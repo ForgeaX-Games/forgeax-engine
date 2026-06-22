@@ -112,7 +112,7 @@ export const urpPipeline: RenderPipeline = {
       usage: 0x10, // RENDER_ATTACHMENT
     });
 
-    // Shadow depth atlas target. ECS-driven size (DirectionalLight.mapSize
+    // Shadow depth atlas target. ECS-driven size (DirectionalLightShadow.mapSize
     // per-cascade) x tilesPerSide. cascadeCount (1..4) drives the atlas tile
     // grid: tilesPerSide = ceil(sqrt(cascadeCount)), atlasSize = tilesPerSide *
     // mapSize. N=4 => 2x2 tiles => atlasSize = 2 * mapSize (e.g. 4096x4096 for
@@ -120,7 +120,7 @@ export const urpPipeline: RenderPipeline = {
     // written or read (D-5).
     //
     // recordFrame projects both fields onto data; we read them here to size
-    // the atlas. Falls back to 1024 x 1 cascade when castShadow:false
+    // the atlas. Falls back to 1024 x 1 cascade when no DirectionalLightShadow
     // is wired (the shadow pass is gated downstream on shadowMapSize > 0 so a
     // fallback texture is harmless).
     const shadowMapSize =

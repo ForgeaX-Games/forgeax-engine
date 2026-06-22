@@ -1,6 +1,6 @@
-// biome-ignore-all lint/suspicious/noExplicitAny: legacy CSM field tests migrated to merged DirectionalLight
+// biome-ignore-all lint/suspicious/noExplicitAny: TDD red stage — new CSM fields not yet declared on DirectionalLightShadow type; any casts dissolve after w3 green
 // shadow-csm-component.test.ts - feat-20260613-csm-cascaded-shadow-maps-unique-shadow-path
-// M1 / w1: DirectionalLight merged shadow fields test (retargeted from deleted DirectionalLightShadow per feat-20260621 M5).
+// M1 / w1: DirectionalLightShadow component schema refactor test (RED).
 //
 // Covers AC-01 (new field defaults: cascadeCount=4, splitLambda=0.75,
 // cascadeBlend=0.2, mapSize=2048), AC-02 (out-of-bound validation per field
@@ -8,7 +8,7 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
-import { DirectionalLight } from '../components/directional-light';
+import { DirectionalLightShadow } from '../components/directional-light-shadow';
 import { ShadowInvalidConfigError } from '../errors';
 
 // ── AC-01: new field defaults ────────────────────────────────────────────
@@ -18,13 +18,13 @@ describe('CSM component schema (w1)', () => {
     it('empty data spawn defaults cascadeCount=4, splitLambda=0.75, cascadeBlend=0.2', () => {
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: {},
       });
       expect(r.ok).toBe(true);
       const e = r.unwrap();
 
-      const shadow = world.get(e, DirectionalLight).unwrap();
+      const shadow = world.get(e, DirectionalLightShadow).unwrap();
 
       // New CSM fields (defined by M1 schema update).
       expect((shadow as any).cascadeCount).toBe(4);
@@ -35,20 +35,20 @@ describe('CSM component schema (w1)', () => {
     it('mapSize default changed from 1024 to 2048 (D-2)', () => {
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: {},
       });
       expect(r.ok).toBe(true);
       const e = r.unwrap();
 
-      const shadow = world.get(e, DirectionalLight).unwrap();
+      const shadow = world.get(e, DirectionalLightShadow).unwrap();
       expect(shadow.mapSize).toBeCloseTo(2048, 5);
     });
 
     it('spawn with partial cascade data: explicit field overrides default', () => {
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: {
           mapSize: 1024,
         },
@@ -56,7 +56,7 @@ describe('CSM component schema (w1)', () => {
       expect(r.ok).toBe(true);
       const e = r.unwrap();
 
-      const shadow = world.get(e, DirectionalLight).unwrap();
+      const shadow = world.get(e, DirectionalLightShadow).unwrap();
       expect(shadow.mapSize).toBeCloseTo(1024, 5);
 
       // Unspecified CSM fields fall back to defaults.
@@ -79,7 +79,7 @@ describe('CSM component schema (w1)', () => {
     it('cascadeCount=0 -> ShadowInvalidConfigError', () => {
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: { cascadeCount: 0 } as any,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
@@ -92,7 +92,7 @@ describe('CSM component schema (w1)', () => {
     it('cascadeCount=5 -> ShadowInvalidConfigError (max=4)', () => {
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: { cascadeCount: 5 } as any,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
@@ -106,7 +106,7 @@ describe('CSM component schema (w1)', () => {
     it('splitLambda=-0.1 -> ShadowInvalidConfigError (min=0)', () => {
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: { splitLambda: -0.1 } as any,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
@@ -119,7 +119,7 @@ describe('CSM component schema (w1)', () => {
     it('splitLambda=1.1 -> ShadowInvalidConfigError (max=1)', () => {
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: { splitLambda: 1.1 } as any,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
@@ -133,7 +133,7 @@ describe('CSM component schema (w1)', () => {
     it('cascadeBlend=-0.1 -> ShadowInvalidConfigError (min=0)', () => {
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: { cascadeBlend: -0.1 } as any,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
@@ -146,7 +146,7 @@ describe('CSM component schema (w1)', () => {
     it('cascadeBlend=0.6 -> ShadowInvalidConfigError (max=0.5)', () => {
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: { cascadeBlend: 0.6 } as any,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
@@ -160,7 +160,7 @@ describe('CSM component schema (w1)', () => {
     it('all three new fields within valid range spawn succeeds', () => {
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: { cascadeCount: 1, splitLambda: 0, cascadeBlend: 0 } as any,
       });
       expect(r.ok).toBe(true);
@@ -205,12 +205,12 @@ describe('CSM component schema (w1)', () => {
     const legacyField = `ortho${'HalfExtent'}`;
 
     it('schema does not contain the legacy fixed-extent field', () => {
-      const schema = DirectionalLight.schema;
+      const schema = DirectionalLightShadow.schema;
       expect(legacyField in schema).toBe(false);
     });
 
     it('defaults do not contain the legacy fixed-extent field', () => {
-      const defaults = DirectionalLight.defaults;
+      const defaults = DirectionalLightShadow.defaults;
       expect(defaults).toBeDefined();
       expect(legacyField in (defaults as any)).toBe(false);
     });
@@ -223,7 +223,7 @@ describe('CSM component schema (w1)', () => {
       // does not leak into the row — fail-fast over silent fallback.
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: { [legacyField]: 20 } as any,
       });
       expect(r.ok).toBe(false);
@@ -241,7 +241,7 @@ describe('CSM component schema (w1)', () => {
     it('mapSize=0 -> ShadowInvalidConfigError (no max field)', () => {
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: { mapSize: 0 },
       });
       expect(r.ok).toBe(false);
@@ -264,7 +264,7 @@ describe('CSM component schema (w1)', () => {
     it('mapSize=1 spawn succeeds', () => {
       const world = new World();
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: { mapSize: 1 },
       });
       expect(r.ok).toBe(true);

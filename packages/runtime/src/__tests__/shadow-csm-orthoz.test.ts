@@ -24,7 +24,7 @@
 import { World } from '@forgeax/engine-ecs';
 import { mat4, vec3 } from '@forgeax/engine-math';
 import { describe, expect, it } from 'vitest';
-import { Camera, DirectionalLight, Transform } from '../components';
+import { Camera, DirectionalLight, DirectionalLightShadow, Transform } from '../components';
 import { extractFrame } from '../render-system-extract';
 
 // Light travelling down and toward +x/+z, so the source is up and toward -x/-z.
@@ -38,20 +38,16 @@ function setupWorld(cascadeCount: number): World {
   const world = new World();
   world.spawn({
     component: DirectionalLight,
-    data: {
-      directionX: LIGHT_DIR[0],
-      directionY: LIGHT_DIR[1],
-      directionZ: LIGHT_DIR[2],
-      cascadeCount,
-      nearPlane: 0.1,
-      farPlane: 100,
-    },
+    data: { directionX: LIGHT_DIR[0], directionY: LIGHT_DIR[1], directionZ: LIGHT_DIR[2] },
   });
   world.spawn(
     { component: Transform, data: { posY: 5, posZ: 10 } },
     { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
   );
-
+  world.spawn({
+    component: DirectionalLightShadow,
+    data: { cascadeCount, nearPlane: 0.1, farPlane: 100 },
+  });
   return world;
 }
 

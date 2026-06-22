@@ -120,6 +120,7 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
+  DirectionalLightShadow,
   HANDLE_CUBE,
   Materials,
   MeshFilter,
@@ -179,7 +180,7 @@ if (!cutoutEntry.ok) {
 
 const world = new World();
 
-// Light + shadow (merged component)
+// Light + shadow
 world.spawn(
   {
     component: DirectionalLight,
@@ -191,6 +192,11 @@ world.spawn(
       colorG: 0.95,
       colorB: 0.9,
       intensity: 1.0,
+    },
+  },
+  {
+    component: DirectionalLightShadow,
+    data: {
       // feat-20260613-csm M6 / w22: matches src/main.ts (cascadeCount=1
       // AC-10 baseline). orthoHalfExtent removed (legacy field gone);
       // farPlane tightened 60 -> 20 so the cutout 0.15-unit holes stay

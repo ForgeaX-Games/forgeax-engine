@@ -1,20 +1,27 @@
 // shadow-m1.dawn.test.ts - feat-20260520-directional-light-shadow-mapping
 // M1a / w2 (TDD red): AC-10 debugReadback shape, AC-11 lightSpaceMatrix
-// numerical match. AC-03 cardinality cap deleted per feat-20260621 M5 (DirectionalLight has no cap).
+// numerical match, AC-03 cardinality-exceeded fail-fast.
 //
 // AC anchor: requirements AC-10 (debugReadback returns { center, corners:
 // {tl,tr,bl,br}, mapSize } POD), AC-11 (lightSpaceMatrix epsilon-match
-// host vs reference). plan-strategy D-5 (5 sample pixel integer
+// host vs reference), AC-03 (>1 DirectionalLightShadow throws
+// CardinalityExceededError). plan-strategy D-5 (5 sample pixel integer
 // coordinates), D-3 (ECS fail-fast at spawn/addComponent).
 //
-// Fixture: single DirectionalLight with castShadow:true + cube
+// Fixture: single DirectionalLight + single DirectionalLightShadow + cube
 // with known ortho bounds; center and at least one corner readback value
 // in (0,1) open interval and unequal.
 //
-// Note: DirectionalLight no longer has a cardinality cap (feat-20260621 M5).
+// Red phase: DirectionalLightShadow component not yet implemented (w5);
+// all spawns involving it will fail. The cardinality test imports the
+// error class directly (w1 already landed).
 
+import type { CardinalityExceededError, EcsError } from '@forgeax/engine-ecs';
+import { World } from '@forgeax/engine-ecs';
 import { mat4 } from '@forgeax/engine-math';
 import { describe, expect, it } from 'vitest';
+import { DirectionalLightShadow } from '../components/directional-light-shadow';
+import { Transform } from '../components/transform';
 
 // Fixture constants SSOT (plan-strategy section 8.1 test anchor).
 const FIXTURE_DIRECTION: [number, number, number] = [0, -1, 0]; // straight down
@@ -29,6 +36,84 @@ const dawnReady = typeof navigator !== 'undefined' && (navigator as any).gpu !==
 describe('shadow M1a dawn (w2 RED)', () => {
   it.skipIf(!dawnReady)("'dawn-binding-missing' -- dawn.node binding injection failed", () => {
     expect(dawnReady).toBe(true);
+  });
+
+  // ── AC-03: >1 DirectionalLightShadow -> CardinalityExceededError ──────
+  describe('AC-03 cardinality enforcement', () => {
+    it('spawn second DirectionalLightShadow throws cardinality-exceeded', () => {
+      const world = new World();
+
+      const r1 = world.spawn({
+        component: DirectionalLightShadow,
+        data: {},
+      });
+      expect(r1.ok).toBe(true);
+
+      const r2 = world.spawn({
+        component: DirectionalLightShadow,
+        data: { mapSize: 512 },
+      });
+      expect(r2.ok).toBe(false);
+      const err = (r2 as { ok: false; error: EcsError }).error;
+      expect(err.code).toBe('cardinality-exceeded');
+
+      // Structured property consumption (charter P3)
+      const detail = (err as unknown as CardinalityExceededError).detail;
+      expect(detail.componentName).toBe('DirectionalLightShadow');
+      expect(detail.count).toBe(1); // one already exists, trying to add second
+      expect(detail.max).toBe(1);
+    });
+
+    it('addComponent second DirectionalLightShadow throws cardinality-exceeded', () => {
+      const world = new World();
+
+      const e1 = world
+        .spawn({
+          component: DirectionalLightShadow,
+          data: {},
+        })
+        .unwrap();
+
+      world.addComponent(e1, {
+        component: DirectionalLightShadow,
+        data: {},
+      });
+      // addComponent on entity that already has it — this is component-already-present
+      // The cardinality check is on different entities
+    });
+
+    it('addComponent DirectionalLightShadow to second entity throws cardinality-exceeded', () => {
+      const world = new World();
+
+      // First entity holds the cardinality=1 component
+      world
+        .spawn({
+          component: DirectionalLightShadow,
+          data: { mapSize: 512 },
+        })
+        .unwrap();
+
+      // Second entity — spawn without it, then try to add
+      const e2 = world
+        .spawn({
+          component: Transform,
+          data: { posX: 1, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+        })
+        .unwrap();
+
+      const r = world.addComponent(e2, {
+        component: DirectionalLightShadow,
+        data: { mapSize: 1024 },
+      });
+      expect(r.ok).toBe(false);
+      const err = (r as { ok: false; error: EcsError }).error;
+      expect(err.code).toBe('cardinality-exceeded');
+
+      const detail = (err as unknown as CardinalityExceededError).detail;
+      expect(detail.componentName).toBe('DirectionalLightShadow');
+      expect(detail.count).toBe(1);
+      expect(detail.max).toBe(1);
+    });
   });
 
   // ── AC-11: lightSpaceMatrix host-vs-reference epsilon match ───────────

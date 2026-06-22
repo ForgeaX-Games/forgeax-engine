@@ -30,11 +30,9 @@
 //   [480..496) splitPlanes[3]   vec4<f32>     (align 16, 16)
 //   [496..500) cascadeCount     f32           (align 4, size 4)
 //   [500..504) cascadeBlend     f32           (align 4, size 4)
-//   [504..508) depthBias        f32           (align 4, size 4)
-//   [508..512) normalBias       f32           (align 4, size 4)
-//   [512..516) pcfKernelSize    f32           (align 4, size 4)
-//   [516..528) _tail_pad       —             (WGSL struct tail pad, 12 B)
-//   WGSL struct = 528 B. Host UBO = 592 B: 16 f32 (64 B) of tail zeros
+//   [504..508) pcfKernelSize    f32           (align 4, size 4)
+//   [508..512) _tail_pad       —             (WGSL struct tail pad, 4 B)
+//   WGSL struct = 512 B. Host UBO = 592 B: 22 f32 (88 B) of tail zeros
 //   appended by render-system-record.ts to satisfy AC-08 fixed-size
 //   invariant — the WGSL struct only reads its fields; the extra padding
 //   in the GPU buffer is never accessed by the shader.
@@ -60,15 +58,6 @@
 // the AC-08 fixed-UBO-size invariant (the extra bytes are never read).
 // shadow_caster.wgsl indexes the 4 fields via `shadowCasterCascade.index`
 // (binding 5, written per shadow pass).
-//
-// feat-20260621-merge-directionallightshadow-into-directionallight M3 / m3-t3:
-// the merged DirectionalLight's shadow bias + PCF kernel width append at the
-// tail (depthBias / normalBias / pcfKernelSize at bytes 504/508/512, floats
-// 126/127/128). Tail-append only -- field order is byte-for-byte stable
-// (charter P4); the prior 88 B host tail pad shrinks to 64 B, total stays
-// 592 B (host UBO size unchanged, AC-08). lighting-directional.wgsl drives the
-// directional shadow bias (D-1: bias = max(normalBias*(1-N.L), depthBias)) and
-// a pcfKernelSize-wide PCF loop from these fields.
 struct View {
   worldViewProj   : mat4x4<f32>,
   lightDir        : vec3<f32>,
@@ -82,8 +71,6 @@ struct View {
   splitPlanes     : array<vec4<f32>,4>,
   cascadeCount    : f32,
   cascadeBlend    : f32,
-  depthBias       : f32,
-  normalBias      : f32,
   pcfKernelSize   : f32,
 };
 

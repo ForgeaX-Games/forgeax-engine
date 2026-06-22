@@ -24,7 +24,7 @@ import { vec3 } from '@forgeax/engine-math';
 import type { Handle, Handler, RegisterMethodResult, Registry } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Camera, DirectionalLight, PointLight, SpotLight, Transform } from '../components';
-import type { ShadowInvalidConfigError } from '../errors';
+import { DirectionalLightShadow } from '../components/directional-light-shadow';
 import { packLightArrayHeader, packPointLight, packSpotLight } from '../light-buffer-layout';
 import { computeInvRangeSquared, degToCos } from '../light-helpers';
 import { registerRuntimeInspector } from '../register-inspector';
@@ -81,18 +81,19 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 }
 
 {
-  // ─── from directional-light-shadow.test.ts (post-merge: DirectionalLightShadow deleted, target now DirectionalLight) ───
+  // ─── from directional-light-shadow.test.ts ───
   describe('directional-light-shadow.test.ts', () => {
-    describe('DirectionalLight merged shadow schema (post-m1-t6)', () => {
-      it('AC-01: shadow fields are present with correct default values in the merged component', () => {
-        const dl = DirectionalLight;
+    describe('DirectionalLightShadow component schema (w4 RED)', () => {
+      it('AC-01: exposes 9 fields with correct default values', () => {
+        const dls = DirectionalLightShadow;
 
-        expect(dl.name).toBe('DirectionalLight');
-        expect(dl.schema).toBeDefined();
+        expect(dls.name).toBe('DirectionalLightShadow');
+        expect(dls.schema).toBeDefined();
 
-        expect(dl.defaults).toBeDefined();
-        // biome-ignore lint/style/noNonNullAssertion: dl.defaults asserted defined just above
-        const defaults = dl.defaults!;
+        // AC-01 field defaults (plan-strategy section 8 defaults table)
+        expect(dls.defaults).toBeDefined();
+        // biome-ignore lint/style/noNonNullAssertion: dls.defaults asserted defined just above
+        const defaults = dls.defaults!;
 
         expect(defaults.cascadeCount).toBe(4);
         expect(defaults.splitLambda).toBeCloseTo(0.75, 5);
@@ -102,27 +103,31 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(defaults.normalBias).toBeCloseTo(0.05, 5);
         expect(defaults.nearPlane).toBeCloseTo(0.1, 5);
         expect(defaults.farPlane).toBeCloseTo(50, 5);
-        expect(defaults.pcfKernelSize).toBe(3);
+        expect(defaults.pcfKernelSize).toBe(3); // u32-like, stored as f32 but exact for small integers
 
-        // Merged component: 7 light + 1 castShadow + 9 shadow = 17 fields
-        expect(Object.keys(dl.schema).length).toBe(17);
-        expect('cascadeCount' in dl.schema).toBe(true);
-        expect('splitLambda' in dl.schema).toBe(true);
-        expect('cascadeBlend' in dl.schema).toBe(true);
-        expect('mapSize' in dl.schema).toBe(true);
-        expect('depthBias' in dl.schema).toBe(true);
-        expect('normalBias' in dl.schema).toBe(true);
-        expect('nearPlane' in dl.schema).toBe(true);
-        expect('farPlane' in dl.schema).toBe(true);
-        expect('pcfKernelSize' in dl.schema).toBe(true);
-        // DirectionalLightShadow is deleted; the old orthoHalfExtent field is gone
+        // All 9 fields are in the schema (3 CSM fields added, the legacy
+        // fixed-extent field deleted: 7-1+3=9). The literal name of the
+        // deleted field is built by concatenation so the AC-03 grep gate
+        // does not match this deletion-guard line.
+        expect(Object.keys(dls.schema).length).toBe(9);
+        expect('cascadeCount' in dls.schema).toBe(true);
+        expect('splitLambda' in dls.schema).toBe(true);
+        expect('cascadeBlend' in dls.schema).toBe(true);
+        expect('mapSize' in dls.schema).toBe(true);
+        expect('depthBias' in dls.schema).toBe(true);
+        expect('normalBias' in dls.schema).toBe(true);
+        expect('nearPlane' in dls.schema).toBe(true);
+        expect('farPlane' in dls.schema).toBe(true);
+        expect('pcfKernelSize' in dls.schema).toBe(true);
+        expect(`ortho${'HalfExtent'}` in dls.schema).toBe(false);
       });
 
-      it('AC-02: spawn-default fallback fills omitted shadow fields from defaults (single-component)', () => {
+      it('AC-02: spawn-default fallback fills omitted fields from defaults', () => {
         const world = new World();
 
+        // Layer 2 fallback: spawn with partial data, defaults fill the rest
         const r = world.spawn({
-          component: DirectionalLight,
+          component: DirectionalLightShadow,
           data: {
             mapSize: 2048,
           },
@@ -130,48 +135,50 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(r.ok).toBe(true);
         const e = r.unwrap();
 
-        const light = world.get(e, DirectionalLight);
-        expect(light.ok).toBe(true);
-        const lightData = light.unwrap();
+        const shadow = world.get(e, DirectionalLightShadow);
+        expect(shadow.ok).toBe(true);
+        const shadowData = shadow.unwrap();
 
-        expect(lightData.mapSize).toBe(2048);
-        expect(lightData.cascadeCount).toBe(4);
-        expect(lightData.splitLambda).toBeCloseTo(0.75, 5);
-        expect(lightData.cascadeBlend).toBeCloseTo(0.2, 5);
-        expect(lightData.depthBias).toBeCloseTo(0.005, 5);
-        expect(lightData.normalBias).toBeCloseTo(0.05, 5);
-        expect(lightData.nearPlane).toBeCloseTo(0.1, 5);
-        expect(lightData.farPlane).toBeCloseTo(50, 5);
-        expect(lightData.pcfKernelSize).toBe(3);
+        // Explicit field keeps the passed value
+        expect(shadowData.mapSize).toBe(2048);
+        // Omitted fields fall back to defaults (from schema)
+        expect(shadowData.cascadeCount).toBe(4);
+        expect(shadowData.splitLambda).toBeCloseTo(0.75, 5);
+        expect(shadowData.cascadeBlend).toBeCloseTo(0.2, 5);
+        expect(shadowData.depthBias).toBeCloseTo(0.005, 5);
+        expect(shadowData.normalBias).toBeCloseTo(0.05, 5);
+        expect(shadowData.nearPlane).toBeCloseTo(0.1, 5);
+        expect(shadowData.farPlane).toBeCloseTo(50, 5);
+        expect(shadowData.pcfKernelSize).toBe(3);
       });
 
-      it('AC-02: spawn with empty data gets all defaults (single-component)', () => {
+      it('AC-02: spawn with empty data gets all defaults', () => {
         const world = new World();
 
         const r = world.spawn({
-          component: DirectionalLight,
+          component: DirectionalLightShadow,
           data: {},
         });
         expect(r.ok).toBe(true);
         const e = r.unwrap();
 
-        const light = world.get(e, DirectionalLight).unwrap();
-        expect(light.cascadeCount).toBe(4);
-        expect(light.splitLambda).toBeCloseTo(0.75, 5);
-        expect(light.cascadeBlend).toBeCloseTo(0.2, 5);
-        expect(light.mapSize).toBeCloseTo(2048, 5);
-        expect(light.depthBias).toBeCloseTo(0.005, 5);
-        expect(light.normalBias).toBeCloseTo(0.05, 5);
-        expect(light.nearPlane).toBeCloseTo(0.1, 5);
-        expect(light.farPlane).toBeCloseTo(50, 5);
-        expect(light.pcfKernelSize).toBe(3);
+        const shadow = world.get(e, DirectionalLightShadow).unwrap();
+        expect(shadow.cascadeCount).toBe(4);
+        expect(shadow.splitLambda).toBeCloseTo(0.75, 5);
+        expect(shadow.cascadeBlend).toBeCloseTo(0.2, 5);
+        expect(shadow.mapSize).toBeCloseTo(2048, 5);
+        expect(shadow.depthBias).toBeCloseTo(0.005, 5);
+        expect(shadow.normalBias).toBeCloseTo(0.05, 5);
+        expect(shadow.nearPlane).toBeCloseTo(0.1, 5);
+        expect(shadow.farPlane).toBeCloseTo(50, 5);
+        expect(shadow.pcfKernelSize).toBe(3);
       });
 
-      it('AC-02: spawn with full explicit data overrides all defaults (single-component)', () => {
+      it('AC-02: spawn with full explicit data overrides all defaults', () => {
         const world = new World();
 
         const r = world.spawn({
-          component: DirectionalLight,
+          component: DirectionalLightShadow,
           data: {
             cascadeCount: 2,
             splitLambda: 0.5,
@@ -187,62 +194,75 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(r.ok).toBe(true);
         const e = r.unwrap();
 
-        const light = world.get(e, DirectionalLight).unwrap();
-        expect(light.cascadeCount).toBe(2);
-        expect(light.splitLambda).toBeCloseTo(0.5, 5);
-        expect(light.cascadeBlend).toBeCloseTo(0.1, 5);
-        expect(light.mapSize).toBeCloseTo(512, 5);
-        expect(light.depthBias).toBeCloseTo(0.01, 5);
-        expect(light.normalBias).toBeCloseTo(0.1, 5);
-        expect(light.nearPlane).toBeCloseTo(1, 5);
-        expect(light.farPlane).toBeCloseTo(100, 5);
-        expect(light.pcfKernelSize).toBe(5);
+        const shadow = world.get(e, DirectionalLightShadow).unwrap();
+        expect(shadow.cascadeCount).toBe(2);
+        expect(shadow.splitLambda).toBeCloseTo(0.5, 5);
+        expect(shadow.cascadeBlend).toBeCloseTo(0.1, 5);
+        expect(shadow.mapSize).toBeCloseTo(512, 5);
+        expect(shadow.depthBias).toBeCloseTo(0.01, 5);
+        expect(shadow.normalBias).toBeCloseTo(0.1, 5);
+        expect(shadow.nearPlane).toBeCloseTo(1, 5);
+        expect(shadow.farPlane).toBeCloseTo(100, 5);
+        expect(shadow.pcfKernelSize).toBe(5); // u32-like
       });
 
-      it('AC-05: single-component spawn bundles light + shadow fields (no dual-component needed)', () => {
+      it('AC-05: query with: [DirectionalLight, DirectionalLightShadow] bundle narrows TS types', () => {
         const world = new World();
 
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: {
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
-            colorR: 1,
-            colorG: 1,
-            colorB: 1,
-            intensity: 1,
-            mapSize: 2048,
+        // Spawn entity with both components
+        const r = world.spawn(
+          {
+            component: DirectionalLight,
+            data: {
+              directionX: 0,
+              directionY: -1,
+              directionZ: 0,
+              colorR: 1,
+              colorG: 1,
+              colorB: 1,
+              intensity: 1,
+            },
           },
-        });
+          {
+            component: DirectionalLightShadow,
+            data: { mapSize: 2048 },
+          },
+        );
         expect(r.ok).toBe(true);
         const e = r.unwrap();
 
+        // Get each component individually; TS narrows types per component token
         const dlResult = world.get(e, DirectionalLight);
         expect(dlResult.ok).toBe(true);
         const dl = dlResult.unwrap();
         expect(dl.directionX).toBe(0);
         expect(dl.intensity).toBe(1);
-        expect(dl.mapSize).toBeCloseTo(2048, 5);
-        expect(dl.depthBias).toBeCloseTo(0.005, 5);
+
+        const dlsResult = world.get(e, DirectionalLightShadow);
+        expect(dlsResult.ok).toBe(true);
+        const dls = dlsResult.unwrap();
+        expect(dls.mapSize).toBeCloseTo(2048, 5);
+        // Defaults filled the rest
+        expect(dls.depthBias).toBeCloseTo(0.005, 5);
       });
 
-      it('query: DirectionalLight entity is found via world.get', () => {
+      it('query: DirectionalLightShadow entity is found via world.get', () => {
         const world = new World();
 
         world
           .spawn({
-            component: DirectionalLight,
+            component: DirectionalLightShadow,
             data: { mapSize: 512 },
           })
           .unwrap();
 
+        // Verify spawn succeeded by checking world info
         const info = world.inspect();
-        const archetypeWithLight = info.archetypes.find((a) =>
-          a.componentNames.includes('DirectionalLight'),
+        const archetypeWithShadow = info.archetypes.find((a) =>
+          a.componentNames.includes('DirectionalLightShadow'),
         );
-        expect(archetypeWithLight).toBeDefined();
-        expect(archetypeWithLight?.entityCount).toBe(1);
+        expect(archetypeWithShadow).toBeDefined();
+        expect(archetypeWithShadow?.entityCount).toBe(1);
       });
     });
   });
@@ -2184,415 +2204,6 @@ import { propagateTransforms } from '../systems/propagate-transforms';
             data: { directionX: 0, directionY: -1, directionZ: 0, range: 8 },
           }).ok,
         ).toBe(true);
-      });
-    });
-  });
-}
-
-{
-  // ─── from feat-20260621-merge-directionallightshadow-into-directionallight M1-t1 ───
-  describe('feat-20260621-merge-directionallightshadow-into-directionallight M1-t1', () => {
-    describe('DirectionalLight merged shadow field defaults', () => {
-      it('castShadow defaults to true', () => {
-        const world = new World();
-        const e = world
-          .spawn({
-            component: DirectionalLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0 },
-          })
-          .unwrap();
-        const view = world.get(e, DirectionalLight).unwrap();
-        expect(view.castShadow).toBe(true);
-      });
-
-      it('spawn with omitted shadow fields fills 9 merged defaults', () => {
-        const world = new World();
-        const e = world
-          .spawn({
-            component: DirectionalLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0 },
-          })
-          .unwrap();
-        const view = world.get(e, DirectionalLight).unwrap();
-        expect(view.cascadeCount).toBe(4);
-        expect(view.splitLambda).toBeCloseTo(0.75, 5);
-        expect(view.cascadeBlend).toBeCloseTo(0.2, 5);
-        expect(view.mapSize).toBe(2048);
-        expect(view.depthBias).toBeCloseTo(0.005, 5);
-        expect(view.normalBias).toBeCloseTo(0.05, 5);
-        expect(view.nearPlane).toBeCloseTo(0.1, 5);
-        expect(view.farPlane).toBeCloseTo(50, 5);
-        expect(view.pcfKernelSize).toBe(3);
-      });
-
-      it('spawn with empty data gets all 9 shadow defaults', () => {
-        const world = new World();
-        const e = world.spawn({ component: DirectionalLight, data: {} }).unwrap();
-        const view = world.get(e, DirectionalLight).unwrap();
-        expect(view.cascadeCount).toBe(4);
-        expect(view.splitLambda).toBeCloseTo(0.75, 5);
-        expect(view.cascadeBlend).toBeCloseTo(0.2, 5);
-        expect(view.mapSize).toBe(2048);
-        expect(view.depthBias).toBeCloseTo(0.005, 5);
-        expect(view.normalBias).toBeCloseTo(0.05, 5);
-        expect(view.nearPlane).toBeCloseTo(0.1, 5);
-        expect(view.farPlane).toBeCloseTo(50, 5);
-        expect(view.pcfKernelSize).toBe(3);
-      });
-
-      it('spawn with full explicit shadow data overrides all 9 defaults', () => {
-        const world = new World();
-        const e = world
-          .spawn({
-            component: DirectionalLight,
-            data: {
-              directionX: 0,
-              directionY: -1,
-              directionZ: 0,
-              cascadeCount: 2,
-              splitLambda: 0.5,
-              cascadeBlend: 0.1,
-              mapSize: 512,
-              depthBias: 0.01,
-              normalBias: 0.1,
-              nearPlane: 1,
-              farPlane: 100,
-              pcfKernelSize: 5,
-            },
-          })
-          .unwrap();
-        const view = world.get(e, DirectionalLight).unwrap();
-        expect(view.cascadeCount).toBe(2);
-        expect(view.splitLambda).toBeCloseTo(0.5, 5);
-        expect(view.cascadeBlend).toBeCloseTo(0.1, 5);
-        expect(view.mapSize).toBe(512);
-        expect(view.depthBias).toBeCloseTo(0.01, 5);
-        expect(view.normalBias).toBeCloseTo(0.1, 5);
-        expect(view.nearPlane).toBeCloseTo(1, 5);
-        expect(view.farPlane).toBeCloseTo(100, 5);
-        expect(view.pcfKernelSize).toBe(5);
-      });
-
-      it('schema has 17 fields (7 light + 1 castShadow + 9 shadow)', () => {
-        expect(Object.keys(DirectionalLight.schema).length).toBe(17);
-        expect('castShadow' in DirectionalLight.schema).toBe(true);
-        expect('cascadeCount' in DirectionalLight.schema).toBe(true);
-        expect('splitLambda' in DirectionalLight.schema).toBe(true);
-        expect('cascadeBlend' in DirectionalLight.schema).toBe(true);
-        expect('mapSize' in DirectionalLight.schema).toBe(true);
-        expect('depthBias' in DirectionalLight.schema).toBe(true);
-        expect('normalBias' in DirectionalLight.schema).toBe(true);
-        expect('nearPlane' in DirectionalLight.schema).toBe(true);
-        expect('farPlane' in DirectionalLight.schema).toBe(true);
-        expect('pcfKernelSize' in DirectionalLight.schema).toBe(true);
-      });
-    });
-  });
-}
-
-{
-  // ─── from feat-20260621-merge-directionallightshadow-into-directionallight M1-t2 ───
-  describe('feat-20260621-merge-directionallightshadow-into-directionallight M1-t2', () => {
-    describe('DirectionalLight.validate() shadow field enforcement', () => {
-      it('rejects even pcfKernelSize (2) with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { pcfKernelSize: 2 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('pcfKernelSize');
-        expect(err.detail.value).toBe(2);
-        expect(err.detail.min).toBe(1);
-        // The hint must name the odd constraint so an AI retry does not loop
-        // 2 -> 3 wrong-way (4 -> 6); verify-step AI-user finding F-6.
-        expect(err.hint).toBe('set pcfKernelSize to an odd integer >= 1; got 2');
-      });
-
-      it('rejects pcfKernelSize < 1 (0) with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { pcfKernelSize: 0 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('pcfKernelSize');
-        expect(err.detail.value).toBe(0);
-      });
-
-      it('rejects pcfKernelSize < 1 (-1) with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { pcfKernelSize: -1 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('pcfKernelSize');
-        expect(err.detail.value).toBe(-1);
-      });
-
-      it('accepts pcfKernelSize=1 (smallest valid odd integer)', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { pcfKernelSize: 1 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('accepts pcfKernelSize=3 (default odd integer)', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { pcfKernelSize: 3 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('accepts pcfKernelSize=7 (larger odd integer)', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { pcfKernelSize: 7 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('rejects mapSize < 1 with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { mapSize: 0 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('mapSize');
-      });
-
-      it('rejects cascadeCount < 1 with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { cascadeCount: 0 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('cascadeCount');
-      });
-
-      it('rejects cascadeCount > 4 with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { cascadeCount: 5 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('cascadeCount');
-        expect(err.detail.value).toBe(5);
-      });
-
-      it('rejects non-integer cascadeCount (1.5) with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { cascadeCount: 1.5 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('cascadeCount');
-      });
-
-      it('rejects splitLambda < 0 with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { splitLambda: -0.1 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('splitLambda');
-      });
-
-      it('rejects splitLambda > 1 with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { splitLambda: 1.1 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('splitLambda');
-      });
-
-      it('accepts splitLambda=0 (boundary valid)', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { splitLambda: 0 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('accepts splitLambda=1 (boundary valid)', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { splitLambda: 1 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('rejects cascadeBlend < 0 with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { cascadeBlend: -0.01 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('cascadeBlend');
-      });
-
-      it('rejects cascadeBlend > 0.5 with ShadowInvalidConfigError', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { cascadeBlend: 0.51 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('cascadeBlend');
-      });
-
-      it('accepts cascadeBlend=0 (boundary valid)', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { cascadeBlend: 0 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('accepts cascadeBlend=0.5 (boundary valid)', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { cascadeBlend: 0.5 },
-        });
-        expect(r.ok).toBe(true);
-      });
-    });
-  });
-}
-
-{
-  // ─── from feat-20260621-merge-directionallightshadow-into-directionallight M1-t3 ───
-  describe('feat-20260621-merge-directionallightshadow-into-directionallight M1-t3', () => {
-    describe('DirectionalLight.validate() skips shadow validation when castShadow=false', () => {
-      it('castShadow=false tolerates even pcfKernelSize (2) because unused', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { castShadow: false, pcfKernelSize: 2 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('castShadow=false tolerates pcfKernelSize=0 because unused', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { castShadow: false, pcfKernelSize: 0 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('castShadow=false tolerates mapSize=0 because unused', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { castShadow: false, mapSize: 0 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('castShadow=false tolerates cascadeCount=5 (out of [1,4]) because unused', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { castShadow: false, cascadeCount: 5 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('castShadow=false tolerates splitLambda=2 (out of [0,1]) because unused', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { castShadow: false, splitLambda: 2 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('castShadow=false tolerates cascadeBlend=1 (out of [0,0.5]) because unused', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { castShadow: false, cascadeBlend: 1 },
-        });
-        expect(r.ok).toBe(true);
-      });
-
-      it('castShadow=true (explicit) still enforces pcfKernelSize odd>=1', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { castShadow: true, pcfKernelSize: 2 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('pcfKernelSize');
-      });
-
-      it('omitted castShadow (treated as default true) still enforces pcfKernelSize odd>=1', () => {
-        const world = new World();
-        const r = world.spawn({
-          component: DirectionalLight,
-          data: { pcfKernelSize: 2 },
-        });
-        expect(r.ok).toBe(false);
-        if (r.ok) throw new Error('expected spawn to fail validation');
-        const err = r.error as unknown as ShadowInvalidConfigError;
-        expect(err.code).toBe('shadow-invalid-config');
-        expect(err.detail.field).toBe('pcfKernelSize');
       });
     });
   });

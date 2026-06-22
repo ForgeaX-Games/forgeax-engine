@@ -3009,9 +3009,10 @@ export const PHYSICS_ERROR_HINTS: Readonly<Record<PhysicsErrorCode, string>> = {
 //   - plan-strategy D-12 (kebab-case + closed union)
 //   - charter P3 (explicit failure: exhaustive switch without default)
 
-/** Closed union of runtime-layer error codes. */
+/** Closed union of runtime-layer error codes. 15 members (12 pre-feat-20260608-cluster-lighting + 3 hdrp-*). */
 export type RuntimeErrorCode =
   | 'shadow-invalid-config'
+  | 'shadow-disabled-by-missing-component'
   | 'skin-joint-count-exceeded'
   | 'skin-joint-despawned'
   | 'skin-joint-path-unresolved'

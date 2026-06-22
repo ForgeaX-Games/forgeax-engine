@@ -8,7 +8,7 @@
 // exists in the worktree (`apps/hello/shadow-csm/` was never created;
 // `apps/learn-render/5.advanced-lighting/3.3.csm/` is an empty placeholder
 // dir with only `.gitkeep`). The closest in-tree demos that exercise the
-// URP shadow path (DirectionalLight with castShadow/cascadeCount) are:
+// URP shadow path (DirectionalLight + DirectionalLightShadow) are:
 //   - hello-cube (1 cascade, single-cascade smoke)
 //   - hello-shadow-opt-out (1 cascade, opts out via shadowMapSize=0 fallback)
 //

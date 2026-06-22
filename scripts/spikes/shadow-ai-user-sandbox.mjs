@@ -2,14 +2,18 @@
 // shadow-ai-user-sandbox.mjs - AIUserSimulatorSandbox real-run trial
 // feat-20260520-directional-light-shadow-mapping verify step.
 //
-// Four tasks (retargeted to merged DirectionalLight, feat-20260621 M5):
-//   T1: spawn single DirectionalLight with shadow fields, render frame,
-//       debugReadback returns structured depth data.
-//   T2: spawn DirectionalLight with castShadow:false — verify shadow disabled.
-//   T3: mapSize=0 validation on DirectionalLight — does the spawn fail with
-//       structured error carrying .code + .hint?
-//   T4: no cardinality cap — spawn 2 DirectionalLight entities, no error.
-//   T5: Inspector API — verify directional shadow methods.
+// Four tasks:
+//   T1: spawn DirectionalLight + DirectionalLightShadow on same entity,
+//       render frame, debugReadback returns structured depth data.
+//   T2: spawn DirectionalLight and DirectionalLightShadow on SEPARATE
+//       entities — does the engine warn or silently fail? Check
+//       debugReadback returns null (shadow RT never allocated).
+//   T3: mapSize=0 validation — does the spawn fail with structured error
+//       carrying .code + .hint? Check error shape.
+//   T4: cardinality — spawn 2 DirectionalLightShadow components, expect
+//       CardinalityExceededError with .detail.{componentName, count, max}.
+//   T5: Inspector API — verify directionalShadow.{mapSize, lightSpaceMatrix}
+//       and runtime.shadow debug method shapes.
 
 // AI-user-friction note: `import {...} from '@forgeax/engine-runtime'` does NOT
 // resolve from a standalone Node script in this worktree because pnpm workspace
@@ -23,6 +27,7 @@ import {
   Camera,
   createRenderer,
   DirectionalLight,
+  DirectionalLightShadow,
   MeshFilter,
   MeshRenderer,
   Transform,
@@ -138,7 +143,27 @@ function buildFixtureWorld(sameEntity) {
   );
 
   if (sameEntity) {
-    // T1 & T5: single merged DirectionalLight with shadow fields
+    // T1 & T5: light + shadow on same entity
+    world.spawn(
+      {
+        component: DirectionalLight,
+        data: {
+          directionX: FIXTURE_LIGHT_DIR[0],
+          directionY: FIXTURE_LIGHT_DIR[1],
+          directionZ: FIXTURE_LIGHT_DIR[2],
+          colorR: 1,
+          colorG: 1,
+          colorB: 1,
+          intensity: 1,
+        },
+      },
+      {
+        component: DirectionalLightShadow,
+        data: { mapSize: 1024, nearPlane: 0.1, farPlane: 50, orthoHalfExtent: 10 },
+      },
+    );
+  } else {
+    // T2: light on one entity, shadow on another
     world.spawn({
       component: DirectionalLight,
       data: {
@@ -149,25 +174,11 @@ function buildFixtureWorld(sameEntity) {
         colorG: 1,
         colorB: 1,
         intensity: 1,
-        mapSize: 1024,
-        nearPlane: 0.1,
-        farPlane: 50,
       },
     });
-  } else {
-    // T2: light with castShadow:false (shadow disabled)
     world.spawn({
-      component: DirectionalLight,
-      data: {
-        directionX: FIXTURE_LIGHT_DIR[0],
-        directionY: FIXTURE_LIGHT_DIR[1],
-        directionZ: FIXTURE_LIGHT_DIR[2],
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
-        intensity: 1,
-        castShadow: false,
-      },
+      component: DirectionalLightShadow,
+      data: { mapSize: 1024, nearPlane: 0.1, farPlane: 50, orthoHalfExtent: 10 },
     });
   }
 
@@ -340,12 +351,12 @@ async function task2_separateEntities() {
 }
 
 async function task3_mapSizeZero() {
-  console.log('\n── T3: mapSize=0 validation (shadow-invalid-config) ──');
+  console.log('\n── T3: mapSize=0 validation (runtime.shadow.invalid-config) ──');
   const world = new World();
 
   const r = world.spawn({
-    component: DirectionalLight,
-    data: { mapSize: 0, castShadow: false },
+    component: DirectionalLightShadow,
+    data: { mapSize: 0 },
   });
 
   if (r.ok) {
@@ -357,8 +368,8 @@ async function task3_mapSizeZero() {
   console.log(`  error.constructor.name: ${err.constructor.name}`);
   console.log(`  Object.keys(error): ${JSON.stringify(Object.keys(err))}`);
 
-  if (err.code === 'shadow-invalid-config') {
-    pass(`error.code is 'shadow-invalid-config' (hand-attached property)`);
+  if (err.code === 'runtime.shadow.invalid-config') {
+    pass(`error.code is 'runtime.shadow.invalid-config' (hand-attached property)`);
   } else {
     fail(`unexpected error.code: ${err.code}`);
   }
@@ -394,27 +405,51 @@ async function task3_mapSizeZero() {
   }
 }
 
-async function task4_noCap() {
-  console.log('\n── T4: no cardinality cap (2 DirectionalLight entities, both succeed) ──');
+async function task4_cardinality() {
+  console.log('\n── T4: CardinalityExceededError (2 DirectionalLightShadow) ──');
   const world = new World();
 
   const r1 = world.spawn({
-    component: DirectionalLight,
-    data: { directionX: 0, directionY: -1, directionZ: 0, mapSize: 1024 },
+    component: DirectionalLightShadow,
+    data: { mapSize: 1024 },
   });
   if (!r1.ok) {
     return fail('first spawn failed', r1.error);
   }
-  pass('first DirectionalLight spawn ok');
+  pass('first DirectionalLightShadow spawn ok');
 
   const r2 = world.spawn({
-    component: DirectionalLight,
-    data: { directionX: 1, directionY: 0, directionZ: 0, mapSize: 512 },
+    component: DirectionalLightShadow,
+    data: { mapSize: 512 },
   });
-  if (!r2.ok) {
-    return fail('second spawn should succeed (no cardinality cap)', r2.error);
+  if (r2.ok) {
+    return fail('second spawn should NOT succeed but returned ok');
   }
-  pass('second DirectionalLight spawn ok (no cardinality cap)');
+
+  const err = r2.error;
+  console.log(`  error.code: ${err.code}`);
+  console.log(`  error.constructor.name: ${err.constructor.name}`);
+  console.log(`  Object.keys(error): ${JSON.stringify(Object.keys(err))}`);
+
+  if (err.code === 'cardinality-exceeded') {
+    pass("error.code is 'cardinality-exceeded'");
+  } else {
+    fail(`unexpected error.code: ${err.code}`);
+  }
+
+  if (err.detail) {
+    console.log(`  error.detail: ${JSON.stringify(err.detail)}`);
+    const d = err.detail;
+    if (d.componentName === 'DirectionalLightShadow' && d.count === 1 && d.max === 1) {
+      pass(
+        `error.detail: { componentName: '${d.componentName}', count: ${d.count}, max: ${d.max} }`,
+      );
+    } else {
+      fail(`error.detail shape mismatch: ${JSON.stringify(d)}`);
+    }
+  } else {
+    fail('error.detail missing');
+  }
 }
 
 async function task5_inspectorApi() {
@@ -513,7 +548,7 @@ async function main() {
     { name: 'T1', fn: task1_renderAndReadback },
     { name: 'T2', fn: task2_separateEntities },
     { name: 'T3', fn: task3_mapSizeZero },
-    { name: 'T4', fn: task4_noCap },
+    { name: 'T4', fn: task4_cardinality },
     { name: 'T5', fn: task5_inspectorApi },
   ];
 

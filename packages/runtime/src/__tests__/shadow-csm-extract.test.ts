@@ -1,49 +1,39 @@
-// shadow-csm-extract.test.ts — feat-20260621-merge-directionallightshadow-into-directionallight M2
-// TDD red test: castShadow gate + ExtractedLights bias/PCF fields.
+// shadow-csm-extract.test.ts - feat-20260613-csm-cascaded-shadow-maps-unique-shadow-path
+// M2 / w7: ExtractedLights interface extension test (TDD: now green after w9).
 //
-// After M1 (component merge), DirectionalLight carries the 9 shadow fields
-// and castShadow:bool (default true).
-// This test asserts the extract stage:
-//   (a) castShadow:true  → CSM path runs (lightViewProj + cascades populated)
-//   (b) castShadow:false → CSM path skipped (no cascade output)
-//   (c) ExtractedLights carries depthBias/normalBias/pcfKernelSize
-//   (d) bias/PCF fields are undefined when castShadow:false
-// RED before m2-t2/m2-t3: extract still queries the deleted
-// castShadow: true; lightViewProj won't populate.
+// Covers AC-08 (ExtractedLights carries fixed-size lightViewProj[4] +
+// splitPlanes[4] + cascadeCount/cascadeBlend scalars) and verifies
+// lightSpaceMatrix is deleted.
 
 import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
-import { Camera, DirectionalLight, Transform } from '../components';
+import { Camera, DirectionalLight, DirectionalLightShadow, Transform } from '../components';
 import { extractFrame } from '../render-system-extract';
 
-function makeWorld(castShadow?: boolean): World {
-  const world = new World();
-  world.spawn({
-    component: DirectionalLight,
-    data: {
-      directionX: 0,
-      directionY: -1,
-      directionZ: 0,
-      castShadow: castShadow ?? true,
-      depthBias: 0.01,
-      normalBias: 0.08,
-      pcfKernelSize: 5,
-    },
-  });
-  world.spawn(
-    { component: Transform, data: {} },
-    {
-      component: Camera,
-      data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 },
-    },
-  );
-  return world;
-}
+describe('ExtractedLights interface (w7)', () => {
+  function setupWorld(): World {
+    const world = new World();
+    world.spawn({
+      component: DirectionalLight,
+      data: { directionX: 0, directionY: -1, directionZ: 0 },
+    });
+    world.spawn(
+      { component: Transform, data: {} },
+      {
+        component: Camera,
+        data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 },
+      },
+    );
+    world.spawn({
+      component: DirectionalLightShadow,
+      data: { nearPlane: 0.1, farPlane: 100 },
+    });
+    return world;
+  }
 
-describe('ExtractedLights interface (M2 castShadow gate)', () => {
-  describe('castShadow=true (default): CSM path runs', () => {
+  describe('N=4 (default cascadeCount)', () => {
     it('lightViewProj is an array of 4 Float32Array mat4s', () => {
-      const world = makeWorld(true);
+      const world = setupWorld();
       const frame = extractFrame(world);
       const { lightViewProj } = frame.lights;
       expect(lightViewProj).toBeDefined();
@@ -58,7 +48,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
     });
 
     it('splitPlanes is a Float32Array of length 4', () => {
-      const world = makeWorld(true);
+      const world = setupWorld();
       const frame = extractFrame(world);
       const { splitPlanes } = frame.lights;
       expect(splitPlanes).toBeDefined();
@@ -73,54 +63,10 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
     });
 
     it('cascadeCount and cascadeBlend scalars match component defaults', () => {
-      const world = makeWorld(true);
+      const world = setupWorld();
       const frame = extractFrame(world);
       expect(frame.lights.cascadeCount).toBe(4);
       expect(frame.lights.cascadeBlend).toBeCloseTo(0.2, 5);
-    });
-  });
-
-  describe('castShadow=false: CSM path skipped', () => {
-    it('lightViewProj is undefined when castShadow=false', () => {
-      const world = makeWorld(false);
-      const frame = extractFrame(world);
-      expect(frame.lights.lightViewProj).toBeUndefined();
-    });
-
-    it('splitPlanes, cascadeCount, cascadeBlend are undefined', () => {
-      const world = makeWorld(false);
-      const frame = extractFrame(world);
-      expect(frame.lights.splitPlanes).toBeUndefined();
-      expect(frame.lights.cascadeCount).toBeUndefined();
-      expect(frame.lights.cascadeBlend).toBeUndefined();
-    });
-  });
-
-  describe('ExtractedLights carries bias/PCF from merged DirectionalLight', () => {
-    it('depthBias populated when castShadow=true', () => {
-      const world = makeWorld(true);
-      const frame = extractFrame(world);
-      expect(frame.lights.depthBias).toBeCloseTo(0.01, 5);
-    });
-
-    it('normalBias populated when castShadow=true', () => {
-      const world = makeWorld(true);
-      const frame = extractFrame(world);
-      expect(frame.lights.normalBias).toBeCloseTo(0.08, 5);
-    });
-
-    it('pcfKernelSize populated when castShadow=true', () => {
-      const world = makeWorld(true);
-      const frame = extractFrame(world);
-      expect(frame.lights.pcfKernelSize).toBe(5);
-    });
-
-    it('depthBias, normalBias, pcfKernelSize are undefined when castShadow=false', () => {
-      const world = makeWorld(false);
-      const frame = extractFrame(world);
-      expect(frame.lights.depthBias).toBeUndefined();
-      expect(frame.lights.normalBias).toBeUndefined();
-      expect(frame.lights.pcfKernelSize).toBeUndefined();
     });
   });
 
@@ -129,19 +75,16 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
       const world = new World();
       world.spawn({
         component: DirectionalLight,
-        data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
-          cascadeCount: 1,
-          nearPlane: 0.1,
-          farPlane: 100,
-        },
+        data: { directionX: 0, directionY: -1, directionZ: 0 },
       });
       world.spawn(
         { component: Transform, data: {} },
         { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
       );
+      world.spawn({
+        component: DirectionalLightShadow,
+        data: { cascadeCount: 1, nearPlane: 0.1, farPlane: 100 },
+      });
 
       const frame = extractFrame(world);
       const { lightViewProj, cascadeCount } = frame.lights;
@@ -172,7 +115,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
 
   describe('lightSpaceMatrix deleted', () => {
     it('ExtractedLights does not have lightSpaceMatrix property', () => {
-      const world = makeWorld(true);
+      const world = setupWorld();
       const frame = extractFrame(world);
       expect('lightSpaceMatrix' in frame.lights).toBe(false);
     });
@@ -184,55 +127,41 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
   // dead (research F7): extract never read it, so frame.lights.pcfKernelSize
   // is undefined regardless of the component value -- these cases are RED
   // until M0-T-IMPL-EXTRACT lands.
-  describe('pcfKernelSize wiring (M0, AC-14; merged DirectionalLight)', () => {
+  describe('pcfKernelSize wiring (M0, AC-14)', () => {
     function setupWorldWithPcf(pcfKernelSize: number): World {
       const world = new World();
-      // feat-20260621: shadow fields merged onto DirectionalLight (castShadow
-      // defaults true); pcfKernelSize is read from the same component.
       world.spawn({
         component: DirectionalLight,
-        data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
-          cascadeCount: 1,
-          nearPlane: 0.1,
-          farPlane: 100,
-          pcfKernelSize,
-        },
+        data: { directionX: 0, directionY: -1, directionZ: 0 },
       });
       world.spawn(
         { component: Transform, data: {} },
         { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
       );
+      world.spawn({
+        component: DirectionalLightShadow,
+        data: { cascadeCount: 1, nearPlane: 0.1, farPlane: 100, pcfKernelSize },
+      });
       return world;
     }
 
-    it('reads pcfKernelSize=1 from the merged component', () => {
+    it('reads pcfKernelSize=1 from the component', () => {
       const frame = extractFrame(setupWorldWithPcf(1));
       expect(frame.lights.pcfKernelSize).toBe(1);
     });
 
-    it('reads pcfKernelSize=3 from the merged component', () => {
+    it('reads pcfKernelSize=3 from the component', () => {
       const frame = extractFrame(setupWorldWithPcf(3));
       expect(frame.lights.pcfKernelSize).toBe(3);
     });
 
-    it('reads pcfKernelSize=5 from the merged component', () => {
+    it('reads pcfKernelSize=5 from the component', () => {
       const frame = extractFrame(setupWorldWithPcf(5));
       expect(frame.lights.pcfKernelSize).toBe(5);
     });
 
     it('defaults pcfKernelSize to 3 when the component omits it', () => {
-      const world = new World();
-      world.spawn({
-        component: DirectionalLight,
-        data: { directionX: 0, directionY: -1, directionZ: 0, cascadeCount: 1 },
-      });
-      world.spawn(
-        { component: Transform, data: {} },
-        { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
-      );
+      const world = setupWorld();
       const frame = extractFrame(world);
       expect(frame.lights.pcfKernelSize).toBe(3);
     });

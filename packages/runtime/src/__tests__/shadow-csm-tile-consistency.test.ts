@@ -197,6 +197,7 @@ async function importComponents(): Promise<{
   MeshRenderer: unknown;
   Camera: unknown;
   DirectionalLight: unknown;
+  DirectionalLightShadow: unknown;
   HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
 }> {
   return (await import('../index')) as never;
@@ -248,20 +249,21 @@ async function captureCascadeViewports(cascadeCount: number, mapSize: number): P
     },
     { component: C.Transform, data: { ...identityTransform(), posZ: 3 } },
   );
-  world.spawn({
-    component: C.DirectionalLight,
-    data: {
-      directionX: -0.5,
-      directionY: -1,
-      directionZ: -0.3,
-      colorR: 1,
-      colorG: 1,
-      colorB: 1,
-      intensity: 1,
-      cascadeCount,
-      mapSize,
+  world.spawn(
+    {
+      component: C.DirectionalLight,
+      data: {
+        directionX: -0.5,
+        directionY: -1,
+        directionZ: -0.3,
+        colorR: 1,
+        colorG: 1,
+        colorB: 1,
+        intensity: 1,
+      },
     },
-  });
+    { component: C.DirectionalLightShadow, data: { cascadeCount, mapSize } },
+  );
   world.spawn(
     { component: C.MeshFilter, data: { assetHandle: C.HANDLE_CUBE } },
     { component: C.MeshRenderer, data: {} },
@@ -387,9 +389,6 @@ describe('AC-07: PCF offset coordinate-system self-consistency (static source ch
     expect(src).toMatch(
       /offsetUv\s*=\s*clamp\(\s*uv\s*\+\s*vec2<f32>\(f32\(x\),\s*f32\(y\)\)\s*\*\s*texel\s*,\s*tileLo\s*,\s*tileHi\s*\)/,
     );
-    // One-texel inset tile clamp (merged 5.3-production-shadow-demos variant-free
-    // PCF uses a fixed texel inset; the per-iteration radius clip keeps all taps
-    // of kernels {1,3,5} in-tile).
     expect(src).toMatch(/let\s+tileLo\s*=\s*tileOrigin\s*\+\s*texel/);
     expect(src).toMatch(/let\s+tileHi\s*=\s*tileOrigin\s*\+\s*vec2<f32>\(inv\)\s*-\s*texel/);
     // count=1 => tilesPerSide=1 => inv=1, tileOrigin=(0,0) => uv === tileUv, so

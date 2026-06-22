@@ -36,6 +36,7 @@ import {
   Camera,
   createRenderer,
   DirectionalLight,
+  DirectionalLightShadow,
   HANDLE_CUBE,
   Instances,
   MeshFilter,
@@ -270,24 +271,31 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
     );
 
     // Directional light with shadow mapping
-    world.spawn({
-      component: DirectionalLight,
-      data: {
-        directionX: 0,
-        directionY: -1,
-        directionZ: -0.3,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
-        intensity: 1,
-        mapSize: 1024,
-        depthBias: 0.005,
-        normalBias: 0.05,
-        nearPlane: 0.1,
-        farPlane: 50,
-        pcfKernelSize: 3,
+    world.spawn(
+      {
+        component: DirectionalLight,
+        data: {
+          directionX: 0,
+          directionY: -1,
+          directionZ: -0.3,
+          colorR: 1,
+          colorG: 1,
+          colorB: 1,
+          intensity: 1,
+        },
       },
-    });
+      {
+        component: DirectionalLightShadow,
+        data: {
+          mapSize: 1024,
+          depthBias: 0.005,
+          normalBias: 0.05,
+          nearPlane: 0.1,
+          farPlane: 50,
+          pcfKernelSize: 3,
+        },
+      },
+    );
 
     // N=5 instanced cubes spread along X, or all at origin when FALSIFY.
     const instanceTransforms = FALSIFY_COLLAPSED

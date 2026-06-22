@@ -47,6 +47,7 @@ import { urpPipeline } from '../urp-pipeline';
       perFrameGraph: null,
       instanceBuffers: new Map(),
       warnedZeroLightStandard: false,
+      warnedShadowDisabled: false,
       warnedMultiLightDirectional: false,
       warnedMultiLightPoint: false,
       warnedMultiLightSpot: false,

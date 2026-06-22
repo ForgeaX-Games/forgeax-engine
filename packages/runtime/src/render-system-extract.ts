@@ -119,6 +119,7 @@ import type { AssetRegistry } from './asset-registry';
 import {
   Camera,
   DirectionalLight,
+  DirectionalLightShadow,
   Instances,
   Layer,
   MeshFilter,
@@ -383,57 +384,49 @@ export interface ExtractedLights {
    * projection matrices (one per cascade, length 4 pre-allocated). Each matrix
    * is a column-major 16-float mat4 with atlas tile UV inset baked in
    * (plan-strategy D-3). cascadeCount < 4: unused slots are zero matrices.
-   * Undefined when castShadow=false or no directional light.
+   * Undefined when no DirectionalLightShadow component.
    */
   readonly lightViewProj: readonly Float32Array[] | undefined;
   /**
    * feat-20260613-csm-cascaded-shadow-maps M2 / w9: view-space z depths
    * of the PSSM split planes (length 4, Float32Array). cascadeCount < 4:
-   * unused slots are 0.0f. Undefined when castShadow=false or no directional
-   * light.
+   * unused slots are 0.0f. Undefined when no DirectionalLightShadow component.
    */
   readonly splitPlanes: Float32Array | undefined;
   /**
    * feat-20260613-csm-cascaded-shadow-maps M2 / w9: effective cascade count
-   * from the DirectionalLight component (1..4). Undefined when castShadow=false
-   * or no directional light.
+   * from the DirectionalLightShadow component (1..4). Undefined when shadow
+   * component absent.
    */
   readonly cascadeCount: number | undefined;
   /**
    * feat-20260613-csm-cascaded-shadow-maps M2 / w9: cascade blend width
-   * from the DirectionalLight component (0..0.5). Undefined when castShadow=false
-   * or no directional light.
+   * from the DirectionalLightShadow component (0..0.5). Undefined when shadow
+   * component absent.
    */
   readonly cascadeBlend: number | undefined;
   /**
+   * feat-20260621-learn-render-5-3-production-shadow-demos M0 / AC-14:
+   * pcfKernelSize from the DirectionalLightShadow component (odd, 1/3/5).
+   * Drives the directional shadow PCF tap kernel via View UBO slot [126]
+   * (record stage) -> lighting-directional.wgsl dynamic kernel. Undefined
+   * when no DirectionalLightShadow component.
+   */
+  readonly pcfKernelSize: number | undefined;
+  /**
    * feat-20260520-directional-light-shadow-mapping M1c / w8:
-   * shadowMapSize from DirectionalLight.mapSize. Drives shadow RT
+   * shadowMapSize from DirectionalLightShadow.mapSize. Drives shadow RT
    * lazy-allocate (idempotency: same size -> no rebuild). Undefined when
-   * castShadow=false or no directional light.
+   * no DirectionalLightShadow component.
    */
   readonly shadowMapSize: number | undefined;
   /**
-   * feat-20260621-merge-directionallightshadow-into-directionallight M2:
-   * depthBias from the merged DirectionalLight (constant shadow-bias floor).
-   * Populated when castShadow=true on the first-hit directional light;
-   * undefined otherwise.
+   * feat-20260520-directional-light-shadow-mapping verify round 1 fix:
+   * true when a DirectionalLightShadow entity exists but no DirectionalLight
+   * entity does — i.e. orphan shadow (AC-22). The record stage fires
+   * ShadowDisabledByMissingComponentError once per RenderSystem lifecycle.
    */
-  readonly depthBias: number | undefined;
-  /**
-   * feat-20260621-merge-directionallightshadow-into-directionallight M2:
-   * normalBias from the merged DirectionalLight (slope-based shadow-bias
-   * coefficient).
-   * Populated when castShadow=true on the first-hit directional light;
-   * undefined otherwise.
-   */
-  readonly normalBias: number | undefined;
-  /**
-   * feat-20260621-merge-directionallightshadow-into-directionallight M2:
-   * pcfKernelSize from the merged DirectionalLight (PCF kernel width, odd>=1).
-   * Populated when castShadow=true on the first-hit directional light;
-   * undefined otherwise.
-   */
-  readonly pcfKernelSize: number | undefined;
+  readonly hasOrphanShadow: boolean;
   /**
    * feat-20260612-point-light-shadows-urp-hdrp M1 / T-M1-7:
    * shadow-casting point lights (PointLight + PointLightShadow + Transform
@@ -1128,7 +1121,7 @@ export interface ExtractPipelineSurface {
  *   C_i = λ·n·(f/n)^(i/m) + (1-λ)·(n + i/m·(f-n))
  *   where i = 1..m, n = nearPlane, f = farPlane, m = cascadeCount
  *
- * Uses the DirectionalLight component's nearPlane/farPlane (not camera
+ * Uses the DirectionalLightShadow component's nearPlane/farPlane (not camera
  * near/far — D-8). Returns strictly monotonic view-space z depths (positive).
  *
  * When `farPlane <= nearPlane + ε` (ε=1e-6), throws ShadowInvalidConfigError
@@ -1415,22 +1408,6 @@ export function extractFrame(
   // deg -> cos (D-S2); range -> 1/range^2 (D-S5).
   let directional: DirectionalLightSnapshot | undefined;
   let directionalCount = 0;
-  // feat-20260621 M2: capture shadow fields from the first-hit DirectionalLight.
-  // castShadow defaults to true; the CSM path is gated on firstHitCastShadow !== false.
-  let firstHitCastShadow: boolean | undefined;
-  let firstHitShadowFields:
-    | {
-        cascadeCount: number;
-        splitLambda: number;
-        cascadeBlend: number;
-        mapSize: number;
-        depthBias: number;
-        normalBias: number;
-        nearPlane: number;
-        farPlane: number;
-        pcfKernelSize: number;
-      }
-    | undefined;
   queryRun(directionalLightQuery, world, (bundle) => {
     const l = bundle.DirectionalLight;
     for (let i = 0; i < bundle.Entity.self.length; i++) {
@@ -1449,18 +1426,6 @@ export function extractFrame(
       if (directional === undefined) {
         // First hit wins; record-stage N>1 fail-fast (M3 / w19) flags duplicates.
         directional = snapshot;
-        firstHitCastShadow = (l.castShadow[i] ?? 1) !== 0;
-        firstHitShadowFields = {
-          cascadeCount: l.cascadeCount[i] ?? 4,
-          splitLambda: l.splitLambda[i] ?? 0.75,
-          cascadeBlend: l.cascadeBlend[i] ?? 0.2,
-          mapSize: l.mapSize[i] ?? 2048,
-          depthBias: l.depthBias[i] ?? 0.005,
-          normalBias: l.normalBias[i] ?? 0.05,
-          nearPlane: l.nearPlane[i] ?? 0.1,
-          farPlane: l.farPlane[i] ?? 50,
-          pcfKernelSize: l.pcfKernelSize[i] ?? 3,
-        };
       }
     }
   });
@@ -1570,6 +1535,7 @@ export function extractFrame(
   let splitPlanes: Float32Array | undefined;
   let cascadeCount: number | undefined;
   let cascadeBlend: number | undefined;
+  let pcfKernelSize: number | undefined;
   let shadowMapSize: number | undefined;
 
   // Camera data needed for frustum corner computation (first camera only;
@@ -1609,23 +1575,24 @@ export function extractFrame(
     };
   }
 
-  // feat-20260621 M2: CSM computation gated on castShadow from the
-  // merged DirectionalLight. castShadow defaults to true (first-hit-wins
-  // semantics, D-6 no cardinality cap). The independent shadowQuery and
-  // orphanShadowQuery are removed; shadow fields live on DirectionalLight.
-  if (directional !== undefined && firstHitCastShadow !== false) {
+  if (directional !== undefined) {
     const dirSnapshot = directional;
-    const sf = firstHitShadowFields;
-    if (sf !== undefined) {
-      const mapSize = sf.mapSize;
-      const cc = sf.cascadeCount;
-      const sl = sf.splitLambda;
-      const cb = sf.cascadeBlend;
-      const sNear = sf.nearPlane;
-      const sFar = sf.farPlane;
+    const shadowQuery = createQueryState({ with: [DirectionalLightShadow, Entity] });
+    queryRun(shadowQuery, world, (bundle) => {
+      if (bundle.Entity.self.length === 0) return;
+      const s = bundle.DirectionalLightShadow;
+      const i = 0; // cardinality=1: first hit only
+      const mapSize = s.mapSize?.[i] ?? 2048;
+      const cc = s.cascadeCount?.[i] ?? 4;
+      const sl = s.splitLambda?.[i] ?? 0.75;
+      const cb = s.cascadeBlend?.[i] ?? 0.2;
+      const sNear = s.nearPlane?.[i] ?? 0.1;
+      const sFar = s.farPlane?.[i] ?? 50;
+      const pcf = s.pcfKernelSize?.[i] ?? 3;
       shadowMapSize = mapSize;
       cascadeCount = Math.round(cc);
       cascadeBlend = cb;
+      pcfKernelSize = Math.round(pcf);
 
       // PSSM split planes (D-8: component nearPlane/farPlane, not camera).
       const splits = pssmSplit(sNear, sFar, cascadeCount, sl);
@@ -1778,7 +1745,22 @@ export function extractFrame(
       }
 
       lightViewProj = resultLightViewProjs;
-    }
+    });
+  }
+
+  // feat-20260520-directional-light-shadow-mapping verify round 1 fix
+  // (AC-22): detect orphan DirectionalLightShadow — entity exists but has
+  // no DirectionalLight on the same entity. The record stage fires
+  // ShadowDisabledByMissingComponentError once per RenderSystem lifecycle.
+  let hasOrphanShadow = false;
+  {
+    const orphanShadowQuery = createQueryState({ with: [DirectionalLightShadow, Entity] });
+    queryRun(orphanShadowQuery, world, (bundle) => {
+      if (bundle.Entity.self.length === 0) return;
+      if (directional === undefined) {
+        hasOrphanShadow = true;
+      }
+    });
   }
 
   // feat-20260613-csm M3 / w14 (plan-strategy §D-7): pad the up-to-4
@@ -1886,10 +1868,9 @@ export function extractFrame(
     splitPlanes: splitPlanes !== undefined ? paddedSplitPlanes : undefined,
     cascadeCount,
     cascadeBlend,
+    pcfKernelSize,
     shadowMapSize,
-    depthBias: firstHitCastShadow !== false ? firstHitShadowFields?.depthBias : undefined,
-    normalBias: firstHitCastShadow !== false ? firstHitShadowFields?.normalBias : undefined,
-    pcfKernelSize: firstHitCastShadow !== false ? firstHitShadowFields?.pcfKernelSize : undefined,
+    hasOrphanShadow,
     pointShadow: pointShadowSnapshots,
   };
 

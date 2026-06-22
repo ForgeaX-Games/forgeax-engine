@@ -370,7 +370,7 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
     //
     // feat-20260613-csm M6 / w22: the legacy 'shadow' pass is now N
     // independent 'shadowCascade<i>' passes (one per cascade tile in the
-    // atlas, D-4). Without DirectionalLight with castShadow the urp falls back to
+    // atlas, D-4). Without DirectionalLightShadow the urp falls back to
     // cascadeCount=1 -> a single 'shadowCascade0' pass.
     //
     // feat-20260612-point-light-shadows-urp-hdrp M3 / T-M3-4: 'point-shadow'

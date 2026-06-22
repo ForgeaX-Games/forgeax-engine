@@ -12,7 +12,8 @@ import { World } from '@forgeax/engine-ecs';
 import type { Handler, RegisterMethodResult, Registry } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { DirectionalLight } from '../components/directional-light';
-import { ShadowInvalidConfigError } from '../errors';
+import { DirectionalLightShadow } from '../components/directional-light-shadow';
+import { ShadowDisabledByMissingComponentError, ShadowInvalidConfigError } from '../errors';
 import { registerRuntimeInspector } from '../register-inspector';
 import { extractFrame } from '../render-system-extract';
 import type { Renderer } from '../renderer';
@@ -120,26 +121,6 @@ describe('shadow inspector bucket', () => {
       expect(reg.methods.has('runtime.shadow.debugReadback')).toBe(false);
     });
 
-    // AC-11(d): when engine.directionalShadow (backed by PipelineState
-    // shadowTexture === null) returns null (castShadow:false or no shadow RT
-    // allocated), the mapSize inspector handler returns { mapSize: 0 }.
-    it('AC-11(d): mapSize handler returns { mapSize: 0 } when engine.directionalShadow is null', () => {
-      const world = new World();
-
-      const reg = new FakeRegistry();
-      const rendererWithNullShadow = {
-        ...makeFakeRenderer(),
-        directionalShadow: null,
-      } as unknown as Renderer;
-      registerRuntimeInspector(reg, rendererWithNullShadow, world);
-
-      const handler = reg.methods.get('runtime.lights.directionalShadow.mapSize');
-      expect(handler).toBeDefined();
-      if (handler === undefined) throw new Error('mapSize handler not registered');
-      const result = handler(undefined);
-      expect(result).toEqual({ mapSize: 0 });
-    });
-
     it('registerMethod same-name fail-fast (register twice -> error)', () => {
       const world = new World();
 
@@ -155,14 +136,12 @@ describe('shadow inspector bucket', () => {
     });
   });
 
-  // ── AC-04: castShadow gates shadowMapSize via extractFrame ─────────────
-  // feat-20260621: orphan-shadow detection is gone (no separate shadow
-  // component to orphan); "shadow off" is now simply castShadow:false, which
-  // the extract surfaces as shadowMapSize === undefined.
-  describe('AC-04 castShadow gates extract shadowMapSize', () => {
-    it('castShadow:false -> directional defined, shadowMapSize undefined', () => {
+  // ── AC-04/22: once-warn flags via extractFrame ─────────────────────────
+  describe('AC-04/22 extractFrame once-warn detection', () => {
+    it('hasOrphanShadow=false when no DirectionalLightShadow entity exists', () => {
       const world = new World();
 
+      // Spawn DirectionalLight only — no DirectionalLightShadow entity at all
       world
         .spawn({
           component: DirectionalLight,
@@ -174,45 +153,87 @@ describe('shadow inspector bucket', () => {
             colorG: 1,
             colorB: 1,
             intensity: 1,
-            castShadow: false,
           },
         })
         .unwrap();
 
       const extracted = extractFrame(world);
+      // hasOrphanShadow=false because no DirectionalLightShadow entity exists
+      expect(extracted.lights.hasOrphanShadow).toBe(false);
+      // light without shadow -> shadowMapSize is undefined (record fires once-warn)
       expect(extracted.lights.directional).toBeDefined();
       expect(extracted.lights.shadowMapSize).toBeUndefined();
     });
 
-    it('no DirectionalLight -> directional undefined, shadowMapSize undefined', () => {
-      const world = new World();
-      const extracted = extractFrame(world);
-      expect(extracted.lights.directional).toBeUndefined();
-      expect(extracted.lights.shadowMapSize).toBeUndefined();
-    });
-
-    it('castShadow default (true) with mapSize -> shadowMapSize populated', () => {
+    it('AC-22: hasOrphanShadow=true when DirectionalLightShadow entity exists without DirectionalLight', () => {
       const world = new World();
 
+      // Spawn DirectionalLightShadow WITHOUT DirectionalLight
       world
         .spawn({
-          component: DirectionalLight,
-          data: {
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
-            colorR: 1,
-            colorG: 1,
-            colorB: 1,
-            intensity: 1,
-            mapSize: 2048,
-          },
+          component: DirectionalLightShadow,
+          data: { mapSize: 1024 },
         })
         .unwrap();
 
       const extracted = extractFrame(world);
+      expect(extracted.lights.hasOrphanShadow).toBe(true);
+      expect(extracted.lights.directional).toBeUndefined();
+    });
+
+    it('hasOrphanShadow=false when both components co-exist on same entity', () => {
+      const world = new World();
+
+      world
+        .spawn(
+          {
+            component: DirectionalLight,
+            data: {
+              directionX: 0,
+              directionY: -1,
+              directionZ: 0,
+              colorR: 1,
+              colorG: 1,
+              colorB: 1,
+              intensity: 1,
+            },
+          },
+          {
+            component: DirectionalLightShadow,
+            data: { mapSize: 2048 },
+          },
+        )
+        .unwrap();
+
+      const extracted = extractFrame(world);
+      expect(extracted.lights.hasOrphanShadow).toBe(false);
       expect(extracted.lights.directional).toBeDefined();
       expect(extracted.lights.shadowMapSize).toBe(2048);
+    });
+
+    it('AC-04: light without shadow — extract sees undefined shadowMapSize with defined directional', () => {
+      const world = new World();
+
+      world
+        .spawn({
+          component: DirectionalLight,
+          data: {
+            directionX: 0,
+            directionY: -1,
+            directionZ: 0,
+            colorR: 1,
+            colorG: 1,
+            colorB: 1,
+            intensity: 1,
+          },
+        })
+        .unwrap();
+
+      const extracted = extractFrame(world);
+      // AC-04 condition: light exists, shadow does not
+      expect(extracted.lights.directional).toBeDefined();
+      expect(extracted.lights.shadowMapSize).toBeUndefined();
+      expect(extracted.lights.hasOrphanShadow).toBe(false);
     });
   });
 
@@ -232,7 +253,7 @@ describe('shadow inspector bucket', () => {
       const world = new World();
 
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: { mapSize: 0 },
       });
       expect(r.ok).toBe(false);
@@ -256,38 +277,29 @@ describe('shadow inspector bucket', () => {
       const world = new World();
 
       const r = world.spawn({
-        component: DirectionalLight,
+        component: DirectionalLightShadow,
         data: { mapSize: 1 },
       });
       expect(r.ok).toBe(true);
     });
   });
 
-  // ── castShadow: false shadow-off assertions ─────────────────────────
-  describe('castShadow: false shadow-off', () => {
-    it('light with castShadow:false — extract sees undefined shadowMapSize', () => {
-      const world = new World();
+  // ── ShadowDisabledByMissingComponentError structured properties ────────
+  describe('ShadowDisabledByMissingComponentError', () => {
+    it('missingKind=shadow carries AC-04 code and hint', () => {
+      const err = new ShadowDisabledByMissingComponentError('shadow');
+      expect(err.code).toBe('shadow-disabled-by-missing-component');
+      expect(err.name).toBe('ShadowDisabledByMissingComponentError');
+      expect(err.expected).toBe('DirectionalLightShadow on same entity as DirectionalLight');
+      expect(err.hint).toContain('Spawn DirectionalLightShadow');
+    });
 
-      world
-        .spawn({
-          component: DirectionalLight,
-          data: {
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
-            colorR: 1,
-            colorG: 1,
-            colorB: 1,
-            intensity: 1,
-            castShadow: false,
-          },
-        })
-        .unwrap();
-
-      const extracted = extractFrame(world);
-      expect(extracted.lights.directional).toBeDefined();
-      // castShadow:false => shadow simply off, no error
-      expect(extracted.lights.shadowMapSize).toBeUndefined();
+    it('missingKind=light carries AC-22 code and hint', () => {
+      const err = new ShadowDisabledByMissingComponentError('light');
+      expect(err.code).toBe('shadow-disabled-by-missing-component');
+      expect(err.expected).toBe('DirectionalLight on same entity as DirectionalLightShadow');
+      expect(err.hint).toContain('Spawn DirectionalLight');
+      expect(err.hint).toContain('orphaned');
     });
   });
 });

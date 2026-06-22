@@ -6,6 +6,3 @@
 
 node_modules/
 dist/
-# Local build artifact cp'd from the main checkout per CLAUDE.md worktree discipline;
-# never tracked (this package no longer ships its own wasm bundle).
-wgpu_wasm_bg.wasm

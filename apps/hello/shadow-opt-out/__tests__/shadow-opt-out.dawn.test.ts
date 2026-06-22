@@ -18,6 +18,7 @@ import {
   Camera,
   createRenderer,
   DirectionalLight,
+  DirectionalLightShadow,
   HANDLE_CUBE,
   Materials,
   MeshFilter,
@@ -123,6 +124,11 @@ function buildWorld(): World {
         colorG: 0.95,
         colorB: 0.9,
         intensity: 1.0,
+      },
+    },
+    {
+      component: DirectionalLightShadow,
+      data: {
         // feat-20260613-csm M6 / w22: matches apps/hello/shadow-opt-out/src/main.ts
         // (cascadeCount=1, the AC-10 degenerate baseline). Pre-CSM the test
         // pinned orthoHalfExtent=8 to match the legacy fixed-extent path;

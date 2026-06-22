@@ -687,7 +687,7 @@ export interface Component<N extends string = string, S extends ComponentSchema 
    * Optional cardinality bound for this component type (plan-strategy D-3).
    *
    * When set to a positive integer (canonical first consumer:
-   * `PointLightShadow` with `cardinality = 4`), `world.spawn` and
+   * `DirectionalLightShadow` with `cardinality = 1`), `world.spawn` and
    * `world.addComponent` enforce that at most `cardinality` entities carry
    * this component at any time. Violations return
    * `CardinalityExceededError` with `.code = 'cardinality-exceeded'`.
@@ -1047,7 +1047,7 @@ export interface DefineComponentOptions<S extends ComponentSchema = ComponentSch
    * Optional cardinality bound for this component type (plan-strategy D-3).
    *
    * When set to a positive integer (canonical first consumer:
-   * `PointLightShadow` with `cardinality = 4`), `world.spawn` and
+   * `DirectionalLightShadow` with `cardinality = 1`), `world.spawn` and
    * `world.addComponent` enforce that at most `cardinality` entities carry
    * this component at any time. Violations return
    * `CardinalityExceededError` with `.code = 'cardinality-exceeded'`.

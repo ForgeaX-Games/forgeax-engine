@@ -778,7 +778,7 @@ export interface PipelineState {
   /**
    * feat-20260520-directional-light-shadow-mapping M2 / w14 (D-1):
    * 1x1 depth32float fallback bound at viewBindGroup binding(3) when no
-   * shadow RT exists (castShadow:false or allocation failed).
+   * shadow RT exists (no DirectionalLightShadow or allocation failed).
    * Cleared to 1.0 (far plane) so comparison-sampler always returns fully lit.
    */
   readonly shadowFallbackTextureView: TextureView;
@@ -1062,7 +1062,7 @@ export interface PerPassResources {
    * AGENTS.md §Change stance exception for external-visible wire
    * protocols with known downstream consumers. Populated each frame
    * from `lights.lightViewProj[0]`. Null before the first extract with
-   * an active shadow-casting DirectionalLight.
+   * an active DirectionalLightShadow.
    */
   shadowLightSpaceMatrix: Float32Array | null;
   /**
@@ -1070,7 +1070,7 @@ export interface PerPassResources {
    * lightViewProj concatenation (4 × 16 = 64 f32, col-major) consumed by
    * `debugSampleShadowFactor` so the probe can pick the right cascade
    * geometrically (frustum containment). Null before the first extract
-   * with an active shadow-casting DirectionalLight.
+   * with an active DirectionalLightShadow.
    */
   shadowCsmLightViewProj: Float32Array | null;
 
@@ -1242,6 +1242,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     perFrameGraph: null,
     instanceBuffers: new Map(),
     warnedZeroLightStandard: false,
+    warnedShadowDisabled: false,
     warnedMultiLightDirectional: false,
     warnedMultiLightPoint: false,
     warnedMultiLightSpot: false,

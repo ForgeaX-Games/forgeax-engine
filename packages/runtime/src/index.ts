@@ -57,6 +57,7 @@ export {
   // RecoverError class re-exported so AI users `instanceof RecoverError` the
   // recover() failure (peer convention to SkinMaterialMismatchError etc.).
   RecoverError,
+  ShadowDisabledByMissingComponentError,
   ShadowInvalidConfigError,
   SkeletonResolveFailedError,
   SkinMaterialMismatchError,
@@ -289,6 +290,7 @@ export {
   Children,
   cameraProjectionFromF32,
   DirectionalLight,
+  DirectionalLightShadow,
   Instances,
   type InstancesData,
   Layer,

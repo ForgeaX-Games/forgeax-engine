@@ -358,7 +358,7 @@ export interface Renderer {
    * pixel POD { center, corners: {tl,tr,bl,br}, mapSize }. Uses
    * copyTextureToBuffer + mapAsync + Float32Array direct read. Returns null
    * when no shadow RT is allocated (shadow pass hasn't run yet, or no
-   * DirectionalLight with castShadow).
+   * DirectionalLightShadow component).
    *
    * AI users consume per-pixel depth values as [0,1] floats; no 24-in-32
    * unorm decode needed (depth32float, D-2 round-3).
@@ -378,7 +378,7 @@ export interface Renderer {
    * lights.directionalShadow exposes shadow configuration (mapSize,
    * lightSpaceMatrix) for Inspector consumption. Null when the renderer
    * has no active shadow system (shader manifest empty or no
-   * DirectionalLight with castShadow).
+   * DirectionalLightShadow component).
    */
   readonly directionalShadow?: {
     readonly mapSize: number;

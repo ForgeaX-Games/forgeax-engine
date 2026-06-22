@@ -77,12 +77,11 @@ world.spawn({ component: Camera, data: {} }).unwrap();
 - **材质注册失败走黑/白回退**：`.pack.json` 里 `passes[].shader` 标识符改名残留 → `register failed: shader 'X' not registered`。见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §shader 标识符残留。
 - **物体不在该在的位置**：`Transform` 写的是 local TRS，引擎每帧派生 world mat4；要读世界坐标见 [`forgeax-engine-math`](../forgeax-engine-math/SKILL.md)。
 - **glTF 蒙皮模型 (`.glb` w/ JOINTS_0+WEIGHTS_0) 自动用 `pbr-skin` shader**：cooker (`@forgeax/engine-gltf` `gltfDocToSceneAsset`) 在 mesh 含 `skinAttrs` 时把 material `passes[].shader` 从 `forgeax::default-standard-pbr` 改写为 `forgeax::pbr-skin` (feat-20260611 w17-a)；不需要手写 `.pack.json` 选 shader。下游 18F vertex layout / `pbr-skin-pl` pipeline-layout / extract 18F↔pbr-skin 同进同退由 runtime 自动接通。整链路诊断见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §skin-vertex-attribute-chain。
-- **方向光阴影不出现**：`DirectionalLight.castShadow` 默认为 `true`（feat-20260621 合并后），zero-config spawn 即投射 CSM 阴影。阴影不出现的两大根因：(a) `castShadow` 被手动设为 `false`——设回 `true` 或不填（走默认 true）；(b) **mesh 的材质缺少 `ShadowCaster` pass**——`Materials.standard(...)` 工厂自动产出 `passKind='shadow-caster'` 的 pass，引擎拿它把 mesh 画进 shadow depth atlas。手写 `MaterialAsset` 字面量如果只声明了 `forward` / `deferred` pass 而缺少 `shadow-caster`，该 mesh 静默不写入 shadow atlas——`castShadow` 开着也没阴影。修法：在 `passes[]` 里加一条 `{ name: 'ShadowCaster', shader: 'forgeax::default-standard-pbr' }` 或直接改用 `Materials.standard(...)` 工厂。详见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §方向光阴影不出现。
 
 ## 深入
 
 - 渲染流程（zero-config 默认 vs tonemap opt-in）/ FXAA / built-in mesh handles：见 `packages/runtime/README.md` §Render flow · §Built-in mesh handles
-- 灯光 / shadow mapping / `DirectionalLight` shadow 字段（合并后，`castShadow` 开关）：见 `packages/runtime/README.md` §Lights · §Shadow mapping（`pcfKernelSize` drives directional shadow PCF kernel size, 1=hard / 3=soft / 5=softer；`depthBias`/`normalBias` drive the slope-scaled shadow bias）
+- 灯光 / shadow mapping / `DirectionalLightShadow`：见 `packages/runtime/README.md` §Lights · §Shadow mapping（`pcfKernelSize` now wired: drives directional shadow PCF kernel size, 1=hard / 3=soft / 5=softer）
 - `Materials` 工厂 + `MaterialAsset` pass 结构：源码 SSOT `packages/runtime/src/materials.ts` + `packages/runtime/src/asset-registry.ts`
 - 组件字段定义：源码 `packages/runtime/src/components/{mesh-filter,mesh-renderer,directional-light,point-light,spot-light,skylight}.ts`
 - Skylight 环境光（可选 cubemap 纯色 fallback + color/intensity）：源码 SSOT `packages/runtime/src/components/skylight.ts` + `packages/runtime/src/ibl/skylight-bind-group.ts`（白 fallback irradiance cube）+ IBL 完整链路见 `packages/runtime/README.md` §Skylight / IBL

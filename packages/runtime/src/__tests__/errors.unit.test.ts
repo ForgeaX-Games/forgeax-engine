@@ -844,12 +844,14 @@ import { RhiErrorListenerRegistry } from '../renderer';
 {
   // ─── from errors.test.ts ───
   describe('errors.test.ts', () => {
-    describe('AC-11 RuntimeErrorCode exhaustive switch (11 members, no default)', () => {
+    describe('AC-11 RuntimeErrorCode exhaustive switch (12 members, no default)', () => {
       it('exhaustive switch covers all members without a default branch', () => {
         function exhaustive(code: RuntimeErrorCode): string {
           switch (code) {
             case 'shadow-invalid-config':
               return 'shadow invalid config';
+            case 'shadow-disabled-by-missing-component':
+              return 'shadow disabled by missing component';
             case 'skin-joint-count-exceeded':
               return 'skin joint count exceeded';
             case 'skin-joint-despawned':
@@ -941,6 +943,8 @@ import { RhiErrorListenerRegistry } from '../renderer';
         function exhaustive(code: RuntimeErrorCode): string {
           switch (code) {
             case 'shadow-invalid-config':
+              return 'ok';
+            case 'shadow-disabled-by-missing-component':
               return 'ok';
             case 'skin-joint-count-exceeded':
               return 'ok';

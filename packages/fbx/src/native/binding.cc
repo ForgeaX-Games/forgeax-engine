@@ -435,19 +435,14 @@ static void WriteSkinData(FbxScene* scene, std::string& result) {
 // === Animation extraction (t47) ===========================================
 
 /**
- * Write animation clip data: iterate FbxAnimStack -> FbxAnimLayer -> nodes.
+ * Write animation clip data: iterate FbxAnimStack -> FbxAnimLayer ->
+ * FbxAnimCurveNode -> per-axis keys. Output raw per-axis keyTimes +
+ * keyValues for each TRS channel, unmerged (merge + resample in TS bridge).
  *
- * For every key time on a node's LclTranslation / LclRotation / LclScaling
- * curves we re-sample node->EvaluateLocalTransform(t) and decompose to TRS
- * via GetT / GetQ / GetS -- the SAME authoritative path WalkNode uses for the
- * bind pose. Rotation is emitted as a real unit quaternion (x,y,z,w), NOT raw
- * euler-degree curve values; this lets the SDK resolve rotation order,
- * pre/post-rotation and pivot offsets instead of us reconstructing them.
- *
- * Output schema (flat per-channel timeline, one channel per animated TRS slot):
- *   { targetNode, property, keyTimes:[t...], keyValues:[...] }
- * keyValues stride is 3 for translation/scale, 4 for rotation (quat xyzw).
- * The TS bridge (parse-animation-clip.ts) merges + resamples to a fixed fps.
+ * Uses EvaluateLocalTransform(time) for matrix-based evaluation
+ * (Unity SWIG ground truth), then decompose to TRS for per-axis output.
+ * This avoids direct LclTranslation/LclRotation/LclScale property reading
+ * which may be stale for procedurally-driven animations.
  */
 static void WriteAnimationData(FbxScene* scene, std::string& result) {
   int animStackCount = scene->GetSrcObjectCount<FbxAnimStack>();
@@ -467,15 +462,11 @@ static void WriteAnimationData(FbxScene* scene, std::string& result) {
     FbxAnimLayer* layer = animStack->GetMember<FbxAnimLayer>(0);
     if (!layer) continue;
 
-    // EvaluateLocalTransform(t) evaluates against the scene's CURRENT anim
-    // stack; without this it returns the rest pose at every time (identity
-    // animation). WalkNode gets away without it because rest pose == bind pose.
-    scene->SetCurrentAnimationStack(animStack);
-
+    // Collect all animated nodes via curve nodes
     FbxNode* root = scene->GetRootNode();
     if (!root) continue;
 
-    // Build node path map (DFS) + flat node list.
+    // Build node path map: flat name -> full path
     std::map<FbxNode*, std::string> nodePaths;
     std::vector<FbxNode*> allNodes;
 
@@ -496,57 +487,58 @@ static void WriteAnimationData(FbxScene* scene, std::string& result) {
       }
     }
 
-    // Collect the union of every key time on a node's curve node into `out`
-    // (seconds). Walks all curves under all destination properties so a
-    // single-curve (dc=1) or per-axis (dc=3) rotation node both contribute.
-    auto collectTimes = [](FbxAnimCurveNode* cn, std::set<double>& out) {
-      if (!cn) return;
-      int dc = cn->GetDstPropertyCount();
-      for (int d = 0; d < dc; d++) {
-        int chCount = cn->GetCurveCount(d);
-        for (int ch = 0; ch < chCount; ch++) {
-          FbxAnimCurve* curve = cn->GetCurve(d, ch);
-          if (!curve) continue;
-          int keyCount = curve->KeyGetCount();
-          for (int k = 0; k < keyCount; k++) {
-            out.insert(curve->KeyGetTime(k).GetSecondDouble());
-          }
-        }
-      }
-    };
-
-    // Global time span (for clip duration).
-    double minTime = 0.0, maxTime = 0.0;
+    // Determine time span: iterate all curve nodes to get min/max key time
+    FbxTime minTime, maxTime;
     bool hasKeys = false;
 
     for (size_t ni = 0; ni < allNodes.size(); ni++) {
       FbxNode* node = allNodes[ni];
-      std::set<double> times;
-      collectTimes(node->LclTranslation.GetCurveNode(layer), times);
-      collectTimes(node->LclRotation.GetCurveNode(layer), times);
-      collectTimes(node->LclScaling.GetCurveNode(layer), times);
-      if (times.empty()) continue;
-      double lo = *times.begin();
-      double hi = *times.rbegin();
-      if (!hasKeys) {
-        minTime = lo;
-        maxTime = hi;
-        hasKeys = true;
-      } else {
-        if (lo < minTime) minTime = lo;
-        if (hi > maxTime) maxTime = hi;
-      }
+      FbxAnimCurveNode* cnT = node->LclTranslation.GetCurveNode(layer);
+      FbxAnimCurveNode* cnR = node->LclRotation.GetCurveNode(layer);
+      FbxAnimCurveNode* cnS = node->LclScaling.GetCurveNode(layer);
+
+      auto scanNode = [&](FbxAnimCurveNode* cn) {
+        if (!cn) return;
+        int dc = cn->GetDstPropertyCount();
+        for (int d = 0; d < dc; d++) {
+          int chCount = cn->GetCurveCount(d);
+          for (int ch = 0; ch < chCount; ch++) {
+            FbxAnimCurve* curve = cn->GetCurve(d, ch);
+            if (!curve) continue;
+            int keyCount = curve->KeyGetCount();
+            if (keyCount == 0) continue;
+            FbxTime kt = curve->KeyGetTime(0);
+            if (!hasKeys) {
+              minTime = kt;
+              maxTime = curve->KeyGetTime(keyCount - 1);
+              hasKeys = true;
+            } else {
+              if (kt < minTime) minTime = kt;
+              FbxTime lastKt = curve->KeyGetTime(keyCount - 1);
+              if (lastKt > maxTime) maxTime = lastKt;
+            }
+          }
+        }
+      };
+      scanNode(cnT);
+      scanNode(cnR);
+      scanNode(cnS);
     }
 
     if (!hasKeys) continue;
-    double duration = maxTime - minTime;
+
+    // Duration in seconds
+    double duration = (maxTime - minTime).GetSecondDouble();
     if (duration <= 0) continue;
 
     if (clipIdx > 0) clipsJson << ",";
     clipsJson << "{";
+
     const char* stackName = animStack->GetName();
     clipsJson << "\"name\":\"" << (stackName ? stackName : "") << "\",";
     clipsJson << "\"duration\":" << duration << ",";
+
+    // Channels: per-node TRS property with per-axis raw keys
     clipsJson << "\"channels\":[";
     bool firstChannel = true;
 
@@ -556,103 +548,86 @@ static void WriteAnimationData(FbxScene* scene, std::string& result) {
       FbxAnimCurveNode* cnR = node->LclRotation.GetCurveNode(layer);
       FbxAnimCurveNode* cnS = node->LclScaling.GetCurveNode(layer);
 
-      // Per-property key-time sets. A property gets a channel only if it owns
-      // animation curves (mirrors glTF: no channel for static slots).
-      std::set<double> tT, tR, tS;
-      collectTimes(cnT, tT);
-      collectTimes(cnR, tR);
-      collectTimes(cnS, tS);
-      if (tT.empty() && tR.empty() && tS.empty()) continue;
+      auto writeChannel = [&](const char* propName, FbxAnimCurveNode* cn) {
+        if (!cn) return;
+        int dc = cn->GetDstPropertyCount();
+        // FBX SDK rotation curve nodes may have dc=3 (X/Y/Z) or dc=1
+        // (all components in one curve). Accept any non-zero dc.
+        if (dc < 1) return;
 
-      // Per-node sample timeline = union of all its animated properties, so a
-      // single EvaluateLocalTransform(t) feeds every channel on this node.
-      std::set<double> tAll;
-      tAll.insert(tT.begin(), tT.end());
-      tAll.insert(tR.begin(), tR.end());
-      tAll.insert(tS.begin(), tS.end());
-      std::vector<double> times(tAll.begin(), tAll.end());
+        // Gather per-axis keys
+        std::vector<double> kt[3], kv[3]; // X, Y, Z
+        int axisCount = dc >= 3 ? 3 : dc;
+        for (int d = 0; d < axisCount; d++) {
+          int chCount = cn->GetCurveCount(d);
+          for (int ch = 0; ch < chCount; ch++) {
+            FbxAnimCurve* curve = cn->GetCurve(d, ch);
+            if (!curve) continue;
+            int keyCount = curve->KeyGetCount();
+            for (int k = 0; k < keyCount; k++) {
+              FbxTime t = curve->KeyGetTime(k);
+              double val = curve->KeyGetValue(k);
+              kt[d].push_back(t.GetSecondDouble());
+              kv[d].push_back(val);
+            }
+          }
+        }
 
-      // Evaluate the SDK local transform once per key time, decompose to TRS.
-      size_t n = times.size();
-      std::vector<double> tx(n), ty(n), tz(n);
-      std::vector<double> qx(n), qy(n), qz(n), qw(n);
-      std::vector<double> sx(n), sy(n), sz(n);
-      double pqx = 0, pqy = 0, pqz = 0, pqw = 1; // previous quat for sign fix
-      for (size_t f = 0; f < n; f++) {
-        FbxTime ft;
-        ft.SetSecondDouble(times[f]);
-        FbxAMatrix m = node->EvaluateLocalTransform(ft);
-        FbxVector4 t = m.GetT();
-        FbxQuaternion q = m.GetQ();
-        FbxVector4 s = m.GetS();
-        tx[f] = t[0]; ty[f] = t[1]; tz[f] = t[2];
-        double cx = q[0], cy = q[1], cz = q[2], cw = q[3];
-        // Canonicalize sign for short-arc continuity across adjacent keys
-        // (EvaluateLocalTransform may flip the quaternion hemisphere).
-        if (cx * pqx + cy * pqy + cz * pqz + cw * pqw < 0) {
-          cx = -cx; cy = -cy; cz = -cz; cw = -cw;
+        // Skip channels with no keys
+        bool anyKeys = false;
+        for (int d = 0; d < axisCount; d++) {
+          if (!kt[d].empty()) { anyKeys = true; break; }
         }
-        qx[f] = pqx = cx; qy[f] = pqy = cy; qz[f] = pqz = cz; qw[f] = pqw = cw;
-        sx[f] = s[0]; sy[f] = s[1]; sz[f] = s[2];
-      }
+        if (!anyKeys) return;
 
-      auto writeArr = [&](const std::vector<double>& v) {
-        clipsJson << "[";
-        for (size_t i = 0; i < v.size(); i++) {
-          if (i > 0) clipsJson << ",";
-          clipsJson << v[i];
-        }
-        clipsJson << "]";
-      };
-      auto writeTimes = [&]() {
-        clipsJson << "[";
-        for (size_t i = 0; i < times.size(); i++) {
-          if (i > 0) clipsJson << ",";
-          clipsJson << times[i];
-        }
-        clipsJson << "]";
-      };
-      auto interleave3 = [&](const std::vector<double>& a,
-                             const std::vector<double>& b,
-                             const std::vector<double>& c) {
-        clipsJson << "[";
-        for (size_t i = 0; i < a.size(); i++) {
-          if (i > 0) clipsJson << ",";
-          clipsJson << a[i] << "," << b[i] << "," << c[i];
-        }
-        clipsJson << "]";
-      };
-      auto interleave4 = [&](const std::vector<double>& a,
-                             const std::vector<double>& b,
-                             const std::vector<double>& c,
-                             const std::vector<double>& d) {
-        clipsJson << "[";
-        for (size_t i = 0; i < a.size(); i++) {
-          if (i > 0) clipsJson << ",";
-          clipsJson << a[i] << "," << b[i] << "," << c[i] << "," << d[i];
-        }
-        clipsJson << "]";
-      };
-      (void)writeArr;
-
-      auto emitChannel = [&](const char* propName, char kind) {
         if (!firstChannel) clipsJson << ",";
         firstChannel = false;
+
         clipsJson << "{";
         clipsJson << "\"targetNode\":\"" << nodePaths[node] << "\",";
         clipsJson << "\"property\":\"" << propName << "\",";
-        clipsJson << "\"keyTimes\":";
-        writeTimes();
-        clipsJson << ",\"keyValues\":";
-        if (kind == 'r') interleave4(qx, qy, qz, qw);
-        else if (kind == 't') interleave3(tx, ty, tz);
-        else interleave3(sx, sy, sz);
+        clipsJson << "\"keyTimesX\":[";
+        for (size_t i = 0; i < kt[0].size(); i++) {
+          if (i > 0) clipsJson << ",";
+          clipsJson << kt[0][i];
+        }
+        clipsJson << "],";
+        clipsJson << "\"keyValuesX\":[";
+        for (size_t i = 0; i < kv[0].size(); i++) {
+          if (i > 0) clipsJson << ",";
+          clipsJson << kv[0][i];
+        }
+        clipsJson << "],";
+        clipsJson << "\"keyTimesY\":[";
+        for (size_t i = 0; i < kt[1].size(); i++) {
+          if (i > 0) clipsJson << ",";
+          clipsJson << kt[1][i];
+        }
+        clipsJson << "],";
+        clipsJson << "\"keyValuesY\":[";
+        for (size_t i = 0; i < kv[1].size(); i++) {
+          if (i > 0) clipsJson << ",";
+          clipsJson << kv[1][i];
+        }
+        clipsJson << "],";
+        clipsJson << "\"keyTimesZ\":[";
+        for (size_t i = 0; i < kt[2].size(); i++) {
+          if (i > 0) clipsJson << ",";
+          clipsJson << kt[2][i];
+        }
+        clipsJson << "],";
+        clipsJson << "\"keyValuesZ\":[";
+        for (size_t i = 0; i < kv[2].size(); i++) {
+          if (i > 0) clipsJson << ",";
+          clipsJson << kv[2][i];
+        }
+        clipsJson << "]";
         clipsJson << "}";
       };
 
-      if (!tT.empty()) emitChannel("translation", 't');
-      if (!tR.empty()) emitChannel("rotation", 'r');
-      if (!tS.empty()) emitChannel("scale", 's');
+      writeChannel("translation", cnT);
+      writeChannel("rotation", cnR);
+      writeChannel("scale", cnS);
     }
 
     clipsJson << "]"; // channels

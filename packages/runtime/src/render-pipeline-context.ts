@@ -208,9 +208,9 @@ export interface RenderPipelineData {
   readonly shadowMapSize: number | undefined;
   /**
    * feat-20260613-csm-cascaded-shadow-maps M3 / w12: effective cascade count
-   * from DirectionalLight.cascadeCount (1..4). Drives atlas tilesPerSide /
-   * atlasSize and the N-pass addShadowPass loop in urp-pipeline. undefined when
-   * castShadow is disabled (fallback single 1024px shadow pass).
+   * from DirectionalLightShadow (1..4). Drives atlas tilesPerSide / atlasSize
+   * and the N-pass addShadowPass loop in urp-pipeline. undefined when no
+   * DirectionalLightShadow is wired (fallback single 1024px shadow pass).
    */
   readonly cascadeCount: number | undefined;
 }

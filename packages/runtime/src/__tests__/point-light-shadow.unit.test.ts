@@ -706,7 +706,7 @@ import { buildPointShadowMatrices } from '../render-system-extract';
     // typecheck step in T-M5-4 will surface "Unused @ts-expect-error
     // directive" as a hard failure and the regression is caught.
     //
-    // Mirrors the DirectionalLight AC-12 pattern so AI users cross-
+    // Mirrors the DirectionalLightShadow AC-12 pattern so AI users cross-
     // referencing the two shadow components see the same test shape.
     describe('PointLightShadow @ts-expect-error type-narrowing (T-M5-2 / AC-12)', () => {
       it('AC-12: spawn rejects unknown field name (mapsize vs mapSize)', () => {

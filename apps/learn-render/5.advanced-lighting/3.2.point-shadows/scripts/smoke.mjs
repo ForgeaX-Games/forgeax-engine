@@ -26,7 +26,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(here, '..');
 
 // Known-noise app.onError codes.
-const KNOWN_NOISE_CODES = new Set([]);
+const KNOWN_NOISE_CODES = new Set([
+  'shadow-disabled-by-missing-component',
+]);
 
 const consoleErrors = [];
 const originalConsoleError = console.error.bind(console);

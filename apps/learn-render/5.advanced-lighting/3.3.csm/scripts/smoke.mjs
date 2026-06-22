@@ -4,7 +4,7 @@
 //
 // LearnOpenGL section 5.3 cascaded shadow maps dawn-node smoke
 // (structural-only). Spawns a large wood floor + 10 cubes spanning 0-40m depth
-// + DirectionalLight with castShadow (cascadeCount=4, splitLambda=
+// + DirectionalLight + DirectionalLightShadow (cascadeCount=4, splitLambda=
 // 0.75, mapSize=2048) under the engine's built-in URP, then layers a registered
 // cascade-overlay post-process via the M4' post-URP hook
 // (installPipeline(forgeax::urp, { config: { postEffects } })). Renders 300
@@ -21,7 +21,7 @@
 //   - FALSIFY=force-cascade-overlay-off : install URP with empty postEffects ->
 //     perFramePassNames KEEPS shadowCascade* but DROPS post-effect* (overlay is
 //     the delta; shadows survive — the AUGMENT, not REPLACE, guarantee).
-//   - FALSIFY=force-no-shadow-pass : castShadow=false -> no
+//   - FALSIFY=force-no-shadow-pass : omit DirectionalLightShadow -> no
 //     shadowCascade* pass (proves the shadowCascade assertion can fail).
 //
 // Output literals (preserved for grep tooling):
@@ -47,7 +47,9 @@ const TEXTURES_DIR = resolve(MONOREPO_ROOT, 'forgeax-engine-assets', 'learn-open
 const WOOD_SRC_PATH = resolve(TEXTURES_DIR, 'wood.png');
 
 // Known-noise app.onError codes during shadow demos.
-const KNOWN_NOISE_CODES = new Set([]);
+const KNOWN_NOISE_CODES = new Set([
+  'shadow-disabled-by-missing-component',
+]);
 
 const consoleErrors = [];
 const originalConsoleError = console.error.bind(console);
@@ -189,6 +191,7 @@ const {
   Camera,
   createPlaneGeometry,
   DirectionalLight,
+  DirectionalLightShadow,
   HANDLE_CUBE,
   Materials,
   MeshFilter,
@@ -323,23 +326,34 @@ for (const c of cubes) {
 }
 
 // Directional light with 4-cascade CSM shadow. FALSIFY=force-no-shadow-pass
-// sets castShadow=false (proves the shadowCascade assertion can fail).
+// omits the shadow component (proves the shadowCascade assertion can fail).
 const shadowPresent = FALSIFY !== 'force-no-shadow-pass';
-if (!shadowPresent) {
-  console.log('[smoke] FALSIFY=force-no-shadow-pass -- DirectionalLight castShadow=false');
-}
-world.spawn(
-  {
-    component: DirectionalLight,
-    data: {
-      directionX: 0.3, directionY: -0.9, directionZ: -0.3,
-      colorR: 1, colorG: 1, colorB: 1, intensity: 1,
-      ...(shadowPresent
-        ? { castShadow: true, cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2, mapSize: 2048, nearPlane: 0.1, farPlane: 50 }
-        : { castShadow: false }),
+if (shadowPresent) {
+  world.spawn(
+    {
+      component: DirectionalLight,
+      data: {
+        directionX: 0.3, directionY: -0.9, directionZ: -0.3,
+        colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+      },
     },
-  },
-).unwrap();
+    {
+      component: DirectionalLightShadow,
+      data: { cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2, mapSize: 2048, nearPlane: 0.1, farPlane: 50 },
+    },
+  ).unwrap();
+} else {
+  console.log('[smoke] FALSIFY=force-no-shadow-pass -- DirectionalLightShadow omitted');
+  world.spawn(
+    {
+      component: DirectionalLight,
+      data: {
+        directionX: 0.3, directionY: -0.9, directionZ: -0.3,
+        colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+      },
+    },
+  ).unwrap();
+}
 
 // Camera at (0, 1.5, 6) facing -Z.
 world.spawn(
@@ -448,7 +462,7 @@ console.log(`[smoke] perFramePassNames=${JSON.stringify(passNames)}`);
 
 // --- 9. Verdict (structural-only) ---
 
-// URP declares a fallback single shadowCascade0 even with castShadow=false
+// URP declares a fallback single shadowCascade0 even with NO DirectionalLightShadow
 // (the 1024x1 fallback). So "a shadowCascade pass exists" is always true and is a
 // weak proxy. The genuinely falsifiable signal is the cascade COUNT: a 4-cascade
 // CSM must produce exactly 4 shadowCascade passes; the no-shadow fallback produces 1.
@@ -478,8 +492,8 @@ if (unexpectedConsoleErrors.length > 0) {
 // (e) 4-cascade CSM: the demo spawns cascadeCount=4, so the graph MUST contain
 // exactly 4 shadowCascade passes. This is the assertion the prior
 // installPipeline-replacement smoke could not make (it REPLACED URP and dropped
-// every shadow pass yet stayed green). FALSIFY=force-no-shadow-pass sets
-// castShadow=false -> URP falls back to a single shadowCascade0 (count 1, not 4),
+// every shadow pass yet stayed green). FALSIFY=force-no-shadow-pass omits the
+// component -> URP falls back to a single shadowCascade0 (count 1, not 4),
 // flipping this assertion.
 if (shadowPresent && shadowCascadeCount !== 4) {
   failures.push(
@@ -488,7 +502,7 @@ if (shadowPresent && shadowCascadeCount !== 4) {
 }
 if (!shadowPresent && shadowCascadeCount !== 1) {
   failures.push(
-    `(e) expected 1 fallback shadowCascade pass (castShadow=false), got ${shadowCascadeCount}`,
+    `(e) expected 1 fallback shadowCascade pass (no DirectionalLightShadow), got ${shadowCascadeCount}`,
   );
 }
 

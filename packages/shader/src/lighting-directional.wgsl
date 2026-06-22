@@ -126,12 +126,7 @@ fn _sampleShadowForCascade(
   let tileUv = vec2<f32>(projCoords.x * 0.5 + 0.5, -projCoords.y * 0.5 + 0.5);
   let uv = tileUv * inv + tileOrigin;
   let currentDepth = projCoords.z;
-  // feat-20260621-merge-directionallightshadow-into-directionallight M3 / m3-t4
-  // (D-1): the slope-scaled bias is driven by the merged DirectionalLight's
-  // shadow fields carried in the View UBO -- normalBias scales the
-  // (1 - N.L) slope term, depthBias is the constant floor. Replaces the prior
-  // hardcoded max(0.05*(1-N.L), 0.005).
-  let bias = max(view.normalBias * (1.0 - dot(normal, l)), view.depthBias);
+  let bias = max(0.05 * (1.0 - dot(normal, l)), 0.005);
   let adjustedDepth = currentDepth - bias;
   // NaN-safe bounds: relational < and > do not reject NaN (NaN < 0 is
   // false), so a zero / degenerate lightViewProj matrix that produces
@@ -153,15 +148,13 @@ fn _sampleShadowForCascade(
   // count<=1 (single full-atlas tile) this is a no-op widening of the bound.
   let tileLo = tileOrigin + texel;
   let tileHi = tileOrigin + vec2<f32>(inv) - texel;
-  // Variable-width PCF kernel driven by view.pcfKernelSize (feat-20260621
-  // 5.3-production-shadow-demos AC-14 merged with the DirectionalLightShadow
-  // merge). Constant trip count to MAX_PCF_HALF with a per-iteration clip to the
-  // runtime radius keeps the shader variant-free (no dynamic loop bound, legal
-  // for textureSampleCompareLevel uniform control flow). Host clamps
-  // view.pcfKernelSize to {1,3,5}; divisor = actual tap count, so pcfKernelSize=3
-  // -> half=1 -> 9 taps / 9.0 (result-identical to the prior hard-coded 3x3);
-  // pcfKernelSize=1 -> half=0 -> single centre tap (hard edge); pcfKernelSize=5
-  // -> half=2 -> 25-tap soft penumbra.
+  // Dynamic PCF kernel (driven by view.pcfKernelSize, MAX_PCF_HALF=2).
+  // Clamp the requested kernel to the supported odd sizes {1,3,5}, derive the
+  // half-extent, and loop to the compile-time MAX_PCF_HALF bound while clipping
+  // each iteration to the runtime radius. divisor = actual tap count, so
+  // pcfKernelSize=3 -> half=1 -> 9 taps / 9.0 (result-identical to the prior
+  // hard-coded 3x3; the compiled instructions differ — the value does not);
+  // pcfKernelSize=1 -> half=0 -> single tap (hard edge).
   let kernel = clamp(u32(round(view.pcfKernelSize)), 1u, 2u * MAX_PCF_HALF + 1u);
   let half = (kernel - 1u) / 2u;
   let halfI = i32(half);
