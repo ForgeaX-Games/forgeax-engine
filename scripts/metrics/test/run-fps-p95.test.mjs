@@ -19,7 +19,7 @@
 //   - plan-tasks.json#T-M4-1 acceptanceCheck (>=3 P95 cases, >=2 compareKey paths)
 
 import { describe, expect, it } from 'vitest';
-import { computeP95, median, resolveFpsStatus } from '../run-fps.mjs';
+import { computeP95, median, resolveFpsStatus, withTimeout } from '../run-fps.mjs';
 
 describe('computeP95 (T-M4-1)', () => {
   it('returns 0 for empty input (sentinel matches median())', () => {
@@ -67,6 +67,26 @@ describe('median (T-M4-1, regression)', () => {
 
   it('returns 0 for empty input', () => {
     expect(median([])).toBe(0);
+  });
+});
+
+describe('withTimeout (bug-20260622 Fail Fast backstop)', () => {
+  it('resolves with the work value when it settles before the timeout', async () => {
+    await expect(withTimeout(Promise.resolve(42), 1000, 'work')).resolves.toBe(42);
+  });
+
+  it('rejects with a labelled timeout error when the work never settles', async () => {
+    // A never-resolving promise mirrors a stalled rAF: page.evaluate has no
+    // internal timeout, so without withTimeout this would hang forever.
+    await expect(withTimeout(new Promise(() => {}), 20, 'fps sample 1/5')).rejects.toThrow(
+      /fps sample 1\/5 timed out after 20ms/,
+    );
+  });
+
+  it('propagates the work rejection unchanged when it loses no race', async () => {
+    await expect(withTimeout(Promise.reject(new Error('boom')), 1000, 'work')).rejects.toThrow(
+      'boom',
+    );
   });
 });
 
