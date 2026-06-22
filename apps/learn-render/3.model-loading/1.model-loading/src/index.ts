@@ -1,0 +1,393 @@
+// apps/learn-render/3.model-loading/1.model-loading/src/main.ts
+// LearnOpenGL section 3.1 model-loading - Sponza atrium with multi-light +
+// DirectionalLight + Skylight IBL. The whole gltf -> mesh / material /
+// scene / texture asset graph flows through the build-time gltfImporter +
+// vite-plugin-pack pipeline; the demo body stays at the 4-step idiom
+// (charter P4 / requirements AC-17 / plan section 9.1):
+//
+//   (1) createApp({ canvas, ... }, { importTransport: createDevImportTransport() })
+//   (2) assets.configurePackIndex('/pack-index.json')
+//   (3) const scene = await assets.loadByGuid<SceneAsset>(SPONZA_SCENE_GUID);
+//       assets.instantiate<SceneAsset>(scene.value, world)
+//   (4) app.start()
+//
+// No manual parseGltf, no walk-images-by-filename, no manual mesh / material /
+// scene register loop. The gltfImporter (engine) handles all of that
+// transparently: it parses the .gltf, extracts the texture bytes from the
+// three image-source paths, decodes them via the ImportContext seam, and
+// emits one ImportedAsset per declared sub-asset (103 meshes + 25 materials +
+// 69 textures + 1 scene for Sponza). The dev path uses createDevImportTransport
+// so a DDC miss for an unimported sub-asset GUID triggers an on-demand
+// POST /__import import against the dev server.
+//
+// Lights / Skylight / camera / first-person controls remain example-specific
+// glue: they are part of the LearnOpenGL teaching surface, not gltf wiring.
+
+import { createApp } from '@forgeax/engine-app';
+import type { App, AppError } from '@forgeax/engine-app';
+import { InspectorError, Registry, wireDefaultInspectors } from '@forgeax/engine-console';
+import { startConsoleServer } from '@forgeax/engine-console/server';
+import { registerEcsInspector, World } from '@forgeax/engine-ecs';
+import { wireDebugRhiInspector, type DebugRhiAdapter } from '@forgeax/engine-rhi-debug';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
+import {
+  Camera,
+  createDevImportTransport,
+  DirectionalLight,
+  EngineEnvironmentError,
+  PointLight,
+  registerRuntimeInspector,
+  Skylight,
+  Transform,
+} from '@forgeax/engine-runtime';
+import type { RhiError } from '@forgeax/engine-runtime';
+import type { SceneAsset, TextureAsset } from '@forgeax/engine-types';
+import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
+
+const SPONZA_SCENE_GUID = '019e4fe2-523b-7506-99e5-ccd39795ecda';
+const NEWPORT_LOFT_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
+const PACK_INDEX_URL = '/pack-index.json';
+
+const canvas = document.querySelector<HTMLCanvasElement>('#app');
+if (canvas === null) {
+  throw new Error("[learn-render 3.1] missing <canvas id='app'> in index.html");
+}
+
+function resizeCanvas(c: HTMLCanvasElement): void {
+  c.width = window.innerWidth * devicePixelRatio;
+  c.height = window.innerHeight * devicePixelRatio;
+}
+resizeCanvas(canvas);
+
+void bootstrap(canvas);
+
+async function bootstrap(target: HTMLCanvasElement): Promise<void> {
+  // Step (1): createApp - explicitly inject createDevImportTransport so a
+  // DDC miss on an unimported sub-asset GUID falls through to a dev-server
+  // POST /__import (vite-plugin-pack's per-meta lock dedupes 122-way
+  // concurrent loads down to a single gltfImporter pass per meta sidecar).
+  const appRes = await createApp(
+    target,
+    {},
+    // Host-explicit dev transport (OOS-1): a DDC miss for an unimported Sponza
+    // texture triggers an on-demand POST /__import import against the dev server.
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+  );
+  if (!appRes.ok) {
+    reportBootstrapError(appRes.error);
+    return;
+  }
+  const app = appRes.value;
+  const renderer = app.renderer;
+  const world = app.world;
+
+  app.onError((e) => {
+    console.error('[learn-render 3.1] app.onError:', e.code, e.hint);
+    const bus = (globalThis as unknown as {
+      __learnRenderErrors?: Array<{ code: string; hint?: string }>;
+    }).__learnRenderErrors;
+    if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
+  });
+
+  const assets = renderer.assets;
+
+  // Step (2): configurePackIndex.
+  assets.configurePackIndex(PACK_INDEX_URL);
+
+  // Step (3): loadByGuid<SceneAsset> + instantiate.
+  // The gltfImporter has already produced the SceneAsset + every referenced
+  // mesh / material / texture sub-asset POD; the runtime resolves the cross-
+  // refs transparently when the scene instantiates.
+  const sceneGuidRes = AssetGuid.parse(SPONZA_SCENE_GUID);
+  if (!sceneGuidRes.ok) {
+    console.error('[learn-render 3.1] SPONZA_SCENE_GUID parse failed:', sceneGuidRes.error);
+    return;
+  }
+  const sceneRes = await assets.loadByGuid<SceneAsset>(sceneGuidRes.value);
+  if (!sceneRes.ok) {
+    console.error('[learn-render 3.1] loadByGuid<SceneAsset> failed:', sceneRes.error);
+    const bus = (globalThis as unknown as {
+      __learnRenderErrors?: Array<{ code: string; hint?: string }>;
+    }).__learnRenderErrors;
+    if (bus !== undefined)
+      bus.push({
+        code: sceneRes.error.code,
+        ...(sceneRes.error.hint !== undefined ? { hint: sceneRes.error.hint } : {}),
+      });
+    return;
+  }
+  // loadByGuid returns the payload (D-17); mint a user-tier column handle.
+  const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
+  const instRes = assets.instantiate<SceneAsset>(sceneHandle, world);
+  if (!instRes.ok) {
+    const errAny = instRes.error as { code: string; hint?: string };
+    console.error('[learn-render 3.1] scene instantiate failed:', errAny.code);
+    const bus = (globalThis as unknown as {
+      __learnRenderErrors?: Array<{ code: string; hint?: string }>;
+    }).__learnRenderErrors;
+    if (bus !== undefined)
+      bus.push({
+        code: errAny.code,
+        ...(errAny.hint !== undefined ? { hint: errAny.hint } : {}),
+      });
+    return;
+  }
+
+  // Lights / Skylight / camera / first-person controls (example-specific glue,
+  // not gltf wiring -- this is the LearnOpenGL teaching surface).
+  spawnLights(world);
+  await spawnSkylight(app);
+  const cameraEntity = spawnCamera(world);
+  if (cameraEntity === undefined) return;
+
+  addFirstPersonSystem(app.world, app.renderer, {
+    name: 'sponza-first-person',
+    overrideBackend: undefined,
+    moveSpeed: 4.8,
+  });
+
+  // Step (4): app.start().
+  const startRes = app.start();
+  if (!startRes.ok) {
+    console.error('[learn-render 3.1] app.start failed:', startRes.error);
+    return;
+  }
+
+  window.addEventListener('resize', () => {
+    resizeCanvas(target);
+    world.set(cameraEntity, Camera, { aspect: window.innerWidth / window.innerHeight });
+  });
+
+  console.warn(`[learn-render 3.1] backend=${renderer.backend} scene loaded via loadByGuid<SceneAsset>`);
+
+  // Expose scene-ready hook for visual tests (M4 playwright visual sentinel).
+  (window as unknown as Record<string, unknown>).__sponzaSceneReady = true;
+
+  // M8-3 (AC-29): debug capture console-server injection.
+  // When FORGEAX_ENGINE_RHI_DEBUG=1, createAppFromCanvas dynamically imports
+  // @forgeax/engine-rhi-debug, wraps the RHI, creates a DebugRhiAdapter,
+  // and exposes it as app._debugAdapter. This demo wires that adapter into
+  // wireDefaultInspectors + starts the WS:5732 console server so the CLI
+  // capture-frame command reaches a real recorder chain.
+  //
+  // The debug adapter is NOT auto-wired by createApp itself -- the demo host
+  // owns the inspector wiring (same pattern as inspector-demo's host assembly).
+  // wireDefaultInspectors supports an optional debugRhi injector (round 1 M7
+  // WireDefaultInspectorsInjectors.debugRhi field, plan-strategy D-5).
+  const proc = (globalThis as { process?: { env?: { FORGEAX_ENGINE_RHI_DEBUG?: string } } }).process;
+  if (proc?.env?.FORGEAX_ENGINE_RHI_DEBUG === '1' && (app as App & { _debugAdapter?: unknown })._debugAdapter) {
+    const reg = new Registry();
+    const wired = wireDefaultInspectors(
+      reg,
+      { world, engine: renderer, assets: renderer.assets },
+      {
+        registerEcsInspector,
+        registerRuntimeInspector,
+        debugRhi: (r) => {
+          const res = wireDebugRhiInspector(
+            r,
+            (app as App & { _debugAdapter: DebugRhiAdapter })._debugAdapter,
+          );
+          if (!res.ok)
+            return {
+              ok: false,
+              error: new InspectorError({
+                code: 'console-startup-failed',
+                expected: 'wireDebugRhiInspector to succeed',
+                hint: res.error.hint,
+              }),
+            };
+          return res;
+        },
+      },
+    );
+    if (!wired.ok) {
+      console.error('[learn-render 3.1] wireDefaultInspectors failed:', wired.error);
+    } else {
+      const srvRes = await startConsoleServer({ port: 5732, registry: reg });
+      if (srvRes.ok) {
+        console.warn(
+          `[learn-render 3.1] debug inspector server on ws://localhost:${srvRes.value.port}/inspector`,
+        );
+        console.warn(
+          '[learn-render 3.1] try: forgeax-engine-console capture-frame --frames=1 --label sponza-debug --target ws://localhost:5732',
+        );
+        (window as unknown as Record<string, unknown>).__sponzaDebugCaptureReady = true;
+      } else {
+        console.error('[learn-render 3.1] startConsoleServer failed:', srvRes.error);
+      }
+    }
+  }
+}
+
+// === Lights + Skylight + Camera ===========================================
+
+function spawnLights(world: World): void {
+  // DirectionalLight with merged shadow fields (warm sun, plan D-7).
+  const d: [number, number, number] = [-0.3, -1.0, -0.3];
+  const invLen = 1 / Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+  world.spawn(
+    {
+      component: DirectionalLight,
+      data: {
+        directionX: d[0] * invLen,
+        directionY: d[1] * invLen,
+        directionZ: d[2] * invLen,
+        colorR: 1.0,
+        colorG: 0.95,
+        colorB: 0.85,
+        intensity: 3.0,
+        mapSize: 2048,
+        // feat-20260613-csm M6 / w23: explicit 4-cascade Sponza baseline.
+        // cascadeCount=4 + splitLambda=0.75 + cascadeBlend=0.2 are the
+        // component defaults; declared explicitly here so the demo source
+        // documents the CSM regime AI users should compare against.
+        cascadeCount: 4,
+        splitLambda: 0.75,
+        cascadeBlend: 0.2,
+        // Scaled by 0.008 to match Sponza root scale (was cm-space
+        // 4500/2200; world-space after gltf root transform applies).
+        farPlane: 36,
+        depthBias: 0.005,
+      },
+    },
+  );
+
+  // 4 PointLight (plan D-8): warm-yellow, cool-cyan, magenta, neutral-white.
+  // Light positions and intensities scaled by Sponza's 0.008 root scale
+  // (range ~ length * scale; intensity ~ scale^2 for inverse-square fall-off
+  // to keep mid-room luminance equivalent).
+  const pointDefs: Array<{
+    pos: [number, number, number];
+    color: [number, number, number];
+    intensity: number;
+    range: number;
+  }> = [
+    { pos: [-6.4, 1.6, 0], color: [1.0, 0.85, 0.5], intensity: 32, range: 20 },
+    { pos: [6.4, 1.6, 0], color: [0.4, 0.85, 1.0], intensity: 32, range: 20 },
+    { pos: [0, 1.6, -3.2], color: [0.95, 0.4, 0.85], intensity: 32, range: 20 },
+    { pos: [0, 1.6, 3.2], color: [1.0, 1.0, 1.0], intensity: 32, range: 20 },
+  ];
+  for (const pd of pointDefs) {
+    world.spawn(
+      {
+        component: Transform,
+        data: {
+          posX: pd.pos[0], posY: pd.pos[1], posZ: pd.pos[2],
+          quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
+          scaleX: 1, scaleY: 1, scaleZ: 1,
+        },
+      },
+      {
+        component: PointLight,
+        data: {
+          colorR: pd.color[0],
+          colorG: pd.color[1],
+          colorB: pd.color[2],
+          intensity: pd.intensity,
+          range: pd.range,
+        },
+      },
+    );
+  }
+}
+
+async function spawnSkylight(app: App): Promise<void> {
+  const assets = app.renderer.assets;
+
+  const guidRes = AssetGuid.parse(NEWPORT_LOFT_GUID);
+  if (!guidRes.ok) {
+    console.error('[learn-render 3.1] NEWPORT_LOFT_GUID parse failed:', guidRes.error);
+    return;
+  }
+
+  const hdrHandleRes = await assets.loadByGuid<TextureAsset>(guidRes.value);
+  if (!hdrHandleRes.ok) {
+    console.error(
+      `[learn-render 3.1] loadByGuid(newport_loft.hdr) failed: ${hdrHandleRes.error.code}`,
+    );
+    const bus = (globalThis as unknown as {
+      __learnRenderErrors?: Array<{ code: string; hint?: string }>;
+    }).__learnRenderErrors;
+    if (bus !== undefined)
+      bus.push({
+        code: hdrHandleRes.error.code,
+        ...(hdrHandleRes.error.hint !== undefined ? { hint: hdrHandleRes.error.hint } : {}),
+      });
+    return;
+  }
+
+  // feat-20260601-gpu-resource-store-extraction M1: equirect-to-cubemap upload
+  // lives on renderer.store. loadByGuid returns the TextureAsset PAYLOAD (M8
+  // D-17); mint a user-tier source handle and pass world + handle + pod.
+  const srcHandle = app.world.allocSharedRef('TextureAsset', hdrHandleRes.value);
+  const cubemapRes = await app.renderer.store.uploadCubemapFromEquirect(
+    app.world,
+    srcHandle,
+    hdrHandleRes.value,
+  );
+  if (!cubemapRes.ok) {
+    console.error(
+      `[learn-render 3.1] equirect-to-cubemap upload failed: ${cubemapRes.error.code}`,
+    );
+    return;
+  }
+
+  app.world.spawn({
+    component: Skylight,
+    data: { cubemap: cubemapRes.value, intensity: 1.0 },
+  });
+  console.warn('[learn-render 3.1] Skylight active: IBL diffuse + specular split-sum');
+}
+
+function spawnCamera(world: World): import('@forgeax/engine-ecs').EntityHandle | undefined {
+  const aspect = window.innerWidth / window.innerHeight;
+  // Sponza root carries scale=0.008 in its glTF; the gltfImporter now
+  // correctly applies that transform, so the world-space size is ~40x28
+  // (down from 5000-cm raw). Camera distances scale accordingly: the
+  // earlier (pre-feat-20260608-#316) demo path manually registered
+  // assets and silently dropped the root TRS, leaving Sponza in cm.
+  const res = world.spawn(
+    {
+      component: Transform,
+      data: {
+        posX: 0, posY: 1.5, posZ: 4,
+        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
+        scaleX: 1, scaleY: 1, scaleZ: 1,
+      },
+    },
+    {
+      component: Camera,
+      data: {
+        fov: Math.PI / 3,
+        aspect,
+        near: 0.08,
+        far: 120,
+      },
+    },
+  );
+  if (!res.ok) {
+    console.error('[learn-render 3.1] spawnCamera failed:', res.error);
+    return undefined;
+  }
+  return res.value;
+}
+
+function reportBootstrapError(err: AppError | RhiError | EngineEnvironmentError): void {
+  if (err instanceof EngineEnvironmentError) {
+    const inner = err.detail.webgpuError;
+    const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';
+    console.error(`[learn-render 3.1] EngineEnvironmentError: webgpu inner=${code}`);
+    return;
+  }
+  console.error(`[learn-render 3.1] ${err.code}: ${err.hint}`);
+}
+
+declare global {
+  interface Window {
+    __sponzaSceneReady?: boolean;
+    __sponzaDebugCaptureReady?: boolean;
+    __learnRenderErrors?: Array<{ code: string; hint?: string }>;
+  }
+}

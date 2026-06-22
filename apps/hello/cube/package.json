@@ -1,0 +1,58 @@
+{
+  "name": "@forgeax/hello-cube",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "End-to-end Hello Cube ECS-driven binding exemplar (D-S10 + D-S1 four-path allow-list reused).",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:browser": "node scripts/smoke-browser.mjs"
+  },
+  "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/hello-cube smoke",
+    "_comment": "smokeInvocation = self-contained SSOT for AC-12b (D-S10 / OQ-5 close): hello-cube smoke literal lives in apps/hello/cube/package.json#forgeax.smokeInvocation + .github/workflows/ci.yml only; not byte-for-byte aligned with hello-triangle (each app owns its own SSOT, K-12 stance preserved separately for AC-12a).",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle (dist/assets) shape is downstream of @forgeax/engine-runtime + @forgeax/engine-rhi-webgpu sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "triangle baseline anchor only, hello-cube ECS smoke covers GPU"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "ECS-driven binding exemplar; bench focus stays on @forgeax/engine-math"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-cube smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; spike artefacts archived in feat-20260511-naga-rhi-wgpu-merge M5 (PR #34 + git history)"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-rhi-webgpu": "workspace:*",
+    "@forgeax/engine-rhi-wgpu": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-math": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0",
+    "@webgpu/types": "^0.1.70"
+  }
+}

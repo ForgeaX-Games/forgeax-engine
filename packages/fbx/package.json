@@ -1,0 +1,61 @@
+{
+  "name": "@forgeax/engine-fbx",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "description": "FBX importer via Autodesk FBX SDK 2020.3.7 native addon. Converts .fbx files to 7 sub-asset POD types consumed by the engine asset pipeline.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "scripts",
+    "binding.gyp",
+    "README.md"
+  ],
+  "scripts": {
+    "install": "node scripts/postinstall.mjs",
+    "build": "tsup",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@forgeax/engine-types": "workspace:*",
+    "node-addon-api": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "build-time importer with native addon; bundle size not meaningful for C++ native modules"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "build-time one-shot import; no runtime fps measured by this package"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "import wall-time baseline tracked in M0 spike-m0.md; no per-package bench suite needed"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/engine-fbx test"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "M0 spike report lives in .forgeax-harness/forgeax-loop/feat-20260615-fbx-importer-via-sdk/spike-m0.md (loop-state SSOT); not a per-package metric"
+      }
+    }
+  }
+}

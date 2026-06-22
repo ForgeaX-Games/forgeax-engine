@@ -1,0 +1,58 @@
+[package]
+name = "wgpu-wasm"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "wgpu 29 + naga 29 + wasm-bindgen merged crate exposing RHI raw bindings (rhi.rs) + naga three-phase pipeline (naga.rs) to JS for @forgeax/engine-rhi-wgpu + @forgeax/engine-naga thin shells (feat-20260511-naga-rhi-wgpu-merge)."
+license = "Apache-2.0"
+
+# Form invariants (plan-strategy D-P1 + D-P2 + research F-1 / F-2 / F-3):
+# - wgpu = "29" features=["webgpu", "webgl", "wgsl"] — double-feature cdylib + WGSL
+#   frontend (graceful fallback through wgpu::util::new_instance_with_webgpu_detection).
+# - naga = "29" features=["wgsl-in", "serialize"] — explicit version match keeps Cargo
+#   dedup to a single naga instance (research F-2 caution: wgpu's transitive naga must
+#   match this explicit declaration; v29 vs v30 mismatch would split into two copies
+#   and break the merged crate body).
+# - cdylib + rlib: cdylib for wasm-pack output; rlib retained for cargo test --lib.
+# - default-features=false on wgpu drops native vulkan/dx12/metal backends (wasm-only).
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wgpu = { version = "29", default-features = false, features = ["webgl", "wgsl", "serde"] }
+naga = { version = "29", features = ["wgsl-in", "wgsl-out", "serialize"] }
+# naga_oil 0.22 pins naga 29 (research R-01 / F-2) — Cargo dedup collapses both
+# to a single naga instance. default-features = false turns off `test_shader`
+# and `glsl` (plan-strategy D-02) so the wasm binary does not carry GLSL
+# frontends / test fixtures.
+naga_oil = { version = "0.22", default-features = false }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde-wasm-bindgen = "0.6"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "console"] }
+
+[dev-dependencies]
+# wasm-bindgen-test runs the T-03 fixtures under `wasm-pack test --node`
+# (plan-strategy §4.2 + research RISK-2 wasm32 smoke).
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+# Size-first profile (replaces the size-first profiles in three legacy crates — wgpu spike + naga shim + rhi-wgpu crate — all archived in feat-20260511-naga-rhi-wgpu-merge M5).
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"
+
+# wasm-opt override (plan-strategy D-P9 / RK-3 / bug-20260512-wasm-opt-multi-table):
+# wasm-pack's bundled binaryen is too old to parse wgpu 29's multi-table WASM output
+# ("Only 1 table definition allowed in MVP"). Disable the bundled wasm-opt here and
+# run the system binaryen (>= 116) manually in build.sh after wasm-pack completes —
+# CI installs binaryen via apt before the Build wgpu-wasm step; local builds skip
+# wasm-opt gracefully when binaryen is absent (acceptable for dev iteration).
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

@@ -1,0 +1,289 @@
+// Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
+// biome-ignore-all lint/complexity/noUselessLoneBlockStatements: scope isolation between merged source files
+//
+// Source files (N=2):
+//   - packages/physics/__tests__/component-schema.test.ts
+//   - packages/physics/__tests__/enum-helpers.test.ts
+//
+// Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
+// source as ancestorTitles[0]. Top-level imports merged + deduped.
+//
+// Note: merged from __tests__/ into src/__tests__/; import paths adjusted (../src/index → ../index).
+
+import { describe, expect, it } from 'vitest';
+import type { PhysicsErrorCode } from '../index';
+import {
+  COLLIDER_SHAPE_CAPSULE,
+  COLLIDER_SHAPE_CUBOID,
+  COLLIDER_SHAPE_SPHERE,
+  Collider,
+  ColliderShapeValue,
+  CollidingEntities,
+  CollisionEvent,
+  colliderShapeFromF32,
+  PHYSICS_ERROR_HINTS,
+  PhysicsError,
+  RIGID_BODY_TYPE_DYNAMIC,
+  RIGID_BODY_TYPE_KINEMATIC,
+  RIGID_BODY_TYPE_STATIC,
+  RigidBody,
+  RigidBodyTypeValue,
+  rigidBodyTypeFromF32,
+} from '../index';
+
+{
+  // ─── from component-schema.test.ts ───
+
+  describe('component-schema.test.ts', () => {
+    describe('feat-20260528 M1 t7 physics component schema definitions', () => {
+      it('RigidBody is a valid Component token with expected fields', () => {
+        expect(RigidBody).toBeDefined();
+        expect(RigidBody.name).toBe('RigidBody');
+        const schema = RigidBody.schema;
+        expect(schema).toHaveProperty('type');
+        expect(schema).toHaveProperty('mass');
+        expect(schema).toHaveProperty('linearDamping');
+        expect(schema).toHaveProperty('angularDamping');
+        expect(schema).toHaveProperty('gravityScale');
+        expect(schema).toHaveProperty('ccdEnabled');
+      });
+
+      it('Collider is a valid Component token with expected fields', () => {
+        expect(Collider).toBeDefined();
+        expect(Collider.name).toBe('Collider');
+        const schema = Collider.schema;
+        expect(schema).toHaveProperty('shape');
+        expect(schema).toHaveProperty('halfExtentsX');
+        expect(schema).toHaveProperty('halfExtentsY');
+        expect(schema).toHaveProperty('halfExtentsZ');
+        expect(schema).toHaveProperty('radius');
+        expect(schema).toHaveProperty('halfHeight');
+        expect(schema).toHaveProperty('friction');
+        expect(schema).toHaveProperty('restitution');
+        expect(schema).toHaveProperty('density');
+        expect(schema).toHaveProperty('isSensor');
+        expect(schema).toHaveProperty('collisionGroups');
+        expect(schema).toHaveProperty('solverGroups');
+      });
+
+      it('CollidingEntities is a valid Component token with entities field', () => {
+        expect(CollidingEntities).toBeDefined();
+        expect(CollidingEntities.name).toBe('CollidingEntities');
+        const schema = CollidingEntities.schema;
+        expect(schema).toHaveProperty('entities');
+      });
+
+      it('CollisionEvent is the expected constant value', () => {
+        expect(CollisionEvent).toBe('__CollisionEvent__');
+      });
+
+      it('PhysicsError is importable and constructable', () => {
+        const err = new PhysicsError({
+          code: 'backend-not-registered',
+          expected: 'PhysicsWorld resource to be registered',
+          hint: 'use createApp({ physics: ... })',
+          detail: {
+            code: 'backend-not-registered',
+            attemptedBackend: 'rapier-3d',
+          },
+        });
+        expect(err.code).toBe('backend-not-registered');
+        expect(err.name).toBe('PhysicsError');
+        expect(err.hint).toContain('createApp');
+      });
+
+      it('PhysicsErrorCode literal union has all 8 members', () => {
+        const codes: Set<string> = new Set();
+        const all: PhysicsErrorCode[] = [
+          'wasm-load-failed',
+          'wasm-simd-unsupported',
+          'step-failed',
+          'invalid-body-config',
+          'body-not-found',
+          'collider-not-found',
+          'backend-not-registered',
+          'teleport-invalid-body-type',
+        ];
+        for (const c of all) {
+          codes.add(c);
+        }
+        expect(codes.size).toBe(8);
+      });
+
+      it('PHYSICS_ERROR_HINTS has all 8 code entries', () => {
+        const allCodes: PhysicsErrorCode[] = [
+          'wasm-load-failed',
+          'wasm-simd-unsupported',
+          'step-failed',
+          'invalid-body-config',
+          'body-not-found',
+          'collider-not-found',
+          'backend-not-registered',
+          'teleport-invalid-body-type',
+        ];
+        for (const code of allCodes) {
+          expect(PHYSICS_ERROR_HINTS[code]).toBeDefined();
+          expect(PHYSICS_ERROR_HINTS[code].length).toBeGreaterThan(0);
+        }
+      });
+
+      it('RigidBodyType literal union has 3 discriminants', () => {
+        const types = ['static', 'dynamic', 'kinematic'] as const;
+        expect(new Set(types).size).toBe(3);
+      });
+
+      it('ColliderShape literal union has 3 discriminants', () => {
+        const shapes = ['cuboid', 'sphere', 'capsule'] as const;
+        expect(new Set(shapes).size).toBe(3);
+      });
+    });
+  });
+}
+
+{
+  // ─── from enum-helpers.test.ts ───
+
+  describe('enum-helpers.test.ts', () => {
+    describe('rigidBodyTypeFromF32', () => {
+      it('0 maps to static', () => {
+        expect(rigidBodyTypeFromF32(0)).toBe('static');
+      });
+
+      it('1 maps to dynamic', () => {
+        expect(rigidBodyTypeFromF32(1)).toBe('dynamic');
+      });
+
+      it('2 maps to kinematic', () => {
+        expect(rigidBodyTypeFromF32(2)).toBe('kinematic');
+      });
+
+      it('out-of-range values fall back to static', () => {
+        expect(rigidBodyTypeFromF32(-1)).toBe('static');
+        expect(rigidBodyTypeFromF32(3)).toBe('static');
+        expect(rigidBodyTypeFromF32(99)).toBe('static');
+      });
+
+      it('fractional values fall back to static', () => {
+        expect(rigidBodyTypeFromF32(0.5)).toBe('static');
+        expect(rigidBodyTypeFromF32(1.5)).toBe('static');
+        expect(rigidBodyTypeFromF32(2.9)).toBe('static');
+      });
+    });
+
+    describe('colliderShapeFromF32', () => {
+      it('0 maps to cuboid', () => {
+        expect(colliderShapeFromF32(0)).toBe('cuboid');
+      });
+
+      it('1 maps to sphere', () => {
+        expect(colliderShapeFromF32(1)).toBe('sphere');
+      });
+
+      it('2 maps to capsule', () => {
+        expect(colliderShapeFromF32(2)).toBe('capsule');
+      });
+
+      it('out-of-range values fall back to cuboid', () => {
+        expect(colliderShapeFromF32(-1)).toBe('cuboid');
+        expect(colliderShapeFromF32(3)).toBe('cuboid');
+        expect(colliderShapeFromF32(99)).toBe('cuboid');
+      });
+
+      it('fractional values fall back to cuboid', () => {
+        expect(colliderShapeFromF32(0.5)).toBe('cuboid');
+        expect(colliderShapeFromF32(1.5)).toBe('cuboid');
+        expect(colliderShapeFromF32(2.9)).toBe('cuboid');
+      });
+    });
+
+    describe('numeric enum constants', () => {
+      it('RigidBodyTypeValue has expected numeric values', () => {
+        expect(RigidBodyTypeValue.static).toBe(0);
+        expect(RigidBodyTypeValue.dynamic).toBe(1);
+        expect(RigidBodyTypeValue.kinematic).toBe(2);
+      });
+
+      it('ColliderShapeValue has expected numeric values', () => {
+        expect(ColliderShapeValue.cuboid).toBe(0);
+        expect(ColliderShapeValue.sphere).toBe(1);
+        expect(ColliderShapeValue.capsule).toBe(2);
+      });
+
+      it('individual RigidBody constants match RigidBodyTypeValue', () => {
+        expect(RIGID_BODY_TYPE_STATIC).toBe(0);
+        expect(RIGID_BODY_TYPE_DYNAMIC).toBe(1);
+        expect(RIGID_BODY_TYPE_KINEMATIC).toBe(2);
+      });
+
+      it('individual ColliderShape constants match ColliderShapeValue', () => {
+        expect(COLLIDER_SHAPE_CUBOID).toBe(0);
+        expect(COLLIDER_SHAPE_SPHERE).toBe(1);
+        expect(COLLIDER_SHAPE_CAPSULE).toBe(2);
+      });
+    });
+
+    describe('layer-2 defaults (m3-1e regression)', () => {
+      it('RigidBody defaults include gravityScale=1', () => {
+        expect(RigidBody.schema).toHaveProperty('gravityScale');
+        const defaults = (
+          RigidBody as { schema: Record<string, unknown>; defaults?: Record<string, unknown> }
+        ).defaults;
+        expect(defaults).toBeDefined();
+        if (defaults) {
+          expect(defaults.gravityScale).toBe(1);
+        }
+      });
+
+      it('RigidBody defaults include mass=1', () => {
+        const defaults = (
+          RigidBody as { schema: Record<string, unknown>; defaults?: Record<string, unknown> }
+        ).defaults;
+        expect(defaults).toBeDefined();
+        if (defaults) {
+          expect(defaults.mass).toBe(1);
+        }
+      });
+
+      it('RigidBody defaults include type=dynamic (1)', () => {
+        const defaults = (
+          RigidBody as { schema: Record<string, unknown>; defaults?: Record<string, unknown> }
+        ).defaults;
+        expect(defaults).toBeDefined();
+        if (defaults) {
+          expect(defaults.type).toBe(1);
+        }
+      });
+
+      it('Collider defaults include density=1', () => {
+        expect(Collider.schema).toHaveProperty('density');
+        const defaults = (
+          Collider as { schema: Record<string, unknown>; defaults?: Record<string, unknown> }
+        ).defaults;
+        expect(defaults).toBeDefined();
+        if (defaults) {
+          expect(defaults.density).toBe(1);
+        }
+      });
+
+      it('Collider defaults include friction=0.5', () => {
+        const defaults = (
+          Collider as { schema: Record<string, unknown>; defaults?: Record<string, unknown> }
+        ).defaults;
+        expect(defaults).toBeDefined();
+        if (defaults) {
+          expect(defaults.friction).toBe(0.5);
+        }
+      });
+
+      it('Collider defaults include restitution=0', () => {
+        const defaults = (
+          Collider as { schema: Record<string, unknown>; defaults?: Record<string, unknown> }
+        ).defaults;
+        expect(defaults).toBeDefined();
+        if (defaults) {
+          expect(defaults.restitution).toBe(0);
+        }
+      });
+    });
+  });
+}

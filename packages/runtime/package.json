@@ -1,0 +1,90 @@
+{
+  "name": "@forgeax/engine-runtime",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "description": "Renderer + Backend (WebGPU/WebGL2) async factory entry for forgeax-engine.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./geometry": {
+      "types": "./dist/geometry/index.d.ts",
+      "import": "./dist/geometry/index.mjs"
+    },
+    "./debug-draw-glue": {
+      "types": "./dist/debug-draw-glue.d.ts",
+      "import": "./dist/debug-draw-glue.mjs"
+    },
+    "./internal/*": null,
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "bench": "vitest bench --run",
+    "test:bench": "vitest bench --run",
+    "bench:json": "FORGEAX_BENCH=fast vitest bench --run --outputJson bench-result.json",
+    "bench:nineslice": "node ../../scripts/bench/bench-nineslice-100panel.mjs"
+  },
+  "dependencies": {
+    "@forgeax/engine-debug-draw": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-input": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-pack": "workspace:^",
+    "@forgeax/engine-render-graph": "workspace:*",
+    "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-rhi-webgpu": "workspace:*",
+    "@forgeax/engine-rhi-wgpu": "workspace:*",
+    "@forgeax/engine-shader": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-import": "workspace:*",
+    "@forgeax/engine-naga": "workspace:*",
+    "@forgeax/engine-vite-plugin-shader": "workspace:*"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": true,
+        "path": "dist/index.mjs",
+        "compression": "gzip",
+        "expected": 93148
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "renderer entry without bundled canvas; fps reported by hello-triangle / hello-cube apps that consume the renderer"
+      },
+      "bench": {
+        "enabled": true,
+        "reportPath": "bench-result.json",
+        "suite": "@forgeax/engine-runtime",
+        "baseline": {
+          "source": "inline",
+          "threshold": 5000000
+        }
+      },
+      "gate": {
+        "enabled": true,
+        "reason": "node scripts/forgeax/check-pipeline-vocabulary-isolation.mjs"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike package"
+      }
+    }
+  }
+}

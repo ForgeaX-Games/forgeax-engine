@@ -1,0 +1,58 @@
+{
+  "name": "@forgeax/engine-shader",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "description": "Runtime shader registry — content-addressable manifest lookup → rhi.createShaderModule. Physically isolated from the build-time triple @forgeax/engine-shader-compiler / @forgeax/engine-naga / @forgeax/engine-wgpu-wasm (AC-06 三重闸门 grep 守护).",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-types": "workspace:*",
+    "@webgpu/types": "^0.1.70"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": true,
+        "path": "dist/index.mjs",
+        "compression": "gzip"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "runtime registry without canvas; fps reported by hello-triangle / hello-cube apps that consume the registry"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "manifest-lookup path is not perf-critical; bench focus stays on @forgeax/engine-math"
+      },
+      "gate": {
+        "enabled": false,
+        "reason": "physical-isolation grep gates (check-shader-no-naga-in-dist + check-shader-runtime-deps + check-shader-no-compiler-import) are repo-root scripts wired into ci.yml lint job, not a per-package gate"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike package"
+      }
+    }
+  }
+}

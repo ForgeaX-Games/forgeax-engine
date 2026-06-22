@@ -1,0 +1,101 @@
+.DS_Store
+
+# build artifacts & caches
+node_modules/
+dist/
+.turbo/
+coverage/
+report/
+*.tsbuildinfo
+.vite/
+*.log
+
+# dist-freshness stamp written by forgeax-studio/scripts/run.sh: records the
+# engine SHA at last successful dist rebuild so vite-driven hosts can detect
+# stale dist/ after a submodule pointer bump and rebuild before serving.
+.dist-sha
+
+# python bytecode caches (scripts/forgeax/*.py and the harness venv produce
+# these on every invocation; never tracked).
+__pycache__/
+*.pyc
+
+# python bytecode caches (scripts/forgeax/*.py and the harness venv produce
+# these on every invocation; never tracked).
+__pycache__/
+*.pyc
+
+# vitest bench --outputJson result（T-036 CI artifact，本地不入库）
+bench-result.json
+packages/*/bench-result.json
+.worktrees/
+
+# tsc -b emit drift (apps/**/*.tsbuildinfo): apps' tsconfig.json compilations
+# may drop a .tsbuildinfo when noEmit:true is overridden locally; keep them out.
+# (The sibling tsconfig.node.json that previously emitted vite.config.{js,d.ts}
+# next to the .ts source was deleted across all 48 apps by
+# bug-20260609-derived-artefact-ssot-drift -- vite-node v8 consumes
+# vite.config.ts directly with no tsc step, so the emit + shadow chain is gone.
+# vite.config.ts is intentionally NOT in any app's tsconfig.json include array,
+# matching the pre-existing flat shape of hello/{custom-shader,gltf,*}.)
+apps/**/*.tsbuildinfo
+
+# images
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+*.tif
+*.svg
+*.webp
+*.ico
+*.heic
+*.raw
+*.cr2
+*.nef
+
+# Zero-binary invariant: the engine repo tracks NO image binaries. All
+# rendered baselines, demo source assets, and vendor textures live in the
+# forgeax-engine-assets submodule (smoke-baselines/<demo>/, demo-assets/<demo>/,
+# learn-opengl/, ...). The global *.png / *.jpg blocks above have no
+# whitelist exceptions on purpose — a stray committed image is a regression,
+# not a fixture. Regenerate IBL baselines via `pnpm bake:ibl-reference`
+# (writes into the submodule); charter P5 baseline-as-SSOT.
+
+# vedios
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
+*.webm
+*.m4v
+*.mpg
+*.mpeg
+*.3gp
+# feat-20260617 host-engine-contract: the video-cutscene demo ships one tiny
+# self-contained VP8/WebM as the cutscene source so the browser smoke can play
+# a real video end-to-end (zero external deps, zero npm video lib -- OOS-7).
+!apps/hello/video-cutscene/public/cutscene.webm
+
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+
+# .forgeax-harness is a floating clone of forgeax-engine-harness (NOT a submodule
+# as of 2026-06-06 — see docs/specs/2026-06-06-harness-desubmodule-floating-clone-design.md).
+# The engine never tracks it; `pnpm harness:sync` clones/pulls it on install.
+/.forgeax-harness/
+
+.playwright-cli/
+
+# Per-worktree private Playwright browser cache (PLAYWRIGHT_BROWSERS_PATH) used
+# by hello-*/fbx smoke:browser to sidestep the shared ~/Library/Caches/ms-playwright
+# lock when multiple worktrees install browsers concurrently.
+.pw-browsers/
+
+# M8 stray debug capture dirs from unit tests
+.forgeax-debug/
+packages/*/.forgeax-debug/

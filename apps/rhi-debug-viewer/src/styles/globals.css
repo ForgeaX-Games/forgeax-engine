@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 98%;
+    --foreground: 0 0% 4%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 4%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 4%;
+    --brand: 188 86% 38%;
+    --brand-foreground: 0 0% 100%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 220 14% 96%;
+    --accent-foreground: 0 0% 9%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 188 86% 38%;
+    --success: 158 64% 38%;
+    --success-foreground: 0 0% 100%;
+    --warning: 32 95% 35%;
+    --warning-foreground: 0 0% 100%;
+    --danger: 0 84% 47%;
+    --danger-foreground: 0 0% 100%;
+    --info: 217 91% 50%;
+    --info-foreground: 0 0% 100%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 0 0% 4%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 8%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 8%;
+    --popover-foreground: 0 0% 98%;
+    --brand: 186 96% 43%;
+    --brand-foreground: 0 0% 4%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 64%;
+    --accent: 0 0% 12%;
+    --accent-foreground: 0 0% 98%;
+    --border: 0 0% 16%;
+    --input: 0 0% 16%;
+    --ring: 186 96% 43%;
+    --success: 158 64% 52%;
+    --success-foreground: 0 0% 4%;
+    --warning: 43 96% 56%;
+    --warning-foreground: 0 0% 4%;
+    --danger: 0 84% 60%;
+    --danger-foreground: 0 0% 4%;
+    --info: 213 94% 68%;
+    --info-foreground: 0 0% 4%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-family: "Geist Sans", system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings:
+      "rlig" 1,
+      "calt" 1;
+  }
+
+  code,
+  .font-mono {
+    font-family: "Geist Mono", ui-monospace, "SF Mono", monospace;
+  }
+}

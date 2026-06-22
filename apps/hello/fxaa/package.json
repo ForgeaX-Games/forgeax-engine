@@ -1,0 +1,54 @@
+{
+  "name": "@forgeax/hello-fxaa",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "FXAA post-processing opt-in exemplar (feat-20260528-fxaa-post-processing / M4 / w18).",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs"
+  },
+  "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/hello-fxaa smoke",
+    "_comment": "smokeInvocation = self-contained SSOT. hello-fxaa exercises Camera antialias=fxaa end-to-end (geometry pass -> copy swap-chain -> FXAA fullscreen pass).",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle (dist/assets) shape is downstream of @forgeax/engine-runtime sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "fps no-regression covered by hello-cube / hello-room / hello-app gates that run the default zero-overhead path; FXAA opt-in cost is verified via the smoke gate (300-frame readback) rather than per-app fps sampling"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "FXAA opt-in exemplar; vitest bench focus stays on @forgeax/engine-math + @forgeax/engine-runtime#transparent-sort, and pixel-parity bench covers cross-backend FXAA correctness"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-fxaa smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; this is the M4 hello-fxaa opt-in exemplar"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-input": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@webgpu/types": "^0.1.70",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0"
+  }
+}

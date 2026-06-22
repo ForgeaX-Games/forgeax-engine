@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>forgeax-engine - Hello Audio (spacebar one-shot SFX + 3D listener)</title>
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; background: #1a1a22; color: #e8e8ef; font-family: ui-monospace, monospace; }
+      canvas { display: block; width: 100vw; height: 100vh; }
+      #overlay {
+        position: fixed; left: 12px; top: 12px;
+        background: rgba(0, 0, 0, 0.45); padding: 8px 12px;
+        border-radius: 6px; line-height: 1.6; pointer-events: none;
+        font-size: 13px;
+      }
+      #overlay b { color: #ffe57c; }
+    </style>
+  </head>
+  <body>
+    <canvas id="app"></canvas>
+    <div id="overlay">
+      <b>spacebar</b> = one-shot SFX &amp; resume AudioContext<br />
+      <b>WASD</b> = move listener<br />
+      distance = -- | pan = --
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

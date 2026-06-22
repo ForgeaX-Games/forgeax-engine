@@ -1,0 +1,51 @@
+{
+  "name": "@forgeax/hello-picking",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "End-to-end screen-to-entity picking demonstration (feat-20260529-picking-raycasting-screen-to-entity M4 / w16).",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs"
+  },
+  "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/hello-picking smoke",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle tracked at package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "picking smoke covers GPU"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "picking bench not yet defined"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-picking smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-math": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0",
+    "@webgpu/types": "^0.1.70"
+  }
+}

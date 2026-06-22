@@ -1,0 +1,133 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`scripts/metrics/render-sticky.mjs sticky comment composer (w22) (i) all-ok fixture: stdout matches snapshot 1`] = `
+"### forgeax-engine metrics report
+
+total: 4/4 (package x kind) entries passed (all status=ok)
+
+<details>
+<summary>complete metrics details (4 entries)</summary>
+
+| package | kind | value | target | status |
+| --- | --- | --- | --- | --- |
+| engine | bundle-size | 51200 bytes (50.00 KB) | <= 102400 bytes (100.00 KB) | ok |
+| hello-triangle | gate | 0 | 0 | ok |
+| math | bundle-size | 4096 bytes (4.00 KB) | <= 102400 bytes (100.00 KB) | ok |
+| math | bench | 41.25 ns/op | n/a | ok |
+
+</details>
+"
+`;
+
+exports[`scripts/metrics/render-sticky.mjs sticky comment composer (w22) (ii) partial fixture: stdout matches snapshot 1`] = `
+"### forgeax-engine metrics report
+
+| package | kind | value | target | status |
+| --- | --- | --- | --- | --- |
+| engine | bundle-size | 153600 bytes (150.00 KB) | <= 102400 bytes (100.00 KB) | over |
+total: 3/4 (package x kind) entries passed
+
+<details>
+<summary>complete metrics details (4 entries)</summary>
+
+| package | kind | value | target | status |
+| --- | --- | --- | --- | --- |
+| engine | bundle-size | 153600 bytes (150.00 KB) | <= 102400 bytes (100.00 KB) | over |
+| hello-triangle | gate | 0 | 0 | ok |
+| math | bundle-size | 4096 bytes (4.00 KB) | <= 102400 bytes (100.00 KB) | ok |
+| math | bench | 41.25 ns/op | n/a | ok |
+
+</details>
+"
+`;
+
+exports[`scripts/metrics/render-sticky.mjs sticky comment composer (w22) (iii) all-bad fixture: stdout matches snapshot 1`] = `
+"### forgeax-engine metrics report
+
+| package | kind | value | target | status |
+| --- | --- | --- | --- | --- |
+| engine | bundle-size | 153600 bytes (150.00 KB) | <= 102400 bytes (100.00 KB) | over |
+| hello-triangle | gate | 1 | 0 | unavailable |
+| math | bundle-size | n/a | <= 102400 bytes (100.00 KB) | missing |
+| math | bench | n/a | n/a | unavailable |
+total: 0/4 (package x kind) entries passed
+
+<details>
+<summary>complete metrics details (4 entries)</summary>
+
+| package | kind | value | target | status |
+| --- | --- | --- | --- | --- |
+| engine | bundle-size | 153600 bytes (150.00 KB) | <= 102400 bytes (100.00 KB) | over |
+| hello-triangle | gate | 1 | 0 | unavailable |
+| math | bundle-size | n/a | <= 102400 bytes (100.00 KB) | missing |
+| math | bench | n/a | n/a | unavailable |
+
+</details>
+"
+`;
+
+exports[`scripts/metrics/render-sticky.mjs sticky comment composer (w22) > (i) all-ok fixture: stdout matches snapshot 1`] = `
+"### forgeax-engine metrics report
+
+total: 4/4 (package x kind) entries passed (all status=ok)
+
+<details>
+<summary>complete metrics details (4 entries)</summary>
+
+| package | kind | value | target | status |
+| --- | --- | --- | --- | --- |
+| engine | bundle-size | 51200 bytes (50.00 KB) | <= 102400 bytes (100.00 KB) | ok |
+| hello-triangle | gate | 0 | 0 | ok |
+| math | bundle-size | 4096 bytes (4.00 KB) | <= 102400 bytes (100.00 KB) | ok |
+| math | bench | 41.25 ns/op | n/a | ok |
+
+</details>
+"
+`;
+
+exports[`scripts/metrics/render-sticky.mjs sticky comment composer (w22) > (ii) partial fixture: stdout matches snapshot 1`] = `
+"### forgeax-engine metrics report
+
+| package | kind | value | target | status |
+| --- | --- | --- | --- | --- |
+| engine | bundle-size | 153600 bytes (150.00 KB) | <= 102400 bytes (100.00 KB) | over |
+total: 3/4 (package x kind) entries passed
+
+<details>
+<summary>complete metrics details (4 entries)</summary>
+
+| package | kind | value | target | status |
+| --- | --- | --- | --- | --- |
+| engine | bundle-size | 153600 bytes (150.00 KB) | <= 102400 bytes (100.00 KB) | over |
+| hello-triangle | gate | 0 | 0 | ok |
+| math | bundle-size | 4096 bytes (4.00 KB) | <= 102400 bytes (100.00 KB) | ok |
+| math | bench | 41.25 ns/op | n/a | ok |
+
+</details>
+"
+`;
+
+exports[`scripts/metrics/render-sticky.mjs sticky comment composer (w22) > (iii) all-bad fixture: stdout matches snapshot 1`] = `
+"### forgeax-engine metrics report
+
+| package | kind | value | target | status |
+| --- | --- | --- | --- | --- |
+| engine | bundle-size | 153600 bytes (150.00 KB) | <= 102400 bytes (100.00 KB) | over |
+| hello-triangle | gate | 1 | 0 | unavailable |
+| math | bundle-size | n/a | <= 102400 bytes (100.00 KB) | missing |
+| math | bench | n/a | n/a | unavailable |
+total: 0/4 (package x kind) entries passed
+
+<details>
+<summary>complete metrics details (4 entries)</summary>
+
+| package | kind | value | target | status |
+| --- | --- | --- | --- | --- |
+| engine | bundle-size | 153600 bytes (150.00 KB) | <= 102400 bytes (100.00 KB) | over |
+| hello-triangle | gate | 1 | 0 | unavailable |
+| math | bundle-size | n/a | <= 102400 bytes (100.00 KB) | missing |
+| math | bench | n/a | n/a | unavailable |
+
+</details>
+"
+`;

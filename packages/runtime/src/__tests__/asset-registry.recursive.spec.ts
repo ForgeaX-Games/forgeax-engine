@@ -1,0 +1,1276 @@
+// asset-registry.recursive.spec — M1/SceneAsset recursive loadByGuid (TDD red
+// phase for AC-01 / AC-06 / AC-07 / AC-08). The test file compiles and the
+// "red" stage is intentional (type=test task).
+//
+// Coverage:
+//   AC-01 — scene + N material + 1 mesh: recursive loadByGuid<SceneAsset>
+//           registers all transitive sub-assets
+//   AC-06 — idempotency: second loadByGuid(g) returns same handle, zero fetch
+//   AC-07 — transitive failure: missing sub-asset → err with breadcrumb hint
+//   AC-08 — in-flight dedup + cycle: concurrent Promise.all 3-way dedup;
+//           cycle A→B→A no stack overflow
+
+import { defineComponent } from '@forgeax/engine-ecs';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
+import type {
+  AssetError,
+  LocalEntityId,
+  MaterialAsset,
+  SceneAsset,
+  MeshAsset as TypesMeshAsset,
+} from '@forgeax/engine-types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { AssetRegistry } from '../asset-registry';
+import { collectRefs } from '../collect-refs';
+import { createDefaultLoaderRegistry } from '../wire-default-loaders';
+import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+
+// ── test GUIDs ──────────────────────────────────────────────────────────────
+const SCENE_GUID = 'a0000000-0000-4000-a000-000000000001';
+const MATERIAL_A_GUID = 'a0000000-0000-4000-a000-000000000002';
+const MATERIAL_B_GUID = 'a0000000-0000-4000-a000-000000000003';
+const MESH_GUID = 'a0000000-0000-4000-a000-000000000004';
+const MISSING_SUB_GUID = 'a0000000-0000-4000-a000-000000009999';
+const CYCLE_A_GUID = 'b0000000-0000-4000-b000-000000000001';
+const CYCLE_B_GUID = 'b0000000-0000-4000-b000-000000000002';
+
+function parseGuid(s: string): AssetGuid {
+  const r = AssetGuid.parse(s);
+  if (!r.ok) throw new Error(`invalid test GUID: ${s}`);
+  return r.value;
+}
+
+function localId(n: number): LocalEntityId {
+  return n as LocalEntityId;
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────────
+
+function makeMesh(): TypesMeshAsset {
+  return {
+    kind: 'mesh',
+    vertices: new Float32Array([
+      -0.5, 0, 0.5, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0.5, 0, 0.5, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0.5, 0, -0.5,
+      0, 1, 0, 1, 1, 1, 0, 0, 1,
+    ]),
+    indices: new Uint16Array([0, 1, 2]),
+    attributes: {},
+    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+  };
+}
+
+function makeMaterialAsset(): MaterialAsset {
+  return {
+    kind: 'material',
+    passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
+    paramValues: {},
+  };
+}
+
+function makeTestSceneAsset(subRefs: { meshGuid: string; materialGuids: string[] }): SceneAsset {
+  return {
+    kind: 'scene',
+    entities: [
+      {
+        localId: localId(0),
+        components: {
+          Transform: { posX: 0, posY: 0, posZ: 0 },
+          MeshFilter: { assetHandle: subRefs.meshGuid },
+          MeshRenderer: { materials: subRefs.materialGuids },
+        },
+      },
+    ],
+  };
+}
+
+// ── registry setup ──────────────────────────────────────────────────────────
+
+function makeRegistry(): AssetRegistry {
+  return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+}
+
+function preregisterMesh(reg: AssetRegistry): void {
+  reg.catalog(parseGuid(MESH_GUID), makeMesh());
+}
+
+function preregisterMaterial(reg: AssetRegistry, guidStr: string): void {
+  reg.catalog(parseGuid(guidStr), makeMaterialAsset());
+}
+
+// ── AC-01: scene + N material + 1 mesh recursive resolution ────────────────
+
+describe('AC-01 — scene recursive loadByGuid', () => {
+  it('collectRefs(scene) extracts material + mesh GUIDs from MeshFilter + MeshRenderer', () => {
+    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+    defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
+
+    const scene = makeTestSceneAsset({
+      meshGuid: MESH_GUID,
+      materialGuids: [MATERIAL_A_GUID, MATERIAL_B_GUID],
+    });
+
+    const refs = collectRefs(scene);
+    const refStrs = refs.map((r) => AssetGuid.format(r));
+
+    expect(refStrs).toContain(MESH_GUID);
+    expect(refStrs).toContain(MATERIAL_A_GUID);
+    expect(refStrs).toContain(MATERIAL_B_GUID);
+    expect(refs.length).toBe(3);
+  });
+
+  it('loadByGuid<SceneAsset> in dev mode returns ok when sub-assets pre-registered', async () => {
+    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+    defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
+
+    const reg = makeRegistry();
+    preregisterMesh(reg);
+    preregisterMaterial(reg, MATERIAL_A_GUID);
+    preregisterMaterial(reg, MATERIAL_B_GUID);
+
+    const scene = makeTestSceneAsset({
+      meshGuid: MESH_GUID,
+      materialGuids: [MATERIAL_A_GUID, MATERIAL_B_GUID],
+    });
+    reg.catalog(parseGuid(SCENE_GUID), scene);
+
+    const result = await reg.loadByGuid<SceneAsset>(parseGuid(SCENE_GUID));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.kind).toBe('scene');
+    }
+  });
+});
+
+// ── AC-06: idempotency ─────────────────────────────────────────────────────
+
+describe('AC-06 — idempotency', () => {
+  it('two sequential loadByGuid(g) return the same payload in dev mode', async () => {
+    const reg = makeRegistry();
+    const meshGuid = parseGuid(MESH_GUID);
+    const mesh = makeMesh();
+    const cat1 = reg.catalog(meshGuid, mesh);
+    expect(cat1.ok).toBe(true);
+
+    const r1 = await reg.loadByGuid<TypesMeshAsset>(meshGuid);
+    expect(r1.ok).toBe(true);
+    const r2 = await reg.loadByGuid<TypesMeshAsset>(meshGuid);
+    expect(r2.ok).toBe(true);
+
+    if (r1.ok && r2.ok && cat1.ok) {
+      expect(r1.value).toBe(r2.value);
+      expect(r1.value).toBe(cat1.value);
+    }
+  });
+
+  it('loadByGuid returns the same payload for a pre-registered scene', async () => {
+    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+    defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
+
+    const reg = makeRegistry();
+    preregisterMesh(reg);
+    preregisterMaterial(reg, MATERIAL_A_GUID);
+
+    const scene = makeTestSceneAsset({
+      meshGuid: MESH_GUID,
+      materialGuids: [MATERIAL_A_GUID],
+    });
+    reg.catalog(parseGuid(SCENE_GUID), scene);
+
+    const r1 = await reg.loadByGuid<SceneAsset>(parseGuid(SCENE_GUID));
+    const r2 = await reg.loadByGuid<SceneAsset>(parseGuid(SCENE_GUID));
+
+    expect(r1.ok).toBe(true);
+    expect(r2.ok).toBe(true);
+    if (r1.ok && r2.ok) {
+      expect(r1.value).toBe(r2.value);
+    }
+  });
+});
+
+// ── AC-07: transitive failure attribution ───────────────────────────────────
+
+describe('AC-07 — transitive failure attribution', () => {
+  it('dev-mode loadByGuid returns asset-not-found for missing GUID', async () => {
+    const reg = makeRegistry();
+    const rMissing = await reg.loadByGuid<TypesMeshAsset>(parseGuid(MISSING_SUB_GUID));
+    expect(rMissing.ok).toBe(false);
+    if (!rMissing.ok) {
+      const err = rMissing.error as AssetError;
+      expect(err.code).toBe('asset-not-found');
+      expect(typeof err.hint).toBe('string');
+    }
+  });
+
+  it('prod-path recursive error includes sub-asset GUID + parent scene GUID in hint', async () => {
+    // Construct a catalog where the scene pack and mesh pack exist but the
+    // material sub-ref GUID is missing. After M1 recursion is wired in ddcLoad,
+    // loadByGuid<SceneAsset> should fail with a breadcrumb hint containing both
+    // the missing GUID and the parent scene GUID.
+    //
+    // Pack fixture format matches the existing load-by-guid-prod fixtures
+    // (pack-index is a flat array, pack file uses schemaVersion + assets[]).
+
+    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+    defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
+
+    const reg = makeRegistry();
+
+    // Pack-index: scene + mesh present, material missing.
+    const packIndex = [
+      { guid: SCENE_GUID, relativeUrl: '/packs/scene.pack.json', kind: 'scene' },
+      { guid: MESH_GUID, relativeUrl: '/packs/mesh.pack.json', kind: 'mesh' },
+      // MISSING_SUB_GUID intentionally absent
+    ];
+
+    // Scene pack payload references MESH_GUID + MISSING_SUB_GUID.
+    const scenePack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: SCENE_GUID,
+          kind: 'scene',
+          payload: {
+            entities: [
+              {
+                localId: 0,
+                components: {
+                  Transform: { posX: 0, posY: 0, posZ: 0 },
+                  MeshFilter: { assetHandle: MESH_GUID },
+                  MeshRenderer: { materials: [MISSING_SUB_GUID] },
+                },
+              },
+            ],
+          },
+          refs: [],
+        },
+      ],
+    };
+
+    const meshPack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: MESH_GUID,
+          kind: 'mesh',
+          payload: {
+            vertices: [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1],
+            indices: [0],
+            attributes: {},
+          },
+          refs: [],
+          submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' }],
+        },
+      ],
+    };
+
+    reg.configurePackIndex(`/pack-index.json`);
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === `/pack-index.json`) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/scene.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(scenePack) });
+      }
+      if (url === '/packs/mesh.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(meshPack) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      const result = await reg.loadByGuid<SceneAsset>(parseGuid(SCENE_GUID));
+
+      // After M1 impl, this should fail because MISSING_SUB_GUID is not in the
+      // catalog. The error hint should contain the missing GUID and the parent
+      // scene GUID as a breadcrumb.
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const err = result.error as AssetError;
+        expect(
+          ['asset-not-found', 'asset-fetch-failed', 'asset-not-imported'].includes(err.code),
+        ).toBe(true);
+        expect(typeof err.hint).toBe('string');
+        // Breadcrumb (D-7 / B-8): hint contains the missing sub-asset GUID,
+        // the parent scene GUID, and the entity localId + component.field path
+        // (4-segment chain: scene → entity → component.field → sub-asset).
+        expect(err.hint).toContain(MISSING_SUB_GUID);
+        expect(err.hint).toContain(SCENE_GUID);
+        expect(err.hint).toContain('entity 0');
+        expect(err.hint).toContain('MeshRenderer.materials');
+      }
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+});
+
+// ── M2 GUIDs ───────────────────────────────────────────────────────────────
+const TEXTURE_A_GUID = 'c0000000-0000-4000-c000-000000000001';
+const TEXTURE_B_GUID = 'c0000000-0000-4000-c000-000000000002';
+const TEXTURE_C_GUID = 'c0000000-0000-4000-c000-000000000003';
+const MATERIAL_PARENT_GUID = 'c0000000-0000-4000-c000-000000000004';
+const SKELETON_GUID = 'd0000000-0000-4000-d000-000000000001';
+const SKIN_GUID = 'd0000000-0000-4000-d000-000000000002';
+const SCENE_GLTF_GUID = 'e0000000-0000-4000-e000-000000000001';
+
+// ── AC-08: in-flight dedup + cycle ─────────────────────────────────────────
+
+describe('AC-08 — in-flight dedup + cycle', () => {
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('concurrent loadByGuid(g) 3-way shares in-flight promise — only 1 pack fetch', async () => {
+    const reg = makeRegistry();
+
+    const packIndex = [{ guid: MESH_GUID, relativeUrl: '/packs/mesh.pack.json', kind: 'mesh' }];
+
+    const meshPack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: MESH_GUID,
+          kind: 'mesh',
+          payload: {
+            vertices: [
+              -0.5, 0, 0.5, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0.5, 0, 0.5, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0.5,
+              0, -0.5, 0, 1, 0, 1, 1, 1, 0, 0, 1,
+            ],
+            indices: [0, 1, 2],
+            attributes: {},
+          },
+          refs: [],
+          submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+        },
+      ],
+    };
+
+    reg.configurePackIndex(`/pack-index.json`);
+
+    let packFetchCount = 0;
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === `/pack-index.json`) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/mesh.pack.json') {
+        packFetchCount++;
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(meshPack) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      const meshGuid = parseGuid(MESH_GUID);
+      const [r1, r2, r3] = await Promise.all([
+        reg.loadByGuid<TypesMeshAsset>(meshGuid),
+        reg.loadByGuid<TypesMeshAsset>(meshGuid),
+        reg.loadByGuid<TypesMeshAsset>(meshGuid),
+      ]);
+
+      expect(r1.ok).toBe(true);
+      expect(r2.ok).toBe(true);
+      expect(r3.ok).toBe(true);
+
+      if (r1.ok && r2.ok && r3.ok) {
+        expect(r1.value).toBe(r2.value);
+        expect(r2.value).toBe(r3.value);
+
+        // In-flight dedup: only 1 pack-index fetch + 1 pack fetch = 2 total
+        // (pack-index might be fetched N times since fetchMock is per-call,
+        // but packFetchCount should be 1 thanks to inFlight dedup)
+        expect(packFetchCount).toBe(1);
+      }
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('cycle A→B→A no stack overflow, both registered', async () => {
+    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('SceneCycler', { refScene: 'shared<unknown>' });
+
+    const reg = makeRegistry();
+
+    // Two SceneAssets that reference each other via a handle field.
+    // collectRefs(scene) detects the handle field → recursive loadByGuid.
+    // With inFlight dedup: A starts fetch→parse→collectRefs→B, B starts
+    // fetch→parse→collectRefs→A, inFlight.has(A)=true → returns A's
+    // in-flight Promise → no stack overflow.
+
+    const packIndex = [
+      { guid: CYCLE_A_GUID, relativeUrl: '/packs/a.pack.json', kind: 'scene' },
+      { guid: CYCLE_B_GUID, relativeUrl: '/packs/b.pack.json', kind: 'scene' },
+    ];
+
+    const sceneAPack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: CYCLE_A_GUID,
+          kind: 'scene',
+          payload: {
+            entities: [
+              {
+                localId: 0,
+                components: {
+                  Transform: { posX: 0, posY: 0, posZ: 0 },
+                  SceneCycler: { refScene: CYCLE_B_GUID },
+                },
+              },
+            ],
+          },
+          refs: [],
+        },
+      ],
+    };
+
+    const sceneBPack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: CYCLE_B_GUID,
+          kind: 'scene',
+          payload: {
+            entities: [
+              {
+                localId: 0,
+                components: {
+                  Transform: { posX: 0, posY: 0, posZ: 0 },
+                  SceneCycler: { refScene: CYCLE_A_GUID },
+                },
+              },
+            ],
+          },
+          refs: [],
+        },
+      ],
+    };
+
+    reg.configurePackIndex(`/pack-index.json`);
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === `/pack-index.json`) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/a.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(sceneAPack) });
+      }
+      if (url === '/packs/b.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(sceneBPack) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      const result = await reg.loadByGuid<SceneAsset>(parseGuid(CYCLE_A_GUID));
+      expect(result.ok).toBe(true);
+
+      const resB = reg.lookup(parseGuid(CYCLE_B_GUID));
+      expect(resB).not.toBe(undefined);
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+});
+
+// ── AC-02: material recursive (D-8 — paramValues string-only walker) ─────────
+
+describe('AC-02 — material recursive loadByGuid', () => {
+  it('collectRefs(material) extracts texture GUIDs from paramValues', () => {
+    const material: MaterialAsset = {
+      kind: 'material',
+      passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
+      paramValues: {
+        u_albedoMap: TEXTURE_A_GUID,
+        u_normalMap: TEXTURE_B_GUID,
+        u_metallic: 0.5, // number — NOT a GUID, should be skipped
+        u_name: 'rough-metal', // string but NOT a GUID, should be skipped
+        u_emptyStr: '', // empty string — not a valid GUID, should be skipped
+      },
+    };
+
+    const refs = collectRefs(material);
+    const refStrs = refs.map((r) => AssetGuid.format(r));
+
+    // Only TEXTURE_A_GUID and TEXTURE_B_GUID are valid GUID strings
+    expect(refStrs).toContain(TEXTURE_A_GUID);
+    expect(refStrs).toContain(TEXTURE_B_GUID);
+    expect(refStrs).not.toContain('rough-metal');
+    expect(refs.length).toBe(2);
+  });
+
+  it('collectRefs(material) with undefined paramValues returns []', () => {
+    const material: MaterialAsset = {
+      kind: 'material',
+      passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
+      // paramValues omitted entirely
+    };
+
+    expect(collectRefs(material)).toEqual([]);
+  });
+
+  it('collectRefs(material) skips non-GUID-string paramValues in mixed map', () => {
+    const material: MaterialAsset = {
+      kind: 'material',
+      passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
+      paramValues: {
+        tex: TEXTURE_A_GUID,
+        metallic: 0.5,
+        name: 'rough-metal',
+      },
+    };
+
+    const refs = collectRefs(material);
+    const refStrs = refs.map((r) => AssetGuid.format(r));
+
+    expect(refStrs).toContain(TEXTURE_A_GUID);
+    expect(refs.length).toBe(1);
+  });
+
+  it('loadByGuid<MaterialAsset> recurses into texture sub-assets pre-registered in dev mode', async () => {
+    // Verify that the recursive loadByGuid<MaterialAsset> walk reaches
+    // texture GUIDs from paramValues. The textures are pre-registered in dev
+    // mode (fast-path hit), simulating the typical dev workflow where leaf
+    // assets are registered before the material. The material itself is
+    // loaded via the prod path, and the recursive walk triggers loadByGuid
+    // for each texture GUID — each hitting the fast-path cache.
+    const reg = makeRegistry();
+
+    // Pre-register textures in dev mode (fast-path compatible)
+    reg.catalog(parseGuid(TEXTURE_A_GUID), {
+      kind: 'texture' as const,
+      width: 4,
+      height: 4,
+      format: 'rgba8unorm' as const,
+      data: new Uint8Array(64),
+      colorSpace: 'srgb' as const,
+      mipmap: false,
+    });
+    reg.catalog(parseGuid(TEXTURE_B_GUID), {
+      kind: 'texture' as const,
+      width: 4,
+      height: 4,
+      format: 'rgba8unorm' as const,
+      data: new Uint8Array(64),
+      colorSpace: 'srgb' as const,
+      mipmap: false,
+    });
+
+    const packIndex = [
+      { guid: MATERIAL_PARENT_GUID, relativeUrl: '/packs/material.pack.json', kind: 'material' },
+    ];
+
+    const materialPack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: MATERIAL_PARENT_GUID,
+          kind: 'material',
+          payload: {
+            passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
+            paramValues: {
+              u_albedoMap: TEXTURE_A_GUID,
+              u_normalMap: TEXTURE_B_GUID,
+            },
+          },
+          refs: [],
+        },
+      ],
+    };
+
+    reg.configurePackIndex(`/pack-index.json`);
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === `/pack-index.json`) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/material.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(materialPack) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      const result = await reg.loadByGuid<MaterialAsset>(parseGuid(MATERIAL_PARENT_GUID));
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        // Both texture GUIDs should be resolvable (fast-path hit from dev pre-registration)
+        expect(reg.lookup(parseGuid(TEXTURE_A_GUID))).not.toBe(undefined);
+        expect(reg.lookup(parseGuid(TEXTURE_B_GUID))).not.toBe(undefined);
+      }
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+});
+
+// ── AC-04: skin recursive (D-10 — single skeletonGuid) ─────────────────────-
+
+describe('AC-04 — skin recursive loadByGuid', () => {
+  it('collectRefs(skin) extracts skeletonGuid', () => {
+    const skin: import('@forgeax/engine-types').SkinAsset = {
+      kind: 'skin',
+      skeletonGuid: SKELETON_GUID,
+      jointPaths: ['Root/Arm/Hand', 'Root/Leg'],
+    };
+
+    const refs = collectRefs(skin);
+    expect(refs.length).toBe(1);
+    const ref0 = refs[0];
+    if (ref0 === undefined) throw new Error('refs[0] should be defined after length check');
+    expect(AssetGuid.format(ref0)).toBe(SKELETON_GUID);
+  });
+
+  it('collectRefs(skin) with malformed skeletonGuid returns []', () => {
+    const skin: import('@forgeax/engine-types').SkinAsset = {
+      kind: 'skin',
+      skeletonGuid: 'not-a-valid-uuid',
+      jointPaths: ['Root'],
+    };
+
+    const refs = collectRefs(skin);
+    expect(refs.length).toBe(0);
+  });
+
+  it('loadByGuid<SkinAsset> registers skeleton sub-asset via recursive walk', async () => {
+    const reg = makeRegistry();
+
+    // Pre-register skeleton in dev mode (fast-path compatible); the skeleton
+    // loader requires Float32Array which does not survive JSON round-trip.
+    reg.catalog(parseGuid(SKELETON_GUID), {
+      kind: 'skeleton',
+      inverseBindMatrices: new Float32Array(32),
+      jointCount: 2,
+    });
+
+    const packIndex = [{ guid: SKIN_GUID, relativeUrl: '/packs/skin.pack.json', kind: 'skin' }];
+
+    const skinPack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: SKIN_GUID,
+          kind: 'skin',
+          payload: {
+            jointPaths: ['Root', 'Root/Spine'],
+            skeletonGuid: SKELETON_GUID,
+          },
+          refs: [],
+        },
+      ],
+    };
+
+    reg.configurePackIndex(`/pack-index.json`);
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === `/pack-index.json`) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/skin.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(skinPack) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      const result = await reg.loadByGuid<import('@forgeax/engine-types').SkinAsset>(
+        parseGuid(SKIN_GUID),
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        // Skeleton GUID should be resolvable (fast-path hit from dev pre-registration)
+        expect(reg.lookup(parseGuid(SKELETON_GUID))).not.toBe(undefined);
+      }
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+});
+
+// ── AC-03: gltf-shaped scene composite (D-9 — via SceneAsset entry) ─────────
+
+describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
+  it('loadByGuid<SceneAsset> registers mesh + material + texture-by-material chain', async () => {
+    // D-9: runtime Asset union contains no GltfAsset POD; gltf importer
+    // output (mesh + material + texture) is covered via SceneAsset recursion.
+    // This fixture mirrors that output: a scene whose entities reference mesh
+    // + material, and the material's paramValues reference a texture GUID.
+    // The recursive walk must reach all three kinds.
+    //
+    // Texture is pre-registered in dev mode (fast-path compatible) because
+    // the texture upstream-entry path requires .bin URLs + metadata; the
+    // material walker's collectRefs extracts the texture GUIDs from
+    // paramValues, and the recursive loadByGuid hits the dev fast-path.
+
+    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+    defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
+
+    const reg = makeRegistry();
+
+    // Pre-register texture in dev mode
+    reg.catalog(parseGuid(TEXTURE_C_GUID), {
+      kind: 'texture' as const,
+      width: 4,
+      height: 4,
+      format: 'rgba8unorm' as const,
+      data: new Uint8Array(64),
+      colorSpace: 'srgb' as const,
+      mipmap: false,
+    });
+
+    const packIndex = [
+      { guid: SCENE_GLTF_GUID, relativeUrl: '/packs/scene-gltf.pack.json', kind: 'scene' },
+      { guid: MESH_GUID, relativeUrl: '/packs/mesh.pack.json', kind: 'mesh' },
+      {
+        guid: MATERIAL_A_GUID,
+        relativeUrl: '/packs/mat.pack.json',
+        kind: 'material',
+      },
+    ];
+
+    const scenePack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: SCENE_GLTF_GUID,
+          kind: 'scene',
+          payload: {
+            entities: [
+              {
+                localId: 0,
+                components: {
+                  Transform: { posX: 0, posY: 0, posZ: 0 },
+                  MeshFilter: { assetHandle: MESH_GUID },
+                  MeshRenderer: { materials: [MATERIAL_A_GUID] },
+                },
+              },
+            ],
+          },
+          refs: [],
+        },
+      ],
+    };
+
+    const meshPack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: MESH_GUID,
+          kind: 'mesh',
+          payload: {
+            vertices: [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1],
+            indices: [0],
+            attributes: {},
+          },
+          refs: [],
+          submeshes: [
+            {
+              indexOffset: 0,
+              indexCount: 0,
+              vertexCount: 0,
+              topology: 'triangle-list',
+            },
+          ],
+        },
+      ],
+    };
+
+    const materialPack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: MATERIAL_A_GUID,
+          kind: 'material',
+          payload: {
+            passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
+            paramValues: {
+              u_baseColorMap: TEXTURE_C_GUID,
+              u_normalMap: TEXTURE_C_GUID, // same texture via two params (diamond)
+              u_metallic: 0.5, // non-GUID value → skipped
+            },
+          },
+          refs: [],
+        },
+      ],
+    };
+
+    reg.configurePackIndex(`/pack-index.json`);
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === `/pack-index.json`) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/scene-gltf.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(scenePack) });
+      }
+      if (url === '/packs/mesh.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(meshPack) });
+      }
+      if (url === '/packs/mat.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(materialPack) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      const result = await reg.loadByGuid<SceneAsset>(parseGuid(SCENE_GLTF_GUID));
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        // All three kinds should be registered:
+        // - mesh (via scene entity MeshFilter, prod path)
+        // - material (via scene entity MeshRenderer, prod path)
+        // - texture (via material paramValues, dev fast-path hit)
+        expect(reg.lookup(parseGuid(MESH_GUID))).not.toBe(undefined);
+        expect(reg.lookup(parseGuid(MATERIAL_A_GUID))).not.toBe(undefined);
+        expect(reg.lookup(parseGuid(TEXTURE_C_GUID))).not.toBe(undefined);
+      }
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+});
+
+// ── M3: leaf coverage (AC-05) ──────────────────────────────────────────────
+//
+// CollectRefs returns [] for all 10 leaf kinds in the closed Asset union.
+// The 6 spec-enumerated leaves (mesh / texture / cube-texture / animation-clip
+// / audio / font) plus 4 extras (sampler / shader / skeleton / render-pipeline)
+// that M0 already had as leaf arms -- tested together for union completeness.
+//
+// AC-05 per-leaf assertions:
+//   collectRefs(asset) === []
+//   loadByGuid (fast-path) returns the catalogued payload
+//   lookup after catalog returns the payload
+//   inspect().assets count incremented by 1 from catalog (zero extra mutations)
+
+const LEAF_TEST_GUIDS: Record<string, string> = {
+  mesh: 'f0000000-0000-4000-f000-000000000001',
+  texture: 'f0000000-0000-4000-f000-000000000002',
+  'cube-texture': 'f0000000-0000-4000-f000-000000000003',
+  sampler: 'f0000000-0000-4000-f000-000000000004',
+  shader: 'f0000000-0000-4000-f000-000000000005',
+  skeleton: 'f0000000-0000-4000-f000-000000000006',
+  'animation-clip': 'f0000000-0000-4000-f000-000000000007',
+  audio: 'f0000000-0000-4000-f000-000000000008',
+  font: 'f0000000-0000-4000-f000-000000000009',
+  'render-pipeline': 'f0000000-0000-4000-f000-00000000000a',
+};
+
+interface LeafFixture {
+  readonly label: string;
+  readonly kind: string;
+  readonly makeAsset: () => import('@forgeax/engine-types').Asset;
+}
+
+const LEAF_FIXTURES: readonly LeafFixture[] = [
+  {
+    label: 'mesh',
+    kind: 'mesh',
+    makeAsset: () => ({
+      kind: 'mesh' as const,
+      vertices: new Float32Array(12),
+      indices: new Uint16Array([0]),
+      attributes: {},
+      submeshes: [
+        { indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' as const },
+      ],
+    }),
+  },
+  {
+    label: 'texture',
+    kind: 'texture',
+    makeAsset: () => ({
+      kind: 'texture' as const,
+      width: 4,
+      height: 4,
+      format: 'rgba8unorm' as const,
+      data: new Uint8Array(64),
+      colorSpace: 'srgb' as const,
+      mipmap: false,
+    }),
+  },
+  {
+    label: 'cube-texture',
+    kind: 'cube-texture',
+    makeAsset: () => ({
+      kind: 'cube-texture' as const,
+      width: 4,
+      height: 4,
+      format: 'rgba8unorm' as const,
+      faces: [
+        new Uint8Array(64),
+        new Uint8Array(64),
+        new Uint8Array(64),
+        new Uint8Array(64),
+        new Uint8Array(64),
+        new Uint8Array(64),
+      ],
+    }),
+  },
+  {
+    label: 'sampler',
+    kind: 'sampler',
+    makeAsset: () => ({
+      kind: 'sampler' as const,
+      magFilter: 'linear' as const,
+      minFilter: 'linear' as const,
+    }),
+  },
+  {
+    label: 'shader',
+    kind: 'shader',
+    makeAsset: () => ({
+      kind: 'shader' as const,
+      name: 'test::leaf-shader',
+      source: 'fn main() {}',
+      paramSchema: [],
+    }),
+  },
+  {
+    label: 'skeleton',
+    kind: 'skeleton',
+    makeAsset: () => ({
+      kind: 'skeleton' as const,
+      inverseBindMatrices: new Float32Array(16),
+      jointCount: 1,
+    }),
+  },
+  {
+    label: 'animation-clip',
+    kind: 'animation-clip',
+    makeAsset: () => ({
+      kind: 'animation-clip' as const,
+      duration: 1.0,
+      channels: [],
+    }),
+  },
+  {
+    label: 'audio',
+    kind: 'audio',
+    makeAsset: () =>
+      // AudioClipAsset requires a real AudioBuffer; in this test we verify
+      // collectRefs (pure type switch, OOS-11 no internal data pre-load) and
+      // registry lifecycle. A typed partial satisfies the unit under test
+      // without decoding real PCM.
+      ({
+        kind: 'audio' as const,
+        buffer: { length: 0, sampleRate: 48000, numberOfChannels: 1, duration: 0 } as AudioBuffer,
+      }),
+  },
+  {
+    label: 'font',
+    kind: 'font',
+    makeAsset: () => ({
+      kind: 'font' as const,
+      // D-19: FontAsset.atlas/sampler are embedded AssetGuids (not handles).
+      atlas: parseGuid('a0000000-0000-4000-a000-00000000f001'),
+      sampler: parseGuid('a0000000-0000-4000-a000-00000000f002'),
+      glyphs: {},
+      common: {
+        lineHeight: 0,
+        base: 0,
+        distanceRange: 0,
+        pxRange: 0,
+        atlasWidth: 0,
+        atlasHeight: 0,
+      },
+    }),
+  },
+  {
+    label: 'render-pipeline',
+    kind: 'render-pipeline',
+    makeAsset: () => ({
+      kind: 'render-pipeline' as const,
+      pipelineId: 'forgeax::urp' as const,
+    }),
+  },
+];
+
+describe('AC-05 -- leaf assets (collectRefs returns [])', () => {
+  // Charter awareness: AI users grep `case '<leafKind>':` in collect-refs.ts
+  // to discover which kinds are leaves. These tests confirm claim per kind.
+
+  it.each(
+    LEAF_FIXTURES.map((f) => [f.label, f]),
+  )('collectRefs(%s) returns []', (_label, fixture) => {
+    const asset = fixture.makeAsset();
+    const refs = collectRefs(asset);
+    expect(refs).toEqual([]);
+  });
+
+  it.each(
+    LEAF_FIXTURES.map((f) => [f.label, f]),
+  )('loadByGuid<%s> returns ok and asset is catalogued via fast-path', async (_label, fixture) => {
+    const reg = makeRegistry();
+    const guidStr = LEAF_TEST_GUIDS[fixture.label];
+    if (guidStr === undefined) throw new Error(`missing leaf test GUID for ${fixture.label}`);
+    const guid = parseGuid(guidStr);
+    const asset = fixture.makeAsset();
+
+    // Record pre-catalogue state
+    const assetsBefore = reg.inspect().assets.length;
+
+    // Catalogue the leaf
+    const cat = reg.catalog(guid, asset);
+    expect(cat.ok).toBe(true);
+
+    // Verify catalog added exactly one entry
+    const assetsAfterCatalog = reg.inspect().assets.length;
+    expect(assetsAfterCatalog).toBe(assetsBefore + 1);
+
+    // loadByGuid fast-path (already catalogued) returns the payload
+    const result = await reg.loadByGuid(guid);
+
+    expect(result.ok).toBe(true);
+    if (result.ok && cat.ok) {
+      expect(result.value).toBe(cat.value);
+    }
+
+    // No extra registry mutations from loadByGuid
+    const assetsAfterLoad = reg.inspect().assets.length;
+    expect(assetsAfterLoad).toBe(assetsBefore + 1);
+
+    // lookup confirms catalogue
+    expect(reg.lookup(guid)).not.toBe(undefined);
+
+    // collectRefs on the catalogued asset returns []
+    const refs = collectRefs(asset);
+    expect(refs).toEqual([]);
+  });
+});
+
+// ── feat-20260612 M2 fixup: SceneAsset.skinGuids browser-async-load chain ──
+//
+// REGRESSION COVERAGE: before the fix, browser-path `loadByGuid<SceneAsset>`
+// recursively followed entity-component handle fields (mesh / material /
+// texture / skeleton) but had no cross-edge to SkinAssets -- SkinAsset is a
+// sibling identified by matching `skeletonGuid`, not by any handle field on a
+// SceneEntity component. After loadByGuid<SceneAsset> resolved, instantiate()
+// invoked `postSpawnResolveJoints` which silently `continue`d when
+// `resolver.resolveSkinAsset` returned undefined. The result: `Skin.joints`
+// stayed length=0, and the M2-introduced `JointCountMismatchError` fail-fast
+// in render-system-extract triggered every frame on the browser path. dawn
+// smoke missed it because dawn pre-registers every sub-asset before
+// instantiate (sync register-handle path), bypassing the recursive walk.
+//
+// The fix:
+//   1. SceneAsset POD now carries `skinGuids?: readonly string[]` (a list of
+//      SkinAsset GUIDs the scene's skinned entities reference). gltfImporter
+//      populates it; on-disk pack JSON stores it as either string GUIDs or
+//      refs[] indices (parseScenePayload accepts both).
+//   2. `collectRefs(scene)` walks `asset.skinGuids` and yields parsed GUIDs
+//      so the recursive `loadByGuid` walk pulls every SkinAsset.
+//   3. `postSpawnResolveJoints` upgraded its silent `continue` on missing
+//      SkinAsset to a fail-fast `skin-asset-unresolved` error, so a future
+//      regression of the cross-edge wiring surfaces immediately rather than
+//      hiding behind a frame-1 JointCountMismatchError.
+const SKIN_FIXUP_SCENE_GUID = 'f0000000-0000-4000-f000-000000000001';
+const SKIN_FIXUP_SKIN_GUID = 'f0000000-0000-4000-f000-000000000002';
+const SKIN_FIXUP_SKELETON_GUID = 'f0000000-0000-4000-f000-000000000003';
+
+describe('feat-20260612 M2 fixup — SceneAsset.skinGuids cross-edge', () => {
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('collectRefs(scene) yields SkinAsset GUIDs from scene.skinGuids', () => {
+    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+
+    const scene: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: localId(0), components: { Transform: { posX: 0, posY: 0, posZ: 0 } } }],
+      skinGuids: [SKIN_FIXUP_SKIN_GUID],
+    };
+
+    const refs = collectRefs(scene);
+    const refStrs = refs.map((r) => AssetGuid.format(r));
+    expect(refStrs).toContain(SKIN_FIXUP_SKIN_GUID);
+  });
+
+  it('loadByGuid<SceneAsset> recursively loads SkinAsset via skinGuids cross-edge (browser pack-fetch path)', async () => {
+    // Reproduces the browser-async-pack-fetch path: SkinAsset is NOT
+    // pre-registered; loadByGuid<SceneAsset> must reach it through the
+    // skinGuids cross-edge encoded in the scene pack body. Without the fix,
+    // the SkinAsset is never loaded and no resolveGuid lookup succeeds.
+
+    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('Skin', {
+      skeleton: 'shared<SkeletonAsset>',
+      joints: 'array<entity>',
+    });
+
+    const reg = makeRegistry();
+
+    // Pre-register Skeleton in dev mode (Float32Array does not survive JSON
+    // round-trip; the skeleton-loader's dual contract handles array form,
+    // but this fixture keeps the focus on skin cross-edge wiring).
+    reg.catalog(parseGuid(SKIN_FIXUP_SKELETON_GUID), {
+      kind: 'skeleton',
+      inverseBindMatrices: new Float32Array(64),
+      jointCount: 1,
+    });
+
+    const packIndex = [
+      { guid: SKIN_FIXUP_SCENE_GUID, relativeUrl: '/packs/scene.pack.json', kind: 'scene' },
+      { guid: SKIN_FIXUP_SKIN_GUID, relativeUrl: '/packs/skin.pack.json', kind: 'skin' },
+    ];
+
+    const scenePack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: SKIN_FIXUP_SCENE_GUID,
+          kind: 'scene',
+          payload: {
+            entities: [
+              {
+                localId: 0,
+                components: {
+                  Transform: { posX: 0, posY: 0, posZ: 0 },
+                  Skin: { skeleton: 0 },
+                },
+              },
+            ],
+            // refs[]-index form (browser JSON-roundtrip shape)
+            skinGuids: [1],
+          },
+          // refs ordering matches indices used by both the Skin.skeleton
+          // handle field (resolved via HANDLE_FIELD_NAMES) and the
+          // skinGuids[] integer form.
+          refs: [SKIN_FIXUP_SKELETON_GUID, SKIN_FIXUP_SKIN_GUID],
+        },
+      ],
+    };
+
+    const skinPack = {
+      schemaVersion: '1.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: SKIN_FIXUP_SKIN_GUID,
+          kind: 'skin',
+          payload: {
+            jointPaths: ['Root'],
+            skeletonGuid: SKIN_FIXUP_SKELETON_GUID,
+          },
+          refs: [SKIN_FIXUP_SKELETON_GUID],
+        },
+      ],
+    };
+
+    reg.configurePackIndex(`/pack-index.json`);
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === `/pack-index.json`) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/scene.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(scenePack) });
+      }
+      if (url === '/packs/skin.pack.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(skinPack) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    // BEFORE fix: SkinAsset not catalogued -> lookup fails.
+    // AFTER fix: collectRefs yields SkinAsset GUID -> loadByGuid recursion
+    // pulls it -> lookup succeeds.
+    const result = await reg.loadByGuid<SceneAsset>(parseGuid(SKIN_FIXUP_SCENE_GUID));
+    expect(result.ok).toBe(true);
+
+    expect(reg.lookup(parseGuid(SKIN_FIXUP_SKIN_GUID))).not.toBe(undefined);
+  });
+
+  it('parseScenePayload accepts skinGuids as inline strings (in-memory form)', async () => {
+    // dawn-smoke / direct register path stores skinGuids as raw GUID strings
+    // (not refs[] indices). parseScenePayload's resolveSkinGuids must accept
+    // both shapes for round-trip symmetry with the browser pack-fetch path.
+
+    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+
+    const reg = makeRegistry();
+    reg.catalog(parseGuid(SKIN_FIXUP_SKELETON_GUID), {
+      kind: 'skeleton',
+      inverseBindMatrices: new Float32Array(64),
+      jointCount: 1,
+    });
+    reg.catalog(parseGuid(SKIN_FIXUP_SKIN_GUID), {
+      kind: 'skin',
+      jointPaths: ['Root'],
+      skeletonGuid: SKIN_FIXUP_SKELETON_GUID,
+    });
+
+    // Build a SceneAsset POD with inline skinGuids (no refs[] indices).
+    const scene: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: localId(0), components: { Transform: { posX: 0, posY: 0, posZ: 0 } } }],
+      skinGuids: [SKIN_FIXUP_SKIN_GUID],
+    };
+    reg.catalog(parseGuid(SKIN_FIXUP_SCENE_GUID), scene);
+
+    const result = await reg.loadByGuid<SceneAsset>(parseGuid(SKIN_FIXUP_SCENE_GUID));
+    expect(result.ok).toBe(true);
+
+    // collectRefs walks inline string form too
+    const refs = collectRefs(scene);
+    const refStrs = refs.map((r) => AssetGuid.format(r));
+    expect(refStrs).toContain(SKIN_FIXUP_SKIN_GUID);
+  });
+});

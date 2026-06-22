@@ -1,0 +1,20 @@
+# packages/wgpu-wasm/.gitignore — productionised merge of the archived legacy
+# wasm-pack shims (naga + rhi-wgpu/crate; both packages were deleted in
+# feat-20260511-naga-rhi-wgpu-merge M5 — this single crate replaces both,
+# plan-strategy D-P1 + research F-2 / F-3 ship form).
+#
+# Zero-binary invariant: the compiled `*.wasm` artefact is NOT committed (it
+# is the only binary in pkg/). Rebuild it locally / in CI via `build.sh`
+# (wasm-pack; needs a Rust toolchain — see CONTRIBUTING §Rust toolchain).
+# The pkg/ TEXT glue (.js + .d.ts + package.json + README) IS committed so the
+# TS shim consumers (@forgeax/engine-rhi-wgpu + @forgeax/engine-naga) resolve
+# `workspace:*` references via pnpm without every contributor running Rust.
+# Cargo.lock = application-level crate lock, MUST be checked in (CI cache key =
+#              hashFiles(.../Cargo.lock); bundle-size MetricKind cites the
+#              resolved wgpu / naga patches from this file).
+
+target/
+node_modules/
+
+# The only binary in pkg/: the wasm-pack-compiled module. Rebuilt by build.sh.
+pkg/*.wasm

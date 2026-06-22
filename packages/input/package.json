@@ -1,0 +1,56 @@
+{
+  "name": "@forgeax/engine-input",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "description": "Frame-start scanned, frozen InputSnapshot Resource (keyboard.down/up + mouse.movementDelta + mouse.button(0|1|2)) + browser PointerLock backend for forgeax-engine.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@forgeax/engine-ecs": "workspace:*"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "MVP input package (4-method surface only); bundle-size lock deferred to a future feat once PointerLock backend stabilises and meaningful threshold can be locked. M12 measured baseline (gzip dist/index.mjs): 1303 bytes raw 4302 (recorded for future enable flip; do not gate on it yet)"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "library package, no runtime canvas; fps is reported by hello-* / learn-render apps that consume engine.input.snapshot()"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "frame-start scan path is O(events-since-last-tick); not a perf-critical surface for the MVP"
+      },
+      "gate": {
+        "enabled": false,
+        "reason": "no package-level binary gate; AC-07 surface coverage runs as part of pnpm test:unit + tsc -b"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike package; this is a production MVP per plan-strategy D-5 (input internalisation minimal surface)"
+      }
+    }
+  }
+}

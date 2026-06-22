@@ -1,0 +1,527 @@
+// @forgeax/engine-shader-compiler — package entrypoint.
+//
+// Top-level surface (charter proposition 1 progressive disclosure / proposition 5 consistent abstraction):
+// - compileShader / CompileOptions / CompileResult — main API (pure function + Result)
+// - ShaderError / 4 factories + Result<T,E> — error model (re-exported from @forgeax/engine-naga;
+//   feat-20260511-naga-rhi-wgpu-merge moved the ShaderError class + factories down to the
+//   @forgeax/engine-naga thin shell, this package now re-exports for backward compat).
+// - parseReflectionJson — internal module (re-exported for vite-plugin-shader to reuse)
+//
+// Form invariants (plan-strategy §S-5 + §S-7 + §S-9 + feat-20260511 D-P4):
+// - wasm initialisation is delegated to @forgeax/engine-naga (which itself awaits
+//   @forgeax/engine-wgpu-wasm.ensureReady()); this package does not own the wasm
+//   boundary plumbing.
+// - Pure function: same input always yields same output (research Finding 7 invariant);
+//   no dependency on mutable globals or filesystem state (except wasm loading inside
+//   @forgeax/engine-naga, which is deterministic after a single ensureReady).
+//
+// feat-20260512-naga-oil-composition-hmr M3 T-07 extension:
+// - CompileOptions gains `imports?: Record<string,string>` / `defines?: Record<string,boolean>`
+//   (non-boolean values rejected at the TS layer via Record<string,boolean>, D-06).
+// - CompileResult gains `deps: string[]` (AC-13; AI-F2 breadcrumb).
+// - Pre-scan order (plan-strategy §1 architecture concept — before naga_oil call):
+//   1. non-boolean `#define NAME VALUE` literal scan -> shader-compile-failed (D-05 OOS-1)
+//   2. scanDefineConflicts (T-12) -> shader-define-conflict (D-07)
+//   3. detectCycle (T-11) -> shader-circular-import (D-04)
+//   4. composeShader (naga_oil) -> shader-import-not-found / shader-compile-failed (via T-13 mapper)
+//   5. naga parse/validate/emit_reflection (legacy path) on the composed WGSL
+// - options.id missing -> fromModuleId placeholder `<anonymous-entry-<hash8>>` (D-11).
+
+import { composeShader, emit_reflection, parse, validate } from '@forgeax/engine-naga';
+import type { BindGroupLayoutDescriptor, ManifestEntry } from '@forgeax/engine-types';
+import { detectCycle } from './cycle-detect.js';
+import { scanDefineConflicts } from './define-scan.js';
+import { mapWasmError } from './error-mapper.js';
+import {
+  compileFailed,
+  err,
+  manifestMalformed,
+  ok,
+  type Result,
+  ShaderError,
+  type ShaderError as ShaderErrorType,
+} from './errors.js';
+import { parseReflectionJson } from './reflection.js';
+
+// === Public types ===================================================================
+
+/** Options accepted by `compileShader`. */
+export interface CompileOptions {
+  /**
+   * Source module id (the id from the vite plugin transform hook; used for
+   * error signal locating + as detail.fromModuleId on shader-import-not-found).
+   * Omitted -> compileShader substitutes `<anonymous-entry-<hash8>>` (D-11).
+   */
+  readonly id?: string;
+  /**
+   * naga_oil composition imports: `moduleId -> wgslSource`. Each value's first
+   * line must declare `#define_import_path <moduleId>` so the upstream composer
+   * can register it (AC-14). Omitted defaults to empty map.
+   */
+  readonly imports?: Record<string, string>;
+  /**
+   * `#ifdef` branch selector: `DEFINE_NAME -> boolean`. D-06: TS strictly
+   * enforces boolean values; a numeric or string literal is a TS compile-time
+   * error here. Omitted defaults to empty map.
+   */
+  readonly defines?: Record<string, boolean>;
+  /**
+   * Dynamic offset annotation list of (group, binding) pairs.
+   *
+   * Naga IR does not express the dynamic offset dimension (research Finding 2 footnote).
+   * Callers annotate explicitly via this field so the reflection JSON output records
+   * hasDynamicOffset:true.
+   */
+  readonly dynamicOffsets?: readonly { readonly group: number; readonly binding: number }[];
+}
+
+/** Success-branch value of `compileShader`. */
+export interface CompileResult {
+  /** Composed + validated WGSL source (post naga_oil #import + #ifdef resolution). */
+  readonly wgsl: string;
+  /** GLSL placeholder (empty string in M1 scope; non-WebGL fallback path). */
+  readonly glsl: string;
+  /** Reflection-derived output, fully explicit with integer visibility bitmask (plan-strategy §S-9). */
+  readonly bindings: readonly BindGroupLayoutDescriptor[];
+  /** Single manifest entry (4 fields: hash / wgsl / glsl / bindings; AC-04). */
+  readonly manifestEntry: ManifestEntry;
+  /**
+   * Resolved moduleIds consumed by the entry (from options.imports keys +
+   * transitive resolution). Empty array when no imports were used (AC-13
+   * AI-F2 breadcrumb; Vite plugin consumes this for HMR reverseDeps).
+   */
+  readonly deps: string[];
+}
+
+// === Main API =======================================================================
+
+const DEFINE_WITH_VALUE_RE = /^\s*#define\s+\w+\s+(\S.*)$/;
+const IMPORT_DIRECTIVE_RE = /^\s*#import\s+([A-Za-z0-9_:]+)/;
+const MODULE_ID_PREFIX_RE = /^([A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*)/;
+const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_:]+)/;
+
+/**
+ * Build-time pure function: WGSL -> triplet artefacts + reflection derivation.
+ *
+ * Flow (feat-20260512 M3 T-07):
+ * 1. Resolve fromModuleId (options.id or <anonymous-entry-hash8>).
+ * 2. Pre-scan non-boolean `#define NAME VALUE` in entry + imports sources
+ *    -> shader-compile-failed (OOS-1, D-05).
+ * 3. scanDefineConflicts -> shader-define-conflict (D-07).
+ * 4. detectCycle on the import graph -> shader-circular-import (D-04).
+ * 5. composeShader (naga_oil) -> post-link WGSL + resolved deps. Errors from
+ *    the wasm layer flow through mapWasmError (T-13) as structured ShaderError.
+ * 6. naga parse / validate / emit_reflection on the composed WGSL.
+ * 7. Assemble triplet + Result.ok.
+ *
+ * All error paths return Result.err — never throw (AGENTS.md "Errors are structured").
+ */
+export async function compileShader(
+  source: string,
+  options: CompileOptions = {},
+): Promise<Result<CompileResult, ShaderErrorType>> {
+  const imports = options.imports ?? {};
+  const defines = options.defines ?? {};
+  const fromModuleId = options.id ?? `<anonymous-entry-${computeHash(source)}>`;
+
+  // Stage 0a: non-boolean #define value pre-scan (D-05 OOS-1).
+  const nonBooleanErr = findNonBooleanDefine({ [fromModuleId]: source, ...imports });
+  if (nonBooleanErr !== null) {
+    return err(
+      compileFailed({
+        message: `#define with value is not supported (OOS-1); offending declaration in module '${nonBooleanErr.moduleId}': ${nonBooleanErr.line}`,
+        hint: 'v1 supports only boolean defines via options.defines; remove the value (e.g. `#define TILE_SIZE` becomes a boolean), or hoist the numeric literal into the WGSL source directly. See OOS-1 in packages/shader-compiler/README.md.',
+      }),
+    );
+  }
+
+  // Stage 0b: #define conflict pre-scan (D-07).
+  const conflicts = scanDefineConflicts({ [fromModuleId]: source, ...imports });
+  if (conflicts.length > 0) {
+    const first = conflicts[0];
+    if (first !== undefined) {
+      const siteList = first.sites.map((s) => s.moduleId).join(', ');
+      return err(
+        new ShaderError({
+          code: 'shader-define-conflict',
+          expected: `each #define NAME declared in at most one module`,
+          message: `#define '${first.defineName}' conflicts across modules: ${siteList}`,
+          hint: `rename the duplicate define in one of: ${siteList}; or move the declaration to a single common module`,
+          detail: first,
+        }),
+      );
+    }
+  }
+
+  // Stage 0c: cycle detection (D-04).
+  const graph = buildImportGraph(source, imports, fromModuleId);
+  const cycle = detectCycle(graph);
+  if (cycle !== null) {
+    return err(
+      new ShaderError({
+        code: 'shader-circular-import',
+        expected: 'the import graph is acyclic',
+        message: `circular #import chain detected: ${cycle.join(' -> ')}`,
+        hint: `break the cycle by extracting the shared symbols into a third module imported by both sides of: ${cycle.join(' -> ')}`,
+        detail: {
+          code: 'shader-circular-import',
+          cycle,
+        },
+      }),
+    );
+  }
+
+  // Stage 0d: import-resolvability pre-check. naga_oil composes successfully
+  // when an #import target is unused by the entry body (it silently drops the
+  // directive), which hides AC-02 errors AI users need to see at build time.
+  // Scan entry + imports for every #import <moduleId>::<symbol> directive and
+  // require the <moduleId> prefix to appear in options.imports. When the
+  // target module source exists but lacks a `#define_import_path <moduleId>`
+  // header, surface the same shader-import-not-found code (the module cannot
+  // bind under its declared id).
+  const importResolveErr = checkImportsResolvable(source, imports, fromModuleId, defines);
+  if (importResolveErr !== null) return err(importResolveErr);
+
+  // Stage 1: compose via naga_oil (wasm boundary). Errors flow through mapWasmError.
+  let composed: string;
+  try {
+    composed = await composeShader(source, imports, defines);
+  } catch (e) {
+    return err(mapWasmError(e, { fromModuleId }));
+  }
+
+  // Collect deps: keys of options.imports that are referenced from the entry
+  // (AC-13 AI-F2 breadcrumb). naga_oil drops unused imports during composition,
+  // but the TS layer reports the declared set so the Vite plugin HMR graph
+  // tracks every possible edge (plan-strategy D-10 reverseDeps Map).
+  const deps = Object.keys(imports);
+
+  // Stage 2: parse composed WGSL.
+  const parsedResult = await parse(composed);
+  if (!parsedResult.ok) {
+    return err(parsedResult.error);
+  }
+
+  // Stage 3: validate.
+  const validatedResult = await validate(parsedResult.value);
+  if (!validatedResult.ok) {
+    return err(validatedResult.error);
+  }
+
+  // Stage 4: emit_reflection.
+  const optionsJson = JSON.stringify({
+    dynamicOffsets: options.dynamicOffsets ?? [],
+  });
+  const reflectionResult = await emit_reflection(validatedResult.value, optionsJson);
+  if (!reflectionResult.ok) {
+    return err(
+      compileFailed({
+        message: `reflection emit failed: ${reflectionResult.error.message}`,
+        hint: 'verify naga IR consistency; emit_reflection should not fail after validate succeeded',
+      }),
+    );
+  }
+  const reflectionJson = reflectionResult.value;
+
+  // Stage 5: JSON.parse + triplet assembly.
+  let bindings: readonly BindGroupLayoutDescriptor[];
+  try {
+    bindings = parseReflectionJson(reflectionJson);
+  } catch (e) {
+    return err(
+      manifestMalformed({
+        message: 'reflection JSON parse failed',
+        hint: 'naga emit_reflection output is malformed; report as @forgeax/engine-naga bug',
+        reason: e instanceof Error ? e.message : String(e),
+      }),
+    );
+  }
+
+  const hash = computeHash(composed);
+  const result: CompileResult = {
+    wgsl: composed,
+    glsl: '',
+    bindings,
+    manifestEntry: {
+      hash,
+      wgsl: composed,
+      glsl: undefined,
+      bindings: reflectionJson,
+    },
+    deps,
+  };
+  return ok(result);
+}
+
+// === helpers ========================================================================
+
+/**
+ * Find the first `#define NAME VALUE` line where VALUE is present and
+ * non-empty. The naga_oil + TS-layer contract is that `#define NAME` (no
+ * value) is a boolean directive; `#define NAME VALUE` is out of scope (OOS-1).
+ *
+ * Returns { moduleId, line } of the first offender, or null.
+ */
+function findNonBooleanDefine(
+  modules: Record<string, string>,
+): { moduleId: string; line: string } | null {
+  for (const [moduleId, source] of Object.entries(modules)) {
+    for (const line of source.split(/\r?\n/)) {
+      const match = DEFINE_WITH_VALUE_RE.exec(line);
+      if (match) {
+        return { moduleId, line: line.trim() };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Build a moduleId -> [importedModuleId...] adjacency map from the entry +
+ * imports sources by regex-scanning `#import <path>` lines. The import path
+ * is narrowed to its leading module prefix (the portion before the first
+ * `::` or end-of-line), so `#import forgeax_pbr::brdf::{f_schlick}` is
+ * recorded as a dep on `forgeax_pbr::brdf` — matching how options.imports
+ * keys are declared by the caller.
+ *
+ * The entry appears under `fromModuleId`; each options.imports value is
+ * scanned under its own moduleId so nested dependencies are traced.
+ */
+function buildImportGraph(
+  entry: string,
+  imports: Record<string, string>,
+  fromModuleId: string,
+): Record<string, string[]> {
+  const graph: Record<string, string[]> = {};
+  graph[fromModuleId] = extractImports(entry);
+  for (const [moduleId, source] of Object.entries(imports)) {
+    graph[moduleId] = extractImports(source);
+  }
+  return graph;
+}
+
+function extractImports(source: string): string[] {
+  const deps: string[] = [];
+  for (const line of source.split(/\r?\n/)) {
+    const match = IMPORT_DIRECTIVE_RE.exec(line);
+    if (!match) continue;
+    const full = match[1];
+    if (full === undefined) continue;
+    const prefix = MODULE_ID_PREFIX_RE.exec(full)?.[1] ?? full;
+    // naga_oil #import paths of the form `mod_a::fn_b` bind against the
+    // options.imports key `mod_a`. Double-colon split: keep only the first
+    // segment as the dep target.
+    const first = prefix.split('::')[0] ?? prefix;
+    // But for multi-segment modules (e.g. `forgeax_pbr::brdf`), callers may
+    // key imports using the full segmented moduleId. Prefer the longest prefix
+    // that matches a key when available — callers provide the key set at
+    // compose time, not here, so both variants are emitted as candidate deps
+    // and the graph scanner tolerates missing adjacency entries.
+    deps.push(first);
+    if (prefix !== first) deps.push(prefix);
+  }
+  return deps;
+}
+
+/**
+ * TS-layer import resolvability pre-check (AC-02).
+ *
+ * naga_oil's #import dispatch is lazy: unused directives do not error, so an
+ * entry with `#import forgeax_missing::mod` + empty `options.imports` still
+ * composes successfully. AI users consuming err.code expect the structured
+ * `shader-import-not-found` signal in this case — so we scan the entry + every
+ * companion module for `#import` directives and require:
+ *
+ *   (a) the leading moduleId prefix to appear as an `options.imports` key OR
+ *       as the tail of an existing `#define_import_path` header in some
+ *       companion module source (AC-02 two-step resolution)
+ *   (b) each options.imports value declares `#define_import_path <moduleId>`
+ *       at or near the top (otherwise naga_oil cannot bind it and the same
+ *       error code applies)
+ *
+ * Returns the first unresolved import as a ShaderError, or null when every
+ * #import chain resolves.
+ */
+function checkImportsResolvable(
+  entry: string,
+  imports: Record<string, string>,
+  fromModuleId: string,
+  defines: Record<string, boolean> = {},
+): ShaderError | null {
+  // Build the set of moduleIds that some companion module declares.
+  const declaredPaths = new Set<string>();
+  for (const [moduleId, src] of Object.entries(imports)) {
+    declaredPaths.add(moduleId);
+    for (const line of src.split(/\r?\n/)) {
+      const header = DEFINE_IMPORT_PATH_RE.exec(line);
+      const declared = header?.[1];
+      if (declared !== undefined) declaredPaths.add(declared);
+    }
+  }
+
+  // (b) every options.imports entry must declare its moduleId via
+  //     #define_import_path; naga_oil throws on add otherwise.
+  for (const [moduleId, src] of Object.entries(imports)) {
+    const lines = src.split(/\r?\n/);
+    const hasHeader = lines.some((l) => {
+      const h = DEFINE_IMPORT_PATH_RE.exec(l);
+      return h?.[1] === moduleId;
+    });
+    if (!hasHeader) {
+      return makeImportNotFound({
+        importPath: moduleId,
+        fromModuleId,
+        message: `module '${moduleId}' is registered in options.imports but its source does not declare '#define_import_path ${moduleId}' at the top`,
+      });
+    }
+  }
+
+  // (a) walk every #import directive in entry + imports and verify the
+  //     leading module segment resolves against declaredPaths.
+  const sources: Array<{ moduleId: string; source: string }> = [
+    { moduleId: fromModuleId, source: entry },
+  ];
+  for (const [moduleId, src] of Object.entries(imports)) {
+    sources.push({ moduleId, source: src });
+  }
+
+  for (const { moduleId: callerId, source } of sources) {
+    const lines = source.split(/\r?\n/);
+    // feat-20260609-hdrp-cluster-fragment-ggx M5-hotfix: #ifdef-aware #import
+    // scanning. An #import directive inside a false #ifdef block must be
+    // skipped — naga_oil will also skip it during composition, so the
+    // TS-layer pre-check must match to avoid false-positive import-not-found.
+    // We maintain a disableStack (same semantics as filterImportsByDefines
+    // in vite-plugin-shader) only for the entry source; companion modules'
+    // #import directives are always active (they define the dependency graph).
+    let scanLines: string[];
+    if (callerId === fromModuleId && Object.keys(defines).length > 0) {
+      scanLines = [];
+      const disableStack: Array<[boolean, boolean]> = [];
+      for (const line of lines) {
+        const ifdefMatch = /^\s*#ifdef\s+(\w+)/.exec(line);
+        const ifndefMatch = /^\s*#ifndef\s+(\w+)/.exec(line);
+        if (ifdefMatch) {
+          const axis = ifdefMatch[1] ?? '';
+          const parentDisabled =
+            disableStack.length > 0 && disableStack[disableStack.length - 1]?.[0];
+          disableStack.push([parentDisabled || !(defines[axis] ?? false), false]);
+          continue;
+        }
+        if (ifndefMatch) {
+          const axis = ifndefMatch[1] ?? '';
+          const parentDisabled =
+            disableStack.length > 0 && disableStack[disableStack.length - 1]?.[0];
+          disableStack.push([parentDisabled || (defines[axis] ?? false), false]);
+          continue;
+        }
+        if (/^\s*#else\b/.exec(line)) {
+          if (disableStack.length > 0) {
+            const top = disableStack[disableStack.length - 1];
+            if (top === undefined) continue;
+            if (!top[1]) {
+              const parentDisabled =
+                disableStack.length > 1 && disableStack[disableStack.length - 2]?.[0];
+              if (!parentDisabled) top[0] = !top[0];
+              top[1] = true;
+            }
+          }
+          continue;
+        }
+        if (/^\s*#endif/.exec(line)) {
+          if (disableStack.length > 0) disableStack.pop();
+          continue;
+        }
+        if (disableStack.length > 0 && disableStack[disableStack.length - 1]?.[0]) continue;
+        scanLines.push(line);
+      }
+    } else {
+      scanLines = lines;
+    }
+    for (const line of scanLines) {
+      const directive = IMPORT_DIRECTIVE_RE.exec(line);
+      const full = directive?.[1];
+      if (full === undefined) continue;
+      const prefix = MODULE_ID_PREFIX_RE.exec(full)?.[1] ?? full;
+      // An #import target resolves when some declared path is a strict prefix
+      // of the import path or equals it. naga_oil paths are `::` segmented,
+      // so we walk from longest -> shortest to find a match.
+      const segments = prefix.split('::');
+      let resolved = false;
+      for (let i = segments.length; i > 0; i--) {
+        const candidate = segments.slice(0, i).join('::');
+        if (declaredPaths.has(candidate)) {
+          resolved = true;
+          break;
+        }
+      }
+      if (!resolved) {
+        return makeImportNotFound({
+          importPath: prefix,
+          fromModuleId: callerId,
+          message: `#import '${prefix}' cannot be resolved from module '${callerId}': no matching '#define_import_path' found across options.imports`,
+        });
+      }
+    }
+  }
+  return null;
+}
+
+function makeImportNotFound(args: {
+  importPath: string;
+  fromModuleId: string;
+  message: string;
+}): ShaderError {
+  return new ShaderError({
+    code: 'shader-import-not-found',
+    expected: `options.imports contains a module that declares #define_import_path ${args.importPath.split('::')[0] ?? args.importPath}`,
+    message: args.message,
+    hint: `check options.imports; ensure '${args.importPath}' is provided and its source declares #define_import_path at the top`,
+    detail: {
+      code: 'shader-import-not-found',
+      importPath: args.importPath,
+      fromModuleId: args.fromModuleId,
+    },
+  });
+}
+
+// === helper: content-addressable hash ==============================================
+
+/**
+ * SHA-256-equivalent stub — M1 phase uses a deterministic FNV-1a 32-bit hex hash
+ * string as a placeholder (the manifest schema SSOT requires a string field and
+ * does not lock the hash algorithm). When M2 vite plugin lands generateBundle
+ * triplet output, this can be upgraded to sha256 (post-MVP; out of scope for
+ * this task).
+ */
+function computeHash(source: string): string {
+  let hash = 0x811c9dc5; // FNV offset basis
+  for (let i = 0; i < source.length; i++) {
+    hash ^= source.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+// === re-exports =====================================================================
+
+export type { ParamSchemaEntry } from '@forgeax/engine-types';
+
+export { checkBindGroupOverflow, compareParamSchemaSuperset } from './compare-param-schema.js';
+export {
+  compileFailed,
+  err,
+  initFailed,
+  manifestMalformed,
+  ok,
+  type Result,
+  type ResultErr,
+  type ResultOk,
+  ShaderError,
+  type ShaderErrorCode,
+  type ShaderErrorDetail,
+  shaderNotFound,
+} from './errors.js';
+
+/** Package version string (debug tag). */
+export const SHADER_COMPILER_PACKAGE_VERSION = '0.0.0';

@@ -1,0 +1,53 @@
+{
+  "name": "@forgeax/hello-hdrp-lighting",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "HDRP cluster-forward 256-light demo (feat-20260608-cluster-lighting M7 / w25). Spawns ~256 punctual lights and installs forgeax::hdrp via assets.register<RenderPipelineAsset> + renderer.installPipeline. URP is the engine default; this demo opts in to HDRP. AC-06 / AC-21.",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs"
+  },
+  "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/hello-hdrp-lighting smoke",
+    "_comment": "smokeInvocation = self-contained SSOT (mirrors hello-bloom): the HDRP install seam + 256-light spawn must survive the dawn-node 300-frame loop with 0 RhiError + 4 HDRP buffers wired on BGL slots 3..6.",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle (dist/assets) shape is downstream of @forgeax/engine-runtime + @forgeax/engine-rhi-webgpu sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "fps no-regression covered by hello-cube / hello-room / hello-app gates that run the URP zero-overhead default; HDRP cluster-forward cost is verified via the smoke gate (structural-only) rather than per-app fps sampling"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "cluster-forward perf bench scope deferred (OOS-1: bench focus stays on @forgeax/parity-urp-vs-hdrp pixel-parity ≤4 lights subset)"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-hdrp-lighting smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; this is the M7 hello-hdrp-lighting opt-in exemplar"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@webgpu/types": "^0.1.70",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0"
+  }
+}

@@ -1,0 +1,3 @@
+# Light Casters (LearnOpenGL §2.5)
+
+LearnOpenGL section 2.5 (Light Casters) — demonstrates directional, point, and spot light types in a single combined scene. 10 container2-textured cubes (diffuse + specular maps, same vendor PNGs as §2.4 lighting-maps) at LO `cubePositions[]` are lit by 1 DirectionalLight + 4 PointLight (at LO `pointLightPositions[]`) + 1 camera-attached SpotLight (flashlight effect). First-person camera with WASD + mouse look + scroll-wheel FoV zoom. Combined demo covers LO 5.1 directional, 5.2 point, and 5.3/5.4 spot/spot_soft (inner=12.5° / outer=17.5° outerCone gives the soft-edge falloff of 5.4) in one scene.

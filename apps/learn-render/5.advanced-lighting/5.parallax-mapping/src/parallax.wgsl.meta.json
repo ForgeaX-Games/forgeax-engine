@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "external-asset-package",
+  "importer": "shader",
+  "source": "parallax.wgsl",
+  "importSettings": {
+    "materialShaderIdentifier": "learn-render::5-5-parallax"
+  },
+  "subAssets": [
+    {
+      "guid": "01935b00-7d8c-7c4e-9f12-345678abcd05",
+      "sourceIndex": 0,
+      "kind": "material-shader"
+    }
+  ],
+  "paramSchema": [
+    { "name": "baseColor", "type": "color", "default": [1.0, 1.0, 1.0, 1.0] },
+    { "name": "heightScale", "type": "f32", "default": 0.1 },
+    { "name": "algoMode", "type": "f32", "default": 0.0 },
+    { "name": "baseColorTexture", "type": "texture2d" },
+    { "name": "normalTexture", "type": "texture2d" },
+    { "name": "heightTexture", "type": "texture2d" }
+  ]
+}

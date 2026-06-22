@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "019e2cc6-5e6a-757c-a001-b69bc85af3c3",
+      "kind": "material",
+      "payload": {
+        "kind": "material",
+        "passes": [
+          {
+            "name": "Forward",
+            "shader": "forgeax::default-unlit",
+            "tags": { "LightMode": "Forward" },
+            "queue": 2000
+          }
+        ],
+        "paramValues": {
+          "baseColor": [1.0, 1.0, 1.0, 1.0],
+          "baseColorTexture": "019e3969-1d46-773e-988c-a10e305ff2a4"
+        }
+      },
+      "refs": [
+        "019e3969-1d46-773e-988c-a10e305ff2a4"
+      ]
+    }
+  ]
+}

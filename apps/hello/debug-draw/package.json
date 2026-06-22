@@ -1,0 +1,54 @@
+{
+  "name": "@forgeax/hello-debug-draw",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Immediate-mode debug-draw demo (feat-20260615-debug-draw-immediate-mode): low-path RHI draw + empty-mode control frame with dawn-node smoke and baseline PNGs.",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle shape is downstream of @forgeax/engine-debug-draw size tracked at the package level"
+      },
+      "fps": {
+        "enabled": true,
+        "sampleCount": 5,
+        "frameCount": 120
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "debug-draw demo is a correctness exemplar; bench focus stays on @forgeax/engine-debug-draw unit tests"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-debug-draw smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; debug-draw visual evidence is validated through baseline PNGs in this demo"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-debug-draw": "workspace:*",
+    "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-rhi-webgpu": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0",
+    "@webgpu/types": "^0.1.70"
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "name": "@forgeax/hello-audio",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Spacebar one-shot SFX + movable 3D listener demo (feat-20260529-hello-audio-demo-with-spacebar-one-shot-sfx-playba).",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "forgeax": {
+    "assets": {
+      "roots": []
+    },
+    "smokeInvocation": "pnpm --filter @forgeax/hello-audio smoke",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle shape already tracked at engine package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "fps no-regression covered by hello-cube / hello-room gates"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "perf bench anchored at engine-runtime / engine-math packages"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-audio smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; production exemplar demo"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-audio": "workspace:*",
+    "@forgeax/engine-audio-webaudio": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@webgpu/types": "^0.1.70",
+    "typescript": "~5.8.3",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0"
+  }
+}

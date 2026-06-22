@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/math"
+    },
+    {
+      "path": "./packages/debug-draw"
+    },
+    {
+      "path": "./packages/ecs"
+    },
+    {
+      "path": "./packages/input"
+    },
+    {
+      "path": "./packages/image"
+    },
+    {
+      "path": "./packages/runtime"
+    },
+    {
+      "path": "./packages/console"
+    },
+    {
+      "path": "./packages/pack"
+    },
+    {
+      "path": "./packages/vite-plugin-pack"
+    },
+    {
+      "path": "./packages/naga"
+    },
+    {
+      "path": "./packages/shader-compiler"
+    },
+    {
+      "path": "./packages/state"
+    },
+    {
+      "path": "./packages/vite-plugin-shader"
+    },
+    {
+      "path": "./packages/wgpu-wasm"
+    },
+    {
+      "path": "./packages/gltf"
+    },
+    {
+      "path": "./packages/fbx"
+    },
+    {
+      "path": "./packages/import"
+    },
+    {
+      "path": "./packages/app"
+    },
+    {
+      "path": "./packages/audio"
+    },
+    {
+      "path": "./packages/audio-webaudio"
+    },
+    {
+      "path": "./packages/physics"
+    },
+    {
+      "path": "./packages/physics-rapier3d"
+    },
+    {
+      "path": "./packages/physics-rapier2d"
+    },
+    {
+      "path": "./packages/font"
+    },
+    {
+      "path": "./packages/rhi-debug"
+    },
+    {
+      "path": "./packages/vite-plugin-rhi-debug"
+    }
+  ]
+}

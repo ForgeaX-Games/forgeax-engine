@@ -1,0 +1,58 @@
+{
+  "name": "@forgeax/engine-audio",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "description": "Pure-interface audio surface for forgeax-engine — ECS components (AudioSource / AudioListener), AudioBackend protocol, AudioError type family.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-math": "workspace:*"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "MVP audio interface package (ECS component schemas + AudioBackend protocol only); bundle-size lock deferred to a future feat once the tick system and Web Audio backend stabilise"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "pure-interface package, no runtime canvas; fps is reported by apps that consume the audio tick system"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "interface-only package with no hot path; bench focus stays on @forgeax/engine-audio-webaudio backend"
+      },
+      "gate": {
+        "enabled": false,
+        "reason": "no package-level binary gate; test surface coverage runs as part of pnpm test:unit + tsc -b"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike package; this is a production MVP per plan-strategy D-1 (dual-package split)"
+      }
+    }
+  }
+}

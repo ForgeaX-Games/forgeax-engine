@@ -1,0 +1,36 @@
+{
+  "name": "@forgeax/engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Placeholder for the @forgeax/engine family. The runtime entry is @forgeax/engine-runtime; see README for the full family.",
+  "files": [
+    "README.md",
+    "LICENSE"
+  ],
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "placeholder package — no shippable artefact"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "placeholder package — no runtime canvas"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "placeholder package — no perf hot path"
+      },
+      "gate": {
+        "enabled": false,
+        "reason": "placeholder package — no binary gate"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "placeholder package — not a spike"
+      }
+    }
+  }
+}

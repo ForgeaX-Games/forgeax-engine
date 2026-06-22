@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ForgeaX-Games/forgeax-engine/packages/pack/schema/pack.schema.json",
+  "title": "InternalTextPackage",
+  "description": "Schema for .pack.json files describing an internal text package (compiled asset payloads + GUID cross-references).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "assets"],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "description": "Schema version string, e.g. '1.0.0'."
+    },
+    "kind": {
+      "type": "string",
+      "const": "internal-text-package",
+      "description": "Discriminator for the internal text package type."
+    },
+    "assets": {
+      "type": "array",
+      "description": "Compiled asset entries.",
+      "items": {
+        "$ref": "#/$defs/asset"
+      }
+    }
+  },
+  "$defs": {
+    "guid36": {
+      "type": "string",
+      "format": "uuid",
+      "description": "RFC 4122 36-char dash-form UUID. Sentinel strings like '@builtin/...' are rejected at the schema level (AC-11)."
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["guid", "kind", "payload", "refs"],
+      "properties": {
+        "guid": {
+          "$ref": "#/$defs/guid36",
+          "description": "Unique GUID for this asset entry."
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Asset kind identifier, e.g. 'MaterialAsset'."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional display name for this asset. Add-only field for backward compatibility with old pack files that lack it."
+        },
+        "payload": {
+          "type": "object",
+          "description": "Serialized asset payload. Free-form object."
+        },
+        "refs": {
+          "type": "array",
+          "description": "GUID cross-references. Each element must be an RFC 4122 36-char dash-form UUID. @builtin/ sentinels are explicitly excluded (AC-11).",
+          "items": {
+            "$ref": "#/$defs/guid36"
+          }
+        }
+      }
+    }
+  }
+}

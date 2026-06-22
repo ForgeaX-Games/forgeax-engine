@@ -1,0 +1,71 @@
+{
+  "name": "@forgeax/engine-vite-plugin-pack",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "description": "Vite plugin: dev HMR + /__pack routes + build-time pack-index.json emit for the forgeax engine asset package system.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "schema",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@forgeax/engine-image": "workspace:*",
+    "@forgeax/engine-import": "workspace:*"
+  },
+  "peerDependencies": {
+    "@forgeax/engine-pack": "workspace:*",
+    "vite": "^7"
+  },
+  "devDependencies": {
+    "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-types": "workspace:*",
+    "@types/node": "^20.14.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "vite": "8.0.10"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": true,
+        "path": "dist/index.mjs",
+        "compression": "gzip"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "build-time vite plugin; no runtime canvas or frame loop"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "thin plugin shell over @forgeax/engine-pack scanner; no perf-critical hot path"
+      },
+      "gate": {
+        "enabled": false,
+        "reason": "no standalone binary gate for this package; CI gates are repo-root scripts"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike package"
+      }
+    }
+  }
+}

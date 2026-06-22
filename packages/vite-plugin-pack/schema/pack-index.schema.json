@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ForgeaX-Games/forgeax-engine/packages/vite-plugin-pack/schema/pack-index.schema.json",
+  "title": "PackIndex",
+  "description": "Schema for pack-index.json — the build-time emitted catalog mapping GUIDs to physical asset URLs.",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/packIndexEntry"
+  },
+  "$defs": {
+    "packIndexEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["guid", "relativeUrl", "kind", "sourcePath"],
+      "properties": {
+        "guid": {
+          "type": "string",
+          "format": "uuid",
+          "description": "RFC 4122 36-char dash-form UUID identifying this asset."
+        },
+        "relativeUrl": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Root-relative URL to the physical asset file in the build output."
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Asset kind identifier, e.g. 'mesh', 'texture', 'material'."
+        },
+        "sourcePath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Relative path to the source .pack.json or .meta.json file from the project root."
+        }
+      }
+    }
+  }
+}

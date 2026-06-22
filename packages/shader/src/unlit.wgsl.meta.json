@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "external-asset-package",
+  "importer": "shader",
+  "source": "unlit.wgsl",
+  "importSettings": {
+    "materialShaderIdentifier": "forgeax::unlit"
+  },
+  "subAssets": [
+    {
+      "guid": "edfcf3e9-9d7f-49ce-8999-580f3c7f21e9",
+      "sourceIndex": 0,
+      "kind": "material-shader"
+    }
+  ],
+  "paramSchema": [
+    {
+      "name": "baseColor",
+      "type": "color"
+    },
+    {
+      "name": "baseColorTexture",
+      "type": "texture2d"
+    }
+  ]
+}

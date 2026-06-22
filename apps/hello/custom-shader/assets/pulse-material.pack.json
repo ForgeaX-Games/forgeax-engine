@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "01935b00-7d8c-7c4e-9f12-345678abcd02",
+      "kind": "material",
+      "payload": {
+        "kind": "material",
+        "passes": [
+          {
+            "name": "Forward",
+            "shader": "my-game::pulse-material",
+            "tags": { "LightMode": "Forward" },
+            "queue": 2000
+          }
+        ],
+        "paramValues": {
+          "baseColor": [0.95, 0.45, 0.2, 1.0],
+          "time": 0.0,
+          "speed": 2.0
+        }
+      },
+      "refs": []
+    }
+  ]
+}

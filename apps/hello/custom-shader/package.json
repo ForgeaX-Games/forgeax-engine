@@ -1,0 +1,53 @@
+{
+  "name": "@forgeax/hello-custom-shader",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "feat-20260523-shader-template-instance-split AC-14 free-end demo: a user-side custom material shader (pulse-material.wgsl) registered through ShaderRegistry.registerMaterialShader('my-game::pulse-material', ...). Shows the simple-end .pack.json + .wgsl + sidecar trio that AI users assemble at app boot.",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs"
+  },
+  "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/hello-custom-shader smoke",
+    "_comment": "AC-14 free-end demo (custom material shader); smoke gate verifies the .wgsl composes + the .pack.json validates + the engine starts. The full visible-pulse acceptance lands in M6 once the runtime per-material-shader pipeline cache is wired (see hello-custom-shader README + M5 milestone report).",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle (dist/assets) shape is downstream of @forgeax/engine-runtime + @forgeax/engine-rhi-webgpu sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "free-end demo; bench focus stays on engine-math / pixel-parity"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "free-end demo; bench focus stays on engine-math / pixel-parity"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-custom-shader smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; AC-14 demo source-level"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-shader": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-math": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0",
+    "@webgpu/types": "^0.1.70"
+  }
+}

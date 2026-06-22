@@ -1,0 +1,7 @@
+# Force LF for all text files — biome formatter requires LF output, and
+# core.autocrlf=true on Windows would otherwise convert .ts/.js/.json/.mjs
+# to CRLF, producing spurious diffs on every biome --write.
+* text=auto eol=lf
+
+pnpm-lock.yaml merge=ours linguist-generated=true
+bun.lock        merge=ours linguist-generated=true

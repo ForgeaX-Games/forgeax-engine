@@ -1,0 +1,4058 @@
+// Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
+// biome-ignore-all lint/complexity/noUselessLoneBlockStatements: scope isolation between merged source files
+//
+// Source files (N=29):
+//   - packages/ecs/__tests__/cli-ecs-scripts.test.ts
+//   - packages/ecs/__tests__/managed-ref-on-release.test.ts
+//   - packages/ecs/__tests__/register-ecs-inspector.test.ts
+//   - packages/ecs/src/__tests__/ai-user-sandbox-trial.test.ts
+//   - packages/ecs/src/__tests__/array-handle-element.test.ts
+//   - packages/ecs/src/__tests__/array-remove-by-value.test.ts
+//   - packages/ecs/src/__tests__/hook-despawn.test.ts
+//   - packages/ecs/src/__tests__/hook-no-regression.test.ts
+//   - packages/ecs/src/__tests__/hook-on-insert.test.ts
+//   - packages/ecs/src/__tests__/hook-on-remove.test.ts
+//   - packages/ecs/src/__tests__/inspect.test.ts
+//   - packages/ecs/src/__tests__/managed-array-carry-over.test.ts
+//   - packages/ecs/src/__tests__/managed-array-element-type.test.ts
+//   - packages/ecs/src/__tests__/managed-array-errors.test.ts
+//   - packages/ecs/src/__tests__/managed-array-release.test.ts
+//   - packages/ecs/src/__tests__/managed-array-stride.test.ts
+//   - packages/ecs/src/__tests__/managed-array-vocab.test.ts
+//   - packages/ecs/src/__tests__/managed-buffer-grow.test.ts
+//   - packages/ecs/src/__tests__/managed-carry-over.test.ts
+//   - packages/ecs/src/__tests__/managed-release.test.ts
+//   - packages/ecs/src/__tests__/register-inspector.test.ts
+//   - packages/ecs/src/__tests__/resource.test.ts
+//   - packages/ecs/src/__tests__/scene-instance-container.test.ts
+//   - packages/ecs/src/__tests__/schedule-remove-replace.test.ts
+//   - packages/ecs/src/__tests__/schedule.test.ts
+//   - packages/ecs/src/__tests__/string-carry-over.test.ts
+//   - packages/ecs/src/__tests__/string-identity-contract.test.ts
+//   - packages/ecs/src/__tests__/string-managed-dispatch.test.ts
+//   - packages/ecs/src/__tests__/string-release.test.ts
+//
+// Excluded (defineComponent name collisions — Transform/ChildOf break resolveComponent):
+//   - packages/ecs/src/__tests__/scene-instance-delete-marks.test.ts
+//   - packages/ecs/src/__tests__/scene-instance-divergence.test.ts
+//   - packages/ecs/src/__tests__/scene-instance-hierarchy.test.ts
+//   - packages/ecs/src/__tests__/scene-instance-overrides.test.ts
+//   - packages/ecs/src/__tests__/scene-instantiate-typo.test.ts
+//   - packages/ecs/src/__tests__/scene-instantiate.test.ts
+//   - packages/ecs/src/__tests__/scene-multi-instance.test.ts
+//
+// Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
+// source as ancestorTitles[0]. Top-level imports merged + deduped.
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import type {
+  Handle,
+  Handler,
+  InspectorError as InspectorErrorShape,
+  RegisterMethodResult,
+  RegisterRootResult,
+  Registry,
+} from '@forgeax/engine-types';
+import { err } from '@forgeax/engine-types';
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { BufferPool } from '../buffer-pool';
+import {
+  type Component,
+  defineComponent,
+  type FieldValueType,
+  isSchemaVocabKeyword,
+  MANAGED_ARRAY_ELEMENT_TYPES,
+  parseManagedArraySchema,
+  type SchemaFieldType,
+  type ShapeOf,
+  type TypedArrayFor,
+} from '../component';
+import { Entity } from '../entity';
+import { ENTITY_NULL_RAW, type EntityHandle } from '../entity-handle';
+import {
+  ArrayPopEmptyError,
+  CyclicDependencyError,
+  type EcsErrorCode,
+  type EcsErrorDetail,
+  FixedArrayOverflowError,
+  FixedSizeMismatchError,
+  type ManagedArrayElementTypeNotAllowedError,
+  ResourceNotFoundError,
+  UniqueRefDoubleReleaseError,
+  type UniqueRefReleasedError,
+} from '../errors';
+import { ECS_MUTATING_METHODS } from '../mutating-methods';
+import { registerEcsInspector } from '../register-inspector';
+import { type ErrorContext, matchSeverity, Severity } from '../schedule';
+import { UniqueRefStore } from '../unique-ref-store';
+import { World, type WorldInspection } from '../world';
+import {
+  COMPONENTS_SCRIPT,
+  ENTITIES_SCRIPT_BY_NAMES,
+  RESOURCES_SCRIPT,
+  SYSTEMS_SCRIPT,
+  WORLD_SCRIPT,
+} from './__fixtures__/inspect-scripts.snapshot';
+import { handleNumeric } from './utils/handle-numeric';
+
+{
+  // --- from cli-ecs-scripts.test.ts ---
+  describe('feat-20260517 M3 w10 cli-ecs 5 scripts byte-identical', () => {
+    it('(a) entities script with empty filters matches fixture', async () => {
+      const mod = await import('../cli-ecs');
+      const actual = mod.buildEntitiesScript([], []);
+      const expected = ENTITIES_SCRIPT_BY_NAMES([], []);
+      expect(actual).toBe(expected);
+    });
+
+    it('(b) entities script with non-empty filters matches fixture', async () => {
+      const mod = await import('../cli-ecs');
+      const actual = mod.buildEntitiesScript(['Transform'], ['Camera']);
+      const expected = ENTITIES_SCRIPT_BY_NAMES(['Transform'], ['Camera']);
+      expect(actual).toBe(expected);
+    });
+
+    it('(c) components script matches fixture', async () => {
+      const mod = await import('../cli-ecs');
+      expect(mod.buildComponentsScript()).toBe(COMPONENTS_SCRIPT());
+    });
+
+    it('(d) systems script matches fixture', async () => {
+      const mod = await import('../cli-ecs');
+      expect(mod.buildSystemsScript()).toBe(SYSTEMS_SCRIPT());
+    });
+
+    it('(e) resources script matches fixture', async () => {
+      const mod = await import('../cli-ecs');
+      expect(mod.buildResourcesScript()).toBe(RESOURCES_SCRIPT());
+    });
+
+    it('(f) world script matches fixture', async () => {
+      const mod = await import('../cli-ecs');
+      expect(mod.buildWorldScript()).toBe(WORLD_SCRIPT());
+    });
+
+    it('(g) cli-ecs help body lists 5 subcommands (entities/components/systems/resources/world)', async () => {
+      const mod = await import('../cli-ecs');
+      const help = mod.helpBody();
+      expect(help).toMatch(/forgeax-engine-console-ecs/);
+      for (const sub of ['entities', 'components', 'systems', 'resources', 'world']) {
+        expect(help).toContain(sub);
+      }
+      // packs is asset plugin's territory; must not appear in the ecs help
+      expect(help).not.toContain('packs');
+    });
+  });
+}
+{
+  // --- from managed-ref-on-release.test.ts ---
+  describe('feat-20260528 M1 t1 UniqueRefStore onRelease callback', () => {
+    it('alloc with onRelease stores the callback and calls it on release before delete', () => {
+      const store = new UniqueRefStore();
+      let called = false;
+      let releasedPayload: string | undefined;
+
+      const handle = store.alloc<'Test', string>('Test', 'hello', (payload) => {
+        called = true;
+        releasedPayload = payload;
+      });
+      expect(called).toBe(false);
+
+      const result = store.release(handle);
+      expect(result.ok).toBe(true);
+      expect(called).toBe(true);
+      expect(releasedPayload).toBe('hello');
+    });
+
+    it('release with onRelease callback: second release (double-release) does not trigger callback', () => {
+      const store = new UniqueRefStore();
+      let callCount = 0;
+
+      const handle = store.alloc<'Test'>('Test', 'world', () => {
+        callCount++;
+      });
+
+      store.release(handle);
+      expect(callCount).toBe(1);
+
+      // Double-release: handle already freed, onRelease should NOT fire again.
+      const result2 = store.release(handle);
+      expect(result2.ok).toBe(false);
+      expect(callCount).toBe(1);
+    });
+
+    it('alloc without onRelease (backward-compatible two-param form) works', () => {
+      const store = new UniqueRefStore();
+      const handle = store.alloc<'Test'>('Test', 'backward-compat');
+      const resolveResult = store.resolve(handle);
+      expect(resolveResult.ok).toBe(true);
+      if (resolveResult.ok) {
+        expect(resolveResult.value).toBe('backward-compat');
+      }
+
+      const releaseResult = store.release(handle);
+      expect(releaseResult.ok).toBe(true);
+
+      // After release, resolve should fail.
+      const after = store.resolve(handle);
+      expect(after.ok).toBe(false);
+    });
+
+    it('onRelease passes the correct payload when multiple handles exist', () => {
+      const store = new UniqueRefStore();
+      const released: number[] = [];
+
+      type Item = { id: number };
+      const h1 = store.alloc<'A', Item>('A', { id: 1 }, (p) => released.push(p.id));
+      const h2 = store.alloc<'A', Item>('A', { id: 2 }, (p) => released.push(p.id));
+      const h3 = store.alloc<'A', Item>('A', { id: 3 }); // no callback
+
+      // Release out of order.
+      store.release(h2);
+      expect(released).toEqual([2]);
+
+      store.release(h1);
+      expect(released).toEqual([2, 1]);
+
+      store.release(h3); // no callback, should not push.
+      expect(released).toEqual([2, 1]);
+    });
+
+    it('onRelease fires before payload is deleted (resolve after release yields no payload)', () => {
+      const store = new UniqueRefStore();
+      let payloadDuringCallback: { name: string } | undefined;
+
+      const handle = store.alloc<'X', { name: string }>('X', { name: 'payload' }, (p) => {
+        // At callback time, resolve should still return the payload
+        // (it is deleted AFTER the callback).
+        payloadDuringCallback = p;
+      });
+
+      store.release(handle);
+      expect(payloadDuringCallback).toEqual({ name: 'payload' });
+
+      // After release, resolve should fail.
+      const after = store.resolve(handle);
+      expect(after.ok).toBe(false);
+    });
+
+    it('onRelease is called per-handle: independent handles do not share callbacks', () => {
+      const store = new UniqueRefStore();
+      const sequence: string[] = [];
+
+      const h1 = store.alloc<'A'>('A', 1, () => sequence.push('a'));
+      const h2 = store.alloc<'A'>('A', 2, () => sequence.push('b'));
+
+      store.release(h1);
+      expect(sequence).toEqual(['a']);
+
+      store.release(h2);
+      expect(sequence).toEqual(['a', 'b']);
+    });
+  });
+}
+{
+  // --- from register-ecs-inspector.test.ts ---
+  interface FakeRegistry extends Registry {
+    readonly methods: Map<string, Handler>;
+    readonly mutatingContributions: ReadonlySet<string>[];
+  }
+
+  function makeFakeRegistry(): FakeRegistry {
+    const methods = new Map<string, Handler>();
+    const roots = new Map<string, unknown>();
+    const mutatingContributions: ReadonlySet<string>[] = [];
+    const merged = new Set<string>();
+    const reg: FakeRegistry = {
+      methods,
+      mutatingContributions,
+      registerRoot(name, value): RegisterMethodResult {
+        if (roots.has(name)) {
+          return {
+            ok: false,
+            error: Object.assign(
+              new Error(`[InspectorError console-startup-failed] root ${name} already registered`),
+              {
+                name: 'InspectorError',
+                code: 'console-startup-failed' as const,
+                expected: `unique root name`,
+                hint: 'use a different name',
+              },
+            ),
+          };
+        }
+        roots.set(name, value);
+        return { ok: true, value: undefined };
+      },
+      registerMethod(name, handler): RegisterMethodResult {
+        if (methods.has(name)) {
+          return {
+            ok: false,
+            error: Object.assign(
+              new Error(
+                `[InspectorError console-startup-failed] method ${name} already registered`,
+              ),
+              {
+                name: 'InspectorError',
+                code: 'console-startup-failed' as const,
+                expected: `unique method name`,
+                hint: 'use a different name',
+              },
+            ),
+          };
+        }
+        methods.set(name, handler);
+        return { ok: true, value: undefined };
+      },
+      registerMutatingMethods(contribution): RegisterMethodResult {
+        if (mutatingContributions.includes(contribution)) {
+          return {
+            ok: false,
+            error: Object.assign(
+              new Error(
+                `[InspectorError console-startup-failed] mutating-methods contribution already registered`,
+              ),
+              {
+                name: 'InspectorError',
+                code: 'console-startup-failed' as const,
+                expected: 'each contribution registered exactly once (=== identity)',
+                hint: 'pass a fresh ReadonlySet<string> per host assembly',
+              },
+            ),
+          };
+        }
+        mutatingContributions.push(contribution);
+        for (const m of contribution) merged.add(m);
+        return { ok: true, value: undefined };
+      },
+      lookupRoot(name) {
+        return roots.has(name) ? { ok: true, value: roots.get(name) } : null;
+      },
+      lookupMethod(name): Handler | undefined {
+        return methods.get(name);
+      },
+      lookupMutatingMethods() {
+        return merged;
+      },
+    };
+    return reg;
+  }
+
+  describe('feat-20260517 M3 w12 registerEcsInspector mutating-methods step', () => {
+    it('(a) fresh registry: contributes ECS_MUTATING_METHODS via registerMutatingMethods', () => {
+      const reg = makeFakeRegistry();
+      const world = new World();
+      const r = registerEcsInspector(reg, world);
+      expect(r.ok).toBe(true);
+      expect(reg.mutatingContributions.length).toBe(1);
+      expect(reg.mutatingContributions[0]).toBe(ECS_MUTATING_METHODS);
+      // The four ECS handlers registered (entities / components / systems / resources).
+      expect(reg.methods.has('entities')).toBe(true);
+      expect(reg.methods.has('components')).toBe(true);
+      expect(reg.methods.has('systems')).toBe(true);
+      expect(reg.methods.has('resources')).toBe(true);
+    });
+
+    it('(b) duplicate registration fails fast with console-startup-failed', () => {
+      const reg = makeFakeRegistry();
+      const world = new World();
+      const r1 = registerEcsInspector(reg, world);
+      expect(r1.ok).toBe(true);
+      const r2 = registerEcsInspector(reg, world);
+      expect(r2.ok).toBe(false);
+      if (!r2.ok) {
+        expect(r2.error.code).toBe('console-startup-failed');
+      }
+    });
+  });
+}
+{
+  // --- from ai-user-sandbox-trial.test.ts ---
+  interface MaterialAsset {
+    readonly albedo: readonly [number, number, number, number];
+  }
+
+  // World owns its UniqueRefStore from construction (M1: uniqueRefs is a
+  // non-null private field). Tests probe the internal store via a structural
+  // cast --- no caller-side wiring step remains.
+  function refsOf(w: World): UniqueRefStore {
+    return (w as unknown as { uniqueRefs: UniqueRefStore }).uniqueRefs;
+  }
+
+  describe('AI user sandbox - schema vocab + lifecycle', () => {
+    it('(1) `buffer<128>` field exposes Uint8Array view, mutable in place', () => {
+      const Mesh = defineComponent('Mesh', { vertexData: { type: 'buffer<128>' } });
+      const w = new World();
+      const e = w.spawn({ component: Mesh, data: { vertexData: new Uint8Array(128) } }).unwrap();
+      const r = w.get(e, Mesh).unwrap();
+      expect(r.vertexData).toBeInstanceOf(Uint8Array);
+      expect(r.vertexData.byteLength).toBe(128);
+      r.vertexData[0] = 42;
+      const r2 = w.get(e, Mesh).unwrap();
+      expect(r2.vertexData[0]).toBe(42);
+    });
+
+    it('(2) `ref<T>` field stores managed Handle; auto-released on despawn (AC-03 path 1)', () => {
+      const Mat = defineComponent('Mat', { material: { type: 'unique<MaterialAsset>' } });
+      const w = new World();
+      const store = refsOf(w);
+      const handle = store.alloc<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+        albedo: [1, 0, 0, 1],
+      });
+      const e = w
+        .spawn({
+          component: Mat,
+          data: { material: handle },
+        })
+        .unwrap();
+      const r = w.get(e, Mat).unwrap();
+      const payload = store.resolve<'MaterialAsset', MaterialAsset>(r.material);
+      expect(payload.ok).toBe(true);
+      if (payload.ok) expect(payload.value.albedo[0]).toBe(1);
+      w.despawn(e).unwrap();
+      const after = store.resolve(handle);
+      expect(after.ok).toBe(false);
+      if (!after.ok) expect(after.error.code).toBe('unique-ref-released');
+    });
+
+    it('(3) `handle<T>` field stores unmanaged Handle; ECS does NOT release on despawn', () => {
+      const MeshFilter = defineComponent('MeshFilter', {
+        assetHandle: { type: 'shared<MeshAsset>' },
+      });
+      const w = new World();
+      const fakeHandle: Handle<'MeshAsset', 'shared'> = 0x1234_5678 as Handle<
+        'MeshAsset',
+        'shared'
+      >;
+      const e = w.spawn({ component: MeshFilter, data: { assetHandle: fakeHandle } }).unwrap();
+      const r = w.get(e, MeshFilter).unwrap();
+      expect(r.assetHandle).toBe(fakeHandle);
+      w.despawn(e).unwrap();
+    });
+
+    it('(4) ENTITY_NULL_RAW sentinel is 0xffffffff (entity-field null encoding)', () => {
+      // Sentinel vocab invariant: the underlying u32 value used as 'no entity'
+      // is 0xffffffff; the surface to AI users for that slot is `null`. The ECS
+      // returns the raw encoded Entity on read without bottoming out dangling
+      // references; consumers check liveness themselves.
+      expect(ENTITY_NULL_RAW).toBe(0xffffffff);
+    });
+
+    it('(5) archetype migrate (addComponent reshuffle): managed handle Object.is preserved', () => {
+      const Mat = defineComponent('Mat', { material: { type: 'unique<MaterialAsset>' } });
+      const Tag = defineComponent('Tag', { x: { type: 'u32' } });
+      const w = new World();
+      const store = refsOf(w);
+      const handle = store.alloc<'MaterialAsset', MaterialAsset>('MaterialAsset', {
+        albedo: [0, 1, 0, 1],
+      });
+      const e = w
+        .spawn({
+          component: Mat,
+          data: { material: handle },
+        })
+        .unwrap();
+      const handleBefore = w.get(e, Mat).unwrap().material;
+      w.addComponent(e, { component: Tag, data: { x: 7 } }).unwrap();
+      const handleAfter = w.get(e, Mat).unwrap().material;
+      // u32 bit-equal: handle is a packed Uint32 brand.
+      expect(handleAfter).toBe(handleBefore);
+      // Resolved payload still alive (carry-over, NOT release).
+      const resolved = store.resolve<'MaterialAsset', MaterialAsset>(handleAfter);
+      expect(resolved.ok).toBe(true);
+      if (resolved.ok) expect(resolved.value.albedo[1]).toBe(1);
+    });
+
+    it('(6) `world.set` covering write releases old managed handle (AC-03 path 3)', () => {
+      const Mat = defineComponent('Mat', { material: { type: 'unique<MaterialAsset>' } });
+      const w = new World();
+      const store = refsOf(w);
+      const oldHandle = store.alloc('MaterialAsset', { albedo: [1, 0, 0, 1] });
+      const newHandle = store.alloc('MaterialAsset', { albedo: [0, 0, 1, 1] });
+      const e = w
+        .spawn({
+          component: Mat,
+          data: { material: oldHandle },
+        })
+        .unwrap();
+      w.set(e, Mat, {
+        material: newHandle,
+      }).unwrap();
+      const after = store.resolve(oldHandle);
+      expect(after.ok).toBe(false);
+      if (!after.ok) expect(after.error.code).toBe('unique-ref-released');
+      expect(store.resolve(newHandle).ok).toBe(true);
+    });
+  });
+}
+{
+  // --- from array-handle-element.test.ts ---
+  describe('array<handle<X>> parse (w6, D-1)', () => {
+    it("parseManagedArraySchema('array<shared<MaterialAsset>>') returns { elementType: 'shared<MaterialAsset>', length: undefined }", () => {
+      const result = parseManagedArraySchema('array<shared<MaterialAsset>>');
+      // pre w5: returns null because 'shared<MaterialAsset>' is not in
+      // ManagedArrayElementType — this is the TDD red state
+      expect(result).not.toBeNull();
+      if (result === null) return;
+      expect(result.elementType).toBe('shared<MaterialAsset>');
+      expect(result.length).toBeUndefined();
+    });
+
+    it("parseManagedArraySchema('array<shared<MeshAsset>>') returns { elementType: 'shared<MeshAsset>' }", () => {
+      const result = parseManagedArraySchema('array<shared<MeshAsset>>');
+      expect(result).not.toBeNull();
+      if (result === null) return;
+      expect(result.elementType).toBe('shared<MeshAsset>');
+      expect(result.length).toBeUndefined();
+    });
+
+    it("parseManagedArraySchema('array<shared<>, 3>') returns null (empty tag rejection)", () => {
+      // R-NEW-1: empty tag inside shared<> is rejected
+      const result = parseManagedArraySchema('array<shared<>, 3>');
+      expect(result).toBeNull();
+    });
+
+    it("parseManagedArraySchema('array<shared<>>') returns null (variable-capacity empty tag rejection)", () => {
+      const result = parseManagedArraySchema('array<shared<>>');
+      expect(result).toBeNull();
+    });
+
+    it("parseManagedArraySchema('array<handle<X>>') returns null (post-w23 'handle<T>' arm deleted)", () => {
+      // gate-allow:ecs-brand
+      // feat-20260614 w23: the 'handle<T>' parser arm was removed; any
+      // legacy literal flowing through here returns null and the caller
+      // surfaces SchemaUnsupportedFieldError (with migration-hint pointing
+      // at 'shared<T>' -- see schema-vocab.test-d.ts).
+      const result = parseManagedArraySchema('array<handle<MeshAsset>>');
+      expect(result).toBeNull();
+    });
+
+    it("isSchemaVocabKeyword('array<shared<MaterialAsset>>') returns true", () => {
+      const result = isSchemaVocabKeyword('array<shared<MaterialAsset>>');
+      expect(result).toBe(true);
+    });
+  });
+}
+{
+  // --- from array-remove-by-value.test.ts ---
+  function makeWorldWithList(values: number[]): {
+    world: World;
+    parent: EntityHandle;
+    Bag: ReturnType<typeof defineComponent<'RbvBag', { items: 'array<entity>' }>>;
+  } {
+    const Bag = defineComponent('RbvBag', { items: { type: 'array<entity>' } });
+    const world = new World();
+    const parent = world.spawn({ component: Bag, data: {} }).unwrap();
+    for (const v of values) {
+      world.push(parent, Bag, 'items', v as EntityHandle).unwrap();
+    }
+    return { world, parent, Bag };
+  }
+
+  function readList(
+    world: World,
+    parent: EntityHandle,
+    Bag: ReturnType<typeof defineComponent<'RbvBag', { items: 'array<entity>' }>>,
+  ): number[] {
+    const snap = world.get(parent, Bag).unwrap().items;
+    return Array.from(snap);
+  }
+
+  describe('World._removeArrayElementByValue', () => {
+    it('removes a mid element and shrinks length by 1', () => {
+      const { world, parent, Bag } = makeWorldWithList([10, 20, 30, 40]);
+      const r = world._removeArrayElementByValue(parent, Bag, 'items', 20 as EntityHandle);
+      expect(r.ok).toBe(true);
+      const list = readList(world, parent, Bag);
+      expect(list).toHaveLength(3);
+      expect(list).toContain(10);
+      expect(list).toContain(30);
+      expect(list).toContain(40);
+      expect(list).not.toContain(20);
+    });
+
+    it('removes the first element', () => {
+      const { world, parent, Bag } = makeWorldWithList([10, 20, 30]);
+      world._removeArrayElementByValue(parent, Bag, 'items', 10 as EntityHandle).unwrap();
+      const list = readList(world, parent, Bag);
+      expect(list).toHaveLength(2);
+      expect(list).not.toContain(10);
+      expect(list).toContain(20);
+      expect(list).toContain(30);
+    });
+
+    it('removes the last element', () => {
+      const { world, parent, Bag } = makeWorldWithList([10, 20, 30]);
+      world._removeArrayElementByValue(parent, Bag, 'items', 30 as EntityHandle).unwrap();
+      const list = readList(world, parent, Bag);
+      expect(list).toHaveLength(2);
+      expect(list).not.toContain(30);
+    });
+
+    it('is idempotent when the value is not present', () => {
+      const { world, parent, Bag } = makeWorldWithList([10, 20, 30]);
+      const r = world._removeArrayElementByValue(parent, Bag, 'items', 99 as EntityHandle);
+      expect(r.ok).toBe(true);
+      const list = readList(world, parent, Bag);
+      expect(list).toHaveLength(3);
+    });
+
+    it('drains the list to empty across repeated removals + slot is released', () => {
+      const { world, parent, Bag } = makeWorldWithList([10, 20, 30]);
+      world._removeArrayElementByValue(parent, Bag, 'items', 10 as EntityHandle).unwrap();
+      world._removeArrayElementByValue(parent, Bag, 'items', 20 as EntityHandle).unwrap();
+      world._removeArrayElementByValue(parent, Bag, 'items', 30 as EntityHandle).unwrap();
+      const list = readList(world, parent, Bag);
+      expect(list).toHaveLength(0);
+      // Idempotent on an already-empty list.
+      const r = world._removeArrayElementByValue(parent, Bag, 'items', 10 as EntityHandle);
+      expect(r.ok).toBe(true);
+    });
+
+    it('removes only the first matching occurrence when duplicates exist', () => {
+      const { world, parent, Bag } = makeWorldWithList([10, 20, 10]);
+      world._removeArrayElementByValue(parent, Bag, 'items', 10 as EntityHandle).unwrap();
+      const list = readList(world, parent, Bag);
+      expect(list).toHaveLength(2);
+      expect(list.filter((v) => v === 10)).toHaveLength(1);
+      expect(list).toContain(20);
+    });
+  });
+}
+{
+  // --- from hook-despawn.test.ts ---
+  describe('despawn onRemove hook', () => {
+    it('despawn triggers onRemove for a component with the hook declared', () => {
+      const onRemove = vi.fn();
+      const Pos = defineComponent(
+        'DespawnHookPos',
+        { x: { type: 'f32' }, y: { type: 'f32' } },
+        { onRemove: onRemove as (entity: EntityHandle, value: Record<string, unknown>) => void },
+      );
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 1, y: 2 } }).unwrap();
+
+      const r = world.despawn(e);
+      expect(r.ok).toBe(true);
+      expect(onRemove).toHaveBeenCalledTimes(1);
+    });
+
+    it('despawn triggers onRemove for every component with the hook declared', () => {
+      const onRemovePos = vi.fn();
+      const onRemoveVel = vi.fn();
+      const Pos = defineComponent(
+        'DespawnMultiA',
+        { x: { type: 'f32' }, y: { type: 'f32' } },
+        { onRemove: onRemovePos as (entity: EntityHandle, value: Record<string, unknown>) => void },
+      );
+      const Vel = defineComponent(
+        'DespawnMultiB',
+        { vx: { type: 'f32' }, vy: { type: 'f32' } },
+        { onRemove: onRemoveVel as (entity: EntityHandle, value: Record<string, unknown>) => void },
+      );
+      const world = new World();
+      const e = world
+        .spawn({ component: Pos, data: { x: 1, y: 2 } }, { component: Vel, data: { vx: 3, vy: 4 } })
+        .unwrap();
+
+      world.despawn(e).unwrap();
+      expect(onRemovePos).toHaveBeenCalledTimes(1);
+      expect(onRemoveVel).toHaveBeenCalledTimes(1);
+    });
+
+    it('despawn does NOT trigger onRemove for components without the hook declared', () => {
+      const onRemove = vi.fn();
+      const HookComp = defineComponent(
+        'DespawnHookC',
+        { v: { type: 'f32' } },
+        { onRemove: onRemove as (entity: EntityHandle, value: Record<string, unknown>) => void },
+      );
+      const NoHookComp = defineComponent('DespawnNoHook', { v: { type: 'f32' } });
+      const world = new World();
+      const e = world
+        .spawn({ component: HookComp, data: { v: 1 } }, { component: NoHookComp, data: { v: 2 } })
+        .unwrap();
+
+      world.despawn(e).unwrap();
+      // Only the hook-declaring component should trigger onRemove.
+      expect(onRemove).toHaveBeenCalledTimes(1);
+    });
+
+    it('despawn passes the old value snapshot to onRemove (AC-04 + D-6)', () => {
+      let capturedOldValue: Record<string, unknown> | null = null;
+      const onRemove = vi.fn((_entity: EntityHandle, value: Record<string, unknown>) => {
+        capturedOldValue = value;
+      });
+      const Pos = defineComponent(
+        'DespawnSnapPos',
+        { x: { type: 'f32' }, y: { type: 'f32' } },
+        { onRemove: onRemove as (entity: EntityHandle, value: Record<string, unknown>) => void },
+      );
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 42, y: 99 } }).unwrap();
+
+      world.despawn(e).unwrap();
+      expect(onRemove).toHaveBeenCalledTimes(1);
+      expect(capturedOldValue).toEqual({ x: 42, y: 99 });
+    });
+  });
+}
+{
+  // --- from hook-no-regression.test.ts ---
+  describe('hook no-regression guard (AC-05)', () => {
+    it('addComponent path unchanged for components without hook declaration', () => {
+      const Pos = defineComponent('NoRegPos', { x: { type: 'f32' }, y: { type: 'f32' } });
+      const Tag = defineComponent('NoRegTag', {});
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 1, y: 2 } }).unwrap();
+
+      const r = world.addComponent(e, { component: Tag, data: {} });
+      expect(r.ok).toBe(true);
+
+      const pos = world.get(e, Pos).unwrap();
+      const tag = world.get(e, Tag).unwrap();
+      expect(pos).toEqual({ x: 1, y: 2 });
+      expect(tag).toEqual({});
+    });
+
+    it('removeComponent path unchanged for components without hook declaration', () => {
+      const Pos = defineComponent('NoRegPos2', { x: { type: 'f32' }, y: { type: 'f32' } });
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 3, y: 4 } }).unwrap();
+
+      const r = world.removeComponent(e, Pos);
+      expect(r.ok).toBe(true);
+
+      const result = world.get(e, Pos);
+      expect(result.ok).toBe(false);
+    });
+
+    it('despawn path unchanged for components without hook declaration', () => {
+      const Pos = defineComponent('NoRegPos3', { x: { type: 'f32' }, y: { type: 'f32' } });
+      const Tag = defineComponent('NoRegTag3', {});
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 5, y: 6 } }).unwrap();
+      // Verify the entity was alive before despawn.
+      expect(world.get(e, Pos).ok).toBe(true);
+
+      const r = world.despawn(e);
+      expect(r.ok).toBe(true);
+
+      // After despawn, the entity is stale.
+      const result = world.get(e, Pos);
+      expect(result.ok).toBe(false);
+      // Also verify despawn does not affect other entities.
+      const other = world.spawn({ component: Tag, data: {} }).unwrap();
+      expect(world.get(other, Tag).ok).toBe(true);
+    });
+
+    it('spawn path unchanged for components without hook declaration', () => {
+      const Pos = defineComponent('NoRegPos4', { x: { type: 'f32' }, y: { type: 'f32' } });
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 7, y: 8 } }).unwrap();
+      const pos = world.get(e, Pos).unwrap();
+      expect(pos).toEqual({ x: 7, y: 8 });
+    });
+  });
+}
+{
+  // --- from hook-on-insert.test.ts ---
+  describe('onInsert hook', () => {
+    it('defineComponent accepts onInsert in the options third parameter', () => {
+      const onInsert = vi.fn();
+      const Pos = defineComponent(
+        'HookInsPos',
+        { x: { type: 'f32' }, y: { type: 'f32' } },
+        { onInsert },
+      );
+      // Token is created without throw — the option is legal syntax.
+      expect(Pos.name).toBe('HookInsPos');
+      // onInsert callback is stored on the token.
+      expect(Pos.onInsert).toBe(onInsert);
+    });
+
+    it('addComponent triggers the onInsert callback', () => {
+      const onInsert = vi.fn();
+      const Pos = defineComponent(
+        'HookInsPos2',
+        { x: { type: 'f32' }, y: { type: 'f32' } },
+        { onInsert },
+      );
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 0, y: 0 } }).unwrap();
+
+      // addComponent on an entity without the hook — should still work
+      const Tag = defineComponent('HookInsTag', {});
+      const r = world.addComponent(e, { component: Tag, data: {} });
+      expect(r.ok).toBe(true);
+
+      // Now check: the hook was called for Pos during spawn (addComponent path)
+      // In this test, spawn itself goes through addComponent path, so the hook
+      // should fire on spawn as well.
+      expect(onInsert).toHaveBeenCalledTimes(1);
+    });
+
+    it('onInsert callback receives the entity and the written value', () => {
+      let capturedEntity: EntityHandle | null = null;
+      let capturedValue: Record<string, unknown> | null = null;
+      const onInsert = vi.fn((entity: EntityHandle, value: Record<string, unknown>) => {
+        capturedEntity = entity;
+        capturedValue = value;
+      });
+      const Pos = defineComponent(
+        'HookInsPos3',
+        { x: { type: 'f32' }, y: { type: 'f32' } },
+        { onInsert: onInsert as (entity: EntityHandle, value: Record<string, unknown>) => void },
+      );
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 3, y: 4 } }).unwrap();
+
+      expect(onInsert).toHaveBeenCalledTimes(1);
+      expect(capturedEntity).toBe(e);
+      expect(capturedValue).toEqual({ x: 3, y: 4 });
+    });
+
+    it('onInsert fires for addComponent on an existing entity', () => {
+      const onInsert = vi.fn();
+      const TagHook = defineComponent('HookInsTag2', {}, { onInsert });
+      const world = new World();
+      const e = world.spawn().unwrap();
+
+      const r = world.addComponent(e, { component: TagHook, data: {} });
+      expect(r.ok).toBe(true);
+      expect(onInsert).toHaveBeenCalledTimes(1);
+    });
+
+    it('component without onInsert declaration does not trigger any hook', () => {
+      // No hook declared: the path must be identical to pre-feat behavior.
+      const Pos = defineComponent('NoHookPos', { x: { type: 'f32' }, y: { type: 'f32' } });
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 1, y: 2 } }).unwrap();
+
+      // Verify the component is readable and correct.
+      const pos = world.get(e, Pos).unwrap();
+      expect(pos).toEqual({ x: 1, y: 2 });
+
+      // addComponent on a component without onInsert still works.
+      const Tag = defineComponent('NoHookTag', {});
+      const e2 = world.spawn().unwrap();
+      const r = world.addComponent(e2, { component: Tag, data: {} });
+      expect(r.ok).toBe(true);
+      const tag = world.get(e2, Tag).unwrap();
+      expect(tag).toEqual({});
+    });
+  });
+}
+{
+  // --- from hook-on-remove.test.ts ---
+  describe('onRemove hook', () => {
+    it('defineComponent accepts onRemove in the options third parameter', () => {
+      const onRemove = vi.fn();
+      const Pos = defineComponent(
+        'HookRemPos',
+        { x: { type: 'f32' }, y: { type: 'f32' } },
+        { onRemove },
+      );
+      expect(Pos.name).toBe('HookRemPos');
+      expect(Pos.onRemove).toBe(onRemove);
+    });
+
+    it('removeComponent triggers the onRemove callback', () => {
+      const onRemove = vi.fn();
+      const Pos = defineComponent(
+        'HookRemPos2',
+        { x: { type: 'f32' }, y: { type: 'f32' } },
+        { onRemove: onRemove as (entity: EntityHandle, value: Record<string, unknown>) => void },
+      );
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 1, y: 2 } }).unwrap();
+
+      // removeComponent should trigger onRemove.
+      const r = world.removeComponent(e, Pos);
+      expect(r.ok).toBe(true);
+      expect(onRemove).toHaveBeenCalledTimes(1);
+    });
+
+    it('onRemove callback receives the entity and the old value (AC-03)', () => {
+      let capturedEntity: EntityHandle | null = null;
+      let capturedOldValue: Record<string, unknown> | null = null;
+      const onRemove = vi.fn((entity: EntityHandle, value: Record<string, unknown>) => {
+        capturedEntity = entity;
+        capturedOldValue = value;
+      });
+      const Pos = defineComponent(
+        'HookRemPos3',
+        { x: { type: 'f32' }, y: { type: 'f32' } },
+        { onRemove: onRemove as (entity: EntityHandle, value: Record<string, unknown>) => void },
+      );
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 7, y: 8 } }).unwrap();
+
+      world.removeComponent(e, Pos).unwrap();
+      expect(onRemove).toHaveBeenCalledTimes(1);
+      expect(capturedEntity).toBe(e);
+      // The old value snapshot is the value that was on the component before removal.
+      expect(capturedOldValue).toEqual({ x: 7, y: 8 });
+    });
+
+    it('onRemove old value is a snapshot — readable inside the callback (AC-03)', () => {
+      const onRemove = vi.fn((_entity: EntityHandle, value: Record<string, unknown>) => {
+        // The old value must be a readable snapshot, not a live reference.
+        // Verify the value fields are accessible.
+        expect(value.x).toBe(10);
+        expect(value.y).toBe(20);
+      });
+      const Pos = defineComponent(
+        'HookRemPos4',
+        { x: { type: 'f32' }, y: { type: 'f32' } },
+        { onRemove: onRemove as (entity: EntityHandle, value: Record<string, unknown>) => void },
+      );
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 10, y: 20 } }).unwrap();
+      world.removeComponent(e, Pos).unwrap();
+      expect(onRemove).toHaveBeenCalledTimes(1);
+    });
+
+    it('component without onRemove declaration does not trigger any hook on remove', () => {
+      const Pos = defineComponent('NoHookRemPos', { x: { type: 'f32' }, y: { type: 'f32' } });
+      const world = new World();
+      const e = world.spawn({ component: Pos, data: { x: 3, y: 4 } }).unwrap();
+
+      const r = world.removeComponent(e, Pos);
+      expect(r.ok).toBe(true);
+
+      // Component is gone — get should return ComponentNotPresentError.
+      const result = world.get(e, Pos);
+      expect(result.ok).toBe(false);
+    });
+  });
+}
+{
+  // --- from inspect.test.ts ---
+  describe('world.inspect()', () => {
+    it('returns a WorldInspection with all 6 fields defined on empty world', () => {
+      const world = new World();
+      const info: WorldInspection = world.inspect();
+
+      expect(info.entityCount).toBe(0);
+      expect(info.archetypeCount).toBe(0);
+      expect(info.archetypes).toEqual([]);
+      expect(info.activeComponents).toEqual([]);
+      expect(info.systemCount).toBe(0);
+      expect(info.resourceKeys).toEqual([]);
+    });
+
+    it('entityCount reflects live entities after spawn and despawn', () => {
+      const Pos = defineComponent('InspectPos', { x: { type: 'f32' }, y: { type: 'f32' } });
+      const world = new World();
+      const e1 = world.spawn({ component: Pos, data: { x: 1, y: 2 } }).unwrap();
+      world.spawn({ component: Pos, data: { x: 3, y: 4 } });
+
+      expect(world.inspect().entityCount).toBe(2);
+
+      world.despawn(e1);
+      expect(world.inspect().entityCount).toBe(1);
+    });
+
+    it('archetypeCount and archetypes reflect distinct component sets', () => {
+      const A = defineComponent('InspA', { v: { type: 'f32' } });
+      const B = defineComponent('InspB', { w: { type: 'i32' } });
+      const world = new World();
+
+      world.spawn({ component: A, data: { v: 1 } });
+      world.spawn({ component: B, data: { w: 2 } });
+
+      const info = world.inspect();
+      expect(info.archetypeCount).toBe(2);
+      expect(info.archetypes.length).toBe(2);
+
+      // Each archetype has correct shape
+      for (const arch of info.archetypes) {
+        expect(arch.key).toBeDefined();
+        expect(arch.componentNames.length).toBeGreaterThanOrEqual(1);
+        expect(arch.entityCount).toBe(1);
+        expect(arch.capacity).toBeGreaterThan(0);
+      }
+    });
+
+    it('activeComponents lists component names that have been spawned, not merely defined', () => {
+      const X = defineComponent('InspX', { v: 'u8' });
+      // InspY is defined (globally live) but never spawned. The active list is
+      // derived from the archetype graph, so a defined-but-never-spawned
+      // component (InspY) is absent.
+      defineComponent('InspY', { w: 'u8' });
+      const world = new World();
+      world.spawn({ component: X, data: { v: 1 } });
+
+      const names = world.inspect().activeComponents;
+      expect(names).toContain('InspX');
+      expect(names).not.toContain('InspY');
+    });
+
+    it('systemCount increments after addSystem', () => {
+      const world = new World();
+      expect(world.inspect().systemCount).toBe(0);
+
+      world.addSystem({
+        name: 'inspSys1',
+        queries: [],
+        fn: () => {},
+      });
+      expect(world.inspect().systemCount).toBe(1);
+
+      world.addSystem({
+        name: 'inspSys2',
+        queries: [],
+        fn: () => {},
+      });
+      expect(world.inspect().systemCount).toBe(2);
+    });
+
+    it('resourceKeys reflects inserted and removed resources', () => {
+      const world = new World();
+      world.insertResource('timer', { elapsed: 0 });
+      world.insertResource('config', { debug: true });
+
+      const keys = world.inspect().resourceKeys;
+      expect(keys).toContain('timer');
+      expect(keys).toContain('config');
+      expect(keys.length).toBe(2);
+
+      world.removeResource('timer');
+      expect(world.inspect().resourceKeys).toEqual(['config']);
+    });
+
+    it('archetype info componentNames matches spawned components', () => {
+      const P = defineComponent('InspPos2', { x: { type: 'f32' }, y: { type: 'f32' } });
+      const V = defineComponent('InspVel2', { vx: { type: 'f32' }, vy: { type: 'f32' } });
+      const world = new World();
+
+      // Multi-component spawn
+      world.spawn({ component: P, data: { x: 0, y: 0 } }, { component: V, data: { vx: 1, vy: 1 } });
+
+      const info = world.inspect();
+      expect(info.archetypeCount).toBe(1);
+      // biome-ignore lint/style/noNonNullAssertion: archetypeCount asserted to be 1 above
+      const arch = info.archetypes[0]!;
+      expect(arch.componentNames).toContain('InspPos2');
+      expect(arch.componentNames).toContain('InspVel2');
+      expect(arch.entityCount).toBe(1);
+    });
+  });
+
+  // M3 / w13 — AC-15: activeComponents is derived from the live archetype
+  // graph, so it reflects what each World has actually spawned, independent
+  // of any global registration / definition state.
+  describe('world.inspect().activeComponents (M3 AC-15)', () => {
+    it('a spawned component appears; a defined-but-never-spawned component does not', () => {
+      const Used = defineComponent('M3Used', { v: 'u8' });
+      // M3Unused is defined (lives in the global index) but never spawned.
+      defineComponent('M3Unused', { v: 'u8' });
+      const world = new World();
+      world.spawn({ component: Used, data: { v: 1 } });
+
+      const names = world.inspect().activeComponents;
+      expect(names).toContain('M3Used');
+      expect(names).not.toContain('M3Unused');
+    });
+
+    it('despawning the last holder drops the component from activeComponents', () => {
+      const Solo = defineComponent('M3Solo', { v: 'u8' });
+      const world = new World();
+      const e = world.spawn({ component: Solo, data: { v: 1 } }).unwrap();
+      expect(world.inspect().activeComponents).toContain('M3Solo');
+
+      world.despawn(e);
+      // The archetype now holds zero live entities, so the component is no
+      // longer active (active = present on a non-empty archetype).
+      expect(world.inspect().activeComponents).not.toContain('M3Solo');
+    });
+
+    it('two Worlds report independent activeComponents from the same global definitions', () => {
+      const A = defineComponent('M3CrossA', { v: 'u8' });
+      const B = defineComponent('M3CrossB', { w: 'u8' });
+      const worldA = new World();
+      const worldB = new World();
+      worldA.spawn({ component: A, data: { v: 1 } });
+      worldB.spawn({ component: B, data: { w: 2 } });
+
+      const namesA = worldA.inspect().activeComponents;
+      const namesB = worldB.inspect().activeComponents;
+      expect(namesA).toContain('M3CrossA');
+      expect(namesA).not.toContain('M3CrossB');
+      expect(namesB).toContain('M3CrossB');
+      expect(namesB).not.toContain('M3CrossA');
+    });
+  });
+}
+{
+  // --- from managed-array-carry-over.test.ts ---
+  const ent = (n: number): EntityHandle => n as unknown as EntityHandle;
+
+  // ---------------------------------------------------------------------------
+  // (a) addComponent triggers migrate; array<entity> bytes + length + capacity preserved.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - array<entity> variable carry-over via addComponent migrate', () => {
+    it('byte-equal Uint32 buffer + length + capacity preserved across migrate', () => {
+      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+
+      // Spawn empty so we can grow via world.push and exercise the count column.
+      const e = w.spawn({ component: Children, data: { entities: new Uint32Array(0) } }).unwrap();
+
+      // Push three entities so capacity > 0 and length === 3.
+      w.push(e, Children, 'entities', ent(101)).unwrap();
+      w.push(e, Children, 'entities', ent(202)).unwrap();
+      w.push(e, Children, 'entities', ent(303)).unwrap();
+
+      const before = w.get(e, Children);
+      if (!before.ok) throw new Error('expected ok pre-migrate');
+      // expectType (AC-02 anchor c, w13: direct world.get call site):
+      // before.value.entities is Uint32Array (TypedArrayFor<'u32'>).
+      const snap0: Uint32Array = before.value.entities;
+      expect(snap0.length).toBe(3);
+      const capacity0 = w.capacity(e, Children, 'entities').unwrap();
+      expect(capacity0).toBeGreaterThanOrEqual(3);
+
+      // Snapshot the underlying bytes (length0 * 4 bytes) by reading via
+      // the live snapshot.
+      const bytes0: number[] = [];
+      for (let i = 0; i < snap0.length; i++) bytes0.push(snap0[i] ?? 0);
+
+      // Trigger archetype migrate by adding an unrelated component.
+      w.addComponent(e, { component: Anchor, data: { x: 1 } }).unwrap();
+
+      // Re-read after migrate.
+      const after = w.get(e, Children);
+      if (!after.ok) throw new Error('expected ok post-migrate');
+      const snap1 = after.value.entities;
+      const capacity1 = w.capacity(e, Children, 'entities').unwrap();
+
+      // length + capacity preserved.
+      expect(snap1.length).toBe(snap0.length);
+      expect(capacity1).toBe(capacity0);
+
+      // Byte-equal: each u32 element identical.
+      for (let i = 0; i < snap1.length; i++) {
+        expect(snap1[i]).toBe(bytes0[i]);
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (b) array<f32, 16> fixed-capacity migrate carry-over.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - array<f32,16> fixed carry-over via addComponent migrate', () => {
+    it('byte-equal 16 f32 elements + length preserved across migrate', () => {
+      const Mat4 = defineComponent('Mat4', { mat: { type: 'array<f32, 16>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+
+      // Init payload: 16 distinct f32 values so byte-equal is meaningful.
+      const init = new Float32Array(16);
+      for (let i = 0; i < 16; i++) init[i] = (i + 1) * 1.5;
+
+      const e = w.spawn({ component: Mat4, data: { mat: init } }).unwrap();
+
+      const before = w.get(e, Mat4);
+      if (!before.ok) throw new Error('expected ok pre-migrate');
+      // expectType (AC-02 anchor a, w13: system fn callback would see this
+      // shape via world.get -- here we assert the explicit Float32Array
+      // annotation matches the schema-derived TypedArray).
+      const snap0: Float32Array = before.value.mat;
+      const capacity0 = w.capacity(e, Mat4, 'mat').unwrap();
+      expect(snap0.length).toBe(16);
+      expect(capacity0).toBe(16);
+      const bytes0: number[] = [];
+      for (let i = 0; i < snap0.length; i++) bytes0.push(snap0[i] ?? 0);
+
+      // Trigger migrate.
+      w.addComponent(e, { component: Anchor, data: { x: 7 } }).unwrap();
+
+      const after = w.get(e, Mat4);
+      if (!after.ok) throw new Error('expected ok post-migrate');
+      const snap1 = after.value.mat;
+      const capacity1 = w.capacity(e, Mat4, 'mat').unwrap();
+
+      expect(snap1.length).toBe(snap0.length);
+      expect(capacity1).toBe(capacity0);
+      for (let i = 0; i < snap1.length; i++) {
+        expect(snap1[i]).toBe(bytes0[i]);
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (c) removeComponent migrate carry-over (the reverse direction).
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - array<entity> variable carry-over via removeComponent migrate', () => {
+    it('removing a sibling component preserves array bytes + length + capacity', () => {
+      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+
+      const e = w
+        .spawn(
+          { component: Children, data: { entities: new Uint32Array(0) } },
+          { component: Anchor, data: { x: 11 } },
+        )
+        .unwrap();
+
+      w.push(e, Children, 'entities', ent(7)).unwrap();
+      w.push(e, Children, 'entities', ent(8)).unwrap();
+
+      const before = w.get(e, Children);
+      if (!before.ok) throw new Error('expected ok pre-migrate');
+      // expectType (AC-02 anchor b, w13: queryRun callback path -- Children
+      // .entities snapshot type-equals TypedArrayFor<'u32'> (Uint32Array)
+      // when the bundle field is destructured inside a queryRun closure).
+      const snap0: Uint32Array = before.value.entities;
+      const capacity0 = w.capacity(e, Children, 'entities').unwrap();
+      const bytes0: number[] = [];
+      for (let i = 0; i < snap0.length; i++) bytes0.push(snap0[i] ?? 0);
+
+      // Trigger migrate by removing the sibling.
+      w.removeComponent(e, Anchor).unwrap();
+
+      const after = w.get(e, Children);
+      if (!after.ok) throw new Error('expected ok post-migrate');
+      const snap1 = after.value.entities;
+      const capacity1 = w.capacity(e, Children, 'entities').unwrap();
+
+      expect(snap1.length).toBe(snap0.length);
+      expect(capacity1).toBe(capacity0);
+      for (let i = 0; i < snap1.length; i++) {
+        expect(snap1[i]).toBe(bytes0[i]);
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (d) BufferPool slot id stays bit-equal across migrate (Negative invariant).
+  //
+  // Indirect observation: spawn entity A with array, capture A's bytes pre-
+  // migrate, trigger migrate, then spawn a foreign entity B of the same byte
+  // shape and verify A's bytes still survive afterwards. If migrate had
+  // erroneously released A's slot, A's bytes would be reset by B's
+  // alloc-and-zero path.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - BufferPool slot id Negative invariant (no release on migrate)', () => {
+    it("migrating A does not release A's slot; foreign alloc cannot disturb A bytes", () => {
+      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+
+      // Spawn A with 3 elements.
+      const a = w.spawn({ component: Children, data: { entities: new Uint32Array(0) } }).unwrap();
+      w.push(a, Children, 'entities', ent(0xdead)).unwrap();
+      w.push(a, Children, 'entities', ent(0xbeef)).unwrap();
+      w.push(a, Children, 'entities', ent(0xcafe)).unwrap();
+      const beforeA = w.get(a, Children);
+      if (!beforeA.ok) throw new Error('expected ok');
+      const snapA = beforeA.value.entities;
+      const aBytes: number[] = [snapA[0] ?? 0, snapA[1] ?? 0, snapA[2] ?? 0];
+
+      // Migrate A by adding Anchor.
+      w.addComponent(a, { component: Anchor, data: { x: 0 } }).unwrap();
+
+      // Spawn B with the same shape; if migrate had mis-released A's slot, B's
+      // alloc-and-zero path would clobber A's bytes via LIFO same-bucket reuse.
+      const b = w.spawn({ component: Children, data: { entities: new Uint32Array(0) } }).unwrap();
+      w.push(b, Children, 'entities', ent(0x1111)).unwrap();
+      w.push(b, Children, 'entities', ent(0x2222)).unwrap();
+      w.push(b, Children, 'entities', ent(0x3333)).unwrap();
+
+      // Re-read A's snapshot; bytes must survive migrate + foreign alloc.
+      const afterA = w.get(a, Children);
+      if (!afterA.ok) throw new Error('expected ok');
+      const snapA2 = afterA.value.entities;
+      expect(snapA2.length).toBe(3);
+      const capA = w.capacity(a, Children, 'entities').unwrap();
+      expect(capA).toBeGreaterThanOrEqual(3);
+      expect(snapA2[0]).toBe(aBytes[0]);
+      expect(snapA2[1]).toBe(aBytes[1]);
+      expect(snapA2[2]).toBe(aBytes[2]);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (e) Sidecar count column survives migrate for variable arrays.
+  //
+  // addComponent migrate copies all u32 columns (including the sidecar
+  // `<fieldName>:count` column) row-by-row. After migrate the snapshot reads
+  // length from the new archetype's count column; if migrate had missed the
+  // count column, length would default to zero and the loop body would not
+  // see prior elements.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - sidecar count column carry-over (length stays in sync after migrate)', () => {
+    it('snapshot.length matches pre-migrate length after archetype move', () => {
+      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+
+      const e = w.spawn({ component: Children, data: { entities: new Uint32Array(0) } }).unwrap();
+      w.push(e, Children, 'entities', ent(99)).unwrap();
+      w.push(e, Children, 'entities', ent(100)).unwrap();
+
+      w.addComponent(e, { component: Anchor, data: { x: 0 } }).unwrap();
+
+      const after = w.get(e, Children);
+      if (!after.ok) throw new Error('expected ok');
+      const snap = after.value.entities;
+      expect(snap.length).toBe(2);
+      expect(snap[0]).toBe(99);
+      expect(snap[1]).toBe(100);
+    });
+  });
+}
+{
+  // --- from managed-array-element-type.test.ts ---
+  describe('array vocab — element-type runtime fail-safe (w2, AC-03)', () => {
+    it('array<ref<X>> at runtime throws managed-array-element-type-not-allowed', () => {
+      expect(() => {
+        defineComponent('Bad', {
+          bad: { type: 'array<ref<MaterialAsset>>' as unknown as SchemaFieldType },
+        });
+      }).toThrow(/managed-array-element-type-not-allowed/);
+    });
+
+    it('array<handle<X>> with non-empty tag is accepted at runtime (feat-20260608 M2 D-1)', () => {
+      expect(() => {
+        defineComponent('Good', {
+          good: { type: 'array<shared<MeshAsset>>' as unknown as SchemaFieldType },
+        });
+      }).not.toThrow();
+    });
+
+    it('array<buffer:N> at runtime throws managed-array-element-type-not-allowed', () => {
+      expect(() => {
+        defineComponent('Bad', { bad: { type: 'array<buffer:8>' as unknown as SchemaFieldType } });
+      }).toThrow(/managed-array-element-type-not-allowed/);
+    });
+
+    it('array<array<T,N>> nesting at runtime throws managed-array-element-type-not-allowed', () => {
+      expect(() => {
+        defineComponent('Bad', {
+          bad: { type: 'array<array<f32,4>>' as unknown as SchemaFieldType },
+        });
+      }).toThrow(/managed-array-element-type-not-allowed/);
+    });
+
+    it('legal element types do not throw: array<entity> / array<f32> / array<u32, 16>', () => {
+      expect(() => defineComponent('Foo', { entities: { type: 'array<entity>' } })).not.toThrow();
+      expect(() => defineComponent('Bar', { values: { type: 'array<f32>' } })).not.toThrow();
+      expect(() => defineComponent('Baz', { mat: { type: 'array<f32, 16>' } })).not.toThrow();
+      expect(() => defineComponent('Qux', { flags: { type: 'array<bool>' } })).not.toThrow();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // w2 (M2) --- array<string> rejection (OOS-04 lock-out + R-P2 mitigation).
+  //
+  // AC-10 extends the bare 'string' keyword to the SchemaVocabKeyword closed
+  // union, but OOS-04 explicitly rules out `array<string>` at this stage:
+  // arrays of variable-length references are a separate design (would need
+  // per-element BufferPool slot tracking + per-row release loops). Locking it
+  // out at registration time prevents AI users from accidentally defining a
+  // schema we cannot back. The runtime guard piggybacks on the existing
+  // MANAGED_ARRAY_ELEMENT_TYPES whitelist --- adding 'string' here would
+  // silently flip the policy, so we also assert the set membership / size
+  // stays at the 12-member baseline (R-P2 mitigation: drift detector).
+  // ---------------------------------------------------------------------------
+
+  describe('array vocab --- string element rejection (w2 M2, OOS-04)', () => {
+    it('array<string> at runtime throws managed-array-element-type-not-allowed', () => {
+      expect(() => {
+        defineComponent('Bad', { bad: { type: 'array<string>' as unknown as SchemaFieldType } });
+      }).toThrow(/managed-array-element-type-not-allowed/);
+    });
+
+    it('array<string, 4> fixed form is also rejected', () => {
+      expect(() => {
+        defineComponent('Bad', { bad: { type: 'array<string, 4>' as unknown as SchemaFieldType } });
+      }).toThrow(/managed-array-element-type-not-allowed/);
+    });
+
+    it('MANAGED_ARRAY_ELEMENT_TYPES still has 12 members and excludes "string"', () => {
+      expect(MANAGED_ARRAY_ELEMENT_TYPES.size).toBe(12);
+      expect(MANAGED_ARRAY_ELEMENT_TYPES.has('string' as never)).toBe(false);
+      // Explicit allow-list snapshot --- any drift in the 12 members shows up
+      // as a diff here, signalling a vocab evolution that needs design review.
+      expect([...MANAGED_ARRAY_ELEMENT_TYPES].sort()).toEqual(
+        [
+          'bool',
+          'enum',
+          'entity',
+          'f32',
+          'f64',
+          'i16',
+          'i32',
+          'i8',
+          'ref',
+          'u16',
+          'u32',
+          'u8',
+        ].sort(),
+      );
+    });
+  });
+}
+{
+  // --- from managed-array-errors.test.ts ---
+  interface CollectedError {
+    readonly code: EcsErrorCode;
+    readonly detail: unknown;
+  }
+
+  function makeHarness(): { world: World; collected: CollectedError[] } {
+    const collected: CollectedError[] = [];
+    const world = new World();
+    world.setErrorHandler((err) => {
+      const e = err as { code?: EcsErrorCode; detail?: unknown };
+      if (e.code !== undefined) {
+        collected.push({ code: e.code, detail: e.detail });
+      }
+    });
+    return { world, collected };
+  }
+
+  // ---------------------------------------------------------------------------
+  // (a) fixed-size-mismatch -- error class shape.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - fixed-size-mismatch error class', () => {
+    it('FixedSizeMismatchError carries .code + detail.expected / detail.actual', () => {
+      const err = new FixedSizeMismatchError('mat', 16, 15);
+      expect(err.code).toBe('fixed-size-mismatch');
+      expect(err.detail).toEqual({ expected: 16, actual: 15 });
+      // expectType: detail narrows to fixed-size-mismatch shape.
+      const detail: Extract<EcsErrorDetail, { code: 'fixed-size-mismatch' }> = {
+        code: 'fixed-size-mismatch',
+        ...err.detail,
+      };
+      expect(detail.expected).toBe(16);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (b) fixed-array-overflow -- world.push on fixed-capacity array.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - fixed-array-overflow runtime path (world.push on array<T, N>)', () => {
+    it('returns FixedArrayOverflowError with detail.capacity / detail.attemptedCount', () => {
+      const Mat4 = defineComponent('Mat4', { mat: { type: 'array<f32, 16>' } });
+      const w = new World();
+      const init = new Float32Array(16);
+      const e = w.spawn({ component: Mat4, data: { mat: init } }).unwrap();
+
+      // world.push on a fixed-capacity field is a contract violation regardless
+      // of count -- fixed arrays are written whole-row via spawn / set, not
+      // grown element-wise.
+      const r = w.push(e, Mat4, 'mat', 1.5);
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('fixed-array-overflow');
+      expect(r.error).toBeInstanceOf(FixedArrayOverflowError);
+      const detail = (r.error as FixedArrayOverflowError).detail;
+      expect(detail.capacity).toBe(16);
+      expect(detail.attemptedCount).toBe(16);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (c) array-pop-empty -- world.pop on empty variable array.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - array-pop-empty runtime path (world.pop on empty array<T>)', () => {
+    it('returns ArrayPopEmptyError with detail.count === 0', () => {
+      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
+      const w = new World();
+      const e = w.spawn({ component: Children, data: { entities: new Uint32Array(0) } }).unwrap();
+
+      const r = w.pop(e, Children, 'entities');
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('array-pop-empty');
+      expect(r.error).toBeInstanceOf(ArrayPopEmptyError);
+      const detail = (r.error as ArrayPopEmptyError).detail;
+      expect(detail.count).toBe(0);
+    });
+
+    it('returns array-pop-empty for world.pop on a fixed-capacity field too', () => {
+      const Mat4 = defineComponent('Mat4', { mat: { type: 'array<f32, 16>' } });
+      const w = new World();
+      const init = new Float32Array(16);
+      const e = w.spawn({ component: Mat4, data: { mat: init } }).unwrap();
+
+      const r = w.pop(e, Mat4, 'mat');
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('array-pop-empty');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (d) world.pop on a non-empty variable array succeeds and shrinks count.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - world.pop on non-empty variable array', () => {
+    it('returns the last element and shrinks live snapshot length by 1', () => {
+      const Indices = defineComponent('Indices', { values: { type: 'array<u32>' } });
+      const w = new World();
+      const e = w.spawn({ component: Indices, data: { values: new Uint32Array(0) } }).unwrap();
+
+      w.push(e, Indices, 'values', 11).unwrap();
+      w.push(e, Indices, 'values', 22).unwrap();
+      w.push(e, Indices, 'values', 33).unwrap();
+      expect(w.get(e, Indices).unwrap().values.length).toBe(3);
+
+      const popped = w.pop(e, Indices, 'values').unwrap();
+      expect(popped).toBe(33);
+      expect(w.get(e, Indices).unwrap().values.length).toBe(2);
+
+      const second = w.pop(e, Indices, 'values').unwrap();
+      expect(second).toBe(22);
+      expect(w.get(e, Indices).unwrap().values.length).toBe(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (e) managed-array-element-type-not-allowed (surviving member; sample path).
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - managed-array-element-type-not-allowed surviving member', () => {
+    it('defineComponent throws ManagedArrayElementTypeNotAllowedError on illegal element', () => {
+      let captured: ManagedArrayElementTypeNotAllowedError | null = null;
+      try {
+        defineComponent('Bad', { bad: { type: 'array<ref<X>>' as unknown as SchemaFieldType } });
+      } catch (err) {
+        captured = err as ManagedArrayElementTypeNotAllowedError;
+      }
+      expect(captured).not.toBeNull();
+      if (captured === null) return;
+      expect(captured.code).toBe('managed-array-element-type-not-allowed');
+      expect(captured.detail.fieldName).toBe('bad');
+      expect(captured.detail.elementType).toBe('ref<X>'); // gate-allow:ecs-brand (illegal-element-type-not-allowed parser rejection fixture)
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (f) Exhaustive switch over the 5 collapsed-vocab codes -- no default arm.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - exhaustive switch over collapsed-vocab codes', () => {
+    it('no default branch is needed when the switch covers all 5 members', () => {
+      const codes: EcsErrorCode[] = [
+        'fixed-size-mismatch',
+        'fixed-array-overflow',
+        'array-pop-empty',
+        'instance-transforms-stride-mismatch',
+        'managed-array-element-type-not-allowed',
+      ];
+      let hits = 0;
+      for (const code of codes) {
+        switch (code) {
+          case 'fixed-size-mismatch':
+          case 'fixed-array-overflow':
+          case 'array-pop-empty':
+          case 'instance-transforms-stride-mismatch':
+          case 'managed-array-element-type-not-allowed':
+            hits += 1;
+            break;
+          default:
+            // The exhaustive narrowing is performed by `EcsErrorCode` over the
+            // entire union; this default arm is unreachable for the 5 codes
+            // listed above. We use `void` rather than assertNever to keep the
+            // test focused on collapsed-vocab membership without coupling to
+            // the 22 surviving members.
+            void code;
+        }
+      }
+      expect(hits).toBe(5);
+    });
+  });
+
+  // Reserved harness import keeps the helper available for future code-path
+  // fail-safe additions; suppress unused warnings while the harness has no
+  // active call site in this rewrite.
+  void makeHarness;
+}
+{
+  // --- from managed-array-release.test.ts ---
+  function readSlotId(
+    world: World,
+    entityRaw: number,
+    component: Component,
+    fieldName: string,
+  ): number {
+    const graph = (
+      world as unknown as {
+        _getGraph(): {
+          archetypes: Array<{
+            columns: Map<number, Map<string, { view: { [k: number]: number } }>>;
+            size: number;
+            components: Component[];
+          }>;
+        };
+      }
+    )._getGraph();
+    const slotIndex = entityRaw & 0xffffff; // lower 24 bits -- index slot
+    for (const arch of graph.archetypes) {
+      if (!arch) continue;
+      for (let row = 0; row < arch.size; row++) {
+        // Entity identity read from id=0 self column (not a separate entities array)
+        const selfVal = arch.columns.get(0)?.get('self')?.view[row];
+        const idx = typeof selfVal === 'number' ? selfVal & 0xffffff : 0;
+        if (idx === slotIndex) {
+          for (let i = 0; i < arch.components.length; i++) {
+            if (arch.components[i] === component) {
+              for (const [, fieldCols] of arch.columns) {
+                const col = fieldCols.get(fieldName);
+                if (col !== undefined && fieldCols.has(fieldName)) {
+                  return col.view[row] as number;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helper -- the BufferPool's live (alloc'd, not-yet-released) slot count.
+  // feat-20260602: fixed `array<T,N>` stores its elements INLINE in the
+  // archetype column, so it never allocs / releases a pool slot. The three
+  // release paths assert `_liveCount() === 0` end-to-end for the fixed shape
+  // (the inline migration superseded the prior slot-id + freelist-reuse
+  // contract these blocks used to lock).
+  // ---------------------------------------------------------------------------
+
+  function liveCount(world: World): number {
+    return (world as unknown as { bufferPool: { _liveCount(): number } }).bufferPool._liveCount();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Path 1 -- world.despawn(e) releases array fields; slot id reusable.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - array<entity> variable: despawn releases slot; freelist reuses id', () => {
+    it('despawn frees the slot; same-shape spawn pops the freed id', () => {
+      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
+      const w = new World();
+
+      // Spawn A with 4 elements (16 bytes -> bucket 0 / size class 16).
+      const a = w
+        .spawn({
+          component: Children,
+          data: { entities: new Uint32Array([1, 2, 3, 4]) },
+        })
+        .unwrap();
+      const aSlotId = readSlotId(w, handleNumeric(a), Children, 'entities');
+      expect(aSlotId).toBeGreaterThan(0);
+
+      // Despawn A; the array field's slot is released to its bucket free-list.
+      w.despawn(a).unwrap();
+
+      // Spawn B with the same element count -> same bucket -> LIFO pop returns
+      // A's freed slot id.
+      const b = w
+        .spawn({
+          component: Children,
+          data: { entities: new Uint32Array([10, 20, 30, 40]) },
+        })
+        .unwrap();
+      const bSlotId = readSlotId(w, handleNumeric(b), Children, 'entities');
+      expect(bSlotId).toBe(aSlotId);
+    });
+  });
+
+  describe('w12 - array<f32,N> fixed: despawn touches no pool slot (inline)', () => {
+    it('spawn + despawn of an inline fixed array never allocs a pool slot', () => {
+      const Mat4 = defineComponent('Mat4', { mat: 'array<f32, 16>' });
+      const w = new World();
+
+      const init = new Float32Array(16);
+      for (let i = 0; i < 16; i++) init[i] = i + 1;
+
+      const a = w.spawn({ component: Mat4, data: { mat: init } }).unwrap();
+      // Inline column: no BufferPool slot is allocated for the fixed field.
+      expect(liveCount(w)).toBe(0);
+
+      w.despawn(a).unwrap();
+      expect(liveCount(w)).toBe(0);
+
+      // Same-shape respawn still touches no slot, and reads back its payload.
+      const b = w.spawn({ component: Mat4, data: { mat: new Float32Array(16) } }).unwrap();
+      expect(liveCount(w)).toBe(0);
+      const got = w.get(b, Mat4);
+      if (!got.ok) throw new Error('expected ok');
+      expect(got.value.mat[0]).toBe(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Path 2 -- world.removeComponent(e, C) releases array fields on C only.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - array<entity> variable: removeComponent releases slot', () => {
+    it('removeComponent frees the array slot; freelist reuses id', () => {
+      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+
+      const a = w
+        .spawn(
+          {
+            component: Children,
+            data: { entities: new Uint32Array([1, 2, 3, 4]) },
+          },
+          { component: Anchor, data: { x: 7 } },
+        )
+        .unwrap();
+      const aSlotId = readSlotId(w, handleNumeric(a), Children, 'entities');
+      expect(aSlotId).toBeGreaterThan(0);
+
+      w.removeComponent(a, Children).unwrap();
+
+      const b = w
+        .spawn({
+          component: Children,
+          data: { entities: new Uint32Array([10, 20, 30, 40]) },
+        })
+        .unwrap();
+      const bSlotId = readSlotId(w, handleNumeric(b), Children, 'entities');
+      expect(bSlotId).toBe(aSlotId);
+    });
+  });
+
+  describe('w12 - array<f32,N> fixed: removeComponent touches no pool slot (inline)', () => {
+    it('removeComponent of an inline fixed array never allocs a pool slot', () => {
+      const Mat4 = defineComponent('Mat4', { mat: 'array<f32, 16>' });
+      const Anchor = defineComponent('Anchor', { x: 'f32' });
+      const w = new World();
+
+      const init = new Float32Array(16);
+      for (let i = 0; i < 16; i++) init[i] = i + 1;
+
+      const a = w
+        .spawn({ component: Mat4, data: { mat: init } }, { component: Anchor, data: { x: 7 } })
+        .unwrap();
+      expect(liveCount(w)).toBe(0);
+
+      w.removeComponent(a, Mat4).unwrap();
+      expect(liveCount(w)).toBe(0);
+
+      const b = w.spawn({ component: Mat4, data: { mat: new Float32Array(16) } }).unwrap();
+      expect(liveCount(w)).toBe(0);
+      const got = w.get(b, Mat4);
+      if (!got.ok) throw new Error('expected ok');
+      expect(got.value.mat.length).toBe(16);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Path 3 -- world.set(e, C, { arr: newValue }) releases prior + allocs new.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - array<entity> variable: set field overwrite releases prior slot', () => {
+    it('set frees the prior array slot before allocating the new one', () => {
+      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
+      const w = new World();
+
+      const a = w
+        .spawn({
+          component: Children,
+          data: { entities: new Uint32Array([1, 2, 3, 4]) },
+        })
+        .unwrap();
+      const oldSlotId = readSlotId(w, handleNumeric(a), Children, 'entities');
+      expect(oldSlotId).toBeGreaterThan(0);
+
+      // Overwrite the array field with a brand-new payload of the same byte
+      // size -> set path releases oldSlotId, then alloc(16) pops oldSlotId
+      // from the freelist and the column re-stores the SAME id (LIFO same-
+      // bucket reuse, D-7).
+      w.set(a, Children, { entities: new Uint32Array([100, 200, 300, 400]) }).unwrap();
+
+      const newSlotId = readSlotId(w, handleNumeric(a), Children, 'entities');
+      expect(newSlotId).toBe(oldSlotId);
+
+      // Bytes match the new payload (proves the slot was reset post-release).
+      const got = w.get(a, Children);
+      if (!got.ok) throw new Error('expected ok');
+      const snap = got.value.entities;
+      expect(snap.length).toBe(4);
+      expect(snap[0]).toBe(100);
+      expect(snap[3]).toBe(400);
+    });
+  });
+
+  describe('w12 - array<f32,N> fixed: set field overwrite is inline (no pool slot)', () => {
+    it('set overwrites the inline payload in place without touching the pool', () => {
+      const Mat4 = defineComponent('Mat4', { mat: 'array<f32, 16>' });
+      const w = new World();
+
+      const init = new Float32Array(16);
+      for (let i = 0; i < 16; i++) init[i] = i + 1;
+
+      const a = w.spawn({ component: Mat4, data: { mat: init } }).unwrap();
+      expect(liveCount(w)).toBe(0);
+
+      const next = new Float32Array(16);
+      for (let i = 0; i < 16; i++) next[i] = (i + 1) * 100;
+      w.set(a, Mat4, { mat: next }).unwrap();
+      // Inline set is a verbatim in-place row write -- no alloc / release.
+      expect(liveCount(w)).toBe(0);
+
+      const got = w.get(a, Mat4);
+      if (!got.ok) throw new Error('expected ok');
+      const snap = got.value.mat;
+      expect(snap[0]).toBe(100);
+      expect(snap[15]).toBe(1600);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Boundary -- releasing one entity does NOT disturb a sibling at a different
+  // row in the same archetype + same column.
+  // ---------------------------------------------------------------------------
+
+  describe('w12 - sibling-entity isolation: despawn one row does not touch another', () => {
+    it("despawn(a) keeps b's array bytes + slot id intact", () => {
+      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
+      const w = new World();
+
+      const a = w
+        .spawn({
+          component: Children,
+          data: { entities: new Uint32Array([1, 2, 3, 4]) },
+        })
+        .unwrap();
+      const b = w
+        .spawn({
+          component: Children,
+          data: { entities: new Uint32Array([10, 20, 30, 40]) },
+        })
+        .unwrap();
+
+      const bSlotIdBefore = readSlotId(w, handleNumeric(b), Children, 'entities');
+      expect(bSlotIdBefore).toBeGreaterThan(0);
+
+      // Despawn A -- only A's row's slot is released.
+      w.despawn(a).unwrap();
+
+      // B's data + slot id stay intact.
+      const bSlotIdAfter = readSlotId(w, handleNumeric(b), Children, 'entities');
+      expect(bSlotIdAfter).toBe(bSlotIdBefore);
+
+      const got = w.get(b, Children);
+      if (!got.ok) throw new Error('expected ok');
+      const snap = got.value.entities;
+      expect(snap.length).toBe(4);
+      expect(snap[0]).toBe(10);
+      expect(snap[3]).toBe(40);
+    });
+  });
+}
+{
+  // --- from managed-array-stride.test.ts ---
+  interface CollectedError {
+    readonly code: EcsErrorCode;
+  }
+
+  function makeHarness(): { world: World; collected: CollectedError[] } {
+    const collected: CollectedError[] = [];
+    const world = new World();
+    world.setErrorHandler((err) => {
+      const e = err as { code?: EcsErrorCode };
+      if (e.code !== undefined) collected.push({ code: e.code });
+    });
+    return { world, collected };
+  }
+
+  describe('w12 - managed-array stride: ECS-layer negative invariant (AC-06)', () => {
+    it('(a) spawn with 17 f32: no stride error fires from the ECS write path', () => {
+      const Instances = defineComponent('Instances', { transforms: { type: 'array<f32>' } });
+      const { world, collected } = makeHarness();
+      const e = world
+        .spawn({ component: Instances, data: { transforms: new Float32Array(17) } })
+        .unwrap();
+      void e;
+      expect(
+        collected.filter((c) => (c.code as string) === 'managed-array-stride-mismatch').length,
+      ).toBe(0);
+      expect(collected.filter((c) => c.code === 'instance-transforms-stride-mismatch').length).toBe(
+        0,
+      );
+    });
+
+    it('(b) set to 15 f32 after spawning 16: no stride error fires from the ECS write path', () => {
+      const Instances = defineComponent('Instances', { transforms: { type: 'array<f32>' } });
+      const { world, collected } = makeHarness();
+      const e = world
+        .spawn({ component: Instances, data: { transforms: new Float32Array(16) } })
+        .unwrap();
+      world.set(e, Instances, { transforms: new Float32Array(15) }).unwrap();
+      expect(
+        collected.filter((c) => (c.code as string) === 'managed-array-stride-mismatch').length,
+      ).toBe(0);
+      expect(collected.filter((c) => c.code === 'instance-transforms-stride-mismatch').length).toBe(
+        0,
+      );
+    });
+
+    it('(c) push that crosses a non-multiple count: no stride error fires', () => {
+      const Instances = defineComponent('Instances', { transforms: { type: 'array<f32>' } });
+      const { world, collected } = makeHarness();
+      const e = world
+        .spawn({ component: Instances, data: { transforms: new Float32Array(0) } })
+        .unwrap();
+      world.push(e, Instances, 'transforms', 1.5).unwrap();
+      expect(
+        collected.filter((c) => (c.code as string) === 'managed-array-stride-mismatch').length,
+      ).toBe(0);
+    });
+
+    it('(d) Children is stride-agnostic at the ECS layer', () => {
+      const Children = defineComponent('Children', { entities: { type: 'array<entity>' } });
+      const { world, collected } = makeHarness();
+      const e = world
+        .spawn({ component: Children, data: { entities: new Uint32Array(7) } })
+        .unwrap();
+      world.push(e, Children, 'entities', 11 as unknown as EntityHandle).unwrap();
+      expect(
+        collected.filter((c) => (c.code as string) === 'managed-array-stride-mismatch').length,
+      ).toBe(0);
+    });
+  });
+}
+{
+  // --- from managed-array-vocab.test.ts ---
+  describe('array vocab - keyword recognition (w12, AC-01)', () => {
+    it('array<entity> derives to Uint32Array (Entity column storage)', () => {
+      expectTypeOf<FieldValueType<'array<entity>'>>().toEqualTypeOf<Uint32Array>();
+    });
+
+    it('array<f32, 16> derives to Float32Array (fixed-capacity)', () => {
+      expectTypeOf<FieldValueType<'array<f32, 16>'>>().toEqualTypeOf<Float32Array>();
+    });
+
+    it('array<u32> derives to Uint32Array', () => {
+      expectTypeOf<FieldValueType<'array<u32>'>>().toEqualTypeOf<Uint32Array>();
+    });
+
+    it('array<i32, 4> derives to Int32Array (fixed-capacity i32)', () => {
+      expectTypeOf<FieldValueType<'array<i32, 4>'>>().toEqualTypeOf<Int32Array>();
+    });
+
+    it('array<bool> derives to Uint8Array', () => {
+      expectTypeOf<FieldValueType<'array<bool>'>>().toEqualTypeOf<Uint8Array>();
+    });
+
+    it('ShapeOf threads array vocab through FieldValueType', () => {
+      type S = {
+        entities: 'array<entity>';
+        mat: 'array<f32, 16>';
+        indices: 'array<u32>';
+      };
+      type Expected = {
+        entities: Uint32Array;
+        mat: Float32Array;
+        indices: Uint32Array;
+      };
+      expectTypeOf<ShapeOf<S>>().toEqualTypeOf<Expected>();
+    });
+  });
+
+  describe('array vocab - three-application-point inference (w12, AC-01)', () => {
+    // Application point (a) -- inside world.addSystem fn callback. The system
+    // closure reads the array field via `world.get(e, C).unwrap().entities`;
+    // the inferred type must be `Uint32Array` without an `as` cast.
+    it('application point (a) -- inside world.addSystem fn callback', () => {
+      type Foo = ReturnType<typeof defineComponent<'Foo', { entities: 'array<entity>' }>>;
+      type FooShape = ShapeOf<Foo['schema']>;
+      // expectType: array<entity> resolves to Uint32Array at the system call site.
+      expectTypeOf<FooShape['entities']>().toEqualTypeOf<Uint32Array>();
+      const dummy: FooShape['entities'] = new Uint32Array(0);
+      expectTypeOf(dummy).toEqualTypeOf<Uint32Array>();
+    });
+
+    // Application point (b) -- inside queryRun callback (same world.get path,
+    // different host scope; type derivation must not regress when `entities`
+    // crosses a function boundary).
+    it('application point (b) -- inside queryRun callback', () => {
+      type Foo = ReturnType<typeof defineComponent<'Foo', { entities: 'array<entity>' }>>;
+      type FooShape = ShapeOf<Foo['schema']>;
+      // expectType: queryRun callback sees the same Uint32Array shape as system fn.
+      expectTypeOf<FooShape['entities']>().toEqualTypeOf<Uint32Array>();
+    });
+
+    // Application point (c) -- direct world.get call site (the simplest path,
+    // outside any system / query). The explicit type annotation pins the
+    // TypedArray inference to the schema literal.
+    it('application point (c) -- direct world.get call site', () => {
+      type Foo = ReturnType<typeof defineComponent<'Foo', { entities: 'array<entity>' }>>;
+      type FooShape = ShapeOf<Foo['schema']>;
+      // expectType: direct world.get(e, C).unwrap().entities matches TypedArrayFor<'u32'>.
+      const arr: TypedArrayFor<'u32'> = new Uint32Array(0);
+      expectTypeOf(arr).toEqualTypeOf<FooShape['entities']>();
+    });
+
+    it('World type still resolves (no parser regression)', () => {
+      expectTypeOf<World>().toBeObject();
+    });
+  });
+
+  describe('array vocab - cross-shape closure on TypedArray surface (w12, AC-02)', () => {
+    it('Float32Array exposes `length` indexed access; no `push` / `pop` / `count`', () => {
+      type FA = Float32Array;
+      expectTypeOf<FA>().toHaveProperty('length');
+      expectTypeOf<FA>().toHaveProperty('subarray');
+      // The TypedArray surface is the SSOT here -- AI users mutate the field
+      // through `world.push` / `world.pop` / `world.set`, NOT the snapshot.
+    });
+
+    it('Uint32Array indexed read returns number', () => {
+      type UA = Uint32Array;
+      expectTypeOf<UA[number]>().toEqualTypeOf<number>();
+    });
+  });
+
+  describe('array vocab - element-type rejection (w12, AC-03)', () => {
+    it('array<ref<X>> is not a recognised schema field type', () => {
+      // @ts-expect-error 'array<ref<X>>' is not a SchemaFieldType (AC-03).
+      const bad: SchemaFieldType = 'array<ref<MaterialAsset>>';
+      void bad;
+    });
+
+    it('array<handle<X>> is now a recognised schema field type (feat-20260608 M2 D-1)', () => {
+      const valid: SchemaFieldType = 'array<shared<MeshAsset>>';
+      void valid;
+    });
+
+    it('array<array<f32,4>> nesting is not a recognised schema field type', () => {
+      // @ts-expect-error 'array<array<f32,4>>' is not a SchemaFieldType (AC-03).
+      const bad: SchemaFieldType = 'array<array<f32,4>>';
+      void bad;
+    });
+  });
+
+  describe('array vocab - cross-brand rejection (w12, AC-04)', () => {
+    it("Entity packed u32 is not assignable to Handle<Mesh, 'unique'>", () => {
+      const takesMeshHandle = (h: Handle<'Mesh', 'unique'>): void => {
+        void h;
+      };
+      const view = new Uint32Array(1) as TypedArrayFor<'u32'>;
+      const elem: number = view[0] ?? 0;
+      // @ts-expect-error number is not assignable to Handle<'Mesh','unique'> (AC-04).
+      takesMeshHandle(elem);
+    });
+  });
+}
+{
+  // --- from managed-buffer-grow.test.ts ---
+  function fillSequential(view: Uint8Array, base: number): void {
+    for (let i = 0; i < view.byteLength; i++) view[i] = (i + base) & 0xff;
+  }
+
+  describe('w12 - AC-07 BufferPool.grow byte-equal carry-over', () => {
+    it('cross-bucket grow (128 -> 1024) keeps first 128 bytes byte-equal', () => {
+      const pool = new BufferPool();
+      const a = pool.alloc(128);
+      if (!a.ok) throw new Error('expected ok alloc');
+      fillSequential(a.value.view, 1);
+      const r = pool.grow(a.value.id, 1024);
+      if (!r.ok) throw new Error('expected ok grow');
+      expect(r.value.byteLength).toBe(1024);
+      for (let i = 0; i < 128; i++) expect(r.value[i]).toBe((i + 1) & 0xff);
+      // The grown tail bytes are zero-filled by the fresh ArrayBuffer.
+      for (let i = 128; i < 1024; i++) expect(r.value[i]).toBe(0);
+    });
+
+    it('same-bucket grow (128 -> 200) keeps first 128 bytes byte-equal', () => {
+      const pool = new BufferPool();
+      const a = pool.alloc(128);
+      if (!a.ok) throw new Error('expected ok alloc');
+      fillSequential(a.value.view, 17);
+      const r = pool.grow(a.value.id, 200);
+      if (!r.ok) throw new Error('expected ok grow');
+      expect(r.value.byteLength).toBe(200);
+      for (let i = 0; i < 128; i++) expect(r.value[i]).toBe((i + 17) & 0xff);
+    });
+
+    it('multi-step grow (128 -> 1024 -> 4096) preserves accumulated content', () => {
+      const pool = new BufferPool();
+      const a = pool.alloc(128);
+      if (!a.ok) throw new Error('expected ok alloc');
+      fillSequential(a.value.view, 5);
+
+      const r1 = pool.grow(a.value.id, 1024);
+      if (!r1.ok) throw new Error('expected ok grow1');
+      // Write a second pattern over the newly-available range.
+      for (let i = 128; i < 1024; i++) r1.value[i] = (i ^ 0x5a) & 0xff;
+
+      const r2 = pool.grow(a.value.id, 4096);
+      if (!r2.ok) throw new Error('expected ok grow2');
+      expect(r2.value.byteLength).toBe(4096);
+      // Original prefix preserved.
+      for (let i = 0; i < 128; i++) expect(r2.value[i]).toBe((i + 5) & 0xff);
+      // Mid-range (set in r1) preserved across the second grow.
+      for (let i = 128; i < 1024; i++) expect(r2.value[i]).toBe((i ^ 0x5a) & 0xff);
+      // Tail past the prior view length is zero-filled.
+      for (let i = 1024; i < 4096; i++) expect(r2.value[i]).toBe(0);
+    });
+  });
+}
+{
+  // --- from managed-carry-over.test.ts ---
+  function refsOf(w: World): UniqueRefStore {
+    return (w as unknown as { uniqueRefs: UniqueRefStore }).uniqueRefs;
+  }
+
+  function fillSequential(view: Uint8Array, base: number): void {
+    for (let i = 0; i < view.byteLength; i++) view[i] = (i + base) & 0xff;
+  }
+
+  function expectBytesEqual(a: Uint8Array, b: Uint8Array, len: number): void {
+    for (let i = 0; i < len; i++) {
+      expect(a[i]).toBe(b[i]);
+    }
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // ---------------------------------------------------------------------------
+  // (a) ref<T> carry-over - Object.is on resolved payload survives migrate.
+  // ---------------------------------------------------------------------------
+
+  describe('w16 - ref<T> field archetype migrate carry-over (AC-04)', () => {
+    it('addComponent triggers migrate; ref<T> handle u32 stays bit-equal', () => {
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const store = refsOf(w);
+      const payload = { id: 7 };
+      const h = store.alloc('MaterialAsset', payload);
+      const e = w
+        .spawn({
+          component: Mat,
+          data: { handle: h },
+        })
+        .unwrap();
+
+      const before = w.get(e, Mat);
+      if (!before.ok) throw new Error('expected ok get before');
+      const handleBefore = handleNumeric(before.value.handle);
+
+      // Trigger archetype migrate by adding a second component.
+      w.addComponent(e, { component: Anchor, data: { x: 1 } }).unwrap();
+
+      const after = w.get(e, Mat);
+      if (!after.ok) throw new Error('expected ok get after');
+      const handleAfter = handleNumeric(after.value.handle);
+
+      expect(Object.is(handleBefore, handleAfter)).toBe(true);
+      // Resolved payload is the same object reference (store.resolve returns
+      // the SAME payload object on every call; AC-04 prelude in
+      // managed-release.test.ts).
+      const resolvedBefore = store.resolve(before.value.handle);
+      const resolvedAfter = store.resolve(after.value.handle);
+      if (!resolvedBefore.ok || !resolvedAfter.ok) {
+        throw new Error('expected resolved x2');
+      }
+      expect(Object.is(resolvedBefore.value, resolvedAfter.value)).toBe(true);
+      expect(resolvedAfter.value).toBe(payload);
+    });
+
+    it('removeComponent triggers migrate; surviving ref<T> handle u32 stays bit-equal', () => {
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const store = refsOf(w);
+      const payload = { id: 11 };
+      const h = store.alloc('MaterialAsset', payload);
+      const e = w
+        .spawn(
+          {
+            component: Mat,
+            data: { handle: h },
+          },
+          { component: Anchor, data: { x: 0 } },
+        )
+        .unwrap();
+
+      const before = w.get(e, Mat);
+      if (!before.ok) throw new Error('expected ok get before');
+      const handleBefore = handleNumeric(before.value.handle);
+
+      // Removing Anchor migrates the entity; Mat (with managed ref) survives.
+      w.removeComponent(e, Anchor).unwrap();
+
+      const after = w.get(e, Mat);
+      if (!after.ok) throw new Error('expected ok get after');
+      const handleAfter = handleNumeric(after.value.handle);
+
+      expect(Object.is(handleBefore, handleAfter)).toBe(true);
+      const r = store.resolve(after.value.handle);
+      if (!r.ok) throw new Error('expected resolved');
+      expect(r.value).toBe(payload);
+    });
+
+    it('multi-hop migrate (add then remove) keeps ref<T> handle u32 bit-equal end-to-end', () => {
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const Tag = defineComponent('Tag', { v: { type: 'u32' } });
+      const w = new World();
+      const store = refsOf(w);
+      const payload = { id: 99 };
+      const h = store.alloc('MaterialAsset', payload);
+      const e = w
+        .spawn({
+          component: Mat,
+          data: { handle: h },
+        })
+        .unwrap();
+      const r0 = w.get(e, Mat);
+      if (!r0.ok) throw new Error('expected r0');
+      const handle0 = handleNumeric(r0.value.handle);
+
+      // Hop 1: add Anchor.
+      w.addComponent(e, { component: Anchor, data: { x: 2 } }).unwrap();
+      const r1 = w.get(e, Mat);
+      if (!r1.ok) throw new Error('expected r1');
+      expect(Object.is(handleNumeric(r1.value.handle), handle0)).toBe(true);
+
+      // Hop 2: add Tag.
+      w.addComponent(e, { component: Tag, data: { v: 42 } }).unwrap();
+      const r2 = w.get(e, Mat);
+      if (!r2.ok) throw new Error('expected r2');
+      expect(Object.is(handleNumeric(r2.value.handle), handle0)).toBe(true);
+
+      // Hop 3: remove Anchor.
+      w.removeComponent(e, Anchor).unwrap();
+      const r3 = w.get(e, Mat);
+      if (!r3.ok) throw new Error('expected r3');
+      expect(Object.is(handleNumeric(r3.value.handle), handle0)).toBe(true);
+
+      // Hop 4: remove Tag.
+      w.removeComponent(e, Tag).unwrap();
+      const r4 = w.get(e, Mat);
+      if (!r4.ok) throw new Error('expected r4');
+      expect(Object.is(handleNumeric(r4.value.handle), handle0)).toBe(true);
+
+      // Final resolve still returns the original payload.
+      const resolved = store.resolve(r4.value.handle);
+      if (!resolved.ok) throw new Error('expected resolved');
+      expect(resolved.value).toBe(payload);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (b) buffer:<N> field carry-over - bytes preserved byte-equal across migrate.
+  // ---------------------------------------------------------------------------
+
+  describe('w16 - buffer:<N> field archetype migrate carry-over (AC-04)', () => {
+    it('addComponent migrate keeps buffer payload byte-equal (post-migrate view)', () => {
+      const Skin = defineComponent('Skin', { palette: { type: 'buffer<128>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const seed = new Uint8Array(128);
+      fillSequential(seed, 13);
+      const e = w.spawn({ component: Skin, data: { palette: seed } }).unwrap();
+
+      const before = w.get(e, Skin);
+      if (!before.ok) throw new Error('expected ok get before');
+      const snapshot = new Uint8Array(before.value.palette); // copy for comparison.
+
+      w.addComponent(e, { component: Anchor, data: { x: 0 } }).unwrap();
+
+      const after = w.get(e, Skin);
+      if (!after.ok) throw new Error('expected ok get after');
+      expect(after.value.palette.byteLength).toBe(128);
+      expectBytesEqual(after.value.palette, snapshot, 128);
+    });
+
+    it('removeComponent migrate keeps surviving buffer field byte-equal', () => {
+      const Skin = defineComponent('Skin', { palette: { type: 'buffer<64>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const seed = new Uint8Array(64);
+      fillSequential(seed, 71);
+      const e = w
+        .spawn({ component: Skin, data: { palette: seed } }, { component: Anchor, data: { x: 9 } })
+        .unwrap();
+
+      const before = w.get(e, Skin);
+      if (!before.ok) throw new Error('expected ok get before');
+      const snapshot = new Uint8Array(before.value.palette);
+
+      // Remove Anchor; Skin (with buffer) survives the migrate.
+      w.removeComponent(e, Anchor).unwrap();
+
+      const after = w.get(e, Skin);
+      if (!after.ok) throw new Error('expected ok get after');
+      expectBytesEqual(after.value.palette, snapshot, 64);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (c) Combined ref + buffer fields on the same component survive migrate.
+  // ---------------------------------------------------------------------------
+
+  describe('w16 - combined ref+buffer fields archetype migrate carry-over (AC-04)', () => {
+    it('addComponent migrate: ref handle u32 stays bit-equal AND buffer bytes byte-equal', () => {
+      const Mesh = defineComponent('Mesh', {
+        material: { type: 'unique<MaterialAsset>' },
+        vertices: { type: 'buffer<256>' },
+      });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const store = refsOf(w);
+      const payload = { id: 1 };
+      const h = store.alloc('MaterialAsset', payload);
+      const seed = new Uint8Array(256);
+      fillSequential(seed, 31);
+      const e = w
+        .spawn({
+          component: Mesh,
+          data: {
+            material: h,
+            vertices: seed,
+          },
+        })
+        .unwrap();
+
+      const before = w.get(e, Mesh);
+      if (!before.ok) throw new Error('expected ok get before');
+      const handleBefore = handleNumeric(before.value.material);
+      const bytesSnapshot = new Uint8Array(before.value.vertices);
+
+      w.addComponent(e, { component: Anchor, data: { x: 5 } }).unwrap();
+
+      const after = w.get(e, Mesh);
+      if (!after.ok) throw new Error('expected ok get after');
+      expect(Object.is(handleNumeric(after.value.material), handleBefore)).toBe(true);
+      expect(after.value.vertices.byteLength).toBe(256);
+      expectBytesEqual(after.value.vertices, bytesSnapshot, 256);
+
+      // Resolved payload is still the same object reference.
+      const resolved = store.resolve(after.value.material);
+      if (!resolved.ok) throw new Error('expected resolved');
+      expect(resolved.value).toBe(payload);
+    });
+
+    it('removeComponent migrate: ref+buffer on the surviving component stay carry-over intact', () => {
+      const Mesh = defineComponent('Mesh', {
+        material: { type: 'unique<MaterialAsset>' },
+        vertices: { type: 'buffer<128>' },
+      });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const store = refsOf(w);
+      const payload = { id: 2 };
+      const h = store.alloc('MaterialAsset', payload);
+      const seed = new Uint8Array(128);
+      fillSequential(seed, 47);
+      const e = w
+        .spawn(
+          {
+            component: Mesh,
+            data: {
+              material: h,
+              vertices: seed,
+            },
+          },
+          { component: Anchor, data: { x: 3 } },
+        )
+        .unwrap();
+
+      const before = w.get(e, Mesh);
+      if (!before.ok) throw new Error('expected ok get before');
+      const handleBefore = handleNumeric(before.value.material);
+      const snapshot = new Uint8Array(before.value.vertices);
+
+      w.removeComponent(e, Anchor).unwrap();
+
+      const after = w.get(e, Mesh);
+      if (!after.ok) throw new Error('expected ok get after');
+      expect(Object.is(handleNumeric(after.value.material), handleBefore)).toBe(true);
+      expectBytesEqual(after.value.vertices, snapshot, 128);
+    });
+
+    it('multi-hop migrate keeps ref+buffer carry-over intact end-to-end', () => {
+      const Mesh = defineComponent('Mesh', {
+        material: { type: 'unique<MaterialAsset>' },
+        vertices: { type: 'buffer<64>' },
+      });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const Tag = defineComponent('Tag', { v: { type: 'u32' } });
+      const w = new World();
+      const store = refsOf(w);
+      const payload = { id: 3 };
+      const h = store.alloc('MaterialAsset', payload);
+      const seed = new Uint8Array(64);
+      fillSequential(seed, 53);
+      const e = w
+        .spawn({
+          component: Mesh,
+          data: {
+            material: h,
+            vertices: seed,
+          },
+        })
+        .unwrap();
+
+      const r0 = w.get(e, Mesh);
+      if (!r0.ok) throw new Error('expected r0');
+      const handle0 = handleNumeric(r0.value.material);
+      const snapshot = new Uint8Array(r0.value.vertices);
+
+      // Hop sequence: +Anchor, +Tag, -Anchor, -Tag.
+      w.addComponent(e, { component: Anchor, data: { x: 0 } }).unwrap();
+      w.addComponent(e, { component: Tag, data: { v: 1 } }).unwrap();
+      w.removeComponent(e, Anchor).unwrap();
+      w.removeComponent(e, Tag).unwrap();
+
+      const rN = w.get(e, Mesh);
+      if (!rN.ok) throw new Error('expected rN');
+      expect(Object.is(handleNumeric(rN.value.material), handle0)).toBe(true);
+      expectBytesEqual(rN.value.vertices, snapshot, 64);
+      const resolved = store.resolve(rN.value.material);
+      if (!resolved.ok) throw new Error('expected resolved');
+      expect(resolved.value).toBe(payload);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (d) Negative invariants: migrate does NOT release / realloc / route errors.
+  // ---------------------------------------------------------------------------
+
+  describe('w16 - migrate does not release or route errors (AC-04 negative)', () => {
+    it('addComponent migrate does not call UniqueRefStore.release / BufferPool.release', () => {
+      const Mesh = defineComponent('Mesh', {
+        material: { type: 'unique<MaterialAsset>' },
+        vertices: { type: 'buffer<32>' },
+      });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const store = refsOf(w);
+      const refReleaseSpy = vi.spyOn(UniqueRefStore.prototype, 'release');
+      const bufReleaseSpy = vi.spyOn(BufferPool.prototype, 'release');
+      const h = store.alloc('MaterialAsset', { id: 1 });
+      const seed = new Uint8Array(32);
+      fillSequential(seed, 1);
+      const e = w
+        .spawn({
+          component: Mesh,
+          data: {
+            material: h,
+            vertices: seed,
+          },
+        })
+        .unwrap();
+
+      // Reset call counts to ignore any release calls made during alloc/setup.
+      refReleaseSpy.mockClear();
+      bufReleaseSpy.mockClear();
+
+      w.addComponent(e, { component: Anchor, data: { x: 1 } }).unwrap();
+
+      expect(refReleaseSpy).not.toHaveBeenCalled();
+      expect(bufReleaseSpy).not.toHaveBeenCalled();
+    });
+
+    it('removeComponent migrate of an unrelated component does not release the survivor managed slots', () => {
+      const Mesh = defineComponent('Mesh', {
+        material: { type: 'unique<MaterialAsset>' },
+        vertices: { type: 'buffer<32>' },
+      });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const store = refsOf(w);
+      const h = store.alloc('MaterialAsset', { id: 1 });
+      const seed = new Uint8Array(32);
+      fillSequential(seed, 17);
+      const e = w
+        .spawn(
+          {
+            component: Mesh,
+            data: {
+              material: h,
+              vertices: seed,
+            },
+          },
+          { component: Anchor, data: { x: 0 } },
+        )
+        .unwrap();
+
+      const refReleaseSpy = vi.spyOn(UniqueRefStore.prototype, 'release');
+      const bufReleaseSpy = vi.spyOn(BufferPool.prototype, 'release');
+
+      // Remove Anchor (no managed fields). Mesh's material + vertices must NOT
+      // be released - they survive the migrate.
+      w.removeComponent(e, Anchor).unwrap();
+
+      expect(refReleaseSpy).not.toHaveBeenCalled();
+      expect(bufReleaseSpy).not.toHaveBeenCalled();
+
+      // The handle still resolves and the bytes are still readable.
+      const after = w.get(e, Mesh);
+      if (!after.ok) throw new Error('expected ok get after');
+      const resolved = store.resolve(after.value.material);
+      expect(resolved.ok).toBe(true);
+      expect(after.value.vertices.byteLength).toBe(32);
+    });
+
+    it('migrate does not route any error through the Layer 3 ErrorHandler', () => {
+      const Mesh = defineComponent('Mesh', {
+        material: { type: 'unique<MaterialAsset>' },
+        vertices: { type: 'buffer<32>' },
+      });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const Tag = defineComponent('Tag', { v: { type: 'u32' } });
+      const w = new World();
+      const store = refsOf(w);
+      let handlerCalls = 0;
+      w.setErrorHandler(() => {
+        handlerCalls++;
+      });
+      const h = store.alloc('MaterialAsset', { id: 1 });
+      const seed = new Uint8Array(32);
+      fillSequential(seed, 23);
+      const e = w
+        .spawn({
+          component: Mesh,
+          data: {
+            material: h,
+            vertices: seed,
+          },
+        })
+        .unwrap();
+
+      w.addComponent(e, { component: Anchor, data: { x: 0 } }).unwrap();
+      w.addComponent(e, { component: Tag, data: { v: 1 } }).unwrap();
+      w.removeComponent(e, Anchor).unwrap();
+
+      expect(handlerCalls).toBe(0);
+    });
+  });
+}
+{
+  // --- from managed-release.test.ts ---
+  function refsOf(w: World): UniqueRefStore {
+    return (w as unknown as { uniqueRefs: UniqueRefStore }).uniqueRefs;
+  }
+
+  // ---------------------------------------------------------------------------
+  // (a) UniqueRefStore unit-level invariants (covers w7 acceptance).
+  // ---------------------------------------------------------------------------
+
+  describe('w6 - UniqueRefStore unit invariants', () => {
+    it('alloc returns a frozen plain-object handle wrapper', () => {
+      const w = new World();
+      const store = refsOf(w);
+      const h = store.alloc('MaterialAsset', { id: 7 });
+      // Wrapper is frozen (D-3 charter: immutable identity).
+      expect(Object.isFrozen(h)).toBe(true);
+    });
+
+    it('resolve(h) on a live handle returns ok(payload)', () => {
+      const w = new World();
+      const store = refsOf(w);
+      const h = store.alloc<'MaterialAsset', { id: number }>('MaterialAsset', { id: 42 });
+      const r = store.resolve<'MaterialAsset', { id: number }>(h);
+      if (!r.ok) throw new Error('expected ok');
+      expect(r.value.id).toBe(42);
+    });
+
+    it('resolve(h) after release returns err(unique-ref-released)', () => {
+      const w = new World();
+      const store = refsOf(w);
+      const h = store.alloc('MaterialAsset', { id: 1 });
+      store.release(h).unwrap();
+      const r = store.resolve(h);
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error('expected err');
+      expect(r.error.code).toBe('unique-ref-released');
+    });
+
+    it('release(h) twice surfaces unique-ref-double-release', () => {
+      const w = new World();
+      const store = refsOf(w);
+      const h = store.alloc('MaterialAsset', { id: 1 });
+      store.release(h).unwrap();
+      const r = store.release(h);
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error('expected err');
+      expect(r.error.code).toBe('unique-ref-double-release');
+    });
+
+    it('AC-04 prelude: alloc returns per-(slot,gen) singleton identity (Object.is)', () => {
+      // D-3: each alloc produces a unique frozen wrapper; the same wrapper is
+      // strongly referenced by the store's Map until release. Any mid-life
+      // resolve of the same handle must return the same object reference (this
+      // probes the "(slot, gen) singleton" invariant prior to archetype migrate
+      // carry-over in M4 — the store does NOT swap wrapper identity on resolve).
+      const w = new World();
+      const store = refsOf(w);
+      const h = store.alloc('MaterialAsset', { id: 1 });
+      const r1 = store.resolve(h);
+      const r2 = store.resolve(h);
+      if (!r1.ok || !r2.ok) throw new Error('expected ok x2');
+      expect(Object.is(r1.value, r2.value)).toBe(true);
+    });
+
+    it('release of distinct handles is independent (refcount per-slot, not global)', () => {
+      const w = new World();
+      const store = refsOf(w);
+      const a = store.alloc<'MaterialAsset', { id: number }>('MaterialAsset', { id: 1 });
+      const b = store.alloc<'MaterialAsset', { id: number }>('MaterialAsset', { id: 2 });
+      store.release(a).unwrap();
+      // b stays live.
+      const rb = store.resolve<'MaterialAsset', { id: number }>(b);
+      if (!rb.ok) throw new Error('expected b live');
+      expect(rb.value.id).toBe(2);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (b) World release loop integration tests (AC-03 - 3 paths).
+  // ---------------------------------------------------------------------------
+
+  describe('w6 - World ref<T> field release loop', () => {
+    it('world.despawn(e) releases ref<T> field handle (path 1)', () => {
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
+      const w = new World();
+      const store = refsOf(w);
+      const h = store.alloc('MaterialAsset', { id: 7 });
+      const e = w
+        .spawn({
+          component: Mat,
+          data: { handle: h },
+        })
+        .unwrap();
+      w.despawn(e).unwrap();
+      const r = store.resolve(h);
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error('expected released');
+      expect(r.error.code).toBe('unique-ref-released');
+    });
+
+    it('world.removeComponent(e, C) releases ref<T> field handle (path 2)', () => {
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const store = refsOf(w);
+      const h = store.alloc('MaterialAsset', { id: 7 });
+      const e = w
+        .spawn(
+          {
+            component: Mat,
+            data: { handle: h },
+          },
+          { component: Anchor, data: { x: 0 } },
+        )
+        .unwrap();
+      w.removeComponent(e, Mat).unwrap();
+      const r = store.resolve(h);
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error('expected released');
+      expect(r.error.code).toBe('unique-ref-released');
+    });
+
+    it('world.set(e, C, { handle: newHandle }) releases the prior handle (path 3)', () => {
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
+      const w = new World();
+      const store = refsOf(w);
+      const oldH = store.alloc('MaterialAsset', { id: 1 });
+      const newH = store.alloc('MaterialAsset', { id: 2 });
+      const e = w
+        .spawn({
+          component: Mat,
+          data: { handle: oldH },
+        })
+        .unwrap();
+      w.set(e, Mat, {
+        handle: newH,
+      }).unwrap();
+      const rOld = store.resolve(oldH);
+      expect(rOld.ok).toBe(false);
+      if (rOld.ok) throw new Error('expected old released');
+      expect(rOld.error.code).toBe('unique-ref-released');
+      const rNew = store.resolve(newH);
+      expect(rNew.ok).toBe(true);
+    });
+
+    it('null ref<T> field on spawn does not call release on despawn (boundary)', () => {
+      // Boundary case: ref<T> field can hold null; despawn must not attempt to
+      // release a null slot (would surface as unique-ref-double-release noise).
+      // We probe by giving the World an ErrorHandler that throws on any call -
+      // a clean despawn means no release happened.
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
+      const w = new World();
+      let handlerCalls = 0;
+      w.setErrorHandler(() => {
+        handlerCalls++;
+      });
+      // Use 0 as the "null/unset" sentinel encoded as a managed handle. The
+      // store's release path must short-circuit on this sentinel - documented
+      // by D-3 (the wrapper for slot 0 is never allocated, so resolve returns
+      // err but world's release loop must skip it without escalating).
+      const sentinel = 0 as Handle<'MaterialAsset', 'unique'>;
+      const e = w.spawn({ component: Mat, data: { handle: sentinel } }).unwrap();
+      w.despawn(e).unwrap();
+      expect(handlerCalls).toBe(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (c) w9 - Layer 3 ErrorHandler routing on release failure (AC-05).
+  // ---------------------------------------------------------------------------
+
+  interface CapturedCall {
+    readonly error: unknown;
+    readonly context: ErrorContext;
+  }
+
+  describe('w9 - release failure routes through Layer 3 ErrorHandler', () => {
+    it('manual release + World.despawn -> ErrorHandler captures unique-ref-double-release', () => {
+      // Real World-driven double release: AI user calls store.release(h)
+      // themselves, then despawns the holder entity. The column still
+      // carries the u32 handle, so World.despawn -> release(h) returns
+      // err(unique-ref-double-release) which routes to Layer 3.
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
+      const w = new World();
+      const store = refsOf(w);
+      const captured: CapturedCall[] = [];
+      w.setErrorHandler((error, context) => {
+        captured.push({ error, context });
+      });
+      const h = store.alloc('MaterialAsset', { id: 1 });
+      const e = w
+        .spawn({
+          component: Mat,
+          data: { handle: h },
+        })
+        .unwrap();
+      // Drop the handle out from under the World.
+      store.release(h).unwrap();
+      // Despawn must not throw - the chain continues despite release err.
+      expect(() => w.despawn(e).unwrap()).not.toThrow();
+      expect(captured).toHaveLength(1);
+      const c0 = captured[0];
+      if (c0 === undefined) throw new Error('expected captured');
+      // {code, hint, expected, detail} contract (AC-05).
+      expect(c0.error).toBeInstanceOf(UniqueRefDoubleReleaseError);
+      const errClass = c0.error as UniqueRefDoubleReleaseError;
+      expect(errClass.code).toBe('unique-ref-double-release');
+      expect(errClass.hint.length).toBeGreaterThan(0);
+      expect(errClass.expected.length).toBeGreaterThan(0);
+      expect(errClass.detail.handle).toBe(handleNumeric(h));
+      expect(errClass.detail.target).toBe('<unknown>');
+      // ErrorContext shape (severity=Error -> chain continues, not Panic).
+      expect(c0.context.severity).toBe(Severity.Error);
+      // feat-20260614 M2 D-2: release-dispatch is one SSOT helper, so the
+      // systemName collapses to a uniform 'World.release (component.field)'
+      // label across despawn / removeComponent / set paths.
+      expect(c0.context.systemName).toContain('World.release');
+      expect(c0.context.systemName).toContain('Mat.handle');
+    });
+
+    it('release loop never aborts despawn chain on multi-component entity (AC-05)', () => {
+      // Multi-component entity: Mat (with managed ref) + Anchor. After
+      // manual store.release(h), World.despawn surfaces the err on Mat.handle
+      // through the ErrorHandler but continues - the entity is fully
+      // removed (Anchor's path runs untouched).
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const store = refsOf(w);
+      const handlerErrors: unknown[] = [];
+      w.setErrorHandler((error) => {
+        handlerErrors.push(error);
+      });
+      const h = store.alloc('MaterialAsset', { id: 1 });
+      const e = w
+        .spawn(
+          {
+            component: Mat,
+            data: { handle: h },
+          },
+          { component: Anchor, data: { x: 42 } },
+        )
+        .unwrap();
+      store.release(h).unwrap();
+      expect(() => w.despawn(e).unwrap()).not.toThrow();
+      // Subsequent get on the despawned entity returns stale-entity err -
+      // confirms the chain completed despite mid-loop release failure.
+      const r = w.get(e, Anchor);
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error('expected stale');
+      expect(r.error.code).toBe('stale-entity');
+      // One double-release surface for Mat.handle, no extra noise.
+      expect(handlerErrors).toHaveLength(1);
+      expect(handlerErrors[0]).toBeInstanceOf(UniqueRefDoubleReleaseError);
+    });
+
+    it('removeComponent path also routes double-release through ErrorHandler', () => {
+      // Mirror of the despawn case but for the removeComponent path.
+      const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const store = refsOf(w);
+      const captured: CapturedCall[] = [];
+      w.setErrorHandler((error, context) => {
+        captured.push({ error, context });
+      });
+      const h = store.alloc('MaterialAsset', { id: 1 });
+      const e = w
+        .spawn(
+          {
+            component: Mat,
+            data: { handle: h },
+          },
+          { component: Anchor, data: { x: 0 } },
+        )
+        .unwrap();
+      store.release(h).unwrap();
+      expect(() => w.removeComponent(e, Mat).unwrap()).not.toThrow();
+      expect(captured).toHaveLength(1);
+      const c0 = captured[0];
+      if (c0 === undefined) throw new Error('expected captured');
+      expect((c0.error as UniqueRefDoubleReleaseError).code).toBe('unique-ref-double-release');
+      // feat-20260614 M2 D-2: SSOT release-dispatch -> uniform systemName.
+      expect(c0.context.systemName).toContain('World.release');
+      expect(c0.context.systemName).toContain('Mat.handle');
+    });
+
+    it('UniqueRefReleasedError carries the {code, hint, expected, detail} contract', () => {
+      // AC-05 shape lock: even though the World M1 release loop does not
+      // surface 'unique-ref-released' (resolve is the read path, not the
+      // release path), the error class carries the same structured payload
+      // as 'unique-ref-double-release' so AI users get a uniform exhaustive
+      // switch on the union.
+      const w = new World();
+      const store = refsOf(w);
+      const h = store.alloc('MaterialAsset', { id: 1 });
+      store.release(h).unwrap();
+      const r = store.resolve(h);
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error('expected released');
+      const e: UniqueRefReleasedError = r.error;
+      expect(e.code).toBe('unique-ref-released');
+      expect(e.hint.length).toBeGreaterThan(0);
+      expect(e.expected.length).toBeGreaterThan(0);
+      expect(typeof e.detail.handle).toBe('number');
+      expect(typeof e.detail.target).toBe('string');
+    });
+  });
+}
+{
+  // --- from register-inspector.test.ts ---
+  class FakeRegistry implements Registry {
+    readonly rootCalls: Array<{ name: string }> = [];
+    readonly methodCalls: Array<{ method: string; handler: Handler }> = [];
+    private readonly roots = new Set<string>();
+    private readonly methods = new Set<string>();
+
+    registerRoot(name: string, root: unknown): RegisterRootResult {
+      this.rootCalls.push({ name });
+      if (this.roots.has(name)) {
+        return {
+          ok: false,
+          error: makeDuplicateError(`root "${name}" not yet registered`, name),
+        };
+      }
+      this.roots.add(name);
+      void root;
+      return { ok: true, value: undefined };
+    }
+
+    registerMethod(method: string, handler: Handler): RegisterMethodResult {
+      this.methodCalls.push({ method, handler });
+      if (this.methods.has(method)) {
+        return {
+          ok: false,
+          error: makeDuplicateError(`method "${method}" not yet registered`, method),
+        };
+      }
+      this.methods.add(method);
+      return { ok: true, value: undefined };
+    }
+
+    lookupRoot(name: string): unknown {
+      return this.roots.has(name) ? {} : undefined;
+    }
+
+    lookupMethod(method: string): Handler | undefined {
+      void method;
+      return undefined;
+    }
+    // feat-20260517 D-5 stub — ECS plugin assembly is M2 w14; M1 keeps the
+    // FakeRegistry tsc-compatible by returning empty merged set.
+    registerMutatingMethods(): RegisterRootResult {
+      return { ok: true, value: undefined };
+    }
+    lookupMutatingMethods(): ReadonlySet<string> {
+      return EMPTY_MUTATING_METHODS;
+    }
+  }
+
+  const EMPTY_MUTATING_METHODS: ReadonlySet<string> = new Set<string>();
+
+  function makeDuplicateError(expected: string, name: string): InspectorErrorShape {
+    return Object.assign(new Error('Console startup failed'), {
+      code: 'console-startup-failed' as const,
+      expected,
+      hint: `call registerEcsInspector at most once per Registry instance (duplicate on "${name}")`,
+    });
+  }
+
+  describe('registerEcsInspector — purity (AC-10)', () => {
+    it('importing @forgeax/engine-ecs does not call registerRoot / registerMethod', async () => {
+      const reg = new FakeRegistry();
+      // Dynamic import to mirror real-world consumers; pure top-level functions
+      // must NOT call reg.* during import resolution.
+      const mod = await import('../index');
+      expect(reg.rootCalls).toHaveLength(0);
+      expect(reg.methodCalls).toHaveLength(0);
+      // Sanity: registerEcsInspector is exported (plan-strategy §3.1
+      // contributor symbol).
+      expect(typeof mod.registerEcsInspector).toBe('function');
+    });
+  });
+
+  describe('registerEcsInspector — happy path', () => {
+    it('registers entities / components / systems / resources methods', async () => {
+      const { registerEcsInspector } = await import('../index');
+      const reg = new FakeRegistry();
+      const world = new World();
+      const result = registerEcsInspector(reg, world);
+      expect(result.ok).toBe(true);
+      const methodNames = reg.methodCalls.map((c) => c.method);
+      expect(methodNames).toEqual(['entities', 'components', 'systems', 'resources']);
+    });
+
+    it('handlers return shapes compatible with world.inspect() consumers', async () => {
+      const { registerEcsInspector } = await import('../index');
+      const reg = new FakeRegistry();
+      const world = new World();
+      registerEcsInspector(reg, world);
+      const byName = new Map<string, Handler>(reg.methodCalls.map((c) => [c.method, c.handler]));
+      // The four handlers must each return an object derived from
+      // world.inspect(). We assert the shape minimally (AC-12 byte freeze of
+      // inspect-scripts.ts is checked separately in the console layer).
+      const entities = byName.get('entities')?.(null);
+      expect(entities).toBeTypeOf('object');
+      const components = byName.get('components')?.(null) as { componentCount: number };
+      expect(typeof components.componentCount).toBe('number');
+      const systems = byName.get('systems')?.(null) as { systemCount: number };
+      expect(typeof systems.systemCount).toBe('number');
+      const resources = byName.get('resources')?.(null) as { resourceCount: number };
+      expect(typeof resources.resourceCount).toBe('number');
+    });
+  });
+
+  describe('registerEcsInspector — fail-fast on duplicate (R-REG-CONFLICT)', () => {
+    it('returns Result.err with console-startup-failed on second call', async () => {
+      const { registerEcsInspector } = await import('../index');
+      const reg = new FakeRegistry();
+      const world = new World();
+      const first = registerEcsInspector(reg, world);
+      expect(first.ok).toBe(true);
+      const second = registerEcsInspector(reg, world);
+      expect(second.ok).toBe(false);
+      if (second.ok) throw new Error('unreachable');
+      expect(second.error.code).toBe('console-startup-failed');
+      // Short-circuits on the first duplicate (entities) per plan-strategy
+      // §3.3 error path 1; we do not collect every duplicate.
+      expect(second.error.expected).toContain('entities');
+    });
+  });
+}
+{
+  // --- from resource.test.ts ---
+  describe('insertResource / getResource', () => {
+    it('insertResource stores a value and getResource retrieves it', () => {
+      const world = new World();
+      world.insertResource('time', { delta: 0.016, elapsed: 0 });
+      const time = world.getResource<{ delta: number; elapsed: number }>('time');
+      expect(time).toEqual({ delta: 0.016, elapsed: 0 });
+    });
+
+    it('getResource returns the exact reference (not a copy)', () => {
+      const world = new World();
+      const obj = { count: 0 };
+      world.insertResource('counter', obj);
+      const retrieved = world.getResource<{ count: number }>('counter');
+      expect(retrieved).toBe(obj);
+    });
+
+    it('supports primitive values', () => {
+      const world = new World();
+      world.insertResource('fps', 60);
+      expect(world.getResource<number>('fps')).toBe(60);
+    });
+
+    it('supports string values', () => {
+      const world = new World();
+      world.insertResource('name', 'hello');
+      expect(world.getResource<string>('name')).toBe('hello');
+    });
+  });
+
+  describe('hasResource', () => {
+    it('returns true for existing resource', () => {
+      const world = new World();
+      world.insertResource('exists', 42);
+      expect(world.hasResource('exists')).toBe(true);
+    });
+
+    it('returns false for non-existing resource', () => {
+      const world = new World();
+      expect(world.hasResource('nope')).toBe(false);
+    });
+  });
+
+  describe('removeResource', () => {
+    it('removes an existing resource', () => {
+      const world = new World();
+      world.insertResource('temp', 100);
+      world.removeResource('temp');
+      expect(world.hasResource('temp')).toBe(false);
+    });
+
+    it('getResource after remove throws ResourceNotFoundError', () => {
+      const world = new World();
+      world.insertResource('gone', 1);
+      world.removeResource('gone');
+      expect(() => world.getResource('gone')).toThrow(ResourceNotFoundError);
+    });
+  });
+
+  describe('idempotent overwrite (E-13)', () => {
+    it('insertResource with same key overwrites old value', () => {
+      const world = new World();
+      world.insertResource('data', { v: 1 });
+      world.insertResource('data', { v: 2 });
+      expect(world.getResource<{ v: number }>('data')).toEqual({ v: 2 });
+    });
+
+    it('overwrite is idempotent — double insert same value is fine', () => {
+      const world = new World();
+      world.insertResource('stable', 42);
+      world.insertResource('stable', 42);
+      expect(world.getResource<number>('stable')).toBe(42);
+    });
+  });
+
+  describe('getResource not found (E-14)', () => {
+    it('getResource on non-existing key throws ResourceNotFoundError', () => {
+      const world = new World();
+      expect(() => world.getResource('missing')).toThrow(ResourceNotFoundError);
+    });
+
+    it('ResourceNotFoundError contains key in message', () => {
+      const world = new World();
+      try {
+        world.getResource('myKey');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ResourceNotFoundError);
+        expect((err as ResourceNotFoundError).message).toContain('myKey');
+      }
+    });
+
+    it('ResourceNotFoundError has hint property', () => {
+      const world = new World();
+      try {
+        world.getResource('foo');
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ResourceNotFoundError);
+        expect((err as ResourceNotFoundError).hint).toContain('insertResource');
+      }
+    });
+  });
+}
+{
+  // --- from schedule-remove-replace.test.ts ---
+  describe('schedule.removeSystem (AC-04)', () => {
+    it('removes a registered system; world.inspect() no longer lists it', () => {
+      const world = new World();
+      world.addSystem({ name: 'sysA', queries: [], fn: () => {} });
+      world.addSystem({ name: 'sysB', queries: [], fn: () => {} });
+
+      const r = world.removeSystem('sysA');
+      expect(r.ok).toBe(true);
+
+      const snap = world.inspect();
+      const names = snap.systems.map((s) => s.name);
+      expect(names).not.toContain('sysA');
+      expect(names).toContain('sysB');
+    });
+
+    it('returns Result.err with code system-before-unknown when name does not exist', () => {
+      const world = new World();
+      world.addSystem({ name: 'sysA', queries: [], fn: () => {} });
+
+      const r = world.removeSystem('nonexistent');
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('system-before-unknown');
+    });
+  });
+
+  describe('schedule.replaceSystem (AC-04)', () => {
+    it('replaces system fn atomically; before/after edges of the slot remain intact', () => {
+      const world = new World();
+      const log: string[] = [];
+
+      world.addSystem({ name: 'sysA', queries: [], fn: () => log.push('A-old') });
+      world.addSystem({
+        name: 'sysB',
+        queries: [],
+        fn: () => log.push('B'),
+        after: ['sysA'],
+      });
+
+      const r = world.replaceSystem('sysA', {
+        name: 'sysA',
+        queries: [],
+        fn: () => log.push('A-new'),
+      });
+      expect(r.ok).toBe(true);
+
+      world.update();
+      expect(log).toEqual(['A-new', 'B']);
+      expect(log.indexOf('A-new')).toBeLessThan(log.indexOf('B'));
+    });
+
+    it('returns Result.err with code system-before-unknown when target name not registered', () => {
+      const world = new World();
+
+      const r = world.replaceSystem('nonexistent', {
+        name: 'nonexistent',
+        queries: [],
+        fn: () => {},
+      });
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('system-before-unknown');
+    });
+  });
+}
+{
+  // --- from schedule.test.ts ---
+  describe('System registration (AC-11)', () => {
+    it('world.addSystem registers a system with query descriptor', () => {
+      const world = new World();
+      const Pos = defineComponent('SchedPos', { x: { type: 'f32' }, y: { type: 'f32' } });
+      const log: string[] = [];
+
+      world.addSystem({
+        name: 'movement',
+        queries: [{ with: [Pos] }],
+        fn: () => {
+          log.push('movement');
+        },
+      });
+
+      world.update();
+      expect(log).toEqual(['movement']);
+    });
+
+    it('system receives query results and commands', () => {
+      const world = new World();
+      const Pos = defineComponent('SysQPos', { x: { type: 'f32' }, y: { type: 'f32' } });
+      world.spawn({ component: Pos, data: { x: 1, y: 2 } });
+
+      let receivedBundleCount = 0;
+
+      world.addSystem({
+        name: 'reader',
+        queries: [{ with: [Pos, Entity] }],
+        fn: (_world, queryResults, _commands) => {
+          // queryResults is an array of callback-based query runners
+          for (const result of queryResults) {
+            for (const bundle of result) {
+              receivedBundleCount += bundle.Entity.self.length;
+            }
+          }
+        },
+      });
+
+      world.update();
+      expect(receivedBundleCount).toBe(1);
+    });
+  });
+
+  describe('before/after constraints (AC-12)', () => {
+    it('after constraint ensures system runs after specified system', () => {
+      const world = new World();
+      const log: string[] = [];
+
+      world.addSystem({
+        name: 'sysA',
+        queries: [],
+        fn: () => log.push('A'),
+      });
+
+      world.addSystem({
+        name: 'sysB',
+        queries: [],
+        fn: () => log.push('B'),
+        after: ['sysA'],
+      });
+
+      world.update();
+      expect(log.indexOf('A')).toBeLessThan(log.indexOf('B'));
+    });
+
+    it('before constraint ensures system runs before specified system', () => {
+      const world = new World();
+      const log: string[] = [];
+
+      // Register B first, then A with before: ['sysB']
+      world.addSystem({
+        name: 'sysB',
+        queries: [],
+        fn: () => log.push('B'),
+      });
+
+      world.addSystem({
+        name: 'sysA',
+        queries: [],
+        fn: () => log.push('A'),
+        before: ['sysB'],
+      });
+
+      world.update();
+      expect(log.indexOf('A')).toBeLessThan(log.indexOf('B'));
+    });
+
+    it('complex DAG: A -> B -> D, A -> C -> D', () => {
+      const world = new World();
+      const log: string[] = [];
+
+      world.addSystem({
+        name: 'A',
+        queries: [],
+        fn: () => log.push('A'),
+      });
+
+      world.addSystem({
+        name: 'B',
+        queries: [],
+        fn: () => log.push('B'),
+        after: ['A'],
+        before: ['D'],
+      });
+
+      world.addSystem({
+        name: 'C',
+        queries: [],
+        fn: () => log.push('C'),
+        after: ['A'],
+        before: ['D'],
+      });
+
+      world.addSystem({
+        name: 'D',
+        queries: [],
+        fn: () => log.push('D'),
+      });
+
+      world.update();
+
+      // A must come first, D must come last
+      expect(log[0]).toBe('A');
+      expect(log[3]).toBe('D');
+      // B and C are between A and D — order determined by registration order
+      expect(log[1]).toBe('B');
+      expect(log[2]).toBe('C');
+    });
+  });
+
+  describe('Registration order tie-breaker (AC-13)', () => {
+    it('systems with no ordering constraints run in registration order', () => {
+      const world = new World();
+      const log: string[] = [];
+
+      world.addSystem({ name: 'first', queries: [], fn: () => log.push('first') });
+      world.addSystem({ name: 'second', queries: [], fn: () => log.push('second') });
+      world.addSystem({ name: 'third', queries: [], fn: () => log.push('third') });
+
+      world.update();
+      expect(log).toEqual(['first', 'second', 'third']);
+    });
+
+    it('tie-breaker applies within same topological level', () => {
+      const world = new World();
+      const log: string[] = [];
+
+      world.addSystem({ name: 'root', queries: [], fn: () => log.push('root') });
+      // Three systems all after 'root', no order among themselves
+      world.addSystem({
+        name: 'childC',
+        queries: [],
+        fn: () => log.push('childC'),
+        after: ['root'],
+      });
+      world.addSystem({
+        name: 'childA',
+        queries: [],
+        fn: () => log.push('childA'),
+        after: ['root'],
+      });
+      world.addSystem({
+        name: 'childB',
+        queries: [],
+        fn: () => log.push('childB'),
+        after: ['root'],
+      });
+
+      world.update();
+      expect(log[0]).toBe('root');
+      // After root: childC, childA, childB — by registration order
+      expect(log.slice(1)).toEqual(['childC', 'childA', 'childB']);
+    });
+  });
+
+  describe('DAG cyclic dependency (E-07)', () => {
+    it('cyclic dependency throws CyclicDependencyError', () => {
+      const world = new World();
+
+      world.addSystem({ name: 'A', queries: [], fn: () => {}, after: ['C'] });
+      world.addSystem({ name: 'B', queries: [], fn: () => {}, after: ['A'] });
+      world.addSystem({ name: 'C', queries: [], fn: () => {}, after: ['B'] });
+
+      expect(() => world.update()).toThrow(CyclicDependencyError);
+    });
+
+    it('CyclicDependencyError message contains cycle path', () => {
+      const world = new World();
+
+      world.addSystem({ name: 'X', queries: [], fn: () => {}, after: ['Z'] });
+      world.addSystem({ name: 'Y', queries: [], fn: () => {}, after: ['X'] });
+      world.addSystem({ name: 'Z', queries: [], fn: () => {}, after: ['Y'] });
+
+      try {
+        world.update();
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(CyclicDependencyError);
+        const msg = (err as CyclicDependencyError).message;
+        // Message should contain system names from the cycle
+        expect(msg).toMatch(/X/);
+        expect(msg).toMatch(/Y/);
+        expect(msg).toMatch(/Z/);
+      }
+    });
+
+    it('partial cycle: some systems are outside the cycle', () => {
+      const world = new World();
+      const log: string[] = [];
+
+      // Linear chain: free1 → free2 (no cycle)
+      world.addSystem({ name: 'free1', queries: [], fn: () => log.push('free1') });
+      world.addSystem({
+        name: 'free2',
+        queries: [],
+        fn: () => log.push('free2'),
+        after: ['free1'],
+      });
+
+      // Cycle: cyc1 → cyc2 → cyc1
+      world.addSystem({ name: 'cyc1', queries: [], fn: () => {}, after: ['cyc2'] });
+      world.addSystem({ name: 'cyc2', queries: [], fn: () => {}, after: ['cyc1'] });
+
+      expect(() => world.update()).toThrow(CyclicDependencyError);
+    });
+
+    it('4-node cycle: A→B→C→D→A with an uncycled system E', () => {
+      const world = new World();
+
+      world.addSystem({ name: 'E', queries: [], fn: () => {} });
+      world.addSystem({ name: 'A', queries: [], fn: () => {}, after: ['D'] });
+      world.addSystem({ name: 'B', queries: [], fn: () => {}, after: ['A'] });
+      world.addSystem({ name: 'C', queries: [], fn: () => {}, after: ['B'] });
+      world.addSystem({ name: 'D', queries: [], fn: () => {}, after: ['C'] });
+
+      try {
+        world.update();
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(CyclicDependencyError);
+        const msg = (err as CyclicDependencyError).message;
+        // Cycle involves A, B, C, D
+        expect(msg).toMatch(/A/);
+        expect(msg).toMatch(/B/);
+      }
+    });
+
+    it('before/after referencing unknown systems are silently skipped', () => {
+      const world = new World();
+      const log: string[] = [];
+
+      world.addSystem({
+        name: 'sys1',
+        queries: [],
+        fn: () => log.push('sys1'),
+        after: ['nonexistent'],
+      });
+
+      world.update();
+      expect(log).toEqual(['sys1']);
+    });
+  });
+
+  describe('Empty World update (E-09)', () => {
+    it('update on empty world completes silently', () => {
+      const world = new World();
+      expect(() => world.update()).not.toThrow();
+    });
+
+    it('update on world with no systems completes silently', () => {
+      const world = new World();
+      const Pos = defineComponent('EmptyUpdatePos', { x: { type: 'f32' } });
+      world.spawn({ component: Pos, data: { x: 1 } });
+      expect(() => world.update()).not.toThrow();
+    });
+  });
+
+  describe('Lazy build', () => {
+    it('addSystem only marks dirty, first update triggers sort', () => {
+      const world = new World();
+      const log: string[] = [];
+
+      world.addSystem({ name: 'A', queries: [], fn: () => log.push('A') });
+      world.addSystem({ name: 'B', queries: [], fn: () => log.push('B'), before: ['A'] });
+
+      // First update builds schedule
+      world.update();
+      expect(log).toEqual(['B', 'A']);
+
+      log.length = 0;
+      // Second update uses cached schedule
+      world.update();
+      expect(log).toEqual(['B', 'A']);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // [w16] Layer 2 ParamValidation tests (red phase — AP-8 Layer 2)
+  // ────────────────────────────────────────────────────────────────────────────
+
+  describe('Layer 2 — ParamValidation (AP-8)', () => {
+    it('query with no matching archetypes → system body still executes (Query is always ok)', () => {
+      const world = new World();
+      const Pos = defineComponent('PVSkipPos', { x: { type: 'f32' } });
+      // No entities spawned — query will match nothing
+
+      let bodyExecuted = false;
+      world.addSystem({
+        name: 'emptyQuerySystem',
+        queries: [{ with: [Pos] }],
+        fn: () => {
+          bodyExecuted = true;
+        },
+      });
+
+      world.update();
+      // Per Bevy Finding 6: Query<D, F> is always Ok (empty is valid).
+      // System body executes; it receives empty query results.
+      // "skipped" path is reserved for future Populated/Single query types.
+      expect(bodyExecuted).toBe(true);
+    });
+
+    it('query with matching archetypes → system body executes (ok)', () => {
+      const world = new World();
+      const Pos = defineComponent('PVOkPos', { x: { type: 'f32' } });
+      world.spawn({ component: Pos, data: { x: 1 } });
+
+      let bodyExecuted = false;
+      world.addSystem({
+        name: 'okSystem',
+        queries: [{ with: [Pos] }],
+        fn: () => {
+          bodyExecuted = true;
+        },
+      });
+
+      world.update();
+      expect(bodyExecuted).toBe(true);
+    });
+
+    it('Resource missing → invalid path (error collected by ErrorHandler)', () => {
+      const world = new World();
+      const errors: unknown[] = [];
+
+      // Set a non-throwing error handler to collect errors
+      world.setErrorHandler((error: unknown) => {
+        errors.push(error);
+      });
+
+      // System that needs a Resource that doesn't exist
+      let bodyExecuted = false;
+      world.addSystem({
+        name: 'resourceSystem',
+        queries: [],
+        resources: ['missingResource'],
+        fn: () => {
+          bodyExecuted = true;
+        },
+      });
+
+      // The system should not execute because the required resource is missing
+      // and the error should be collected by the ErrorHandler
+      world.update();
+      expect(bodyExecuted).toBe(false);
+      expect(errors.length).toBe(1);
+      expect((errors[0] as Error).message).toContain('missingResource');
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // [w18] Layer 3 ErrorHandler + Severity tests (red phase — AP-8 Layer 3)
+  // ────────────────────────────────────────────────────────────────────────────
+
+  describe('Layer 3 — ErrorHandler + Severity (AP-8)', () => {
+    it('Severity enum has 7 levels', () => {
+      expect(Severity.Ignore).toBeDefined();
+      expect(Severity.Trace).toBeDefined();
+      expect(Severity.Debug).toBeDefined();
+      expect(Severity.Info).toBeDefined();
+      expect(Severity.Warning).toBeDefined();
+      expect(Severity.Error).toBeDefined();
+      expect(Severity.Panic).toBeDefined();
+      // 7 distinct values
+      const values = new Set([
+        Severity.Ignore,
+        Severity.Trace,
+        Severity.Debug,
+        Severity.Info,
+        Severity.Warning,
+        Severity.Error,
+        Severity.Panic,
+      ]);
+      expect(values.size).toBe(7);
+    });
+
+    it('matchSeverity: Panic → throws', () => {
+      const testError = new Error('test');
+      expect(() => {
+        matchSeverity(testError, { severity: Severity.Panic, systemName: 'test' });
+      }).toThrow('test');
+    });
+
+    it('matchSeverity: Error → does not throw (logs)', () => {
+      const testError = new Error('test error');
+      // Should not throw — just logs
+      expect(() => {
+        matchSeverity(testError, { severity: Severity.Error, systemName: 'test' });
+      }).not.toThrow();
+    });
+
+    it('matchSeverity: Warning → does not throw', () => {
+      expect(() => {
+        matchSeverity(new Error('w'), { severity: Severity.Warning, systemName: 'test' });
+      }).not.toThrow();
+    });
+
+    it('matchSeverity: Info → does not throw', () => {
+      expect(() => {
+        matchSeverity(new Error('i'), { severity: Severity.Info, systemName: 'test' });
+      }).not.toThrow();
+    });
+
+    it('matchSeverity: Debug → does not throw', () => {
+      expect(() => {
+        matchSeverity(new Error('d'), { severity: Severity.Debug, systemName: 'test' });
+      }).not.toThrow();
+    });
+
+    it('matchSeverity: Trace → does not throw', () => {
+      expect(() => {
+        matchSeverity(new Error('t'), { severity: Severity.Trace, systemName: 'test' });
+      }).not.toThrow();
+    });
+
+    it('matchSeverity: Ignore → silent', () => {
+      const testError = new Error('test');
+      expect(() => {
+        matchSeverity(testError, { severity: Severity.Ignore, systemName: 'test' });
+      }).not.toThrow();
+    });
+
+    it('system fn returning Result.err triggers ErrorHandler', () => {
+      const world = new World();
+      const errors: unknown[] = [];
+
+      // Configure custom error handler
+      world.setErrorHandler((error: unknown, _ctx: unknown) => {
+        errors.push(error);
+      });
+
+      world.addSystem({
+        name: 'failingSystem',
+        queries: [],
+        fn: () => {
+          return err(new Error('system failure'));
+        },
+      });
+
+      world.update();
+      expect(errors.length).toBe(1);
+    });
+
+    it('system fn returning void is treated as ok — ErrorHandler not called', () => {
+      const world = new World();
+      const errors: unknown[] = [];
+
+      world.setErrorHandler((error: unknown, _ctx: unknown) => {
+        errors.push(error);
+      });
+
+      world.addSystem({
+        name: 'voidSystem',
+        queries: [],
+        fn: () => {
+          // returns void — treated as ok
+        },
+      });
+
+      world.update();
+      expect(errors.length).toBe(0);
+    });
+  });
+}
+{
+  // --- from string-carry-over.test.ts ---
+  interface MaterialAsset {
+    readonly tint: number;
+  }
+
+  function refsOf(w: World): UniqueRefStore {
+    return (w as unknown as { uniqueRefs: UniqueRefStore }).uniqueRefs;
+  }
+
+  // ---------------------------------------------------------------------------
+  // (a) addComponent migrate: string `.value` Object.is + string-equal preserved.
+  // ---------------------------------------------------------------------------
+
+  describe('w8 --- string carry-over via addComponent migrate (AC-04)', () => {
+    it('Object.is(pre, post) holds AND pre === post string-equal', () => {
+      const Foo = defineComponent('Foo', { v: { type: 'string' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+
+      const e = w.spawn({ component: Foo, data: { v: 'hello world' } }).unwrap();
+      const pre = w.get(e, Foo).unwrap().v;
+      expect(pre).toBe('hello world');
+
+      w.addComponent(e, { component: Anchor, data: { x: 1 } }).unwrap();
+
+      const post = w.get(e, Foo).unwrap().v;
+      expect(post).toBe(pre);
+      expect(Object.is(pre, post)).toBe(true);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (b) removeComponent migrate: same invariants in the reverse direction.
+  // ---------------------------------------------------------------------------
+
+  describe('w8 --- string carry-over via removeComponent migrate (AC-04)', () => {
+    it('Object.is(pre, post) holds across the reverse migrate', () => {
+      const Foo = defineComponent('Foo', { v: { type: 'string' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+
+      const e = w
+        .spawn(
+          { component: Foo, data: { v: 'archetype migrate' } },
+          { component: Anchor, data: { x: 7 } },
+        )
+        .unwrap();
+      const pre = w.get(e, Foo).unwrap().v;
+
+      w.removeComponent(e, Anchor).unwrap();
+
+      const post = w.get(e, Foo).unwrap().v;
+      expect(post).toBe(pre);
+      expect(Object.is(pre, post)).toBe(true);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (c) Mixed string + ref<T> on the same entity: both stay identity-stable.
+  // ---------------------------------------------------------------------------
+
+  describe('w8 --- mixed string + ref<T> carry-over (AC-04, D-R3 symmetry)', () => {
+    it('addComponent migrate keeps BOTH string identity and ref<T> handle bit-equal', () => {
+      const Mixed = defineComponent('Mixed', {
+        label: { type: 'string' },
+        mat: { type: 'unique<MaterialAsset>' },
+      });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+
+      const refs = refsOf(w);
+      const payload: MaterialAsset = { tint: 0xff00ff };
+      const matHandle = refs.alloc('MaterialAsset', payload);
+
+      const e = w
+        .spawn({
+          component: Mixed,
+          data: {
+            label: 'mixed-entity',
+            mat: matHandle,
+          } as never,
+        })
+        .unwrap();
+
+      const pre = w.get(e, Mixed).unwrap();
+      const labelPre = pre.label;
+      const matPre = handleNumeric(pre.mat);
+
+      w.addComponent(e, { component: Anchor, data: { x: 0 } }).unwrap();
+
+      const post = w.get(e, Mixed).unwrap();
+      const labelPost = post.label;
+      const matPost = handleNumeric(post.mat);
+
+      // (a) String field --- Object.is + value equal across migrate.
+      expect(labelPost).toBe(labelPre);
+      expect(Object.is(labelPre, labelPost)).toBe(true);
+
+      // (b) Ref field --- u32 handle bit-equal AND resolves to the same payload.
+      expect(matPost).toBe(matPre);
+      const resolvedPost = refs.resolve(post.mat);
+      if (!resolvedPost.ok) throw new Error('expected resolved');
+      expect(resolvedPost.value).toBe(payload);
+    });
+  });
+}
+{
+  // --- from string-identity-contract.test.ts ---
+  // Inline `'string'`-field component — the prior `Name` reference moved to
+  // @forgeax/engine-runtime (tweak-20260612-ecs-concept-compression). The ECS
+  // package tests its own `'string'` schema vocab without depending on the
+  // runtime sibling.
+  const StrName = defineComponent('StrName', { value: { type: 'string' } });
+  describe('string field --- identity contract (w5, AC-03)', () => {
+    it('Object.is(read1, read2) === true between consecutive reads with no set', () => {
+      const w = new World();
+      const e = w.spawn({ component: StrName, data: { value: 'Player' } }).unwrap();
+      const got1 = w.get(e, StrName);
+      if (!got1.ok) throw new Error('expected ok');
+      const got2 = w.get(e, StrName);
+      if (!got2.ok) throw new Error('expected ok');
+      // Identity stability: the same reference is returned across reads.
+      expect(Object.is(got1.value.value, got2.value.value)).toBe(true);
+    });
+
+    it('read returns a native JS string (not a wrapper with .get())', () => {
+      const w = new World();
+      const e = w.spawn({ component: StrName, data: { value: 'Hello' } }).unwrap();
+      const got = w.get(e, StrName);
+      if (!got.ok) throw new Error('expected ok');
+      // After w6 the value is a native string; typeof must be 'string'.
+      expect(typeof got.value.value).toBe('string');
+      expect(got.value.value).toBe('Hello');
+    });
+
+    it('set with a different value invalidates prior read identity', () => {
+      // Contract only locks identity BETWEEN reads with no intervening set.
+      // After set, the new read returns a fresh string reference; this test
+      // documents the inverse boundary.
+      const w = new World();
+      const e = w.spawn({ component: StrName, data: { value: 'Player' } }).unwrap();
+      const before = w.get(e, StrName).unwrap().value;
+      w.set(e, StrName, { value: 'Boss' }).unwrap();
+      const after = w.get(e, StrName).unwrap().value;
+      expect(before).toBe('Player');
+      expect(after).toBe('Boss');
+      // No Object.is invariant required across set; values differ.
+      expect(Object.is(before, after)).toBe(false);
+    });
+  });
+}
+{
+  // --- from string-managed-dispatch.test.ts ---
+  interface WorldInternals {
+    uniqueRefs: UniqueRefStore;
+  }
+
+  function getUniqueRefs(w: World): UniqueRefStore {
+    return (w as unknown as WorldInternals).uniqueRefs as UniqueRefStore;
+  }
+
+  // Inline `'string'`-field component for the dispatch tests.
+  const StrName2 = defineComponent('StrName2', { value: { type: 'string' } });
+  describe("w5 - 'string' dispatch via uniqueRefs (AC-05 / AC-13)", () => {
+    it('spawn { StrName2: "Alice" } -> world.get returns native JS string', () => {
+      const w = new World();
+      const e = w.spawn({ component: StrName2, data: { value: 'Alice' } }).unwrap();
+      const got = w.get(e, StrName2);
+      if (!got.ok) throw new Error('expected ok');
+      // After w6 dispatch routes through uniqueRefs.resolve(handle).unwrap()
+      // which yields the native JS string payload --- no .get() wrapper.
+      expect(typeof got.value.value).toBe('string');
+      expect(got.value.value).toBe('Alice');
+    });
+
+    it('set updates the payload; subsequent read returns the new string', () => {
+      const w = new World();
+      const e = w.spawn({ component: StrName2, data: { value: 'Alice' } }).unwrap();
+      w.set(e, StrName2, { value: 'Bob' }).unwrap();
+      const got = w.get(e, StrName2);
+      if (!got.ok) throw new Error('expected ok');
+      expect(got.value.value).toBe('Bob');
+      expect(typeof got.value.value).toBe('string');
+    });
+
+    it('spawn with raw=undefined fallbacks to empty string (AC-06)', () => {
+      const w = new World();
+      // After feat-20260517 / M2 / AC-01, ComponentData<S>.data is
+      // Partial<ShapeOf<S>>, so `data: {}` is a valid call -- the
+      // erased dispatch boundary now lives in `fillComponentDefaults`
+      // and spawn must coerce the missing string field to '' rather
+      // than throw or write a garbage handle.
+      const e = w.spawn({ component: StrName2, data: {} }).unwrap();
+      const got = w.get(e, StrName2);
+      if (!got.ok) throw new Error('expected ok');
+      expect(got.value.value).toBe('');
+    });
+  });
+
+  describe("w5 - mixed 'string' + 'unique<T>' single-arm release (AC-05)", () => {
+    it('despawn(e) releases BOTH the string handle AND the ref<T> handle', () => {
+      // The same isManagedField arm must fan out across BOTH fields. This
+      // test is the load-bearing observable for w6's predicate merge: any
+      // future regression that re-splits string vs ref<T> dispatch would
+      // leave one of the two handles live after despawn.
+      const Mat = defineComponent('Mat', {
+        label: { type: 'string' },
+        handle: { type: 'unique<MaterialAsset>' },
+      });
+      const w = new World();
+      const refs = getUniqueRefs(w);
+      const matH = refs.alloc('MaterialAsset', { id: 7 });
+
+      const e = w
+        .spawn({
+          component: Mat,
+          data: {
+            label: 'mat-7',
+            handle: matH,
+          } as never,
+        })
+        .unwrap();
+
+      // Both fields readable pre-despawn.
+      const got = w.get(e, Mat);
+      if (!got.ok) throw new Error('expected ok');
+      expect(got.value.label).toBe('mat-7');
+
+      // Despawn must release the ref<T> handle (existing AC-05 path).
+      w.despawn(e).unwrap();
+      const resolveMat = refs.resolve(matH);
+      expect(resolveMat.ok).toBe(false);
+      if (resolveMat.ok) throw new Error('expected ref handle released');
+      expect(resolveMat.error.code).toBe('unique-ref-released');
+
+      // The 'string' field's underlying handle must also be released by the
+      // SAME arm. We cannot cheaply observe the internal string-handle, so
+      // the proxy invariant is: after despawn the entity is no longer
+      // readable --- regression in dispatch would either keep the handle
+      // live (no-op release) or throw (separate arm misroute).
+      const reread = w.get(e, Mat);
+      expect(reread.ok).toBe(false);
+    });
+
+    it('removeComponent(e, C) releases BOTH handles on the removed component', () => {
+      const Mat = defineComponent('Mat', {
+        label: { type: 'string' },
+        handle: { type: 'unique<MaterialAsset>' },
+      });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const refs = getUniqueRefs(w);
+      const matH = refs.alloc('MaterialAsset', { id: 11 });
+
+      const e = w
+        .spawn(
+          {
+            component: Mat,
+            data: {
+              label: 'mat-11',
+              handle: matH,
+            } as never,
+          },
+          { component: Anchor, data: { x: 1 } },
+        )
+        .unwrap();
+
+      w.removeComponent(e, Mat).unwrap();
+
+      const resolveMat = refs.resolve(matH);
+      expect(resolveMat.ok).toBe(false);
+      if (resolveMat.ok) throw new Error('expected ref handle released');
+      expect(resolveMat.error.code).toBe('unique-ref-released');
+
+      // Anchor remains; the entity is still alive.
+      const got = w.get(e, Anchor);
+      expect(got.ok).toBe(true);
+    });
+
+    it('set on string field releases the prior payload (path 3)', () => {
+      // Field-overwrite path: the prior string handle must be released
+      // BEFORE the new alloc, mirroring the ref<T> path 3 release-then-alloc
+      // invariant (D-5 net-zero on same-bucket reuse).
+      const StrName3 = defineComponent('StrName3', { value: { type: 'string' } });
+      const w = new World();
+      const refs = getUniqueRefs(w);
+      const before = (refs as unknown as { liveCount?: () => number }).liveCount?.() ?? null;
+
+      const e = w.spawn({ component: StrName3, data: { value: 'first' } }).unwrap();
+      w.set(e, StrName3, { value: 'second' }).unwrap();
+      const got = w.get(e, StrName3);
+      if (!got.ok) throw new Error('expected ok');
+      expect(got.value.value).toBe('second');
+      void before;
+    });
+  });
+}
+{
+  // --- from string-release.test.ts ---
+  function refsOf(w: World): UniqueRefStore {
+    return (w as unknown as { uniqueRefs: UniqueRefStore }).uniqueRefs;
+  }
+
+  // ---------------------------------------------------------------------------
+  // (1) Source-level grep: world.ts has no independent string release call.
+  // ---------------------------------------------------------------------------
+
+  describe('w11 --- world.ts source has no independent string release branch (AC-05)', () => {
+    it('no `releaseString` / `releaseStringField` / `isStringField` symbol in world.ts', () => {
+      const worldSrc = readFileSync(fileURLToPath(new URL('../world.ts', import.meta.url)), 'utf8');
+      expect(worldSrc.includes('releaseString')).toBe(false);
+      expect(worldSrc.includes('releaseStringField')).toBe(false);
+      expect(worldSrc.includes('isStringField')).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (2) Behavioural: mixed string + ref<T> entity drops both in one pass.
+  // ---------------------------------------------------------------------------
+
+  describe('w11 --- mixed string + ref<T> release (AC-05 single-arm dispatch)', () => {
+    it('despawn drops BOTH slots in the same loop pass; _liveCount delta = 2', () => {
+      const Mixed = defineComponent('Mixed', {
+        label: { type: 'string' },
+        mat: { type: 'unique<MaterialAsset>' },
+      });
+      const w = new World();
+      const refs = refsOf(w);
+
+      const matHandle = refs.alloc('MaterialAsset', { tint: 0xff_00_00 });
+      const e = w
+        .spawn({
+          component: Mixed,
+          data: {
+            label: 'mixed-entity',
+            mat: matHandle,
+          } as never,
+        })
+        .unwrap();
+
+      const liveBefore = refs._liveCount();
+      w.despawn(e).unwrap();
+      const liveAfter = refs._liveCount();
+
+      // Net release count: -2 = -1 string handle + -1 ref<T> handle.
+      expect(liveBefore - liveAfter).toBe(2);
+
+      // The ref handle resolves as released (string handle is internally
+      // managed, no caller-visible probe).
+      const r = refs.resolve(matHandle);
+      expect(r.ok).toBe(false);
+      if (r.ok) throw new Error('expected released');
+      expect(r.error.code).toBe('unique-ref-released');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (3) Despawn / removeComponent / set --- string field is released by the
+  // shared isManagedField arm on every World release path.
+  // ---------------------------------------------------------------------------
+
+  describe('w11 --- string release via despawn / removeComponent / set (AC-05)', () => {
+    it('despawn releases the string handle (path 1)', () => {
+      const Foo = defineComponent('Foo', { v: { type: 'string' } });
+      const w = new World();
+      const refs = refsOf(w);
+      const e = w.spawn({ component: Foo, data: { v: 'hello' } }).unwrap();
+      const liveBefore = refs._liveCount();
+      w.despawn(e).unwrap();
+      expect(refs._liveCount()).toBe(liveBefore - 1);
+    });
+
+    it('removeComponent releases the string handle (path 2)', () => {
+      const Foo = defineComponent('Foo', { v: { type: 'string' } });
+      const Anchor = defineComponent('Anchor', { x: { type: 'f32' } });
+      const w = new World();
+      const refs = refsOf(w);
+      const e = w
+        .spawn({ component: Foo, data: { v: 'hello' } }, { component: Anchor, data: { x: 1 } })
+        .unwrap();
+      const liveBefore = refs._liveCount();
+      w.removeComponent(e, Foo).unwrap();
+      expect(refs._liveCount()).toBe(liveBefore - 1);
+    });
+
+    it('set release-then-alloc on the same field produces _liveCount delta 0', () => {
+      const Foo = defineComponent('Foo', { v: { type: 'string' } });
+      const w = new World();
+      const refs = refsOf(w);
+      const e = w.spawn({ component: Foo, data: { v: 'hello' } }).unwrap();
+      const liveBefore = refs._liveCount();
+      w.set(e, Foo, { v: 'world' }).unwrap();
+      // Net change: -1 (release prior) + 1 (alloc new) = 0.
+      expect(refs._liveCount()).toBe(liveBefore);
+      expect(w.get(e, Foo).unwrap().v).toBe('world');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (4) Sibling isolation: despawn on entity A leaves entity B's string intact.
+  // ---------------------------------------------------------------------------
+
+  describe('w11 --- string release sibling isolation', () => {
+    it('despawn on A does not disturb B`s string in the same archetype', () => {
+      const Foo = defineComponent('Foo', { v: { type: 'string' } });
+      const w = new World();
+      const a = w.spawn({ component: Foo, data: { v: 'aaa' } }).unwrap();
+      const b = w.spawn({ component: Foo, data: { v: 'bbb' } }).unwrap();
+
+      w.despawn(a).unwrap();
+
+      const got = w.get(b, Foo);
+      if (!got.ok) throw new Error('expected ok');
+      expect(got.value.v).toBe('bbb');
+    });
+  });
+}

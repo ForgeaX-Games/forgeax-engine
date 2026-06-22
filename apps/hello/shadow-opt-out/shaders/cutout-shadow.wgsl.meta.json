@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "external-asset-package",
+  "importer": "shader",
+  "source": "cutout-shadow.wgsl",
+  "importSettings": {
+    "materialShaderIdentifier": "shadow_opt_out::cutout_shadow"
+  },
+  "subAssets": [
+    {
+      "guid": "019a6b00-8e9d-7d5f-a123-456789abcdef",
+      "sourceIndex": 0,
+      "kind": "material-shader"
+    }
+  ],
+  "paramSchema": [
+    { "name": "baseColor", "type": "color" }
+  ]
+}

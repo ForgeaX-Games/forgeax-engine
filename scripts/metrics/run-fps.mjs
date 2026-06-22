@@ -1,0 +1,342 @@
+#!/usr/bin/env node
+// run-fps.mjs (M5 w23 + M4 T-M4-2) - dedicated fps reporter (separate from run-all.mjs).
+//
+// Per plan-strategy K-11 fps measurement runs in its own CI step (vite preview
+// boot is too slow to fit the 30s budget of run-all.mjs). This script honours
+// that boundary while still writing into the same 2D report tree
+// (report/<package>/fps.json) so render-sticky.mjs can fold fps results into
+// the same sticky comment as the other kinds.
+//
+// Behaviour (charter proposition 4 explicit failure + user q4=A AC-09 reversal):
+//   - exit 0 + report/<package>/fps.json with status='ok' on success.
+//   - exit 1 + status='noisy' / 'unavailable' / 'over' otherwise; stderr 3-section
+//     ('metric-status-not-ok') so PRs fail closed.
+//
+// M4 T-M4-2 / D-6: P95 field + compareKey switch ('p95' | 'median'). hello-
+// triangle keeps median (no compareKey field -> default); apps/parity/
+// instancing-static sets compareKey='p95' to align with AC-09 (P95 >= 60 fps).
+//
+// Usage:
+//   node scripts/metrics/run-fps.mjs [--root <dir>] [--report-dir <dir>] [--app <package-dir>]
+//   --app default = apps/hello/triangle.
+//
+// Reference:
+//   - requirements §AC-05 / §AC-06 / §AC-09
+//   - plan-strategy §K-11 / §4.5 / §D-6
+
+import { spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, resolve } from 'node:path';
+import process from 'node:process';
+import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
+
+// MetricErrorCode mirror — string literals match `packages/types/src/index.ts`
+// `export type MetricErrorCode` SSOT (M1 T-001 + T-002). This fps reporter
+// fires `'metric-status-not-ok'` exclusively (every failure path collapses to
+// the same kind); the 2 parity members 'pixel-parity-threshold-exceeded' /
+// 'pixel-parity-capture-failed' are emitted by `scripts/bench/pixel-parity.mjs`
+// (M2 T-009). The frozen array below is the AI-grep anchor that keeps
+// drift between TS alias and .mjs producer detectable
+// (research Finding 9 §6 g9 checklist item 5).
+/** @type {Readonly<('metric-not-declared' | 'metric-kind-unknown' | 'metric-status-not-ok' | 'metric-schema-malformed' | 'pixel-parity-threshold-exceeded' | 'pixel-parity-capture-failed')[]>} */
+const KNOWN_METRIC_ERROR_CODES = Object.freeze([
+  'metric-not-declared',
+  'metric-kind-unknown',
+  'metric-status-not-ok',
+  'metric-schema-malformed',
+  'pixel-parity-threshold-exceeded',
+  'pixel-parity-capture-failed',
+]);
+void KNOWN_METRIC_ERROR_CODES;
+
+// ----------------------------------------------------------------------------
+// Pure helpers (M4 T-M4-2 / D-6) — exported for unit tests; no side effects.
+// ----------------------------------------------------------------------------
+
+export function median(numbers) {
+  const sorted = [...numbers].sort((a, b) => a - b);
+  if (sorted.length === 0) return 0;
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) return (sorted[mid - 1] + sorted[mid]) / 2;
+  return sorted[mid];
+}
+
+// computeP95: for fps "higher is better" the meaningful percentile is the
+// lowest 5% — the worst-case frames a user actually feels during the sampled
+// window. Formula: ascending sort + floor(n * 0.05). floor (not ceil): for the
+// canonical 5-sample setup floor(0.25)=0 picks the single worst sample; ceil
+// would point past index 0 and dilute the signal. Empty input returns 0
+// (matches median() sentinel; production main() guards length before calling).
+export function computeP95(numbers) {
+  if (numbers.length === 0) return 0;
+  const sorted = [...numbers].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length * 0.05)];
+}
+
+// resolveFpsStatus: pure-function status decision so the compareKey switch is
+// unit-testable without spawning vite preview.
+//   - no valid samples           -> 'unavailable'
+//   - lost samples vs sampleCount -> 'noisy' (frame error during run)
+//   - threshold null/undefined    -> 'ok' (no baseline yet, e.g. hello-triangle)
+//   - compareKey='median' + median<threshold -> 'noisy'
+//   - compareKey='p95'    + p95<threshold    -> 'noisy'
+//   - else                        -> 'ok'
+// 'metric-status-not-ok' is fired by main() whenever status !== 'ok' (charter
+// proposition 4 explicit failure; existing behaviour preserved).
+export function resolveFpsStatus({ samples, sampleCount, threshold, compareKey }) {
+  if (samples.length === 0) return 'unavailable';
+  if (samples.length < sampleCount) return 'noisy';
+  if (threshold === null || threshold === undefined) return 'ok';
+  const stat = compareKey === 'p95' ? computeP95(samples) : median(samples);
+  return stat < threshold ? 'noisy' : 'ok';
+}
+
+// ----------------------------------------------------------------------------
+// CLI entry — gated so `import { computeP95, ... }` from tests does not boot
+// vite preview. The check `import.meta.url === url.pathToFileURL(argv[1]).href`
+// matches when this file is invoked directly via `node run-fps.mjs ...`.
+// ----------------------------------------------------------------------------
+
+const isCliEntry = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    const entryUrl = new URL(`file://${process.argv[1]}`).href;
+    return import.meta.url === entryUrl;
+  } catch {
+    return false;
+  }
+})();
+
+if (isCliEntry) {
+  await runFpsCli();
+}
+
+async function runFpsCli() {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const defaultRepoRoot = resolve(here, '..', '..');
+
+  const argv = process.argv.slice(2);
+  const args = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--root' && argv[i + 1]) args.root = argv[++i];
+    else if (a === '--report-dir' && argv[i + 1]) args.reportDir = argv[++i];
+    else if (a === '--app' && argv[i + 1]) args.app = argv[++i];
+  }
+
+  const root = resolve(args.root ?? defaultRepoRoot);
+  const reportDir = resolve(args.reportDir ?? `${root}/report`);
+  const appDir = resolve(root, args.app ?? 'apps/hello/triangle');
+
+  const pkgJson = JSON.parse(readFileSync(`${appDir}/package.json`, 'utf8'));
+  const pkgShortName = (pkgJson.name ?? 'app').replace(/^@[^/]+\//, '');
+  const fpsDecl = pkgJson?.forgeax?.metrics?.fps ?? null;
+  if (!fpsDecl || fpsDecl.enabled !== true) {
+    process.stdout.write(
+      `[ok] fps disabled for ${pkgShortName} (forgeax.metrics.fps.enabled=false), nothing to do\n`,
+    );
+    process.exit(0);
+  }
+
+  const sampleCount = Number.parseInt(
+    process.env.FPS_SAMPLE_COUNT ?? String(fpsDecl.sampleCount ?? 5),
+    10,
+  );
+  const framesPerSample = Number.parseInt(
+    process.env.FPS_FRAMES_PER_SAMPLE ?? String(fpsDecl.frameCount ?? 120),
+    10,
+  );
+  const previewPort = Number.parseInt(process.env.PREVIEW_PORT ?? '4174', 10);
+  const previewHost = process.env.PREVIEW_HOST ?? '127.0.0.1';
+  const previewUrl = `http://${previewHost}:${previewPort}/`;
+  const threshold = fpsDecl.baseline?.threshold ?? null;
+  const compareKey = fpsDecl.compareKey === 'p95' ? 'p95' : 'median';
+
+  function failStructured(code, expected, hint) {
+    process.stderr.write(
+      `[reason] ${code}: ${expected}\n[rerun]  pnpm metrics:run\n[hint]   ${hint}\n`,
+    );
+    process.exit(1);
+  }
+
+  function writeReport(report) {
+    const outDir = resolve(reportDir, pkgShortName);
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(resolve(outDir, 'fps.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  }
+
+  function buildEntry(status, value, samples, message, extras = {}) {
+    const entry = {
+      package: pkgShortName,
+      member: `apps/${pkgShortName}`,
+      kind: 'fps',
+      enabled: true,
+      status,
+      value,
+      threshold,
+      details: { sampleCount, frameCount: framesPerSample, samples, compareKey, ...extras },
+    };
+    if (message) entry.details.message = message;
+    return entry;
+  }
+
+  const preview = spawn(
+    'pnpm',
+    [
+      'exec',
+      'vite',
+      'preview',
+      '--host',
+      previewHost,
+      '--port',
+      String(previewPort),
+      '--strictPort',
+    ],
+    { cwd: appDir, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+
+  let previewKilled = false;
+  const killPreview = () => {
+    if (previewKilled) return;
+    previewKilled = true;
+    try {
+      preview.kill('SIGTERM');
+    } catch {
+      /* ignore */
+    }
+  };
+  process.on('exit', killPreview);
+  process.on('SIGINT', () => {
+    killPreview();
+    process.exit(130);
+  });
+
+  preview.stdout.on('data', (chunk) => process.stdout.write(`[preview:stdout] ${chunk}`));
+  preview.stderr.on('data', (chunk) => process.stderr.write(`[preview:stderr] ${chunk}`));
+
+  async function waitForPreview(timeoutMs = 15000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const res = await fetch(previewUrl);
+        if (res.ok) return;
+      } catch {
+        /* not ready yet */
+      }
+      await delay(200);
+    }
+    throw new Error(`vite preview not ready at ${previewUrl} within ${timeoutMs}ms`);
+  }
+
+  try {
+    await waitForPreview();
+  } catch (err) {
+    killPreview();
+    writeReport(buildEntry('unavailable', null, [], err.message));
+    failStructured(
+      'metric-status-not-ok',
+      `apps/${pkgShortName}.fps reports status === 'ok'`,
+      `inspect report/${pkgShortName}/fps.json for value vs threshold; rerun: pnpm metrics:run`,
+    );
+  }
+
+  let chromium;
+  try {
+    const requireFromApp = createRequire(`${appDir}/package.json`);
+    const playwrightModule = requireFromApp('playwright');
+    chromium = playwrightModule?.chromium;
+    if (!chromium) throw new Error('playwright.chromium not found');
+  } catch (err) {
+    killPreview();
+    writeReport(buildEntry('unavailable', null, [], `playwright not importable: ${err.message}`));
+    failStructured(
+      'metric-status-not-ok',
+      `apps/${pkgShortName}.fps reports status === 'ok'`,
+      `inspect report/${pkgShortName}/fps.json for value vs threshold; rerun: pnpm metrics:run`,
+    );
+  }
+
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+  } catch (err) {
+    killPreview();
+    writeReport(buildEntry('unavailable', null, [], `chromium launch failed: ${err.message}`));
+    failStructured(
+      'metric-status-not-ok',
+      `apps/${pkgShortName}.fps reports status === 'ok'`,
+      `inspect report/${pkgShortName}/fps.json for value vs threshold; rerun: pnpm metrics:run`,
+    );
+  }
+
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(previewUrl, { waitUntil: 'load' });
+  await delay(500);
+
+  async function measureOneSample(framesPerSampleArg) {
+    return await page.evaluate(async (n) => {
+      return await new Promise((res) => {
+        const start = performance.now();
+        let count = 0;
+        const tick = () => {
+          count += 1;
+          if (count >= n) {
+            res(performance.now() - start);
+            return;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+    }, framesPerSampleArg);
+  }
+
+  const samples = [];
+  for (let i = 0; i < sampleCount; i++) {
+    try {
+      const elapsedMs = await measureOneSample(framesPerSample);
+      const fps = elapsedMs > 0 ? (framesPerSample * 1000) / elapsedMs : 0;
+      samples.push({ frames: framesPerSample, elapsed_ms: elapsedMs, fps });
+      process.stdout.write(
+        `[fps] sample ${i + 1}/${sampleCount}: ${fps.toFixed(2)} fps over ${elapsedMs.toFixed(1)}ms\n`,
+      );
+    } catch (err) {
+      samples.push({ frames: framesPerSample, elapsed_ms: null, fps: 0, error: String(err) });
+    }
+  }
+
+  await context.close();
+  await browser.close();
+  killPreview();
+
+  const validFps = samples.filter((s) => s.fps > 0).map((s) => s.fps);
+  const medianFps = validFps.length > 0 ? median(validFps) : 0;
+  const p95Fps = validFps.length > 0 ? computeP95(validFps) : 0;
+  const status = resolveFpsStatus({
+    samples: validFps,
+    sampleCount,
+    threshold,
+    compareKey,
+  });
+
+  const reportedValue = compareKey === 'p95' ? p95Fps : medianFps;
+  const entry = buildEntry(status, Number(reportedValue.toFixed(2)), samples, undefined, {
+    median: Number(medianFps.toFixed(2)),
+    p95: Number(p95Fps.toFixed(2)),
+  });
+  writeReport(entry);
+  process.stdout.write(
+    `[fps] ${compareKey} ${entry.value} fps across ${validFps.length}/${sampleCount} samples (median=${medianFps.toFixed(2)} p95=${p95Fps.toFixed(2)} status=${status})\n`,
+  );
+
+  if (status !== 'ok') {
+    failStructured(
+      'metric-status-not-ok',
+      `apps/${pkgShortName}.fps reports status === 'ok'`,
+      `inspect report/${pkgShortName}/fps.json for value vs threshold; rerun: pnpm metrics:run`,
+    );
+  }
+}

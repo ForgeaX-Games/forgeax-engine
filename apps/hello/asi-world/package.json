@@ -1,0 +1,36 @@
+{
+  "name": "@forgeax/hello-asi-world",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "ASI World scene + WASD + tile/object collision demo (asi_world test2-b30f5a terrain + kirito spritesheet, ported onto Tilemap/TileLayer/Sprite/SpriteAnimation).",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": { "enabled": false, "reason": "downstream demo, not size-tracked" },
+      "fps": { "enabled": false, "reason": "covered by hello-cube / hello-app" },
+      "bench": { "enabled": false, "reason": "not perf-critical" },
+      "gate": { "enabled": false, "reason": "demo-only; no headless smoke yet" },
+      "spike-report": { "enabled": false, "reason": "not a spike" }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@types/node": "^25.8.0",
+    "@webgpu/types": "^0.1.70",
+    "vite": "8.0.10"
+  }
+}

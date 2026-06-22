@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "external-asset-package",
+  "importer": "shader",
+  "source": "sprite.wgsl",
+  "importSettings": {
+    "materialShaderIdentifier": "forgeax::sprite"
+  },
+  "subAssets": [
+    {
+      "guid": "1ded8a0b-8df0-45ee-b746-65a0f1aa2301",
+      "sourceIndex": 0,
+      "kind": "material-shader"
+    }
+  ],
+  "paramSchema": [
+    {
+      "name": "baseColor",
+      "type": "color",
+      "default": [1.0, 1.0, 1.0, 1.0]
+    },
+    {
+      "name": "region",
+      "type": "vec4",
+      "default": [0.0, 0.0, 1.0, 1.0]
+    },
+    {
+      "name": "pivot",
+      "type": "vec2",
+      "default": [0.5, 0.5]
+    },
+    {
+      "name": "flipX",
+      "type": "f32",
+      "default": 0.0
+    },
+    {
+      "name": "flipY",
+      "type": "f32",
+      "default": 0.0
+    },
+    {
+      "name": "slices",
+      "type": "vec4",
+      "default": [0.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "name": "sliceMode",
+      "type": "f32",
+      "default": 0.0
+    },
+    {
+      "name": "texture",
+      "type": "texture2d"
+    }
+  ]
+}

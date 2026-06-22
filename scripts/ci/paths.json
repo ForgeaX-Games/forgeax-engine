@@ -1,0 +1,16 @@
+[
+  "packages/**",
+  "apps/**",
+  "scripts/**",
+  "templates/**",
+  ".github/**",
+  "AGENTS.md",
+  "*.json",
+  "*.yaml",
+  "*.ts",
+  "*.toml",
+  "bun.lock",
+  ".pnpm-version",
+  ".bun-version",
+  ".nvmrc"
+]

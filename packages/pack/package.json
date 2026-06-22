@@ -1,0 +1,99 @@
+{
+  "name": "@forgeax/engine-pack",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "description": "Disk schema, GUID tools, scanner, and fail-fast error chain for the forgeax engine asset package system. CLI surface is provided by @forgeax/engine-console (forgeax-engine-console asset).",
+  "bin": {
+    "forgeax-engine-console-asset": "./dist/cli-asset.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./schema": {
+      "types": "./dist/schema-compiled.d.ts",
+      "import": "./dist/schema.mjs"
+    },
+    "./guid": {
+      "types": "./dist/guid.d.ts",
+      "import": "./dist/guid.mjs"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "import": "./dist/errors.mjs"
+    },
+    "./bridge": {
+      "types": "./dist/bridge.d.ts",
+      "import": "./dist/bridge.mjs"
+    },
+    "./scanner": {
+      "types": "./dist/scanner.d.ts",
+      "import": "./dist/scanner.mjs"
+    },
+    "./name": {
+      "types": "./dist/deriveAssetName.d.ts",
+      "import": "./dist/name.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "schema",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:no-assets-load": "node scripts/check-no-assets-load.mjs",
+    "check:pack-error-detail-narrowed": "node scripts/check-pack-error-detail-narrowed.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.8.3",
+    "vitest": "4.1.5"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": true,
+        "path": "dist/index.mjs",
+        "compression": "gzip"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "build-time and CLI package; no runtime canvas or frame loop"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "no perf-critical hot path bench in this package; scanner throughput not yet instrumented"
+      },
+      "gate": {
+        "enabled": false,
+        "reason": "package-level gate scripts declared in CI yaml directly; no standalone binary gate declared here"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike package"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-types": "workspace:*",
+    "fast-glob": "^3.3.3",
+    "upng-js": "^2.1.0",
+    "uuidv7": "^1.2.1"
+  }
+}

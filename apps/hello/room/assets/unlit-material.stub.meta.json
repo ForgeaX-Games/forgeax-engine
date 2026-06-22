@@ -1,0 +1,16 @@
+{
+  "kind": "external-asset-package",
+  "importer": "gltf",
+  "schemaVersion": "1.0.0",
+  "source": "unlit-material.stub",
+  "importSettings": {
+    "shadingModel": "unlit"
+  },
+  "subAssets": [
+    {
+      "guid": "008e4f75-e7a3-4715-b05b-b93a9ec12074",
+      "sourceIndex": 0,
+      "kind": "material"
+    }
+  ]
+}

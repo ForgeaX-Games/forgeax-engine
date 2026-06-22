@@ -1,0 +1,57 @@
+{
+  "name": "@forgeax/engine-physics",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "description": "Physics interface package for forgeax-engine — ECS component schemas (RigidBody / Collider / CollisionEvent), PhysicsWorld Resource interface, PhysicsErrorCode union.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "interface package — zero runtime payload beyond type exports; bundle-size tracked by backend packages"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "interface package — no runtime systems; fps tracked by backend / demo"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "interface package — pure type definitions and component schemas; no hot-path benchmark surface"
+      },
+      "gate": {
+        "enabled": false,
+        "reason": "no package-level binary gate; smoke gate covered by hello-physics demo (M4)"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike package"
+      }
+    }
+  }
+}

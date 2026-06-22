@@ -1,0 +1,73 @@
+{
+  "name": "@forgeax/engine-app",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "description": "App shell + game loop helper (rAF + start/stop/pause + auto input) for forgeax-engine.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@forgeax/engine-audio": "workspace:*",
+    "@forgeax/engine-audio-webaudio": "workspace:*",
+    "@forgeax/engine-debug-draw": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-input": "workspace:*",
+    "@forgeax/engine-physics": "workspace:*",
+    "@forgeax/engine-physics-rapier2d": "workspace:*",
+    "@forgeax/engine-physics-rapier3d": "workspace:*",
+    "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-state": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-rhi-debug": "workspace:*",
+    "@forgeax/engine-rhi-webgpu": "workspace:*",
+    "@forgeax/engine-rhi-wgpu": "workspace:*",
+    "@webgpu/types": "^0.1.70"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "MVP shell package; bundle-size lock deferred until API stabilises and meaningful threshold can be locked"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "library helper without bundled canvas; fps reported by hello-app and other host apps that consume createApp"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "rAF main loop is a thin orchestration layer; not a perf-critical surface for the MVP"
+      },
+      "gate": {
+        "enabled": false,
+        "reason": "no package-level binary gate; AC surface coverage runs as part of pnpm test:unit + tsc -b"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike package; this is a production MVP per plan-strategy D-5 (double SSOT entry + thin wrapper)"
+      }
+    }
+  }
+}

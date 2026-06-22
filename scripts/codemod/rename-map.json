@@ -1,0 +1,16 @@
+[
+  { "old": "@forgeax/math", "new": "@forgeax/engine-math" },
+  { "old": "@forgeax/ecs", "new": "@forgeax/engine-ecs" },
+  { "old": "@forgeax/core", "new": "@forgeax/engine-ecs" },
+  { "old": "@forgeax/types", "new": "@forgeax/engine-types" },
+  { "old": "@forgeax/rhi-webgpu", "new": "@forgeax/engine-rhi-webgpu" },
+  { "old": "@forgeax/rhi-wgpu", "new": "@forgeax/engine-rhi-wgpu" },
+  { "old": "@forgeax/rhi", "new": "@forgeax/engine-rhi" },
+  { "old": "@forgeax/wgpu-wasm", "new": "@forgeax/engine-wgpu-wasm" },
+  { "old": "@forgeax/naga", "new": "@forgeax/engine-naga" },
+  { "old": "@forgeax/shader-compiler", "new": "@forgeax/engine-shader-compiler" },
+  { "old": "@forgeax/vite-plugin-shader", "new": "@forgeax/engine-vite-plugin-shader" },
+  { "old": "@forgeax/shader", "new": "@forgeax/engine-shader" },
+  { "old": "@forgeax/console", "new": "@forgeax/engine-console" },
+  { "old": "@forgeax/engine", "new": "@forgeax/engine-runtime" }
+]

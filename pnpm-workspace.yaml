@@ -1,0 +1,25 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+  - "apps/hello/*"
+  - "apps/parity/*"
+  - "apps/learn-render/*/*"
+  - "apps/learn-render/*/*/*"
+  - "templates/game-default"
+
+allowBuilds:
+  esbuild: true
+  simple-git-hooks: true
+  webgpu: true
+
+supportedArchitectures:
+  os:
+    - darwin
+    - linux
+    - win32
+  cpu:
+    - x64
+    - arm64
+  libc:
+    - glibc
+    - musl

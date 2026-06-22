@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "external-asset-package",
+  "importer": "shader",
+  "source": "shadow_caster.wgsl",
+  "importSettings": {
+    "materialShaderIdentifier": "forgeax::default-shadow-caster"
+  },
+  "subAssets": [
+    {
+      "guid": "2e167c2a-1747-5bd7-b56d-aea9bc3f436e",
+      "sourceIndex": 0,
+      "kind": "material-shader"
+    }
+  ],
+  "paramSchema": []
+}

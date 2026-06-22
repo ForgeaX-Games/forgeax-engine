@@ -1,0 +1,16 @@
+{
+  "kind": "external-asset-package",
+  "importer": "gltf",
+  "schemaVersion": "1.0.0",
+  "source": "standard-material.stub",
+  "importSettings": {
+    "shadingModel": "standard"
+  },
+  "subAssets": [
+    {
+      "guid": "f6af7007-158f-4d92-9e47-93bf2f213e1f",
+      "sourceIndex": 0,
+      "kind": "material"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "name": "@forgeax/hello-multi-material",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Multi-prim + mixed-topology demo (feat-20260608-mesh-multi-section-primitive-multi-material-slot): a single MeshAsset carries two submeshes (triangle-list quad + line-list wireframe box) bound to two distinct MaterialAssets through MeshRenderer.materials[]. End-to-end proof of submeshes[i] <-> materials[i] index alignment + per-submesh PSO selection.",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs"
+  },
+  "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/hello-multi-material smoke",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle shape downstream of @forgeax/engine-runtime sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "multi-material correctness exemplar; fps anchored by hello-triangle / hello-cube"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "correctness exemplar; bench focus stays on @forgeax/engine-math"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-multi-material smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; this is the M5 hello-multi-material multi-prim + mixed-topology exemplar"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0",
+    "@webgpu/types": "^0.1.70"
+  }
+}

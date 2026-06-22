@@ -1,0 +1,111 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "019e2808-d3ba-735f-811f-ae7bbb465392",
+      "kind": "scene",
+      "payload": {
+        "kind": "scene",
+        "nodes": [
+          {
+            "localId": 0,
+            "components": {
+              "Transform": {
+                "posX": 0,
+                "posY": 0,
+                "posZ": 0,
+                "quatX": 0,
+                "quatY": 0,
+                "quatZ": 0,
+                "quatW": 1,
+                "scaleX": 1,
+                "scaleY": 1,
+                "scaleZ": 1
+              },
+              "MeshFilter": { "assetHandle": 0 },
+              "MeshRenderer": { "materials": [1] }
+            }
+          },
+          {
+            "localId": 1,
+            "components": {
+              "Transform": {
+                "posX": -0.4,
+                "posY": 0.3,
+                "posZ": 0.2,
+                "quatX": 0,
+                "quatY": 0,
+                "quatZ": 0,
+                "quatW": 1,
+                "scaleX": 0.4,
+                "scaleY": 0.4,
+                "scaleZ": 0.4
+              },
+              "ChildOf": { "parent": 0 },
+              "MeshFilter": { "assetHandle": 0 },
+              "MeshRenderer": { "materials": [2] }
+            }
+          },
+          {
+            "localId": 2,
+            "components": {
+              "Transform": {
+                "posX": 0.5,
+                "posY": -0.4,
+                "posZ": 0,
+                "quatX": 0,
+                "quatY": 0,
+                "quatZ": 0,
+                "quatW": 1,
+                "scaleX": 0.6,
+                "scaleY": 0.1,
+                "scaleZ": 0.6
+              },
+              "ChildOf": { "parent": 0 },
+              "MeshFilter": { "assetHandle": 0 },
+              "MeshRenderer": { "materials": [1] }
+            }
+          },
+          {
+            "localId": 3,
+            "components": {
+              "Transform": {
+                "posX": 0,
+                "posY": 0,
+                "posZ": 3,
+                "quatX": 0,
+                "quatY": 0,
+                "quatZ": 0,
+                "quatW": 1,
+                "scaleX": 1,
+                "scaleY": 1,
+                "scaleZ": 1
+              },
+              "Camera": { "fov": 0.7853981633974483, "aspect": 1.7777777777777777, "near": 0.1, "far": 100 }
+            }
+          },
+          {
+            "localId": 4,
+            "components": {
+              "DirectionalLight": {
+                "directionX": -0.5,
+                "directionY": -1,
+                "directionZ": -0.3,
+                "colorR": 1,
+                "colorG": 1,
+                "colorB": 1,
+                "intensity": 1
+              }
+            }
+          }
+        ]
+      },
+      "refs": [
+        "cbe42beb-8975-5096-b3a1-3dda4cb4c077",
+        "f6af7007-158f-4d92-9e47-93bf2f213e1f",
+        "008e4f75-e7a3-4715-b05b-b93a9ec12074"
+      ]
+    }
+  ]
+}

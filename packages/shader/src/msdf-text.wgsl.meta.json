@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "external-asset-package",
+  "importer": "shader",
+  "source": "msdf-text.wgsl",
+  "importSettings": {
+    "materialShaderIdentifier": "forgeax::msdf-text"
+  },
+  "subAssets": [
+    {
+      "guid": "b8f92146-3b24-519b-97a2-271419b53563",
+      "sourceIndex": 0,
+      "kind": "material-shader"
+    }
+  ],
+  "paramSchema": [
+    {
+      "name": "tintColor",
+      "type": "color",
+      "default": [1.0, 1.0, 1.0, 1.0]
+    },
+    {
+      "name": "distanceRange",
+      "type": "f32",
+      "default": 4.0
+    },
+    {
+      "name": "baseColorTexture",
+      "type": "texture2d"
+    }
+  ]
+}

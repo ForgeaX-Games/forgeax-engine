@@ -1,0 +1,51 @@
+{
+  "name": "@forgeax/preview",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Minimal Vite host that loads a GameEntry template and renders it in-browser (createApp + loadGame). Local smoke host for templates/game-default.",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "preview is a game-template host; bundle size is downstream of the loaded template"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "preview FPS is content-dependent; engine-level FPS tracked at hello-cube / hello-app"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "no engine-level bench surface in preview host"
+      },
+      "gate": {
+        "enabled": false,
+        "reason": "e2e gate is the central vitest browser project (preview.browser.test.ts, run by pnpm test:browser in the vitest-browser CI job), not a per-package smoke command"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/apps-shared": "workspace:*",
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@webgpu/types": "^0.1.70",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0"
+  }
+}

@@ -1,0 +1,84 @@
+import type { DecodedImage, ImageMeta } from '@forgeax/engine-types';
+
+/**
+ * External-asset-package envelope shape mirroring the
+ * `packages/pack/schema/meta.schema.json` $defs/ExternalAssetPackage.
+ * Consumed by `forgeax-engine-console-asset import` (CLI entry, M3b) +
+ * the image importer in M2 build-time path. The internal-text-package
+ * variant ($defs/InternalTextPackage) is owned by the gltf-loader feat.
+ */
+export interface ExternalAssetPackage {
+  readonly schemaVersion: string;
+  readonly kind: 'external-asset-package';
+  readonly importer: 'image';
+  readonly source: string;
+  readonly importSettings: ImageImportSettings;
+  readonly subAssets: readonly ExternalSubAsset[];
+}
+
+/**
+ * Free-form image importer settings persisted into `*.meta.json` (importer: 'image')
+ * `importSettings`. Matches `ImageMeta` POD field-for-field (charter P5
+ * single SSOT) but the open Record shape allows future minor adds (cubemap
+ * face / array layer / custom colorSpace) without breaking existing meta
+ * files (plan-strategy R5).
+ */
+export interface ImageImportSettings extends Readonly<Record<string, unknown>> {
+  readonly colorSpace: ImageMeta['colorSpace'];
+  readonly mipmap: ImageMeta['mipmap'];
+  readonly addressMode: ImageMeta['addressMode'];
+  readonly filterMode: ImageMeta['filterMode'];
+}
+
+export interface ExternalSubAsset {
+  readonly guid: string;
+  readonly sourceIndex: number;
+  readonly kind: string;
+  readonly name?: string;
+}
+
+/**
+ * Pure function that translates a DecodedImage POD + ImageMeta POD into
+ * an external-asset-package envelope ready to be JSON-stringified into a
+ * `*.meta.json` sidecar with importer: 'image' (plan-strategy section 3.2 sequence A; AC-13
+ * disk schema reuse).
+ *
+ * The single sub-asset emitted carries:
+ *  - `guid` -- copied verbatim from `meta.guid` (the producer guarantees
+ *    the GUID is freshly minted or reused via `reimportReuseMeta`)
+ *  - `sourceIndex: 0` (single-sub-asset shape; cubemap / array reserved
+ *    for future feat)
+ *  - `kind: 'image'` (closed literal for image-importer emit)
+ *
+ * Two consecutive calls with identical inputs produce JSON.stringify
+ * byte-equal output (AC-16 idempotent reimport).
+ */
+export function toAssetPack(decoded: DecodedImage, meta: ImageMeta): ExternalAssetPackage {
+  // decoded.bytes are not embedded in the meta envelope -- the source bytes
+  // live next to the sidecar on disk (the runtime reads them via
+  // decodeImageFromFile at app load time). We keep the parameter so future
+  // cubemap / array-layer feats can derive multi-sub-asset emit from decoded
+  // dimensions without breaking the call surface (charter P5 consistent
+  // abstraction).
+  void decoded;
+
+  return {
+    schemaVersion: '1.0.0',
+    kind: 'external-asset-package',
+    importer: 'image',
+    source: '',
+    importSettings: {
+      colorSpace: meta.colorSpace,
+      mipmap: meta.mipmap,
+      addressMode: meta.addressMode,
+      filterMode: meta.filterMode,
+    },
+    subAssets: [
+      {
+        guid: meta.guid,
+        sourceIndex: 0,
+        kind: 'image',
+      },
+    ],
+  };
+}

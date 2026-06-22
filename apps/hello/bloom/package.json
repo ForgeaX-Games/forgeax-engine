@@ -1,0 +1,54 @@
+{
+  "name": "@forgeax/hello-bloom",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Bloom post-processing opt-in exemplar (feat-20260531-bloom-first-declarative-render-graph-pass / M4 / w18).",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs"
+  },
+  "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/hello-bloom smoke",
+    "_comment": "smokeInvocation = self-contained SSOT. hello-bloom exercises Camera bloom columns end-to-end (bright-pass -> blur-H -> blur-V -> composite -> tonemap).",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle (dist/assets) shape is downstream of @forgeax/engine-runtime sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "fps no-regression covered by hello-cube / hello-room / hello-app gates that run the default zero-overhead path; Bloom opt-in cost is verified via the smoke gate (structural-only) rather than per-app fps sampling"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "Bloom opt-in exemplar; vitest bench focus stays on @forgeax/engine-math + @forgeax/engine-runtime#transparent-sort"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-bloom smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; this is the M4 hello-bloom opt-in exemplar"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-input": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@webgpu/types": "^0.1.70",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0"
+  }
+}

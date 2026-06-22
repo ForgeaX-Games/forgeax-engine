@@ -1,0 +1,39 @@
+{
+  "assets": [
+    {
+      "kind": "scene",
+      "guid": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      "refs": [
+        "cbe42beb-8975-5096-b3a1-3dda4cb4c077",
+        "008e4f75-e7a3-4715-b05b-b93a9ec12074"
+      ],
+      "payload": {
+        "nodes": [
+          {
+            "localId": 0,
+            "components": {
+              "Transform": {
+                "posX": 0,
+                "posY": 0.5,
+                "posZ": 0,
+                "quatX": 0,
+                "quatY": 0,
+                "quatZ": 0,
+                "quatW": 1,
+                "scaleX": 0.5,
+                "scaleY": 0.5,
+                "scaleZ": 0.5
+              },
+              "MeshFilter": {
+                "assetHandle": 0
+              },
+              "MeshRenderer": {
+                "materials": [1]
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

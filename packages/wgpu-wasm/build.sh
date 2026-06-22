@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# packages/wgpu-wasm/build.sh — wasm-pack build entry (plan-strategy D-P1 + D-P3 +
+# research F-4 wasm-pack --target web + F-5 Vite ?url consumption).
+#
+# Production-form contract:
+# - --target web outputs an ES module + manual instantiation glue + the
+#   `pkg/wgpu_wasm.js` default `init(input?)` export. The TS shim layer
+#   (src/index.ts ensureReady singleton wrapper, w3) consumes this via Vite ?url.
+# - --release is the wasm-pack default; the [profile.release] in Cargo.toml
+#   (opt-level=z + lto=fat + codegen-units=1 + strip=debuginfo + wasm-opt -Oz
+#   override) is the size-budget knob honoured here.
+# - pkg/ output is committed to git (continues the precedent of the two
+#   legacy wasm-pack crates that this package replaces — both archived in
+#   feat-20260511-naga-rhi-wgpu-merge M5) so the @forgeax/engine-wgpu-wasm workspace
+#   dep tree resolves without requiring every consumer to run a Rust toolchain.
+#
+# Outputs to ./pkg/ (.wasm + .d.ts + .js glue + package.json).
+#
+# When to re-run: only when packages/wgpu-wasm/src or Cargo.toml has been modified.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Surface explicit failure when toolchain is missing (charter proposition 4).
+if ! command -v rustc >/dev/null 2>&1; then
+  echo "[wgpu-wasm] rustc not found on PATH." >&2
+  echo "  install: see https://rustup.rs" >&2
+  exit 1
+fi
+
+# Assert rustc >= 1.93 (plan-strategy D-P3: wgpu 29 requires rust-version 1.93).
+RUSTC_VERSION="$(rustc --version | awk '{print $2}')"
+RUSTC_MAJOR="$(echo "$RUSTC_VERSION" | cut -d. -f1)"
+RUSTC_MINOR="$(echo "$RUSTC_VERSION" | cut -d. -f2)"
+echo "[wgpu-wasm] rustc version: $RUSTC_VERSION"
+if [ "$RUSTC_MAJOR" -lt 1 ] || { [ "$RUSTC_MAJOR" -eq 1 ] && [ "$RUSTC_MINOR" -lt 93 ]; }; then
+  echo "[wgpu-wasm] rustc $RUSTC_VERSION is older than required 1.93." >&2
+  echo "  install: rustup install 1.93" >&2
+  echo "  the rust-toolchain.toml in this directory should pin 1.93 automatically;" >&2
+  echo "  if rustup did not honour it, run: rustup show" >&2
+  exit 1
+fi
+
+if ! command -v wasm-pack >/dev/null 2>&1; then
+  echo "[wgpu-wasm] wasm-pack not found on PATH." >&2
+  echo "  install: cargo install wasm-pack" >&2
+  exit 1
+fi
+
+if ! rustup target list --installed 2>/dev/null | grep -q '^wasm32-unknown-unknown$'; then
+  echo "[wgpu-wasm] missing target wasm32-unknown-unknown." >&2
+  echo "  install: rustup target add wasm32-unknown-unknown" >&2
+  exit 1
+fi
+
+# wasm-pack build defaults to the release profile; --target web aligns with
+# the production lazy-import shape consumed by the TS shim ensureReady wrapper.
+wasm-pack build --target web --out-dir "$SCRIPT_DIR/pkg" --release
+
+# Post-optimise with system binaryen wasm-opt if available (bug-20260512):
+# wasm-pack's bundled binaryen is too old for wgpu 29 multi-table WASM output, so
+# Cargo.toml sets wasm-opt=false; CI installs binaryen (>= 116) via apt before this
+# script runs, giving the extra -Oz pass. Local builds without binaryen skip silently.
+WASM_FILE="$SCRIPT_DIR/pkg/wgpu_wasm_bg.wasm"
+if command -v wasm-opt >/dev/null 2>&1; then
+  echo "[wgpu-wasm] running system wasm-opt -Oz ..."
+  wasm-opt -Oz --enable-bulk-memory --enable-multivalue --enable-reference-types \
+    "$WASM_FILE" -o "$WASM_FILE"
+  echo "[wgpu-wasm] wasm-opt done"
+else
+  echo "[wgpu-wasm] wasm-opt not found on PATH, skipping post-optimisation (dev build only)"
+fi

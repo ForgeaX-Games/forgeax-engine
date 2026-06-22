@@ -1,0 +1,518 @@
+#!/usr/bin/env node
+// apps/learn-render/2.lighting/5.light-casters/scripts/smoke-dawn.mjs
+//
+// LearnOpenGL section 2.5 light-casters dawn-node smoke (feat-20260611
+// w13 / M3 round-2 fix-up I-5 -- real-scene adaptation per src/index.ts).
+//
+// Walks the LO 2.5 three-light-types scene the demo runs in production:
+//   1. decodeImageFromFile(container2.png + container2_specular.png)
+//      -- same diffuse / specular pair as LO 2.4.
+//   2. registerWithGuid<TextureAsset> for both.
+//   3. registerWithGuid<MeshAsset>(cubeGuid, HANDLE_CUBE asset).
+//   4. unlit material with diffuse baseColorTexture.
+//   5. spawn the 10-cube grid (same CUBE_POSITIONS as LO 1.6) +
+//      DirectionalLight + 4 PointLights at LO POINT_LIGHT_POSITIONS +
+//      a SpotLight at the camera position (LO 2.5 flashlight idiom).
+//
+// Differential axes vs hello-triangle / lighting-maps (D-2 / D-8
+// byte-level):
+//   - GUID set: same 4 GUIDs as LO 2.4 BUT CUBE_MATERIAL_GUID is LO
+//     2.5's own '019e3969-2000-7000-8000-000000000002' (last byte 02
+//     vs 01).
+//   - clear color: engine teal default.
+//   - sample sites: 10 lit cubes + 3 light types -- probes hit cube_0,
+//     cube_8, and the SpotLight cone area. Names mirror LO 2.5.
+//
+// Output literals (preserved byte-for-byte for grep tooling):
+//   - `[learn-render-light-casters] backend=webgpu`
+//   - `[smoke] frames observed=<N>`
+//   - `[smoke] pixelSamples=<json>`
+//   - `[smoke] PASS - 4 criteria GREEN: ...`
+
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
+
+const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
+
+const WIDTH = 800;
+const HEIGHT = 600;
+
+const here = dirname(fileURLToPath(import.meta.url));
+const APP_ROOT = resolve(here, '..');
+const MONOREPO_ROOT = resolve(APP_ROOT, '..', '..', '..', '..');
+const TEXTURES_DIR = resolve(MONOREPO_ROOT, 'forgeax-engine-assets', 'learn-opengl', 'textures');
+const DIFFUSE_SRC_PATH = resolve(TEXTURES_DIR, 'container2.png');
+const DIFFUSE_META_PATH = resolve(TEXTURES_DIR, 'container2.png.meta.json');
+const SPECULAR_SRC_PATH = resolve(TEXTURES_DIR, 'container2_specular.png');
+const SPECULAR_META_PATH = resolve(TEXTURES_DIR, 'container2_specular.png.meta.json');
+
+const SMOKE_WALL_BUDGET_MS = Number.parseInt(process.env.SMOKE_WALL_BUDGET_MS ?? '45000', 10);
+
+const CUBE_MESH_GUID = '019e3968-6007-71ae-856e-1fd6c9728cfb';
+// LO 2.5 own material GUID -- last byte 02 (vs 01 in LO 2.4).
+const CUBE_MATERIAL_GUID = '019e3969-2000-7000-8000-000000000002';
+
+// LO 2.5 cubePositions -- same array as LO 1.6.
+const CUBE_POSITIONS = [
+  [0.0, 0.0, 0.0],
+  [2.0, 5.0, -15.0],
+  [-1.5, -2.2, -2.5],
+  [-3.8, -2.0, -12.3],
+  [2.4, -0.4, -3.5],
+  [-1.7, 3.0, -7.5],
+  [1.3, -2.0, -2.5],
+  [1.5, 2.0, -2.5],
+  [1.5, 0.2, -1.5],
+  [-1.3, 1.0, -1.5],
+];
+
+// LO 2.5 PointLight positions + colours.
+const POINT_LIGHT_POSITIONS = [
+  [0.7, 0.2, 2.0],
+  [2.3, -3.3, -4.0],
+  [-4.0, 2.0, -12.0],
+  [0.0, 0.0, -3.0],
+];
+const POINT_LIGHT_COLORS = [
+  [1.0, 1.0, 1.0],
+  [1.0, 0.0, 0.0],
+  [0.0, 1.0, 0.0],
+  [0.0, 0.0, 1.0],
+];
+
+// --- 1. dawn.node binding setup ----------------------------------------------
+
+let create;
+let globals;
+try {
+  ({ create, globals } = await import('webgpu'));
+} catch (err) {
+  console.error(`[smoke] FAIL - dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+Object.assign(globalThis, globals);
+if (!('navigator' in globalThis) || globalThis.navigator === undefined) {
+  Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true, writable: true });
+}
+let gpu;
+try {
+  gpu = create([]);
+} catch (err) {
+  console.error(`[smoke] FAIL - dawn-node create([]) failed: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+Object.defineProperty(globalThis.navigator, 'gpu', {
+  value: gpu,
+  configurable: true,
+  writable: true,
+});
+// bug-20260612 dawn-only stub: pin getPreferredCanvasFormat to 'rgba8unorm' so this
+// smoke harness's hardcoded rgba8unorm-srgb viewFormats stay compatible with the
+// dawn-node webgpu module's actual UA preference (which is bgra8unorm). Browser
+// path (test:browser project) does not run smoke-dawn.mjs; the real Channel 2
+// BGRA path is exercised through the helper unmodified there.
+gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
+
+let sharedDevice;
+const originalAmbientRequestAdapter = globalThis.navigator.gpu.requestAdapter.bind(
+  globalThis.navigator.gpu,
+);
+globalThis.navigator.gpu.requestAdapter = async (opts) => {
+  const rawAdapter = await originalAmbientRequestAdapter(opts);
+  if (rawAdapter === null) return rawAdapter;
+  const originalRequestDevice = rawAdapter.requestDevice.bind(rawAdapter);
+  rawAdapter.requestDevice = async (desc) => {
+    const dev = await originalRequestDevice(desc);
+    if (!sharedDevice) sharedDevice = dev;
+    return dev;
+  };
+  return rawAdapter;
+};
+
+// --- 2. Mock canvas ---------------------------------------------------------
+
+let renderTarget;
+function ensureRenderTarget(device, format) {
+  if (renderTarget) return renderTarget;
+  renderTarget = device.createTexture({
+    size: { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+    format,
+    usage: 0x10 | 0x01,
+    viewFormats: ['rgba8unorm-srgb'],
+  });
+  return renderTarget;
+}
+const mockCanvas = {
+  width: WIDTH,
+  height: HEIGHT,
+  getContext(kind) {
+    if (kind !== 'webgpu') return null;
+    return {
+      configure(desc) {
+        ensureRenderTarget(desc.device, desc.format ?? 'rgba8unorm');
+      },
+      unconfigure() {},
+      getCurrentTexture() {
+        if (!renderTarget) {
+          if (!sharedDevice) throw new Error('no shared device captured');
+          ensureRenderTarget(sharedDevice, 'rgba8unorm');
+        }
+        return renderTarget;
+      },
+    };
+  },
+  addEventListener() {},
+  removeEventListener() {},
+};
+
+// --- 3. Drive engine ECS path -----------------------------------------------
+
+if (
+  !existsSync(DIFFUSE_SRC_PATH) ||
+  !existsSync(DIFFUSE_META_PATH) ||
+  !existsSync(SPECULAR_SRC_PATH) ||
+  !existsSync(SPECULAR_META_PATH)
+) {
+  console.error('[smoke] FAIL - container2 / container2_specular asset fixtures missing');
+  process.exit(1);
+}
+
+const { World } = await import('@forgeax/engine-ecs');
+const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
+const enginePkg = await import('@forgeax/engine-runtime');
+const {
+  Camera,
+  createRenderer,
+  DirectionalLight,
+  HANDLE_CUBE,
+  MeshFilter,
+  MeshRenderer,
+  PointLight,
+  resolveAssetHandle,
+  SpotLight,
+  Transform,
+} = enginePkg;
+const { unwrapHandle } = await import('@forgeax/engine-types');
+const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+
+const diffuseRes = await decodeImageFromFile(DIFFUSE_SRC_PATH);
+const specularRes = await decodeImageFromFile(SPECULAR_SRC_PATH);
+if (!diffuseRes.ok || !specularRes.ok) {
+  console.error('[smoke] FAIL - decodeImageFromFile failed');
+  process.exit(1);
+}
+const { decoded: diffuseDecoded, meta: diffuseMeta } = diffuseRes.value;
+const { decoded: specularDecoded, meta: specularMeta } = specularRes.value;
+console.log(
+  `[learn-render-light-casters] decoded diffuse=${diffuseDecoded.width}x${diffuseDecoded.height} specular=${specularDecoded.width}x${specularDecoded.height}`,
+);
+
+const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
+const ENGINE_MANIFEST = await buildEngineShaderManifest();
+const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+
+let renderer;
+try {
+  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+} catch (err) {
+  console.error(
+    `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
+  );
+  process.exit(1);
+} finally {
+  globalThis.navigator.gpu.requestAdapter = originalAmbientRequestAdapter;
+}
+
+console.log(`[learn-render-light-casters] backend=${renderer.backend}`);
+
+const assets = renderer.assets;
+if (!assets) {
+  console.error('[smoke] FAIL - AssetRegistry is null');
+  process.exit(1);
+}
+const errors = [];
+renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+
+const ready = await renderer.ready;
+if (!ready.ok) {
+  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code}`);
+  process.exit(1);
+}
+
+const diffuseGuidRes = AssetGuid.parse(diffuseMeta.guid);
+const specularGuidRes = AssetGuid.parse(specularMeta.guid);
+const cubeGuidRes = AssetGuid.parse(CUBE_MESH_GUID);
+const matGuidRes = AssetGuid.parse(CUBE_MATERIAL_GUID);
+if (!diffuseGuidRes.ok || !specularGuidRes.ok || !cubeGuidRes.ok || !matGuidRes.ok) {
+  console.error('[smoke] FAIL - GUID parse failure');
+  process.exit(1);
+}
+const mkTex = (decoded) => ({
+  kind: 'texture',
+  width: decoded.width,
+  height: decoded.height,
+  format: decoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
+  data: decoded.bytes,
+  colorSpace: decoded.colorSpace,
+  mipmap: decoded.mipmap,
+});
+const world = new World();
+// feat-20260614 M8 (D-15/D-17): textures mint user-tier column handles via
+// allocSharedRef; GUIDs are catalogued for loadByGuid parity.
+const diffuseHandle = world.allocSharedRef('TextureAsset', mkTex(diffuseDecoded));
+const specularHandle = world.allocSharedRef('TextureAsset', mkTex(specularDecoded));
+assets.catalog(diffuseGuidRes.value, mkTex(diffuseDecoded));
+assets.catalog(specularGuidRes.value, mkTex(specularDecoded));
+const cubeAssetRes = resolveAssetHandle(world, HANDLE_CUBE);
+if (!cubeAssetRes.ok) {
+  console.error('[smoke] FAIL - HANDLE_CUBE asset unavailable');
+  process.exit(1);
+}
+assets.catalog(cubeGuidRes.value, cubeAssetRes.value);
+
+const cubeMaterial = world.allocSharedRef('MaterialAsset', {
+  kind: 'material',
+  passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
+  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: unwrapHandle(diffuseHandle) },
+});
+void specularHandle;
+// LO 2.5 10-cube grid (same array as LO 1.6).
+for (let i = 0; i < CUBE_POSITIONS.length; i++) {
+  const pos = CUBE_POSITIONS[i];
+  world.spawn(
+    {
+      component: Transform,
+      data: {
+        posX: pos[0],
+        posY: pos[1],
+        posZ: pos[2],
+        quatX: 0,
+        quatY: 0,
+        quatZ: 0,
+        quatW: 1,
+        scaleX: 1,
+        scaleY: 1,
+        scaleZ: 1,
+      },
+    },
+    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+    { component: MeshRenderer, data: { materials: [cubeMaterial] } },
+  );
+}
+
+// LO 2.5 DirectionalLight (sun-equivalent).
+world.spawn({
+  component: DirectionalLight,
+  data: {
+    directionX: -0.2,
+    directionY: -1,
+    directionZ: -0.3,
+    colorR: 1,
+    colorG: 1,
+    colorB: 1,
+    intensity: 0.5,
+  },
+});
+
+// LO 2.5 4 PointLights with distinct colours -- white / red / green /
+// blue. Each spawned as own entity at POINT_LIGHT_POSITIONS[i] with
+// PointLight component carrying the colour triple.
+for (let i = 0; i < POINT_LIGHT_POSITIONS.length; i++) {
+  const plPos = POINT_LIGHT_POSITIONS[i];
+  const plColor = POINT_LIGHT_COLORS[i];
+  world.spawn(
+    {
+      component: Transform,
+      data: {
+        posX: plPos[0],
+        posY: plPos[1],
+        posZ: plPos[2],
+        quatX: 0,
+        quatY: 0,
+        quatZ: 0,
+        quatW: 1,
+        scaleX: 1,
+        scaleY: 1,
+        scaleZ: 1,
+      },
+    },
+    {
+      component: PointLight,
+      data: {
+        colorR: plColor[0],
+        colorG: plColor[1],
+        colorB: plColor[2],
+        intensity: 100,
+        range: 50,
+      },
+    },
+  );
+}
+
+// LO 2.5 camera-coupled SpotLight (flashlight idiom; cone 12.5/17.5
+// inner/outer).
+world.spawn(
+  {
+    component: Transform,
+    data: {
+      posX: 0,
+      posY: 0,
+      posZ: 3,
+      quatX: 0,
+      quatY: 0,
+      quatZ: 0,
+      quatW: 1,
+      scaleX: 1,
+      scaleY: 1,
+      scaleZ: 1,
+    },
+  },
+  {
+    component: Camera,
+    data: { fov: Math.PI / 4, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 },
+  },
+  {
+    component: SpotLight,
+    data: {
+      directionX: 0,
+      directionY: 0,
+      directionZ: -1,
+      colorR: 1,
+      colorG: 1,
+      colorB: 1,
+      intensity: 4,
+      range: 50,
+      innerConeDeg: 12.5,
+      outerConeDeg: 17.5,
+    },
+  },
+);
+
+const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const frameStart = Date.now();
+let framesObserved = 0;
+for (let i = 0; i < TARGET_FRAMES; i++) {
+  const r = renderer.draw(world);
+  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
+  framesObserved++;
+}
+const device = sharedDevice;
+if (!device) {
+  console.error('[smoke] FAIL - no shared device captured for readback');
+  process.exit(1);
+}
+await device.queue.onSubmittedWorkDone();
+const frameWall = Date.now() - frameStart;
+console.log(
+  `[smoke] frames observed=${framesObserved} (wall=${frameWall}ms, target=${TARGET_FRAMES})`,
+);
+
+// --- 4. Pixel readback ------------------------------------------------------
+
+if (!renderTarget) {
+  console.error('[smoke] FAIL - renderTarget never allocated');
+  process.exit(1);
+}
+const bytesPerPixel = 4;
+const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
+const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
+const readbackBuffer = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
+{
+  const enc = device.createCommandEncoder();
+  enc.copyTextureToBuffer(
+    { texture: renderTarget },
+    { buffer: readbackBuffer, bytesPerRow, rowsPerImage: HEIGHT },
+    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+  );
+  device.queue.submit([enc.finish()]);
+}
+try {
+  await readbackBuffer.mapAsync(0x01);
+} catch (err) {
+  console.error(`[smoke] FAIL - mapAsync rejected: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+const mapped = readbackBuffer.getMappedRange();
+const bytes = new Uint8Array(mapped.slice(0));
+readbackBuffer.unmap();
+readbackBuffer.destroy();
+
+const readRgba = (px, py) => {
+  const off = py * bytesPerRow + px * bytesPerPixel;
+  const r = (bytes[off + 0] ?? 0) / 255;
+  const g = (bytes[off + 1] ?? 0) / 255;
+  const b = (bytes[off + 2] ?? 0) / 255;
+  return [r, g, b];
+};
+// LO 2.5 sample sites: spotlightCenter at NDC origin (camera-coupled
+// SpotLight points at -Z) + pointLightLitL/R for cubes near the
+// PointLight cluster. Names tied to LO 2.5 light type names.
+const sites = [
+  { name: 'spotlightCenter', x: Math.floor(WIDTH / 2), y: Math.floor(HEIGHT / 2) },
+  { name: 'directionalLitUL', x: Math.floor(WIDTH * 0.38), y: Math.floor(HEIGHT * 0.45) },
+  { name: 'directionalLitBR', x: Math.floor(WIDTH * 0.62), y: Math.floor(HEIGHT * 0.55) },
+  { name: 'pointLightCluster', x: Math.floor(WIDTH * 0.7), y: Math.floor(HEIGHT * 0.65) },
+  { name: 'cornerTL', x: Math.floor(WIDTH * 0.05), y: Math.floor(HEIGHT * 0.05) },
+];
+const pixelSamples = {};
+for (const s of sites) pixelSamples[s.name] = readRgba(s.x, s.y);
+console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
+
+// --- 5. Verdict (4 criteria) ------------------------------------------------
+
+const distance = (a, b) =>
+  Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2);
+const CLEAR_COLOR = [0.2, 0.3, 0.3];
+const meshSiteNames = ['spotlightCenter', 'directionalLitUL', 'directionalLitBR'];
+let meshedRenderCount = 0;
+const perSiteDistance = {};
+for (const name of meshSiteNames) {
+  const site = pixelSamples[name];
+  const dist = distance(site, CLEAR_COLOR);
+  perSiteDistance[name] = dist.toFixed(4);
+  if (dist > SMOKE_PIXEL_THRESHOLD) meshedRenderCount++;
+}
+console.log(`[smoke] perSiteDistance=${JSON.stringify(perSiteDistance)}`);
+
+const wallTotalMs = Date.now() - frameStart;
+console.log(`[smoke] wallTotalMs=${wallTotalMs} (budget=${SMOKE_WALL_BUDGET_MS})`);
+
+void matGuidRes;
+
+const failures = [];
+if (renderer.backend !== 'webgpu')
+  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (framesObserved < SMOKE_MIN_FRAMES)
+  failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
+if (meshedRenderCount < 1) {
+  failures.push(
+    `(c) LO 2.5 3-light-types - 0 of ${meshSiteNames.length} meshed sites exceed threshold=${SMOKE_PIXEL_THRESHOLD}; perSiteDistance=${JSON.stringify(perSiteDistance)}`,
+  );
+}
+if (errors.length > 0) {
+  const codes = errors.map((e) => e.code).join(', ');
+  failures.push(`(d) Renderer.onError fired ${errors.length} times: [${codes}]`);
+}
+
+if (failures.length > 0) {
+  console.error(`[smoke] FAIL - ${failures.length} criteria failed:`);
+  for (const f of failures) console.error(`  ${f}`);
+  console.error(
+    "  rerun: pnpm --filter '@forgeax/app-learn-render-2-lighting-5-light-casters' smoke",
+  );
+  await delay(0);
+  device.destroy?.();
+  process.exit(1);
+}
+
+console.log(
+  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, LO 2.5 directional+4point+spot lit cube grid sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, RhiError count=0, wallTotalMs=${wallTotalMs}`,
+);
+
+device.destroy?.();
+delete globalThis.navigator.gpu;
+process.exit(0);
