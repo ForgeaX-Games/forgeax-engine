@@ -175,7 +175,7 @@ describe('AC-26 same prefab mounted multiple times — disjoint mappings', () =>
     const r = world.instantiateScene(parentHandle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const inst = world.get(r.value.root, SceneInstance);
+    const inst = world.get(r.value, SceneInstance);
     if (!inst.ok) throw new Error('get SceneInstance failed');
     // Two mount-time children at memberFirst=3 and memberFirst=4 should be
     // distinct entities.
@@ -215,7 +215,7 @@ describe('AC-24 outer entity ChildOf points into mount sub-region', () => {
     const r = world.instantiateScene(parentHandle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const inst = world.get(r.value.root, SceneInstance);
+    const inst = world.get(r.value, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
     const outerE = inst.value.mapping[1] as unknown as number;
     const memberE = inst.value.mapping[3] as unknown as number;

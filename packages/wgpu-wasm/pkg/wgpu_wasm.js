@@ -729,10 +729,7 @@ export class RhiWgpuQueue {
      * @param {Array<any>} buffers
      */
     submit(buffers) {
-        const ret = wasm.rhiwgpuqueue_submit(this.__wbg_ptr, buffers);
-        if (ret[1]) {
-            throw takeFromExternrefTable0(ret[0]);
-        }
+        wasm.rhiwgpuqueue_submit(this.__wbg_ptr, buffers);
     }
     /**
      * bug-20260610: explicit `js_name = writeBuffer` because wasm-bindgen's
@@ -2586,7 +2583,7 @@ function __wbg_get_imports() {
             arg0.viewport(arg1, arg2, arg3, arg4);
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 1268, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 1261, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_a677eb11d0f21513___convert__closures_____invoke___wasm_bindgen_a677eb11d0f21513___JsValue__core_f4ce2b6cc8c3b44d___result__Result_____wasm_bindgen_a677eb11d0f21513___JsError___true_);
             return ret;
         },

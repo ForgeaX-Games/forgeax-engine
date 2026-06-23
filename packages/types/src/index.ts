@@ -1305,94 +1305,6 @@ export type AssetBrand =
   | 'RenderPipelineAsset'
   | 'TilesetAsset';
 
-/**
- * The 1:1 `Asset['kind']` -> `AssetBrand` mapping (feat-20260622 D-4 / D-8).
- * Brand is derived from kind, never stored on the envelope (charter Derive); the
- * `Record<Asset['kind'], AssetBrand>` key completeness is the guard that a new
- * Asset kind must add its brand mapping (a missing key is a compile error),
- * replacing the retired 14-arm `assetBrand` switch. Co-located with the
- * `AssetBrand` union (D-8) so the mapping and its codomain share one SSOT.
- */
-export const ASSET_BRAND: Record<Asset['kind'], AssetBrand> = {
-  mesh: 'MeshAsset',
-  texture: 'TextureAsset',
-  sampler: 'SamplerAsset',
-  material: 'MaterialAsset',
-  scene: 'SceneAsset',
-  'cube-texture': 'CubeTextureAsset',
-  skeleton: 'SkeletonAsset',
-  skin: 'SkinAsset',
-  'animation-clip': 'AnimationClip',
-  audio: 'AudioClipAsset',
-  shader: 'ShaderAsset',
-  font: 'FontAsset',
-  'render-pipeline': 'RenderPipelineAsset',
-  tileset: 'TilesetAsset',
-};
-
-// === AssetRef + AssetEnvelope (feat-20260622-asset-ref-graph-protocol-unification-refs-as-ssot M1 / w1) ===
-//
-// Decision anchors:
-//   - plan-strategy D-1: single envelope type AssetEnvelope = { guid, kind, name?,
-//     payload, refs } — ImportedAsset is upgraded to this shape; assetCatalog
-//     value type changes from Map<string, Asset> to Map<string, AssetEnvelope>.
-//   - plan-strategy D-2: scene refs are importer flat superset (mesh U material U
-//     texture U skeleton U skin); texture edges have sourceField=undefined (no
-//     per-entity origin).
-//   - plan-strategy D-3: sourceField is structured triple { componentName,
-//     fieldName, arrayIndex? } — consumers read via property access, not string
-//     parse (charter P3).
-//   - plan-strategy D-10: edge metadata (AssetRef) does NOT sink into Loader.load
-//     refs param — loader still receives GUID string projection.
-//   - plan-strategy OOS-1: Asset closed union unchanged; AssetEnvelope wraps it.
-//   - plan-strategy OOS-4: AssetErrorCode member set unchanged (21 members).
-//   - charter F1: single-entry indexability — refs field name cross-layer
-//     consistent (ImportedAsset.refs / AssetEnvelope.refs / pack-index refs).
-
-/**
- * Structured edge metadata carried in an asset envelope's `refs[]`. Each entry
- * records a GUID-level reference plus optional provenance: which scene entity
- * field originated the reference (``sourceField``) and the entity's local id
- * (``sceneEntityId``). Texture edges and other transitive references have no
- * per-entity origin — ``sourceField`` is ``undefined`` for those (D-2).
- *
- * AI users consume ``sourceField`` via property access (``ref.sourceField?.componentName``
- * / ``ref.sourceField?.fieldName`` / ``ref.sourceField?.arrayIndex``), never by
- * parsing a concatenated string (charter P3).
- */
-export interface AssetRef {
-  readonly guid: string;
-  readonly sourceField?: {
-    readonly componentName?: string;
-    readonly fieldName: string;
-    readonly arrayIndex?: number;
-  };
-  readonly sceneEntityId?: number;
-}
-
-/**
- * Self-contained asset envelope — the single shape through which assets flow
- * from import to catalog to recursive load (plan-strategy D-1).
- *
- * ``payload`` carries the closed ``Asset`` union member (mesh / texture / scene /
- * material / etc.). ``refs`` is the authoritative reference graph — every GUID
- * this asset transitively depends on, with optional edge metadata
- * (``sourceField`` / ``sceneEntityId``). ``name`` is the per-asset display name
- * (may be undefined; ``resolveName`` derives the final name via a three-argument
- * XOR that also considers the package path).
- */
-export interface AssetEnvelope {
-  readonly guid: string;
-  readonly kind: string;
-  // Per-GUID stored display name -- the `storedName` argument resolveName feeds
-  // to deriveAssetName (the single home for the explicit name, replacing the
-  // retired storedNameOf side table). `undefined` = no explicit name (resolveName
-  // then applies the multi-asset basename fallback / no-package '' branch).
-  readonly name?: string;
-  readonly payload: Asset;
-  readonly refs: readonly AssetRef[];
-}
-
 // === Package interface (feat-20260618-asset-and-pack-name-fields M1 / w2) ======
 //
 // Decision anchors:
@@ -1593,9 +1505,8 @@ export interface SceneAsset {
    *
    * On disk: refs[] indices, mirror of `mounts[].source`.
    * Post-parseScenePayload: GUID strings (resolved via refs[]).
-   * Enumerated in the scene envelope's `refs[]` (the recursion source) so
-   * `loadByGuid<SceneAsset>` recursively pulls each SkinAsset before
-   * `instantiate`.
+   * Walked by `collectRefs(scene)` so `loadByGuid<SceneAsset>` recursively
+   * pulls each SkinAsset before `instantiate`.
    */
   readonly skinGuids?: readonly string[];
 }
@@ -2200,25 +2111,7 @@ export type AssetErrorDetail =
       readonly index: number;
       readonly refsLength: number;
     }
-  | { readonly vertexCount: number; readonly floatsPerVertex: number }
-  // feat-20260622 verify r1: sub-asset load-failure breadcrumb in structured
-  // form. The recursive loader composes the same provenance into the `.hint`
-  // string; this variant additionally exposes it for property access so AI
-  // users locate the broken edge without parsing the hint (charter P3,
-  // requirements section error-self-recovery). `sourceField`/`sceneEntityId`
-  // mirror the originating AssetRef edge; both undefined for transitive
-  // (texture) edges with no per-entity origin (D-2).
-  | {
-      readonly referencedByGuid: string;
-      readonly referencedByKind: string;
-      readonly subAssetGuid: string;
-      readonly sceneEntityId?: number;
-      readonly sourceField?: {
-        readonly componentName?: string;
-        readonly fieldName: string;
-        readonly arrayIndex?: number;
-      };
-    };
+  | { readonly vertexCount: number; readonly floatsPerVertex: number };
 
 // === Image importer error model SSOT (feat-20260515-learn-render-getting-started M2 T-M2-04) ===
 //
@@ -4656,7 +4549,7 @@ export interface ImportedAsset {
   readonly kind: string;
   readonly name?: string;
   readonly payload: Asset;
-  readonly refs: readonly AssetRef[];
+  readonly refs: readonly string[];
 }
 
 /**

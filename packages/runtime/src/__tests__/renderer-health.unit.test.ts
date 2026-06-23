@@ -65,37 +65,27 @@ describe('HealthReason narrowing (AC-05)', () => {
 // ── w2: RecoverError union exhaustiveness (AC-06) ──────────────────────────
 
 describe('RecoverError closed union (AC-06)', () => {
-  it('switch(err.code) exhaustively matches all members without default', () => {
-    // Consumer-side switch matching every RecoverErrorCode member.
+  it('switch(err.code) exhaustively matches both members without default', () => {
+    // Consumer-side switch matching both RecoverErrorCode members.
     // TS must not emit non-exhaustive errors; no `default` branch.
-    // feat-20260622-s5 M3 / w19: union grew add-only to 4 members (adapter /
-    // device unavailable join the S3 not-needed / not-implemented(reserved)).
     function handleRecover(err: RecoverError): string {
       switch (err.code) {
         case 'recover-not-needed':
           return `not-needed: ${err.hint}`;
         case 'recover-not-implemented':
           return `not-implemented: ${err.hint}`;
-        case 'recover-adapter-unavailable':
-          return `adapter-unavailable: ${err.hint}`;
-        case 'recover-device-unavailable':
-          return `device-unavailable: ${err.hint}`;
       }
     }
     expect(typeof handleRecover).toBe('function');
   });
 
-  it('RecoverErrorCode has exactly 4 members', () => {
+  it('RecoverErrorCode has exactly 2 members', () => {
     function exhaustive(code: RecoverErrorCode): string {
       switch (code) {
         case 'recover-not-needed':
           return 'not-needed';
         case 'recover-not-implemented':
           return 'not-implemented';
-        case 'recover-adapter-unavailable':
-          return 'adapter-unavailable';
-        case 'recover-device-unavailable':
-          return 'device-unavailable';
       }
     }
     expect(typeof exhaustive).toBe('function');
@@ -477,11 +467,6 @@ describe('Renderer health/recover integration (M2 RED)', () => {
   });
 
   // ── w9: recover() healthy-state returns recover-not-needed (AC-04) ────────
-  //
-  // feat-20260622-s5 M3 / w19 migration: recover() is now async (device rebuild
-  // is async). The alive-state guard returns recover-not-needed synchronously
-  // inside the Promise. The full rebuild success/failure-code matrix lives in
-  // renderer-recover.unit.test.ts (w10-w14); this stays a health-surface smoke.
 
   it('w9: recover() on healthy renderer returns recover-not-needed error', async () => {
     const canvas = makeMockCanvas();
@@ -492,14 +477,14 @@ describe('Renderer health/recover integration (M2 RED)', () => {
       { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
     );
 
-    const recoverFn = (renderer as unknown as Record<string, unknown>).recover as
-      | (() => Promise<Result<void, RecoverError>>)
-      | undefined;
-    if (!recoverFn) {
-      throw new Error('renderer.recover() missing');
+    // TDD RED: renderer.recover() does not exist on Renderer until w11.
+    const result =
+      (
+        (renderer as unknown as Record<string, unknown>).recover as () => Result<void, RecoverError>
+      )?.() ?? null;
+    if (!result) {
+      throw new Error('TDD RED: renderer.recover() not implemented yet (expected after w11+w13)');
     }
-    const result = await recoverFn();
-    expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('recover-not-needed');
       expect(typeof result.error.expected).toBe('string');
@@ -509,17 +494,9 @@ describe('Renderer health/recover integration (M2 RED)', () => {
     }
   });
 
-  // ── w10: recover() on degraded state attempts a rebuild, never fakes alive ─
-  //
-  // feat-20260622-s5 M3 / w19 migration: the S3 placeholder behaviour
-  // (recover-not-implemented, health unchanged) is gone — recover() now runs a
-  // single idempotent rebuild. On this minimal single-entry HEALTH manifest the
-  // rebuild's engine-SSOT-triple check fails, so recover() resolves
-  // recover-device-unavailable and LEAVES health at device-lost (A-AC-07: never
-  // fakes the renderer back to alive on failure). The success path (full triple
-  // manifest -> ok + alive) is covered in renderer-recover.unit.test.ts (w10).
+  // ── w10: recover() degraded-state placeholder + health unchanged (AC-04b) ─
 
-  it('w10: recover() on degraded renderer attempts rebuild; failure keeps health device-lost', async () => {
+  it('w10: recover() on degraded renderer returns recover-not-implemented + health unchanged', async () => {
     const canvas = makeMockCanvas();
     const { createRenderer } = await import('../createRenderer');
     const renderer = await createRenderer(
@@ -528,198 +505,55 @@ describe('Renderer health/recover integration (M2 RED)', () => {
       { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
     );
 
+    // TDD RED: health() does not exist on Renderer until w11.
     const healthFn = (renderer as unknown as Record<string, unknown>).health as
       | (() => HealthSnapshot)
       | undefined;
     if (!healthFn) {
-      throw new Error('renderer.health() missing');
+      throw new Error('TDD RED: renderer.health() not implemented yet');
     }
     const recoverFn = (renderer as unknown as Record<string, unknown>).recover as
-      | (() => Promise<Result<void, RecoverError>>)
+      | (() => Result<void, RecoverError>)
       | undefined;
     if (!recoverFn) {
-      throw new Error('renderer.recover() missing');
+      throw new Error('TDD RED: renderer.recover() not implemented yet');
     }
 
     // Drive into degraded state via device.lost (same mock path as w14).
-    if (!_testDeviceLostResolve) throw new Error('device.lost resolver not set up');
-    _testDeviceLostResolve({
-      reason: 'unknown',
-      message: 'test device lost for w10 degraded-state',
-    });
-
-    await vi.waitFor(() => {
-      expect(healthFn().reason).toBe('device-lost');
-    });
-    expect(healthFn().reason).toBe('device-lost');
-
-    // recover() runs a single rebuild attempt. The reserved recover-not-implemented
-    // is never produced anymore; on this minimal manifest the rebuild fails with a
-    // device-unavailability code.
-    const result = await recoverFn();
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).not.toBe('recover-not-implemented');
-      expect(result.error.code).toBe('recover-device-unavailable');
-    }
-
-    // A-AC-07: failure never fakes the renderer back to alive.
-    const snapAfter = healthFn();
-    expect(snapAfter.reason).toBe('device-lost');
-    expect(snapAfter.recoverable).toBe(true);
-  });
-});
-
-// ──────────────────────────────────────────────────────────────────────────────
-// M2 draw guard tests (w7 — TDD RED)
-//
-// These tests verify device-lost draw() silent return + disposed latch. They are
-// RED until w9 adds the health-state guard in draw().
-// ──────────────────────────────────────────────────────────────────────────────
-
-describe('Renderer draw device-lost guard (w7 TDD RED)', () => {
-  beforeEach(() => {
-    makeGPUSpy = makeStubGPU();
-    vi.stubGlobal('navigator', { ...navigator, gpu: makeGPUSpy });
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    _testDeviceLostResolve = null;
-  });
-
-  // ── w7(a): device-lost -> draw() returns err silently ──────────────────────
-
-  it('w7(a): device-lost state draw() returns Result.err without firing onError each frame', async () => {
-    const canvas = makeMockCanvas();
-    const { createRenderer } = await import('../createRenderer');
-    const renderer = await createRenderer(
-      canvas,
-      {},
-      { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
-    );
-
-    const healthFn = (renderer as unknown as Record<string, unknown>).health as
-      | (() => HealthSnapshot)
-      | undefined;
-    if (!healthFn) {
-      throw new Error('TDD RED: renderer.health() not found');
-    }
-
-    // Subscribe to onError to verify no per-frame fire
-    const onErrorFn = (renderer as unknown as Record<string, unknown>).onError as
-      | ((cb: (err: { code: string }) => void) => () => void)
-      | undefined;
-    if (!onErrorFn) {
-      throw new Error('TDD RED: renderer.onError() not found');
-    }
-    const errorCb = vi.fn<(err: { code: string }) => void>();
-    onErrorFn(errorCb);
-
-    // Need a World with Camera to reach draw internals
-    const { World } = await import('@forgeax/engine-ecs');
-    const { Transform, Camera } = await import('../index');
-    const world = new World();
-    world.spawn(
-      {
-        component: Transform,
-        data: {
-          posX: 0,
-          posY: 0,
-          posZ: 10,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
-        },
-      },
-      {
-        component: Camera,
-        data: {
-          fov: Math.PI / 4,
-          aspect: 1,
-          near: 0.1,
-          far: 100,
-          clearR: 0,
-          clearG: 0,
-          clearB: 0,
-          clearA: 1,
-        },
-      },
-    );
-
-    await renderer.ready;
-
-    // Baseline: health is alive
-    expect(healthFn().reason).toBe('alive');
-
-    // Trigger device-lost
-    if (!_testDeviceLostResolve) throw new Error('device.lost resolver not set up');
-    _testDeviceLostResolve({
-      reason: 'unknown',
-      message: 'device lost for draw guard test',
-    });
-
-    await vi.waitFor(() => {
-      expect(healthFn().reason).toBe('device-lost');
-    });
-
-    // Reset error spy counter after lost event (the lost channel itself fires onError once)
-    errorCb.mockClear();
-
-    // Draw N=5 times in device-lost state
-    for (let i = 0; i < 5; i++) {
-      const result = renderer.draw(world);
-      // TDD RED / AC-10: draw returns err silently (not ok for device-lost)
-      expect(result.ok).toBe(false);
-    }
-
-    // TDD RED / AC-10: onError was NOT fired during those 5 draws (silent return)
-    // Current behavior (w7 RED): draw fires onError each frame through the normal
-    // device-lost flow (dual-channel), or the disposed/rhi-not-available path fires.
-    // After w9 fix: zero onError fires for draw() during device-lost.
-    expect(errorCb).not.toHaveBeenCalled();
-  });
-
-  // ── w7(b): disposed latch — post-dispose lost callback is no-op ────────────
-
-  it('w7(b): disposed latch prevents reconstruction on device-lost event', async () => {
-    const canvas = makeMockCanvas();
-    const { createRenderer } = await import('../createRenderer');
-    const renderer = await createRenderer(
-      canvas,
-      {},
-      { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
-    );
-
-    // TDD RED: dispose then trigger lost — should not try to reconstruct
-    const disposeFn = (renderer as unknown as Record<string, unknown>).dispose as
-      | (() => void)
-      | undefined;
-    if (!disposeFn) {
-      throw new Error('TDD RED: renderer.dispose() not found');
-    }
-
-    disposeFn();
-
-    // After dispose, trigger device.lost (should be no-op, no throw)
+    // F-2: _internal_getHealthRegistry removed; test uses real device.lost fire.
     if (!_testDeviceLostResolve) throw new Error('device.lost resolver not set up');
     _testDeviceLostResolve({
       reason: 'destroyed',
-      message: 'lost after dispose',
+      message: 'test device lost for w10 degraded-state',
     });
 
-    // Allow microtask flush — no assertion needed beyond "doesn't throw/crash"
-    await new Promise((r) => setTimeout(r, 50));
+    // Flush microtask so device.lost.then() fires into the health registry
+    await vi.waitFor(() => {
+      expect(healthFn().reason).toBe('device-lost');
+    });
 
-    // TDD RED: disposed renderer.draw returns err
-    const { World } = await import('@forgeax/engine-ecs');
-    const world = new World();
-    const result = renderer.draw(world);
-    expect(result.ok).toBe(false);
+    // Verify health() reflects the degraded state
+    const snapBefore = healthFn();
+    expect(snapBefore.reason).toBe('device-lost');
+
+    // recover() on degraded state must return recover-not-implemented (AC-04b)
+    const result = recoverFn();
+    if (result.ok) {
+      expect(result.ok).toBe(false); // must never return ok
+      return;
+    }
+    expect(result.error.code).toBe('recover-not-implemented');
+    expect(typeof result.error.expected).toBe('string');
+    expect(result.error.expected.length).toBeGreaterThan(0);
+    expect(typeof result.error.hint).toBe('string');
+    expect(result.error.hint.length).toBeGreaterThan(0);
+    // AC-04b: hint must mention S5 / self-heal is not yet implemented
+    expect(result.error.hint).toMatch(/S5|self-heal|not yet implemented|placeholder/i);
+
+    // After recover(), health is unchanged — reason still device-lost
+    const snapAfter = healthFn();
+    expect(snapAfter.reason).toBe('device-lost');
+    expect(snapAfter.recoverable).toBe(true);
   });
 });
 
@@ -743,7 +577,7 @@ describe('Renderer health device.lost integration (M3 RED)', () => {
 
   // ── w14: device.lost health update (AC-10) ─────────────────────────────────
 
-  it('w14: device.lost reason=unknown sets health().reason to device-lost with correct detail + recoverable', async () => {
+  it('w14: device.lost sets health().reason to device-lost with correct detail + recoverable', async () => {
     const canvas = makeMockCanvas();
     const { createRenderer } = await import('../createRenderer');
     const renderer = await createRenderer(
@@ -763,14 +597,11 @@ describe('Renderer health device.lost integration (M3 RED)', () => {
     // Baseline: alive before device loss
     expect(healthFn().reason).toBe('alive');
 
-    // Trigger device.lost via the module-level resolver hook. reason 'unknown'
-    // = genuine unrecoverable loss (driver crash / TDR) which DOES flip health
-    // to device-lost. (reason 'destroyed' = intentional teardown, gated -- see
-    // w14b below.)
+    // Trigger device.lost via the module-level resolver hook
     if (!_testDeviceLostResolve) throw new Error('device.lost resolver not set up');
     _testDeviceLostResolve({
-      reason: 'unknown',
-      message: 'device lost (driver crash)',
+      reason: 'destroyed',
+      message: 'device was destroyed intentionally',
     });
 
     // Allow the microtask queue to flush so device.lost.then() fires
@@ -785,8 +616,8 @@ describe('Renderer health device.lost integration (M3 RED)', () => {
     // TS discriminated union narrows snap: in 'device-lost' branch detail is
     // HealthDetailDeviceLost with required lostReason (AC-05, no toHaveProperty bypass).
     if (snap.reason === 'device-lost') {
-      expect(snap.detail.lostReason).toBe('unknown');
-      expect(snap.detail.message).toBe('device lost (driver crash)');
+      expect(snap.detail.lostReason).toBe('destroyed');
+      expect(snap.detail.message).toBe('device was destroyed intentionally');
     }
   });
 
@@ -849,7 +680,7 @@ describe('Renderer health device.lost integration (M3 RED)', () => {
 
     // Trigger device.lost
     if (!_testDeviceLostResolve) throw new Error('device.lost resolver not set up');
-    _testDeviceLostResolve({ reason: 'unknown', message: 'lost' });
+    _testDeviceLostResolve({ reason: 'destroyed', message: 'lost' });
 
     // Wait for the health channel to fire
     await vi.waitFor(() => {
@@ -879,7 +710,7 @@ describe('Renderer health device.lost integration (M3 RED)', () => {
 
     // Trigger device.lost BEFORE registering the callback
     if (!_testDeviceLostResolve) throw new Error('device.lost resolver not set up');
-    _testDeviceLostResolve({ reason: 'unknown', message: 'late-attach test' });
+    _testDeviceLostResolve({ reason: 'destroyed', message: 'late-attach test' });
 
     // Flush the microtask so healthRegistry.fire() completes
     const healthFn = (renderer as unknown as Record<string, unknown>).health as

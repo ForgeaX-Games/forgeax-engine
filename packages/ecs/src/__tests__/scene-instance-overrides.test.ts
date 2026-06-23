@@ -51,7 +51,7 @@ describe('SceneInstance setSceneOverride / removeSceneOverride (w30 rewrite)', (
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value.root;
+    const root = r.value;
     const state = world.getSceneInstanceState(root).unwrap();
     expect(state.overrides.size).toBe(0);
 
@@ -79,7 +79,7 @@ describe('SceneInstance setSceneOverride / removeSceneOverride (w30 rewrite)', (
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const root = r.value.root;
+    const root = r.value;
     const entity = firstMember(world, root);
 
     world.setSceneOverride(root, entity, Transform, 'posX', 5).unwrap();
@@ -105,7 +105,7 @@ describe('SceneInstance setSceneOverride / removeSceneOverride (w30 rewrite)', (
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const root = r.value.root;
+    const root = r.value;
 
     const stray = world
       .spawn({ component: Transform, data: { posX: 11, posY: 22, posZ: 33 } })
@@ -127,7 +127,7 @@ describe('SceneInstance setSceneOverride / removeSceneOverride (w30 rewrite)', (
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const root = r.value.root;
+    const root = r.value;
     const state = world.getSceneInstanceState(root).unwrap();
 
     expect(state.source).toBe(handle);
@@ -145,7 +145,7 @@ describe('SceneInstance setSceneOverride / removeSceneOverride (w30 rewrite)', (
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const root = r.value.root;
+    const root = r.value;
     const entity = firstMember(world, root);
 
     world.setSceneOverride(root, entity, Transform, 'posX', 1).unwrap();

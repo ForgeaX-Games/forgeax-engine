@@ -2337,8 +2337,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //
   // Anchors:
   //   - requirements §AC-07 (BindGroup cache auto-invalidates after grow —
-  // feat-20260622-handle-to-id-allocator-elimination: after grow the
-  //   new inner buffer object is a fresh WeakMap chain key → cache miss)
+  //     inner buffer handle id changes ⇒ buildBindGroupCacheKey ⇒ new key)
   //   - requirements §AC-11 (dev mode console.info with `[mesh-ssbo]` prefix)
   //   - plan-strategy §2.D-3 (import.meta.env?.DEV optional-chain — dawn smoke
   //     defaults false)
@@ -2352,21 +2351,21 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       vi.restoreAllMocks();
     });
 
-    it('(a) inner buffer changes after grow — new WeakMap key → cache miss (AC-07)', () => {
+    it('(a) inner buffer handle changes after grow — getOrAssignHandleId yields a NEW id (cache miss)', () => {
       const { internals, ctrl } = makeInternalsWithRealController();
       const meshBeforeBuf = ctrl.state.mesh.buffer;
-      // Simulate a WeakMap chain root keyed by the pre-grow inner buffer.
-      const root = new WeakMap<object, unknown>();
-      root.set(meshBeforeBuf as unknown as object, { __leaf: 'bg-old' });
+      // Pretend a per-frame handle map has assigned id=1 to the pre-grow inner buffer.
+      const handleMap = new Map<object, number>();
+      handleMap.set(meshBeforeBuf as unknown as object, 1);
 
       ensureMeshSsboCapacity(internals, 1500);
 
       const meshAfterBuf = ctrl.state.mesh.buffer;
       expect(meshAfterBuf).not.toBe(meshBeforeBuf);
-      // AC-07: the new inner buffer is a different object, so WeakMap chain
-      // lookup naturally misses — no numeric id needed.
-      expect(root.has(meshAfterBuf as unknown as object)).toBe(false);
-      expect(root.has(meshBeforeBuf as unknown as object)).toBe(true);
+      // The new inner buffer is NOT in the existing handle map ⇒ a fresh id
+      // would be assigned by the real `getOrAssignHandleId` ⇒ buildBindGroupCacheKey
+      // would compose a different key ⇒ meshBindGroupCache miss + rebuild.
+      expect(handleMap.has(meshAfterBuf as unknown as object)).toBe(false);
     });
 
     it('(b) dev=true (vitest default) → console.info called once with `[mesh-ssbo]` + old + new + requested', () => {

@@ -83,8 +83,8 @@ import type { RhiError } from '@forgeax/engine-rhi';
  * | `'skin-palette-overflow'` | `SkinPaletteOverflowError` | palette buffer exceeds device maxStorageBufferBindingSize |
  * | `'material-resolved-empty-passes'` | `MaterialResolvedEmptyPassesError` | material parent chain walk resolves to zero passes (missing-parent or no-pass-in-chain) |
  * | `'skybox-cubemap-not-ready'` | `SkyboxCubemapNotReadyError` | cubemap asset not uploaded yet when SkyboxBackground spawns (degrade to clear colour + fire structured error) |
- * | `'mesh-ssbo-capacity-exceeded'` | `MeshSsboCapacityExceededError` | post-grow mesh SSBO capacity still cannot accommodate the requested slot count (defensive fallback under degenerate conditions; frame renders subset) |
- * | `'mesh-ssbo-ceiling-reached'` | `MeshSsboCeilingReachedError` | the requested mesh SSBO slot count would exceed `device.limits.maxStorageBufferBindingSize`; grow refuses to allocate (frame renders subset) |
+ * | `'mesh-ssbo-capacity-exceeded'` | `MeshSsboCapacityExceededError` | post-grow mesh SSBO capacity still cannot accommodate the requested slot count (defensive fallback under degenerate conditions) |
+ * | `'mesh-ssbo-ceiling-reached'` | `MeshSsboCeilingReachedError` | the requested mesh SSBO slot count would exceed `device.limits.maxStorageBufferBindingSize`; grow refuses to allocate (frame is skipped) |
  * | `'hdrp-caps-insufficient'` | `HdrpCapsInsufficientError` | install-time: `device.caps.maxStorageBuffersPerShaderStage < 4`; HDRP cannot run on this device |
  * | `'hdrp-light-budget-exceeded'` | `HdrpLightBudgetExceededError` | per-frame fail-soft: light count exceeds HDRP budget (256); truncate to 256 |
  * | `'hdrp-index-list-overflow'` | `HdrpIndexListOverflowError` | per-frame fail-soft: cluster binner light index list overflow (>65536); continue rendering |
@@ -670,9 +670,9 @@ export interface MeshSsboCeilingReachedDetail {
  * Structured error for mesh-SSBO grow refused because the request exceeds
  * `device.limits.maxStorageBufferBindingSize`.
  *
- * Emitted by `growMeshSsbo` (D-5: fire, never throw). The frame renders a
- * degraded subset (truncated to pre-grow capacity) per plan-strategy D-2 —
- * no black frame. Four-field surface aligned with `SkinPaletteOverflowError`:
+ * Emitted by `growMeshSsbo` (D-5: fire, never throw). The frame is skipped
+ * — no `writeBuffer`, no `draw` (AC-08). Four-field surface aligned with
+ * `SkinPaletteOverflowError`:
  *   - `.code = 'mesh-ssbo-ceiling-reached'`
  *   - `.expected` — requested * stride <= device.limits.maxStorageBufferBindingSize
  *   - `.hint` — reduce per-frame entity count or pick a higher-tier adapter
@@ -1386,31 +1386,16 @@ export class PointShadowAtlasBoundsViolationError extends Error {
 // ── RecoverError (feat-20260621-renderer-health-recover-skeleton M1) ─────────
 
 /**
- * Closed union of recover() error codes.
+ * Closed union of recover() error codes (plan-strategy D-3).
  *
- * Exactly 4 members (feat-20260622-s5 M3 / D-2 add-only minor; the S3
- * skeleton shipped the first two):
+ * Exactly 2 members:
  *   - `'recover-not-needed'` — health state is `'alive'`, no recovery required
- *     (also returned after a successful recover: the renderer is alive again,
- *     so a second recover() is a no-op signal — A-AC-08 idempotency)
- *   - `'recover-not-implemented'` — **reserved**. The S3 skeleton returned this
- *     for any degraded state; M3 implements recover() so this code is no longer
- *     produced. Kept in the union (not deleted) so consumers' exhaustive
- *     switches stay valid — AGENTS.md Change stance: `*ErrorCode` unions evolve
- *     add-only minor, never remove a member
- *   - `'recover-adapter-unavailable'` — rebuild requested a new adapter but
- *     `requestAdapter` returned no adapter (driver / GPU may have been reset)
- *   - `'recover-device-unavailable'` — an adapter was obtained but
- *     `requestDevice` failed or threw (device creation is driver-dependent)
- *
- * On both failure codes the health state stays `'device-lost'` (recover() never
- * fakes the renderer back to `'alive'` on failure — A-AC-07). recover() is a
- * single idempotent attempt: no retry loop, no backoff, no timer (A-OOS-1).
+ *   - `'recover-not-implemented'` — degraded state detected but S3 has no
+ *     self-heal; `recover()` returns `Result.err`, never `Result.ok`
  *
  * AI users exhaustively switch without default; TS guards completeness.
  */
-// biome-ignore format: single-line union keeps the A-AC-09 grep gate (exactly 4 `recover-*` literals on the definition line) stable
-export type RecoverErrorCode = 'recover-not-needed' | 'recover-not-implemented' | 'recover-adapter-unavailable' | 'recover-device-unavailable';
+export type RecoverErrorCode = 'recover-not-needed' | 'recover-not-implemented';
 
 /**
  * Structured error for `Renderer.recover()` failures.
@@ -1420,7 +1405,7 @@ export type RecoverErrorCode = 'recover-not-needed' | 'recover-not-implemented' 
  *   - `.expected: string` — expected-state description
  *   - `.hint: string` — actionable recovery guidance
  *
- * No `.detail` field: each code has fixed semantics with no variable data.
+ * No `.detail` field: both codes have fixed semantics with no variable data.
  */
 export class RecoverError extends Error {
   readonly code: RecoverErrorCode;
@@ -1428,36 +1413,23 @@ export class RecoverError extends Error {
   readonly hint: string;
 
   constructor(code: RecoverErrorCode) {
-    let message: string;
-    let expected: string;
-    let hint: string;
-    switch (code) {
-      case 'recover-not-needed':
-        message = 'recover-not-needed: renderer is not in a degraded state';
-        expected =
-          'renderer is healthy; call health() first to confirm degraded state before calling recover()';
-        hint = 'call health() first to confirm degraded state before calling recover()';
-        break;
-      case 'recover-not-implemented':
-        message = 'recover-not-implemented: self-heal recovery is not yet implemented';
-        expected = 'recovery is not yet implemented; self-heal lands in S5';
-        hint = 'self-heal recovery lands in S5; health().reason still reflects the degraded state';
-        break;
-      case 'recover-adapter-unavailable':
-        message = 'recover-adapter-unavailable: requestAdapter returned no adapter during rebuild';
-        expected = 'requestAdapter returned null; driver/GPU may have been reset';
-        hint = 'retry recover() after a host-chosen delay; adapter availability is transient';
-        break;
-      case 'recover-device-unavailable':
-        message = 'recover-device-unavailable: requestDevice failed or threw during rebuild';
-        expected = 'requestDevice failed or threw';
-        hint = 'retry recover() after a host-chosen delay; device creation is driver-dependent';
-        break;
+    if (code === 'recover-not-needed') {
+      const expected =
+        'renderer is healthy; call health() first to confirm degraded state before calling recover()';
+      const hint = 'call health() first to confirm degraded state before calling recover()';
+      super('recover-not-needed: renderer is not in a degraded state');
+      this.code = 'recover-not-needed';
+      this.expected = expected;
+      this.hint = hint;
+    } else {
+      const expected = 'recovery is not yet implemented; self-heal lands in S5';
+      const hint =
+        'self-heal recovery lands in S5; health().reason still reflects the degraded state';
+      super('recover-not-implemented: self-heal recovery is not yet implemented');
+      this.code = 'recover-not-implemented';
+      this.expected = expected;
+      this.hint = hint;
     }
-    super(message);
-    this.code = code;
-    this.expected = expected;
-    this.hint = hint;
     this.name = 'RecoverError';
   }
 }

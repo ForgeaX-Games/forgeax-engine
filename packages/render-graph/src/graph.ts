@@ -393,32 +393,17 @@ export class RenderGraph<Ctx = unknown> {
       return;
     }
     for (const pooled of this.transientPool.values()) {
-      try {
-        device.destroyTexture(pooled.texture as Texture);
-      } catch {
-        // swallow-and-continue: per-handle destroy failures do not
-        // interrupt the drain chain (docstring tolerance contract).
-      }
+      device.destroyTexture(pooled.texture as Texture);
     }
     this.transientPool.clear();
     // bug-20260622 D-6: drain teardown path — destroy any pendingDestroy
     // items left over (Renderer.dispose() has no in-flight frames).
     for (const pooled of this.pendingDestroy) {
-      try {
-        device.destroyTexture(pooled.texture as Texture);
-      } catch {
-        // swallow-and-continue: per-handle destroy failures do not
-        // interrupt the drain chain (docstring tolerance contract).
-      }
+      device.destroyTexture(pooled.texture as Texture);
     }
     this.pendingDestroy.length = 0;
     for (const pooled of this.persistentTextures.values()) {
-      try {
-        device.destroyTexture(pooled.texture as Texture);
-      } catch {
-        // swallow-and-continue: per-handle destroy failures do not
-        // interrupt the drain chain (docstring tolerance contract).
-      }
+      device.destroyTexture(pooled.texture as Texture);
     }
     this.persistentTextures.clear();
   }
@@ -514,36 +499,8 @@ export class RenderGraph<Ctx = unknown> {
 
     // Destroy snapshot items.
     for (const pooled of snapshot) {
-      try {
-        device.destroyTexture(pooled.texture as Texture);
-      } catch {
-        // swallow-and-continue: per-handle destroy errors are tolerated
-        // (docstring contract) — a stale handle does not interrupt the
-        // reclaim chain for subsequent items.
-      }
+      device.destroyTexture(pooled.texture as Texture);
     }
-  }
-
-  /**
-   * Drop the pendingDestroy queue WITHOUT calling device.destroyTexture
-   * (feat-20260622-s5 M3 / B-2 / B-AC-02).
-   *
-   * Used on the device-lost recover() rebuild path: the queue holds
-   * PooledTexture handles minted against the now-lost device, so calling
-   * destroyTexture on them against the freshly-rebuilt device is meaningless
-   * (the old GPUDevice owns them; spec retires its resources implicitly when
-   * it is lost). recover() calls this after `gpuStore.destroyAll()` and before
-   * `tryCreateWebGPURenderer` so no stale handle reaches the new device.
-   *
-   * device-lost is an upstream judgement (createRenderer's health state); the
-   * graph stays RHI-pure and takes no device parameter — it only exposes the
-   * clear entry. Same effect as the existing null-device fast paths in drain()
-   * / reclaimRetiredTransients() (`pendingDestroy.length = 0`), surfaced as a
-   * method recover() can call directly. Idempotent: a second call on an
-   * already-empty queue is a no-op.
-   */
-  clearPendingDestroy(): void {
-    this.pendingDestroy.length = 0;
   }
 
   /**

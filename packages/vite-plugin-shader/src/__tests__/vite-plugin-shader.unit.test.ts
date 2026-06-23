@@ -17,13 +17,12 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { compileFailed, compileShader } from '@forgeax/engine-shader-compiler';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { loadEngineImportsMap } from '../engine-imports-map.js';
 import { buildEngineShaderManifest, forgeaxShader } from '../index.js';
 import { toRollupLog } from '../wrap.js';
@@ -1786,31 +1785,44 @@ ${MINIMAL_WGSL.trim()}
       expect(result == null).toBe(true);
     });
 
-    it('emitted adapter source contains SHADER_MANIFEST_PATH + BASE_URL composition', () => {
+    it('emitted adapter source executes and yields BundlerOptions-shaped object', async () => {
       const plugin = forgeaxShader() as unknown as PluginWithVirtualHooks;
       const resolved = plugin.resolveId?.call(undefined, VIRTUAL_ID) as string;
       const source = plugin.load?.call(undefined, resolved) as string;
-      expect(typeof source).toBe('string');
-      // After C-R8, the emitted source uses import.meta.env.BASE_URL with
-      // the SHADER_MANIFEST_PATH suffix constant (base-aware) instead of
-      // a hardcoded JSON.stringify('/shaders/manifest.json').
-      expect(source).toContain('import.meta.env.BASE_URL');
-      expect(source).toContain('shaders/manifest.json');
-      expect(source).toContain('shaderManifestUrl');
+      // Execute the emitted ESM source via dynamic data: import.
+      const dataUrl = `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
+      const mod = (await import(/* @vite-ignore */ dataUrl)) as {
+        forgeaxBundlerAdapter?: () => { shaderManifestUrl: string; importTransport?: unknown };
+      };
+      expect(typeof mod.forgeaxBundlerAdapter).toBe('function');
+      const opts = mod.forgeaxBundlerAdapter?.();
+      expect(typeof opts).toBe('object');
+      expect(typeof opts?.shaderManifestUrl).toBe('string');
+      expect((opts?.shaderManifestUrl ?? '').length).toBeGreaterThan(0);
+      // M2 SSOT fallback: createRenderer.ts:758 / vite-plugin-shader emit path
+      // both use `/shaders/manifest.json` (TASK-010 lock).
+      expect(opts?.shaderManifestUrl).toBe('/shaders/manifest.json');
+      // importTransport may be undefined or a function -- adapter does not
+      // synthesise a transport (consumers attach their own when needed).
+      if (opts?.importTransport !== undefined) {
+        expect(typeof opts.importTransport === 'function').toBe(true);
+      }
     });
   });
 
   describe('forgeaxBundlerAdapter return type (TASK-018 / AC-10 structural typing)', () => {
-    it('return value source declares forgeaxBundlerAdapter returning BundlerOptions shape', () => {
+    it('return value structurally satisfies BundlerOptions (string field + optional transport)', async () => {
       const plugin = forgeaxShader() as unknown as PluginWithVirtualHooks;
       const resolved = plugin.resolveId?.call(undefined, VIRTUAL_ID) as string;
       const source = plugin.load?.call(undefined, resolved) as string;
-      // After C-R8, source cannot be executed in Node (import.meta.env is
-      // Vite-only). Verify the source pattern instead: it declares a function
-      // returning { shaderManifestUrl, importTransport }.
-      expect(source).toContain('shaderManifestUrl');
-      expect(source).toContain('importTransport');
-      expect(source).toContain('import.meta.env.BASE_URL');
+      const dataUrl = `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
+      const mod = (await import(/* @vite-ignore */ dataUrl)) as {
+        forgeaxBundlerAdapter: () => { shaderManifestUrl: string; importTransport?: unknown };
+      };
+      const opts = mod.forgeaxBundlerAdapter();
+      // Compile-time type assertions (vitest typecheck).
+      expectTypeOf(opts.shaderManifestUrl).toBeString();
+      expectTypeOf(opts).toMatchTypeOf<{ shaderManifestUrl: string; importTransport?: unknown }>();
     });
   });
 }
@@ -2063,118 +2075,6 @@ struct UserParams { tint: vec4<f32> };
       const ctx = createMockContext();
       const result = await plugin.transform?.call(ctx as never, SUPERSET_WGSL, wgslPath);
       expect(result).not.toBeNull();
-    });
-  });
-}
-
-{
-  // --- from shader-manifest-ssot.test.ts ---
-  // C-R8 (studio-issues): SHADER_MANIFEST_PATH SSOT + base-aware.
-  //
-  // Pre-fix: three bare literals of 'shaders/manifest.json' scattered across
-  // the plugin source — :743 (SHADER_MANIFEST_URL constant, with leading /),
-  // :1956 (generateBundle emit) and :2038 (configureServer dev middleware).
-  // The adapter virtual module inlines the constant with a JSON.stringify,
-  // so an app under a non-root Vite base (e.g. /app/) gets the wrong URL.
-  //
-  // Post-fix: single SSOT constant SHADER_MANIFEST_PATH = 'shaders/manifest.json'
-  // (no leading slash), three consumers each compose their own prefix:
-  //   (1) virtual module adapter: (import.meta.env.BASE_URL ?? '/') + SHADER_MANIFEST_PATH
-  //   (2) generateBundle emit: SHADER_MANIFEST_PATH (relative, no leading /)
-  //   (3) configureServer middleware: '/' + SHADER_MANIFEST_PATH
-  //
-  // TDD red phase: grep should hit 3+ code lines (multiple bare literals)
-  // until w27 lands and consolidates them to exactly 1 (the constant definition).
-
-  // NOTE: test imports at top-level (merged import block).
-
-  const INDEX_PATH = resolve(fileURLToPath(import.meta.url), '..', '..', 'index.ts');
-
-  function stripComments(src: string): string {
-    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
-  }
-
-  function grepCodeLines(src: string, pattern: RegExp): Array<{ line: number; text: string }> {
-    const results: Array<{ line: number; text: string }> = [];
-    const lines = src.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (line === undefined) continue;
-      // Strip inline comment, then check.
-      const codeOnly = line.replace(/\/\/.*$/, '').replace(/\/\*.*\*\//g, '');
-      if (pattern.test(codeOnly)) {
-        results.push({ line: i + 1, text: codeOnly.trim() });
-      }
-    }
-    return results;
-  }
-
-  describe('shader-manifest-ssot.test.ts', () => {
-    describe('C-R8 shader manifest SSOT grep gate', () => {
-      it('AC-07: after fix, slash-tolerant grep for shaders/manifest.json in code lines hits exactly 1 line', () => {
-        // Post-fix assertion: exactly 1 code line (constant definition).
-        // Pre-fix: 3+ code lines (:743 constant, :1956 emit, :2038 middleware).
-        // This test FAILS (red) until w27 consolidates all literals.
-        const src = readFileSync(INDEX_PATH, 'utf8');
-        const pat = /['"]\/?shaders\/manifest\.json['"]/;
-        const hits = grepCodeLines(src, pat);
-        expect(hits.length).toBe(1);
-      });
-
-      it('AC-07: after fix, the single SSOT line is a SHADER_MANIFEST_PATH constant definition (no leading /)', () => {
-        const src = readFileSync(INDEX_PATH, 'utf8');
-        const pat = /['"]\/?shaders\/manifest\.json['"]/;
-        const hits = grepCodeLines(src, pat);
-        // The lone hit must be the constant definition.
-        expect(hits.length).toBeGreaterThanOrEqual(1);
-        const lone = hits[0];
-        if (lone !== undefined) {
-          expect(lone.text).toMatch(/const\s+SHADER_MANIFEST_PATH/);
-          // Must NOT contain leading slash in the literal.
-          expect(lone.text).not.toMatch(/['"]\/shaders/);
-        }
-      });
-
-      it('AC-07: after fix, forgeaxBundlerAdapter uses SHADER_MANIFEST_PATH with BASE_URL composition', () => {
-        // Post-fix: adapter source uses SHADER_MANIFEST_PATH (suffix constant)
-        // and composes with BASE_URL. Pre-fix: JSON.stringify(SHADER_MANIFEST_URL).
-        // This FAILS (red) until w27.
-        const src = readFileSync(INDEX_PATH, 'utf8');
-        const stripped = stripComments(src);
-        // The old URL constant should no longer appear in the VIRTUAL_BUNDLER_SOURCE.
-        const hasOldUrlInSrc = /SHADER_MANIFEST_URL/.test(stripped);
-        // Must use SHADER_MANIFEST_PATH (the new suffix constant) in adapter source.
-        const hasPathInSrc = stripped.includes('SHADER_MANIFEST_PATH');
-        // Must compose BASE_URL for base-aware resolution.
-        const hasBaseAware = stripped.includes('import.meta.env.BASE_URL');
-        expect(hasPathInSrc && hasBaseAware && !hasOldUrlInSrc).toBe(true);
-      });
-
-      it('AC-07: after fix, generateBundle emit fileName uses SHADER_MANIFEST_PATH (not bare literal)', () => {
-        // Post-fix: `fileName: SHADER_MANIFEST_PATH`.
-        // Pre-fix: `fileName: 'shaders/manifest.json'` (bare literal).
-        // This FAILS (red) until w27.
-        const src = readFileSync(INDEX_PATH, 'utf8');
-        const stripped = stripComments(src);
-        // Must use the constant in the emit block.
-        const hasConstantInEmit = /\bfileName:\s*SHADER_MANIFEST_PATH/.test(stripped);
-        // Bare literal 'shaders/manifest.json' must NOT appear in non-comment code.
-        // We already test that via the exact-1-line grep above; this is a focused check.
-        expect(hasConstantInEmit).toBe(true);
-      });
-
-      it('AC-07: after fix, configureServer manifestUrl uses SHADER_MANIFEST_PATH constant (not bare literal)', () => {
-        // Post-fix: `const manifestUrl = \`/${SHADER_MANIFEST_PATH}\``.
-        // Pre-fix: `const manifestUrl = '/shaders/manifest.json'` (bare literal).
-        // This FAILS (red) until w27.
-        const src = readFileSync(INDEX_PATH, 'utf8');
-        const stripped = stripComments(src);
-        // Must use the constant in the middleware manifestUrl.
-        const hasCompose =
-          /manifestUrl\s*=\s*`\/\$\{SHADER_MANIFEST_PATH\}`/.test(stripped) ||
-          /manifestUrl\s*=.*SHADER_MANIFEST_PATH/.test(stripped);
-        expect(hasCompose).toBe(true);
-      });
     });
   });
 }

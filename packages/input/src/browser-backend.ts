@@ -156,15 +156,9 @@ export function attachBrowserInputBackend(
   // OOS-1 keeps any explicit "request lock" / "exit lock" surface out
   // of the snapshot itself.
   function onCanvasClick(): void {
-    const fn = canvas.requestPointerLock;
-    if (typeof fn !== 'function') return;
-    // Pointer Lock requires window focus; skip silently when unfocused
-    // (the next focused click will acquire it) and swallow the async
-    // rejection so a post-load / iframe `WrongDocumentError` never
-    // surfaces as an unhandled promise rejection.
-    if (typeof doc.hasFocus === 'function' && !doc.hasFocus()) return;
-    const r = fn.call(canvas) as unknown;
-    if (r && typeof (r as Promise<void>).catch === 'function') (r as Promise<void>).catch(() => {});
+    if (typeof canvas.requestPointerLock === 'function') {
+      canvas.requestPointerLock();
+    }
   }
   safeAdd(canvas, 'click', onCanvasClick as EventListener);
 

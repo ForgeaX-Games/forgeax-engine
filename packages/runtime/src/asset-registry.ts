@@ -43,14 +43,12 @@ import { err, ok, type Result, type RhiError } from '@forgeax/engine-rhi';
 import type { ShaderRegistry } from '@forgeax/engine-shader';
 import {
   type AnimationChannel,
-  ASSET_BRAND,
   ASSET_ERROR_HINTS,
   type Asset,
-  type AssetEnvelope,
+  type AssetBrand,
   AssetError,
   type AssetErrorCode,
   type AssetErrorDetail,
-  type AssetRef,
   type CubeTextureAsset,
   type CubeTextureMetadata,
   derive,
@@ -108,6 +106,7 @@ import { postSpawnResolveJoints } from './scene-instances/post-spawn-resolve-joi
  * computation writes the real AABB into the caller's placeholder).
  */
 
+import { collectRefs } from './collect-refs';
 import type { EngineMetrics } from './engine-metrics';
 import { unpackMeshBin } from './mesh-bin';
 // feat-20260601-gpu-resource-store-extraction M1: the GPU texture / cubemap /
@@ -316,10 +315,38 @@ interface MutablePackage {
 // feat-20260608-tilemap-object-layer-rendering M0: AssetBrand union grows
 // 13 -> 14 with `'TilesetAsset'` in @forgeax/engine-types.
 
-// feat-20260622 D-4/D-8: the 14-arm assetBrand switch is retired for the
-// module-level ASSET_BRAND Record table in @forgeax/engine-types (brand derived
-// from kind; Record key completeness is the new-kind guard). Consumers read
-// ASSET_BRAND[kind] directly.
+function assetBrand(asset: Asset): AssetBrand {
+  switch (asset.kind) {
+    case 'mesh':
+      return 'MeshAsset';
+    case 'texture':
+      return 'TextureAsset';
+    case 'sampler':
+      return 'SamplerAsset';
+    case 'material':
+      return 'MaterialAsset';
+    case 'scene':
+      return 'SceneAsset';
+    case 'cube-texture':
+      return 'CubeTextureAsset';
+    case 'skeleton':
+      return 'SkeletonAsset';
+    case 'skin':
+      return 'SkinAsset';
+    case 'animation-clip':
+      return 'AnimationClip';
+    case 'audio':
+      return 'AudioClipAsset';
+    case 'shader':
+      return 'ShaderAsset';
+    case 'font':
+      return 'FontAsset';
+    case 'render-pipeline':
+      return 'RenderPipelineAsset';
+    case 'tileset':
+      return 'TilesetAsset';
+  }
+}
 
 // ─── Schema-driven material parse result (feat-20260523 M4-T01) ──────────
 // ─── AssetRegistry class ────────────────────────────────────────────────────
@@ -1961,7 +1988,7 @@ export class AssetRegistry {
   // (`world.allocSharedRef`) is the caller's job on the ECS/render side.
   // Sub-asset refs embedded in a payload stay as GUID strings (AssetGuid /
   // dash-form), never minted at load time. Keyed by lowercased GUID string.
-  private readonly assetCatalog: Map<string, AssetEnvelope> = new Map();
+  private readonly assetCatalog: Map<string, Asset> = new Map();
 
   // feat-20260618-asset-and-pack-name-fields M3 (D-1): the package index that
   // backs the two-segment asset identity `<packagePath>.<name>`. `packages`
@@ -1979,15 +2006,12 @@ export class AssetRegistry {
   // registerPackage to find-or-create the shared object.
   private readonly packageByPath: Map<string, MutablePackage> = new Map();
 
-  // Per-GUID stored display names now live on the asset envelope's `name` field
-  // (the single home, replacing the retired storedNameOf side table; D-6).
-  // resolveName reads `assetCatalog.get(key)?.name` as the `storedName` argument
-  // of deriveAssetName. `pendingNames` bridges the one ordering where a name is
-  // known before its envelope exists: the prod disk path registers the package
-  // (entry names) during resolveCatalogEntry, then catalogues the body later --
-  // catalog() drains the pending name into the new envelope, so nothing persists
-  // here once the envelope is in place.
-  private readonly pendingNames: Map<string, string> = new Map();
+  // Stored display names keyed by lowercased GUID. Multi-asset packages read
+  // their entry-level name here (D-2: name flows entry -> Package, never the
+  // payload); 1->N promotion writes the original asset's derived basename here
+  // (D-3); null-package assets that carry a self-name (AC-03) also store it
+  // here. resolveName reads it as the `storedName` argument of deriveAssetName.
+  private readonly storedNameOf: Map<string, string> = new Map();
 
   // ─── Prod pack-index fetch state (M4/w23) ──────────────────────────────
   // When packIndexUrl is configured, loadByGuid fetches pack-index.json on
@@ -2106,13 +2130,7 @@ export class AssetRegistry {
         throw new Error(`[asset-registry] builtin GUID ${guidStr} is not a valid UUID`);
       }
       const payload = builtinByHandle.get(unwrapHandle(handle));
-      if (payload !== undefined)
-        this.assetCatalog.set(guidStr.toLowerCase(), {
-          guid: guidStr,
-          kind: payload.kind,
-          payload,
-          refs: [],
-        });
+      if (payload !== undefined) this.assetCatalog.set(guidStr.toLowerCase(), payload);
     }
     // D-5: builtin meshes have no import path and no source name -- register
     // them with a null package so resolveName returns '' (the detectable
@@ -2176,20 +2194,14 @@ export class AssetRegistry {
    * the pack-index on the next load, re-resolving the relativeUrl whose body
    * cache was just dropped. No-op when the GUID is not catalogued.
    *
-   * Does NOT touch `packages` (a re-load's registerPackage overwrites them; D-8)
-   * and does NOT trigger GPU resource release (OOS-1,
+   * Does NOT touch `packages` / `storedNameOf` (a re-load's registerPackage
+   * overwrites them; D-8) and does NOT trigger GPU resource release (OOS-1,
    * q1 boundary: the asset is CPU-only; GPU resources follow the ECS).
    *
    * @param guid - Case-insensitive GUID string or AssetGuid.
    */
   invalidate(guid: string): void {
     const guidKey = guid.toLowerCase();
-    // D-6: the stored name lives on the envelope; preserve it across the delete
-    // (the `packages` mapping survives, so resolveName must still see the name
-    // until a re-load's registerPackage overwrites it) by parking it on
-    // pendingNames -- the next catalog() of this GUID drains it back.
-    const survivingName = this.assetCatalog.get(guidKey)?.name;
-    if (survivingName !== undefined) this.pendingNames.set(guidKey, survivingName);
     this.assetCatalog.delete(guidKey);
     // R-1 hard fix (research-decisions.md): delete inFlight entry so the
     // next loadByGuid does not hit the old Promise whose generation no
@@ -2291,16 +2303,7 @@ export class AssetRegistry {
     );
     const sceneAsset = sceneRes0.ok ? sceneRes0.value : undefined;
     if (sceneAsset !== undefined && sceneAsset.kind === 'scene') {
-      // feat-20260622 M3 / w8: find the scene's GUID key in the catalog
-      // so _resolveSceneGuids can reverse-decode from envelope.refs edges.
-      let sceneGuidKey: string | undefined;
-      for (const [key, envelope] of this.assetCatalog) {
-        if (envelope.kind === 'scene' && envelope.payload === sceneAsset) {
-          sceneGuidKey = key;
-          break;
-        }
-      }
-      const sceneRes = this._resolveSceneGuids(sceneAsset, world, sceneGuidKey);
+      const sceneRes = this._resolveSceneGuids(sceneAsset, world);
       if (!sceneRes.ok) return sceneRes;
 
       // Register the GUID-resolved SceneAsset as a shared ref so
@@ -2308,23 +2311,18 @@ export class AssetRegistry {
       // ref alloc-grant rc=1 stays held by the alloc; the SceneInstance spawn
       // retains to rc=2 and the despawn path releases back to rc=1.
       const sharedHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
-      // C-R2 (feat-20260622-s5 M6): instantiateScene now returns
-      // `{ root, diagnostics }` on success. This runtime API keeps its
-      // `Result<EntityHandle>` contract; unwrap to `root`. (Surfacing scene
-      // unknown-field diagnostics through `assets.instantiate` is M7 README
-      // scope — the ECS boundary `world.instantiateScene` is the SSOT today.)
-      const sceneInst = world.instantiateScene(sharedHandle, parent);
-      if (!sceneInst.ok) {
-        return sceneInst as unknown as Result<EntityHandle, AssetError | PackError | EcsError>;
-      }
-      instantiateResult = ok(sceneInst.value.root);
+      instantiateResult = world.instantiateScene(sharedHandle, parent) as unknown as Result<
+        EntityHandle,
+        AssetError | PackError | EcsError
+      >;
+      if (!instantiateResult.ok) return instantiateResult;
     } else {
       // Non-resolvable handle: original ecs direct path (backward compat).
-      const sceneInst = world.instantiateScene(handle as Handle<'SceneAsset', 'shared'>, parent);
-      if (!sceneInst.ok) {
-        return sceneInst as unknown as Result<EntityHandle, AssetError | PackError | EcsError>;
-      }
-      instantiateResult = ok(sceneInst.value.root);
+      instantiateResult = world.instantiateScene(
+        handle as Handle<'SceneAsset', 'shared'>,
+        parent,
+      ) as unknown as Result<EntityHandle, AssetError | PackError | EcsError>;
+      if (!instantiateResult.ok) return instantiateResult;
     }
 
     // Post-spawn hook: auto-wire Skin.joints from jointPaths. feat-20260614 M8
@@ -2343,13 +2341,12 @@ export class AssetRegistry {
           );
           if (!skelRes.ok) return undefined;
           const skeletonPayload = skelRes.value as Asset;
-          for (const [, envelope] of self.assetCatalog) {
-            const asset = envelope.payload;
+          for (const [, asset] of self.assetCatalog) {
             if (asset.kind !== 'skin') continue;
             const skinSkeletonGuid = asset.skeletonGuid;
             if (skinSkeletonGuid === undefined) continue;
             const catalogued = self.assetCatalog.get(skinSkeletonGuid.toLowerCase());
-            if (catalogued !== undefined && catalogued.payload === skeletonPayload) {
+            if (catalogued !== undefined && catalogued === skeletonPayload) {
               return asset;
             }
           }
@@ -2387,117 +2384,68 @@ export class AssetRegistry {
    * containing the GUID string, node localId, and field name for AI-user
    * debuggability (P3).
    */
-  _resolveSceneGuids(
-    scene: SceneAsset,
-    world: World,
-    sceneGuidKey?: string,
-  ): Result<SceneAsset, AssetError> {
-    // feat-20260622 M3 / w8: reverse-decode from envelope.refs edges when
-    // sceneGuidKey is provided and the catalog holds an envelope for this
-    // scene. Each edge with sceneEntityId+sourceField.componentName carries
-    // the (entityLocalId, componentName, fieldName, arrayIndex) triple —
-    // no need to walk entities with resolveComponent reflection.
+  _resolveSceneGuids(scene: SceneAsset, world: World): Result<SceneAsset, AssetError> {
+    // D-4 / B-5 / IN-4: delegate handle-field detection to the shared helper
+    // (extractSceneEntityHandleGuids) so "identify handle<...> fields" lives in
+    // exactly one authoritative location.
+    const entries = extractSceneEntityHandleGuids(
+      scene.entities as unknown as ReadonlyArray<{
+        readonly localId: number;
+        readonly components: Record<string, Record<string, unknown>>;
+      }>,
+    );
+
+    // feat-20260614 M8 (D-15 / D-17): resolve every detected GUID string to a
+    // fresh user-tier column handle. The payload is looked up in the catalogue
+    // and minted via `world.allocSharedRef` (instantiate-time GUID->handle);
+    // the registry mints nothing. Stop on first error (AC-08).
+    const resolvedMap = new Map<string, number>();
     // D-15/D-17 dedup contract: the same catalogued GUID referenced from
     // multiple nodes must resolve to ONE user-tier handle (one allocSharedRef
     // per unique payload), so cross-node references share a single ref-counted
     // slot. Mint once per GUID, reuse for every later occurrence.
-    const resolvedMap = new Map<string, number>();
     const guidToHandle = new Map<string, number>();
-    const sceneEnvelope =
-      sceneGuidKey !== undefined ? this.assetCatalog.get(sceneGuidKey) : undefined;
-    if (
-      sceneEnvelope !== undefined &&
-      sceneEnvelope.refs !== undefined &&
-      sceneEnvelope.refs.length > 0
-    ) {
-      for (const ref of sceneEnvelope.refs) {
-        const { sceneEntityId, sourceField } = ref;
-        if (sceneEntityId === undefined || sourceField === undefined) continue;
-        const { componentName, fieldName, arrayIndex } = sourceField;
-        if (componentName === undefined || fieldName === undefined) continue;
+    for (const entry of entries) {
+      const fieldPath =
+        `${entry.componentName}.${entry.fieldName}` +
+        (entry.arrayIndex !== undefined ? `[${entry.arrayIndex}]` : '');
 
-        const fieldPath = `${componentName}.${fieldName}${arrayIndex !== undefined ? `[${arrayIndex}]` : ''}`;
-
-        const envelope = this.assetCatalog.get(ref.guid.toLowerCase());
-        if (envelope === undefined) {
-          return err(
-            new AssetError({
-              code: 'asset-not-found',
-              expected: `GUID ${ref.guid} catalogued in AssetRegistry`,
-              hint:
-                `GUID ${ref.guid} not catalogued; ` +
-                `call loadByGuid('${ref.guid}') before instantiate; ` +
-                `at node localId=${sceneEntityId}, field=${fieldPath}`,
-            }),
-          );
-        }
-        const payload = envelope.payload;
-        const guidKey = ref.guid.toLowerCase();
-        let resolvedSlot = guidToHandle.get(guidKey);
-        if (resolvedSlot === undefined) {
-          resolvedSlot = unwrapHandle(world.allocSharedRef(ASSET_BRAND[payload.kind], payload));
-          guidToHandle.set(guidKey, resolvedSlot);
-        }
-
-        const key =
-          `${sceneEntityId}|${componentName}|${fieldName}` +
-          (arrayIndex !== undefined ? `|${arrayIndex}` : '|');
-        resolvedMap.set(key, resolvedSlot);
+      const guidRes = AssetGuid.parse(entry.guidString);
+      if (!guidRes.ok) {
+        return err(
+          new AssetError({
+            code: 'asset-not-found',
+            expected: `valid GUID string for field ${fieldPath}`,
+            hint:
+              `GUID "${entry.guidString}" could not be parsed; ` +
+              `at node localId=${entry.entityLocalId}, field=${fieldPath}`,
+          }),
+        );
       }
-    } else {
-      // Backward compat: positive extraction via extractSceneEntityHandleGuids
-      // when the scene envelope is not available (e.g. unit tests that
-      // construct SceneAsset without cataloguing it as an envelope).
-      const entries = extractSceneEntityHandleGuids(
-        scene.entities as unknown as ReadonlyArray<{
-          readonly localId: number;
-          readonly components: Record<string, Record<string, unknown>>;
-        }>,
-      );
-
-      for (const entry of entries) {
-        const fieldPath =
-          `${entry.componentName}.${entry.fieldName}` +
-          (entry.arrayIndex !== undefined ? `[${entry.arrayIndex}]` : '');
-
-        const guidRes = AssetGuid.parse(entry.guidString);
-        if (!guidRes.ok) {
-          return err(
-            new AssetError({
-              code: 'asset-not-found',
-              expected: `valid GUID string for field ${fieldPath}`,
-              hint:
-                `GUID "${entry.guidString}" could not be parsed; ` +
-                `at node localId=${entry.entityLocalId}, field=${fieldPath}`,
-            }),
-          );
-        }
-        const envelope = this.assetCatalog.get(entry.guidString.toLowerCase());
-        if (envelope === undefined) {
-          return err(
-            new AssetError({
-              code: 'asset-not-found',
-              expected: `GUID ${entry.guidString} catalogued in AssetRegistry`,
-              hint:
-                `GUID ${entry.guidString} not catalogued; ` +
-                `call loadByGuid('${entry.guidString}') before instantiate; ` +
-                `at node localId=${entry.entityLocalId}, field=${fieldPath}`,
-            }),
-          );
-        }
-        const payload = envelope.payload;
-        const guidKey = entry.guidString.toLowerCase();
-        let resolvedSlot = guidToHandle.get(guidKey);
-        if (resolvedSlot === undefined) {
-          resolvedSlot = unwrapHandle(world.allocSharedRef(ASSET_BRAND[payload.kind], payload));
-          guidToHandle.set(guidKey, resolvedSlot);
-        }
-
-        const key =
-          `${entry.entityLocalId}|${entry.componentName}|${entry.fieldName}` +
-          (entry.arrayIndex !== undefined ? `|${entry.arrayIndex}` : '|');
-        resolvedMap.set(key, resolvedSlot);
+      const payload = this.assetCatalog.get(entry.guidString.toLowerCase());
+      if (payload === undefined) {
+        return err(
+          new AssetError({
+            code: 'asset-not-found',
+            expected: `GUID ${entry.guidString} catalogued in AssetRegistry`,
+            hint:
+              `GUID ${entry.guidString} not catalogued; ` +
+              `call loadByGuid('${entry.guidString}') before instantiate; ` +
+              `at node localId=${entry.entityLocalId}, field=${fieldPath}`,
+          }),
+        );
       }
+      const guidKey = entry.guidString.toLowerCase();
+      let resolvedSlot = guidToHandle.get(guidKey);
+      if (resolvedSlot === undefined) {
+        resolvedSlot = unwrapHandle(world.allocSharedRef(assetBrand(payload), payload));
+        guidToHandle.set(guidKey, resolvedSlot);
+      }
+
+      const key =
+        `${entry.entityLocalId}|${entry.componentName}|${entry.fieldName}` +
+        (entry.arrayIndex !== undefined ? `|${entry.arrayIndex}` : '|');
+      resolvedMap.set(key, resolvedSlot);
     }
 
     // Build the resolved copy. Handle-type fields (detected above) are
@@ -2861,11 +2809,7 @@ export class AssetRegistry {
    * `Result.err(AssetError)` on validation failure; `Result.ok(payload)` with
    * the stored payload (mesh payloads gain an `aabb`) on success.
    */
-  catalog<T extends Asset>(
-    guid: AssetGuid | string,
-    asset: T,
-    refs?: readonly AssetRef[],
-  ): Result<T, AssetError> {
+  catalog<T extends Asset>(guid: AssetGuid | string, asset: T): Result<T, AssetError> {
     const meshValidation = validateMeshPayload(asset);
     if (meshValidation !== null) return err(meshValidation);
 
@@ -2898,21 +2842,7 @@ export class AssetRegistry {
     }
     const key =
       typeof guid === 'string' ? guid.toLowerCase() : AssetGuid.format(guid).toLowerCase();
-    const kind = asset.kind;
-    // Drain any name recorded by an earlier _registerPackage call whose body had
-    // not yet been catalogued (prod disk path; D-6). Preserve a name already on
-    // a prior envelope for this key (re-catalog of the same GUID).
-    const pendingName = this.pendingNames.get(key);
-    const priorName = this.assetCatalog.get(key)?.name;
-    const name = pendingName ?? priorName;
-    this.pendingNames.delete(key);
-    this.assetCatalog.set(key, {
-      guid: key,
-      kind,
-      ...(name !== undefined ? { name } : {}),
-      payload: stored,
-      refs: refs ?? [],
-    });
+    this.assetCatalog.set(key, stored);
     // D-1: catalog() inline path defaults every GUID to the no-package state
     // (null). loadByGuid + builtin override via their own registerPackage calls
     // before / after this so the package mapping is populated for all assets
@@ -2947,7 +2877,7 @@ export class AssetRegistry {
         const key = g.toLowerCase();
         this.packages.set(key, null);
         const n = names?.get(g) ?? names?.get(key);
-        if (n !== undefined) this.setStoredName(key, n);
+        if (n !== undefined) this.storedNameOf.set(key, n);
       }
       return;
     }
@@ -2965,10 +2895,10 @@ export class AssetRegistry {
     if (pkg.assetGuids.size === 1 && addsNewMember) {
       const [originalKey] = pkg.assetGuids;
       if (originalKey !== undefined) {
-        if (this.hasStoredName(originalKey)) {
+        if (this.storedNameOf.has(originalKey)) {
           this.metrics?.increment('package.xor-invariant-violated');
         } else {
-          this.setStoredName(originalKey, deriveAssetName(pkg.path, 1));
+          this.storedNameOf.set(originalKey, deriveAssetName(pkg.path, 1));
         }
       }
     }
@@ -2978,41 +2908,8 @@ export class AssetRegistry {
       pkg.assetGuids.add(key);
       this.packages.set(key, pkg);
       const n = names?.get(g) ?? names?.get(key);
-      if (n !== undefined) this.setStoredName(key, n);
+      if (n !== undefined) this.storedNameOf.set(key, n);
     }
-  }
-
-  /**
-   * Read the per-GUID stored display name (D-6 home: the envelope's `name`
-   * field, with `pendingNames` covering the prod-disk ordering where the name is
-   * known before the body is catalogued). Single read point for resolveName /
-   * the 1->N promotion XOR check.
-   */
-  private storedNameFor(key: string): string | undefined {
-    return this.assetCatalog.get(key)?.name ?? this.pendingNames.get(key);
-  }
-
-  private hasStoredName(key: string): boolean {
-    return this.storedNameFor(key) !== undefined;
-  }
-
-  /**
-   * Write the per-GUID stored display name. When the envelope exists, replace it
-   * with one carrying the new `name` (the envelope is immutable; D-6 keeps the
-   * payload free of the name). Before the envelope is catalogued (prod disk
-   * path), stash on `pendingNames` so catalog() can drain it into the new
-   * envelope. `name === undefined` clears the name in both homes.
-   */
-  private setStoredName(key: string, name: string | undefined): void {
-    const envelope = this.assetCatalog.get(key);
-    if (envelope !== undefined) {
-      const { name: _drop, ...rest } = envelope;
-      this.assetCatalog.set(key, name === undefined ? rest : { ...rest, name });
-      this.pendingNames.delete(key);
-      return;
-    }
-    if (name === undefined) this.pendingNames.delete(key);
-    else this.pendingNames.set(key, name);
   }
 
   /**
@@ -3045,7 +2942,7 @@ export class AssetRegistry {
     const key =
       typeof guid === 'string' ? guid.toLowerCase() : AssetGuid.format(guid).toLowerCase();
     const pkg = this.packages.get(key);
-    const storedName = this.storedNameFor(key);
+    const storedName = this.storedNameOf.get(key);
     const path = pkg == null ? null : pkg.path;
     const assetCount = pkg == null ? 0 : pkg.assetGuids.size;
     return deriveAssetName(path, assetCount, storedName);
@@ -3092,11 +2989,11 @@ export class AssetRegistry {
       pkg.path = slash >= 0 ? `${pkg.path.slice(0, slash + 1)}${newName}` : newName;
       this.packageByPath.delete(oldPath);
       this.packageByPath.set(pkg.path, pkg);
-      this.setStoredName(key, undefined);
+      this.storedNameOf.delete(key);
       return ok(undefined);
     }
 
-    this.setStoredName(key, newName);
+    this.storedNameOf.set(key, newName);
     return ok(undefined);
   }
 
@@ -3154,7 +3051,7 @@ export class AssetRegistry {
   lookup(guid: AssetGuid | string): Asset | undefined {
     const key =
       typeof guid === 'string' ? guid.toLowerCase() : AssetGuid.format(guid).toLowerCase();
-    return this.assetCatalog.get(key)?.payload;
+    return this.assetCatalog.get(key);
   }
 
   /**
@@ -3179,10 +3076,8 @@ export class AssetRegistry {
     if (sliceMode !== 1) return;
     const samplerGuid = typeof pv.sampler === 'string' ? pv.sampler : undefined;
     if (samplerGuid === undefined) return;
-    const samplerEnvelope = this.assetCatalog.get(samplerGuid.toLowerCase());
-    if (samplerEnvelope === undefined || samplerEnvelope.kind !== 'sampler') return;
-    const samplerAsset = samplerEnvelope.payload;
-    if (samplerAsset.kind !== 'sampler') return;
+    const samplerAsset = this.assetCatalog.get(samplerGuid.toLowerCase());
+    if (samplerAsset === undefined || samplerAsset.kind !== 'sampler') return;
     const u = samplerAsset.addressModeU;
     const v = samplerAsset.addressModeV;
     if (u !== 'repeat' || v !== 'repeat') {
@@ -3215,10 +3110,10 @@ export class AssetRegistry {
    * registry.
    *
    * **Post-condition:** `ok(payload)` is returned ONLY when the asset AND every
-   * transitively referenced sub-asset (per the asset envelope's `refs[]`) are
-   * present in this registry. The implementation walks `envelope.refs` and
-   * recursively calls `loadByGuid` on each ref before cataloguing the top-level
-   * asset. The resolved value is the PAYLOAD `T`
+   * transitively referenced sub-asset (per `collectRefs(asset)` dispatch on
+   * `asset.kind`) are present in this registry. The implementation walks
+   * `collectRefs(asset)` and recursively calls `loadByGuid` on each ref before
+   * cataloguing the top-level asset. The resolved value is the PAYLOAD `T`
    * (D-17), never a handle -- mint a column handle with
    * `world.allocSharedRef('Kind', payload)` when one is needed (e.g. before
    * `instantiate`).
@@ -3277,7 +3172,7 @@ export class AssetRegistry {
     // (covers dev catalog() + prod cached repeat calls).
     const existing = this.assetCatalog.get(guidKey);
     if (existing !== undefined) {
-      return ok(existing.payload as T);
+      return ok(existing as T);
     }
 
     // In-flight dedup (D-5 / B-10): if another call is already loading this
@@ -3542,16 +3437,15 @@ export class AssetRegistry {
     // paramValues handle fields (e.g. baseColorTexture) are stored on disk as
     // refs[] indices. The materialLoader rewrites each to its refs[] GUID
     // string verbatim (D-19: no handle minting at load time -- the ECS/render
-    // side resolves GUID -> column handle at use time).
-    // feat-20260622 M4 / w12 + w13: each branch yields the parsed asset AND its
-    // pack-entry refs[] (GUID-string projection). The refs ride onto the
-    // catalogued envelope (D-9), and the recursive core reads envelope.refs as
-    // the single recursion source (D-5) — no per-kind ref re-derivation,
-    // and no more per-kind texture preload (the former material Path A is folded
-    // into the unified for-loop, R1). loadByGuid stays idempotent on cache hit,
-    // so the unified for-loop loading texture sub-assets after the material is
-    // registered preserves the cycle-safety register-before-recurse invariant.
-    let packResult: Result<{ asset: Asset; refs: readonly string[] }, AssetError>;
+    // side resolves GUID -> column handle at use time). We still recursively
+    // load every refs[] GUID first so the sub-asset payloads are catalogued and
+    // resolvable later. For non-material kinds, fetch+parse in one step (legacy
+    // path); for material we fetch the raw entry, recursively load every refs[]
+    // GUID first, then parse + catalog. The cycle-safety register-before-recurse
+    // invariant for the parent still holds (we register the material AFTER
+    // texture preload but no consumer of the material is awakened until the
+    // overall loadByGuid resolves).
+    let packResult: Result<Asset, AssetError>;
     if (entry.kind === 'mesh' && entry.relativeUrl.endsWith('.bin')) {
       // bug-20260610 Fix A: mesh sub-assets carry their vertices / indices in
       // a sibling `<guid>.bin` produced by `packMeshBin` (build-time, in
@@ -3619,24 +3513,51 @@ export class AssetRegistry {
           }),
         );
       }
-      // mesh is a leaf asset (no sub-asset refs).
-      packResult = ok({ asset: parsed, refs: [] });
+      packResult = ok(parsed);
     } else if (entry.kind === 'material') {
-      // feat-20260622 M4 / w13 (R1): fold the former Path A (material texture
-      // preload) into the unified envelope.refs for-loop. The material parse
-      // (materialLoader.load) resolves each paramValues texture field by
-      // index -> refs[] GUID string verbatim — it never reads the texture
-      // sub-asset from the catalog, only the refs[] string projection. So the
-      // texture sub-assets do NOT need pre-loading before parse; the unified
-      // for-loop (w12) iterates the catalogued material envelope.refs (which
-      // include the texture edges produced by gltf-importer, w5) and loads
-      // them, idempotent on cache hit. We fetch the raw entry, parse, and let
-      // the unified for-loop handle every refs[] edge.
+      // Two-phase: fetch raw entry, preload only paramValues-texture refs[]
+      // (NOT the parent slot — the parent path below carries a precise
+      // breadcrumb hint that downstream tests assert on), then parseAssetPayload.
       const rawResult = await this.fetchPackEntry(entry.relativeUrl, guidKey);
       if (!rawResult.ok) {
         return rawResult as unknown as Result<T, AssetError>;
       }
       const refsRaw = rawResult.value.refs ?? [];
+      const matPayload = rawResult.value.payload as Record<string, unknown>;
+      const matParamValues = (matPayload.paramValues as Record<string, unknown> | undefined) ?? {};
+      // feat-20260613-material-paramschema-driven-binding M4 / w22 (D-5 graceful):
+      // the texture-field allowlist is now derived from the registered shader's
+      // paramSchema (mirrors materialLoader.load above). When the shader is
+      // not yet registered, fall back to "every int paramValue in
+      // [0, refs.length)" — pre-loading a non-texture sub-asset here is
+      // harmless because loadByGuid is idempotent (the registry caches by GUID).
+      const passesFromPayload = matPayload.passes;
+      const shaderTextureFields = collectShaderTextureFieldNames(
+        passesFromPayload,
+        this.makeLoadContext(),
+      );
+      const candidateFields =
+        shaderTextureFields !== undefined ? shaderTextureFields : Object.keys(matParamValues);
+      const textureRefIndices = new Set<number>();
+      for (const fieldName of candidateFields) {
+        const v = matParamValues[fieldName];
+        if (typeof v !== 'number' || !Number.isInteger(v)) continue;
+        if (v < 0 || v >= refsRaw.length) continue;
+        textureRefIndices.add(v);
+      }
+      for (const idx of textureRefIndices) {
+        if (idx < 0 || idx >= refsRaw.length) continue;
+        const refGuidStr = refsRaw[idx];
+        if (typeof refGuidStr !== 'string') continue;
+        const refParse = AssetGuid.parse(refGuidStr);
+        if (!refParse.ok) continue;
+        const refLoaded = await this.loadByGuid(refParse.value);
+        if (!refLoaded.ok) {
+          // Texture sub-asset failed to load — surface so the material
+          // registration sees a precise error rather than a silent grey.
+          return refLoaded as unknown as Result<T, AssetError>;
+        }
+      }
       const parsed = this.parseAssetPayload(
         rawResult.value.kind,
         rawResult.value.payload,
@@ -3651,7 +3572,7 @@ export class AssetRegistry {
           }),
         );
       }
-      packResult = ok({ asset: parsed, refs: refsRaw });
+      packResult = ok(parsed);
     } else {
       packResult = await this.fetchPackFile(entry.relativeUrl, guidKey, entry.kind);
     }
@@ -3659,33 +3580,12 @@ export class AssetRegistry {
       return packResult as Result<T, AssetError>;
     }
 
-    const asset = packResult.value.asset;
-    // feat-20260622 M4 / w12: project the pack-entry refs[] (GUID strings) into
-    // AssetRef[] for the envelope. The on-disk pack.json refs[] carries only
-    // GUID strings (sourceField / sceneEntityId are stripped at the
-    // serialization boundary, w7 D-10), so prod-loaded edges have no per-entity
-    // metadata — the scene breadcrumb fallback (buildSceneChildContext) still
-    // walks the payload for entity/field detail. Dev-server register paths that
-    // carry rich AssetRef[] keep their edge metadata end-to-end.
-    const packRefs: readonly AssetRef[] = packResult.value.refs.map((g) => ({ guid: g }));
+    const asset = packResult.value;
 
-    // feat-20260622 M5 / w17 (D-8, R5): the former material parent preload
-    // "Path B" (an independent early-return that loaded the parent BEFORE the
-    // unified for-loop and carried the precise breadcrumb hint `loading parent
-    // material X for child Y`) is folded into the unified envelope.refs
-    // for-loop. The parent GUID already rides on the material envelope.refs
-    // (gltf-importer w5 writes it; the on-disk pack refs[] carries it as a
-    // GUID string -> packRefs above projects it), so the unified for-loop
-    // recurses on it like any other edge. Here we only resolve the parent
-    // GUID -> AssetGuid and stamp `parent` onto the asset payload (the
-    // renderer-facing field read by walkMaterialPassesOverSharedRefs); the
-    // parent EDGE load + the `loading parent material X for child Y` breadcrumb
-    // + the not-a-material guard all move into the for-loop's
-    // sourceField.fieldName==='parent' / parent-edge branch below. No early
-    // return: the material registers (register-before-recurse) and its parent
-    // edge loads through the same unified path as texture / scene edges.
-    let assetToRegister: Asset = asset;
-    let parentGuidKey: string | undefined;
+    // feat-20260528-pack-material-parent-inheritance M2 / w5: parent
+    // recursive preload (D-2). feat-20260614 M8 (D-19): the parent ref is
+    // stored as a GUID (AssetGuid) on the catalogued child -- loadByGuid
+    // catalogues the parent payload but never mints a handle.
     if (
       asset.kind === 'material' &&
       'parentGuid' in (asset as unknown as Record<string, unknown>) &&
@@ -3702,16 +3602,44 @@ export class AssetRegistry {
           }),
         );
       }
-      parentGuidKey = parentGuidStr.toLowerCase();
+      const parentResult = await this.loadByGuid<MaterialAsset>(parentGuid.value);
+      if (!parentResult.ok) {
+        const parentErr = parentResult.error;
+        const code: AssetErrorCode =
+          parentErr instanceof AssetError ? parentErr.code : 'asset-parse-failed';
+        return err(
+          new AssetError({
+            code,
+            expected: parentErr.expected,
+            hint: `loading parent material ${parentGuidStr} for child ${guidKey}: ${
+              parentErr.hint ?? ''
+            }`,
+            ...(parentErr.detail !== undefined
+              ? { detail: parentErr.detail as Readonly<AssetErrorDetail> }
+              : {}),
+          }),
+        );
+      }
+      const parentAsset = parentResult.value;
+      if (parentAsset === undefined || parentAsset.kind !== 'material') {
+        return err(
+          new AssetError({
+            code: 'asset-parse-failed',
+            expected: `parent GUID ${parentGuidStr} to reference a MaterialAsset`,
+            hint: `loading parent material ${parentGuidStr} for child ${guidKey}: referenced asset is ${(parentAsset as { kind?: string } | undefined)?.kind ?? 'unknown'}, not 'material'`,
+          }),
+        );
+      }
       const matAsset = asset as unknown as MaterialAsset & { parentGuid?: string };
       const passes = matAsset.passes;
       const paramValues = matAsset.paramValues;
-      assetToRegister = {
+      const resolvedAsset: MaterialAsset = {
         kind: 'material',
         ...(passes !== undefined ? { passes } : {}),
         ...(paramValues !== undefined ? { paramValues } : {}),
         parent: parentGuid.value,
       };
+      return this.registerParsedAsset<T>(guid, resolvedAsset, guidKey);
     }
 
     // tweak-20260609 M1: catalogue the asset BEFORE recursing into its
@@ -3720,93 +3648,26 @@ export class AssetRegistry {
     // Promise for A can be fulfilled. The inFlight entry in `loadByGuid` is
     // the second line of defense — it catches concurrent same-GUID calls
     // before the asset is catalogued.
-    const registerResult = this.registerParsedAsset<T>(guid, assetToRegister, guidKey, packRefs);
+    const registerResult = this.registerParsedAsset<T>(guid, asset, guidKey);
     if (!registerResult.ok) return registerResult;
     const registeredPayload = registerResult.value;
 
-    // feat-20260622 M4 / w12 (D-5): the recursion source is the just-catalogued
-    // envelope's refs[]. The for-loop is kind-agnostic
-    // — every AssetRef carries the GUID to recurse on; scene/material/skin all
-    // flow through this one loop. Each edge optionally carries sourceField /
-    // sceneEntityId; when present the childContext is built straight from the
-    // edge, otherwise the scene branch falls back to walking the payload
-    // (buildSceneChildContext) so the prod-path breadcrumb keeps its entity /
-    // field detail (on-disk refs[] are GUID-string-only, w7 D-10).
-    const envelope = this.assetCatalog.get(guidKey);
-    const refs: readonly AssetRef[] = envelope?.refs ?? [];
+    const refs = collectRefs(asset);
     if (refs.length > 0) {
       const subResults = await Promise.all(
         refs.map((ref) => {
-          const refGuidKey = ref.guid.toLowerCase();
-          const parsedRef = AssetGuid.parse(ref.guid);
-          if (!parsedRef.ok) {
-            return Promise.resolve({
-              guidKey: refGuidKey,
-              result: err(
-                new AssetError({
-                  code: 'asset-parse-failed',
-                  expected: `valid sub-asset GUID referenced by ${asset.kind} ${guidKey}`,
-                  hint: `refs[] entry '${ref.guid}' is not a valid UUID format`,
-                }),
-              ) as Result<Asset, AssetError | ImageError | RhiError>,
-              childContext: undefined as
-                | {
-                    sceneEntityId?: number;
-                    componentField?: string;
-                    sourceField?: {
-                      componentName?: string;
-                      fieldName: string;
-                      arrayIndex?: number;
-                    };
-                  }
-                | undefined,
-              isParentEdge: false,
-              edge: ref,
-            });
-          }
-          let childContext:
+          const refGuidKey = AssetGuid.format(ref);
+          const childContext:
             | {
                 sceneEntityId?: number;
                 componentField?: string;
-                sourceField?: {
-                  componentName?: string;
-                  fieldName: string;
-                  arrayIndex?: number;
-                };
               }
-            | undefined;
-          if (ref.sceneEntityId !== undefined || ref.sourceField !== undefined) {
-            childContext = {};
-            if (ref.sceneEntityId !== undefined) childContext.sceneEntityId = ref.sceneEntityId;
-            if (ref.sourceField?.fieldName !== undefined) {
-              childContext.componentField =
-                (ref.sourceField.componentName !== undefined
-                  ? `${ref.sourceField.componentName}.`
-                  : '') +
-                ref.sourceField.fieldName +
-                (ref.sourceField.arrayIndex !== undefined ? `[${ref.sourceField.arrayIndex}]` : '');
-              childContext.sourceField = ref.sourceField;
-            }
-          } else if (asset.kind === 'scene') {
-            childContext = this.buildSceneChildContext(asset, refGuidKey, guidKey);
-          }
-          // feat-20260622 M5 / w17 (D-8): the material parent edge. Identify it
-          // by either the rich dev-path marker (sourceField.fieldName==='parent')
-          // or the prod-path GUID match against the resolved parent GUID
-          // (on-disk refs[] strip sourceField, w7 D-10, so the GUID is the only
-          // signal). The parent edge carries the distinct `loading parent
-          // material X for child Y` breadcrumb (AC-10) instead of the generic
-          // buildBreadcrumbHint form, and is guarded to be a material.
-          const isParentEdge =
-            asset.kind === 'material' &&
-            (ref.sourceField?.fieldName === 'parent' ||
-              (parentGuidKey !== undefined && refGuidKey === parentGuidKey));
-          return this.loadByGuid(parsedRef.value, childContext ?? parentContext).then((r) => ({
+            | undefined =
+            asset.kind === 'scene' ? this.buildSceneChildContext(asset, refGuidKey) : undefined;
+          return this.loadByGuid(ref, childContext ?? parentContext).then((r) => ({
             guidKey: refGuidKey,
             result: r,
             childContext,
-            isParentEdge,
-            edge: ref,
           }));
         }),
       );
@@ -3817,41 +3678,7 @@ export class AssetRegistry {
         guidKey: subGuidKey,
         result: subResult,
         childContext: subChildContext,
-        isParentEdge,
-        edge: subEdge,
       } of subResults) {
-        // feat-20260622 M5 / w17: parent-edge breadcrumb migration (former Path
-        // B). On load failure, carry the distinct `loading parent material X for
-        // child Y: <subErr.hint>` form (AC-10 downstream literal assertion) and
-        // propagate the parent's own error code verbatim.
-        if (isParentEdge && !subResult.ok) {
-          const subErr = subResult.error;
-          const code: AssetErrorCode =
-            subErr instanceof AssetError ? subErr.code : 'asset-parse-failed';
-          return err(
-            new AssetError({
-              code,
-              expected: subErr.expected,
-              hint: `loading parent material ${subGuidKey} for child ${guidKey}: ${
-                subErr.hint ?? ''
-              }`,
-              ...(subErr instanceof AssetError && subErr.detail !== undefined
-                ? { detail: subErr.detail as Readonly<AssetErrorDetail> }
-                : {}),
-            }),
-          );
-        }
-        // feat-20260622 M5 / w17: parent edge loaded but is not a material —
-        // same guard the former Path B carried, with the matching breadcrumb.
-        if (isParentEdge && subResult.ok && subResult.value?.kind !== 'material') {
-          return err(
-            new AssetError({
-              code: 'asset-parse-failed',
-              expected: `parent GUID ${subGuidKey} to reference a MaterialAsset`,
-              hint: `loading parent material ${subGuidKey} for child ${guidKey}: referenced asset is ${subResult.value?.kind ?? 'unknown'}, not 'material'`,
-            }),
-          );
-        }
         if (!subResult.ok) {
           const subErr = subResult.error;
           const breadcrumb = this.buildBreadcrumbHint(
@@ -3862,34 +3689,14 @@ export class AssetRegistry {
           );
           const code: AssetErrorCode =
             subErr instanceof AssetError ? subErr.code : 'asset-fetch-failed';
-          // feat-20260622 verify r1: deliver the breadcrumb provenance in
-          // structured form so AI users locate the broken edge by property
-          // access (charter P3), not by parsing the hint. Preserve the sub
-          // error's own detail when it carries one (more specific); otherwise
-          // expose the edge provenance (entity / source field).
-          // Prefer the rich dev-path edge provenance; on the prod path the
-          // on-disk edge is GUID-only (sourceField stripped, w7 D-10), so fall
-          // back to the entity-walk-recovered provenance carried on the
-          // childContext (verify r1).
-          const provEntityId = subEdge?.sceneEntityId ?? subChildContext?.sceneEntityId;
-          const provSourceField = subEdge?.sourceField ?? subChildContext?.sourceField;
-          const breadcrumbDetail: Readonly<AssetErrorDetail> = {
-            referencedByGuid: guidKey,
-            referencedByKind: asset.kind,
-            subAssetGuid: subGuidKey,
-            ...(provEntityId !== undefined ? { sceneEntityId: provEntityId } : {}),
-            ...(provSourceField !== undefined ? { sourceField: provSourceField } : {}),
-          };
-          const detail: Readonly<AssetErrorDetail> =
-            subErr instanceof AssetError && subErr.detail !== undefined
-              ? subErr.detail
-              : breadcrumbDetail;
           return err(
             new AssetError({
               code,
               expected: subErr.expected,
               hint: `${breadcrumb} / ${subErr.hint ?? ''}`,
-              detail,
+              ...(subErr instanceof AssetError && subErr.detail !== undefined
+                ? { detail: subErr.detail as Readonly<AssetErrorDetail> }
+                : {}),
             }),
           );
         }
@@ -3901,100 +3708,20 @@ export class AssetRegistry {
 
   /**
    * tweak-20260609 M1 helper: build the per-sub-ref parent context for a
-   * SceneAsset child. feat-20260622 M3 / w9: re-sourced to lookup in the
-   * scene envelope's ``refs[]`` edges instead of walking entity components
-   * via extractSceneEntityHandleGuids (D-7). When the scene envelope is not
-   * found in the catalog, falls back to the entity-walk path (backward compat
-   * for call sites that lack a catalogued envelope).
-   *
-   * Texture edges (sourceField=undefined) produce ``componentField:
-   * undefined`` — the breadcrumb will show GUID+kind only, no per-entity
-   * detail (D-2: texture has no per-entity origin).
+   * SceneAsset child. Walks the scene's entities to find which entity's
+   * component.field references the given sub-asset GUID, producing a
+   * `parentContext` with `sceneEntityId` and `componentField` for precise
+   * error breadcrumbs (D-7 / B-8).
    */
   private buildSceneChildContext(
     scene: Asset & { kind: 'scene' },
     subGuidKey: string,
-    sceneGuidKey?: string,
   ):
     | {
         sceneEntityId?: number;
         componentField?: string;
-        sourceField?: {
-          componentName?: string;
-          fieldName: string;
-          arrayIndex?: number;
-        };
       }
     | undefined {
-    // feat-20260622 M3 / w9: direct lookup in envelope.refs edges.
-    // feat-20260622 review r1: address the recursing scene's OWN envelope by
-    // its guidKey, not the first scene in the catalog -- under a multi-scene
-    // glTF catalog the first-scene scan attributes the breadcrumb to the wrong
-    // scene. Fall back to the first-scene scan only when no guidKey is given
-    // (legacy call sites lacking a catalogued envelope).
-    let sceneEnvelope: AssetEnvelope | undefined;
-    if (sceneGuidKey !== undefined) {
-      const env = this.assetCatalog.get(sceneGuidKey);
-      if (env?.kind === 'scene') sceneEnvelope = env;
-    }
-    if (sceneEnvelope === undefined) {
-      for (const [, env] of this.assetCatalog) {
-        if (env.kind === 'scene' && env.refs !== undefined && env.refs.length > 0) {
-          sceneEnvelope = env;
-          break;
-        }
-      }
-    }
-    let edgeResult:
-      | {
-          sceneEntityId?: number;
-          componentField?: string;
-        }
-      | undefined;
-    if (sceneEnvelope?.refs !== undefined) {
-      for (const ref of sceneEnvelope.refs) {
-        if (ref.guid.toLowerCase() === subGuidKey) {
-          const { sceneEntityId, sourceField } = ref;
-          const result: {
-            sceneEntityId?: number;
-            componentField?: string;
-            sourceField?: {
-              componentName?: string;
-              fieldName: string;
-              arrayIndex?: number;
-            };
-          } = {};
-          if (sceneEntityId !== undefined) {
-            result.sceneEntityId = sceneEntityId;
-          }
-          if (sourceField?.componentName !== undefined && sourceField?.fieldName !== undefined) {
-            result.componentField =
-              `${sourceField.componentName}.${sourceField.fieldName}` +
-              (sourceField.arrayIndex !== undefined ? `[${sourceField.arrayIndex}]` : '');
-          }
-          if (sourceField !== undefined) {
-            result.sourceField = sourceField;
-          }
-          // A rich edge (dev register path) carries full detail — return now.
-          if (result.sceneEntityId !== undefined || result.componentField !== undefined) {
-            return result;
-          }
-          // feat-20260622 M4 / w14: a GUID-only edge (prod path: on-disk refs[]
-          // strip sourceField / sceneEntityId at the serialization boundary, w7
-          // D-10) carries no per-entity detail. Keep this empty-but-defined
-          // result as the fallback, then try the entity walk below to recover
-          // the entity localId + component.field path (D-7 / B-8). The walk
-          // recovers handle-field edges (mesh / material); a texture edge (D-2:
-          // no per-entity origin) is not found by the walk, so the empty
-          // edgeResult is returned (w10 texture-edge contract preserved).
-          edgeResult = result;
-          break;
-        }
-      }
-    }
-    // Backward compat: fall back to entity walk when the envelope edge carries
-    // no per-entity detail (prod path: GUID-only refs[]) or no envelope is
-    // available (e.g. direct catalog() registration with scene payload, no refs).
     const entries = extractSceneEntityHandleGuids(
       scene.entities as unknown as ReadonlyArray<{
         readonly localId: number;
@@ -4006,19 +3733,12 @@ export class AssetRegistry {
         return {
           sceneEntityId: entry.entityLocalId,
           componentField: `${entry.componentName}.${entry.fieldName}${entry.arrayIndex !== undefined ? `[${entry.arrayIndex}]` : ''}`,
-          // feat-20260622 verify r1: also surface the recovered provenance in
-          // structured parts so the failure `.detail` can expose them for AI
-          // property access (charter P3), not only the concatenated hint string.
-          sourceField: {
-            componentName: entry.componentName,
-            fieldName: entry.fieldName,
-            ...(entry.arrayIndex !== undefined ? { arrayIndex: entry.arrayIndex } : {}),
-          },
         };
       }
     }
-    return edgeResult;
+    return undefined;
   }
+
   /**
    * tweak-20260609 M1 helper: build the error-hint breadcrumb string
    * containing the parent asset's GUID + kind, enriched with the
@@ -4136,17 +3856,12 @@ export class AssetRegistry {
     guid: AssetGuid,
     asset: Asset,
     _guidKey: string,
-    refs?: readonly AssetRef[],
   ): Result<T, AssetError | ImageError | RhiError> {
     // feat-20260614 M8 (D-17): catalogue the parsed payload under its GUID and
     // return the PAYLOAD. `catalog` validates mesh stride + material passes and
     // returns Result.err on failure (no throw), so the loadByGuid surface stays
     // a consistent Result (charter P4 consistent abstraction).
-    //
-    // feat-20260622 M4 / w12 (D-9): the pack-entry refs[] ride onto the
-    // catalogued envelope here so the recursive core can read envelope.refs as
-    // its single recursion source.
-    return this.catalog<T>(guid, asset as T, refs) as Result<T, AssetError | ImageError | RhiError>;
+    return this.catalog<T>(guid, asset as T) as Result<T, AssetError | ImageError | RhiError>;
   }
 
   /**
@@ -4329,7 +4044,7 @@ export class AssetRegistry {
     relativeUrl: string,
     guidKey: string,
     _kind: string,
-  ): Promise<Result<{ asset: Asset; refs: readonly string[] }, AssetError>> {
+  ): Promise<Result<Asset, AssetError>> {
     // ── cache hit ───────────────────────────────────────────────────────
     const cached = this.packFileCache.get(relativeUrl);
     if (cached !== undefined) {
@@ -4384,7 +4099,7 @@ export class AssetRegistry {
     kind: string;
     payload: Record<string, unknown>;
     refs?: string[];
-  }): Result<{ asset: Asset; refs: readonly string[] }, AssetError> {
+  }): Result<Asset, AssetError> {
     const parsed = this.parseAssetPayload(assetEntry.kind, assetEntry.payload, assetEntry.refs);
     // F21: the scene loader returns its structured ParseErrorDetail inline via
     // the LoaderOutput `{ ok: false, error }` arm, surfaced here through
@@ -4418,12 +4133,7 @@ export class AssetRegistry {
         }),
       );
     }
-    // feat-20260622 M4 / w12: surface the pack-entry refs[] (GUID-string
-    // projection) alongside the parsed payload so ddcLoad can store them on
-    // the catalogued envelope. The recursive core then reads envelope.refs
-    // as the single recursion source (D-5), never re-deriving them from
-    // the payload.
-    return ok({ asset: parsed, refs: assetEntry.refs ?? [] });
+    return ok(parsed);
   }
 
   /**
@@ -4438,7 +4148,7 @@ export class AssetRegistry {
   private async fetchAndCachePackFile(
     relativeUrl: string,
     guidKey: string,
-  ): Promise<Result<{ asset: Asset; refs: readonly string[] }, AssetError>> {
+  ): Promise<Result<Asset, AssetError>> {
     const fetchPromise = (async (): Promise<ParsedPackFile> => {
       let raw: unknown;
       try {
@@ -4631,12 +4341,8 @@ export class AssetRegistry {
    */
   inspect(): InspectSnapshot {
     const assets: InspectEntry[] = [];
-    for (const [guid, envelope] of this.assetCatalog) {
-      assets.push({
-        guid,
-        brand: ASSET_BRAND[envelope.payload.kind],
-        name: this.resolveName(guid),
-      });
+    for (const [guid, asset] of this.assetCatalog) {
+      assets.push({ guid, brand: assetBrand(asset), name: this.resolveName(guid) });
     }
     return { assets };
   }

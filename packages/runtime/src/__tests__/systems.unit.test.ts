@@ -846,10 +846,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           warnedNineSliceScaleEntities: new Set<number>(),
           viewBindGroupCache: new Map(),
           meshBindGroupCache: new Map(),
-          materialBgPerEntity: new Map(),
-          instancesBgPerEntity: new Map(),
-          materialBgShared: new Map(),
-          singletonMaterialCache: new Map(),
+          materialBgCache: new Map(),
+          instancesBgCache: new Map(),
+          handleToId: new WeakMap<object, number>(),
+          nextHandleId: 0,
           installedPipelineHandle: 0,
           activePipeline: urpPipeline,
           installedPipelineConfig: undefined,
@@ -898,10 +898,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           warnedNineSliceScaleEntities: new Set<number>(),
           viewBindGroupCache: new Map(),
           meshBindGroupCache: new Map(),
-          materialBgPerEntity: new Map(),
-          instancesBgPerEntity: new Map(),
-          materialBgShared: new Map(),
-          singletonMaterialCache: new Map(),
+          materialBgCache: new Map(),
+          instancesBgCache: new Map(),
+          handleToId: new WeakMap<object, number>(),
+          nextHandleId: 0,
           installedPipelineHandle: 0,
           activePipeline: urpPipeline,
           installedPipelineConfig: undefined,
@@ -3719,10 +3719,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           warnedNineSliceScaleEntities: new Set<number>(),
           viewBindGroupCache: new Map(),
           meshBindGroupCache: new Map(),
-          materialBgPerEntity: new Map(),
-          instancesBgPerEntity: new Map(),
-          materialBgShared: new Map(),
-          singletonMaterialCache: new Map(),
+          materialBgCache: new Map(),
+          instancesBgCache: new Map(),
+          handleToId: new WeakMap<object, number>(),
+          nextHandleId: 0,
           installedPipelineHandle: 0,
           activePipeline: urpPipeline,
           installedPipelineConfig: undefined,
@@ -3844,10 +3844,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           warnedNineSliceScaleEntities: new Set<number>(),
           viewBindGroupCache: new Map(),
           meshBindGroupCache: new Map(),
-          materialBgPerEntity: new Map(),
-          instancesBgPerEntity: new Map(),
-          materialBgShared: new Map(),
-          singletonMaterialCache: new Map(),
+          materialBgCache: new Map(),
+          instancesBgCache: new Map(),
+          handleToId: new WeakMap<object, number>(),
+          nextHandleId: 0,
           installedPipelineHandle: 0,
           activePipeline: urpPipeline,
           installedPipelineConfig: undefined,
@@ -3916,10 +3916,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           warnedNineSliceScaleEntities: new Set<number>(),
           viewBindGroupCache: new Map(),
           meshBindGroupCache: new Map(),
-          materialBgPerEntity: new Map(),
-          instancesBgPerEntity: new Map(),
-          materialBgShared: new Map(),
-          singletonMaterialCache: new Map(),
+          materialBgCache: new Map(),
+          instancesBgCache: new Map(),
+          handleToId: new WeakMap<object, number>(),
+          nextHandleId: 0,
           installedPipelineHandle: 0,
           activePipeline: urpPipeline,
           installedPipelineConfig: undefined,
@@ -8897,7 +8897,7 @@ type ExtractFrameWithPipeline = (
 //       for the mesh-array UBO).
 //   (b) `_skinBgCacheStats(pipelineState)` — N=3 sequential lookups
 //       against the same `(meshStorageBuffer, skinPaletteAllocator
-//       .buffer)` pair through `getOrCreateFromChain` produce miss=1 +
+//       .buffer)` pair through `getOrCreateBindGroup` produce miss=1 +
 //       hit=2. Keys are buffer-identity based (no entityKey segment) so
 //       multiple skinned entities sharing the same allocator buffer +
 //       mesh SSBO globally dedup the BG.
@@ -8958,48 +8958,58 @@ type ExtractFrameWithPipeline = (
       expect(noSkinSlot7[0]).toBe(7 * 256);
     });
 
-    it('skin BG cache dedups by buffer identity: N=3 lookups -> miss=1 + hit=2 (m3-1b)', async () => {
+    it('skin BG cache key dedups by buffer identity: N=3 lookups -> miss=1 + hit=2 (m3-1b)', async () => {
       const recordModule = (await import('../render-system-record')) as {
-        getOrCreateFromChain: (
-          root: WeakMap<object, unknown>,
-          handles: readonly object[],
+        buildBindGroupCacheKey: (
           variant: string,
-          factory: () => unknown,
-          counts: { createBindGroup: number; keys: string[] },
-        ) => unknown;
+          handles: object[],
+          frameState: { handleToId: WeakMap<object, number>; nextHandleId: number },
+        ) => string;
         _skinBgCacheStats?: (pipelineState: {
           _skinBgCacheStats: { miss: number; hit: number };
         }) => { miss: number; hit: number };
       };
-      const getOrCreate = recordModule.getOrCreateFromChain;
+      const buildKey = recordModule.buildBindGroupCacheKey;
       const readStats = recordModule._skinBgCacheStats;
       expect(readStats).toBeDefined();
       if (readStats === undefined) throw new Error('_skinBgCacheStats missing');
 
+      // Stand-in PipelineState carrying just the stats counter the m3-2
+      // impl publishes.  The renderer-owned PS will carry the same field
+      // shape; this fixture keeps the test scoped to the counter contract.
       const pipelineState = { _skinBgCacheStats: { miss: 0, hit: 0 } };
 
-      // Nested WeakMap chain root — identical handle pair produces same leaf.
-      const root = new WeakMap<object, unknown>();
+      // Mirror the record-site cache structure: a per-frame Map<string, BG>.
+      const cache = new Map<string, object>();
       const bindGroupCounts = { createBindGroup: 0, keys: [] as string[] };
-      const factory = () => ({ __label: 'bg' });
 
+      // Sentinel buffer handles -- record-stage builds the cache key from
+      // (meshStorageBuffer, skinPaletteAllocator.buffer) identities. Three
+      // skinned entities in one frame share the same pair, so the key is
+      // identical across all three lookups (the cache key is buffer-
+      // identity based, NOT entity-keyed -- m3-2 design preserves this).
       const meshSsbo = { __label: 'mesh-ssbo' };
       const paletteBuffer = { __label: 'skin-palette' };
+      const frameState = {
+        handleToId: new WeakMap<object, number>(),
+        nextHandleId: 0,
+      } as never;
 
-      // Walk N=3 lookups through the real getOrCreateFromChain.
+      // Walk N=3 lookups exactly as the record loop does (3 skin entries).
       for (let i = 0; i < 3; i++) {
-        const prevCount = bindGroupCounts.createBindGroup;
-        getOrCreate(
-          root,
-          [meshSsbo as object, paletteBuffer as object],
+        const key = buildKey(
           'pbr-skin-mesh',
-          factory,
-          bindGroupCounts,
+          [meshSsbo as object, paletteBuffer as object],
+          frameState,
         );
-        if (bindGroupCounts.createBindGroup > prevCount) {
-          pipelineState._skinBgCacheStats.miss += 1;
-        } else {
+        const hit = cache.get(key);
+        if (hit !== undefined) {
           pipelineState._skinBgCacheStats.hit += 1;
+        } else {
+          pipelineState._skinBgCacheStats.miss += 1;
+          cache.set(key, { __label: `bg-${i}` });
+          bindGroupCounts.createBindGroup += 1;
+          bindGroupCounts.keys.push(key);
         }
       }
 
@@ -9007,7 +9017,8 @@ type ExtractFrameWithPipeline = (
       const stats = readStats(pipelineState);
       expect(stats.miss).toBe(1);
       expect(stats.hit).toBe(2);
-      // Cross-check via bindGroupCounts: exactly one createBindGroup call.
+      // Cross-check via bindGroupCounts (the existing record-stage signal):
+      // exactly one createBindGroup call covers all three skin entries.
       expect(bindGroupCounts.createBindGroup).toBe(1);
       expect(bindGroupCounts.keys).toHaveLength(1);
     });
@@ -9068,7 +9079,7 @@ type ExtractFrameWithPipeline = (
 // w14: AC-07 B-family error strategy. dispose-path sub-cases drive real
 //      disposeInstanceBuffers; the F12 sub-case drives the real record pass
 //      with a destroy that fails (this block).
-// w15: AC-10 WeakMap chain behavior invariants.
+// w15: AC-10 D-family WeakMap behavior — real getOrAssignHandleId.
 //
 // Round 2 fix-up (implement-review §5 Issues 1-4 + round-cap-override mandate):
 // the prior round drove disposeInstanceBuffers as an F11/F12 proxy — a
@@ -9589,87 +9600,29 @@ type ExtractFrameWithPipeline = (
     });
   });
 
-  // ── w15: AC-10 WeakMap chain behavior invariants ──
-  //
-  // feat-20260622-handle-to-id-allocator-elimination: the old
-  // getOrAssignHandleId is gone; the old numeric counter is removed. WeakMap chain
-  // determinism replaces it — same handle object identity → same
-  // leaf BG, different handles → different leaf.
+  // ── w15: AC-10 D-family WeakMap behavior (via real getOrAssignHandleId) ──
 
-  describe('WeakMap chain behavior invariants [w15]', () => {
-    it('same handle object in chain → same leaf BindGroup (deterministic)', () => {
-      const root = new WeakMap<object, unknown>();
-      const h1 = {};
-      const h2 = {};
+  describe('handleToId WeakMap behavior (AC-10) [w15]', () => {
+    it('getOrAssignHandleId returns stable id for same object, increments per new object', async () => {
+      const { getOrAssignHandleId } = await import('../render-system-record');
+      const ht = new WeakMap<object, number>();
+      const fs = { handleToId: ht, nextHandleId: 0 };
 
-      // We simulate the chain by building two levels manually for the test
-      const inner = new WeakMap<object, unknown>();
-      root.set(h1, inner);
-      const leaf = new Map<string, unknown>();
-      inner.set(h2, leaf);
-      const bg1 = { __label: 'bg-1' };
-      leaf.set('variant-a', bg1);
+      const obj = {};
+      const id1 = getOrAssignHandleId(fs, obj);
+      const id2 = getOrAssignHandleId(fs, obj);
+      expect(id1).toBe(id2);
+      expect(id1).toBe(0);
 
-      // Same handle path → same leaf entry
-      const innerCheck = root.get(h1) as WeakMap<object, unknown>;
-      expect(innerCheck).toBeDefined();
-      const leafCheck = innerCheck.get(h2) as Map<string, unknown>;
-      expect(leafCheck).toBeDefined();
-      expect(leafCheck.get('variant-a')).toBe(bg1);
-      expect(leafCheck.get('variant-a')).toBe(bg1);
-
-      // Different variant on same chain → different leaf entry
-      const bg2 = { __label: 'bg-2' };
-      leaf.set('variant-b', bg2);
-      expect(leaf.get('variant-a')).toBe(bg1);
-      expect(leaf.get('variant-b')).toBe(bg2);
-      expect(bg1).not.toBe(bg2);
+      const ids: number[] = [];
+      for (let i = 0; i < 5; i++) ids.push(getOrAssignHandleId(fs, {}));
+      expect(ids).toEqual([1, 2, 3, 4, 5]);
+      expect(fs.nextHandleId).toBe(6);
     });
 
-    it('different handle objects → different chain position → different leaf', () => {
-      const root = new WeakMap<object, unknown>();
-      const hA = {};
-      const hB = {};
-      const innerA = new WeakMap<object, unknown>();
-      const innerB = new WeakMap<object, unknown>();
-      const leafA = new Map<string, unknown>();
-      const leafB = new Map<string, unknown>();
-      innerA.set({}, leafA);
-      innerB.set({}, leafB);
-      root.set(hA, innerA);
-      root.set(hB, innerB);
-
-      // Different root-level key → completely independent chains
-      const chainA = root.get(hA) as WeakMap<object, unknown>;
-      const chainB = root.get(hB) as WeakMap<object, unknown>;
-      expect(chainA).not.toBe(chainB);
-
-      // No shared leaf — hA's chain entries don't hit hB's chain
-      leafA.set('v', 'from-A');
-      leafB.set('v', 'from-B');
-      expect(
-        (root.get(hA) as WeakMap<object, unknown>).get({}) as Map<string, unknown>,
-      ).toBeUndefined();
-    });
-
-    it('grow miss: new inner buffer is new WeakMap key → cache miss (AC-07)', () => {
-      // AC-07: when mesh SSBO grows, the inner buffer object is replaced.
-      // The old inner buffer was a WeakMap key in the chain; the new one is
-      // a different object, so chain lookup naturally misses.
-      const root = new WeakMap<object, unknown>();
-      const oldBuf = {};
-      const inner = new WeakMap<object, unknown>();
-      const leaf = new Map<string, unknown>();
-      inner.set({}, leaf);
-      root.set(oldBuf, inner);
-
-      // Old buffer hits
-      expect(root.has(oldBuf)).toBe(true);
-
-      // New buffer (grow replacement) misses
-      const newBuf = {};
-      expect(root.has(newBuf)).toBe(false);
-      expect(oldBuf).not.toBe(newBuf);
+    it('handleToId on RenderFrameState is a WeakMap', () => {
+      const ht = new WeakMap<object, number>();
+      expect(ht).toBeInstanceOf(WeakMap);
     });
   });
 }

@@ -166,7 +166,7 @@ export interface SceneInstanceState {
  * apply unchanged (plan-strategy §D-5).
  *
  * @example Materialise + inspect a SceneAsset:
- *   const { root, diagnostics } = world.instantiateScene(handle).value;
+ *   const root = world.instantiateScene(handle).value;
  *   const inst = world.get(root, SceneInstance).value;
  *   // inst.source === handle, inst.mapping is Uint32Array(totalSlots)
  *   // inst.state holds entityToLocalId / detachedLocalIds / overrides /

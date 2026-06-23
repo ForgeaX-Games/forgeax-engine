@@ -44,10 +44,10 @@ describe('SceneInstance multi-instance independence (w30 rewrite)', () => {
     if (!r1.ok || !r2.ok) return;
 
     const set1 = new Set<EntityHandle>(
-      Array.from(world.getSceneInstanceState(r1.value.root).unwrap().entityToLocalId.keys()),
+      Array.from(world.getSceneInstanceState(r1.value).unwrap().entityToLocalId.keys()),
     );
     const set2 = new Set<EntityHandle>(
-      Array.from(world.getSceneInstanceState(r2.value.root).unwrap().entityToLocalId.keys()),
+      Array.from(world.getSceneInstanceState(r2.value).unwrap().entityToLocalId.keys()),
     );
 
     for (const e of set1) expect(set2.has(e)).toBe(false);
@@ -66,12 +66,12 @@ describe('SceneInstance multi-instance independence (w30 rewrite)', () => {
     const r2 = world.instantiateScene(handle);
     if (!r1.ok || !r2.ok) throw new Error('instantiateScene failed');
 
-    const s1 = world.getSceneInstanceState(r1.value.root).unwrap();
-    const s2 = world.getSceneInstanceState(r2.value.root).unwrap();
+    const s1 = world.getSceneInstanceState(r1.value).unwrap();
+    const s2 = world.getSceneInstanceState(r2.value).unwrap();
     const e1 = Array.from(s1.entityToLocalId.keys())[0];
     if (e1 === undefined) throw new Error('e1 missing');
 
-    world.setSceneOverride(r1.value.root, e1, Transform, 'posX', 99).unwrap();
+    world.setSceneOverride(r1.value, e1, Transform, 'posX', 99).unwrap();
     expect(s1.overrides.size).toBe(1);
     expect(s2.overrides.size).toBe(0);
   });
@@ -87,9 +87,9 @@ describe('SceneInstance multi-instance independence (w30 rewrite)', () => {
     const r2 = world.instantiateScene(handle);
     if (!r1.ok || !r2.ok) throw new Error('instantiateScene failed');
 
-    world.despawnScene(r1.value.root).unwrap();
+    world.despawnScene(r1.value).unwrap();
 
-    const s2 = world.getSceneInstanceState(r2.value.root).unwrap();
+    const s2 = world.getSceneInstanceState(r2.value).unwrap();
     expect(s2.entityToLocalId.size).toBe(1);
     expect(s2.overrides.size).toBe(0);
     expect(s2.detachedLocalIds.size).toBe(0);
@@ -103,9 +103,9 @@ describe('SceneInstance multi-instance independence (w30 rewrite)', () => {
     const handleA = registerSceneAsset(world, buildScene(nodes));
     const handleB = registerSceneAsset(world, buildScene(nodes));
 
-    const rootA1 = world.instantiateScene(handleA).unwrap().root;
-    const rootA2 = world.instantiateScene(handleA).unwrap().root;
-    const rootB = world.instantiateScene(handleB).unwrap().root;
+    const rootA1 = world.instantiateScene(handleA).unwrap();
+    const rootA2 = world.instantiateScene(handleA).unwrap();
+    const rootB = world.instantiateScene(handleB).unwrap();
 
     world.despawnScene(rootA1).unwrap();
     world.despawnScene(rootA2).unwrap();

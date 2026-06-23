@@ -47,7 +47,7 @@ describe('SceneInstance detachSceneMember / reattachSceneMember (w30 rewrite)', 
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value.root;
+    const root = r.value;
     const state = world.getSceneInstanceState(root).unwrap();
     expect(state.detachedLocalIds.size).toBe(0);
 
@@ -77,7 +77,7 @@ describe('SceneInstance detachSceneMember / reattachSceneMember (w30 rewrite)', 
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const root = r.value.root;
+    const root = r.value;
     const state = world.getSceneInstanceState(root).unwrap();
     const entity = Array.from(state.entityToLocalId.keys())[0];
     if (entity === undefined) throw new Error('entity missing');
@@ -97,7 +97,7 @@ describe('SceneInstance detachSceneMember / reattachSceneMember (w30 rewrite)', 
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const root = r.value.root;
+    const root = r.value;
     const stray = world
       .spawn({ component: Transform, data: { posX: 99, posY: 99, posZ: 99 } })
       .unwrap();
@@ -113,7 +113,7 @@ describe('SceneInstance detachSceneMember / reattachSceneMember (w30 rewrite)', 
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const root = r.value.root;
+    const root = r.value;
     const state = world.getSceneInstanceState(root).unwrap();
     const entity = Array.from(state.entityToLocalId.keys())[0];
     if (entity === undefined) throw new Error('entity missing');
@@ -131,7 +131,7 @@ describe('SceneInstance detachSceneMember / reattachSceneMember (w30 rewrite)', 
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const root = r.value.root;
+    const root = r.value;
     const state = world.getSceneInstanceState(root).unwrap();
     const entity = Array.from(state.entityToLocalId.keys())[0];
     if (entity === undefined) throw new Error('entity missing');
@@ -154,7 +154,7 @@ describe('despawnScene (w30 rewrite)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value.root;
+    const root = r.value;
     const entities = Array.from(world.getSceneInstanceState(root).unwrap().entityToLocalId.keys());
     expect(entities.length).toBe(4);
     for (const e of entities) {
@@ -181,7 +181,7 @@ describe('despawnScene (w30 rewrite)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value.root;
+    const root = r.value;
     const state = world.getSceneInstanceState(root).unwrap();
     const all = Array.from(state.entityToLocalId.keys());
 

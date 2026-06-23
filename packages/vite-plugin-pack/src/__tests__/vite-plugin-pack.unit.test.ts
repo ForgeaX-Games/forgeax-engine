@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
-import type { Asset, AssetRef, Importer, PackIndexEntry } from '@forgeax/engine-types';
+import type { Asset, Importer, PackIndexEntry } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildCatalogStrict } from '../build-catalog.js';
@@ -1064,7 +1064,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
           guid: string;
           kind: string;
           payload: Asset;
-          refs: readonly AssetRef[];
+          refs: ReadonlyArray<string>;
         }> = [];
 
         const meshSub = subAssets.find((s) => s.kind === 'mesh');

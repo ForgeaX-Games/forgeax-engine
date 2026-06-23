@@ -1,8 +1,8 @@
 // feat-20260619 M5 / w18 — AC-11 cow-survivor long-session steady-state
 // bounded test covering A-family (texture / mesh / cubemap) through real
-// store evict primitives. B-family (instance buffers) and D-family (nested
-// WeakMap per-entity cache) single-family boundedness are guarded by w15-w17
-// rewritten tests (systems.unit.test.ts / gpu-resource-cow-survivor.test.ts).
+// store evict primitives. B-family (instance buffers) and D-family (WeakMap)
+// single-family boundedness are guarded by w12-w15 rewritten tests
+// (systems.unit.test.ts) through real disposeInstanceBuffers / getOrAssignHandleId.
 // C-family (transient pool) is guarded by w9-w10 through graph.compile+resize.
 //
 // The survivor negative assertions verify that live resources survive
@@ -17,7 +17,6 @@ import type { CubeTextureAsset, Handle, MeshAsset, TextureAsset } from '@forgeax
 import { toShared, unwrapHandle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { GpuResourceStore } from '../gpu-resource-store';
-import { cleanPerEntityCache } from '../render-system-record';
 
 // ── Mock device (same shape as gpu-resource.test.ts makeStoreMockDevice) ──
 
@@ -323,55 +322,24 @@ describe('cow-survivor long-session steady-state bounded (AC-11) [w18]', () => {
     expect(store._getTextureGpuTexture(survivorHandle)).toBeUndefined();
   });
 
-  it('D-family nested WeakMap steady-state bounded (AC-04)', () => {
-    // AC-04: outer Map<number, WeakMap> bounded across multi-frame
-    // spawn/despawn cycles. cleanPerEntityCache delete removes despawned
-    // entityKeys; GC collects unreachable inner WeakMaps. No numeric
-    // counter or nextHandleId — bound is proven by Map.size stability.
-    const cache = new Map<number, WeakMap<object, unknown>>();
+  it('D-family handleToId: calls real getOrAssignHandleId', async () => {
+    const { getOrAssignHandleId } = await import('../render-system-record');
+    const ht = new WeakMap<object, number>();
 
-    const maxConcurrent = 5;
-    const rounds = 100;
+    const fs = { handleToId: ht, nextHandleId: 0 };
 
-    const sizes: number[] = [];
-
-    for (let round = 0; round < rounds; round++) {
-      // Spawn `maxConcurrent` fresh entities
-      for (let i = 0; i < maxConcurrent; i++) {
-        const ek = round * maxConcurrent + i;
-        const inner = new WeakMap<object, unknown>();
-        inner.set({}, { __mock: 'bg' });
-        cache.set(ek, inner);
-      }
-
-      // Validate current-round entityKeys, clean stale ones
-      const validated = new Set<number>();
-      for (let i = 0; i < maxConcurrent; i++) {
-        validated.add(round * maxConcurrent + i);
-      }
-      cleanPerEntityCache(cache, validated);
-
-      // Record size AFTER cleanup so we measure steady-state boundedness
-      sizes.push(cache.size);
+    const ids: number[] = [];
+    for (let round = 0; round < 50; round++) {
+      const obj = {};
+      // biome-ignore lint/suspicious/noExplicitAny: RenderFrameState has 20+ fields, test only needs handleToId+nextHandleId
+      const id = getOrAssignHandleId(fs as any, obj);
+      ids.push(id);
+      // biome-ignore lint/suspicious/noExplicitAny: see above
+      expect(getOrAssignHandleId(fs as any, obj)).toBe(id);
     }
 
-    // After all rounds, the last round's validated keys remain;
-    // all previous-round keys were deleted. Size must stay at
-    // maxConcurrent or fewer (not monotonic growth to rounds * maxConcurrent).
-    const steadySizes = sizes.slice(50);
-    const maxSteady = Math.max(...steadySizes);
-    const minSteady = Math.min(...steadySizes);
-    // At steady state, cache size is bounded at maxConcurrent
-    expect(maxSteady).toBeLessThanOrEqual(maxConcurrent + 1);
-    // Cleanup ensures entries from prior rounds don't accumulate
-    // (size never grows beyond maxConcurrent across all rounds)
-    const overallMax = Math.max(...sizes);
-    expect(overallMax).toBeLessThanOrEqual(maxConcurrent + 1);
-
-    // Final validated set size equals maxConcurrent
-    expect(cache.size).toBe(maxConcurrent);
-
-    // verify that max-min spread is tight (no accumulation/deletion jitter)
-    expect(maxSteady - minSteady).toBeLessThanOrEqual(1);
+    expect(ids[0]).toBe(0);
+    expect(ids[49]).toBe(49);
+    expect(fs.nextHandleId).toBe(50);
   });
 });

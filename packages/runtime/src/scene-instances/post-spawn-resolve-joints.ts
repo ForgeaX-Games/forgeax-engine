@@ -189,8 +189,7 @@ export function postSpawnResolveJoints(
         // JointCountMismatchError fail-fast in render-system-extract then
         // triggered every frame on the browser-async-pack-fetch path.
         // The cure is to load SkinAssets through the SceneAsset.skinGuids
-        // cross-edge (gltfImporter scene branch emits the SkinAsset GUIDs into
-        // the scene envelope's refs[], the runtime recursion source) so this
+        // cross-edge (gltfImporter scene branch + collectRefs) so this
         // resolver should always succeed; if it does not, fail-fast here
         // with a precise errorCode rather than silently producing an
         // unresolvable Skin.joints state.

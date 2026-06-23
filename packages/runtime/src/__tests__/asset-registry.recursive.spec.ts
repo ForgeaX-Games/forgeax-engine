@@ -22,6 +22,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
+import { collectRefs } from '../collect-refs';
 import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -100,6 +101,25 @@ function preregisterMaterial(reg: AssetRegistry, guidStr: string): void {
 // ── AC-01: scene + N material + 1 mesh recursive resolution ────────────────
 
 describe('AC-01 — scene recursive loadByGuid', () => {
+  it('collectRefs(scene) extracts material + mesh GUIDs from MeshFilter + MeshRenderer', () => {
+    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
+    defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
+
+    const scene = makeTestSceneAsset({
+      meshGuid: MESH_GUID,
+      materialGuids: [MATERIAL_A_GUID, MATERIAL_B_GUID],
+    });
+
+    const refs = collectRefs(scene);
+    const refStrs = refs.map((r) => AssetGuid.format(r));
+
+    expect(refStrs).toContain(MESH_GUID);
+    expect(refStrs).toContain(MATERIAL_A_GUID);
+    expect(refStrs).toContain(MATERIAL_B_GUID);
+    expect(refs.length).toBe(3);
+  });
+
   it('loadByGuid<SceneAsset> in dev mode returns ok when sub-assets pre-registered', async () => {
     defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
     defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
@@ -208,10 +228,6 @@ describe('AC-07 — transitive failure attribution', () => {
     ];
 
     // Scene pack payload references MESH_GUID + MISSING_SUB_GUID.
-    // feat-20260622 M4 / w14: refs[] is now the recursion SSOT (D-5). Handle
-    // fields carry refs[] indices (resolved by parseScenePayload), and the
-    // scene envelope's refs[] (GUID-string projection) drives the unified
-    // recursive for-loop. MESH_GUID -> refs[0], MISSING_SUB_GUID -> refs[1].
     const scenePack = {
       schemaVersion: '1.0.0',
       kind: 'internal-text-package',
@@ -225,13 +241,13 @@ describe('AC-07 — transitive failure attribution', () => {
                 localId: 0,
                 components: {
                   Transform: { posX: 0, posY: 0, posZ: 0 },
-                  MeshFilter: { assetHandle: 0 },
-                  MeshRenderer: { materials: [1] },
+                  MeshFilter: { assetHandle: MESH_GUID },
+                  MeshRenderer: { materials: [MISSING_SUB_GUID] },
                 },
               },
             ],
           },
-          refs: [MESH_GUID, MISSING_SUB_GUID],
+          refs: [],
         },
       ],
     };
@@ -290,27 +306,6 @@ describe('AC-07 — transitive failure attribution', () => {
         expect(err.hint).toContain(SCENE_GUID);
         expect(err.hint).toContain('entity 0');
         expect(err.hint).toContain('MeshRenderer.materials');
-        // feat-20260622 verify r1: the breadcrumb provenance is ALSO exposed in
-        // structured form on `.detail` so an AI user locates the broken edge by
-        // property access, not by parsing the hint (charter P3, requirements
-        // error-self-recovery). Only asserted when the propagated error did not
-        // carry a more-specific detail of its own.
-        const detail = err.detail as
-          | {
-              referencedByGuid?: string;
-              subAssetGuid?: string;
-              sceneEntityId?: number;
-              sourceField?: { componentName?: string; fieldName?: string; arrayIndex?: number };
-            }
-          | undefined;
-        // Unconditional (verify r2): the structured breadcrumb MUST be delivered
-        // on this scene->missing-sub-asset prod path — a guarded assertion would
-        // pass vacuously if the provenance silently regressed to hint-only.
-        expect(detail?.referencedByGuid?.toLowerCase()).toBe(SCENE_GUID.toLowerCase());
-        expect(detail?.subAssetGuid?.toLowerCase()).toBe(MISSING_SUB_GUID.toLowerCase());
-        expect(detail?.sceneEntityId).toBe(0);
-        expect(detail?.sourceField?.componentName).toBe('MeshRenderer');
-        expect(detail?.sourceField?.fieldName).toBe('materials');
       }
     } finally {
       // biome-ignore lint/suspicious/noExplicitAny: test teardown
@@ -420,12 +415,11 @@ describe('AC-08 — in-flight dedup + cycle', () => {
 
     const reg = makeRegistry();
 
-    // Two SceneAssets that reference each other via a refs[] edge.
-    // feat-20260622 M4 / w14: the recursion source is envelope.refs (D-5).
-    // A's envelope.refs = [CYCLE_B_GUID], B's = [CYCLE_A_GUID].
-    // With register-before-recurse + inFlight dedup: A registers then recurses
-    // into B; B registers then recurses into A; A is already catalogued
-    // (fast-path hit) / inFlight Promise satisfies it → no stack overflow.
+    // Two SceneAssets that reference each other via a handle field.
+    // collectRefs(scene) detects the handle field → recursive loadByGuid.
+    // With inFlight dedup: A starts fetch→parse→collectRefs→B, B starts
+    // fetch→parse→collectRefs→A, inFlight.has(A)=true → returns A's
+    // in-flight Promise → no stack overflow.
 
     const packIndex = [
       { guid: CYCLE_A_GUID, relativeUrl: '/packs/a.pack.json', kind: 'scene' },
@@ -445,12 +439,12 @@ describe('AC-08 — in-flight dedup + cycle', () => {
                 localId: 0,
                 components: {
                   Transform: { posX: 0, posY: 0, posZ: 0 },
-                  SceneCycler: { refScene: 0 },
+                  SceneCycler: { refScene: CYCLE_B_GUID },
                 },
               },
             ],
           },
-          refs: [CYCLE_B_GUID],
+          refs: [],
         },
       ],
     };
@@ -468,12 +462,12 @@ describe('AC-08 — in-flight dedup + cycle', () => {
                 localId: 0,
                 components: {
                   Transform: { posX: 0, posY: 0, posZ: 0 },
-                  SceneCycler: { refScene: 0 },
+                  SceneCycler: { refScene: CYCLE_A_GUID },
                 },
               },
             ],
           },
-          refs: [CYCLE_A_GUID],
+          refs: [],
         },
       ],
     };
@@ -510,6 +504,57 @@ describe('AC-08 — in-flight dedup + cycle', () => {
 // ── AC-02: material recursive (D-8 — paramValues string-only walker) ─────────
 
 describe('AC-02 — material recursive loadByGuid', () => {
+  it('collectRefs(material) extracts texture GUIDs from paramValues', () => {
+    const material: MaterialAsset = {
+      kind: 'material',
+      passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
+      paramValues: {
+        u_albedoMap: TEXTURE_A_GUID,
+        u_normalMap: TEXTURE_B_GUID,
+        u_metallic: 0.5, // number — NOT a GUID, should be skipped
+        u_name: 'rough-metal', // string but NOT a GUID, should be skipped
+        u_emptyStr: '', // empty string — not a valid GUID, should be skipped
+      },
+    };
+
+    const refs = collectRefs(material);
+    const refStrs = refs.map((r) => AssetGuid.format(r));
+
+    // Only TEXTURE_A_GUID and TEXTURE_B_GUID are valid GUID strings
+    expect(refStrs).toContain(TEXTURE_A_GUID);
+    expect(refStrs).toContain(TEXTURE_B_GUID);
+    expect(refStrs).not.toContain('rough-metal');
+    expect(refs.length).toBe(2);
+  });
+
+  it('collectRefs(material) with undefined paramValues returns []', () => {
+    const material: MaterialAsset = {
+      kind: 'material',
+      passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
+      // paramValues omitted entirely
+    };
+
+    expect(collectRefs(material)).toEqual([]);
+  });
+
+  it('collectRefs(material) skips non-GUID-string paramValues in mixed map', () => {
+    const material: MaterialAsset = {
+      kind: 'material',
+      passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
+      paramValues: {
+        tex: TEXTURE_A_GUID,
+        metallic: 0.5,
+        name: 'rough-metal',
+      },
+    };
+
+    const refs = collectRefs(material);
+    const refStrs = refs.map((r) => AssetGuid.format(r));
+
+    expect(refStrs).toContain(TEXTURE_A_GUID);
+    expect(refs.length).toBe(1);
+  });
+
   it('loadByGuid<MaterialAsset> recurses into texture sub-assets pre-registered in dev mode', async () => {
     // Verify that the recursive loadByGuid<MaterialAsset> walk reaches
     // texture GUIDs from paramValues. The textures are pre-registered in dev
@@ -594,6 +639,31 @@ describe('AC-02 — material recursive loadByGuid', () => {
 // ── AC-04: skin recursive (D-10 — single skeletonGuid) ─────────────────────-
 
 describe('AC-04 — skin recursive loadByGuid', () => {
+  it('collectRefs(skin) extracts skeletonGuid', () => {
+    const skin: import('@forgeax/engine-types').SkinAsset = {
+      kind: 'skin',
+      skeletonGuid: SKELETON_GUID,
+      jointPaths: ['Root/Arm/Hand', 'Root/Leg'],
+    };
+
+    const refs = collectRefs(skin);
+    expect(refs.length).toBe(1);
+    const ref0 = refs[0];
+    if (ref0 === undefined) throw new Error('refs[0] should be defined after length check');
+    expect(AssetGuid.format(ref0)).toBe(SKELETON_GUID);
+  });
+
+  it('collectRefs(skin) with malformed skeletonGuid returns []', () => {
+    const skin: import('@forgeax/engine-types').SkinAsset = {
+      kind: 'skin',
+      skeletonGuid: 'not-a-valid-uuid',
+      jointPaths: ['Root'],
+    };
+
+    const refs = collectRefs(skin);
+    expect(refs.length).toBe(0);
+  });
+
   it('loadByGuid<SkinAsset> registers skeleton sub-asset via recursive walk', async () => {
     const reg = makeRegistry();
 
@@ -665,8 +735,8 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
     //
     // Texture is pre-registered in dev mode (fast-path compatible) because
     // the texture upstream-entry path requires .bin URLs + metadata; the
-    // material envelope's refs[] carries the texture GUIDs from paramValues,
-    // and the recursive loadByGuid hits the dev fast-path.
+    // material walker's collectRefs extracts the texture GUIDs from
+    // paramValues, and the recursive loadByGuid hits the dev fast-path.
 
     defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
     defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
@@ -708,15 +778,13 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
                 localId: 0,
                 components: {
                   Transform: { posX: 0, posY: 0, posZ: 0 },
-                  MeshFilter: { assetHandle: 0 },
-                  MeshRenderer: { materials: [1] },
+                  MeshFilter: { assetHandle: MESH_GUID },
+                  MeshRenderer: { materials: [MATERIAL_A_GUID] },
                 },
               },
             ],
           },
-          // feat-20260622 M4 / w14: refs[] is the recursion SSOT (D-5).
-          // MESH_GUID -> refs[0], MATERIAL_A_GUID -> refs[1].
-          refs: [MESH_GUID, MATERIAL_A_GUID],
+          refs: [],
         },
       ],
     };
@@ -755,16 +823,13 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
           kind: 'material',
           payload: {
             passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
-            // feat-20260622 M4 / w14: texture handle fields carry refs[] indices
-            // (resolved by materialLoader); the texture edge rides material
-            // refs[] so the unified for-loop recurses into it.
             paramValues: {
-              u_baseColorMap: 0,
-              u_normalMap: 0, // same texture via two params (diamond)
+              u_baseColorMap: TEXTURE_C_GUID,
+              u_normalMap: TEXTURE_C_GUID, // same texture via two params (diamond)
               u_metallic: 0.5, // non-GUID value → skipped
             },
           },
-          refs: [TEXTURE_C_GUID],
+          refs: [],
         },
       ],
     };
@@ -810,13 +875,13 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
 
 // ── M3: leaf coverage (AC-05) ──────────────────────────────────────────────
 //
-// All 10 leaf kinds in the closed Asset union carry no sub-asset edges; the
-// importer fills envelope.refs = [] for them. The 6 spec-enumerated leaves
-// (mesh / texture / cube-texture / animation-clip / audio / font) plus 4 extras
-// (sampler / shader / skeleton / render-pipeline) -- tested together for union
-// completeness.
+// CollectRefs returns [] for all 10 leaf kinds in the closed Asset union.
+// The 6 spec-enumerated leaves (mesh / texture / cube-texture / animation-clip
+// / audio / font) plus 4 extras (sampler / shader / skeleton / render-pipeline)
+// that M0 already had as leaf arms -- tested together for union completeness.
 //
 // AC-05 per-leaf assertions:
+//   collectRefs(asset) === []
 //   loadByGuid (fast-path) returns the catalogued payload
 //   lookup after catalog returns the payload
 //   inspect().assets count incremented by 1 from catalog (zero extra mutations)
@@ -926,10 +991,10 @@ const LEAF_FIXTURES: readonly LeafFixture[] = [
     label: 'audio',
     kind: 'audio',
     makeAsset: () =>
-      // AudioClipAsset requires a real AudioBuffer; in this test we verify the
-      // leaf registry lifecycle (no sub-asset edges, OOS-11 no internal data
-      // pre-load). A typed partial satisfies the unit under test without
-      // decoding real PCM.
+      // AudioClipAsset requires a real AudioBuffer; in this test we verify
+      // collectRefs (pure type switch, OOS-11 no internal data pre-load) and
+      // registry lifecycle. A typed partial satisfies the unit under test
+      // without decoding real PCM.
       ({
         kind: 'audio' as const,
         buffer: { length: 0, sampleRate: 48000, numberOfChannels: 1, duration: 0 } as AudioBuffer,
@@ -964,10 +1029,17 @@ const LEAF_FIXTURES: readonly LeafFixture[] = [
   },
 ];
 
-describe('AC-05 -- leaf assets (no sub-asset edges)', () => {
-  // Leaf kinds carry no recursion edges; the importer fills envelope.refs = []
-  // and loadByGuid does not recurse for them. These tests confirm the registry
-  // lifecycle (catalog -> fast-path loadByGuid -> lookup) per leaf kind.
+describe('AC-05 -- leaf assets (collectRefs returns [])', () => {
+  // Charter awareness: AI users grep `case '<leafKind>':` in collect-refs.ts
+  // to discover which kinds are leaves. These tests confirm claim per kind.
+
+  it.each(
+    LEAF_FIXTURES.map((f) => [f.label, f]),
+  )('collectRefs(%s) returns []', (_label, fixture) => {
+    const asset = fixture.makeAsset();
+    const refs = collectRefs(asset);
+    expect(refs).toEqual([]);
+  });
 
   it.each(
     LEAF_FIXTURES.map((f) => [f.label, f]),
@@ -1003,6 +1075,10 @@ describe('AC-05 -- leaf assets (no sub-asset edges)', () => {
 
     // lookup confirms catalogue
     expect(reg.lookup(guid)).not.toBe(undefined);
+
+    // collectRefs on the catalogued asset returns []
+    const refs = collectRefs(asset);
+    expect(refs).toEqual([]);
   });
 });
 
@@ -1025,8 +1101,8 @@ describe('AC-05 -- leaf assets (no sub-asset edges)', () => {
 //      SkinAsset GUIDs the scene's skinned entities reference). gltfImporter
 //      populates it; on-disk pack JSON stores it as either string GUIDs or
 //      refs[] indices (parseScenePayload accepts both).
-//   2. The scene envelope's `refs[]` includes each SkinAsset GUID so the
-//      recursive `loadByGuid` walk pulls every SkinAsset.
+//   2. `collectRefs(scene)` walks `asset.skinGuids` and yields parsed GUIDs
+//      so the recursive `loadByGuid` walk pulls every SkinAsset.
 //   3. `postSpawnResolveJoints` upgraded its silent `continue` on missing
 //      SkinAsset to a fail-fast `skin-asset-unresolved` error, so a future
 //      regression of the cross-edge wiring surfaces immediately rather than
@@ -1049,6 +1125,20 @@ describe('feat-20260612 M2 fixup — SceneAsset.skinGuids cross-edge', () => {
       // biome-ignore lint/suspicious/noExplicitAny: test teardown
       delete (globalThis as any).fetch;
     }
+  });
+
+  it('collectRefs(scene) yields SkinAsset GUIDs from scene.skinGuids', () => {
+    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+
+    const scene: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: localId(0), components: { Transform: { posX: 0, posY: 0, posZ: 0 } } }],
+      skinGuids: [SKIN_FIXUP_SKIN_GUID],
+    };
+
+    const refs = collectRefs(scene);
+    const refStrs = refs.map((r) => AssetGuid.format(r));
+    expect(refStrs).toContain(SKIN_FIXUP_SKIN_GUID);
   });
 
   it('loadByGuid<SceneAsset> recursively loads SkinAsset via skinGuids cross-edge (browser pack-fetch path)', async () => {
@@ -1140,8 +1230,8 @@ describe('feat-20260612 M2 fixup — SceneAsset.skinGuids cross-edge', () => {
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
 
     // BEFORE fix: SkinAsset not catalogued -> lookup fails.
-    // AFTER fix: the scene envelope's refs[] carries the SkinAsset GUID ->
-    // loadByGuid recursion pulls it -> lookup succeeds.
+    // AFTER fix: collectRefs yields SkinAsset GUID -> loadByGuid recursion
+    // pulls it -> lookup succeeds.
     const result = await reg.loadByGuid<SceneAsset>(parseGuid(SKIN_FIXUP_SCENE_GUID));
     expect(result.ok).toBe(true);
 
@@ -1178,7 +1268,9 @@ describe('feat-20260612 M2 fixup — SceneAsset.skinGuids cross-edge', () => {
     const result = await reg.loadByGuid<SceneAsset>(parseGuid(SKIN_FIXUP_SCENE_GUID));
     expect(result.ok).toBe(true);
 
-    // Inline-string skinGuids form resolves through the recursive walk too.
-    expect(reg.lookup(parseGuid(SKIN_FIXUP_SKIN_GUID))).not.toBe(undefined);
+    // collectRefs walks inline string form too
+    const refs = collectRefs(scene);
+    const refStrs = refs.map((r) => AssetGuid.format(r));
+    expect(refStrs).toContain(SKIN_FIXUP_SKIN_GUID);
   });
 });

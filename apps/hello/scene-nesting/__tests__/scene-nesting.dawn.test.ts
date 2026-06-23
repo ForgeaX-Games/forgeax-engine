@@ -229,7 +229,7 @@ describe('hello-scene-nesting w34 - dawn draw scene with mount (AC-33)', () => {
     const instRes = world.instantiateScene(outerHandle);
     expect(instRes.ok).toBe(true);
     if (!instRes.ok) return;
-    const root = instRes.value.root;
+    const root = instRes.value;
 
     // Verify the mount created entities.
     const inst = world.get(root, SceneInstance);

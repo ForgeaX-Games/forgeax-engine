@@ -139,7 +139,6 @@ GpuResource v1 是单 owner immortal 模型：有且仅有一个所有者负责 
 - **在 runtime `engine-shader` 里 import `engine-naga`**：物理隔离的 3 道 grep gate（triple-grep gate）会拦——naga 只在 build-time 的 shader-compiler 链路出现，runtime 侧禁用。
 - **二次 destroy 同一个 buffer / texture**：返回 `err.code === 'destroy-after-destroy'` 而非 OK——这是 fail-fast 设计（不是 bug）。在调用方用 `switch (err.code)` 走 `'destroy-after-destroy'` 分支即可自检"已释放过"。若期望 idempotent OK 语义，在调用前检查 `GpuResource.isDestroyed`（runtime 层 wrapper）。
 - **想调 `device.destroy()` 释放整个设备**：不可在公共路径调用（chromium adapter pool 中毒）。只加资源级 `destroyBuffer` / `destroyTexture`；需要裸 `GPUDevice.destroy()` 走 `_internal_getRawDevice(device)` escape hatch。
-- **wgpu-wasm Channel 3（WebKit/headless chromium）上 submit 后静默黑屏 / GPU 死**：旧代码 `RhiWgpuQueue::submit` 返回 `()` 不标 `#[wasm_bindgen(catch)]`，且 wgpu backend 的 submit 校验 error 走 error-sink 对 JS 侧不可见——相当于 submit 失败被静默吞掉、GPU 死透。已修（bug-20260622 R5 M4）：Rust 侧 `device.on_uncaptured_error` 全局回调接收 error-sink 投递并写入 per-queue last-error 槽位；`submit()` 标 `#[wasm_bindgen(catch)]` 改返回 `Result`，调用后同步读取 + 清空槽位，命中则以 `[rhi-code:<code>]` 前缀抛回 JS。TS shim `queue.ts` 按前缀路由到 `queueSubmitFailed` / `webgpuRuntimeError`（复用既有 `RhiErrorCode` 闭合联合成员，零新增）。**行为变化**：submit 期校验错误从「panic(GPU 死)」改为「经 onError 返回 RhiError(实例存活)」，下一帧 submit 正常。
 
 ## 深入
 

@@ -42,8 +42,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
   // Mutation resistance (sec.5.3.1) for material-key is verified by
   // targeted mutation testing on production source — see implementer's
   // mutation-test report.  The R-2 defect class (dropped handle from key)
-  // is guaranteed by the key-construction guard at the getOrCreateFromChain
-  // call site: all 14 entries are passed as WeakMap chain keys before
+  // is guaranteed by the key-construction guard at the getOrCreateBindGroup
+  // call site: all 14 entries are mapped through getOrAssignHandleId before
   // joining.  This structural guarantee is verified by code-path coverage
   // in test:dawn.
 
@@ -383,19 +383,44 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       const count1 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(count1).toBeGreaterThan(0);
 
-      // feat-20260622-handle-to-id-allocator-elimination: keys are now bare
-      // variant strings pushed by getOrCreateFromChain (not the old format
-      // 'view-main-{id}-{id}-...'). The variant string identifies which
-      // bind-group layout was created; handle identity is tracked by the
-      // nested WeakMap chain, not encoded in a flat string key.
-      //
-      // View-main BG key must exist on cold frame as bare variant string.
-      const viewKeys = (rs.bindGroupCounts?.keys ?? []).filter((k: string) => k === 'view-main');
+      // View-main BG key must exist on cold frame.
+      const viewKeys = (rs.bindGroupCounts?.keys ?? []).filter((k: string) =>
+        k.startsWith('view-main-'),
+      );
       expect(viewKeys.length).toBe(1);
 
-      // Mesh BG key must exist on cold frame as bare variant string.
-      const meshKeys = (rs.bindGroupCounts?.keys ?? []).filter((k: string) => k === 'mesh');
+      // Mesh BG key must exist on cold frame.
+      const meshKeys = (rs.bindGroupCounts?.keys ?? []).filter((k: string) =>
+        k.startsWith('mesh-'),
+      );
       expect(meshKeys.length).toBe(1);
+
+      // feat-20260612-point-light-shadows-urp-hdrp Round-2 F-1: viewKey now
+      // includes 7 handle ids (was 5): + cube_array shadow atlas view +
+      // shadowParams UBO. The legacy split-by-'-' logic counts variant
+      // segments + handle segments (the 'view-main' variant prefix splits
+      // into 2 segments, then each handle id is a non-negative integer
+      // segment); total = 2 + 7 = 9.
+      for (const key of viewKeys) {
+        expect(key.split('-').length).toBe(9);
+      }
+
+      // Each mesh key must have the variant prefix AND at least one
+      // non-empty handle-id segment after the prefix.
+      // Mutation gate: dropping the meshStorageBuffer handle from the key
+      // produces 'mesh-' (empty handle seq) which still splits into 2
+      // segments ['mesh', ''].  We additionally verify the segments
+      // array has no empty strings.
+      for (const key of meshKeys) {
+        const segs = key.split('-');
+        expect(segs.length).toBeGreaterThanOrEqual(2);
+        // All segments after the variant must be non-empty numeric ids.
+        for (let s = 1; s < segs.length; s++) {
+          expect(segs[s], `mesh key "${key}" segment[${s}] must be a non-empty numeric id`).toMatch(
+            /^\d+$/,
+          );
+        }
+      }
 
       // Frame 2: warm — all cache hits
       draw(world);
@@ -1803,8 +1828,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
     const engine = await importEngine();
     // TDD red: the engine's RenderSystem already has bindGroupCounts from w4,
-    // viewBindGroupCache + meshBindGroupCache from w7, materialBgPerEntity +
-    // instancesBgPerEntity from w12.  But per-frame clean-up (w14) is NOT yet
+    // viewBindGroupCache + meshBindGroupCache from w7, materialBgCache +
+    // instancesBgCache from w12.  But per-frame clean-up (w14) is NOT yet
     // implemented — after despawn, cache entries will NOT be removed until w14.
     return { createRenderer: engine.createRenderer };
   }
@@ -2115,8 +2140,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       const countAfterDespawn = bc?.createBindGroup ?? -1;
       expect(countAfterDespawn).toBe(0);
 
-      // TDD red note: the despawned entity's materialBgPerEntity and
-      // instancesBgPerEntity entries still occupy space in their Maps (w14
+      // TDD red note: the despawned entity's materialBgCache and
+      // instancesBgCache entries still occupy space in their Maps (w14
       // clean-up not yet implemented).  This is correct pre-clean-up state —
       // they are orphaned but not yet dropped.  After w14 lands, a follow-up
       // assertion could verify GC by checking the counter stays 0 even after
@@ -2240,14 +2265,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       // After respawn: the entityKey differs (generation bumped — w1 already
       // tests this invariant). In the mock, handle objects are reference-equal
       // across invocations, so the new entity's cache key only differs in
-      // entityKey, but the nested WeakMap chain maps the same GPU object refs
-      // to the same leaf BindGroup.  The counter therefore stays low when the
-      // handle set is unchanged (mock limitation, not a cache bug).
+      // entityKey, but `getOrAssignHandleId` maps the same GPU object refs to
+      // the same numeric ids.  The counter therefore stays low when the handle
+      // set is unchanged (mock limitation, not a cache bug).
       draw(world);
       const countAfterRespawn = bc?.createBindGroup ?? -1;
-      // Mock limitation: same object refs -> same WeakMap chain hit.  The entityKey
-      // portion of the outer Map differs, but with 14 identical handle objects,
-      // the inner chain hits the same leaf BG.  In a real GPU context
+      // Mock limitation: same object refs -> same handle ids.  The entityKey
+      // portion of the key differs, but with 14 identical handle ids, the
+      // cache key prefixes differ only in entityKey.  In a real GPU context
       // with different device objects, the key would fully differ.
       expect(countAfterRespawn).toBeLessThanOrEqual(3);
     });

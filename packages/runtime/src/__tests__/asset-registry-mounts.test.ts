@@ -403,13 +403,9 @@ describe('integration: concurrent scene load via parseAssetPayload (F21 / AC-09 
     }
 
     // B: must be a valid SceneAsset.
-    // feat-20260622 M4 / w12: parseAndReturnAsset returns { asset, refs } so
-    // the recursive core can read envelope.refs (D-5); unwrap `.asset` here.
     expect(resultB.ok).toBe(true);
     if (resultB.ok) {
-      const asset = (
-        resultB.value as { asset: { kind: string; entities: Array<{ localId: number }> } }
-      ).asset;
+      const asset = resultB.value as { kind: string; entities: Array<{ localId: number }> };
       expect(asset.kind).toBe('scene');
       // B's entities must NOT contain A's localId 100.
       const entityIds = asset.entities.map((e) => e.localId);
@@ -445,8 +441,7 @@ describe('integration: concurrent scene load via parseAssetPayload (F21 / AC-09 
     });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      // feat-20260622 M4 / w12: parseAndReturnAsset returns { asset, refs }.
-      expect((result.value as { asset: { kind: string } }).asset.kind).toBe('scene');
+      expect((result.value as { kind: string }).kind).toBe('scene');
     }
   });
 });

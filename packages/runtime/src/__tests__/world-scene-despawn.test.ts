@@ -31,18 +31,18 @@ describe('world.despawnScene (w19)', () => {
     const handle = registerSceneAsset(world, asset);
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const inst = world.get(r.value.root, SceneInstance);
+    const inst = world.get(r.value, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
     const m0 = inst.value.mapping[0] as unknown as number;
     const m1 = inst.value.mapping[1] as unknown as number;
 
-    const dr = world.despawnScene(r.value.root);
+    const dr = world.despawnScene(r.value);
     expect(dr.ok).toBe(true);
     if (!dr.ok) return;
     expect(dr.value).toBeGreaterThanOrEqual(3); // root + 2 members
 
     // After despawn, get() on root + members must fail
-    expect(world.get(r.value.root, SceneInstance).ok).toBe(false);
+    expect(world.get(r.value, SceneInstance).ok).toBe(false);
     expect(world.get(m0 as never, Transform).ok).toBe(false);
     expect(world.get(m1 as never, Transform).ok).toBe(false);
   });
@@ -59,14 +59,14 @@ describe('world.despawnScene (w19)', () => {
     const handle = registerSceneAsset(world, asset);
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiate failed');
-    const inst = world.get(r.value.root, SceneInstance);
+    const inst = world.get(r.value, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
     const member1 = inst.value.mapping[1] as unknown as number;
 
-    const det = world.detachSceneMember(r.value.root, member1 as never);
+    const det = world.detachSceneMember(r.value, member1 as never);
     expect(det.ok).toBe(true);
 
-    const dr = world.despawnScene(r.value.root, { keepDetached: true });
+    const dr = world.despawnScene(r.value, { keepDetached: true });
     expect(dr.ok).toBe(true);
     // Detached member must remain alive
     expect(world.get(member1 as never, Transform).ok).toBe(true);

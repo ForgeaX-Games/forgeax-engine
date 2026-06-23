@@ -221,7 +221,7 @@ async function findRealTtf(): Promise<string | undefined> {
 
         const font = produced.find((a) => a.guid === FONT_GUID);
         expect(font?.kind).toBe('font');
-        expect(font?.refs.map((r) => r.guid)).toContain(ATLAS_GUID);
+        expect(font?.refs).toContain(ATLAS_GUID);
       });
     });
   });

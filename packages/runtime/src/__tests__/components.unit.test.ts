@@ -1811,12 +1811,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const r = world.instantiateScene(handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
-      const e = firstNodeEntity(world, r.value.root);
+      const e = firstNodeEntity(world, r.value);
       const t = world.get(e, Transform).unwrap();
       expect(t.posX).toBe(1.5);
       // overrides stay empty - no setSceneOverride was called. M3 reads them
       // from the SceneInstanceState payload via getSceneInstanceState.
-      const stateRes = world.getSceneInstanceState(r.value.root);
+      const stateRes = world.getSceneInstanceState(r.value);
       expect(stateRes.ok).toBe(true);
       if (!stateRes.ok) return;
       expect(stateRes.value.overrides.size).toBe(0);
@@ -1842,7 +1842,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const r = world.instantiateScene(handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
-      const e = firstNodeEntity(world, r.value.root);
+      const e = firstNodeEntity(world, r.value);
       const t = world.get(e, Transform).unwrap();
       expect(t.posY).toBe(7.0);
     });
@@ -1870,7 +1870,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const r = world.instantiateScene(handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
-      const e = firstNodeEntity(world, r.value.root);
+      const e = firstNodeEntity(world, r.value);
       const t = world.get(e, Transform).unwrap();
       expect(t.posY).toBe(0); // f32 -> 0
       expect(t.posZ).toBe(0); // f32 -> 0
@@ -1900,7 +1900,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const r = world.instantiateScene(handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
-      const e = firstNodeEntity(world, r.value.root);
+      const e = firstNodeEntity(world, r.value);
       const slot = world.get(e, TargetSlot).unwrap();
       // Read-side: ENTITY_NULL_RAW storage maps back to null; layer 3 silent
       // path must NOT emit any error code.
@@ -1933,7 +1933,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const r = world.instantiateScene(handle);
       expect(r.ok).toBe(true);
       if (!r.ok) return;
-      const e = firstNodeEntity(world, r.value.root);
+      const e = firstNodeEntity(world, r.value);
       const t = world.get(e, Transform).unwrap();
       expect(t.posX).toBe(1.5); // layer 1 wins (explicit beats default 99)
       expect(t.posY).toBe(7.0); // layer 2 wins (component default beats type 0)

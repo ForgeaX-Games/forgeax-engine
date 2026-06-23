@@ -29,35 +29,7 @@ import {
   type RhiQueue,
 } from '@forgeax/engine-rhi';
 import { unwrapBuffer } from './buffer';
-import { queueSubmitFailed, webgpuRuntimeError } from './errors';
-
-// bug-20260622 R5 WS2: the wgpu-wasm submit() (rhi.rs) now returns Result and,
-// when a submit-period validation error landed in the on_uncaptured_error
-// slot, throws a JsValue string prefixed `[rhi-code:<code>]`. The Rust side is
-// the single classification SSOT (classify_uncaptured_error, M3); the shim only
-// reads the prefix to route into the matching RhiError factory. Errors without
-// the marker (navigator.gpu GPUQueue throws, wasm traps) fall through to the
-// webgpu-runtime-error catch-all so no failure is ever swallowed.
-const RHI_CODE_PREFIX = '[rhi-code:';
-
-/**
- * Route a caught submit() error into the correct RhiError factory. A wgpu-wasm
- * submit-period validation failure arrives as `[rhi-code:queue-submit-failed]
- * <message>`; anything else (including navigator.gpu exceptions and wasm traps)
- * maps to webgpu-runtime-error. The queue instance survives either way (AC-06).
- */
-function classifySubmitError(cause: unknown): ReturnType<typeof webgpuRuntimeError> {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  if (message.startsWith(RHI_CODE_PREFIX)) {
-    const close = message.indexOf(']');
-    const code = message.slice(RHI_CODE_PREFIX.length, close);
-    const detail = message.slice(close + 1).trim();
-    if (code === 'queue-submit-failed') {
-      return queueSubmitFailed(detail);
-    }
-  }
-  return webgpuRuntimeError(cause);
-}
+import { webgpuRuntimeError } from './errors';
 
 /**
  * bug-20260610 helper: pack the spec aspect string into the u8 the wasm
@@ -138,7 +110,7 @@ class RhiWgpuQueueImpl implements RhiQueue {
       this.raw.submit.call(this.raw, commandBuffers);
       return ok(undefined);
     } catch (e) {
-      return classifySubmitError(e);
+      return webgpuRuntimeError(e);
     }
   }
 

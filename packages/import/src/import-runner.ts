@@ -358,7 +358,7 @@ export async function runImport(
         kind: a.kind,
         ...(a.name !== undefined ? { name: a.name } : {}),
         payload: { ...auxNormalised, data: new Uint8Array(0) },
-        refs: a.refs.map((r) => r.guid),
+        refs: a.refs,
       };
     }
     if (a.kind === 'mesh') {
@@ -381,7 +381,7 @@ export async function runImport(
           indices: [],
           data: new Uint8Array(0),
         },
-        refs: a.refs.map((r) => r.guid),
+        refs: a.refs,
       };
     }
     return {
@@ -397,7 +397,7 @@ export async function runImport(
       // roundtrip safe end-to-end.  This matches the convention every
       // existing pack-fixture test uses (`vertices: Array.from(...)`).
       payload: normaliseForPack(a.payload as unknown) as Record<string, unknown>,
-      refs: a.refs.map((r) => r.guid),
+      refs: a.refs,
     };
   });
 

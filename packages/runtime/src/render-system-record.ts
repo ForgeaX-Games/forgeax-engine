@@ -102,7 +102,6 @@ import type {
   RenderPipelineData,
 } from './render-pipeline-context';
 import {
-  configureSurface,
   type MeshGpuHandles,
   type PipelineState,
   type RenderSystemInternals,
@@ -275,45 +274,33 @@ export interface RenderFrameState {
    */
   readonly warnedNineSliceScaleEntities: Set<number>;
   /**
-   * feat-20260622-handle-to-id-allocator-elimination M1 / w3: per-frame
-   * bind group caches converted to nested WeakMap chain roots (D-3).
-   * Each root is a WeakMap<object, WeakMap<...>> walked by
-   * getOrCreateFromChain; the chain depth varies by variant
-   * (view-main = 7, mesh = 1, hdrp-unified = 5, skin = 2).
-   * The root WeakMap is init-time stable — never cleared, no eviction.
-   * Chain keys are always inner buffer handles, never wrappers (D-3).
+   * feat-20260531-per-frame-bind-group-cache M2 / w7: per-frame bind group
+   * caches. Keyed by variant discriminator + ordered handle-id sequence;
+   * hit returns the cached BindGroup from a previous frame, miss calls
+   * device.createBindGroup and stores the result. viewBindGroupCache
+   * covers both main (#1) and shadow (#3) variants (distinct keys per D-2).
    */
-  readonly viewBindGroupCache: WeakMap<object, unknown>;
-  readonly meshBindGroupCache: WeakMap<object, unknown>;
+  readonly viewBindGroupCache: Map<string, BindGroup>;
+  readonly meshBindGroupCache: Map<string, BindGroup>;
   /**
-   * feat-20260622-handle-to-id-allocator-elimination M1 / w2: per-entity
-   * bind group caches scoped by entityKey (packed u32 as number).
-   * Outer Map<number, WeakMap<handle, ...>> lets GC collect entries for
-   * destroyed entities whose handles are unreachable; per-entity material
-   * and instances share the same two-level shape (D-1). The inner WeakMap
-   * value is opaque (`unknown`) because `getOrCreateFromChain` walks a
-   * variable-depth chain — intermediate handles map to nested WeakMaps and
-   * only the final handle maps to the variant->BindGroup leaf Map. Direct
-   * readers (HDRP shadow-instances read end) assert the leaf shape locally.
+   * feat-20260531-per-frame-bind-group-cache M3 / w12: per-entity material
+   * and instances bind group caches. Keyed by variant discriminator +
+   * entityKey + ordered handle-id sequence (D-2 handle-set keys). Cache
+   * fields use 'BgCache' suffix to avoid collision with the banned
+   * identifier 'materialBindGroup' (check-render-record-no-opaque-order-
+   * zero-material.mjs grep gate).
    */
-  readonly materialBgPerEntity: Map<number, WeakMap<object, unknown>>;
-  readonly instancesBgPerEntity: Map<number, WeakMap<object, unknown>>;
+  readonly materialBgCache: Map<string, BindGroup>;
+  readonly instancesBgCache: Map<string, BindGroup>;
   /**
-   * feat-20260622-handle-to-id-allocator-elimination M1 / w2: cross-entity
-   * shared material bind group cache (OQ-1 option A). Outer key is the
-   * material shaderId string; inner chain is a WeakMap keyed by the same
-   * handle objects used in per-entity chains. Reuses the generic
-   * `getOrCreatePerEntity` helper with outerKey string|number (D-1).
+   * M2 / w7: maps each opaque RHI handle object (Buffer / TextureView /
+   * Sampler) to a sequential numeric id. A single shared counter per
+   * RenderFrameState (stable across the RenderSystem lifetime) so the same
+   * GPU resource always maps to the same id. Used by getOrCreateBindGroup
+   * to build deterministic cache keys from object handles.
    */
-  readonly materialBgShared: Map<string, WeakMap<object, unknown>>;
-  /**
-   * feat-20260622-handle-to-id-allocator-elimination M1 / w2: singleton
-   * material bind group cache (D-6). Single flat Map<variant, BindGroup>
-   * for the one true singleton in production: shadow-material-singleton.
-   * shadow-instances-singleton is a test fixture fiction (research F3);
-   * no second singleton field is needed.
-   */
-  readonly singletonMaterialCache: Map<string, BindGroup>;
+  readonly handleToId: WeakMap<object, number>;
+  nextHandleId: number;
   /**
    * feat-20260601-customizable-render-pipeline-seam M1 / w7: the raw u32 handle of the
    * currently installed RenderPipelineAsset (0 = none installed). `installPipeline` sets
@@ -457,9 +444,49 @@ const COPY_DST_USAGE = 8;
 const MAX_UNIFORM_INSTANCES = 128;
 
 /**
+ * feat-20260531-per-frame-bind-group-cache M2 / w7: assigns a stable
+ * sequential numeric id to each opaque RHI handle object (Buffer,
+ * TextureView, Sampler). The same object reference always maps to the
+ * same id; calling this each frame on the same GPU resource is idempotent.
+ * Used by buildBindGroupCacheKey to produce deterministic string keys
+ * for Map<string, BindGroup> caches (D-2: fine-grain handle-set keys).
+ */
+/**
+ * @internal — exported for AC-10 (w15) WeakMap behavior-invariant test access.
+ */
+export function getOrAssignHandleId(frameState: RenderFrameState, handle: object): number {
+  let id = frameState.handleToId.get(handle);
+  if (id === undefined) {
+    id = frameState.nextHandleId;
+    frameState.handleToId.set(handle, id);
+    frameState.nextHandleId = id + 1;
+  }
+  return id;
+}
+
+/**
+ * M2 / w7: builds a deterministic cache-key string from a variant
+ * discriminator and an ordered array of bound resource handles.
+ * Ordering is the bind group entry order (binding 0..N); the variant
+ * discriminator prefixes the key to isolate main vs shadow view
+ * variants (AC-06).
+ *
+ * @internal — exported for unit test access (w9-a R-2 mutation-resistance test)
+ */
+export function buildBindGroupCacheKey(
+  variant: string,
+  handles: object[],
+  frameState: RenderFrameState,
+): string {
+  const ids = handles.map((h) => getOrAssignHandleId(frameState, h));
+  return `${variant}-${ids.join('-')}`;
+}
+
+/**
  * M3 / w12: extracts the underlying GPU resource object from a bind
  * group entry descriptor. Returns the raw object reference (Buffer,
- * TextureView, or Sampler) usable as a WeakMap chain key.
+ * TextureView, or Sampler) that `getOrAssignHandleId` can map to a
+ * stable numeric id for cache-key construction.
  */
 function extractEntryResourceHandle(entry: { resource: { kind: string; value: unknown } }): object {
   const v = entry.resource.value;
@@ -470,92 +497,61 @@ function extractEntryResourceHandle(entry: { resource: { kind: string; value: un
 }
 
 /**
- * feat-20260622-handle-to-id-allocator-elimination M2 / w7: walks a nested
- * WeakMap chain to find or create a BindGroup leaf. Each handle in the
- * `handles` array is a chain node; the final leaf is a Map<string, BindGroup>
- * keyed by `variant` (D-2). Chain keys are always object references, never
- * numeric ids — GC reclaims entries for dead handles automatically.
+ * M2 / w7: lookup-then-create helper for per-frame bind group caches.
+ * On cache hit returns the cached BindGroup (zero-cost).
+ * On cache miss calls the factory, bumps bindGroupCounts.createBindGroup,
+ * stores the result, and returns it.
  *
- * On cache hit returns the cached BindGroup. On miss calls `factory`,
- * bumps `bindGroupCounts.createBindGroup`, stores the result at the leaf,
- * and returns it. Hit/miss accounting is observable via `bindGroupCounts`
- * (D-8: the skin probe reads `counts.createBindGroup` delta).
+ * This single shared helper avoids jscpd dup-check violations across the
+ * 14 createBindGroup call sites (plan-strategy S5.6).
  */
-export function getOrCreateFromChain(
-  root: WeakMap<object, unknown>,
-  handles: readonly object[],
-  variant: string,
+function getOrCreateBindGroup(
+  cache: Map<string, BindGroup>,
+  key: string,
   factory: () => BindGroup,
-  counts: { createBindGroup: number; keys: string[] },
+  bindGroupCounts: BindGroupCounts,
 ): BindGroup {
-  let node = root;
-  for (let i = 0; i < handles.length - 1; i++) {
-    // biome-ignore lint/style/noNonNullAssertion: handles length guards the index
-    const h = handles[i]!;
-    let next = node.get(h) as WeakMap<object, unknown> | undefined;
-    if (next === undefined) {
-      next = new WeakMap();
-      node.set(h, next);
-    }
-    node = next;
-  }
-  // biome-ignore lint/style/noNonNullAssertion: known non-empty at call sites
-  const last = handles[handles.length - 1]!;
-  let leaf = node.get(last) as Map<string, BindGroup> | undefined;
-  if (leaf === undefined) {
-    leaf = new Map();
-    node.set(last, leaf);
-  }
-  const hit = leaf.get(variant);
+  const hit = cache.get(key);
   if (hit !== undefined) return hit;
   const bg = factory();
-  counts.createBindGroup += 1;
-  counts.keys.push(variant);
-  leaf.set(variant, bg);
+  bindGroupCounts.createBindGroup += 1;
+  bindGroupCounts.keys.push(key);
+  cache.set(key, bg);
   return bg;
 }
 
 /**
- * feat-20260622-handle-to-id-allocator-elimination M2 / w8: per-entity bind
- * group lookup-or-create helper (D-2). Two-step lookup: outer Map.get(outerKey)
- * finds or lazily creates an inner WeakMap chain, then delegates to
- * `getOrCreateFromChain` for the chain walk. outerKey is `string | number`
- * to cover both per-entity (number entityKey) and material-shared
- * (string shaderId) caches (D-1 / OQ-1).
- */
-export function getOrCreatePerEntity(
-  outerMap: Map<string | number, WeakMap<object, unknown>>,
-  outerKey: string | number,
-  handles: readonly object[],
-  variant: string,
-  factory: () => BindGroup,
-  counts: { createBindGroup: number; keys: string[] },
-): BindGroup {
-  let inner = outerMap.get(outerKey) as WeakMap<object, unknown> | undefined;
-  if (inner === undefined) {
-    inner = new WeakMap();
-    outerMap.set(outerKey, inner);
-  }
-  return getOrCreateFromChain(inner, handles, variant, factory, counts);
-}
-
-/**
- * feat-20260622-handle-to-id-allocator-elimination M2 / w8: evicts per-entity
- * cache entries whose entityKey is not in the validated set. Works on
- * Map<entityKey, WeakMap<handle, BindGroup>> by iterating the outer Map keys
- * and deleting entries for which validatedEntityKeys.has(ek) is false.
- * No string parsing, no Number / Number.isNaN — the entityKey is already a
- * number (D-1 / RD4).
+ * M4 / w14: drops cache entries whose entityKey segment (extracted from
+ * the key string prefix) is not in the validated entity key set.
  *
- * @internal — exported for unit test access (AC-08)
+ * Cache keys follow the 'variant-entityKey-handleIds...' format (D-2).
+ * This helper extracts the entityKey by finding the first two '-'
+ * delimiters, parses the segment between them as a number, and deletes
+ * the entry when that number is not in the live set.
+ *
+ * The same logic applies to materialBgCache and instancesBgCache — the
+ * single helper avoids a jscpd dup-check violation (plan-strategy S5.6).
+ *
+ * @internal — exported for unit test access (w16 sentinel-survival test)
  */
 export function cleanPerEntityCache(
-  cache: Map<number, WeakMap<object, unknown>>,
+  cache: Map<string, BindGroup>,
   validatedEntityKeys: Set<number>,
+  _variant: string,
 ): void {
-  for (const ek of cache.keys()) {
+  for (const key of cache.keys()) {
+    const firstDash = key.indexOf('-');
+    if (firstDash === -1) continue;
+    const secondDash = key.indexOf('-', firstDash + 1);
+    if (secondDash === -1) continue;
+    const ek = Number(key.slice(firstDash + 1, secondDash));
+    // D-6 sentinel keys (e.g. 'shadow-material-singleton') produce NaN here
+    // because their segment between the dashes is non-numeric. Skip them so
+    // the sentinel entries survive across frames — they are init-time stable
+    // and must NOT be evicted by per-entity clean-up.
+    if (Number.isNaN(ek)) continue;
     if (!validatedEntityKeys.has(ek)) {
-      cache.delete(ek);
+      cache.delete(key);
     }
   }
 }
@@ -570,12 +566,11 @@ export function cleanPerEntityCache(
  *  - `{ ok: true }`       — slotCount already covers `neededSlots` (idempotent
  *                           short-circuit), or the controller successfully grew
  *                           in this call. Caller proceeds with the frame.
- *  - `{ ok: false, code, degradedToSlotCount }` — controller hit ceiling /
- *                           capacity and ALREADY fired the structured error
- *                           via errorRegistry.  Caller truncates the draw
- *                           list to `degradedToSlotCount` (graceful degradation
- *                           per plan-strategy D-2): renders the subset that
- *                           fits, discards overflow, no black frame.
+ *  - `{ ok: false, code }` — controller hit ceiling / capacity and ALREADY
+ *                           fired the structured error via errorRegistry.
+ *                           Caller must early-return: skip writeBuffer loops,
+ *                           skip pass record (AC-08: 0 writeBuffer / 0 draw,
+ *                           no truncation).
  *
  * This helper does NOT re-fire on `ok:false` — the controller is the single
  * fire site (createRenderer.ts grow factory), so callers see exactly one
@@ -592,8 +587,9 @@ export function cleanPerEntityCache(
  * Bind-group cache invalidation is automatic: on grow, the controller
  * mutates `meshSsboState.mesh.buffer` / `.material.buffer` in place
  * (wrapper-object identity preserved, inner buffer replaced — research §F8).
- * Downstream the fresh inner buffer object is a new WeakMap chain key, so
- * `getOrCreateFromChain` misses and rebuilds the BindGroup on the next frame
+ * Downstream `getOrAssignHandleId(<inner buffer>)` therefore yields a fresh
+ * id, `buildBindGroupCacheKey` composes a different key, and
+ * `getOrCreateBindGroup` rebuilds the BindGroup on the next frame
  * (AC-07; T-M3-03 (a) test).
  *
  * @internal — exported for unit-test access (`mesh-ssbo-grow.test.ts`
@@ -607,7 +603,6 @@ export function ensureMeshSsboCapacity(
           | {
               readonly ok: false;
               readonly code: 'mesh-ssbo-ceiling-reached' | 'mesh-ssbo-capacity-exceeded';
-              readonly degradedToSlotCount: number;
             })
       | undefined;
     readonly meshSsboState?: { readonly slotCount: number } | undefined;
@@ -618,7 +613,6 @@ export function ensureMeshSsboCapacity(
   | {
       readonly ok: false;
       readonly code: 'mesh-ssbo-ceiling-reached' | 'mesh-ssbo-capacity-exceeded';
-      readonly degradedToSlotCount: number;
     } {
   // Empty scene / no controller wired (legacy / test fixture path).
   if (neededSlots <= 0) return { ok: true };
@@ -727,9 +721,8 @@ export interface DispatchCounts {
 export interface BindGroupCounts {
   createBindGroup: number;
   /**
-   * Debug-only: records the variant of every cache-miss BindGroup created via
-   * `getOrCreateFromChain` for unit-test observability. Production paths do
-   * not read this array.
+   * Debug-only: records every cache-miss key passed to getOrCreateBindGroup
+   * for unit-test observability. Production paths do not read this array.
    */
   keys: string[];
 }
@@ -1689,39 +1682,10 @@ export function recordFrame(
     const canvasContext: RhiCanvasContext | null = internals.context;
     if (canvasContext === null) return;
 
-    let currentTextureResult = canvasContext.getCurrentTexture();
+    const currentTextureResult = canvasContext.getCurrentTexture();
     if (!currentTextureResult.ok) {
-      // A-IN-2 / AC-03: reset configured flag + reconfigure canvas context +
-      // retry getCurrentTexture once. Only the exceptional path (surface
-      // outdated) hits this branch; the normal hot path stays unmodified
-      // (A-AC-05: zero reconfigure calls on success).
-      pipelineState.perPassResources.configured = false;
-      const cfgResult = configureSurface(
-        canvasContext,
-        internals.device,
-        pipelineState.format,
-        pipelineState.colorAttachmentFormat,
-      );
-      if (cfgResult.ok) {
-        pipelineState.perPassResources.configured = true;
-        (globalThis as Record<string, unknown>).__forgeaxSwapChainFormat = pipelineState.format;
-      }
-      // Retry getCurrentTexture exactly once
-      const retryResult = canvasContext.getCurrentTexture();
-      if (!retryResult.ok) {
-        internals.errorRegistry.fire(retryResult.error);
-        // A-AC-04: consecutive failure → internal-fault with surface detail
-        internals.healthRegistry.fire({
-          reason: 'internal-fault',
-          detail: {
-            message:
-              'surface-configure-failed after retry: getCurrentTexture failed twice consecutively',
-          },
-          recoverable: false,
-        });
-        return;
-      }
-      currentTextureResult = retryResult;
+      internals.errorRegistry.fire(currentTextureResult.error);
+      return;
     }
     // bug-20260519: when the canvas storage format differs from the
     // sRGB-encoding view format, ask for the view explicitly so the GPU
@@ -2255,31 +2219,30 @@ export function recordFrame(
     // Build a Set<number> of entityKeys from the validated renderables.
     // The entityKey is the packed Entity u32 (encodeEntity(indexSlot,
     // generation)) surfaced by D-1.  Entries in the per-entity caches
-    // (materialBgPerEntity, instancesBgPerEntity) whose outer-Map entityKey
-    // is NOT in this set are orphaned — their entity has been despawned —
-    // and must be dropped.
+    // (materialBgCache, instancesBgCache) whose entityKey segment is NOT
+    // in this set are orphaned — their entity has been despawned — and
+    // must be dropped.
     //
     // view + mesh caches are frame-shared (no entityKey component), so
-    // they are not subject to per-entity clean-up.  They are keyed by
-    // GPU resource handle objects (WeakMap chains), and the caches are
-    // naturally bounded by the fixed number of GPU resource combinations.
+    // they are not subject to per-entity clean-up.  Their keys contain
+    // GPU resource handle ids, and the caches are naturally bounded by
+    // the fixed number of GPU resource combinations.
     const validatedEntityKeys = new Set<number>();
     for (const v of validated) {
       validatedEntityKeys.add(v.source.entityKey);
     }
 
-    // Clean per-entity material BG cache: drop outer-Map entries whose
-    // entityKey is absent from the current validated set. The shared and
-    // singleton material caches have no entityKey and are not touched here.
-    cleanPerEntityCache(frameState.materialBgPerEntity, validatedEntityKeys);
+    // Clean per-entity material BG cache: drop entries whose entityKey
+    // segment is absent from the current validated set.
+    cleanPerEntityCache(frameState.materialBgCache, validatedEntityKeys, 'material');
 
     // Clean per-entity instances BG cache.
-    cleanPerEntityCache(frameState.instancesBgPerEntity, validatedEntityKeys);
+    cleanPerEntityCache(frameState.instancesBgCache, validatedEntityKeys, 'instances');
 
     // viewBindGroupCache + meshBindGroupCache are frame-shared (keyed by
-    // GPU resource handle objects, no entityKey).  GPU resources are
-    // created once at init-time and their handle references are immutable,
-    // so the WeakMap chains are naturally bounded.  No per-frame clean-up.
+    // GPU resource handle ids, no entityKey).  GPU resources are created
+    // once at init-time and their handle references are immutable — the
+    // cache is naturally bounded.  No per-frame clean-up needed.
 
     // D-5 retrofit: instanceBuffers clean-up.  The instanceBuffers Map is
     // keyed by `encacheKey` (packed Entity u32, same as entityKey on
@@ -2335,10 +2298,9 @@ export function recordFrame(
     // `validatedOrdered.length` slots BEFORE the first per-entity writeBuffer
     // (line 1786 below). On `ok:false` the controller has already fired a
     // structured RuntimeError (`mesh-ssbo-ceiling-reached` /
-    // `mesh-ssbo-capacity-exceeded`); we truncate the draw list to
-    // `degradedToSlotCount` (graceful degradation per plan-strategy D-2):
-    // render the subset that fits, discard overflow, no black frame.
-    // The helper is idempotent across same-frame re-calls (AC-09) and
+    // `mesh-ssbo-capacity-exceeded`); we early-return the frame: 0
+    // writeBuffer + 0 draw + no pass record (AC-08, no truncation). The
+    // helper is idempotent across same-frame re-calls (AC-09) and
     // short-circuits on length=0 / length<=slotCount (boundary table).
     //
     // bug-20260609: feat-20260608 M5 amend made the material UBO indexed by
@@ -2358,8 +2320,7 @@ export function recordFrame(
     const neededSlots = Math.max(validatedOrdered.length, neededMaterialSlots);
     const meshSsboCapResult = ensureMeshSsboCapacity(internals, neededSlots);
     if (!meshSsboCapResult.ok) {
-      // Graceful degradation: truncate to pre-grow capacity, render the subset.
-      validatedOrdered = validatedOrdered.slice(0, meshSsboCapResult.degradedToSlotCount);
+      return;
     }
 
     // D-2 (bug-20260527): LDR sprite pass split.
@@ -2593,19 +2554,17 @@ export function recordFrame(
     const encoder: RhiCommandEncoder = encoderResult.value;
 
     // ── feat-20260531-per-frame-bind-group-cache M2 / w7-w8 ────────
-    // feat-20260622-handle-to-id-allocator-elimination M3: per-frame bind
-    // group caches keyed by handle-object identity (D-2 / D-3). Each call
-    // site below uses `getOrCreateFromChain` (init-time-stable view/mesh) or
-    // `getOrCreatePerEntity` (entity-scoped material/instances): walk the
-    // WeakMap chain of bound resource handles to a variant->BindGroup leaf;
-    // hit = reuse, miss = factory create + bump bindGroupCounts.createBindGroup
-    // + store.
+    // Per-frame bind group caches (D-2 handle-set keys, D-4
+    // RenderFrameState host). Each call site below uses
+    // getOrCreateBindGroup to: (1) build a deterministic cache key from
+    // variant discriminator + ordered bound resource handles, (2) lookup
+    // the cache Map, (3) hit = reuse, miss = factory create + bump
+    // bindGroupCounts.createBindGroup + store.
     //
-    // View main (#1) chain = b0(viewUniformBuffer), b1(pointLightsBuffer),
-    // b2(spotLightsBuffer), b3(graph shadowDepth view or
-    // shadowFallbackTextureView), b4(shadowSampler), b5(atlas view), b6
-    // (shadowParams); variant 'view-main'.
-    // Mesh (#2) chain = inner b0 buffer (meshStorageBuffer.buffer); variant 'mesh'.
+    // View main (#1) key = 'view-main' + ids of b0(viewUniformBuffer),
+    // b1(pointLightsBuffer), b2(spotLightsBuffer), b3(graph shadowDepth
+    // view or shadowFallbackTextureView), b4(shadowSampler).
+    // Mesh (#2) key = 'mesh' + id of b0(meshStorageBuffer).
     let viewBindGroup: BindGroup | null = null;
     let meshBindGroup: BindGroup | null = null;
     // feat-20260609-hdrp-cluster-fragment-ggx M4 / w19: HDRP unified group(2)
@@ -2634,18 +2593,22 @@ export function recordFrame(
         : null;
       const b5View =
         atlasViewMaybe !== null ? atlasViewMaybe : pipelineState.shadowAtlasFallbackTextureView;
-      viewBindGroup = getOrCreateFromChain(
-        frameState.viewBindGroupCache,
-        [
-          pipelineState.viewUniformBuffer,
-          pipelineState.pointLightsBuffer,
-          pipelineState.spotLightsBuffer,
-          b3View,
-          pipelineState.perPassResources.shadowSampler,
-          b5View,
-          pipelineState.shadowParamsBuffer,
-        ],
+      const viewKey = buildBindGroupCacheKey(
         'view-main',
+        [
+          pipelineState.viewUniformBuffer as unknown as object,
+          pipelineState.pointLightsBuffer as unknown as object,
+          pipelineState.spotLightsBuffer as unknown as object,
+          b3View as unknown as object,
+          pipelineState.perPassResources.shadowSampler as unknown as object,
+          b5View as unknown as object,
+          pipelineState.shadowParamsBuffer as unknown as object,
+        ],
+        frameState,
+      );
+      viewBindGroup = getOrCreateBindGroup(
+        frameState.viewBindGroupCache,
+        viewKey,
         () => {
           const viewBindGroupResult = internals.device.createBindGroup({
             label: 'pbr-view-bg',
@@ -2729,14 +2692,18 @@ export function recordFrame(
         bindGroupCounts,
       );
 
-      // M3 / w10 (D-3 hard constraint): use the inner `.buffer` as the
-      // WeakMap chain key so the cache tracks the underlying GPU buffer
+      // M3 / T-M3-04 (R1 grep gate): pass the inner `.buffer` to handle-id
+      // assignment so the cache key tracks the underlying GPU buffer
       // identity. The wrapper object's identity is stable across grow
-      // events; using the wrapper would defeat AC-07 cache invalidation.
-      meshBindGroup = getOrCreateFromChain(
-        frameState.meshBindGroupCache,
-        [pipelineState.meshStorageBuffer.buffer],
+      // events; passing the wrapper would defeat AC-07 cache invalidation.
+      const meshKey = buildBindGroupCacheKey(
         'mesh',
+        [pipelineState.meshStorageBuffer.buffer as unknown as object],
+        frameState,
+      );
+      meshBindGroup = getOrCreateBindGroup(
+        frameState.meshBindGroupCache,
+        meshKey,
         () => {
           // bug-20260610: WebGL2 fallback path needs the binding to cover the
           // whole `array<Mesh, 128>` uniform buffer (14336 B) instead of a
@@ -2783,18 +2750,20 @@ export function recordFrame(
           frameState.installedPipelineConfig?.clusterGrid,
         );
         if (hdrpBuffers !== null) {
-          // D-3: buffer dimension uses the inner `.buffer` (same constraint
-          // as the mesh path) so a grow event rotates the chain key.
-          hdrpClusterBindGroup = getOrCreateFromChain(
-            frameState.meshBindGroupCache,
-            [
-              pipelineState.meshStorageBuffer.buffer,
-              hdrpBuffers.lightDataBuffer,
-              hdrpBuffers.clusterGridBuffer,
-              hdrpBuffers.lightIndexListBuffer,
-              hdrpBuffers.clusterUniformBuffer,
-            ],
+          const hdrpKey = buildBindGroupCacheKey(
             'hdrp-unified',
+            [
+              pipelineState.meshStorageBuffer.buffer as unknown as object,
+              hdrpBuffers.lightDataBuffer as unknown as object,
+              hdrpBuffers.clusterGridBuffer as unknown as object,
+              hdrpBuffers.lightIndexListBuffer as unknown as object,
+              hdrpBuffers.clusterUniformBuffer as unknown as object,
+            ],
+            frameState,
+          );
+          hdrpClusterBindGroup = getOrCreateBindGroup(
+            frameState.meshBindGroupCache,
+            hdrpKey,
             () => {
               const bg = createHdrpUnifiedBindGroup(
                 internals,
@@ -3088,19 +3057,24 @@ export function recordShadowPass(
       // b3 is always shadowFallbackTextureView (not the actual shadow
       // map — WebGPU forbids writing to and sampling from the same
       // texture in the same synchronization scope). Handles are all
-      // init-time stable, so the WeakMap chain hits from frame 2 onward.
-      const shadowViewBg = getOrCreateFromChain(
-        c.frameState.viewBindGroupCache,
-        [
-          pipelineState.viewUniformBuffer,
-          pipelineState.pointLightsBuffer,
-          pipelineState.spotLightsBuffer,
-          pipelineState.shadowFallbackTextureView,
-          pipelineState.perPassResources.shadowSampler,
-          pipelineState.shadowAtlasFallbackTextureView,
-          pipelineState.shadowParamsBuffer,
-        ],
+      // init-time stable (D-6 sentinel effectively — key hits from
+      // frame 2 onward).
+      const shadowViewKey = buildBindGroupCacheKey(
         'view-shadow',
+        [
+          pipelineState.viewUniformBuffer as unknown as object,
+          pipelineState.pointLightsBuffer as unknown as object,
+          pipelineState.spotLightsBuffer as unknown as object,
+          pipelineState.shadowFallbackTextureView as unknown as object,
+          pipelineState.perPassResources.shadowSampler as unknown as object,
+          pipelineState.shadowAtlasFallbackTextureView as unknown as object,
+          pipelineState.shadowParamsBuffer as unknown as object,
+        ],
+        c.frameState,
+      );
+      const shadowViewBg = getOrCreateBindGroup(
+        c.frameState.viewBindGroupCache,
+        shadowViewKey,
         () => {
           const shadowViewBgResult = runtime.device.createBindGroup({
             label: 'shadow-view-bg',
@@ -3181,12 +3155,12 @@ export function recordShadowPass(
       // materialBindGroupLayout (14 entries: material 0..6 + Skylight
       // 7..13 per feat-20260520-skylight-ibl-cubemap D-5 round-4).
       //
-      // D-6 / AC-05: all handles are init-time stable pipelineState defaults
-      // + skylightFallback resources, so this BG is a true singleton (no
-      // entityKey).  It lives in its own flat singletonMaterialCache
-      // Map<variant, BindGroup> under 'shadow-material-singleton' — hit from
-      // frame 2 onward, and cleanPerEntityCache never touches it (it is not
-      // in any per-entity Map).
+      // M4 / w15 (D-6 sentinel cache): all handles are init-time stable
+      // pipelineState defaults + skylightFallback resources.  Use a fixed
+      // sentinel key (no entityKey) — hit from frame 2 onward, zero-cost
+      // after the first frame.  Key is 'shadow-material-singleton'; the
+      // clean-up loop in recordFrame skips sentinel keys via Number.isNaN
+      // (the segment between the two dashes is non-numeric).
       const shadowMaterialBaseEntries = [
         {
           binding: 0,
@@ -3256,22 +3230,20 @@ export function recordShadowPass(
               shadowEmissiveAo,
             )
           : shadowMaterialBaseEntries;
-      // D-6 / AC-05: the one true singleton material BG lives in its own flat
-      // Map<variant, BindGroup> (no entityKey, no handle chain). Cache hit
-      // from frame 2 onward; the cleanPerEntityCache eviction never touches it.
-      let shadowMaterialBg = c.frameState.singletonMaterialCache.get('shadow-material-singleton');
-      if (shadowMaterialBg === undefined) {
-        const shadowMaterialBgResult = runtime.device.createBindGroup({
-          label: 'shadow-material-bg',
-          layout: pipelineState.materialBindGroupLayout,
-          entries: shadowMergedEntries,
-        });
-        if (!shadowMaterialBgResult.ok) throw shadowMaterialBgResult.error;
-        shadowMaterialBg = shadowMaterialBgResult.value;
-        c.bindGroupCounts.createBindGroup += 1;
-        c.bindGroupCounts.keys.push('shadow-material-singleton');
-        c.frameState.singletonMaterialCache.set('shadow-material-singleton', shadowMaterialBg);
-      }
+      const shadowMaterialBg = getOrCreateBindGroup(
+        c.frameState.materialBgCache,
+        'shadow-material-singleton',
+        () => {
+          const shadowMaterialBgResult = runtime.device.createBindGroup({
+            label: 'shadow-material-bg',
+            layout: pipelineState.materialBindGroupLayout,
+            entries: shadowMergedEntries,
+          });
+          if (!shadowMaterialBgResult.ok) throw shadowMaterialBgResult.error;
+          return shadowMaterialBgResult.value;
+        },
+        c.bindGroupCounts,
+      );
 
       // feat-20260604-instances-per-instance-transform-shader-group3-bin M2 / w12 (D-1 (C)):
       // shadow pass per-instance channel alignment — replaces the identity singleton
@@ -3464,16 +3436,11 @@ export function recordShadowPass(
           }
         }
 
-        // Bind per-entity instances BG for @group(3) (or fallback identity).
-        // D-4: write end of the HDRP shadow-instances producer/consumer pair.
-        // outerKey = entry.source.entityKey, handle = shadowInstanceBuffer;
-        // the HDRP main pass read end (:3820 below) must look up the same
-        // (entityKey, instBuffer) leaf or the shadow instances silently drop.
-        const shadowInstancesBg = getOrCreatePerEntity(
-          c.frameState.instancesBgPerEntity,
-          entry.source.entityKey,
-          [shadowInstanceBuffer],
-          'shadow-instances',
+        // Bind per-entity instances BG for @group(3) (or fallback identity)
+        const shadowInstancesBgKey = `shadow-instances-${entry.source.entityKey}-${getOrAssignHandleId(c.frameState, shadowInstanceBuffer as unknown as object)}`;
+        const shadowInstancesBg = getOrCreateBindGroup(
+          c.frameState.instancesBgCache,
+          shadowInstancesBgKey,
           () => {
             const result = runtime.device.createBindGroup({
               label: 'shadow-instances-bg',
@@ -3647,28 +3614,32 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
       // use while the real atlas faces are render-attached here.
       pass.setPipeline(shadowPipeline);
       // Look up the shadow view BG built earlier this frame by recordShadowPass.
-      // `view-shadow` is the cache variant; keyed by the same handle objects.
+      // `view-shadow` is the cache key prefix; tied to the same handle ids.
       // If the directional shadow path wasn't taken (castShadow:false),
       // shadow-view-bg was never built -- skip the geometry walk in that case
       // (the depth attachment was still cleared above which is the AC-04
       // "atlas face cleared to far" minimum guarantee).
+      const shadowViewKeyForLookup = buildBindGroupCacheKey(
+        'view-shadow',
+        [
+          pipelineState.viewUniformBuffer as unknown as object,
+          pipelineState.pointLightsBuffer as unknown as object,
+          pipelineState.spotLightsBuffer as unknown as object,
+          pipelineState.shadowFallbackTextureView as unknown as object,
+          pipelineState.perPassResources.shadowSampler as unknown as object,
+          pipelineState.shadowAtlasFallbackTextureView as unknown as object,
+          pipelineState.shadowParamsBuffer as unknown as object,
+        ],
+        frameState,
+      );
       // Build (or reuse) the shadow-view BG. If the directional shadow path
       // already populated it earlier this frame, the cache hits; otherwise
       // (castShadow:false -- recordShadowPass never
       // ran) we build it on-demand here so the point shadow caster has a
       // valid b0 view BG even on directional-shadow-free scenes.
-      const cachedShadowViewBg = getOrCreateFromChain(
+      const cachedShadowViewBg = getOrCreateBindGroup(
         frameState.viewBindGroupCache,
-        [
-          pipelineState.viewUniformBuffer,
-          pipelineState.pointLightsBuffer,
-          pipelineState.spotLightsBuffer,
-          pipelineState.shadowFallbackTextureView,
-          pipelineState.perPassResources.shadowSampler,
-          pipelineState.shadowAtlasFallbackTextureView,
-          pipelineState.shadowParamsBuffer,
-        ],
-        'view-shadow',
+        shadowViewKeyForLookup,
         () => {
           const r = runtime.device.createBindGroup({
             label: 'shadow-view-bg',
@@ -3714,13 +3685,12 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
       );
       // Same on-demand build for the dummy material BG (the shadow_caster
       // shader does not consume @group(1) but the PSO requires the BGL
-      // to validate). Reuse the same singleton Map entry recordShadowPass
-      // writes so the two paths share one allocation per frame (D-6).
-      let cachedShadowMaterialBg = frameState.singletonMaterialCache.get(
+      // to validate). Reuse the same singleton key recordShadowPass uses
+      // so the two paths share one allocation per frame.
+      const cachedShadowMaterialBg = getOrCreateBindGroup(
+        frameState.materialBgCache,
         'shadow-material-singleton',
-      );
-      if (cachedShadowMaterialBg === undefined) {
-        const buildShadowMaterialSingleton = (): BindGroup => {
+        () => {
           const fb = pipelineState.skylightFallback;
           const fallbackEntries = [
             {
@@ -3790,12 +3760,9 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
           });
           if (!r.ok) throw r.error;
           return r.value;
-        };
-        cachedShadowMaterialBg = buildShadowMaterialSingleton();
-        c.bindGroupCounts.createBindGroup += 1;
-        c.bindGroupCounts.keys.push('shadow-material-singleton');
-        frameState.singletonMaterialCache.set('shadow-material-singleton', cachedShadowMaterialBg);
-      }
+        },
+        c.bindGroupCounts,
+      );
       if (meshBindGroup === null) {
         pass.end();
         const finishOnly = enc.finish();
@@ -3850,16 +3817,8 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
             instCount = Math.max(1, inst.instanceCount);
           }
         }
-        // D-4 read end: look up the leaf recordShadowPass wrote at :3439
-        // with the SAME (entityKey, instBuffer) pair. The single-handle chain
-        // stores the variant->BindGroup leaf Map directly under the buffer
-        // handle in the inner WeakMap, so the variant lookup is the third
-        // step. The inner WeakMap value is opaque (`unknown`); the 1-handle
-        // shadow-instances chain guarantees it is the leaf Map here.
-        const shadowInstLeaf = frameState.instancesBgPerEntity
-          .get(entry.source.entityKey)
-          ?.get(instBufferKey) as Map<string, BindGroup> | undefined;
-        const cachedInstBg = shadowInstLeaf?.get('shadow-instances');
+        const instBgKey = `shadow-instances-${entry.source.entityKey}-${getOrAssignHandleId(frameState, instBufferKey)}`;
+        const cachedInstBg = frameState.instancesBgCache.get(instBgKey);
         if (cachedInstBg === undefined) continue; // recordShadowPass should have populated it
         pass.setBindGroup(3, cachedInstBg);
         for (const sm of submeshes) {
@@ -4682,11 +4641,10 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
       // The instanceBuffers cache already handles archVersion/byteLength
       // invalidation (handle changes on buffer rebuild); the BG cache
       // naturally misses when the underlying handle id differs.
-      const instancesBindGroup: BindGroup = getOrCreatePerEntity(
-        frameState.instancesBgPerEntity,
-        entry.source.entityKey,
-        [instanceBuffer],
-        'instances',
+      const instancesBgKey = `instances-${entry.source.entityKey}-${getOrAssignHandleId(frameState, instanceBuffer as unknown as object)}`;
+      const instancesBindGroup: BindGroup = getOrCreateBindGroup(
+        frameState.instancesBgCache,
+        instancesBgKey,
         () => {
           const result = runtime.device.createBindGroup({
             label: 'pbr-instances-bg',
@@ -4787,22 +4745,33 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         const meshBindSize = runtime.device.caps.storageBuffer
           ? MESH_SSBO_BYTES
           : MESH_UBO_FULL_ARRAY_BYTES;
-        // m3-2 / D-8: skin BG cache miss / hit instrumentation. The chain
-        // walk no longer exposes a string key to `.has()`, so we derive
-        // hit/miss from the w7 `bindGroupCounts.createBindGroup` accounting:
-        // snapshot the counter, run `getOrCreateFromChain`, and compare. A
-        // delta of 1 means the factory ran (miss); 0 means a chain hit. This
-        // publishes the per-frame counter the m3-1 acceptanceCheck reads
-        // (miss=1 + hit=N-1 across N skin entries sharing one allocator
-        // buffer + mesh SSBO). Field is optional + opt-in (read via
-        // structural cast so prod paths that omit the counter pay nothing).
+        const skinBgKey = buildBindGroupCacheKey(
+          'pbr-skin-mesh',
+          [
+            pipelineState.meshStorageBuffer.buffer as unknown as object,
+            skinResources.paletteBuffer as unknown as object,
+          ],
+          frameState,
+        );
+        // m3-2: skin BG cache miss / hit instrumentation. Probe the cache
+        // before delegating to `getOrCreateBindGroup` so we can publish the
+        // per-frame counter the m3-1 acceptanceCheck reads (miss=1 + hit
+        // =N-1 across N skin entries sharing one allocator buffer + mesh
+        // SSBO). The probe is read-only; the actual factory + cache.set
+        // still flow through `getOrCreateBindGroup` to keep
+        // `bindGroupCounts.createBindGroup` accounting in the same place.
+        // Field is optional + opt-in (no PipelineState type change at this
+        // milestone -- read via structural cast so prod paths that omit
+        // the counter pay nothing).
         const skinStats = (pipelineState as { _skinBgCacheStats?: { miss: number; hit: number } })
           ._skinBgCacheStats;
-        const skinMissesBefore = bindGroupCounts.createBindGroup;
-        const skinBindGroup: BindGroup = getOrCreateFromChain(
+        if (skinStats !== undefined) {
+          if (frameState.meshBindGroupCache.has(skinBgKey)) skinStats.hit += 1;
+          else skinStats.miss += 1;
+        }
+        const skinBindGroup: BindGroup = getOrCreateBindGroup(
           frameState.meshBindGroupCache,
-          [pipelineState.meshStorageBuffer.buffer, skinResources.paletteBuffer],
-          'pbr-skin-mesh',
+          skinBgKey,
           () => {
             const result = runtime.device.createBindGroup({
               label: 'pbr-skin-mesh-bg',
@@ -4846,10 +4815,6 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           },
           bindGroupCounts,
         );
-        if (skinStats !== undefined) {
-          if (bindGroupCounts.createBindGroup > skinMissesBefore) skinStats.miss += 1;
-          else skinStats.hit += 1;
-        }
         group2BindGroup = skinBindGroup;
         // m3-2: dyn-offset tuple via `_computeSkinGroup2DynOffsets` with the
         // per-entity palette cursor M2 m2-6 wrote at the extract stage.
@@ -4964,16 +4929,17 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           spriteEmissiveAo,
         );
 
-        // M3 / w12: sprite material BG cache (D-2 handle-chain).
-        // Per-entity: outerKey = entityKey, chain = the 14 merged-entry
-        // handle objects (D-5 extractEntryResourceHandle). Sprite filler
-        // b3-b6 (defaultSampler/defaultWhite/defaultNormal) are constant
+        // M3 / w12: sprite material BG cache (D-2 handle-set key).
+        // Same pattern as #9: 'material' + entityKey + ordered
+        // handle ids for all 14 entries. Sprite filler b3-b6
+        // (defaultSampler/defaultWhite/defaultNormal) are constant
         // handles — no spurious invalidation.
-        const spriteBg: BindGroup = getOrCreatePerEntity(
-          frameState.materialBgPerEntity,
-          entry.source.entityKey,
-          spriteMergedEntries.map((e) => extractEntryResourceHandle(e)),
-          'material',
+        const spriteMaterialBgKey = `material-${entry.source.entityKey}-${spriteMergedEntries
+          .map((e) => getOrAssignHandleId(frameState, extractEntryResourceHandle(e)))
+          .join('-')}`;
+        const spriteBg: BindGroup = getOrCreateBindGroup(
+          frameState.materialBgCache,
+          spriteMaterialBgKey,
           () => {
             const result = runtime.device.createBindGroup({
               label: 'sprite-material-bg',
@@ -5028,12 +4994,11 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           // smIdx; otherwise fall back to slot 0 (count-mismatch already
           // filtered by extract; this guard handles the materials.length=1
           // single-material path mapped over multi-submesh meshes safely).
-          // This BG drops entityKey: identical-texture-set submeshes
-          // (whether on the same entity or different ones) share one BG via
-          // the shaderId-outer `materialBgShared` cache. The 14 handle
-          // objects form the WeakMap chain and fully discriminate the
-          // binding state since sampler/textureView/buffer handle identities
-          // are stable across frames.
+          // Cache key drops entityKey: identical-texture-set submeshes
+          // (whether on the same entity or different ones) share one BG.
+          // The 14 handle ids fully discriminate the binding state since
+          // sampler/textureView/buffer handles are stable per frame
+          // (frameState's getOrAssignHandleId is per-frame).
           const matSlotIdx = smIdx < matsForRebind.length ? smIdx : 0;
           const submeshMaterial = matsForRebind[matSlotIdx] ?? entry.source.material;
           // feat-20260621-learn-render-5-5-parallax M2 / w8 (D-3): assemble the
@@ -5137,26 +5102,30 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
             skylightResources,
             smEmissiveAo,
           );
-          // bug-20260610 layer 7d: this BG drops the per-entity entityKey so
-          // identical-material submeshes/entities dedup globally (OQ-1 / PD1).
-          // It lives in the dedicated cross-entity `materialBgShared` cache:
-          // outerKey = shaderId string (the natural dedup dimension), chain =
-          // the merged-entry handle objects. No entityKey, so cleanPerEntityCache
-          // never touches it — the old `Number.isNaN('shared')` sentinel hack
-          // (D-6) is gone.
+          // bug-20260610 layer 7d: cache key drops the per-entity entityKey
+          // segment so identical-material submeshes/entities dedup globally.
+          // Insert a non-numeric sentinel ('shared') in the 2nd segment so
+          // cleanPerEntityCache (which parses `<prefix>-<entityKey>-<rest>`)
+          // skips these entries — Number(<'shared'>) yields NaN, the cleanup
+          // loop's `Number.isNaN(ek)` branch keeps the entry alive across
+          // frames. Without this prefix, cleanup treats the first handle id
+          // as a candidate entityKey, mismatches the validated set, and
+          // drops the entry every frame -> AC-03 hello-cube smoke fails
+          // (frame-3 createBindGroupCount=1, expected 0).
           // feat-20260621-learn-render-5-5-parallax M2 / w8: a custom shader
           // with >3 textures owns a per-shader material BGL (w6); the bind
           // group must be created against THAT layout so the entry count
           // (e.g. 20 for a 4-texture shader) matches. Built-in / 3-texture
-          // shaders resolve to the shared 18-entry BGL. The shaderId outerKey
-          // keeps two shaders with a coincidentally-identical handle set from
-          // colliding on layout.
+          // shaders resolve to the shared 18-entry BGL. The cache key includes
+          // the shaderId so two shaders with a coincidentally-identical handle
+          // set never collide on layout.
           const smMaterialBgl = smPerShaderBgl ?? pipelineState.materialBindGroupLayout;
-          perSubmeshBg = getOrCreatePerEntity(
-            frameState.materialBgShared,
-            smShaderId ?? '',
-            smMergedEntries.map((e) => extractEntryResourceHandle(e)),
-            'material-shared',
+          const submeshMaterialBgKey = `material-shared-${smShaderId ?? ''}-${smMergedEntries
+            .map((e) => getOrAssignHandleId(frameState, extractEntryResourceHandle(e)))
+            .join('-')}`;
+          perSubmeshBg = getOrCreateBindGroup(
+            frameState.materialBgCache,
+            submeshMaterialBgKey,
             () => {
               const result = runtime.device.createBindGroup({
                 label: 'pbr-material-skylight-bg',
@@ -5489,11 +5458,10 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
 
         // M3 / w12: LDR sprite split pass per-entity instances BG cache.
         // Same pattern as #7.
-        const spriteInstancesBg: BindGroup = getOrCreatePerEntity(
-          frameState.instancesBgPerEntity,
-          spriteEntry.source.entityKey,
-          [spriteInstanceBuffer],
-          'instances',
+        const spriteInstancesBgKey = `instances-${spriteEntry.source.entityKey}-${getOrAssignHandleId(frameState, spriteInstanceBuffer as unknown as object)}`;
+        const spriteInstancesBg: BindGroup = getOrCreateBindGroup(
+          frameState.instancesBgCache,
+          spriteInstancesBgKey,
           () => {
             const result = runtime.device.createBindGroup({
               label: 'sprite-pass-instances-bg',
@@ -5581,12 +5549,13 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         );
 
         // M3 / w12: LDR sprite split-pass per-entity material BG cache.
-        // Per-entity: outerKey = entityKey, chain = merged-entry handles (D-5).
-        const spritePassBg: BindGroup = getOrCreatePerEntity(
-          frameState.materialBgPerEntity,
-          spriteEntry.source.entityKey,
-          spritePassMergedEntries.map((e) => extractEntryResourceHandle(e)),
-          'material',
+        // Same pattern as #8/#9.
+        const spritePassMaterialBgKey = `material-${spriteEntry.source.entityKey}-${spritePassMergedEntries
+          .map((e) => getOrAssignHandleId(frameState, extractEntryResourceHandle(e)))
+          .join('-')}`;
+        const spritePassBg: BindGroup = getOrCreateBindGroup(
+          frameState.materialBgCache,
+          spritePassMaterialBgKey,
           () => {
             const result = runtime.device.createBindGroup({
               label: 'sprite-pass-material-bg',

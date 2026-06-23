@@ -158,11 +158,10 @@ interface SceneBuildContext {
   /** Scene refs[]: [mesh..., material..., texture..., skeleton..., skin...] GUIDs. */
   readonly refs: readonly string[];
   /**
-   * Skin GUIDs (inline strings) injected into the SceneAsset payload and the
-   * scene envelope's refs[] so the runtime recursive loadByGuid walk pulls each
-   * SkinAsset on the browser-async pack-fetch path. Mirrors gltf-importer:
-   * stored as GUID strings (the on-disk round-trip + parseScenePayload's
-   * resolveSkinGuids accept both shapes).
+   * Skin GUIDs (inline strings) injected into the SceneAsset payload so runtime
+   * collectRefs(scene) can recurse into each SkinAsset on the browser-async
+   * pack-fetch path. Mirrors gltf-importer: stored as GUID strings (the on-disk
+   * round-trip + parseScenePayload's resolveSkinGuids accept both shapes).
    */
   readonly skinGuids: readonly string[];
 }
@@ -235,7 +234,7 @@ function buildSceneAsset(pod: ScenePod, guid: string, ctx: SceneBuildContext): I
     kind: 'scene',
     ...(pod.name !== undefined ? { name: pod.name } : {}),
     payload: scene,
-    refs: ctx.refs.map((guid) => ({ guid })),
+    refs: [...ctx.refs],
   };
 }
 
@@ -375,10 +374,7 @@ export function toAssetPack(params: {
         skeletonGuid: skeletonGuid ?? '',
         jointPaths: params.skin.jointPaths,
       } as never,
-      refs:
-        skeletonGuid !== undefined
-          ? [{ guid: skeletonGuid, sourceField: { fieldName: 'skeleton' } }]
-          : [],
+      refs: skeletonGuid !== undefined ? [skeletonGuid] : [],
     });
   }
 

@@ -83,35 +83,6 @@ thread_local! {
     static SAMPLER_REGISTRY: RefCell<HashMap<u32, wgpu::Sampler>> = RefCell::new(HashMap::new());
     static BUFFER_REGISTRY: RefCell<HashMap<u32, wgpu::Buffer>> = RefCell::new(HashMap::new());
     static NEXT_TOKEN: RefCell<u32> = const { RefCell::new(1) };
-    // bug-20260622 R5 WS2: last-uncaptured-error slot. The
-    // `on_uncaptured_error` global callback (registered at request_device,
-    // mirroring register_lost_callback's Closure paradigm at l.934) writes the
-    // wgpu::Error Debug string here instead of letting wgpu panic. submit()
-    // reads-and-clears it synchronously after self.inner.submit() so the TS
-    // shim (queue.ts) can fan the failure out through onError as a structured
-    // RhiError. wasm32 is single-threaded so a thread_local RefCell is safe;
-    // the slot is device/instance-global (one wgpu module = one device on the
-    // WebGL2 fallback path), matching the error-sink's process-global shape.
-    static LAST_UNCAPTURED_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
-}
-
-/// Store the latest uncaptured wgpu error message (called from the
-/// `on_uncaptured_error` global callback). Overwrites any prior un-consumed
-/// value — submit() consumes per call, so the slot holds at most the most
-/// recent submit-period failure.
-fn store_uncaptured_error(message: String) {
-    LAST_UNCAPTURED_ERROR.with(|slot| {
-        *slot.borrow_mut() = Some(message);
-    });
-}
-
-/// Read-and-clear the last uncaptured wgpu error message. Returns `None` when
-/// no error was reported since the previous call. submit() calls this right
-/// after self.inner.submit() to detect a submit-period validation failure
-/// (the error-sink delivery is synchronous on the same call stack for the
-/// WebGL2 backend).
-fn take_uncaptured_error() -> Option<String> {
-    LAST_UNCAPTURED_ERROR.with(|slot| slot.borrow_mut().take())
 }
 
 fn alloc_token() -> u32 {
@@ -941,19 +912,6 @@ impl RhiWgpuAdapter {
         // the WebGL2 fallback path).
         let token = alloc_token();
         register_device(token, device.clone());
-        // bug-20260622 R5 WS2: register the on_uncaptured_error global callback
-        // so submit-period wgpu validation errors land in a JS-visible slot
-        // instead of being dropped by the error-sink (which silently swallowed
-        // them, leaving the GPU wedged). The handler captures nothing — it only
-        // writes the Error's Debug string into the thread_local slot — so it
-        // satisfies the `Fn(Error) + Send + Sync + 'static` bound without a
-        // non-Send JS closure. submit() reads-and-clears the slot synchronously.
-        // Debug format begins with the variant name ("Validation { .. }" /
-        // "OutOfMemory { .. }" / "Internal { .. }"), which classify_uncaptured_error
-        // (l.1776, M3) matches via starts_with("Validation").
-        device.on_uncaptured_error(std::sync::Arc::new(|error: wgpu::Error| {
-            store_uncaptured_error(format!("{error:?}"));
-        }));
         Ok(RhiWgpuDevice { inner: device, queue, token })
     }
 }
@@ -1771,59 +1729,6 @@ fn parse_color_targets(
 }
 
 // ============================================================================
-// classify_uncaptured_error — free helper: wgpu error string -> stable category
-//
-// M4 will register an on_uncaptured_error global callback (mirroring
-// register_lost_callback at l.934: Closure::wrap -> device.on_uncaptured_error).
-// The callback formats the wgpu::Error as its Debug representation (which
-// includes the variant discriminant), then passes the string to the TS shim.
-//
-// This helper does the pure-string classification so the logic is testable
-// with wasm-pack test --node (node cannot construct a wgpu adapter, same
-// constraint as the parse_vertex_buffers / parse_color_targets helpers).
-//
-// Classification rules (SSOT: plan-strategy D-4):
-//   Validation { ... }  -> QueueSubmitFailed  (recoverable: fix command, next frame)
-//   OutOfMemory { ... } -> WebgpuRuntimeError
-//   Internal { ... }    -> WebgpuRuntimeError
-//   empty / malformed   -> WebgpuRuntimeError  (safe fallback; never panic)
-//
-// Panic policy: this function never panics. Unknown/malformed input is
-// classified as WebgpuRuntimeError so the caller always gets a valid
-// category to feed into the RhiErrorCode closed union (requirements AC-04).
-// ============================================================================
-
-/// Classification of an uncaptured wgpu error received via on_uncaptured_error.
-///
-/// Maps to the error codes in the closed RhiErrorCode union
-/// (packages/rhi/src/errors.ts): QueueSubmitFailed -> 'queue-submit-failed',
-/// WebgpuRuntimeError -> 'webgpu-runtime-error'. No new union members are
-/// added (plan-strategy D-4, requirements AC-05/AC-08).
-#[derive(Debug, PartialEq, Eq)]
-enum UncapturedErrorClass {
-    /// Submit-period GPU validation error. Maps to RhiErrorCode 'queue-submit-failed'.
-    /// Recoverable: fix the bad command data, submit next frame.
-    QueueSubmitFailed,
-    /// Backend runtime error (out-of-memory, internal failure, or unrecognised).
-    /// Maps to RhiErrorCode 'webgpu-runtime-error'.
-    WebgpuRuntimeError,
-}
-
-/// Classify an uncaptured wgpu error string into a stable category.
-///
-/// Input is the `Debug` representation of `wgpu::Error` as formatted by the
-/// `on_uncaptured_error` callback (see module-level doc above). This function
-/// is pure — no device, no adapter, no wasm-bindgen — so it is testable via
-/// `wasm-pack test --node`.
-fn classify_uncaptured_error(message: &str) -> UncapturedErrorClass {
-    if message.starts_with("Validation") {
-        UncapturedErrorClass::QueueSubmitFailed
-    } else {
-        UncapturedErrorClass::WebgpuRuntimeError
-    }
-}
-
-// ============================================================================
 // RhiWgpuTexture — createView (Gap 10) + destroy + spec dimensions
 // ============================================================================
 #[wasm_bindgen]
@@ -1961,18 +1866,8 @@ impl RhiWgpuBuffer {
 
 #[wasm_bindgen]
 impl RhiWgpuQueue {
-    // bug-20260622 R5 WS2: submit now returns Result so a submit-period wgpu
-    // validation error (delivered to the on_uncaptured_error slot, NOT a Rust
-    // panic — see ws2-mechanism-investigation.md) surfaces to the TS shim as a
-    // catchable Err instead of being silently swallowed by the error-sink. The
-    // Err string carries a stable `[rhi-code:<code>]` prefix that queue.ts
-    // parses to route into the matching RhiError factory (queue-submit-failed
-    // vs webgpu-runtime-error). classify_uncaptured_error (M3) is the single
-    // classification SSOT — TS only routes by the prefix, never re-classifies.
-    // The queue instance stays alive after an Err (AC-06): the next submit()
-    // call finds the slot cleared and proceeds normally.
-    #[wasm_bindgen(js_name = submit, catch)]
-    pub fn submit(&self, buffers: js_sys::Array) -> Result<(), JsValue> {
+    #[wasm_bindgen(js_name = submit)]
+    pub fn submit(&self, buffers: js_sys::Array) {
         let mut cmd_bufs: Vec<wgpu::CommandBuffer> = Vec::new();
         for i in 0..buffers.length() {
             let v = buffers.get(i);
@@ -1989,16 +1884,6 @@ impl RhiWgpuQueue {
             }
         }
         self.inner.submit(cmd_bufs);
-        // The error-sink delivery is synchronous on the WebGL2 backend, so any
-        // submit-period validation error is already in the slot by now.
-        if let Some(message) = take_uncaptured_error() {
-            let code = match classify_uncaptured_error(&message) {
-                UncapturedErrorClass::QueueSubmitFailed => "queue-submit-failed",
-                UncapturedErrorClass::WebgpuRuntimeError => "webgpu-runtime-error",
-            };
-            return Err(JsValue::from_str(&format!("[rhi-code:{code}] {message}")));
-        }
-        Ok(())
     }
 
     /// bug-20260610: explicit `js_name = writeBuffer` because wasm-bindgen's
@@ -3488,102 +3373,5 @@ mod tests {
         assert_eq!(vbs[0].array_stride, 32);
         assert_eq!(vbs[0].attributes.len(), 1);
         assert_eq!(vbs[0].attributes[0].shader_location, 0);
-    }
-
-    // ========================================================================
-    // M3: classify_uncaptured_error free-helper tests (TDD red->green).
-    //
-    // Node cannot construct a wgpu adapter (spike-w3), so the pure-string
-    // classification lives in a free helper at module level — same pattern
-    // as parse_vertex_buffers / parse_color_targets. The caller in M4 is the
-    // on_uncaptured_error callback that formats wgpu::Error as Debug and
-    // passes the string through to the TS shim via a per-queue slot.
-    //
-    // Panic policy: classify_uncaptured_error never panics (req AC-04).
-    // Empty / malformed / unrecognised input -> WebgpuRuntimeError (safe
-    // fallback so the TS caller always gets a valid RhiErrorCode).
-    // ========================================================================
-
-    #[wasm_bindgen_test]
-    fn test_classify_uncaptured_error_validation() {
-        let msg = "Validation { source: ..., description: \"Queue::submit failed: buffer destroyed\" }";
-        let c = classify_uncaptured_error(msg);
-        assert_eq!(
-            c,
-            UncapturedErrorClass::QueueSubmitFailed,
-            "Validation error must classify as QueueSubmitFailed"
-        );
-    }
-
-    #[wasm_bindgen_test]
-    fn test_classify_uncaptured_error_out_of_memory() {
-        let msg = "OutOfMemory { source: ... }";
-        let c = classify_uncaptured_error(msg);
-        assert_eq!(
-            c,
-            UncapturedErrorClass::WebgpuRuntimeError,
-            "OutOfMemory error must classify as WebgpuRuntimeError"
-        );
-    }
-
-    #[wasm_bindgen_test]
-    fn test_classify_uncaptured_error_internal() {
-        let msg = "Internal { source: Some(Error), description: \"internal driver failure\" }";
-        let c = classify_uncaptured_error(msg);
-        assert_eq!(
-            c,
-            UncapturedErrorClass::WebgpuRuntimeError,
-            "Internal error must classify as WebgpuRuntimeError"
-        );
-    }
-
-    #[wasm_bindgen_test]
-    fn test_classify_uncaptured_error_empty_string() {
-        let c = classify_uncaptured_error("");
-        assert_eq!(
-            c,
-            UncapturedErrorClass::WebgpuRuntimeError,
-            "empty string must classify as WebgpuRuntimeError (safe fallback, never panic)"
-        );
-    }
-
-    #[wasm_bindgen_test]
-    fn test_classify_uncaptured_error_unrecognized() {
-        let c = classify_uncaptured_error("garbage unreadable bytes \0 \n\t");
-        assert_eq!(
-            c,
-            UncapturedErrorClass::WebgpuRuntimeError,
-            "unrecognized input must classify as WebgpuRuntimeError (safe fallback, never panic)"
-        );
-    }
-
-    #[wasm_bindgen_test]
-    fn test_classify_uncaptured_error_instance_survives() {
-        // Step 1: unrecognized input -> safe fallback, no panic.
-        let c1 = classify_uncaptured_error("totally unknown message");
-        assert_eq!(
-            c1, UncapturedErrorClass::WebgpuRuntimeError,
-            "step 1: malformed input must return safe fallback"
-        );
-
-        // Step 2: valid Validation message after malformed input -> correct
-        // classification, instance not poisoned.
-        let c2 = classify_uncaptured_error(
-            "Validation { source: ..., description: \"Vertex buffer is not big enough\" }"
-        );
-        assert_eq!(
-            c2, UncapturedErrorClass::QueueSubmitFailed,
-            "step 2: valid Validation after malformed input must classify correctly"
-        );
-
-        // Step 3: Internal after Validation -> correct, instance survives
-        // across multiple call types.
-        let c3 = classify_uncaptured_error(
-            "Internal { source: ..., description: \"backend connection lost\" }"
-        );
-        assert_eq!(
-            c3, UncapturedErrorClass::WebgpuRuntimeError,
-            "step 3: Internal after Validation must classify correctly"
-        );
     }
 }

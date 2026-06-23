@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "2D sprite atlas + animation demo: 100 instances / 1 draw call (feat-20260521-sprite-atlas-animation M6). Baseline regen after PR #401 cullMode='none'.",
+  "description": "2D sprite atlas + animation demo: 100 instances / 1 draw call (feat-20260521-sprite-atlas-animation M6).",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",

@@ -119,7 +119,6 @@ import {
 } from './pipeline-spec';
 import { TONEMAP_POST_PROCESS_ID } from './render-graph-primitives';
 import {
-  configureSurface,
   createRenderSystem,
   type MeshGpuHandles,
   type PipelineState,
@@ -664,90 +663,6 @@ export async function createRenderer(
 // ─── WebGPU branch ──────────────────────────────────────────────────────────
 
 /**
- * Wire the spec `device.lost` Promise into the lost / error / health channels
- * (research §F-4 / R2). D-VD2 Round 2: the same event fans out through
- * `errorRegistry` so `renderer.onError(err => switch err.code { 'device-lost' })`
- * triggers, and through `healthRegistry` so `health().reason` flips to
- * `'device-lost'` (feat-20260622-s5 M1/M2).
- *
- * Extracted to a single helper (SSOT) so the createRenderer assembly path AND
- * the recover() rebuild path attach byte-identical fan-out to whichever device
- * is current — recover() mints a fresh device whose own `lost` Promise must be
- * re-wired to the SAME registries the host already subscribed to.
- */
-function attachDeviceLostFanout(
-  device: RhiDevice,
-  pack: RhiBackendPack,
-  registries: {
-    lostRegistry: LostListenerRegistry;
-    errorRegistry: RhiErrorListenerRegistry;
-    healthRegistry: HealthListenerRegistry;
-  },
-): void {
-  const { lostRegistry, errorRegistry, healthRegistry } = registries;
-  device.lost
-    .then((info) => {
-      const safe = {
-        reason: info?.reason ?? 'unknown',
-        message: info?.message ?? '',
-      };
-      lostRegistry.fire(safe);
-      // Health channel fan-out: safe.reason is 'unknown' | 'destroyed' per
-      // RhiDevice.lost return type, matching HealthDetailDeviceLost.lostReason
-      // with no narrowing cast needed (plan-decisions D-6 / OOS-1).
-      //
-      // requirements A constraint (W3C spec assumption): `reason ===
-      // 'destroyed'` is INTENTIONAL teardown (host/driver called
-      // device.destroy() -- e.g. renderer.dispose(), browser tab recycle,
-      // or test-isolation device pooling), NOT a recoverable fault. It must
-      // NOT flip health to 'device-lost' (which would make draw() refuse via
-      // the M2 guard and invite a spurious recover()). The lost + error
-      // channels still fire below so AI users observe the teardown; only the
-      // health channel (which drives the draw guard + recover eligibility)
-      // is gated. Genuine unrecoverable loss surfaces as reason 'unknown'.
-      if (safe.reason !== 'destroyed') {
-        healthRegistry.fire({
-          reason: 'device-lost',
-          detail: { lostReason: safe.reason, message: safe.message },
-          recoverable: true,
-        });
-      }
-      // Dual-channel fan-out: translate to RhiError + fire errorRegistry.
-      // When pack.translateErrorEventToRhiError is unavailable (e.g. explicit
-      // escape-hatch instance that omits the translator), build a minimal
-      // device-lost RhiError inline so the wire-up promise still holds on
-      // the lost path (graceful degradation; charter proposition 5).
-      if (pack.translateErrorEventToRhiError) {
-        const translated = pack.translateErrorEventToRhiError(safe);
-        errorRegistry.fire(translated.error);
-      } else {
-        errorRegistry.fire(
-          new RhiError({
-            code: 'device-lost',
-            expected: 'device must remain alive (driver / browser must not destroy the GPUDevice)',
-            hint: `device-lost reason: ${safe.reason}; message: ${safe.message || '<empty>'}`,
-          }),
-        );
-      }
-    })
-    .catch((err: unknown) => {
-      lostRegistry.fire({ reason: 'unknown', message: String(err) });
-      healthRegistry.fire({
-        reason: 'device-lost',
-        detail: { lostReason: 'unknown', message: String(err) },
-        recoverable: true,
-      });
-      errorRegistry.fire(
-        new RhiError({
-          code: 'device-lost',
-          expected: 'device.lost Promise resolves with GPUDeviceLostInfo',
-          hint: `device.lost Promise rejected unexpectedly: ${String(err)}`,
-        }),
-      );
-    });
-}
-
-/**
  * tryCreateWebGPURenderer returns three kinds of outcome (fix-f1 / w16):
  * - `ok`           → Renderer created successfully
  * - `rhi-err`      → RHI Result.err path (preserves the original RhiError
@@ -826,10 +741,60 @@ async function tryCreateWebGPURenderer(
   const errorRegistry = new RhiErrorListenerRegistry();
   const healthRegistry = new HealthListenerRegistry();
   // device.lost dual-track (research §F-4 / R2 countermeasure): the spec
-  // Promise is passed through to the lost-fan-out registry (extracted to
-  // attachDeviceLostFanout so the recover() rebuild path re-attaches the
-  // SAME wiring to the freshly-minted device — SSOT, one fan-out shape).
-  attachDeviceLostFanout(device, pack, { lostRegistry, errorRegistry, healthRegistry });
+  // Promise is passed through to the lost-fan-out registry. D-VD2 Round 2
+  // wire-up (feat-20260511-rhi-spec-realign-aggressive): the same event now
+  // ALSO fires through `errorRegistry` so AI users `renderer.onError(err =>
+  // switch err.code { case 'device-lost': ... })` actually triggers (AGENTS.md
+  // break-point #4 promise; before Round 2 this branch was unreachable —
+  // silent failure counter-example to charter proposition 4).
+  device.lost
+    .then((info) => {
+      const safe = {
+        reason: info?.reason ?? 'unknown',
+        message: info?.message ?? '',
+      };
+      lostRegistry.fire(safe);
+      // Health channel fan-out: safe.reason is 'unknown' | 'destroyed' per
+      // RhiDevice.lost return type, matching HealthDetailDeviceLost.lostReason
+      // with no narrowing cast needed (plan-decisions D-6 / OOS-1).
+      healthRegistry.fire({
+        reason: 'device-lost',
+        detail: { lostReason: safe.reason, message: safe.message },
+        recoverable: true,
+      });
+      // Dual-channel fan-out: translate to RhiError + fire errorRegistry.
+      // When pack.translateErrorEventToRhiError is unavailable (e.g. explicit
+      // escape-hatch instance that omits the translator), build a minimal
+      // device-lost RhiError inline so the wire-up promise still holds on
+      // the lost path (graceful degradation; charter proposition 5).
+      if (pack.translateErrorEventToRhiError) {
+        const translated = pack.translateErrorEventToRhiError(safe);
+        errorRegistry.fire(translated.error);
+      } else {
+        errorRegistry.fire(
+          new RhiError({
+            code: 'device-lost',
+            expected: 'device must remain alive (driver / browser must not destroy the GPUDevice)',
+            hint: `device-lost reason: ${safe.reason}; message: ${safe.message || '<empty>'}`,
+          }),
+        );
+      }
+    })
+    .catch((err: unknown) => {
+      lostRegistry.fire({ reason: 'unknown', message: String(err) });
+      healthRegistry.fire({
+        reason: 'device-lost',
+        detail: { lostReason: 'unknown', message: String(err) },
+        recoverable: true,
+      });
+      errorRegistry.fire(
+        new RhiError({
+          code: 'device-lost',
+          expected: 'device.lost Promise resolves with GPUDeviceLostInfo',
+          hint: `device.lost Promise rejected unexpectedly: ${String(err)}`,
+        }),
+      );
+    });
 
   // D-VD2 Round 2 wire-up part 2: register the spec `onuncapturederror`
   // listener on the raw GPUDevice so GPUUncapturedErrorEvent (validation /
@@ -1200,60 +1165,51 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     perShaderMaterialLayoutCache.set(materialShaderId, built);
     return built;
   };
-  // feat-20260622-s5 M3 / w17: the pipeline build is factored into a closure so
-  // the recover() rebuild can re-run the SAME three-step assembly against the
-  // freshly-acquired device (SSOT — one build path, one set of seed callbacks).
-  // All captured references (getShader / gpuStore / getShaderModuleAdapter /
-  // materialShaderPipelineCache / renderSystem) are stable across recover; only
-  // `internals.device` / `internals.pack` are read live, so a rebuild after a
-  // device swap compiles against the new device.
-  const buildPipeline = (): Promise<PipelineState> =>
-    buildReadyWebGPU(
-      internals.device,
-      getShader,
-      gpuStore,
-      internals.pack.createShaderModule,
-      internals.errorRegistry,
-      // feat-20260608-mesh-ssbo-dynamic-grow-l1-lift-1024-entity-cap M2 /
-      // T-M2-05 + M3 / T-M3-04: callback set by buildReadyWebGPU once
-      // meshSsboController is wired. Both the grow hook AND the read-only
-      // state ref land on `internals` so the record stage (M3
-      // ensureMeshSsboCapacity) can read slotCount + call grow through
-      // RenderSystemInternals.
-      (hook, state) => {
-        internals.growMeshSsbo = hook;
-        internals.meshSsboState = state;
-      },
-      // feat-20260609 R3-fixup: seed the lazy adapter cache with the
-      // eagerly-compiled shadow_caster module.
-      (label, module) => {
-        getShaderModuleAdapter().seedModule(label, module);
-      },
-      // M6 fix-up: seed `materialShaderPipelineCache` from the boot-time
-      // SPEC_CONST prewarm. Closure captures the Map declared just above so
-      // the URP-variant prewarmed PSOs become visible to the URP record path
-      // immediately (no 1-frame async-compile skip-draw window).
-      (key, pso) => {
-        if (!materialShaderPipelineCache.has(key)) {
-          materialShaderPipelineCache.set(key, pso);
-        }
-      },
-      // feat-20260621 M-A3 (D-5): register the built-in tonemap on the unified
-      // post-process channel once buildReadyWebGPU resolves the tonemap manifest
-      // entry's composed WGSL. Fires after the manifest-load await, by which point
-      // `renderSystem` (declared synchronously below) is defined. The 16 B params
-      // schema mirrors the prior dedicated UBO: [exposure(f32), whitePoint(f32),
-      // mode(u32), pad(f32)]; the extract stage bridges Camera.exposure/whitePoint/
-      // tonemap into this channel each frame (render-system-extract.ts w13).
-      (source: string) => {
-        renderSystem.postProcess.register(TONEMAP_POST_PROCESS_ID, {
-          source,
-          params: { byteSize: 16, defaultValue: new Uint8Array(16) },
-          reads: ['hdrColor'],
-        });
-      },
-    );
-  const ready: Promise<Result<void, RhiError>> = buildPipeline().then(
+  const ready: Promise<Result<void, RhiError>> = buildReadyWebGPU(
+    internals.device,
+    getShader,
+    gpuStore,
+    internals.pack.createShaderModule,
+    internals.errorRegistry,
+    // feat-20260608-mesh-ssbo-dynamic-grow-l1-lift-1024-entity-cap M2 /
+    // T-M2-05 + M3 / T-M3-04: callback set by buildReadyWebGPU once
+    // meshSsboController is wired. Both the grow hook AND the read-only
+    // state ref land on `internals` so the record stage (M3
+    // ensureMeshSsboCapacity) can read slotCount + call grow through
+    // RenderSystemInternals.
+    (hook, state) => {
+      internals.growMeshSsbo = hook;
+      internals.meshSsboState = state;
+    },
+    // feat-20260609 R3-fixup: seed the lazy adapter cache with the
+    // eagerly-compiled shadow_caster module.
+    (label, module) => {
+      getShaderModuleAdapter().seedModule(label, module);
+    },
+    // M6 fix-up: seed `materialShaderPipelineCache` from the boot-time
+    // SPEC_CONST prewarm. Closure captures the Map declared just above so
+    // the URP-variant prewarmed PSOs become visible to the URP record path
+    // immediately (no 1-frame async-compile skip-draw window).
+    (key, pso) => {
+      if (!materialShaderPipelineCache.has(key)) {
+        materialShaderPipelineCache.set(key, pso);
+      }
+    },
+    // feat-20260621 M-A3 (D-5): register the built-in tonemap on the unified
+    // post-process channel once buildReadyWebGPU resolves the tonemap manifest
+    // entry's composed WGSL. Fires after the manifest-load await, by which point
+    // `renderSystem` (declared synchronously below) is defined. The 16 B params
+    // schema mirrors the prior dedicated UBO: [exposure(f32), whitePoint(f32),
+    // mode(u32), pad(f32)]; the extract stage bridges Camera.exposure/whitePoint/
+    // tonemap into this channel each frame (render-system-extract.ts w13).
+    (source: string) => {
+      renderSystem.postProcess.register(TONEMAP_POST_PROCESS_ID, {
+        source,
+        params: { byteSize: 16, defaultValue: new Uint8Array(16) },
+        reads: ['hdrColor'],
+      });
+    },
+  ).then(
     (state): Result<void, RhiError> => {
       pipelineState = state;
       readySettled = true;
@@ -1743,17 +1699,8 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   };
   const renderSystem: RenderSystem = createRenderSystem({
     canvas: internals.canvas,
-    // feat-20260622-s5 M3 / w17: device + context read live off `internals` via
-    // getters so the recover() rebuild (which swaps internals.device /
-    // internals.context for a freshly-acquired pair) is observed by the record
-    // stage without reconstructing the RenderSystem (RenderSystemRuntime.device
-    // / RenderSystemInternals.context are read at frame time, not cached).
-    get device() {
-      return internals.device;
-    },
-    get context() {
-      return internals.context;
-    },
+    device: internals.device,
+    context: internals.context,
     // feat-20260608-create-app-param-surface-trim / M1 / AC-02: clearColor
     // is no longer threaded through createRenderSystem; the record stage
     // reads `camera.clearR/G/B/A` straight from the Camera SoA columns.
@@ -1761,7 +1708,6 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     assets,
     gpuStore,
     errorRegistry: internals.errorRegistry,
-    healthRegistry: internals.healthRegistry,
     getMaterialShaderPipeline,
     getParamSchema,
     getMaterialBindGroupLayout,
@@ -1845,20 +1791,6 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         });
         internals.errorRegistry.fire(e);
         return err(e);
-      }
-      // M2 / w9 (A-IN-5): device-lost guard — draw() silently returns err
-      // without firing onError each frame. The device-lost channel fires once
-      // through the dual-channel fan-out (:750-797); draw() does not repeat it
-      // (canvas holds previous frame). Host observes health().reason ===
-      // 'device-lost' and calls recover() when ready.
-      if (internals.healthRegistry.getLastSnapshot().reason === 'device-lost') {
-        return err(
-          new RhiError({
-            code: 'rhi-not-available',
-            expected: 'GPUDevice is lost; recover() to rebuild and resume rendering',
-            hint: 'call renderer.recover() after a host-chosen delay; camera holds previous frame',
-          }),
-        );
       }
       // D-S4: ready not settled => fire onError + skip frame. Uses
       // 'rhi-not-available' (closed union placeholder semantics; charter
@@ -2057,115 +1989,12 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     health(): HealthSnapshot {
       return internals.healthRegistry.getLastSnapshot();
     },
-    async recover(): Promise<Result<void, RecoverError>> {
-      // feat-20260622-s5 M3 / w17 (A-IN-3 / D-1): single idempotent device
-      // rebuild. One attempt only — no loop, no backoff, no timer, no extra
-      // in-flight health state (A-OOS-1); the host owns the cadence of calling
-      // this again. Fail-Fast entry guards (architecture-principles #5):
-      // disposed renderer or non-device-lost state short-circuits before any
-      // GPU work.
-      if (disposed) {
-        // A-IN-6: disposed latch wins; recover() never rebuilds a dead
-        // renderer. `recover-not-needed` is the sentinel (no degraded state to
-        // recover from on a disposed renderer).
-        return err(new RecoverError('recover-not-needed'));
-      }
+    recover(): Result<void, RecoverError> {
       const snapshot = internals.healthRegistry.getLastSnapshot();
-      // A-AC-08: `alive` (including the alive state after a prior successful
-      // recover) is a no-op signal — idempotent second call.
-      if (snapshot.reason !== 'device-lost') {
+      if (snapshot.reason === 'alive') {
         return err(new RecoverError('recover-not-needed'));
       }
-
-      // Step (a): release every GPU resource owned by the lost device. The CPU
-      // POD caches (AssetRegistry catalog/payload, pack cache) are NOT touched
-      // (A-AC-12) — only the GpuResourceStore + canvas context are torn down.
-      gpuStore.destroyAll();
-      internals.context.unconfigure();
-
-      // Step (b) / B-2 / B-AC-02: shed device-bound RenderSystem state minted by
-      // the lost device — the render-graph pendingDestroy queue (its PooledTextures
-      // belong to the lost device; the clear skips device.destroyTexture, mirroring
-      // the null-device fast path) plus the post-process registry + param UBOs (so
-      // the rebuild's buildReadyWebGPU re-registers the tonemap without a
-      // `post-process-already-registered` collision).
-      renderSystem.resetForRecover();
-
-      // Step (c): re-acquire device through the SAME backend pack (the
-      // idempotent factory primitives tryCreateWebGPURenderer uses). On the
-      // adapter / device failure paths, health stays `device-lost` (A-AC-07):
-      // recover() never fakes the renderer back to `alive`.
-      const adapterResult = await internals.pack.rhi.requestAdapter(undefined, internals.canvas);
-      if (!adapterResult.ok) {
-        return err(new RecoverError('recover-adapter-unavailable'));
-      }
-      let device: RhiDevice;
-      try {
-        const deviceResult = await adapterResult.value.requestDevice();
-        if (!deviceResult.ok) {
-          return err(new RecoverError('recover-device-unavailable'));
-        }
-        device = deviceResult.value;
-      } catch {
-        return err(new RecoverError('recover-device-unavailable'));
-      }
-      const ctxResult = internals.pack.rhi.acquireCanvasContext(internals.canvas);
-      if (!ctxResult.ok) {
-        return err(new RecoverError('recover-device-unavailable'));
-      }
-
-      // Step (d): swap in the new device + context. Downstream reads device via
-      // getters off `internals` (RenderSystem, ensureContextConfigured), so the
-      // swap is observed without reconstructing the RenderSystem.
-      internals.device = device;
-      internals.context = ctxResult.value;
-
-      // Re-attach the device.lost fan-out to the new device's lost Promise,
-      // reusing the SAME registries the host already subscribed to (SSOT
-      // helper). When this device is lost again, health() flips to
-      // `device-lost` and the host can call recover() once more.
-      attachDeviceLostFanout(device, internals.pack, {
-        lostRegistry: internals.lostRegistry,
-        errorRegistry: internals.errorRegistry,
-        healthRegistry: internals.healthRegistry,
-      });
-
-      // Step (e): rebuild GPU-bound state against the new device. The per-shader
-      // PSO + layout caches hold handles minted by the lost device; drop them so
-      // the rebuild compiles fresh PSOs. configureGpuDevice + prepareMaterialShaders
-      // + buildPipeline reuse the exact boot-time assembly (the closures capture
-      // stable references; only `internals.device` changed).
-      materialShaderPipelineCache.clear();
-      perShaderMaterialLayoutCache.clear();
-      gpuStore.configureGpuDevice(
-        // biome-ignore lint/suspicious/noExplicitAny: MipmapBlitDevice descriptors are typed `any`; RhiDevice satisfies the shape
-        internals.device as any,
-        internals.pack.createShaderModule as unknown as MipmapShaderModuleFactory | undefined,
-        (world, pod) => {
-          let handle: Handle<'CubeTextureAsset', 'shared'>;
-          handle = world.allocSharedRef('CubeTextureAsset', pod, () => {
-            gpuStore.evictCubemap(unwrapHandle(handle));
-          });
-          return ok(handle);
-        },
-        internals.device.caps,
-      );
-      try {
-        await prepareMaterialShaders(internals.device, getShader, assets);
-        pipelineState = await buildPipeline();
-      } catch {
-        // Pipeline rebuild failed against the new device. Treat as a device
-        // unavailability (the device was acquired but is not usable); health
-        // stays `device-lost` so the host can retry.
-        return err(new RecoverError('recover-device-unavailable'));
-      }
-
-      // Step (f): the renderer is alive again. The next draw() lazily
-      // re-configures the canvas context (ensureContextConfigured keys off the
-      // fresh pipelineState's `configured` flag) and re-uploads GPU resources
-      // via ensureResident from the preserved CPU POD caches (A-AC-12).
-      internals.healthRegistry.fire({ reason: 'alive', recoverable: false });
-      return ok(undefined);
+      return err(new RecoverError('recover-not-implemented'));
     },
     onHealthChange(cb: HealthChangeListener): () => void {
       return internals.healthRegistry.add(cb);
@@ -3174,53 +3003,6 @@ function nextPow2(n: number): number {
 }
 
 /**
- * WebGPU spec floor for `maxStorageBufferBindingSize` (128 MiB).
- * @see {@link https://www.w3.org/TR/webgpu/#dom-supported-limits-maxstoragebufferbindingsize}
- */
-const WEBGPU_SPEC_FLOOR_MAX_STORAGE_BUFFER_BINDING_SIZE = 134217728;
-
-/**
- * Derive a usable storage-buffer ceiling from device limits.
- *
- * Mirrors the `SKIN_PALETTE_MAX_BINDING_BYTES` 0/undefined floor pattern
- * (createRenderer.ts:4070-4073): when `maxStorageBufferBindingSize` is 0 or
- * undefined (WebKit `downlevel_webgl2_defaults`), climb the fallback chain —
- * `maxBufferSize` → `maxUniformBufferBindingSize` → WebGPU spec floor
- * 134217728 (128 MiB).
- *
- * Pure helper — no device dependency, directly testable in node.
- */
-export function deriveStorageBufferCeiling(
-  limits: Readonly<{
-    maxStorageBufferBindingSize?: number;
-    maxBufferSize?: number;
-    maxUniformBufferBindingSize?: number;
-  }>,
-): number {
-  // Preferred: the device-reported storage-buffer binding size (when > 0).
-  if (
-    typeof limits.maxStorageBufferBindingSize === 'number' &&
-    limits.maxStorageBufferBindingSize > 0
-  ) {
-    return limits.maxStorageBufferBindingSize;
-  }
-  // Fallback 1: maxBufferSize (device-level buffer allocation limit).
-  if (typeof limits.maxBufferSize === 'number' && limits.maxBufferSize > 0) {
-    return limits.maxBufferSize;
-  }
-  // Fallback 2: maxUniformBufferBindingSize (uniform binding limit, lower
-  // but still a real device capacity signal).
-  if (
-    typeof limits.maxUniformBufferBindingSize === 'number' &&
-    limits.maxUniformBufferBindingSize > 0
-  ) {
-    return limits.maxUniformBufferBindingSize;
-  }
-  // Fallback 3: WebGPU spec floor — always non-zero, safe as last resort.
-  return WEBGPU_SPEC_FLOOR_MAX_STORAGE_BUFFER_BINDING_SIZE;
-}
-
-/**
  * Mesh + material buffer wrapper carrying the inner `Buffer` handle plus
  * the byte-size at the time of allocation. The wrapper-object identity is
  * stable across grow events — only `.buffer` and `.sizeInBytes` are mutated
@@ -3246,8 +3028,6 @@ export type MeshSsboGrowResult =
   | {
       readonly ok: false;
       readonly code: 'mesh-ssbo-ceiling-reached' | 'mesh-ssbo-capacity-exceeded';
-      /** Pre-grow slotCount — the caller can render up to this many slots (degraded subset). */
-      readonly degradedToSlotCount: number;
     };
 
 /** Minimal device surface the grow controller needs (mocked in unit tests). */
@@ -3348,18 +3128,14 @@ export function createMeshSsboGrowController(
     while (target < neededSlots) target = target * 2;
     // Round up to nextPow2 of needed in case slotCount is 0 / not pow2.
     target = Math.max(target, nextPow2(neededSlots));
-    const ceilingBytes = deriveStorageBufferCeiling(device.limits);
+    const ceilingBytes = device.limits.maxStorageBufferBindingSize;
     const targetBytes = target * perEntityStride;
     // (3) ceiling check — refuse + fire structured error.
     if (targetBytes > ceilingBytes) {
       errorRegistry.fire(
         new MeshSsboCeilingReachedError(neededSlots, state.slotCount, ceilingBytes),
       );
-      return {
-        ok: false,
-        code: 'mesh-ssbo-ceiling-reached',
-        degradedToSlotCount: state.slotCount,
-      };
+      return { ok: false, code: 'mesh-ssbo-ceiling-reached' };
     }
     // (4) + (5) allocate fresh buffers + replace inner refs.
     allocBufferPair(target);
@@ -3368,11 +3144,7 @@ export function createMeshSsboGrowController(
       errorRegistry.fire(
         new MeshSsboCapacityExceededError(neededSlots, state.slotCount, ceilingBytes),
       );
-      return {
-        ok: false,
-        code: 'mesh-ssbo-capacity-exceeded',
-        degradedToSlotCount: state.slotCount,
-      };
+      return { ok: false, code: 'mesh-ssbo-capacity-exceeded' };
     }
     return { ok: true };
   };
@@ -6750,16 +6522,39 @@ function ensureContextConfigured(
   // RhiDevice back to the underlying raw GPUDevice via RAW_DEVICE_MAP
   // internally so the spec slot still gets a valid raw handle while AI-user-
   // facing code only sees the RHI surface (charter proposition 5).
-  // The configure descriptor (WebGL2-fallback gate: storage-cap proxy ->
-  // sRGB view format + usage bits) is the shared SSOT `configureSurface`
-  // (render-system.ts), also used by the F2 surface-outdated reconfigure
-  // branch so the two cannot drift (architecture-principles #1 SSOT).
-  const cfgResult = configureSurface(
-    internals.context,
-    internals.device,
-    state.format,
-    state.colorAttachmentFormat,
-  );
+  // The forgeax `CanvasConfiguration.format` field is `GPUTextureFormat`
+  // (string literal union); state.format is typed `string` in the
+  // PipelineState shape (legacy carry-over). Use the explicit two-step
+  // assertion (AC-08 (j) allows `as unknown as ...`) so the cast stays
+  // surface-correct and discoverable.
+  // bug-20260610: WebGL2 backend lacks the SURFACE_VIEW_FORMATS downlevel
+  // flag — `viewFormats: ['*-srgb']` on the surface is rejected. Detect
+  // this via the storage-buffer cap (same proxy as the rest of the
+  // WebGL2-fallback path) and fall back to a single-format surface where
+  // the storage format IS the sRGB view (state.colorAttachmentFormat ===
+  // state.format then matches, and render-system-record's viewDesc gate
+  // skips the explicit createTextureView format request — see
+  // render-system-record.ts:1408).
+  const limitsHere = (internals.device as { limits?: Readonly<Record<string, number>> }).limits;
+  const storageCap = limitsHere?.maxStorageBuffersPerShaderStage ?? 1;
+  const supportsViewFormats = storageCap > 0;
+  const cfgResult = internals.context.configure({
+    device: internals.device,
+    format: (supportsViewFormats
+      ? state.format
+      : state.colorAttachmentFormat) as unknown as GPUTextureFormat,
+    alphaMode: 'opaque',
+    // bug-20260610: WebGL2 swap-chain only supports COLOR_TARGET (=0x10).
+    // The full WebGPU set RENDER_ATTACHMENT|TEXTURE_BINDING|COPY_SRC is
+    // required only when the engine sources mid-frame swap-chain reads
+    // (none of the hello-* / learn-render demos do today; mipmap +
+    // tonemap-readback paths are offscreen). Use the same supportsViewFormats
+    // proxy as above.
+    usage: supportsViewFormats ? 0x10 | 0x04 | 0x01 : 0x10,
+    ...(supportsViewFormats
+      ? { viewFormats: [state.colorAttachmentFormat as unknown as GPUTextureFormat] }
+      : {}),
+  });
   if (!cfgResult.ok) {
     errorRegistry.fire(cfgResult.error);
     return;
