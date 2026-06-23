@@ -3381,7 +3381,7 @@ import { handleNumeric } from './utils/handle-numeric';
         wScene,
         buildScene([{ localId: localId(0), components: { 't7-mixed': { posX: 7 } } }]),
       );
-      const root = wScene.instantiateScene(handle).unwrap();
+      const root = wScene.instantiateScene(handle).unwrap().root;
       const eScene = firstSceneEntity(wScene, root);
       const sceneRow = wScene.get(eScene, Mixed).unwrap();
 
@@ -3413,7 +3413,7 @@ import { handleNumeric } from './utils/handle-numeric';
         wScene,
         buildScene([{ localId: localId(0), components: { 't7-mixed': {} } }]),
       );
-      const root = wScene.instantiateScene(handle).unwrap();
+      const root = wScene.instantiateScene(handle).unwrap().root;
       const eScene = firstSceneEntity(wScene, root);
       const sceneRow = wScene.get(eScene, Mixed).unwrap();
 
@@ -3529,7 +3529,7 @@ import { handleNumeric } from './utils/handle-numeric';
         wScene,
         buildScene([{ localId: localId(0), components: { 't10-brands': {} } }]),
       );
-      const root = wScene.instantiateScene(handle).unwrap();
+      const root = wScene.instantiateScene(handle).unwrap().root;
       const eScene = firstSceneEntity(wScene, root);
       const sceneRow = wScene.get(eScene, Brands).unwrap();
 

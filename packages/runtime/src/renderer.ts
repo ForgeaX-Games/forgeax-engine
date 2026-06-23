@@ -333,15 +333,28 @@ export interface Renderer {
    */
   health(): HealthSnapshot;
   /**
-   * Attempt renderer recovery. In S3 (placeholder): returns
-   * `Result.err(RecoverError 'recover-not-needed')` when healthy, and
-   * `Result.err(RecoverError 'recover-not-implemented')` when degraded.
-   * Self-heal recovery lands in a later milestone (OOS-1).
+   * Attempt a single idempotent device rebuild (feat-20260622-s5 M3).
    *
-   * Does NOT mutate the health state — `health().reason` still reflects the
-   * degraded state after recover() returns (AC-04b).
+   * Only acts in the `device-lost` health state; `alive` returns
+   * `recover-not-needed` (also returned after a successful rebuild — the
+   * renderer is alive again, so a second recover() is a no-op signal).
+   * Rebuild sequence: `gpuStore.destroyAll()` + `context.unconfigure()` ->
+   * clear the render-graph pendingDestroy queue (B-2) -> re-acquire device via
+   * the same backend pack (`requestAdapter` -> `requestDevice`) -> rebuild
+   * Shader/Pipeline -> re-attach the device.lost fan-out -> `fire('alive')`.
+   * CPU POD caches (AssetRegistry catalog/payload, pack cache) survive; only
+   * GPU resources are released and re-uploaded on the next draw via
+   * `ensureResident` (A-AC-12).
+   *
+   * Async because device acquisition is async (`requestAdapter` /
+   * `requestDevice`). A single attempt: no retry loop, no backoff, no timer
+   * (A-OOS-1). On failure resolves `Result.err` (`recover-adapter-unavailable`
+   * / `recover-device-unavailable`) and leaves `health().reason ===
+   * 'device-lost'` — recover() never fakes the renderer back to `alive`
+   * (A-AC-07). The host owns the retry cadence (call recover() again after a
+   * host-chosen delay).
    */
-  recover(): Result<void, RecoverError>;
+  recover(): Promise<Result<void, RecoverError>>;
   /**
    * Push-style health subscription with unsubscribe.
    *

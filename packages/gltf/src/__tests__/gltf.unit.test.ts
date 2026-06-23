@@ -1170,7 +1170,7 @@ import {
         const tex = produced.find((p) => p.guid === TEX_GUID);
         expect(tex?.kind).toBe('texture');
         const mat = produced.find((p) => p.guid === MAT_GUID);
-        expect(mat?.refs).toContain(TEX_GUID);
+        expect(mat?.refs.map((r) => r.guid)).toContain(TEX_GUID);
       });
     });
   });
@@ -1285,7 +1285,7 @@ import {
         expect((tex?.payload as TextureAsset).colorSpace).toBe('srgb');
 
         const mat = produced.find((p) => p.guid === MAT_GUID);
-        expect(mat?.refs).toContain(TEX_GUID);
+        expect(mat?.refs.map((r) => r.guid)).toContain(TEX_GUID);
       });
     });
   });
@@ -1384,8 +1384,182 @@ import {
         expect(calls[0]?.mimeType).toBe('image/png');
 
         const mat = produced.find((p) => p.guid === MAT_GUID);
-        expect(mat?.refs).toContain(TEX_GUID);
+        expect(mat?.refs.map((r) => r.guid)).toContain(TEX_GUID);
       });
+    });
+  });
+
+  describe('asset-ref-edge-metadata-contract (AC-02 / w6)', () => {
+    it('(a) scene refs mesh edge: sourceField filled with componentName/fieldName', async () => {
+      const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
+      const TEX_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d460';
+      const MAT_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d461';
+      const MESH_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d462';
+      const SCENE_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d463';
+      const ctx = makeGlbCtx({
+        source: 'BoxTextured.glb',
+        bytes,
+        subAssets: [
+          { guid: TEX_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: MAT_GUID, sourceIndex: 0, kind: 'material' },
+          { guid: MESH_GUID, sourceIndex: 0, kind: 'mesh' },
+          { guid: SCENE_GUID, sourceIndex: 0, kind: 'scene' },
+        ],
+        decodeCalls: [],
+      });
+      const produced = await gltfImporter.import(ctx);
+      const scene = produced.find((p) => p.guid === SCENE_GUID);
+      expect(scene).toBeDefined();
+      const meshRefs = scene?.refs.filter((r) => r.guid === MESH_GUID);
+      expect(meshRefs?.length).toBeGreaterThanOrEqual(1);
+      const meshRef = meshRefs?.[0];
+      expect(meshRef?.sourceField?.componentName).toBe('MeshFilter');
+      expect(meshRef?.sourceField?.fieldName).toBe('assetHandle');
+      expect(meshRef?.sceneEntityId).toBeGreaterThanOrEqual(0);
+      const matRefs = scene?.refs.filter((r) => r.guid === MAT_GUID);
+      expect(matRefs?.length).toBeGreaterThanOrEqual(1);
+      const matRef = matRefs?.[0];
+      expect(matRef?.sourceField?.componentName).toBe('MeshRenderer');
+      expect(matRef?.sourceField?.fieldName).toBe('materials');
+      expect(matRef?.sourceField?.arrayIndex).toBeGreaterThanOrEqual(0);
+      expect(matRef?.sceneEntityId).toBeGreaterThanOrEqual(0);
+    });
+
+    it('(b) sceneEntityId matches entity localId for handle-field refs', async () => {
+      const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
+      const TEX_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d460';
+      const MAT_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d461';
+      const MESH_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d462';
+      const SCENE_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d463';
+      const ctx = makeGlbCtx({
+        source: 'BoxTextured.glb',
+        bytes,
+        subAssets: [
+          { guid: TEX_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: MAT_GUID, sourceIndex: 0, kind: 'material' },
+          { guid: MESH_GUID, sourceIndex: 0, kind: 'mesh' },
+          { guid: SCENE_GUID, sourceIndex: 0, kind: 'scene' },
+        ],
+        decodeCalls: [],
+      });
+      const produced = await gltfImporter.import(ctx);
+      const scene = produced.find((p) => p.guid === SCENE_GUID);
+      expect(scene).toBeDefined();
+      const meshRef = scene?.refs.find((r) => r.guid === MESH_GUID);
+      expect(meshRef?.sceneEntityId).toBeGreaterThanOrEqual(0);
+    });
+
+    it('(c) texture edges in scene refs have sourceField=undefined (D-2)', async () => {
+      const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
+      const TEX_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d460';
+      const MAT_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d461';
+      const MESH_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d462';
+      const SCENE_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d463';
+      const ctx = makeGlbCtx({
+        source: 'BoxTextured.glb',
+        bytes,
+        subAssets: [
+          { guid: TEX_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: MAT_GUID, sourceIndex: 0, kind: 'material' },
+          { guid: MESH_GUID, sourceIndex: 0, kind: 'mesh' },
+          { guid: SCENE_GUID, sourceIndex: 0, kind: 'scene' },
+        ],
+        decodeCalls: [],
+      });
+      const produced = await gltfImporter.import(ctx);
+      const scene = produced.find((p) => p.guid === SCENE_GUID);
+      expect(scene).toBeDefined();
+      const texRef = scene?.refs.find((r) => r.guid === TEX_GUID);
+      expect(texRef).toBeDefined();
+      expect(texRef?.sourceField).toBeUndefined();
+      expect(texRef?.sceneEntityId).toBeUndefined();
+    });
+
+    it('(d) material parent edge for material without parent', async () => {
+      const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
+      const TEX_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d460';
+      const MAT_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d461';
+      const MESH_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d462';
+      const SCENE_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d463';
+      const ctx = makeGlbCtx({
+        source: 'BoxTextured.glb',
+        bytes,
+        subAssets: [
+          { guid: TEX_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: MAT_GUID, sourceIndex: 0, kind: 'material' },
+          { guid: MESH_GUID, sourceIndex: 0, kind: 'mesh' },
+          { guid: SCENE_GUID, sourceIndex: 0, kind: 'scene' },
+        ],
+        decodeCalls: [],
+      });
+      const produced = await gltfImporter.import(ctx);
+      const mat = produced.find((p) => p.guid === MAT_GUID);
+      expect(mat).toBeDefined();
+      const parentRefs = mat?.refs.filter((r) => r.sourceField?.fieldName === 'parent');
+      expect(parentRefs?.length).toBe(0);
+    });
+
+    it('(e) material refs texture edges: sourceField.componentName="<material>" and fieldName is texture slot', async () => {
+      const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
+      const TEX_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d460';
+      const MAT_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d461';
+      const MESH_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d462';
+      const SCENE_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d463';
+      const ctx = makeGlbCtx({
+        source: 'BoxTextured.glb',
+        bytes,
+        subAssets: [
+          { guid: TEX_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: MAT_GUID, sourceIndex: 0, kind: 'material' },
+          { guid: MESH_GUID, sourceIndex: 0, kind: 'mesh' },
+          { guid: SCENE_GUID, sourceIndex: 0, kind: 'scene' },
+        ],
+        decodeCalls: [],
+      });
+      const produced = await gltfImporter.import(ctx);
+      const mat = produced.find((p) => p.guid === MAT_GUID);
+      expect(mat).toBeDefined();
+      const texRef = mat?.refs.find((r) => r.guid === TEX_GUID);
+      expect(texRef).toBeDefined();
+      expect(texRef?.sourceField?.componentName).toBe('<material>');
+      expect(texRef?.sourceField?.fieldName).toBe('baseColorTexture');
+      expect(texRef?.sceneEntityId).toBeUndefined();
+    });
+
+    it('(f) all scene refs AssetRef entries have valid shape', async () => {
+      const bytes = new Uint8Array(await readFile(FIXTURE_GLB));
+      const TEX_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d460';
+      const MAT_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d461';
+      const MESH_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d462';
+      const SCENE_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d463';
+      const ctx = makeGlbCtx({
+        source: 'BoxTextured.glb',
+        bytes,
+        subAssets: [
+          { guid: TEX_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: MAT_GUID, sourceIndex: 0, kind: 'material' },
+          { guid: MESH_GUID, sourceIndex: 0, kind: 'mesh' },
+          { guid: SCENE_GUID, sourceIndex: 0, kind: 'scene' },
+        ],
+        decodeCalls: [],
+      });
+      const produced = await gltfImporter.import(ctx);
+      const scene = produced.find((p) => p.guid === SCENE_GUID);
+      expect(scene).toBeDefined();
+      for (const ref of scene?.refs ?? []) {
+        expect(typeof ref.guid).toBe('string');
+        expect(ref.guid.length).toBeGreaterThan(0);
+        if (ref.sourceField !== undefined) {
+          expect(typeof ref.sourceField.fieldName).toBe('string');
+          expect(ref.sourceField.fieldName.length).toBeGreaterThan(0);
+          if (ref.sourceField.componentName !== undefined) {
+            expect(typeof ref.sourceField.componentName).toBe('string');
+          }
+          if (ref.sourceField.arrayIndex !== undefined) {
+            expect(typeof ref.sourceField.arrayIndex).toBe('number');
+          }
+        }
+      }
     });
   });
 }

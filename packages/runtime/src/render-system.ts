@@ -285,6 +285,20 @@ export interface RenderSystem {
    * cascade owns the try/catch + errorRegistry.fire fan-out (D-3).
    */
   disposeFrameState(): void;
+
+  /**
+   * feat-20260622-s5 M3 / B-2 / w18: drop the device-bound state the recover()
+   * rebuild must shed before re-running the pipeline build against a fresh
+   * device. Two effects, both keyed to the lost device:
+   *   1. the per-frame render-graph's pendingDestroy queue (PooledTextures
+   *      minted by the lost device — clearPendingDestroy skips destroyTexture);
+   *   2. the post-process registry + its eager param UBOs (the WGSL re-registers
+   *      during the rebuild's buildReadyWebGPU; without this reset the tonemap
+   *      re-register throws `post-process-already-registered`, and the UBOs are
+   *      stale lost-device handles anyway).
+   * Idempotent and graph-optional (no-op when nothing has compiled yet).
+   */
+  resetForRecover(): void;
 }
 
 /**
@@ -302,6 +316,12 @@ export interface RenderSystem {
 export interface RenderSystemRuntime {
   readonly device: RhiDevice;
   readonly errorRegistry: RhiErrorListenerRegistry;
+  /**
+   * feat-20260622-s5-device-surface-self-heal-recover M2 / w8: health registry
+   * threaded into the record stage so `recordFrame` can fire `internal-fault`
+   * when surface reconfigure+retry both fail (A-IN-2).
+   */
+  readonly healthRegistry: import('./renderer').HealthListenerRegistry;
   // feat-20260523-shader-template-instance-split M9-T03 (D-PipelineBuilder):
   // per-MaterialShader pipeline cache lookup. Returns the cached pipeline
   // for `materialShaderId`, lazily building on first miss via
@@ -480,6 +500,7 @@ export interface RenderSystemInternals extends RenderSystemRuntime {
         | {
             readonly ok: false;
             readonly code: 'mesh-ssbo-ceiling-reached' | 'mesh-ssbo-capacity-exceeded';
+            readonly degradedToSlotCount: number;
           })
     | undefined;
   readonly meshSsboState?: { readonly slotCount: number } | undefined;
@@ -546,10 +567,10 @@ export interface PipelineState {
   // inner `.buffer` is replaced by `growMeshSsbo` (createRenderer.ts /
   // T-M2-05). Consumers must read `.buffer` to reach the underlying
   // `Buffer` handle (M3-04: `pipelineState.meshStorageBuffer.buffer` /
-  // `.materialUniformBuffer.buffer`); passing the wrapper directly to
-  // `getOrAssignHandleId` would bind the cache to the wrapper object id
-  // (which never changes) instead of the inner buffer id (which DOES
-  // change on grow), defeating the cache miss → re-bind path (R1
+  // `.materialUniformBuffer.buffer`); using the wrapper directly as a
+  // WeakMap chain key would bind the cache to the wrapper object identity
+  // (which never changes) instead of the inner buffer identity (which DOES
+  // change on grow), defeating the cache miss -> re-bind path (D-3
   // grep-gate guards this).
   readonly materialUniformBuffer: { readonly buffer: Buffer; readonly sizeInBytes: number };
   readonly meshStorageBuffer: { readonly buffer: Buffer; readonly sizeInBytes: number };
@@ -869,6 +890,38 @@ export interface PipelineState {
    * resources; shadow probe (OOS-4) stays on PipelineState directly.
    */
   readonly perPassResources: PerPassResources;
+}
+
+/**
+ * Configure a canvas surface from the two PipelineState format fields, applying
+ * the WebGL2-fallback gate (storage-buffer cap == 0 proxy): full WebGPU surface
+ * (sRGB view format + RENDER_ATTACHMENT|TEXTURE_BINDING|COPY_SRC usage) when
+ * storage buffers are available, single-format COLOR_TARGET-only surface on the
+ * GLES fallback. Single SSOT for the configure descriptor consumed by both the
+ * lazy first-frame path (ensureContextConfigured in createRenderer.ts) and the
+ * F2 surface-outdated reconfigure-and-retry branch (render-system-record.ts) so
+ * the two cannot drift (architecture-principles #1 SSOT). Returns the configure
+ * Result; callers own the `state.perPassResources.configured` flag + the
+ * `__forgeaxSwapChainFormat` probe write (those differ per call site).
+ */
+export function configureSurface(
+  context: RhiCanvasContext,
+  device: RhiDevice,
+  format: string,
+  colorAttachmentFormat: string,
+): Result<void, RhiError> {
+  const limitsHere = (device as { limits?: Readonly<Record<string, number>> }).limits;
+  const storageCap = limitsHere?.maxStorageBuffersPerShaderStage ?? 1;
+  const supportsViewFormats = storageCap > 0;
+  return context.configure({
+    device,
+    format: (supportsViewFormats ? format : colorAttachmentFormat) as unknown as GPUTextureFormat,
+    alphaMode: 'opaque',
+    usage: supportsViewFormats ? 0x10 | 0x04 | 0x01 : 0x10,
+    ...(supportsViewFormats
+      ? { viewFormats: [colorAttachmentFormat as unknown as GPUTextureFormat] }
+      : {}),
+  });
 }
 
 /**
@@ -1256,21 +1309,20 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     // renderable guard for the runtime `nineslice.scale-too-small` metric
     // counter (`runtime.metrics.increment(...)` in render-system-record.ts).
     warnedNineSliceScaleEntities: new Set<number>(),
-    // feat-20260531-per-frame-bind-group-cache M2 / w7: per-frame
-    // bind group caches. viewBindGroupCache covers main (#1) and shadow
-    // (#3) variants with distinct keys. meshBindGroupCache keys on b0
-    // meshStorageBuffer handle (D-2 handle-set). Maps are per-RenderSystem
-    // (never cleared — handle stability ensures bounded size).
-    viewBindGroupCache: new Map(),
-    meshBindGroupCache: new Map(),
-    // M3 / w12: per-entity material and instances caches (entityKey-scoped)
-    materialBgCache: new Map(),
-    instancesBgCache: new Map(),
-    // M2 / w7: maps opaque RHI handle objects to sequential numeric ids.
-    // Single shared Map + counter across the RenderSystem lifetime; same
-    // GPU resource always maps to the same id (idempotent frame-to-frame).
-    handleToId: new WeakMap<object, number>(),
-    nextHandleId: 0,
+    // feat-20260622-handle-to-id-allocator-elimination M1 / w3: per-frame
+    // bind group caches as nested WeakMap chain roots. viewBindGroupCache
+    // covers main and shadow variants; meshBindGroupCache keys on inner
+    // buffer handles (D-3). Roots are init-time stable (never cleared).
+    viewBindGroupCache: new WeakMap(),
+    meshBindGroupCache: new WeakMap(),
+    // feat-20260622-handle-to-id-allocator-elimination M1 / w2: per-entity
+    // material and instances caches (outer Map<entityKey, WeakMap>).
+    materialBgPerEntity: new Map(),
+    instancesBgPerEntity: new Map(),
+    // cross-entity shared material cache (outer Map<shaderId, WeakMap>).
+    materialBgShared: new Map(),
+    // singleton material cache (flat Map<variant, BindGroup>; D-6).
+    singletonMaterialCache: new Map(),
     // feat-20260601-customizable-render-pipeline-seam M1 / w7: installed-pipeline state.
     // 0 = nothing installed yet (createRenderer dogfood installs the default before any
     // draw). activePipeline defaults to the built-in forward pipeline.
@@ -1601,6 +1653,18 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         frameState.pointShadowAtlas.dispose();
         frameState.pointShadowAtlas = null;
       }
+    },
+    resetForRecover(): void {
+      // feat-20260622-s5 M3 / B-2 / w18: recover() rebuild drops device-bound
+      // state minted by the lost device. (1) graph pendingDestroy (stale
+      // handles, skip device.destroyTexture); no-op when no graph compiled yet.
+      frameState.perFrameGraph?.clearPendingDestroy();
+      // (2) post-process registry + eager param UBOs: the rebuild's
+      // buildReadyWebGPU re-registers the engine tonemap, which would throw
+      // `post-process-already-registered` against a populated registry; the
+      // UBOs are stale lost-device handles released with the device.
+      postProcessRegistry.clear();
+      postProcessParamsBuffers.clear();
     },
   };
 }

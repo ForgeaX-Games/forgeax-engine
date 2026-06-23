@@ -457,7 +457,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value;
+    const root = r.value.root;
 
     // Spawn ChildOf-linked children under the root.
     const child1 = world.spawn({ component: ChildOf, data: { parent: root } }).unwrap();
@@ -520,7 +520,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value;
+    const root = r.value.root;
 
     const mapping = readMapping(world, root);
     expect(mapping.length).toBeGreaterThanOrEqual(3);
@@ -554,14 +554,14 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root1 = r.value;
+    const root1 = r.value.root;
 
     // Spawn a second scene (simulating tutorial variant).
     const handle2 = registerSceneAsset(world, buildScene(nodes));
     const r2 = world.instantiateScene(handle2);
     expect(r2.ok).toBe(true);
     if (!r2.ok) return;
-    const root2 = r2.value;
+    const root2 = r2.value.root;
 
     const player = world.spawn().unwrap();
 
@@ -585,7 +585,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     const r3 = world.instantiateScene(handle);
     expect(r3.ok).toBe(true);
     if (!r3.ok) return;
-    const root3 = r3.value;
+    const root3 = r3.value.root;
     despawnOnExit(world, root3, LevelId, 'main-menu');
 
     // Transition back to main-menu.
@@ -716,7 +716,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value;
+    const root = r.value.root;
 
     // Collect member entities
     const mapping = readMapping(world, root);
@@ -749,7 +749,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value;
+    const root = r.value.root;
 
     setNextState(world, LevelId, 'street-a');
     world.update();
@@ -773,7 +773,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value;
+    const root = r.value.root;
 
     const mapping = readMapping(world, root);
     expect(mapping.length).toBeGreaterThanOrEqual(2);
@@ -802,7 +802,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value;
+    const root = r.value.root;
 
     const mapping = readMapping(world, root);
 
@@ -842,7 +842,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value;
+    const root = r.value.root;
 
     const mapping = readMapping(world, root);
 
@@ -875,7 +875,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value;
+    const root = r.value.root;
 
     const mappingBefore = readMapping(world, root);
     expect(mappingBefore.length).toBeGreaterThanOrEqual(3);
@@ -914,7 +914,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
 
-    const mapping = readMapping(world, r.value);
+    const mapping = readMapping(world, r.value.root);
     expect(mapping.length).toBeGreaterThanOrEqual(1);
 
     // Read component data before transition

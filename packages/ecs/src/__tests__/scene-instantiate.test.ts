@@ -88,7 +88,7 @@ describe('instantiateScene main path (w30 rewrite)', () => {
     const r = world.instantiateScene(handle, externalParent);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const root = r.value;
+    const root = r.value.root;
     expect(world.get(root, ChildOf).unwrap().parent).toBe(externalParent);
   });
 
@@ -175,10 +175,10 @@ describe('instantiateScene main path (w30 rewrite)', () => {
     const r2 = world.instantiateScene(handle);
     expect(r1.ok && r2.ok).toBe(true);
     if (!r1.ok || !r2.ok) return;
-    expect(r1.value).not.toBe(r2.value);
+    expect(r1.value.root).not.toBe(r2.value.root);
 
-    const m1 = readMapping(world, r1.value);
-    const m2 = readMapping(world, r2.value);
+    const m1 = readMapping(world, r1.value.root);
+    const m2 = readMapping(world, r2.value.root);
 
     const ENTITY_NULL_RAW = 0xffffffff;
     const entitiesOf = (m: Uint32Array): Set<number> => {
@@ -248,7 +248,7 @@ describe('instantiateScene mount fail-fast (R2 verify fixups)', () => {
     const r = world.instantiateScene(outerHandle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const outerRoot = r.value;
+    const outerRoot = r.value.root;
     const mapping = readMapping(world, outerRoot);
     // mapping layout: [0]=entity at lid=0, [1]=mount entity at lid=1, [2]=child member
     const mountEntity = mapping[1] as unknown as EntityHandle;
@@ -405,7 +405,7 @@ describe('w24 SceneInstance rc invariant (feat-20260614 M5 / D-5)', () => {
     if (!r.ok) return;
     const rcAfterSpawn = world.sharedRefs.refcount(handle);
     expect(rcAfterSpawn).toBeGreaterThanOrEqual(2);
-    const dr = world.despawn(r.value);
+    const dr = world.despawn(r.value.root);
     expect(dr.ok).toBe(true);
     expect(world.sharedRefs.refcount(handle)).toBe(rcAfterSpawn - 1);
     expect(world.sharedRefs.refcount(handle)).toBeGreaterThanOrEqual(1);
@@ -423,7 +423,7 @@ describe('w24 SceneInstance rc invariant (feat-20260614 M5 / D-5)', () => {
     const handle = world.allocSharedRef('SceneAsset', asset, cb);
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiate failed');
-    world.despawn(r.value);
+    world.despawn(r.value.root);
     // Rc is now 1 (alloc-grant); explicit release brings it to 0.
     const releaseR = world.sharedRefs.release(handle);
     expect(releaseR.ok).toBe(true);
@@ -463,6 +463,6 @@ describe('w32 instantiateScene: builtin handle in scene short-circuits write bar
     expect(world.sharedRefs.refcount(sceneHandle)).toBeGreaterThanOrEqual(2);
 
     // Despawn must not throw a builtin-slot error.
-    expect(() => world.despawn(r.value).unwrap()).not.toThrow();
+    expect(() => world.despawn(r.value.root).unwrap()).not.toThrow();
   });
 });

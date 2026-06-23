@@ -366,7 +366,14 @@ export type SystemFn<
  * console.log(info.entityCount, info.archetypeCount);
  * ```
  */
-export type { ArchetypeInfo, WorldInspection } from './world';
+// C-R2 (feat-20260622-s5): non-fatal SceneAsset unknown-field diagnostics +
+// the instantiateScene success envelope ({ root, diagnostics }).
+export type {
+  ArchetypeInfo,
+  SceneInstantiateDiagnostic,
+  SceneInstantiateOk,
+  WorldInspection,
+} from './world';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Entity encoding utilities
