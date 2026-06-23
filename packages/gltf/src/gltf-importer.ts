@@ -32,7 +32,13 @@
 // gap as `import-produced-no-assets`. A texture sub-asset that fails byte
 // extraction surfaces as `gltf-image-extract-failed` (D-6).
 
-import type { Handle, ImportContext, ImportedAsset, Importer } from '@forgeax/engine-types';
+import type {
+  AssetRef,
+  Handle,
+  ImportContext,
+  ImportedAsset,
+  Importer,
+} from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { gltfDocToSceneAsset, meshIrToMeshAsset, toMaterialAsset } from './bridge.js';
 import { gltfErr } from './errors.js';
@@ -185,19 +191,23 @@ function materialTextureRefs(
   mat: GltfMaterialIr,
   doc: GltfDoc,
   textureGuidByIndex: ReadonlyMap<number, string>,
-): readonly string[] {
-  const refs: string[] = [];
+): readonly AssetRef[] {
+  const refs: AssetRef[] = [];
   const textures = doc.textures ?? [];
-  function pushRefForTextureIndex(texIdx: number | undefined): void {
+  function pushRefForTextureIndex(texIdx: number | undefined, fieldName: string): void {
     if (texIdx === undefined) return;
     const tex = textures[texIdx];
     if (tex === undefined) return;
     const guid = textureGuidByIndex.get(tex.source);
-    if (guid !== undefined) refs.push(guid);
+    if (guid !== undefined)
+      refs.push({
+        guid,
+        sourceField: { componentName: '<material>', fieldName },
+      });
   }
-  pushRefForTextureIndex(mat.baseColorTexture);
-  pushRefForTextureIndex(mat.metallicRoughnessTexture);
-  pushRefForTextureIndex(mat.normalTexture);
+  pushRefForTextureIndex(mat.baseColorTexture, 'baseColorTexture');
+  pushRefForTextureIndex(mat.metallicRoughnessTexture, 'metallicRoughnessTexture');
+  pushRefForTextureIndex(mat.normalTexture, 'normalTexture');
   return refs;
 }
 
@@ -250,10 +260,11 @@ async function importGltf(ctx: ImportContext): Promise<readonly ImportedAsset[]>
   // share `sourceIndex` (toAssetPack emits 1:1 per GltfSkeletonRecord) but live
   // as distinct `kind` sub-assets, so the SkinAsset GUIDs differ from the
   // SkeletonAsset GUIDs. The scene branch below appends these GUIDs to both
-  // its refs[] (pack-index integrity) and its payload.skinGuids (runtime
-  // collectRefs cross-edge so loadByGuid<SceneAsset> recursively pulls every
-  // SkinAsset before instantiate -- without it, browser-async-pack-fetch
-  // never loads SkinAssets and Skin.joints stays length=0).
+  // its refs[] (the runtime recursion source: loadByGuid<SceneAsset> walks
+  // envelope.refs to recursively pull every SkinAsset before instantiate) and
+  // its payload.skinGuids (the reverse-decode hint) -- without the refs[] edge,
+  // browser-async-pack-fetch never loads SkinAssets and Skin.joints stays
+  // length=0).
   const skinGuidBySourceIndex = new Map<number, string>();
   for (const sub of ctx.subAssets) {
     if (sub.kind === 'skin') skinGuidBySourceIndex.set(sub.sourceIndex, sub.guid);
@@ -304,6 +315,14 @@ async function importGltf(ctx: ImportContext): Promise<readonly ImportedAsset[]>
         skinned,
       });
       const refs = materialTextureRefs(mat, doc, maps.textureGuidByIndex);
+      // D-8: if material has a parent, add parent edge to refs
+      const materialRefs: AssetRef[] = [...refs];
+      if (matAsset.parent !== undefined) {
+        materialRefs.push({
+          guid: matAsset.parent as unknown as string,
+          sourceField: { fieldName: 'parent' },
+        });
+      }
       // bug-20260610: pack-side material handle fields (`<X>Texture`) must
       // carry refs[] indices on disk, NOT image indices. The runtime
       // materialLoader resolves these at registerWithGuid time using the
@@ -340,7 +359,7 @@ async function importGltf(ctx: ImportContext): Promise<readonly ImportedAsset[]>
         kind: 'material',
         ...(matName !== undefined ? { name: matName } : {}),
         payload: rewrittenAsset,
-        refs,
+        refs: materialRefs,
       });
     } else if (sub.kind === 'texture') {
       const imageIndex = sub.sourceIndex;
@@ -409,20 +428,115 @@ async function importGltf(ctx: ImportContext): Promise<readonly ImportedAsset[]>
       // SkinAsset cross-edge that has no entity-component representation but
       // is required for postSpawnResolveJoints to resolve Skin.joints[] via
       // SkinAsset.jointPaths.
-      const skeletonGuidList = [...skeletonGuidBySourceIndex.values()];
-      const skinGuidList = [...skinGuidBySourceIndex.values()];
-      const refs = [
-        ...maps.meshGuidByIndex.values(),
-        ...maps.materialGuidByIndex.values(),
-        ...maps.textureGuidByIndex.values(),
-        ...skeletonGuidList,
-        ...skinGuidList,
-      ];
-      // Inject skinGuids into the scene payload so runtime collectRefs(scene)
-      // can recurse into each SkinAsset in the browser-async-pack-fetch path.
+      //
+      // D-2 / D-3: refs carries structured edge metadata (AssetRef[]).
+      // Walk scene entities to build a handle-value -> (entityLocalId,
+      // componentName, fieldName, arrayIndex?) provenance map, then
+      // produce AssetRef[] from the flat GUID superset with sourceField
+      // / sceneEntityId filled for mesh/material handle-field edges.
+      // Texture edges: sourceField=undefined (transitive, no per-entity
+      // origin). Skeleton edges: sourceField from Skin.skeleton if entity
+      // carries that GUID. Skin edges: sourceField=undefined (cross-edge
+      // with no entity-component representation).
+      const handleValueProvenance = new Map<
+        number,
+        { sceneEntityId: number; componentName: string; fieldName: string; arrayIndex?: number }
+      >();
+      const skeletonGuidProvenance = new Map<string, { sceneEntityId: number }>();
+      for (const entity of scene.entities) {
+        const comps = entity.components as Record<string, Record<string, unknown>>;
+        const mf = comps.MeshFilter;
+        if (mf !== undefined && typeof mf.assetHandle === 'number') {
+          handleValueProvenance.set(mf.assetHandle, {
+            sceneEntityId: entity.localId,
+            componentName: 'MeshFilter',
+            fieldName: 'assetHandle',
+          });
+        }
+        const mr = comps.MeshRenderer;
+        if (mr !== undefined && Array.isArray(mr.materials)) {
+          for (let arrIdx = 0; arrIdx < mr.materials.length; arrIdx++) {
+            const h = mr.materials[arrIdx];
+            if (typeof h === 'number') {
+              handleValueProvenance.set(h, {
+                sceneEntityId: entity.localId,
+                componentName: 'MeshRenderer',
+                fieldName: 'materials',
+                arrayIndex: arrIdx,
+              });
+            }
+          }
+        }
+        const skin = comps.Skin;
+        if (skin !== undefined && typeof skin.skeleton === 'string') {
+          skeletonGuidProvenance.set(skin.skeleton, { sceneEntityId: entity.localId });
+        }
+      }
+
+      const meshGuidList = [...maps.meshGuidByIndex.values()];
+      const materialGuidList = [...maps.materialGuidByIndex.values()];
+      const textureGuidList = [...maps.textureGuidByIndex.values()];
+
+      function makeRef(guid: string, idx: number): AssetRef {
+        const prov = handleValueProvenance.get(idx);
+        if (prov !== undefined) {
+          return {
+            guid,
+            sourceField: {
+              componentName: prov.componentName,
+              fieldName: prov.fieldName,
+              ...(prov.arrayIndex !== undefined ? { arrayIndex: prov.arrayIndex } : {}),
+            },
+            sceneEntityId: prov.sceneEntityId,
+          };
+        }
+        return { guid };
+      }
+
+      const refs: AssetRef[] = [];
+      let cursor = 0;
+      for (const guid of meshGuidList) {
+        refs.push(makeRef(guid, cursor));
+        cursor++;
+      }
+      for (const guid of materialGuidList) {
+        refs.push(makeRef(guid, cursor));
+        cursor++;
+      }
+      for (const guid of textureGuidList) {
+        refs.push({ guid });
+        cursor++;
+      }
+      {
+        const skeletonGuidList = [...skeletonGuidBySourceIndex.values()];
+        for (const guid of skeletonGuidList) {
+          const skProv = skeletonGuidProvenance.get(guid);
+          refs.push(
+            skProv !== undefined
+              ? {
+                  guid,
+                  sourceField: { componentName: 'Skin', fieldName: 'skeleton' },
+                  sceneEntityId: skProv.sceneEntityId,
+                }
+              : { guid },
+          );
+          cursor++;
+        }
+      }
+      {
+        const skinGuidList = [...skinGuidBySourceIndex.values()];
+        for (const guid of skinGuidList) {
+          refs.push({ guid });
+          cursor++;
+        }
+      }
+      // Inject skinGuids into the scene payload as the reverse-decode hint; the
+      // SkinAsset GUIDs are already in the scene envelope's refs[] above, which
+      // is the runtime recursion source for the browser-async-pack-fetch path.
       // Stored as inline GUID strings (in-memory dawn smoke path); the on-disk
       // .pack.json round-trip preserves them as strings -- parseScenePayload's
       // resolveSkinGuids accepts both string and refs[]-index shapes.
+      const skinGuidList = [...skinGuidBySourceIndex.values()];
       const sceneWithSkinGuids =
         skinGuidList.length > 0 ? { ...scene, skinGuids: skinGuidList } : scene;
       const sceneName = isMultiAsset ? doc.scenes[sub.sourceIndex]?.name : undefined;
@@ -464,7 +578,12 @@ async function importGltf(ctx: ImportContext): Promise<readonly ImportedAsset[]>
         skeletonGuid,
         jointPaths: rec.jointPaths,
       };
-      out.push({ guid: sub.guid, kind: 'skin', payload, refs: [skeletonGuid] });
+      out.push({
+        guid: sub.guid,
+        kind: 'skin',
+        payload,
+        refs: [{ guid: skeletonGuid, sourceField: { fieldName: 'skeleton' } }],
+      });
     } else if (sub.kind === 'animation-clip') {
       // tweak-20260611 M4: animation-clip sub-asset POD emit. GltfAnimationClipRecord
       // (gltf IR) and AnimationClip (runtime POD) are structurally compatible

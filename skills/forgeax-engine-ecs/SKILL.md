@@ -149,7 +149,7 @@ world.addChild(parent, child, ChildOf); // child gains ChildOf; parent.Children.
 
 - **系统 fn 首参必须是 `world`**：`defineSystem({ fn: (world, queryResults, commands) => {...} })`——旧签名 `(queryResults, commands)` 已废弃。typecheck 不足以兜底此陷阱（TS 参数前插后 `arity-narrowed assignment` 合法，见 memory `overload-arg-shape-dispatch-hides-p0`）。迁移：形参加 `world`，体内原闭包捕获的 `world` 改用参数 `world`。
 - **query 字段名拼写错 / 漏 column**：组件被链式 `addComponent` 加进 archetype 时曾有列错位 bug（已修），但若 `bundle.C.field` 为 `undefined`，先确认 query 的 `with` 真包含该组件、字段名与 schema 完全一致。
-- **spawn-data 字段名拼写错 → fail-fast**（bug-20260615）：`world.spawn` / `world.addComponent` / `SceneAsset.instantiate` 现在对 `data` 里出现的未声明字段返回 `err({ code: 'spawn-data-unknown-field', detail: { component, field, knownFields } })`；`commands.spawn` / `commands.addComponent` 走 throw（无 Result 通道，throw 时栈帧指向调用系统）。这条规则覆盖了一类历史"看起来像渲染 bug 实则 typo"——比如 `MeshRenderer { material: h }`（旧名单数）静默落入 `materials: []` 默认路径并产生隐形/灰白实体。
+- **spawn-data 字段名拼写错 → fail-fast**（bug-20260615）：`world.spawn` / `world.addComponent` / `commands.spawn` 对 `data` 里出现的未声明字段仍返回 `err({ code: 'spawn-data-unknown-field', detail: { component, field, knownFields } })`——typo 是编程错误，应 fatal。但 **scene instantiate 路径已改为诊断通道**：`world.instantiateScene` 对 unknown-field 跳过该字段 + 记录 `SceneInstantiateDiagnostic` 条目（不 abort 整场景），见上节。
 - **系统里直接结构改动会破迭代**：在 `fn` 里 spawn/despawn/add/remove 要走 `commands`，引擎帧末统一 flush；即时路径（`world.spawn`）留给系统外。
 - **Result 不 unwrap 就静默丢错**：`world.get` 等返回 `Result`；系统体内显式 `if (!r.ok) return r;` 或 `.unwrap()`（TS 无 `?` 运算符）。其余渲染/测试症状见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md)。
 - **`defineSystem` 同名静默覆盖**：第二次 `defineSystem({ name: 'X', ... })` 用同名会 `SYSTEM_REGISTRY.set` 覆盖旧 token，不抛错（对齐 `defineComponent` 行为）。`getRegisteredSystems()` 反映最新 token。
@@ -196,13 +196,13 @@ if (r.ok) {
 
 ## SceneInstance（feat-20260608 ECS-fication）
 
-`SceneAsset` 不再走单独的 container，而是 ECS 化：`world.instantiateScene(handle)` 返回**合成根 Entity**，根上挂两个组件——`SceneInstance{source, mapping, state}` + 单位 `Transform`（D-V-0：`propagateTransforms` 沿 ChildOf 走时根必须有 Transform，否则每帧 `RhiError(hierarchy-broken)`）。`SceneAsset.mounts[]` 让一个 SceneAsset 嵌入另一个；mount entity 也自动挂 Transform（R2/B-1）。
+`SceneAsset` 不再走单独的 container，而是 ECS 化：`world.instantiateScene(handle)` 返回 `{ root, diagnostics }` 信封——`root` 是合成根 Entity（挂 `SceneInstance{source, mapping, state}` + 单位 `Transform`），`diagnostics` 是未知字段的结构化诊断数组（`readonly SceneInstantiateDiagnostic[]`）。diagnostics 属性访问消费（`d.component` / `d.field` / `d.localId`），非 NODE_ENV-gated——生产环境同样可观测。`SceneAsset.mounts[]` 让一个 SceneAsset 嵌入另一个；mount entity 也自动挂 Transform（R2/B-1）。
 
 ### 8 个 World 方法（全在 `world.<TAB>` 自动补全）
 
 | 方法 | 作用 |
 |:--|:--|
-| `instantiateScene(handle, parent?)` | 物化 SceneAsset，返回合成根 Entity |
+| `instantiateScene(handle, parent?)` | 物化 SceneAsset，返回 `{ root: EntityHandle, diagnostics: readonly SceneInstantiateDiagnostic[] }`——`root` 为合成根 Entity，`diagnostics` 经属性访问消费未知字段信息 |
 | `despawnScene(root, opts?)` | `despawnDescendants(root) + world.despawn(root)`；返回销毁数 `Result<number>` |
 | `despawnDescendants(root, opts?)` | 沿 ChildOf 销毁子树，根保留；返回销毁数 `Result<number>` |
 | `setSceneOverride<S>(root, member, component, field, value)` | Layer-0 override（写入 + 记录 diff）；`member` 是活 Entity，`component`/`field` 走 schema 类型 |
@@ -224,6 +224,28 @@ if (r.ok) {
 
 > [!NOTE]
 > mount.overrides[].localId 在**父 SceneAsset 的命名空间**里（即 `memberFirst + offset`，不是子 SceneAsset 的局部 id）。R2/F-8 cement。
+
+### SceneInstantiateDiagnostic — 结构化诊断通道
+
+`instantiateScene` 成功值随 `root` 附带 `diagnostics: readonly SceneInstantiateDiagnostic[]`——未知字段不再 abort 整场景，而是跳过该字段 + 记录诊断条目。属性访问消费（`d.component` / `d.field` / `d.localId`），不做字符串解析，非 NODE_ENV-gated（生产环境同样可观测）。
+
+```ts
+import type { SceneInstantiateDiagnostic } from '@forgeax/engine-ecs';
+
+const r = world.instantiateScene(handle);
+if (r.ok) {
+  const { root, diagnostics } = r.value;
+  for (const d of diagnostics) {
+    // d.component = 'DirectionalLightShadow'
+    // d.field     = 'orthoHalfExtent'
+    // d.localId   = 21
+    console.warn(`Unknown field: ${d.component}.${d.field} on entity #${d.localId}`);
+  }
+  // All entities spawned normally; known fields written correctly.
+}
+```
+
+**分层**：`assets.instantiate()`（runtime）保留 `Result<EntityHandle>` 契约——内部 unwrap `.root`，不对 AI 用户暴露 diagnostics。需诊断面时直调 `world.instantiateScene`。
 
 ### 踩坑
 

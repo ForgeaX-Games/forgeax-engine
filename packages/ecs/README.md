@@ -8,6 +8,41 @@ This README is the **per-package演进契约 anchor** for `Result<T, E>`. AGENTS
 
 > Append-only registry of breaking-change rows for this package's public surface. Each row carries an ISO-date anchor (`YYYY-MM-DD`), the superseded shape, the new shape, a call-site upgrade diff, and the harness loop folder where the original decision lives. Per [AGENTS.md §Error model](../../AGENTS.md#error-model) the **Evolution contract** is: minor = add members only; major = rename / delete / reorder / narrow / deprecate. Rows below are all major edits.
 
+### 2026-06-22 — instantiateScene diagnostics envelope + unknown-field non-fatal (major)
+
+**Supersedes**: the legacy `world.instantiateScene` -> `Result<EntityHandle, ...>` surface with fatal-abort on unknown fields. Loop anchor: `.forgeax-harness/forgeax-loop/feat-20260622-s5-device-surface-self-heal-recover/`.
+
+**Shape diff**:
+
+| Aspect | Before | After |
+|:--|:--|:--|
+| `instantiateScene` success value | `EntityHandle` (branded number, synthetic root) | `{ root: EntityHandle; readonly diagnostics: readonly SceneInstantiateDiagnostic[] }` (envelope) |
+| Unknown-field behavior | `return err(SpawnDataUnknownFieldError)` — aborts entire scene | Skip the unknown field, record `SceneInstantiateDiagnostic` entry, continue (all entities spawn, known fields write correctly) |
+| New type | — | `SceneInstantiateDiagnostic = { readonly component: string; readonly field: string; readonly localId: number }` (barrel export from `@forgeax/engine-ecs`) |
+| Runtime `assets.instantiate()` | — | Keeps `Result<EntityHandle>` contract; internally unwraps `.root` |
+| NODE_ENV-gating | — | Not gated; diagnostics are production-observable (property-access, not string parsing) |
+
+**Call-site upgrade diff**:
+
+```diff
+ // before — EntityHandle directly, unknown field aborts entire scene
+-const r = world.instantiateScene(handle);
+-if (r.ok) {
+-  const root = r.value; // EntityHandle
+-}
+
+ // after — envelope with diagnostics
++const r = world.instantiateScene(handle);
++if (r.ok) {
++  const { root, diagnostics } = r.value;
++  for (const d of diagnostics) {
++    // d.component, d.field, d.localId — property access
++  }
++}
+```
+
+**Why this row exists**: AI users porting code that assumes `instantiateScene` returns an `EntityHandle` directly will hit TS errors. The envelope adds `diagnostics` to the success path; old callers can `r.value.root` (mechanical). The runtime `assets.instantiate()` keeps the simpler `Result<EntityHandle>` contract for users who don't need diagnostics.
+
 ### 2026-05-15 — Buffer / array schema vocab collapse (major)
 
 **Supersedes**: feat-20260514-ecs-children-instances-managed-buffer-array (the legacy `'buffer:<N>'` colon-literal keyword + `FixedArrayView<T>` / `VarArrayView<T>` value-shape exports + `defineComponent` `arrayStride` option). Loop anchor: `.forgeax-harness/forgeax-loop/feat-20260515-buffer-array-vocab-collapse/`.
@@ -634,7 +669,7 @@ Both are named `fields` but occupy **separate scopes** (parameter vs. property).
 
 ### Synthetic root invariant (D-V-0 / R2/F-7)
 
-`world.instantiateScene(handle)` returns one synthetic root `Entity` that
+`world.instantiateScene(handle)` returns `{ root, diagnostics }` — `root` is a synthetic root `Entity` that
 carries `SceneInstance{source, mapping, state}` and identity
 `Transform`. The Transform attach is load-bearing — `propagateTransforms`
 walks the `ChildOf` chain `meshRenderer -> ... -> syntheticRoot` through
@@ -647,11 +682,13 @@ cleanly without per-frame errors. AI users normally never observe these
 intermediates — they read the synthetic root via `world.get(root,
 SceneInstance)` and address members through `mapping[localId]`.
 
+`diagnostics: readonly SceneInstantiateDiagnostic[]` is a structured array of unknown-field records. When a `.pack.json` carries a field name that no longer matches the registered component schema, that field is skipped (entity still spawns with known fields intact) and logged as a diagnostic entry `{ component, field, localId }`. This is production-observable (property-access, not NODE_ENV-gated) and covers the "stale field in old pack.json does not blank the entire 21-entity scene" studio scenario.
+
 ### 8 World methods
 
 | Method | Signature | Effect |
 |:--|:--|:--|
-| `instantiateScene` | `(Handle<SceneAsset>, parent?: EntityHandle) => Result<EntityHandle, EcsError \| PackError>` | Materialise the SceneAsset; spawns 1 synthetic root + every entity / mount entity / nested member. Returns the synthetic root Entity. |
+| `instantiateScene` | `(Handle<SceneAsset>, parent?: EntityHandle) => Result<{ root: EntityHandle; readonly diagnostics: readonly SceneInstantiateDiagnostic[] }, EcsError \| PackError>` | Materialise the SceneAsset; spawns 1 synthetic root + every entity / mount entity / nested member. Success returns `{ root, diagnostics }` — `root` is the synthetic root Entity, `diagnostics` is structured unknown-field records (property-access, production-observable). Unknown fields are skipped (do not abort the scene). |
 | `despawnScene` | `(root: EntityHandle, opts?: { keepDetached?: boolean }) => Result<number, EcsError>` | `despawnDescendants(root) + world.despawn(root)`. Returns the count of destroyed entities. |
 | `despawnDescendants` | `(root: EntityHandle, opts?: { keepDetached?: boolean }) => Result<number, EcsError>` | Walk `ChildOf` from `root` and despawn every descendant; root stays alive. Returns the count of destroyed entities. |
 | `setSceneOverride` | `<S>(root: EntityHandle, member: EntityHandle, component: Component<S>, field: keyof ShapeOf<S>, value: unknown) => Result<void, EcsError>` | Layer-0 override — write through to the live entity column AND record the diff in `state.overrides`. `member` is the live Entity; `component` and `field` are typed via the component's schema. |

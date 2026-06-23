@@ -62,7 +62,7 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
     const directRes = worldA.instantiateScene(handleA);
     expect(directRes.ok).toBe(true);
     if (!directRes.ok) return;
-    const directRoot = directRes.value;
+    const directRoot = directRes.value.root;
     const directInst = worldA.get(directRoot, SceneInstance);
     expect(directInst.ok).toBe(true);
     if (!directInst.ok) return;

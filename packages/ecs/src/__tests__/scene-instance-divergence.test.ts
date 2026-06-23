@@ -37,7 +37,7 @@ describe('SceneInstance write-path divergence (AC-15)', () => {
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const root = r.value;
+    const root = r.value.root;
     const state = world.getSceneInstanceState(root).unwrap();
 
     const entity = Array.from(state.entityToLocalId.keys())[0];
@@ -65,7 +65,7 @@ describe('SceneInstance write-path divergence (AC-15)', () => {
     const handle = registerSceneAsset(world, buildScene(nodes));
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const root = r.value;
+    const root = r.value.root;
     const state = world.getSceneInstanceState(root).unwrap();
     const entity = Array.from(state.entityToLocalId.keys())[0];
     if (entity === undefined) throw new Error('entity missing');

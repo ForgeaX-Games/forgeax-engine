@@ -1,12 +1,24 @@
 // @forgeax/engine-runtime — scene-handle-fields: shared reflection helper for
 // SceneAsset handle-field extraction (plan-strategy D-4 / requirements B-5).
 //
-// Both `collectRefs(scene)` and `_resolveSceneGuids` consume this helper so the
-// "identify handle<...> / array<handle<...>> schema fields + parse GUID string"
-// logic has exactly one authoritative location (Derive, Don't Duplicate).
+// `_resolveSceneGuids` (instantiate) and `buildSceneChildContext` (breadcrumb)
+// consume this helper so the "identify shared<...> / array<shared<...>> schema
+// fields + read GUID string" logic has exactly one authoritative location
+// (Derive, Don't Duplicate).
 //
 // This helper returns raw GUID strings WITHOUT mutating the registry; resolution
 // to Handle numbers is the caller's responsibility.
+//
+// Both consumers prefer the structured `envelope.refs` edges (D-3) when an
+// envelope is catalogued for the scene, and fall back to this entity-component
+// walk only when no envelope (or no per-entity edge detail) is available:
+//  - `_resolveSceneGuids`: envelope-less scenes (e.g. unit tests that build a
+//    SceneAsset directly without cataloguing it; no `sceneGuidKey`).
+//  - `buildSceneChildContext`: prod GUID-only refs[] edges whose `sourceField`
+//    was stripped at the serialization boundary (w7 D-10), plus direct
+//    `catalog()` scene registration with no refs. The walk recovers the
+//    (entityLocalId, componentName, fieldName, arrayIndex) triple the bare
+//    edge no longer carries.
 
 import { resolveComponent } from '@forgeax/engine-ecs';
 
@@ -54,7 +66,8 @@ interface SceneEntityLike {
  * skipped (they are not GUID refs).
  *
  * @internal Shared by {@link AssetRegistry._resolveSceneGuids} and
- * {@link collectRefs}.
+ * `buildSceneChildContext` as the entity-walk fallback used when the structured
+ * `envelope.refs` edges are unavailable or carry no per-entity detail.
  */
 export function extractSceneEntityHandleGuids(
   entities: ReadonlyArray<SceneEntityLike>,

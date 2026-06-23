@@ -46,7 +46,7 @@ const right = mat4.getRight(vec3.create(), worldMat);     // +X basis
 | `Renderer.onLost(cb)` | `(RendererLostListener) => () => void` | device-lost notify (R-2, engine does not auto-recover) |
 | `Renderer.onError(cb)` | `(RhiErrorListener) => () => void` | RHI construction / operation error fan-out (F2 + K-9 silent skip fix reuse): backend RhiError + runtime catch (`'webgpu-runtime-error'`) reach AI users via listener; access `.code` / `.expected` / `.hint` / `.detail.compilerMessages`. See error-handling 6-member table + listener pattern. |
 | `Renderer.health()` | `() => HealthSnapshot` | Pull current health snapshot — `reason` (discriminant), `detail?` (per-reason narrowed), `recoverable` (derived boolean). Data SSOT from `HealthListenerRegistry.getLastSnapshot()`. |
-| `Renderer.recover()` | `() => Result<void, RecoverError>` | Attempt renderer recovery. S3 placeholder: returns `Result.err('recover-not-needed')` when healthy, `Result.err('recover-not-implemented')` when degraded. Self-heal lands in S5. |
+| `Renderer.recover()` | `() => Promise<Result<void, RecoverError>>` | Imperative single-shot device rebuild. In `'device-lost'` state: destroys all GPU resources, clears pendingDestroy, rebuilds device, re-wires listeners, rebuilds shader/pipeline, reconfigures canvas context. Returns `Result.ok` + fires `'alive'` on success; returns `Result.err` with discriminable `.code` on failure (adapter/device two-path). Async because `requestAdapter`/`requestDevice` is async. Call in `'alive'` state returns `'recover-not-needed'` (safe no-op). |
 | `Renderer.onHealthChange(cb)` | `(HealthChangeListener) => () => void` | Push-style health subscription; returns unsubscribe. Late-attach replay fires cb immediately if a snapshot has already been emitted (AC-07). |
 | `EngineEnvironmentError` | `class extends Error` | No usable rendering backend; `.detail.webgpuError` carries the structured error |
 
@@ -63,7 +63,7 @@ createRenderer (bug-20260526-channel2-adapter-fail-no-channel3-fallback)
 
 ## Renderer health / recover
 
-Renderer 提供三个健康面动词，统一回答"渲染器现在是否健康、为什么不健康、能否恢复"。S3 阶段为骨架 -- `recover()` 占位返回错误，自愈逻辑落地 S5。详见 [`skills/forgeax-engine-app/SKILL.md`](../../skills/forgeax-engine-app/SKILL.md) 用法教学（3 动词 + 消费片段）。
+Renderer 提供三个健康面动词，统一回答"渲染器现在是否健康、为什么不健康、能否恢复"。`recover()` 是单次幂等设备重建——宿主决定重试节奏（引擎内无退避/定时器）。详见 [`skills/forgeax-engine-app/SKILL.md`](../../skills/forgeax-engine-app/SKILL.md) 用法教学（3 动词 + 消费片段）。
 
 ### HealthReason (closed union, 3 members)
 
@@ -98,22 +98,33 @@ type HealthSnapshot =
 
 ### recover() semantics
 
-`recover()` returns `Result<void, RecoverError>`. S3 placeholder behavior:
+`recover()` returns `Promise<Result<void, RecoverError>>`. Post-S5 behavior:
 
 | state | return value |
 |:--|:--|
 | healthy (`'alive'`) | `Result.err(RecoverError 'recover-not-needed')` |
-| degraded | `Result.err(RecoverError 'recover-not-implemented')` |
+| `'device-lost'` | On success: `Result.ok` + `fire('alive')`. On failure: `Result.err` with discriminable `.code` — `'recover-adapter-unavailable'` (requestAdapter returned null) or `'recover-device-unavailable'` (requestDevice failed). Health stays `'device-lost'` on failure. |
 
-Never returns `Result.ok` in S3. After `recover()`, `health().reason` is unchanged (AC-04b -- no fake recovery).
+Single-shot: no internal retry loop, no backoff, no timers, no counters, no `'recovering'` state added to `HealthReason`. Host owns retry rhythm.
 
-### RecoverError (closed union, 2 members)
+### RecoverError (closed union, 4 members)
 
 ```ts
-type RecoverErrorCode = 'recover-not-needed' | 'recover-not-implemented';
+type RecoverErrorCode =
+  | 'recover-not-needed'
+  | 'recover-not-implemented'
+  | 'recover-adapter-unavailable'
+  | 'recover-device-unavailable';
 ```
 
-Consume via `switch (err.code)` without default; TS guards exhaustiveness. Error objects carry `.code` / `.expected` / `.hint`.
+Consume via `switch (err.code)` without default; TS guards exhaustiveness. Error objects carry `.code` / `.expected` / `.hint` only — **no `.detail` field** (each code has fixed semantics with no variable payload; unlike `RhiError` / `AssetError`, do not reach for `err.detail` on a `RecoverError`).
+
+| code | trigger | .hint |
+|:--|:--|:--|
+| `'recover-not-needed'` | Called when `health().reason === 'alive'` | "call health() first to confirm degraded state before calling recover()" |
+| `'recover-not-implemented'` | **reserved** — S3 skeleton returned this; never produced by the implemented path, kept to avoid breaking changes | "self-heal recovery is now implemented; this code should not appear in production" |
+| `'recover-adapter-unavailable'` | `requestAdapter` returned null during rebuild | "retry recover() after a host-chosen delay; adapter availability is transient" |
+| `'recover-device-unavailable'` | `requestDevice` failed or threw during rebuild | "retry recover() after a host-chosen delay; device creation is driver-dependent" |
 
 ### onHealthChange replay
 

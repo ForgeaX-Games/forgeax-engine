@@ -128,7 +128,7 @@ async function importFont(ctx: ImportContext): Promise<readonly ImportedAsset[]>
       guid: fontSub.guid,
       kind: 'font',
       payload: fontPayload,
-      refs: atlasSub !== undefined ? [atlasSub.guid] : [],
+      refs: atlasSub !== undefined ? [{ guid: atlasSub.guid }] : [],
     });
   }
   return out;

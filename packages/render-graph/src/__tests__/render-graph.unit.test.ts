@@ -1801,3 +1801,349 @@ import { RenderGraph } from '../graph.js';
     });
   });
 }
+
+{
+  // --- w15: B-2 recover() clears pendingDestroy (feat-20260622-s5 M3) ---
+  //
+  // The recover() rebuild path (createRenderer M3) tears down the old device
+  // and requests a fresh one. The render-graph's pendingDestroy queue still
+  // holds PooledTexture handles minted against the OLD device; calling
+  // destroyTexture on them against the NEW device is meaningless (and may
+  // throw). recover() therefore drops the queue via clearPendingDestroy()
+  // instead of draining it (B-2 / B-AC-02, plan-strategy D-5). This mirrors
+  // the existing null-device fast path (`pendingDestroy.length = 0`) but is a
+  // public method recover() can call directly.
+
+  function clearPendingCaps() {
+    return {
+      backendKind: 'webgpu' as const,
+      compute: true,
+      storageBuffer: true,
+      storageTexture: false,
+      timestampQuery: false,
+      indirectDrawing: false,
+      textureCompression: false,
+      multiDrawIndirect: false,
+      pushConstants: false,
+      textureBindingArray: false,
+      samplerAliasing: true,
+      firstInstanceIndirect: false,
+      rgba16floatRenderable: false,
+      rg11b10ufloatRenderable: false,
+      float32Filterable: false,
+      maxColorAttachments: 8,
+    };
+  }
+
+  // --- w20: B-1 destroyTexture error tolerance (feat-20260622-s5 M4) ---
+  //
+  // The render-graph's drain() and reclaimRetiredTransients() docstrings
+  // claim per-handle destroy errors are tolerated (swallow-and-continue),
+  // but the current implementation uses bare for-loops with no try/catch.
+  // B-1 fixes the gap (plan-strategy D-4 / PD3): any single
+  // device.destroyTexture failure must not interrupt the destroy chain
+  // for subsequent handles. Test coverage (w20, B-AC-01):
+  //   1. reclaimRetiredTransients snapshot loop — error on item 0,
+  //      items 1..N-1 still destroyed, queue empty after.
+  //   2. drain() loops (transient / pendingDestroy / persistent) — same
+  //      per-handle tolerance policy via a shared mock device.
+
+  function b1ToleranceCaps() {
+    return {
+      backendKind: 'webgpu' as const,
+      compute: true,
+      storageBuffer: true,
+      storageTexture: false,
+      timestampQuery: false,
+      indirectDrawing: false,
+      textureCompression: false,
+      multiDrawIndirect: false,
+      pushConstants: false,
+      textureBindingArray: false,
+      samplerAliasing: true,
+      firstInstanceIndirect: false,
+      rgba16floatRenderable: false,
+      rg11b10ufloatRenderable: false,
+      float32Filterable: false,
+      maxColorAttachments: 8,
+    };
+  }
+
+  interface B1Probe {
+    created: number;
+    destroyed: number;
+    destroyedHandles: object[];
+    /** If non-negative, destroyTexture throws on this 0-based invocation. */
+    throwOnCall: number;
+    destroyCallCount: number;
+  }
+
+  function makeB1Device(probe: B1Probe): {
+    // biome-ignore lint/suspicious/noExplicitAny: opaque mock device surface
+    [k: string]: any;
+  } {
+    return {
+      createTexture: (_desc: unknown) => {
+        probe.created += 1;
+        const handle = { __mock: `tex-${probe.created}` };
+        return { ok: true as const, value: handle };
+      },
+      createTextureView: (_tex: unknown, _desc: unknown) => {
+        return { ok: true as const, value: { __mock: 'view' } };
+      },
+      destroyTexture: (tex: object) => {
+        probe.destroyCallCount += 1;
+        if (probe.destroyCallCount - 1 === probe.throwOnCall) {
+          throw new Error('mock destroyTexture error (simulated)');
+        }
+        probe.destroyed += 1;
+        probe.destroyedHandles.push(tex);
+        return { ok: true as const, value: undefined };
+      },
+      queue: {
+        onSubmittedWorkDone: () => Promise.resolve(undefined),
+      },
+    };
+  }
+
+  describe('B-1 destroyTexture error tolerance (w20)', () => {
+    it('reclaimRetiredTransients: item-0 error does not stop item 1..N from being destroyed', async () => {
+      const probe: B1Probe = {
+        created: 0,
+        destroyed: 0,
+        destroyedHandles: [],
+        throwOnCall: 0,
+        destroyCallCount: 0,
+      };
+      const mockDevice = makeB1Device(probe);
+      const g = new RenderGraph();
+      g.addColorTarget('hdrColor', {
+        format: 'rgba16float',
+        size: { w: 64, h: 64 },
+        sample: 1,
+        usage: 0,
+      });
+      g.addPass('main', { reads: [], writes: ['hdrColor'] });
+
+      const r = g.compile({
+        backendKind: 'webgpu',
+        caps: b1ToleranceCaps(),
+        // biome-ignore lint/suspicious/noExplicitAny: opaque mock device surface
+        device: mockDevice as any,
+      });
+      expect(r.ok).toBe(true);
+
+      // Populate pendingDestroy with >= 3 entries by replacing the
+      // transient pool entry three times (setTransientEntry pushes the
+      // old one to pendingDestroy each time).
+      // biome-ignore lint/suspicious/noExplicitAny: internal pool + pending access in unit test
+      const pool = (g as any).transientPool as Map<string, { texture: object; view: object }>;
+      for (let i = 0; i < 3; i++) {
+        const [key] = [...pool.entries()][0] as [string, { texture: object }];
+        // biome-ignore lint/suspicious/noExplicitAny: internal method access
+        (g as any).setTransientEntry(key, {
+          texture: { __mock: `entry-${i}` },
+          view: { __mock: 'view' },
+        });
+      }
+
+      // biome-ignore lint/suspicious/noExplicitAny: internal field access
+      const pending = (g as any).pendingDestroy as { texture: object; view: object }[];
+      expect(pending.length).toBe(3);
+
+      // reclaimRetiredTransients takes a snapshot and calls
+      // device.destroyTexture on each. Item 0 throws; items 1,2 must
+      // still be destroyed (swallow-and-continue). The queue must be
+      // empty afterwards.
+      await expect(g.reclaimRetiredTransients()).resolves.toBeUndefined();
+
+      // After reclaim: queue drained (items consumed from the snapshot;
+      // snapshot was spliced before the loop, so pendingDestroy is empty
+      // because the loop consumed the snapshot array in-place).
+      expect(pending.length).toBe(0);
+
+      // Item 0 threw, but items 1,2 succeeded -> at least 2 destroyed.
+      expect(probe.destroyed).toBe(2);
+      // destroyTexture was called 3 times (item 0 threw, items 1,2 succeeded).
+      expect(probe.destroyCallCount).toBe(3);
+    });
+
+    it('drain: transient-pool destroy error on item 0 does not stop subsequent items from being destroyed', () => {
+      const probe: B1Probe = {
+        created: 0,
+        destroyed: 0,
+        destroyedHandles: [],
+        throwOnCall: 0,
+        destroyCallCount: 0,
+      };
+      const mockDevice = makeB1Device(probe);
+      const g = new RenderGraph();
+      g.addColorTarget('a', {
+        format: 'rgba16float',
+        size: { w: 32, h: 32 },
+        sample: 1,
+        usage: 0,
+      });
+      g.addColorTarget('b', {
+        format: 'rgba8unorm',
+        size: { w: 32, h: 32 },
+        sample: 1,
+        usage: 0,
+      });
+      g.addPass('main', { reads: [], writes: ['a', 'b'] });
+
+      const r = g.compile({
+        backendKind: 'webgpu',
+        caps: b1ToleranceCaps(),
+        // biome-ignore lint/suspicious/noExplicitAny: opaque mock device surface
+        device: mockDevice as any,
+      });
+      expect(r.ok).toBe(true);
+
+      // Both color targets created transient pool entries.
+      // drain() walks transientPool.values(), then pendingDestroy, then
+      // persistentTextures. With throwOnCall=0, the very first
+      // destroyTexture (for the first transient pool entry) throws.
+      // Subsequent entries must still be destroyed.
+      //
+      // We can't use compile+resize to enqueue pendingDestroy because
+      // the recompile with the same device would use the same pool.
+      // Instead we exercise the transient pool destroy path directly
+      // via drain(), which walks all 3 loops. The transient pool has 2
+      // entries (a,b). Item 0 throws, item 1 succeeds.
+      const destroyedBefore = probe.destroyed;
+      g.drain();
+
+      // Item 1 was still destroyed after item 0 threw.
+      // Transient pool has 2 entries -> at least 1 destroyed (item 0
+      // threw, item 1 succeeded). pendingDestroy and persistent were
+      // empty/cleared so no further calls.
+      expect(probe.destroyed - destroyedBefore).toBe(1);
+      expect(probe.destroyCallCount - destroyedBefore).toBe(2);
+    });
+
+    it('drain: pendingDestroy teardown error on item 0 does not stop subsequent items', () => {
+      const probe: B1Probe = {
+        created: 0,
+        destroyed: 0,
+        destroyedHandles: [],
+        throwOnCall: 2, // throw on the 3rd destroy call (0-based)
+        // transient pool has 2 entries -> calls 0,1
+        // pendingDestroy has 3 entries -> calls 2,3,4
+        // throwOnCall=2 -> error on pendingDestroy item 0
+        destroyCallCount: 0,
+      };
+      const mockDevice = makeB1Device(probe);
+      const g = new RenderGraph();
+      g.addColorTarget('a', {
+        format: 'rgba16float',
+        size: { w: 32, h: 32 },
+        sample: 1,
+        usage: 0,
+      });
+      g.addPass('main', { reads: [], writes: ['a'] });
+
+      const r = g.compile({
+        backendKind: 'webgpu',
+        caps: b1ToleranceCaps(),
+        // biome-ignore lint/suspicious/noExplicitAny: opaque mock device surface
+        device: mockDevice as any,
+      });
+      expect(r.ok).toBe(true);
+
+      // Push 3 entries into pendingDestroy.
+      for (let i = 0; i < 3; i++) {
+        // biome-ignore lint/suspicious/noExplicitAny: internal field access
+        (g as any).pendingDestroy.push({ texture: { __mock: `pd-${i}` }, view: { __mock: 'v' } });
+      }
+
+      const destroyedBefore = probe.destroyed;
+      g.drain();
+
+      // transient pool (1 entry) -> calls 0 (ok)
+      // pendingDestroy (3 entries) -> call 1 throws (item 0 of pendingDestroy),
+      //   calls 2,3 succeed (items 1,2 of pendingDestroy)
+      // persistent -> empty, nothing
+      // Total: call 0 ok + call 1 throw + call 2 ok + call 3 ok = 3 successes
+      expect(probe.destroyed - destroyedBefore).toBe(3);
+      // 4 total calls attempted
+      expect(probe.destroyCallCount - destroyedBefore).toBe(4);
+      // pendingDestroy cleared
+      // biome-ignore lint/suspicious/noExplicitAny: internal field access
+      expect(((g as any).pendingDestroy as unknown[]).length).toBe(0);
+    });
+  });
+
+  describe('RenderGraph.clearPendingDestroy (B-2 / B-AC-02)', () => {
+    it('clears the pendingDestroy queue without calling destroyTexture on stale handles', () => {
+      const destroyedHandles: object[] = [];
+      const mockDevice = {
+        createTexture: (_desc: unknown) => ({
+          ok: true as const,
+          value: { __mock: `tex-${Date.now()}-${Math.random()}` },
+        }),
+        createTextureView: (_tex: unknown, _desc: unknown) => ({
+          ok: true as const,
+          value: { __mock: 'view' },
+        }),
+        destroyTexture: (tex: object) => {
+          destroyedHandles.push(tex);
+          return { ok: true as const, value: undefined };
+        },
+        queue: {
+          onSubmittedWorkDone: () => Promise.resolve(undefined),
+        },
+      };
+
+      const g = new RenderGraph();
+      g.addColorTarget('hdrColor', {
+        format: 'rgba16float',
+        size: { w: 64, h: 64 },
+        sample: 1,
+        usage: 0,
+      });
+      g.addPass('main', { reads: [], writes: ['hdrColor'] });
+
+      const r = g.compile({
+        backendKind: 'webgpu',
+        caps: clearPendingCaps(),
+        // biome-ignore lint/suspicious/noExplicitAny: opaque mock device surface
+        device: mockDevice as any,
+      });
+      expect(r.ok).toBe(true);
+
+      // Populate pendingDestroy with a stale entry (simulating a resize-time
+      // transient retirement that has not yet been reclaimed).
+      // biome-ignore lint/suspicious/noExplicitAny: internal pool access in unit test
+      const pool = (g as any).transientPool as Map<string, { texture: object; view: object }>;
+      const [key, oldEntry] = [...pool.entries()][0] as [string, { texture: object; view: object }];
+      // biome-ignore lint/suspicious/noExplicitAny: internal method access in unit test
+      (g as any).setTransientEntry(key, {
+        texture: { __mock: 'replacement-tex' },
+        view: { __mock: 'replacement-view' },
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: internal field access in unit test
+      const pending = (g as any).pendingDestroy as { texture: object; view: object }[];
+      expect(pending.length).toBeGreaterThanOrEqual(1);
+      expect(pending.some((p) => p.texture === oldEntry.texture)).toBe(true);
+
+      const destroyedBefore = destroyedHandles.length;
+
+      // B-2: clearPendingDestroy empties the queue WITHOUT calling
+      // destroyTexture (stale handles belong to the lost device).
+      (g as { clearPendingDestroy: () => void }).clearPendingDestroy();
+
+      expect(pending.length).toBe(0);
+      // No destroyTexture call on the stale device handles.
+      expect(destroyedHandles.length).toBe(destroyedBefore);
+    });
+
+    it('clearPendingDestroy on an empty queue is a safe no-op', () => {
+      const g = new RenderGraph();
+      expect(() => (g as { clearPendingDestroy: () => void }).clearPendingDestroy()).not.toThrow();
+      // biome-ignore lint/suspicious/noExplicitAny: internal field access in unit test
+      const pending = (g as any).pendingDestroy as unknown[];
+      expect(pending.length).toBe(0);
+    });
+  });
+}

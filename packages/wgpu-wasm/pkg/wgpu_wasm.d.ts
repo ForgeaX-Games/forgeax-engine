@@ -487,7 +487,7 @@ export interface InitOutput {
     readonly rhiwgpuinstance_requestAdapter: (a: number) => any;
     readonly rhiwgpuinstance_requestAdapterWithCanvas: (a: number, b: any) => any;
     readonly rhiwgpupipelinelayout_forgeaxToken: (a: number) => number;
-    readonly rhiwgpuqueue_submit: (a: number, b: any) => void;
+    readonly rhiwgpuqueue_submit: (a: number, b: any) => [number, number];
     readonly rhiwgpuqueue_writeBuffer: (a: number, b: number, c: bigint, d: number, e: number, f: number, g: bigint, h: number, i: bigint) => void;
     readonly rhiwgpuqueue_writeTexture: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: bigint, k: number, l: number, m: number, n: number, o: number) => void;
     readonly rhiwgpurenderpass_draw: (a: number, b: number, c: number, d: number, e: number) => void;

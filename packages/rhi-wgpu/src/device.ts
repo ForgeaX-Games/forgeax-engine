@@ -96,6 +96,10 @@ export interface RawDeviceLike {
   createCommandEncoder?(desc?: unknown): unknown;
   createTextureView?(tex: unknown, desc: unknown): unknown;
   createQuerySet?(desc: unknown): unknown;
+  // F4 (feat-20260622-s5): wgpu-wasm device exposed register_lost_callback (rhi.rs:935).
+  // When raw.lost is undefined (wasm path without native device.lost Promise),
+  // the constructor wires this to resolve the forged Promise.
+  registerLostCallback?(cb: (reason: string, message: string) => void): void;
 }
 
 // Caps probe — split by spec-feature gate vs mandatory-but-noncompliant
@@ -251,13 +255,42 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       raw.queue === undefined || raw.queue === null
         ? makeRhiQueue({})
         : makeRhiQueue(raw.queue as RawQueueLike);
+    let lostResolve:
+      | ((value: { reason: 'destroyed' | 'unknown'; message: string }) => void)
+      | undefined;
     this.lost =
       raw.lost === undefined
-        ? new Promise(() => {}) // never resolves; spec says lost is permanent
+        ? new Promise<{
+            readonly reason: 'destroyed' | 'unknown';
+            readonly message: string;
+          }>((resolve) => {
+            lostResolve = resolve;
+          })
         : (raw.lost as unknown as Promise<{
             readonly reason: 'destroyed' | 'unknown';
             readonly message: string;
           }>);
+
+    // F4 (feat-20260622-s5): when on the wasm path (raw.lost === undefined),
+    // wire the real Promise resolver to wgpu-wasm's register_lost_callback
+    // (rhi.rs:935). The Rust side already calls closure.forget() so the
+    // callback survives; the JS resolver reference is held on this instance
+    // via Object.defineProperty (non-enumerable, like _internal_raw) to
+    // prevent GC (D-7; plan-decisions PD-L-1). On the browser path
+    // (raw.lost is the native GPUDevice.lost Promise), no wiring is needed.
+    if (raw.lost === undefined && typeof raw.registerLostCallback === 'function') {
+      if (lostResolve !== undefined) {
+        Object.defineProperty(this, '_lostResolver', {
+          value: lostResolve,
+          writable: false,
+          enumerable: false,
+          configurable: false,
+        });
+        raw.registerLostCallback((reason: string, message: string) => {
+          lostResolve?.({ reason: reason as 'destroyed' | 'unknown', message });
+        });
+      }
+    }
   }
 
   /**

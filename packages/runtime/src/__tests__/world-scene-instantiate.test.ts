@@ -43,7 +43,7 @@ describe('world.instantiateScene basic (w17)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const inst = world.get(r.value, SceneInstance);
+    const inst = world.get(r.value.root, SceneInstance);
     expect(inst.ok).toBe(true);
   });
 
@@ -61,7 +61,7 @@ describe('world.instantiateScene basic (w17)', () => {
     const r = world.instantiateScene(handle);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const inst = world.get(r.value, SceneInstance);
+    const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
     expect(inst.value.mapping.length).toBe(3);
   });
@@ -80,7 +80,7 @@ describe('world.instantiateScene basic (w17)', () => {
     const handle = registerSceneAsset(world, asset);
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const inst = world.get(r.value, SceneInstance);
+    const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get SceneInstance failed');
     const memberRaw = inst.value.mapping[0];
     expect(memberRaw).toBeDefined();
@@ -106,7 +106,7 @@ describe('world.instantiateScene basic (w17)', () => {
     const handle = registerSceneAsset(world, asset);
     const r = world.instantiateScene(handle, parent);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const rootChildOf = world.get(r.value, ChildOf);
+    const rootChildOf = world.get(r.value.root, ChildOf);
     expect(rootChildOf.ok).toBe(true);
     if (!rootChildOf.ok) return;
     expect(rootChildOf.value.parent as unknown as number).toBe(parent as unknown as number);
@@ -123,7 +123,7 @@ describe('world.getSceneAssetForInstance (w22)', () => {
     const handle = registerSceneAsset(world, asset);
     const r = world.instantiateScene(handle);
     if (!r.ok) throw new Error('instantiateScene failed');
-    const got = world.getSceneAssetForInstance(r.value);
+    const got = world.getSceneAssetForInstance(r.value.root);
     expect(got.ok).toBe(true);
     if (!got.ok) return;
     expect(got.value as unknown as number).toBe(handle as unknown as number);
