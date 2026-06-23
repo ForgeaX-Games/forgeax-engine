@@ -21,7 +21,6 @@ import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { Camera } from '../components/camera';
 import { DirectionalLight } from '../components/directional-light';
-import { DirectionalLightShadow } from '../components/directional-light-shadow';
 import { Transform } from '../components/transform';
 import { createRenderer } from '../createRenderer';
 
@@ -111,7 +110,7 @@ function buildScene(initialCascadeCount: number, initialMapSize: number): SceneE
         },
       },
       {
-        component: DirectionalLightShadow,
+        component: DirectionalLight,
         data: {
           mapSize: initialMapSize,
           nearPlane: 0.1,
@@ -143,7 +142,7 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
 
     expect(renderer.draw(world).ok).toBe(true);
 
-    world.set(shadowEntity, DirectionalLightShadow, {
+    world.set(shadowEntity, DirectionalLight, {
       mapSize: 2048,
       nearPlane: 0.1,
       farPlane: 50,
@@ -151,7 +150,7 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
     });
     expect(renderer.draw(world).ok).toBe(true);
 
-    world.set(shadowEntity, DirectionalLightShadow, {
+    world.set(shadowEntity, DirectionalLight, {
       mapSize: 2048,
       nearPlane: 0.1,
       farPlane: 50,
@@ -174,7 +173,7 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
 
     expect(renderer.draw(world).ok).toBe(true);
 
-    world.set(shadowEntity, DirectionalLightShadow, {
+    world.set(shadowEntity, DirectionalLight, {
       mapSize: 1024,
       nearPlane: 0.1,
       farPlane: 50,
@@ -182,7 +181,7 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
     });
     expect(renderer.draw(world).ok).toBe(true);
 
-    world.set(shadowEntity, DirectionalLightShadow, {
+    world.set(shadowEntity, DirectionalLight, {
       mapSize: 2048,
       nearPlane: 0.1,
       farPlane: 50,

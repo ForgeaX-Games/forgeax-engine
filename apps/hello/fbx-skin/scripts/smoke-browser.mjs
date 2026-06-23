@@ -40,7 +40,18 @@ const url = `http://localhost:${server.config.server.port}`;
 
 try {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
-  await delay(5000);
+  // Cold-start budget: a fresh vite server may re-optimize deps + compile the
+  // wgpu wasm before the demo's async instantiate writes the HUD. 5s was flaky
+  // on cold caches; poll the HUD up to 20s instead of a single fixed wait.
+  let hudReady = false;
+  for (let waited = 0; waited < 20000; waited += 1000) {
+    await delay(1000);
+    hudReady = await page.evaluate(() => {
+      const el = document.getElementById('fbx-skin-hud');
+      return el !== null && /\d+x humanoid instances/.test(el.textContent ?? '');
+    });
+    if (hudReady) break;
+  }
 
   const canvasExists = await page.evaluate(() => {
     const c = document.querySelector('canvas');

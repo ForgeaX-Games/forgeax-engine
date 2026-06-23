@@ -222,7 +222,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     MeshRenderer: unknown;
     Camera: unknown;
     DirectionalLight: unknown;
-    DirectionalLightShadow: unknown;
     Skylight: unknown;
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
@@ -961,7 +960,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     MeshRenderer: unknown;
     Camera: unknown;
     DirectionalLight: unknown;
-    DirectionalLightShadow: unknown;
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
@@ -1339,7 +1337,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     MeshRenderer: unknown;
     Camera: unknown;
     DirectionalLight: unknown;
-    DirectionalLightShadow: unknown;
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {

@@ -310,7 +310,6 @@ import { extractFrame } from '../render-system-extract';
     MeshRenderer: unknown;
     Camera: unknown;
     DirectionalLight: unknown;
-    DirectionalLightShadow: unknown;
     // w22 - HANDLE_CUBE / HANDLE_TRIANGLE narrow from plain `number` to
     // `Handle<MeshAsset>` (AC-09 / D-P1). The brand is a phantom over `number`
     // at runtime; test code typings reflect the narrow so `tsc -b` catches any
@@ -379,13 +378,20 @@ import { extractFrame } from '../render-system-extract';
         },
         { component: C.Transform, data: cameraTransform() },
       );
-      // verify round 1 fix: spawn DirectionalLightShadow alongside DirectionalLight
-      // to silence the once-warn AC-04 (light without shadow). The test validates
-      // render pipeline dispatch, not the once-warn error path.
-      world.spawn(
-        { component: C.DirectionalLight, data: directionalLight() },
-        { component: C.DirectionalLightShadow, data: { mapSize: 1024 } },
-      );
+      // spawn DirectionalLight with merged shadow fields.
+      world.spawn({
+        component: C.DirectionalLight,
+        data: {
+          directionX: 0,
+          directionY: -1,
+          directionZ: 0,
+          colorR: 1,
+          colorG: 1,
+          colorB: 1,
+          intensity: 1,
+          mapSize: 1024,
+        },
+      });
       world.spawn(
         { component: C.MeshFilter, data: { assetHandle: C.HANDLE_CUBE } },
         { component: C.MeshRenderer, data: defaultMaterial() },
@@ -396,8 +402,7 @@ import { extractFrame } from '../render-system-extract';
       renderer.onError((e) => errors.push(e));
       renderer.draw(world);
 
-      // AC-04 once-warn fires once (light without shadow co-located) - the test
-      // spawns DirectionalLightShadow to silence it.
+      // DirectionalLight with merged shadow fields.
       expect(errors).toHaveLength(0);
       // feat-20260612-point-light-shadows-urp-hdrp Round-2 F-1: cube_array
       // fallback adds 6 per-face boot clears (1.0/far) so the cube atlas
@@ -1031,10 +1036,19 @@ import { extractFrame } from '../render-system-extract';
         },
         { component: C.Transform, data: cameraTransform() },
       );
-      world.spawn(
-        { component: C.DirectionalLight, data: directionalLight() },
-        { component: C.DirectionalLightShadow, data: { mapSize: 1024 } },
-      );
+      world.spawn({
+        component: C.DirectionalLight,
+        data: {
+          directionX: 0,
+          directionY: -1,
+          directionZ: 0,
+          colorR: 1,
+          colorG: 1,
+          colorB: 1,
+          intensity: 1,
+          mapSize: 1024,
+        },
+      });
 
       // Spawn 3 transparent entities at near, mid, far distances from camera at z=3.
       // Camera is at (0, 0, 3). Entity positions:
@@ -1171,10 +1185,19 @@ import { extractFrame } from '../render-system-extract';
         },
         { component: C.Transform, data: cameraTransform() },
       );
-      world.spawn(
-        { component: C.DirectionalLight, data: directionalLight() },
-        { component: C.DirectionalLightShadow, data: { mapSize: 1024 } },
-      );
+      world.spawn({
+        component: C.DirectionalLight,
+        data: {
+          directionX: 0,
+          directionY: -1,
+          directionZ: 0,
+          colorR: 1,
+          colorG: 1,
+          colorB: 1,
+          intensity: 1,
+          mapSize: 1024,
+        },
+      });
 
       // Spawn 2 opaque (Geometry=2000) entities at different distances.
       // The record stage should NOT re-sort Geometry-queue entities.
@@ -1262,10 +1285,19 @@ import { extractFrame } from '../render-system-extract';
         },
         { component: C.Transform, data: cameraTransform() },
       );
-      world.spawn(
-        { component: C.DirectionalLight, data: directionalLight() },
-        { component: C.DirectionalLightShadow, data: { mapSize: 1024 } },
-      );
+      world.spawn({
+        component: C.DirectionalLight,
+        data: {
+          directionX: 0,
+          directionY: -1,
+          directionZ: 0,
+          colorR: 1,
+          colorG: 1,
+          colorB: 1,
+          intensity: 1,
+          mapSize: 1024,
+        },
+      });
 
       // Spawn one entity with a material that carries stencilReference=1.
       world.spawn(
@@ -1322,10 +1354,19 @@ import { extractFrame } from '../render-system-extract';
         },
         { component: C.Transform, data: cameraTransform() },
       );
-      world.spawn(
-        { component: C.DirectionalLight, data: directionalLight() },
-        { component: C.DirectionalLightShadow, data: { mapSize: 1024 } },
-      );
+      world.spawn({
+        component: C.DirectionalLight,
+        data: {
+          directionX: 0,
+          directionY: -1,
+          directionZ: 0,
+          colorR: 1,
+          colorG: 1,
+          colorB: 1,
+          intensity: 1,
+          mapSize: 1024,
+        },
+      });
 
       // Spawn entity WITHOUT stencilReference on any pass.
       world.spawn(

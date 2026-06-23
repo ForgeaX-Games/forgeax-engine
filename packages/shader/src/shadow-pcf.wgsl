@@ -14,9 +14,9 @@
 //   - sample_shadow_2d(...) -> f32 — directional 2D 9-tap software PCF
 //   - sample_shadow_cube_hw2x2(...) -> f32 — point cube hardware 2x2 PCF
 //
-// Bias formula (byte-equivalent to the original lighting-directional.wgsl
-// inline PCF, research L1.5 lines 47-81):
-//   bias = max(depthBias * (1.0 - dot(N, L)), normalBias / 1000.0)
+// Bias formula (D-1 directional convention -- normalBias is the slope
+// coefficient, depthBias the floor; feat-20260621 m3-t5 rename):
+//   bias = max(normalBias * (1.0 - dot(N, L)), depthBias / 1000.0)
 //
 // Return: 1.0 = fully lit, 0.0 = fully shadowed.
 
@@ -46,13 +46,18 @@ fn sample_shadow_2d(
   uv           : vec2<f32>,
   texel        : vec2<f32>,
   depthRef     : f32,
-  depthBias    : f32,
   normalBias   : f32,
+  depthBias    : f32,
   nDotL        : f32,
 ) -> f32 {
-  // Slope-scaled bias: byte-equivalent to original lighting-directional.wgsl
-  // inline constants (max(0.05*(1-dot(N,L)), 0.005)), research L1.5 lines 59-60.
-  let bias = max(depthBias * (1.0 - nDotL), normalBias / 1000.0);
+  // feat-20260621-merge-directionallightshadow-into-directionallight M3 / m3-t5:
+  // param names aligned to the D-1 directional convention -- the slope
+  // coefficient is `normalBias` (scales the 1 - dot(N,L) term) and the floor is
+  // `depthBias`. Pure formal-parameter rename: the two names are swapped in BOTH
+  // the signature and the formula, so each positional argument keeps its prior
+  // role and all call sites are unaffected. The /1000.0 floor scaling is the
+  // existing point-light convention and is preserved.
+  let bias = max(normalBias * (1.0 - nDotL), depthBias / 1000.0);
   let adjustedDepth = depthRef - bias;
 
   // 9-tap 3x3 PCF kernel. textureSampleCompareLevel returns 1.0 when
@@ -97,12 +102,14 @@ fn sample_shadow_cube_hw2x2(
   lightLocal    : vec3<f32>,
   layer         : i32,
   depthRef      : f32,
-  depthBias     : f32,
   normalBias    : f32,
+  depthBias     : f32,
   nDotL         : f32,
 ) -> f32 {
-  // Slope-scaled bias: same formula as 2D path, shared SSOT.
-  let bias = max(depthBias * (1.0 - nDotL), normalBias / 1000.0);
+  // Slope-scaled bias: same formula as 2D path, shared SSOT. feat-20260621 M3 /
+  // m3-t5: param names aligned to D-1 (normalBias = slope coefficient,
+  // depthBias = floor). Pure rename -- each positional arg keeps its prior role.
+  let bias = max(normalBias * (1.0 - nDotL), depthBias / 1000.0);
   let adjustedDepth = depthRef - bias;
 
   // Single textureSampleCompareLevel call: the comparison sampler resolves a

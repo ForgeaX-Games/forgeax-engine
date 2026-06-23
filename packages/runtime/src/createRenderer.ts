@@ -2047,8 +2047,8 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       // `addColorTarget('shadowDepth', ...)`); the ECS-managed
       // perPassResources slot was deleted in this milestone (D-2
       // SSOT). Falls back to the 1x1 fallback view when the graph
-      // has not allocated the target (no DirectionalLightShadow
-      // wired or shadowMapSize=0).
+      // has not allocated the target (castShadow:false or
+      // shadowMapSize=0).
       const graphShadowView = renderSystem.getCurrentShadowView();
       const probeShadowView =
         graphShadowView !== null ? graphShadowView : state.shadowFallbackTextureView;
@@ -2393,7 +2393,7 @@ async function debugReadbackShadowDepth(
 /**
  * directionalShadowSnapshot: reads the current shadow configuration
  * (mapSize, lightSpaceMatrix) from PipelineState. Returns null when no
- * shadow RT exists (shader manifest empty or no DirectionalLightShadow).
+ * shadow RT exists (shader manifest empty or castShadow:false).
  */
 function directionalShadowSnapshot(state: PipelineState): {
   readonly mapSize: number;
@@ -2665,6 +2665,11 @@ const GPU_SHADER_STAGE_FRAGMENT = 0x2;
 // stays at offset 176; lightViewProj_B..D + splitPlanes[4] + cascadeCount +
 // cascadeBlend + tail padding appended after inverseViewProj. Total 148 f32
 // = 592 B, fixed independent of cascadeCount (AC-08).
+// feat-20260621-merge-directionallightshadow-into-directionallight M3 / m3-t3:
+// depthBias / normalBias / pcfKernelSize from the merged DirectionalLight
+// append at the formerly-free tail pad (bytes 504/508/512, floats 126/127/128).
+// VIEW_UBO_BYTES stays 592 (the host tail pad shrinks 88 B -> 64 B); the WGSL
+// View struct in common.wgsl carries the matching 3 f32 (SSOT comment synced).
 const VIEW_UBO_BYTES = 592;
 
 // ── feat-20260520-directional-light-shadow-mapping M2 / w15 (AC-12 numeric flip)
@@ -4654,8 +4659,8 @@ async function buildReadyWebGPU(
 
   // feat-20260520-directional-light-shadow-mapping M2 / w14 (D-1):
   // shadowFallbackTextureView is a 1x1 depth32float fallback bound at
-  // viewBindGroup entry 3 when no shadow RT exists (no DirectionalLightShadow
-  // component or allocation failed). Cleared to 1.0 (far plane) via a minimal
+  // viewBindGroup entry 3 when no shadow RT exists (castShadow:false
+  // or allocation failed). Cleared to 1.0 (far plane) via a minimal
   // render pass so textureSampleCompareLevel always returns 1.0 (fully lit).
   // Uses RENDER_ATTACHMENT for the clear pass + TEXTURE_BINDING for sampling.
   const RENDER_ATTACHMENT_USAGE = 0x10;

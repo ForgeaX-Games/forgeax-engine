@@ -630,7 +630,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     spot: [],
     lightSpaceMatrix: undefined,
     shadowMapSize: undefined,
-    hasOrphanShadow: false,
     pointShadow: [],
   };
 
@@ -1897,7 +1896,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     MeshRenderer: unknown;
     Camera: unknown;
     DirectionalLight: unknown;
-    DirectionalLightShadow: unknown;
   }> {
     return (await import('../index')) as never;
   }
@@ -2029,8 +2027,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         { component: C.Transform, data: cameraTransform() },
       );
       world.spawn(
-        { component: C.DirectionalLight, data: {} },
-        { component: C.DirectionalLightShadow, data: { mapSize: 512, cascadeCount: 1 } },
+        { component: C.DirectionalLight, data: { mapSize: 512, cascadeCount: 1 } },
         { component: C.Transform, data: cameraTransform() },
       );
       world.spawn(
@@ -2100,13 +2097,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(code).toMatch(KEBAB_REGEX);
     });
 
-    it('exhaustive switch over RuntimeErrorCode 8 members compiles without default', () => {
+    it('exhaustive switch over RuntimeErrorCode 7 members compiles without default', () => {
       function exhaustive(code: RuntimeErrorCode): string {
         switch (code) {
           case 'shadow-invalid-config':
             return 'shadow';
-          case 'shadow-disabled-by-missing-component':
-            return 'shadow-disabled';
           case 'skin-joint-count-exceeded':
             return 'joint-count';
           case 'skin-joint-despawned':
@@ -3444,7 +3439,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     spot: [],
     lightSpaceMatrix: undefined,
     shadowMapSize: undefined,
-    hasOrphanShadow: false,
     pointShadow: [],
   };
 
@@ -9323,7 +9317,6 @@ type ExtractFrameWithPipeline = (
     Camera: unknown;
     Instances: unknown;
     DirectionalLight: unknown;
-    DirectionalLightShadow: unknown;
     HANDLE_CUBE: unknown;
   }
 
@@ -9574,24 +9567,23 @@ type ExtractFrameWithPipeline = (
       const { renderer, world, C } = await bootIntegrationRenderer(device, true);
 
       spawnCamera(world, C);
-      // DirectionalLight + DirectionalLightShadow => recordShadowPass runs and
+      // DirectionalLight with castShadow => recordShadowPass runs and
       // records the instance entity BEFORE the main pass, so the shadow F12
       // path (render-system-record.ts:3323) owns the destroy this frame.
-      world.spawn(
-        {
-          component: C.DirectionalLight,
-          data: {
-            directionX: -0.5,
-            directionY: -1,
-            directionZ: -0.3,
-            colorR: 1,
-            colorG: 1,
-            colorB: 1,
-            intensity: 1,
-          },
+      world.spawn({
+        component: C.DirectionalLight,
+        data: {
+          directionX: -0.5,
+          directionY: -1,
+          directionZ: -0.3,
+          colorR: 1,
+          colorG: 1,
+          colorB: 1,
+          intensity: 1,
+          cascadeCount: 1,
+          mapSize: 1024,
         },
-        { component: C.DirectionalLightShadow, data: { cascadeCount: 1, mapSize: 1024 } },
-      );
+      });
       const cube = spawnInstancedCube(world, C, 2);
 
       renderer.draw(world);

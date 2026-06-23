@@ -67,7 +67,6 @@ import {
   HdrpLightBudgetExceededError,
   PointShadowAtlasBoundsViolationError,
   PointShadowAtlasUninitializedError,
-  ShadowDisabledByMissingComponentError,
   SkyboxCubemapNotReadyError,
 } from './errors';
 import { GpuBuffer } from './gpu-resource';
@@ -182,6 +181,19 @@ function makeZeroCameraFallbackSnapshot(): CameraSnapshot {
   };
 }
 
+// feat-20260621-merge-directionallightshadow-into-directionallight M3 / m3-t2
+// (D-7): host-clamp the merged DirectionalLight's pcfKernelSize to the nearest
+// valid odd kernel in {1,3,5} before it reaches the View UBO float [128].
+// lighting-directional.wgsl runs a constant-trip-count loop to MAX_PCF_HALF=2
+// (merged 5.3-production-shadow-demos AC-14 variant-free pattern) and clips each
+// iteration to half = (pcfKernelSize-1)/2, so the supported kernel set is
+// {1,3,5} (cap 5). undefined (no shadow fields) defaults to 3.
+function clampPcfKernelSize(value: number | undefined): number {
+  if (value === undefined) return 3;
+  if (value <= 1) return 1;
+  if (value <= 3) return 3;
+  return 5;
+}
 /**
  * Per-RenderSystem mutable frame state.
  *
@@ -215,12 +227,6 @@ export interface RenderFrameState {
   perFrameGraph: RenderGraph<RenderPipelineContext> | null;
   readonly instanceBuffers: Map<number, InstanceBufferCacheEntry>;
   warnedZeroLightStandard: boolean;
-  /**
-   * feat-20260520-directional-light-shadow-mapping verify round 1 fix
-   * (AC-04 + AC-22): once-warn latch for shadow disabled by missing
-   * component. Fire at most once per RenderSystem lifetime.
-   */
-  warnedShadowDisabled: boolean;
   /**
    * feax-20260608-multi-light-warn-once M3: once-warn latch for multi-light
    * overrun per bucket (directional N>1 / point N>4 / spot N>4). Fires at
@@ -1269,28 +1275,12 @@ export function recordFrame(
     if (lights.directionalCount > 1) {
       warnMultiLightDirectional(frameState, lights.directionalCount);
     }
-    // feat-20260520-directional-light-shadow-mapping verify round 1 fix:
-    // once-warn for shadow disabled by missing component (AC-04 + AC-22).
-    // Fires at most once per RenderSystem lifecycle via warnedShadowDisabled
-    // latch. Follows the same console.warn pattern as warnedZeroLightStandard
-    // (non-production only) so smoke gates that track onError fire count
-    // are not polluted by configuration once-warns.
-    if (!frameState.warnedShadowDisabled) {
-      const ac04 = lights.directional !== undefined && lights.shadowMapSize === undefined;
-      const ac22 = lights.hasOrphanShadow;
-      if (ac04 || ac22) {
-        frameState.warnedShadowDisabled = true;
-        const err = new ShadowDisabledByMissingComponentError(ac04 ? 'shadow' : 'light');
-        const env = (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process;
-        if (env?.env?.NODE_ENV !== 'production') {
-          console.warn(`[forgeax] ${err.message}`, {
-            code: err.code,
-            expected: err.expected,
-            hint: err.hint,
-          });
-        }
-      }
-    }
+    // feat-20260621-merge-directionallightshadow-into-directionallight M3 / m3-t2:
+    // the AC-04/AC-22 "shadow disabled by missing component" once-warn is gone.
+    // After merging DirectionalLightShadow into DirectionalLight there is no
+    // orphan-shadow / missing-companion configuration to warn about -- castShadow
+    // defaults true on the single component, so the warn condition can never
+    // arise. The error class + RuntimeErrorCode member have been removed in M4 (m4-t2).
 
     // feat-20260608-cluster-lighting M6 / w23 (F-4 fix): URP-only multi-light
     // warn. HDRP supports 256 punctual lights via SSBO; the 4-slot first-slice
@@ -2391,8 +2381,9 @@ export function recordFrame(
       //   [44..59] inverseViewProj, [60..75] lightViewProj1,
       //   [76..91] lightViewProj2, [92..107] lightViewProj3,
       //   [108]/[112]/[116]/[120] splitPlanes (vec4 stride),
-      //   [124] cascadeCount, [125] cascadeBlend, [126] pcfKernelSize,
-      //   [127..147] tail pad.
+      //   [124] cascadeCount, [125] cascadeBlend,
+      //   [126] depthBias, [127] normalBias, [128] pcfKernelSize (feat-20260621
+      //   M3 / m3-t2-t3), [129..147] tail pad.
       const VIEW_PAYLOAD_FLOATS = 148;
       const viewPayload = new Float32Array(VIEW_PAYLOAD_FLOATS);
       for (let i = 0; i < 16; i++) viewPayload[i] = (worldViewProj as unknown as number[])[i] ?? 0;
@@ -2435,11 +2426,20 @@ export function recordFrame(
       // cascadeCount / cascadeBlend at [124..125].
       viewPayload[124] = lights.cascadeCount ?? 0;
       viewPayload[125] = lights.cascadeBlend ?? 0;
-      // feat-20260621-learn-render-5-3-production-shadow-demos M0 / AC-14:
-      // pcfKernelSize at [126] (first tail-pad slot, plan-strategy D-0). The
-      // WGSL View struct (common.wgsl) reads this lane; 0 when no shadow
-      // component (lighting-directional.wgsl clamps to a single tap).
-      viewPayload[126] = lights.pcfKernelSize ?? 0;
+      // feat-20260621-merge-directionallightshadow-into-directionallight M3 /
+      // m3-t2: shadow bias + PCF kernel width from the merged DirectionalLight
+      // land in the formerly-free tail pad at floats [126/127/128] (bytes
+      // 504/508/512). VIEW_PAYLOAD_FLOATS / VIEW_UBO_BYTES are unchanged --
+      // the WGSL View struct (common.wgsl) appends matching f32 at the same
+      // slots; the host tail pad shrinks 88 B -> 64 B, rest stays zero.
+      // pcfKernelSize is host-clamped to the nearest valid odd kernel {1,3,5}
+      // (cap 5, matching lighting-directional.wgsl MAX_PCF_HALF=2 from the
+      // merged 5.3-production-shadow-demos AC-14 variant-free loop) so the
+      // per-iteration radius clip has a fixed, legal bound; undefined
+      // (no cast-shadow / no shadow fields) defaults to 3.
+      viewPayload[126] = lights.depthBias ?? 0.005;
+      viewPayload[127] = lights.normalBias ?? 0.05;
+      viewPayload[128] = clampPcfKernelSize(lights.pcfKernelSize);
 
       const viewUploadResult = internals.device.queue.writeBuffer(
         pipelineState.viewUniformBuffer,
@@ -2576,7 +2576,7 @@ export function recordFrame(
       // (`addColorTarget('shadowDepth', ...)` declared in `urp-pipeline.ts`).
       // Graph owns the texture lifecycle; record-stage reads the resolved
       // view each frame (D-2 SSOT). When the graph has not allocated the
-      // target (no DirectionalLightShadow wired or shadowMapSize=0),
+      // target (castShadow:false or shadowMapSize=0),
       // `getColorTargetView` returns undefined and we fall through to the
       // 1x1 fallback view that keeps the BGL satisfied.
       const graphShadowView = frameState.perFrameGraph?.getColorTargetView('shadowDepth') as
@@ -3011,7 +3011,7 @@ export function recordShadowPass(
   // M5-T1: shadow depth target read directly from render-graph
   // (`addColorTarget('shadowDepth', ...)` declared in `urp-pipeline.ts`;
   // D-2 SSOT). Returns undefined when the graph has not allocated the
-  // target (no DirectionalLightShadow wired or shadowMapSize=0); the
+  // target (castShadow:false or shadowMapSize=0); the
   // gate below (`shadowView !== null`) is preserved by coalescing
   // undefined to null.
   const shadowView =
@@ -3615,7 +3615,7 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
       pass.setPipeline(shadowPipeline);
       // Look up the shadow view BG built earlier this frame by recordShadowPass.
       // `view-shadow` is the cache key prefix; tied to the same handle ids.
-      // If the directional shadow path wasn't taken (no DirectionalLightShadow),
+      // If the directional shadow path wasn't taken (castShadow:false),
       // shadow-view-bg was never built -- skip the geometry walk in that case
       // (the depth attachment was still cleared above which is the AC-04
       // "atlas face cleared to far" minimum guarantee).
@@ -3634,7 +3634,7 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
       );
       // Build (or reuse) the shadow-view BG. If the directional shadow path
       // already populated it earlier this frame, the cache hits; otherwise
-      // (no DirectionalLightShadow in the scene -- recordShadowPass never
+      // (castShadow:false -- recordShadowPass never
       // ran) we build it on-demand here so the point shadow caster has a
       // valid b0 view BG even on directional-shadow-free scenes.
       const cachedShadowViewBg = getOrCreateBindGroup(

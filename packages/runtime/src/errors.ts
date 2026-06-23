@@ -1,8 +1,7 @@
 // @forgeax/engine-runtime — error classes (public surface).
 //
-// Closed-union RuntimeErrorCode + 9 error classes:
-//   - ShadowInvalidConfigError          — DirectionalLightShadow field validation (mapSize < 1, cascadeCount ∉ {1..4}, splitLambda ∉ [0,1], cascadeBlend ∉ [0,0.5])
-//   - ShadowDisabledByMissingComponentError — once-warn when shadow/light are mismatched
+// Closed-union RuntimeErrorCode + 8 error classes:
+//   - ShadowInvalidConfigError          — DirectionalLight / PointLightShadow field validation (mapSize < 1, cascadeCount ∉ {1..4}, splitLambda ∉ [0,1], cascadeBlend ∉ [0,0.5])
 //   - SkinJointCountExceededError       — skin joint count > MAX_JOINTS (256)
 //   - SkinJointDespawnedError           — skin joint Entity despawned at extract time
 //   - SkinJointPathUnresolvedError      — jointPath Name lookup failed
@@ -75,8 +74,7 @@ import type { RhiError } from '@forgeax/engine-rhi';
  *
  * | code | class | trigger |
  * |:--|:--|:--|
- * | `'shadow-invalid-config'` | `ShadowInvalidConfigError` | `DirectionalLightShadow` or `PointLightShadow` validation fail (mapSize<1 / farPlane<=nearPlane) |
- * | `'shadow-disabled-by-missing-component'` | `ShadowDisabledByMissingComponentError` | once-warn when shadow/light are on different entities |
+ * | `'shadow-invalid-config'` | `ShadowInvalidConfigError` | `DirectionalLight` shadow fields or `PointLightShadow` validation fail (mapSize<1 / farPlane<=nearPlane) |
  * | `'skin-joint-count-exceeded'` | `SkinJointCountExceededError` | skin joint count exceeds MAX_JOINTS (256) |
  * | `'skin-joint-despawned'` | `SkinJointDespawnedError` | skin joint Entity despawned at extract time |
  * | `'skin-joint-path-unresolved'` | `SkinJointPathUnresolvedError` | jointPath Name lookup failed at post-spawn |
@@ -96,7 +94,6 @@ import type { RhiError } from '@forgeax/engine-rhi';
  */
 export type RuntimeErrorCode =
   | 'shadow-invalid-config'
-  | 'shadow-disabled-by-missing-component'
   | 'skin-joint-count-exceeded'
   | 'skin-joint-despawned'
   | 'skin-joint-path-unresolved'
@@ -167,7 +164,7 @@ export type SkinExtractErrorCode =
 /**
  * Detail for `RuntimeErrorCode 'shadow-invalid-config'`.
  *
- * Emitted by `DirectionalLightShadow.validate` when a field value violates
+ * Emitted by `DirectionalLight.validate` shadow-field path when a field value violates
  * runtime constraints (e.g. mapSize < 1, cascadeCount not in {1..4}).
  * AI users access `.detail.field` / `.detail.value` / `.detail.min` /
  * `.detail.max` via property access — no string parsing.
@@ -186,7 +183,7 @@ export interface ShadowInvalidConfigDetail {
 /**
  * Structured error for shadow component config validation failures.
  *
- * Emitted by `DirectionalLightShadow.validate()` (mapSize / cascadeCount /
+ * Emitted by `DirectionalLight.validate()` shadow-field path (mapSize / cascadeCount /
  * splitLambda / cascadeBlend / farPlane) and `PointLightShadow.validate()`
  * (mapSize / farPlane > nearPlane / pcfKernelSize); both shadow component
  * types share this single error class so `switch (err.code)` on
@@ -224,12 +221,17 @@ export class ShadowInvalidConfigError extends Error {
     // Integer-typed fields get an "integer in [min, max]" hint when a range
     // is supplied. Expand this set as new integer-typed shadow fields land.
     const isInteger = field === 'cascadeCount' || field === 'pcfKernelSize';
+    // pcfKernelSize must be odd (kernel is symmetric around the center tap).
+    // Naming "odd" in the hint stops an AI retry from looping min->min+1 (4->6).
+    const isOdd = field === 'pcfKernelSize';
     const hint =
       max !== undefined
         ? isInteger
           ? `set ${field} to an integer in [${min}, ${max}]; got ${value}`
           : `set ${field} to a value in [${min}, ${max}]; got ${value}`
-        : `set ${field} to a value ${comparator} ${min}; got ${value}`;
+        : isOdd
+          ? `set ${field} to an odd integer ${comparator} ${min}; got ${value}`
+          : `set ${field} to a value ${comparator} ${min}; got ${value}`;
     const expected =
       max !== undefined ? `${field} in [${min}, ${max}]` : `${field} ${comparator} ${min}`;
     super(
@@ -241,43 +243,6 @@ export class ShadowInvalidConfigError extends Error {
     this.hint = hint;
     this.expected = expected;
     this.detail = { field, value, min, ...(max !== undefined ? { max } : {}) };
-  }
-}
-
-// ── ShadowDisabledByMissingComponentError ─────────────────────────────────
-
-/**
- * Once-warn fired when DirectionalLightShadow is on a different entity than
- * DirectionalLight (AC-04 / AC-22).
- *
- * `.code = 'shadow-disabled-by-missing-component'` (closed RuntimeErrorCode):
- *   - `missing.kind === 'shadow'`  → AC-04: DirectionalLight present, DirectionalLightShadow absent
- *   - `missing.kind === 'light'`   → AC-22: DirectionalLightShadow present, DirectionalLight absent
- *
- * Fires at most once per World lifecycle (dedup latch in extractFrame).
- */
-export class ShadowDisabledByMissingComponentError extends Error {
-  readonly code = 'shadow-disabled-by-missing-component' as const;
-  readonly expected: string;
-  readonly hint: string;
-
-  constructor(missingKind: 'shadow' | 'light') {
-    const hint =
-      missingKind === 'shadow'
-        ? 'Spawn DirectionalLightShadow on the same entity as DirectionalLight; shadows are disabled until both components co-exist'
-        : 'Spawn DirectionalLight on the same entity as DirectionalLightShadow; shadow is orphaned and disabled until a DirectionalLight is on the same entity';
-    const expected =
-      missingKind === 'shadow'
-        ? 'DirectionalLightShadow on same entity as DirectionalLight'
-        : 'DirectionalLight on same entity as DirectionalLightShadow';
-    super(
-      missingKind === 'shadow'
-        ? 'DirectionalLight present without DirectionalLightShadow — shadows disabled'
-        : 'DirectionalLightShadow present without DirectionalLight — shadows disabled',
-    );
-    this.name = 'ShadowDisabledByMissingComponentError';
-    this.expected = expected;
-    this.hint = hint;
   }
 }
 
@@ -1018,7 +983,6 @@ export class GbufferAttachmentCountMismatchError extends Error {
  */
 export type RuntimeError =
   | ShadowInvalidConfigError
-  | ShadowDisabledByMissingComponentError
   | SkinJointCountExceededError
   | SkinJointDespawnedError
   | SkinJointPathUnresolvedError

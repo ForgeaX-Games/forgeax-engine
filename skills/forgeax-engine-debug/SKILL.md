@@ -28,12 +28,14 @@ description: >-
 | 测试只在 **Windows** 失败，CRLF 污染 diff | `.gitattributes` 未强制 LF 或 grep/glob 路径分隔符 | [§windows-兼容性](#windows-兼容性) |
 | **天空盒（cubemap）渲染上下颠倒** | skybox.wgsl 含错误的 V-flip | [§天空盒-v-flip](#天空盒-v-flip) |
 | **方向光 CSM 阴影完全无遮挡**（diffuse 正常有明暗，shadow 项恒为 1 全亮；`shadowCascade0-3` pass 都在跑、light matrix 有效） | VS 发 `viewZ=-clipPos.w`（负）与正 `splitPlanes` 比较，cascade 选择全压到 layer 0 近 slab → 远处投影出 tile → 越界门返回 1.0 | [§csm-阴影全亮无遮挡](#csm-阴影全亮无遮挡) |
+| **方向光完全不投射阴影**（`castShadow` 开着但某些 mesh 不写入 shadow atlas） | mesh 的材质缺少 `ShadowCaster` pass（手写 `MaterialAsset` 只声明了 forward/deferred pass，没加 shadow-caster）——该 mesh 静默不进入 shadow depth pass | [§方向光阴影不出现-castshadow-与-shadowcaster-pass](#方向光阴影不出现-castshadow-与-shadowcaster-pass) |
 | **standard 材质冷启动黑几秒 / 无 IBL 处全黑** | 唯一环境光是异步 IBL cubemap 的 Skylight，cubemap 就绪前 ambient=0 | [§ambient-黑到-ibl-加载](#ambient-黑到-ibl-加载) |
 | **多 glTF mesh 文档材质错乱**（每节点绑了所有 mesh 的材质） | glTF bridge 未按 meshIndex 过滤材质 | [§gltf-bridge-多mesh材质串](#gltf-bridge-多mesh材质串) |
 | **pbr-skin pipeline 创建失败** (`Binding doesn't exist in pbr-mesh-array-bgl` / `Vertex attribute slot 5 not present`) | 标准 PBR pipeline-layout 被 skin shader 错误复用 (L1)；JOINTS_0/WEIGHTS_0 vertex 属性未上传 (L2) | [§pbr-skin-pipeline-build-fail](#pbr-skin-pipeline-build-fail) |
 | **skin browser 全黑而 dawn smoke 全绿**（`cube-vbo size=768` 不是 1152；slot 5 missing） | parse-gltf → bridge → mesh-loader → render-data → buildPipelineContext → extract 6 环节有断点 | [§skin-vertex-attribute-chain](#skin-vertex-attribute-chain) |
 | **`pnpm -F @forgeax/hello-skin dev` Fox 黑屏**，console `loadByGuid<SceneAsset> failed: AssetError code=asset-not-imported`，但 `smoke` (dawn) 全绿 | fresh worktree 漏 `pnpm build` / 端口被 sibling 占用 / submodule 未 init —— 99% 是环境，先证伪三连 | [§fox-demo-dev-加载报-asset-not-imported](#fox-demo-dev-加载报-asset-not-imported) |
 | **skin entity 静止不动**：hasSkin + AnimationPlayer 已挂，但 Fox 维持 bind-pose 静态；clip 时间轴在推、`Transform.world` 在变，画面就是不动 | palette UBO 没接 allocator / record dyn-offset 写死 0 / extract T-21 placeholder 没兑付 / **`MAX_JOINTS` off-by-one 256 vs 16320 BGL cap** / **browser-async pack-fetch 路径 SkinAsset 还没 register 就 instantiate**（`Skin.joints.length=0` + `JointCountMismatchError` 每帧；M2 fixup `e5e68b35` SceneAsset.skinGuids cross-edge 修；旧 silent-skip 改为 `'skin-asset-unresolved'` Result.err fail-fast） | [§skin-entity-静止不动](#skin-entity-静止不动) |
+| **FBX 骨骼动画整体扭曲 / 上下颠倒 / 动作乱抽**（bind-pose 关掉 AnimationPlayer 是完美直立人形，一开动画就崩） | FBX 动画提取链 bug：`WriteAnimationData` 直接读 `LclRotation` 原始**欧拉度数**当四元数（runtime slerp 它），且 `GetDstPropertyCount()=1` 只读 X 轴 Y/Z 恒 0；修法是每帧 `EvaluateLocalTransform(t).GetQ()`（需先 `SetCurrentAnimationStack`）—— 与 bind-pose 的 `WalkNode` 同一权威路径 | [§fbx-skin-动画扭曲](#fbx-skin-动画扭曲) |
 | `'webgpu-runtime-error'` 300 frame，`detail.error.name=SkinPaletteOverflowError needs=16384 cap=16320` 首帧即报 | `MAX_JOINTS=256 × 64 = 16384 B` 超过 PR #361 立的 `pbr-skin` BGL `@group(2)@binding(1)` 16320 B 容量 | [§skinpaletteoverflowerror-needs-16384-b-exceeds-16320-b](#skinpaletteoverflowerror-needs-16384-b-exceeds-16320-b) |
 | Edge 浏览器报 `EngineEnvironmentError: webgpu inner=adapter-unavailable`，全屏黑 | 浏览器配置整体禁了硬件 GL 栈，**不是引擎可修** | [§edge-webgpu-disabled](#edge-webgpu-disabled) |
 | wgpu-wasm WebGL2 fallback 路径 `wgpu error: Validation Error` panic（`pbr-pipeline-standard` storage/uniform mismatch · `msaaColor` `DownlevelFlags(VIEW_FORMATS)` · 类似形态） | 引擎在 fallback 路径上漏了 device-cap gate（写死单 axis variant key、graph 层 viewFormats 没按 cap 过滤、texture view-format reinterpret 没 gate） | [§wgpu-wasm-webgl2-fallback-cap-gates](#wgpu-wasm-webgl2-fallback-cap-gates) |
@@ -223,7 +225,7 @@ grep -n "ndcY\|uv.y\" packages/shader/src/builtin/skybox.wgsl
 
 ## CSM 阴影全亮无遮挡
 
-**信号**：方向光 + `DirectionalLightShadow` + standard PBR（每材质带 `ShadowCaster` pass）场景**完全没有阴影**——diffuse 明暗正常（受光面/背光面对），唯独 shadow 项死掉。debug 采样所有点 `shadowFactor === 1.000`（全亮），即便正对太阳的遮挡点下方。`r.perFramePassNames` 含 `shadowCascade0-3`（CSM pass 在跑）、`r.directionalShadow.lightSpaceMatrix` 有效。
+**信号**：方向光 + standard PBR（每材质带 `ShadowCaster` pass）场景**完全没有阴影**——diffuse 明暗正常（受光面/背光面对），唯独 shadow 项死掉。debug 采样所有点 `shadowFactor === 1.000`（全亮），即便正对太阳的遮挡点下方。`r.perFramePassNames` 含 `shadowCascade0-3`（CSM pass 在跑）、`r.directionalShadow.lightSpaceMatrix` 有效。
 
 **根因**：**cascade 选择的 `viewZ` 符号不匹配**。VS 发 `out.viewZ = -clipPos.w`（相机前方为**负**——这是 cluster Z-slice 路径也依赖的故意约定），但 `pssmSplit` host 端产出**正**的 view-space split 深度。`_pickCascadeLayer` / `cascadeBlend` band 数学拿原始负 `viewZ` 跟正 `splitPlanes` 比 → 每个可见 fragment 都落进 cascade 0 的近 slab（约 0.1~1 单位深）→ 几单位外的物体投影出 [0,1] tile → `lighting-directional.wgsl` 的 NaN-safe 越界门返回 `1.0`（全亮）。整个 frame 看起来全受光。
 
@@ -237,6 +239,27 @@ grep -n "out.viewZ" packages/shader/src/default-standard-pbr*.wgsl
 关键陷阱：单测 `shadow-csm-shader.dawn.test.ts` 内嵌的 kernel 若复刻了**正** `viewZ` 直接比较，会复制 bug 并永绿——测试必须喂生产用的**负** `viewZ`。
 
 **修法**：在消费侧转一次 `viewDepth = -viewZ`，让 `_pickCascadeLayer` + blend band 都是正比正（VS 的负 viewZ 约定不动，cluster 路径不受影响）。源码 SSOT `packages/shader/src/lighting-directional.wgsl`；split 计算 `packages/runtime/src/render-system-extract.ts` `pssmSplit`。
+
+---
+
+## 方向光阴影不出现（castShadow 与 ShadowCaster pass）
+
+**信号**：场景有 `DirectionalLight`（`castShadow` 未设或为 `true`），`perFramePassNames` 含 `shadowCascade0-3`（shadow depth pass 在跑），但某个（或全部）mesh **完全不投射阴影**——其他 mesh 的阴影正常，或被遮挡面全亮。
+
+**根因（两候选，按常见顺序排）**：
+
+| 排序 | 根因 | 判定 | 修法 |
+|:--|:--|:--|:--|
+| **R1** | `DirectionalLight.castShadow` 被手动设为 `false` | `world.get(lightEntity, DirectionalLight).unwrap().castShadow === false` | 删掉 `castShadow: false`（走默认 true）或显式改回 `castShadow: true`。合并后（feat-20260621）shadow 字段全在同一个 `DirectionalLight` 组件上，不需要第二个组件 |
+| **R2** | mesh 的材质缺少 `ShadowCaster` pass——depth-only shadow pass 靠 `passKind='shadow-caster'` 筛选 entity；`Materials.standard(...)` 工厂自动产出该 pass，但手写 `MaterialAsset` 字面量如果只写了 `forward` / `deferred` pass，该 mesh 静默不进入 shadow depth pass | `material.passes` 数组里没有 `passKind='shadow-caster'` 的条目 | 在 `passes[]` 里加 `{ name: 'ShadowCaster', shader: 'forgeax::default-standard-pbr' }`，或改用 `Materials.standard(...)` 工厂构造材质。详见 [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md) §材质工厂 |
+
+**背景**：`DirectionalLight.castShadow` 是**灯侧开关**——控制引擎是否跑 shadow depth pass（populate shadow atlas）。ShadowCaster pass 是**材质/渲染侧开关**——控制某个 mesh 是否被画进该 atlas。两个条件必须同时满足才有阴影。`castShadow` 默认 `true`（合并后 zero-config 即开），所以 R1 只在手动改 `castShadow: false` 时触发。R2 在手写材质时最常见——忘记加 ShadowCaster pass，看着灯光、看着 shadow pass 在跑，就是没阴影。
+
+**不要**：在 demo 里把 mesh 的 material 换回 unlit 绕开问题——那只是躲，下一个 standard mesh 一样踩。素材质的 `passes[]` 数组才是 SSOT。
+
+**相邻条目**：
+- 同症状但全场景阴影全无（不是个别 mesh 没阴影）：见 [§CSM 阴影全亮无遮挡](#csm-阴影全亮无遮挡)（viewZ 符号不匹配）
+- 材质工厂用法：[`forgeax-engine-material`](../forgeax-engine-material/SKILL.md) §规范调用顺序
 
 ---
 
@@ -426,6 +449,40 @@ pnpm -F @forgeax/hello-skin smoke 2>&1 | grep -E "paletteWrites|distinctFullHash
 引 PR #TBD（finalize 后 backfill）。
 
 **Don't**：在 demo 里塞手动 rAF mutation 假装 joint 在动 / 强制重 spawn entity 绕过 allocator——这正是 PR #361 留下 stub 的形态，下一只 Fox 进来又复发。沿调用链走到 4 个 milestone 的落点修。
+
+---
+
+## fbx-skin 动画扭曲
+
+**信号**：`apps/hello/fbx-skin`（humanoid.fbx，80 joints，clips run/punch/shot）能渲染但**整体扭曲、上下颠倒、动作乱抽**。无 onError，dawn smoke 全绿。
+
+**先分层证伪 —— bind pose vs 动画**（交接文档 §逐层闸门协议，charter F2 image-untrustworthy）：临时关掉 `AnimationPlayer`（demo 里 `if (clip && !DEBUG)`），截图。
+- **bind pose = 完美直立人形** → 骨架 / IBM / 蒙皮权重 / 坐标转换 / palette / shader 全对，缺陷 100% 在**动画提取链**（本症状）。
+- bind pose 也扭 → 是 IBM / 列序 / 单位 / `M_i = jointWorld × IBM` 顺序，走 [§skin-vertex-attribute-chain] / hello-skin 家族。
+
+**根因（FBX 动画提取链两个叠加 bug，皆在 `@forgeax/engine-fbx`）**：
+1. **欧拉度数当四元数**：`binding.cc::WriteAnimationData` 读 `LclRotation` 曲线原始值（**欧拉角度数**），bridge 打包成 `[x,y,z,1]`，runtime `sampleChannel` 见 `elementCount===4` 当四元数 slerp。实时数据特征：rotation output `[62.93, 0, 0, 1]`（单位四元数分量不可能 >1）。
+2. **只读 X 轴**：`GetDstPropertyCount()` 对这些 curve node 返回 1，Y/Z 曲线永不读 → 全 channel 的 Y/Z 槽位恒 0。
+
+**判定**（绕开 vite，直接打 native addon）：
+```bash
+cd packages/fbx
+node -e "const b=require('./build/Release/fbx_binding.node');const d=JSON.parse(b.parseFbx('<abs>/forgeax-engine-assets/vendor/fbx-test/humanoid.fbx'));
+const c=d.clips[0];for(const ch of c.channels){if(ch.property==='rotation'&&ch.targetNode.endsWith('Hips')){console.log(ch.keyValues.slice(0,8));}}"
+# 坏：[62.93, 0, 0, 1, ...]（欧拉度数）  好：[0.2, 0.031, -0.022, 0.979, ...]（单位四元数）
+```
+
+**修法**：`WriteAnimationData` 改成每个 key time 采样 `node->EvaluateLocalTransform(t)` 再 `GetT/GetQ/GetS` 分解 —— 与 bind-pose 的 `WalkNode` **同一条权威路径**，输出真四元数（SDK 自己处理旋转顺序 / pre-post-rotation / pivot）。
+- **必须先 `scene->SetCurrentAnimationStack(animStack)`** —— 否则 `EvaluateLocalTransform(t)` 无视时间，永远返回 rest pose（数据全 identity/zero 就是漏了这句）。`WalkNode` 侥幸不需要是因为 rest pose == bind pose；二者顺序安全：`SceneToJson`（含 WalkNode）在 `WriteAnimationData` 之前跑完。
+- IR schema 顺势从 per-axis `keyTimesX/Y/Z` 收成扁平 `keyTimes` + 交错 `keyValues`（stride 3 T/S，4 rotation quat）—— SSOT，结构上消灭单轴 bug。bridge 重采样 + 四元数 nlerp 归一化；符号跨相邻 key 规范化保短弧连续。
+
+**坑（验证时极易踩）**：
+- **native 改完必须 `node-gyp rebuild`**：`FBX_SDK_ROOT=$HOME/.local/fbxsdk/current npx node-gyp rebuild`（SDK 在则可重建；否则 postinstall graceful-skip）。
+- **dist 陈旧陷阱**：`@forgeax/engine-fbx` 解析到 `dist/index.mjs`，改 `parse-animation-clip.ts` 后**必须 `pnpm --filter @forgeax/engine-fbx build`**，否则浏览器拿旧 schema 读不到 `keyValues` → 全 identity，看着像没改对。
+- **vite 全程缓存 import 结果**：`SetCurrentAnimationStack` 这类 native 改完后要 **kill vite + `rm -rf node_modules/.vite node_modules/.cache`** 再重启，否则 `/__forgeax-ddc/*.pack.json` 还是旧 body（`metaPackBodies` 是进程内 Map）。
+- CPU 侧蒙皮 AABB 自检（`palette[j]=jointWorld_j × IBM_j`，对每顶点 4-influence 加权变换求包围盒）是判定"数据对不对"的离线闸门：bind vs anim-f0 高度应都 ~160，塌成小 blob 说明数据仍坏。
+
+**Don't**：在 demo 里手动转 quat / 改 camera 绕过 —— 这是引擎 importer 的 bug，必须修 native（charter "Demo failures route to engine fixes"）。`fbx_binding.node` 是构建产物；CI `smoke-fbx-macos-arm64` 是 label-gated（标签从不存在 → 从没跑过），故此修目前仅本地 native 验证。
 
 ---
 

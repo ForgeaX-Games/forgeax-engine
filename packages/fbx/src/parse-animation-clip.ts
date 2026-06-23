@@ -1,25 +1,28 @@
 // parse-animation-clip.ts — M5 t50: TS bridge for animation clip POD data.
 //
-// Consumes the C++ JSON POD clips section emitted by t47 binding.cc
-// (WriteAnimationData), performs merge-keys + linear resample at 30 fps,
+// Consumes the C++ JSON POD clips section emitted by binding.cc
+// (WriteAnimationData), linear-resamples each channel to a fixed fps,
 // produces AnimationClipPod (types SSOT per requirements AC-07).
 //
-// Input schema (from JSON.parse of binding output):
+// Input schema (from JSON.parse of binding output) — flat per-channel timeline:
 //   clips?: [{
 //     name?: string,
 //     duration: number,
 //     channels: [{
 //       targetNode: string,
 //       property: 'translation'|'rotation'|'scale',
-//       keyTimesX: number[], keyValuesX: number[],
-//       keyTimesY: number[], keyValuesY: number[],
-//       keyTimesZ: number[], keyValuesZ: number[],
+//       keyTimes: number[],     // ascending, seconds
+//       keyValues: number[],    // interleaved, stride 3 (T/S) or 4 (rotation quat xyzw)
 //     }],
 //   }]
 //
+// The binding emits rotation as a real unit quaternion sampled from
+// node->EvaluateLocalTransform(t).GetQ() (NOT raw euler-degree curves), so the
+// bridge only resamples + re-normalizes; it never euler-converts.
+//
 // Processing:
-//   merge-keys: collect all unique timestamps from X/Y/Z axes, sort ascending
-//   linear resample: evaluate each axis at each framestep (1/fps intervals)
+//   linear resample: evaluate the strided keyValues at each framestep (1/fps)
+//   rotation: per-component lerp then normalize (nlerp); runtime slerps further
 //   output: AnimationClipPod.channels[].sampler.{input,output,interpolation:LINEAR}
 
 import type {
@@ -31,12 +34,10 @@ import type {
 export interface FbxRawAnimChannel {
   readonly targetNode: string;
   readonly property: 'translation' | 'rotation' | 'scale';
-  readonly keyTimesX?: number[];
-  readonly keyValuesX?: number[];
-  readonly keyTimesY?: number[];
-  readonly keyValuesY?: number[];
-  readonly keyTimesZ?: number[];
-  readonly keyValuesZ?: number[];
+  /** Ascending key timestamps in seconds. */
+  readonly keyTimes?: number[];
+  /** Interleaved key values, stride 3 (translation/scale) or 4 (rotation quat). */
+  readonly keyValues?: number[];
 }
 
 export interface FbxRawClip {
@@ -52,38 +53,55 @@ export interface FbxRawAnimDoc {
 const DEFAULT_FPS = 30;
 
 /**
- * Linearly interpolate between axis keyframes at time t.
- * Returns 0 when no keys are defined for this axis.
+ * Linear-interpolate a strided keyValues stream at time t into `out`.
+ *
+ * keyTimes is ascending; keyValues holds `stride` floats per key. Clamps to
+ * the first/last key outside the range. For rotation (stride 4) the result is
+ * a per-component lerp; the caller normalizes it (nlerp) — runtime playback
+ * slerps further, so import-time nlerp is sufficient to keep unit length.
  */
-function sampleAxis(keys: readonly number[], values: readonly number[], t: number): number {
-  if (keys.length === 0) return 0;
-  const firstKey = keys[0];
-  const firstVal = values[0];
-  const lastIdx = keys.length - 1;
-  const lastKey = keys[lastIdx];
-  const lastVal = values[lastIdx];
-  if (firstKey === undefined || firstVal === undefined) return 0;
-  if (lastKey === undefined || lastVal === undefined) return 0;
-  if (t <= firstKey) return firstVal;
-  if (t >= lastKey) return lastVal;
-  for (let i = 1; i < keys.length; i++) {
-    const curKey = keys[i];
-    if (curKey === undefined || t > curKey) continue;
-    const t0 = keys[i - 1];
-    const t1 = curKey;
-    const v0 = values[i - 1];
-    const v1 = values[i];
-    if (t0 === undefined || t1 === undefined || v0 === undefined || v1 === undefined) continue;
-    const frac = (t - t0) / (t1 - t0);
-    return v0 + (v1 - v0) * frac;
+function sampleStrided(
+  keyTimes: readonly number[],
+  keyValues: readonly number[],
+  stride: number,
+  t: number,
+  out: number[],
+): void {
+  const n = keyTimes.length;
+  if (n === 0) {
+    for (let c = 0; c < stride; c++) out[c] = c === 3 ? 1 : 0;
+    return;
   }
-  return lastVal;
+  const first = keyTimes[0] as number;
+  const lastIdx = n - 1;
+  const last = keyTimes[lastIdx] as number;
+  if (t <= first) {
+    for (let c = 0; c < stride; c++) out[c] = keyValues[c] ?? 0;
+    return;
+  }
+  if (t >= last) {
+    for (let c = 0; c < stride; c++) out[c] = keyValues[lastIdx * stride + c] ?? 0;
+    return;
+  }
+  // Find bracket [i-1, i].
+  let i = 1;
+  while (i < n && (keyTimes[i] as number) < t) i++;
+  const t0 = keyTimes[i - 1] as number;
+  const t1 = keyTimes[i] as number;
+  const frac = t1 > t0 ? (t - t0) / (t1 - t0) : 0;
+  const b0 = (i - 1) * stride;
+  const b1 = i * stride;
+  for (let c = 0; c < stride; c++) {
+    const v0 = keyValues[b0 + c] ?? 0;
+    const v1 = keyValues[b1 + c] ?? 0;
+    out[c] = v0 + (v1 - v0) * frac;
+  }
 }
 
 /**
- * Build a per-frame sampler for one channel: merge unique timestamps
- * from X/Y/Z keys into a uniform timeline at the given fps, then
- * linearly interpolate each axis at each frame step.
+ * Build a per-frame sampler for one channel: resample the flat strided
+ * keyValues onto a uniform timeline at the given fps. Rotation channels are
+ * re-normalized per frame so the lerp output stays a unit quaternion.
  */
 function buildSampler(ch: FbxRawAnimChannel, duration: number, fps: number): AnimationSamplerPod {
   const frameInterval = 1 / fps;
@@ -97,20 +115,26 @@ function buildSampler(ch: FbxRawAnimChannel, duration: number, fps: number): Ani
   const stride = ch.property === 'rotation' ? 4 : 3;
   const output = new Float32Array(frameCount * stride);
 
-  const xKeys = ch.keyTimesX ?? [];
-  const xVals = ch.keyValuesX ?? [];
-  const yKeys = ch.keyTimesY ?? [];
-  const yVals = ch.keyValuesY ?? [];
-  const zKeys = ch.keyTimesZ ?? [];
-  const zVals = ch.keyValuesZ ?? [];
+  const keyTimes = ch.keyTimes ?? [];
+  const keyValues = ch.keyValues ?? [];
+  const tmp = new Array<number>(stride);
 
   for (let f = 0; f < frameCount; f++) {
-    const t = input[f];
-    if (t === undefined) continue;
-    output[f * stride + 0] = sampleAxis(xKeys, xVals, t);
-    output[f * stride + 1] = sampleAxis(yKeys, yVals, t);
-    if (stride >= 3) output[f * stride + 2] = sampleAxis(zKeys, zVals, t);
-    if (stride === 4) output[f * stride + 3] = 1;
+    const t = input[f] as number;
+    sampleStrided(keyTimes, keyValues, stride, t, tmp);
+    const base = f * stride;
+    if (stride === 4) {
+      const len = Math.hypot(tmp[0] ?? 0, tmp[1] ?? 0, tmp[2] ?? 0, tmp[3] ?? 0);
+      const inv = len > 0 ? 1 / len : 0;
+      output[base + 0] = (tmp[0] ?? 0) * inv;
+      output[base + 1] = (tmp[1] ?? 0) * inv;
+      output[base + 2] = (tmp[2] ?? 0) * inv;
+      output[base + 3] = len > 0 ? (tmp[3] ?? 0) * inv : 1;
+    } else {
+      output[base + 0] = tmp[0] ?? 0;
+      output[base + 1] = tmp[1] ?? 0;
+      output[base + 2] = tmp[2] ?? 0;
+    }
   }
 
   return { input, output, interpolation: 'LINEAR' };

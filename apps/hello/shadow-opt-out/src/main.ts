@@ -17,7 +17,6 @@ import {
   acquireCanvasContext,
   createRenderer,
   DirectionalLight,
-  DirectionalLightShadow,
   EngineEnvironmentError,
   HANDLE_CUBE,
   Materials,
@@ -103,11 +102,6 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         colorG: 0.95,
         colorB: 0.9,
         intensity: 1.0,
-      },
-    },
-    {
-      component: DirectionalLightShadow,
-      data: {
         mapSize: 1024,
         // feat-20260613-csm M6 / w23: shadow-opt-out runs the single-tile
         // baseline (cascadeCount=1) so AC-10 ("cascadeCount=1 degenerates

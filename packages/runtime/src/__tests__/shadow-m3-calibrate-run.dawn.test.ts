@@ -15,7 +15,6 @@ import {
   Camera,
   createRenderer,
   DirectionalLight,
-  DirectionalLightShadow,
   HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
@@ -117,28 +116,21 @@ function createMockCanvas(width: number, height: number): HTMLCanvasElement {
 function buildFixtureWorld(): World {
   const world = new World();
 
-  world.spawn(
-    {
-      component: DirectionalLight,
-      data: {
-        directionX: FIXTURE_LIGHT_DIR[0],
-        directionY: FIXTURE_LIGHT_DIR[1],
-        directionZ: FIXTURE_LIGHT_DIR[2],
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
-        intensity: 1,
-      },
+  world.spawn({
+    component: DirectionalLight,
+    data: {
+      directionX: FIXTURE_LIGHT_DIR[0],
+      directionY: FIXTURE_LIGHT_DIR[1],
+      directionZ: FIXTURE_LIGHT_DIR[2],
+      colorR: 1,
+      colorG: 1,
+      colorB: 1,
+      intensity: 1,
+      mapSize: FIXTURE_MAP_SIZE,
+      nearPlane: 0.1,
+      farPlane: 50,
     },
-    {
-      component: DirectionalLightShadow,
-      data: {
-        mapSize: FIXTURE_MAP_SIZE,
-        nearPlane: 0.1,
-        farPlane: 50,
-      },
-    },
-  );
+  });
 
   world.spawn(
     {

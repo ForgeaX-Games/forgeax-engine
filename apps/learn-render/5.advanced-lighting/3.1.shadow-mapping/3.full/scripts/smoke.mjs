@@ -4,7 +4,7 @@
 //
 // LearnOpenGL section 5.3.1 directional production shadow dawn-node smoke
 // (structural-only). Spawns wood-floor + 6 cubes + DirectionalLight +
-// DirectionalLightShadow (cascadeCount=1), renders 300 frames, and asserts
+// DirectionalLight with castShadow (cascadeCount=1), renders 300 frames, and asserts
 // no RhiError / no unknown onError codes.
 //
 // Output literals (preserved for grep tooling):
@@ -30,9 +30,7 @@ const TEXTURES_DIR = resolve(MONOREPO_ROOT, 'forgeax-engine-assets', 'learn-open
 const WOOD_SRC_PATH = resolve(TEXTURES_DIR, 'wood.png');
 
 // Known-noise app.onError codes during shadow toggle demos.
-const KNOWN_NOISE_CODES = new Set([
-  'shadow-disabled-by-missing-component',
-]);
+const KNOWN_NOISE_CODES = new Set([]);
 
 const consoleErrors = [];
 const originalConsoleError = console.error.bind(console);
@@ -177,7 +175,6 @@ const {
   Camera,
   createPlaneGeometry,
   DirectionalLight,
-  DirectionalLightShadow,
   HANDLE_CUBE,
   Materials,
   MeshFilter,
@@ -310,37 +307,25 @@ for (const c of cubes) {
 }
 
 // Directional light with shadow.
-const shadowConfig = FALSIFY === 'force-no-shadow-pass'
-  ? null
-  : { cascadeCount: 1, mapSize: 2048, depthBias: 0.005, nearPlane: 0.1, farPlane: 50, pcfKernelSize: 3 };
+const shadowPresent = FALSIFY !== 'force-no-shadow-pass';
+const shadowFields = shadowPresent
+  ? { castShadow: true, cascadeCount: 1, mapSize: 2048, depthBias: 0.005, nearPlane: 0.1, farPlane: 50, pcfKernelSize: 3 }
+  : { castShadow: false };
 
-let lightEntity;
-if (shadowConfig !== null) {
-  lightEntity = world.spawn(
-    {
-      component: DirectionalLight,
-      data: {
-        directionX: 0.2, directionY: -0.98, directionZ: 0,
-        colorR: 1, colorG: 1, colorB: 1, intensity: 1,
-      },
-    },
-    {
-      component: DirectionalLightShadow,
-      data: shadowConfig,
-    },
-  ).unwrap();
-} else {
-  console.log('[smoke] FALSIFY=force-no-shadow-pass -- DirectionalLightShadow omitted');
-  lightEntity = world.spawn(
-    {
-      component: DirectionalLight,
-      data: {
-        directionX: 0.2, directionY: -0.98, directionZ: 0,
-        colorR: 1, colorG: 1, colorB: 1, intensity: 1,
-      },
-    },
-  ).unwrap();
+if (!shadowPresent) {
+  console.log('[smoke] FALSIFY=force-no-shadow-pass -- DirectionalLight castShadow=false');
 }
+
+world.spawn(
+  {
+    component: DirectionalLight,
+    data: {
+      directionX: 0.2, directionY: -0.98, directionZ: 0,
+      colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+      ...shadowFields,
+    },
+  },
+).unwrap();
 
 // Camera at (0, 1.5, 8).
 const cameraEntity = world.spawn(
@@ -426,7 +411,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${totalFrames}, shadowPresent=${shadowConfig !== null}, onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}`,
+  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${totalFrames}, shadowPresent=${shadowPresent}, onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}`,
 );
 
 if (sharedDevice) sharedDevice.destroy?.();

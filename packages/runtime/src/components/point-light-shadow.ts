@@ -7,11 +7,11 @@
 //
 // Cardinality = 4: at most 4 shadow-casting point lights per scene
 // (feat-20260612 plan-strategy §D-1 cube_array atlas layers=4 cap).
-// Co-located with DirectionalLightShadow in components/ (research L1.2).
+// Co-located with DirectionalLight in components/ (research L1.2).
 //
 // Naming convention: bare entity name (AGENTS.md §Component naming), no
-// Component suffix. Mirrors DirectionalLightShadow surface — same defineComponent
-// pattern, same ShadowInvalidConfigError surface (validate added in M1 / T-M1-3).
+// Component suffix. Same defineComponent pattern and ShadowInvalidConfigError
+// surface as the shadow fields merged into DirectionalLight (feat-20260621 M1).
 
 import { defineComponent } from '@forgeax/engine-ecs';
 import { ShadowInvalidConfigError } from '../errors';

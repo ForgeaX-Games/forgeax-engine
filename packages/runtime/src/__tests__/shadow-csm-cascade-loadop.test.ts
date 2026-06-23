@@ -207,7 +207,6 @@ async function importComponents(): Promise<{
   MeshRenderer: unknown;
   Camera: unknown;
   DirectionalLight: unknown;
-  DirectionalLightShadow: unknown;
   HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
 }> {
   return (await import('../index')) as never;
@@ -279,10 +278,10 @@ async function drawCsmScene(cascadeCount: number): Promise<CaptureLog> {
     },
     { component: C.Transform, data: cameraTransform() },
   );
-  world.spawn(
-    { component: C.DirectionalLight, data: directionalLight() },
-    { component: C.DirectionalLightShadow, data: { cascadeCount, mapSize: 1024 } },
-  );
+  world.spawn({
+    component: C.DirectionalLight,
+    data: { ...directionalLight(), cascadeCount, mapSize: 1024 },
+  });
   world.spawn(
     { component: C.MeshFilter, data: { assetHandle: C.HANDLE_CUBE } },
     { component: C.MeshRenderer, data: {} },

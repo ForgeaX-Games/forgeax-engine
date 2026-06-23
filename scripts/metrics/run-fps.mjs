@@ -93,6 +93,23 @@ export function resolveFpsStatus({ samples, sampleCount, threshold, compareKey }
   return stat < threshold ? 'noisy' : 'ok';
 }
 
+// withTimeout: Fail Fast backstop (architecture principle #5). playwright's
+// page.evaluate has NO internal timeout, so a stalled compositor (rAF never
+// fires) hangs the await forever — in CI that decays into a 15m job-level
+// cancel (non-success, non-actionable) instead of a structured failure
+// (bug-20260622-fps-reporter-lavapipe-raf-stall). Racing the work against a
+// timer converts the hang into a rejection within `ms`, which the sample loop
+// records as a lost sample -> resolveFpsStatus returns 'noisy' -> exit 1 +
+// 'metric-status-not-ok'. The timer is cleared on settle so a winning work
+// promise never leaks a pending handle that would keep the event loop alive.
+export function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 // ----------------------------------------------------------------------------
 // CLI entry — gated so `import { computeP95, ... }` from tests does not boot
 // vite preview. The check `import.meta.url === url.pathToFileURL(argv[1]).href`
@@ -260,7 +277,17 @@ async function runFpsCli() {
 
   let browser;
   try {
-    browser = await chromium.launch({ headless: true });
+    // --disable-gpu: the fps reporter only counts raw requestAnimationFrame
+    // callbacks (no WebGPU dependency — see ci.yml metrics-validate comment).
+    // The metrics-validate job's `Detect lavapipe ICD` step exports
+    // VK_ICD_FILENAMES / VK_DRIVER_FILES into $GITHUB_ENV, which leak into this
+    // step's env. Without this flag headless chromium's GPU process picks up the
+    // lavapipe ICD and tries to init software Vulkan; that init intermittently
+    // stalls the compositor, so rAF stops firing and page.evaluate (which has no
+    // internal timeout) hangs until the 15m job-level cancel
+    // (bug-20260622-fps-reporter-lavapipe-raf-stall). Forcing the pure-software
+    // compositor path keeps rAF on a CPU timer that never touches Vulkan.
+    browser = await chromium.launch({ headless: true, args: ['--disable-gpu'] });
   } catch (err) {
     killPreview();
     writeReport(buildEntry('unavailable', null, [], `chromium launch failed: ${err.message}`));
@@ -294,10 +321,22 @@ async function runFpsCli() {
     }, framesPerSampleArg);
   }
 
+  // Per-sample wall-clock ceiling. A healthy sample is framesPerSample/60s
+  // (~2s for the 120-frame default); even a slow lavapipe runner finishes in a
+  // few seconds. 30s is far above any healthy sample yet far below the 15m
+  // job-level timeout, so a stalled rAF fails in seconds with a structured
+  // 'metric-status-not-ok' instead of an opaque job cancel. Override via
+  // FPS_SAMPLE_TIMEOUT_MS for slower environments.
+  const sampleTimeoutMs = Number.parseInt(process.env.FPS_SAMPLE_TIMEOUT_MS ?? '30000', 10);
+
   const samples = [];
   for (let i = 0; i < sampleCount; i++) {
     try {
-      const elapsedMs = await measureOneSample(framesPerSample);
+      const elapsedMs = await withTimeout(
+        measureOneSample(framesPerSample),
+        sampleTimeoutMs,
+        `fps sample ${i + 1}/${sampleCount}`,
+      );
       const fps = elapsedMs > 0 ? (framesPerSample * 1000) / elapsedMs : 0;
       samples.push({ frames: framesPerSample, elapsed_ms: elapsedMs, fps });
       process.stdout.write(

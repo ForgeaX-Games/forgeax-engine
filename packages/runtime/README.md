@@ -773,7 +773,7 @@ import {
 | `MeshFilter` | `assetHandle: ref` (u32) | 必填；未注册 → fire onError + skip entity |
 | `MeshRenderer` | `materials: array<shared<MaterialAsset>>`（spawn payload 是 `Partial<ShapeOf<S>>`，字段可省略；feat-20260608 M2 / w7 multi-material array：positional `materials[i]` ↔ `MeshAsset.submeshes[i]`；feat-20260614 handle->shared rename） | `materials` undefined / 空数组 → `defaultMaterialSnapshot()` mid-grey unlit（D-Q7 case B，no onError）；`materials.length !== submeshes.length` → fire `AssetError 'mesh-renderer-material-count-mismatch'` + entity skip（feat-20260608 M2 / w11）；`materials[i]` 非零但未注册 → fire `RhiError 'asset-not-registered'` + entity skip（D-Q7 case C） |
 | `Camera` | `fov + aspect + near + far + clearR/G/B/A + tonemap + exposure + whitePoint + antialias + bloom* + ...`（projection + clear + tonemap + AA + bloom 字段族） | spawn 时显式给（不自动）；clear 默认 `[0, 0, 0, 1]`；详见 §Camera clear color + §Anti-Aliasing 子章节 |
-| `DirectionalLight` | `directionX/Y/Z + colorR/G/B + intensity`（7 f32） | 0 light = unlit fallback（合法，不 fire onError） |
+| `DirectionalLight` | `directionX/Y/Z + colorR/G/B + intensity + castShadow`（7 f32 + 1 bool gate）+ `cascadeCount + splitLambda + cascadeBlend + mapSize + depthBias + normalBias + nearPlane + farPlane + pcfKernelSize`（9 f32 shadow params，feat-20260621 merge） | 0 light = unlit fallback（合法，不 fire onError）；castShadow 默认 true，zero-config spawn 即投射 cascaded shadow maps
 
 **错误分档表**（与 AGENTS.md `§ECS render bridge` 错误分档表同结构 SSOT；AI 用户 `renderer.onError(err => switch(err.code) {...})` 主消费方式 + `await renderer.ready` 主 reject 方式）：
 
@@ -903,13 +903,38 @@ renderer.onError((e: RhiError) => {
 
 | 分桶 | 规则 | 命中 component |
 |:--|:--|:--|
-| 单语义裸名 | drop `Component` suffix；命名直接表达单一语义 | `Transform` / `Camera` / `DirectionalLight` / `PointLight` / `SpotLight` / `Skylight` |
+| 单语义裸名 | drop `Component` suffix；命名直接表达单一语义 | `Transform` / `Camera` / `DirectionalLight`（含 shadow 字段，见下方 spawn 示例）/ `PointLight` / `SpotLight` / `Skylight` |
 | Unity 槽位 | `Filter` 槽位（资源选择）+ `Renderer` 槽位（材质 / 视觉绑定）后缀作 idiom 保留 | `MeshFilter` / `MeshRenderer` |
 | 关系组件持有者视角 | 名字 = 持有者对父的 verb / role；字段名与组件名互呼 | `ChildOf { parent: Entity }`（schema-vocab `'entity'`，relationship `mirror: 'Children'`，feat-20260514 M5/w18）/ `Children { entities: 'array<entity>' }`（feat-20260514-ecs-children-instances-managed-buffer-array：变长 `array<entity>` 取代 v1 OOS-04 的 `count: 'u32'` 计数 + 旧 `'entity[]'` 占位） |
 | 已合并复合 | category discriminant 下沉到 asset；单 component 持 `readonly Handle<Asset>[]`（feat-20260608 multi-material array：`materials[i]` ↔ `MeshAsset.submeshes[i]`） | `MeshRenderer { materials: readonly Handle<MaterialAsset>[] }`（`MaterialAsset.shadingModel` 路由 unlit / standard） |
 | 逐实体标志 | bool-ish `u8` 字段，默认为 1（opt-in culling），设为 0 禁用 | `MeshRenderer.frustumCulled`（`u8`）— per-entity opt-out of frustum culling |
 
 破坏性变更 row 见 [AGENTS.md §Breaking changes 2026-05-13](../../AGENTS.md#breaking-changes) 与 [§Breaking changes 2026-05-17 (Single MeshRenderer consolidation)](../../AGENTS.md#breaking-changes)。
+
+**`DirectionalLight` 合并 spawn 示例**（feat-20260621 -- shadow 字段并入灯光组件，无 `DirectionalLightShadow`）：
+
+```ts
+import { DirectionalLight } from '@forgeax/engine-runtime';
+
+// Zero-config（castShadow 默认为 true，4 级 cascade 全默认值）：
+world.spawn({ component: DirectionalLight, data: {
+  directionX: 0.2, directionY: -0.98, directionZ: 0,
+} }).unwrap();
+
+// 显式 shadow 配置（单组件，17 个字段）：
+world.spawn({ component: DirectionalLight, data: {
+  directionX: 0.2, directionY: -0.98, directionZ: 0,
+  colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+  cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2,
+  mapSize: 2048, nearPlane: 0.1, farPlane: 50,
+} }).unwrap();
+
+// 关闭阴影（castShadow: false，shadow 字段仍存但校验跳过）：
+world.spawn({ component: DirectionalLight, data: {
+  directionX: 0, directionY: -1, directionZ: 0,
+  castShadow: false,
+} }).unwrap();
+```
 
 ## Picking（屏幕 → 实体拾取）
 
@@ -1155,7 +1180,7 @@ world.spawn(
 
 ## Shadow mapping
 
-> feat-20260613-csm-cascaded-shadow-maps-unique-shadow-path -- CSM (Cascaded Shadow Maps) is the **single** shadow path. The N-cascade tile atlas with `cascadeCount=1` degenerates to the same shape as the legacy single-shadow slice; there is no separate single-cascade fallback. Mesh occluders cast shadows via per-cascade depth-only passes; the standard PBR path samples the atlas with slope-scaled depth bias, 3x3 PCF (Percentage-Closer Filtering), and inter-cascade linear blending. Cardinality cap: at most 1 `DirectionalLightShadow` component per world (N<=1). Without the component, the shadow pass is skipped and the main pass emits a once-warn.
+> feat-20260613-csm-cascaded-shadow-maps-unique-shadow-path + feat-20260621 merge -- CSM (Cascaded Shadow Maps) is the **single** shadow path. The N-cascade tile atlas with `cascadeCount=1` degenerates to the same shape as the legacy single-shadow slice; there is no separate single-cascade fallback. Mesh occluders cast shadows via per-cascade depth-only passes; the standard PBR path samples the atlas with slope-scaled depth bias, 3x3 PCF (Percentage-Closer Filtering), and inter-cascade linear blending. Shadow parameters are **merged into `DirectionalLight`** via a `castShadow` boolean toggle (default `true`) -- a zero-config `world.spawn({ component: DirectionalLight, data: {} })` casts cascaded shadows by default. Setting `castShadow: false` skips the shadow pass silently (no error / no warn). There is no separate `DirectionalLightShadow` component; it was deleted (feat-20260621 M1-M6).
 
 ### Evolution
 
@@ -1165,22 +1190,36 @@ world.spawn(
 | LO 3.1.2 (M2) | feat-20260520 w12-w14 | single-sample shadow lookup (`textureSampleCompareLevel`) in `evalDirectional()` | acne + peter-panning present (baseline artifact) |
 | LO 3.1.3 (M3) | feat-20260520 w15-w16 | slope-scaled depth bias + 3x3 PCF in `evalDirectional()` | acne suppressed; soft shadow edges via 9-tap PCF kernel |
 | CSM unique path | feat-20260613 w1-w29 | N-cascade tile atlas (mapSize x N stride x mapSize) + per-cascade frustum-fit (PSSM split, lambda-blended) + per-fragment cascade selection with linear blend; `cascadeCount=1` degenerates without a fallback path | single-cascade legacy fields (`orthoHalfExtent`, `lightSpaceMatrix`) gone; 4-cascade is default |
+| Merge into DirectionalLight | feat-20260621 M1-M6 | Shadow params merged into `DirectionalLight` (castShadow gate + 9 f32 shadow fields); `DirectionalLightShadow` component deleted; no cardinality cap | single-component spawn; `data: {}` enables shadows by default |
 
-### DirectionalLightShadow component
+### DirectionalLight shadow fields (merged, feat-20260621)
 
-9-field schema registered on the same entity as `DirectionalLight`. The shadow pass binds them by entity, not by world-scope; spawning on separate entities triggers a once-warn (`RuntimeErrorCode 'shadow-disabled-by-missing-component'`) and the shadow silently does not appear. Spawning >1 fails fast with `EcsErrorCode 'cardinality-exceeded'`. Field validation failures emit `ShadowInvalidConfigError` with `.code='shadow-invalid-config'` and `.detail.{field,value,min,max?}` for property-access narrowing (no string parsing).
+Shadow parameters live **directly on `DirectionalLight`** -- no separate component. `castShadow` defaults to `true`: a zero-config `world.spawn({ component: DirectionalLight, data: {} })` casts 4-cascade CSM shadows with all defaults. Set `castShadow: false` to opt one light out of shadow rendering (shadow fields are still stored but validation is skipped). There is **no cardinality cap** -- the `DirectionalLight` component is first-hit-wins (same as before). Field validation failures (`castShadow === true` only) emit `ShadowInvalidConfigError` with `.code='shadow-invalid-config'` and `.detail.{field,value,min,max?}` for property-access narrowing (no string parsing).
+
+**Light fields** (7 f32):
+
+| Field | Default | Semantics |
+|:--|:--|:--|
+| `directionX/Y/Z` | 0, -1, 0 | Outgoing light direction (shader internally negates) |
+| `colorR/G/B` | 1, 1, 1 | Linear-space RGB |
+| `intensity` | 1 | Light intensity multiplier |
+
+**Shadow fields** (1 bool gate + 9 f32, migrated from deleted `DirectionalLightShadow`):
 
 | Field | Default | Semantics | Range |
 |:--|:--|:--|:--|
+| `castShadow` | `true` | Does this light compute a shadow map? `false` skips the shadow pass (silent, no error/warn) | `bool` |
 | `cascadeCount` | 4 | Number of cascade tiles in the atlas. `1` degenerates to a single-tile path through the same WGSL kernel | integer in `[1, 4]` |
 | `splitLambda` | 0.75 | PSSM split weight: `0` = uniform (linear in view-space depth), `1` = log (denser splits near camera) | `[0, 1]` |
 | `cascadeBlend` | 0.2 | Fraction of each cascade's view-space slab over which the WGSL sampler linearly blends to the next cascade. `0` = hard transitions, `0.5` = full overlap | `[0, 0.5]` |
 | `mapSize` | 2048 | Per-cascade tile resolution (NxN). Atlas is `mapSize x cascadeCount` wide x `mapSize` tall, depth32float | `>= 1`; power-of-two recommended |
-| `depthBias` | 0.005 | Pipeline-side bias floor (shader-side slope-scaled bias dominates) | `>= 0` |
-| `normalBias` | 0.05 | Reserved for future normal-offset bias | `>= 0` |
+| `depthBias` | 0.005 | Constant depth-bias floor. Shader bias is `max(normalBias * (1 - N.L), depthBias)` — `depthBias` wins on faces near-perpendicular to the light; wired via the `view.depthBias` View UBO tail-pad lane | `>= 0` |
+| `normalBias` | 0.05 | Slope-scaled bias: scales the `1 - N.L` term so grazing-angle faces get more bias (reduces shadow acne). Wired via the `view.normalBias` View UBO tail-pad lane and consumed by `lighting-directional.wgsl` | `>= 0` |
 | `nearPlane` | 0.1 | Camera frustum near plane fed to PSSM split (must match `Camera.nearPlane`) | `> 0` |
 | `farPlane` | 50 | Camera frustum far plane fed to PSSM split (caps shadow visibility distance) | `> nearPlane` |
 | `pcfKernelSize` | 3 | PCF kernel size (odd, 1/3/5): drives the directional shadow PCF tap kernel via the `view.pcfKernelSize` View UBO tail-pad lane. `1` = hard edge (single tap), `3` = soft (9 taps), `5` = softer (25 taps); values clamp to MAX_PCF_HALF=2 | `odd, >= 1` |
+
+**Two-level `castShadow` disambiguation**: there are TWO `castShadow`-like concepts in the engine. (1) `DirectionalLight.castShadow` -- the **light-side toggle**: does this light compute/render a shadow map at all? `false` means the shadow atlas is not populated and the shader receives `shadowFactor = 1.0` (full light, no occlusion). (2) The **material/renderer-level ShadowCaster pass** -- whether a mesh writes into the shadow atlas. A mesh using `MaterialAsset` with a `passKind='shadow-caster'` pass (auto-generated by `Materials.standard(...)`) will be drawn into the shadow depth passes. A mesh whose material lacks that pass (e.g. hand-rolled custom material) silently does NOT write the atlas -- shadows won't occlude even when `castShadow` is `true`.
 
 Per-cascade frustum-fit (D-1, replaces the legacy fixed `orthoHalfExtent`): the camera frustum is split along view-space depth using PSSM with `splitLambda`; each cascade's 8 frustum corners are AABB-fit in light-space to derive the orthographic projection bounds. The camera projection variant (perspective vs orthographic) is honoured -- orthographic cameras feed `mat4.orthographic` to corner generation, perspective feeds `mat4.perspective`.
 
@@ -1200,23 +1239,26 @@ Slope-scaled bias (shader, `lighting-directional.wgsl::evalDirectional()`):
 ### Spawn example
 
 ```ts
-import { DirectionalLight, DirectionalLightShadow } from '@forgeax/engine-runtime';
+import { DirectionalLight } from '@forgeax/engine-runtime';
 
-// 4-cascade default (recommended baseline):
-world.spawn(
-  { component: DirectionalLight, data: { directionX: 0.2, directionY: -0.98, directionZ: 0,
-                                          colorR: 1, colorG: 1, colorB: 1, intensity: 1 } },
-  { component: DirectionalLightShadow, data: { cascadeCount: 4, splitLambda: 0.75,
-                                                cascadeBlend: 0.2, mapSize: 2048,
-                                                nearPlane: 0.1, farPlane: 50 } },
-).unwrap();
+// Zero-config: 4-cascade CSM with all defaults (castShadow defaults to true)
+world.spawn({ component: DirectionalLight, data: {
+  directionX: 0.2, directionY: -0.98, directionZ: 0,
+} }).unwrap();
 
-// cascadeCount=1 degenerate (compact scenes / low-budget devices):
-// Same WGSL path as 4-cascade -- no fallback shader variant.
-world.spawn(
-  { component: DirectionalLight, data: { directionX: 0, directionY: -1, directionZ: 0 } },
-  { component: DirectionalLightShadow, data: { cascadeCount: 1, mapSize: 1024 } },
-).unwrap();
+// Explicit config (all shadow fields on the same component):
+world.spawn({ component: DirectionalLight, data: {
+  directionX: 0.2, directionY: -0.98, directionZ: 0,
+  colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+  cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2,
+  mapSize: 2048, nearPlane: 0.1, farPlane: 50,
+} }).unwrap();
+
+// Opt out of shadows (still one component):
+world.spawn({ component: DirectionalLight, data: {
+  directionX: 0, directionY: -1, directionZ: 0,
+  castShadow: false,
+} }).unwrap();
 ```
 
 ### Knowledge base
@@ -1225,7 +1267,7 @@ See [.forgeax-harness/knowledge-base/wiki/learnopengl-as-evolution-roadmap.md](.
 
 ### PointLightShadow component (URP + HDRP)
 
-> feat-20260612-point-light-shadows-urp-hdrp M1-M5 — omnidirectional cube-map shadows for point lights, dual-pipeline (URP forward + HDRP cluster-forward). Cardinality cap = 4 shadow-casting point lights per world (cube_array atlas layers = 4). Spawn `PointLightShadow` on the same entity as `PointLight`; mismatched entities are silently skipped (same once-warn pattern as `DirectionalLightShadow`). Spawning a 5th `PointLightShadow` fails fast with `EcsErrorCode 'cardinality-exceeded'`.
+> feat-20260612-point-light-shadows-urp-hdrp M1-M5 — omnidirectional cube-map shadows for point lights, dual-pipeline (URP forward + HDRP cluster-forward). Cardinality cap = 4 shadow-casting point lights per world (cube_array atlas layers = 4). Spawn `PointLightShadow` on the same entity as `PointLight`; mismatched entities are silently skipped. Spawning a 5th `PointLightShadow` fails fast with `EcsErrorCode 'cardinality-exceeded'`. Note: `DirectionalLight` shadow params are merged into the light component (see above); `PointLightShadow` remains a separate component.
 
 6-field schema (defaults preserve LearnOpenGL 3.2 reference parameters):
 
@@ -1238,7 +1280,7 @@ See [.forgeax-harness/knowledge-base/wiki/learnopengl-as-evolution-roadmap.md](.
 | `farPlane` | 25 | Cube perspective far plane | `> nearPlane` (validate fails otherwise) |
 | `pcfKernelSize` | 3 | PCF kernel size (odd >= 1). Note: point shadows use hardware 2x2 PCF, so this field does not affect the point-light tap count (the dynamic kernel lands on directional shadows only) | `odd, >= 1` |
 
-`PointLightShadow.validate()` emits `ShadowInvalidConfigError` (`RuntimeErrorCode 'shadow-invalid-config'`, shared with `DirectionalLightShadow`) on `mapSize < 1` or `farPlane <= nearPlane`. The closed `RuntimeErrorCode` union is unchanged — point shadows reuse the directional surface (charter P4 closed-union SSOT).
+`PointLightShadow.validate()` emits `ShadowInvalidConfigError` (`RuntimeErrorCode 'shadow-invalid-config'`, shared with `DirectionalLight.validate()`) on `mapSize < 1` or `farPlane <= nearPlane`. The closed `RuntimeErrorCode` union is unchanged -- point shadows reuse the directional surface (charter P4 closed-union SSOT).
 
 #### URP vs HDRP atlas binding contract
 

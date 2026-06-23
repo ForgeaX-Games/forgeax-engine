@@ -140,7 +140,6 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  DirectionalLightShadow,
   PointLight,
   resolveAssetHandle,
   Skylight,
@@ -411,9 +410,7 @@ world.spawn(
   { component: DirectionalLight, data: {
     directionX: d[0] * invLen, directionY: d[1] * invLen, directionZ: d[2] * invLen,
     colorR: 1.0, colorG: 0.95, colorB: 0.85, intensity: 3.0,
-  } },
-  { component: DirectionalLightShadow, data: {
-    mapSize: 2048, farPlane: 4500, orthoHalfExtent: 2200, depthBias: 0.005,
+    mapSize: 2048, farPlane: 4500, depthBias: 0.005,
   } },
 );
 

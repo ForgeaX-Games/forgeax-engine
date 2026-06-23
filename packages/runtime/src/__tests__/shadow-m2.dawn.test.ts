@@ -26,7 +26,6 @@ import {
   Camera,
   createRenderer,
   DirectionalLight,
-  DirectionalLightShadow,
   HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
@@ -180,38 +179,31 @@ function buildFixtureWorld(): World {
   const world = new World();
 
   // Light + shadow on same entity.
-  world.spawn(
-    {
-      component: DirectionalLight,
-      data: {
-        directionX: FIXTURE_LIGHT_DIR[0],
-        directionY: FIXTURE_LIGHT_DIR[1],
-        directionZ: FIXTURE_LIGHT_DIR[2],
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
-        intensity: 1,
-      },
+  world.spawn({
+    component: DirectionalLight,
+    data: {
+      directionX: FIXTURE_LIGHT_DIR[0],
+      directionY: FIXTURE_LIGHT_DIR[1],
+      directionZ: FIXTURE_LIGHT_DIR[2],
+      colorR: 1,
+      colorG: 1,
+      colorB: 1,
+      intensity: 1,
+      // feat-20260613-csm M6 / w22: shadow-m2 fixture predates CSM and
+      // expects all geometry to land in cascade 0 (the test reads
+      // debug.center, which always samples the cascade-0 tile -- see
+      // debugReadbackShadowDepth in createRenderer.ts). With cascadeCount=4
+      // (CSM default), PSSM splits between [nearPlane=0.1,
+      // farPlane=50] place cascade 0 in view-space z [0.1, 3.5];
+      // the fixture's geometry sits at world z=0 (camera at z=10), which
+      // is in view-space z=10 -> cascade 2/3, leaving cascade 0 empty.
+      // Pinning cascadeCount=1 keeps the AC-12 single-shadow contract.
+      cascadeCount: 1,
+      mapSize: FIXTURE_MAP_SIZE,
+      nearPlane: 0.1,
+      farPlane: 50,
     },
-    {
-      component: DirectionalLightShadow,
-      data: {
-        // feat-20260613-csm M6 / w22: shadow-m2 fixture predates CSM and
-        // expects all geometry to land in cascade 0 (the test reads
-        // debug.center, which always samples the cascade-0 tile -- see
-        // debugReadbackShadowDepth in createRenderer.ts). With cascadeCount=4
-        // (CSM default), PSSM splits between [shadow.nearPlane=0.1,
-        // shadow.farPlane=50] place cascade 0 in view-space z [0.1, 3.5];
-        // the fixture's geometry sits at world z=0 (camera at z=10), which
-        // is in view-space z=10 -> cascade 2/3, leaving cascade 0 empty.
-        // Pinning cascadeCount=1 keeps the AC-12 single-shadow contract.
-        cascadeCount: 1,
-        mapSize: FIXTURE_MAP_SIZE,
-        nearPlane: 0.1,
-        farPlane: 50,
-      },
-    },
-  );
+  });
 
   // Camera at (0, 0, 10) identity quat looking along -Z, orthographic
   // projection wide enough to capture the ground plane (y in [-5, 5]) and

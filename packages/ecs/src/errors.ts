@@ -825,7 +825,7 @@ export class ManagedArrayElementTypeNotAllowedError extends Error {
 //
 // `'cardinality-exceeded'` is triggered when ECS spawn / addComponent
 // detects more than one entity carrying a cardinality=1 component such as
-// DirectionalLightShadow (plan-strategy D-3). `.detail` carries
+// PointLightShadow (plan-strategy D-3). `.detail` carries
 // `{ componentName, count, max }` so AI users narrow on `.code` then read
 // `.detail` for the offending component name + the bound violated
 // (charter P3 progressive disclosure).
@@ -848,9 +848,9 @@ export class ManagedArrayElementTypeNotAllowedError extends Error {
 /**
  * Thrown / returned via `Result.err` when an attempt is made to add or spawn
  * a second entity with a component declared cardinality = 1 on the World.
- * The canonical first consumer is `DirectionalLightShadow` (only one shadow
- * caster per scene is supported); future singleton-style components route
- * through the same code.
+ * The canonical first consumer is `PointLightShadow` (at most 4 shadow-casting
+ * point lights per scene, cardinality=4); other bounded components route through
+ * the same code.
  *
  * `.code = 'cardinality-exceeded'`
  * `.detail = { componentName, count, max }`
@@ -1449,7 +1449,7 @@ export type EcsErrorCode =
   // evolution per AGENTS.md Error model evolution contract. Surfaced from
   // ECS spawn / addComponent when more than one entity carries a
   // cardinality=1 component (canonical first consumer:
-  // DirectionalLightShadow).
+  // PointLightShadow).
   | 'cardinality-exceeded'
   // feat-20260520-2d-sprite-layer-mvp M-2 w13 — resource-setter bound
   // validation (plan-strategy D-4). 25 -> 26 minor evolution; first

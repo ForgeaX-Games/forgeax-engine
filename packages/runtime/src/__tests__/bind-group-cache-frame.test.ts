@@ -407,7 +407,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //   (a) stable scene, >= 2 draws => view main cache hit (counter not bumped by view BG)
   //   (b) resize (view UBO realloc => handle change) => cache miss -> rebuild -> hit
   //   (c) AC-06: main vs shadow variant keys distinct, each variant caches independently;
-  //       both variants present when scene has shadow (DirectionalLightShadow component)
+  //       both variants present when scene has shadow (castShadow:true on DirectionalLight)
   //
   // TDD red: cache Maps + helper do not exist yet; view/mesh createBindGroup calls
   // are not wired through cache. Tests will fail when asserting cache-hit counter
@@ -583,7 +583,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     MeshRenderer: unknown;
     Camera: unknown;
     DirectionalLight: unknown;
-    DirectionalLightShadow: unknown;
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
@@ -639,7 +638,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       MeshFilter: unknown;
       MeshRenderer: unknown;
       DirectionalLight: unknown;
-      DirectionalLightShadow: unknown;
       HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
     },
     options?: { withShadow?: boolean },
@@ -647,8 +645,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     const w = world as {
       spawn: (...args: unknown[]) => unknown;
     };
-    if (options?.withShadow) {
-    }
+    // withShadow gated on castShadow (now merged into DirectionalLight)
 
     w.spawn(
       {
@@ -668,7 +665,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       { component: C.Transform, data: cameraTransform() },
     );
     w.spawn(
-      { component: C.DirectionalLight, data: {} },
+      {
+        component: C.DirectionalLight,
+        data: { castShadow: options?.withShadow === true },
+      },
       { component: C.Transform, data: cameraTransform() },
     );
     w.spawn(

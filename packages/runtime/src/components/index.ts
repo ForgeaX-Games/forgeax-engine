@@ -64,7 +64,6 @@ export {
 export { Children } from './children';
 export { ChildOf } from './child-of';
 export { DirectionalLight } from './directional-light';
-export { DirectionalLightShadow } from './directional-light-shadow';
 export { Instances, type InstancesData } from './instances';
 export { Layer } from './layer';
 export { MeshFilter } from './mesh-filter';

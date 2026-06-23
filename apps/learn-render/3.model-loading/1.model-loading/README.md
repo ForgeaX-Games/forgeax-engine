@@ -1,14 +1,14 @@
 # learn-render 3.1 -- Model Loading: Sponza
 
 > [!NOTE]
-> LearnOpenGL section 3.1 (Model Loading) -- Sponza atrium with full PBR rendering, multi-light (1 DirectionalLightShadow + 4 PointLight), and Skylight IBL, loaded through the `@forgeax/engine-gltf` Tier-C importer (103 primitives, 25 materials, 69 textures).
+> LearnOpenGL section 3.1 (Model Loading) -- Sponza atrium with full PBR rendering, multi-light (1 DirectionalLight + 4 PointLight), and Skylight IBL, loaded through the `@forgeax/engine-gltf` Tier-C importer (103 primitives, 25 materials, 69 textures).
 
 ## What this demo teaches
 
 Sponza is the canonical large-model stress test for a real-time PBR pipeline. This demo shows:
 
 1. **glTF Tier-C import** -- `parseGltf` reads 103 primitives into per-primitive `MeshIr` entries with POSITION + NORMAL + TEXCOORD_0 + TANGENT vertex attributes, loads 69 textures (63 JPG + 4 PNG) through `externalLoader`, and bridges 25 `pbrMetallicRoughness` materials into `MaterialAsset { shadingModel: 'standard' }` with `baseColorTexture` / `metallicRoughnessTexture` / `normalTexture` slots.
-2. **DirectionalLight + Shadow** -- 1 warm-sun directional light casts PCF shadows across the atrium (`mapSize=2048`, `farPlane=4500`, `orthoHalfExtent=2200`, `depthBias=0.005`).
+2. **DirectionalLight with castShadow** -- 1 warm-sun directional light casts PCF shadows across the atrium (`mapSize=2048`, `farPlane=4500`, `depthBias=0.005`).
 3. **4 PointLight cap** -- 4 point lights (warm yellow, cyan, magenta, neutral white) placed in the atrium demonstrate the forgeax 4-point-light rendering cap (charter F4: demo failures route to engine fixes).
 4. **Skylight IBL** -- HDR equirectangular newport_loft.hdr is loaded as irradiance + specular cubemap through `renderer.uploadCubemapFromEquirect`, feeding the PBR indirect diffuse + specular terms.
 5. **4-step recipe** -- `configurePackIndex` -> `loadByGuid<SceneAsset>` -> `assets.instantiate` -> `app.start()`, identical to hello-gltf (charter P4 consistent abstraction).
@@ -41,7 +41,7 @@ Measured from `Sponza.gltf` by `jq` (research section G-2; 167 KB JSON, fetch fr
 
 ## Light layout
 
-### DirectionalLight + DirectionalLightShadow
+### DirectionalLight (merged shadow fields)
 
 | Parameter | Value |
 |:--|:--|
@@ -50,7 +50,6 @@ Measured from `Sponza.gltf` by `jq` (research section G-2; 167 KB JSON, fetch fr
 | Intensity | 3.0 |
 | `mapSize` | 2048 |
 | `farPlane` | 4500 |
-| `orthoHalfExtent` | 2200 |
 | `depthBias` | 0.005 |
 
 ### 4 PointLight

@@ -119,12 +119,31 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     expectTypeOf<Data['autoAspect']>().toEqualTypeOf<boolean>();
   });
 
-  it('DirectionalLight data shape has 7 number fields', () => {
+  it('DirectionalLight data shape: 7 light fields + castShadow bool + 9 merged shadow fields', () => {
+    // feat-20260621: DirectionalLightShadow merged into DirectionalLight via castShadow toggle.
     type Data = ShapeOf<typeof DirectionalLight.schema>;
     expectTypeOf<keyof Data>().toEqualTypeOf<
-      'directionX' | 'directionY' | 'directionZ' | 'colorR' | 'colorG' | 'colorB' | 'intensity'
+      | 'directionX'
+      | 'directionY'
+      | 'directionZ'
+      | 'colorR'
+      | 'colorG'
+      | 'colorB'
+      | 'intensity'
+      | 'castShadow'
+      | 'mapSize'
+      | 'cascadeCount'
+      | 'splitLambda'
+      | 'cascadeBlend'
+      | 'depthBias'
+      | 'normalBias'
+      | 'nearPlane'
+      | 'farPlane'
+      | 'pcfKernelSize'
     >();
     expectTypeOf<Data['intensity']>().toEqualTypeOf<number>();
+    // bool column narrows to boolean, not number.
+    expectTypeOf<Data['castShadow']>().toEqualTypeOf<boolean>();
   });
 });
 

@@ -1,6 +1,6 @@
 // apps/learn-render/3.model-loading/1.model-loading/src/main.ts
 // LearnOpenGL section 3.1 model-loading - Sponza atrium with multi-light +
-// DirectionalLightShadow + Skylight IBL. The whole gltf -> mesh / material /
+// DirectionalLight + Skylight IBL. The whole gltf -> mesh / material /
 // scene / texture asset graph flows through the build-time gltfImporter +
 // vite-plugin-pack pipeline; the demo body stays at the 4-step idiom
 // (charter P4 / requirements AC-17 / plan section 9.1):
@@ -34,7 +34,6 @@ import {
   Camera,
   createDevImportTransport,
   DirectionalLight,
-  DirectionalLightShadow,
   EngineEnvironmentError,
   PointLight,
   registerRuntimeInspector,
@@ -225,7 +224,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 // === Lights + Skylight + Camera ===========================================
 
 function spawnLights(world: World): void {
-  // DirectionalLight (warm sun, plan D-7) + DirectionalLightShadow.
+  // DirectionalLight with merged shadow fields (warm sun, plan D-7).
   const d: [number, number, number] = [-0.3, -1.0, -0.3];
   const invLen = 1 / Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
   world.spawn(
@@ -239,11 +238,6 @@ function spawnLights(world: World): void {
         colorG: 0.95,
         colorB: 0.85,
         intensity: 3.0,
-      },
-    },
-    {
-      component: DirectionalLightShadow,
-      data: {
         mapSize: 2048,
         // feat-20260613-csm M6 / w23: explicit 4-cascade Sponza baseline.
         // cascadeCount=4 + splitLambda=0.75 + cascadeBlend=0.2 are the

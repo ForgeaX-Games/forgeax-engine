@@ -1,7 +1,7 @@
 // apps/learn-render/5.advanced-lighting/3.3.csm/src/main.ts
 // LearnOpenGL section 5.3 -- cascaded shadow maps (CSM / PSSM).
 // Large wood floor (scale ~50) + 10 cubes spanning 0-40m depth + directional
-// light with a 4-cascade DirectionalLightShadow. Walk forward (first-person)
+// light with a 4-cascade castShadow. Walk forward (first-person)
 // to see near cubes lit by tight near-cascade shadows and far cubes by the
 // coarse far cascade. Keys 1-4 highlight a single cascade band, key 0 turns
 // the cascade-overlay debug-viz off, Space toggles the shadow on/off.
@@ -28,7 +28,6 @@ import {
   createDevImportTransport,
   createPlaneGeometry,
   DirectionalLight,
-  DirectionalLightShadow,
   HANDLE_CUBE,
   Materials,
   MeshFilter,
@@ -205,11 +204,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       data: {
         directionX: 0.3, directionY: -0.9, directionZ: -0.3,
         colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+        castShadow: true,
+        ...SHADOW_CONFIG,
       },
-    },
-    {
-      component: DirectionalLightShadow,
-      data: SHADOW_CONFIG,
     },
   ).unwrap();
 
@@ -265,11 +262,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (e.key === ' ' || e.key === 'Space') {
       e.preventDefault();
       if (shadowEnabled) {
-        world.removeComponent(lightEntity, DirectionalLightShadow);
+        world.set(lightEntity, DirectionalLight, { castShadow: false });
         shadowEnabled = false;
         console.warn('[learn-render 5.3.3 csm] shadow disabled via Space toggle');
       } else {
-        world.set(lightEntity, DirectionalLightShadow, SHADOW_CONFIG);
+        world.set(lightEntity, DirectionalLight, { castShadow: true, ...SHADOW_CONFIG });
         shadowEnabled = true;
         console.warn('[learn-render 5.3.3 csm] shadow enabled via Space toggle');
       }

@@ -16,7 +16,6 @@ import {
   createDevImportTransport,
   createPlaneGeometry,
   DirectionalLight,
-  DirectionalLightShadow,
   HANDLE_CUBE,
   Materials,
   MeshFilter,
@@ -188,11 +187,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       data: {
         directionX: 0.2, directionY: -0.98, directionZ: 0,
         colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+        castShadow: true,
+        ...SHADOW_CONFIG,
       },
-    },
-    {
-      component: DirectionalLightShadow,
-      data: SHADOW_CONFIG,
     },
   ).unwrap();
 
@@ -223,11 +220,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (e.key === 'Space') {
       e.preventDefault();
       if (shadowEnabled) {
-        world.removeComponent(lightEntity, DirectionalLightShadow);
+        world.set(lightEntity, DirectionalLight, { castShadow: false });
         shadowEnabled = false;
         console.warn('[learn-render 5.3.1 directional shadow] shadow disabled via Space toggle');
       } else {
-        world.set(lightEntity, DirectionalLightShadow, {
+        world.set(lightEntity, DirectionalLight, {
+          castShadow: true,
           cascadeCount: 1,
           mapSize: 2048,
           depthBias: 0.005,
@@ -242,7 +240,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (e.key === 'p' || e.key === 'P') {
       e.preventDefault();
       currentPcfSize = currentPcfSize === 1 ? 3 : 1;
-      world.set(lightEntity, DirectionalLightShadow, { pcfKernelSize: currentPcfSize });
+      world.set(lightEntity, DirectionalLight, { pcfKernelSize: currentPcfSize });
       console.warn(
         `[learn-render 5.3.1 directional shadow] pcfKernelSize toggled to ${currentPcfSize} via P toggle`,
       );

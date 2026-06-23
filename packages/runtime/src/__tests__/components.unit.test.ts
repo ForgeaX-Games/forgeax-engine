@@ -264,9 +264,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(Camera.schema.autoAspect).toBe('bool');
     });
 
-    it('DirectionalLight has 7 f32 fields (direction x/y/z + color r/g/b + intensity)', () => {
+    it('DirectionalLight has 17 fields: 7 light f32 + castShadow bool + 9 merged shadow f32', () => {
+      // feat-20260621: DirectionalLightShadow merged into DirectionalLight via castShadow toggle.
       expect(DirectionalLight.name).toBe('DirectionalLight');
-      expect(Object.keys(DirectionalLight.schema).length).toBe(7);
+      expect(Object.keys(DirectionalLight.schema).length).toBe(17);
+      // 7 light fields
       expect(DirectionalLight.schema.directionX).toBe('f32');
       expect(DirectionalLight.schema.directionY).toBe('f32');
       expect(DirectionalLight.schema.directionZ).toBe('f32');
@@ -274,6 +276,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(DirectionalLight.schema.colorG).toBe('f32');
       expect(DirectionalLight.schema.colorB).toBe('f32');
       expect(DirectionalLight.schema.intensity).toBe('f32');
+      // shadow gate + 9 merged shadow fields
+      expect(DirectionalLight.schema.castShadow).toBe('bool');
+      expect(DirectionalLight.schema.mapSize).toBe('f32');
+      expect(DirectionalLight.schema.cascadeCount).toBe('f32');
+      expect(DirectionalLight.schema.splitLambda).toBe('f32');
+      expect(DirectionalLight.schema.cascadeBlend).toBe('f32');
+      expect(DirectionalLight.schema.depthBias).toBe('f32');
+      expect(DirectionalLight.schema.normalBias).toBe('f32');
+      expect(DirectionalLight.schema.nearPlane).toBe('f32');
+      expect(DirectionalLight.schema.farPlane).toBe('f32');
+      expect(DirectionalLight.schema.pcfKernelSize).toBe('f32');
     });
 
     it('all 5 components are frozen tokens with auto-incrementing .id', () => {
