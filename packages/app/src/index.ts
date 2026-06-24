@@ -43,7 +43,7 @@ export {
   AppError,
   isAppError,
 } from './errors';
-export type { GameContext, GameEntry } from './game-context';
+export type { BootstrapContext, BootstrapEntry, GameContext, GameEntry } from './game-context';
 
 import {
   isLoadGameError,

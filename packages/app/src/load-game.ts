@@ -1,4 +1,4 @@
-// @forgeax/engine-app -- loadGame(slug, resolver) -> Result<GameEntry, LoadGameError>
+// @forgeax/engine-app -- loadGame(slug, resolver) -> Result<BootstrapEntry, LoadGameError>
 //
 // Pure-function load helper that validates a dynamically-imported game
 // template module. The resolver is an injection point so loadGame is
@@ -7,8 +7,8 @@
 // Shape:
 //   1. Call resolver(slug). If resolver throws, distinguish module-not-found
 //      (slug in detail) from import-failed (cause in detail).
-//   2. If resolver returns a module, check typeof module.default === 'function'.
-//   3. On success, return Result.ok(module.default).
+//   2. If resolver returns a module, check typeof module.bootstrap === 'function'.
+//   3. On success, return Result.ok(module.bootstrap).
 //
 // Constraints from upstream:
 //   - requirements D-3: loadGame does NOT depend on Vite specifics
@@ -22,16 +22,16 @@
 
 import { err, ok, type Result } from '@forgeax/engine-ecs';
 
-import type { GameEntry } from './game-context';
+import type { BootstrapEntry } from './game-context';
 import { LOAD_GAME_ERROR_HINTS, LOAD_GAME_EXPECTED, LoadGameError } from './load-game-errors';
 
 /**
  * The shape of a module that the resolver returns. loadGame checks
- * `typeof module.default === 'function'` before treating it as a valid
- * GameEntry.
+ * `typeof module.bootstrap === 'function'` before treating it as a valid
+ * BootstrapEntry.
  */
 interface GameEntryModule {
-  readonly default?: unknown;
+  readonly bootstrap?: unknown;
   readonly [key: string]: unknown;
 }
 
@@ -48,8 +48,8 @@ export type GameEntryResolver = (slug: string) => Promise<GameEntryModule>;
 /**
  * Load and validate a game template module.
  *
- * Returns `Result.ok<GameEntry>` when the resolver returns a module
- * whose `default` export is a function. Returns `Result.err<LoadGameError>`
+ * Returns `Result.ok<BootstrapEntry>` when the resolver returns a module
+ * whose `bootstrap` export is a function. Returns `Result.err<LoadGameError>`
  * with one of 3 error codes on failure.
  *
  * @param slug - The game identifier (e.g. 'game-default'). Passed
@@ -60,7 +60,7 @@ export type GameEntryResolver = (slug: string) => Promise<GameEntryModule>;
 export async function loadGame(
   slug: string,
   resolver: GameEntryResolver,
-): Promise<Result<GameEntry, LoadGameError>> {
+): Promise<Result<BootstrapEntry, LoadGameError>> {
   let module: GameEntryModule;
   try {
     module = await resolver(slug);
@@ -91,9 +91,9 @@ export async function loadGame(
     );
   }
 
-  // Validate default export: must be a function. null / undefined /
+  // Validate bootstrap named export: must be a function. null / undefined /
   // non-function values are all invalid-format.
-  if (typeof module.default !== 'function') {
+  if (typeof module.bootstrap !== 'function') {
     const exportKeys = Object.keys(module);
     return err(
       new LoadGameError({
@@ -105,5 +105,5 @@ export async function loadGame(
     );
   }
 
-  return ok(module.default as GameEntry);
+  return ok(module.bootstrap as BootstrapEntry);
 }

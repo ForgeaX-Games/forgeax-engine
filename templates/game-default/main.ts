@@ -24,10 +24,13 @@ import {
 type MatHandle = Handle<'MaterialAsset', 'shared'>;
 import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { EntityHandle } from '@forgeax/engine-ecs';
-import type { GameEntry } from '@forgeax/engine-app';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import type { BootstrapContext } from '@forgeax/engine-app';
 import type { SceneAsset, LocalNodeId, TextureAsset } from '@forgeax/engine-types';
 import { installHud, type ViewMode } from './src/hud';
+
+/** Narrowed context for helper functions consuming world + optional assets/app. */
+type Ctx = { world: World; assets?: import('@forgeax/engine-runtime').AssetRegistry; app?: import('@forgeax/engine-app').App };
 
 // sky.hdr lives in the forgeax-engine-assets submodule (demo-assets/template-
 // game-default/sky.hdr + matching *.meta.json sidecar). pluginPack scans that
@@ -69,7 +72,7 @@ interface ScenePack { assets: PackAsset[] }
 // whose WebGPU lacks the rgba16float render-attachment the IBL precompute needs.
 // Then, on Chromium/Dawn only, upgrade that Skylight to full image-based
 // lighting from sky.hdr + add the visible SkyboxBackground.
-async function installHdrSky(ctx: Parameters<GameEntry>[0]): Promise<void> {
+async function installHdrSky(ctx: Ctx): Promise<void> {
   const skylight = ctx.world.spawn(
     { component: Skylight, data: { colorR: 0.9, colorG: 0.95, colorB: 1.0, intensity: 0.35 } },
   ).unwrap();
@@ -117,7 +120,7 @@ async function installHdrSky(ctx: Parameters<GameEntry>[0]): Promise<void> {
 // null on any failure (caller falls back to a minimal scene).
 async function instantiateScenePack(
   pack: ScenePack,
-  ctx: Parameters<GameEntry>[0],
+  ctx: Ctx,
 ): Promise<{ mapping: ReadonlyMap<number, Entity>; nodes: PackNode[] } | null> {
   const { world, assets } = ctx;
   const sceneEntry = pack.assets.find((a) => a.kind === 'scene');
@@ -254,7 +257,7 @@ async function instantiateScenePack(
 
 // Minimal fallback scene (ground + cube + sun) so Play still runs if the pack is
 // missing/unreadable. The editor authors the real one.
-function spawnFallbackScene(ctx: Parameters<GameEntry>[0]): void {
+function spawnFallbackScene(ctx: Ctx): void {
   const { world, assets } = ctx;
   const ground = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ baseColor: [0.48, 0.62, 0.35, 1], roughness: 0.95, metallic: 0 }));
   world.spawn(
@@ -267,7 +270,7 @@ function spawnFallbackScene(ctx: Parameters<GameEntry>[0]): void {
 // A THICK invisible static floor whose TOP sits at y=0 (the visual ground's top).
 // Dynamic props rest + collide against this, not the thin 0.2-tall visual ground —
 // so a hard knock can't push them partway THROUGH a thin slab and leave them sunk.
-function spawnGroundCollider(ctx: Parameters<GameEntry>[0]): void {
+function spawnGroundCollider(ctx: Ctx): void {
   ctx.world.spawn(
     { component: Transform, data: { posX: 0, posY: -5, posZ: 0 } },
     { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
@@ -291,7 +294,7 @@ const PLAYER_Y = 0.75;
 //                                   (树有碰撞体、无物理 — dynamic props bounce off it)
 //   Player / Sun                  → skipped (Player becomes the kinematic box-man root)
 function attachScenePhysics(
-  ctx: Parameters<GameEntry>[0],
+  ctx: Ctx,
   loaded: { mapping: ReadonlyMap<number, Entity>; nodes: PackNode[] },
 ): {
   props: Array<{ e: EntityHandle; mat: MatHandle }>;
@@ -370,7 +373,7 @@ function attachScenePhysics(
 // parts to the root at runtime (engine runtime ChildOf works) so the avatar moves as
 // a unit, and make the root a kinematic body (driven by its Transform → shoves props).
 function setupPlayerRoot(
-  ctx: Parameters<GameEntry>[0],
+  ctx: Ctx,
   root: EntityHandle,
   loaded: { mapping: ReadonlyMap<number, Entity>; nodes: PackNode[] },
 ): void {
@@ -393,8 +396,8 @@ function setupPlayerRoot(
   world.addComponent(root, { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.4 } });
 }
 
-const start: GameEntry = async (ctx) => {
-  const { world, registerUpdate } = ctx;
+export async function bootstrap(world: World, ctx?: BootstrapContext) {
+  const { registerUpdate } = ctx ?? {};
 
   const canvas = document.querySelector<HTMLCanvasElement>('#app')!;
   const dpr = window.devicePixelRatio || 1;
@@ -410,18 +413,18 @@ const start: GameEntry = async (ctx) => {
     const res = await fetch(new URL('./scene.pack.json', import.meta.url), { cache: 'no-store' });
     if (!res.ok) throw new Error(`scene.pack.json ${res.status}`);
     const pack = await res.json() as ScenePack;
-    loaded = await instantiateScenePack(pack, ctx);
+    loaded = await instantiateScenePack(pack, { world });
   } catch (err) {
     console.warn('[game] scene pack unavailable:', err);
   }
-  if (!loaded) spawnFallbackScene(ctx);
+  if (!loaded) spawnFallbackScene({ world });
 
   // Thick physics floor (top at y=0) so knocked props can't sink into the ground.
-  spawnGroundCollider(ctx);
+  spawnGroundCollider({ world });
 
   // HDR environment (skylight + skybox) -- same as ✎ Edit. tonemap (below) must be
   // active for the skybox pass; store lives on the app's renderer.
-  void installHdrSky(ctx);
+  void installHdrSky({ world, assets: ctx?.assets, app: ctx?.app });
 
   // ── physics: attach RigidBody/Collider to the scene + spawn showcase props,
   //    then make the Player a kinematic box-man root (▶ Play simulates; ✎ Edit
@@ -442,7 +445,7 @@ const start: GameEntry = async (ctx) => {
       const t = (playerNode.components.Transform ?? {}) as Record<string, number>;
       initX = t.posX ?? 0; initZ = t.posZ ?? 0;
       player = loaded.mapping.get(playerNode.localId);
-      if (player !== undefined) setupPlayerRoot(ctx, player, loaded);
+      if (player !== undefined) setupPlayerRoot({ world }, player, loaded);
     }
   }
   const origMatOf = new Map<EntityHandle, MatHandle>(flashables.map((f) => [f.e, f.mat] as [Entity, MatHandle]));
@@ -940,6 +943,4 @@ const start: GameEntry = async (ctx) => {
       }
     });
   }
-};
-
-export default start;
+}

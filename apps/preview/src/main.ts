@@ -1,9 +1,9 @@
-// apps/preview -- minimal Vite host for loading GameEntry templates.
+// apps/preview -- minimal Vite host for loading bootstrap entry templates.
 //
 // Three-statement bootstrap (charter F1 limited context + P1 progressive disclosure):
 //   1. createApp(canvas) -- one-shot engine wiring
 //   2. loadGame(slug, resolver) -- resolve + validate the template module
-//   3. await entry(ctx); app.start() -- run the game
+//   3. await entry.bootstrap(world, ctx); app.start() -- run the game
 //
 // The resolver is a dynamic import proxy injected by the host so loadGame
 // remains independent of Vite / bundler specifics. The slug defaults to
@@ -13,8 +13,8 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
   type CanvasAppError,
   createApp,
-  type GameContext,
-  type GameEntry,
+  type BootstrapContext,
+  type BootstrapEntry,
   isAppError,
   isLoadGameError,
   loadGame,
@@ -44,8 +44,7 @@ if (!app.ok) {
 const assets = app.value.renderer.assets;
 assets.configurePackIndex('/pack-index.json');
 
-const ctx: GameContext = {
-  world: app.value.world,
+const ctx: BootstrapContext = {
   assets,
   app: app.value,
   registerUpdate: (fn: (dt: number) => void) => app.value.registerUpdate(fn),
@@ -53,7 +52,7 @@ const ctx: GameContext = {
 
 const slug = new URLSearchParams(window.location.search).get('game') ?? 'game-default';
 
-const templateModules = import.meta.glob<{ default: GameEntry }>('../../../templates/*/main.ts');
+const templateModules = import.meta.glob<{ bootstrap: () => unknown }>('../../../templates/*/main.ts');
 
 const loaded = await loadGame(slug, (s) => {
   const key = `../../../templates/${s}/main.ts`;
@@ -66,11 +65,11 @@ if (!loaded.ok) {
   throw new Error('preview: loadGame failed');
 }
 
-const entry: GameEntry = loaded.value;
+const entry: BootstrapEntry = loaded.value;
 try {
-  await entry(ctx);
+  await entry(app.value.world, ctx);
 } catch (e: unknown) {
-  console.error('[preview] GameEntry rejected:', e);
+  console.error('[preview] bootstrap rejected:', e);
   throw e;
 }
 app.value.start();
