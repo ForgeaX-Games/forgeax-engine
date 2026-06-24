@@ -2403,6 +2403,15 @@ export class AssetRegistry {
     const guidToHandle = new Map<string, number>();
     const sceneEnvelope =
       sceneGuidKey !== undefined ? this.assetCatalog.get(sceneGuidKey) : undefined;
+    // Did the structured-edge branch actually resolve anything? Prod-loaded
+    // packs catalogue refs[] as GUID-only edges (sourceField / sceneEntityId
+    // stripped at the w7 D-10 serialization boundary), so the rich-edge loop
+    // below `continue`-skips every ref and resolves nothing. When that happens
+    // we MUST fall through to the entity-walk fallback — otherwise the handle
+    // fields keep their GUID strings and `spawn` writes the sentinel 0 while
+    // `retainSharedScalarHandle(GUID)` routes `shared-ref-released` (the on-disk
+    // game-scene instantiate crash: enemy MeshFilter.assetHandle).
+    let resolvedFromEdges = false;
     if (
       sceneEnvelope !== undefined &&
       sceneEnvelope.refs !== undefined &&
@@ -2441,11 +2450,17 @@ export class AssetRegistry {
           `${sceneEntityId}|${componentName}|${fieldName}` +
           (arrayIndex !== undefined ? `|${arrayIndex}` : '|');
         resolvedMap.set(key, resolvedSlot);
+        resolvedFromEdges = true;
       }
-    } else {
-      // Backward compat: positive extraction via extractSceneEntityHandleGuids
-      // when the scene envelope is not available (e.g. unit tests that
-      // construct SceneAsset without cataloguing it as an envelope).
+    }
+    if (!resolvedFromEdges) {
+      // Fallback: positive extraction via extractSceneEntityHandleGuids when
+      // the structured edges resolved nothing — either the scene envelope is
+      // absent (unit tests that build a SceneAsset without cataloguing it) OR
+      // the catalogued refs[] are GUID-only with no per-entity metadata (the
+      // prod on-disk pack path). The entity-component walk recovers the
+      // (localId, componentName, fieldName, arrayIndex) triple the bare edge
+      // dropped, so GUID strings resolve to live handles before spawn.
       const entries = extractSceneEntityHandleGuids(
         scene.entities as unknown as ReadonlyArray<{
           readonly localId: number;
