@@ -37,7 +37,7 @@
 //     against `device.caps.storageBuffer` (D-5 cap-gate: backends
 //     lacking storage buffer support emit `RhiError 'feature-not-enabled'`).
 
-import type { World } from '@forgeax/engine-ecs';
+import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { type Mat4, mat3, mat4, vec3 } from '@forgeax/engine-math';
 import type { RenderGraph, ResolveContext } from '@forgeax/engine-render-graph';
 import {
@@ -68,6 +68,7 @@ import {
   PointShadowAtlasBoundsViolationError,
   PointShadowAtlasUninitializedError,
   SkyboxCubemapNotReadyError,
+  VideoUploadUnsupportedError,
 } from './errors';
 import { GpuBuffer } from './gpu-resource';
 import type { GpuResourceStore } from './gpu-resource-store';
@@ -124,6 +125,8 @@ import { resolveAssetHandle } from './resolve-asset-handle';
 import { ShadowAtlas } from './shadow-atlas';
 import { getOrCreateSsaoBuffers } from './ssao-buffers';
 import { matchPass } from './systems/pass-selector';
+import { VIDEO_ELEMENT_PROVIDER_KEY, type VideoElementProvider } from './video-element-provider';
+import { probeVideoHighPerfUpload } from './video-player-system';
 
 /**
  * feat-20260608-create-app-param-surface-trim / M1 / D-8 (q8 user lock):
@@ -870,6 +873,69 @@ function residentTextureView(
     return undefined;
   }
   return store.getTextureGpuView(handle);
+}
+
+// feat-20260623-world-space-video-asset M4 / w16 (D-3): resolve the
+// current-frame GPU view for a video-sourced texture field through the
+// transient DynamicTextureStore, NOT the static `residentTextureView` /
+// `ensureResident` cache (video never enters that switch; AC-08).
+//
+// Per frame: ask the host-registered VideoElementProvider (World Resource,
+// D-1) for this entity's HTMLVideoElement, upload its current frame via
+// `store.uploadFrame` (copyExternalImageToTexture), and return the resulting
+// view. When the provider is absent / returns no element / the element has no
+// decodable dimensions yet, fall back to any previously-uploaded view and
+// finally to `undefined` (caller binds the default view this frame — charter
+// P3 graceful, no garbage sampling). A failed GPU upload fires the structured
+// RhiError on the engine channel and degrades to the default view.
+//
+// `highPerfAvailable` is the w17 capability probe; the high-perf
+// GPUExternalTexture branch is a reserved hook (OOS-5) — when it ever becomes
+// available the upload would route there. Today it is always false so the
+// general copyExternalImageToTexture path is the only one taken.
+function videoTextureView(
+  world: World,
+  store: import('./dynamic-texture-store').DynamicTextureStore | undefined,
+  runtime: RenderSystemRuntime,
+  entityKey: number,
+  clip: Handle<'VideoAsset', 'shared'>,
+  highPerfAvailable: boolean,
+  // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture-view return
+): any | undefined {
+  if (store === undefined) return undefined;
+  const provider = world.hasResource(VIDEO_ELEMENT_PROVIDER_KEY)
+    ? world.getResource<VideoElementProvider>(VIDEO_ELEMENT_PROVIDER_KEY)
+    : undefined;
+  const element = provider?.getElement(entityKey as unknown as EntityHandle, clip);
+  // AC-10 double-miss: a VideoPlayer entity can reach NEITHER upload path this
+  // frame — no host HTMLVideoElement (general copyExternalImageToTexture path)
+  // AND no high-perf GPUExternalTexture path. This is the genuine "this backend
+  // exposes no usable video upload path" case (no provider registered, or the
+  // provider yields nothing while the high-perf reserved hook is unavailable —
+  // OOS-5 keeps it always false today). Rather than silently binding the
+  // default view, fire the structured VideoUploadUnsupportedError on the engine
+  // error channel so an AI user can detect the dead path via `.code` / `.hint`
+  // (charter P3; AC-10 signal lives on the REAL per-frame upload path, not an
+  // orphan system). The default view is still bound this frame so the draw
+  // does not crash (graceful degradation), but the failure is no longer silent.
+  if (element === undefined && !highPerfAvailable) {
+    runtime.errorRegistry.fire(new VideoUploadUnsupportedError());
+    return store.getView(clip);
+  }
+  // D-2 / w17 high-perf reserved hook: a future GPUExternalTexture import path
+  // would key off `highPerfAvailable` here. It is always false today
+  // (importExternalTexture absent), so the general copyExternalImageToTexture
+  // path below is the sole route end-to-end.
+  if (element === undefined) return store.getView(clip);
+  const width = element.videoWidth;
+  const height = element.videoHeight;
+  const uploaded = store.uploadFrame(clip, element, width, height);
+  if (uploaded === undefined) return store.getView(clip);
+  if (!uploaded.ok) {
+    runtime.errorRegistry.fire(uploaded.error);
+    return store.getView(clip);
+  }
+  return uploaded.value;
 }
 
 // feat-20260621-learn-render-5-5-parallax M2 / w8 (D-3): the built-in
@@ -4059,6 +4125,14 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
   // disambiguate count=1 vs count=4 PSOs. Derived from the per-camera
   // msaaActive boolean (already on the context).
   const sampleCount = msaaActive ? 4 : 1;
+  // feat-20260623-world-space-video-asset M4 / w17 (D-2 / AC-09): high-perf
+  // GPUExternalTexture upload availability for video sources, resolved by the
+  // explicit RhiCaps-based capability probe. The probe checks
+  // backendKind==='webgpu' AND `importExternalTexture` method presence; the
+  // latter is absent today (OOS-5), so this is false and the general
+  // copyExternalImageToTexture path (w16) is the sole route. The branch exists
+  // so the AC-09 two-path reserved hook is code-review-verifiable, not a TODO.
+  const videoHighPerfAvailable = probeVideoHighPerfUpload(runtime.device);
   // feat-20260609-hdrp-cluster-fragment-ggx M4 / w16: HDRP active swaps the
   // group(2) bindGroup for the unified 7-entry layout (mesh SSBO at binding 0
   // + cluster 4 buffer at bindings 3..6). The dynamic offset
@@ -5095,11 +5169,31 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
               field !== undefined
                 ? defaultViewForUserRegionField(field, pipelineState)
                 : pipelineState.defaultWhiteTextureView;
-            const smHandle =
-              field !== undefined ? submeshMaterial.textureHandles?.get(field) : undefined;
-            if (smHandle !== undefined) {
-              const view = residentTextureView(world, store, runtime, smHandle);
+            // feat-20260623-world-space-video-asset M4 / w16 (D-3/D-5): a
+            // video-sourced field routes to the transient DynamicTextureStore
+            // (per-frame copyExternalImageToTexture), NOT residentTextureView
+            // (whose ensureResident has no `video` arm; AC-08). The video GUID
+            // occupies the same texture2d slot a static texture would (D-5), so
+            // the binding shape is identical — only the view source differs.
+            const smVideoClip =
+              field !== undefined ? submeshMaterial.videoTextureFields?.get(field) : undefined;
+            if (smVideoClip !== undefined) {
+              const view = videoTextureView(
+                world,
+                runtime.dynamicTextureStore,
+                runtime,
+                entry.source.entityKey,
+                smVideoClip,
+                videoHighPerfAvailable,
+              );
               if (view !== undefined) smView = view;
+            } else {
+              const smHandle =
+                field !== undefined ? submeshMaterial.textureHandles?.get(field) : undefined;
+              if (smHandle !== undefined) {
+                const view = residentTextureView(world, store, runtime, smHandle);
+                if (view !== undefined) smView = view;
+              }
             }
             smBaseEntries.push(
               {

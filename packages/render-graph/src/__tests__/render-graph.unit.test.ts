@@ -343,7 +343,7 @@ import { RenderGraph } from '../graph.js';
 
   function mockCaps(
     overrides: { compute?: boolean; storageBuffer?: boolean },
-    backendKind: 'webgpu' | 'wgpu-native' | 'wgpu-webgl2' = 'webgpu',
+    backendKind: 'webgpu' | 'wgpu-native' | 'wgpu-webgl2' | 'null' = 'webgpu',
   ) {
     return {
       backendKind,

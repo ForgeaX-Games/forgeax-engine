@@ -8,7 +8,7 @@ description: >-
 
 # forgeax-engine-material
 
-> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: studio game-template integration (2026-06-17, Skylight 可选 cubemap + color/intensity 纯色环境光)
+> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: feat-20260623-world-space-video-asset M6（VideoPlayer 组件 + video GUID 进 paramValues 贴图槽）
 
 > **material = 让东西可见的三件套**。一个实体要被画出来，缺一不可：几何（MeshFilter）+ 材质绑定（MeshRenderer）+ 材质资源（MaterialAsset），standard 材质还需要场景里有灯。聚合 `@forgeax/engine-runtime`（material / mesh / lights / shadow）。
 
@@ -27,6 +27,8 @@ description: >-
 | `assets.register(materialAsset)` | `=> Result<Handle, AssetError>` | 注册材质拿 handle |
 | `DirectionalLight` / `PointLight` / `SpotLight` | 组件 | 直接光源；standard 材质要靠它 |
 | `Skylight` | 组件 `{ cubemap?, colorR/G/B, intensity }` | 环境光（ambient）。`cubemap` **可选**：省略 → 即时纯色环境光（白 fallback cube，无 async），给 cubemap → 完整 IBL。`color`×`intensity` 都是每帧实时调的 |
+| `VideoPlayer` | 组件 `{ clip, playing, loop, currentTime }` | 视频播放控制组件；`clip: Handle<'VideoAsset','shared'>` 指向 VideoAsset，对齐 AudioSource.clip |
+| `VideoElementProvider` | interface + Resource key | host 实现的桥接接口；`world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, provider)` 注册后引擎的**每帧 record 阶段**直接取 element 上传（无需注册任何额外系统）|
 | `HANDLE_CUBE / QUAD / TRIANGLE / SPHERE` | 内建 `Handle<MeshAsset>` | 喂给 `MeshFilter.assetHandle` |
 | `Transform` | 组件 | 位置 / 朝向 / 缩放（local TRS，引擎派生 world mat4） |
 
@@ -128,6 +130,129 @@ const handle = renderer.assets.register(mat).unwrap();
 ```
 
 POJO 路径仍走完整 loader pipeline：`MATERIAL_PARAM_TEXTURE_FIELDS` 白名单字段照样解析 GUID → handle，shader 标识符同样走 `registerMaterialShader` 注册表查询。区别只是构造期不走工厂语法糖。
+
+## 世界空间视频纹理 -- VideoPlayer + paramValues video GUID
+
+**一句话价值：** 视频就是"会动的贴图"——`MaterialAsset.paramValues` 的贴图字段（如 `baseColorTexture`）填入 VideoAsset GUID 后，材质采样视频帧的方式与静态贴图完全相同。AI 用户只需改一句 GUID，其余链路无需变动。
+
+视频纹理的完整数据流：host 侧实现 `VideoElementProvider` → `world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, provider)` → spawn entity 带 `VideoPlayer { clip, playing, loop }` + `MeshFilter` + `MeshRenderer`（材质 paramValues 贴图字段引用 VideoAsset GUID 的**短横线字符串**形式，不是 `AssetGuid` 对象）。引擎**每帧 record 阶段**直接通过 provider 取 `HTMLVideoElement`、`copyExternalImageToTexture` 上传当前帧到 transient texture、shader 从同一 `texture2d` 槽位采样——**无需注册任何额外 ECS 系统**：上传与 AC-10 失败信号都在真实 `renderer.draw` 路径上。
+
+### idiom 骨架
+
+```ts
+import {
+  Camera, createRenderer, DirectionalLight,
+  MeshFilter, MeshRenderer, HANDLE_QUAD, perspective, Transform,
+  VideoPlayer, VIDEO_ELEMENT_PROVIDER_KEY,
+  type VideoElementProvider,
+} from '@forgeax/engine-runtime';
+import type { VideoAsset } from '@forgeax/engine-types';
+
+const renderer = await createRenderer(canvas);
+await renderer.ready;
+const assets = renderer.assets;
+if (assets === null) throw new Error('backend not initialized');
+
+const world = new World();
+
+// --- host side: implement VideoElementProvider ---
+const provider: VideoElementProvider = {
+  getElement(_entity, _clipHandle) {
+    const el = document.createElement('video');
+    el.src = '/clip.webm';
+    el.muted = true;
+    el.playsInline = true;
+    el.loop = true;
+    el.crossOrigin = 'anonymous';
+    el.load();
+    el.play().catch(() => {});
+    return el;
+  },
+};
+world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, provider);
+// No system to register: the per-frame upload runs inside renderer.draw.
+
+// --- AI-user side: register VideoAsset ---
+const videoGuid = /* parse/allocate GUID */;
+assets.catalog<VideoAsset>(videoGuid, { kind: 'video', url: '/clip.webm' });
+const videoRes = await assets.loadByGuid<VideoAsset>(videoGuid);
+if (!videoRes.ok) throw new Error(videoRes.error.code);
+const videoClipHandle = world.allocSharedRef('VideoAsset', videoRes.value);
+
+// --- material with video GUID in paramValues ---
+// (identical to a static texture material — only the GUID's kind differs)
+const VIDEO_GUID_STRING = 'f1b3d000-1111-4aaa-9eee-aa1111112222'; // dash-form
+const matGuid = /* parse/allocate GUID */;
+assets.catalog(matGuid, {
+  kind: 'material',
+  passes: [{ name: 'Forward', shader: 'forgeax::default-unlit' }],
+  paramValues: {
+    baseColor: [0.9, 0.9, 0.9],
+    // paramValues texture fields take a DASH-FORM GUID STRING (not the AssetGuid
+    // object / Uint8Array). A non-string here matches neither the string nor the
+    // minted-handle (number) arm and silently drops to the default white texture.
+    baseColorTexture: VIDEO_GUID_STRING,
+  },
+});
+const matRes = await assets.loadByGuid(matGuid);
+if (!matRes.ok) throw new Error(matRes.error.code);
+const matHandle = world.allocSharedRef('MaterialAsset', matRes.value);
+
+// --- spawn the video-textured entity ---
+world.spawn(
+  { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
+  { component: MeshRenderer, data: { materials: [matHandle] } },
+  { component: VideoPlayer, data: { clip: videoClipHandle, playing: true, loop: true } },
+  { component: Transform, data: { posX: 0, posY: 0, posZ: -1, scaleX: 2, scaleY: 2 } },
+);
+// Use the perspective() factory: fov is in RADIANS and aspect has no schema
+// default — a raw `{ fov: 60 }` leaves aspect=0 (degenerate projection -> blank
+// screen) and treats 60 as radians.
+world.spawn(
+  { component: Camera, data: perspective({ fov: Math.PI / 3, aspect: canvas.width / canvas.height }) },
+  { component: Transform, data: { posX: 0, posY: 0, posZ: 5 } },
+);
+world.spawn({ component: DirectionalLight, data: {} });
+
+// --- render loop ---
+const frame = () => {
+  renderer.draw(world);
+  requestAnimationFrame(frame);
+};
+requestAnimationFrame(frame);
+```
+
+完整范例：`apps/hello/video-texture`（M5 demo，host provider + AI-user 场景同文件）。
+
+### AI 用户代码与静态贴图逐行同构
+
+对比静态贴图材质 vs 视频纹理材质——**唯一差异是 GUID 指向的 Asset kind**：
+
+```ts
+// Static texture: TextureAsset { kind: 'texture', ... }
+const staticMat = { paramValues: { baseColorTexture: textureGuid } };
+
+// Video texture: VideoAsset { kind: 'video', url: '...' }
+const videoMat = { paramValues: { baseColorTexture: videoGuid } };
+```
+
+材质构造、`paramValues` 字段、shader 绑定、深度遮挡、相机透视——全部一致。AI 用户学一次 `paramValues` 贴图字段即覆盖静态贴图与视频纹理。
+
+### 能力边界
+
+| 边界 | 说明 |
+|:--|:--|
+| **dawn-node 不渲染视频** | dawn 环境无 `HTMLVideoElement` / `VideoFrame`。像素验收只能走 browser e2e；dawn smoke 只验证结构链路 |
+| **需 host 提供 `<video>`** | 引擎绝不创建 `<video>` / 设 `.src` / 碰 DOM。host 必须实现 `VideoElementProvider` 并 `insertResource` 为 World Resource（无需注册任何系统，record 阶段每帧自动取）|
+| **无声轨** | `VideoPlayer` 不控音频；声音归后续 feat 或 host 自行管理 |
+| **capability 双缺显式失败** | 两上传路径都不可用时（无 host element + 高性能路径未实现），引擎在真实 record 路径上 `errorRegistry.fire(VideoUploadUnsupportedError)`——`renderer.onError` 收到 `{ code: 'video-upload-unsupported', hint }`，AI 用户通过属性访问消费，不解析字符串 |
+| **高性能路径为钩子** | `GPUExternalTexture` 零拷贝路径未实现（OOS-5），仅保留显式探测分支。通用 `copyExternalImageToTexture` 路径已全做且端到端可用 |
+
+### 踩坑：视频纹理专用
+
+- **dawn-node smoke 无画面**：dawn 无 `HTMLVideoElement`——视频像素只能 browser 验收。dawn structural smoke 仅验证注册/负载/组件链路不炸，**不验像素**。
+- **视频画面黑屏**：先排查 demo 场景三连（这两条最常踩）：(a) **相机** 用 `perspective({ fov, aspect })` 工厂——别传裸 `{ fov: 60 }`（fov 当弧度 + aspect=0 退化投影 = 全屏空白）；(b) **paramValues 贴图字段** 填**短横线 GUID 字符串**，不是 `AssetGuid` 对象（对象既非 string 又非 number，整条 video 路由被静默丢弃 → 默认白）。再排查 video 链路：(c) `VideoElementProvider` 是否已 `insertResource`、(d) `VideoPlayer.clip` handle 是否指向正确的 VideoAsset GUID。能力双缺时引擎在 record 路径 fire `video-upload-unsupported`，`renderer.onError` 收到该 code 可定位根因。
+- **video 材质不走静态 cache**：video 帧通过独立 `DynamicTextureStore` 每帧上传，**不进** `GpuResourceStore.ensureResident`。静态贴图的 `invalidate` 对 video 无缓存语义。
 
 ## HDRP deferred opaque + forward transparent（≤ 256 灯打开关）
 

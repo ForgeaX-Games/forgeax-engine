@@ -152,7 +152,6 @@ import {
   TRANSPARENT_SORT_MODE_LAYER_Z,
 } from '../systems/transparent-sort-config';
 import { urpPipeline } from '../urp-pipeline';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
@@ -8510,7 +8509,7 @@ function makeSkinM2AssetRegistry(): AssetRegistry {
       { name: 'roughness', type: 'f32', default: 0.5 },
     ],
   });
-  return new AssetRegistry(shaderRegistry, createDefaultLoaderRegistry());
+  return new AssetRegistry(shaderRegistry);
 }
 
 function registerSkinM2Mesh(world: World): Handle<'MeshAsset', 'shared'> {

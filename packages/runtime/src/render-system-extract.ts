@@ -680,6 +680,22 @@ export interface MaterialSnapshot {
    * `appendInjection('lightmap')`, not the user-region).
    */
   readonly textureHandles?: ReadonlyMap<string, Handle<'TextureAsset', 'shared'>> | undefined;
+  /**
+   * User-region texture field names whose paramValue resolved to a VideoAsset
+   * (kind `'video'`) rather than a static TextureAsset
+   * (feat-20260623-world-space-video-asset M4 / w14, D-5). The video GUID
+   * occupies the same texture2d paramValues slot a static texture would (P4:
+   * one binding shape), but extract routes it here instead of `textureHandles`
+   * so the record stage pulls the current-frame view from the transient
+   * DynamicTextureStore (D-3) instead of `GpuResourceStore.ensureResident`
+   * (which has no `video` arm; AC-08). Each entry also carries the resolved
+   * clip handle so the record stage can key the per-frame upload.
+   *
+   * Producer/consumer split (charter P5 / AC-07 gate): extract owns the
+   * asset->snapshot translation; record consumes this POD field only — it never
+   * reaches back into the MaterialAsset to learn a field is video-sourced.
+   */
+  readonly videoTextureFields?: ReadonlyMap<string, Handle<'VideoAsset', 'shared'>> | undefined;
   readonly baseColorTexture?: Handle<'TextureAsset', 'shared'> | undefined;
   readonly sampler?: Handle<'SamplerAsset', 'shared'> | undefined;
   /**
@@ -944,6 +960,35 @@ const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
 ];
 
 /**
+ * feat-20260623-world-space-video-asset M4 / w14 (D-5): if a user-region
+ * texture field's paramValue is an embedded GUID string that catalogues to a
+ * VideoAsset (`kind === 'video'`), mint a `VideoAsset`-branded column handle for
+ * it and return that handle; otherwise return undefined (the field is a static
+ * texture / sampler / scalar and flows through the normal TextureAsset path).
+ *
+ * The video GUID occupies the same texture2d paramValues slot a static texture
+ * would (P4: identical binding shape) — extract just routes it to a different
+ * GPU lifecycle (the transient DynamicTextureStore, D-3) instead of the static
+ * `ensureResident` cache, whose switch has no `video` arm (AC-08). Minting a
+ * brand-`VideoAsset` handle keeps the snapshot self-describing: the record stage
+ * sees a video handle and resolves the per-frame view without reaching back into
+ * the asset (charter P5).
+ *
+ * A `number` paramValue (already a minted column handle) is not a GUID string so
+ * it cannot be a freshly-catalogued video; it passes through as undefined here.
+ */
+function resolveVideoFieldHandle(
+  value: unknown,
+  world: World,
+  assetsRef: AssetRegistry,
+): Handle<'VideoAsset', 'shared'> | undefined {
+  if (typeof value !== 'string') return undefined;
+  const payload = assetsRef.lookup(value);
+  if (payload === undefined || payload.kind !== 'video') return undefined;
+  return world.allocSharedRef('VideoAsset', payload) as Handle<'VideoAsset', 'shared'>;
+}
+
+/**
  * feat-20260621-learn-render-5-5-parallax M2 / w7 (D-3): collect the
  * user-region texture handles for a material by iterating the shader's
  * `derive(paramSchema).textureFieldNames` SSOT (via
@@ -955,21 +1000,39 @@ const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
  * When the shader is not registered the built-in 3-field set is used so
  * standard materials still resolve. `emissiveTexture` / `occlusionTexture`
  * are engine-injection (lightmap) textures and are NOT part of this set.
+ *
+ * feat-20260623-world-space-video-asset M4 / w14 (D-5): a field whose paramValue
+ * catalogues to a VideoAsset is routed into `videoOut` (a VideoAsset-branded
+ * handle) instead of the TextureAsset map, so the record stage pulls its view
+ * from the transient DynamicTextureStore (D-3) rather than the static
+ * ensureResident cache (AC-08). The video GUID still has to be in this
+ * `textureFieldNames` traversal set or it is never inspected (R-7) — that
+ * membership is asserted in w13.
  */
 function collectUserRegionTextureHandles(
   pv: Readonly<Record<string, number | number[] | string | undefined>>,
   shaderId: string | undefined,
   assetsRef: AssetRegistry,
+  world: World,
   resolveTex: (
     value: unknown,
     brand: 'TextureAsset',
   ) => Handle<'TextureAsset', 'shared'> | undefined,
+  videoOut: Map<string, Handle<'VideoAsset', 'shared'>>,
 ): Map<string, Handle<'TextureAsset', 'shared'>> {
   const fields =
     (shaderId !== undefined ? assetsRef.materialShaderTextureFieldNames(shaderId) : undefined) ??
     BUILTIN_USER_REGION_TEXTURE_FIELDS;
   const out = new Map<string, Handle<'TextureAsset', 'shared'>>();
   for (const field of fields) {
+    // D-5: a video-kind paramValue is routed to the transient path (videoOut),
+    // NOT minted as a TextureAsset (which would crash the record-stage
+    // ensureResident, AC-08). A static field falls through to resolveTex.
+    const videoHandle = resolveVideoFieldHandle(pv[field], world, assetsRef);
+    if (videoHandle !== undefined) {
+      videoOut.set(field, videoHandle);
+      continue;
+    }
     const handle = resolveTex(pv[field], 'TextureAsset');
     if (handle !== undefined) out.set(field, handle);
   }
@@ -1066,11 +1129,14 @@ function resolveMaterialSnapshot(
   // user-region field list, so an Nth texture (e.g. parallax heightTexture)
   // resolves through the same path. emissive/occlusion are engine-injection
   // (lightmap) textures, NOT in textureFieldNames, so they keep named reads.
+  const videoTextureFields = new Map<string, Handle<'VideoAsset', 'shared'>>();
   const textureHandles = collectUserRegionTextureHandles(
     pv,
     firstPassShader,
     assetsRef,
+    world,
     resolveTexLike,
+    videoTextureFields,
   );
   const samplerHandle = resolveTexLike(pv.sampler, 'SamplerAsset');
   const emissiveTextureHandle = resolveTexLike(pv.emissiveTexture, 'TextureAsset');
@@ -1088,6 +1154,7 @@ function resolveMaterialSnapshot(
     materialShaderId: firstPassShader,
     paramSnapshot: paramSnap,
     ...(textureHandles.size > 0 && { textureHandles }),
+    ...(videoTextureFields.size > 0 && { videoTextureFields }),
     ...(baseColorTextureHandle !== undefined && { baseColorTexture: baseColorTextureHandle }),
     ...(metallicRoughnessTextureHandle !== undefined && {
       metallicRoughnessTexture: metallicRoughnessTextureHandle,
@@ -2433,7 +2500,20 @@ export function extractFrame(
               ? assets.materialShaderTextureFieldNames(firstPassShader)
               : undefined) ?? BUILTIN_USER_REGION_TEXTURE_FIELDS;
           const textureHandles = new Map<string, Handle<'TextureAsset', 'shared'>>();
+          const videoTextureFields = new Map<string, Handle<'VideoAsset', 'shared'>>();
           for (const field of userRegionFields) {
+            // D-5: a video-kind paramValue routes to the transient path
+            // (videoTextureFields), NOT validateTextureHandle (which drops
+            // kind!=='texture', the R-7 silent-fail path). Static fields fall
+            // through to validateTextureHandle unchanged.
+            const videoHandle =
+              assets !== null && assets !== undefined
+                ? resolveVideoFieldHandle(pv[field], world, assets)
+                : undefined;
+            if (videoHandle !== undefined) {
+              videoTextureFields.set(field, videoHandle);
+              continue;
+            }
             const handle = validateTextureHandle(field, pv[field]);
             if (handle !== undefined) textureHandles.set(field, handle);
           }
@@ -2536,6 +2616,7 @@ export function extractFrame(
               materialShaderId: firstPassShader,
               paramSnapshot: paramSnap,
               ...(textureHandles.size > 0 && { textureHandles }),
+              ...(videoTextureFields.size > 0 && { videoTextureFields }),
               ...(baseColorTextureHandle !== undefined && {
                 baseColorTexture: baseColorTextureHandle,
               }),

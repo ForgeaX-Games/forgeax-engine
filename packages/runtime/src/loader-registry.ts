@@ -32,7 +32,10 @@ import type { Loader } from '@forgeax/engine-types';
  * ```
  */
 export class LoaderRegistry {
-  private readonly loaders = new Map<string, Loader>();
+  // feat-20260623 M4 / w13: the Map stores Loader<unknown> so host custom kinds
+  // (Loader<MyPayload>) are accepted. The P in Loader<P> is covariant (output
+  // only: load() returns P), so Loader<Asset> is assignable to Loader<unknown>.
+  private readonly loaders = new Map<string, Loader<unknown>>();
 
   /**
    * Register a loader for its `loader.kind`. Fail-fast on a malformed loader
@@ -42,7 +45,7 @@ export class LoaderRegistry {
    * @throws TypeError when `loader.kind` is empty or `loader.load` is not a
    *   function — a wire-time misconfiguration the host must fix.
    */
-  register(loader: Loader): void {
+  register(loader: Loader<unknown>): void {
     if (typeof loader.kind !== 'string' || loader.kind.length === 0) {
       throw new TypeError(
         `LoaderRegistry.register: loader.kind must be a non-empty string (got ${JSON.stringify(loader.kind)})`,
@@ -62,7 +65,7 @@ export class LoaderRegistry {
    * `AssetError(code='loader-not-registered')` with the registered kinds in
    * `.detail` (charter P3).
    */
-  get(kind: string): Loader | undefined {
+  get(kind: string): Loader<unknown> | undefined {
     return this.loaders.get(kind);
   }
 

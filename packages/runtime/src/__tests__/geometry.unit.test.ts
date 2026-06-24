@@ -64,7 +64,6 @@ import {
 import { resolveAssetHandle } from '../resolve-asset-handle';
 import { propagateTransforms } from '../systems/propagate-transforms';
 import { deriveVertexBufferLayout } from '../vertex-attribute-layout';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
@@ -388,7 +387,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     matHandle: Handle<'MaterialAsset', 'shared'>;
   } {
     const world = new World();
-    const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const assets = new AssetRegistry(makeMockShaderRegistry());
 
     // AABB: unit cube [-1,1] in each axis
     const aabb = new Float32Array([-1, -1, -1, 1, 1, 1]);
@@ -520,7 +519,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('(4) entity with no position attribute (AABB is inverted-infinity) is always visible', () => {
       const world = new World();
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
 
       // Catalog a mesh with NO position attribute -> computeAABB returns empty box.
       // The entity should be always-visible even far away from camera.
@@ -2590,7 +2589,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //          research Finding 10 (validateMeshPayload :565-601) + Finding 5 (asset-invalid-value precedent).
 
   function reg(): AssetRegistry {
-    return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    return new AssetRegistry(makeMockShaderRegistry());
   }
 
   describe('validateMeshPayload topology rules (M5 w12 - AC-10)', () => {
@@ -3421,7 +3420,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return new AssetRegistry(
       // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
       { lookupMaterialShader: () => ({ ok: false }) } as any,
-      createDefaultLoaderRegistry(),
     );
   }
 

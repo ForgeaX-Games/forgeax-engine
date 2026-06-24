@@ -22,7 +22,6 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ── test GUIDs ──────────────────────────────────────────────────────────────
@@ -86,7 +85,7 @@ function makeTestSceneAsset(subRefs: { meshGuid: string; materialGuids: string[]
 // ── registry setup ──────────────────────────────────────────────────────────
 
 function makeRegistry(): AssetRegistry {
-  return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+  return new AssetRegistry(makeMockShaderRegistry());
 }
 
 function preregisterMesh(reg: AssetRegistry): void {

@@ -14,11 +14,13 @@
 // apply here). Custom loaders for novel kinds are added by the host with a
 // direct `registry.register(loader)`.
 //
-// Default set (10 kinds):
+// Default set (11 kinds):
 //   inline pack-payload (7): mesh / scene / cube-texture / material / skeleton /
 //     skin / animation-clip
 //   upstream-branch (2):     texture / font
 //   placeholder (1):         audio (D-3, see audioLoaderPlaceholder below)
+//   descriptor-only (1):     video (feat-20260623-world-space-video-asset M2 / w4;
+//                            pure {url} payload, no pixel decode)
 //
 // Deliberately NOT registered (AC-02 exclusion): sampler / render-pipeline /
 // shader — these have no inline loader today; `loadByGuid` on them surfaces
@@ -27,35 +29,40 @@
 import { INLINE_PACK_LOADERS, UPSTREAM_ENTRY_LOADERS } from './asset-registry';
 import { audioLoaderPlaceholder } from './audio-loader-placeholder';
 import { LoaderRegistry } from './loader-registry';
+import { videoLoader } from './video-loader';
 
 export { audioLoaderPlaceholder } from './audio-loader-placeholder';
+export { videoLoader } from './video-loader';
 
 /**
  * Wire the engine's default loader set (7 inline + texture + font + audio
- * placeholder = 10 kinds) onto `registry` in one call. Returns the same
- * `registry` for chaining (so `wireDefaultLoaders(new LoaderRegistry())` is a
- * one-expression wired registry).
+ * placeholder + video = 11 kinds) onto `registry` in one call. Returns the
+ * same `registry` for chaining (so `wireDefaultLoaders(new LoaderRegistry())`
+ * is a one-expression wired registry).
  *
  * @example
  * ```ts
  * import { LoaderRegistry, wireDefaultLoaders } from '@forgeax/engine-runtime';
  * const loaders = wireDefaultLoaders(new LoaderRegistry());
  * // loaders.get('mesh') / .get('texture') / .get('font') / .get('audio')
- * // are now non-undefined; sampler / render-pipeline / shader stay undefined.
+ * // / .get('video') are now non-undefined;
+ * // sampler / render-pipeline / shader stay undefined.
  * ```
  */
 export function wireDefaultLoaders(registry: LoaderRegistry): LoaderRegistry {
   for (const loader of INLINE_PACK_LOADERS) registry.register(loader);
   for (const loader of UPSTREAM_ENTRY_LOADERS) registry.register(loader);
   registry.register(audioLoaderPlaceholder);
+  registry.register(videoLoader);
   return registry;
 }
 
 /**
  * Convenience factory: a fresh `LoaderRegistry` pre-wired with the default
  * loader set. The production assembly point (`createRenderer`) and tests pass
- * the result into `new AssetRegistry(shaderRegistry, loaders)` (D-7
- * constructor-injection; loaders always present at construction, no setter / no
+ * the result into `new LoaderRegistry()` (D-7 constructor-injection;
+ * loaders always wired at construction — used by `AssetRegistry` internally
+ * via `createDefaultLoaderRegistry()` and by host code / tests independently) — no setter / no
  * illegal intermediate state).
  */
 export function createDefaultLoaderRegistry(): LoaderRegistry {

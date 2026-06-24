@@ -21,7 +21,8 @@ import type { RuntimeError, RuntimeErrorCode } from '../errors';
 // error TS2304 / "not all constituents of type RuntimeErrorCode are handled".
 // Adding a `default` arm would defeat the exhaustive check.
 //
-// Member count is 20 post feat-20260621 (removed 1 shadow-disabled-by-missing-component).
+// Member count is 21 post feat-20260623 (added video-upload-unsupported;
+// 20 post feat-20260621 removed shadow-disabled-by-missing-component).
 
 function exhaustiveSwitchOnCode(code: RuntimeErrorCode): string {
   switch (code) {
@@ -81,6 +82,10 @@ function exhaustiveSwitchOnCode(code: RuntimeErrorCode): string {
       return 'point-shadow-atlas-uninitialized';
     case 'point-shadow-atlas-bounds-violation':
       return 'point-shadow-atlas-bounds-violation';
+    // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability
+    // double-miss code (add-only minor).
+    case 'video-upload-unsupported':
+      return 'video-upload-unsupported';
   }
 }
 
@@ -194,6 +199,10 @@ function narrowRuntimeError(err: RuntimeError): void {
       void err.detail.value; // number
       void err.detail.max; // number
       break;
+    // feat-20260623-world-space-video-asset M3 / w11: AC-10 double-miss.
+    // No detail on VideoUploadUnsupportedError.
+    case 'video-upload-unsupported':
+      break;
   }
 }
 
@@ -207,7 +216,7 @@ export type _ExhaustiveSwitchChecks = {
   _narrow: typeof narrowRuntimeError;
 };
 
-// ── Member count assertion: 20 is the post-feat-20260621 count ────────────────
+// ── Member count assertion: 21 is the post-feat-20260623 count ────────────────
 //
 // The primary guard is the exhaustive switch above — any missing member causes
 // a compile error. This `satisfies` assertion provides a secondary signal:

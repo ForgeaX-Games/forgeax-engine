@@ -62,6 +62,9 @@ export {
   SkinMaterialMismatchError,
   SkinPaletteOverflowError,
   SkyboxCubemapNotReadyError,
+  // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability
+  // double-miss error class (instanceof + .code/.hint property access).
+  VideoUploadUnsupportedError,
 } from './errors';
 
 /**
@@ -537,9 +540,22 @@ export {
   resetTilemapDerivedEntityTracker,
   tilemapChunkExtractSystem,
 } from './tilemap-chunk-extract-system';
+// ─── VideoElementProvider host bridge (M3 / w9) ─────────────────────────
+export {
+  VIDEO_ELEMENT_PROVIDER_KEY,
+  type VideoElementProvider,
+} from './video-element-provider';
+
+// ─── VideoPlayer component (M3 / w7) ────────────────────────────────────
+export { VideoPlayer } from './video-player';
+// ─── video high-perf upload capability probe (M4 / w17) ──────────────────
+// The single per-frame video upload + AC-10 failure path lives in the record
+// stage (videoTextureView); this module only exports the AC-09 capability probe.
+export { probeVideoHighPerfUpload, type VideoCapabilityDevice } from './video-player-system';
 export {
   audioLoaderPlaceholder,
   createDefaultLoaderRegistry,
+  videoLoader,
   wireDefaultLoaders,
 } from './wire-default-loaders';
 

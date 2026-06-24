@@ -796,7 +796,7 @@ export interface RhiCaps {
   /**
    * The rendering backend kind — single source of truth for backend-aware
    * logic (e.g. explicit barrier insertion vs. spec-managed / GL-implicit
-   * sync). Closed 3-member union: every backend reports exactly one.
+   * sync). Closed 4-member union: every backend reports exactly one.
    *
    * - `'webgpu'`: browser WebGPU — spec-managed barriers, no explicit
    *   barrier insertion needed.
@@ -804,11 +804,16 @@ export interface RhiCaps {
    *   requires explicit Vulkan/Metal/DX12 barrier commands.
    * - `'wgpu-webgl2'`: wgpu GLES3/WebGL2 backend — GL implicit sync, no
    *   explicit barrier insertion needed (equivalence group with `'webgpu'`).
+   * - `'null'`: headless no-op backend (`@forgeax/engine-rhi-null`) for
+   *   structural unit tests — no GPU / DOM; records command-stream shape into
+   *   a ledger instead of executing it. No barrier insertion needed (the
+   *   no-op backend executes nothing); falls into the same no-barrier branch
+   *   as `'webgpu'` / `'wgpu-webgl2'`.
    *
    * @note `exactOptionalPropertyTypes` requires every backend fill this
    *   field; a backend that omits it produces a tsc compile error.
    */
-  readonly backendKind: 'webgpu' | 'wgpu-native' | 'wgpu-webgl2';
+  readonly backendKind: 'webgpu' | 'wgpu-native' | 'wgpu-webgl2' | 'null';
   /** Whether compute pipelines are supported. */
   readonly compute: boolean;
   /** Whether timestamp queries are supported. */

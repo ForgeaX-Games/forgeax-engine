@@ -29,7 +29,6 @@ import { AssetRegistry } from '../asset-registry';
 import { Camera, MeshFilter, MeshRenderer, Skin, Transform } from '../components';
 import { extractFrame } from '../render-system-extract';
 import { propagateTransforms } from '../systems/propagate-transforms';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ── helpers ──────────────────────────────────────────────────────────────
@@ -70,7 +69,7 @@ function makeAssetRegistry(): AssetRegistry {
       { name: 'roughness', type: 'f32', default: 0.5 },
     ],
   });
-  return new AssetRegistry(shaderRegistry, createDefaultLoaderRegistry());
+  return new AssetRegistry(shaderRegistry);
 }
 
 function registerSkinnedMesh(world: World): Handle<'MeshAsset', 'shared'> {

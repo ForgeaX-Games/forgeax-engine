@@ -29,7 +29,6 @@ import { glyphTextLayoutSystem, resetGlyphBakeCache } from '../glyph-text-layout
 import { GpuResourceStore } from '../gpu-resource-store';
 import { pick } from '../pick';
 import { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from '../resolve-asset-handle';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
@@ -81,7 +80,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     }
 
     function makeRegistry(): AssetRegistry {
-      return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      return new AssetRegistry(makeMockShaderRegistry());
     }
 
     function spawnLabel(world: World, fontId: number, text: string, fontSize = 1): EntityHandle {
@@ -501,7 +500,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     describe('glyph text pick (AC-13, pick.ts unchanged)', () => {
       it('(d) center-viewport ray hits the baked text entity', () => {
         resetGlyphBakeCache();
-        const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+        const assets = new AssetRegistry(makeMockShaderRegistry());
         const world = makeWorld();
         const fontId = registerFont(world, 'Hi');
         const camera = spawnCamera(world, 5);
@@ -516,7 +515,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       it('(e) pickable=0 label is skipped by pick', () => {
         resetGlyphBakeCache();
-        const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+        const assets = new AssetRegistry(makeMockShaderRegistry());
         const world = makeWorld();
         const fontId = registerFont(world, 'Hi');
         const camera = spawnCamera(world, 5);

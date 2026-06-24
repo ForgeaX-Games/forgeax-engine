@@ -34,7 +34,6 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // 12 floats per vertex (position vec3 + normal vec3 + uv vec2 + tangent vec4) --
@@ -150,7 +149,7 @@ describe('mesh-bin loader (M2 / m2-1)', () => {
     ]);
     installFetchMock(routes);
 
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     reg.configurePackIndex(packIndexUrl);
 
     const parsed = AssetGuid.parse(MESH_BIN_GUID);
@@ -210,7 +209,7 @@ describe('mesh-bin loader (M2 / m2-1)', () => {
     ]);
     installFetchMock(routes);
 
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     reg.configurePackIndex(packIndexUrl);
 
     const parsed = AssetGuid.parse(MESH_INLINE_GUID);
@@ -241,7 +240,7 @@ describe('mesh-bin loader (M2 / m2-1)', () => {
     ]);
     installFetchMock(routes);
 
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     reg.configurePackIndex(packIndexUrl);
 
     const parsed = AssetGuid.parse(MESH_EMPTY_GUID);

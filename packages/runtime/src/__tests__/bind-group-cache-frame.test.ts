@@ -12,7 +12,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import { MeshFilter, MeshRenderer, Transform } from '../components';
 import { type ExtractedFrame, extractFrame } from '../render-system-extract';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ─── from bind-group-cache-stable-frame.test.ts ───
@@ -891,7 +890,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   describe('w1 — entityKey cross-frame stability', () => {
     it('same entity produces equal entityKey across two consecutive extractFrame calls', () => {
       const world = new World();
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
       const meshHandle = registerMesh(world);
       const matHandle = registerUnlitMaterial(world);
 
@@ -915,7 +914,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('two different entities produce different entityKey values', () => {
       const world = new World();
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
       const meshHandle = registerMesh(world);
       const matHandle = registerUnlitMaterial(world);
 
@@ -937,7 +936,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('despawn + respawn yields different entityKey (generation bump)', () => {
       const world = new World();
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
       const meshHandle = registerMesh(world);
       const matHandle = registerUnlitMaterial(world);
 

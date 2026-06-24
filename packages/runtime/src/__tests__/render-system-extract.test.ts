@@ -31,7 +31,6 @@ import {
 import { HANDLE_CUBE } from '../index';
 import { extractFrame } from '../render-system-extract';
 import { propagateTransforms } from '../systems/propagate-transforms';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ─── from render-system-extract.test.ts ───
@@ -529,7 +528,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('AC-05 core signal: child no-passes inherits passes from parent via extract', () => {
       const world = makeWorldWithComponents();
       spawnCamera(world);
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
       const mesh = registerTestMesh(world);
 
       const parentMat = registerMaterial(world, assets, [FORWARD_PBR_PASS]);
@@ -556,7 +555,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('AC-06 shoot-76 equivalent: N children inherit from 1 parent', () => {
       const world = makeWorldWithComponents();
       spawnCamera(world);
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
       const mesh = registerTestMesh(world);
 
       const parentMat = registerMaterial(world, assets, [FORWARD_PBR_PASS]);
@@ -590,7 +589,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('AC-06 paramValues shallow-merge: child overrides parent, parent-only key retained', () => {
       const world = makeWorldWithComponents();
       spawnCamera(world);
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
       const mesh = registerTestMesh(world);
 
       const parentMat = registerMaterial(world, assets, [FORWARD_PBR_PASS], undefined, {
@@ -623,7 +622,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('no-parent regression: material without parent still extracts correctly', () => {
       const world = makeWorldWithComponents();
       spawnCamera(world);
-      const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const assets = new AssetRegistry(makeMockShaderRegistry());
       const mesh = registerTestMesh(world);
 
       const mat = registerMaterial(world, assets, [FORWARD_UNLIT_PASS], undefined, {
@@ -748,7 +747,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     assets: AssetRegistry;
   } {
     const world = new World();
-    const assets = new AssetRegistry(makeShaderRegistryWithSprite(), createDefaultLoaderRegistry());
+    const assets = new AssetRegistry(makeShaderRegistryWithSprite());
     const mesh = registerSpriteMesh(world);
     const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
       kind: 'material',
@@ -1055,10 +1054,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   describe('render-system-extract heightTexture (4th texture) snapshot pass-through (M2 w3)', () => {
     it('MaterialSnapshot.textureHandles carries heightTexture handle (non-undefined, matches input)', () => {
       const world = new World();
-      const assets = new AssetRegistry(
-        makeShaderRegistryWithParallax(),
-        createDefaultLoaderRegistry(),
-      );
+      const assets = new AssetRegistry(makeShaderRegistryWithParallax());
       const mesh = registerQuadMesh(world);
 
       const baseColorHandle = makeTextureHandle(world);

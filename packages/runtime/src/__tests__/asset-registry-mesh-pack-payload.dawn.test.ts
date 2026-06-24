@@ -36,7 +36,6 @@ import type { CubeTextureAsset, MeshAsset as TypesMeshAsset } from '@forgeax/eng
 import { describe, expect, it } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import { GpuResourceStore } from '../gpu-resource-store';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 
 // feat-20260601-gpu-resource-store-extraction M1: configureGpuDevice moved to
 // GpuResourceStore (D-3 registerCube relay). These tests exercise registry-side
@@ -92,7 +91,7 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
       if (adapter === null) return;
       const device = await adapter.requestDevice();
 
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const gpuStore = new GpuResourceStore();
       gpuStore.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
@@ -115,7 +114,7 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
   );
 
   it('(b) catalog() non-12F mesh returns Result.err mesh-vertex-stride-mismatch', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const parseResult = AssetGuid.parse(GUID_PACK_TEST);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
@@ -130,7 +129,7 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
   });
 
   it('(c) after catalog() returns err, lookup returns undefined (no intermediate state)', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const parseResult = AssetGuid.parse(GUID_PACK_TEST);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
@@ -143,7 +142,7 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
   });
 
   it('(d) AC-08 narrowing: read err.detail.floatsPerVertex off the Result.err', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const parseResult = AssetGuid.parse(GUID_PACK_TEST);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
@@ -182,7 +181,7 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
       if (adapter === null) return;
       const device = await adapter.requestDevice();
 
-      const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+      const reg = new AssetRegistry(makeMockShaderRegistry());
       const gpuStore = new GpuResourceStore();
       gpuStore.configureGpuDevice(
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim

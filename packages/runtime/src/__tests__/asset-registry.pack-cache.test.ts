@@ -13,7 +13,6 @@ import type { MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ── test GUIDs ──────────────────────────────────────────────────────────────
@@ -30,7 +29,7 @@ function parseGuid(s: string): AssetGuid {
 // ── registry setup ──────────────────────────────────────────────────────────
 
 function makeRegistry(): AssetRegistry {
-  return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+  return new AssetRegistry(makeMockShaderRegistry());
 }
 
 // ── pack fixture: two meshes sharing the same .pack.json ────────────────────
@@ -369,7 +368,6 @@ describe('transportOrFail packIndexCache concurrent patch (F20 / AC-08) [w14]', 
     // Override the constructor to pass the importTransport.
     const regWithTransport = new AssetRegistry(
       makeMockShaderRegistry(),
-      createDefaultLoaderRegistry(),
       // biome-ignore lint/suspicious/noExplicitAny: test mock
       importTransport as any,
     );
@@ -501,7 +499,6 @@ describe('integration: concurrent transportOrFail dual GUID (F20 / AC-07) [w18]'
 
     const reg = new AssetRegistry(
       makeMockShaderRegistry(),
-      createDefaultLoaderRegistry(),
       // biome-ignore lint/suspicious/noExplicitAny: test mock
       importTransport as any,
     );

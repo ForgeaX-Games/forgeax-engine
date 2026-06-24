@@ -78,6 +78,7 @@ import {
 } from './asset-registry';
 import { BuiltinAssetRegistry } from './builtin-asset-registry';
 import { classifyEnvErrorReason, composeEnvErrorHint } from './create-renderer-env-classify';
+import { DynamicTextureStore } from './dynamic-texture-store';
 import { createEngineMetrics } from './engine-metrics';
 import {
   EngineEnvironmentError,
@@ -160,7 +161,6 @@ import {
 import { tilemapChunkExtractSystem } from './tilemap-chunk-extract-system';
 import { URP_PIPELINE_ID, urpPipeline } from './urp-pipeline';
 import { deriveVertexBufferLayout } from './vertex-attribute-layout';
-import { createDefaultLoaderRegistry } from './wire-default-loaders';
 
 // Re-export registerAdvanceAnimationPlayer so consumers can wire it.
 // Re-export registerPropagateTransforms so consumers can wire the
@@ -1023,20 +1023,22 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // BEFORE the renderer is returned, so `register<MaterialAsset>` referencing
   // an engine shader succeeds without waiting for `renderer.ready`.
 
-  // feat-20260603-asset-import-loader-injection M1 / w7 (D-7): the AssetRegistry
-  // is constructed with an injected LoaderRegistry wired with the engine's
-  // default loader set. This is the single production assembly point (research
-  // Finding 11); host apps that need custom loaders register them on this
-  // registry before / after construction via `loaders.register(...)`.
-  const loaders = createDefaultLoaderRegistry();
+  // feat-20260623-asset-payload-generic-open-registry M3 / w10: host apps
+  // that need custom loaders register them on `assets.loaders.register(...)`.
   // feat-20260604-hdr-equirect-cube-importer-loader M4 / w16 (D-3 / AC-05):
   // the host-injected ImportTransport (or undefined for the shipped form) is
-  // threaded into the AssetRegistry third ctor slot -- the construction-time-
+  // threaded into the AssetRegistry ctor -- the construction-time-
   // only single injection point (no setter, no illegal intermediate state).
-  const assets = new AssetRegistry(shaderRegistry, loaders, internals.importTransport);
+  const assets = new AssetRegistry(shaderRegistry, internals.importTransport);
   // feat-20260601-gpu-resource-store-extraction M1: the GPU residency layer
   // lives in a standalone store; `assets` keeps the CPU POD registry only.
   const gpuStore = new GpuResourceStore();
+  // feat-20260623-world-space-video-asset M4 / w16 (D-3): transient per-frame
+  // video texture store, fully independent of gpuStore (AC-08). Configured with
+  // the device alongside gpuStore below; threaded into the record stage via the
+  // RenderSystemRuntime so a `videoTextureFields` material field uploads its
+  // frame here instead of entering the static ensureResident cache.
+  const dynamicTextureStore = new DynamicTextureStore();
   // feat-20260527-sprite-nineslice M4 / w16 (D-5): per-Renderer EngineMetrics
   // counter. Surfaced through `renderer.metrics` and threaded to the record
   // stage via `RenderSystemRuntime.metrics` so soft-warns
@@ -1105,6 +1107,13 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       return ok(handle);
     },
     internals.device.caps,
+  );
+  // feat-20260623-world-space-video-asset M4 / w16 (D-3): wire the same device
+  // into the transient video texture store (createTexture / createTextureView /
+  // destroyTexture / queue.copyExternalImageToTexture all live on RhiDevice).
+  dynamicTextureStore.configureGpuDevice(
+    // biome-ignore lint/suspicious/noExplicitAny: DynamicTextureDevice is a structural subset of RhiDevice
+    internals.device as any,
   );
   // D-S3: Renderer.ready three-step strict-serial Promise. Kicked off
   // synchronously here so `await renderer.ready` is the AI-user-facing
@@ -1760,6 +1769,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     getPipelineState: () => pipelineState,
     assets,
     gpuStore,
+    dynamicTextureStore,
     errorRegistry: internals.errorRegistry,
     healthRegistry: internals.healthRegistry,
     getMaterialShaderPipeline,
@@ -3677,7 +3687,13 @@ async function buildReadyWebGPU(
   // single SSOT, no scattered branches. See selectSwapChainFormat
   // (above the SWAP_CHAIN_*_FORMAT historical constants).
   const swapChainFormats = selectSwapChainFormat(storageBufferCapable);
-  if (swapChainFormats.fallbackReason !== undefined) {
+  // The 'null' (headless RhiNull) backend has no UA preferred-canvas-format by
+  // design; the rgba8unorm fallback is its intended steady state, not a
+  // degraded one — firing 'rhi-not-available' there is territorially wrong
+  // (the backend IS available) and only pollutes Renderer.onError in headless
+  // CI. Skip the diagnostic for it; Channel 2/3 still report a missing
+  // getPreferredCanvasFormat as before.
+  if (swapChainFormats.fallbackReason !== undefined && rhiDevice.caps.backendKind !== 'null') {
     // Step ③ in selectSwapChainFormat fired — surface a structured
     // diagnostic through the RhiError channel so AI users subscribed via
     // Renderer.onError(cb) can detect "extremely-old UA / missing

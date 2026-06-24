@@ -16,8 +16,8 @@
 // - Handle<T,M> double-axis brand identity (cross-tag + cross-mode rejection)
 // - Handle<T,M> extends number (u32 runtime storage invariant)
 // - plain `number` does not extend Handle<...> (untagged u32 rejection)
-// - AssetTagMap interface - 13 closed members aligned with Asset.kind 13 tags
-// - TagOf<T extends Asset> distributive conditional - 13 tag mappings + 1 never tail
+// - AssetTagMap interface - 15 closed members aligned with Asset.kind 15 tags
+// - TagOf<T extends Asset> distributive conditional - 15 tag mappings + 1 never tail
 // - toUnique / toShared / unwrapHandle factory return type assertions
 //
 // Charter mapping: F1 (single-entry IDE autocomplete from
@@ -194,7 +194,7 @@ describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)'
     expectTypeOf<TagOf<RenderPipelineAsset>>().toEqualTypeOf<'RenderPipelineAsset'>();
   });
 
-  it('TagOf<Asset> distributes over the 14 members', () => {
+  it('TagOf<Asset> distributes over the 15 members', () => {
     expectTypeOf<TagOf<Asset>>().toEqualTypeOf<
       | 'MeshAsset'
       | 'TextureAsset'
@@ -210,6 +210,7 @@ describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)'
       | 'FontAsset'
       | 'RenderPipelineAsset'
       | 'TilesetAsset'
+      | 'VideoAsset'
     >();
   });
 });

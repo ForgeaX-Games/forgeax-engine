@@ -11,7 +11,6 @@ import type { MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const GUID_BROWSER_A = '00000000-0000-7000-8000-000000000021';
@@ -36,7 +35,7 @@ function makeMesh(): TypesMeshAsset {
 
 describe('w12 - AssetRegistry browser loadByGuid happy path', () => {
   it('loadByGuid() returns Ok(payload) for a catalogued GUID', async () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const parseResult = AssetGuid.parse(GUID_BROWSER_A);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
@@ -49,7 +48,7 @@ describe('w12 - AssetRegistry browser loadByGuid happy path', () => {
   });
 
   it('two loadByGuid(sameGuid) calls return the same payload', async () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const parseResult = AssetGuid.parse(GUID_BROWSER_A);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
@@ -64,7 +63,7 @@ describe('w12 - AssetRegistry browser loadByGuid happy path', () => {
   });
 
   it('AC-11: inspect() reports MeshAsset brand after catalog()', async () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const before = reg.inspect().assets.length;
     const parseResult = AssetGuid.parse(GUID_BROWSER_A);
     if (!parseResult.ok) throw new Error('expected ok');
@@ -75,6 +74,6 @@ describe('w12 - AssetRegistry browser loadByGuid happy path', () => {
     const last = snap.assets[snap.assets.length - 1];
     expect(last).toBeDefined();
     if (last === undefined) return;
-    expect(last.brand).toBe('MeshAsset');
+    expect(last.kind).toBe('mesh');
   });
 });

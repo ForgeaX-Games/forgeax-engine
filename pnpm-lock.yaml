@@ -1189,6 +1189,46 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
 
+  apps/hello/video-texture:
+    dependencies:
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../../../packages/ecs
+      '@forgeax/engine-math':
+        specifier: workspace:*
+        version: link:../../../packages/math
+      '@forgeax/engine-pack':
+        specifier: workspace:*
+        version: link:../../../packages/pack
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../../../packages/types
+    devDependencies:
+      '@forgeax/apps-shared':
+        specifier: workspace:*
+        version: link:../../shared
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-shader
+      '@webgpu/types':
+        specifier: ^0.1.70
+        version: 0.1.70
+      playwright:
+        specifier: ^1.55.0
+        version: 1.56.1
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
+
   apps/inspector-demo:
     dependencies:
       '@forgeax/engine-console':
@@ -3234,6 +3274,18 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
 
+  packages/rhi-null:
+    dependencies:
+      '@forgeax/engine-rhi':
+        specifier: workspace:*
+        version: link:../rhi
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../types
+      '@webgpu/types':
+        specifier: ^0.1.70
+        version: 0.1.70
+
   packages/rhi-webgpu:
     dependencies:
       '@forgeax/engine-rhi':
@@ -3284,6 +3336,9 @@ importers:
       '@forgeax/engine-rhi':
         specifier: workspace:*
         version: link:../rhi
+      '@forgeax/engine-rhi-null':
+        specifier: workspace:*
+        version: link:../rhi-null
       '@forgeax/engine-rhi-webgpu':
         specifier: workspace:*
         version: link:../rhi-webgpu

@@ -38,7 +38,6 @@ import { AssetRegistry } from '../asset-registry';
 // undefined during instantiate. ChildOf + SceneInstance are used directly
 // below as values; Transform / MeshRenderer pin the side-effect import.
 import { ChildOf, MeshRenderer, SceneInstance, Transform } from '../components';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function lid(n: number): LocalEntityId {
@@ -83,7 +82,7 @@ function buildSceneAssetWithGuidRef(): SceneAsset {
 
 describe('templates/game-default API contract (regression for `world.sceneInstances` drift)', () => {
   it('(a) assets.instantiate returns the synthetic root Entity directly (no `byRef` indirection)', async () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
 
     const matGuid = AssetGuid.parse(MAT_GUID);
@@ -128,7 +127,7 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
   });
 
   it('(b) the synthetic root carries SceneInstance.mapping[localId] = Entity (per-node lookup the template walks)', async () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
 
     const matGuid = AssetGuid.parse(MAT_GUID);
@@ -296,7 +295,7 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
   });
 
   it('(d) loadByGuid returns the catalogued SceneAsset payload (identity)', async () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const sceneGuid = AssetGuid.parse(SCENE_GUID);
     if (!sceneGuid.ok) throw new Error('parse');
     const payload: SceneAsset = { kind: 'scene', entities: [] };

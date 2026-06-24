@@ -89,7 +89,6 @@ import { PickError } from '../pick-errors';
 import { extractFrame } from '../render-system-extract';
 import type { Renderer } from '../renderer';
 import { propagateTransforms } from '../systems/propagate-transforms';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
@@ -1079,7 +1078,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function makeScene(): Scene {
     const world = new World();
-    const assets = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const assets = new AssetRegistry(makeMockShaderRegistry());
     const mesh = registerBox(world, assets);
     const material = registerMaterial(world, assets);
     return { world, assets, mesh, material };
@@ -3422,7 +3421,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const assets = new AssetRegistry(
         // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
         { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
       );
 
       const matHandle = world.allocSharedRef('MaterialAsset', {
@@ -3466,7 +3464,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const assets = new AssetRegistry(
         // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
         { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
       );
 
       const meshHandle = world.allocSharedRef('MeshAsset', {
@@ -3505,7 +3502,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const assets = new AssetRegistry(
         // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry
         { lookupMaterialShader: () => ({ ok: false }) } as any,
-        createDefaultLoaderRegistry(),
       );
 
       const matHandle = world.allocSharedRef('MaterialAsset', {

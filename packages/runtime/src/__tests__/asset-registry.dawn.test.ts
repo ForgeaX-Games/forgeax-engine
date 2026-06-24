@@ -15,7 +15,6 @@ import { describe, expect, it } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
 import { resolveAssetHandle } from '../resolve-asset-handle';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const GUID_DAWN_A = '00000000-0000-7000-8000-000000000031';
@@ -41,7 +40,7 @@ function makeMesh(): TypesMeshAsset {
 
 describe('w13 - AssetRegistry Node loadByGuid happy path', () => {
   it('loadByGuid() returns Ok(payload) for a catalogued GUID', async () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const parseResult = AssetGuid.parse(GUID_DAWN_A);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
@@ -54,7 +53,7 @@ describe('w13 - AssetRegistry Node loadByGuid happy path', () => {
   });
 
   it('two loadByGuid(sameGuid) calls return same payload (idempotent)', async () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const parseResult = AssetGuid.parse(GUID_DAWN_A);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;
@@ -71,7 +70,7 @@ describe('w13 - AssetRegistry Node loadByGuid happy path', () => {
 
 describe('w13 - AssetRegistry Node error paths (AC-03 migration)', () => {
   it('asset-not-found: loadByGuid(unregistered guid)', async () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const parseResult = AssetGuid.parse(GUID_DAWN_B);
     if (!parseResult.ok) throw new Error('expected ok');
     const guid = parseResult.value;

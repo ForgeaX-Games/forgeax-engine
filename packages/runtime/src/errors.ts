@@ -122,6 +122,13 @@ export type RuntimeErrorCode =
   // bidirectional Skin <-> pbr-skin material mismatch detected at extract.
   | 'skin-material-mismatch'
   | 'material-skin-attr-missing'
+  // feat-20260623-world-space-video-asset M3 / w11 (add-only minor): AC-10
+  // capability double-miss. Fired by the per-frame record stage (videoTextureView)
+  // when neither the general copyExternalImageToTexture path (no host
+  // HTMLVideoElement) nor the high-perf GPUExternalTexture path is available;
+  // the engine surfaces this structured failure on the error channel instead of
+  // silently rendering a stale/garbage texture (charter P3, plan-strategy D-6).
+  | 'video-upload-unsupported'
   // feat-20260612-skin-palette-per-frame-upload M2 / m2-5: SkinExtractErrorCode
   // subset union covering the three new fail-fast checks at extractFrame
   // hasSkin time (skeleton handle resolution / SkinAsset.joints.length vs
@@ -424,6 +431,41 @@ export class VertexStorageBufferUnavailableError extends Error {
       'this device does not support vertex-stage storage buffers; skinning requires vertex-stage storage buffer access (OOS-uniform-palette fallback not implemented)';
     super('vertex-stage storage buffer unavailable — skinning cannot operate');
     this.name = 'VertexStorageBufferUnavailableError';
+    this.expected = expected;
+    this.hint = hint;
+  }
+}
+
+// ── VideoUploadUnsupportedError ─────────────────────────────────────────
+
+/**
+ * Structured error for `RuntimeErrorCode 'video-upload-unsupported'`
+ * (feat-20260623-world-space-video-asset M3 / w11 — AC-10).
+ *
+ * Fired by the per-frame record stage (`videoTextureView`) when a VideoPlayer
+ * entity can reach neither video upload path this frame: the general
+ * `copyExternalImageToTexture` path (no host HTMLVideoElement resolved via
+ * `VideoElementProvider`) AND the high-perf `GPUExternalTexture` path
+ * (capability absent). The engine surfaces this explicit failure rather than
+ * silently rendering a stale/garbage texture (charter P3, plan-strategy D-6).
+ *   - `.code = 'video-upload-unsupported'`
+ *   - `.expected` — at least one upload path available (host element or
+ *     GPUExternalTexture capability)
+ *   - `.hint` — actionable recovery: use a static texture or switch backend
+ *   - `.detail` — undefined (no narrowed detail variant)
+ */
+export class VideoUploadUnsupportedError extends Error {
+  readonly code = 'video-upload-unsupported' as const;
+  readonly expected: string;
+  readonly hint: string;
+
+  constructor() {
+    const expected =
+      'at least one video upload path available: a host HTMLVideoElement (general copyExternalImageToTexture path) or GPUExternalTexture capability (high-perf path)';
+    const hint =
+      'this backend exposes no usable video upload path; render a static texture instead, or switch to a WebGPU backend that supports video texture upload';
+    super('video upload unsupported — no general or high-perf path available');
+    this.name = 'VideoUploadUnsupportedError';
     this.expected = expected;
     this.hint = hint;
   }
@@ -1009,7 +1051,9 @@ export type RuntimeError =
   | JointEntityDanglingError
   // feat-20260612-point-light-shadows-urp-hdrp Round-2 F-4: ShadowAtlas P3.
   | PointShadowAtlasUninitializedError
-  | PointShadowAtlasBoundsViolationError;
+  | PointShadowAtlasBoundsViolationError
+  // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability double-miss.
+  | VideoUploadUnsupportedError;
 
 /**
  * Structured signal carrier for the `EngineEnvironmentError.detail` field.

@@ -149,7 +149,11 @@ export interface InternalizedGraph {
 // ── Compile options ──────────────────────────────────────────────
 
 export interface CompileOptions {
-  readonly backendKind: 'webgpu' | 'wgpu-native' | 'wgpu-webgl2';
+  // D-6: second independent literal union (NOT derived from RhiCaps['backendKind']);
+  // add-only '|null' member so passthrough callers forwarding
+  // device.caps.backendKind type-check. Deriving from RhiCaps to collapse the
+  // duplicate is a known OOS follow-on (architecture-principles #2 Derive).
+  readonly backendKind: 'webgpu' | 'wgpu-native' | 'wgpu-webgl2' | 'null';
   readonly caps: RhiCaps;
   /**
    * RHI device interface handle for real GPU texture allocation (D-1).

@@ -48,6 +48,7 @@
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-rhi-wgpu": "workspace:*",
+    "@forgeax/engine-rhi-null": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },

@@ -28,7 +28,6 @@ import type { MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const MESH_A = '70000000-0000-4000-7000-000000000001';
@@ -44,7 +43,7 @@ function parseGuid(s: string): AssetGuid {
 }
 
 function makeRegistry(): AssetRegistry {
-  return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+  return new AssetRegistry(makeMockShaderRegistry());
 }
 
 const MESH_PAYLOAD_A = {

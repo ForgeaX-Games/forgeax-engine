@@ -9,8 +9,8 @@
 //   - type Handle<T extends string, M extends 'unique' | 'shared'>
 //     (double-axis phantom brand on top of `number`)
 //   - type UniqueHandle<T> / SharedHandle<T> (mode-pinned aliases)
-//   - interface AssetTagMap (13-member closed map mesh/texture/cube-texture/sampler/material/scene/audio/skin/skeleton/animation-clip/shader/font/render-pipeline)
-//   - type TagOf<T extends Asset> (distributive conditional - 13+1 never tail)
+//   - interface AssetTagMap (14-member closed map mesh/texture/cube-texture/sampler/material/scene/audio/skin/skeleton/animation-clip/shader/font/render-pipeline/tileset/video)
+//   - type TagOf<T extends Asset> (distributive conditional - 14+1 never tail)
 //   - function toUnique<T>(raw) / toShared<T>(raw) (brand creation factories)
 //   - function unwrapHandle<T,M>(h) (brand removal helper - cast inverse)
 //
@@ -131,6 +131,8 @@ export interface AssetTagMap {
   'render-pipeline': 'RenderPipelineAsset';
   /** feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild */
   tileset: 'TilesetAsset';
+  /** feat-20260623-world-space-video-asset M1 / w2 */
+  video: 'VideoAsset';
 }
 
 /**

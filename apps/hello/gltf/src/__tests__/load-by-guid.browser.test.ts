@@ -51,7 +51,7 @@ import {
   type Handle,
   type MaterialAsset,
   type MeshAsset,
-  type RhiError, createDefaultLoaderRegistry} from '@forgeax/engine-runtime';
+  type RhiError} from '@forgeax/engine-runtime';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type {
   AssetError,
@@ -213,7 +213,7 @@ function gltfDocToSceneAsset(
 
 describe('hello-gltf w27 - loadByGuid<SceneAsset> spine + AC-07 + AC-15', () => {
   it('(a) loadByGuid<SceneAsset>(sceneGuid) infers Result<SceneAsset, AssetError>', async () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
     const meshGuid = findGuid('mesh');
     const matGuid = findGuid('material');
@@ -270,7 +270,7 @@ describe('hello-gltf w27 - loadByGuid<SceneAsset> spine + AC-07 + AC-15', () => 
   });
 
   it('(b)+(c) sceneInstances.instantiate spawns mesh + camera entities', async () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const meshGuid = findGuid('mesh');
     const matGuid = findGuid('material');
     const sceneGuid = findGuid('scene');

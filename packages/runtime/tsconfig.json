@@ -20,6 +20,7 @@
     { "path": "../rhi-debug" },
     { "path": "../rhi-webgpu" },
     { "path": "../rhi-wgpu" },
+    { "path": "../rhi-null" },
     { "path": "../shader" },
     { "path": "../render-graph" },
     { "path": "../pack" },

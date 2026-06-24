@@ -465,6 +465,17 @@ export interface RenderSystemRuntime {
     bgl: BindGroupLayout,
     colorFormat: GPUTextureFormat,
   ) => RenderPipeline | null;
+  /**
+   * feat-20260623-world-space-video-asset M4 / w16 (D-3): transient per-frame
+   * texture store for VideoAsset sources. Independent of {@link gpuStore} — the
+   * record stage routes a `MaterialSnapshot.videoTextureFields` field through
+   * this store (per-frame copyExternalImageToTexture upload + current-frame view)
+   * instead of `gpuStore.ensureResident` (whose static cache video must never
+   * enter, AC-08). Optional so test fixtures that drive recordFrame manually
+   * need not supply one — a video field then degrades to the default view
+   * (charter P3). The production createRenderer always wires it.
+   */
+  readonly dynamicTextureStore?: import('./dynamic-texture-store').DynamicTextureStore | undefined;
 }
 
 export interface RenderSystemInternals extends RenderSystemRuntime {

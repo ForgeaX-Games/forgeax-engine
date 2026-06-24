@@ -904,6 +904,10 @@ import { RhiErrorListenerRegistry } from '../renderer';
               return 'point shadow atlas uninitialized';
             case 'point-shadow-atlas-bounds-violation':
               return 'point shadow atlas bounds violation';
+            // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability
+            // double-miss code (add-only minor).
+            case 'video-upload-unsupported':
+              return 'video upload unsupported';
           }
         }
         expect(exhaustive('skybox-cubemap-not-ready')).toBe('skybox cubemap not ready');
@@ -987,6 +991,8 @@ import { RhiErrorListenerRegistry } from '../renderer';
             case 'point-shadow-atlas-uninitialized':
               return 'ok';
             case 'point-shadow-atlas-bounds-violation':
+              return 'ok';
+            case 'video-upload-unsupported':
               return 'ok';
           }
         }

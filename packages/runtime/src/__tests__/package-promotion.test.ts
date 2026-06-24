@@ -21,7 +21,6 @@ import { describe, expect, it } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
 import { createEngineMetrics } from '../engine-metrics';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const G1 = 'c0000000-0000-4000-c000-000000000001';
@@ -35,7 +34,7 @@ function parseGuid(s: string): AssetGuid {
 }
 
 function makeRegistry(): AssetRegistry {
-  return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+  return new AssetRegistry(makeMockShaderRegistry());
 }
 
 const sampler: SamplerAsset = { kind: 'sampler' };

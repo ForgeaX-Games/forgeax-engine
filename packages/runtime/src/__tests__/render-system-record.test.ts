@@ -25,7 +25,6 @@ import { extractFrame, type MaterialSnapshot } from '../render-system-extract';
 import * as recordModule from '../render-system-record';
 import { detectNineSliceScaleTooSmall } from '../render-system-record';
 import { propagateTransforms } from '../systems/propagate-transforms';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 
 // ─── from render-system-record-pbr-ubo-stable.test.ts ───
 {
@@ -380,10 +379,7 @@ import { createDefaultLoaderRegistry } from '../wire-default-loaders';
   describe('SpriteRegionOverride compose 9-slice (M4 / w17b, AC-14)', () => {
     it('(1) entity without override uses asset-side region', () => {
       const world = new World();
-      const assets = new AssetRegistry(
-        makeShaderRegistryWithSprite(),
-        createDefaultLoaderRegistry(),
-      );
+      const assets = new AssetRegistry(makeShaderRegistryWithSprite());
       const mesh = registerSpriteMesh(world);
       const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',
@@ -407,10 +403,7 @@ import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 
     it('(2) entity with override uses the override region in the snapshot', () => {
       const world = new World();
-      const assets = new AssetRegistry(
-        makeShaderRegistryWithSprite(),
-        createDefaultLoaderRegistry(),
-      );
+      const assets = new AssetRegistry(makeShaderRegistryWithSprite());
       const mesh = registerSpriteMesh(world);
       const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',
@@ -441,10 +434,7 @@ import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 
     it('(3) two entities sharing one material diverge on effective region (compose with 9-slice)', () => {
       const world = new World();
-      const assets = new AssetRegistry(
-        makeShaderRegistryWithSprite(),
-        createDefaultLoaderRegistry(),
-      );
+      const assets = new AssetRegistry(makeShaderRegistryWithSprite());
       const mesh = registerSpriteMesh(world);
       const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
         kind: 'material',

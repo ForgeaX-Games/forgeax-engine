@@ -2,8 +2,9 @@
 // change to a graph-walk axis. The recursion source is `envelope.refs` (D-5), so
 // when the importer puts a referenced GUID into refs[], the recursive loadByGuid
 // walk pulls it -- no exhaustive `switch (asset.kind)` arm to add, no per-kind
-// runtime walker to extend. The only kind-exhaustive mapping a new Asset kind
-// touches is the ASSET_BRAND Record table (brand, not recursion).
+// runtime walker to extend. feat-20260623 M2: the ASSET_BRAND table (the only
+// kind-exhaustive mapping a new Asset kind previously touched) is now retired;
+// a new kind requires zero engine-type changes (brand concept eliminated).
 //
 // This locks the structural win of the refs-as-SSOT pivot: adding a reference
 // field to any Asset member surfaces in the load graph through refs[] alone.
@@ -21,7 +22,6 @@ import type { MaterialAsset } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const PARENT_GUID = 'c0000000-0000-4000-c000-000000000001';
@@ -34,7 +34,7 @@ function parseGuid(s: string): AssetGuid {
 }
 
 function makeRegistry(): AssetRegistry {
-  return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+  return new AssetRegistry(makeMockShaderRegistry());
 }
 
 const stubMaterial: MaterialAsset = {

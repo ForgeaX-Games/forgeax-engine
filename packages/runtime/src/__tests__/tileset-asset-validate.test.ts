@@ -32,11 +32,10 @@ import {
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { AssetRegistry, validateTilesetPayload } from '../asset-registry';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeAssetRegistry(): AssetRegistry {
-  return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+  return new AssetRegistry(makeMockShaderRegistry());
 }
 
 function makeAtlasHandle(id: number): Handle<'TextureAsset', 'shared'> {

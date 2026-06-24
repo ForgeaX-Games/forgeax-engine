@@ -1125,7 +1125,15 @@ export function wrapCreateShaderModule(
     device: RhiDevice,
     desc: { code: string; label?: string | undefined },
   ): Promise<Result<ShaderModule, import('@forgeax/engine-rhi').RhiError>> {
-    const result = await originalFn(device, desc);
+    // The renderer threads the proxied RhiDevice (from proxyDevice()) here, but
+    // engine-rhi-webgpu's createShaderModule reverse-looks-up the GPUDevice via
+    // a WeakMap keyed on the RhiDevice that makeRhiDevice registered. The proxy
+    // is a different JS object, so WeakMap.get(proxy) is undefined and the real
+    // fn returns shader-compile-failed ("unregistered RhiDevice"). Unwrap the
+    // proxy to the registered device via the _realDevice escape hatch that
+    // proxyDevice exposes for exactly this purpose.
+    const realDevice = (device as RhiDevice & { _realDevice?: RhiDevice })._realDevice ?? device;
+    const result = await originalFn(realDevice, desc);
     if (!result.ok) return result;
 
     // I-12 (round 1 implement-review) fix: route the createShaderModule

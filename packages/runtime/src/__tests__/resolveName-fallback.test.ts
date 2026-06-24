@@ -15,7 +15,6 @@ import type { SamplerAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const MULTI_A = 'e0000000-0000-4000-e000-000000000001';
@@ -31,7 +30,7 @@ function parseGuid(s: string): AssetGuid {
 }
 
 function makeRegistry(): AssetRegistry {
-  return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+  return new AssetRegistry(makeMockShaderRegistry());
 }
 
 const sampler: SamplerAsset = { kind: 'sampler' };

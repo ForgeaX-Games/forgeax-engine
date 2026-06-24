@@ -9,22 +9,13 @@
 //          consumption points (instantiate -> allocSharedRef brand arg;
 //          inspect().assets[].brand) return the correct brand per kind.
 
-import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { ASSET_BRAND, type Asset, type AssetBrand, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
-function parseGuid(s: string): AssetGuid {
-  const r = AssetGuid.parse(s);
-  if (!r.ok) throw new Error(`invalid test GUID: ${s}`);
-  return r.value;
-}
-
 function makeReg(): AssetRegistry {
-  return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+  return new AssetRegistry(makeMockShaderRegistry());
 }
 
 const sampler = { kind: 'sampler' as const };
@@ -108,164 +99,5 @@ describe('AC-05 resolveName regression (storedNameOf retired, name on envelope)'
     expect(r.ok).toBe(true);
     expect(reg.resolveName(a)).toBe('Renamed');
     expect(reg.resolveName(b)).toBe('Second');
-  });
-});
-
-// ── AC-06: ASSET_BRAND Record table maps every kind; consumption points read it ─
-
-// One representative payload per Asset.kind (all 14 members of the closed union).
-const KIND_FIXTURES: ReadonlyArray<{ kind: Asset['kind']; make: () => Asset }> = [
-  {
-    kind: 'mesh',
-    make: () => ({
-      kind: 'mesh',
-      vertices: new Float32Array(12),
-      indices: new Uint16Array([0]),
-      attributes: {},
-      submeshes: [{ indexOffset: 0, indexCount: 0, vertexCount: 0, topology: 'triangle-list' }],
-    }),
-  },
-  {
-    kind: 'texture',
-    make: () => ({
-      kind: 'texture',
-      width: 4,
-      height: 4,
-      format: 'rgba8unorm',
-      data: new Uint8Array(64),
-      colorSpace: 'srgb',
-      mipmap: false,
-    }),
-  },
-  { kind: 'sampler', make: () => ({ kind: 'sampler', magFilter: 'linear', minFilter: 'linear' }) },
-  {
-    kind: 'material',
-    make: () => ({
-      kind: 'material',
-      passes: [{ name: 'forward', shader: 'test::dummy', tags: { LightMode: 'Forward' } }],
-      paramValues: {},
-    }),
-  },
-  { kind: 'scene', make: () => ({ kind: 'scene', entities: [] }) },
-  {
-    kind: 'cube-texture',
-    make: () => ({
-      kind: 'cube-texture',
-      width: 4,
-      height: 4,
-      format: 'rgba8unorm',
-      faces: [
-        new Uint8Array(64),
-        new Uint8Array(64),
-        new Uint8Array(64),
-        new Uint8Array(64),
-        new Uint8Array(64),
-        new Uint8Array(64),
-      ],
-    }),
-  },
-  {
-    kind: 'skeleton',
-    make: () => ({ kind: 'skeleton', inverseBindMatrices: new Float32Array(16), jointCount: 1 }),
-  },
-  {
-    kind: 'skin',
-    make: () => ({
-      kind: 'skin',
-      skeletonGuid: '01890000-0000-7000-8000-0000000000ff',
-      jointPaths: ['Root'],
-    }),
-  },
-  { kind: 'animation-clip', make: () => ({ kind: 'animation-clip', duration: 1, channels: [] }) },
-  {
-    kind: 'audio',
-    make: () => ({
-      kind: 'audio',
-      buffer: { length: 0, sampleRate: 48000, numberOfChannels: 1, duration: 0 } as AudioBuffer,
-    }),
-  },
-  {
-    kind: 'shader',
-    make: () => ({ kind: 'shader', name: 'test::leaf', source: 'fn main() {}', paramSchema: [] }),
-  },
-  {
-    kind: 'font',
-    make: () => ({
-      kind: 'font',
-      atlas: parseGuid('01890000-0000-7000-8000-0000000000f1'),
-      sampler: parseGuid('01890000-0000-7000-8000-0000000000f2'),
-      glyphs: {},
-      common: {
-        lineHeight: 0,
-        base: 0,
-        distanceRange: 0,
-        pxRange: 0,
-        atlasWidth: 0,
-        atlasHeight: 0,
-      },
-    }),
-  },
-  {
-    kind: 'render-pipeline',
-    make: () => ({ kind: 'render-pipeline', pipelineId: 'forgeax::urp' }),
-  },
-  {
-    kind: 'tileset',
-    make: () => ({
-      kind: 'tileset',
-      guid: 'test/tileset',
-      atlases: [toShared<'TextureAsset'>(101)],
-      tileWidth: 16,
-      tileHeight: 16,
-      columns: 1,
-      rows: 1,
-      regions: [],
-      tiles: [],
-    }),
-  },
-];
-
-const EXPECTED_BRAND: Record<Asset['kind'], AssetBrand> = {
-  mesh: 'MeshAsset',
-  texture: 'TextureAsset',
-  sampler: 'SamplerAsset',
-  material: 'MaterialAsset',
-  scene: 'SceneAsset',
-  'cube-texture': 'CubeTextureAsset',
-  skeleton: 'SkeletonAsset',
-  skin: 'SkinAsset',
-  'animation-clip': 'AnimationClip',
-  audio: 'AudioClipAsset',
-  shader: 'ShaderAsset',
-  font: 'FontAsset',
-  'render-pipeline': 'RenderPipelineAsset',
-  tileset: 'TilesetAsset',
-};
-
-describe('AC-06 ASSET_BRAND table (assetBrand switch retired)', () => {
-  it('maps all 14 Asset kinds to the expected brand', () => {
-    // Independent expected table guards against a typo'd value in ASSET_BRAND.
-    for (const kind of Object.keys(EXPECTED_BRAND) as Asset['kind'][]) {
-      expect(ASSET_BRAND[kind]).toBe(EXPECTED_BRAND[kind]);
-    }
-    // Key completeness: the table covers exactly the 14 kinds and no extras.
-    expect(Object.keys(ASSET_BRAND).sort()).toEqual(Object.keys(EXPECTED_BRAND).sort());
-  });
-
-  it('inspect().assets[].brand returns the correct brand per kind', () => {
-    const reg = makeReg();
-    const guidByKind = new Map<Asset['kind'], string>();
-    KIND_FIXTURES.forEach((f, i) => {
-      const guid = `02890000-0000-7000-8000-0000000001${(i + 10).toString(16).padStart(2, '0')}`;
-      guidByKind.set(f.kind, guid.toLowerCase());
-      reg.catalog(parseGuid(guid), f.make());
-    });
-    const snap = reg.inspect();
-    for (const f of KIND_FIXTURES) {
-      const guid = guidByKind.get(f.kind);
-      const entry = snap.assets.find((e) => e.guid === guid);
-      expect(entry, `inspect entry for ${f.kind}`).toBeDefined();
-      expect(entry?.brand).toBe(EXPECTED_BRAND[f.kind]);
-    }
   });
 });

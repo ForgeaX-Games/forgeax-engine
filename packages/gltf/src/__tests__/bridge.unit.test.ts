@@ -12,7 +12,7 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import { AssetRegistry, createDefaultLoaderRegistry } from '@forgeax/engine-runtime';
+import { AssetRegistry } from '@forgeax/engine-runtime';
 import type { Handle, MaterialAsset, ParamSchemaEntry, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { gltfDocToSceneAsset, toMaterialAsset } from '../bridge.js';
@@ -397,7 +397,6 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         const reg = new AssetRegistry(
           // biome-ignore lint/suspicious/noExplicitAny: mock ShaderRegistry with only lookupMaterialShader
           makeBridgeTestShaderRegistry() as any,
-          createDefaultLoaderRegistry(),
         );
 
         const asset = toMaterialAsset(STANDARD_MATERIAL, {

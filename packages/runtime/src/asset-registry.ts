@@ -43,7 +43,6 @@ import { err, ok, type Result, type RhiError } from '@forgeax/engine-rhi';
 import type { ShaderRegistry } from '@forgeax/engine-shader';
 import {
   type AnimationChannel,
-  ASSET_BRAND,
   ASSET_ERROR_HINTS,
   type Asset,
   type AssetEnvelope,
@@ -101,6 +100,7 @@ import { meshFromInterleaved } from './geometry/box';
 import type { LoaderRegistry } from './loader-registry';
 import { resolveAssetHandle } from './resolve-asset-handle';
 import { postSpawnResolveJoints } from './scene-instances/post-spawn-resolve-joints';
+import { createDefaultLoaderRegistry } from './wire-default-loaders';
 
 /**
  * Strip readonly from all fields of T. Used to mutate the MeshAsset.aabb slot
@@ -316,10 +316,10 @@ interface MutablePackage {
 // feat-20260608-tilemap-object-layer-rendering M0: AssetBrand union grows
 // 13 -> 14 with `'TilesetAsset'` in @forgeax/engine-types.
 
-// feat-20260622 D-4/D-8: the 14-arm assetBrand switch is retired for the
-// module-level ASSET_BRAND Record table in @forgeax/engine-types (brand derived
-// from kind; Record key completeness is the new-kind guard). Consumers read
-// ASSET_BRAND[kind] directly.
+// feat-20260622 D-4/D-8: the 14-arm assetBrand switch and ASSET_BRAND Record
+// table are both retired (PR #496 eliminated the brand concept entirely).
+// New Asset union members no longer need a brand mapping; the closed union
+// exhaustive switch in test-d files is the sole type-level guard.
 
 // ─── Schema-driven material parse result (feat-20260523 M4-T01) ──────────
 // ─── AssetRegistry class ────────────────────────────────────────────────────
@@ -1961,7 +1961,7 @@ export class AssetRegistry {
   // (`world.allocSharedRef`) is the caller's job on the ECS/render side.
   // Sub-asset refs embedded in a payload stay as GUID strings (AssetGuid /
   // dash-form), never minted at load time. Keyed by lowercased GUID string.
-  private readonly assetCatalog: Map<string, AssetEnvelope> = new Map();
+  private readonly assetCatalog: Map<string, AssetEnvelope<Asset>> = new Map();
 
   // feat-20260618-asset-and-pack-name-fields M3 (D-1): the package index that
   // backs the two-segment asset identity `<packagePath>.<name>`. `packages`
@@ -2013,7 +2013,7 @@ export class AssetRegistry {
   // entry for A instead of re-entering fetch.
   private readonly inFlight: Map<
     string,
-    Promise<Result<Asset, AssetError | ImageError | RhiError>>
+    Promise<Result<unknown, AssetError | ImageError | RhiError>>
   > = new Map();
 
   // bug-20260610 Fix B (M3 / D-4): per-instance pack-file cache keyed by
@@ -2061,13 +2061,13 @@ export class AssetRegistry {
    * 'array<f32>' }` component; the RenderSystem record stage owns GPU
    * storage buffer allocation + cap-gate.
    */
-  // feat-20260603-asset-import-loader-injection M1: the registry dispatches
-  // `parseAssetPayload` / the texture+font upstream branches through this
-  // constructor-injected `LoaderRegistry` (D-1 / D-7) instead of a hardcoded
-  // `if (kind === ...)` chain. Injected at construction (no setter, no illegal
-  // intermediate state); the production assembly point + tests pass a registry
-  // wired by `wireDefaultLoaders` / `createDefaultLoaderRegistry`.
-  private readonly loaders: LoaderRegistry;
+  // feat-20260603-asset-import-loader-injection M1 / w5 (D-7): the registry
+  // dispatches `parseAssetPayload` / the texture+font upstream branches through
+  // this `LoaderRegistry`. feat-20260623 M3 / w9: the loader registry is now
+  // internally built by `createDefaultLoaderRegistry()` (public readonly field)
+  // so host apps can reach `engine.assets.loaders.register(...)` without a
+  // constructor-injection slot or a phantom passthrough wrapper.
+  readonly loaders: LoaderRegistry = createDefaultLoaderRegistry();
 
   // feat-20260603-asset-import-loader-injection M4 / w31 (AC-19 / AC-22):
   // the optional `ImportTransport` is the *only* difference between the studio
@@ -2081,11 +2081,9 @@ export class AssetRegistry {
   /** @internal Stored for M2 validation; TS suppressor reference */
   constructor(
     private readonly shaderRegistry: ShaderRegistry,
-    loaders: LoaderRegistry,
     importTransport?: ImportTransport | undefined,
   ) {
     void this.shaderRegistry;
-    this.loaders = loaders;
     this.importTransport = importTransport;
     // feat-20260614 M8 (D-15): builtins are GUID-addressable catalogue rows.
     // The builtin payloads also live process-static in BuiltinAssetRegistry
@@ -2435,7 +2433,7 @@ export class AssetRegistry {
         const guidKey = ref.guid.toLowerCase();
         let resolvedSlot = guidToHandle.get(guidKey);
         if (resolvedSlot === undefined) {
-          resolvedSlot = unwrapHandle(world.allocSharedRef(ASSET_BRAND[payload.kind], payload));
+          resolvedSlot = unwrapHandle(world.allocSharedRef(payload.kind, payload));
           guidToHandle.set(guidKey, resolvedSlot);
         }
 
@@ -2489,7 +2487,7 @@ export class AssetRegistry {
         const guidKey = entry.guidString.toLowerCase();
         let resolvedSlot = guidToHandle.get(guidKey);
         if (resolvedSlot === undefined) {
-          resolvedSlot = unwrapHandle(world.allocSharedRef(ASSET_BRAND[payload.kind], payload));
+          resolvedSlot = unwrapHandle(world.allocSharedRef(payload.kind, payload));
           guidToHandle.set(guidKey, resolvedSlot);
         }
 
@@ -2861,20 +2859,24 @@ export class AssetRegistry {
    * `Result.err(AssetError)` on validation failure; `Result.ok(payload)` with
    * the stored payload (mesh payloads gain an `aabb`) on success.
    */
-  catalog<T extends Asset>(
+  catalog<T = Asset>(
     guid: AssetGuid | string,
     asset: T,
     refs?: readonly AssetRef[],
   ): Result<T, AssetError> {
-    const meshValidation = validateMeshPayload(asset);
+    // D-5: narrow T to Asset for kind-discriminate branches. The runtime
+    // catalog only accepts Asset-kind payloads (host custom kinds enter
+    // through loadByGuid + registerParsedAsset, not catalog directly).
+    const a: Asset = asset as unknown as Asset;
+    const meshValidation = validateMeshPayload(a);
     if (meshValidation !== null) return err(meshValidation);
 
     // feat-20260608 M0 baseline rebuild: tileset payload fail-fast gate at
     // register entry — region rectangle bounds-check uses the implicit atlas
     // extent (columns * tileWidth x rows * tileHeight) when the caller did
     // not supply an explicit one (charter P3 explicit failure).
-    if (asset.kind === 'tileset') {
-      const tilesetAsset = asset as TilesetAsset;
+    if (a.kind === 'tileset') {
+      const tilesetAsset = a as TilesetAsset;
       const tilesetValidation = validateTilesetPayload(
         tilesetAsset,
         inferAtlasExtent(tilesetAsset),
@@ -2884,21 +2886,21 @@ export class AssetRegistry {
 
     // feat-20260527 M2 / w6: material validation with union paramSchema
     // semantics across all passes (plan-strategy D-2, D-5).
-    if (asset.kind === 'material') {
-      const matValidation = this.validateMaterialPasses(asset as MaterialAsset);
+    if (a.kind === 'material') {
+      const matValidation = this.validateMaterialPasses(a as MaterialAsset);
       if (matValidation !== null) return err(matValidation);
-      const sliceValidation = this.validateSpriteSlices(asset as MaterialAsset);
+      const sliceValidation = this.validateSpriteSlices(a as MaterialAsset);
       if (sliceValidation !== null) return err(sliceValidation);
-      this.detectTileNeedsRepeatSampler(asset as MaterialAsset);
+      this.detectTileNeedsRepeatSampler(a as MaterialAsset);
     }
 
-    let stored: Asset = asset;
-    if (asset.kind === 'mesh') {
-      stored = withMeshAabb(asset as TypesMeshAsset);
+    let stored: Asset = a;
+    if (a.kind === 'mesh') {
+      stored = withMeshAabb(a as TypesMeshAsset);
     }
     const key =
       typeof guid === 'string' ? guid.toLowerCase() : AssetGuid.format(guid).toLowerCase();
-    const kind = asset.kind;
+    const kind = a.kind;
     // Drain any name recorded by an earlier _registerPackage call whose body had
     // not yet been catalogued (prod disk path; D-6). Preserve a name already on
     // a prior envelope for this key (re-catalog of the same GUID).
@@ -3151,10 +3153,10 @@ export class AssetRegistry {
    * ECS/render side (e.g. `walkMaterialParents` in `resolve-asset-handle.ts`)
    * to resolve a payload's embedded sub-asset GUIDs (D-19) without minting.
    */
-  lookup(guid: AssetGuid | string): Asset | undefined {
+  lookup<T = Asset>(guid: AssetGuid | string): T | undefined {
     const key =
       typeof guid === 'string' ? guid.toLowerCase() : AssetGuid.format(guid).toLowerCase();
-    return this.assetCatalog.get(key)?.payload;
+    return this.assetCatalog.get(key)?.payload as T | undefined;
   }
 
   /**
@@ -3263,7 +3265,7 @@ export class AssetRegistry {
    * }
    * ```
    */
-  async loadByGuid<T extends Asset>(
+  async loadByGuid<T = Asset>(
     guid: AssetGuid,
     parentContext?: {
       sceneEntityId?: number;
@@ -3344,7 +3346,7 @@ export class AssetRegistry {
    * / glyph-parse logic moved verbatim into the loader bodies (D-2 — loader is
    * pure of `registerWithGuid`, which stays here).
    */
-  private async loadFromUpstreamEntry<T extends Asset>(
+  private async loadFromUpstreamEntry<T = Asset>(
     guidKey: string,
     entry: {
       relativeUrl: string;
@@ -3388,7 +3390,7 @@ export class AssetRegistry {
    * Fetches pack-index.json (cached), then fetches the pack file, parses the
    * asset payload, and registers it.
    */
-  private async loadByGuidProd<T extends Asset>(
+  private async loadByGuidProd<T = Asset>(
     guid: AssetGuid,
     guidKey: string,
     parentContext?: {
@@ -3513,7 +3515,7 @@ export class AssetRegistry {
    * between the two is whether `this.importTransport` exists when the caller
    * falls back to `transportOrFail` (AC-23 key invariant).
    */
-  private async ddcLoad<T extends Asset>(
+  private async ddcLoad<T = Asset>(
     guid: AssetGuid,
     guidKey: string,
     entry: {
@@ -3610,7 +3612,7 @@ export class AssetRegistry {
         ...(unpacked.aabb !== undefined ? { aabb: unpacked.aabb } : {}),
       };
       const parsed = this.parseAssetPayload('mesh', synthPayload);
-      if (parsed === undefined || 'ok' in parsed) {
+      if (parsed === undefined || (typeof parsed === 'object' && 'ok' in parsed)) {
         return err(
           new AssetError({
             code: 'asset-parse-failed',
@@ -3620,7 +3622,7 @@ export class AssetRegistry {
         );
       }
       // mesh is a leaf asset (no sub-asset refs).
-      packResult = ok({ asset: parsed, refs: [] });
+      packResult = ok({ asset: parsed as Asset, refs: [] });
     } else if (entry.kind === 'material') {
       // feat-20260622 M4 / w13 (R1): fold the former Path A (material texture
       // preload) into the unified envelope.refs for-loop. The material parse
@@ -3642,7 +3644,7 @@ export class AssetRegistry {
         rawResult.value.payload,
         rawResult.value.refs,
       );
-      if (parsed === undefined || 'ok' in parsed) {
+      if (parsed === undefined || (typeof parsed === 'object' && 'ok' in parsed)) {
         return err(
           new AssetError({
             code: 'asset-parse-failed',
@@ -3651,7 +3653,7 @@ export class AssetRegistry {
           }),
         );
       }
-      packResult = ok({ asset: parsed, refs: refsRaw });
+      packResult = ok({ asset: parsed as Asset, refs: refsRaw });
     } else {
       packResult = await this.fetchPackFile(entry.relativeUrl, guidKey, entry.kind);
     }
@@ -4048,7 +4050,7 @@ export class AssetRegistry {
    * import a missing DDC, then re-enter the DDC load path. When no transport
    * is wired (shipped form), fail fast with `asset-not-imported` (AC-22).
    */
-  private async transportOrFail<T extends Asset>(
+  private async transportOrFail<T = Asset>(
     guid: AssetGuid,
     guidKey: string,
     _missReason: AssetErrorCode,
@@ -4132,7 +4134,7 @@ export class AssetRegistry {
    * Extracted from the old `loadByGuidProd` body so `ddcLoad` and
    * `transportOrFail` share an identical load path (AC-23 key invariant).
    */
-  private registerParsedAsset<T extends Asset>(
+  private registerParsedAsset<T = Asset>(
     guid: AssetGuid,
     asset: Asset,
     _guidKey: string,
@@ -4389,8 +4391,8 @@ export class AssetRegistry {
     // F21: the scene loader returns its structured ParseErrorDetail inline via
     // the LoaderOutput `{ ok: false, error }` arm, surfaced here through
     // parseAssetPayload's return value -- no shared instance slot.
-    if (parsed !== undefined && 'ok' in parsed) {
-      const e = parsed.error;
+    if (parsed !== undefined && typeof parsed === 'object' && 'ok' in parsed) {
+      const e = (parsed as { readonly ok: false; readonly error: ParseErrorDetail }).error;
       return err(
         new AssetError({
           code: 'asset-parse-failed',
@@ -4423,7 +4425,7 @@ export class AssetRegistry {
     // the catalogued envelope. The recursive core then reads envelope.refs
     // as the single recursion source (D-5), never re-deriving them from
     // the payload.
-    return ok({ asset: parsed, refs: assetEntry.refs ?? [] });
+    return ok({ asset: parsed as Asset, refs: assetEntry.refs ?? [] });
   }
 
   /**
@@ -4525,17 +4527,22 @@ export class AssetRegistry {
     kind: string,
     payload: Record<string, unknown>,
     refs?: string[],
-  ): Asset | undefined | { readonly ok: false; readonly error: ParseErrorDetail } {
+  ):
+    | Asset
+    | Record<string, unknown>
+    | undefined
+    | { readonly ok: false; readonly error: ParseErrorDetail } {
     // feat-20260603-asset-import-loader-injection M1 / w4: dispatch on
     // `kind` through the injected LoaderRegistry instead of a hardcoded
     // `if (kind === ...)` chain (D-1 / AC-01). The seven inline pack-payload
     // loaders parse synchronously; texture / font live on the upstream
-    // loadByGuidProd branch (w6) and are never reached here. Unknown / stub
-    // kinds (sampler / shader / render-pipeline / texture / font / audio) have
-    // no inline loader -> `get` returns undefined -> the historical
-    // `return undefined` fall-through is preserved.
+    // loadByGuidProd branch (w6) and are never reached here.
+    // feat-20260623 M2 / w5: unknown kinds pass through the raw payload so
+    // host-registered loaders can parse their own kind. The engine does not
+    // parse payloads it cannot match; parse responsibility is explicit on the
+    // missing loader (charter P3).
     const loader = this.loaders.get(kind);
-    if (loader === undefined) return undefined;
+    if (loader === undefined) return { ...payload, kind };
     const out = loader.load(payload, refs, this.makeLoadContext());
     // The inline pack-payload loaders are synchronous (`Asset | undefined`);
     // the async texture / font loaders are dispatched from loadByGuidProd, not
@@ -4547,7 +4554,7 @@ export class AssetRegistry {
     // F21: the scene loader returns { ok: false, error: ParseErrorDetail } for
     // structured parse errors. Pass the error arm straight through the return
     // value so the caller constructs a precise AssetError -- no instance slot.
-    if (out !== undefined && typeof out === 'object' && 'ok' in out) {
+    if (out !== undefined && out !== null && typeof out === 'object' && 'ok' in out) {
       return out as { readonly ok: false; readonly error: ParseErrorDetail };
     }
     return out as Asset | undefined;
@@ -4616,14 +4623,14 @@ export class AssetRegistry {
 
   /**
    * Return a runtime snapshot of every catalogued asset. Each entry exposes
-   * `{ guid, brand }` where `brand` mirrors the engine-types `Asset`
-   * discriminated union. feat-20260614 M8 (D-15): the registry holds no
+   * `{ guid, kind, name }` where `kind` is the asset discriminant string
+   * from `payload.kind`. feat-20260614 M8 (D-15): the registry holds no
    * handles -- entries are keyed by GUID (the catalogue key).
    *
    * AI-user narrowing flow (AC-11 + plan-strategy §7.4):
    * ```ts
    * for (const e of registry.inspect().assets) {
-   *   if (e.brand === 'TextureAsset') {
+   *   if (e.kind === 'texture') {
    *     // re-query via registry.lookup(e.guid) to get the typed Asset value.
    *   }
    * }
@@ -4634,7 +4641,7 @@ export class AssetRegistry {
     for (const [guid, envelope] of this.assetCatalog) {
       assets.push({
         guid,
-        brand: ASSET_BRAND[envelope.payload.kind],
+        kind: envelope.payload.kind,
         name: this.resolveName(guid),
       });
     }

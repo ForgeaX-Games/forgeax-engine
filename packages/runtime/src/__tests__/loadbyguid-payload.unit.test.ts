@@ -27,7 +27,6 @@ import { BUILTIN_BASE } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import { walkMaterialPassesOverSharedRefs } from '../resolve-asset-handle';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function mesh(): MeshAsset {
@@ -55,7 +54,7 @@ describe('M8 mint+resolve consistency (AC-24 positive end-to-end)', () => {
 describe('M8 material-walk: handle root via sharedRefs, parent chain via catalogue GUID (D-19)', () => {
   it('resolves the parent chain by following material.parent GUID through the AssetRegistry catalogue', () => {
     const world = new World();
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     // Parent material: catalogued by GUID, declares the base pass + a base param.
     const parentGuidStr = '22222222-2222-5222-8222-222222222222';
     const parentGuid = reg.parseGuid(parentGuidStr);
@@ -91,7 +90,7 @@ describe('M8 material-walk: handle root via sharedRefs, parent chain via catalog
 
 describe('M8 loadByGuid returns payload, not a Handle (D-17)', () => {
   it('dev/fallback loadByGuid resolves to the registered payload object', async () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const payload = mesh();
     // After the M8 cut AssetRegistry catalogues GUID->payload; loadByGuid
     // returns the PAYLOAD (assignable to MeshAsset, not Handle<...>).

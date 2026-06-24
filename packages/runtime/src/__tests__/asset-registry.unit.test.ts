@@ -24,7 +24,6 @@ import { BUILTIN_BASE } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AssetRegistry, HANDLE_CUBE } from '../asset-registry';
 import { BUILTIN_CUBE, BuiltinAssetRegistry } from '../builtin-asset-registry';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const ASSET_REGISTRY_SRC = readFileSync(
@@ -108,7 +107,7 @@ function makeMeshFixture(): MeshAsset {
 }
 
 function makeReg(): AssetRegistry {
-  return new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+  return new AssetRegistry(makeMockShaderRegistry());
 }
 
 function parseGuid(s: string): AssetGuid {
@@ -871,5 +870,155 @@ describe('M3 integration: generation discard error shape (AC-11 + AC-12) [w13]',
       // biome-ignore lint/suspicious/noExplicitAny: test teardown
       delete (globalThis as any).fetch;
     }
+  });
+});
+
+describe('AC-05 InspectEntry.kind (brand removed)', () => {
+  it('inspect() returns entries with .kind (not .brand)', () => {
+    const reg = new AssetRegistry(makeMockShaderRegistry());
+    const guid = AssetGuid.format(AssetGuid.random());
+    reg.catalog(guid, {
+      kind: 'sampler' as const,
+      magFilter: 'linear' as const,
+      minFilter: 'linear' as const,
+    });
+    const snap = reg.inspect();
+    const entry = snap.assets.find((e) => e.guid === guid.toLowerCase());
+    expect(entry).toBeDefined();
+    expect(entry?.kind).toBe('sampler');
+    expect(entry?.name).toBe('');
+    expect(entry).toHaveProperty('kind');
+    expect(entry).not.toHaveProperty('brand');
+  });
+
+  it('inspect().assets[].kind mirrors payload.kind', () => {
+    const reg = new AssetRegistry(makeMockShaderRegistry());
+    const payload = {
+      kind: 'sampler' as const,
+      magFilter: 'linear' as const,
+      minFilter: 'linear' as const,
+    };
+    const guid = AssetGuid.format(AssetGuid.random());
+    reg.catalog(guid, payload);
+    const snap = reg.inspect();
+    const entry = snap.assets.find((e) => e.guid === guid.toLowerCase());
+    expect(entry, 'inspect entry for sampler').toBeDefined();
+    expect(entry?.kind).toBe('sampler');
+  });
+});
+
+describe('AC-06 parseAssetPayload passthrough + dev/prod consistency', () => {
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('engine-known kind (mesh) parses correctly via prod path', async () => {
+    const reg = makeReg();
+    reg.configurePackIndex('/pack-index.json');
+
+    const guid = 'b0000000-0000-4000-a000-000000000010';
+    const packIndex = [{ guid, relativeUrl: '/packs/ac06-mesh.pack.json', kind: 'mesh' }];
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/ac06-mesh.pack.json') {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '1.0.0',
+              kind: 'internal-text-package',
+              assets: [
+                {
+                  guid,
+                  kind: 'mesh',
+                  payload: {
+                    vertices: [
+                      0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    ],
+                    indices: [0, 1, 2],
+                    attributes: {},
+                    submeshes: [
+                      { indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' },
+                    ],
+                  },
+                },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const result = await reg.loadByGuid<MeshAsset>(parseGuid(guid));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.kind).toBe('mesh');
+  });
+
+  it('unmatched kind payload survives passthrough via prod loadByGuid', async () => {
+    const reg = makeReg();
+    reg.configurePackIndex('/pack-index.json');
+
+    const guid = 'b0000000-0000-4000-a000-000000000011';
+    const customPayload = { fieldA: 42, fieldB: 'hello' };
+    const packIndex = [{ guid, relativeUrl: '/packs/ac06-unknown.pack.json', kind: 'host-custom' }];
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      if (url === '/packs/ac06-unknown.pack.json') {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              schemaVersion: '1.0.0',
+              kind: 'internal-text-package',
+              assets: [{ guid, kind: 'host-custom', payload: customPayload }],
+            }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const result = await reg.loadByGuid(parseGuid(guid));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const snap = reg.inspect();
+    const entry = snap.assets.find((e) => e.guid === guid.toLowerCase());
+    expect(entry).toBeDefined();
+    expect(entry?.kind).toBe('host-custom');
+  });
+
+  it('dev-path catalog stores payload with kind faithfully', () => {
+    const reg = makeReg();
+    const guid = AssetGuid.format(AssetGuid.random());
+    const payload = {
+      kind: 'sampler' as const,
+      magFilter: 'linear' as const,
+      minFilter: 'linear' as const,
+    };
+    reg.catalog(guid, payload);
+
+    const stored = reg.lookup(guid);
+    expect(stored).toBeDefined();
+    expect(stored?.kind).toBe('sampler');
   });
 });

@@ -36,10 +36,10 @@ import type { RhiCaps } from '../src/index';
   // ─── from caps-backend-kind.test.ts ───
 
   describe('caps-backend-kind.test.ts', () => {
-    describe('RhiCaps.backendKind — 3-member closed union', () => {
-      it('backendKind is a string-literal union of exactly 3 members', () => {
+    describe('RhiCaps.backendKind — 4-member closed union', () => {
+      it('backendKind is a string-literal union of exactly 4 members', () => {
         expectTypeOf<RhiCaps['backendKind']>().toEqualTypeOf<
-          'webgpu' | 'wgpu-native' | 'wgpu-webgl2'
+          'webgpu' | 'wgpu-native' | 'wgpu-webgl2' | 'null'
         >();
       });
 
@@ -56,11 +56,14 @@ import type { RhiCaps } from '../src/index';
               return 'explicit barriers';
             case 'wgpu-webgl2':
               return 'GL implicit sync, no barriers';
+            case 'null':
+              return 'headless no-op backend';
           }
         }
         expect(handleBackend('webgpu')).toBe('spec-managed barriers');
         expect(handleBackend('wgpu-native')).toBe('explicit barriers');
         expect(handleBackend('wgpu-webgl2')).toBe('GL implicit sync, no barriers');
+        expect(handleBackend('null')).toBe('headless no-op backend');
       });
     });
   });

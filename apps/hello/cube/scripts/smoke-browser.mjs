@@ -38,6 +38,10 @@ import { chromium } from 'playwright';
 const HERE = dirname(fileURLToPath(import.meta.url));
 // apps/hello/cube/scripts -> apps/hello/cube -> apps/hello -> apps -> repo root.
 const REPO_ROOT = resolve(HERE, '..', '..', '..', '..');
+// apps/hello/cube/scripts -> apps/hello/cube. `pnpm -F @forgeax/hello-cube dev`
+// runs vite with cwd = this package dir, so the dev endpoint writes
+// .forgeax-debug/<runId> relative to APP_DIR (not REPO_ROOT).
+const APP_DIR = resolve(HERE, '..');
 
 const viteProc = spawn('pnpm', ['-F', '@forgeax/hello-cube', 'dev'], {
   cwd: REPO_ROOT,
@@ -140,9 +144,15 @@ if (missingFields.length > 0) {
   process.exit(1);
 }
 
-// (3) tapePath file exists. The dev endpoint writes relative to the vite cwd
-// (REPO_ROOT); resolve against it if the returned path is relative.
-const tapeAbs = resolve(REPO_ROOT, captured.tapePath);
+// (3) tapePath file exists. The dev endpoint writes relative to the vite cwd,
+// which `pnpm -F` sets to APP_DIR; fall back to REPO_ROOT for the bare
+// `node scripts/smoke-browser.mjs` invocation where cwd is the repo root.
+const resolveArtifact = (rel) => {
+  const inApp = resolve(APP_DIR, rel);
+  if (existsSync(inApp)) return inApp;
+  return resolve(REPO_ROOT, rel);
+};
+const tapeAbs = resolveArtifact(captured.tapePath);
 if (!existsSync(tapeAbs)) {
   console.error(
     `\n[smoke-browser] RED -- tapePath does not exist on disk: ${tapeAbs} ` +
@@ -152,7 +162,7 @@ if (!existsSync(tapeAbs)) {
 }
 
 // (4) reportPath file exists + JSON parses.
-const reportAbs = resolve(REPO_ROOT, captured.reportPath);
+const reportAbs = resolveArtifact(captured.reportPath);
 if (!existsSync(reportAbs)) {
   console.error(`\n[smoke-browser] RED -- reportPath does not exist on disk: ${reportAbs}`);
   process.exit(1);

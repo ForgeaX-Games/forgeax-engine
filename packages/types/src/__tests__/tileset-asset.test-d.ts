@@ -97,6 +97,8 @@ describe('TilesetAsset POD shape (M0 baseline)', () => {
           return 'render-pipeline';
         case 'tileset':
           return 'tileset';
+        case 'video':
+          return 'video';
       }
       // No default branch -- TS guards completeness.
     }

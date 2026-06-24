@@ -283,11 +283,35 @@ async function createAppFromCanvas(
     // acquireCanvasContext only calls canvas.getContext('webgpu') (no recorded
     // RHI calls), so forwarding the real instance's bound method is safe and
     // keeps the recorder proxy out of the swap-chain config path.
+    // The forwarded context's `configure({ device })` reverse-looks-up the raw
+    // GPUDevice in rhi-webgpu's RAW_DEVICE_MAP keyed on the RhiDevice that
+    // makeRhiDevice registered. The renderer threads the proxied device (from
+    // the requestAdapter -> requestDevice proxy chain) here, which is a
+    // different JS object -> the lookup misses and configure returns
+    // rhi-not-available ("CanvasConfiguration.device must be a RhiDevice
+    // produced by ..."). Unwrap the proxy to the registered device via the
+    // _realDevice escape hatch (same fix as wrapCreateShaderModule).
     const realRhiRec = realRhi as unknown as Record<string, unknown>;
     if (typeof realRhiRec.acquireCanvasContext === 'function') {
-      extras.acquireCanvasContext = (
-        realRhiRec.acquireCanvasContext as (c: unknown) => unknown
-      ).bind(realRhi);
+      const boundAcquire = (realRhiRec.acquireCanvasContext as (c: unknown) => unknown).bind(
+        realRhi,
+      );
+      extras.acquireCanvasContext = (canvasArg: unknown): unknown => {
+        const ctxRes = boundAcquire(canvasArg) as {
+          ok: boolean;
+          value?: { configure(desc: Record<string, unknown>): unknown };
+        };
+        if (!ctxRes.ok || ctxRes.value === undefined) return ctxRes;
+        const realCtx = ctxRes.value;
+        const wrappedCtx: Record<string, unknown> = Object.create(realCtx as object);
+        wrappedCtx.configure = (desc: Record<string, unknown>): unknown => {
+          const dev = desc.device as { _realDevice?: unknown } | undefined;
+          const realDevice = dev?._realDevice;
+          const unwrapped = realDevice !== undefined ? { ...desc, device: realDevice } : desc;
+          return realCtx.configure(unwrapped);
+        };
+        return { ...ctxRes, value: wrappedCtx };
+      };
     }
 
     // Inject the wrapped RHI instance via the explicit rhi escape hatch.

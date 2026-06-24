@@ -1076,6 +1076,9 @@ export interface RenderPipelineAsset {
  *   - feat-20260601-customizable-render-pipeline-seam-and-dogfood-rend w5 added
  *     `'render-pipeline'` variant (12 -> 13, minor add per AGENTS.md
  *     `Evolution contract`); RenderPipelineAsset with pipelineId + config.
+ *   - feat-20260623-world-space-video-asset M1 added `'video'` variant
+ *     (14 -> 15, minor add per AGENTS.md `Evolution contract`);
+ *     VideoAsset with `{ url }` descriptor, no width/height/duration.
  *
  * Exhaustive `switch (asset.kind)` type-guards against future additions
  * without default fallback (charter proposition 4 + proposition 3).
@@ -1091,6 +1094,7 @@ export interface RenderPipelineAsset {
  * | `'shader'` | `ShaderAsset` (material-shader registration SSOT, name + source + paramSchema) |
  * | `'font'` | `FontAsset` (MSDF atlas handle + glyph metrics) |
  * | `'render-pipeline'` | `RenderPipelineAsset` (installable pipeline logic id + config) |
+ * | `'video'` | `VideoAsset` (runtime-only `{ url }` descriptor, no width/height/duration) |
  */
 export type Asset =
   | MeshAsset
@@ -1108,7 +1112,10 @@ export type Asset =
   | RenderPipelineAsset
   // === 1 new variant (feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild) ===
   // Direct atlases[] form (plan-strategy D-7 one-cut); no intermediate single-`atlas` shape.
-  | TilesetAsset;
+  | TilesetAsset
+  // === 1 new variant (feat-20260623-world-space-video-asset M1) ===
+  // runtime-only { url } descriptor; no width/height/duration in payload.
+  | VideoAsset;
 
 // === Tileset asset POD shape (feat-20260608 M0 baseline rebuild) =================
 //
@@ -1279,57 +1286,6 @@ export interface TilesetAsset {
   readonly tiles: readonly TilesetTileEntry[];
 }
 
-/**
- * Runtime brand label per {@link Asset.kind} discriminant -- one string literal
- * per Asset union member. Consumers narrow with `switch (entry.brand)` or
- * `if (entry.brand === 'TextureAsset')`.
- *
- * Mirrors the 13 Asset union kinds 1:1. The label differs from `Asset.kind`
- * string discriminate where the kind-string does not match the TS type name
- * (e.g. `'cube-texture'` maps to `'CubeTextureAsset'`, `'audio'` to
- * `'AudioClipAsset'`).
- */
-export type AssetBrand =
-  | 'MeshAsset'
-  | 'TextureAsset'
-  | 'CubeTextureAsset'
-  | 'SamplerAsset'
-  | 'MaterialAsset'
-  | 'SceneAsset'
-  | 'ShaderAsset'
-  | 'SkeletonAsset'
-  | 'SkinAsset'
-  | 'AnimationClip'
-  | 'AudioClipAsset'
-  | 'FontAsset'
-  | 'RenderPipelineAsset'
-  | 'TilesetAsset';
-
-/**
- * The 1:1 `Asset['kind']` -> `AssetBrand` mapping (feat-20260622 D-4 / D-8).
- * Brand is derived from kind, never stored on the envelope (charter Derive); the
- * `Record<Asset['kind'], AssetBrand>` key completeness is the guard that a new
- * Asset kind must add its brand mapping (a missing key is a compile error),
- * replacing the retired 14-arm `assetBrand` switch. Co-located with the
- * `AssetBrand` union (D-8) so the mapping and its codomain share one SSOT.
- */
-export const ASSET_BRAND: Record<Asset['kind'], AssetBrand> = {
-  mesh: 'MeshAsset',
-  texture: 'TextureAsset',
-  sampler: 'SamplerAsset',
-  material: 'MaterialAsset',
-  scene: 'SceneAsset',
-  'cube-texture': 'CubeTextureAsset',
-  skeleton: 'SkeletonAsset',
-  skin: 'SkinAsset',
-  'animation-clip': 'AnimationClip',
-  audio: 'AudioClipAsset',
-  shader: 'ShaderAsset',
-  font: 'FontAsset',
-  'render-pipeline': 'RenderPipelineAsset',
-  tileset: 'TilesetAsset',
-};
-
 // === AssetRef + AssetEnvelope (feat-20260622-asset-ref-graph-protocol-unification-refs-as-ssot M1 / w1) ===
 //
 // Decision anchors:
@@ -1381,7 +1337,7 @@ export interface AssetRef {
  * (may be undefined; ``resolveName`` derives the final name via a three-argument
  * XOR that also considers the package path).
  */
-export interface AssetEnvelope {
+export interface AssetEnvelope<P = Asset> {
   readonly guid: string;
   readonly kind: string;
   // Per-GUID stored display name -- the `storedName` argument resolveName feeds
@@ -1389,7 +1345,7 @@ export interface AssetEnvelope {
   // retired storedNameOf side table). `undefined` = no explicit name (resolveName
   // then applies the multi-asset basename fallback / no-package '' branch).
   readonly name?: string;
-  readonly payload: Asset;
+  readonly payload: P;
   readonly refs: readonly AssetRef[];
 }
 
@@ -1672,6 +1628,48 @@ export interface AudioClipAsset {
   readonly buffer: AudioBuffer;
 }
 
+// === VideoAsset POD shape (feat-20260623-world-space-video-asset M1) ==========
+//
+// Decision anchors:
+//   - requirements AC-01 (VideoAsset is Asset closed-union 15th member;
+//     kind discriminator 'video'; payload { url: string }, no width/height/duration).
+//   - requirements constraint: payload must not inline video bytes, only a URL descriptor.
+//   - plan-strategy D-4 (VideoAsset descriptor naming aligns with TextureAsset/AudioClipAsset).
+//   - charter F1 (AI users discover the schema via IDE autocomplete on the closed
+//     `Asset` union + `Handle<VideoAsset>` returns from `AssetRegistry.register`).
+//   - plan-strategy D-5 (resolveTexLike identifies video kind via `payload.kind === 'video'`;
+//     video does not masquerade as 'texture').
+//
+// `refs` is always empty (isolated leaf) — VideoAsset carries no sub-asset
+// references (plan-strategy S6.3). The `url` field points to an external video
+// file; the runtime resolves it into an HTMLVideoElement via the host-provided
+// `VideoElementProvider` World Resource (plan-strategy D-1).
+
+/**
+ * Video asset POD shape -- pure `{url}` descriptor.
+ *
+ * `VideoAsset` is a runtime-only asset kind (OOS-1: no import/cook pipeline).
+ * The `url` field points to an external video file (e.g. `*.webm` / `*.mp4`);
+ * the engine does NOT decode video bytes -- it delegates to the host-side
+ * `HTMLVideoElement` via `VideoElementProvider` (plan-strategy D-1).
+ *
+ * `width` / `height` / `duration` are deliberately absent from the POD:
+ * the runtime reads them from `HTMLVideoElement.videoWidth` /
+ * `videoHeight` / `duration` after `loadedmetadata` fires (requirements
+ * constraint "payload must not inline video bytes").
+ *
+ * Consumers reference a VideoAsset via `MaterialAsset.paramValues` texture
+ * fields (e.g. `baseColorTexture`), sharing the same `texture2d` slot with
+ * static textures (charter P4 consistent abstraction). The extraction layer
+ * (render-system-extract `resolveTexLike`) identifies the video kind and
+ * routes to the per-frame transient texture pathway instead of the static
+ * `GpuResourceStore.ensureResident` cache (plan-strategy D-5).
+ */
+export interface VideoAsset {
+  readonly kind: 'video';
+  readonly url: string;
+}
+
 /**
  * Skeleton asset POD shape — pure rig data, no mesh attachment.
  *
@@ -1930,7 +1928,7 @@ export const ASSET_ERROR_HINTS: Readonly<Record<AssetErrorCode, string>> = {
     'circular parent chain detected; inspect parent handles — use err.detail.cycle to see the full path (e.g. "A -> B -> A")',
   // === 2 new hints (feat-20260603-asset-import-loader-injection M1 / w1) ===
   'loader-not-registered':
-    'no loader registered for this asset kind; wire it via wireDefaultLoaders(registry) or registry.register(loader) (the loader carries its own kind); err.detail.registeredKinds lists the kinds currently wired',
+    'no loader registered for this asset kind; register it via engine.assets.loaders.register(loader) (the loader carries its own kind); err.detail.registeredKinds lists the kinds currently wired',
   'asset-not-imported':
     'GUID is in the catalog but its DDC artefact is missing and no ImportTransport is wired (shipped form never falls back to a runtime import); add the asset to the build-time pre-import step instead of importing at runtime',
   // === 1 new hint (feat-20260604-hdr-equirect-cube-importer-loader M2 / w4) ===
@@ -4365,7 +4363,8 @@ export interface PackIndexEntry {
 /** One row in the inspector's `assets[]` snapshot (JSON-RPC over WS). */
 export interface InspectEntry {
   readonly guid: string;
-  readonly brand: AssetBrand;
+  /** Asset kind discriminant string (e.g. `'mesh'`, `'texture'`, `'scene'`). */
+  readonly kind: string;
   /** Display name resolved by resolveName (empty string is legal). */
   readonly name: string;
 }
@@ -4413,8 +4412,8 @@ export interface InspectSnapshot {
  * into the types package (charter P4 — the runtime narrows; types stays
  * dependency-free).
  */
-export type LoaderAsyncResult =
-  | { readonly ok: true; readonly value: Asset }
+export type LoaderAsyncResult<P = Asset> =
+  | { readonly ok: true; readonly value: P }
   | { readonly ok: false; readonly error: unknown };
 
 /**
@@ -4422,11 +4421,11 @@ export type LoaderAsyncResult =
  * succeeded) or `undefined` (parse rejected); the asynchronous arm returns a
  * `Promise<LoaderAsyncResult>`.
  */
-export type LoaderOutput =
-  | Asset
+export type LoaderOutput<P = Asset> =
+  | P
   | undefined
   | { readonly ok: false; readonly error: ParseErrorDetail }
-  | Promise<LoaderAsyncResult>;
+  | Promise<LoaderAsyncResult<P>>;
 
 /**
  * Capabilities the host wires into a {@link Loader} at load time. A loader
@@ -4494,13 +4493,13 @@ export interface LoadContext {
  * produces the `Asset` POD (or a structured error / `undefined`). See the
  * module comment above for the sync vs async dispatch asymmetry.
  */
-export interface Loader {
+export interface Loader<P = Asset> {
   readonly kind: string;
   load(
     payload: Record<string, unknown>,
     refs: readonly string[] | undefined,
     ctx: LoadContext,
-  ): LoaderOutput;
+  ): LoaderOutput<P>;
 }
 
 // === Import contract SSOT (feat-20260603-asset-import-loader-injection M2 / w12) ===
@@ -4651,11 +4650,11 @@ export const IMPORT_ERROR_HINTS: Readonly<Record<ImportErrorCode, string>> = {
  * meta and stamps it here. `kind` mirrors the `Asset.kind` discriminant so the
  * DDC row and the runtime loader dispatch on the same string.
  */
-export interface ImportedAsset {
+export interface ImportedAsset<P = Asset> {
   readonly guid: string;
   readonly kind: string;
   readonly name?: string;
-  readonly payload: Asset;
+  readonly payload: P;
   readonly refs: readonly AssetRef[];
 }
 

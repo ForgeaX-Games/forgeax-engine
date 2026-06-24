@@ -22,7 +22,6 @@ import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import { ChildOf, SceneInstance } from '../components';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function localId(n: number): LocalEntityId {
@@ -54,7 +53,7 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
       posY: 'f32',
       posZ: 'f32',
     });
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const asset = buildScene();
     // Direct path baseline.
     const worldA = new World();
@@ -94,7 +93,7 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
       posY: 'f32',
       posZ: 'f32',
     });
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const asset = buildScene();
     const world = new World();
     const handle = registerSceneAsset(world, asset);
@@ -122,7 +121,7 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
   });
 
   it('(c) error passthrough: invalid handle -> sugar returns Err verbatim', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
     // Use a handle that is not a managed ref -> instantiateScene returns Err.
     const bogusHandle = toShared<'SceneAsset'>(9999);
@@ -173,7 +172,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
       posY: 'f32',
       posZ: 'f32',
     });
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const asset = buildPostScene();
     const world = new World();
     const handle = registerSceneAsset(world, asset);
@@ -207,7 +206,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
       posY: 'f32',
       posZ: 'f32',
     });
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const asset = buildPostScene();
     const world = new World();
     const handle = registerSceneAsset(world, asset);
@@ -246,7 +245,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
       { localId: localId(0), components: { Transform: { posX: 0 } } },
       { localId: localId(1), components: { Transform: { posX: 10 } } },
     ];
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
     const asset: SceneAsset = { kind: 'scene', entities: multiRoot };
     const handle = registerSceneAsset(world, asset);
@@ -282,7 +281,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
       posY: 'f32',
       posZ: 'f32',
     });
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
     const singleRoot: SceneEntity[] = [
       { localId: localId(0), components: { Transform: { posX: 0 } } },
@@ -318,7 +317,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
       posY: 'f32',
       posZ: 'f32',
     });
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
     const asset = buildPostScene();
     const handle = registerSceneAsset(world, asset);

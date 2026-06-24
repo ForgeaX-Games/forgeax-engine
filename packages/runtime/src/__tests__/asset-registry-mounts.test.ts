@@ -20,7 +20,6 @@
 import type { LoadContext, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { AssetRegistry, sceneLoader } from '../asset-registry';
-import { createDefaultLoaderRegistry } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 /** Access the private parseAssetPayload method via structural view-cast. */
@@ -54,7 +53,7 @@ const GUID_C = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 
 describe('w27 - parseScenePayload mounts[].source refs resolution (AC-10)', () => {
   it('(a) resolves mounts[].source integer index through refs[] to GUID string', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const fn = accessParseScenePayload(reg);
     const refs = [GUID_A];
     const payload = {
@@ -83,7 +82,7 @@ describe('w27 - parseScenePayload mounts[].source refs resolution (AC-10)', () =
   });
 
   it('(b) payload with no mounts field passes through (back-compat)', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const fn = accessParseScenePayload(reg);
     const payload = {
       entities: [{ localId: 0, components: {} }],
@@ -97,7 +96,7 @@ describe('w27 - parseScenePayload mounts[].source refs resolution (AC-10)', () =
   });
 
   it('(c) mounts with source already a string passes through unchanged', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const fn = accessParseScenePayload(reg);
     const refs = [GUID_A];
     const payload = {
@@ -120,7 +119,7 @@ describe('w27 - parseScenePayload mounts[].source refs resolution (AC-10)', () =
   });
 
   it('(d) mounts[].source integer index out-of-bounds returns ParseSceneError', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const fn = accessParseScenePayload(reg);
     const refs = [GUID_A]; // only 1 entry, indices 0 valid, 1+ invalid
     const payload = {
@@ -142,7 +141,7 @@ describe('w27 - parseScenePayload mounts[].source refs resolution (AC-10)', () =
     // Even if 'source' were in HANDLE_FIELD_NAMES (it is not), mount.source
     // should be resolved through the mounts[] array pipeline, not the handle-
     // field allowlist. This test verifies no collision.
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const fn = accessParseScenePayload(reg);
     // Use a mock where entities[].components has a field named 'source' that is
     // NOT in HANDLE_FIELD_NAMES. This verifies mount.source resolution is
@@ -173,7 +172,7 @@ describe('w27 - parseScenePayload mounts[].source refs resolution (AC-10)', () =
   });
 
   it('(f) mounts memberFirst/memberCount/localId/parent are preserved as numbers (not refs indices)', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const fn = accessParseScenePayload(reg);
     const refs = [GUID_A];
     const payload = {
@@ -203,7 +202,7 @@ describe('w27 - parseScenePayload mounts[].source refs resolution (AC-10)', () =
   });
 
   it('(g) multiple mounts with interleaved source indices resolved correctly', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const fn = accessParseScenePayload(reg);
     const refs = [GUID_A, GUID_B, GUID_C];
     const payload = {
@@ -346,7 +345,7 @@ describe('sceneLoader returns ParseSceneError (F21 / AC-09 + AC-10) [w15]', () =
 
 describe('integration: concurrent scene load via parseAssetPayload (F21 / AC-09 + AC-10) [w19]', () => {
   it('two concurrent parseAssetPayload calls: A fails with ParseSceneError, B succeeds without cross-contamination', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
 
     // A: refs index out of bounds -> ParseSceneError from sceneLoader.
     const payloadA = {
@@ -419,7 +418,7 @@ describe('integration: concurrent scene load via parseAssetPayload (F21 / AC-09 
   });
 
   it('parseScenePayload without refs does not attempt handle resolution and returns SceneAsset (no reportParseError)', () => {
-    const reg = new AssetRegistry(makeMockShaderRegistry(), createDefaultLoaderRegistry());
+    const reg = new AssetRegistry(makeMockShaderRegistry());
     const internal = reg as unknown as {
       parseAndReturnAsset(entry: {
         kind: string;
