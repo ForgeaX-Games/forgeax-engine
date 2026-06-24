@@ -24,6 +24,7 @@
     { "path": "../shader" },
     { "path": "../render-graph" },
     { "path": "../pack" },
+    { "path": "../plugin" },
     { "path": "../vite-plugin-shader" },
     { "path": "../import" }
   ]

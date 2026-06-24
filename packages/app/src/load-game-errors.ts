@@ -43,7 +43,7 @@
  * | code | trigger |
  * |:--|:--|
  * | `'module-not-found'` | resolver throws an error distinguishable as module-not-found (e.g. "Cannot find module"). Detail carries `slug` so AI users can surface which game path failed. |
- * | `'invalid-format'` | resolver returns a module whose shape is wrong: no `default` export, `default` is null, or `default` is not a function. Detail carries `exportKeys` (all keys of the returned module) so AI users can inspect the module shape. |
+ * | `'invalid-format'` | resolver returns a module whose shape is wrong: no `bootstrap` export, `bootstrap` is null, or `bootstrap` is not a function. Detail carries `exportKeys` (all keys of the returned module) so AI users can inspect the module shape. |
  * | `'import-failed'` | resolver throws a generic Error (network error, build error, etc.) not distinguishable as module-not-found. Detail carries the original `cause` Error so AI users can chain narrow. |
  *
  * Plan-strategy D-3 locks the count at 3.
@@ -65,8 +65,8 @@ export interface LoadGameDetailModuleNotFound {
  *
  * `exportKeys` carries the keys of the module object returned by the
  * resolver. AI users inspect these to understand why the module shape
- * was rejected (e.g. typed `default` instead of `default`, or the
- * module exports a non-function value).
+ * was rejected (e.g. used a default export instead of a named `bootstrap`
+ * export, or the module exports a non-function value).
  */
 export interface LoadGameDetailInvalidFormat {
   readonly exportKeys: string[];
@@ -175,8 +175,9 @@ export const LoadGameError: LoadGameErrorConstructor =
  * the count and non-emptiness of every entry.
  */
 export const LOAD_GAME_EXPECTED: Readonly<Record<LoadGameErrorCode, string>> = {
-  'module-not-found': 'resolver should return a module with a default export for the given slug',
-  'invalid-format': 'resolved module must have a default export that is a function',
+  'module-not-found':
+    'resolver should return a module with a `bootstrap` export for the given slug',
+  'invalid-format': 'resolved module must have a `bootstrap` export that is a function',
   'import-failed':
     'resolver should complete without throwing; import path, network, and build errors are forwarded here',
 };
@@ -191,7 +192,7 @@ export const LOAD_GAME_ERROR_HINTS: Readonly<Record<LoadGameErrorCode, string>> 
   'module-not-found':
     'verify the game slug matches an existing template directory; check the resolver import path for typos',
   'invalid-format':
-    'the template must export a default function matching the GameEntry signature; check for named-export vs default-export confusion',
+    'the template must export a `bootstrap` function matching the BootstrapEntry signature; check for named-export vs default-export confusion',
   'import-failed':
     'inspect detail.cause for the original error (network failure, build error, dynamic import timeout, etc.)',
 };

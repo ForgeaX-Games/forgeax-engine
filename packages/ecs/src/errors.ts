@@ -466,6 +466,105 @@ export class BuiltinSlotNotOwnedError extends Error {
   }
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// feat-20260623-asset-handle-generation M4 — stale error classes (+2).
+//
+// Two error classes covering gen-based staleness detection in SharedRefStore
+// and UniqueRefStore. Distinguish from the existing `*-ref-released` codes
+// (slot empty / never allocated) — `*-ref-stale` means the slot has been
+// released AND re-allocated, so the caller's handle generation no longer
+// matches the store's current generation. AI users pick different recovery
+// strategies: released -> re-load the asset; stale -> re-acquire the handle
+// from AssetRegistry (charter P3 explicit failure, two semantics two
+// recovery paths).
+//
+// `.detail` carries { slot, expectedGeneration, actualGeneration } aligned
+// with StaleEntityError field names (AC-11). Codes are add-only minor
+// members of EcsErrorCode (AC-10) and detail shapes extend EcsErrorDetail
+// discriminator.
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returned via `Result.err` when SharedRefStore.resolve / .retain / .release
+ * is called with a handle whose generation no longer matches the store's
+ * current generation for that slot — the slot was released and re-allocated
+ * to a different payload. Distinct from `'shared-ref-released'` (slot empty,
+ * never re-allocated): stale means the slot IS live but belongs to a newer
+ * allocation.
+ *
+ * `.code = 'shared-ref-stale'`
+ * `.detail = { slot, expectedGeneration, actualGeneration }`
+ * `.hint` — recommends re-acquiring the handle from AssetRegistry.
+ */
+export class SharedRefStaleError extends Error {
+  override readonly name = 'SharedRefStaleError';
+  readonly code = 'shared-ref-stale' as const;
+  readonly hint: string;
+  readonly expected: string;
+  readonly detail: {
+    readonly slot: number;
+    readonly expectedGeneration: number;
+    readonly actualGeneration: number;
+  };
+
+  constructor(slot: number, expectedGeneration: number, actualGeneration: number) {
+    const hint = `Handle for slot ${slot} is stale: expected generation ${expectedGeneration}, but the store has generation ${actualGeneration} (slot was released and re-allocated). Re-acquire the handle from AssetRegistry.`;
+    const expected = `generation === ${actualGeneration} (current store generation)`;
+    super(
+      `SharedRefStore: stale handle.\n` +
+        `  code: shared-ref-stale\n` +
+        `  slot: ${slot}\n` +
+        `  expectedGeneration: ${expectedGeneration}\n` +
+        `  actualGeneration: ${actualGeneration}\n` +
+        `  expected: ${expected}\n` +
+        `  hint: ${hint}`,
+    );
+    this.hint = hint;
+    this.expected = expected;
+    this.detail = { slot, expectedGeneration, actualGeneration };
+  }
+}
+
+/**
+ * Returned via `Result.err` when UniqueRefStore.resolve / .release is
+ * called with a handle whose generation no longer matches the store's
+ * current generation for that slot — the slot was released and re-allocated.
+ * Distinct from `'unique-ref-released'` (slot empty). UniqueRefStore has
+ * no retain method; the stale surface is resolve + release only.
+ *
+ * `.code = 'unique-ref-stale'`
+ * `.detail = { slot, expectedGeneration, actualGeneration }`
+ * `.hint` — recommends re-acquiring the handle from the producing system.
+ */
+export class UniqueRefStaleError extends Error {
+  override readonly name = 'UniqueRefStaleError';
+  readonly code = 'unique-ref-stale' as const;
+  readonly hint: string;
+  readonly expected: string;
+  readonly detail: {
+    readonly slot: number;
+    readonly expectedGeneration: number;
+    readonly actualGeneration: number;
+  };
+
+  constructor(slot: number, expectedGeneration: number, actualGeneration: number) {
+    const hint = `Handle for slot ${slot} is stale: expected generation ${expectedGeneration}, but the store has generation ${actualGeneration} (slot was released and re-allocated). Re-acquire the handle via the producing system or re-spawn the asset.`;
+    const expected = `generation === ${actualGeneration} (current store generation)`;
+    super(
+      `UniqueRefStore: stale handle.\n` +
+        `  code: unique-ref-stale\n` +
+        `  slot: ${slot}\n` +
+        `  expectedGeneration: ${expectedGeneration}\n` +
+        `  actualGeneration: ${actualGeneration}\n` +
+        `  expected: ${expected}\n` +
+        `  hint: ${hint}`,
+    );
+    this.hint = hint;
+    this.expected = expected;
+    this.detail = { slot, expectedGeneration, actualGeneration };
+  }
+}
+
 /**
  * Thrown / returned via `Result.err` when BufferPool indexing reads or writes
  * an offset outside the slot's `[0, size)` byte range. Triggers are limited
@@ -1425,6 +1524,13 @@ export type EcsErrorCode =
   // slot (< BUILTIN_BASE) passed to alloc/retain/release/resolve is a caller
   // error -> `'builtin-slot-not-owned'` (hint points at BuiltinAssetRegistry).
   | 'builtin-slot-not-owned'
+  // feat-20260623-asset-handle-generation M4 — stale error codes (+2).
+  // `'shared-ref-stale'` / `'unique-ref-stale'` cover gen mismatch on resolve /
+  // retain / release after slot re-allocation. Add-only minor per AGENTS.md
+  // Error model evolution contract; distinct from the existing `*-ref-released`
+  // codes (slot empty vs slot re-allocated).
+  | 'shared-ref-stale'
+  | 'unique-ref-stale'
   | 'managed-buffer-out-of-bounds'
   | 'managed-buffer-shrink-not-supported'
   // managed-array-* kebab codes — surviving member from feat-20260514;
@@ -1534,6 +1640,19 @@ export type EcsErrorDetail =
     }
   // feat-20260614 M6 D-15 — builtin-slot fail-fast detail variant (+1).
   | { readonly code: 'builtin-slot-not-owned'; readonly slot: number }
+  // feat-20260623-asset-handle-generation M4 — stale error detail variants (+2).
+  | {
+      readonly code: 'shared-ref-stale';
+      readonly slot: number;
+      readonly expectedGeneration: number;
+      readonly actualGeneration: number;
+    }
+  | {
+      readonly code: 'unique-ref-stale';
+      readonly slot: number;
+      readonly expectedGeneration: number;
+      readonly actualGeneration: number;
+    }
   | { readonly code: 'managed-buffer-out-of-bounds'; readonly index: number; readonly size: number }
   | {
       readonly code: 'managed-buffer-shrink-not-supported';

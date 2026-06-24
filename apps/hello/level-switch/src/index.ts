@@ -33,7 +33,12 @@ const TUTORIAL_GUID = '6a000001-0001-4000-a000-000000000001';
 const STREET_A_GUID = '6a000002-0001-4000-a000-000000000002';
 
 export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
-  const appResult = await createApp(canvas, { input: false }, forgeaxBundlerAdapter());
+  // M3 (w16): input:false opt-out deleted (D-6). Canvas form always attaches
+  // input (D-2). This demo accepts input always-on — the state-switch keys
+  // (1/2/3) continue to work via the InputSnapshot that inputPlugin provides.
+  // Option (a) assemble-form migration was assessed but costs outweigh benefits
+  // for a demo where input-always-on has zero correctness impact.
+  const appResult = await createApp(canvas, {}, forgeaxBundlerAdapter());
   if (!appResult.ok) {
     console.error(`[hello-level-switch] createApp failed:`, appResult.error);
     throw new Error('createApp failed');

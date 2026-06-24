@@ -159,8 +159,8 @@ export function finalizeToMemory(debugInst: {
 }):
   | { readonly ok: true; readonly value: FinalizeToMemoryValue }
   | { readonly ok: false; readonly error: DebugError } {
-  const tape = debugInst.getTape();
-  if (!tape) {
+  const tapeOrErr = debugInst.getTape();
+  if (!tapeOrErr) {
     return err(
       new DebugError({
         code: 'frame-end-hook-missing',
@@ -169,6 +169,13 @@ export function finalizeToMemory(debugInst: {
       }),
     );
   }
+  // Duck-type DebugError: the capture-browser subpath bundles its own
+  // DebugError class and getTape() runs in a different bundle (barrel),
+  // so instanceof spuriously fails cross-bundle. Check .code instead.
+  if (tapeOrErr !== null && typeof tapeOrErr === 'object' && 'code' in tapeOrErr) {
+    return err(tapeOrErr as DebugError);
+  }
+  const tape = tapeOrErr;
 
   const runId = generateRunId();
   const { json, blob } = serializeTape(tape);

@@ -16,9 +16,9 @@ Layer 1 (play now): spawn `AudioSource` with `playing: true`. Layer 2 (mix): bus
 import { AudioSource, AudioListener, AudioClipAsset, type AudioBackend } from '@forgeax/engine-audio';
 import { createWebAudioBackend } from '@forgeax/engine-audio-webaudio';
 
-// Setup: inject backend via createApp
-const app = await createApp(canvas, { audio: true });
-// Or assemble form: createApp({ renderer, world, audio: createWebAudioBackend() })
+// Setup: enable audio via the audioPlugin
+import { audioPlugin } from '@forgeax/engine-audio-webaudio';
+const app = await createApp(canvas, { plugins: [audioPlugin()] });
 
 // Load clip via asset system
 const clip = await app.world.getResource('AssetRegistry').loadByGuid<AudioClipAsset>(bgmGuid);
@@ -91,5 +91,5 @@ Each error carries 4-field structured surface: `.code` / `.expected` / `.hint` /
 
 - [`@forgeax/engine-audio-webaudio`](../audio-webaudio) -- browser implementation (`createWebAudioBackend`, tick systems)
 - [`@forgeax/engine-ecs`](../ecs) -- `defineComponent`, World, Entity, System, Resource
-- [`@forgeax/engine-app`](../app) -- `createApp({ audio })` injection
+- [`@forgeax/engine-app`](../app) -- `createApp({ plugins: [audioPlugin()] })` injection
 - [`@forgeax/engine-types`](../types) -- `AudioErrorCode`, `AudioError`, `AudioClipAsset` type definitions SSOT

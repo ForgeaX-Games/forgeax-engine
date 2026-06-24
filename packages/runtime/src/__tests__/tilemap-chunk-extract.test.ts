@@ -89,7 +89,6 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
         arch.componentNames.includes('MeshFilter') &&
         arch.componentNames.includes('MeshRenderer') &&
         arch.componentNames.includes('Layer') &&
-        arch.componentNames.includes('ChildOf') &&
         !arch.componentNames.includes('Instances')
       ) {
         derivedCount += arch.entityCount;
@@ -205,7 +204,7 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     tilemapChunkExtractSystem(world);
     for (const arch of world.inspect().archetypes) {
       if (!arch.componentNames.includes('MeshFilter')) continue;
-      if (!arch.componentNames.includes('ChildOf')) continue;
+      if (!arch.componentNames.includes('Layer')) continue;
       const derived = (
         world as unknown as {
           _getGraph(): {
@@ -241,8 +240,7 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
       if (
         arch.componentNames.includes('MeshFilter') &&
         arch.componentNames.includes('MeshRenderer') &&
-        arch.componentNames.includes('Layer') &&
-        arch.componentNames.includes('ChildOf')
+        arch.componentNames.includes('Layer')
       ) {
         count += arch.entityCount;
       }

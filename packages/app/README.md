@@ -14,7 +14,7 @@ if (!app.ok) throw app.error;
 app.value.start();
 ```
 
-The thin wrapper `createApp(canvas, opts?, bundler?)` allocates a fresh `World`, calls `createRenderer(canvas, opts, bundler)`, attaches the browser input backend (skip with `opts.input = false`), and wires the rAF main loop. Discover the API via IDE autocomplete on `@forgeax/engine-app`.
+The thin wrapper `createApp(canvas, opts?, bundler?)` allocates a fresh `World`, calls `createRenderer(canvas, opts, bundler)`, runs plugins (default 5-plugin set: transform / time / animation / state / input), and wires the rAF main loop. The browser input backend is attached + pre-injected by `createApp` before plugins run. Discover the API via IDE autocomplete on `@forgeax/engine-app`.
 
 Per-frame clear color now lives on the `Camera` component (`clearR/G/B/A`), not on `RendererOptions` — see `packages/runtime/README.md` §Camera clear color. The canonical sample is `apps/hello/app/src/main.ts`.
 
@@ -51,11 +51,15 @@ const app = await createApp(canvas, {}, bundler);
 | Entry | Shape | Purpose |
 |:--|:--|:--|
 |:--|:--|:--|
-| `createApp(canvas, opts?, bundler?)` | async factory thin wrapper | One-screen takeoff; calls `createRenderer` + `new World()` + auto-attach + rAF. Third arg `BundlerOptions` (e.g. `forgeaxBundlerAdapter()`) carries bundler-emit substances (`shaderManifestUrl` / `importTransport`). Returns `Promise<Result<App, AppError \| RhiError \| EngineEnvironmentError>>` |
-| `createApp({ renderer, world, input?, schedule?, ... })` | async factory assemble form | Host already owns `renderer = await createRenderer(canvas, opts)` + `world = new World()`; pass them in by reference. Returns `Promise<Result<App, AppError \| RhiError>>` (no `EngineEnvironmentError` — host-owned) |
+| `createApp(canvas, opts?, bundler?)` | async factory thin wrapper | One-screen takeoff; calls `createRenderer` + `new World()` + runs plugins (default 5-plugin set) + rAF. Third arg `BundlerOptions` (e.g. `forgeaxBundlerAdapter()`) carries bundler-emit substances (`shaderManifestUrl` / `importTransport`). Returns `Promise<Result<App, CanvasAppError \| PluginError>>` |
+| `createApp({ renderer, world, plugins?, ... })` | async factory assemble form | Host already owns `renderer = await createRenderer(canvas, opts)` + `world = new World()`; pass them in by reference. Returns `Promise<Result<App, AssembleAppError \| PluginError>>` (no `EngineEnvironmentError` — host-owned) |
+| `Plugin` | interface | `{ readonly name: string; build(world: World): Result<void, PluginError> \| Promise<Result<void, PluginError>> }` — unified capability wiring contract |
+| `PluginError` | class | 2-member closed `code` union (`'duplicate-plugin' \| 'plugin-build-failed'`); 4-field surface (`.code` / `.expected` / `.hint` / `.detail`) byte-for-byte parallel to `AppError` |
+| `CreateAppOptions.plugins` | `Plugin[] \| undefined` | Single entry for capability wiring — add `physicsPlugin('rapier-3d')` / `audioPlugin()` / custom plugins here. The canvas form auto-loads the 5-plugin default set (transform / time / animation / state / input) which merges with user-provided plugins |
 | `App.renderer` | `Renderer` readonly | Reference equality with the assemble input |
 | `App.world` | `World` readonly | Reference equality with the assemble input |
-| `App.input` | `InputBackend \| undefined` readonly | Frozen `InputSnapshot` producer when auto-attach engaged; `undefined` when `opts.input === false` |
+| `App.pluginRegistry` | `Map<string, Plugin>` readonly | Plugin registry produced by `runPlugins()` — pass to `wireDefaultInspectors` context for inspector `plugins` RPC method |
+| `App.input` | `InputBackend \| undefined` readonly | `InputSnapshot` producer when input plugin was loaded (input is in the default canvas set); `undefined` in assemble form without explicit `inputPlugin()` |
 | `App.start()` | `() => Result<void, AppError>` | Begin rAF scheduling. Idempotent state machine: second call returns `'app-already-running'` |
 | `App.stop()` | `() => Result<void, AppError>` | Cancel rAF; trigger triple-funnel cleanup (input detach + removeSystem + device-lost unsubscribe). Returns `'app-not-started'` when called from idle state, `'app-paused-while-stop'` when called from paused state |
 | `App.pause()` / `App.resume()` | `() => Result<void, AppError>` | rAF paused/running state toggle (idempotent) |
@@ -68,21 +72,28 @@ const app = await createApp(canvas, {}, bundler);
 
 ```ts
 import { World } from '@forgeax/engine-ecs';
-import { createApp } from '@forgeax/engine-app';
-import { createRenderer } from '@forgeax/engine-runtime';
-import { attachBrowserInputBackend } from '@forgeax/engine-input';
+import { createApp, inputPlugin } from '@forgeax/engine-app';
+import { createRenderer, transformPlugin, timePlugin, animationPlugin } from '@forgeax/engine-runtime';
+import { statePlugin } from '@forgeax/engine-state';
+import { attachBrowserInputBackend, INPUT_BACKEND_KEY } from '@forgeax/engine-input';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const renderer = await createRenderer(canvas, {}, forgeaxBundlerAdapter());
 const world = new World();
-const input = attachBrowserInputBackend(canvas).backend;
 
-const app = await createApp({ renderer, world, input });
+// Pre-inject input backend before plugins run (D-3 pattern)
+const inputHandle = attachBrowserInputBackend(canvas);
+world.insertResource(INPUT_BACKEND_KEY, inputHandle.backend);
+
+const app = await createApp({ renderer, world, plugins: [
+  transformPlugin(), timePlugin(), animationPlugin(),
+  statePlugin(), inputPlugin(),
+] });
 if (!app.ok) throw app.error;
 app.value.start();
 ```
 
-When `args.input` is supplied, the assemble form treats it as **host-managed**: it is exposed verbatim as `app.input`, and the host is responsible for detaching it (no auto-cleanup on `stop`). Use this form when the host wants explicit control over input lifetime.
+The assemble form does **not** auto-load the default plugin set (D-2): the host must explicitly list every plugin. Input backend is pre-injected into the World as a resource before `createApp` runs plugins — `inputPlugin().build()` guards on `hasResource(INPUT_BACKEND_KEY)` and is a no-op if the backend was not pre-injected.
 
 ## AppError 5-member closed union
 
@@ -165,13 +176,12 @@ The `switch (err.code)` is exhaustive across 5 + 18 = 23 cases (`AppErrorCode | 
 ## Advanced opts (collapsible)
 
 <details>
-<summary><strong>maxDt / silenceUnhandledErrors / input / schedule (CreateAppOptions advanced)</strong></summary>
+<summary><strong>maxDt / silenceUnhandledErrors / rhi escape hatches (CreateAppOptions advanced)</strong></summary>
 
 | Field | Default | Purpose |
 |:--|:--|:--|
 | `maxDt` | `MAX_DT_DEFAULT` (1/30s) | dt clamp ceiling. `dt = Math.min(Math.max(rawDt, 0), maxDt)`. Negative `rawDt` (system clock rewind) → 0 |
 | `silenceUnhandledErrors` | `false` | When `true`, suppresses the `console.error` fallback inside the error fan-out (host accepts total silence). When no `onError` listener is registered AND this flag is `false`, errors land in `console.error` |
-| `input` | `true` (canvas form) | Set to `false` to skip `attachBrowserInputBackend(canvas)` + frame-start scan system registration. Use this for hosts that do not need keyboard/mouse (hello-cube / hello-room etc.) |
 | `schedule` | `undefined` | Opaque hook for advanced scheduling (typed `unknown` in MVP; narrowed in a later feat once the schedule shape lands) |
 | `rhi` / `rawDeviceForContextConfigure` | inherited from `RendererOptions` | RHI escape hatches forwarded into `createRenderer` byte-for-byte. **`shaderManifestUrl`** moved to **third-arg `BundlerOptions`** (post feat-20260608); **`clearColor`** moved to **`Camera` component fields `clearR/clearG/clearB/clearA`** (post feat-20260608) |
 
@@ -221,4 +231,7 @@ The boundary between host (DOM, canvas, UI) and engine (renderer, world, frame l
 - AppError 5-member union + APP_ERROR_HINTS / APP_EXPECTED: `packages/app/src/errors.ts`
 - Frame-loop state machine: `packages/app/src/internal/frame-loop.ts`
 - Cleanup triple-funnel (stop / device-lost / exception): `packages/app/src/internal/cleanup.ts`
-- Input attach: `attachInputAuto` inserts the `InputBackend` under `INPUT_BACKEND_KEY` and adds the `InputFrameStartScan` system token (a top-level `defineSystem`); the legacy per-backend factory is retired. The `@forgeax/engine-input` README is the SSOT for the wiring recipe.
+- Plugin runner (merge + dedup + ordered await): `packages/app/src/internal/run-plugins.ts`
+- Plugin interface + PluginError SSOT: `packages/plugin/src/index.ts`
+- Built-in plugin factories: `packages/app/src/plugin-factories.ts` (inputPlugin), `packages/runtime/src/plugin-factories.ts` (transform/animation/time), `packages/state/src/plugin-factory.ts` (state), `packages/physics/src/plugin-factory.ts` (physics), `packages/audio-webaudio/src/plugin-factory.ts` (audio)
+- Input wiring: input backend is pre-injected via `world.insertResource(INPUT_BACKEND_KEY, backend)` by createApp; `inputPlugin().build(world)` guards on `hasResource` before `addSystem(InputFrameStartScan)`. The `@forgeax/engine-input` README is the SSOT for the wiring recipe.

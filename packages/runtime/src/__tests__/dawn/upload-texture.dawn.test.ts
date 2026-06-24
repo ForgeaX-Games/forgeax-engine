@@ -128,9 +128,12 @@ describe('T-M3-02 dawn uploadTexture format <-> colorSpace consistency', () => {
     expect(res.ok).toBe(true);
   });
 
-  it('asset-not-found path: resolve against unregistered handle (real GPU)', () => {
+  it('asset-not-found path: resolve against unregistered gen-0 handle (real GPU)', () => {
     const world = new World();
-    const fake = toShared<'TextureAsset'>(0xdeadbeef);
+    // gen-0 user-tier handle for a never-allocated slot: passes the generation
+    // gate then misses the payload -> asset-not-found. A gen>0 handle would
+    // surface 'shared-ref-stale' instead (D-3/AC-10).
+    const fake = toShared<'TextureAsset'>(99999);
     const podRes = resolveAssetHandle<TextureAsset>(world, fake);
     expect(podRes.ok).toBe(false);
     if (podRes.ok) return;

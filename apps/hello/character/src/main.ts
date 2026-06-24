@@ -13,7 +13,7 @@
 // resource to appear before issuing moveAndSlide. Until then the character
 // holds its spawn pose.
 
-import type { AppError } from '@forgeax/engine-app';
+import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import type { World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
@@ -22,10 +22,10 @@ import {
   Collider,
   ColliderShapeValue,
   type PhysicsWorld,
+  physicsPlugin,
   RigidBody,
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
-import type { RhiError } from '@forgeax/engine-runtime';
 import {
   Camera,
   DirectionalLight,
@@ -54,7 +54,7 @@ const JUMP_SPEED = 6; // units/second initial upward
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('hello-character: missing <canvas id="app"> in index.html');
 
-const app = await createApp(canvas, { physics: 'rapier-3d' }, forgeaxBundlerAdapter());
+const app = await createApp(canvas, { plugins: [physicsPlugin('rapier-3d')] }, forgeaxBundlerAdapter());
 if (!app.ok) {
   reportError(app.error);
 } else {
@@ -269,7 +269,7 @@ function drawCharacterGizmo(
   );
 }
 
-function reportError(err: AppError | RhiError | EngineEnvironmentError): void {
+function reportError(err: CanvasAppError): void {
   if (err instanceof EngineEnvironmentError) {
     console.error(
       `[hello-character] EngineEnvironmentError: ${err instanceof Error ? err.message : String(err)}`,

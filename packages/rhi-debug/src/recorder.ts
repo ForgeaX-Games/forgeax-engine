@@ -126,6 +126,15 @@ interface RecorderInternal {
   blobPool: Map<string, ArrayBuffer>;
   handleMap: WeakMap<object, HandleId>;
   textureViewHandleMap: WeakMap<TextureView, HandleId>;
+  /**
+   * @internal
+   * Bootstrap create-event table. Populated by registerHandle when called
+   * with a create event payload — records every create* (buffer, texture,
+   * pipeline, bindGroup, shaderModule, …) from the moment wrap() is called,
+   * independent of the recorder state machine (Idle / Armed / Recording).
+   * Preserved across arm() cycles (SSOT for closure computation in getTape).
+   */
+  bootstrapCreates: Map<HandleId, RhiCallEvent>;
   /** @internal */
   _skipRecord: boolean;
   frameIdx: number;
@@ -150,9 +159,19 @@ function pushEvent(s: RecorderInternal, event: RhiCallEvent): void {
   s.events.push(event);
 }
 
-function registerHandle(s: RecorderInternal, handle: object, kind: string): HandleId {
+function registerHandle(
+  s: RecorderInternal,
+  handle: object,
+  kind: string,
+  createEvent?: RhiCallEvent,
+): HandleId {
   const hId = allocHandleId(kind);
   s.handleMap.set(handle, hId);
+  if (createEvent !== undefined) {
+    // biome-ignore lint/suspicious/noExplicitAny: RhiCallEvent union has 39 members with varying field names; handleId stamp uses any to avoid per-member type narrowing
+    (createEvent as any).handleId = hId;
+    s.bootstrapCreates.set(hId, createEvent);
+  }
   return hId;
 }
 
@@ -163,6 +182,269 @@ function getHandleId(s: RecorderInternal, handle: object, kind: string): HandleI
 }
 
 // ============================================================================
+// Transitive closure — bootstrapCreates → self-contained tape prefix
+// ============================================================================
+
+/**
+ * @internal
+ * Collect all handleIds referenced by frame events in `s.events`.
+ *
+ * Scans events for fields that reference resources created by create* calls
+ * (buffer/texture/pipeline/bindGroup/sampler/textureView/shaderModule).
+ * Excludes pass handleIds, cmd handleIds, and inline 'layout:auto' strings.
+ */
+function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]): Set<HandleId> {
+  const refs = new Set<HandleId>();
+  for (const e of events) {
+    switch (e.kind) {
+      case 'writeBuffer':
+      case 'clearBuffer': {
+        const we = e as { handleId: HandleId };
+        refs.add(we.handleId);
+        break;
+      }
+      case 'setVertexBuffer': {
+        const we = e as { bufferHandleId: HandleId };
+        refs.add(we.bufferHandleId);
+        break;
+      }
+      case 'setIndexBuffer': {
+        const we = e as { bufferHandleId: HandleId };
+        refs.add(we.bufferHandleId);
+        break;
+      }
+      case 'setPipeline': {
+        const we = e as { pipelineHandleId: HandleId };
+        refs.add(we.pipelineHandleId);
+        break;
+      }
+      case 'setComputePipeline': {
+        const we = e as { pipelineHandleId: HandleId };
+        refs.add(we.pipelineHandleId);
+        break;
+      }
+      case 'setBindGroup': {
+        const we = e as { bindGroupHandleId: HandleId };
+        refs.add(we.bindGroupHandleId);
+        break;
+      }
+      case 'writeTexture': {
+        const we = e as { destination: { textureHandleId: HandleId } };
+        refs.add(we.destination.textureHandleId);
+        break;
+      }
+      case 'copyBufferToBuffer': {
+        const we = e as { sourceHandleId: HandleId; destinationHandleId: HandleId };
+        refs.add(we.sourceHandleId);
+        refs.add(we.destinationHandleId);
+        break;
+      }
+      case 'copyBufferToTexture': {
+        const we = e as {
+          source: { bufferHandleId: HandleId };
+          destination: { textureHandleId: HandleId };
+        };
+        refs.add(we.source.bufferHandleId);
+        refs.add(we.destination.textureHandleId);
+        break;
+      }
+      case 'copyTextureToBuffer': {
+        const we = e as {
+          source: { textureHandleId: HandleId };
+          destination: { bufferHandleId: HandleId };
+        };
+        refs.add(we.source.textureHandleId);
+        refs.add(we.destination.bufferHandleId);
+        break;
+      }
+      case 'copyTextureToTexture': {
+        const we = e as {
+          source: { textureHandleId: HandleId };
+          destination: { textureHandleId: HandleId };
+        };
+        refs.add(we.source.textureHandleId);
+        refs.add(we.destination.textureHandleId);
+        break;
+      }
+      case 'beginRenderPass': {
+        const we = e as {
+          colorAttachmentViewHandleIds: readonly (HandleId | undefined)[];
+          depthStencilViewHandleId?: HandleId;
+        };
+        for (const vhId of we.colorAttachmentViewHandleIds) {
+          if (vhId !== undefined) refs.add(vhId);
+        }
+        if (we.depthStencilViewHandleId !== undefined) refs.add(we.depthStencilViewHandleId);
+        break;
+      }
+      // submit.cmdHandleIds refer to per-frame transient CommandEncoder
+      // handles (allocated via allocHandleId, never written to bootstrapCreates).
+      // Including them in the seed set would cause closure lookups to fail
+      // with a spurious tape-handle-graph-broken on every valid capture.
+      default:
+        break;
+    }
+  }
+  return refs;
+}
+
+/**
+ * @internal
+ * Return handleIds referenced by a create* event for transitive closure traversal.
+ *
+ * The edge set follows D-3 (plan-strategy 2):
+ *   - createBindGroup → layoutHandleId + resourceHandleIds
+ *   - createPipelineLayout → bglHandleIds
+ *   - createRenderPipeline → layoutHandleId (if != 'layout:auto') + vertex/fragmentShaderModuleHandleId (R-1)
+ *   - createComputePipeline → layoutHandleId (if != 'layout:auto') + computeShaderModuleHandleId (R-1)
+ *   - createTextureView → sourceHandleId
+ * Leaf resources (buffer / texture / sampler / BGL / shaderModule) return empty.
+ */
+function _getCreateEventReferencedHandleIds(event: RhiCallEvent): HandleId[] {
+  switch (event.kind) {
+    case 'createBindGroup': {
+      const e = event as { layoutHandleId: HandleId; resourceHandleIds: readonly HandleId[] };
+      return [e.layoutHandleId, ...e.resourceHandleIds];
+    }
+    case 'createPipelineLayout': {
+      const e = event as { bglHandleIds: readonly HandleId[] };
+      return [...e.bglHandleIds];
+    }
+    case 'createRenderPipeline': {
+      const e = event as {
+        layoutHandleId: HandleId;
+        vertexShaderModuleHandleId?: HandleId;
+        fragmentShaderModuleHandleId?: HandleId;
+      };
+      const refs: HandleId[] = [];
+      if (e.layoutHandleId !== 'layout:auto') refs.push(e.layoutHandleId);
+      if (e.vertexShaderModuleHandleId !== undefined) refs.push(e.vertexShaderModuleHandleId);
+      if (e.fragmentShaderModuleHandleId !== undefined) refs.push(e.fragmentShaderModuleHandleId);
+      return refs;
+    }
+    case 'createComputePipeline': {
+      const e = event as { layoutHandleId: HandleId; computeShaderModuleHandleId?: HandleId };
+      const refs: HandleId[] = [];
+      if (e.layoutHandleId !== 'layout:auto') refs.push(e.layoutHandleId);
+      if (e.computeShaderModuleHandleId !== undefined) refs.push(e.computeShaderModuleHandleId);
+      return refs;
+    }
+    case 'createTextureView': {
+      const e = event as { sourceHandleId: HandleId };
+      return [e.sourceHandleId];
+    }
+    case 'createBuffer':
+    case 'createTexture':
+    case 'createSampler':
+    case 'createBindGroupLayout':
+    case 'createShaderModule':
+    case 'createCommandEncoder':
+      return [];
+    default:
+      return [];
+  }
+}
+
+/**
+ * @internal
+ * Compute the transitive closure of handleIds from bootstrapCreates.
+ *
+ * Starting from the given seed set, recursively walks all referenced handleIds
+ * via _getCreateEventReferencedHandleIds. Returns the set of all handleIds
+ * whose create events must be included in the tape prefix for self-containment.
+ *
+ * If any referenced handleId is not found in bootstrapCreates, returns
+ * `null` for that id — the caller should produce a DebugError (w9).
+ */
+function _computeClosure(
+  seedHandleIds: Set<HandleId>,
+  bootstrapCreates: Map<HandleId, RhiCallEvent>,
+  inFrameHandleIds: Set<HandleId>,
+): { closure: Set<HandleId>; missing: HandleId | null } {
+  const closure = new Set(seedHandleIds);
+  const queue = [...seedHandleIds];
+
+  while (queue.length > 0) {
+    const current: HandleId | undefined = queue.shift();
+    if (current === undefined) break;
+    const createEvent = bootstrapCreates.get(current);
+    if (createEvent === undefined) {
+      // The handle is not in bootstrapCreates. If it is declared in
+      // s.events (e.g. swapchain textures from getCurrentTexture), treat it
+      // as a leaf — no further expansion needed.
+      if (inFrameHandleIds.has(current)) continue;
+      return { closure, missing: current };
+    }
+    const edges = _getCreateEventReferencedHandleIds(createEvent);
+    for (const target of edges) {
+      if (!closure.has(target)) {
+        closure.add(target);
+        queue.push(target);
+      }
+    }
+  }
+  return { closure, missing: null };
+}
+
+/**
+ * @internal
+ * Topologically sort the closure set so that dependencies appear before dependents.
+ *
+ * Builds a dep-graph: if event A references handleId of event B, then B must
+ * appear before A. Uses Kahn's algorithm.
+ */
+function _topoSortClosure(
+  closure: Set<HandleId>,
+  bootstrapCreates: Map<HandleId, RhiCallEvent>,
+): RhiCallEvent[] {
+  const inDegree = new Map<HandleId, number>();
+  const dependents = new Map<HandleId, HandleId[]>();
+
+  for (const hId of closure) {
+    inDegree.set(hId, 0);
+    dependents.set(hId, []);
+  }
+
+  for (const hId of closure) {
+    const event = bootstrapCreates.get(hId);
+    if (event === undefined) continue;
+    const edges = _getCreateEventReferencedHandleIds(event);
+    for (const target of edges) {
+      if (closure.has(target)) {
+        // hId depends on target
+        const current = dependents.get(target);
+        if (current !== undefined) current.push(hId);
+        inDegree.set(hId, (inDegree.get(hId) ?? 0) + 1);
+      }
+    }
+  }
+
+  const queue: HandleId[] = [];
+  for (const [hId, deg] of inDegree) {
+    if (deg === 0) queue.push(hId);
+  }
+
+  const sorted: RhiCallEvent[] = [];
+  while (queue.length > 0) {
+    const current: HandleId | undefined = queue.shift();
+    if (current === undefined) break;
+    const event = bootstrapCreates.get(current);
+    if (event !== undefined) sorted.push(event);
+
+    const deps = dependents.get(current);
+    if (deps !== undefined) {
+      for (const dep of deps) {
+        const newDeg = (inDegree.get(dep) ?? 1) - 1;
+        inDegree.set(dep, newDeg);
+        if (newDeg === 0) queue.push(dep);
+      }
+    }
+  }
+
+  return sorted;
+}
+
+// ============================================================================
 // DebugRhiInstance — public interface
 // ============================================================================
 
@@ -170,7 +452,7 @@ export interface DebugRhiInstance extends RhiInstance {
   arm(frames: number): Result<void, DebugError>;
   onFrameEnd(): void;
   finalize(): Result<{ runId: string; tapePath: string; reportPath: string }, DebugError>;
-  getTape(): Tape | undefined;
+  getTape(): Tape | DebugError | undefined;
   getState(): string;
   getEvents(): readonly RhiCallEvent[];
   getBlobPool(): ReadonlyMap<string, ArrayBuffer>;
@@ -195,6 +477,15 @@ export interface DebugRhiInstance extends RhiInstance {
   _registerShaderModule(handle: ShaderModule, handleId: HandleId): void;
   /**
    * @internal
+   * Route a create event through registerHandle (alloc id + write bootstrapCreates)
+   * and pushEvent in a single call. For standalone wrappers that cannot access
+   * the internal registerHandle/pushEvent functions directly.
+   * Returns the allocated HandleId so the caller can use it for downstream
+   * registration (e.g. shaderModule → handleMap).
+   */
+  _pushExternalCreateEvent(handle: object, kind: string, event: RhiCallEvent): HandleId;
+  /**
+   * @internal
    * Return the most recent `RhiDevice` produced through the recorder's
    * proxied `requestAdapter().requestDevice()` chain. `undefined` when
    * the host has not yet driven a device acquisition through the proxy.
@@ -209,6 +500,13 @@ export interface DebugRhiInstance extends RhiInstance {
    * duplicating state-machine knowledge.
    */
   _getValid(): boolean;
+  /**
+   * @internal
+   * Return the number of entries in bootstrapCreates. Test-only accessor
+   * so unit tests can verify bootstrapCreates write/retain semantics
+   * without going through getTape() closure computation (M2).
+   */
+  _getBootstrapCreatesSize(): number;
 }
 
 // ============================================================================
@@ -233,6 +531,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     blobPool: new Map(),
     handleMap: new WeakMap(),
     textureViewHandleMap: new WeakMap(),
+    bootstrapCreates: new Map(),
     _skipRecord: false,
     frameIdx: 0,
     bootstrap: true,
@@ -313,8 +612,77 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     s.frameIdx++;
   }
 
-  function getTape(): Tape | undefined {
+  function getTape(): Tape | DebugError | undefined {
     if (s.events.length === 0) return undefined;
+
+    // Pre-scan s.events for create* declarations: handleIds whose
+    // create event is already carried by the frame events (transient
+    // per-frame resources like swapchain textures, command encoders).
+    // These handles do NOT need bootstrap prefixing -- they were born
+    // during the recorded frame and their create event is in s.events.
+    const inFrameHandleIds = new Set<HandleId>();
+    for (const e of s.events) {
+      if (
+        e.kind.startsWith('create') &&
+        'handleId' in e &&
+        typeof (e as { handleId: unknown }).handleId === 'string'
+      ) {
+        inFrameHandleIds.add((e as { handleId: HandleId }).handleId);
+      }
+      // Also collect backward-referenced handleIds from create events in
+      // s.events. For example, createTextureView.sourceHandleId points to
+      // swapchain textures (from getCurrentTexture) that never get their own
+      // createTexture event. These handleIds exist only as references within
+      // frame events and must not trigger bootstrap lookup.
+      const backwardRefs = _getCreateEventReferencedHandleIds(e);
+      for (const ref of backwardRefs) {
+        inFrameHandleIds.add(ref);
+      }
+    }
+
+    // Collect frame-referenced handleIds from per-frame events.
+    const allFrameHandleIds = _collectFrameReferencedHandleIds(s.events);
+
+    // Exclude handles whose create event is already in s.events:
+    // only compute bootstrap closure for handles that need prefixing.
+    const prefixSeedIds = new Set<HandleId>();
+    for (const hId of allFrameHandleIds) {
+      if (!inFrameHandleIds.has(hId)) {
+        prefixSeedIds.add(hId);
+      }
+    }
+
+    // Transitive closure from bootstrapCreates
+    const { closure, missing } = _computeClosure(
+      prefixSeedIds,
+      s.bootstrapCreates,
+      inFrameHandleIds,
+    );
+
+    if (missing !== null) {
+      // Missing create — return error (hint refined in w9)
+      return new DebugError({
+        code: 'tape-handle-graph-broken',
+        expected: 'all referenced handleIds must have create events in bootstrapCreates',
+        hint: `handleId '${missing}' has no create event in bootstrap table; the resource may have been created before wrap() was called — re-capture with recorder wrap() before all resource creation`,
+        detail: {
+          danglingHandleId: missing,
+          referencingEventIndex: -1,
+        },
+      });
+    }
+
+    // Topological sort: dependencies (leaf resources) before dependents
+    const prefixEvents: RhiCallEvent[] = _topoSortClosure(closure, s.bootstrapCreates);
+
+    // dedup: only prefix create events not already in s.events.
+    const dedupedPrefx = prefixEvents.filter((e) => {
+      if ('handleId' in e && typeof (e as { handleId: unknown }).handleId === 'string') {
+        return !inFrameHandleIds.has((e as { handleId: HandleId }).handleId);
+      }
+      return true;
+    });
+
     return {
       formatVersion: TAPE_FORMAT_VERSION,
       rhiCapsRecorded: s.recordedCaps ?? {
@@ -325,7 +693,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         storageBuffer: false,
         timestampQuery: false,
       },
-      events: s.events,
+      events: [...dedupedPrefx, ...s.events],
       blobPool: s.blobPool,
     };
   }
@@ -817,26 +1185,26 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       createBuffer(desc: BufferDescriptor) {
         const res = realDevice.createBuffer(desc);
         if (!res.ok) return res;
-        const hId = registerHandle(s, res.value as unknown as object, 'buffer');
-        pushEvent(s, {
+        const event: RhiCallEvent = {
           kind: 'createBuffer',
-          handleId: hId,
+          handleId: '' as HandleId,
           desc: {
             size: desc.size ?? 0,
             usage: desc.usage ?? 0,
             mappedAtCreation: desc.mappedAtCreation,
           },
-        });
+        };
+        registerHandle(s, res.value as unknown as object, 'buffer', event);
+        pushEvent(s, event);
         return res;
       },
 
       createTexture(desc: TextureDescriptor) {
         const res = realDevice.createTexture(desc);
         if (!res.ok) return res;
-        const hId = registerHandle(s, res.value as unknown as object, 'texture');
-        pushEvent(s, {
+        const event: RhiCallEvent = {
           kind: 'createTexture',
-          handleId: hId,
+          handleId: '' as HandleId,
           desc: {
             size: desc.size ?? { width: 1, height: 1 },
             mipLevelCount: desc.mipLevelCount,
@@ -847,7 +1215,9 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
             viewFormats: desc.viewFormats,
             textureBindingViewDimension: desc.textureBindingViewDimension,
           },
-        });
+        };
+        registerHandle(s, res.value as unknown as object, 'texture', event);
+        pushEvent(s, event);
         return res;
       },
 
@@ -857,7 +1227,55 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         const srcId = getHandleId(s, texture as unknown as object, 'texture');
         const viewId = registerHandle(s, res.value as unknown as object, 'textureView');
         s.textureViewHandleMap.set(res.value, viewId);
-        pushEvent(s, {
+
+        // Emit a faithful createTexture if the source texture is a
+        // swapchain texture that has no createTexture event yet.
+        // getCurrentTexture() returns the raw GPUTexture whose runtime
+        // properties (width, height, format, usage) are readable —
+        // read them to construct a faithful createTexture event instead
+        // of a synthetic 1x1 stand-in (D-1, C-3).
+        if (!s.bootstrapCreates.has(srcId)) {
+          const raw = texture as unknown as Record<string, unknown>;
+          const width = raw.width as number | undefined;
+          const height = raw.height as number | undefined;
+          const depthOrArrayLayers = (raw.depthOrArrayLayers as number | undefined) ?? 1;
+          const format = raw.format as string | undefined;
+          const rawUsage = raw.usage as number | undefined;
+
+          if (
+            width === undefined ||
+            height === undefined ||
+            format === undefined ||
+            rawUsage === undefined
+          ) {
+            return makeErr(
+              new DebugError({
+                code: 'tape-handle-graph-broken',
+                expected:
+                  'swapchain GPUTexture runtime properties readable (width/height/format/usage)',
+                hint: `swapchain texture '${srcId}' has unreadable dimensions (width=${width}, height=${height}, format=${format}, usage=${rawUsage}); the backend may not expose runtime texture properties — re-capture with a device that does`,
+                detail: {
+                  danglingHandleId: srcId,
+                  referencingEventIndex: -1,
+                },
+              }),
+            ) as unknown as Result<TextureView, import('@forgeax/engine-rhi').RhiError>;
+          }
+
+          const texEvent: RhiCallEvent = {
+            kind: 'createTexture',
+            handleId: srcId,
+            desc: {
+              size: { width, height, depthOrArrayLayers },
+              format: format as GPUTextureFormat,
+              usage: (rawUsage | 0x01) as GPUTextureUsageFlags, // D-4: COPY_SRC for replay readbackRt
+            },
+          };
+          s.bootstrapCreates.set(srcId, texEvent);
+          pushEvent(s, texEvent);
+        }
+
+        const event: RhiCallEvent = {
           kind: 'createTextureView',
           sourceHandleId: srcId,
           resultHandleId: viewId,
@@ -871,38 +1289,41 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
             baseArrayLayer: desc.baseArrayLayer,
             arrayLayerCount: desc.arrayLayerCount,
           },
-        });
+        };
+        s.bootstrapCreates.set(viewId, event);
+        pushEvent(s, event);
         return res;
       },
 
       createSampler(desc?: SamplerDescriptor | undefined) {
         const res = realDevice.createSampler(desc);
         if (!res.ok) return res;
-        const hId = registerHandle(s, res.value as unknown as object, 'sampler');
-        pushEvent(s, {
+        const event: RhiCallEvent = {
           kind: 'createSampler',
-          handleId: hId,
+          handleId: '' as HandleId,
           desc: desc as Partial<GPUSamplerDescriptor> | undefined,
-        });
+        };
+        registerHandle(s, res.value as unknown as object, 'sampler', event);
+        pushEvent(s, event);
         return res;
       },
 
       createBindGroupLayout(desc: BindGroupLayoutDescriptor) {
         const res = realDevice.createBindGroupLayout(desc);
         if (!res.ok) return res;
-        const hId = registerHandle(s, res.value as unknown as object, 'bindGroupLayout');
-        pushEvent(s, {
+        const event: RhiCallEvent = {
           kind: 'createBindGroupLayout',
-          handleId: hId,
+          handleId: '' as HandleId,
           desc: { label: desc.label, entries: desc.entries ?? [] },
-        });
+        };
+        registerHandle(s, res.value as unknown as object, 'bindGroupLayout', event);
+        pushEvent(s, event);
         return res;
       },
 
       createBindGroup(desc: BindGroupDescriptor) {
         const res = realDevice.createBindGroup(desc);
         if (!res.ok) return res;
-        const hId = registerHandle(s, res.value as unknown as object, 'bindGroup');
         const layoutId = getHandleId(s, desc.layout as unknown as object, 'bindGroupLayout');
         const entries = Array.from(desc.entries);
         const resourceKinds: RhiBindResourceKind[] = entries.map((e) => e.resource.kind);
@@ -920,44 +1341,46 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
           }
           return 'externalTexture:unknown' as HandleId;
         });
-        pushEvent(s, {
+        const event: RhiCallEvent = {
           kind: 'createBindGroup',
-          handleId: hId,
+          handleId: '' as HandleId,
           layoutHandleId: layoutId,
           entries: entries.map((e, idx) => ({
             binding: e.binding,
             resourceKind: resourceKinds[idx] as RhiBindResourceKind,
           })),
           resourceHandleIds,
-        });
+        };
+        registerHandle(s, res.value as unknown as object, 'bindGroup', event);
+        pushEvent(s, event);
         return res;
       },
 
       createPipelineLayout(desc: PipelineLayoutDescriptor) {
         const res = realDevice.createPipelineLayout(desc);
         if (!res.ok) return res;
-        const hId = registerHandle(s, res.value as unknown as object, 'pipelineLayout');
         const bglIds = Array.from(desc.bindGroupLayouts).map((bgl) =>
           getHandleId(s, bgl as unknown as object, 'bindGroupLayout'),
         );
-        pushEvent(s, { kind: 'createPipelineLayout', handleId: hId, bglHandleIds: bglIds });
+        const event: RhiCallEvent = {
+          kind: 'createPipelineLayout',
+          handleId: '' as HandleId,
+          bglHandleIds: bglIds,
+        };
+        registerHandle(s, res.value as unknown as object, 'pipelineLayout', event);
+        pushEvent(s, event);
         return res;
       },
 
       createRenderPipeline(desc: RenderPipelineDescriptor) {
         const res = realDevice.createRenderPipeline(desc);
         if (!res.ok) return res;
-        const hId = registerHandle(s, res.value as unknown as object, 'renderPipeline');
         let layoutId: HandleId;
         if (typeof desc.layout === 'string') {
           layoutId = 'layout:auto';
         } else {
           layoutId = getHandleId(s, desc.layout as unknown as object, 'pipelineLayout');
         }
-        // Resolve shader module handleIds for cross-device replay.
-        // The tape's pipeline desc carries live GPU module objects from
-        // the recording device; the replayer must swap them with re-created
-        // shader modules using the handleId.
         let vertexShaderModuleHandleId: HandleId | undefined;
         if (desc.vertex !== undefined) {
           vertexShaderModuleHandleId = getHandleId(
@@ -974,9 +1397,9 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
             'shaderModule',
           );
         }
-        pushEvent(s, {
+        const event: RhiCallEvent = {
           kind: 'createRenderPipeline',
-          handleId: hId,
+          handleId: '' as HandleId,
           desc: {
             vertex: desc.vertex,
             primitive: desc.primitive,
@@ -987,14 +1410,15 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
           layoutHandleId: layoutId,
           vertexShaderModuleHandleId,
           fragmentShaderModuleHandleId,
-        });
+        };
+        registerHandle(s, res.value as unknown as object, 'renderPipeline', event);
+        pushEvent(s, event);
         return res;
       },
 
       createComputePipeline(desc: ComputePipelineDescriptor) {
         const res = realDevice.createComputePipeline(desc);
         if (!res.ok) return res;
-        const hId = registerHandle(s, res.value as unknown as object, 'computePipeline');
         let layoutId: HandleId;
         if (typeof desc.layout === 'string') {
           layoutId = 'layout:auto';
@@ -1006,13 +1430,15 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
           desc.compute.module as unknown as object,
           'shaderModule',
         );
-        pushEvent(s, {
+        const event: RhiCallEvent = {
           kind: 'createComputePipeline',
-          handleId: hId,
+          handleId: '' as HandleId,
           desc: { compute: desc.compute as unknown as GPUProgrammableStage },
           layoutHandleId: layoutId,
           computeShaderModuleHandleId,
-        });
+        };
+        registerHandle(s, res.value as unknown as object, 'computePipeline', event);
+        pushEvent(s, event);
         return res;
       },
 
@@ -1067,11 +1493,19 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     _registerShaderModule(handle: ShaderModule, handleId: HandleId): void {
       s.handleMap.set(handle as unknown as object, handleId);
     },
+    _pushExternalCreateEvent(handle: object, kind: string, event: RhiCallEvent): HandleId {
+      const hId = registerHandle(s, handle, kind, event);
+      pushEvent(s, event);
+      return hId;
+    },
     _getCapturedDevice(): RhiDevice | undefined {
       return s.capturedDevice;
     },
     _getValid(): boolean {
       return s.valid;
+    },
+    _getBootstrapCreatesSize(): number {
+      return s.bootstrapCreates.size;
     },
 
     async requestAdapter(
@@ -1142,14 +1576,11 @@ export function wrapCreateShaderModule(
     // guard). The previous `(events as RhiCallEvent[]).push(...)` cast
     // bypassed those guards — recorder-internal RHI calls during shader
     // construction would have self-polluted the tape.
-    const hId = allocHandleId('shaderModule');
-    const event: RhiCallEvent = {
+    const hId = debugInst._pushExternalCreateEvent(result.value, 'shaderModule', {
       kind: 'createShaderModule',
-      handleId: hId,
+      handleId: '' as HandleId,
       wgslCode: desc.code,
-    };
-    debugInst._pushExternalEvent(event);
-
+    });
     // Register the shader module handle in the recorder's handleMap so
     // downstream pipeline events (createRenderPipeline / createComputePipeline)
     // can resolve the handleId via getHandleId. Required for cross-device

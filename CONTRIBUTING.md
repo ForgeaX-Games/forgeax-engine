@@ -4,69 +4,47 @@ Thanks for your interest! This monorepo runs **two package managers in parallel*
 
 ## Prerequisites
 
-- **Node.js ≥ 22.13.0** (active LTS; `.nvmrc` is checked into the repo)
-- **pnpm ≥ 11.1.3** (`package.json#packageManager` pins the corepack-managed version)
+- **Node.js ≥ 22.13.0** (active LTS; `.nvmrc` pins the exact patch — currently `22.22.3`)
+- **pnpm** — `package.json#packageManager` pins the corepack-managed version (currently `11.7.0`)
 - **Bun ≥ 1.2.0** (`.bun-version` is checked into the repo)
 
 If you use `corepack enable`, pnpm comes bundled with the right version automatically.
 
-## Rust toolchain (only when modifying `packages/naga-wasm-shim/`)
+## Rust toolchain (only when modifying `packages/wgpu-wasm/`)
 
-`@forgeax/engine-naga-wasm-shim` is the only Rust crate in the monorepo — a thin wasm-bindgen wrap around [`naga`](https://crates.io/crates/naga) that feeds `@forgeax/engine-shader-compiler` from JavaScript. **You only need the Rust toolchain if you are editing `packages/naga-wasm-shim/src/*.rs` or `Cargo.toml`.** Most contributors never touch Rust because the prebuilt `pkg/` output (`*.wasm` + `*.d.ts` + `*.js` glue) is committed to git and consumed by `pnpm install` directly.
+`@forgeax/engine-wgpu-wasm` is the **only** Rust crate in the monorepo — a single wasm-bindgen crate merging `wgpu 29` (RHI raw bindings) and `naga 29` (three-phase shader pipeline), produced by `feat-20260511-naga-rhi-wgpu-merge`. It replaced the two earlier crates (`naga-wasm-shim` + `rhi-wgpu/crate`), which are archived. Two TS-only thin shells consume its raw bindings: `@forgeax/engine-rhi-wgpu` (RHI) and `@forgeax/engine-naga` (shader tooling) — neither contains Rust anymore.
+
+**You only need the Rust toolchain if you are editing `packages/wgpu-wasm/src/*.rs` or `Cargo.toml`.** Most contributors never touch Rust because the prebuilt `pkg/` output (`*.wasm` + `*.d.ts` + `*.js` glue) is committed to git and consumed by `pnpm install` directly.
 
 ### One-time install
 
 ```bash
-rustup install stable                       # Rust ≥ 1.87 (naga MSRV; 1.95+ recommended)
-rustup target add wasm32-unknown-unknown
+rustup install 1.93                         # Rust >= 1.93 (wgpu 29 MSRV)
+rustup target add wasm32-unknown-unknown    # required for wasm-pack build --target web
 cargo install wasm-pack                     # wasm-pack 0.14+
 ```
 
-### Rebuild after Rust changes
-
-```bash
-bash packages/naga-wasm-shim/build.sh       # → wasm-pack build --target web --out-dir pkg
-```
-
-Stage **both** `packages/naga-wasm-shim/src/...` and the regenerated `packages/naga-wasm-shim/pkg/...` artifacts in the same commit so non-Rust contributors stay unblocked.
-
-### When the toolchain is unavailable
-
-- CI builds the wasm crate from scratch via the steps in `.github/workflows/ci.yml` (`dtolnay/rust-toolchain@stable` + `jetli/wasm-pack-action@v0.4.0`), so a fork PR without Rust locally still verifies cleanly.
-- Locally, if you need to run `pnpm test` on a machine without Rust, the committed `pkg/` output is already wired into the workspace — `pnpm install` does **not** invoke `cargo` / `wasm-pack`, and `@forgeax/engine-shader-compiler` resolves the prebuilt `naga_wasm_shim_bg.wasm` via its package.json `exports` map.
-
-`Cargo.lock` is committed (per plan-strategy §S-3, applications-tier crate convention) and is **not** part of the dual-lockfile sync — `pnpm-lock.yaml` and `bun.lock` describe the npm side; `Cargo.lock` is owned by `cargo` alone. The pre-commit `check-staged-lockfiles.mjs` guard does not touch it.
-
-## Rust toolchain (only when modifying `packages/rhi-wgpu/`)
-
-`@forgeax/engine-rhi-wgpu` is the second Rust crate in the monorepo (feat-20260511-rhi-wgpu-impl 兑现) — a thin wasm-bindgen wrap around `wgpu 29` exposing the `@forgeax/engine-rhi` surface as a wasm bundle. **You only need the Rust toolchain if you are editing `packages/rhi-wgpu/crate/src/*.rs` or `Cargo.toml`.** Most contributors never touch Rust because the prebuilt `pkg/` output (`*.wasm` + `*.d.ts` + `*.js` glue) is committed to git and consumed by `pnpm install` directly — same convention as `packages/naga-wasm-shim/` above.
-
-### One-time install
-
-```bash
-rustup install 1.93                         # Rust >= 1.93 (wgpu 29 MSRV per research R-NEW-03 / F-1; the rust-toolchain.toml pin scopes this bump to packages/rhi-wgpu only, leaving naga-wasm-shim on >= 1.87)
-rustup target add wasm32-unknown-unknown    # required for wasm-pack build --target web
-cargo install wasm-pack                     # wasm-pack 0.14+ (same version as naga-wasm-shim)
-```
-
-Note: `packages/rhi-wgpu/rust-toolchain.toml` already pins `channel = "1.93"` + `targets = ["wasm32-unknown-unknown"]`, so once `rustup` is installed it will auto-fetch the right toolchain on first `cargo` invocation inside the crate. The pin is **scoped** to `packages/rhi-wgpu/crate/` — the rest of the monorepo (including `packages/naga-wasm-shim`, Rust >= 1.87) is untouched.
+`packages/wgpu-wasm/rust-toolchain.toml` already pins `channel = "1.93"` + `targets = ["wasm32-unknown-unknown"]`, so once `rustup` is installed it auto-fetches the right toolchain on the first `cargo` invocation inside the crate.
 
 ### Rebuild after Rust changes
 
 ```bash
-bash packages/rhi-wgpu/build.sh             # -> wasm-pack build --target web --out-dir pkg
-# or equivalently via pnpm workspace script:
-pnpm -F @forgeax/engine-rhi-wgpu build             # tsc -b + tsup (rebuilds JS shim around prebuilt pkg/)
+bash packages/wgpu-wasm/build.sh            # -> wasm-pack build --target web --out-dir pkg
+# or equivalently via the pnpm workspace script:
+pnpm -F @forgeax/engine-wgpu-wasm build     # tsc -b + tsup (rebuilds the JS shim around prebuilt pkg/)
 ```
 
-The `build.sh` entry asserts `rustc >= 1.93` explicitly with a structured error message (charter proposition 4 explicit failure) so a missing toolchain pin surfaces at the `.sh` entry rather than as an opaque `cargo` error. Stage **both** `packages/rhi-wgpu/crate/src/...` and the regenerated `packages/rhi-wgpu/pkg/...` artifacts in the same commit so non-Rust contributors stay unblocked (same SOP as naga-wasm-shim above).
+`build.sh` asserts `rustc >= 1.93` explicitly with a structured error message (charter proposition 4 explicit failure) so a missing toolchain pin surfaces at the `.sh` entry rather than as an opaque `cargo` error. Stage **both** `packages/wgpu-wasm/src/...` and the regenerated `packages/wgpu-wasm/pkg/...` artifacts in the same commit so non-Rust contributors stay unblocked.
+
+> [!NOTE]
+> wasm-pack's bundled binaryen is too old to parse wgpu 29's multi-table WASM, so `Cargo.toml` sets `wasm-opt = false`. CI installs a system `binaryen` (>= 116) and `build.sh` runs an extra `wasm-opt -Oz` pass when one is on `PATH`; local builds without binaryen skip that pass silently (dev-only size penalty).
 
 ### When the toolchain is unavailable
 
-- CI builds the wasm crate from scratch via the same `dtolnay/rust-toolchain@stable` + `jetli/wasm-pack-action@v0.4.0` steps as `naga-wasm-shim`, so a fork PR without Rust locally still verifies cleanly.
-- Locally, if you need to run `pnpm test` on a machine without Rust, the committed `pkg/` output is already wired into the workspace — `pnpm install` does **not** invoke `cargo` / `wasm-pack`, and `@forgeax/engine-runtime` resolves the prebuilt `rhi_wgpu_bg.wasm` via dynamic `import('@forgeax/engine-rhi-wgpu')` inside the auto-select facade.
+- CI builds the wasm crate from scratch via `dtolnay/rust-toolchain@stable` + `taiki-e/install-action` (`wasm-pack@0.14.0`) in `.github/workflows/ci.yml`, so a fork PR without Rust locally still verifies cleanly.
+- Locally, if you need to run `pnpm test` on a machine without Rust, the committed `pkg/` output is already wired into the workspace — `pnpm install` does **not** invoke `cargo` / `wasm-pack`. The `@forgeax/engine-rhi-wgpu` and `@forgeax/engine-naga` shells resolve the prebuilt `wgpu_wasm_bg.wasm` directly.
 
-`packages/rhi-wgpu/crate/Cargo.lock` is committed (same applications-tier crate convention as `naga-wasm-shim`) and is **not** part of the dual-lockfile sync. See AGENTS.md `## RHI / WebGPU` -> dual-impl 立場 for the architectural rationale (auto-select facade + escape hatch).
+`packages/wgpu-wasm/Cargo.lock` is committed (applications-tier crate convention) and is **not** part of the dual-lockfile sync — `pnpm-lock.yaml` and `bun.lock` describe the npm side; `Cargo.lock` is owned by `cargo` alone. The pre-commit `check-staged-lockfiles.mjs` guard does not touch it. See `packages/rhi-wgpu/README.md` and AGENTS.md §Packages for the dual-impl / auto-select-facade rationale.
 
 ## FBX SDK 2020.3.7 toolchain (only when modifying `packages/fbx/`)
 
@@ -159,7 +137,7 @@ git commit -m "chore: sync lockfiles"
 
 `.gitattributes` already marks both lockfiles as `merge=ours linguist-generated=true`, which (a) makes git auto-pick "ours" during merge so you don't have to hand-edit, (b) collapses lockfile diffs in GitHub PR view.
 
-## ⚠️ Use `bun run test` — never `bun test`
+## ⚠ Use `bun run test` — never `bun test`
 
 > [!CAUTION]
 > **Always invoke the test script through `bun run test`**, which delegates to `vitest run` via `package.json#scripts.test`. Bun's built-in `bun test` is a Jest-subset runner: it does **not** read `vitest.config.ts`, does **not** recognize `vi.mock` / `vi.fn` / `expectTypeOf`, and silently ignores type-test files (`*.test-d.ts`).
@@ -186,8 +164,9 @@ Each task in our planning system maps to one commit; commit messages take the fo
 
 ## Architecture invariants
 
-- The three packages have a strict descending dependency chain: `engine → core → math`. Cross-level imports break the build.
-- `tsup` emits `.mjs` only (`format: ['esm']`); declarations come from `tsc -b` composite mode (`dts: false` in tsup, `emitDeclarationOnly: true` in tsconfig).
-- All runtime diagnostics use `console.warn` / `console.error` (Biome's `noConsole` rule allows only these levels in source). No debug panel, no in-engine property panel, no REST explorer.
+- The monorepo is a layered graph of `@forgeax/engine-*` packages (`packages/<pkg>/` ↔ `@forgeax/engine-<pkg>`; bare `@forgeax/engine` in `packages/engine/` is a README-only placeholder). Each `packages/<pkg>/README.md` is the SSOT for that package's API, error codes, and capability gates — see AGENTS.md §Packages. Cross-level imports that violate the dependency direction break the build.
+- `tsup` emits `.mjs` only (`format: ['esm']`); declarations come from `tsc -b` composite mode (`dts: false` in tsup, `emitDeclarationOnly: true` in tsconfig). `pnpm -r build` alone leaves `.d.ts` stale — run `pnpm build` (chains `tsc -b`).
+- All runtime diagnostics use `console.warn` / `console.error` (Biome's `noConsole` rule allows only these levels in source).
+- Source and entry docs are **English-only** (ASCII + math/Greek), enforced by `scripts/forgeax/check_english_only.py`.
 
-Refer to `.forgeax-harness/forgeax-loop/feat-20260505-typescript-game-engine/plan-strategy.md` for the full architectural rationale (K-1 through K-11 decisions, R-1 through R-12 risk treatments).
+Refer to `.forgeax-harness/forgeax-loop/feat-20260505-typescript-game-engine/plan-strategy.md` for the original architectural rationale (K-1 through K-11 decisions, R-1 through R-12 risk treatments).

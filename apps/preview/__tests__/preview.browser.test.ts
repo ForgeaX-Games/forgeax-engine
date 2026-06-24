@@ -1,14 +1,14 @@
 // preview.browser.test.ts -- e2e gate for the apps/preview host + the
-// templates/game-default GameEntry it loads. Runs in the vitest `browser`
+// templates/game-default bootstrap entry it loads. Runs in the vitest `browser`
 // project (chrome-beta + lavapipe, real WebGPU), so it covers the
 // browser-only path that dawn-node smokes cannot: createApp's canvas form,
-// the GameEntry's scene.pack.json fetch via import.meta.url, loadByGuid
+// the bootstrap entry's scene.pack.json fetch via import.meta.url, loadByGuid
 // through the pluginPack dev-server middleware, and N frames of real draw.
 //
 // What it asserts (charter P3 explicit failure -- every gate is a hard
 // expect, no silent skip):
 //   - createApp(canvas) -> Result.ok(App)          (host wiring alive)
-//   - the template GameEntry resolves without throw (scene pack loads)
+//   - the template bootstrap resolves without throw (scene pack loads)
 //   - a Camera entity exists                        (dynamic layer ran)
 //   - entityCount >= 21 (the pack's node count)     (scene pack instantiated,
 //                                                     not the fallback path)
@@ -18,16 +18,17 @@
 // This mirrors apps/preview/src/main.ts's bootstrap, minus the two Vite
 // build-time couplings a test runner cannot evaluate: `virtual:forgeax/
 // bundler` (createApp works without it -- see thin-wrapper.browser.test.ts)
-// and `import.meta.glob` (the template module is imported directly here).
+// and `import.meta.glob` (the template module is imported directly here, and
+// its `bootstrap` named export is invoked as bootstrap(world, ctx)).
 
 import { SUT_ATTRIBUTABLE_CODES } from '@forgeax/apps-shared/onerror-gate';
 import { createApp } from '@forgeax/engine-app';
-import type { GameContext } from '@forgeax/engine-app';
+import type { BootstrapContext } from '@forgeax/engine-app';
 import { createQueryState, Entity, queryRun } from '@forgeax/engine-ecs';
 import { Camera, createDevImportTransport } from '@forgeax/engine-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import gameDefault from '../../../templates/game-default/main';
+import { bootstrap } from '../../../templates/game-default/main';
 
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -50,7 +51,7 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     canvas.remove();
   });
 
-  it('createApp + GameEntry + 10 frames instantiates the scene, a Camera, and zero renderer errors', async () => {
+  it('createApp + bootstrap + 10 frames instantiates the scene, a Camera, and zero renderer errors', async () => {
     const appRes = await createApp(canvas, {}, { importTransport: createDevImportTransport() });
     expect(appRes.ok).toBe(true);
     if (!appRes.ok) return;
@@ -64,16 +65,16 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     const assets = app.renderer.assets;
     assets.configurePackIndex('/pack-index.json');
 
-    const ctx: GameContext = {
-      world: app.world,
+    const ctx: BootstrapContext = {
       assets,
       app,
       registerUpdate: (fn: (dt: number) => void) => app.registerUpdate(fn),
     };
 
-    // The GameEntry awaits scene.pack.json fetch + loadByGuid; a throw here is
-    // a real failure (stale pack schema, missing asset, broken instantiate).
-    await gameDefault(ctx);
+    // bootstrap(world, ctx) awaits scene.pack.json fetch + loadByGuid; a throw
+    // here is a real failure (stale pack schema, missing asset, broken
+    // instantiate).
+    await bootstrap(app.world, ctx);
 
     const startRes = app.start();
     expect(startRes.ok).toBe(true);

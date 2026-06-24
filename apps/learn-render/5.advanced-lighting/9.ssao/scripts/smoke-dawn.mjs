@@ -208,7 +208,7 @@ if (DISCRIMINATION) {
       Transform: TransformLocal,
     } = runtimePkgLocal;
 
-    const appResult = await createAppLocal(canvas, { input: false }, { shaderManifestUrl: MANIFEST_URL });
+    const appResult = await createAppLocal(canvas, {}, { shaderManifestUrl: MANIFEST_URL });
     globalThis.navigator.gpu.requestAdapter = originalReqAdapter;
 
     if (!appResult.ok) {
@@ -458,7 +458,7 @@ const {
   Transform,
 } = runtimePkg;
 
-const appResult = await createApp(mockCanvas, { input: false }, { shaderManifestUrl: MANIFEST_URL });
+const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
 
 if (!appResult.ok) {

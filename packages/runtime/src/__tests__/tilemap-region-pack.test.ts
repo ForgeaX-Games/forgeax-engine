@@ -95,7 +95,6 @@ function readDerivedTransforms(world: World): Array<{
     if (!arch.componentNames.includes('Transform')) continue;
     if (!arch.componentNames.includes('MeshFilter')) continue;
     if (!arch.componentNames.includes('Layer')) continue;
-    if (!arch.componentNames.includes('ChildOf')) continue;
     const derived = graph.archetypes.find((a) => a.key === arch.key);
     if (!derived) continue;
     const entityCol = derived.columns.get(Entity.id)?.get('self')?.view as Uint32Array | undefined;

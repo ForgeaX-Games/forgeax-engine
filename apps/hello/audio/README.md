@@ -1,7 +1,8 @@
 # forgeax-engine -- Hello Audio
 
 Spacebar one-shot SFX + movable 3D listener --
-`createApp({ audio:true, input:true })` declarative ECS example.
+`createApp({ plugins: [audioPlugin()] })` declarative ECS example
+(input is in the canvas-form default plugin set).
 
 ## Quickstart
 
@@ -15,7 +16,7 @@ pnpm --filter @forgeax/hello-audio dev
 
 | Surface | Details |
 |:--|:--|
-| **One-shot takeoff** | `createApp(canvas, { audio:true, input:true })` -- auto-attaches WebAudioBackend + InputBackend (parallel to `physics:'rapier-3d'`). |
+| **One-shot takeoff** | `createApp(canvas, { plugins: [audioPlugin()] })` -- `audioPlugin()` auto-attaches the WebAudioBackend; input is in the canvas-form default plugin set (parallel to `physicsPlugin('rapier-3d')`). |
 | **Declarative ECS audio** | `AudioSource({ clip, playing })` drives `audioTickSystem` edge detection -- no imperative `backend.play()` bypass (AC-07). |
 | **Pack-index asset loading** | SFX GUID resolved via vite-plugin-pack (`/__pack/lookup/:guid` in dev, `pack-index.json` at build time) -> `loadAudioClipByGuid` -> `registerWithGuid` -> `AudioSource.clip`. |
 | **Spatial panning** | `AudioSource.spatialBlend=1.0` creates a PannerNode; `syncListenerFromWorldMatrix(l, worldMatrix)` syncs the listener position/orientation each frame from the listener entity's `Transform.world` mat4. |
@@ -32,13 +33,11 @@ pnpm --filter @forgeax/hello-audio dev
 ## API surface
 
 ```ts
-// 1. One-shot takeoff -- audio + input auto-attached.
-const app = await createApp(canvas, {
-  clearColor: [0.1, 0.2, 0.3, 1],
-  shaderManifestUrl: '/shaders/manifest.json',
-  audio: true,
-  input: true,
-});
+import { audioPlugin } from '@forgeax/engine-audio-webaudio';
+
+// 1. One-shot takeoff -- audioPlugin() auto-attaches the WebAudioBackend;
+//    input is in the canvas-form default plugin set.
+const app = await createApp(canvas, { plugins: [audioPlugin()] });
 
 // 2. Load + register an audio clip via the pack-index pipeline.
 //    resolveUrlFromPackIndex(guid) -> loadAudioClipByGuid(guid, url)

@@ -24,7 +24,7 @@
 // glue: they are part of the LearnOpenGL teaching surface, not gltf wiring.
 
 import { createApp } from '@forgeax/engine-app';
-import type { App, AppError } from '@forgeax/engine-app';
+import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { InspectorError, Registry, wireDefaultInspectors } from '@forgeax/engine-console';
 import { startConsoleServer } from '@forgeax/engine-console/server';
 import { registerEcsInspector, World } from '@forgeax/engine-ecs';
@@ -40,7 +40,6 @@ import {
   Skylight,
   Transform,
 } from '@forgeax/engine-runtime';
-import type { RhiError } from '@forgeax/engine-runtime';
 import type { SceneAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
@@ -374,7 +373,7 @@ function spawnCamera(world: World): import('@forgeax/engine-ecs').EntityHandle |
   return res.value;
 }
 
-function reportBootstrapError(err: AppError | RhiError | EngineEnvironmentError): void {
+function reportBootstrapError(err: CanvasAppError): void {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';

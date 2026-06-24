@@ -623,6 +623,80 @@ async function replayEvent(
 }
 
 // ============================================================================
+// Cross-backend format adaptation (F-1)
+// ============================================================================
+
+/**
+ * Adapt a recorded canvas swapchain format to one the offline replay device
+ * accepts for an ordinary (non-swapchain) texture and its view.
+ *
+ * **Why this is a target-device format adaptation, not a synthetic value (C-3):**
+ * a browser captures the canvas swapchain as a `bgra8unorm` texture but views it
+ * (and the render-pipeline color target) as `bgra8unorm-srgb` — the srgb view of
+ * the platform's preferred canvas format. When that tape is replayed offline, the
+ * swapchain texture is reconstructed as an ordinary offscreen texture. The plain
+ * `bgra8unorm` texture is creatable, but a `bgra8unorm-srgb` *view* over it is not
+ * valid unless the texture declared `viewFormats: ['bgra8unorm-srgb']` (which the
+ * canvas-provided swapchain texture implies but a manually-created texture does
+ * not). Replaying the recorded shape verbatim therefore fails at `beginRenderPass`
+ * with an incompatible-view-format error. This is a genuine cross-backend
+ * impedance, not a recording defect: the recorded formats are faithful, but the
+ * offline replay device cannot reconstruct the canvas's implicit srgb-view
+ * compatibility on a plain texture.
+ *
+ * The remap rewrites both canvas BGRA formats (`bgra8unorm` and `bgra8unorm-srgb`)
+ * to the byte-compatible `rgba8unorm`, applied consistently to the texture, its
+ * view, and the pipeline color target so all three agree. Both are 8-bit-per-channel
+ * RGBA, so per-draw binding/RT inspection and pixel readback are unaffected. Every
+ * other format — including `rgba8unorm` itself — passes through unchanged, so the
+ * existing same-format replay path is not perturbed.
+ *
+ * This adaptation is replay-layer-generic (every browser-captured tape replayed
+ * offline needs it), which is why it lives here rather than in any per-demo script.
+ */
+function adaptReplayFormat(format: string | undefined): string | undefined {
+  if (format === 'bgra8unorm' || format === 'bgra8unorm-srgb') {
+    return 'rgba8unorm';
+  }
+  return format;
+}
+
+/**
+ * Return a copy of `desc` with its `format` field remapped via
+ * `adaptReplayFormat`, or the original `desc` unchanged when the format needs
+ * no adaptation (so the same-format replay path allocates nothing extra).
+ * Shared by the createTexture / createTextureView handlers.
+ */
+function descWithAdaptedFormat<T extends { format?: unknown }>(desc: T): T {
+  const adapted = adaptReplayFormat(desc.format as string | undefined);
+  return adapted === desc.format ? desc : { ...desc, format: adapted };
+}
+
+/**
+ * Remap the color-target formats of a render-pipeline fragment state via
+ * `adaptReplayFormat`. Returns a new fragment object when any target changed,
+ * `undefined` when nothing needs adapting (so the caller leaves the original
+ * fragment untouched).
+ */
+function adaptFragmentTargets(fragment: unknown): Record<string, unknown> | undefined {
+  if (!fragment || typeof fragment !== 'object') return undefined;
+  const frag = fragment as Record<string, unknown>;
+  if (!Array.isArray(frag.targets)) return undefined;
+
+  let mutated = false;
+  const adaptedTargets = frag.targets.map((t: unknown) => {
+    if (!t || typeof t !== 'object' || !('format' in t)) return t;
+    const target = t as Record<string, unknown>;
+    const adapted = adaptReplayFormat(target.format as string | undefined);
+    if (adapted === target.format) return t;
+    mutated = true;
+    return { ...target, format: adapted };
+  });
+
+  return mutated ? { ...frag, targets: adaptedTargets } : undefined;
+}
+
+// ============================================================================
 // Per-event-kind replay helpers
 // ============================================================================
 
@@ -647,7 +721,7 @@ function replayCreateTexture(
   device: RhiDevice,
   handleMap: Map<HandleId, unknown>,
 ): void {
-  const result = device.createTexture(event.desc as any);
+  const result = device.createTexture(descWithAdaptedFormat(event.desc) as any);
   if (result.ok) {
     handleMap.set(event.handleId, result.value);
   }
@@ -660,7 +734,7 @@ function replayCreateTextureView(
 ): void {
   const texture = handleMap.get(event.sourceHandleId);
   if (texture === undefined) return;
-  const result = device.createTextureView(texture as any, event.desc);
+  const result = device.createTextureView(texture as any, descWithAdaptedFormat(event.desc) as any);
   if (result.ok) {
     handleMap.set(event.resultHandleId, result.value);
   }
@@ -706,8 +780,19 @@ function replayCreateBindGroup(
     if (resourceHandleId !== undefined) {
       const resource = handleMap.get(resourceHandleId);
       const entry = entries[j];
+      const resourceKind = event.entries[j]?.resourceKind;
       if (resource !== undefined && entry !== undefined) {
-        entry.resource = resource;
+        // Re-wrap raw Rhi objects into RhiBindingResource shape
+        // so rhi-webgpu.createBindGroup can dispatch on .kind.
+        if (resourceKind === 'buffer') {
+          entry.resource = { kind: 'buffer', value: { buffer: resource } };
+        } else if (resourceKind === 'sampler') {
+          entry.resource = { kind: 'sampler', value: resource };
+        } else if (resourceKind === 'textureView') {
+          entry.resource = { kind: 'textureView', value: resource };
+        } else {
+          entry.resource = resource;
+        }
       }
     }
   }
@@ -755,6 +840,15 @@ function replayCreateRenderPipeline(
   // via createShaderModuleFn (stored in handleMap under the handleId that
   // the recorder captured as vertexShaderModuleHandleId / fragmentShaderModuleHandleId).
   const desc = { ...event.desc, layout } as Record<string, unknown>;
+  // F-1: adapt fragment color-target formats so the pipeline's attachment
+  // state matches the replay-adapted RT texture/view formats (canvas BGRA ->
+  // rgba8unorm). A render pipeline whose target format diverges from its bound
+  // color attachment is rejected, so this mirrors the createTexture /
+  // createTextureView remap above.
+  const adaptedFragment = adaptFragmentTargets(desc.fragment);
+  if (adaptedFragment !== undefined) {
+    desc.fragment = adaptedFragment;
+  }
   if (event.vertexShaderModuleHandleId !== undefined && desc.vertex) {
     const vertexSm = handleMap.get(event.vertexShaderModuleHandleId);
     if (vertexSm !== undefined) {

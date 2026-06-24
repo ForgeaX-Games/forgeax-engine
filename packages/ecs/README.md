@@ -832,12 +832,12 @@ Self-help affordances for stale refs:
 - **`'stale-entity'`** — write APIs that take an entity argument still fail-fast with this `EcsErrorCode` when handed a dead entity, so an accidental stale write surfaces structurally rather than corrupting data silently.
 - **`remove-essential-component`** — `world.removeComponent(e, Entity)` returns this structured error (the Entity column is structurally required on every archetype); despawn the entity instead if you want to retire it.
 
-## Managed handles are operational, not persistent
+## Managed handles carry a generation
 
 > [!IMPORTANT]
-> A `Handle<T, 'managed'>` returned by `world.allocManagedRef(...)` (or installed implicitly through a `ref<T>` schema field) is valid **only until the next release-edge of its holder**. Caching one across that edge is undefined behavior — the ECS does **not** detect a stale managed handle at runtime, and the typed runtime surface deliberately has no `'managed-ref-stale-slot'` arm.
+> A `Handle<T, 'unique'>` (from a `ref<T>` schema field / `world.allocUniqueRef`) or `Handle<T, 'shared'>` (from `world.allocSharedRef`, the AssetRegistry path) packs `(generation << 24) | slot` via the shared codec in `@forgeax/engine-types` — the same SSOT codec ECS `EntityHandle` uses. Caching a handle past its holder's release-edge no longer silently resolves to the next payload: the store welds the slot's generation at `alloc` and compares it on every `resolve` / `retain` / `release`, returning a structured stale error (`'unique-ref-stale'` / `'shared-ref-stale'`) when the slot was released and re-allocated.
 
-**Release edges** (the moments a managed handle stops being valid):
+**Release edges** (the moments a handle's generation advances and old handles go stale):
 
 | Edge | Trigger |
 |:--|:--|
@@ -847,22 +847,14 @@ Self-help affordances for stale refs:
 
 **Consequences AI users must internalise:**
 
-- **Do not stash a managed handle in a long-lived JS variable** that outlives the holder entity / component / field write. Read it through `world.get(e, C).<refField>` at the point of use.
-- **Stale resolve is silent.** If the handle's underlying slot has been re-allocated (a fresh `allocManagedRef` reusing the freed slot), `world.get` returns the **new** payload — by design. `'managed-ref-released'` only fires when the slot is currently free; it is **not** a stale-cache detector. Treat managed handles like Rust borrows: their lifetime is enforced at the type / lifecycle layer (`Handle<T, 'managed'>` brand + ECS hooks), not by runtime tracking.
-- **Double-release is detected by payload-presence**, not by a generation tag — `'managed-ref-double-release'` (`EcsErrorCode`) surfaces when `release` runs against a slot whose payload is already gone and the slot has not yet been re-allocated.
-- **Throwing `onRelease` is throw-safe.** When a release-edge fires the `onRelease` callback registered at `allocManagedRef`, the slot's bookkeeping (callback table + payload map + freelist) is cleared **before** the callback runs. A throwing `onRelease` therefore re-propagates from the first `release` cleanly — the store is already consistent, and a second `release` of the same handle returns `'managed-ref-double-release'` as expected. Do not wrap the call in `try/finally` "to be safe"; the ECS already does it for you (plan-strategy D-1; AC-01/02).
-
-**Why no generation tag?** Adding a per-slot generation counter to `ManagedRefStore` would let the runtime distinguish "stale-by-reuse" from "live re-alloc", but:
-
-- Detection without prevention is a half-measure: the type system + lifecycle hooks already make the correct usage shape easy to spot in code review and AI inspection.
-- A generation tag on a 24-bit slot index forces a roll-over policy, which adds a "permanently retired slot" failure mode under heavy churn — a regression the M3 deletion explicitly removes (see `docs/specs/2026-06-14-ecs-managed-lifecycle-ssot-design.md` §3.3).
-- Concept compression (AGENTS.md §Design axiom): one less moving part for every reader of `world.get(e, C)`.
+- **Prefer reading through `world.get(e, C).<refField>`** at the point of use rather than stashing a handle in a long-lived JS variable. A stashed handle is now *safe* (it fails structurally instead of mis-resolving) but re-reading is still the simplest correct pattern.
+- **Stale resolve fails fast.** If the handle's slot has been released and re-allocated, `resolve` returns `err(code)` with `code === 'unique-ref-stale'` / `'shared-ref-stale'` — distinct from `'…-ref-released'` (slot currently free, nothing re-allocated). The stale error carries `.detail = { slot, expectedGeneration, actualGeneration }` so an AI user can tell **stale-by-reuse** (re-acquire the handle) from **released** (re-load the asset). See `forgeax-engine-assets` SKILL §"Handle 代际语义" for the `switch (err.code)` recovery pattern.
+- **Double-release** stays detected by payload-presence (`'unique-ref-double-release'` / `'shared-ref-double-release'`) for a handle whose generation still matches; the generation check catches the orthogonal stale-by-reuse case first.
+- **Generation retires at MAX_GEN (255), it does not wrap** — a re-used slot can never collide with an old handle's generation (retire-on-255; mirrors `EntityHandle`). The 24-bit slot index leaves 8 bits of generation.
+- **Throwing `onRelease` is throw-safe.** When a release-edge fires the `onRelease` callback, the slot's bookkeeping (callback table + payload map + freelist + generation bump) is cleared **before** the callback runs. A throwing `onRelease` re-propagates from the first `release` cleanly — the store is already consistent, and a second `release` returns the double-release error (plan-strategy D-1; AC-01/02).
 
 ### BufferPool — slot id never escapes
 
-`BufferPool` (the backing store for `buffer:<bytes>` schema-vocab fields) follows the same operational-not-persistent contract, with one tightening: **the slot `id` returned by `pool.alloc(byteLength)` never escapes the ECS internals.** There is no public `Handle<Buffer>` surface today; archetype columns store the `id` as u32 and `world.get(e, C).<bufferField>` rebinds the live `Uint8Array` view through `pool.view(id)` at the point of access (no caller-facing caching).
+`BufferPool` (the backing store for `buffer<N>` schema-vocab fields) follows an operational-not-persistent contract, with one tightening: **the slot `id` returned by `pool.alloc(byteLength)` never escapes the ECS internals.** There is no public `Handle<Buffer>` surface today; archetype columns store the `id` as u32 and `world.get(e, C).<bufferField>` rebinds the live `Uint8Array` view through `pool.view(id)` at the point of access (no caller-facing caching).
 
-Because of that, `BufferPool` carries no generation tag and `BufferPool.prototype.release` is typed `Result<void, never>` — there is no error arm and the type contract is locked at compile time by `packages/ecs/src/__tests__/buffer-pool.test-d.ts`. If a future feature adds a public `Handle<Buffer>` surface, the no-gen-tag design **must be re-debated** — silent slot re-use is only safe while the holder is a single ECS field, not a free-floating cache (see requirements-decisions q4 / q5).
-
-> [!NOTE]
-> **Deeper design rationale:** [`docs/specs/2026-06-14-ecs-managed-lifecycle-ssot-design.md`](../../docs/specs/2026-06-14-ecs-managed-lifecycle-ssot-design.md) §3.3 — covers the choice of payload-presence detection over generation tags, the relationship to `Handle<T, 'managed'>` typing, and the carry-over invariant that lets archetype migrate move row indices without invalidating wrapper identity.
+Because of that, `BufferPool` carries no generation tag and `BufferPool.prototype.release` is typed `Result<void, never>` — there is no error arm and the type contract is locked at compile time by `packages/ecs/src/__tests__/buffer-pool.test-d.ts`. If a future feature adds a public `Handle<Buffer>` surface, it should adopt the same packed-generation codec the unique/shared stores now use (`@forgeax/engine-types`) so slot re-use fails fast rather than mis-resolving.

@@ -1,26 +1,24 @@
 #!/usr/bin/env node
 // hello-physics headless smoke.
 //
-// Strategy: createApp with physics opts, spawn a dynamic sphere + static
-// ground scene, start the app, wait for WASM to load (poll PhysicsWorld),
-// then run N frames with working tick systems, and assert the sphere's
-// Transform.posY has decreased (gravity-driven free-fall).
+// Strategy: createApp with physicsPlugin('rapier-3d'), spawn a dynamic sphere +
+// static ground scene, start the app, poll for PhysicsWorld (async WASM), then
+// run N frames with working tick systems, and assert the sphere's Transform.posY
+// has decreased (gravity-driven free-fall).
 //
 // This smoke verifies the full createApp -> physics tick pipeline:
-//   1. createApp(canvas, { physics: 'rapier-3d' }) succeeds.
-//   2. Renderer.ready succeeds.
-//   3. app.start() + WASM-load-wait + N-frame loop + app.stop() succeeds.
-//   4. PhysicsWorld resource is inserted into World after WASM init.
-//   5. Dynamic RigidBody has Transform.posY strictly lower than initial
+//   1. createApp(canvas, { plugins: [physicsPlugin('rapier-3d')] }) succeeds.
+//   2. app.start() + N-frame loop + app.stop() succeeds.
+//   3. PhysicsWorld resource is inserted into World after WASM init.
+//   4. Dynamic RigidBody has Transform.posY strictly lower than initial
 //      after simulation advances (verifying the three-phase tick systems
 //      -- physicsSyncBackend, physicsStepSimulation, physicsWriteback --
 //      are registered and running, AC-04).
 //
-// Note: the physics WASM loads asynchronously via fire-and-forget. We
-// run frames in a poll loop until PhysicsWorld appears, THEN run the
-// simulation frames with active tick systems. If the WASM fails to load
-// within the timeout, we report the limitation and treat PhysicsWorld
-// presence + system registration as a structural pass.
+// Note: physicsPlugin.build awaits the Rapier WASM import -- runPlugins in
+// createApp resolves after the WASM module is loaded, so PhysicsWorld is
+// populated before the first app frame. If the WASM fails to load within
+// the timeout, the smoke FAILs (non-vacuous PASS).
 
 import { setTimeout as delay } from 'node:timers/promises';
 import { readFileSync } from 'node:fs';
@@ -138,15 +136,14 @@ const runtimePkg = await import('@forgeax/engine-runtime');
 const { Camera, DirectionalLight, Transform } = runtimePkg;
 
 const physicsPkg = await import('@forgeax/engine-physics');
-const { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } = physicsPkg;
+const { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue, physicsPlugin } = physicsPkg;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
 const appResult = await createApp(mockCanvas, {
-    input: false,
-  physics: 'rapier-3d',
+  plugins: [physicsPlugin('rapier-3d')],
 }, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
   originalConsoleError(`[smoke] FAIL - createApp threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
@@ -267,14 +264,13 @@ if (totalFrames < SMOKE_MIN_FRAMES) {
   failures.push(`(c) total frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
 }
 
-// AC-04: if PhysicsWorld is present, dynamic RigidBody must have posY strictly
-// lower than initial after simulation. If WASM did not load, report limitation.
-if (hasPhysicsWorld) {
-  if (finalPosY >= initialPosY) {
-    failures.push(`(d) sphere posY did not decrease: ${initialPosY} -> ${finalPosY} (delta=${(finalPosY - initialPosY).toFixed(4)})`);
-  }
-} else {
-  console.log('[smoke] note: Rapier WASM did not load -- posY fall not verified');
+// AC-04: PhysicsWorld must be present (physicsPlugin awaits WASM import before
+// createApp resolves). Dynamic RigidBody must have posY strictly lower than
+// initial after simulation frames advance.
+if (!hasPhysicsWorld) {
+  failures.push(`(d) PhysicsWorld not present -- WASM did not load or physicsPlugin build failed`);
+} else if (finalPosY >= initialPosY) {
+  failures.push(`(e) sphere posY did not decrease: ${initialPosY} -> ${finalPosY} (delta=${(finalPosY - initialPosY).toFixed(4)})`);
 }
 
 if (failures.length > 0) {

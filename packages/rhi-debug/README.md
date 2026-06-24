@@ -30,6 +30,8 @@ The browser-to-CLI loop is: **one line in the browser console to capture a frame
 
 L1 is the byte-on-disk handoff: the dev-server POST endpoint and the Node `finalize()` tail both route through the single `assembleReport` writer, so a browser-captured tape and a Node-captured tape are indistinguishable on disk (D-3 / AC-05). L2a and L2c chain straight into L3a -- the `tapePath` they return is the first positional argument of `inspect-offline`. L2a is the Node-side equivalent of L2c: an AI user runs one CLI command instead of switching to the browser DevTools console to type `window.__forgeax.captureFrame(n)`.
 
+**L3a/L3b/L3c now support real demo tapes** (not just self-contained test tapes). The recorder's bootstrap create closure (computed in `getTape()`) prefixes the per-frame events with the transitive closure of all `create*` events needed by the frame's referenced resources, making non-self-contained steady-frame tapes replayable on a fresh device. Swapchain render targets are faithfully recorded as real-size createTexture events (not synthetic 1x1 stand-ins), and bindGroups with real resources (buffer/sampler/textureView) are replayed through `RhiBindingResource {kind,value}` packaging — so real-demo draws with color attachments and full resource bindings are now inspectable at all three L3 layers. A browser captures the canvas swapchain as a `bgra8unorm` texture but views it (and targets it) as `bgra8unorm-srgb`; on offline replay that srgb view over a plain bgra texture is an incompatible-view-format error (surfacing at `beginRenderPass`). `createReplay` adapts the canvas BGRA formats -> `rgba8unorm` (byte-compatible) consistently across createTexture / createTextureView / pipeline target, so a browser-captured tape feeds straight into `createReplay` with no per-script format mutation. `wrap()` must be called before resource creation; otherwise `finalize()` returns `tape-handle-graph-broken` with a finalize-side (bootstrap-table) hint directing the caller to re-capture.
+
 ## API
 
 ### Core functions
@@ -38,7 +40,7 @@ L1 is the byte-on-disk handoff: the dev-server POST endpoint and the Node `final
 |:--|:--|:--|
 | `wrap` | `(instance: RhiInstance): DebugRhiInstance` | Proxy-wrap an RhiInstance. `DebugRhiInstance extends RhiInstance` with added `arm(frames)`, `onFrameEnd()`, `finalize()`, `getTape()`, `getState()`, `getEvents()`, `getBlobPool()`, `transitionToError()`, `disposeError()`. |
 | `wrapCreateShaderModule` | `(originalFn: CreateShaderModuleFn, debugInst: DebugRhiInstance): CreateShaderModuleFn` | Standalone wrapper for `createShaderModule` (which is not on `RhiDevice` in rhi-webgpu). Records `createShaderModule` events in the tape. |
-| `createReplay` | `(tape: Tape, device: RhiDevice, createShaderModuleFn?: CreateShaderModuleFn): Result<Replay, DebugError>` | Create a Replay object from a tape. Performs caps fail-fast check (returns `caps-mismatch` if `tape.rhiCapsRecorded` is not a subset of `device.caps`). `createShaderModuleFn` (optional) replays `createShaderModule` events with real WGSL compilation; without it those events are silently skipped (v1 default). |
+| `createReplay` | `(tape: Tape, device: RhiDevice, createShaderModuleFn?: CreateShaderModuleFn): Result<Replay, DebugError>` | Create a Replay object from a tape. Performs caps fail-fast check (returns `caps-mismatch` if `tape.rhiCapsRecorded` is not a subset of `device.caps`). `createShaderModuleFn` is **type-optional but required for any tape carrying `createShaderModule` events** (every real-demo tape does — only shader-free self-contained test tapes omit them): pass `createShaderModule` from `@forgeax/engine-rhi-webgpu`. Omitting it silently skips those events, so downstream pipeline creation fails at the RHI layer (no `DebugError`) — not at `createReplay`. |
 | `inspectAt` | `(replay: Replay, drawIdx: number, events: readonly RhiCallEvent[], fields: readonly InspectFields[] \| undefined, device: RhiDevice, outputDir: string): Promise<Result<InspectReport, DebugError>>` | Inspect replay state at a specific draw index. `events` supplies frame/pass info; `fields` controls which data is computed (`['bindings']` skips RT readback; `['rt']` triggers `copyTextureToBuffer` + PNG; `undefined` = all); `device` performs RT readback; `outputDir` is where the RT PNG is written. |
 | `wireDebugRhiInspector` | `(reg: Registry, ctx: WireDefaultInspectorsContext): RegisterRootResult` | Register 3 RPC methods (`debug.captureFrame`, `debug.inspectAt`, `debug.replayDispose`) on a console `Registry`. Used by `wireDefaultInspectors` as the `debugRhi` injector. |
 
@@ -82,6 +84,8 @@ import { captureFramesToMemory } from '@forgeax/engine-rhi-debug/capture-browser
 import { createReplay, deserializeTape } from '@forgeax/engine-rhi-debug';
 import { inspectDrawJson } from '@forgeax/engine-rhi-debug/inspect-core';
 import { renderRtToCanvas } from '@forgeax/engine-rhi-debug/rt-to-canvas';
+// createShaderModule is a free function on the backend, not on RhiDevice.
+import { createShaderModule } from '@forgeax/engine-rhi-webgpu';
 
 // 1) Capture one frame to memory (no fs, no network).
 const tape = await captureFramesToMemory(debugInst, 1);
@@ -92,7 +96,11 @@ if (!tapeRes.ok) {
   throw tapeRes.error;
 }
 const tapeObj = tapeRes.value;
-const replayRes = createReplay(tapeObj, device);
+// Pass createShaderModule as the third arg so pipeline shaders are replayed.
+// Real-demo tapes carry createShaderModule events; omitting this silently
+// skips them and downstream pipeline creation fails. (createShaderModule is
+// not on RhiDevice in rhi-webgpu -- import it from the backend.)
+const replayRes = createReplay(tapeObj, device, createShaderModule);
 if (!replayRes.ok) {
   throw replayRes.error; // caps-mismatch, etc.
 }
@@ -259,7 +267,7 @@ error -> idle           (via disposeError())
 | `recorder-already-armed` | previous arm() still active; call `disposeError()` or wait for capture to finish |
 | `frame-end-hook-missing` | `createRenderer` internal `onFrameEnd` injection point absent (theoretically unreachable) |
 | `tape-format-version-mismatch` | tape formatVersion vs runtime version (`{tapeVersion}` vs `{expectedVersion}`) |
-| `tape-handle-graph-broken` | dangling handle `{danglingHandleId}` referenced at event `{referencingEventIndex}` |
+| `tape-handle-graph-broken` | one code, two distinct `.hint` sides (cross-hint distinct): **finalize side** (`getTape()` found an in-frame handle with no `create*` in the bootstrap table) names the bootstrap table + "before wrap()" and tells you to re-capture; **deserialize side** (`deserializeTape()` found a dangling handle in a stored tape) names "never declared by a create event" / corrupt-or-stale tape. Both carry `.detail { danglingHandleId, referencingEventIndex }` -- branch on the hint text (not the code) to pick the right recovery: re-capture vs discard the stale tape. |
 | `caps-mismatch` | missing caps: `{missingCaps}` |
 | `replay-step-out-of-range` | stepTo(`{requestedStep}`) out of [0, `{totalEvents}`); current=`{currentStep}` |
 | `replay-deterministic-violation` | RT pixel diff between original and replay exceeds threshold (test-only error) |

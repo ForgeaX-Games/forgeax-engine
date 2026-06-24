@@ -23,9 +23,11 @@ import {
   err,
   ok,
   PACK_ERROR_HINTS,
+  pack,
   type Result,
   toShared,
   toUnique,
+  unpackSlot,
   unwrapHandle,
 } from '@forgeax/engine-types';
 import { type Archetype, appendEntity, removeEntity } from './archetype';
@@ -2268,7 +2270,7 @@ export class World {
     let cur: number = startSlot;
     let curGen: number = startGen;
     while (true) {
-      const key = cur | (curGen << 24);
+      const key = pack(cur, curGen);
       if (visited.has(key)) return null; // corrupt pre-existing cycle: terminate
       visited.add(key);
 
@@ -2318,7 +2320,7 @@ export class World {
         // Read the current entity's parent, then walk upward.
         // We start from entity, read its parent, then ascend.
         while (true) {
-          const key = cur | (curGen << 24);
+          const key = pack(cur, curGen);
           if (visited.has(key)) return; // cycle detected, terminate
           visited.add(key);
 
@@ -2411,7 +2413,7 @@ export class World {
               for (const raw of list) {
                 const childSlot = entityIndex(raw as EntityHandle);
                 const childGen = entityGeneration(raw as EntityHandle);
-                const key = childSlot | (childGen << 24);
+                const key = pack(childSlot, childGen);
                 if (visited.has(key)) continue;
                 const childRec = self.records[childSlot];
                 if (!self.recordIsLive(childRec, childGen)) continue;
@@ -3362,9 +3364,9 @@ export class World {
    */
   private migrateEntity(record: EntityRecord, srcArch: Archetype, targetArch: Archetype): void {
     const oldRow = record.row;
-    // Read entity index from id=0 self column (not a separate entities array).
+    // Read entity slot from id=0 self column (not a separate entities array).
     const selfCol = srcArch.columns.get(EntityComponent.id)?.get('self');
-    const entitySlot = (selfCol?.view[oldRow] ?? 0) & 0xffffff;
+    const entitySlot = unpackSlot(selfCol?.view[oldRow] ?? 0);
 
     // Append a new row in the target archetype.
     const newRow = appendEntity(targetArch, entitySlot);

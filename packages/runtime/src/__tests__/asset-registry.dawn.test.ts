@@ -79,9 +79,13 @@ describe('w13 - AssetRegistry Node error paths (AC-03 migration)', () => {
     if (!res.ok) expect(res.error.code).toBe('asset-not-found');
   });
 
-  it('asset-not-found: resolveAssetHandle(unallocated handle)', () => {
+  it('asset-not-found: resolveAssetHandle(unallocated gen-0 handle)', () => {
     const world = new World();
-    const fake = toShared<'TextureAsset'>(0xdeadbeef);
+    // gen-0 user-tier handle for a never-allocated slot: passes the generation
+    // gate (storeGen defaults to 0) then misses the payload -> asset-not-found.
+    // (A gen>0 handle would instead surface 'shared-ref-stale' per D-3/AC-10 —
+    // see asset.unit.test.ts "unresolvable handle: stale error forwarded".)
+    const fake = toShared<'TextureAsset'>(99999);
     const res = resolveAssetHandle<TextureAsset>(world, fake as Handle<string, 'shared'>);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.code).toBe('asset-not-found');

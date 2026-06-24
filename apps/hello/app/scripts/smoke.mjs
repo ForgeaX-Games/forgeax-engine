@@ -9,9 +9,9 @@
 //      createApp(canvas) thin-wrapper passes the canvas-detached guard
 //      and reaches createRenderer; getContext('webgpu') returns a shim
 //      whose configure() allocates an offscreen render target.
-//   3. createApp(mockCanvas, { input: false }, { shaderManifestUrl })
-//      -- input: false skips the auto attachBrowserInputBackend (dawn-node
-//      has no DOM event surface). populateDemoWorld matches hello-cube.
+//   3. createApp(mockCanvas, {}, { shaderManifestUrl })
+//      -- input is always-on by default (canvas form); the mock canvas
+//      has no DOM event surface but dawn-node is not affected.
 //   4. After 300 frames, readPixels center pixel via copyTextureToBuffer
 //      + mapAsync; assert RGBA each component within eps=0.05 of clearColor.
 //   5. Verdict: clearColor RGBA match + onError count == 0 + console.error
@@ -170,9 +170,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
-const appResult = await createApp(mockCanvas, {
-    input: false,
-}, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
+const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
   originalConsoleError(`[smoke] FAIL - createApp threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 });

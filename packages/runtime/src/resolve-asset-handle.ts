@@ -14,6 +14,7 @@
 // F1 single-entry indexability -- one import, one call, no dual-path leak.
 
 import type { World } from '@forgeax/engine-ecs';
+import { SharedRefStaleError, UniqueRefStaleError } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { err, ok, type Result } from '@forgeax/engine-rhi';
 import type {
@@ -23,7 +24,7 @@ import type {
   MaterialAsset,
   MaterialPassDescriptor,
 } from '@forgeax/engine-types';
-import { ASSET_ERROR_HINTS, AssetError, BUILTIN_BASE, unwrapHandle } from '@forgeax/engine-types';
+import { ASSET_ERROR_HINTS, AssetError, BUILTIN_BASE, handleSlot } from '@forgeax/engine-types';
 import { BuiltinAssetRegistry } from './builtin-asset-registry';
 import { MaterialResolvedEmptyPassesError } from './errors';
 
@@ -45,8 +46,8 @@ import { MaterialResolvedEmptyPassesError } from './errors';
 export function resolveAssetHandle<T extends Asset>(
   world: World,
   handle: Handle<string, 'shared'>,
-): Result<T, AssetErrorType> {
-  const slot = unwrapHandle(handle);
+): Result<T, AssetErrorType | SharedRefStaleError | UniqueRefStaleError> {
+  const slot = handleSlot(handle);
   if (slot < BUILTIN_BASE) {
     const builtin = BuiltinAssetRegistry.resolve(handle);
     if (builtin !== null) return ok(builtin as unknown as T);
@@ -60,6 +61,19 @@ export function resolveAssetHandle<T extends Asset>(
   }
   const res = world.sharedRefs.resolve<string, T>(handle);
   if (res.ok) return ok(res.value);
+  // Forward structured stale error codes transparently (D-3, AC-10).
+  // instanceof guards on the concrete error classes so callers
+  // (e.g. render-system-extract) can switch on err.code with
+  // exhaustive-casing — stale vs released vs not-found distinguishable.
+  if (res.error instanceof SharedRefStaleError) return err(res.error);
+  if (res.error instanceof UniqueRefStaleError) return err(res.error);
+  // Exhaustive switch over remaining error codes from SharedRefStore.resolve.
+  // No default case; tsc validates completeness if new codes join the union.
+  switch (res.error.code) {
+    case 'shared-ref-released':
+    case 'builtin-slot-not-owned':
+      break;
+  }
   return err(
     new AssetError({
       code: 'asset-not-found',
@@ -89,7 +103,7 @@ export function walkMaterialPassesOverSharedRefs(
   registry: { lookup(guid: AssetGuid | string): Asset | undefined },
 ): Result<
   { passes: MaterialPassDescriptor[]; paramValues: Record<string, unknown> },
-  AssetErrorType | MaterialResolvedEmptyPassesError
+  AssetErrorType | MaterialResolvedEmptyPassesError | SharedRefStaleError | UniqueRefStaleError
 > {
   const visited = new Set<string>();
   const chainNames: string[] = [];
@@ -157,7 +171,7 @@ export function walkMaterialPassesOverSharedRefs(
     return { passes: mergedPasses, paramValues: mergedParams };
   }
 
-  const rootLabel = `handle-${unwrapHandle(handle)}`;
+  const rootLabel = `handle-${handleSlot(handle)}`;
   const result = walkPayload(rootRes.ok ? rootRes.value : undefined, rootLabel);
   if (result === null) {
     // W-7: cycle.

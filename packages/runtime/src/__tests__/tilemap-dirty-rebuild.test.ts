@@ -60,8 +60,7 @@ function countDerived(world: World): number {
     if (
       arch.componentNames.includes('MeshFilter') &&
       arch.componentNames.includes('MeshRenderer') &&
-      arch.componentNames.includes('Layer') &&
-      arch.componentNames.includes('ChildOf')
+      arch.componentNames.includes('Layer')
     ) {
       count += arch.entityCount;
     }

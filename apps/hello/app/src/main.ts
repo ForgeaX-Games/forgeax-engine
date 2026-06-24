@@ -8,10 +8,11 @@
 //   app.value.start();
 //
 // Error handling pattern (D-6 dual-layer instanceof + switch): the
-// error union is AppError | RhiError | EngineEnvironmentError. The
+// error union is CanvasAppError (AppError | RhiError | PluginError |
+// EngineEnvironmentError; SSOT in @forgeax/engine-app). The
 // outer instanceof check separates EngineEnvironmentError (which lacks
-// .code) from the structured AppError | RhiError union; the inner
-// switch (err.code) is exhaustive across 5 + 18 = 23 codes (charter P4
+// .code) from the structured AppError | RhiError | PluginError union; the inner
+// switch (err.code) is exhaustive across 5 + 18 + 2 = 25 codes (charter P4
 // closed-union, tsc strict mode guards completeness with no default).
 //
 // SLOC note (AC-01): the AC target was <=30 SLOC excluding imports +
@@ -24,9 +25,8 @@
 // in the first 5 lines, which is the discovery surface charter F1 + P1
 // optimise for.
 
-import type { AppError } from '@forgeax/engine-app';
+import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
-import type { RhiError } from '@forgeax/engine-rhi/errors';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { populateDemoWorld } from '../../../shared/src/populate-demo-world';
@@ -44,7 +44,7 @@ else {
   app.value.start();
 }
 
-function reportError(err: AppError | RhiError | EngineEnvironmentError): void {
+function reportError(err: CanvasAppError): void {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';
@@ -75,6 +75,8 @@ function reportError(err: AppError | RhiError | EngineEnvironmentError): void {
     case 'oom':
     case 'internal-error':
     case 'hierarchy-broken':
+    case 'duplicate-plugin':
+    case 'plugin-build-failed':
       console.error(`[app] ${err.code}: ${err.hint}`);
       return;
   }

@@ -300,6 +300,9 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/runtime
     devDependencies:
+      '@forgeax/engine-rhi-debug':
+        specifier: workspace:*
+        version: link:../../../packages/rhi-debug
       '@forgeax/engine-vite-plugin-rhi-debug':
         specifier: workspace:*
         version: link:../../../packages/vite-plugin-rhi-debug
@@ -2889,6 +2892,9 @@ importers:
       '@forgeax/engine-physics-rapier3d':
         specifier: workspace:*
         version: link:../physics-rapier3d
+      '@forgeax/engine-plugin':
+        specifier: workspace:*
+        version: link:../plugin
       '@forgeax/engine-rhi':
         specifier: workspace:*
         version: link:../rhi
@@ -2938,6 +2944,9 @@ importers:
       '@forgeax/engine-math':
         specifier: workspace:*
         version: link:../math
+      '@forgeax/engine-plugin':
+        specifier: workspace:*
+        version: link:../plugin
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../types
@@ -3165,9 +3174,19 @@ importers:
       '@forgeax/engine-math':
         specifier: workspace:*
         version: link:../math
+      '@forgeax/engine-plugin':
+        specifier: workspace:*
+        version: link:../plugin
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../types
+    devDependencies:
+      '@forgeax/engine-physics-rapier2d':
+        specifier: workspace:*
+        version: link:../physics-rapier2d
+      '@forgeax/engine-physics-rapier3d':
+        specifier: workspace:*
+        version: link:../physics-rapier3d
 
   packages/physics-rapier2d:
     dependencies:
@@ -3218,6 +3237,12 @@ importers:
       '@forgeax/engine-runtime':
         specifier: workspace:*
         version: link:../runtime
+
+  packages/plugin:
+    dependencies:
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../ecs
 
   packages/render-graph:
     dependencies:
@@ -3330,6 +3355,9 @@ importers:
       '@forgeax/engine-pack':
         specifier: workspace:^
         version: link:../pack
+      '@forgeax/engine-plugin':
+        specifier: workspace:*
+        version: link:../plugin
       '@forgeax/engine-render-graph':
         specifier: workspace:*
         version: link:../render-graph
@@ -3391,6 +3419,9 @@ importers:
       '@forgeax/engine-ecs':
         specifier: workspace:*
         version: link:../ecs
+      '@forgeax/engine-plugin':
+        specifier: workspace:*
+        version: link:../plugin
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../types

@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 // hello-character headless dawn-node smoke.
 //
-// Strategy: createApp with physics opts, spawn a kinematic capsule character +
-// static ground, start the app, wait for the Rapier WASM to load (poll
-// PhysicsWorld), then DRIVE the character with PhysicsWorld.moveAndSlide for N
-// frames and assert:
-//   1. createApp + renderer.ready + start/stop succeed, app.onError == 0.
+// Strategy: createApp with physicsPlugin('rapier-3d'), spawn a kinematic capsule
+// character + static ground, start the app, poll for PhysicsWorld (async WASM),
+// then DRIVE the character with PhysicsWorld.moveAndSlide for N frames and assert:
+//   1. createApp + app ready/start/stop succeed, app.onError == 0.
 //   2. >= 300 frames observed.
 //   3. PhysicsWorld resource is present after WASM init.
 //   4. moveAndSlide advanced the character horizontally (it did NOT fall through
@@ -17,10 +16,10 @@
 // (feat-20260617 G-2 / AC-15). Structural-only: no pixel readback (the demo's
 // visual gate is the Playwright browser probe + human Read(*.png)).
 //
-// Note: the physics WASM loads asynchronously via fire-and-forget. We poll for
-// PhysicsWorld, then drive moveAndSlide directly each frame (the demo's own
-// registerUpdate also calls it, but the smoke drives explicitly for a
-// deterministic input independent of the headless input backend).
+// Note: physicsPlugin.build awaits the Rapier WASM import -- runPlugins in
+// createApp resolves after the WASM module is loaded, so PhysicsWorld is
+// populated before the first app frame. If it fails to load within the
+// timeout, the smoke FAILs (non-vacuous PASS).
 
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -140,7 +139,7 @@ const runtimePkg = await import('@forgeax/engine-runtime');
 const { Camera, DirectionalLight, Transform } = runtimePkg;
 
 const physicsPkg = await import('@forgeax/engine-physics');
-const { CharacterController, Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } =
+const { CharacterController, Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue, physicsPlugin } =
   physicsPkg;
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -149,7 +148,7 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 const appResult = await createApp(
   mockCanvas,
-  { input: false, physics: 'rapier-3d' },
+  { plugins: [physicsPlugin('rapier-3d')] },
   { shaderManifestUrl: MANIFEST_URL },
 ).catch((err) => {
   originalConsoleError(
@@ -323,19 +322,21 @@ if (totalFrames < SMOKE_MIN_FRAMES) {
   failures.push(`(c) total frames=${totalFrames} < ${SMOKE_MIN_FRAMES}`);
 }
 
-if (hasPhysicsWorld) {
+// Non-vacuous PASS: PhysicsWorld must be present (physicsPlugin awaits WASM
+// before createApp resolves). Assert moveAndSlide behaviour and grounded.
+if (!hasPhysicsWorld) {
+  failures.push(`(d) PhysicsWorld not present -- WASM did not load or physicsPlugin build failed`);
+} else {
   // AC-15: moveAndSlide advanced the character and it did not tunnel.
   if (finalPosX <= initialPosX + 0.3) {
-    failures.push(`(d) character did not advance via moveAndSlide: posX ${initialPosX} -> ${finalPosX}`);
+    failures.push(`(e) character did not advance via moveAndSlide: posX ${initialPosX} -> ${finalPosX}`);
   }
   if (finalPosY < CHAR_REST_Y - 0.5) {
-    failures.push(`(e) character tunneled through the ground: posY=${finalPosY} (rest ${CHAR_REST_Y})`);
+    failures.push(`(f) character tunneled through the ground: posY=${finalPosY} (rest ${CHAR_REST_Y})`);
   }
   if (drivenFrames > 0 && groundedFrames < drivenFrames * 0.5) {
-    failures.push(`(f) character not grounded while walking flat: ${groundedFrames}/${drivenFrames}`);
+    failures.push(`(g) character not grounded while walking flat: ${groundedFrames}/${drivenFrames}`);
   }
-} else {
-  console.log('[smoke] note: Rapier WASM did not load -- moveAndSlide behaviour not verified');
 }
 
 if (failures.length > 0) {

@@ -172,7 +172,7 @@ const {
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
-const appResult = await createApp(mockCanvas, { input: false }, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
+const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
   originalConsoleError(`[smoke] FAIL - createApp threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 });

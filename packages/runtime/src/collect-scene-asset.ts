@@ -155,8 +155,8 @@ export function collectSceneAsset(
           _isArrayLike(rawValue)
         ) {
           // array<shared<T>> field: resolve each element.
-          fieldValues[fieldName] = _normalizeArray(rawValue).map(
-            (h: unknown) => (typeof h === 'number' ? (handleToGuid.get(h) ?? h) : h),
+          fieldValues[fieldName] = _normalizeArray(rawValue).map((h: unknown) =>
+            typeof h === 'number' ? (handleToGuid.get(h) ?? h) : h,
           );
         } else if (_isArrayLike(rawValue)) {
           // Non-handle array-like value (e.g. array<entity>): normalize to
@@ -233,10 +233,7 @@ export function serializeSceneAssetToPack(
         const value = fields[fieldName];
         if (HANDLE_FIELD_NAMES.has(fieldName) && typeof value === 'string') {
           guidSet.add(value);
-        } else if (
-          HANDLE_ARRAY_FIELD_NAMES.has(fieldName) &&
-          Array.isArray(value)
-        ) {
+        } else if (HANDLE_ARRAY_FIELD_NAMES.has(fieldName) && Array.isArray(value)) {
           for (const elem of value as ReadonlyArray<unknown>) {
             if (typeof elem === 'string') guidSet.add(elem);
           }
@@ -247,8 +244,8 @@ export function serializeSceneAssetToPack(
 
   const refs = [...guidSet];
   const guidToIndex = new Map<string, number>();
-  for (let i = 0; i < refs.length; i += 1) {
-    guidToIndex.set(refs[i]!, i);
+  for (const [i, guid] of refs.entries()) {
+    guidToIndex.set(guid, i);
   }
 
   // Phase 2: emit entities with GUID strings replaced by refs indices.
@@ -265,19 +262,14 @@ export function serializeSceneAssetToPack(
         if (HANDLE_FIELD_NAMES.has(fieldName) && typeof value === 'string') {
           const idx = guidToIndex.get(value);
           serializedFields[fieldName] = idx !== undefined ? idx : value;
-        } else if (
-          HANDLE_ARRAY_FIELD_NAMES.has(fieldName) &&
-          Array.isArray(value)
-        ) {
-          serializedFields[fieldName] = (value as ReadonlyArray<unknown>).map(
-            (elem: unknown) => {
-              if (typeof elem === 'string') {
-                const idx = guidToIndex.get(elem);
-                return idx !== undefined ? idx : elem;
-              }
-              return elem;
-            },
-          );
+        } else if (HANDLE_ARRAY_FIELD_NAMES.has(fieldName) && Array.isArray(value)) {
+          serializedFields[fieldName] = (value as ReadonlyArray<unknown>).map((elem: unknown) => {
+            if (typeof elem === 'string') {
+              const idx = guidToIndex.get(elem);
+              return idx !== undefined ? idx : elem;
+            }
+            return elem;
+          });
         } else {
           serializedFields[fieldName] = value;
         }

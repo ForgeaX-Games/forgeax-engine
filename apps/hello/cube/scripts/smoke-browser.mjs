@@ -179,8 +179,170 @@ if (typeof report !== 'object' || report === null) {
   process.exit(1);
 }
 
-console.log(
-  `\n[smoke-browser] GREEN -- captureFrame(1) returned { runId, tapePath, reportPath }; ` +
-    `tape + report exist on disk and report JSON parses. runId=${captured.runId}`,
-);
-process.exit(0);
+// --- 5. Replay + inspect assertion (w8 / AC-06) ----------------------------
+  //
+  // The captured tape and report are now on disk. For replay, we use a fresh
+  // dawn-node GPU device to deserialize, create a replay session, step through
+  // all events, then inspect draw 0 — asserting bindings, drawCall, and RT
+  // three fields are non-empty (AC-06, plan-strategy D-3).
+  //
+  // Swapchain RT is faithfully reconstructed as a real-size offscreen RT (M_SC
+  // D-1) and bindGroups with real resources are wrapped as RhiBindingResource
+  // (M_REP D-2), so the full replay+inspect chain on a fresh device is now
+  // end-to-end available for real demos.
+
+  // 5a. Bootstrap dawn-node GPU for deserialize + createReplay.
+  let createDawn;
+  let gpuGlobals;
+  try {
+    ({ create: createDawn, globals: gpuGlobals } = await import('webgpu'));
+  } catch (err) {
+    console.error(
+      `[smoke-browser] RED -- webgpu (dawn-node) import failed: ${err?.message ?? err}`,
+    );
+    console.error('  hint: ensure node_modules/webgpu is installed');
+    process.exit(1);
+  }
+  Object.assign(globalThis, gpuGlobals);
+  if (!('navigator' in globalThis) || globalThis.navigator === undefined) {
+    Object.defineProperty(globalThis, 'navigator', {
+      value: {},
+      configurable: true,
+      writable: true,
+    });
+  }
+  let gpu;
+  try {
+    gpu = createDawn([]);
+  } catch (err) {
+    console.error(
+      `[smoke-browser] RED -- dawn-node create([]) failed: ${err?.message ?? err}`,
+    );
+    process.exit(1);
+  }
+  Object.defineProperty(globalThis.navigator, 'gpu', {
+    value: gpu,
+    configurable: true,
+    writable: true,
+  });
+  gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
+
+  // 5b. Get a fresh RhiDevice.
+  const rhiWebgpu = await import('@forgeax/engine-rhi-webgpu');
+  const adapterRes = await rhiWebgpu.rhi.requestAdapter();
+  if (!adapterRes.ok) {
+    console.error(
+      `[smoke-browser] RED -- requestAdapter failed: ${adapterRes.error.code}`,
+    );
+    process.exit(1);
+  }
+  const devRes = await adapterRes.value.requestDevice({
+    requiredLimits: { maxUniformBufferBindingSize: 262144 },
+  });
+  if (!devRes.ok) {
+    console.error(
+      `[smoke-browser] RED -- requestDevice failed: ${devRes.error.code}`,
+    );
+    process.exit(1);
+  }
+  const freshDevice = devRes.value;
+
+  // 5c. Reconstruct tape json from the report (header + events).
+  const tapeJson = JSON.stringify({
+    header: report.header,
+    events: report.events,
+  });
+
+  // 5d. Read tape blob from disk.
+  const tapeBlob = new Uint8Array(readFileSync(tapeAbs));
+
+  // 5e. deserializeTape -- assert no dangling handle references.
+  const { deserializeTape: deser } = await import('@forgeax/engine-rhi-debug');
+  const deserRes = deser(tapeJson, tapeBlob);
+  if (!deserRes.ok) {
+    console.error(
+      `[smoke-browser] RED -- deserializeTape failed: ${deserRes.error.code} hint=${JSON.stringify(deserRes.error.hint)}`,
+    );
+    console.error(
+      '  Suspect: tape self-containment regression (bootstrap create* events missing from tape).',
+    );
+    freshDevice.destroy?.();
+    process.exit(1);
+  }
+  const tape = deserRes.value;
+  console.log(
+    `[smoke-browser] deserializeTape OK -- ${tape.events.length} events, ${tape.blobPool.size} blobs`,
+  );
+
+  // 5f. createReplay -- assert replay session creation succeeds.
+  // The browser captures the canvas swapchain format (bgra8unorm on most
+  // platforms), but the replay layer adapts bgra8unorm -> rgba8unorm for
+  // non-canvas textures internally (adaptReplayFormat, replayer.ts), so the
+  // browser tape is fed to createReplay as-is with no per-script mutation.
+  // Pass createShaderModule from rhi-webgpu to replay pipeline shaders on
+  // the fresh dawn-node device (required for real demo tapes with shaders).
+  const { createReplay: createRep } = await import('@forgeax/engine-rhi-debug');
+  const replayRes = createRep(tape, freshDevice, rhiWebgpu.createShaderModule);
+  if (!replayRes.ok) {
+    console.error(
+      `[smoke-browser] RED -- createReplay failed: ${replayRes.error.code} hint=${JSON.stringify(replayRes.error.hint)}`,
+    );
+    freshDevice.destroy?.();
+    process.exit(1);
+  }
+  const replay = replayRes.value;
+
+  // 5g. stepTo(N) -- replay all events to re-create the GPU state at frame end.
+  const stepRes = await replay.stepTo(tape.events.length - 1);
+  if (!stepRes.ok) {
+    console.error(
+      `[smoke-browser] RED -- stepTo failed: ${stepRes.error.code} hint=${JSON.stringify(stepRes.error.hint)}`,
+    );
+    freshDevice.destroy?.();
+    process.exit(1);
+  }
+  console.log(
+    `[smoke-browser] stepTo(${tape.events.length - 1}) OK`,
+  );
+
+  // 5h. inspect last draw (the color render pass) — assert bindings/drawCall/RT
+  // three fields non-empty (AC-06, D-3). hello-cube tapes have depth-only
+  // shadow passes first; the last drawIndexed is the color render pass.
+  const colorDrawIdx = 4; // draws[0..3]=shadow depth-only, draws[4]=main render pass
+  const { inspectDrawJson } = await import('@forgeax/engine-rhi-debug/inspect-core');
+  const inspectRes = await inspectDrawJson(replay, colorDrawIdx, tape.events, freshDevice);
+  if (!inspectRes.ok) {
+    console.error(
+      `[smoke-browser] RED -- inspectDrawJson draw ${colorDrawIdx} failed: ${inspectRes.error.code} hint=${JSON.stringify(inspectRes.error.hint)}`,
+    );
+    freshDevice.destroy?.();
+    process.exit(1);
+  }
+  const report0 = inspectRes.value;
+  const missingInspect = [];
+  if (!report0.bindings || report0.bindings.length === 0) missingInspect.push('bindings');
+  if (!report0.drawCall) missingInspect.push('drawCall');
+  if (!report0.rt) missingInspect.push('rt');
+  if (missingInspect.length > 0) {
+    console.error(
+      `[smoke-browser] RED -- inspect draw ${colorDrawIdx} missing field(s): ${missingInspect.join(', ')}. ` +
+        `Got: frameIdx=${report0.frameIdx} drawIdx=${report0.drawIdx} passIdx=${report0.passIdx}`,
+    );
+    freshDevice.destroy?.();
+    process.exit(1);
+  }
+  console.log(
+    `[smoke-browser] inspect draw ${colorDrawIdx} OK -- bindings=${report0.bindings.length} drawCall=${!!report0.drawCall} rt=${!!report0.rt}`,
+  );
+
+  freshDevice.destroy?.();
+  delete globalThis.navigator.gpu;
+
+  console.log(
+    `\n[smoke-browser] GREEN -- captureFrame(1) returned { runId, tapePath, reportPath }; ` +
+      `tape + report exist on disk, report JSON parses, ` +
+      `deserializeTape has no dangling handles, createReplay + stepTo + inspect draw ${colorDrawIdx} ` +
+      `all succeed with bindings/drawCall/RT non-empty. ` +
+      `runId=${captured.runId}`,
+  );
+  process.exit(0);

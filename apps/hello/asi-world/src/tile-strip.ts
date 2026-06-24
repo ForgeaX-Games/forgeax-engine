@@ -1,0 +1,297 @@
+// Tile-strip debug view: walks the full ECS pipeline (fetch PNG → alloc
+// TextureAsset / SamplerAsset / TilesetAsset via world.allocSharedRef →
+// spawn Tilemap + TileLayers) but instead of building the world map it
+// lays every tile from both atlases out in a STRIP_COLS-wide grid so the
+// renderer can be verified in isolation.
+//
+// Terrain tiles occupy the top band; object tiles occupy the bottom band
+// (separated by one empty row so multi-cell object sprites don't bleed into
+// terrain rows).
+
+import type { App, CanvasAppError } from '@forgeax/engine-app';
+import { createApp } from '@forgeax/engine-app';
+import {
+  CAMERA_PROJECTION_ORTHOGRAPHIC,
+  Camera,
+  ChildOf,
+  EngineEnvironmentError,
+  setTransparentSortConfig,
+  Tilemap,
+  TileLayer,
+  Transform,
+  TRANSPARENT_SORT_MODE_LAYER_Y,
+  encodeTileBits,
+} from '@forgeax/engine-runtime';
+import type {
+  Handle,
+  SamplerAsset,
+  TextureAsset,
+  TilesetAsset,
+  TilesetRegion,
+  TilesetTileEntry,
+} from '@forgeax/engine-types';
+
+import { fetchPngAsRgba } from './png-loader';
+import type { TsjFile } from './types';
+
+const WORLD = '/world';
+const STRIP_COLS = 32;
+
+const canvas = document.querySelector<HTMLCanvasElement>('#app');
+if (!canvas) throw new Error('[tile-strip] missing <canvas id="app">');
+const statusEl = document.querySelector<HTMLElement>('#status');
+
+bootstrap(canvas).catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error('[tile-strip]', msg);
+  if (statusEl) statusEl.textContent = `error: ${msg}`;
+});
+
+async function bootstrap(target: HTMLCanvasElement): Promise<void> {
+  setStatus('booting...');
+
+  const appRes = await createApp(target, {}, { shaderManifestUrl: '/shaders/manifest.json' });
+  if (!appRes.ok) {
+    reportError(appRes.error);
+    return;
+  }
+  const app: App = appRes.value;
+
+  const ready = await app.renderer.ready;
+  if (!ready.ok) {
+    setStatus(`renderer.ready failed: ${ready.error.code}`);
+    return;
+  }
+
+  const assets = app.renderer.assets;
+  if (assets === null) {
+    setStatus('AssetRegistry null');
+    return;
+  }
+
+  const world = app.world;
+  setTransparentSortConfig(world, { mode: TRANSPARENT_SORT_MODE_LAYER_Y, yzAlpha: 1 });
+
+  setStatus('loading atlases...');
+  const [terrainTsj, objectTsj] = await Promise.all([
+    fetchJson<TsjFile>(`${WORLD}/terrain_atlas.tsj`),
+    fetchJson<TsjFile>(`${WORLD}/object_atlas.tsj`),
+  ]);
+
+  const [terrainPng, objectPng] = await Promise.all([
+    fetchPngAsRgba(`${WORLD}/terrain_atlas.png`),
+    fetchPngAsRgba(`${WORLD}/object_atlas.png`),
+  ]);
+
+  const terrainTex = registerTexture(world, terrainPng);
+  const objectTex = registerTexture(world, objectPng);
+
+  world.allocSharedRef<'SamplerAsset', SamplerAsset>('SamplerAsset', {
+    kind: 'sampler',
+    magFilter: 'nearest',
+    minFilter: 'nearest',
+    addressModeU: 'clamp-to-edge',
+    addressModeV: 'clamp-to-edge',
+  });
+
+  // Combined TilesetAsset — terrain entries first, then object entries.
+  // Matches main.ts composeTilesetAsset exactly so we exercise the same
+  // registration path.
+  const regions: TilesetRegion[] = [];
+  const tiles: TilesetTileEntry[] = [];
+
+  for (const t of terrainTsj.tiles) {
+    regions.push({ x: t.x, y: t.y, width: t.width, height: t.height });
+    tiles.push({ regionIndex: regions.length - 1 });
+  }
+
+  const numTerrain = terrainTsj.tiles.length;
+  const numObject = objectTsj.tiles.length;
+
+  for (const t of objectTsj.tiles) {
+    regions.push({ x: t.x, y: t.y, width: t.width, height: t.height, atlasIndex: 1 });
+    // Normalize all object tiles to 1×1 in the debug strip so they sit in a
+    // clean grid without overlap (object tiles range up to 17×15 cells at true
+    // scale; that would shatter the layout). UV slicing via the region is still
+    // exercised faithfully.
+    tiles.push({ regionIndex: regions.length - 1, widthCells: 1, heightCells: 1 });
+  }
+
+  const tilesetHandle = world.allocSharedRef<'TilesetAsset', TilesetAsset>('TilesetAsset', {
+    kind: 'tileset',
+    guid: `tile-strip-${numTerrain}-${numObject}`,
+    atlases: [terrainTex, objectTex],
+    tileWidth: 16,
+    tileHeight: 16,
+    columns: Math.ceil(Math.max(terrainTsj.imagewidth, objectTsj.imagewidth) / 16),
+    rows: Math.ceil(Math.max(terrainTsj.imageheight, objectTsj.imageheight) / 16),
+    atlasSizes: [
+      { pixelWidth: terrainTsj.imagewidth, pixelHeight: terrainTsj.imageheight },
+      { pixelWidth: objectTsj.imagewidth,  pixelHeight: objectTsj.imageheight  },
+    ],
+    regions,
+    tiles,
+  });
+
+  // Grid layout (y-up coordinates):
+  //   high y  → terrain band (terrainRows rows)
+  //   gap row
+  //   low y   → object band  (objectRows  rows)
+  const terrainRows = Math.ceil(numTerrain / STRIP_COLS);
+  const objectRows = Math.ceil(numObject / STRIP_COLS);
+  const totalRows = objectRows + 1 + terrainRows; // bottom=objects, mid=gap, top=terrain
+  const totalCols = STRIP_COLS;
+
+  const tilemapRes = world.spawn(
+    {
+      component: Transform,
+      data: { posX: 0, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 },
+    },
+    {
+      component: Tilemap,
+      data: { cols: totalCols, rows: totalRows, tileSizeX: 1, tileSizeY: 1, tileset: tilesetHandle },
+    },
+  );
+  if (!tilemapRes.ok) {
+    setStatus(`tilemap: ${tilemapRes.error.code}`);
+    return;
+  }
+  const tilemapEntity = tilemapRes.value;
+
+  // Terrain TileLayer — cells in the top band (high y).
+  // tile value i+1 → tiles[i] (terrain section of the combined tiles[])
+  const terrainCells = new Uint32Array(totalCols * totalRows);
+  for (let i = 0; i < numTerrain; i++) {
+    const col = i % STRIP_COLS;
+    const bandRow = Math.floor(i / STRIP_COLS); // 0 = first terrain strip row
+    // terrain band occupies y = (objectRows+1) .. (totalRows-1); bandRow 0 → lowest terrain row
+    const y = objectRows + 1 + bandRow;
+    terrainCells[y * totalCols + col] = encodeTileBits(i + 1, false, false, false, false);
+  }
+
+  const terrainLayerRes = world.spawn(
+    { component: TileLayer, data: { tiles: terrainCells, layerOrder: 0 } },
+    { component: ChildOf, data: { parent: tilemapEntity } },
+    {
+      component: Transform,
+      data: {
+        posX: 0, posY: 0, posZ: 0,
+        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
+        scaleX: 1, scaleY: 1, scaleZ: 1,
+      },
+    },
+  );
+  if (!terrainLayerRes.ok) {
+    setStatus(`terrain layer: ${terrainLayerRes.error.code}`);
+    return;
+  }
+
+  // Object TileLayer — cells in the bottom band (low y).
+  // tile value numTerrain+i+1 → tiles[numTerrain+i] (object section)
+  const objectCells = new Uint32Array(totalCols * totalRows);
+  for (let i = 0; i < numObject; i++) {
+    const col = i % STRIP_COLS;
+    const bandRow = Math.floor(i / STRIP_COLS);
+    const y = bandRow; // object band: y=0 upward
+    objectCells[y * totalCols + col] = encodeTileBits(numTerrain + i + 1, false, false, false, false);
+  }
+
+  const objectLayerRes = world.spawn(
+    { component: TileLayer, data: { tiles: objectCells, layerOrder: 1000 } },
+    { component: ChildOf, data: { parent: tilemapEntity } },
+    {
+      component: Transform,
+      data: {
+        posX: 0, posY: 0, posZ: 0,
+        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
+        scaleX: 1, scaleY: 1, scaleZ: 1,
+      },
+    },
+  );
+  if (!objectLayerRes.ok) {
+    setStatus(`object layer: ${objectLayerRes.error.code}`);
+    return;
+  }
+
+  // Camera centred on the full grid, wide enough to see all STRIP_COLS columns.
+  const aspect = target.width / Math.max(target.height, 1);
+  const camHalfW = totalCols / 2 + 1;
+  const camHalfH = camHalfW / aspect;
+  const camX = totalCols / 2;
+  const camY = totalRows / 2;
+
+  const cameraRes = world.spawn(
+    {
+      component: Transform,
+      data: { posX: camX, posY: camY, posZ: 5, scaleX: 1, scaleY: 1, scaleZ: 1 },
+    },
+    {
+      component: Camera,
+      data: {
+        fov: Math.PI / 4,
+        aspect,
+        near: 0.1,
+        far: 100,
+        projection: CAMERA_PROJECTION_ORTHOGRAPHIC,
+        left: -camHalfW,
+        right: camHalfW,
+        bottom: -camHalfH,
+        top: camHalfH,
+        clearR: 0.05,
+        clearG: 0.05,
+        clearB: 0.08,
+        clearA: 1,
+      },
+    },
+  );
+  if (!cameraRes.ok) {
+    setStatus(`camera: ${cameraRes.error.code}`);
+    return;
+  }
+
+  const startRes = app.start();
+  if (!startRes.ok) {
+    reportError(startRes.error);
+    return;
+  }
+
+  setStatus(
+    `terrain ${numTerrain} tiles | objects ${numObject} tiles` +
+      ` | grid ${totalCols}×${totalRows} | backend=${app.renderer.backend}`,
+  );
+}
+
+function setStatus(text: string): void {
+  if (statusEl) statusEl.textContent = text;
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`);
+  return (await r.json()) as T;
+}
+
+function registerTexture(
+  world: App['world'],
+  png: { width: number; height: number; rgba: Uint8Array },
+): Handle<'TextureAsset', 'shared'> {
+  return world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', {
+    kind: 'texture',
+    width: png.width,
+    height: png.height,
+    format: 'rgba8unorm-srgb',
+    data: png.rgba,
+    colorSpace: 'srgb',
+    mipmap: false,
+    mipLevelCount: 1,
+  });
+}
+
+
+function reportError(err: CanvasAppError): void {
+  if (err instanceof EngineEnvironmentError) {
+    setStatus(`EngineEnvironmentError (no usable WebGPU backend)`);
+  } else {
+    setStatus(`${err.code}: ${err.hint}`);
+  }
+}

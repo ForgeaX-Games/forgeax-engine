@@ -19,7 +19,7 @@
 // slot < BUILTIN_BASE -> BuiltinAssetRegistry.resolve, else world.sharedRefs.
 
 import type { Handle, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
-import { BUILTIN_BASE, unwrapHandle } from '@forgeax/engine-types';
+import { BUILTIN_BASE, handleSlot } from '@forgeax/engine-types';
 import { createBoxGeometry, meshFromInterleaved } from './geometry/box';
 import { createPlaneGeometry } from './geometry/plane';
 import { createSphereGeometry } from './geometry/sphere';
@@ -151,7 +151,7 @@ const BUILTIN_BY_SLOT: ReadonlyMap<number, TypesMeshAsset> = new Map([
  */
 export const BuiltinAssetRegistry = Object.freeze({
   resolve<T extends TypesMeshAsset>(handle: Handle<string, 'shared'>): T | null {
-    const slot = unwrapHandle(handle);
+    const slot = handleSlot(handle);
     if (slot >= BUILTIN_BASE) return null;
     const payload = BUILTIN_BY_SLOT.get(slot);
     return payload === undefined ? null : (payload as T);

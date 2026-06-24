@@ -67,8 +67,8 @@ function addScopedComponent(
 ): ReturnType<typeof world.addComponent> {
   return world.addComponent(entity, {
     component: scoped,
-    // biome-ignore lint/suspicious/noExplicitAny: generic ComponentSchema loses
-    // the concrete {value, mode} enum-field types; data is u32 at runtime.
+    // generic ComponentSchema loses the concrete {value, mode} enum-field
+    // types; data is u32 at runtime.
     data: { value, mode } as Record<string, unknown> as Parameters<
       typeof world.addComponent
     >[1]['data'],

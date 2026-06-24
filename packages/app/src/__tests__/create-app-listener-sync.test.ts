@@ -29,7 +29,7 @@
 //       effective and the system does not suffer 1-frame lag).
 
 import { AudioListener as AudioListenerComponent } from '@forgeax/engine-audio';
-import type { WebAudioEngine } from '@forgeax/engine-audio-webaudio';
+import { audioPlugin, type WebAudioEngine } from '@forgeax/engine-audio-webaudio';
 import { Transform } from '@forgeax/engine-runtime';
 import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../create-app';
@@ -222,7 +222,7 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
           height: 600,
         } as HTMLCanvasElement;
 
-        const result = await createApp(canvas, { audio: true, input: false });
+        const result = await createApp(canvas, { plugins: [audioPlugin()] });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         const app = result.value;
@@ -275,7 +275,7 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
           height: 600,
         } as HTMLCanvasElement;
 
-        const result = await createApp(canvas, { audio: true, input: false });
+        const result = await createApp(canvas, { plugins: [audioPlugin()] });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         const app = result.value;
@@ -323,7 +323,7 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
           height: 600,
         } as HTMLCanvasElement;
 
-        const result = await createApp(canvas, { audio: true, input: false });
+        const result = await createApp(canvas, { plugins: [audioPlugin()] });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         const app = result.value;

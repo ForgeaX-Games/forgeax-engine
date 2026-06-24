@@ -183,16 +183,10 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(released).toBe(true);
     });
 
-    it('allocUniqueRef double-release: despawn after set-overwrite does not double-fire', () => {
-      // §contract — managed handles are operational, not persistent.
-      // Spec: docs/specs/2026-06-14-ecs-managed-lifecycle-ssot-design.md §3.3.
-      // After release-realloc the same handle u32 silently resolves to the
-      // NEW payload (no generation tag in M3+; no runtime stale-by-reuse
-      // detection — by-design, see packages/ecs/README.md
-      // §"Managed handles are operational, not persistent"). The existing
-      // callCount assertion below verifies double-release does not double-fire
-      // the cb (payload-presence detection); the appended stale-resolve
-      // assertion exercises the silent-resolve branch directly.
+    it('allocUniqueRef double-release: despawn after set-overwrite does not double-fire (M4: stale on re-use)', () => {
+      // After M4 gen increment on release, the old handle's gen mismatches the
+      // store's gen after h1's slot is freed and re-allocated. The resolve
+      // returns stale — not silent resolve to new payload.
       const world = new World();
       const Holder = defineComponent('Holder5', { value: { type: 'unique<Test>' } });
 
@@ -210,23 +204,21 @@ import { handleNumeric } from './utils/handle-numeric';
         })
         .unwrap();
 
-      // Overwrite triggers h1's onRelease.
+      // Overwrite triggers h1's onRelease (gen 0->1).
       world.set(entity, Holder, { value: h2 }).unwrap();
       expect(callCount).toBe(1);
 
-      // Silent stale-resolve (spec §3.3): h1 is released but h2 is still live;
-      // freeSlots = [h1.slot]. A fresh allocUniqueRef pops h1's slot via LIFO,
-      // making the new handle equal h1 numerically. Resolving the OLD h1 then
-      // returns the NEW payload with no error — by-design (no gen tag; no
-      // stale-slot detection at runtime).
-      const h3 = world.allocUniqueRef<'Test', string>('Test', 'third');
-      expect(h3 as unknown as number).toBe(h1 as unknown as number);
-      // biome-ignore lint/suspicious/noExplicitAny: targeted private read mirrors unique-ref-store.unit.test.ts
+      // M4: after release, gen incremented. freeSlots = [h1.slot] with gen=1.
+      // A fresh allocUniqueRef reuses the slot with gen=1. Resolving old h1
+      // (gen=0) now returns stale — gen mismatch (AC-01).
+      world.allocUniqueRef<'Test', string>('Test', 'third');
+      // slot is the same but gen differs
+      // biome-ignore lint/suspicious/noExplicitAny: targeted private read
       const store = (world as any).uniqueRefs as UniqueRefStore;
       const staleResolve = store.resolve<'Test', string>(h1);
-      expect(staleResolve.ok).toBe(true);
-      if (staleResolve.ok) {
-        expect(staleResolve.value).toBe('third');
+      expect(staleResolve.ok).toBe(false);
+      if (!staleResolve.ok) {
+        expect(staleResolve.error.code).toBe('unique-ref-stale');
       }
 
       // Despawn triggers h2's onRelease (no-op), h1 is already released.
@@ -3222,8 +3214,8 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(despawnR.ok).toBe(true);
       const resolveR = refs.resolve(h);
       expect(resolveR.ok).toBe(false);
-      if (resolveR.ok) throw new Error('expected released');
-      expect(resolveR.error.code).toBe('unique-ref-released');
+      if (resolveR.ok) throw new Error('expected stale');
+      expect(resolveR.error.code).toBe('unique-ref-stale');
     });
   });
 }
@@ -3627,10 +3619,10 @@ import { handleNumeric } from './utils/handle-numeric';
   });
 
   describe('AC-05 — EcsErrorCode is a closed union of exactly 35 members', () => {
-    it('compile-time member count is 35 (feat-20260614 ecs-shared-component-and-unique-rename M6 D-15 adds builtin-slot-not-owned; M3 added shared-ref-released + shared-ref-double-release; baseline 32 from bug-20260615 spawn-data-unknown-field-fail-fast)', () => {
+    it('compile-time member count is 37 (feat-20260623 M4 adds shared-ref-stale + unique-ref-stale; feat-20260614 M6 D-15 adds builtin-slot-not-owned; M3 added shared-ref-released + shared-ref-double-release; baseline 32 from bug-20260615 spawn-data-unknown-field-fail-fast)', () => {
       // Tuple-length type assertion: any drift in EcsErrorCode member count is a
-      // compile error here, falsifiable by changing the literal 35.
-      expectTypeOf<UnionLength<EcsErrorCode>>().toEqualTypeOf<35>();
+      // compile error here, falsifiable by changing the literal 37.
+      expectTypeOf<UnionLength<EcsErrorCode>>().toEqualTypeOf<37>();
     });
 
     it('the dropped register codes are not assignable to EcsErrorCode', () => {

@@ -25,7 +25,7 @@
 import type { Result, RhiError, Texture, TextureView } from '@forgeax/engine-rhi';
 import { ok } from '@forgeax/engine-rhi';
 import type { Handle } from '@forgeax/engine-types';
-import { unwrapHandle } from '@forgeax/engine-types';
+import { handleSlot } from '@forgeax/engine-types';
 
 /**
  * The host-owned external image the engine copies a video frame from
@@ -124,7 +124,7 @@ export class DynamicTextureStore {
     if (device === undefined) return undefined;
     if (width <= 0 || height <= 0) return undefined;
 
-    const id = unwrapHandle(clip);
+    const id = handleSlot(clip);
     const ensured = this.ensureEntry(device, id, width, height);
     if (!ensured.ok) return ensured;
     const entry = ensured.value;
@@ -144,7 +144,7 @@ export class DynamicTextureStore {
    * (a frame that has not uploaded yet falls back to the default view).
    */
   getView(clip: Handle<'VideoAsset', 'shared'>): TextureView | undefined {
-    return this.entries.get(unwrapHandle(clip))?.view;
+    return this.entries.get(handleSlot(clip))?.view;
   }
 
   /** Destroy every transient texture + drop the map (renderer teardown). */

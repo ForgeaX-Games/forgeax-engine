@@ -49,6 +49,7 @@
     "@forgeax/engine-math": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "vite": "8.0.10",

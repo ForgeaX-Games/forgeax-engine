@@ -506,12 +506,14 @@ export {
   SchemaUnsupportedFieldError,
   SharedRefDoubleReleaseError,
   SharedRefReleasedError,
+  SharedRefStaleError,
   SpawnDataUnknownFieldError,
   SpawnLightInvalidBoundsError,
   SpriteAnimationInvalidError,
   StaleEntityError,
   UniqueRefDoubleReleaseError,
   UniqueRefReleasedError,
+  UniqueRefStaleError,
 } from './errors';
 
 // ────────────────────────────────────────────────────────────────────────────

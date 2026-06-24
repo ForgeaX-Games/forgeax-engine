@@ -1249,7 +1249,16 @@ export interface TilesetTileEntry {
  *                       M0 reads `atlases[0]` exclusively (single-atlas form);
  *                       M1 adds `regions[].atlasIndex` for multi-atlas routing.
  *   - `tileWidth`/`tileHeight` -- per-cell pixel size (atlas grid stride).
- *   - `columns`/`rows`        -- atlas grid layout (informational metadata).
+ *   - `columns`/`rows`        -- atlas grid layout (informational metadata; used
+ *                               as fallback when `atlasSizes` is absent to infer
+ *                               atlas pixel extent as `columns * tileWidth`).
+ *   - `atlasSizes`  -- optional per-atlas pixel dimensions. When present,
+ *                      `atlasSizes[i]` gives the exact pixel size of
+ *                      `atlases[i]` and overrides `columns`/`rows` for UV
+ *                      normalisation in the chunk-extract system. Required when
+ *                      the tileset contains multiple atlases with different
+ *                      pixel sizes (e.g. a terrain + object composite tileset).
+ *                      Each entry carries `{ pixelWidth, pixelHeight }`.
  *   - `regions`     -- array of atlas sub-rectangles (TilesetRegion).
  *   - `tiles`       -- per-tile entries (TilesetTileEntry), 1-indexed via tile id
  *                      sentinel where 0 means "empty" in `TileLayer.tiles`.
@@ -1274,6 +1283,11 @@ export interface TilesetTileEntry {
  * }).unwrap();
  * ```
  */
+export interface TilesetAtlasSize {
+  readonly pixelWidth: number;
+  readonly pixelHeight: number;
+}
+
 export interface TilesetAsset {
   readonly kind: 'tileset';
   readonly guid: string;
@@ -1282,6 +1296,10 @@ export interface TilesetAsset {
   readonly tileHeight: number;
   readonly columns: number;
   readonly rows: number;
+  /** Per-atlas pixel dimensions. `atlasSizes[i]` overrides `columns`/`rows`
+   *  for UV normalisation of regions whose `atlasIndex === i`. Required when
+   *  atlases have different pixel sizes. */
+  readonly atlasSizes?: readonly TilesetAtlasSize[];
   readonly regions: readonly TilesetRegion[];
   readonly tiles: readonly TilesetTileEntry[];
 }
@@ -2925,7 +2943,7 @@ export const AUDIO_ERROR_HINTS: Readonly<Record<AudioErrorCode, string>> = {
  * | `'invalid-body-config'` | mass <= 0 for dynamic bodies, or other validation failure. |
  * | `'body-not-found'` | entity handle resolved to no Rapier rigid body (no RigidBody spawned or handle was freed). |
  * | `'collider-not-found'` | entity handle resolved to no Rapier collider (no Collider spawned or handle was freed). |
- * | `'backend-not-registered'` | PhysicsWorld resource missing from World; use createApp({ physics: ... }) or manual registration. |
+ * | `'backend-not-registered'` | PhysicsWorld resource missing from World; use createApp(canvas, { plugins: [physicsPlugin('rapier-3d')] }) or manual registration. |
  * | `'teleport-invalid-body-type'` | teleport() called on a static or kinematic body (only dynamic allowed). |
  * | `'controller-requires-kinematic'` | moveAndSlide() called on a non-kinematic body. |
  */
@@ -3040,7 +3058,7 @@ export type PhysicsErrorDetail =
  *     case 'invalid-body-config':         return 'ensure mass > 0 for dynamic bodies';
  *     case 'body-not-found':              return 'ensure RigidBody was spawned before use';
  *     case 'collider-not-found':          return 'ensure Collider was spawned before use';
- *     case 'backend-not-registered':      return 'use createApp({ physics: ... })';
+ *     case 'backend-not-registered':      return 'use createApp(canvas, { plugins: [physicsPlugin(...)] })';
  *     case 'teleport-invalid-body-type':   return 'only dynamic bodies can be teleported';
  *     case 'controller-requires-kinematic': return 'set RigidBody.type to kinematic';
  *   }
@@ -3092,7 +3110,7 @@ export const PHYSICS_ERROR_HINTS: Readonly<Record<PhysicsErrorCode, string>> = {
   'collider-not-found':
     'the entity handle did not resolve to a Rapier collider; ensure Collider was spawned before calling physics APIs',
   'backend-not-registered':
-    "PhysicsWorld resource not found; use createApp({ physics: 'rapier-3d' }) or manually register a backend",
+    "PhysicsWorld resource not found; use createApp(canvas, { plugins: [physicsPlugin('rapier-3d')] }) or manually register a backend",
   'teleport-invalid-body-type':
     'teleport is only valid for dynamic bodies; static and kinematic bodies have their position managed differently',
   'controller-requires-kinematic':
@@ -4003,6 +4021,18 @@ export interface WireDefaultInspectorsInjectors {
    * and `registerRuntimeInspector` (plan-strategy D-5).
    */
   debugRhi?(reg: Registry): RegisterRootResult;
+  /**
+   * `registerPluginInspector` from `@forgeax/engine-console` — registers
+   * the `plugins` JSON-RPC method that returns `{ name: string }[]` from
+   * the plugin registry (Map produced by `runPlugins()`).
+   * Optional: when omitted, the `plugins` method is not registered and
+   * JSON-RPC callers receive `InspectorError 'rpc-target-not-wired'`.
+   *
+   * Added by feat-20260623-plugin-system-unify-build-world-protocol M4;
+   * follows the same function-injection pattern as `registerEcsInspector`
+   * and `registerRuntimeInspector` (plan-strategy D-7).
+   */
+  registerPluginInspector?(reg: Registry, pluginRegistry: unknown): RegisterRootResult;
 }
 
 // === Metric registry error model SSOT (feat-20260512-threejs-pixel-parity-bench) ===

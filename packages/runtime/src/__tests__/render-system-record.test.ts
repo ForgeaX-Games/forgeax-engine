@@ -510,23 +510,8 @@ import { propagateTransforms } from '../systems/propagate-transforms';
   // Anchors: plan-strategy §5.3 key tests #1 + #7; §R-5 sentinel three-state.
 
   const mod = recordModule as unknown as {
-    buildSpriteMaterialUboPayload?: (
-      material: MaterialSnapshot,
-      transformWorld: Float32Array,
-    ) => ArrayBuffer;
+    buildSpriteMaterialUboPayload?: (material: MaterialSnapshot) => ArrayBuffer;
   };
-
-  function identityWorld(scaleX = 1, scaleY = 1): Float32Array {
-    // Column-major 4x4 with diagonal scale (column 0 = scaleX-axis basis,
-    // column 1 = scaleY-axis basis).
-    // biome-ignore format: matrix layout
-    return new Float32Array([
-    scaleX, 0, 0, 0,
-    0, scaleY, 0, 0,
-    0, 0, 1, 0,
-    0, 0, 0, 1,
-  ]);
-  }
 
   function makeSpriteSnapshot(spriteFields: {
     colorTintAlpha?: number;
@@ -559,12 +544,12 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(typeof mod.buildSpriteMaterialUboPayload).toBe('function');
     });
 
-    it('(1) no slices -> 80 B; slot 3 = [0,0,0,0]; first 48 B = baseline', () => {
+    it('(1) no slices -> 80 B; slot 3 = [0,0,0,0]; pivotAndSize.zw = (1,1)', () => {
       if (typeof mod.buildSpriteMaterialUboPayload !== 'function') {
         throw new Error('helper not exported yet (red phase)');
       }
       const snap = makeSpriteSnapshot({});
-      const buf = mod.buildSpriteMaterialUboPayload(snap, identityWorld());
+      const buf = mod.buildSpriteMaterialUboPayload(snap);
       expect(buf.byteLength).toBe(80);
       const f32 = new Float32Array(buf);
       // slot 3 = [12..15]
@@ -573,7 +558,9 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(Array.from(f32.slice(0, 4))).toEqual([1, 1, 1, 1]);
       // region slot 1 - identity region (no flip applied)
       expect(Array.from(f32.slice(4, 8))).toEqual([0, 0, 1, 1]);
-      // pivotAndSize slot 2: pivotX=0.5 pivotY=0.5 sourceScaleX=1 sourceScaleY=1
+      // pivotAndSize slot 2: pivotX=0.5 pivotY=0.5 size=(1, 1) (the unit
+      // local quad; worldFromLocal owns world-space scale -- see
+      // bug-20260618 sprite double-scale docstring on the helper).
       expect(Array.from(f32.slice(8, 12))).toEqual([0.5, 0.5, 1, 1]);
     });
 
@@ -581,10 +568,9 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       if (typeof mod.buildSpriteMaterialUboPayload !== 'function') {
         throw new Error('helper not exported yet (red phase)');
       }
-      const baseline = mod.buildSpriteMaterialUboPayload(makeSpriteSnapshot({}), identityWorld());
+      const baseline = mod.buildSpriteMaterialUboPayload(makeSpriteSnapshot({}));
       const stretch = mod.buildSpriteMaterialUboPayload(
         makeSpriteSnapshot({ slices: [0.25, 0.25, 0.25, 0.25], sliceMode: 0 }),
-        identityWorld(),
       );
       expect(stretch.byteLength).toBe(80);
       const stretchF32 = new Float32Array(stretch);
@@ -601,12 +587,11 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       }
       const tile = mod.buildSpriteMaterialUboPayload(
         makeSpriteSnapshot({ slices: [0.25, 0.25, 0.25, -0.25], sliceMode: 1 }),
-        identityWorld(),
       );
       expect(tile.byteLength).toBe(80);
       const f32 = new Float32Array(tile);
       // first 48 B (12 floats) still byte-identical across slot 3 changes.
-      const baseline = mod.buildSpriteMaterialUboPayload(makeSpriteSnapshot({}), identityWorld());
+      const baseline = mod.buildSpriteMaterialUboPayload(makeSpriteSnapshot({}));
       const baseF32 = new Float32Array(baseline);
       expect(Array.from(f32.slice(0, 12))).toEqual(Array.from(baseF32.slice(0, 12)));
       // sentinel: slot 3 = [.25, .25, .25, -.25] (extract already encodes the
@@ -615,6 +600,57 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(f32[13]).toBe(0.25);
       expect(f32[14]).toBe(0.25);
       expect(f32[15]).toBe(-0.25);
+    });
+
+    // bug-20260618 (sprite double-scale) regression: the prior writer
+    // multiplied `pivotAndSize.zw` by Transform.world column lengths so
+    // the sprite shader's `pos_local = (uv - pivot) * size` produced
+    // pre-scaled local-space verts -- then `worldFromLocal` (which also
+    // carries scale) scaled them AGAIN downstream. Net world-space size
+    // was `scaleX^2 / scaleY^2`. The fix locks pivotAndSize.zw to (1, 1)
+    // so worldFromLocal is the sole TRS source (charter P4). This case
+    // asserts the size stays at the unit-quad value regardless of the
+    // material snapshot shape; the writer no longer accepts a
+    // transformWorld argument at all (signature has dropped it).
+    it('(4) signature is single-argument; size locked to (1, 1) for any pivot', () => {
+      if (typeof mod.buildSpriteMaterialUboPayload !== 'function') {
+        throw new Error('helper not exported yet (red phase)');
+      }
+      expect(mod.buildSpriteMaterialUboPayload.length).toBe(1);
+      const offCentrePivot = mod.buildSpriteMaterialUboPayload(
+        makeSpriteSnapshot({ pivot: [0.25, 0.75] }),
+      );
+      const offF32 = new Float32Array(offCentrePivot);
+      expect(Array.from(offF32.slice(8, 12))).toEqual([0.25, 0.75, 1, 1]);
+    });
+
+    // bug-20260618 scale != 1 double-scale regression:
+    // The prior writer extracted scaleX/scaleY from the transformWorld mat4
+    // diagonal and wrote them into pivotAndSize.zw (f32[10]/f32[11]). The
+    // sprite shader then produced pre-scaled local verts, which worldFromLocal
+    // (carrying the same scale) scaled again: net size was scale^2. The fix
+    // locks f32[10]/f32[11] to (1, 1) unconditionally; worldFromLocal is the
+    // sole TRS owner (charter P4). This test targets the two scale values
+    // reported in the original bug (2.5 and 4) and asserts the UBO slots
+    // stay at 1.0 regardless of what scale the entity carries at runtime.
+    it('(5) bug-20260618 scale != 1 double-scale regression: f32[10] and f32[11] locked to 1.0', () => {
+      if (typeof mod.buildSpriteMaterialUboPayload !== 'function') {
+        throw new Error('helper not exported yet (red phase)');
+      }
+      // scale=2.5 entity: material snapshot carries no scale -- the function
+      // is single-argument and has no channel to receive scale. Any prior
+      // injection of scale into sizeX/sizeY (f32[10]/f32[11]) was the bug.
+      const snap25 = makeSpriteSnapshot({ pivot: [0.5, 0.5] });
+      const f32_25 = new Float32Array(mod.buildSpriteMaterialUboPayload(snap25));
+      expect(f32_25[10]).toBe(1.0); // sizeX -- must NOT carry scale=2.5
+      expect(f32_25[11]).toBe(1.0); // sizeY -- must NOT carry scale=2.5
+
+      // scale=4 entity: same assertion for a different pivot to show the
+      // lock is unconditional, not dependent on pivot centering.
+      const snap4 = makeSpriteSnapshot({ pivot: [0.25, 0.75] });
+      const f32_4 = new Float32Array(mod.buildSpriteMaterialUboPayload(snap4));
+      expect(f32_4[10]).toBe(1.0); // sizeX -- must NOT carry scale=4
+      expect(f32_4[11]).toBe(1.0); // sizeY -- must NOT carry scale=4
     });
   });
 }
@@ -650,6 +686,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       renderableIndex,
       passIndex,
       queue: 2000,
+      layer: 0,
       tags,
       renderState: undefined,
       defines: undefined,
@@ -763,6 +800,160 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       const result = filterDispatchBySelector(dispatch, { LightMode: ['Forward'] });
       expect(result.length).toBe(1);
       expect(result[0]?.renderableIndex).toBe(1);
+    });
+  });
+}
+
+// ─── bug-20260622-tilemap-ysort-transparent-sort-modes-followup M2 m2-1 ───
+//
+// AC-04 (error signal SSOT) + AC-05 (LAYER_Y footY ordering) + R-2
+// (mode=DISTANCE without a cameraPos falls back to the original list).
+// `sortTransparentDispatch` itself is render-system.ts-private (closure-
+// scoped helper invoked once per draw); the public-surface contract sits on
+// `transparentSortEntries` (same primary `layer ASC` + secondary mode-formula
+// + identical fallback semantics). Asserting against the exported helper
+// gives byte-exact coverage of the 4-mode dispatch SSOT without instantiating
+// the full RenderSystem (which would need a real GPU device + canvas, far
+// outside unit-test scope; plan-strategy R-2 mitigation).
+// biome-ignore lint/complexity/noUselessLoneBlockStatements: mirrors the per-test-file block-scope idiom this consolidated test file already uses (lines 31/159/261/501/633 -- each ported slab from a pre-consolidation file lives in its own block so helper names cannot collide).
+{
+  // --- AC-04: setTransparentSortConfig mode=99 -> Result.err with 4 SSOT fields ---
+  describe('AC-04 setTransparentSortConfig mode=99 returns Result.err (KV untouched)', () => {
+    it('Result.err carries code/expected/hint/detail + KV resource is NOT inserted', async () => {
+      const { setTransparentSortConfig, TRANSPARENT_SORT_CONFIG_KEY } = await import(
+        '@forgeax/engine-runtime'
+      );
+      const world = new World();
+      // Pre-check: resource MUST be absent before the rejected call.
+      expect(world.hasResource(TRANSPARENT_SORT_CONFIG_KEY)).toBe(false);
+
+      const r = setTransparentSortConfig(world, { mode: 99, yzAlpha: 1.0 });
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      // The 4 SSOT fields locked by plan-strategy D-4. The math symbol
+      // U+2208 ("is element of") goes through the ASCII `∈` escape
+      // so this source file stays English-only per AGENTS.md §Conventions
+      // (mirrors EXPECTED_EXPECTED in systems.unit.test.ts).
+      expect(r.error.code).toBe('resource-invalid-value');
+      expect(r.error.expected).toBe('mode ∈ {0, 1, 2, 3}');
+      expect(r.error.hint).toBe('0=layer-z, 1=layer-y, 2=layer-yz, 3=distance');
+      expect((r.error.detail as { receivedMode: number }).receivedMode).toBe(99);
+      // The KV resource MUST stay un-inserted after a rejected write
+      // (charter P3 -- structured failure, never silently coerce).
+      expect(world.hasResource(TRANSPARENT_SORT_CONFIG_KEY)).toBe(false);
+    });
+  });
+
+  // --- AC-05: mode=LAYER_Y, 3 entities footY=10/20/30 same layer -> 30/20/10 ---
+  describe('AC-05 LAYER_Y footY ordering (same layer, deeper foot draws later)', () => {
+    it('footY=10/20/30 same layer -> output order footY=30/20/10 (back-to-front)', async () => {
+      const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_LAYER_Y } = await import(
+        '@forgeax/engine-runtime'
+      );
+      const { transparentSortEntries } = await import('../systems/transparent-sort');
+      const world = new World();
+      setTransparentSortConfig(world, {
+        mode: TRANSPARENT_SORT_MODE_LAYER_Y,
+        yzAlpha: 1.0,
+      }).unwrap();
+
+      // footY = posY - pivotY * sizeY. Pin pivotY=0 + sizeY=1 so footY === posY
+      // -- the 10/20/30 numbers land verbatim, no algebra to second-guess.
+      // mode=1 sortValue = -footY; ASC over [-10, -20, -30] yields entries
+      // ordered footY=30, 20, 10 (deepest foot draws last = back-to-front).
+      const entries = [
+        {
+          entityIndex: 0,
+          materialHandle: 0,
+          layer: 0,
+          posX: 0,
+          posY: 10,
+          posZ: 0,
+          pivotY: 0,
+          sizeY: 1,
+        },
+        {
+          entityIndex: 1,
+          materialHandle: 0,
+          layer: 0,
+          posX: 0,
+          posY: 20,
+          posZ: 0,
+          pivotY: 0,
+          sizeY: 1,
+        },
+        {
+          entityIndex: 2,
+          materialHandle: 0,
+          layer: 0,
+          posX: 0,
+          posY: 30,
+          posZ: 0,
+          pivotY: 0,
+          sizeY: 1,
+        },
+      ];
+      const sorted = transparentSortEntries(entries, world);
+      expect(sorted.map((e) => e.posY)).toEqual([30, 20, 10]);
+    });
+  });
+
+  // --- R-2: mode=DISTANCE without a cameraPos returns entries unchanged ---
+  // plan-strategy R-2 risk mitigation: sortTransparentDispatch mode=3 +
+  // cameras[0] missing must keep the original dispatch list (PR #401
+  // baseline). transparentSortEntries surfaces the same fallback through
+  // the public helper -- the 2-arg call (no cameraPos) falls through to
+  // the mode=0 posZ formula; with posZ pinned constant the sort becomes
+  // a no-op preserving insertion order (charter P3 deterministic output).
+  describe('R-2 mode=DISTANCE + cameraPos absent preserves insertion order', () => {
+    it('transparentSortEntries(entries, world) with mode=3 + no cameraPos = insertion order', async () => {
+      const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } = await import(
+        '@forgeax/engine-runtime'
+      );
+      const { transparentSortEntries } = await import('../systems/transparent-sort');
+      const world = new World();
+      setTransparentSortConfig(world, {
+        mode: TRANSPARENT_SORT_MODE_DISTANCE,
+        yzAlpha: 1.0,
+      }).unwrap();
+
+      // posZ pinned identical so the fallback (posZ ASC) is a no-op; the
+      // assertion guards both R-2 (no crash, no reorder) and "fallback is
+      // deterministic" together.
+      const entries = [
+        {
+          entityIndex: 7,
+          materialHandle: 0,
+          layer: 0,
+          posX: 1,
+          posY: 0,
+          posZ: 0,
+          pivotY: 0.5,
+          sizeY: 1,
+        },
+        {
+          entityIndex: 8,
+          materialHandle: 0,
+          layer: 0,
+          posX: 2,
+          posY: 0,
+          posZ: 0,
+          pivotY: 0.5,
+          sizeY: 1,
+        },
+        {
+          entityIndex: 9,
+          materialHandle: 0,
+          layer: 0,
+          posX: 3,
+          posY: 0,
+          posZ: 0,
+          pivotY: 0.5,
+          sizeY: 1,
+        },
+      ];
+      const sorted = transparentSortEntries(entries, world);
+      expect(sorted.map((e) => e.entityIndex)).toEqual([7, 8, 9]);
     });
   });
 }

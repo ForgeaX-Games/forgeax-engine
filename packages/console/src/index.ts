@@ -17,6 +17,10 @@
 // modules land in later milestones (T-06 / T-08 / T-12).
 
 export * from './errors';
+export {
+  type RegisterPluginInspectorResult,
+  registerPluginInspector,
+} from './register-plugin-inspector';
 export { Registry } from './registry';
 export { MUTATION_BLACKLIST, wrapReadOnly } from './sandbox';
 export type {

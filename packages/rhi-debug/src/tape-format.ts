@@ -256,7 +256,7 @@ export function deserializeTape(json: string, blob: Uint8Array): Result<Tape, De
         new DebugError({
           code: 'tape-handle-graph-broken',
           expected: 'all handleId references refer to a handleId declared by a prior create* event',
-          hint: `handleId '${dangling}' is referenced but was never declared by any create* event in the tape`,
+          hint: `handleId '${dangling}' is referenced but was never declared by any create* event in the tape. This may be a steady-frame tape captured without prior resource recording; re-capture with the fixed recorder or use a self-contained tape (arm before creating resources).`,
           detail: {
             danglingHandleId: dangling,
             referencingEventIndex: eventArr.indexOf(event),

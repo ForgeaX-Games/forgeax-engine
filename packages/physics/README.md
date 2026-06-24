@@ -25,15 +25,17 @@ world.spawn(
 );
 ```
 
-Enable physics when creating the app:
+Enable physics by passing `physicsPlugin` to `createApp`:
 
 ```ts
-const app = await createApp(canvas, { physics: 'rapier-3d' });
+import { physicsPlugin } from '@forgeax/engine-physics';
+
+const app = await createApp(canvas, { plugins: [physicsPlugin('rapier-3d')] });
 ```
 
 ## Three-Phase Tick Pipeline
 
-Three ECS systems run in order every frame (registered by `createApp` when `physics` opt is set):
+Three ECS systems run in order every frame (registered by `physicsPlugin` during `createApp`):
 
 | Phase | System Name | Runs After | What It Does |
 |:--|:--|:--|:--|

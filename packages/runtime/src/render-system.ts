@@ -63,31 +63,37 @@ import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
 import {
   getTransparentSortConfig,
   TRANSPARENT_SORT_MODE_DISTANCE,
+  TRANSPARENT_SORT_MODE_LAYER_Y,
+  TRANSPARENT_SORT_MODE_LAYER_YZ,
+  TRANSPARENT_SORT_MODE_LAYER_Z,
 } from './systems/transparent-sort-config';
 import { urpPipeline } from './urp-pipeline';
 
 /**
- * w10: distance-mode (mode=3) back-to-front sub-sort of the Transparent-queue
- * segment of a dispatch list. Returns the dispatch list unchanged unless the
- * world's {@link getTransparentSortConfig} mode is
- * {@link TRANSPARENT_SORT_MODE_DISTANCE}. When active, Transparent-queue entries
- * (`queue === RenderQueue.Transparent`) are reordered by squared distance from
- * the active camera (far-first); all other entries keep their relative order,
- * preserving the stable queue ordering produced by `sortDispatchByQueue`.
+ * Unified transparent-queue sub-sort covering all four
+ * {@link TransparentSortConfig} modes. Reorders the
+ * `queue === RenderQueue.Transparent` segment of the dispatch list;
+ * all other queue segments keep their relative order.
  *
- * Squared distance (no `sqrt`) is sufficient for ordering and matches the w7
- * `transparent-sort` kernel's `-(dist^2)` heuristic.
+ * | mode | primary key | secondary key |
+ * |:--:|:--|:--|
+ * | 0 (LAYER_Z)   | `layer` ASC | `posZ` ASC |
+ * | 1 (LAYER_Y)   | `layer` ASC | `-(posY - pivotY * sizeY)` ASC |
+ * | 2 (LAYER_YZ)  | `layer` ASC | `(posY - pivotY * sizeY) + yzAlpha * posZ` ASC |
+ * | 3 (DISTANCE)  | `-(dist² from camera)` ASC (back-to-front, layer ignored) |
+ *
+ * `posX/Y/Z` = translation column of the entity's world mat4 (indices 12/13/14).
+ * `pivotY` = `RenderableSnapshot.material.spriteFields.pivot[1]` (default 0.5).
+ * `sizeY`  = length of the Y-axis column of the world mat4 (indices 4/5/6).
  */
-function sortTransparentByDistance(
+function sortTransparentDispatch(
   dispatch: DispatchEntry[],
   world: World,
   cameras: readonly CameraSnapshot[],
   renderables: readonly RenderableSnapshot[],
 ): DispatchEntry[] {
-  if (getTransparentSortConfig(world).mode !== TRANSPARENT_SORT_MODE_DISTANCE) return dispatch;
-  const camera = cameras[0];
-  if (camera === undefined) return dispatch;
-  const camPos = camera.position;
+  const cfg = getTransparentSortConfig(world);
+  const mode = cfg.mode;
 
   // Indices of Transparent-queue entries within the dispatch list.
   const transparentSlots: number[] = [];
@@ -96,28 +102,69 @@ function sortTransparentByDistance(
   }
   if (transparentSlots.length <= 1) return dispatch;
 
-  // Squared camera distance per Transparent entry (negated → ascending sort
-  // yields back-to-front / far-first order).
-  const negDistSq = (entry: DispatchEntry): number => {
-    const tx = renderables[entry.renderableIndex]?.transform;
-    if (tx === undefined) return 0;
-    // feat-20260601 D-3: world position = translation column of Transform.world
-    // (col3 = m[12,13,14]); the snapshot carries the world mat4, not a
-    // decomposed position vector.
-    const w = tx.world;
-    const dx = (w[12] ?? 0) - (camPos[0] ?? 0);
-    const dy = (w[13] ?? 0) - (camPos[1] ?? 0);
-    const dz = (w[14] ?? 0) - (camPos[2] ?? 0);
-    return -(dx * dx + dy * dy + dz * dz);
-  };
+  let sortedSlotOrder: number[];
 
-  const sortedSlotOrder = transparentSlots.slice().sort((a, b) => {
-    const da = negDistSq(dispatch[a] as DispatchEntry);
-    const db = negDistSq(dispatch[b] as DispatchEntry);
-    if (da < db) return -1;
-    if (da > db) return 1;
-    return 0;
-  });
+  if (mode === TRANSPARENT_SORT_MODE_DISTANCE) {
+    const camera = cameras[0];
+    if (camera === undefined) return dispatch;
+    const camPos = camera.position;
+
+    // Squared camera distance per entry (negated → ascending = back-to-front).
+    // D-3: world position = translation column of Transform.world (m[12,13,14]).
+    const negDistSq = (entry: DispatchEntry): number => {
+      const tx = renderables[entry.renderableIndex]?.transform;
+      if (tx === undefined) return 0;
+      const w = tx.world;
+      const dx = (w[12] ?? 0) - (camPos[0] ?? 0);
+      const dy = (w[13] ?? 0) - (camPos[1] ?? 0);
+      const dz = (w[14] ?? 0) - (camPos[2] ?? 0);
+      return -(dx * dx + dy * dy + dz * dz);
+    };
+
+    sortedSlotOrder = transparentSlots.slice().sort((a, b) => {
+      const da = negDistSq(dispatch[a] as DispatchEntry);
+      const db = negDistSq(dispatch[b] as DispatchEntry);
+      if (da < db) return -1;
+      if (da > db) return 1;
+      return 0;
+    });
+  } else {
+    // Modes 0/1/2: primary = layer ASC, secondary = mode-formula ASC.
+    // sizeY = length of the Y-axis column (col1 = indices 4,5,6) of the
+    // world mat4; rotation-invariant and handles flipV sign correctly.
+    const sortVal = (entry: DispatchEntry): number => {
+      const tx = renderables[entry.renderableIndex]?.transform;
+      const w = tx?.world;
+      const posY = (w?.[13] ?? 0) as number;
+      const posZ = (w?.[14] ?? 0) as number;
+      if (mode === TRANSPARENT_SORT_MODE_LAYER_Z) return posZ;
+      const mat = renderables[entry.renderableIndex]?.material;
+      const pivotY = ((mat?.spriteFields?.pivot as readonly number[] | undefined)?.[1] ??
+        0.5) as number;
+      const wy4 = (w?.[4] ?? 0) as number;
+      const wy5 = (w?.[5] ?? 1) as number;
+      const wy6 = (w?.[6] ?? 0) as number;
+      const sizeY = Math.sqrt(wy4 * wy4 + wy5 * wy5 + wy6 * wy6);
+      const footY = posY - pivotY * sizeY;
+      if (mode === TRANSPARENT_SORT_MODE_LAYER_Y) return -footY;
+      if (mode === TRANSPARENT_SORT_MODE_LAYER_YZ) return footY + cfg.yzAlpha * posZ;
+      // Defensive fallback for any unknown mode that slips past setTransparentSortConfig.
+      return posZ;
+    };
+
+    sortedSlotOrder = transparentSlots.slice().sort((a, b) => {
+      const da = dispatch[a] as DispatchEntry;
+      const db = dispatch[b] as DispatchEntry;
+      const la = da.layer;
+      const lb = db.layer;
+      if (la !== lb) return la - lb;
+      const va = sortVal(da);
+      const vb = sortVal(db);
+      if (va < vb) return -1;
+      if (va > vb) return 1;
+      return 0;
+    });
+  }
 
   // Scatter the reordered Transparent entries back into their original slots.
   const result = dispatch.slice();
@@ -628,6 +675,9 @@ export interface PipelineState {
   // sampling configuration without having to register a SamplerAsset
   // (charter F2 minimal surface).
   readonly defaultSampler: Sampler;
+  // Nearest-neighbour (mag=nearest, min=nearest, mip=nearest, clamp-to-edge)
+  // sampler used for sprite / tilemap materials so pixel-art tiles render sharp.
+  readonly nearestSampler: Sampler;
   readonly fallbackTextureView: TextureView;
 
   // bug-20260519: BUILTIN_CUBE / BUILTIN_TRIANGLE migrated to 12-floats
@@ -1491,14 +1541,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         lastFrustumStats.culled = frustumStats.culled;
         lastFrustumStats.total = frustumStats.total;
 
-        // w10: Distance-mode (mode=3) back-to-front sub-sort on the
-        // Transparent-queue segment of the dispatch list. `world` and the
-        // camera/renderable snapshots are only in scope here (the record
-        // stage no longer receives `world` after the render-graph refactor),
-        // so the sub-sort runs at the extract/record boundary. Only the
-        // Transparent segment is reordered; queue ordering between segments
-        // (sortDispatchByQueue, stable) is preserved.
-        const orderedDispatch = sortTransparentByDistance(dispatch, world, cameras, renderables);
+        // Unified transparent-sort: (layer ASC, sortValue ASC) for modes 0/1/2;
+        // distance back-to-front for mode=3. `world` and the camera/renderable
+        // snapshots are only in scope here (the record stage no longer receives
+        // `world` after the render-graph refactor), so the sub-sort runs at
+        // the extract/record boundary. Only the Transparent segment is
+        // reordered; queue ordering between segments (sortDispatchByQueue,
+        // stable) is preserved.
+        const orderedDispatch = sortTransparentDispatch(dispatch, world, cameras, renderables);
 
         // M3 / w26: single dispatch list replaces old three-bucket model.
         // Pass dispatch to recordFrame — the record stage iterates dispatch

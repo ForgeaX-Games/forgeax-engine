@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // hello-audio headless smoke.
 //
-// Strategy: createApp with audio=true, verify App handle + AudioEngine
+// Strategy: createApp with audioPlugin(), verify App handle + AudioEngine
 // resource is registered, render 300 frames, capture.
 //
 // This smoke verifies the createApp audio integration pipeline:
-//   1. createApp(canvas, { audio: true }) succeeds.
+//   1. createApp(canvas, { plugins: [audioPlugin()] }) succeeds.
 //   2. Renderer.ready succeeds.
 //   3. app.start() + 300-frame loop + app.stop() succeeds.
 //   4. AudioEngine resource is inserted into World after boot.
@@ -15,6 +15,10 @@
 // structural: the app boots, the audio backend is attached, and the World
 // has an AudioEngine resource. No audio playback, no engine.listener access
 // (would trigger ensureContext() -> new AudioContext() crash in headless).
+// Note: if createWebAudioBackend() fails in headless (no AudioContext), the
+// engine's canvas-form audio auto-creation will fail; in that case the
+// smoke reports present=false with the real environmental cause, not a
+// migration gap.
 
 import { setTimeout as delay } from 'node:timers/promises';
 import { readFileSync } from 'node:fs';
@@ -132,13 +136,15 @@ const { Camera, DirectionalLight, Transform } = runtimePkg;
 const audioPkg = await import('@forgeax/engine-audio');
 const { AUDIO_ENGINE_RESOURCE_KEY } = audioPkg;
 
+const audioWebAudioPkg = await import('@forgeax/engine-audio-webaudio');
+const { audioPlugin } = audioWebAudioPkg;
+
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
 const appResult = await createApp(mockCanvas, {
-    input: false,
-  audio: true,
+  plugins: [audioPlugin()],
 }, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
   originalConsoleError(`[smoke] FAIL - createApp threw: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);

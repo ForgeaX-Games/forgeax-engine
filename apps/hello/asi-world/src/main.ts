@@ -24,10 +24,9 @@
 // carries both atlases via `atlases: readonly Handle<TextureAsset>[]`
 // and routes per-region through `regions[i].atlasIndex` (NICE-4).
 
-import type { App, AppError } from '@forgeax/engine-app';
+import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { World } from '@forgeax/engine-ecs';
-import type { RhiError } from '@forgeax/engine-rhi/errors';
 import {
   CAMERA_PROJECTION_ORTHOGRAPHIC,
   Camera,
@@ -70,18 +69,21 @@ import { buildWorld, pickFloorSpawnCell, type BuiltWorld } from './world-build';
 const WORLD = '/world';
 const CHARACTER = '/character';
 
-// Sprite Layer.value above any encoded tilemap Layer.value range. The
-// tilemap chunk-extract system encodes `Layer.value = (layerOrder << 20)
-// | chunkIndex`; even with object layerOrder = 1000 that stays well
-// under 2^31. Picking 1e8 leaves a comfortable margin.
-const SPRITE_LAYER_VALUE = 100_000_000;
-
 const PLAYER_SPEED = 6;
 
-// Object TileLayer paints on top of terrain (layerOrder=0 default). Use
-// a high value so the per-cell object quads sort above every terrain
-// chunk in the per-entity TransparentEntry queue.
+// Object TileLayer uses ySort=1 so all derived entities share
+// Layer.value = OBJECT_LAYER_ORDER << 20 (no chunkIndex contamination).
+// This lets the player Y-interleave with every object tile: the player
+// and all trees/stumps/grass are in the same transparent-sort bucket and
+// sorted by foot-Y, giving the JRPG walk-behind-tree effect.
+// Terrain max Layer.value = HEIGHT_LAYER_BASE<<20 = 100<<20 = 104_857_600
+// which is below OBJECT_LAYER_ORDER<<20 = 1_048_576_000 → terrain stays
+// behind player + objects. ✓
 const OBJECT_LAYER_ORDER = 1000;
+
+// Must equal OBJECT_LAYER_ORDER<<20 so the player sits in the same
+// transparent-sort bucket as ySort object-tile entities.
+const SPRITE_LAYER_VALUE = OBJECT_LAYER_ORDER << 20;
 
 // Tile id encoding (engine reads `tileset.tiles[tileLayerCellValue - 1]`):
 //   terrain TileLayer cell N -> tiles[N - 1]   (terrain block of tiles[])
@@ -278,8 +280,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const r = world.spawn(
       { component: TileLayer, data: { tiles: flipped, layerOrder: layer.layerOrder } },
       { component: ChildOf, data: { parent: tilemapEntity } },
+      { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
     );
-    if (!r.ok) return logErr(`terrain TileLayer (height=${layer.heightKey})`, r.error);
+    if (!r.ok) return logErr(`terrain TileLayer (height=${layer.heightKey} sub=${layer.subIndex})`, r.error);
   }
 
   // Object TileLayer — single anchor-cell sheet. 779 objects in the
@@ -290,9 +293,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const objectLayerSpawn = world.spawn(
     {
       component: TileLayer,
-      data: { tiles: objectTiles, layerOrder: OBJECT_LAYER_ORDER },
+      data: { tiles: objectTiles, layerOrder: OBJECT_LAYER_ORDER, ySort: 1 },
     },
     { component: ChildOf, data: { parent: tilemapEntity } },
+    { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
   );
   if (!objectLayerSpawn.ok) return logErr('object TileLayer', objectLayerSpawn.error);
 
@@ -429,7 +433,7 @@ function logErr(label: string, err: { code?: string; hint?: string; message?: st
   setHud(`${label} failed: ${err.code ?? err.message ?? 'see console'}`);
 }
 
-function reportAppError(err: AppError | RhiError | EngineEnvironmentError): void {
+function reportAppError(err: CanvasAppError): void {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';
@@ -499,22 +503,34 @@ function composeTilesetAsset(args: ComposeTilesetArgs): TilesetAsset {
     });
     tiles.push({
       regionIndex: regions.length - 1,
-      widthCells: Math.max(1, Math.round(t.width / 16)),
-      heightCells: Math.max(1, Math.round(t.height / 16)),
+      widthCells: t.width / 16,
+      heightCells: t.height / 16,
       pivotX: clamp01(t.pivot.x),
       pivotY: clamp01(t.pivot.y),
       collider: toEngineCollider(t.collider),
     });
   }
 
+  // atlasSizes carries the exact pixel dimensions of each atlas so the
+  // chunk-extract system can normalise UV per-atlas (terrain 2277×16,
+  // object 2062×285 — neither is a multiple of tileWidth=16, so
+  // columns*tileWidth would be off by up to one tile).
+  const terrainPxW = args.terrain.tsj.imagewidth;
+  const terrainPxH = args.terrain.tsj.imageheight;
+  const objectPxW = args.object.tsj.imagewidth;
+  const objectPxH = args.object.tsj.imageheight;
   return {
     kind: 'tileset',
     guid: `asi-world-tileset-${numTerrain}-${args.object.tsj.tiles.length}`,
     atlases: [args.terrain.atlas, args.object.atlas],
     tileWidth: 16,
     tileHeight: 16,
-    columns: Math.max(args.terrain.atlasPng.width, args.object.atlasPng.width),
-    rows: Math.max(args.terrain.atlasPng.height, args.object.atlasPng.height),
+    columns: Math.ceil(Math.max(terrainPxW, objectPxW) / 16),
+    rows: Math.ceil(Math.max(terrainPxH, objectPxH) / 16),
+    atlasSizes: [
+      { pixelWidth: terrainPxW, pixelHeight: terrainPxH },
+      { pixelWidth: objectPxW,  pixelHeight: objectPxH  },
+    ],
     regions,
     tiles,
   };
@@ -575,6 +591,7 @@ function registerCharacterMaterial(
       sampler: args.sampler,
       region: [0, 0, 1, 1],
       pivot: [0.5, 0.0],
+      flipY: 1,
     },
   });
 }

@@ -11,10 +11,10 @@
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
-  type CanvasAppError,
-  createApp,
   type BootstrapContext,
   type BootstrapEntry,
+  type CanvasAppError,
+  createApp,
   isAppError,
   isLoadGameError,
   loadGame,
@@ -52,7 +52,9 @@ const ctx: BootstrapContext = {
 
 const slug = new URLSearchParams(window.location.search).get('game') ?? 'game-default';
 
-const templateModules = import.meta.glob<{ bootstrap: () => unknown }>('../../../templates/*/main.ts');
+const templateModules = import.meta.glob<{ bootstrap: () => unknown }>(
+  '../../../templates/*/main.ts',
+);
 
 const loaded = await loadGame(slug, (s) => {
   const key = `../../../templates/${s}/main.ts`;

@@ -50,18 +50,16 @@
 // / MeshAsset POD types + 4 component schemas (Transform / Camera /
 // MeshFilter / MeshRenderer). createApp owns the rAF frame-loop +
 // Time resource + auto input attach.
-import { createApp } from '@forgeax/engine-app';
-import type { App, AppError } from '@forgeax/engine-app';
+import { createApp, inputPlugin } from '@forgeax/engine-app';
+import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { Entity, World } from '@forgeax/engine-ecs';
 import {
   INPUT_BACKEND_KEY,
   type InputBackend,
   type InputBackendSample,
-  InputFrameStartScan,
 } from '@forgeax/engine-input';
 import { quat, vec3 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { RhiError } from '@forgeax/engine-rhi/errors';
 import {
   Camera,
   createDevImportTransport,
@@ -476,7 +474,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 async function createAppForCamera(
   target: HTMLCanvasElement,
   overrideBackend: InputBackend | undefined,
-): Promise<{ ok: true; value: App } | { ok: false; error: AppError | RhiError | EngineEnvironmentError }> {
+): Promise<{ ok: true; value: App } | { ok: false; error: CanvasAppError }> {
   // Host-explicit dev transport (OOS-1 / four-verb redesign 2026-06-06):
   // the container.jpg sidecar ships as a raw source row; the runtime
   // texture loader fails fast with `texture-source-not-imported` until a
@@ -494,9 +492,10 @@ async function createAppForCamera(
   }
   const renderer = await createRenderer(target, {}, bundler);
   const world = new World();
+  // M3 (w17): host pre-injects input backend BEFORE createApp so
+  // inputPlugin.build finds INPUT_BACKEND_KEY and registers the scan system.
   world.insertResource(INPUT_BACKEND_KEY, overrideBackend);
-  world.addSystem(InputFrameStartScan);
-  return createApp({ renderer, world, input: overrideBackend });
+  return createApp({ renderer, world, plugins: [inputPlugin()] });
 }
 
 interface CameraInputState {
@@ -573,7 +572,7 @@ function installCaptureHooks(
   };
 }
 
-function reportBootstrapError(err: AppError | RhiError | EngineEnvironmentError): void {
+function reportBootstrapError(err: CanvasAppError): void {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';

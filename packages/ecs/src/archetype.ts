@@ -3,6 +3,7 @@
 // Per-field independent ArrayBuffer columns (D-01). Sorted ComponentId key.
 // Swap-pop deletion. Version stamp for query cache invalidation (D-10).
 
+import { unpackSlot } from '@forgeax/engine-types';
 import { arrayCountColumnName, type Column, createColumn, growColumn } from './column';
 import {
   bufferFieldByteLength,
@@ -32,7 +33,7 @@ export type ArchetypeId = number;
  *
  * `componentIds` is derived from `components.map(c => c.id)` on demand.
  * Entity identity lives in the id=0 `Entity` component's `self` column
- * (read via `columns.get(0)?.get('self')?.view[row] & 0xffffff`).
+ * (read via `unpackSlot(columns.get(0)?.get('self')?.view[row])`).
  */
 export interface Archetype {
   readonly id: ArchetypeId;
@@ -220,9 +221,9 @@ export function removeEntity(
 
   if (row !== lastRow) {
     // Swap last row into the removed row.
-    // Read moved entity index from the id=0 self column (lower 24 bits).
+    // Read moved entity slot from the id=0 self column via shared codec.
     const selfCol = arch.columns.get(Entity.id)?.get('self');
-    const movedEntity = (selfCol?.view[lastRow] ?? 0) & 0xffffff;
+    const movedEntity = unpackSlot(selfCol?.view[lastRow] ?? 0);
     // Write moved entity index to the new row in the self column
     if (selfCol) {
       // biome-ignore lint/style/noNonNullAssertion: selfCol is defined in this branch

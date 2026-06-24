@@ -44,7 +44,14 @@ const videoEl = document.querySelector<HTMLVideoElement>('#video-overlay');
 if (!videoEl) throw new Error('hello-video-cutscene: missing <video id="video-overlay">');
 const video: HTMLVideoElement = videoEl;
 
-const appRes = await createApp(canvas, { input: false }, forgeaxBundlerAdapter());
+// M3 (w16): input:false opt-out deleted (D-6). Canvas form always attaches
+// input (D-2). This demo accepts input always-on — the cutscene lifecycle
+// (pause/resume/stop) is driven via C/S keyboard keys, and
+// input-always-on adds negligible overhead with zero correctness impact.
+// Option (a) assemble-form migration was assessed but costs (renderer
+// creation, bundler adapter wiring, aspect-sync, listener-sync) outweigh
+// benefits for a demo.
+const appRes = await createApp(canvas, {}, forgeaxBundlerAdapter());
 if (!appRes.ok) {
   if (appRes.error instanceof EngineEnvironmentError) {
     console.error('[hello-video-cutscene] EngineEnvironmentError creating renderer');

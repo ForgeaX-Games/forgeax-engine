@@ -1,7 +1,7 @@
 // PNG → RGBA8 bytes via OffscreenCanvas / HTMLCanvasElement, so we can hand
-// the bytes straight to `assets.register({ kind: 'texture', data, ... })`
-// without going through the build-time vite-plugin-pack importer (the demo
-// stays self-contained).
+// the bytes straight to `world.allocSharedRef('TextureAsset', { kind: 'texture',
+// data, ... })` without going through the build-time vite-plugin-pack importer
+// (the demo stays self-contained).
 
 export interface DecodedTexture {
   readonly width: number;

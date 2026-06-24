@@ -27,6 +27,7 @@
 import { ScheduleMutationError, World, type Result } from '@forgeax/engine-ecs';
 import {
   FRAME_START_SCAN_SYSTEM_NAME,
+  INPUT_BACKEND_KEY,
   type InputBackend,
 } from '@forgeax/engine-input';
 import {
@@ -36,7 +37,7 @@ import {
 } from '@forgeax/engine-runtime';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createApp } from '../src/index';
+import { createApp, inputPlugin } from '../src/index';
 import type { App, AppError } from '../src/types';
 
 // -------- helpers ----------------------------------------------------
@@ -239,7 +240,11 @@ describe('device-lost path 4 -- cleanup central (R-4: detach + removeSystem)', (
     // not the assemble form). For the assemble form path, host owns
     // input lifetime, so we focus on state -> stopped + draw stop.
     const fakeBackend = makeFakeBackend();
-    const result = await createApp({ renderer, world, input: fakeBackend.backend });
+    // Pre-inject the input backend as a world resource (D-3): inputPlugin.build
+    // finds INPUT_BACKEND_KEY and registers the frame-start scan system. The old
+    // AppAssembleArgs.input opt was deleted in the plugin-system unify (M3).
+    world.insertResource(INPUT_BACKEND_KEY, fakeBackend.backend);
+    const result = await createApp({ renderer, world, plugins: [inputPlugin()] });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const app: App = result.value;

@@ -624,10 +624,22 @@ export {
   registerAdvanceAnimationPlayer,
   registerPropagateTransforms,
 } from './createRenderer';
+// ─── Plugin factories (M2 / w6 - feat-20260623-plugin-system-unify) ─────────
+export { animationPlugin, timePlugin, transformPlugin } from './plugin-factories';
 export { registerRuntimeInspector } from './register-inspector';
 
 // ─── Screen-to-entity picking (feat-20260529-picking-raycasting-screen-to-entity M3 / w14) ──
 
+// feat-20260623-editor-openproject M2 w11+w12: SceneInstance→SceneAsset writeback
+// chain (plan-strategy D-1: pure-data collection + pack serialization;
+// handle→GUID reverse lookup via caller-supplied Map built from
+// AssetRegistry.inspect()).
+//
+// collectSceneAsset reads live component values from a materialised
+// SceneInstance back into a SceneAsset POD. serializeSceneAssetToPack
+// serializes the POD into a valid internal-text-package JSON object
+// suitable for disk write via forge.json / file system writer.
+export { collectSceneAsset, serializeSceneAssetToPack } from './collect-scene-asset';
 export {
   HdrpCapsInsufficientError,
   HdrpIndexListOverflowError,
@@ -759,14 +771,4 @@ export type { RenderPipeline, RenderPipelineData } from './render-pipeline';
 // post-narrowing public ctx face from `@forgeax/engine-runtime` directly.
 export type { RenderPipelineContext } from './render-pipeline-context';
 export { URP_PIPELINE_ID, urpPipeline } from './urp-pipeline';
-// feat-20260623-editor-openproject M2 w11+w12: SceneInstance→SceneAsset writeback
-// chain (plan-strategy D-1: pure-data collection + pack serialization;
-// handle→GUID reverse lookup via caller-supplied Map built from
-// AssetRegistry.inspect()).
-//
-// collectSceneAsset reads live component values from a materialised
-// SceneInstance back into a SceneAsset POD. serializeSceneAssetToPack
-// serializes the POD into a valid internal-text-package JSON object
-// suitable for disk write via forge.json / file system writer.
-export { collectSceneAsset, serializeSceneAssetToPack } from './collect-scene-asset';
 // cache-bust-marker for feat-20260615-fbx-importer-via-sdk PR-CI run on bf1d383f / 05a331cd (post-rebase tsbuildinfo restore-keys staleness)

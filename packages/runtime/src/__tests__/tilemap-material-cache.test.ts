@@ -73,7 +73,6 @@ function readDerivedMaterialHandles(world: World): number[] {
   for (const arch of world.inspect().archetypes) {
     if (!arch.componentNames.includes('MeshFilter')) continue;
     if (!arch.componentNames.includes('MeshRenderer')) continue;
-    if (!arch.componentNames.includes('ChildOf')) continue;
     if (!arch.componentNames.includes('Layer')) continue;
     const derived = graph.archetypes.find((a) => a.key === arch.key);
     if (!derived) continue;

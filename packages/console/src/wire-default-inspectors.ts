@@ -69,6 +69,13 @@ export interface WireDefaultInspectorsContext {
   readonly world: unknown;
   readonly engine: unknown;
   readonly assets: unknown;
+  /**
+   * Plugin registry (Map produced by `runPlugins()`). Typed as
+   * `unknown` so console never statically depends on
+   * `@forgeax/engine-plugin`. Optional -- when omitted, the
+   * `plugins` JSON-RPC method is not registered.
+   */
+  readonly pluginRegistry?: unknown;
 }
 
 /**
@@ -110,6 +117,10 @@ export function wireDefaultInspectors(
   if (injectors.debugRhi) {
     const r6 = injectors.debugRhi(reg);
     if (!r6.ok) return r6;
+  }
+  if (injectors.registerPluginInspector) {
+    const r7 = injectors.registerPluginInspector(reg, ctx.pluginRegistry);
+    if (!r7.ok) return r7;
   }
   return { ok: true, value: undefined };
 }

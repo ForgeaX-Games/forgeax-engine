@@ -22,6 +22,9 @@ import type { Result } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
 import type { CommandBuffer } from '../commands';
 import { defineComponent } from '../component';
+import type { EntityHandle } from '../entity-handle';
+import { entityIndex } from '../entity-handle';
+import type { EcsErrorCode } from '../errors';
 import { StaleEntityError } from '../errors';
 import type { EcsError } from '../world';
 import { World } from '../world';
@@ -132,5 +135,78 @@ describe('[w6] AC-L5 — world.addSystem<const Qs> method signature shape (simpl
 
     // Class-method `addSystem` returns void (registration side-effect only).
     expectTypeOf(ret).toEqualTypeOf<void>();
+  });
+});
+
+// w3: type-level assertion — entityIndex returns number (u32 slot, low 24 bits)
+describe('[w3] Entity codec type contract', () => {
+  it('entityIndex returns number', () => {
+    const fake = 0 as EntityHandle;
+    expectTypeOf(entityIndex(fake)).toEqualTypeOf<number>();
+  });
+});
+
+// w13: EcsErrorCode exhaustion test-d — store-level type completeness gate.
+// Verifies the closed union includes 'shared-ref-stale' and 'unique-ref-stale'
+// so that any exhaustive switch without these codes triggers TS never error.
+// Distinct from w19 (resolveAssetHandle real consumption path, AC-10).
+describe('[w13] EcsErrorCode union completeness — stale codes present', () => {
+  it('exhaustive switch over EcsErrorCode must include shared-ref-stale', () => {
+    // If shared-ref-stale is NOT in the union, this switch block would
+    // still compile because the type level never would not trigger —
+    // this test-d proves the code IS in the union.
+    const assertExhaustive = (code: EcsErrorCode): string => {
+      switch (code) {
+        case 'entity-index-overflow':
+        case 'schema-unsupported-field':
+        case 'stale-entity':
+        case 'component-already-present':
+        case 'component-not-present':
+        case 'cyclic-dependency':
+        case 'resource-not-found':
+        case 'system-before-unknown':
+        case 'system-name-conflict':
+        case 'cyclic-injection':
+        case 'unique-ref-released':
+        case 'unique-ref-double-release':
+        case 'unique-ref-stale':
+        case 'shared-ref-released':
+        case 'shared-ref-double-release':
+        case 'shared-ref-stale':
+        case 'builtin-slot-not-owned':
+        case 'managed-buffer-out-of-bounds':
+        case 'managed-buffer-shrink-not-supported':
+        case 'managed-array-element-type-not-allowed':
+        case 'fixed-size-mismatch':
+        case 'fixed-array-overflow':
+        case 'array-pop-empty':
+        case 'instance-transforms-stride-mismatch':
+        case 'spawn-light-invalid-bounds':
+        case 'cardinality-exceeded':
+        case 'resource-invalid-value':
+        case 'sprite-animation-invalid':
+        case 'relationship-self-cycle':
+        case 'relationship-mirror-component-not-registered':
+        case 'relationship-mirror-field-type-mismatch':
+        case 'relationship-detach-mismatch':
+        case 'query-descriptor-with-optional-conflict':
+        case 'component-not-defined':
+        case 'remove-essential-component':
+        case 'scene-override-type-mismatch':
+        case 'spawn-data-unknown-field':
+          return code;
+      }
+    };
+    expectTypeOf(assertExhaustive).toBeFunction();
+  });
+
+  it('shared-ref-stale is assignable to EcsErrorCode', () => {
+    const stale: EcsErrorCode = 'shared-ref-stale';
+    expectTypeOf(stale).toEqualTypeOf<'shared-ref-stale'>();
+  });
+
+  it('unique-ref-stale is assignable to EcsErrorCode', () => {
+    const stale: EcsErrorCode = 'unique-ref-stale';
+    expectTypeOf(stale).toEqualTypeOf<'unique-ref-stale'>();
   });
 });

@@ -24,14 +24,108 @@ description: >-
 
 绝大多数游戏从 `createApp` 起步。`App` 是状态机：`start → (pause ⇄ resume) → stop`。输入不轮询——引擎在**帧起始**冻结成只读 `InputSnapshot` 资源，系统在 `world` 里读它。
 
-参数面分三层：`canvas`（必选）/ `opts?: CreateAppOptions`（app 行为：`input` / `audio` / `physics` / `maxDt`）/ `bundler?: BundlerOptions`（构建层：`shaderManifestUrl` + `importTransport`）。`clearColor` 不在参数里——已搬到 `Camera.clearR/G/B/A`：渲染表现归 `Camera`，构建通道归 `bundler`，app 行为归 `opts`，三关注面分离。
+参数面分两层：`canvas`（必选）/ `opts?: CreateAppOptions`（app 行为：`plugins` / `maxDt`）/ `bundler?: BundlerOptions`（构建层：`shaderManifestUrl` + `importTransport`）。`clearColor` 不在参数里——已搬到 `Camera.clearR/G/B/A`：渲染表现归 `Camera`，构建通道归 `bundler`，app 行为归 `opts`，三关注面分离。
+
+## Plugin 系统
+
+`createApp` 把所有能力接入收拢成一个入口：`plugins: Plugin[]`。一个 `Plugin` 就是一个 `{ name, build(world) }`——**你写引擎系统时熟悉的 `world` 就是 plugin 的唯一参数**（charter P4：transform / physics / audio 同形）。
+
+```ts
+// Plugin 形状——住 @forgeax/engine-plugin，公开路径 @forgeax/engine-app
+interface Plugin {
+  readonly name: string;                              // kebab-case，如 'my-tool' / 'physics'
+  build(world: World): Result<void, PluginError>       // 同步或 async
+                   | Promise<Result<void, PluginError>>;
+}
+```
+
+> [!NOTE]
+> `Plugin` 类型从 `@forgeax/engine-app` import（`app` re-export 自 `@forgeax/engine-plugin`——薄协议层包，仅依赖 `@forgeax/engine-ecs`）。能力包作者在写 `xxxPlugin()` 工厂时**直连** `@forgeax/engine-plugin`（绕开 app 以免成环）；AI 用户只需 `import { ... } from '@forgeax/engine-app'`——入口不变。
+
+### canvas form 默认必装集
+
+`createApp(canvas, {})` 零配置时自动注入 5 个内置 plugin：
+
+```ts
+// 等价于你在 createApp(canvas, {}) 内部得到的
+createApp(canvas, {
+  plugins: [
+    transformPlugin(),   // registerPropagateTransforms(world)
+    timePlugin(),        // 命名占位——Time 仍由 frame-loop 每帧写
+    animationPlugin(),   // registerAdvanceAnimationPlayer(world)
+    statePlugin(),       // registerStatesPlugin(world)
+    inputPlugin(),       // addSystem(InputFrameStartScan) —— canvas 上的 browser 后端由 createApp 预注入 world 资源
+  ],
+});
+```
+
+全部来自 `@forgeax/engine-app` 的 `inputPlugin`（只有它复用了 app 层的 DOM attach 副作用——其它都来自能力包）。
+
+### 内置 plugin 工厂速查
+
+| Plugin | 工厂 | import 路径 | 做了什么 |
+|:--|:--|:--|:--|
+| `transform` | `transformPlugin()` | `@forgeax/engine-runtime` | `registerPropagateTransforms(world)`——写 `Transform.world` mat4 列 |
+| `time` | `timePlugin()` | `@forgeax/engine-runtime` | no-op 占位——Time 每帧由 frame-loop 写；占位让 inspector 枚举 `'time'`、重名检测生效 |
+| `animation` | `animationPlugin()` | `@forgeax/engine-runtime` | `registerAdvanceAnimationPlayer(world)`——驱动分时采样 + 混合 |
+| `state` | `statePlugin()` | `@forgeax/engine-state` | `registerStatesPlugin(world)`——状态 token 的资源创建 + `transitionStates` 系统 |
+| `input` | `inputPlugin()` | `@forgeax/engine-app` | guard `world.hasResource(INPUT_BACKEND_KEY)` → `addSystem(InputFrameStartScan)`；backend 由 `createApp` 预注入 |
+| `physics` | `physicsPlugin(backend)` | `@forgeax/engine-physics` | **async**：动态 import 后端 → loadRapier → `insertResource('PhysicsWorld')` + 注册三阶段 tick。失败返 `PluginError({ code: 'plugin-build-failed' })` |
+| `audio` | `audioPlugin()` | `@forgeax/engine-audio-webaudio` | guard `world.hasResource(AUDIO_ENGINE_RESOURCE_KEY)` → 注册 audio-tick 系统；backend 由 `createApp` 预注入 |
+
+### 显式 plugins 用法
+
+```ts
+import { createApp } from '@forgeax/engine-app';
+import { physicsPlugin } from '@forgeax/engine-physics';
+import { audioPlugin } from '@forgeax/engine-audio-webaudio';
+import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+
+// 自动装默认 5 插件（transform/time/animation/state/input）+ 手动加 physics + audio
+const app = await createApp(canvas, {
+  plugins: [physicsPlugin('rapier-3d'), audioPlugin()],
+}, forgeaxBundlerAdapter());
+
+if (!app.ok) {
+  // PluginError 和 AppError 共用同一 Result 路径
+  if (app.error.code === 'duplicate-plugin') {
+    console.error(`Duplicate plugin name: ${app.error.detail.name}`);
+  } else if (app.error.code === 'plugin-build-failed') {
+    console.error(`Plugin ${app.error.detail.pluginName} failed: ${app.error.detail.cause}`);
+  }
+}
+app.value.start();
+```
+
+### assemble form——显式 plugin 集
+
+assemble 形态不自动拼默认集（host 自管 world core），只跑你在 `plugins` 里显式列的：
+
+```ts
+import { createApp } from '@forgeax/engine-app';
+import { World } from '@forgeax/engine-ecs';
+import { createRenderer, transformPlugin, timePlugin, animationPlugin } from '@forgeax/engine-runtime';
+import { statePlugin } from '@forgeax/engine-state';
+import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+
+const renderer = await createRenderer(canvas, {}, forgeaxBundlerAdapter());
+const world = new World();
+
+// 不传 plugins 就是纯粹空 world——所有能力由 host 决定
+const app = await createApp({ renderer, world, plugins: [
+  transformPlugin(), timePlugin(), animationPlugin(), statePlugin(),
+] });
+```
+
+> [!NOTE]
+> `input: false` 旧 opt 的迁移路径：切到 assemble form，**不**传 `inputPlugin` 即为无 input。旧 API `opts.input` / `opts.audio` / `opts.physics` 已删除——`plugins` 是唯一入口。
 
 ## 核心 API 速查
 
 | 入口 | 形态 | 用途 |
 |:--|:--|:--|
-| `createApp(canvas, opts?, bundler?)` | `async => Result<App, CanvasAppError>` | 一行起飞：自动装配 Renderer + World + input + rAF 循环。第三参数 `bundler` 携带构建层注入（`shaderManifestUrl` + `importTransport`），典型传 `forgeaxBundlerAdapter()` |
-| `createApp({ renderer, world, input?, audio?, physics?, ... })` | `async => Result<App, AssembleAppError>` | assemble 形态：显式注入已有 Renderer / World（参见 `packages/app/README.md` §Assemble form） |
+| `createApp(canvas, opts?, bundler?)` | `async => Result<App, CanvasAppError>` | 一行起飞：自动装配 Renderer + World + input + rAF 循环 + 默认 5 plugin。第三参数 `bundler` 携带构建层注入（`shaderManifestUrl` + `importTransport`），典型传 `forgeaxBundlerAdapter()` |
+| `createApp({ renderer, world, plugins?, ... })` | `async => Result<App, AssembleAppError>` | assemble 形态：显式注入已有 Renderer / World + plugins（参见 `packages/app/README.md` §Assemble form） |
 | `createRenderer(canvas, opts?, bundler?)` | `async => Renderer` | 低层：只要渲染器，自己驱动循环（失败 throw `EngineEnvironmentError`） |
 | `Engine.create(canvas, opts?, bundler?)` | `createRenderer` 的命名空间别名 | 与 `createRenderer` 同一函数，喜欢 `Engine.create({...})` 写法时用 |
 | `forgeaxBundlerAdapter()` | `() => BundlerOptions` | 由 `virtual:forgeax/bundler` 虚拟模块导出，标准第三参数——聚合 `shaderManifestUrl` + `importTransport` |
@@ -403,3 +497,71 @@ world.set(playerEnt, AnimationPlayer, {
 - 6 字段 schema 全表 + 默认值规则：`packages/runtime/src/components/animation-player.ts`（SSOT）
 - 两阶段管线（queryRun → 累加器 → 单次 `world.set`）+ per-channel 加权归一化数学：`packages/runtime/src/systems/advance-animation-player.ts` + 单测 `packages/runtime/src/__tests__/systems.unit.test.ts`
 - dev-mode warn 节流形态（once-per-(entity, channelKey, reason)，导出 `__resetAnimationWarnsForTests` `@internal`）：源码同上文件顶部 + 单测 anchor `'warn-throttle once-per-(entity,channelKey,reason)'`
+
+## 自定义 Plugin
+
+`Plugin` 只有一个形状——会写 `world.addSystem` 就会写 plugin（charter P4：引擎内建 plugin 和用户 plugin 同构）。自定义 plugin 就是把散落在 `createApp` 之后的"裸 world 接线代码"包进 `{ name, build }` 的可复用单元。
+
+### before：散落的 ad-hoc 接线
+
+```ts
+const app = await createApp(canvas, {}, forgeaxBundlerAdapter());
+if (!app.ok) throw app.error;
+
+const world = app.value.world;
+
+// 散落各处——必须记住顺序和依赖
+world.insertResource(TOOL_CONFIG_KEY, { speed: 2.0 });
+world.addSystem(MyToolSystem);
+world.addSystem(MyCleanupSystem);
+
+app.value.start();
+```
+
+### after：包成 plugin，收进 `plugins[]`
+
+```ts
+import { createApp } from '@forgeax/engine-app';
+import type { Plugin } from '@forgeax/engine-app';       // app re-export，公开路径不变
+import { ok } from '@forgeax/engine-ecs';
+import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+
+// "工具箱"收成一个 plugin——build 内做 insertResource + addSystem
+function toolPlugin(config: { speed: number }): Plugin {
+  return {
+    name: 'my-tool',
+    build(world) {
+      world.insertResource(TOOL_CONFIG_KEY, config);
+      world.addSystem(MyToolSystem);
+      world.addSystem(MyCleanupSystem);
+      return ok(undefined);         // 必须返回 Result<void, PluginError>
+    },
+  };
+}
+
+// 一行——所有接线在 plugins[] 里声明式到位
+const app = await createApp(canvas, {
+  plugins: [toolPlugin({ speed: 2.0 })],
+}, forgeaxBundlerAdapter());
+if (!app.ok) throw app.error;
+app.value.start();
+```
+
+### 常见模式
+
+| 你的 plugin 需要... | 写法 |
+|:--|:--|
+| 异步初始化（fetch 配置 / import WASM） | `async build(world) { ... await fetchOrImport(); return ok(undefined); }`——plugin runner 顺序 await |
+| 失败报错 | `return err(new PluginError({ code: 'plugin-build-failed', expected: PLUGIN_EXPECTED['plugin-build-failed'], hint: PLUGIN_ERROR_HINTS['plugin-build-failed'], detail: { pluginName: 'my-tool', cause: 'missing config' } }))` |
+| 预注入资源给别的 plugin 消费 | 把资源名写进 `name`，host 在 `createApp` 前 `world.insertResource(KEY, data)`，plugin 内 `if (world.hasResource(KEY)) {...}` guard |
+| 从能力包拆出独立 plugin | 能力包导出 `xxxPlugin()` 工厂（返回 `Plugin`，import 自 `@forgeax/engine-plugin`**直连**），不依赖 app 包 |
+
+> [!IMPORTANT]
+> 能力包**直连** `@forgeax/engine-plugin` import `Plugin` / `PluginError`，不要经 `@forgeax/engine-app` re-export——app 已依赖你的能力包，反向 import 会成环（R8）。用户代码（demo / 游戏）始终 `import { Plugin } from '@forgeax/engine-app'`——单入口路径不变。
+
+### 参考
+
+- Plugin 接口源码：`packages/plugin/src/index.ts`
+- 实际工厂实现：`packages/runtime/src/plugin-factories.ts`（transform/time/animation）、`packages/state/src/plugin-factory.ts`（state）、`packages/app/src/plugin-factories.ts`（input）
+- Plugin runner 去重+失败累积逻辑：`packages/app/src/internal/run-plugins.ts`
+- PluginError 结构测试：`packages/plugin/src/__tests__/plugin-error.test.ts`

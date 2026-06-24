@@ -56,6 +56,7 @@ import {
 } from '@forgeax/engine-ecs';
 import {
   FRAME_START_SCAN_SYSTEM_NAME,
+  INPUT_BACKEND_KEY,
   INPUT_SNAPSHOT_RESOURCE_KEY,
   type InputBackend,
   type InputSnapshot,
@@ -63,7 +64,7 @@ import {
 import { createRenderer } from '@forgeax/engine-runtime';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createApp } from '../src/index';
+import { createApp, inputPlugin } from '../src/index';
 import type { AppError } from '../src/types';
 
 interface ListenerProbe {
@@ -316,7 +317,10 @@ describe.skip('createApp(assemble form) host-supplied InputBackend bypass', () =
         // host-managed
       },
     };
-    const appResult = await createApp({ renderer, world, input: fakeBackend });
+    // Pre-inject the host backend as a world resource (D-3); the old
+    // AppAssembleArgs.input opt was deleted in the plugin-system unify (M3).
+    world.insertResource(INPUT_BACKEND_KEY, fakeBackend);
+    const appResult = await createApp({ renderer, world, plugins: [inputPlugin()] });
     expect(appResult.ok).toBe(true);
     if (!appResult.ok) {
       canvas.remove();

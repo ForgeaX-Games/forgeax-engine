@@ -15,17 +15,16 @@
 // match the LO initial pose and aligns mouse-dx with camera-right.
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-import type { App, AppError, BundlerOptions } from '@forgeax/engine-app';
-import { createApp } from '@forgeax/engine-app';
+import type { App, BundlerOptions, CanvasAppError } from '@forgeax/engine-app';
+import { createApp, inputPlugin } from '@forgeax/engine-app';
 import { Entity, World } from '@forgeax/engine-ecs';
-import { INPUT_BACKEND_KEY, type InputBackend, InputFrameStartScan } from '@forgeax/engine-input';
+import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { quat, vec3 } from '@forgeax/engine-math';
 import {
   Camera,
   createDevImportTransport,
   createRenderer,
   EngineEnvironmentError,
-  type RhiError,
   SpotLight,
   Transform,
 } from '@forgeax/engine-runtime';
@@ -272,15 +271,14 @@ export async function createFirstPersonControls(
     ...forgeaxBundlerAdapter(),
     importTransport: createDevImportTransport(),
   },
-): Promise<
-  { ok: true; value: App } | { ok: false; error: AppError | RhiError | EngineEnvironmentError }
-> {
+): Promise<{ ok: true; value: App } | { ok: false; error: CanvasAppError }> {
   try {
     const renderer = await createRenderer(target, {}, bundler);
     const world = new World();
+    // M3 (w17): host pre-injects input backend BEFORE createApp so
+    // inputPlugin.build finds INPUT_BACKEND_KEY and registers the scan system.
     world.insertResource(INPUT_BACKEND_KEY, overrideBackend);
-    world.addSystem(InputFrameStartScan);
-    return createApp({ renderer, world, input: overrideBackend });
+    return createApp({ renderer, world, plugins: [inputPlugin()] });
   } catch (error: unknown) {
     if (error instanceof EngineEnvironmentError) {
       return { ok: false, error };

@@ -236,7 +236,7 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 const appResult = await createApp(
   mockCanvas,
-  { input: false },
+  {},
   { shaderManifestUrl: MANIFEST_URL },
 ).catch((err) => {
   originalConsoleError(

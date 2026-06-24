@@ -126,6 +126,8 @@ const rtRes = await renderRtToCanvas(replay, 0, device, canvas);
 4. **inspectAt per-draw** — 缩窄到出错 draw，`['bindings']` 对比 bind group entries 与预期（贴图 GUID 未解析 / UBO 值不对 / sampler 类型错）。
 5. **falsification check** — 在 tape 里 swap 一个 binding index，confirm 像素变化，证明定位正确。
 
+**真实 demo 抓帧支持**：非自包含抓帧 `captureFrame(n)` 在真实 demo（hello-cube 等）上也能产出自洽 tape，经 `deserializeTape` → `createReplay(tape, device, createShaderModule)` → `stepTo(N)` → `inspectDrawJson` 全链端到端可用。swapchain RT 经忠实 createTexture（真实尺寸 / format / usage+COPY_SRC）在 fresh device 上重建为 offscreen RT；带资源 bindGroup（buffer / sampler / textureView）经 `RhiBindingResource {kind,value}` 包装满足 replay 的 4-kind bind 路径。浏览器抓帧把 canvas swapchain 录为 `bgra8unorm` texture，但以 `bgra8unorm-srgb` 建 view / pipeline target（多数平台 canvas 偏好的 srgb view）；离线 replay 时该 srgb view 套在 plain bgra texture 上是 incompatible-view-format 错（在 `beginRenderPass` 暴露）。`createReplay` 在 replay 层内部把 canvas BGRA format 一致地适配为字节兼容的 `rgba8unorm`（createTexture / createTextureView / pipeline target 三处同步），浏览器 tape 因此可直接喂入 `createReplay`，无需 per-script format 改写。`wrap()` 须在资源创建前调用；否则 `finalize()` 返回 `tape-handle-graph-broken`（`.hint` 含 bootstrap table 标记，指引重新抓帧）。旧式稳态帧 tape deserialize 报 `tape-handle-graph-broken` 且 `.hint` 含稳态帧/self-contained 恢复指引（指向 deserialize 侧标记，不含 bootstrap 子串），提示重新抓帧或改用自包含 tape。
+
 ## 错误码速查
 
 `DebugErrorCode` 12 成员闭并集，**完全独立**于 `RhiErrorCode`；`switch (err.code)` 穷尽，TS 编译期抓漏分支。

@@ -1,3 +1,5 @@
+// biome-ignore-all lint/suspicious/noExplicitAny: getTape() now returns Tape | DebugError | undefined; existing self-contained tape tests always get Tape back, safe to narrow with any cast
+// biome-ignore-all lint/style/noNonNullAssertion: test assertions on mock stubs verified by parent expect guards
 // m3-3: bootstrap integration test — verify FORGEAX_ENGINE_RHI_DEBUG=1 wiring:
 // wrap -> wrapCreateShaderModule -> onFrameEnd listener register -> draw -> frameMark.
 //
@@ -19,12 +21,10 @@ function rOk<T>(value: T) {
 // Stub RhiInstance (mimics the shape wrap() expects)
 // ---------------------------------------------------------------
 
-// biome-ignore lint/suspicious/noExplicitAny: structural stub — same pattern as recorder.unit.test.ts m2-6
 function h(): any {
   return {};
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: structural stub — needs to match RhiInstance shape loosely
 function stubRhiInstance(): { inst: any; requestAdapterSpy: any; createCmdEncRes: any } {
   const writeBufferSpy = vi.fn(() => rOk(undefined));
   const submitSpy = vi.fn(() => rOk(undefined));
@@ -130,9 +130,8 @@ describe('bootstrap integration (m3-3)', () => {
     expect(debugInst.getState()).toBe('idle');
 
     // Step 2: wrapCreateShaderModule
-    const originalFn: CreateShaderModuleFn = vi.fn(
-      // biome-ignore lint/suspicious/noExplicitAny: mock stub matching CreateShaderModuleFn signature
-      (_device: any, _desc: any) => Promise.resolve(rOk(h())),
+    const originalFn: CreateShaderModuleFn = vi.fn((_device: any, _desc: any) =>
+      Promise.resolve(rOk(h())),
     ) as unknown as CreateShaderModuleFn;
 
     const wrappedFn = wrapCreateShaderModule(originalFn, debugInst);
@@ -153,7 +152,7 @@ describe('bootstrap integration (m3-3)', () => {
     expect(debugInst.getState()).toBe('idle'); // 1 frame complete -> finalizing -> idle
 
     // Check tape events
-    const tape = debugInst.getTape();
+    const tape = debugInst.getTape() as any;
     expect(tape).toBeDefined();
     expect(tape?.events).toHaveLength(1);
     expect(tape?.events[0]?.kind).toBe('frameMark');
@@ -187,7 +186,7 @@ describe('bootstrap integration (m3-3)', () => {
     // After frame-end, recorder should have transitioned
     expect(debugInst.getState()).toBe('idle');
 
-    const tape = debugInst.getTape();
+    const tape = debugInst.getTape() as any;
     expect(tape).toBeDefined();
     expect(tape?.events).toHaveLength(1);
     expect(tape?.events[0]?.kind).toBe('frameMark');
@@ -210,16 +209,13 @@ describe('bootstrap integration (m3-3)', () => {
     // For this test, we verify the frameMark behavior directly.
     debugInst.onFrameEnd();
 
-    const tape = debugInst.getTape();
+    const tape = debugInst.getTape() as any;
     expect(tape).toBeDefined();
 
     // frameMark should be the last event (or the only event if no RHI calls)
-    // biome-ignore lint/style/noNonNullAssertion: guarded by expect above — tape is defined
-    const frameMarkEvents = tape!.events.filter((e) => e.kind === 'frameMark');
+    const frameMarkEvents = tape!.events.filter((e: any) => e.kind === 'frameMark');
     expect(frameMarkEvents).toHaveLength(1);
-    // biome-ignore lint/style/noNonNullAssertion: guarded by toHaveLength(1)
     expect(frameMarkEvents[0]!.kind).toBe('frameMark');
-    // biome-ignore lint/style/noNonNullAssertion: guarded by toHaveLength(1)
     const first = frameMarkEvents[0]!;
     if (first && 'frameIdx' in first) {
       expect(first?.frameIdx).toBe(0);
@@ -238,7 +234,7 @@ describe('bootstrap integration (m3-3)', () => {
     expect(debugInst.getState()).toBe('idle');
 
     // No tape should be produced (nothing recorded)
-    const tape = debugInst.getTape();
+    const tape = debugInst.getTape() as any;
     expect(tape).toBeUndefined();
   });
 
@@ -248,9 +244,8 @@ describe('bootstrap integration (m3-3)', () => {
 
     // Simulate the Channel-1 probe pattern: attach createShaderModule as an extra
     // property on the wrapped instance (as done in createApp m3-1).
-    const realCsm: CreateShaderModuleFn = vi.fn(
-      // biome-ignore lint/suspicious/noExplicitAny: mock stub matching CreateShaderModuleFn signature
-      (_device: any, _desc: any) => Promise.resolve(rOk(h())),
+    const realCsm: CreateShaderModuleFn = vi.fn((_device: any, _desc: any) =>
+      Promise.resolve(rOk(h())),
     ) as unknown as CreateShaderModuleFn;
     const wrappedCsm = wrapCreateShaderModule(realCsm, debugInst);
 
@@ -265,9 +260,9 @@ describe('bootstrap integration (m3-3)', () => {
     expect(result.ok).toBe(true);
 
     // The tape should contain a createShaderModule event
-    const tape = debugInst.getTape();
+    const tape = debugInst.getTape() as any;
     expect(tape).toBeDefined();
-    const csmEvents = tape?.events.filter((e) => e.kind === 'createShaderModule');
+    const csmEvents = tape?.events.filter((e: any) => e.kind === 'createShaderModule');
     expect(csmEvents).toHaveLength(1);
   });
 });

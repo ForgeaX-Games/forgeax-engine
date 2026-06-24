@@ -33,6 +33,7 @@
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-physics": "workspace:*",
+    "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-physics-rapier2d": "workspace:*",
     "@forgeax/engine-physics-rapier3d": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",

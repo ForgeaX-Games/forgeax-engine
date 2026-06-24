@@ -1028,7 +1028,7 @@ export function detectNineSliceScaleTooSmall(
  * Layout (16 floats, std140 4 vec4 slots):
  *   slot 0  [ 0..15] colorTint     vec4
  *   slot 1  [16..31] region        vec4 (uMin, vMin, uW, vH; flip pre-applied)
- *   slot 2  [32..47] pivotAndSize  vec4 (pivotX, pivotY, sourceScaleX, sourceScaleY)
+ *   slot 2  [32..47] pivotAndSize  vec4 (pivotX, pivotY, 1, 1)
  *   slot 3  [48..63] slicesAndMode vec4 (left, top, right, bottom; tile sentinel: bottom < 0)
  *   slot 4  [64..79] reserved zero (PBR payload occupies this slot but the
  *                                   sprite path leaves it untouched, so the
@@ -1041,28 +1041,28 @@ export function detectNineSliceScaleTooSmall(
  * (`render-system-record-sprite-ubo-bytes.test.ts`) covers the slot 3
  * sentinel triple.
  *
+ * bug-20260618 (sprite double-scale): pivotAndSize.zw is locked to (1, 1).
+ * The earlier feat-20260601 D-3 path wrote the Transform.world column
+ * lengths here so the shader's `pos_local = (uv - pivot) * size` produced
+ * world-unit-sized quads -- but the same `worldFromLocal` mat4 (with scale
+ * baked in) is left-multiplied into `pos_local` downstream, which scales
+ * the quad a SECOND time. The net world-space size was `scaleX^2 / scaleY^2`
+ * (invisible at scale=1, breaks asi-world tilemap object tiles where
+ * widthCells / heightCells != 1). Locking size to the unit-quad value
+ * lets `worldFromLocal` solely own the scale (consistent with PBR / unlit
+ * mesh paths -- charter P4 single-source TRS application).
+ *
  * The helper does NOT consult the texture upload state — missing-texture
  * debug-pink override and the per-frame RhiError fire stay in the inline
  * caller (they require runtime / errorRegistry / frameState). The helper
  * stays a pure POD writer so unit tests can run without a GPU device.
  *
  * @param material  the extracted MaterialSnapshot (shadingModel='sprite')
- * @param transformWorld  the entity's resolved Transform.world mat4 (16
- *                        floats, column-major); column lengths give the
- *                        sprite quad's source scale.
  * @returns 80-byte ArrayBuffer ready for `queue.writeBuffer`.
  */
-export function buildSpriteMaterialUboPayload(
-  material: MaterialSnapshot,
-  transformWorld: Float32Array,
-): ArrayBuffer {
+export function buildSpriteMaterialUboPayload(material: MaterialSnapshot): ArrayBuffer {
   const buf = new ArrayBuffer(STANDARD_PBR_UBO_SIZE);
   const f32 = new Float32Array(buf);
-  // World basis-column lengths drive the sprite quad's world-space size
-  // (feat-20260601 D-3): scaleX = |col0|, scaleY = |col1|.
-  const sw = transformWorld;
-  const sourceScaleX = Math.hypot(sw[0] ?? 1, sw[1] ?? 0, sw[2] ?? 0);
-  const sourceScaleY = Math.hypot(sw[4] ?? 0, sw[5] ?? 1, sw[6] ?? 0);
   const sf = material.spriteFields;
   const baseColor = material.baseColor;
   const colorTintR = baseColor[0] ?? 1;
@@ -1093,11 +1093,12 @@ export function buildSpriteMaterialUboPayload(
   f32[5] = regionY;
   f32[6] = regionZ;
   f32[7] = regionW;
-  // slot 2 — pivotAndSize
+  // slot 2 — pivotAndSize. zw locked to (1, 1) -- worldFromLocal owns scale
+  // (bug-20260618 sprite double-scale fix; see docstring above).
   f32[8] = pivotX;
   f32[9] = pivotY;
-  f32[10] = sourceScaleX;
-  f32[11] = sourceScaleY;
+  f32[10] = 1;
+  f32[11] = 1;
   // slot 3 — slicesAndMode (D-3 sentinel: extract pre-encodes sliceMode=1
   // by negating slices.w; this writer copies verbatim and the shader
   // recovers the magnitude with abs() + reads the sign for tile vs stretch).
@@ -4391,10 +4392,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         // counterpart `buildPbrMaterialUboPayload` below.
         // feat-20260608 M5 amend / w16-a: sprite stays single-slot (sprite
         // per-submesh is OOS-1) -- one writeBuffer at slotOffset only.
-        payloadBuffer = buildSpriteMaterialUboPayload(
-          entry.source.material,
-          entry.source.transform.world,
-        );
+        payloadBuffer = buildSpriteMaterialUboPayload(entry.source.material);
         payloadF32 = new Float32Array(payloadBuffer);
         // Sprite missing-texture detection: helper produced the byte
         // baseline; the runtime / errorRegistry-bound debug-pink override
@@ -4983,10 +4981,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           const view = residentTextureView(world, store, runtime, spriteTexHandle);
           if (view !== undefined) spriteTexView = view as never;
         }
-        const spriteSampler =
-          entry.source.material.sampler !== undefined
-            ? pipelineState.defaultSampler // sampler asset resolution stays simple — sprite uses defaultSampler unless asset registry resolves a custom one in a follow-up
-            : pipelineState.defaultSampler;
+        const spriteSampler = pipelineState.defaultSampler;
         const spriteBaseMaterialEntries = [
           {
             binding: 0,
@@ -5636,7 +5631,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           },
           {
             binding: 1,
-            resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
+            resource: { kind: 'sampler' as const, value: pipelineState.nearestSampler },
           },
           { binding: 2, resource: { kind: 'textureView' as const, value: spriteTexView } },
           {

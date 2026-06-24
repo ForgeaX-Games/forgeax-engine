@@ -805,6 +805,12 @@ export interface DispatchEntry {
   readonly renderableIndex: number;
   readonly passIndex: number;
   readonly queue: number;
+  /**
+   * Signed i32 from the entity's {@link Layer} component value (default 0 for
+   * entities without a Layer). Primary sort key for the transparent-dispatch
+   * sort in {@link render-system.ts}: lower value = drawn first (behind).
+   */
+  readonly layer: number;
   readonly tags: Record<string, string>;
   readonly renderState: MaterialRenderState | undefined;
   readonly defines: Record<string, string> | undefined;
@@ -2125,11 +2131,11 @@ export function extractFrame(
     // column always exists on a Transform-bearing entity, so the
     // "ChildOf but forgot GlobalTransform" misconfiguration cannot occur.
     const fAssetHandle = bundle.MeshFilter?.assetHandle;
-    // feat-20260520-2d-sprite-layer-mvp M-3 / w22: Layer + SortKey columns
-    // currently only act as archetype-edge sniffs (sort-input precompute is
-    // landed elsewhere); keep the void references so the optional bundle
-    // path stays acknowledged.
-    void bundle.Layer;
+    // feat-20260520-2d-sprite-layer-mvp M-3 / w22: Layer column read here;
+    // value folded into each DispatchEntry so the render-system sort can use
+    // it as the primary transparent-sort key without a second ECS round-trip.
+    // SortKey acknowledged; per-entity override path is deferred.
+    const fLayerValue = bundle.Layer?.value as Int32Array | undefined;
     void bundle.SortKey;
     // feat-20260608-tilemap-object-layer-rendering M3 / m3-t5: tilemap-spawned
     // per-cell render entities (the ones `tilemap-chunk-extract-system`
@@ -2155,17 +2161,11 @@ export function extractFrame(
     // first pass + non-empty `paramValues.region`; no new public ECS
     // marker component lands (charter F1 minimum surface).
     //
-    // Why no live sort-bucket construction here yet: the sprite bucket
-    // dispatch list currently flows through the queue-ordered
-    // `DispatchEntry[]` path (see `dispatch.push` below), which sorts by
-    // pass `queue` value -- transparent-Y mode is therefore consumed via
-    // `transparentSortEntries(entries, world)` from the systems barrel
-    // when an AI user wires `setTransparentSortConfig` to mode=1. The
-    // m3-t10 hello demo + m4-t2 asi-world migration exercise the integrated
-    // path end-to-end with the per-entity formula above; the unit-level
-    // contract is verified by
-    // `__tests__/transparent-sort-tilemap-sprite-interleave.test.ts`
-    // (m3-t4).
+    // Layer.value is now folded into each DispatchEntry.layer (fLayerValue
+    // column, read once per archetype pass above). render-system.ts
+    // `sortTransparentDispatch` applies (layer ASC, sortValue ASC) for all
+    // transparent-sort modes (0/1/2) using posY/pivotY/sizeY from the
+    // parallel renderables[] snapshot -- no second ECS round-trip needed.
     // feat-20260527-sprite-nineslice M4 / w17 (AC-14): SpriteRegionOverride
     // per-entity UV sub-rectangle. When the entity carries this component the
     // 4-float `[uMin, vMin, uW, vH]` override displaces the asset-side
@@ -2205,6 +2205,7 @@ export function extractFrame(
     for (let i = 0; i < bundle.Entity.self.length; i++) {
       // feat-20260608 M2 / w11: read materials array via _getArrayView
       const entity = (entitySelf[i] ?? 0) as EntityHandle;
+      const layerVal = (fLayerValue?.[i] ?? 0) as number;
       const materialsView = worldInternal._getArrayView(
         entity,
         MeshRenderer as unknown as typeof Transform,
@@ -2659,6 +2660,7 @@ export function extractFrame(
                 renderableIndex: renderables.length,
                 passIndex: pIdx,
                 queue: pass.queue ?? 2000,
+                layer: layerVal,
                 tags: pass.tags ?? {},
                 renderState: pass.renderState,
                 defines: pass.defines,
@@ -2703,6 +2705,7 @@ export function extractFrame(
           renderableIndex: nextRenderableIndex,
           passIndex: 0,
           queue: 2000,
+          layer: layerVal,
           tags: shadowCasterTags,
           renderState: undefined,
           defines: undefined,
@@ -2720,6 +2723,7 @@ export function extractFrame(
           renderableIndex: nextRenderableIndex,
           passIndex: 1,
           queue: 2000,
+          layer: layerVal,
           tags: forwardTags,
           renderState: undefined,
           defines: undefined,

@@ -11,10 +11,9 @@
 // 1. engine usage
 import { Entity } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
-import type { App, AppError } from '@forgeax/engine-app';
+import type { App, CanvasAppError } from '@forgeax/engine-app';
 import type { InputBackend } from '@forgeax/engine-input';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { RhiError } from '@forgeax/engine-rhi/errors';
 import {
   Camera,
   createDevImportTransport,
@@ -85,7 +84,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const overrideBackend = winExt.__lightingMapsInputBackend?.();
 
   const bundler = { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() };
-  const appRes: { ok: true; value: App } | { ok: false; error: AppError | RhiError | EngineEnvironmentError } =
+  const appRes: { ok: true; value: App } | { ok: false; error: CanvasAppError } =
     overrideBackend === undefined
       ? await createApp(target, {}, bundler)
       : await createFirstPersonControls(target, overrideBackend, bundler);
@@ -348,7 +347,7 @@ function addScrollFovSystem(world: App['world'], renderer: App['renderer']): voi
   });
 }
 
-function reportBootstrapError(error: AppError | RhiError | EngineEnvironmentError): void {
+function reportBootstrapError(error: CanvasAppError): void {
   if (error instanceof EngineEnvironmentError) {
     const webgpuError = error.detail.webgpuError;
     const innerCode = webgpuError !== undefined && 'code' in webgpuError ? webgpuError.code : '<none>';

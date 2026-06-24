@@ -155,13 +155,13 @@ export function getTransparentSortConfig(world: World): TransparentSortConfig {
  *
  * Returns `Result<void, ResourceInvalidValueError>`:
  *
- *   - `ok` — mode is in `{0, 1, 2}`; the resource is inserted /
+ *   - `ok` — mode is in `{0, 1, 2, 3}`; the resource is inserted /
  *     overwritten via `world.insertResource`.
  *   - `err` — mode is out of range; the resource is NOT mutated;
  *     `err.error` is a `ResourceInvalidValueError` instance carrying:
  *       `.code === 'resource-invalid-value'`
- *       `.expected === 'mode \u2208 {0, 1, 2}'`
- *       `.hint === '0=layer-z, 1=layer-y, 2=layer-yz'`
+ *       `.expected === 'mode \u2208 {0, 1, 2, 3}'`
+ *       `.hint === '0=layer-z, 1=layer-y, 2=layer-yz, 3=distance'`
  *       `.detail.receivedMode === <the rejected mode>`
  *
  * @fallback mode out-of-range is NEVER silently coerced to mode=0 —
@@ -183,8 +183,8 @@ export function getTransparentSortConfig(world: World): TransparentSortConfig {
  *   const r = setTransparentSortConfig(world, { mode: 99, yzAlpha: 1.0 });
  *   if (!r.ok) {
  *     // r.error.code === 'resource-invalid-value'
- *     // r.error.expected === 'mode \u2208 {0, 1, 2}'
- *     // r.error.hint === '0=layer-z, 1=layer-y, 2=layer-yz'
+ *     // r.error.expected === 'mode \u2208 {0, 1, 2, 3}'
+ *     // r.error.hint === '0=layer-z, 1=layer-y, 2=layer-yz, 3=distance'
  *     // r.error.detail.receivedMode === 99
  *   }
  */

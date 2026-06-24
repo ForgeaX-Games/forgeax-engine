@@ -23,11 +23,10 @@
 //   P5 -- atlas PNG + sidecar pre-generated via atlas CLI and committed;
 //         demo build chain has zero atlas-tool dependency.
 
-import type { App, AppError } from '@forgeax/engine-app';
+import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { ok as okResult } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { RhiError } from '@forgeax/engine-rhi/errors';
 import {
   CAMERA_PROJECTION_ORTHOGRAPHIC,
   Camera,
@@ -382,7 +381,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   console.warn('[sprite-atlas] running. 100 sprites / 1 atlas / 1 draw call.');
 }
 
-function reportAppError(err: AppError | RhiError | EngineEnvironmentError): void {
+function reportAppError(err: CanvasAppError): void {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';

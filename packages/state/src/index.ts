@@ -33,6 +33,7 @@ export {
   OnEnter,
   OnExit,
 } from './on-enter-on-exit';
+export { statePlugin } from './plugin-factory';
 export { registerStatesPlugin } from './register-plugin';
 export {
   nextStateResourceKey,

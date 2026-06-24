@@ -1,9 +1,19 @@
 // World-data conversion: read the asi_world JSON shapes we already mirror in
 // ./types.ts, return:
-//   - layers : { heightKey, layerOrder, tiles: Uint32Array(cols*rows) } per
-//     terrain height bucket; one TileLayer per height. Within a single
-//     bucket the topmost graphic_index for each (x, y) wins (asi_world
-//     cells already only carry the on-screen index).
+//   - layers : { heightKey, subIndex, layerOrder, tiles: Uint32Array(cols*rows) }
+//     -- one TileLayer per (height bucket, sub-layer index) pair. asi_world
+//     cells carry a `graphic_index: number[]` array where each entry is one
+//     sub-layer (bottom to top) painted into the same cell at the same
+//     height (e.g. [4, 6] = "light grass at idx 4, then wall trim at idx 6
+//     on top"). The earlier path collapsed this to `graphic_index[last]`
+//     only, which made the lower-painted terrain transitions vanish (height=1
+//     wall trim hid the grass underneath; height=-99 sunken floors lost
+//     their middle band). We now spawn one TileLayer per sub-layer index
+//     across all cells in the bucket; layerOrder is `height * 100 + subIndex`
+//     so sub-layers stack within their height bucket but never cross into
+//     the next bucket (HEIGHT_LAYER_BASE = 100 gives 100 sub-layer slots
+//     per height before the next height's slot 0 takes over -- well above
+//     the observed max of ~3 entries per cell).
 //   - regions / tilesetTiles : 1:1 from the .tsj file, which is the SSOT
 //     of the atlas rectangle layout.
 //   - passable : Uint8Array(cols*rows); 1 = walkable. Built from terrain.json
@@ -22,6 +32,8 @@ import type {
 
 export interface BuiltLayer {
   readonly heightKey: string;
+  /** 0-based index within the height bucket; 0 = bottom-most, N-1 = topmost. */
+  readonly subIndex: number;
   readonly layerOrder: number;
   readonly tiles: Uint32Array;
 }
@@ -66,19 +78,40 @@ export function buildWorld(args: {
   const layers: BuiltLayer[] = [];
   for (const heightKey of heightKeys) {
     const cellsAtHeight = terrain.cells[heightKey] ?? [];
-    const tiles = new Uint32Array(cols * rows);
+
+    // Count the max stack depth in this height bucket so we know how many
+    // sub-layers to allocate. asi_world test2-b30f5a tops out at ~3
+    // (template_id length 3 / graphic_index length 3 -- e.g. height=-99
+    // sunken floors with grass + frame + wall trim).
+    let maxStack = 0;
+    for (const cell of cellsAtHeight) {
+      if (cell.graphic_index.length > maxStack) maxStack = cell.graphic_index.length;
+    }
+
+    const heightNum = Number(heightKey);
+    // height -99 in asi_world is a "sunken" floor — render below default 0.
+    // Otherwise stack so taller heights paint over lower ones.
+    const baseLayerOrder = heightNum === -99
+      ? -HEIGHT_LAYER_BASE
+      : heightNum * HEIGHT_LAYER_BASE;
+
+    // Allocate one Uint32Array per sub-layer slot, then walk cells once
+    // and route each graphic_index[k] entry into sub-layer k. Passability
+    // is computed once per cell across all template_id entries
+    // (asi_world's anyLayerImpassable rule).
+    const subTiles: Uint32Array[] = [];
+    for (let s = 0; s < maxStack; s++) subTiles.push(new Uint32Array(cols * rows));
+
     for (const cell of cellsAtHeight) {
       if (cell.x < 0 || cell.x >= cols || cell.y < 0 || cell.y >= rows) continue;
-      // graphic_index is an array (one entry per stacked sub-layer at this
-      // cell); the TOPMOST entry is what asi_world renders on top, so we
-      // pick the last one. id+1 because we reserve id=0 as 'transparent'
-      // (forgeax tilemap convention; tile id 0 yields a transparent cell).
-      const idx = cell.graphic_index.length > 0
-        ? cell.graphic_index[cell.graphic_index.length - 1]
-        : undefined;
-      if (idx === undefined) continue;
-      tiles[cell.y * cols + cell.x] = idx + 1;
-
+      for (let s = 0; s < cell.graphic_index.length; s++) {
+        const idx = cell.graphic_index[s];
+        if (idx === undefined) continue;
+        // +1 because tile id 0 is the engine's transparent-cell sentinel.
+        const subTilesS = subTiles[s];
+        if (subTilesS === undefined) continue;
+        subTilesS[cell.y * cols + cell.x] = idx + 1;
+      }
       // Terrain passability: any sub-layer impassable = blocked.
       for (const tplName of cell.template_id) {
         const tpl = terrainConfig.templates[tplName];
@@ -88,13 +121,17 @@ export function buildWorld(args: {
         }
       }
     }
-    const heightNum = Number(heightKey);
-    // height -99 in asi_world is a "sunken" floor — render below default 0.
-    // Otherwise stack so taller heights paint over lower ones.
-    const layerOrder = heightNum === -99
-      ? -HEIGHT_LAYER_BASE
-      : heightNum * HEIGHT_LAYER_BASE;
-    layers.push({ heightKey, layerOrder, tiles });
+
+    for (let s = 0; s < subTiles.length; s++) {
+      const tiles = subTiles[s];
+      if (tiles === undefined) continue;
+      layers.push({
+        heightKey,
+        subIndex: s,
+        layerOrder: baseLayerOrder + s,
+        tiles,
+      });
+    }
   }
 
   const objectTilesById = new Map<number, TsjTile>();

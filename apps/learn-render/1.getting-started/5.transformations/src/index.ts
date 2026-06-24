@@ -56,9 +56,8 @@
 // for the elapsed delta -- no fn-signature extension to ECS surface.
 import { createApp } from '@forgeax/engine-app';
 import { Entity, type World } from '@forgeax/engine-ecs';
-import type { AppError } from '@forgeax/engine-app';
+import type { CanvasAppError } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { RhiError } from '@forgeax/engine-rhi/errors';
 import {
   Camera,
   createDevImportTransport,
@@ -368,7 +367,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   console.warn(`[learn-render 1.5 transformations] backend=${renderer.backend}`);
 }
 
-function reportBootstrapError(err: AppError | RhiError | EngineEnvironmentError): void {
+function reportBootstrapError(err: CanvasAppError): void {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';

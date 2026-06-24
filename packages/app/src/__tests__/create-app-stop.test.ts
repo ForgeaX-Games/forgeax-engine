@@ -253,7 +253,14 @@ describe('w4: AC-04 assemble form does not auto-destroy external backend', () =>
       destroy: destroySpy,
     };
 
-    const result = await createApp({ renderer, world: new World(), audio: audioBackend });
+    const result = await createApp({
+      renderer,
+      world: (() => {
+        const w = new World();
+        w.insertResource(AUDIO_ENGINE_RESOURCE_KEY, audioBackend);
+        return w;
+      })(),
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const app = result.value;
@@ -273,8 +280,8 @@ describe('w4: AC-04 assemble form does not auto-destroy external backend', () =>
 // feat-20260619 M3: auto-register audioTickSystem (w13/w14 tests, w15 impl)
 // ---------------------------------------------------------------------------
 
-import { AudioSource } from '@forgeax/engine-audio';
-import { WebAudioEngine } from '@forgeax/engine-audio-webaudio';
+import { AUDIO_ENGINE_RESOURCE_KEY, AudioSource } from '@forgeax/engine-audio';
+import { audioPlugin, WebAudioEngine } from '@forgeax/engine-audio-webaudio';
 
 function createTestBufferForApp(duration = 1, sampleRate = 48000): AudioBuffer {
   return {
@@ -452,17 +459,20 @@ function uninstallRafStub() {
 }
 
 describe('feat-20260619 M3: auto-register audioTickSystem', () => {
-  // w13: AC-12 — createApp({audio:true}) auto-registers audioTickSystem
-  // via app.registerUpdate in buildApp. Verification goes through the
-  // full consumption path: createApp → app.start() → frames tick →
-  // AudioSource.playing edge detected → backend.play triggered.
+  // w13: AC-12 — audioPlugin registers the audio-tick world system.
+  // feat-20260623-plugin-system-unify (M2 / D-2 / D-4): the assemble form no
+  // longer auto-wires audio; the host inserts AUDIO_ENGINE_RESOURCE_KEY and
+  // passes audioPlugin() in plugins. The audio-tick system then runs inside
+  // world.update() each frame. Verification goes through the full consumption
+  // path: createApp → app.start() → frames tick → AudioSource.playing edge
+  // detected → backend.play triggered.
   //
   // Edge-detection semantics (getPrevState, audio-tick-system.ts:187-197):
   // first observation stores current as prev and returns current → no edge.
   // A false→true edge requires two frames: frame 1 sees false (prev=false),
   // frame 2 sees true (prev=false, current=true → play-start).
   describe('w13: AC-12 auto-register wiring verification', () => {
-    it('audio:true → backend.play triggered after playing edge (full consumption path)', async () => {
+    it('audioPlugin → backend.play triggered after playing edge (full consumption path)', async () => {
       const OriginalAudioContext = globalThis.AudioContext;
       vi.stubGlobal('document', {
         addEventListener: vi.fn(),
@@ -508,7 +518,15 @@ describe('feat-20260619 M3: auto-register audioTickSystem', () => {
         // ASSET_REGISTRY_RESOURCE_KEY (clipResolver reads world.sharedRefs
         // directly though, so this is primarily for buildApp coverage).
         const rendererWithAssets = { ...renderer, assets: world.sharedRefs } as unknown as Renderer;
-        const result = await createApp({ renderer: rendererWithAssets, world, audio: backend });
+        // New assemble contract (D-2 / D-4): host inserts the audio backend
+        // resource + passes audioPlugin() in the plugin list. audioPlugin reads
+        // the resource and registers the audio-tick world system.
+        world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, backend);
+        const result = await createApp({
+          renderer: rendererWithAssets,
+          world,
+          plugins: [audioPlugin()],
+        });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         const app = result.value;
@@ -641,12 +659,19 @@ describe('feat-20260619 M3: auto-register audioTickSystem', () => {
         const backend = new WebAudioEngine();
         const { renderer } = makeRendererStubForStop();
         const rendererWithAssets = { ...renderer, assets: world.sharedRefs } as unknown as Renderer;
-        const result = await createApp({ renderer: rendererWithAssets, world, audio: backend });
+        // New assemble contract (D-2 / D-4): host inserts the audio resource +
+        // passes audioPlugin() so the audio-tick world system is registered.
+        world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, backend);
+        const result = await createApp({
+          renderer: rendererWithAssets,
+          world,
+          plugins: [audioPlugin()],
+        });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         const app = result.value;
 
-        // First frame: the auto-registered audioTickSystem walks the
+        // First frame: the audio-tick world system walks the
         // AudioSource archetype. clipResolver uses world.sharedRefs (always
         // available on World, not a resource-key lookup). The tick system
         // should not throw due to missing resources.

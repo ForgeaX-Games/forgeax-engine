@@ -9,8 +9,8 @@
 // Five assertions (one retired-symbol zero-hit + four positive guards):
 //   (1) NEG  — `registerObjectMaterials` / `spawnObjectSprites` /
 //              `placeObjectSprite` grep zero hits in main.ts (AC-15).
-//   (2) POS  — `assets.register<TilesetAsset>` appears at least once
-//              (object tileset registration path).
+//   (2) POS  — `world.allocSharedRef<'TilesetAsset', ...>` appears at
+//              least once (object tileset registration path).
 //   (3) POS  — `world.spawn(` invocation that mentions `Tilemap` appears
 //              (Tilemap entity spawn — terrain or object layer).
 //   (4) POS  — `world.spawn(` invocation that mentions `TileLayer`
@@ -53,9 +53,9 @@ describe('asi-world demo migration (m4-t1 grep spot-check)', () => {
     expect(countMatches(src, /\bplaceObjectSprite\b/g)).toBe(0);
   });
 
-  it('positive guard: assets.register<TilesetAsset> appears at least once', () => {
+  it('positive guard: world.allocSharedRef<TilesetAsset> appears at least once', () => {
     const src = readMain();
-    expect(countMatches(src, /assets\.register<TilesetAsset>/g)).toBeGreaterThanOrEqual(1);
+    expect(countMatches(src, /world\.allocSharedRef<['"]TilesetAsset['"]/g)).toBeGreaterThanOrEqual(1);
   });
 
   it('positive guard: world.spawn() with Tilemap component appears', () => {

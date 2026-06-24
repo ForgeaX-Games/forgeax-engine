@@ -85,10 +85,9 @@
 // Time resource + auto input attach (charter P4; OOS-9 / OOS-11 -- the
 // demo never touches raw mat4 math or the browser raw rAF API).
 import { createApp } from '@forgeax/engine-app';
-import type { AppError } from '@forgeax/engine-app';
+import type { CanvasAppError } from '@forgeax/engine-app';
 import { quat, vec3 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { RhiError } from '@forgeax/engine-rhi/errors';
 import {
   Camera,
   createDevImportTransport,
@@ -384,7 +383,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   console.warn(`[learn-render 1.6 coordinate-systems] backend=${renderer.backend}`);
 }
 
-function reportBootstrapError(err: AppError | RhiError | EngineEnvironmentError): void {
+function reportBootstrapError(err: CanvasAppError): void {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';

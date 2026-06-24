@@ -13,6 +13,7 @@
   "include": ["src/**/*"],
   "references": [
     { "path": "../debug-draw" },
+    { "path": "../plugin" },
     { "path": "../audio" },
     { "path": "../audio-webaudio" },
     { "path": "../ecs" },

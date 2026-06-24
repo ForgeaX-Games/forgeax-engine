@@ -7079,15 +7079,16 @@ function makeStubGPU(): unknown {
       expect(res.error.detail.formatColorSpaceConflict?.expected).toBe('linear');
     });
 
-    it('asset-not-found path: resolve against an unresolvable handle (caller-side POD fetch)', () => {
-      // Pull-model migration: the store takes a POD, so a missing asset surfaces
-      // when the caller resolves the handle to a payload before reaching the store.
+    it('unresolvable handle: stale error forwarded (AC-10)', () => {
+      // D-3 / AC-10: resolveAssetHandle forwards stale errors instead of
+      // swallowing them into asset-not-found. A fake handle with gen>0
+      // triggers gen mismatch -> 'shared-ref-stale'.
       const world = new World();
       const fake = toShared<'TextureAsset'>(0xdeadbeef);
       const podRes = resolveAssetHandle<TextureAsset>(world, fake);
       expect(podRes.ok).toBe(false);
       if (podRes.ok) return;
-      expect(podRes.error.code).toBe('asset-not-found');
+      expect(podRes.error.code).toBe('shared-ref-stale');
     });
   });
 }

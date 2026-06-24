@@ -156,7 +156,7 @@ const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
 // Build both apps (URP + HDRP) before proceeding.
-const urpAppResult = await createApp(urpCanvas, { input: false }, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
+const urpAppResult = await createApp(urpCanvas, {}, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
   console.error(`[smoke-0l] FAIL - createApp URP: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 });
@@ -169,7 +169,7 @@ if (!urpAppResult.ok) {
 const urpApp = urpAppResult.value;
 console.log(`[smoke-0l] URP backend=${urpApp.renderer.backend}`);
 
-const hdrpAppResult = await createApp(hdrpCanvas, { input: false }, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
+const hdrpAppResult = await createApp(hdrpCanvas, {}, { shaderManifestUrl: MANIFEST_URL }).catch((err) => {
   console.error(`[smoke-0l] FAIL - createApp HDRP: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 });

@@ -23,10 +23,9 @@
 // that is physically correct, not a rendering bug.
 // 1. engine usage
 import { createApp } from '@forgeax/engine-app';
-import type { App, AppError } from '@forgeax/engine-app';
+import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { Entity, World } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
-import type { RhiError } from '@forgeax/engine-rhi/errors';
 import {
   Camera,
   EngineEnvironmentError,
@@ -98,7 +97,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const overrideBackend = winExt.__materialsInputBackend?.();
 
   const bundler = forgeaxBundlerAdapter();
-  const appRes: { ok: true; value: App } | { ok: false; error: AppError | RhiError | EngineEnvironmentError } =
+  const appRes: { ok: true; value: App } | { ok: false; error: CanvasAppError } =
     overrideBackend === undefined
       ? await createApp(target, {}, bundler)
       : await createFirstPersonControls(target, overrideBackend, bundler);
@@ -288,7 +287,7 @@ function addScrollFovSystem(world: App['world'], renderer: App['renderer']): voi
   });
 }
 
-function reportBootstrapError(err: AppError | RhiError | EngineEnvironmentError): void {
+function reportBootstrapError(err: CanvasAppError): void {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';

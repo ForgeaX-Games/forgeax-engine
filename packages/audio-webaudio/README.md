@@ -8,26 +8,30 @@
 
 ```ts
 import { createApp } from '@forgeax/engine-app';
+import { audioPlugin } from '@forgeax/engine-audio-webaudio';
 
-// audio: true auto-creates WebAudioBackend and registers AudioEngine Resource
-const app = await createApp(canvas, { audio: true });
+// audioPlugin() auto-creates WebAudioBackend and registers the AudioEngine Resource
+const app = await createApp(canvas, { plugins: [audioPlugin()] });
 ```
 
 ### Assemble form (host-managed)
 
 ```ts
-import { createWebAudioBackend } from '@forgeax/engine-audio-webaudio';
+import { createWebAudioBackend, audioPlugin, AUDIO_ENGINE_RESOURCE_KEY } from '@forgeax/engine-audio-webaudio';
+
+// Host pre-injects the backend resource, then passes audioPlugin() to wire the tick system.
+world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, createWebAudioBackend());
 
 const app = await createApp({
   renderer,
   world,
-  audio: createWebAudioBackend(),
+  plugins: [audioPlugin()],
 });
 ```
 
 ## Tick system registration
 
-Both tick systems (audioTickSystem + audioListenerSync) are auto-registered when using `createApp({ audio: true })`. When using the assemble form directly, register them manually in the ECS World schedule. Note the seam difference: `audioTickSystem` has no frame-order constraint, but listener sync reads `Transform.world` (written by `propagateTransforms`), so it MUST run `after: [PROPAGATE_TRANSFORMS_SYSTEM]` or it reads a stale (one-frame-late) pose.
+Both tick systems (audioTickSystem + audioListenerSync) are registered by `audioPlugin()` during `createApp`. When wiring the ECS World schedule manually (no app layer), register them directly. Note the seam difference: `audioTickSystem` has no frame-order constraint, but listener sync reads `Transform.world` (written by `propagateTransforms`), so it MUST run `after: [PROPAGATE_TRANSFORMS_SYSTEM]` or it reads a stale (one-frame-late) pose.
 
 ```ts
 import { audioTickSystem, syncListenerFromWorldMatrix } from '@forgeax/engine-audio-webaudio';
@@ -137,6 +141,6 @@ Requires Web Audio API (`AudioContext`, `AudioBuffer`, `AudioBufferSourceNode`, 
 ## Related packages
 
 - [`@forgeax/engine-audio`](../audio) -- interface, ECS components, error types, `AudioClipAsset` POD
-- [`@forgeax/engine-app`](../app) -- `createApp({ audio })` injection
+- [`@forgeax/engine-app`](../app) -- `createApp({ plugins: [audioPlugin()] })` injection
 - [`@forgeax/engine-ecs`](../ecs) -- World, Entity, System, Resource
 - [`@forgeax/engine-types`](../types) -- `AudioErrorCode`, `AudioError` type definitions SSOT

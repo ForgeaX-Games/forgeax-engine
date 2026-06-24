@@ -1,7 +1,7 @@
-// apps/hello/physics — Physics integration demo using createApp physics opts.
+// apps/hello/physics — Physics integration demo using the physicsPlugin.
 //
 // Three-statement takeoff (mirrors hello-app pattern):
-//   const app = await createApp(canvas, { physics: 'rapier-3d' });
+//   const app = await createApp(canvas, { plugins: [physicsPlugin('rapier-3d')] });
 //   if (!app.ok) reportError(app.error);
 //   app.value.start();
 //
@@ -16,9 +16,8 @@
 // — the sphere appears at y=5 and starts falling once the WASM module
 // initialises.
 
-import type { AppError } from '@forgeax/engine-app';
+import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
-import type { RhiError } from '@forgeax/engine-runtime';
 import {
   Camera,
   DirectionalLight,
@@ -28,7 +27,7 @@ import {
   Transform,
   HANDLE_CUBE,
 } from '@forgeax/engine-runtime';
-import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
+import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue, physicsPlugin } from '@forgeax/engine-physics';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -36,7 +35,7 @@ const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('hello-physics: missing <canvas id="app"> in index.html');
 
 const app = await createApp(canvas, {
-    physics: 'rapier-3d',
+    plugins: [physicsPlugin('rapier-3d')],
 }, forgeaxBundlerAdapter());
 if (!app.ok) reportError(app.error);
 else {
@@ -134,7 +133,7 @@ function spawnScene(world: import('@forgeax/engine-ecs').World): void {
   }).unwrap();
 }
 
-function reportError(err: AppError | RhiError | EngineEnvironmentError): void {
+function reportError(err: CanvasAppError): void {
   if (err instanceof EngineEnvironmentError) {
     console.error(`[hello-physics] EngineEnvironmentError: ${err instanceof Error ? err.message : String(err)}`);
     return;
@@ -163,6 +162,8 @@ function reportError(err: AppError | RhiError | EngineEnvironmentError): void {
     case 'oom':
     case 'internal-error':
     case 'hierarchy-broken':
+    case 'duplicate-plugin':
+    case 'plugin-build-failed':
       console.error(`[hello-physics] ${err.code}: ${err.hint}`);
       return;
   }

@@ -67,7 +67,7 @@ import type {
   PrimitiveTopology,
   VertexAttributeMap,
 } from '@forgeax/engine-types';
-import { derive, unwrapHandle } from '@forgeax/engine-types';
+import { derive, handleSlot } from '@forgeax/engine-types';
 import {
   AssetRegistry,
   HANDLE_CUBE,
@@ -1102,7 +1102,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     (world, pod) => {
       let handle: Handle<'CubeTextureAsset', 'shared'>;
       handle = world.allocSharedRef('CubeTextureAsset', pod, () => {
-        gpuStore.evictCubemap(unwrapHandle(handle));
+        gpuStore.evictCubemap(handleSlot(handle));
       });
       return ok(handle);
     },
@@ -2154,7 +2154,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         (world, pod) => {
           let handle: Handle<'CubeTextureAsset', 'shared'>;
           handle = world.allocSharedRef('CubeTextureAsset', pod, () => {
-            gpuStore.evictCubemap(unwrapHandle(handle));
+            gpuStore.evictCubemap(handleSlot(handle));
           });
           return ok(handle);
         },
@@ -4411,7 +4411,7 @@ async function buildReadyWebGPU(
     HANDLE_SPHERE,
     HANDLE_NINESLICE_QUAD,
   ]) {
-    const id = unwrapHandle(handle);
+    const id = handleSlot(handle);
     const gpu = gpuStore.getMeshGpuHandles(handle);
     if (gpu !== undefined) {
       meshHandles.set(id, gpu as MeshGpuHandles);
@@ -4751,6 +4751,22 @@ async function buildReadyWebGPU(
     'check device.limits.maxSamplersPerShaderStage',
   );
   if (!defaultSamplerResult.ok) throw defaultSamplerResult.error;
+
+  const nearestSamplerResult = runShimSyncStep(
+    () =>
+      rhiDevice.createSampler({
+        label: 'nearest-sampler',
+        magFilter: 'nearest',
+        minFilter: 'nearest',
+        mipmapFilter: 'nearest',
+        addressModeU: 'clamp-to-edge',
+        addressModeV: 'clamp-to-edge',
+      }),
+    'webgpu-runtime-error',
+    'createSampler (nearest) succeeded',
+    'check device.limits.maxSamplersPerShaderStage',
+  );
+  if (!nearestSamplerResult.ok) throw nearestSamplerResult.error;
 
   // feat-20260520-directional-light-shadow-mapping M1c / w8 + M2 / w14:
   // shadow comparison sampler — clamp-to-edge, linear filter, compare:'less'.
@@ -6595,6 +6611,7 @@ async function buildReadyWebGPU(
     instancesBindGroupLayout: instancesBglResult.value,
     identityInstanceBuffer: identityInstanceResult.value,
     defaultSampler: defaultSamplerResult.value,
+    nearestSampler: nearestSamplerResult.value,
     fallbackTextureView: fallbackTextureViewResult.value,
     // feat-20260518 M3 / w13: the 1x1 white textureView aliases
     // `fallbackTextureView` since both serve the same purpose (default-

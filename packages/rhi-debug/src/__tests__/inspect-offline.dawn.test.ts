@@ -159,7 +159,7 @@ async function recordVboFrame(pack: DawnPack): Promise<RecordedTape> {
   await wrappedDevice.queue.onSubmittedWorkDone();
 
   debugInst.onFrameEnd();
-  const tape = debugInst.getTape();
+  const tape = debugInst.getTape() as any;
   if (!tape) throw new Error('tape');
   const { json, blob } = serializeTape(tape);
   return { json, blob };

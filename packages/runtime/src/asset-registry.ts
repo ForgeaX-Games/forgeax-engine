@@ -55,6 +55,7 @@ import {
   derive,
   type FontAsset,
   type Handle,
+  handleSlot,
   IMAGE_ERROR_HINTS,
   type ImageError,
   type ImageErrorDetail,
@@ -1819,7 +1820,7 @@ export function validateTilemapAtRegister(
   if (!(chunkSize >= 1)) {
     return err(invalidValue('Tilemap.chunkSize', chunkSize, 'chunkSize-below-one'));
   }
-  if (unwrapHandle(tileset) === 0) {
+  if (handleSlot(tileset) === 0) {
     return err(invalidValue('Tilemap.tileset', tileset, 'tileset-handle-zero'));
   }
   return ok(undefined);
@@ -2092,18 +2093,18 @@ export class AssetRegistry {
     // scene refs[] pointing at a builtin GUID resolve without a hand-
     // maintained table (docs/feedbacks/2026-06-03 §6.2 Tier 0).
     const builtinByHandle = new Map<number, Asset>([
-      [unwrapHandle(HANDLE_CUBE), BUILTIN_CUBE],
-      [unwrapHandle(HANDLE_TRIANGLE), BUILTIN_TRIANGLE],
-      [unwrapHandle(HANDLE_QUAD), BUILTIN_QUAD],
-      [unwrapHandle(HANDLE_SPHERE), BUILTIN_SPHERE],
-      [unwrapHandle(HANDLE_NINESLICE_QUAD), BUILTIN_NINESLICE_QUAD],
+      [handleSlot(HANDLE_CUBE), BUILTIN_CUBE],
+      [handleSlot(HANDLE_TRIANGLE), BUILTIN_TRIANGLE],
+      [handleSlot(HANDLE_QUAD), BUILTIN_QUAD],
+      [handleSlot(HANDLE_SPHERE), BUILTIN_SPHERE],
+      [handleSlot(HANDLE_NINESLICE_QUAD), BUILTIN_NINESLICE_QUAD],
     ]);
     for (const [handle, guidStr] of BUILTIN_MESH_GUIDS) {
       const parsed = AssetGuid.parse(guidStr);
       if (!parsed.ok) {
         throw new Error(`[asset-registry] builtin GUID ${guidStr} is not a valid UUID`);
       }
-      const payload = builtinByHandle.get(unwrapHandle(handle));
+      const payload = builtinByHandle.get(handleSlot(handle));
       if (payload !== undefined)
         this.assetCatalog.set(guidStr.toLowerCase(), {
           guid: guidStr,

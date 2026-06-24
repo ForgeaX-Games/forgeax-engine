@@ -14,6 +14,7 @@ import type { DebugDraw } from '@forgeax/engine-debug-draw';
 import type { Result, World } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
 import type { PhysicsWorld, PhysicsWorld2D } from '@forgeax/engine-physics';
+import type { Plugin, PluginError } from '@forgeax/engine-plugin';
 import type { RhiError, RhiInstance } from '@forgeax/engine-rhi';
 import type {
   EngineEnvironmentError,
@@ -61,9 +62,8 @@ export type AppDispatchError = AppError | RhiError | RuntimeError | PostProcessE
 export interface AppAssembleArgs {
   readonly renderer: Renderer;
   readonly world: World;
-  readonly input?: InputBackend;
-  readonly audio?: AudioBackend;
-  readonly physics?: 'rapier-2d' | 'rapier-3d';
+  /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
+  readonly plugins?: Plugin[];
   readonly schedule?: unknown;
   readonly maxDt?: number;
   readonly silenceUnhandledErrors?: boolean;
@@ -83,12 +83,8 @@ export interface AppAssembleArgs {
  * default noise, but reachable when the AI user scrolls the type).
  */
 export interface CreateAppOptions {
-  /** Opt-out of the default input attach (default: true). */
-  readonly input?: boolean;
-  /** Enable audio auto-attach (default: undefined/false, no audio). When true, creates a WebAudioBackend and registers it as 'AudioEngine' World Resource. */
-  readonly audio?: boolean;
-  /** Auto-attach physics backend (default: undefined, no physics). When set, dynamic-imports the corresponding rapier backend package and registers a PhysicsWorld Resource + tick systems. */
-  readonly physics?: 'rapier-2d' | 'rapier-3d';
+  /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
+  readonly plugins?: Plugin[];
   /** Opaque schedule hook (typed unknown in M1; narrowed in later feat). */
   readonly schedule?: unknown;
   /** dt clamp ceiling override (defaults to MAX_DT_DEFAULT in M2). */
@@ -178,15 +174,22 @@ export interface App {
   readonly renderer: Renderer;
   /** Caller-owned World (reference equality with the assemble input). */
   readonly world: World;
+  /**
+   * Plugin registry produced by runPlugins() —— Map<string, Plugin>.
+   * The caller passes this to wireDefaultInspectors context so the
+   * inspector's 'plugins' RPC method can enumerate loaded plugins.
+   * Always present after a successful createApp call.
+   */
+  readonly pluginRegistry: Map<string, import('@forgeax/engine-plugin').Plugin>;
   /** InputBackend handle when input attach is enabled; undefined otherwise. */
   readonly input?: InputBackend;
   /** AudioBackend handle when audio attach is enabled; undefined otherwise. */
   readonly audio?: AudioBackend;
   /**
-   * PhysicsWorld handle when physics auto-attach is enabled; undefined
-   * otherwise. This field is populated asynchronously (fire-and-forget
-   * WASM load) -- it may be undefined for the first few frames until
-   * the WASM module initialises.
+   * PhysicsWorld handle when physicsPlugin is loaded; undefined
+   * otherwise. physicsPlugin.build awaits the WASM import -- createApp
+   * resolves ONLY after the WASM module is loaded, so this field is
+   * populated immediately when createApp returns (AC-06: no timing gap).
    */
   readonly physics?: PhysicsWorld | PhysicsWorld2D | undefined;
   /**
@@ -286,13 +289,20 @@ export interface App {
  * Error union returned by the assemble-form entry. The canvas-form thin
  * wrapper widens this with EngineEnvironmentError (createRenderer
  * construction-time failure path -- plan-strategy D-5 / requirements AC-01).
+ *
+ * feat-20260623-plugin-system-unify (M2 / D-7): widened with PluginError
+ * (duplicate-plugin / plugin-build-failed) since runPlugins now drives the
+ * assemble-form wiring and can fail with a structured plugin error.
  */
-export type AssembleAppError = AppError | RhiError;
+export type AssembleAppError = AppError | RhiError | PluginError;
 
 /**
  * Error union returned by the canvas-form thin wrapper. Extends
  * AssembleAppError with EngineEnvironmentError to surface
  * createRenderer construction-time failures unchanged (preserves
  * .detail.webgpuError per requirements section 6.1).
+ *
+ * PluginError rides in via AssembleAppError (the canvas form also runs
+ * runPlugins; M2 / D-7).
  */
 export type CanvasAppError = AssembleAppError | EngineEnvironmentError;

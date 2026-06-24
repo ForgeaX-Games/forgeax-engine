@@ -4,7 +4,7 @@
 // dirty (or has never been extracted), purges its previously-spawned derived
 // per-cell entities and re-spawns one ECS entity per non-zero cell. Each
 // derived entity carries Transform + MeshFilter (HANDLE_QUAD) + MeshRenderer
-// + Layer + ChildOf (back to the parent layer entity).
+// + Layer. Derived entities are root entities (no ChildOf) so propagateTransforms
 //
 // M0 baseline: unit-cell 1x1 form, single-atlas, no UV inset.
 // M2 extension (plan-strategy §D-2 + §D-7 step 3):
@@ -97,10 +97,19 @@ export function resetTilemapDerivedEntityTracker(): void {
 
 /**
  * Compute the per-layer / per-chunk packed value carried in `Layer.value`
- * on derived entities. `(layerOrder << 20) | (chunkIndex & 0xFFFFF)` —
+ * on derived entities. Normal mode: `(layerOrder << 20) | (chunkIndex & 0xFFFFF)` —
  * layerOrder dominates the sort, chunkIndex tiebreaks within a layer.
+ * Y-sort mode (`ySort=true`): returns `(layerOrder << 20)` without the
+ * chunkIndex so all derived entities in this layer share the exact same
+ * Layer.value and can Y-interleave with sprite entities carrying the
+ * same value.
  */
-export function encodeTilemapLayerValue(layerOrder: number, chunkIndex: number): number {
+export function encodeTilemapLayerValue(
+  layerOrder: number,
+  chunkIndex: number,
+  ySort = false,
+): number {
+  if (ySort) return (layerOrder << 20) | 0;
   return (layerOrder << 20) | (chunkIndex & 0xfffff) | 0;
 }
 
@@ -145,10 +154,18 @@ function resolveTilesetMaterial(world: World, tileset: TilesetAsset, regionIndex
   // Atlas-space rectangle -> normalised UV. M2 adds a half-texel inset
   // on every edge (plan-strategy §D-7 step 3) so GPU bilinear filtering
   // at the region boundary never samples the adjacent atlas tile. Atlas
-  // pixel extent is inferred from the tileset grid metadata so the math
-  // stays self-contained.
-  const atlasWidth = Math.max(1, tileset.columns * tileset.tileWidth);
-  const atlasHeight = Math.max(1, tileset.rows * tileset.tileHeight);
+  // pixel extent comes from atlasSizes[atlasIndex] when present (exact
+  // per-atlas pixel dimensions); falls back to columns * tileWidth for
+  // single-atlas or legacy callers.
+  const atlasSize = tileset.atlasSizes?.[atlasIndex];
+  const atlasWidth = Math.max(
+    1,
+    atlasSize !== undefined ? atlasSize.pixelWidth : tileset.columns * tileset.tileWidth,
+  );
+  const atlasHeight = Math.max(
+    1,
+    atlasSize !== undefined ? atlasSize.pixelHeight : tileset.rows * tileset.tileHeight,
+  );
   const halfTexelU = 0.5 / atlasWidth;
   const halfTexelV = 0.5 / atlasHeight;
   const u = region.x / atlasWidth + halfTexelU;
@@ -172,7 +189,7 @@ function resolveTilesetMaterial(world: World, tileset: TilesetAsset, regionIndex
       region: [u, v, w, h],
       pivot: [0.5, 0.5],
       flipX: 0.0,
-      flipY: 0.0,
+      flipY: 1.0,
       slices: [0.0, 0.0, 0.0, 0.0],
       sliceMode: 0.0,
     },
@@ -290,11 +307,11 @@ function specFor(
  */
 function spawnDerivedRenderEntities(
   world: World,
-  layerEntity: EntityHandle,
   tilemap: { tileSizeX: number; tileSizeY: number },
   layerOrder: number,
   spec: DerivedSpawnSpec,
   packedTile: number,
+  ySort = false,
 ): EntityHandle {
   const { flipH, flipV, flipDiagonal } = decodeTileBits(packedTile);
   // D-2 first-line: D swaps the X/Y pivot pair so the 90deg rotation
@@ -318,7 +335,7 @@ function spawnDerivedRenderEntities(
   const scaleY = (flipV ? -1 : 1) * spec.heightCells * tilemap.tileSizeY;
   const quatZ = flipDiagonal ? SQRT1_2 : 0;
   const quatW = flipDiagonal ? SQRT1_2 : 1;
-  const layerValue = encodeTilemapLayerValue(layerOrder, spec.chunkIndex);
+  const layerValue = encodeTilemapLayerValue(layerOrder, spec.chunkIndex, ySort);
   return world
     .spawn(
       {
@@ -344,7 +361,6 @@ function spawnDerivedRenderEntities(
         },
       },
       { component: Layer, data: { value: layerValue } },
-      { component: ChildOf, data: { parent: layerEntity } },
     )
     .unwrap();
 }
@@ -367,6 +383,7 @@ function bucketTileLayer(
         chunkSize: number;
       };
       readonly layerOrder: number;
+      readonly ySort: boolean;
       readonly specs: readonly DerivedSpawnSpec[];
     }
   | undefined {
@@ -400,6 +417,7 @@ function bucketTileLayer(
   return {
     tilemap,
     layerOrder: layer.layerOrder,
+    ySort: (layer.ySort ?? 0) !== 0,
     specs,
   };
 }
@@ -461,11 +479,11 @@ export function tilemapChunkExtractSystem(world: World): void {
     for (const spec of bucket.specs) {
       const e = spawnDerivedRenderEntities(
         world,
-        w.layerEntity,
         bucket.tilemap,
         bucket.layerOrder,
         spec,
         spec.packedTile,
+        bucket.ySort,
       );
       spawned.push(unwrapHandle(e as unknown as Handle<string, 'shared'>));
     }

@@ -898,6 +898,61 @@ describe('tape-format — handle graph integrity', () => {
     }
   });
 
+  it('AC-11: deserialize side hint does NOT contain bootstrap marker (cross-hint distinctness)', () => {
+    const tape = makeTapeWithEvents([
+      {
+        kind: 'writeBuffer',
+        handleId: 'buffer:nonexistent',
+        bufferOffset: 0,
+        dataHash: 'x',
+        size: 4,
+      },
+    ]);
+    const { json, blob } = serializeTape(tape);
+    const res = deserializeTape(json, blob);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('tape-handle-graph-broken');
+      // Deserialize side hint must NOT contain 'bootstrap' (finalize-side-only marker)
+      expect(res.error.hint).not.toContain('bootstrap');
+      // Deserialize side hint should contain tape damage / stale marker
+      const hintContainsTapeIssue =
+        res.error.hint.includes('tape') ||
+        res.error.hint.includes('corrupt') ||
+        res.error.hint.includes('declared') ||
+        res.error.hint.includes('old');
+      expect(hintContainsTapeIssue).toBe(true);
+    }
+  });
+
+  it('AC-08: dangling hint contains recovery guidance for steady-frame tapes without bootstrap creates', () => {
+    // Simulate a stale steady-frame tape: a writeBuffer references a buffer
+    // handleId that was never declared by any create* event. This is the
+    // signature of a tape captured before the bootstrap self-containment fix.
+    // The deserialize-side hint must guide AI users to re-capture.
+    const tape = makeTapeWithEvents([
+      {
+        kind: 'writeBuffer',
+        handleId: 'buffer:nonexistent',
+        bufferOffset: 0,
+        dataHash: 'x',
+        size: 4,
+      },
+    ]);
+    const { json, blob } = serializeTape(tape);
+    const res = deserializeTape(json, blob);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('tape-handle-graph-broken');
+      // AC-08: hint must contain recovery guidance
+      const hintContainsRecovery =
+        res.error.hint.includes('self-contained') ||
+        res.error.hint.includes('steady-frame') ||
+        res.error.hint.includes('re-capture');
+      expect(hintContainsRecovery).toBe(true);
+    }
+  });
+
   it('all handles valid -> ok', () => {
     const tape = makeTapeWithEvents([
       { kind: 'createBuffer', handleId: 'buf-1', desc: { size: 64, usage: 16 } },

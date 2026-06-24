@@ -48,6 +48,7 @@
 // alongside RhiErrorCode et al.); charter P3 (explicit failure) + P4
 // (closed-union exhaustive switch).
 
+import type { PluginError } from '@forgeax/engine-plugin';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
 
 /**
@@ -295,15 +296,20 @@ export const APP_ERROR_HINTS: Readonly<Record<AppErrorCode, string>> = {
 };
 
 /**
- * Type guard for narrowing `AppError | RhiError` mixed signals to AppError.
+ * Type guard for narrowing `CanvasAppError`-compatible mixed signals to AppError.
  *
- * The fan-out signature is `(err: AppError | RhiError) => void`; AI users
+ * The fan-out signature is `(err: CanvasAppError) => void`; AI users
  * who want to handle only the AppError leg call `if (isAppError(err)) ...`
  * before walking `.code`. Reverse-compatible with `instanceof AppError`
  * (the class is exposed); the function form is provided as the
  * canonical idiom in JSDoc / README so AI users do not need to reason
  * about cross-realm `instanceof` quirks.
+ *
+ * Accepts PluginError in the parameter union (feat-20260623-plugin-system-unify
+ * M2 / D-7) so callers who pass the full CanvasAppError don't get TS2379.
+ * The instanceof AppErrorClass gate still returns false for PluginErrors
+ * (PluginErrorClass is a separate class hierarchy from AppErrorClass).
  */
-export function isAppError(err: AppError | RhiError): err is AppError {
+export function isAppError(err: AppError | RhiError | PluginError): err is AppError {
   return err instanceof AppErrorClass;
 }

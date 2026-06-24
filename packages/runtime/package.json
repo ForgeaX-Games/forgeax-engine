@@ -44,6 +44,7 @@
     "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:^",
+    "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-render-graph": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-rhi-webgpu": "workspace:*",

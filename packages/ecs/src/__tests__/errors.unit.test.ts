@@ -637,6 +637,8 @@ import {
             case 'shared-ref-released':
             case 'shared-ref-double-release':
             case 'builtin-slot-not-owned':
+            case 'shared-ref-stale':
+            case 'unique-ref-stale':
               return code;
             default:
               return assertNever(code);

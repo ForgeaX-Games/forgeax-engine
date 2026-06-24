@@ -7,9 +7,13 @@
 // AC-02 requires at least one @ts-expect-error proving cross-mode rejection.
 // Cross-target rejection is also covered. Handle<T,M> still widens to number
 // for GPU upload compatibility.
+//
+// w3: EntityHandle type-level assertions — EntityHandle is numeric (widens
+// to number), and encodeEntity returns an EntityHandle (not a bare number).
 
 import type { Handle } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
+import type { EntityHandle } from '../entity-handle';
 
 describe('Handle<T,M> — phantom brand (w1)', () => {
   it('Handle<T,M> structurally widens to number (GPU upload compatibility)', () => {
@@ -64,5 +68,19 @@ describe('Handle<T,M> — phantom brand (w1)', () => {
     // @ts-expect-error — mesh handle cannot be assigned to a material handle slot
     const mat: Material = mesh;
     void mat;
+  });
+});
+
+// w3: EntityHandle type-level assertions
+describe('[w3] EntityHandle -- numeric brand', () => {
+  it('EntityHandle widens to number (runtime identity is a JS number)', () => {
+    expectTypeOf<EntityHandle>().toMatchTypeOf<number>();
+  });
+
+  it('plain number is not assignable to EntityHandle (brand prevents accidental construction)', () => {
+    const n = 42 as number;
+    // @ts-expect-error -- plain number cannot be widened to phantom-branded EntityHandle
+    const eh: EntityHandle = n;
+    void eh;
   });
 });

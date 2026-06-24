@@ -45,7 +45,6 @@ import {
   FRAME_START_SCAN_SYSTEM_NAME,
   INPUT_BACKEND_KEY,
   type InputBackend,
-  InputFrameStartScan,
 } from '@forgeax/engine-input';
 
 import { AppError } from '../errors';
@@ -85,14 +84,20 @@ function makeAppError(
  *
  * Per plan-strategy D-2 (M2 full resource-ification): the backend is supplied
  * via the INPUT_BACKEND_KEY World resource; the InputFrameStartScan token reads
- * it back inside its fn. Insert the resource BEFORE adding the system so the
- * system's ParamValidation finds the backend on the first tick.
+ * it back inside its fn.
+ *
+ * feat-20260623-plugin-system-unify (M2 / D-3): this helper now only performs
+ * the DOM attach + resource injection. The frame-start scan system is
+ * registered by inputPlugin() (the default plugin set), guarded by the
+ * INPUT_BACKEND_KEY resource this helper inserts -- so the plugin owns the
+ * addSystem (the unified SSOT for world-registration). The cleanup funnel
+ * still owns the matching removeSystem because it owns the DOM / lifecycle
+ * teardown (the plugin has no cleanup seam).
  */
 export function attachInputAuto(canvas: HTMLCanvasElement, world: World): InputAttachHandle {
   const detach = attachBrowserInputBackend(canvas);
   const backend = detach.backend;
   world.insertResource(INPUT_BACKEND_KEY, backend);
-  world.addSystem(InputFrameStartScan);
 
   let cleanedUp = false;
 

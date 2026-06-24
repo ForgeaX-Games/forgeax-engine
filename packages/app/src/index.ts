@@ -28,6 +28,24 @@
 //     type LoadGameDetailModuleNotFound, type GameEntryResolver,
 //   } from '@forgeax/engine-app';
 
+export type {
+  Plugin,
+  PluginDetailBuildFailed,
+  PluginDetailDuplicatePlugin,
+  PluginErrorCode,
+  PluginErrorDetail,
+  PluginErrorDetailFor,
+} from '@forgeax/engine-plugin';
+// PluginError re-exports -- the canonical SSOT lives in @forgeax/engine-plugin
+// (D-1b). Re-exported here to keep AI-user import { Plugin, PluginError } from
+// '@forgeax/engine-app' stable (D-1c). Internal code (run-plugins.ts, capability
+// packages) imports directly from '@forgeax/engine-plugin'.
+export {
+  isPluginError,
+  PLUGIN_ERROR_HINTS,
+  PLUGIN_EXPECTED,
+  PluginError,
+} from '@forgeax/engine-plugin';
 export { createApp } from './create-app';
 export type {
   AppDetailCanvasDetached,
@@ -44,6 +62,7 @@ export {
   isAppError,
 } from './errors';
 export type { BootstrapContext, BootstrapEntry, GameContext, GameEntry } from './game-context';
+export { inputPlugin } from './plugin-factories';
 
 import {
   isLoadGameError,

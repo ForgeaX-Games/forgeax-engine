@@ -44,13 +44,13 @@ import {
   type CubeTextureAsset,
   type DecodedImage,
   type Handle,
+  handleSlot,
   IMAGE_ERROR_HINTS,
   type ImageError,
   type ImageErrorDetail,
   type PrimitiveTopology,
   type TextureAsset,
   type MeshAsset as TypesMeshAsset,
-  unwrapHandle,
 } from '@forgeax/engine-types';
 import { GpuBuffer, GpuTexture } from './gpu-resource';
 import {
@@ -361,7 +361,7 @@ export class GpuResourceStore {
    * returning {freed:0, errors:[]}.
    */
   evictTexture(handle: Handle<'TextureAsset', 'shared'>): { freed: number; errors: RhiError[] } {
-    const id = unwrapHandle(handle);
+    const id = handleSlot(handle);
     const entry = this.textureGpuHandles.get(id);
     if (entry === undefined) return { freed: 0, errors: [] };
 
@@ -383,7 +383,7 @@ export class GpuResourceStore {
   }
 
   evictMesh(handle: Handle<'MeshAsset', 'shared'>): { freed: number; errors: RhiError[] } {
-    const id = unwrapHandle(handle);
+    const id = handleSlot(handle);
     const entry = this.meshGpuHandles.get(id);
     if (entry === undefined) return { freed: 0, errors: [] };
 
@@ -558,7 +558,7 @@ export class GpuResourceStore {
    * part of the engine's public API surface.
    */
   _getTextureGpuTexture(handle: Handle<'TextureAsset', 'shared'>): GpuTexture | undefined {
-    return this.textureGpuHandles.get(unwrapHandle(handle))?.texture;
+    return this.textureGpuHandles.get(handleSlot(handle))?.texture;
   }
 
   /**
@@ -567,7 +567,7 @@ export class GpuResourceStore {
    */
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture-view return
   getTextureGpuView(handle: Handle<'TextureAsset', 'shared'>): any | undefined {
-    return this.textureGpuHandles.get(unwrapHandle(handle))?.view;
+    return this.textureGpuHandles.get(handleSlot(handle))?.view;
   }
 
   /**
@@ -577,19 +577,19 @@ export class GpuResourceStore {
    * `.destroy()` routes through the destroy chain (M-3 / w11).
    */
   getCubemapGpuTexture(handle: Handle<'CubeTextureAsset', 'shared'>): GpuTexture | undefined {
-    return this.cubemapGpuHandles.get(unwrapHandle(handle))?.texture;
+    return this.cubemapGpuHandles.get(handleSlot(handle))?.texture;
   }
 
   /** Return the full-cube texture view, or `undefined` if not uploaded yet. */
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture view
   getCubemapGpuView(handle: Handle<'CubeTextureAsset', 'shared'>): any | undefined {
-    return this.cubemapGpuHandles.get(unwrapHandle(handle))?.view;
+    return this.cubemapGpuHandles.get(handleSlot(handle))?.view;
   }
 
   /** Return per-face 2D views (6 faces), or `undefined` if not uploaded yet. */
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture views
   getCubemapFaceViews(handle: Handle<'CubeTextureAsset', 'shared'>): readonly any[] | undefined {
-    return this.cubemapGpuHandles.get(unwrapHandle(handle))?.faceViews;
+    return this.cubemapGpuHandles.get(handleSlot(handle))?.faceViews;
   }
 
   /**
@@ -598,7 +598,7 @@ export class GpuResourceStore {
    * as the canonical "mesh asset has GPU residency" probe.
    */
   getMeshGpuHandles(handle: Handle<'MeshAsset', 'shared'>): MeshGpuEntry | undefined {
-    return this.meshGpuHandles.get(unwrapHandle(handle));
+    return this.meshGpuHandles.get(handleSlot(handle));
   }
 
   /**
@@ -620,7 +620,7 @@ export class GpuResourceStore {
     pod: TypesMeshAsset | TextureAsset,
     // biome-ignore lint/suspicious/noExplicitAny: opaque GPU handle entry union
   ): Result<any, RhiError | AssetError | ImageError> {
-    const id = unwrapHandle(handle);
+    const id = handleSlot(handle);
     // Hit: O(1) cache lookup, never re-projects (AC-09 -- deriveRenderData*
     // runs only on a miss). The miss arms below dispatch on `pod.kind` with NO
     // default: only the two GPU-resource kinds reachable here (mesh / texture)
@@ -776,7 +776,7 @@ export class GpuResourceStore {
     { id: number; tex: TextureAsset; levels: number; gpuTexture: any | undefined },
     AssetError | ImageError | RhiError
   > {
-    const id = unwrapHandle(handle);
+    const id = handleSlot(handle);
     // The store does not hold the registry (D-2); the caller-provided POD is
     // the GPU-format SSOT and `renderData` is its projection (format / usage /
     // mipLevelCount). `decoded` supplies the pixel bytes + colorSpace; the
@@ -846,7 +846,7 @@ export class GpuResourceStore {
     sourceHandle: Handle<'TextureAsset', 'shared'>,
     sourcePod: TextureAsset,
   ): Promise<Result<Handle<'CubeTextureAsset', 'shared'>, AssetError | RhiError>> {
-    const sourceId = unwrapHandle(sourceHandle);
+    const sourceId = handleSlot(sourceHandle);
 
     const existing = this.cubemapIdempotentMap.get(sourceId);
     if (existing !== undefined) {
@@ -1053,7 +1053,7 @@ export class GpuResourceStore {
     const regResult = registerCube(world, cubeAsset);
     if (!regResult.ok) return regResult;
     const cubeHandle = regResult.value;
-    const cubeId = unwrapHandle(cubeHandle);
+    const cubeId = handleSlot(cubeHandle);
 
     this.cubemapGpuHandles.set(cubeId, {
       texture: gpuTextureWrapper,
@@ -1399,7 +1399,7 @@ export class GpuResourceStore {
     newVertices: Float32Array,
     newIndices: Uint16Array,
   ): void {
-    const id = unwrapHandle(handle);
+    const id = handleSlot(handle);
     this.updateMeshById(id, newVertices, newIndices);
   }
 }

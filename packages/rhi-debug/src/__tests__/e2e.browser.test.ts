@@ -143,11 +143,11 @@ describe('e2e.browser — record on browser GPU (AC-28)', () => {
       await dev.queue.onSubmittedWorkDone();
       debugInst.onFrameEnd();
 
-      const tape = debugInst.getTape();
+      const tape = debugInst.getTape() as any;
       expect(tape).toBeTruthy();
       if (!tape) return;
       expect(tape.events.length).toBeGreaterThan(0);
-      const kinds = new Set(tape.events.map((e) => e.kind));
+      const kinds = new Set(tape.events.map((e: any) => e.kind));
       expect(kinds.has('createTexture')).toBe(true);
       expect(kinds.has('createTextureView')).toBe(true);
       expect(kinds.has('beginRenderPass')).toBe(true);
@@ -175,7 +175,7 @@ describe('e2e.browser — record on browser GPU (AC-28)', () => {
       // get pushed even when the frame body did no work.
       await dev.queue.onSubmittedWorkDone();
       debugInst.onFrameEnd();
-      const tape = debugInst.getTape();
+      const tape = debugInst.getTape() as any;
       expect(tape).toBeTruthy();
       if (!tape) return;
       // Last event must be a frameMark for frameIdx 0.
@@ -301,7 +301,7 @@ fn main() -> @location(0) vec4<f32> {
       await wrappedDevice.queue.onSubmittedWorkDone();
       debugInst.onFrameEnd();
 
-      const tape = debugInst.getTape();
+      const tape = debugInst.getTape() as any;
       if (!tape) return;
 
       // Round-trip serialize
@@ -408,7 +408,7 @@ fn main() -> @location(0) vec4<f32> {
       await wrappedDevice.queue.onSubmittedWorkDone();
       debugInst.onFrameEnd();
 
-      const tape = debugInst.getTape();
+      const tape = debugInst.getTape() as any;
       if (!tape) return;
 
       const { json, blob } = serializeTape(tape);
@@ -498,7 +498,7 @@ fn main() -> @location(0) vec4<f32> {
       await wrappedDevice.queue.onSubmittedWorkDone();
       debugInst.onFrameEnd();
 
-      const tape = debugInst.getTape();
+      const tape = debugInst.getTape() as any;
       if (!tape) return;
 
       const { json, blob } = serializeTape(tape);

@@ -7,7 +7,14 @@
 // Key difference from @forgeax/engine-ecs: generation does NOT wrap 255 → 0.
 // When generation reaches 255, the index is permanently retired from the
 // free list to prevent handle aliasing (D-08).
+//
+// feat-20260623-asset-handle-generation M2 / w4: encodeEntity/decodeEntity/
+// entityIndex/entityGeneration are now thin wrappers over the shared gen-slot
+// codec in @forgeax/engine-types (pack / unpackSlot / unpackGen). The
+// `EntityIndexOverflowError` throw and `ENTITY_NULL_RAW` sentinel stay in ecs
+// (D-1). Constants re-export codec values for backward-compatible names.
 
+import { MAX_GEN, MAX_SLOT, pack, unpackGen, unpackSlot } from '@forgeax/engine-types';
 import { EntityIndexOverflowError } from './errors';
 
 /**
@@ -22,11 +29,11 @@ import { EntityIndexOverflowError } from './errors';
  */
 export type EntityHandle = number & { readonly __entity: unique symbol };
 
-/** Maximum representable entity index (2^24 - 1 = 16_777_215). */
-export const ENTITY_MAX_INDEX = (1 << 24) - 1;
+/** Maximum representable entity index (2^24 - 1 = 16_777_215). Re-exports codec MAX_SLOT. */
+export const ENTITY_MAX_INDEX = MAX_SLOT;
 
-/** Maximum representable generation (2^8 - 1 = 255). */
-export const ENTITY_MAX_GENERATION = 0xff;
+/** Maximum representable generation (2^8 - 1 = 255). Re-exports codec MAX_GEN. */
+export const ENTITY_MAX_GENERATION = MAX_GEN;
 
 /**
  * Sentinel u32 value reserved for the "null entity" slot in `entity`-typed
@@ -63,33 +70,34 @@ export const ENTITY_NULL_RAW = 0xffffffff;
 /**
  * Encode (index, generation) into a u32 entity handle.
  *
+ * Delegates to shared codec `pack(index, generation)` after ecs-specific
+ * overflow validation. The `>>> 0` anti-ToInt32 guard is inherited from the
+ * codec (D-7 hard constraint).
+ *
  * @throws EntityIndexOverflowError when `index > ENTITY_MAX_INDEX` or `index < 0`.
  */
 export function encodeEntity(index: number, generation: number): EntityHandle {
   if (index < 0 || index > ENTITY_MAX_INDEX) {
     throw new EntityIndexOverflowError(index);
   }
-  // Mask generation to its 8-bit slot.
-  const gen = generation & 0xff;
-  // `>>> 0` forces u32 sign-free representation (handles gen >= 128 ToInt32 trap).
-  return (((gen << 24) | (index & 0xffffff)) >>> 0) as EntityHandle;
+  return pack(index, generation) as EntityHandle;
 }
 
-/** Decode a u32 entity handle into its (index, generation) pair. */
+/** Decode a u32 entity handle into its (index, generation) pair via shared codec. */
 export function decodeEntity(entity: EntityHandle): { index: number; generation: number } {
   const e = entity as unknown as number;
   return {
-    index: e & 0xffffff,
-    generation: (e >>> 24) & 0xff,
+    index: unpackSlot(e),
+    generation: unpackGen(e),
   };
 }
 
-/** Extract just the index slot from an entity handle. */
+/** Extract just the index slot from an entity handle via shared codec. */
 export function entityIndex(entity: EntityHandle): number {
-  return (entity as unknown as number) & 0xffffff;
+  return unpackSlot(entity as unknown as number);
 }
 
-/** Extract just the generation slot from an entity handle. */
+/** Extract just the generation slot from an entity handle via shared codec. */
 export function entityGeneration(entity: EntityHandle): number {
-  return ((entity as unknown as number) >>> 24) & 0xff;
+  return unpackGen(entity as unknown as number);
 }

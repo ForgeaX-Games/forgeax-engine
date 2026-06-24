@@ -226,3 +226,92 @@ export function unwrapHandle<T extends string, M extends 'unique' | 'shared'>(
  * `FIRST_USER_HANDLE` literal, promoted to the shared SSOT.
  */
 export const BUILTIN_BASE = 1024;
+
+// === Gen-slot codec SSOT (feat-20260623-asset-handle-generation M1 / w2) ==========
+//
+// Domain-agnostic pure bit operations — max-slot, max-gen, pack, unpack-slot,
+// unpack-gen, and retire-on-255 primitive. This is the single definition point
+// for the `(gen << 24) | slot` layout across entity and asset handles (D-1,
+// AC-15). Callers (ecs / runtime / ref stores) import from
+// @forgeax/engine-types; entity-side overflow throw and sentinel stay in ecs
+// (D-1). No domain concepts live here — just mask and shift.
+//
+// Bit layout (OOS-3: 32-bit number, 24-bit slot + 8-bit gen):
+//   - slot: bits [0, 23], max value (1 << 24) - 1 = 16_777_215
+//   - gen:  bits [24, 31], max value 0xff = 255
+//
+// pack(slot, gen) fixed to (((gen & 0xff) << 24) | (slot & 0xffffff)) >>> 0
+// per D-7 hard constraint — the `>>> 0` prevents ToInt32 negative when
+// gen >= 128 (entity-handle.ts:73 comment documents this trap).
+
+/** Maximum slot index (2^24 - 1 = 16_777_215). */
+export const MAX_SLOT = (1 << 24) - 1;
+
+/** Maximum generation value (2^8 - 1 = 255). */
+export const MAX_GEN = 0xff;
+
+/**
+ * Pack (slot, gen) into a u32 handle.
+ *
+ * The caller is responsible for ensuring slot does not exceed MAX_SLOT;
+ * values above 24 bits are masked by `slot & 0xffffff`. Generation is
+ * masked to 8 bits via `gen & 0xff`. The `>>> 0` forces unsigned u32
+ * representation — without it, gen >= 128 produces a signed-negative
+ * ToInt32 (D-7 hard constraint, entity-handle.ts:73).
+ */
+export function pack(slot: number, gen: number): number {
+  return (((gen & 0xff) << 24) | (slot & 0xffffff)) >>> 0;
+}
+
+/** Extract the low 24 bits (slot) from a packed u32 handle. */
+export function unpackSlot(v: number): number {
+  return v & 0xffffff;
+}
+
+/** Extract the high 8 bits (generation) from a packed u32 handle. */
+export function unpackGen(v: number): number {
+  return (v >>> 24) & 0xff;
+}
+
+/**
+ * Retire-on-255 semantic: returns `true` when gen has reached MAX_GEN (255).
+ * A retired slot never returns to the free list (AC-07).
+ */
+export function isRetiredSlot(gen: number): boolean {
+  return gen === MAX_GEN;
+}
+
+// === Handle inspection helpers (feat-20260623-asset-handle-generation M1 / w2) ====
+//
+// Thin wrappers over the shared codec for Handle<T, M> consumers. handleSlot
+// and handleGeneration internally call unpackSlot / unpackGen — these are the
+// migration targets for unwrapHandle sites that only need the slot or gen
+// (decision q4). unwrapHandle stays as-is for sites that need the full
+// encoded value (D-5 excluded round-trip sites).
+
+/**
+ * Extract the slot (low 24 bits) from a branded Handle.
+ *
+ * This is the runtime identity of the handle — the slot index that maps to
+ * store payloads / GPU resource keys. Call sites that currently use
+ * `unwrapHandle(h)` as a Map key should migrate here so the key stays stable
+ * when gen > 0 (AC-09).
+ */
+export function handleSlot<T extends string, M extends 'unique' | 'shared'>(
+  h: Handle<T, M>,
+): number {
+  return unpackSlot(h as unknown as number);
+}
+
+/**
+ * Extract the generation (high 8 bits) from a branded Handle.
+ *
+ * Used by store-level gen comparisons (resolve/retain/release) to detect
+ * stale handles — the gen embedded during alloc is compared against the
+ * store's current gen for the same slot.
+ */
+export function handleGeneration<T extends string, M extends 'unique' | 'shared'>(
+  h: Handle<T, M>,
+): number {
+  return unpackGen(h as unknown as number);
+}

@@ -8,7 +8,7 @@ description: >-
 
 # forgeax-engine-physics
 
-> **物理 = 给 entity 挂三件套（Transform + RigidBody + Collider），引擎每帧把模拟结果写回 `Transform`**。`@forgeax/engine-physics` 是**接口层**：定义 ECS 组件 schema（`RigidBody` / `Collider` / `CollidingEntities`）、`PhysicsWorld` / `PhysicsWorld2D` Resource 接口、`PhysicsErrorCode` 闭集，但不含实现。实现是两个 WASM 后端：`@forgeax/engine-physics-rapier2d` 与 `@forgeax/engine-physics-rapier3d`。开物理只需 `createApp(canvas, { physics: 'rapier-3d' })`——它 dynamic-import 对应 rapier 包、注册 `PhysicsWorld` Resource、装好三段式 tick 系统。聚合 `@forgeax/engine-physics`（接口）+ `physics-rapier2d` + `physics-rapier3d`（后端）。
+> **物理 = 给 entity 挂三件套（Transform + RigidBody + Collider），引擎每帧把模拟结果写回 `Transform`**。`@forgeax/engine-physics` 是**接口层**：定义 ECS 组件 schema（`RigidBody` / `Collider` / `CollidingEntities`）、`PhysicsWorld` / `PhysicsWorld2D` Resource 接口、`PhysicsErrorCode` 闭集，但不含实现。实现是两个 WASM 后端：`@forgeax/engine-physics-rapier2d` 与 `@forgeax/engine-physics-rapier3d`。开物理只需 `createApp(canvas, { plugins: [physicsPlugin('rapier-3d')] })`——`physicsPlugin` dynamic-import 对应 rapier 包、注册 `PhysicsWorld` Resource、装好三段式 tick 系统。聚合 `@forgeax/engine-physics`（接口）+ `physics-rapier2d` + `physics-rapier3d`（后端）。
 
 ## 心智模型
 
@@ -72,10 +72,10 @@ flowchart TD
 
 ```ts
 import { createApp } from '@forgeax/engine-app';
-import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
+import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue, physicsPlugin } from '@forgeax/engine-physics';
 import { Transform } from '@forgeax/engine-runtime';
 
-const app = await createApp(canvas, { physics: 'rapier-3d' });
+const app = await createApp(canvas, { plugins: [physicsPlugin('rapier-3d')] });
 const world = app.world;
 
 // dynamic body: falls under gravity
@@ -97,7 +97,7 @@ app.start();
 
 ## 踩坑
 
-- **挂了组件但 entity 不动**：缺 `Transform`（写回目标）或缺 `createApp({ physics })`（没装 tick 系统）。三件套必须齐：`Transform` + `RigidBody` + `Collider`。
+- **挂了组件但 entity 不动**：缺 `Transform`（写回目标）或缺 `createApp({ plugins: [physicsPlugin(...)] })`（没装 tick 系统）。三件套必须齐：`Transform` + `RigidBody` + `Collider`。
 - **前几帧没物理反应**：`PhysicsWorld` Resource 是 WASM fire-and-forget 异步加载，未就绪时系统 early-return；这是正常的，不是错误。
 - **dt 过大被跳过**：`physicsStepSimulation` 在 `dt <= 0` 或 `> 0.1s` 时跳过（防大步穿透）——切后台再回来的首帧大 dt 不会模拟。
 - **2D / 3D 后端选错**：`physics: 'rapier-2d'` 用 `PhysicsWorld2D` 接口，`'rapier-3d'` 用 `PhysicsWorld`；组件 schema 共用但坐标维度不同，别混。

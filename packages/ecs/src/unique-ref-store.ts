@@ -7,20 +7,24 @@
 // referenced asset slot. AssetRegistry handles (`handle<T>` schema vocab) take
 // the orthogonal `'shared'` mode and never enter this store.
 //
-// §contract — managed handles are operational, not persistent
-//   Spec: docs/specs/2026-06-14-ecs-managed-lifecycle-ssot-design.md §3.3.
-//   The handle u32 is the slot index directly (24-bit, capped at MAX_SLOT
-//   which equals ENTITY_MAX_INDEX). There is NO generation tag: caching a
-//   managed handle across despawn / removeComponent / world.set overwrite
-//   is undefined behavior at the spec level — a stale handle silently
-//   resolves to the next payload installed in the same slot, and the store
-//   never reports a "stale-slot" error. Detection lives at the type system
-//   (Handle<T, 'unique'>) + ECS lifecycle hooks, not at runtime.
+// §contract — handles carry a generation; stale-by-reuse is detected
+//   The handle u32 packs `(generation << 24) | slot` via the shared codec in
+//   `@forgeax/engine-types` (the same SSOT codec ECS `EntityHandle` uses). The
+//   slot occupies the low 24 bits (capped at MAX_SLOT == ENTITY_MAX_INDEX);
+//   the generation occupies the high 8 bits. `alloc` welds the slot's current
+//   generation into the returned handle; `resolve` / `release` compare the
+//   handle's generation against the store's `_generations[slot]` BEFORE any
+//   payload work, so a handle whose slot was released and re-allocated is
+//   caught deterministically and returns `UniqueRefStaleError` ('unique-ref-
+//   stale') — it no longer silently resolves to the next payload.
 //
-//   AC-06 (unique-ref-double-release) is detected by payload-presence
-//   (`payloads.has(raw)`), not by generation mismatch — a re-alloc into the
-//   same slot makes the prior raw look "live" again, which is the silent-
-//   resolve behavior the spec mandates.
+//   Generation advances on release and retires the slot at MAX_GEN (255)
+//   rather than wrapping, so a re-used slot can never collide with an old
+//   handle's generation (retire-on-255; mirrors EntityHandle).
+//
+//   AC-06 (unique-ref-double-release) remains payload-presence detected
+//   (`payloads.has(raw)`) for a handle whose generation still matches; the
+//   generation check catches the orthogonal stale-by-reuse case first.
 //
 // Storage shape:
 //   - `payloads: Map<number, unknown>` - key = handle u32 = slot index.
@@ -51,11 +55,22 @@
 //   payload reference, so wrapper identity survives migration.
 
 import type { Handle } from '@forgeax/engine-types';
-import { err, ok, type Result, toUnique, unwrapHandle } from '@forgeax/engine-types';
-import { UniqueRefDoubleReleaseError, UniqueRefReleasedError } from './errors';
+import {
+  err,
+  handleGeneration,
+  handleSlot,
+  isRetiredSlot,
+  MAX_SLOT,
+  ok,
+  pack,
+  type Result,
+  toUnique,
+  unwrapHandle,
+} from '@forgeax/engine-types';
+import { UniqueRefDoubleReleaseError, UniqueRefReleasedError, UniqueRefStaleError } from './errors';
 
-/** Maximum representable managed slot index (2^24 - 1 = 16_777_215). */
-const MAX_SLOT = (1 << 24) - 1;
+// MAX_SLOT is now imported from @forgeax/engine-types (codec SSOT, D-1).
+// The local constant is removed to avoid drift (AC-15).
 
 /**
  * Per-slot singleton store for ECS-managed `Handle<T, 'unique'>` lifecycles.
@@ -63,11 +78,13 @@ const MAX_SLOT = (1 << 24) - 1;
  * `release(handle)`; `resolve(handle)` is the read path AI users reach
  * indirectly through `world.get(e, C)` for `ref<T>` schema fields.
  *
- * §contract — managed handles are operational, not persistent (spec §3.3,
- * docs/specs/2026-06-14-ecs-managed-lifecycle-ssot-design.md): handle u32
- * directly equals slot index; no generation tag; stale handles silently
- * resolve to the next payload. README §"Managed handles are operational,
- * not persistent" is the canonical AI-user-facing statement.
+ * §contract — handles carry a generation; stale-by-reuse is detected: the
+ * handle u32 packs `(gen << 24) | slot` via the shared codec; `resolve` /
+ * `release` compare the handle generation against `_generations[slot]` and
+ * return `UniqueRefStaleError` ('unique-ref-stale') when a released slot has
+ * been re-allocated, instead of silently resolving to the next payload.
+ * README §"Managed handles carry a generation" is the canonical AI-user-
+ * facing statement.
  *
  * Identity invariant (AC-04 prelude): the payload returned by `resolve` is
  * the same object reference on every call until `release`. Carry-over (M4)
@@ -88,11 +105,30 @@ export class UniqueRefStore {
   private nextSlot = 1;
 
   /**
+   * Generation table indexed by slot (D-6). Each entry tracks the current
+   * generation for the slot — written to during alloc (welded into the
+   * returned handle via pack) and incremented on release (M4).
+   *
+   * Slot 0 is the sentinel and always has gen=0 — it is never allocated
+   * and never incremented (R6).
+   *
+   * @internal
+   */
+  // biome-ignore lint/style/useNamingConvention: internal field — @internal JSDoc suppresses lint:internal gate
+  private readonly _generations: number[] = [];
+
+  /**
    * Allocate a fresh managed handle for `payload`, branded against `target`.
    *
    * Slot 0 is reserved as the "null/unset" sentinel - schema-vocab `ref<T>`
    * fields default to this sentinel before the first write, and World's
    * release loop uses it to short-circuit (`shouldRelease(0) === false`).
+   *
+   * The returned handle carries a generation tag welded via codec.pack
+   * (D-8, OOS-2): first allocation gen=0 (AC-06), reused slot gen = the
+   * current generation from _generations[slot]. The toUnique brand cast
+   * happens internally — external callers no longer construct Handle<...>
+   * directly.
    *
    * @returns a `Handle<T, 'unique'>` u32. The branded number is safe to
    *   widen to `number` for GPU upload (charter consistent abstraction).
@@ -110,7 +146,8 @@ export class UniqueRefStore {
           'Reduce simultaneous managed handles or investigate handle leaks.',
       );
     }
-    const raw = slot >>> 0;
+    const gen = this._generations[slot] ?? 0;
+    const raw = pack(slot, gen);
     this.payloads.set(raw, payload);
     if (onRelease !== undefined) {
       this.releaseCallbacks.set(raw, onRelease as (payload: unknown) => void);
@@ -124,18 +161,27 @@ export class UniqueRefStore {
    * no re-alloc has filled the slot). Resolves the same payload object on
    * every call - identity-stable until release.
    *
-   * §contract: a stale handle whose slot has been re-allocated silently
-   * resolves to the new payload (spec §3.3). Detection of stale-by-reuse
-   * is intentionally absent from the runtime surface — see README
-   * §"Managed handles are operational, not persistent".
+   * §contract: a stale handle whose slot has been released and re-allocated
+   * returns `err(unique-ref-stale)` — the generation welded into the handle
+   * no longer matches `_generations[slot]`. The gen check runs before the
+   * payload lookup, so stale-by-reuse is caught deterministically — see
+   * README §"Managed handles carry a generation".
    *
    * `T` flows from the caller's `Handle<T, 'unique'>` type; the store erases
    * payload types at the storage layer and the call boundary re-narrows.
    */
   resolve<Target extends string, T = unknown>(
     handle: Handle<Target, 'unique'>,
-  ): Result<T, UniqueRefReleasedError> {
+  ): Result<T, UniqueRefReleasedError | UniqueRefStaleError> {
     const raw = unwrapHandle(handle);
+    // Gen comparison (M4): extract slot + handle gen, compare against
+    // store's current gen. Runs BEFORE payload lookup.
+    const slot = handleSlot(handle);
+    const handleGen = handleGeneration(handle);
+    const storeGen = this._generations[slot] ?? 0;
+    if (handleGen !== storeGen) {
+      return err(new UniqueRefStaleError(slot, handleGen, storeGen));
+    }
     const payload = this.payloads.get(raw);
     if (payload === undefined) {
       // Slot 0 (sentinel) and any handle whose payload was already removed
@@ -160,8 +206,16 @@ export class UniqueRefStore {
    */
   release<Target extends string>(
     handle: Handle<Target, 'unique'>,
-  ): Result<void, UniqueRefDoubleReleaseError> {
+  ): Result<void, UniqueRefDoubleReleaseError | UniqueRefStaleError> {
     const raw = unwrapHandle(handle);
+    // Gen comparison runs FIRST (q12: all operations compare gen first).
+    const slot = handleSlot(handle);
+    const handleGen = handleGeneration(handle);
+    const storeGen = this._generations[slot] ?? 0;
+    if (handleGen !== storeGen) {
+      // AC-03: stale release MUST NOT drop payload / fire callback / touch freeSlots.
+      return err(new UniqueRefStaleError(slot, handleGen, storeGen));
+    }
     const payload = this.payloads.get(raw);
     if (payload === undefined) {
       return err(new UniqueRefDoubleReleaseError(raw, '<unknown>'));
@@ -179,8 +233,13 @@ export class UniqueRefStore {
     const cb = this.releaseCallbacks.get(raw);
     this.releaseCallbacks.delete(raw);
     this.payloads.delete(raw);
-    const slot = raw;
-    this.freeSlots.push(slot);
+    // Gen increment + retire-on-255 (AC-07): bump gen; if it reaches MAX_GEN
+    // the slot is permanently retired — NOT pushed to freeSlots.
+    this._generations[slot] = storeGen + 1;
+    if (!isRetiredSlot(this._generations[slot])) {
+      this.freeSlots.push(slot);
+    }
+    // else: slot retired at MAX_GEN — never returns to freeSlots (no aliasing).
     if (cb !== undefined) {
       cb(payload);
     }

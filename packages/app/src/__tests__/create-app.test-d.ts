@@ -1,10 +1,15 @@
 // create-app.test-d.ts -- compile-time assertions for w2 acceptanceCheck.
 //
 // Anchors:
-// - createApp(canvas, opts?) returns Promise<Result<App, AppError | RhiError | EngineEnvironmentError>>
-//   per AC-01 (canvas thin wrapper widens the error union with EngineEnvironmentError).
-// - createApp({ renderer, world }) returns Promise<Result<App, AppError | RhiError>>
-//   per AC-02 (assemble form excludes EngineEnvironmentError -- renderer host-managed).
+// - createApp(canvas, opts?) returns
+//   Promise<Result<App, AppError | RhiError | PluginError | EngineEnvironmentError>>
+//   per AC-01 (canvas thin wrapper widens the error union with
+//   EngineEnvironmentError; M2 plugin-system-unify D-7 widens it with
+//   PluginError now that runPlugins drives the wiring).
+// - createApp({ renderer, world }) returns
+//   Promise<Result<App, AppError | RhiError | PluginError>>
+//   per AC-02 (assemble form excludes EngineEnvironmentError -- renderer
+//   host-managed -- but includes PluginError; D-7).
 // - 'tagName' in arg dispatch lands the right overload at the call site
 //   (HTMLCanvasElement -> canvas form; AppAssembleArgs -> assemble form).
 //
@@ -13,25 +18,26 @@
 // - P4 consistent abstraction: both routes return the same App handle.
 
 import type { Result, World } from '@forgeax/engine-ecs';
+import type { PluginError } from '@forgeax/engine-plugin';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
 import type { EngineEnvironmentError, Renderer, RendererOptions } from '@forgeax/engine-runtime';
 import { describe, expectTypeOf, it } from 'vitest';
 import { type App, type AppError, createApp } from '../index';
 
 describe('createApp double-SSOT entry signatures (w2 acceptanceCheck)', () => {
-  it('canvas form returns Promise<Result<App, AppError | RhiError | EngineEnvironmentError>> (AC-01)', () => {
+  it('canvas form returns Promise<Result<App, AppError | RhiError | PluginError | EngineEnvironmentError>> (AC-01)', () => {
     const canvas = null as unknown as HTMLCanvasElement;
     const ret = createApp(canvas);
     expectTypeOf(ret).toEqualTypeOf<
-      Promise<Result<App, AppError | RhiError | EngineEnvironmentError>>
+      Promise<Result<App, AppError | RhiError | PluginError | EngineEnvironmentError>>
     >();
   });
 
-  it('assemble form returns Promise<Result<App, AppError | RhiError>> (AC-02)', () => {
+  it('assemble form returns Promise<Result<App, AppError | RhiError | PluginError>> (AC-02)', () => {
     const renderer = null as unknown as Renderer;
     const world = null as unknown as World;
     const ret = createApp({ renderer, world });
-    expectTypeOf(ret).toEqualTypeOf<Promise<Result<App, AppError | RhiError>>>();
+    expectTypeOf(ret).toEqualTypeOf<Promise<Result<App, AppError | RhiError | PluginError>>>();
   });
 
   it('app.renderer / app.world are reference-equal types at the call site (AC-09)', async () => {

@@ -60,11 +60,10 @@
 //         SpriteRenderer / 2D-only surface (charter P4 consistent
 //         abstraction; Bevy 0.19 SpriteBundle retracement is avoided).
 
-import type { App, AppError } from '@forgeax/engine-app';
+import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import type { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { RhiError } from '@forgeax/engine-rhi/errors';
 import {
   Camera,
   createDevImportTransport,
@@ -574,7 +573,7 @@ function setupNineSliceSection(
     .unwrap();
 }
 
-function reportAppError(err: AppError | RhiError | EngineEnvironmentError): void {
+function reportAppError(err: CanvasAppError): void {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';

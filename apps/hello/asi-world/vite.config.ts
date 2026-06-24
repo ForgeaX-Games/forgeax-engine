@@ -20,6 +20,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(here, 'index.html'),
+        atlasViewer: resolve(here, 'atlas-viewer.html'),
+        tileStrip: resolve(here, 'tile-strip.html'),
       },
     },
   },

@@ -15,6 +15,7 @@
     { "path": "../ecs" },
     { "path": "../math" },
     { "path": "../audio" },
+    { "path": "../plugin" },
     { "path": "../import" }
   ]
 }

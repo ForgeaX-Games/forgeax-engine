@@ -3,9 +3,8 @@
 //  updated feat-20260619 M3 w15: audioTickSystem is now auto-registered).
 //
 // What this demo exercises end-to-end:
-//   - createApp({ audio:true, input:true }) auto-registers audioTickSystem
-//     (M3 w15 — previously this was a wiring gap: tick was never registered
-//     and the declarative path did not actually fire).
+//   - createApp(canvas, { plugins: [audioPlugin()] }) registers audioTickSystem
+//     (input is in the canvas-form default plugin set, no longer an explicit opt).
 //   - Declarative ECS audio path: AudioSource.playing edge is now genuinely
 //     consumed by the auto-registered audioTickSystem (not imperative
 //     backend.play() bypass).
@@ -38,7 +37,7 @@ const SFX_GUID = '019e7535-5e5e-75fe-a328-0b08e3a72744';
 import type { App } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { AudioListener, AudioSource } from '@forgeax/engine-audio';
-import { loadAudioClipByGuid } from '@forgeax/engine-audio-webaudio';
+import { audioPlugin, loadAudioClipByGuid } from '@forgeax/engine-audio-webaudio';
 import {
   Camera,
   DirectionalLight,
@@ -54,9 +53,10 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('hello-audio: missing <canvas id="app"> in index.html');
 
+// M3 (w16): input is now in the canvas-form default set (D-2); audioPlugin()
+// signals the app layer to auto-create the WebAudioBackend before runPlugins.
 const appRes = await createApp(canvas, {
-    audio: true,
-  input: true,
+  plugins: [audioPlugin()],
 }, forgeaxBundlerAdapter());
 if (!appRes.ok) {
   if (appRes.error instanceof EngineEnvironmentError) {

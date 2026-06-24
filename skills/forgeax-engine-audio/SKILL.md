@@ -3,25 +3,25 @@ name: forgeax-engine-audio
 description: >-
   forgeax-engine 音频：给 entity 挂 AudioSource 即出声；3D 空间音靠 spatialBlend + AudioListener。
   接口层（audio）+ Web Audio 后端（audio-webaudio），固定 sfx/music 两段 bus。
-  `createApp({audio:true})` 自动注册 audioTickSystem + audioListenerSync、`app.stop()` 自动回收后端。
+  `createApp({ plugins: [audioPlugin()] })` 自动注册 audioTickSystem + audioListenerSync、`app.stop()` 自动回收后端。
   Use when playing BGM/SFX, wiring 3D spatial audio, controlling bus volume/mute,
   diagnosing resource leaks via getActiveSourceCount(), or choosing how to inject the Web Audio backend.
 ---
 
 # forgeax-engine-audio
 
-> **音频 = 给 entity 挂 `AudioSource`，把 `playing` 从 false 翻到 true 就出声**。`@forgeax/engine-audio` 是**接口层**：定义 ECS 组件（`AudioSource` / `AudioListener`）、`AudioBackend` 协议、固定两段 bus 拓扑（`sfx` + `music` -> Master）、`AudioError` 族。实现是 `@forgeax/engine-audio-webaudio`（Web Audio API 浏览器后端：AudioContext 生命周期 + bus 拓扑 + tick 系统 + clip loader）。开音频只需 `createApp(canvas, { audio: true })`——它建一个 `WebAudioBackend` 并注册为 `AudioEngine` World Resource，**并自动注册 `audioTickSystem` + listener sync 系统（ECS addSystem, after propagateTransforms）**。声明式 SFX（给 `AudioSource` 写 `playing: true`）自动发声，3D 空间音 listener pose 自动同步（无需手动 `registerUpdate`），`app.stop()` 自动回收音频后端（经 cleanup funnel 的 `audioBackendDispose` 回调触发 `WebAudioEngine.destroy()`，关闭 AudioContext）。3D 空间音靠 `AudioSource.spatialBlend: 1` + 一个 `AudioListener`（其 `Transform.world` 世界矩阵每帧驱动 Web Audio 监听者位姿）。聚合 `@forgeax/engine-audio`（接口）+ `@forgeax/engine-audio-webaudio`（后端）。
+> **音频 = 给 entity 挂 `AudioSource`，把 `playing` 从 false 翻到 true 就出声**。`@forgeax/engine-audio` 是**接口层**：定义 ECS 组件（`AudioSource` / `AudioListener`）、`AudioBackend` 协议、固定两段 bus 拓扑（`sfx` + `music` -> Master）、`AudioError` 族。实现是 `@forgeax/engine-audio-webaudio`（Web Audio API 浏览器后端：AudioContext 生命周期 + bus 拓扑 + tick 系统 + clip loader）。开音频只需 `createApp(canvas, { plugins: [audioPlugin()] })`——`audioPlugin`（来自 `@forgeax/engine-audio-webaudio`）建一个 `WebAudioBackend` 并注册为 `AudioEngine` World Resource，**并自动注册 `audioTickSystem` + listener sync 系统（ECS addSystem, after propagateTransforms）**。声明式 SFX（给 `AudioSource` 写 `playing: true`）自动发声，3D 空间音 listener pose 自动同步（无需手动 `registerUpdate`），`app.stop()` 自动回收音频后端（经 cleanup funnel 的 `audioBackendDispose` 回调触发 `WebAudioEngine.destroy()`，关闭 AudioContext）。3D 空间音靠 `AudioSource.spatialBlend: 1` + 一个 `AudioListener`（其 `Transform.world` 世界矩阵每帧驱动 Web Audio 监听者位姿）。聚合 `@forgeax/engine-audio`（接口）+ `@forgeax/engine-audio-webaudio`（后端）。
 
 ## 心智模型
 
 三层渐进式（charter P1）：
 
-1. **立即播放**：spawn 一个 `AudioSource`，`playing: true`。`playing` 是**边沿检测**——false->true 起播，true->false 停。`createApp({ audio: true })` 自动注册 `audioTickSystem`，AI 用户无需手动 `registerUpdate(audioTickSystem)`。
+1. **立即播放**：spawn 一个 `AudioSource`，`playing: true`。`playing` 是**边沿检测**——false->true 起播，true->false 停。`createApp({ plugins: [audioPlugin()] })` 自动注册 `audioTickSystem`，AI 用户无需手动 `registerUpdate(audioTickSystem)`。
 2. **混音**：经 `AudioEngine` Resource（即注入的 `AudioBackend`）调 `setBusVolume` / `setBusMute`，作用于 `sfx` / `music` 两条固定 bus。
-3. **3D 空间音**：`AudioSource.spatialBlend: 1`（PannerNode）+ 给监听 entity 挂 `AudioListener` 标记组件。World 里**只有第一个** `AudioListener` entity 被每帧同步，sync 系统读它的 `Transform.world` mat4（16 float 列主序）驱动 Web Audio listener 位姿。`createApp({ audio: true })` 自动注册此系统（ECS addSystem, after propagateTransforms——与 audioTickSystem 的 registerUpdate seam 不同，因 listener sync 须读当帧 `Transform.world`）。
+3. **3D 空间音**：`AudioSource.spatialBlend: 1`（PannerNode）+ 给监听 entity 挂 `AudioListener` 标记组件。World 里**只有第一个** `AudioListener` entity 被每帧同步，sync 系统读它的 `Transform.world` mat4（16 float 列主序）驱动 Web Audio listener 位姿。`createApp({ plugins: [audioPlugin()] })` 自动注册此系统（ECS addSystem, after propagateTransforms——与 audioTickSystem 的 registerUpdate seam 不同，因 listener sync 须读当帧 `Transform.world`）。
 4. **自动回收**：`app.stop()` 经 cleanup funnel 的 `audioBackendDispose` 回调（仅 `reason === 'stop'` 触发）→ `WebAudioEngine.destroy()` → 停所有源 + 断开 bus 拓扑 + 关闭 AudioContext。非 loop 源播完经 `node.onended` 自卸（节点身份比对守卫防止竞态错杀）。`getActiveSourceCount()` 用于长会话后自检资源是否泄漏。
 
-`AudioBackend` 是协议接口，`createApp({ audio: true })` 注入 `WebAudioBackend` 实现并存为 `AudioEngine` Resource（key 常量 `AUDIO_ENGINE_RESOURCE_KEY`）。clip 经资产系统 `loadByGuid` / `registerWithGuid` 拿到 `Handle<'AudioClipAsset','unmanaged'>` 再装到 `AudioSource.clip`。
+`AudioBackend` 是协议接口，`createApp({ plugins: [audioPlugin()] })` 注入 `WebAudioBackend` 实现并存为 `AudioEngine` Resource（key 常量 `AUDIO_ENGINE_RESOURCE_KEY`）。clip 经资产系统 `loadByGuid` / `registerWithGuid` 拿到 `Handle<'AudioClipAsset','unmanaged'>` 再装到 `AudioSource.clip`。
 
 ## 核心 API / 组件速查
 
@@ -44,7 +44,7 @@ description: >-
 
 ```mermaid
 flowchart TD
-  APP["createApp(canvas, { audio: true })：建 WebAudioBackend → 注入 AudioEngine Resource → 自动注册 audioTickSystem"] --> CLIP["loadByGuid<AudioClipAsset>(guid) -> registerWithGuid -> Handle"]
+  APP["createApp(canvas, { plugins: [audioPlugin()] })：建 WebAudioBackend → 注入 AudioEngine Resource → 自动注册 audioTickSystem"] --> CLIP["loadByGuid<AudioClipAsset>(guid) -> registerWithGuid -> Handle"]
   CLIP --> SRC["spawn AudioSource{ clip, playing, bus, spatialBlend }"]
   SRC --> LIS["spawn AudioListener（挂在 camera entity，Transform.world 驱动位姿）"]
   LIS --> BUS["可选：world.getResource(AUDIO_ENGINE_RESOURCE_KEY).setBusVolume('music', 0.3)"]
@@ -58,11 +58,12 @@ flowchart TD
 import { createApp } from '@forgeax/engine-app';
 import { AUDIO_ENGINE_RESOURCE_KEY, AudioListener, AudioSource } from '@forgeax/engine-audio';
 import type { AudioBackend, AudioClipAsset } from '@forgeax/engine-audio';
+import { audioPlugin } from '@forgeax/engine-audio-webaudio';
 import { Camera, MeshFilter, MeshRenderer, Transform, HANDLE_CUBE } from '@forgeax/engine-runtime';
 
-// createApp({audio:true}) auto-registers audioTickSystem —
+// createApp({ plugins: [audioPlugin()] }) auto-registers audioTickSystem —
 // no manual registerUpdate(audioTickSystem) needed.
-const app = await createApp(canvas, { audio: true });
+const app = await createApp(canvas, { plugins: [audioPlugin()] });
 const world = app.world;
 const assets = app.renderer.assets;
 if (assets === null) throw new Error('backend not initialized');
@@ -148,7 +149,7 @@ app.start();
 | 场景 | 行为 | 设计锚点 |
 |:--|:--|:--|
 | **device-lost** | `audioBackendDispose` **不触发**。AudioContext 不依赖 GPU device，音频在 device-lost 后仍可用。| OOS-2（对齐 `rendererDispose` 仅 `reason === 'stop'` 语义） |
-| **assemble 形态** | `createApp({ audio: hostBackend })` 不传 `audioBackendDispose` —— 宿主自管 backend 生命周期（创建与销毁都在宿主手中）。listener sync 系统需宿主**手动注册**（`world.addSystem({ name: 'audio-listener-sync', after: [PROPAGATE_TRANSFORMS_SYSTEM], ... })`——与 audioTickSystem 的 `registerUpdate` seam 不同，因 listener sync 须读当帧 `Transform.world`）。 | OOS-5（对齐 `inputBackend` assemble 不 auto-cleanup 模式）+ D-7（ECS DAG seam） |
+| **assemble 形态** | 宿主先 `world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, hostBackend)` 再 `createApp({ renderer, world, plugins: [audioPlugin()] })`；不传 `audioBackendDispose` —— 宿主自管 backend 生命周期（创建与销毁都在宿主手中）。listener sync 系统需宿主**手动注册**（`world.addSystem({ name: 'audio-listener-sync', after: [PROPAGATE_TRANSFORMS_SYSTEM], ... })`——与 audioTickSystem 的 `registerUpdate` seam 不同，因 listener sync 须读当帧 `Transform.world`）。 | OOS-5（对齐 `inputBackend` assemble 不 auto-cleanup 模式）+ D-7（ECS DAG seam） |
 | **多 world 场景** | 每个 `WebAudioEngine` 持有独立 `AudioContext` 和独立 tick 状态（`_tickStates` / `_prevFrameEntities` 是 per-engine 实例字段）。多 world 间后端复用由宿主控制。| F25（去单例化）+ OOS-3（不引入多 world 共享 context API） |
 | **`playing` 组件态不同步** | 非 loop 源经 `onended` 自卸后，`AudioSource.playing` 组件态仍为 `true`（ECS 列不自动回写）。本特性只回收 Web Audio 资源，组件态同步留作后续 UX 增强。| OOS-1 |
-| **不传 `audio: true`** | 不建 backend、不注册 `audioTickSystem`、不传 `audioBackendDispose`。无音频能力。| AC-12 反向 |
+| **不传 `audioPlugin()`** | 不建 backend、不注册 `audioTickSystem`、不传 `audioBackendDispose`。无音频能力。| AC-12 反向 |

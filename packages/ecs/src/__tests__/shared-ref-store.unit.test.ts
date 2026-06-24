@@ -23,14 +23,18 @@
 // that integration is covered by the M4 test surface (w11), not here.
 
 import type { Handle } from '@forgeax/engine-types';
-import { BUILTIN_BASE, toShared, unwrapHandle } from '@forgeax/engine-types';
+import {
+  BUILTIN_BASE,
+  handleGeneration,
+  handleSlot,
+  MAX_SLOT,
+  pack,
+  toShared,
+  unwrapHandle,
+} from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { defineComponent } from '../component';
-import {
-  BuiltinSlotNotOwnedError,
-  SharedRefDoubleReleaseError,
-  SharedRefReleasedError,
-} from '../errors';
+import { BuiltinSlotNotOwnedError, SharedRefStaleError } from '../errors';
 import { SharedRefStore } from '../shared-ref-store';
 import { World } from '../world';
 
@@ -57,36 +61,38 @@ describe('w6 SharedRefStore: alloc + resolve', () => {
     }
   });
 
-  it('resolve returns SharedRefReleasedError after rc drops to 0', () => {
+  it('resolve returns SharedRefStaleError after rc drops to 0 (gen incremented on release)', () => {
     const store = new SharedRefStore();
     const handle = store.alloc('MeshAsset', { id: 7 });
 
     const releaseResult = store.release(handle);
     expect(releaseResult.ok).toBe(true);
 
+    // After w10 gen increment on release, old handle gen=0 mismatches store
+    // gen=1 — stale, not released. Gen comparison runs before payload lookup.
     const r = store.resolve(handle);
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.error).toBeInstanceOf(SharedRefReleasedError);
-      expect(r.error.code).toBe('shared-ref-released');
-      if (r.error.code === 'shared-ref-released') {
-        expect(typeof r.error.detail.handle).toBe('number');
+      expect(r.error.code).toBe('shared-ref-stale');
+      if (r.error instanceof SharedRefStaleError) {
+        expect(typeof r.error.detail.slot).toBe('number');
       }
     }
   });
 
-  it('release after rc=0 returns SharedRefDoubleReleaseError (no throw)', () => {
+  it('release after rc=0 returns SharedRefStaleError (gen mismatch after first release)', () => {
     const store = new SharedRefStore();
     const handle = store.alloc('MeshAsset', { id: 9 });
 
     expect(store.release(handle).ok).toBe(true);
+    // Second release: gen=0 vs store gen=1 — stale, not double-release.
     const second = store.release(handle);
     expect(second.ok).toBe(false);
     if (!second.ok) {
-      expect(second.error).toBeInstanceOf(SharedRefDoubleReleaseError);
-      expect(second.error.code).toBe('shared-ref-double-release');
-      if (second.error.code === 'shared-ref-double-release') {
-        expect(typeof second.error.detail.handle).toBe('number');
+      expect(second.error.code).toBe('shared-ref-stale');
+      // error.detail is a discriminated union; use error instance check
+      if (second.error instanceof SharedRefStaleError) {
+        expect(typeof second.error.detail.slot).toBe('number');
       }
     }
   });
@@ -181,7 +187,7 @@ describe('w29 SharedRefStore: retain + release + per-handle deleter', () => {
     expect(cb).toHaveBeenCalledTimes(1);
   });
 
-  it('retain after release-to-zero is a SharedRefReleasedError (cannot resurrect)', () => {
+  it('retain after release-to-zero is a SharedRefStaleError (gen mismatch after w10)', () => {
     const store = new SharedRefStore();
     const handle = store.alloc('Asset', { id: 5 });
     expect(store.release(handle).ok).toBe(true);
@@ -189,7 +195,7 @@ describe('w29 SharedRefStore: retain + release + per-handle deleter', () => {
     const r = store.retain(handle);
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.error).toBeInstanceOf(SharedRefReleasedError);
+      expect(r.error.code).toBe('shared-ref-stale');
     }
   });
 });
@@ -308,5 +314,270 @@ describe('w50 SharedRefStore: fail-fast on builtin slot < BUILTIN_BASE (AC-32)',
     const store = new SharedRefStore();
     const handle = store.alloc('MeshAsset', { kind: 'mesh' });
     expect(unwrapHandle(handle)).toBeGreaterThanOrEqual(BUILTIN_BASE);
+  });
+});
+
+// ─── w6 M3: gen welding alloc tests ─────────────────────────────────────
+// feat-20260623-asset-handle-generation M3 — alloc embeds generation into
+// the returned handle via codec.pack(slot, gen). First alloc gen=0 (AC-06);
+// builtin invariant pack(slot,0)===slot holds (AC-05).
+// M3 scope: gen welding only, no gen increment on release (that's M4).
+// Reused slots always get gen=0 in M3 (release does NOT increment
+// _generations[slot] yet).
+describe('w6 M3 SharedRefStore: gen welding on alloc', () => {
+  it('AC-06: first alloc gen=0 => pack(slot,0) === slot (handleSlot matches raw slot)', () => {
+    const store = new SharedRefStore();
+    const handle = store.alloc('TestAsset', { id: 1 });
+
+    const raw = unwrapHandle(handle);
+    const slot = handleSlot(handle);
+    const gen = handleGeneration(handle);
+
+    expect(gen).toBe(0);
+    expect(raw).toBe(slot);
+    // AC-06: slot is the raw value when gen=0
+    expect(raw).toBeGreaterThanOrEqual(BUILTIN_BASE);
+    expect(raw).toBeLessThanOrEqual(MAX_SLOT);
+  });
+
+  it('AC-05: builtin invariant — pack(slot,0) === slot for slot 1-5', () => {
+    // Builtin handle constants (slot 1..5, gen=0) must encode to the same
+    // u32 value as the raw slot — ensures AssetRegistry builtin Map keys,
+    // GUID pre-registration, and entity bit patterns stay unchanged.
+    for (let s = 1; s <= 5; s++) {
+      expect(pack(s, 0)).toBe(s);
+    }
+  });
+
+  it('alloc welds gen into handle — gen extractable via handleGeneration', () => {
+    // After alloc gen welding, handleGeneration returns the gen embedded
+    // during alloc. In M3, gen is always 0 because release does not yet
+    // increment _generations (that's M4). But the code path — pack(slot,gen)
+    // inside alloc -> toShared -> handleGeneration unpacks it — must work.
+    const store = new SharedRefStore();
+    const h = store.alloc('TestAsset', { id: 1 });
+    expect(handleGeneration(h)).toBe(0);
+    expect(handleSlot(h)).toBeGreaterThanOrEqual(BUILTIN_BASE);
+    // pack(slot, gen) round-trips: unpackSlot(pack(s,0)) === s
+    expect(pack(handleSlot(h), handleGeneration(h))).toBe(unwrapHandle(h));
+  });
+
+  it('resolve works correctly after gen-welded alloc (gen increments on release in M4)', () => {
+    // Alloc + release + re-alloc: the second handle resolves to the
+    // second payload. After M4, release increments gen so the reused
+    // slot gets gen=1.
+    const store = new SharedRefStore();
+    const h1 = store.alloc('MeshAsset', { mesh: 'cube' });
+    expect(handleGeneration(h1)).toBe(0);
+
+    expect(store.release(h1).ok).toBe(true);
+
+    const h2 = store.alloc('MeshAsset', { mesh: 'sphere' });
+    // M4: release incremented gen, so re-alloc gets gen=1
+    expect(handleGeneration(h2)).toBe(1);
+
+    const r2 = store.resolve(h2);
+    expect(r2.ok).toBe(true);
+    if (r2.ok) {
+      expect(r2.value).toEqual({ mesh: 'sphere' });
+    }
+  });
+
+  it('alloc with onLastRelease fires deleter after gen-welded release', () => {
+    const cb = vi.fn();
+    const store = new SharedRefStore();
+    const h = store.alloc('Asset', { key: 1 }, cb);
+    expect(store.release(h).ok).toBe(true);
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith({ key: 1 });
+  });
+
+  it('M4: alloc after release reuses slot with gen 1 (gen increments on release)', () => {
+    const store = new SharedRefStore();
+    const h1 = store.alloc('MeshAsset', { mesh: 'cube' });
+    void handleSlot(h1); // probe slot
+    expect(store.release(h1).ok).toBe(true);
+
+    const h2 = store.alloc('MeshAsset', { mesh: 'sphere' });
+    // M4: release incremented gen to 1, so re-alloc gets gen=1
+    expect(handleGeneration(h2)).toBe(1);
+
+    // h2 resolves to the new payload
+    const r2 = store.resolve(h2);
+    expect(r2.ok).toBe(true);
+    if (r2.ok) expect(r2.value).toEqual({ mesh: 'sphere' });
+
+    // h1 (gen=0) is stale now
+    const r1 = store.resolve(h1);
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.error.code).toBe('shared-ref-stale');
+  });
+});
+
+// ─── w9 M4: stale detection unit tests (red phase) ─────────────────────
+// feat-20260623-asset-handle-generation M4 — gen comparison on
+// resolve/retain/release. RED phase: gen increment on release is NOT
+// now via release (gen 0->1) + re-alloc (gen=1), making h1 (gen=0)
+// stale. No manual _generations mutation needed.
+describe('w9 M4 SharedRefStore: stale detection (resolve/retain/release + retire)', () => {
+  it('AC-01: stale resolve returns error with code shared-ref-stale', () => {
+    const store = new SharedRefStore();
+    const h1 = store.alloc('MeshAsset', { mesh: 'cube' });
+    // Release bumps gen from 0 to 1, then re-alloc gets gen=1.
+    // h1 (gen=0) is now stale.
+    expect(store.release(h1).ok).toBe(true);
+    const h2 = store.alloc('MeshAsset', { mesh: 'sphere' });
+
+    const r = store.resolve(h1);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('shared-ref-stale');
+    }
+    // h2 is the current handle and should always resolve
+    const r2 = store.resolve(h2);
+    expect(r2.ok).toBe(true);
+  });
+
+  it('AC-01: stale resolve never returns a payload (verify error branch has no value)', () => {
+    const store = new SharedRefStore();
+    const h1 = store.alloc('MeshAsset', { mesh: 'cube' });
+    expect(store.release(h1).ok).toBe(true);
+    store.alloc('MeshAsset', { mesh: 'sphere' });
+
+    const r = store.resolve(h1);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      // The error must NOT carry a payload — stale resolve does
+      // not return the new payload through any channel.
+      // biome-ignore lint/suspicious/noExplicitAny: accessing value on Result union error branch to verify no payload leak
+      expect((r as any).value).toBeUndefined();
+    }
+  });
+
+  it('AC-02: stale retain returns error, rc unchanged', () => {
+    const store = new SharedRefStore();
+    const h1 = store.alloc('MeshAsset', { mesh: 'cube' });
+    expect(store.release(h1).ok).toBe(true);
+    const h2 = store.alloc('MeshAsset', { mesh: 'sphere' });
+
+    // h2 is alive with rc=1. Read rc before stale retain.
+    const rcBefore = store.refcount(h2);
+    expect(rcBefore).toBe(1);
+
+    const r = store.retain(h1);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('shared-ref-stale');
+    }
+
+    const rcAfter = store.refcount(h2);
+    // AC-02: rc MUST be unchanged after stale retain
+    expect(rcAfter).toBe(rcBefore);
+  });
+
+  it('AC-03: stale release returns error, rc unchanged — read rc before and after', () => {
+    const store = new SharedRefStore();
+    const h1 = store.alloc('MeshAsset', { mesh: 'cube' });
+    expect(store.release(h1).ok).toBe(true);
+
+    const h2 = store.alloc('MeshAsset', { mesh: 'sphere' });
+    expect(handleGeneration(h2)).toBe(1);
+
+    // h2 is alive with rc=1. Stale release with h1 (gen=0) must NOT
+    // decrement h2's rc.
+    const rcBefore = store.refcount(h2);
+    expect(rcBefore).toBe(1);
+
+    const r = store.release(h1);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('shared-ref-stale');
+    }
+
+    const rcAfter = store.refcount(h2);
+    // AC-03 core: stale release MUST NOT touch the new holder's rc.
+    expect(rcAfter).toBe(rcBefore);
+  });
+
+  it('AC-03: stale release when h2 rc>1 does not decrement', () => {
+    const store = new SharedRefStore();
+    const h1 = store.alloc('MeshAsset', { mesh: 'cube' });
+    expect(store.release(h1).ok).toBe(true);
+
+    const h2 = store.alloc('MeshAsset', { mesh: 'sphere' });
+    // build rc=3 for h2
+    expect(store.retain(h2).ok).toBe(true);
+    expect(store.retain(h2).ok).toBe(true);
+    expect(store.refcount(h2)).toBe(3);
+
+    const rcBefore = store.refcount(h2);
+    const r = store.release(h1);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('shared-ref-stale');
+    }
+    // Stale release must not affect h2's rc, even when rc>1
+    expect(store.refcount(h2)).toBe(rcBefore);
+  });
+
+  it('AC-04: new handle after reuse resolves, retains, releases normally', () => {
+    const store = new SharedRefStore();
+    const h1 = store.alloc('MeshAsset', { mesh: 'cube' });
+    expect(store.release(h1).ok).toBe(true);
+
+    // New handle with gen=1 works normally
+    const h2 = store.alloc('MeshAsset', { mesh: 'sphere' });
+    expect(handleGeneration(h2)).toBe(1);
+
+    // resolve
+    const r = store.resolve(h2);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value).toEqual({ mesh: 'sphere' });
+    }
+
+    // retain
+    expect(store.retain(h2).ok).toBe(true);
+    expect(store.refcount(h2)).toBe(2);
+
+    // release back to rc=1 (gen does NOT increment — rc>1)
+    expect(store.release(h2).ok).toBe(true);
+    expect(store.refcount(h2)).toBe(1);
+
+    // final release to rc=0 (gen increments 1->2)
+    expect(store.release(h2).ok).toBe(true);
+    expect(store.refcount(h2)).toBe(0);
+
+    // h1 still stale (gen=0 vs gen=2)
+    const rStale = store.resolve(h1);
+    expect(rStale.ok).toBe(false);
+    if (!rStale.ok) {
+      expect(rStale.error.code).toBe('shared-ref-stale');
+    }
+  });
+
+  it('AC-07: retire-on-255 — gen pushed to MAX_GEN then slot not in freeSlots after release', () => {
+    const store = new SharedRefStore();
+    const h = store.alloc('MeshAsset', { mesh: 'cube' });
+    const slot = handleSlot(h);
+
+    // Bump _generations[slot] to 254, manually push slot to freeSlots
+    // so the next alloc reuses it with gen=254.
+    // biome-ignore lint/suspicious/noExplicitAny: private mutation for retire edge boundary
+    (store as any)._generations[slot] = 254;
+    // biome-ignore lint/suspicious/noExplicitAny: push slot to free list so alloc reuses
+    (store as any).freeSlots.push(slot);
+
+    // Alloc reuses slot, reads gen=254 from _generations.
+    const h2 = store.alloc('MeshAsset', { mesh: 'sphere' });
+    expect(handleGeneration(h2)).toBe(254);
+
+    // Release h2: gen matches (254==254), proceed, gen++ to 255 (=MAX_GEN), retired.
+    expect(store.release(h2).ok).toBe(true);
+
+    // Verify slot is NOT in freeSlots (retired)
+    // biome-ignore lint/suspicious/noExplicitAny: private read
+    const freeSlots: number[] = (store as any).freeSlots;
+    expect(freeSlots.indexOf(slot)).toBe(-1);
   });
 });

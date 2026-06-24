@@ -79,8 +79,7 @@ import {
   FixedSizeMismatchError,
   type ManagedArrayElementTypeNotAllowedError,
   ResourceNotFoundError,
-  UniqueRefDoubleReleaseError,
-  type UniqueRefReleasedError,
+  UniqueRefStaleError,
 } from '../errors';
 import { ECS_MUTATING_METHODS } from '../mutating-methods';
 import { registerEcsInspector } from '../register-inspector';
@@ -413,7 +412,7 @@ import { handleNumeric } from './utils/handle-numeric';
       w.despawn(e).unwrap();
       const after = store.resolve(handle);
       expect(after.ok).toBe(false);
-      if (!after.ok) expect(after.error.code).toBe('unique-ref-released');
+      if (!after.ok) expect(after.error.code).toBe('unique-ref-stale');
     });
 
     it('(3) `handle<T>` field stores unmanaged Handle; ECS does NOT release on despawn', () => {
@@ -481,7 +480,7 @@ import { handleNumeric } from './utils/handle-numeric';
       }).unwrap();
       const after = store.resolve(oldHandle);
       expect(after.ok).toBe(false);
-      if (!after.ok) expect(after.error.code).toBe('unique-ref-released');
+      if (!after.ok) expect(after.error.code).toBe('unique-ref-stale');
       expect(store.resolve(newHandle).ok).toBe(true);
     });
   });
@@ -2576,7 +2575,7 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(r.value.id).toBe(42);
     });
 
-    it('resolve(h) after release returns err(unique-ref-released)', () => {
+    it('resolve(h) after release returns err(unique-ref-stale) (gen incremented in M4)', () => {
       const w = new World();
       const store = refsOf(w);
       const h = store.alloc('MaterialAsset', { id: 1 });
@@ -2584,10 +2583,10 @@ import { handleNumeric } from './utils/handle-numeric';
       const r = store.resolve(h);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('expected err');
-      expect(r.error.code).toBe('unique-ref-released');
+      expect(r.error.code).toBe('unique-ref-stale');
     });
 
-    it('release(h) twice surfaces unique-ref-double-release', () => {
+    it('release(h) twice surfaces unique-ref-stale (gen mismatch after first release, M4)', () => {
       const w = new World();
       const store = refsOf(w);
       const h = store.alloc('MaterialAsset', { id: 1 });
@@ -2595,7 +2594,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const r = store.release(h);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('expected err');
-      expect(r.error.code).toBe('unique-ref-double-release');
+      expect(r.error.code).toBe('unique-ref-stale');
     });
 
     it('AC-04 prelude: alloc returns per-(slot,gen) singleton identity (Object.is)', () => {
@@ -2645,8 +2644,8 @@ import { handleNumeric } from './utils/handle-numeric';
       w.despawn(e).unwrap();
       const r = store.resolve(h);
       expect(r.ok).toBe(false);
-      if (r.ok) throw new Error('expected released');
-      expect(r.error.code).toBe('unique-ref-released');
+      if (r.ok) throw new Error('expected stale');
+      expect(r.error.code).toBe('unique-ref-stale');
     });
 
     it('world.removeComponent(e, C) releases ref<T> field handle (path 2)', () => {
@@ -2667,8 +2666,8 @@ import { handleNumeric } from './utils/handle-numeric';
       w.removeComponent(e, Mat).unwrap();
       const r = store.resolve(h);
       expect(r.ok).toBe(false);
-      if (r.ok) throw new Error('expected released');
-      expect(r.error.code).toBe('unique-ref-released');
+      if (r.ok) throw new Error('expected stale');
+      expect(r.error.code).toBe('unique-ref-stale');
     });
 
     it('world.set(e, C, { handle: newHandle }) releases the prior handle (path 3)', () => {
@@ -2689,7 +2688,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const rOld = store.resolve(oldH);
       expect(rOld.ok).toBe(false);
       if (rOld.ok) throw new Error('expected old released');
-      expect(rOld.error.code).toBe('unique-ref-released');
+      expect(rOld.error.code).toBe('unique-ref-stale');
       const rNew = store.resolve(newH);
       expect(rNew.ok).toBe(true);
     });
@@ -2726,11 +2725,11 @@ import { handleNumeric } from './utils/handle-numeric';
   }
 
   describe('w9 - release failure routes through Layer 3 ErrorHandler', () => {
-    it('manual release + World.despawn -> ErrorHandler captures unique-ref-double-release', () => {
-      // Real World-driven double release: AI user calls store.release(h)
-      // themselves, then despawns the holder entity. The column still
-      // carries the u32 handle, so World.despawn -> release(h) returns
-      // err(unique-ref-double-release) which routes to Layer 3.
+    it('manual release + World.despawn -> ErrorHandler captures unique-ref-stale (gen mismatch, M4)', () => {
+      // Real World-driven stale handle: AI user calls store.release(h)
+      // themselves (gen 0->1), then despawns the holder entity. The column
+      // still carries h with gen=0, so World.despawn -> release(h) returns
+      // err(unique-ref-stale) which routes to Layer 3.
       const Mat = defineComponent('Mat', { handle: { type: 'unique<MaterialAsset>' } });
       const w = new World();
       const store = refsOf(w);
@@ -2745,26 +2744,22 @@ import { handleNumeric } from './utils/handle-numeric';
           data: { handle: h },
         })
         .unwrap();
-      // Drop the handle out from under the World.
+      // Drop the handle out from under the World — gen goes 0->1.
       store.release(h).unwrap();
       // Despawn must not throw - the chain continues despite release err.
       expect(() => w.despawn(e).unwrap()).not.toThrow();
       expect(captured).toHaveLength(1);
       const c0 = captured[0];
       if (c0 === undefined) throw new Error('expected captured');
-      // {code, hint, expected, detail} contract (AC-05).
-      expect(c0.error).toBeInstanceOf(UniqueRefDoubleReleaseError);
-      const errClass = c0.error as UniqueRefDoubleReleaseError;
-      expect(errClass.code).toBe('unique-ref-double-release');
+      // gen mismatch surfaces stale, not double-release (M4).
+      expect(c0.error).toBeInstanceOf(UniqueRefStaleError);
+      const errClass = c0.error as UniqueRefStaleError;
+      expect(errClass.code).toBe('unique-ref-stale');
       expect(errClass.hint.length).toBeGreaterThan(0);
       expect(errClass.expected.length).toBeGreaterThan(0);
-      expect(errClass.detail.handle).toBe(handleNumeric(h));
-      expect(errClass.detail.target).toBe('<unknown>');
+      expect(typeof errClass.detail.slot).toBe('number');
       // ErrorContext shape (severity=Error -> chain continues, not Panic).
       expect(c0.context.severity).toBe(Severity.Error);
-      // feat-20260614 M2 D-2: release-dispatch is one SSOT helper, so the
-      // systemName collapses to a uniform 'World.release (component.field)'
-      // label across despawn / removeComponent / set paths.
       expect(c0.context.systemName).toContain('World.release');
       expect(c0.context.systemName).toContain('Mat.handle');
     });
@@ -2802,7 +2797,7 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(r.error.code).toBe('stale-entity');
       // One double-release surface for Mat.handle, no extra noise.
       expect(handlerErrors).toHaveLength(1);
-      expect(handlerErrors[0]).toBeInstanceOf(UniqueRefDoubleReleaseError);
+      expect(handlerErrors[0]).toBeInstanceOf(UniqueRefStaleError);
     });
 
     it('removeComponent path also routes double-release through ErrorHandler', () => {
@@ -2830,31 +2825,27 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(captured).toHaveLength(1);
       const c0 = captured[0];
       if (c0 === undefined) throw new Error('expected captured');
-      expect((c0.error as UniqueRefDoubleReleaseError).code).toBe('unique-ref-double-release');
+      expect((c0.error as UniqueRefStaleError).code).toBe('unique-ref-stale');
       // feat-20260614 M2 D-2: SSOT release-dispatch -> uniform systemName.
       expect(c0.context.systemName).toContain('World.release');
       expect(c0.context.systemName).toContain('Mat.handle');
     });
 
-    it('UniqueRefReleasedError carries the {code, hint, expected, detail} contract', () => {
-      // AC-05 shape lock: even though the World M1 release loop does not
-      // surface 'unique-ref-released' (resolve is the read path, not the
-      // release path), the error class carries the same structured payload
-      // as 'unique-ref-double-release' so AI users get a uniform exhaustive
-      // switch on the union.
+    it('UniqueRefStaleError carries the {code, hint, expected, detail} contract', () => {
+      // AC-11: stale error exposes .detail {slot, expectedGeneration, actualGeneration}.
+      // After M4 gen increment on release, the old handle's gen no longer
+      // matches — it surfaces stale rather than released.
       const w = new World();
       const store = refsOf(w);
       const h = store.alloc('MaterialAsset', { id: 1 });
       store.release(h).unwrap();
       const r = store.resolve(h);
       expect(r.ok).toBe(false);
-      if (r.ok) throw new Error('expected released');
-      const e: UniqueRefReleasedError = r.error;
-      expect(e.code).toBe('unique-ref-released');
-      expect(e.hint.length).toBeGreaterThan(0);
-      expect(e.expected.length).toBeGreaterThan(0);
-      expect(typeof e.detail.handle).toBe('number');
-      expect(typeof e.detail.target).toBe('string');
+      if (r.ok) throw new Error('expected stale');
+      expect(r.error.code).toBe('unique-ref-stale');
+      expect(r.error.hint.length).toBeGreaterThan(0);
+      expect(r.error.expected.length).toBeGreaterThan(0);
+      expect(typeof (r.error as UniqueRefStaleError).detail.slot).toBe('number');
     });
   });
 }
@@ -3872,7 +3863,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const resolveMat = refs.resolve(matH);
       expect(resolveMat.ok).toBe(false);
       if (resolveMat.ok) throw new Error('expected ref handle released');
-      expect(resolveMat.error.code).toBe('unique-ref-released');
+      expect(resolveMat.error.code).toBe('unique-ref-stale');
 
       // The 'string' field's underlying handle must also be released by the
       // SAME arm. We cannot cheaply observe the internal string-handle, so
@@ -3911,7 +3902,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const resolveMat = refs.resolve(matH);
       expect(resolveMat.ok).toBe(false);
       if (resolveMat.ok) throw new Error('expected ref handle released');
-      expect(resolveMat.error.code).toBe('unique-ref-released');
+      expect(resolveMat.error.code).toBe('unique-ref-stale');
 
       // Anchor remains; the entity is still alive.
       const got = w.get(e, Anchor);
@@ -3991,7 +3982,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const r = refs.resolve(matHandle);
       expect(r.ok).toBe(false);
       if (r.ok) throw new Error('expected released');
-      expect(r.error.code).toBe('unique-ref-released');
+      expect(r.error.code).toBe('unique-ref-stale');
     });
   });
 

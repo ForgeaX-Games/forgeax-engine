@@ -35,9 +35,8 @@
 // is shared with apps/inspector-demo via apps/shared/src/populate-demo-world.ts
 // (feat-20260514-ci-jscpd-duplication-gate M3 T-014 / clone #2 path-A cash-out).
 
-import type { AppError } from '@forgeax/engine-app';
+import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
-import type { RhiError } from '@forgeax/engine-rhi/errors';
 import { EngineEnvironmentError, Name } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { populateDemoWorld } from '../../../shared/src/populate-demo-world';
@@ -77,7 +76,7 @@ if (!app.ok) {
   app.value.start();
 }
 
-function reportError(err: AppError | RhiError | EngineEnvironmentError): void {
+function reportError(err: CanvasAppError): void {
   if (err instanceof EngineEnvironmentError) {
     console.error('[cube] no usable backend:', err);
     return;

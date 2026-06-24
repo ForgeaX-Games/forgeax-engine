@@ -95,10 +95,19 @@ struct Material {
   // analog for Y) so the shader does not need an extra flip uniform.
   region       : vec4<f32>,
   // pivotAndSize: .xy = pivot (0..1 normalized; (0,0)=top-left,
-  // (1,1)=bottom-left of texture UV space), .zw = size (in world units;
-  // unit quad = (1,1)). The sort path consumes pivot.y * size.y as the
-  // foot-offset so the Y-sort formula stays SSOT-aligned (requirements
-  // §AC-10 + transparent-sort.ts w23 formula).
+  // (1,1)=bottom-left of texture UV space), .zw = size in LOCAL quad
+  // units. Always (1, 1) on the live host writer; the world-space size
+  // of the sprite quad is owned by `meshes[i].worldFromLocal` (which
+  // carries Transform.scale). bug-20260618 sprite-double-scale: the
+  // earlier path wrote |worldFromLocal.col0| / |col1| here, which then
+  // got multiplied AGAIN by worldFromLocal downstream -- quads ended up
+  // scaleX^2 wide. The field stays in the UBO for byte-stability with
+  // the PBR layout (slot 2 vec4 alignment) and as a future hook if a
+  // sprite shader variant wants to opt into local-quad-units sizing.
+  // The sort path consumes pivot.y * |Transform.scaleY| (NOT size.y)
+  // as the foot-offset so the Y-sort formula stays SSOT-aligned with
+  // `worldFromLocal` (requirements §AC-10 + transparent-sort.ts w23
+  // formula; charter P4 single TRS source).
   pivotAndSize : vec4<f32>,
   // 9-slice placeholder (feat-20260527-sprite-nineslice M1 / w3): .xyz =
   // L/T/R/B inset values folded into a single vec4 by the schema-driven

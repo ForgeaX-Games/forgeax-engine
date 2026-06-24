@@ -4,13 +4,26 @@
   "compilerOptions": {
     "composite": true,
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
+    "declaration": true,
+    "declarationMap": true
   },
-  "include": ["src"],
+  "include": [
+    "src/**/*"
+  ],
   "references": [
-    { "path": "../ecs" },
-    { "path": "../math" },
-    { "path": "../physics" },
-    { "path": "../types" }
+    {
+      "path": "../ecs"
+    },
+    {
+      "path": "../math"
+    },
+    {
+      "path": "../physics"
+    },
+    {
+      "path": "../types"
+    }
   ]
 }

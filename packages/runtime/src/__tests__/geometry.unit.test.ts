@@ -2124,6 +2124,44 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         expect(typeof fired.detail.ceiling).toBe('number');
       }
     });
+
+    // bug-20260622 wgpu-wasm-ssbo-ceiling-zero regression: when the device
+    // under-reports `maxStorageBufferBindingSize = 0` (currently happens on
+    // the wgpu-wasm backend because rhi.rs requests its device with
+    // `wgpu::Limits::downlevel_webgl2_defaults()` which zeroes the storage
+    // buffer binding-size limit), the grow controller must fall back to the
+    // WebGPU spec default (128 MiB) rather than refuse every grow with
+    // ceiling=0. Without the fallback any demo whose entity count crosses
+    // initialSlotCount (e.g. asi-world at ~3k+ entities) loops on
+    // MeshSsboCeilingReachedError and produces a black screen.
+    it('(d) ceiling=0 fallback — under-reported limit treated as 128 MiB, grow succeeds', () => {
+      const { device, createBufferSpy } = makeFakeDevice({
+        maxStorageBufferBindingSize: 0,
+        maxUniformBufferBindingSize: HIGH_LIMIT,
+      });
+      const { fire } = makeFakeErrorRegistry();
+      const ctrl = createMeshSsboGrowController({
+        device: device as unknown as Parameters<typeof createMeshSsboGrowController>[0]['device'],
+        errorRegistry: { fire: fire as unknown as (e: RuntimeError) => void },
+        initialSlotCount: INITIAL_SLOT_COUNT,
+        perEntityStride: PER_ENTITY_STRIDE,
+        meshUsage: MESH_USAGE,
+        materialUsage: MATERIAL_USAGE,
+      });
+      ctrl.initialBuild();
+      createBufferSpy.mockClear();
+
+      // Pick a slot count well above initialSlotCount=1024 but well below
+      // 128 MiB / 256 B = 512K slots. Matches the asi-world failure-mode
+      // size (~5546 needed slots in the original repro).
+      const result = ctrl.growMeshSsbo(6000);
+      expect(result).toEqual({ ok: true });
+      // mesh + material buffers reallocated once on the grow.
+      expect(createBufferSpy).toHaveBeenCalledTimes(2);
+      expect(fire).not.toHaveBeenCalled();
+      // slotCount lifted to the next pow2 >= 6000 (= 8192).
+      expect(ctrl.state.slotCount).toBe(8192);
+    });
   });
 
   // ── T-M3-01: ensureMeshSsboCapacity idempotent + boundary ────────────────

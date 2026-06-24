@@ -413,7 +413,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     const res = await fetch(new URL('./scene.pack.json', import.meta.url), { cache: 'no-store' });
     if (!res.ok) throw new Error(`scene.pack.json ${res.status}`);
     const pack = await res.json() as ScenePack;
-    loaded = await instantiateScenePack(pack, { world });
+    loaded = await instantiateScenePack(pack, { world, assets: ctx?.assets });
   } catch (err) {
     console.warn('[game] scene pack unavailable:', err);
   }
@@ -436,7 +436,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const flashables: Array<{ e: EntityHandle; mat: MatHandle }> = []; // hit-flash targets (dynamic props)
   const targets: Array<{ e: EntityHandle; points: number }> = [];    // scorable props (entity → points)
   if (loaded) {
-    const phys = attachScenePhysics(ctx, loaded);
+    const phys = attachScenePhysics({ world }, loaded);
     walkBlockers.push(...phys.walkBlockers);
     flashables.push(...phys.props);
     targets.push(...phys.targets);
@@ -720,7 +720,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
 
   // Bullet material — EMISSIVE so it glows and drives the Camera.bloom bright-pass
   // (HDR emissive > bloomThreshold 1.0 → blooms). Showcases the post-processing path.
-  const bulletMat = ctx.world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ baseColor: [1, 0.85, 0.3, 1], roughness: 0.4, metallic: 0, emissive: [1, 0.7, 0.15], emissiveIntensity: 5 }));
+  const bulletMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ baseColor: [1, 0.85, 0.3, 1], roughness: 0.4, metallic: 0, emissive: [1, 0.7, 0.15], emissiveIntensity: 5 }));
   // Bullet mesh — a 0.2-radius sphere baked AT the visual size (Transform.scale
   // stays 1). The default HANDLE_SPHERE is a UNIT sphere; using `scale 0.2` to
   // shrink it produced a large round ground shadow on every shot — a code path
@@ -728,10 +728,10 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // before Transform.scale is folded in. Baking the geometry at the final
   // radius removes the scale dependency and the shadow now matches the bullet.
   const bulletMeshRes = createSphereGeometry(0.2, 12, 8);
-  const bulletMesh = bulletMeshRes.ok ? ctx.world.allocSharedRef('MeshAsset', bulletMeshRes.value) : HANDLE_SPHERE;
+  const bulletMesh = bulletMeshRes.ok ? world.allocSharedRef('MeshAsset', bulletMeshRes.value) : HANDLE_SPHERE;
   // Hit-flash material — a bright emissive white-yellow swapped onto a prop for a
   // few frames when a bullet strikes it (then restored to its base material).
-  const flashMat = ctx.world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ baseColor: [1, 1, 0.9, 1], roughness: 0.5, metallic: 0, emissive: [1, 1, 0.6], emissiveIntensity: 6 }));
+  const flashMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ baseColor: [1, 1, 0.9, 1], roughness: 0.5, metallic: 0, emissive: [1, 1, 0.6], emissiveIntensity: 6 }));
   const flashUntil = new Map<EntityHandle, number>();    // entity → remaining flash seconds
   // squared hit radius for bullet→prop scoring. Aligned with the bullet's
   // 0.5-radius collider — proximity fires the same moment the physics contact

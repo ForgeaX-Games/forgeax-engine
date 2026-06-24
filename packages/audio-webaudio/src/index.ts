@@ -26,5 +26,7 @@ export {
 export { audioTickSystem, detectEdge, type TickStateEntry } from './audio-tick-system';
 // M3: AudioClipAsset loader (fetch + decodeAudioData)
 export { loadAudioClipByGuid } from './clip-loader';
+// M2 (feat-20260623-plugin-system-unify): audioPlugin factory (w9)
+export { AUDIO_TICK_SYSTEM_NAME, audioPlugin } from './plugin-factory';
 // Public factory + class (M2)
 export { createWebAudioBackend, WebAudioEngine } from './web-audio-engine';

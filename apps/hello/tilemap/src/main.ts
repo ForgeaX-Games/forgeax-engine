@@ -98,6 +98,7 @@ async function main(): Promise<void> {
     .spawn(
       { component: TileLayer, data: { tiles, layerOrder: 0, dirty: 1 } },
       { component: ChildOf, data: { parent: tilemap } },
+      { component: Transform, data: { posX: 0, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 } },
     )
     .unwrap();
 

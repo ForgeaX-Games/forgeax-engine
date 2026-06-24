@@ -30,7 +30,6 @@ import {
   AudioListener,
 } from '@forgeax/engine-audio';
 import {
-  audioTickSystem,
   createWebAudioBackend,
   syncListenerFromWorldMatrix,
   WebAudioEngine,
@@ -47,11 +46,14 @@ import {
   World,
 } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
+import { INPUT_BACKEND_KEY } from '@forgeax/engine-input';
+import type { Plugin } from '@forgeax/engine-plugin';
 import type { RhiInstance } from '@forgeax/engine-rhi';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
 import type { CreateShaderModuleFn, DebugRhiInstance } from '@forgeax/engine-rhi-debug';
 import {
   ANIMATION_ASSET_RESOLVER_KEY,
+  animationPlugin,
   CAMERA_PROJECTION_PERSPECTIVE,
   Camera,
   createAnimationAssetResolver,
@@ -61,20 +63,22 @@ import {
   PROPAGATE_TRANSFORMS_SYSTEM,
   type Renderer,
   type RuntimeError,
-  registerAdvanceAnimationPlayer,
-  registerPropagateTransforms,
   Transform,
+  timePlugin,
+  transformPlugin,
 } from '@forgeax/engine-runtime';
 import { createDebugDrawOnReady } from '@forgeax/engine-runtime/debug-draw-glue';
-import { registerStatesPlugin } from '@forgeax/engine-state';
+import { statePlugin } from '@forgeax/engine-state';
 import type { AppErrorCode, AppErrorDetailFor } from './errors';
 import { AppError } from './errors';
 import { makeCleanupFunnel } from './internal/cleanup';
 import { ErrorFanoutRegistry } from './internal/error-fanout';
 import { createFrameLoop } from './internal/frame-loop';
 import { registerCaptureHmrListener } from './internal/hmr-capture-listener';
-import { attachInputAuto, type InputAttachHandle } from './internal/input-attach';
+import { attachInputAuto } from './internal/input-attach';
 import { resolveRhiDebugFlag } from './internal/rhi-debug-flag';
+import { runPlugins } from './internal/run-plugins';
+import { inputPlugin } from './plugin-factories';
 import type {
   App,
   AppAssembleArgs,
@@ -432,56 +436,68 @@ async function createAppFromCanvas(
   // contrast to the assemble form where the host owns it.
   const world = new World();
 
-  // Step 3.1: register advanceAnimationPlayer + propagateTransforms systems.
-  // The systems are auto-wired for all canvas-form apps; assemble-form callers
-  // can register them via `registerAdvanceAnimationPlayer(world, resolver)` +
-  // `registerPropagateTransforms(world)`.
+  // Step 3.1 (M2 plugin-system-unify / D-4): app-layer side effects that the
+  // plugins consume via pre-injected world resources.
   //
-  // advanceAnimationPlayer declares `before: ['propagateTransforms']`, so once
-  // both are registered the ECS DAG scheduler orders them correctly.
-  // propagateTransforms is registered with no `beforeSystemName` (default) --
-  // the driver guarantees pre-draw ordering by running world.update() before
-  // renderer.draw(world).
-  //
-  // Why propagateTransforms is auto-wired: the derived `Transform.world` mat4
-  // is the world-space transform that every downstream consumer -- the render
-  // path, picking, and the audio listener sync -- reads. propagateTransforms is
-  // the sole writer of that world column (root: world = local; child: world =
-  // parent.world x local), so without this wiring a ChildOf hierarchy would
-  // never see parent transforms cascade to children. Every Transform-bearing
-  // entity carries the world column, so the pass is a cheap identity recompose
-  // for flat scenes with no ChildOf.
-  // M2 (full resource-ification): the AnimationAssetResolver is supplied via
-  // a World resource. Insert it BEFORE registering the system so the system's
-  // ParamValidation finds the resource on the first tick (D-2).
+  // The AnimationAssetResolver is supplied as a world resource; insert it
+  // BEFORE the plugins run so animationPlugin's advanceAnimationPlayer finds
+  // it on the first tick (D-2 / D-4). transform + animation system
+  // registration now lives in transformPlugin() / animationPlugin() (default
+  // set below) -- the sole writer of the derived Transform.world mat4 still
+  // ends up registered, just through the unified plugin path.
   const animResolver = createAnimationAssetResolver(renderer.assets);
   world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, animResolver);
-  registerAdvanceAnimationPlayer(world);
-  registerPropagateTransforms(world);
 
-  // Step 4: delegate to the assemble form. Forward optional input/maxDt
-  // through the tunables so the wiring path remains a single SSOT.
-  let inputHandle: InputAttachHandle | undefined;
-  if (opts?.input !== false) {
-    inputHandle = attachInputAuto(canvas, world);
-  }
+  // Input DOM attach (D-3 / C-5): attachBrowserInputBackend needs the canvas
+  // (a DOM surface only this path knows about), so the app attaches it and
+  // inserts the backend as the INPUT_BACKEND_KEY world resource. inputPlugin
+  // (default set) then registers the frame-start scan system, guarded by the
+  // resource presence. The cleanup funnel (detach + removeSystem) stays bound
+  // to stop / device-lost in the app layer (the plugin cannot own DOM
+  // lifetime). M3 (w15): input:false opt-out deleted — canvas form always
+  // attaches input; hosts that want to opt out use assemble form (D-6).
+  const inputHandle = attachInputAuto(canvas, world);
 
-  // Audio auto-attach: when opts.audio === true, create WebAudioBackend
-  // and register as 'AudioEngine' World Resource (parallel to input auto-attach).
+  // Audio backend (D-4): auto-create the WebAudioBackend when the user listed
+  // audioPlugin() in plugins[]. This preserves the M2 contract (audioPlugin
+  // only does world-registration; the backend lifecycle stays in the app layer).
+  // M3 (w15): opts.audio flag deleted — detection is by plugin name.
   let audioBackend: AudioBackend | undefined;
-  if (opts?.audio === true) {
+  const userPlugins: Plugin[] = [...(opts?.plugins ?? [])];
+  const hasAudioPlugin = userPlugins.some((p) => p.name === 'audio');
+  if (hasAudioPlugin) {
     audioBackend = createWebAudioBackend();
+    world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, audioBackend);
   }
 
-  const buildArgs: BuildAppArgs = { renderer, world };
-  if (inputHandle !== undefined) {
-    Object.assign(buildArgs, {
-      inputBackend: inputHandle.backend,
-      cleanup: (onErrorDispatch: (err: AppError) => void) => {
-        inputHandle.cleanup({ onError: onErrorDispatch });
-      },
-    });
+  // Step 3.2 (D-2): canvas form runs the full 5-plugin default set merged with
+  // the user plugins. runPlugins is awaited BEFORE buildApp so a duplicate-plugin /
+  // plugin-build-failed surfaces as Result.err before the frame loop is armed,
+  // and so a physics WASM load completes before createApp resolves (AC-06: no
+  // post-resolve timing gap). M3 (w15): legacy opts.physics / opts.audio bridges
+  // deleted -- demos pass plugins directly; audio backend is auto-created above
+  // when audioPlugin is detected in userPlugins.
+  const defaultSet: Plugin[] = [
+    transformPlugin(),
+    timePlugin(),
+    animationPlugin(),
+    statePlugin(),
+    inputPlugin(),
+  ];
+  const pluginResult = await runPlugins(world, defaultSet, userPlugins);
+  if (!pluginResult.ok) {
+    return err(pluginResult.error);
   }
+
+  const buildArgs: BuildAppArgs = {
+    renderer,
+    world,
+    pluginRegistry: pluginResult.value,
+    inputBackend: inputHandle.backend,
+    cleanup: (onErrorDispatch: (err: AppError) => void) => {
+      inputHandle.cleanup({ onError: onErrorDispatch });
+    },
+  };
   if (audioBackend !== undefined) {
     Object.assign(buildArgs, {
       audioBackend,
@@ -495,9 +511,6 @@ async function createAppFromCanvas(
   }
   if (opts?.silenceUnhandledErrors !== undefined) {
     Object.assign(buildArgs, { silenceUnhandledErrors: opts.silenceUnhandledErrors });
-  }
-  if (opts?.physics !== undefined) {
-    Object.assign(buildArgs, { physics: opts.physics });
   }
   if (_debugInst !== undefined) {
     Object.assign(buildArgs, { debugRhi: _debugInst });
@@ -616,15 +629,42 @@ export function syncCameraAspect(world: World, canvasW: number, canvasH: number)
 async function createAppFromAssemble(
   args: AppAssembleArgs,
 ): Promise<Result<App, AssembleAppError>> {
-  // Host-owned renderer / world / optional pre-attached input. The
-  // assemble form does NOT auto-cleanup args.input on stop -- the host
-  // owns the lifetime contract (charter P5 producer/consumer split).
-  const buildArgs: BuildAppArgs = { renderer: args.renderer, world: args.world };
-  if (args.input !== undefined) {
-    Object.assign(buildArgs, { inputBackend: args.input });
+  // Host-owned renderer / world. The assemble form does NOT auto-create any
+  // backend -- the host manages backend lifecycle (D-2).
+  //
+  // M2 plugin-system-unify / D-2: the assemble form runs ONLY the user plugins
+  // (defaultSet=[]) against the host-owned world. The host manages its own
+  // core wiring + backend resources (transform / state / audio / input etc.),
+  // so this form never auto-injects the default 5 plugins -- preserving the
+  // assemble-form byte-identity contract (R2).
+  //
+  // M3 (w15): args.input / args.audio deleted. The host pre-injects backends
+  // via world.insertResource before calling createApp; App.input / App.audio
+  // read back from world resources (buildApp).
+  const pluginResult = await runPlugins(args.world, [], args.plugins ?? []);
+  if (!pluginResult.ok) {
+    return err(pluginResult.error);
   }
-  if (args.audio !== undefined) {
-    Object.assign(buildArgs, { audioBackend: args.audio });
+
+  const buildArgs: BuildAppArgs = {
+    renderer: args.renderer,
+    world: args.world,
+    pluginRegistry: pluginResult.value,
+  };
+
+  // M3 (w15): read pre-injected backends from world resources. The host
+  // pre-injected INPUT_BACKEND_KEY / AUDIO_ENGINE_RESOURCE_KEY before calling
+  // createApp; their corresponding plugins (inputPlugin / audioPlugin) registered
+  // the ECS systems because they found the resources.
+  if (args.world.hasResource(INPUT_BACKEND_KEY)) {
+    Object.assign(buildArgs, {
+      inputBackend: args.world.getResource<InputBackend>(INPUT_BACKEND_KEY),
+    });
+  }
+  if (args.world.hasResource(AUDIO_ENGINE_RESOURCE_KEY)) {
+    Object.assign(buildArgs, {
+      audioBackend: args.world.getResource<AudioBackend>(AUDIO_ENGINE_RESOURCE_KEY),
+    });
   }
   if (args.maxDt !== undefined) {
     Object.assign(buildArgs, { maxDt: args.maxDt });
@@ -632,18 +672,16 @@ async function createAppFromAssemble(
   if (args.silenceUnhandledErrors !== undefined) {
     Object.assign(buildArgs, { silenceUnhandledErrors: args.silenceUnhandledErrors });
   }
-  if (args.physics !== undefined) {
-    Object.assign(buildArgs, { physics: args.physics });
-  }
   return buildApp(buildArgs);
 }
 
 interface BuildAppArgs {
   readonly renderer: Renderer;
   readonly world: World;
+  /** Plugin registry from runPlugins -- exposed on App.pluginRegistry for inspector consumption. */
+  readonly pluginRegistry: Map<string, Plugin>;
   readonly inputBackend?: InputBackend;
   readonly audioBackend?: AudioBackend;
-  readonly physics?: 'rapier-2d' | 'rapier-3d';
   readonly cleanup?: (onErrorDispatch: (err: AppError) => void) => void;
   readonly maxDt?: number;
   readonly silenceUnhandledErrors?: boolean;
@@ -678,7 +716,6 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     world,
     inputBackend,
     audioBackend,
-    physics,
     cleanup,
     audioBackendDispose,
     maxDt,
@@ -688,62 +725,34 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     debugDraw,
   } = args;
 
-  // Register audio backend as World Resource (parallel to input attach pattern).
-  if (audioBackend !== undefined) {
-    world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, audioBackend);
-  }
+  // M2 plugin-system-unify (D-1 / D-4): audio resource injection,
+  // state-machine wiring, and physics WASM load all moved into their plugins
+  // (audioPlugin / statePlugin / physicsPlugin), run by runPlugins BEFORE this
+  // builder. buildApp no longer wires any capability directly -- it only
+  // injects the AssetRegistry resource (a renderer-derived resource, not a
+  // plugin concern), builds the frame loop, and returns the App handle.
 
-  // Register state-machine plugin (feat-20260616 M2 / m2w5).
-  // Idempotent: safe to call even if the host manually registered first.
-  registerStatesPlugin(world);
-
-  // Inject renderer.assets as World Resource so audioTickSystem's
-  // createClipResolver can resolve clip handles -> AudioBuffer (D-1).
+  // Inject renderer.assets as World Resource so the audio tick system's
+  // createClipResolver can resolve clip handles -> AudioBuffer (D-1). This is a
+  // renderer-derived resource (not a plugin), so it stays in the builder.
   if (renderer.assets !== undefined) {
     world.insertResource(ASSET_REGISTRY_RESOURCE_KEY, renderer.assets);
   }
 
-  // Physics fire-and-forget WASM load (plan-strategy D-4, AC-09).
-  // The dynamic import + init() runs asynchronously without blocking the
-  // first frame. physicsRef wraps a mutable PhysicsWorld slot that is
-  // populated once the WASM module initialises.
-  const physicsRef: {
-    current:
+  // physics resolver for app.physics (D-5): physicsPlugin inserts the
+  // 'PhysicsWorld' world resource on a successful build, so app.physics reads
+  // it back from the world rather than holding a private mutable slot. Because
+  // runPlugins is awaited before buildApp, the resource is already present when
+  // the getter is first read (AC-06: no post-resolve timing gap).
+  function readPhysicsWorld():
+    | import('@forgeax/engine-physics').PhysicsWorld
+    | import('@forgeax/engine-physics').PhysicsWorld2D
+    | undefined {
+    if (!world.hasResource('PhysicsWorld')) return undefined;
+    return world.getResource<
       | import('@forgeax/engine-physics').PhysicsWorld
       | import('@forgeax/engine-physics').PhysicsWorld2D
-      | undefined;
-  } = { current: undefined };
-  if (physics !== undefined) {
-    void (async () => {
-      try {
-        if (physics === 'rapier-3d') {
-          const { loadRapier3D, createRapier3DPhysicsWorld, registerPhysicsSystems } = await import(
-            '@forgeax/engine-physics-rapier3d'
-          );
-          const rapier = await loadRapier3D();
-          const pw = createRapier3DPhysicsWorld(rapier);
-          // Insert the resource BEFORE registering systems: registerPhysicsSystems
-          // wires moveAndSlide's moveContext by reading the 'PhysicsWorld'
-          // resource and silently no-ops (try/catch) if it is absent. Inserting
-          // first guarantees setMoveContext runs, so moveAndSlide writes back
-          // Transform + CharacterController.grounded (feat-20260617 G-2).
-          world.insertResource('PhysicsWorld', pw);
-          registerPhysicsSystems(world);
-          physicsRef.current = pw;
-        } else {
-          const { loadRapier2D, createRapier2DPhysicsWorld, registerPhysicsSystems2D } =
-            await import('@forgeax/engine-physics-rapier2d');
-          const rapier = await loadRapier2D();
-          const pw = createRapier2DPhysicsWorld(rapier);
-          // Same ordering rationale as the 3D arm above.
-          world.insertResource('PhysicsWorld', pw);
-          registerPhysicsSystems2D(world);
-          physicsRef.current = pw;
-        }
-      } catch {
-        // WASM load failed — physics is unavailable but the app continues.
-      }
-    })();
+    >('PhysicsWorld');
   }
   // M4 (w11): listener registry replaces the M3 inline Set so console.error
   // fallback + duplicate-add no-op + unsubscribe handle behaviour matches
@@ -846,13 +855,14 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   const stub: App = {
     renderer,
     world,
+    pluginRegistry: args.pluginRegistry,
     ...(inputBackend !== undefined ? { input: inputBackend } : {}),
     ...(audioBackend !== undefined ? { audio: audioBackend } : {}),
     get physics():
       | import('@forgeax/engine-physics').PhysicsWorld
       | import('@forgeax/engine-physics').PhysicsWorld2D
       | undefined {
-      return physicsRef.current;
+      return readPhysicsWorld();
     },
     registerUpdate(fn: (dt: number) => void): void {
       loop.addUpdateCallback(fn);
@@ -918,25 +928,12 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   // ready": start() never observes a pre-ready frame, and a genuine pipeline
   // build failure fail-fasts as Result.err(rhiError) (caught by the canonical
   // `if (!app.ok) reportError(app.error)` takeoff) instead of per-frame noise.
-  // Physics WASM load above stays fire-and-forget and overlaps this await.
+  // M2 plugin-system-unify (D-1 / D-4): the audio tick system is now registered
+  // by audioPlugin (run by runPlugins before buildApp) as the 'audio-tick'
+  // world system, so there is no buildApp-side registerUpdate hook anymore.
   const readyResult = await renderer.ready;
   if (!readyResult.ok) {
     return err(readyResult.error);
-  }
-
-  // feat-20260619 M3: auto-register audioTickSystem (D-2).
-  // Registered via registerUpdate (FIFO per-frame seam) after both
-  // AUDIO_ENGINE_RESOURCE_KEY and ASSET_REGISTRY_RESOURCE_KEY are inserted,
-  // so the tick system can resolve them on the first frame without error.
-  // The audioBackend reference is captured by closure, avoiding a per-frame
-  // world.getResource lookup. The 1-frame delay from registerUpdate FIFO
-  // ordering (tick before consumer edge-write) is harmless -- edge detection
-  // uses cross-frame diff and only shifts phase, never drops edges.
-  // Only registered when audioBackend !== undefined (AC-12 reverse).
-  if (audioBackend !== undefined) {
-    stub.registerUpdate(() => {
-      audioTickSystem(world, audioBackend);
-    });
   }
 
   return ok(stub);

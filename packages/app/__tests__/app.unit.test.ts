@@ -18,7 +18,7 @@ import { err, ok, type Result, World } from '@forgeax/engine-ecs';
 import { RhiError } from '@forgeax/engine-rhi/errors';
 import { registerPropagateTransforms, Transform } from '@forgeax/engine-runtime';
 import type { Renderer } from '@forgeax/engine-runtime';
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MAX_DT_DEFAULT } from '../src/constants';
 import { createApp } from '../src/create-app';
@@ -39,76 +39,6 @@ import {
 } from '../src/internal/frame-loop';
 import { loadGame } from '../src/load-game';
 import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
-import type { AppAssembleArgs } from '../src/types';
-
-{
-  // ─── from create-app-physics.test.ts ───
-
-  function makeRendererStub(): Renderer {
-    return {
-      draw(): void {
-        // no-op
-      },
-      onError(): () => void {
-        return () => {
-          // no-op
-        };
-      },
-      onLost(): () => void {
-        return () => {
-          // no-op
-        };
-      },
-    } as unknown as Renderer;
-  }
-
-  describe('create-app-physics.test.ts', () => {
-    describe('CreateAppOptions.physics literal union (AC-08 type-level)', () => {
-      it("CreateAppOptions.physics accepts 'rapier-2d' literal", () => {
-        const physicsOpt: 'rapier-2d' | 'rapier-3d' | undefined = 'rapier-2d';
-        expectTypeOf(physicsOpt).toBeString();
-      });
-
-      it("CreateAppOptions.physics accepts 'rapier-3d' literal", () => {
-        const physicsOpt: 'rapier-2d' | 'rapier-3d' | undefined = 'rapier-3d';
-        expectTypeOf(physicsOpt).toBeString();
-      });
-
-      it("CreateAppOptions.physics accepts undefined (no physics)", () => {
-        const physicsOpt: 'rapier-2d' | 'rapier-3d' | undefined = undefined;
-        expect(physicsOpt).toBeUndefined();
-      });
-    });
-
-    describe('AppAssembleArgs accepts physics? field (AC-08 assemble form)', () => {
-      it("assemble-form AppAssembleArgs has optional physics field", () => {
-        const renderer = makeRendererStub();
-        const world = new World();
-        const args: AppAssembleArgs = {
-          renderer,
-          world,
-          physics: 'rapier-3d',
-        };
-        expect(args.physics).toBe('rapier-3d');
-        expect(args.world).toBe(world);
-      });
-
-      it("assemble-form without physics has undefined physics", () => {
-        const renderer = makeRendererStub();
-        const world = new World();
-        const args: AppAssembleArgs = { renderer, world };
-        expect(args.physics).toBeUndefined();
-      });
-    });
-
-    describe('no-physics path (AC-08 absence)', () => {
-      it('world has no PhysicsWorld resource when physics is not configured', () => {
-        const world = new World();
-        expect(world.hasResource('PhysicsWorld')).toBe(false);
-      });
-    });
-  });
-}
 
 {
   // ─── from create-app-propagate-transforms.test.ts ───
@@ -952,9 +882,9 @@ import type { AppAssembleArgs } from '../src/types';
 
   describe('load-game.test.ts', () => {
     describe('loadGame success path (AC-07)', () => {
-      it('resolves with Result.ok containing the default export when resolver returns a valid module', async () => {
+      it('resolves with Result.ok containing the bootstrap export when resolver returns a valid module', async () => {
         const entry = makeStubEntry();
-        const r = await loadGame('my-game', async () => ({ default: entry }));
+        const r = await loadGame('my-game', async () => ({ bootstrap: entry }));
         expect(r.ok).toBe(true);
         if (r.ok) {
           expect(r.value).toBe(entry);
@@ -965,7 +895,7 @@ import type { AppAssembleArgs } from '../src/types';
         const syncEntry: GameEntry = () => {
           // sync function -- JS runtime auto-wraps undefined return to Promise<void>
         };
-        const r = await loadGame('sync-game', async () => ({ default: syncEntry }));
+        const r = await loadGame('sync-game', async () => ({ bootstrap: syncEntry }));
         expect(r.ok).toBe(true);
         if (r.ok) {
           expect(typeof r.value).toBe('function');
@@ -995,7 +925,7 @@ import type { AppAssembleArgs } from '../src/types';
     });
 
     describe('loadGame invalid-format (AC-07 / AC-08)', () => {
-      it('returns Result.err with code invalid-format when module has no default export', async () => {
+      it('returns Result.err with code invalid-format when module has no bootstrap export', async () => {
         const r = await loadGame('bad-game', async () => ({ foo: 1 }) as unknown as Record<string, unknown>);
         expect(r.ok).toBe(false);
         if (!r.ok) {
@@ -1004,12 +934,12 @@ import type { AppAssembleArgs } from '../src/types';
           expect(err.code).toBe('invalid-format');
           const detail = err.detail as { exportKeys: string[] };
           expect(detail.exportKeys).toContain('foo');
-          expect(detail.exportKeys).not.toContain('default');
+          expect(detail.exportKeys).not.toContain('bootstrap');
         }
       });
 
-      it('returns Result.err with code invalid-format when default export is null', async () => {
-        const r = await loadGame('null-game', async () => ({ default: null }) as unknown as Record<string, unknown>);
+      it('returns Result.err with code invalid-format when bootstrap export is null', async () => {
+        const r = await loadGame('null-game', async () => ({ bootstrap: null }) as unknown as Record<string, unknown>);
         expect(r.ok).toBe(false);
         if (!r.ok) {
           const err = r.error as LoadGameError;
@@ -1017,8 +947,8 @@ import type { AppAssembleArgs } from '../src/types';
         }
       });
 
-      it('returns Result.err with code invalid-format when default export is not a function', async () => {
-        const r = await loadGame('string-game', async () => ({ default: 'not-a-function' }) as unknown as Record<string, unknown>);
+      it('returns Result.err with code invalid-format when bootstrap export is not a function', async () => {
+        const r = await loadGame('string-game', async () => ({ bootstrap: 'not-a-function' }) as unknown as Record<string, unknown>);
         expect(r.ok).toBe(false);
         if (!r.ok) {
           const err = r.error as LoadGameError;

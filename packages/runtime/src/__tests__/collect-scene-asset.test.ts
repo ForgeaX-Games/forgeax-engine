@@ -28,20 +28,20 @@ function localId(n: number): LocalEntityId {
   return n as LocalEntityId;
 }
 
-function registerSceneAsset(
-  world: World,
-  asset: SceneAsset,
-): Handle<'SceneAsset', 'shared'> {
+function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset', 'shared'> {
   return world.allocSharedRef('SceneAsset', asset);
 }
 
 /** Safe property access into the dynamic component map. */
-function comp(
-  entity: SceneEntity,
-  name: string,
-): Record<string, unknown> | undefined {
+function comp(entity: SceneEntity, name: string): Record<string, unknown> | undefined {
   const map = entity.components as Record<string, Record<string, unknown>>;
   return map[name];
+}
+
+/** Assert a value is defined, narrowing away undefined/null for downstream access. */
+function def<T>(v: T | undefined | null, label = 'value'): T {
+  if (v === undefined || v === null) throw new Error(`expected ${label} to be defined`);
+  return v;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -76,7 +76,7 @@ describe('w9 — round-trip semantic equivalence', () => {
     expect(collected.kind).toBe('scene');
     expect(collected.entities).toHaveLength(3);
 
-    const collectedLocalIds = collected.entities.map((e) => (e.localId as unknown as number)).sort();
+    const collectedLocalIds = collected.entities.map((e) => e.localId as unknown as number).sort();
     expect(collectedLocalIds).toEqual([0, 1, 2]);
   });
 
@@ -89,9 +89,7 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { Test_Pos3: { x: 10.5, y: 20.5, z: 30.5 } } },
-      ],
+      entities: [{ localId: localId(0), components: { Test_Pos3: { x: 10.5, y: 20.5, z: 30.5 } } }],
     };
 
     const world = new World();
@@ -103,11 +101,10 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const collected = collectSceneAsset(world, root);
     expect(collected.entities).toHaveLength(1);
-    const tp = comp(collected.entities[0]!, 'Test_Pos3');
-    expect(tp).toBeDefined();
-    expect(Math.abs((tp!.x as number) - 10.5)).toBeLessThan(0.001);
-    expect(Math.abs((tp!.y as number) - 20.5)).toBeLessThan(0.001);
-    expect(Math.abs((tp!.z as number) - 30.5)).toBeLessThan(0.001);
+    const tp = def(comp(def(collected.entities[0], 'entity[0]'), 'Test_Pos3'), 'Test_Pos3');
+    expect(Math.abs((tp.x as number) - 10.5)).toBeLessThan(0.001);
+    expect(Math.abs((tp.y as number) - 20.5)).toBeLessThan(0.001);
+    expect(Math.abs((tp.z as number) - 30.5)).toBeLessThan(0.001);
   });
 
   it('(c) default value materialization accepted (semantic != byte equivalence)', () => {
@@ -134,10 +131,12 @@ describe('w9 — round-trip semantic equivalence', () => {
     const root = res.value.root;
 
     const collected = collectSceneAsset(world, root);
-    const tw = comp(collected.entities[0]!, 'Test_WithDefault');
-    expect(tw).toBeDefined();
-    expect(tw!.required).toBe(7);
-    expect(tw!.optional).toBe(42);
+    const tw = def(
+      comp(def(collected.entities[0], 'entity[0]'), 'Test_WithDefault'),
+      'Test_WithDefault',
+    );
+    expect(tw.required).toBe(7);
+    expect(tw.optional).toBe(42);
   });
 
   it('(d) empty scene (no entities) round-trips to empty entities[]', () => {
@@ -161,9 +160,7 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { Test_Name: { label: 'hello' } } },
-      ],
+      entities: [{ localId: localId(0), components: { Test_Name: { label: 'hello' } } }],
     };
 
     const world = new World();
@@ -174,9 +171,8 @@ describe('w9 — round-trip semantic equivalence', () => {
     const root = res.value.root;
 
     const collected = collectSceneAsset(world, root);
-    const tn = comp(collected.entities[0]!, 'Test_Name');
-    expect(tn).toBeDefined();
-    expect(tn!.label).toBe('hello');
+    const tn = def(comp(def(collected.entities[0], 'entity[0]'), 'Test_Name'), 'Test_Name');
+    expect(tn.label).toBe('hello');
   });
 
   it('(f) multiple components per entity round-trip correctly', () => {
@@ -206,9 +202,10 @@ describe('w9 — round-trip semantic equivalence', () => {
     const root = res.value.root;
 
     const collected = collectSceneAsset(world, root);
-    expect(comp(collected.entities[0]!, 'Test_A')!.val).toBe(1);
-    expect(comp(collected.entities[0]!, 'Test_B')!.flag).toBe(true);
-    expect(comp(collected.entities[0]!, 'Test_C')!.name).toBe('multi');
+    const e0 = def(collected.entities[0], 'entity[0]');
+    expect(def(comp(e0, 'Test_A'), 'Test_A').val).toBe(1);
+    expect(def(comp(e0, 'Test_B'), 'Test_B').flag).toBe(true);
+    expect(def(comp(e0, 'Test_C'), 'Test_C').name).toBe('multi');
   });
 
   it('(g) bool field round-trips through collectSceneAsset', () => {
@@ -231,8 +228,12 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const collected = collectSceneAsset(world, root);
     expect(collected.entities).toHaveLength(2);
-    expect(comp(collected.entities[0]!, 'Test_Flag')!.enabled).toBe(true);
-    expect(comp(collected.entities[1]!, 'Test_Flag')!.enabled).toBe(false);
+    expect(
+      def(comp(def(collected.entities[0], 'entity[0]'), 'Test_Flag'), 'Test_Flag').enabled,
+    ).toBe(true);
+    expect(
+      def(comp(def(collected.entities[1], 'entity[1]'), 'Test_Flag'), 'Test_Flag').enabled,
+    ).toBe(false);
   });
 
   it('(h) serializeSceneAssetToPack produces valid pack envelope', () => {
@@ -240,9 +241,7 @@ describe('w9 — round-trip semantic equivalence', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { Test_Pack: { a: 99 } } },
-      ],
+      entities: [{ localId: localId(0), components: { Test_Pack: { a: 99 } } }],
     };
 
     const pack = serializeSceneAssetToPack(asset, 'aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee');
@@ -252,12 +251,12 @@ describe('w9 — round-trip semantic equivalence', () => {
     expect(Array.isArray(assets)).toBe(true);
     expect(assets).toHaveLength(1);
 
-    const assetEntry = assets[0]!;
+    const assetEntry = def(assets[0], 'assets[0]');
     expect(assetEntry.guid).toBe('aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee');
     expect(assetEntry.kind).toBe('scene');
     const payload = assetEntry.payload as Record<string, unknown>;
     expect(Array.isArray(payload.entities)).toBe(true);
-    expect((payload.entities as Array<unknown>)).toHaveLength(1);
+    expect(payload.entities as Array<unknown>).toHaveLength(1);
   });
 
   it('(i) serializeSceneAssetToPack without guid uses a generated guid', () => {
@@ -269,8 +268,9 @@ describe('w9 — round-trip semantic equivalence', () => {
     const assets = pack.assets as Array<Record<string, unknown>>;
     expect(Array.isArray(assets)).toBe(true);
     expect(assets).toHaveLength(1);
-    expect(typeof assets[0]!.guid).toBe('string');
-    expect((assets[0]!.guid as string).length).toBeGreaterThan(0);
+    const entry0 = def(assets[0], 'assets[0]');
+    expect(typeof entry0.guid).toBe('string');
+    expect((entry0.guid as string).length).toBeGreaterThan(0);
   });
 
   it('(j) full round-trip instantiate->collect->serialize->check', () => {
@@ -301,12 +301,16 @@ describe('w9 — round-trip semantic equivalence', () => {
     const pack = serializeSceneAssetToPack(collected, '11111111-2222-4333-8444-555555555555');
     expect(pack.kind).toBe('internal-text-package');
     const assets = pack.assets as Array<Record<string, unknown>>;
-    const payload = assets[0]!.payload as Record<string, unknown>;
+    const payload = def(assets[0], 'assets[0]').payload as Record<string, unknown>;
     const entities = payload.entities as Array<Record<string, unknown>>;
     expect(entities).toHaveLength(2);
 
     // Check entity 0
-    const tf = (entities[0]!.components as Record<string, Record<string, unknown>>)['Test_Full']!;
+    const tf = def(
+      (def(entities[0], 'entity[0]').components as Record<string, Record<string, unknown>>)
+        .Test_Full,
+      'Test_Full',
+    );
     expect(Math.abs((tf.posX as number) - 1.5)).toBeLessThan(0.001);
     expect(Math.abs((tf.posY as number) - 2.5)).toBeLessThan(0.001);
     expect(tf.name).toBe('e0');
@@ -347,7 +351,10 @@ describe('w10 — handle→GUID reverse lookup', () => {
 
     const collected = collectSceneAsset(world, root, handleToGuid);
     expect(collected.entities).toHaveLength(1);
-    expect(comp(collected.entities[0]!, 'Test_MeshRef')!.assetHandle).toBe(testGuid);
+    expect(
+      def(comp(def(collected.entities[0], 'entity[0]'), 'Test_MeshRef'), 'Test_MeshRef')
+        .assetHandle,
+    ).toBe(testGuid);
   });
 
   it('(b) material field resolves to correct GUID', () => {
@@ -363,9 +370,7 @@ describe('w10 — handle→GUID reverse lookup', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { Test_MatRef: { material: fakeHandle } } },
-      ],
+      entities: [{ localId: localId(0), components: { Test_MatRef: { material: fakeHandle } } }],
     };
 
     const handle = registerSceneAsset(world, asset);
@@ -375,7 +380,9 @@ describe('w10 — handle→GUID reverse lookup', () => {
     const root = res.value.root;
 
     const collected = collectSceneAsset(world, root, handleToGuid);
-    expect(comp(collected.entities[0]!, 'Test_MatRef')!.material).toBe(testGuid);
+    expect(
+      def(comp(def(collected.entities[0], 'entity[0]'), 'Test_MatRef'), 'Test_MatRef').material,
+    ).toBe(testGuid);
   });
 
   it('(c) skeleton field resolves to correct GUID', () => {
@@ -391,9 +398,7 @@ describe('w10 — handle→GUID reverse lookup', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { Test_SkelRef: { skeleton: fakeHandle } } },
-      ],
+      entities: [{ localId: localId(0), components: { Test_SkelRef: { skeleton: fakeHandle } } }],
     };
 
     const handle = registerSceneAsset(world, asset);
@@ -403,7 +408,9 @@ describe('w10 — handle→GUID reverse lookup', () => {
     const root = res.value.root;
 
     const collected = collectSceneAsset(world, root, handleToGuid);
-    expect(comp(collected.entities[0]!, 'Test_SkelRef')!.skeleton).toBe(testGuid);
+    expect(
+      def(comp(def(collected.entities[0], 'entity[0]'), 'Test_SkelRef'), 'Test_SkelRef').skeleton,
+    ).toBe(testGuid);
   });
 
   it('(d) clip field resolves to correct GUID', () => {
@@ -419,9 +426,7 @@ describe('w10 — handle→GUID reverse lookup', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { Test_ClipRef: { clip: fakeHandle } } },
-      ],
+      entities: [{ localId: localId(0), components: { Test_ClipRef: { clip: fakeHandle } } }],
     };
 
     const handle = registerSceneAsset(world, asset);
@@ -431,7 +436,9 @@ describe('w10 — handle→GUID reverse lookup', () => {
     const root = res.value.root;
 
     const collected = collectSceneAsset(world, root, handleToGuid);
-    expect(comp(collected.entities[0]!, 'Test_ClipRef')!.clip).toBe(testGuid);
+    expect(
+      def(comp(def(collected.entities[0], 'entity[0]'), 'Test_ClipRef'), 'Test_ClipRef').clip,
+    ).toBe(testGuid);
   });
 
   it('(e) cubemap field resolves to correct GUID', () => {
@@ -447,9 +454,7 @@ describe('w10 — handle→GUID reverse lookup', () => {
 
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [
-        { localId: localId(0), components: { Test_CubeRef: { cubemap: fakeHandle } } },
-      ],
+      entities: [{ localId: localId(0), components: { Test_CubeRef: { cubemap: fakeHandle } } }],
     };
 
     const handle = registerSceneAsset(world, asset);
@@ -459,7 +464,9 @@ describe('w10 — handle→GUID reverse lookup', () => {
     const root = res.value.root;
 
     const collected = collectSceneAsset(world, root, handleToGuid);
-    expect(comp(collected.entities[0]!, 'Test_CubeRef')!.cubemap).toBe(testGuid);
+    expect(
+      def(comp(def(collected.entities[0], 'entity[0]'), 'Test_CubeRef'), 'Test_CubeRef').cubemap,
+    ).toBe(testGuid);
   });
 
   it('(f) materials array field resolves each element to correct GUID', () => {
@@ -494,7 +501,10 @@ describe('w10 — handle→GUID reverse lookup', () => {
     const root = res.value.root;
 
     const collected = collectSceneAsset(world, root, handleToGuid);
-    const resolved = comp(collected.entities[0]!, 'Test_ArrayRef')!.materials as unknown[];
+    const resolved = def(
+      comp(def(collected.entities[0], 'entity[0]'), 'Test_ArrayRef'),
+      'Test_ArrayRef',
+    ).materials as unknown[];
     expect(Array.isArray(resolved)).toBe(true);
     expect(resolved).toEqual([guid0, guid1]);
   });
@@ -533,7 +543,7 @@ describe('w10 — handle→GUID reverse lookup', () => {
     const collected = collectSceneAsset(world, root, handleToGuid);
     const pack = serializeSceneAssetToPack(collected, 'scene-guid-scene-guid-scene-guid-sc');
     const assets = pack.assets as Array<Record<string, unknown>>;
-    const refs = assets[0]!.refs as string[];
+    const refs = def(assets[0], 'assets[0]').refs as string[];
     expect(Array.isArray(refs)).toBe(true);
     expect(refs.includes(meshGuid) || refs.includes(matGuid)).toBe(true);
   });

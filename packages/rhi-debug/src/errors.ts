@@ -34,7 +34,7 @@ export type RhiCapsRecordedKey = keyof RhiCapsRecorded;
  * | `'recorder-already-armed'` | Duplicate arm() while previous capture is still in progress (recorder in `armed` / `recording` / `finalizing`). |
  * | `'frame-end-hook-missing'` | createRenderer internal onFrameEnd injection point is absent (theoretically unreachable; fail-fast guard). |
  * | `'tape-format-version-mismatch'` | Cross-version tape: integer formatVersion does not match. |
- * | `'tape-handle-graph-broken'` | Event references a handleId that was never declared by any create* call in the tape. |
+ * | `'tape-handle-graph-broken'` | Event references a handleId that was never declared by any create* call in the tape (deserialize path); or a frame-referenced handleId has no create event in bootstrapCreates — the resource was created before wrap() and the recorder could not capture its create* event. The `.hint` discriminates: deserialize side mentions "referenced but was never declared", finalize side mentions "bootstrap table" and "before wrap()" (finalize closure path). |
  * | `'caps-mismatch'` | target.caps does not contain tape.rhiCapsRecorded; replay blocked. |
  * | `'replay-step-out-of-range'` | stepTo(N) where N > totalEvents or N < currentEventIdx. |
  * | `'replay-deterministic-violation'` | After submit + onSubmittedWorkDone, RT pixels differ from original (test-only). |

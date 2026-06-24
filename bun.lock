@@ -1497,6 +1497,7 @@
         "@forgeax/engine-physics": "workspace:*",
         "@forgeax/engine-physics-rapier2d": "workspace:*",
         "@forgeax/engine-physics-rapier3d": "workspace:*",
+        "@forgeax/engine-plugin": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-state": "workspace:*",
@@ -1525,6 +1526,7 @@
         "@forgeax/engine-audio": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-plugin": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
@@ -1704,7 +1706,12 @@
       "dependencies": {
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-plugin": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-physics-rapier2d": "workspace:*",
+        "@forgeax/engine-physics-rapier3d": "workspace:*",
       },
     },
     "packages/physics-rapier2d": {
@@ -1735,6 +1742,13 @@
       "devDependencies": {
         "@dimforge/rapier3d": "0.19.3",
         "@forgeax/engine-runtime": "workspace:*",
+      },
+    },
+    "packages/plugin": {
+      "name": "@forgeax/engine-plugin",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
       },
     },
     "packages/render-graph": {
@@ -1814,6 +1828,7 @@
         "@forgeax/engine-input": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:^",
+        "@forgeax/engine-plugin": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-rhi-null": "workspace:*",
@@ -1854,6 +1869,7 @@
       },
       "dependencies": {
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-plugin": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
     },
@@ -2261,6 +2277,8 @@
     "@forgeax/engine-physics-rapier2d": ["@forgeax/engine-physics-rapier2d@workspace:packages/physics-rapier2d"],
 
     "@forgeax/engine-physics-rapier3d": ["@forgeax/engine-physics-rapier3d@workspace:packages/physics-rapier3d"],
+
+    "@forgeax/engine-plugin": ["@forgeax/engine-plugin@workspace:packages/plugin"],
 
     "@forgeax/engine-project": ["@forgeax/engine-project@workspace:packages/engine-project"],
 
