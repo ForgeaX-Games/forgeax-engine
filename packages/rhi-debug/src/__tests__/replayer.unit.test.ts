@@ -25,7 +25,7 @@ import type { RhiCallEventCreateBuffer, RhiCapsRecorded, Tape } from '../types';
 
 function makeTape(caps: Partial<RhiCapsRecorded>, events: Tape['events']): Tape {
   return {
-    formatVersion: 1,
+    formatVersion: 2,
     rhiCapsRecorded: {
       canvasFormat: caps.canvasFormat ?? ('bgra8unorm' as GPUTextureFormat),
       rgba16floatRenderable: caps.rgba16floatRenderable ?? false,

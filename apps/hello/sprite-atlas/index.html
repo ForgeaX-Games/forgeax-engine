@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>forgeax-engine - Hello Sprite Atlas (100 instances / 1 draw call)</title>
+    <title>forgeax-engine - Hello Sprite Atlas (10000 entities folded to 1 instanced drawIndexed)</title>
     <style>
       html, body { margin: 0; padding: 0; height: 100%; background: #1a1a22; color: #e8e8ef; font-family: ui-monospace, monospace; }
       canvas { display: block; width: 100vw; height: 100vh; }
@@ -17,8 +17,8 @@
   <body>
     <canvas id="app"></canvas>
     <div class="hint">
-      <b>100 sprites</b> sharing 1 atlas, 1 draw call<br />
-      walk animation (4 frames, loop)
+      <b>10000 sprites</b> sharing 1 atlas, folded transparently to 1 instanced drawIndexed<br />
+      (record-stage fold operator, AC-03 charter P4)
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

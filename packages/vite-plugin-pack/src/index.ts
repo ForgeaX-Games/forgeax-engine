@@ -24,6 +24,8 @@ import { watch as fsWatch } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import {
+  IMPORT_ERROR_HINTS,
+  ImportError,
   ImporterRegistry,
   type ImportRunnerFs,
   type RunImportMeta,
@@ -98,6 +100,45 @@ interface ViteDevServerLike {
 
 interface WsLike {
   send(payload: { type: string } & Record<string, unknown>): void;
+}
+
+/**
+ * Vite HMR custom-event name the dev server pushes when a watched asset file
+ * (sidecar or image/glTF source) changes. A tooling subscriber receives it via
+ * `import.meta.hot.on(ASSET_CHANGED_EVENT, (data: AssetChangedPayload) => ...)`
+ * and re-queries `/__pack/index` -- replacing filesystem polling with a push
+ * from the catalog-owner. Distinct from the `full-reload` the running game
+ * still receives; this channel is for editors/inspectors, not the game.
+ */
+export const ASSET_CHANGED_EVENT = 'forgeax:asset-changed';
+
+/** Payload carried by {@link ASSET_CHANGED_EVENT}. */
+export interface AssetChangedPayload {
+  /** Watched file path (relative to a scanned root) that changed. */
+  readonly file: string;
+  /** node:fs.watch event kind (`'rename'` | `'change'`). */
+  readonly event: string;
+  /**
+   * Which watch class fired: `'sidecar'` (`.meta.json` / `.pack.json` -- the
+   * catalog was rebuilt) or `'source'` (image / glTF bytes -- catalog rows are
+   * unchanged, only pixels). A subscriber re-queries the catalog only for
+   * `'sidecar'`.
+   */
+  readonly kind: 'sidecar' | 'source';
+}
+
+/**
+ * Push {@link ASSET_CHANGED_EVENT} over the Vite HMR socket. No-op when no ws
+ * channel is wired (graceful degradation, architecture-principles §9).
+ */
+function emitAssetChanged(
+  server: ViteDevServerLike,
+  file: string,
+  event: string,
+  kind: 'sidecar' | 'source',
+): void {
+  const data: AssetChangedPayload = { file, event, kind };
+  server.ws?.send({ type: 'custom', event: ASSET_CHANGED_EVENT, data });
 }
 
 /** Shape of the plugin returned by pluginPack(). */
@@ -357,7 +398,26 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     const raw = catalog.find((e) => e.guid.toLowerCase() === guidLower);
     if (raw === undefined) return [];
     const imported = await importTextureEntry(raw, { cwd: process.cwd() });
-    if ('skipped' in imported) return [];
+    if ('skipped' in imported) {
+      // Fail-fast (architecture-principles §5), mirroring the per-meta path's
+      // `throw runResult.error`: a REAL cook failure (source read / decode /
+      // no-produced) must surface a structured ImportError so the POST route
+      // reports `.code` + `detail.reason` in the 422 body and the browser
+      // console -- not collapse to `[]` -> a generic "could not be imported".
+      // A BENIGN skip (non-texture kind / unknown extension) is not an error:
+      // return `[]` so the route 422s with the generic "not an importable
+      // texture" hint (the build arm passes the raw row through; the dev route
+      // has no raw-row fallback, so `[]` is the benign signal here).
+      if (imported.real) {
+        throw new ImportError({
+          code: 'import-internal-error',
+          expected: `an importable texture source for guid ${raw.guid}`,
+          hint: IMPORT_ERROR_HINTS['import-internal-error'],
+          detail: { reason: imported.skipped },
+        });
+      }
+      return [];
+    }
     const suffix = `.${guidLower}.bin`;
     const binAbs = ddcPath(process.cwd(), guidLower);
     await mkdir(dirname(binAbs), { recursive: true });
@@ -692,6 +752,17 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
                         urlToAbs = buildUrlToAbs(catalog);
                         server.watcher?.on('change', () => {});
                         server.ws?.send({ type: 'full-reload' });
+                        // Push a structured catalog-change event so a subscriber
+                        // (e.g. an editor Content Browser) can re-query
+                        // `/__pack/index` on demand instead of polling the
+                        // filesystem -- the catalog-owner (this dev server, the
+                        // only side that holds catalog truth + already watches
+                        // sidecars) is the right emit source. `full-reload`
+                        // stays for the running game; the custom event is the
+                        // tooling channel. Vite HMR custom-event convention:
+                        // `{ type: 'custom', event, data }`, received via
+                        // `import.meta.hot.on('forgeax:asset-changed', ...)`.
+                        emitAssetChanged(server, filename, eventType, 'sidecar');
                         console.warn(
                           `[forgeax-pack] pack file changed: ${filename} (${eventType})`,
                         );
@@ -704,6 +775,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
                   // Image content change: catalog stays valid (rows derive
                   // from sidecars), only the rendered pixels need to reload.
                   server.ws?.send({ type: 'full-reload' });
+                  emitAssetChanged(server, filename, eventType, 'source');
                   console.warn(`[forgeax-pack] image content changed: ${filename} (${eventType})`);
                 });
                 watcher.unref();
@@ -857,61 +929,69 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           }
         }
 
-        if (metaPath !== undefined && isMultiAssetMeta) {
-          // Per-meta path: coalesce on metaPath.
-          let inflightMeta = inFlightMetaImports.get(metaPath);
-          if (inflightMeta === undefined) {
-            inflightMeta = startMetaImport(metaPath).finally(() =>
-              inFlightMetaImports.delete(metaPath),
-            );
-            inFlightMetaImports.set(metaPath, inflightMeta);
-          }
-          try {
+        // Both arms throw the structured ImportError on a REAL failure
+        // (fail-fast): per-meta via `startMetaImport`'s `throw runResult.error`,
+        // per-asset via `importOneTexture`'s `throw new ImportError`. One shared
+        // catch surfaces `.code` + `detail.reason` so AI/human users see the
+        // actual cause (e.g. `fbx-binding-not-built`, or a decode-failure
+        // reason) instead of a generic `import-failed`.
+        try {
+          if (metaPath !== undefined && isMultiAssetMeta) {
+            // Per-meta path: coalesce on metaPath.
+            let inflightMeta = inFlightMetaImports.get(metaPath);
+            if (inflightMeta === undefined) {
+              inflightMeta = startMetaImport(metaPath).finally(() =>
+                inFlightMetaImports.delete(metaPath),
+              );
+              inFlightMetaImports.set(metaPath, inflightMeta);
+            }
             resultEntries = await inflightMeta;
-          } catch (e) {
-            // startMetaImport throws the structured ImportError on a real
-            // import failure (fail-fast). Surface `.code` + `detail.reason`
-            // so AI/human users see the actual cause (e.g.
-            // `fbx-binding-not-built`) instead of a generic `import-failed`.
-            const err = e as {
-              code?: string;
-              hint?: string;
-              detail?: { reason?: string };
-            };
-            res.statusCode = 422;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(
-              JSON.stringify({
-                error: 'import-failed',
-                guid,
-                code: err.code ?? 'import-internal-error',
-                reason: err.detail?.reason ?? (e instanceof Error ? e.message : String(e)),
-                hint: err.hint ?? 'importer threw while converting the source',
-              }),
-            );
-            return;
+            // Filter to the requested GUID's row.
+            const requested = resultEntries.find((e) => e.guid.toLowerCase() === guidLower);
+            resultEntries = requested !== undefined ? [requested] : [];
+          } else {
+            // Fallback per-asset path (image sidecars, single-texture import).
+            let inflight = inFlightImports.get(guidLower);
+            if (inflight === undefined) {
+              inflight = importOneTexture(guidLower).finally(() =>
+                inFlightImports.delete(guidLower),
+              );
+              inFlightImports.set(guidLower, inflight);
+            }
+            resultEntries = await inflight;
           }
-          // Filter to the requested GUID's row.
-          const requested = resultEntries.find((e) => e.guid.toLowerCase() === guidLower);
-          resultEntries = requested !== undefined ? [requested] : [];
-        } else {
-          // Fallback per-asset path (image sidecars, single-texture import).
-          let inflight = inFlightImports.get(guidLower);
-          if (inflight === undefined) {
-            inflight = importOneTexture(guidLower).finally(() => inFlightImports.delete(guidLower));
-            inFlightImports.set(guidLower, inflight);
-          }
-          resultEntries = await inflight;
-        }
-
-        if (resultEntries.length === 0) {
+        } catch (e) {
+          const err = e as {
+            code?: string;
+            hint?: string;
+            detail?: { reason?: string };
+          };
           res.statusCode = 422;
           res.setHeader('Content-Type', 'application/json');
           res.end(
             JSON.stringify({
               error: 'import-failed',
               guid,
-              hint: 'GUID is declared but its catalog row could not be imported',
+              code: err.code ?? 'import-internal-error',
+              reason: err.detail?.reason ?? (e instanceof Error ? e.message : String(e)),
+              hint: err.hint ?? 'importer threw while converting the source',
+            }),
+          );
+          return;
+        }
+
+        if (resultEntries.length === 0) {
+          // Benign empty result: the GUID is declared but not an importable
+          // texture (non-texture kind / unknown extension -- `importOneTexture`
+          // returns `[]` for these), or the per-meta filter found no matching
+          // row. Real cook failures throw above and never reach here.
+          res.statusCode = 422;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(
+            JSON.stringify({
+              error: 'import-failed',
+              guid,
+              hint: 'GUID declared but not an importable texture (non-texture kind, unknown extension, or no matching sub-asset row)',
             }),
           );
           return;
@@ -1011,13 +1091,11 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       // throw, or absent produced asset) -- pass those through unchanged.
       const imported = await importTextureEntry(entry, { cwd });
       if ('skipped' in imported) {
-        // Surface real import failures as a warning (the prior in-line block
-        // warned on importer throw + no-produced); silent pass-through for
-        // benign non-importable rows (non-texture / unknown extension).
-        if (
-          imported.skipped.startsWith('failed to import') ||
-          imported.skipped.startsWith('imageImporter')
-        ) {
+        // Surface real import failures as a warning; silent pass-through for
+        // benign non-importable rows (non-texture / unknown extension). The
+        // benign-vs-real classification is the shared fn's `real` flag (one
+        // SSOT), no longer a `skipped` string-prefix match here.
+        if (imported.real) {
           console.warn(`[forgeax-pack] ${imported.skipped}`);
         }
         importedEntries.push(entry);

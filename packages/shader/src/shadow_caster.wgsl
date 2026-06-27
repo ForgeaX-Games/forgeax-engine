@@ -41,6 +41,14 @@ fn _cascadeLightViewProj(layer : u32) -> mat4x4<f32> {
 @vertex
 fn vs_main(in : VsInput, @builtin(instance_index) idx : u32) -> @builtin(position) vec4<f32> {
   let worldPos = meshes[0].worldFromLocal * instances[idx].localFromInstance * vec4<f32>(in.position, 1.0);
+  // feat-20260625-spot-light-shadow-mapping M2 / w10 (D-1): spot shadow passes
+  // set `isSpot = 1u` and write their perspective matrix into
+  // `spotLightViewProj`; directional cascade passes keep `isSpot = 0u` and read
+  // `view.lightViewProj_A..D` via `index`. Routing on the discriminant keeps
+  // the spot matrix out of the directional View UBO (no same-frame contention).
+  if (shadowCasterCascade.isSpot == 1u) {
+    return shadowCasterCascade.spotLightViewProj * worldPos;
+  }
   let lvp = _cascadeLightViewProj(shadowCasterCascade.index);
   return lvp * worldPos;
 }

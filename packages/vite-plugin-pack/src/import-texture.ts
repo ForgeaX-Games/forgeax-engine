@@ -43,10 +43,18 @@ export interface ImportTextureOptions {
  * into the catalog row. The shared fn never returns a `relativeUrl`
  * (D-1): the build arm rewrites it from `emitFile` + `getFileName`, and
  * the dev arm from the written `.bin` path -- each call site owns that.
+ *
+ * The `skipped` variant carries `real`: this is the one SSOT distinguishing a
+ * BENIGN skip (`real: false` -- the row is simply not an importable image:
+ * non-texture kind, missing metadata, unknown extension) that callers pass
+ * through unchanged, from a REAL failure (`real: true` -- the source could not
+ * be read / decoded, or the importer produced nothing) that callers must
+ * surface as a structured error rather than swallow. Previously each caller
+ * re-derived this from a `skipped.startsWith('failed to import')` prefix match.
  */
 export type ImportTextureResult =
   | { readonly bytes: Uint8Array; readonly metadata: ImageMetadata }
-  | { readonly skipped: string };
+  | { readonly skipped: string; readonly real: boolean };
 
 /**
  * Import one `kind: 'texture'` pack-index row into `{ bytes, metadata }`.
@@ -72,7 +80,7 @@ export async function importTextureEntry(
     entry.metadata === undefined ||
     entry.metadata.kind !== 'texture'
   ) {
-    return { skipped: 'non-texture or missing texture metadata' };
+    return { skipped: 'non-texture or missing texture metadata', real: false };
   }
   const meta = entry.metadata;
   const sourceAbs = resolve(opts.cwd, entry.sourcePath);
@@ -84,7 +92,10 @@ export async function importTextureEntry(
   const lower = sourceAbs.toLowerCase();
   const isImageMime = lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png');
   if (!isImageMime && !lower.endsWith('.hdr')) {
-    return { skipped: `unknown extension (no image mime / not .hdr): ${entry.sourcePath}` };
+    return {
+      skipped: `unknown extension (no image mime / not .hdr): ${entry.sourcePath}`,
+      real: false,
+    };
   }
 
   // Build the one-subAsset ImportContext (GUID import-stable iron law: the
@@ -122,12 +133,14 @@ export async function importTextureEntry(
       skipped: `failed to import texture ${entry.sourcePath}: ${
         e instanceof Error ? e.message : String(e)
       }`,
+      real: true,
     };
   }
   const imported = produced.find((a) => a.guid === entry.guid)?.payload as TextureAsset | undefined;
   if (imported === undefined) {
     return {
       skipped: `imageImporter produced no asset for ${entry.sourcePath} (guid ${entry.guid})`,
+      real: true,
     };
   }
   // The imported texel bytes ride in TextureAsset.data (Uint8Array |

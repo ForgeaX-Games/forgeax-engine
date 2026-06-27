@@ -167,6 +167,9 @@ importers:
       vite:
         specifier: 8.0.10
         version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
 
   apps/hello/audio:
     dependencies:

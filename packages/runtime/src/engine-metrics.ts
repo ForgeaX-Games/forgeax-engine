@@ -14,13 +14,23 @@
 //   | `reset()`                      | Drop every counter (test isolation hook).   |
 //
 // Naming convention (charter P5 consistent abstraction): counter keys use a
-// dot-delimited namespace `<feature>.<event>`. The 9-slice feature owns:
+// dot-delimited namespace `<feature>.<event>`. Two features own keys today:
 //
 //   - `nineslice.scale-too-small`           — Transform.scale below the four
 //     corner anchors at draw time (AC-16, w17 end-to-end test).
 //   - `nineslice.tile-needs-repeat-sampler` — sliceMode=1 (tile) bound to a
 //     sampler whose addressMode is not `'repeat'`; the visual silently
 //     degrades to clamp-stretch (D-9, w18 register-time soft-warn).
+//   - `render.instancing.foldedDraws`        — feat-20260622-chunk-gpu-
+//     instancing-sprite-tilemap M3 / D-3. Count of instanced drawIndexed
+//     calls the fold operator emits this frame; one increment per non-
+//     singleton head bucket retained after the M2 / w11 cap-fallback
+//     filter. NOT entity count, NOT pre-filter bucket count. AI users
+//     read it via `renderer.metrics.snapshot()['render.instancing.foldedDraws']`
+//     to verify fold actually reduced draw count under mode-0 (LAYER_Z)
+//     transparent sort. The key is exported as `FOLDED_DRAWS_METRIC_KEY`
+//     from `render-system-fold.ts` (single source of truth — engine
+//     calls increment via the helper, never the literal string).
 //
 // Multi-Renderer isolation (D-5 candidate 1): each Renderer instance owns its
 // own EngineMetrics; counters from one renderer never bleed into another.
@@ -48,6 +58,7 @@
  * @remarks Closed namespace (charter P5):
  * - `nineslice.scale-too-small`
  * - `nineslice.tile-needs-repeat-sampler`
+ * - `render.instancing.foldedDraws`
  */
 export interface EngineMetrics {
   /**

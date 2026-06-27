@@ -27,6 +27,7 @@ import { Camera, DirectionalLight, PointLight, SpotLight, Transform } from '../c
 import type { ShadowInvalidConfigError } from '../errors';
 import { packLightArrayHeader, packPointLight, packSpotLight } from '../light-buffer-layout';
 import { computeInvRangeSquared, degToCos } from '../light-helpers';
+import { buildPbrViewBglEntries } from '../pbr-pipeline';
 import { registerRuntimeInspector } from '../register-inspector';
 import type { PointLightSnapshot, SpotLightSnapshot } from '../render-system-extract';
 import { extractFrame } from '../render-system-extract';
@@ -469,6 +470,296 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(frame.lights.directional).toBeUndefined();
         expect(frame.lights.point).toHaveLength(0);
         expect(frame.lights.spot).toHaveLength(0);
+      });
+    });
+
+    // ─── from feat-20260625-spot-light-shadow-mapping M1 w2 ───
+    describe('SpotLightSnapshot shadow field type-check (AC-09)', () => {
+      it('destructuring castShadow + lightViewProj + shadowAtlasTile without as casts typechecks', () => {
+        const world = new World();
+
+        world
+          .spawn(
+            {
+              component: Transform,
+              data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            },
+            {
+              component: Camera,
+              data: {
+                fov: Math.PI / 4,
+                aspect: 1,
+                near: 0.1,
+                far: 100,
+                projection: 0,
+                left: -1,
+                right: 1,
+                bottom: -1,
+                top: 1,
+              },
+            },
+          )
+          .unwrap();
+
+        world
+          .spawn(
+            {
+              component: Transform,
+              data: { posX: 0, posY: 5, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            },
+            {
+              component: SpotLight,
+              data: { directionX: 0, directionY: -1, directionZ: 0, castShadow: true },
+            },
+          )
+          .unwrap();
+
+        propagateTransforms(world);
+        const frame = extractFrame(world);
+
+        expect(frame.lights.spot).toHaveLength(1);
+        const s = frame.lights.spot[0];
+        if (s === undefined) throw new Error('spot bucket empty');
+
+        // AC-09: destructure shadow fields without `as` casts — typecheck success
+        // is the acceptance witness. castShadow is bool, shadowAtlasTile is number
+        // (i32 sentinel -1), lightViewProj is Float32Array | undefined.
+        const castShadow: boolean = s.castShadow;
+        const shadowAtlasTile: number = s.shadowAtlasTile;
+        const lightViewProj: Float32Array | undefined = s.lightViewProj;
+        const mapSize: number = s.mapSize;
+        const nearPlane: number = s.nearPlane;
+        const farPlane: number = s.farPlane;
+
+        // Basic default-value assertions for shadow fields on the snapshot.
+        expect(castShadow).toBe(true);
+        expect(typeof lightViewProj).toBe('object');
+        expect(typeof shadowAtlasTile).toBe('number');
+        expect(typeof mapSize).toBe('number');
+        expect(typeof nearPlane).toBe('number');
+        expect(typeof farPlane).toBe('number');
+      });
+    });
+
+    // ─── from feat-20260625-spot-light-shadow-mapping M1 w3 ───
+    describe('spot direction degeneration (near-zero) extract skip (requirements $112)', () => {
+      it('dir near-zero castShadow spot gets shadowAtlasTile=-1, no lightViewProj', () => {
+        const world = new World();
+
+        world
+          .spawn(
+            {
+              component: Transform,
+              data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            },
+            {
+              component: Camera,
+              data: {
+                fov: Math.PI / 4,
+                aspect: 1,
+                near: 0.1,
+                far: 100,
+                projection: 0,
+                left: -1,
+                right: 1,
+                bottom: -1,
+                top: 1,
+              },
+            },
+          )
+          .unwrap();
+
+        // direction near-zero — normalize will fail, extract should skip shadow
+        world
+          .spawn(
+            {
+              component: Transform,
+              data: { posX: 0, posY: 5, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            },
+            {
+              component: SpotLight,
+              data: { directionX: 0, directionY: 1e-10, directionZ: 0 },
+            },
+          )
+          .unwrap();
+
+        propagateTransforms(world);
+        const frame = extractFrame(world);
+
+        expect(frame.lights.spot).toHaveLength(1);
+        const s = frame.lights.spot[0];
+        if (s === undefined) throw new Error('spot bucket empty');
+
+        // AC-05 / requirements $112: near-zero direction → tile=-1, no lightViewProj.
+        expect(s.shadowAtlasTile).toBe(-1);
+        // lightViewProj should be undefined (no matrix was computed).
+        expect(s.lightViewProj).toBeUndefined();
+        // Direct-light fields still intact (AC-05: clip does not delete the light).
+        expect(s.kind).toBe('spot');
+        expect(s.intensity).toBeGreaterThan(0);
+      });
+
+      it('normal direction castShadow spot gets shadowAtlasTile >= 0 + non-zero lightViewProj', () => {
+        const world = new World();
+
+        world
+          .spawn(
+            {
+              component: Transform,
+              data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            },
+            {
+              component: Camera,
+              data: {
+                fov: Math.PI / 4,
+                aspect: 1,
+                near: 0.1,
+                far: 100,
+                projection: 0,
+                left: -1,
+                right: 1,
+                bottom: -1,
+                top: 1,
+              },
+            },
+          )
+          .unwrap();
+
+        // Normal direction pointing down — should get a valid tile.
+        world
+          .spawn(
+            {
+              component: Transform,
+              data: { posX: 0, posY: 5, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            },
+            {
+              component: SpotLight,
+              data: { directionX: 0, directionY: -1, directionZ: 0 },
+            },
+          )
+          .unwrap();
+
+        propagateTransforms(world);
+        const frame = extractFrame(world);
+
+        expect(frame.lights.spot).toHaveLength(1);
+        const s = frame.lights.spot[0];
+        if (s === undefined) throw new Error('spot bucket empty');
+
+        // Normal direction should get a valid tile (0 for first castShadow spot).
+        expect(s.shadowAtlasTile).toBeGreaterThanOrEqual(0);
+        // lightViewProj should be a non-zero Float32Array (16 floats).
+        expect(s.lightViewProj).toBeInstanceOf(Float32Array);
+        expect(s.lightViewProj).toHaveLength(16);
+        // At least one element should be non-zero (a valid perspective×lookAt matrix).
+        const lvp = s.lightViewProj;
+        if (lvp === undefined) throw new Error('expected lightViewProj to be defined');
+        let hasNonZero = false;
+        for (let i = 0; i < 16; i++) {
+          if (lvp[i] !== 0) {
+            hasNonZero = true;
+            break;
+          }
+        }
+        expect(hasNonZero).toBe(true);
+      });
+    });
+
+    // ─── from feat-20260625-spot-light-shadow-mapping M2 w7 ───
+    describe('spot shadow tile clip cap=4 (AC-05)', () => {
+      function spawnCamera(world: World): void {
+        world
+          .spawn(
+            {
+              component: Transform,
+              data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            },
+            {
+              component: Camera,
+              data: {
+                fov: Math.PI / 4,
+                aspect: 1,
+                near: 0.1,
+                far: 100,
+                projection: 0,
+                left: -1,
+                right: 1,
+                bottom: -1,
+                top: 1,
+              },
+            },
+          )
+          .unwrap();
+      }
+
+      function spawnSpot(world: World, posX: number, castShadow: boolean): void {
+        world
+          .spawn(
+            {
+              component: Transform,
+              data: { posX, posY: 5, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            },
+            {
+              component: SpotLight,
+              data: { directionX: 0, directionY: -1, directionZ: 0, castShadow },
+            },
+          )
+          .unwrap();
+      }
+
+      it('first 4 castShadow spots get distinct tiles 0..3; 5th gets tile=-1 but keeps direct-light fields', () => {
+        const world = new World();
+        spawnCamera(world);
+        for (let i = 0; i < 5; i++) spawnSpot(world, i, true);
+
+        propagateTransforms(world);
+        const frame = extractFrame(world);
+
+        expect(frame.lights.spot).toHaveLength(5);
+        const tiles = frame.lights.spot.map((s) => s.shadowAtlasTile);
+        // Exactly four tiles in [0,3], all distinct.
+        const assigned = tiles.filter((t) => t >= 0);
+        expect(assigned).toHaveLength(4);
+        expect(new Set(assigned).size).toBe(4);
+        for (const t of assigned) {
+          expect(t).toBeGreaterThanOrEqual(0);
+          expect(t).toBeLessThanOrEqual(3);
+        }
+        // Exactly one spot is clipped (tile=-1).
+        expect(tiles.filter((t) => t === -1)).toHaveLength(1);
+
+        // The clipped (5th) spot still carries valid direct-light fields:
+        // clip never deletes the light (AC-05).
+        const clipped = frame.lights.spot.find((s) => s.shadowAtlasTile === -1);
+        if (clipped === undefined) throw new Error('expected one clipped spot');
+        expect(clipped.kind).toBe('spot');
+        expect(clipped.intensity).toBeGreaterThan(0);
+        expect(clipped.color.some((c) => c !== 0)).toBe(true);
+        expect(clipped.direction.some((d) => d !== 0)).toBe(true);
+      });
+
+      it('castShadow:false spot gets tile=-1 without consuming a tile slot', () => {
+        const world = new World();
+        spawnCamera(world);
+        // One shadowless spot first, then one shadow-casting spot.
+        spawnSpot(world, 0, false);
+        spawnSpot(world, 1, true);
+
+        propagateTransforms(world);
+        const frame = extractFrame(world);
+
+        expect(frame.lights.spot).toHaveLength(2);
+        const shadowless = frame.lights.spot.find((s) => s.castShadow === false);
+        const shadowing = frame.lights.spot.find((s) => s.castShadow === true);
+        if (shadowless === undefined || shadowing === undefined) {
+          throw new Error('expected one shadowless + one shadowing spot');
+        }
+        // castShadow:false -> tile=-1, no lightViewProj.
+        expect(shadowless.shadowAtlasTile).toBe(-1);
+        expect(shadowless.lightViewProj).toBeUndefined();
+        // The shadow-casting spot still gets tile 0 (the false spot did not
+        // consume a slot).
+        expect(shadowing.shadowAtlasTile).toBe(0);
       });
     });
   });
@@ -1030,9 +1321,13 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       });
     });
 
-    describe('packSpotLight - std430 48B layout (M3 w17)', () => {
-      it('emits 12 floats / 48 bytes byte-for-byte (position + invRangeSquared + color + cosInner + direction + cosOuter)', () => {
-        const snap: SpotLightSnapshot = {
+    describe('packSpotLight - std430 64B layout (feat-20260625 M2 w6)', () => {
+      // feat-20260625-spot-light-shadow-mapping M2 w6 (D-4): SpotLight std430
+      // stride 48 -> 64 (12 -> 16 floats). Slots 0..11 keep the prior layout;
+      // slots 12..14 are vec4-alignment padding; slot 15 is shadowAtlasTile i32
+      // (sentinel -1 = unassigned/clipped) written via an Int32Array view.
+      function makeSnap(shadowAtlasTile: number): SpotLightSnapshot {
+        return {
           kind: 'spot',
           position: vec3.create(3.0, 4.0, 5.0),
           direction: vec3.create(0.0, -1.0, 0.0),
@@ -1041,11 +1336,20 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           invRangeSquared: 0.0625,
           cosInner: 0.984,
           cosOuter: 0.866,
+          castShadow: true,
+          lightViewProj: new Float32Array(16),
+          mapSize: 2048,
+          nearPlane: 0.1,
+          farPlane: 50,
+          shadowAtlasTile,
         };
-        const out = packSpotLight(snap);
+      }
+
+      it('emits 16 floats / 64 bytes; slots 0..11 unchanged from the 48B layout', () => {
+        const out = packSpotLight(makeSnap(0));
         expect(out).toBeInstanceOf(Float32Array);
-        expect(out.length).toBe(12);
-        expect(out.byteLength).toBe(48);
+        expect(out.length).toBe(16);
+        expect(out.byteLength).toBe(64);
         // Slot 0..2: position vec3.
         expect(out[0]).toBeCloseTo(3.0, 6);
         expect(out[1]).toBeCloseTo(4.0, 6);
@@ -1064,6 +1368,31 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(out[10]).toBeCloseTo(0.0, 6);
         // Slot 11: cosOuter (packed into direction.w lane).
         expect(out[11]).toBeCloseTo(0.866, 6);
+        // Slot 12..14: vec4-alignment padding, zero-initialised.
+        expect(out[12]).toBe(0);
+        expect(out[13]).toBe(0);
+        expect(out[14]).toBe(0);
+      });
+
+      it('slot 15 carries shadowAtlasTile as i32 (tile=0)', () => {
+        const out = packSpotLight(makeSnap(0));
+        const i32 = new Int32Array(out.buffer);
+        expect(i32[15]).toBe(0);
+      });
+
+      it('slot 15 carries shadowAtlasTile sentinel -1 (0xFFFFFFFF bit pattern)', () => {
+        const out = packSpotLight(makeSnap(-1));
+        const i32 = new Int32Array(out.buffer);
+        expect(i32[15]).toBe(-1);
+        // -1 as i32 is 0xFFFFFFFF: reading the same lane as u32 confirms bits.
+        const u32 = new Uint32Array(out.buffer);
+        expect(u32[15]).toBe(0xffffffff);
+      });
+
+      it('slot 15 carries a valid tile index (tile=3, last cap slot)', () => {
+        const out = packSpotLight(makeSnap(3));
+        const i32 = new Int32Array(out.buffer);
+        expect(i32[15]).toBe(3);
       });
     });
 
@@ -2190,6 +2519,60 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 }
 
 {
+  // ─── from feat-20260625-spot-light-shadow-mapping M1 w1 ───
+  describe('feat-20260625-spot-light-shadow-mapping M1 w1', () => {
+    describe('SpotLight embedded shadow schema defaults', () => {
+      it('castShadow defaults to true (embedded, AC-02)', () => {
+        const world = new World();
+        const e = world
+          .spawn({
+            component: SpotLight,
+            data: { directionX: 0, directionY: -1, directionZ: 0 },
+          })
+          .unwrap();
+        const view = world.get(e, SpotLight).unwrap();
+        expect(view.castShadow).toBe(true);
+      });
+
+      it('6 shadow fields align with DirectionalLight defaults', () => {
+        const world = new World();
+        const e = world
+          .spawn({
+            component: SpotLight,
+            data: { directionX: 0, directionY: -1, directionZ: 0 },
+          })
+          .unwrap();
+        const view = world.get(e, SpotLight).unwrap();
+        expect(view.mapSize).toBe(2048);
+        expect(view.depthBias).toBeCloseTo(0.005, 5);
+        expect(view.normalBias).toBeCloseTo(0.05, 5);
+        expect(view.nearPlane).toBeCloseTo(0.1, 5);
+        expect(view.farPlane).toBeCloseTo(50, 5);
+        expect(view.pcfKernelSize).toBe(3);
+      });
+
+      it('spawn with omitted shadow fields fills all defaults from schema', () => {
+        const world = new World();
+        const e = world
+          .spawn({
+            component: SpotLight,
+            data: { directionX: 0, directionY: -1, directionZ: 0 },
+          })
+          .unwrap();
+        const view = world.get(e, SpotLight).unwrap();
+        expect(view.castShadow).toBe(true);
+        expect(view.mapSize).toBe(2048);
+        expect(view.depthBias).toBeCloseTo(0.005, 5);
+        expect(view.normalBias).toBeCloseTo(0.05, 5);
+        expect(view.nearPlane).toBeCloseTo(0.1, 5);
+        expect(view.farPlane).toBeCloseTo(50, 5);
+        expect(view.pcfKernelSize).toBe(3);
+      });
+    });
+  });
+}
+
+{
   // ─── from feat-20260621-merge-directionallightshadow-into-directionallight M1-t1 ───
   describe('feat-20260621-merge-directionallightshadow-into-directionallight M1-t1', () => {
     describe('DirectionalLight merged shadow field defaults', () => {
@@ -2593,6 +2976,242 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const err = r.error as unknown as ShadowInvalidConfigError;
         expect(err.code).toBe('shadow-invalid-config');
         expect(err.detail.field).toBe('pcfKernelSize');
+      });
+    });
+  });
+
+  // ─── from pbr-view-bgl-layout.test.ts ───
+  describe('pbr-view-bgl-layout.test.ts', () => {
+    // feat-20260625-spot-light-shadow-mapping M3 / w12 (D-5 + AC-08) +
+    // w22 (D-1 fragment side, D-5 REVISED: binding 9 = matrix array).
+    //
+    // `buildPbrViewBglEntries` (pbr-pipeline.ts) is the runtime SSOT for the
+    // @group(0) view bind-group layout. The matching WGSL binding declarations
+    // live in common.wgsl (binding 0..9). This block locks the BGL shape so a
+    // BGL <-> WGSL drift (e.g. binding 8 missing, wrong sampleType, or a binding
+    // 9 declared as something other than a FRAGMENT uniform buffer) is caught at
+    // unit time instead of as a WebGPU validation crash in the browser path
+    // (memory: BGL shape mismatch is a browser-path-only bug).
+    //
+    // visibility flags mirror the WebGPU GPUShaderStage bitmask:
+    //   VERTEX = 0x1, FRAGMENT = 0x2.
+    const VISIBILITY_FRAGMENT = 0x2;
+    const VISIBILITY_VERTEX_FRAGMENT = 0x1 | 0x2;
+
+    describe('binding 8 = spotShadowMap (D-5 always-on, last view-BG entry)', () => {
+      it('declares binding 8 as a depth 2D texture, FRAGMENT-only', () => {
+        const entries = buildPbrViewBglEntries({ storageBuffer: true });
+        const b8 = entries.find((e) => e.binding === 8);
+        expect(b8).toBeDefined();
+        if (b8 === undefined) throw new Error('binding 8 missing from view BGL');
+        expect(b8.texture?.sampleType).toBe('depth');
+        expect(b8.texture?.viewDimension).toBe('2d');
+        expect(b8.visibility).toBe(VISIBILITY_FRAGMENT);
+      });
+
+      it('declares binding 8 regardless of storageBuffer caps (always-on, no gate)', () => {
+        const withStorage = buildPbrViewBglEntries({ storageBuffer: true });
+        const noStorage = buildPbrViewBglEntries({ storageBuffer: false });
+        expect(withStorage.some((e) => e.binding === 8)).toBe(true);
+        expect(noStorage.some((e) => e.binding === 8)).toBe(true);
+      });
+
+      it('binding 8 is the last entry (no binding 9)', () => {
+        const entries = buildPbrViewBglEntries({ storageBuffer: true });
+        expect(entries.some((e) => e.binding === 9)).toBe(false);
+        expect(entries.some((e) => e.binding === 10)).toBe(false);
+      });
+    });
+
+    // feat-20260625-spot-light-shadow-mapping w25 (scope-amend webkit-fallback):
+    // the per-spot fragment-read perspective `spotLightViewProj` matrices were
+    // folded out of a standalone @group(0) binding 9 uniform buffer into the View
+    // UBO tail (`view.spotLightViewProj`, bytes 528..784, written by the host
+    // viewPayload). The standalone binding pushed the WebGL2 fallback fragment
+    // uniform-buffer count to 12, over GLES 3.0's
+    // `max_uniform_buffers_per_shader_stage = 11`, crashing pipeline-layout
+    // creation on the compat path (this feat's target). The view BGL therefore
+    // ends at binding 8 — no binding 9 — and the spot matrices ride in the View
+    // UBO (binding 0). This block locks that the spot matrices add ZERO new view
+    // BGL buffer bindings (the WebGL2 budget invariant).
+    describe('spotLightViewProj folded into View UBO (binding 0), not a new binding', () => {
+      it('view BGL declares no uniform buffer beyond binding 7 (only binding 0 = view, 6/7 = point/cascade)', () => {
+        // Enumerate uniform-buffer entries on the view BGL. After the w25 fold,
+        // the only uniform buffers are binding 0 (View UBO, carries the spot
+        // matrices in its tail), binding 6 (point shadowParams) and binding 7
+        // (shadowCasterCascade). No standalone spot-matrix uniform buffer.
+        const entries = buildPbrViewBglEntries({ storageBuffer: true });
+        const uniformBufferBindings = entries
+          .filter((e) => e.buffer?.type === 'uniform')
+          .map((e) => e.binding)
+          .sort((a, b) => a - b);
+        // storageBuffer=true: bindings 1+2 are read-only-storage (not uniform).
+        expect(uniformBufferBindings).toEqual([0, 6, 7]);
+      });
+
+      it('storageBuffer=false: WebGL2 fallback uniform-buffer bindings stay within budget', () => {
+        // On the WebGL2 fallback path bindings 1+2 (point/spot light arrays)
+        // become uniform buffers. The fragment-stage uniform-buffer count must
+        // stay <= 11 (GLES 3.0 max_uniform_buffers_per_shader_stage). View BGL
+        // fragment uniform buffers after w25: binding 0 (view), 1 (pointLights),
+        // 2 (spotLights), 6 (shadowParams), 7 (shadowCasterCascade) = 5. There is
+        // NO standalone spot-matrix uniform buffer (the 12th that overflowed).
+        const entries = buildPbrViewBglEntries({ storageBuffer: false });
+        const fragmentUniformBuffers = entries.filter(
+          (e) => e.buffer?.type === 'uniform' && (e.visibility & VISIBILITY_FRAGMENT) !== 0,
+        );
+        // 5 view-BG fragment uniform buffers (was 6 before the fold).
+        expect(fragmentUniformBuffers.length).toBe(5);
+        // No binding 9 (the folded-away standalone spot-matrix UBO).
+        expect(entries.some((e) => e.binding === 9)).toBe(false);
+      });
+    });
+
+    describe('sampler reuse (binding 4) — spot adds no new sampler (D-5)', () => {
+      it('keeps binding 4 as the single comparison sampler (shared by directional/point/spot)', () => {
+        const entries = buildPbrViewBglEntries({ storageBuffer: true });
+        const samplers = entries.filter((e) => e.sampler !== undefined);
+        expect(samplers).toHaveLength(1);
+        expect(samplers[0]?.binding).toBe(4);
+        expect(samplers[0]?.sampler?.type).toBe('comparison');
+      });
+    });
+
+    describe('bindings 3/4/5/6/7 unchanged (AC-08 no-regress)', () => {
+      it('binding 3 = directional depth 2D, VERTEX|FRAGMENT', () => {
+        const e = buildPbrViewBglEntries({ storageBuffer: true }).find((x) => x.binding === 3);
+        expect(e?.texture?.sampleType).toBe('depth');
+        expect(e?.texture?.viewDimension).toBe('2d');
+        expect(e?.visibility).toBe(VISIBILITY_VERTEX_FRAGMENT);
+      });
+
+      it('binding 4 = comparison sampler, FRAGMENT', () => {
+        const e = buildPbrViewBglEntries({ storageBuffer: true }).find((x) => x.binding === 4);
+        expect(e?.sampler?.type).toBe('comparison');
+        expect(e?.visibility).toBe(VISIBILITY_FRAGMENT);
+      });
+
+      it('binding 5 = point cube-array depth, FRAGMENT', () => {
+        const e = buildPbrViewBglEntries({ storageBuffer: true }).find((x) => x.binding === 5);
+        expect(e?.texture?.sampleType).toBe('depth');
+        expect(e?.texture?.viewDimension).toBe('cube-array');
+        expect(e?.visibility).toBe(VISIBILITY_FRAGMENT);
+      });
+
+      it('binding 6 = point shadow params UBO, FRAGMENT', () => {
+        const e = buildPbrViewBglEntries({ storageBuffer: true }).find((x) => x.binding === 6);
+        expect(e?.buffer?.type).toBe('uniform');
+        expect(e?.visibility).toBe(VISIBILITY_FRAGMENT);
+      });
+
+      it('binding 7 = shadowCasterCascade UBO, VERTEX|FRAGMENT', () => {
+        const e = buildPbrViewBglEntries({ storageBuffer: true }).find((x) => x.binding === 7);
+        expect(e?.buffer?.type).toBe('uniform');
+        expect(e?.visibility).toBe(VISIBILITY_VERTEX_FRAGMENT);
+      });
+    });
+
+    describe('full binding roster is contiguous 0..8', () => {
+      it('exposes exactly bindings 0..8 with no gaps (binding 9 folded into View UBO, w25)', () => {
+        const bindings = buildPbrViewBglEntries({ storageBuffer: true })
+          .map((e) => e.binding)
+          .sort((a, b) => a - b);
+        expect(bindings).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+      });
+    });
+  });
+}
+
+{
+  // ─── feat-20260625-spot-light-shadow-mapping verify round-1 F-2 ───
+  // SpotLight.validate() shadow-field enforcement, mirroring the
+  // DirectionalLight.validate() block above (P4 cross-light parity).
+  describe('feat-20260625-spot-light-shadow-mapping SpotLight.validate()', () => {
+    describe('SpotLight.validate() shadow field enforcement', () => {
+      it('rejects even pcfKernelSize (2) with ShadowInvalidConfigError', () => {
+        const world = new World();
+        const r = world.spawn({
+          component: SpotLight,
+          data: { directionX: 0, directionY: -1, directionZ: 0, pcfKernelSize: 2 },
+        });
+        expect(r.ok).toBe(false);
+        if (r.ok) throw new Error('expected spawn to fail validation');
+        const err = r.error as unknown as ShadowInvalidConfigError;
+        expect(err.code).toBe('shadow-invalid-config');
+        expect(err.detail.field).toBe('pcfKernelSize');
+        expect(err.detail.value).toBe(2);
+        expect(err.hint).toBe('set pcfKernelSize to an odd integer >= 1; got 2');
+      });
+
+      it('rejects pcfKernelSize < 1 (0) with ShadowInvalidConfigError', () => {
+        const world = new World();
+        const r = world.spawn({
+          component: SpotLight,
+          data: { directionX: 0, directionY: -1, directionZ: 0, pcfKernelSize: 0 },
+        });
+        expect(r.ok).toBe(false);
+        if (r.ok) throw new Error('expected spawn to fail validation');
+        const err = r.error as unknown as ShadowInvalidConfigError;
+        expect(err.code).toBe('shadow-invalid-config');
+        expect(err.detail.field).toBe('pcfKernelSize');
+      });
+
+      it('rejects mapSize < 1 with ShadowInvalidConfigError', () => {
+        const world = new World();
+        const r = world.spawn({
+          component: SpotLight,
+          data: { directionX: 0, directionY: -1, directionZ: 0, mapSize: 0 },
+        });
+        expect(r.ok).toBe(false);
+        if (r.ok) throw new Error('expected spawn to fail validation');
+        const err = r.error as unknown as ShadowInvalidConfigError;
+        expect(err.code).toBe('shadow-invalid-config');
+        expect(err.detail.field).toBe('mapSize');
+      });
+
+      it('rejects farPlane <= nearPlane with ShadowInvalidConfigError', () => {
+        const world = new World();
+        const r = world.spawn({
+          component: SpotLight,
+          data: { directionX: 0, directionY: -1, directionZ: 0, nearPlane: 10, farPlane: 5 },
+        });
+        expect(r.ok).toBe(false);
+        if (r.ok) throw new Error('expected spawn to fail validation');
+        const err = r.error as unknown as ShadowInvalidConfigError;
+        expect(err.code).toBe('shadow-invalid-config');
+        expect(err.detail.field).toBe('farPlane');
+      });
+
+      it('accepts valid odd pcfKernelSize (5) + sane planes', () => {
+        const world = new World();
+        const r = world.spawn({
+          component: SpotLight,
+          data: {
+            directionX: 0,
+            directionY: -1,
+            directionZ: 0,
+            pcfKernelSize: 5,
+            mapSize: 1024,
+            nearPlane: 0.1,
+            farPlane: 50,
+          },
+        });
+        expect(r.ok).toBe(true);
+      });
+
+      it('skips shadow-field validation when castShadow is false', () => {
+        const world = new World();
+        const r = world.spawn({
+          component: SpotLight,
+          data: {
+            directionX: 0,
+            directionY: -1,
+            directionZ: 0,
+            castShadow: false,
+            pcfKernelSize: 2,
+          },
+        });
+        expect(r.ok).toBe(true);
       });
     });
   });

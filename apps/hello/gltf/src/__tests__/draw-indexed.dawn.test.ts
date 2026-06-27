@@ -87,7 +87,7 @@ function distance(
 // Expand positions-only meshIr to canonical 12F interleaved layout
 // (position vec3 + normal vec3 + uv vec2 + tangent vec4).
 // GLTF Tier-B defaults: normal=(0,1,0), uv=(0,0), tangent=(1,0,0,1).
-function meshIrToPod12F(meshIr: { positions: Float32Array; indices?: Uint16Array }): Float32Array {
+function meshIrToPod12F(meshIr: { positions: Float32Array }): Float32Array {
   const vertexCount = meshIr.positions.length / 3;
   const out = new Float32Array(vertexCount * 12);
   for (let i = 0; i < vertexCount; i++) {

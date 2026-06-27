@@ -1,5 +1,38 @@
 // @forgeax/engine-runtime - Instances component (per-entity instanced-draw transforms).
 //
+// Two sources, one component (feat-20260622-chunk-gpu-instancing-sprite-tilemap
+// / AC-09; charter P4 consistent abstraction + charter P1 progressive disclosure).
+// The `Instances` ECS component has exactly TWO sources of `transforms` data, and
+// AI users should hold the boundary explicitly to avoid misreading the ECS view:
+//
+//   Source 1 (EXPLICIT, the only source that lands in ECS) — AI user opt-in.
+//     The AI user hand-attaches `Instances { transforms }` onto an entity at
+//     spawn / set time for high-performance instanced draw. `world.get(e,
+//     Instances)` returns the AI user's payload verbatim (a `Float32Array`
+//     snapshot of column-major mat4 instances; stride = 16). This is the sole
+//     code path through which `Instances` ever appears on an entity.
+//
+//   Source 2 (TRANSPARENT, never written back into ECS) — engine record-stage
+//     fold. When the AI user spawns N independent sprite / tilemap-cell
+//     entities sharing the same (Layer.value, posZ, materialHandle) sort
+//     equivalence class, the engine record stage transparently folds the
+//     equivalent run into ONE `drawIndexed(indexCount, count)` using an
+//     INTERNAL transient buffer (see `render-system-record.ts` fold operator
+//     + `render.instancing.foldedDraws` metric, and the `RhiError
+//     'instancing-exceeds-uniform-cap'` fallback). The fold operator does
+//     NOT auto-inject `Instances` onto those entities — `world.get(e,
+//     Instances)` on a folded entity returns `Result.err` exactly as before.
+//     The ECS view is preserved bit-for-bit (per-cell / per-sprite entity
+//     retained, query / despawn / picking unchanged); the optimisation is
+//     invisible at the component layer (charter P4: consistent abstraction —
+//     the high-performance path is opt-in via Source 1, the default spawn
+//     shape stays untouched).
+//
+// AI user reading this header: do NOT expect engine-side fold to materialise
+// as an `Instances` row on your entity. Read the metric (foldedDraws) or the
+// RhiError code to observe fold behaviour; never gate logic on a runtime
+// `world.get(e, Instances)` lookup after spawn.
+//
 // Schema: 1 array<f32> field `transforms` carrying packed column-major mat4
 // instance transforms (16 f32 per instance, stride = 16). Stride is enforced
 // through a TWO-LAYER contract:

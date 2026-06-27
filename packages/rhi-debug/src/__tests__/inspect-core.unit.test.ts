@@ -41,11 +41,15 @@ function makeStubReplay(overrides?: Record<string, any>): any {
 }
 
 function makeMockDevice(): any {
-  const mockBuffer = {
-    mapAsync: vi.fn().mockResolvedValue(undefined),
-    getMappedRange: vi.fn().mockReturnValue(new ArrayBuffer(512 * 512 * 4)),
+  // Mirror the real RHI Buffer contract: mapAsync resolves to
+  // Result<MappedBuffer>, getMappedRange returns Result<ArrayBuffer>. The
+  // success branch surfaces the same JS object as the branded MappedBuffer, so
+  // mapAsync resolves with { ok: true, value: mockBuffer }.
+  const mockBuffer: any = {
+    getMappedRange: vi.fn().mockReturnValue({ ok: true, value: new ArrayBuffer(512 * 512 * 4) }),
     unmap: vi.fn(),
   };
+  mockBuffer.mapAsync = vi.fn().mockResolvedValue({ ok: true, value: mockBuffer });
   const mockEncoder = {
     copyTextureToBuffer: vi.fn(),
     finish: vi.fn().mockReturnValue({ ok: true, value: { __brand: 'CommandBuffer' } }),
@@ -406,7 +410,7 @@ describe('inspectDrawJson error transparency', () => {
     // would be preserved. Since inspectDrawJson does NOT call createReplay
     // (it receives an already-built Replay per D-1), the error transparency
     // manifests via drawIdx out-of-range. But the test exists to validate
-    // that the error's .code field is from the locked 12-member DebugErrorCode
+    // that the error's .code field is from the locked 14-member DebugErrorCode
     // union — no new codes are introduced.
     const events = makeSingleDrawEvents();
     const replay = makeStubReplay({ events, handleMap: new Map<string, unknown>() });
@@ -420,7 +424,7 @@ describe('inspectDrawJson error transparency', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       const err = result.error;
-      // Verify the error has a known code from the 12-member union
+      // Verify the error has a known code from the 14-member union
       expect(typeof err.code).toBe('string');
       // Verify we can switch on it (closed union)
       switch (err.code) {
@@ -436,6 +440,8 @@ describe('inspectDrawJson error transparency', () => {
         case 'png-encode-failed':
         case 'rpc-target-not-wired':
         case 'replay-dispose-busy':
+        case 'snapshot-readback-failed':
+        case 'seed-initial-data-failed':
           break;
         default: {
           const _exhaustive: never = err.code;

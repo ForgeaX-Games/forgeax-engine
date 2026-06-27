@@ -15,8 +15,11 @@
 //   - bufferView.byteStride : when set and != element_size -> interleaved (OOS reject)
 //
 // The U8 -> U16 widening for INDICES is handled inline (a 1-byte index
-// stream is rewritten into a fresh Uint16Array; mesh-asset payload always
-// stores U16 indices per @forgeax/engine-types `MeshAsset.indices: Uint16Array`).
+// stream is rewritten into a fresh Uint16Array). U16 and U32 index streams
+// pass through at their source width; `MeshAsset.indices` is
+// `Uint16Array | Uint32Array` end-to-end (mesh-bin serializes iwidth 2|4,
+// GPU runtime auto-selects the index format), and bridge.ts narrows U32 to
+// U16 losslessly when the merged mesh's maxIndex fits.
 //
 // Producers MUST use `decodeAccessor` rather than reading typed arrays
 // directly so the closed `GltfErrorCode` surface (charter proposition 4)

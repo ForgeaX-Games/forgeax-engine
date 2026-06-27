@@ -317,20 +317,27 @@ describe('w9 M4 UniqueRefStore: stale detection (resolve/release + retire)', () 
     }
   });
 
-  it('AC-07: retire-on-255 — gen pushed to MAX_GEN then slot not recycled', () => {
+  it('AC-07: retire-on-255 — gen pushed past MAX_GEN then slot not recycled', () => {
     const store = new UniqueRefStore();
     const h = store.alloc('MeshAsset', { mesh: 'cube' });
     const slot = handleSlot(h);
+
+    // gen=255 is still a usable handle under the new gen > MAX_GEN predicate.
+    // Bump _generations[slot] to 255 and push to freeSlots so the next alloc
+    // reuses it with gen=255.
     // biome-ignore lint/suspicious/noExplicitAny: private mutation for retire edge boundary
-    (store as any)._generations[slot] = 254;
+    (store as any)._generations[slot] = 255;
     // biome-ignore lint/suspicious/noExplicitAny: push slot to free list so alloc reuses
     (store as any).freeSlots.push(slot);
 
-    // Alloc reuses slot with gen=254
+    // Alloc reuses slot with gen=255
     const h2 = store.alloc('MeshAsset', { mesh: 'sphere' });
-    expect(handleGeneration(h2)).toBe(254);
+    expect(handleGeneration(h2)).toBe(255);
+    // Verify gen=255 is a usable handle — resolve succeeds.
+    const rResolve = store.resolve(h2);
+    expect(rResolve.ok).toBe(true);
 
-    // Release h2: gen matches, gen++ to 255 (=MAX_GEN), slot retired.
+    // Release h2: gen matches, gen++ to 256 (>MAX_GEN), slot retired.
     expect(store.release(h2).ok).toBe(true);
 
     // Slot must not be recycled (retired)

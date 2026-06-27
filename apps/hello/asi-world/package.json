@@ -9,14 +9,22 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/hello-asi-world smoke",
     "metrics": {
       "bundle-size": { "enabled": false, "reason": "downstream demo, not size-tracked" },
-      "fps": { "enabled": false, "reason": "covered by hello-cube / hello-app" },
+      "fps": {
+        "enabled": false,
+        "reason": "feat-20260622-chunk-gpu-instancing-sprite-tilemap M3 / D-4 / L-8: AC-02 65536-cell tilemap p95>=60 fps gate cannot be validated on the GH-hosted ubuntu metrics-validate runner — that runner falls back to swiftshader WebGL2 where fps was previously fake-green (bug-20260612). The swiftshader software path slows progressively at large cell count, so the gate would flake or report unrealistic numbers. AC-02 p95 SSOT moved to verify-stage local sandbox run (charter P5); re-enable when a hardware-WebGPU CI runner is wired (precedent: apps/parity/instancing-static)."
+      },
       "bench": { "enabled": false, "reason": "not perf-critical" },
-      "gate": { "enabled": false, "reason": "demo-only; no headless smoke yet" },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-asi-world smoke"
+      },
       "spike-report": { "enabled": false, "reason": "not a spike" }
     }
   },
@@ -31,6 +39,7 @@
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@types/node": "^25.8.0",
     "@webgpu/types": "^0.1.70",
-    "vite": "8.0.10"
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0"
   }
 }

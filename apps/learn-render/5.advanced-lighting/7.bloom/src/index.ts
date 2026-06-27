@@ -1,17 +1,22 @@
 // apps/learn-render/5.advanced-lighting/7.bloom/src/index.ts
 // LearnOpenGL section 5.7 - Bloom.
 //
-// Bloom via URP default pipeline + Camera bloom fields (BLOOM_ENABLED,
-// bloomThreshold, bloomIntensity, bloomBlurRadius). No custom pipeline
-// code: the seven-step URP bloom chain (bright-filter -> blur-x -> blur-y
-// -> composite) is declared by the engine and opt-in via Camera fields.
+// Faithful port of the LearnOpenGL 5.7 Bloom scene
+// (src/5.advanced_lighting/7.bloom/bloom.cpp): a large wood floor, six
+// container2 wooden boxes scattered with assorted positions/rotations/
+// scales, four bright "light box" cubes, and four HDR point lights whose
+// colours run well past 1.0 (up to 15.0). The bright light-box cubes are
+// the bloom source: each is an unlit cube painted with its light colour
+// (mirroring the tutorial's 7.light_box.fs, which writes lightColor
+// straight to FragColor), so their pixels blow past the bloom bright-pass
+// threshold of 1.0 and glow.
 //
-// Contrast with apps/hello/bloom/ which proves the engine's bloom
-// infrastructure; this demo teaches the LO 5.7 lighting scenario
-// (emissive light boxes on a wood floor). hello/bloom toggles bloom
-// on/off at runtime via Space key — this demo always enables bloom and
-// varies emissive intensity across light boxes to teach the threshold
-// concept (boxes with intensity > threshold glow; boxes below don't).
+// Bloom is opt-in via Camera fields (bloom, bloomThreshold, bloomIntensity,
+// bloomBlurRadius) + Reinhard-extended tonemap. The engine declares the
+// URP default bloom chain (bright-filter -> blur-h -> blur-v -> composite);
+// no custom pipeline code lives here. Contrast with 6.hdr's custom
+// RenderPipeline paradigm and apps/hello/bloom (which proves the bloom
+// infrastructure and toggles it at runtime via Space).
 //
 // GREP anchors for AI users:
 //   - "// 1. engine usage"    public engine API consumed
@@ -21,7 +26,9 @@
 // 1. engine usage
 import { createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { quat } from '@forgeax/engine-math';
 import {
+  BLOOM_DISABLED,
   BLOOM_ENABLED,
   Camera,
   HANDLE_CUBE,
@@ -44,57 +51,84 @@ import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-
 const PACK_INDEX_URL = '/pack-index.json';
 
 // Texture GUIDs from forgeax-engine-assets/learn-opengl/textures/
-//   wood.png                GUID 019e3969-1d48-7c3b-ac24-6d68f457065f
-//   container2.png          GUID 019e3969-1d46-7945-a75a-ef97d537531e
-//   container2_specular.png GUID 019e3969-1d46-76ca-9a46-2168b746a292
+//   wood.png       GUID 019e3969-1d48-7c3b-ac24-6d68f457065f
+//   container2.png GUID 019e3969-1d46-7945-a75a-ef97d537531e
 const WOOD_GUID_STR = '019e3969-1d48-7c3b-ac24-6d68f457065f';
 const CONTAINER2_GUID_STR = '019e3969-1d46-7945-a75a-ef97d537531e';
-const CONTAINER2_SPECULAR_GUID_STR = '019e3969-1d46-76ca-9a46-2168b746a292';
 
-// Bloom configuration (aligned with hello/bloom smoke (d) PASS configuration:
-// threshold=1.0, intensity=1.0, blurRadius=4.0).
+// Bloom configuration. threshold=1.0 only filters HDR-bright pixels (the
+// light boxes); intensity/blurRadius match hello/bloom's PASS config.
 const BLOOM_THRESHOLD = 1.0;
 const BLOOM_INTENSITY = 1.0;
 const BLOOM_BLUR_RADIUS = 4.0;
 
-// 3 light boxes: emissiveIntensity {2.0, 1.5, 0.4}.
-// The first two exceed bloomThreshold=1.0 and trigger bloom; the third
-// stays below the threshold for a didactic Bright/Dim contrast.
-const BOX_A_INTENSITY = 2.0;
-const BOX_B_INTENSITY = 1.5;
-const BOX_C_INTENSITY = 0.4;
+// Reinhard-extended exposure analogue. The bloom_final tonemap in the
+// tutorial uses exposure=1.0.
+const TONEMAP_EXPOSURE = 1.0;
 
-// Light box emissive color: warm white (slightly orange).
-const BOX_EMISSIVE_COLOR: readonly [number, number, number] = [2.0, 1.8, 1.5];
+// HDR light colours (bloom.cpp lightColors). Channels exceed 1.0 so the
+// light boxes blow past the bloom bright-pass threshold and glow.
+const LIGHT_COLORS: ReadonlyArray<readonly [number, number, number]> = [
+  [5.0, 5.0, 5.0],
+  [10.0, 0.0, 0.0],
+  [0.0, 0.0, 15.0],
+  [0.0, 5.0, 0.0],
+];
 
-// Box layout: three light boxes sitting on the wood floor, spaced along X.
-//   box A (intensity=2.0, blooms): posX = -3.0
-//   box B (intensity=1.5, blooms): posX =  0.0
-//   box C (intensity=0.4, dim):    posX =  3.0
-const BOX_POS_Y = 0.6;
-const BOX_POS_Z = 0.0;
-const BOX_SCALE = 0.7;
-const BOX_A_POS_X = -3.0;
-const BOX_B_POS_X = 0.0;
-const BOX_C_POS_X = 3.0;
+// Light positions (bloom.cpp lightPositions). Shared by the point lights
+// and the bright light-box cubes that visualise them.
+const LIGHT_POSITIONS: ReadonlyArray<readonly [number, number, number]> = [
+  [0.0, 0.5, 1.5],
+  [-4.0, 0.5, -3.0],
+  [3.0, 0.5, 1.0],
+  [-0.8, 2.4, -1.0],
+];
 
-// Wood floor: large flat quad at origin, scaled to cover the light box area.
-const FLOOR_SCALE_X = 10.0;
-const FLOOR_SCALE_Z = 4.0;
-const FLOOR_POS_Y = -0.5;
+// Each light box is a unit cube scaled to 0.25 (bloom.cpp light cube scale).
+const LIGHT_BOX_SCALE = 0.25;
 
-// Point light above the scene to illuminate the wood floor and boxes.
-const LIGHT_POS_X = 0.0;
-const LIGHT_POS_Y = 3.0;
-const LIGHT_POS_Z = 2.0;
+// PointLight intensity/range. The tutorial bakes brightness into the light
+// colour itself; here colour stays in [0,1]-ish proportions per channel via
+// LIGHT_COLORS (which already carry the HDR magnitude), driven at unit
+// intensity. Range covers the ~12-unit floor.
+const POINT_LIGHT_INTENSITY = 1.0;
+const POINT_LIGHT_RANGE = 30.0;
 
-// Camera at (0, 1.5, 8), looking toward the light box row.
+// Wood floor: a large flat box centred below the scene (bloom.cpp:
+// translate (0,-1,0), scale (12.5, 0.5, 12.5)). The builtin cube spans
+// [-0.5,0.5], so scale maps directly to full extents.
+const FLOOR_POS_Y = -1.0;
+const FLOOR_SCALE_X = 12.5;
+const FLOOR_SCALE_Y = 0.5;
+const FLOOR_SCALE_Z = 12.5;
+
+// Six wooden container boxes (bloom.cpp scenery cubes). Each entry is
+// [posX, posY, posZ, uniformScale, rotAxisXYZ, rotDeg]; rotDeg=0 means no
+// rotation. Axes are normalised by quat.fromAxisAngle.
+type BoxSpec = {
+  pos: readonly [number, number, number];
+  scale: number;
+  axis: readonly [number, number, number];
+  deg: number;
+};
+const CONTAINER_BOXES: readonly BoxSpec[] = [
+  { pos: [0.0, 1.5, 0.0], scale: 0.5, axis: [1, 0, 0], deg: 0 },
+  { pos: [2.0, 0.0, 1.0], scale: 0.5, axis: [1, 0, 0], deg: 0 },
+  { pos: [-1.0, -1.0, 2.0], scale: 1.0, axis: [1, 0, 1], deg: 60 },
+  { pos: [0.0, 2.7, 4.0], scale: 1.25, axis: [1, 0, 1], deg: 23 },
+  { pos: [-2.0, 1.0, -3.0], scale: 1.0, axis: [1, 0, 1], deg: 124 },
+  { pos: [-3.0, 0.0, 0.0], scale: 0.5, axis: [1, 0, 0], deg: 0 },
+];
+
+// Camera at (0, 0, 5) looking down -Z (bloom.cpp Camera(0,0,5)).
 const CAMERA_POS_X = 0.0;
-const CAMERA_POS_Y = 1.5;
-const CAMERA_POS_Z = 8.0;
+const CAMERA_POS_Y = 0.0;
+const CAMERA_POS_Z = 5.0;
 const CAMERA_FOV = Math.PI / 4;
 const CAMERA_NEAR = 0.1;
 const CAMERA_FAR = 100.0;
+
+const DEG2RAD = Math.PI / 180;
 
 // 3. bootstrap
 
@@ -134,27 +168,23 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Load textures by GUID.
   const woodGuidRes = AssetGuid.parse(WOOD_GUID_STR);
   const container2GuidRes = AssetGuid.parse(CONTAINER2_GUID_STR);
-  const container2SpecularGuidRes = AssetGuid.parse(CONTAINER2_SPECULAR_GUID_STR);
-  if (!woodGuidRes.ok || !container2GuidRes.ok || !container2SpecularGuidRes.ok) {
+  if (!woodGuidRes.ok || !container2GuidRes.ok) {
     console.error('[learn-render 5.7 bloom] GUID parse failed');
     return;
   }
 
-  const [woodTexRes, container2TexRes, container2SpecularTexRes] = await Promise.all([
+  const [woodTexRes, container2TexRes] = await Promise.all([
     assets.loadByGuid<TextureAsset>(woodGuidRes.value),
     assets.loadByGuid<TextureAsset>(container2GuidRes.value),
-    assets.loadByGuid<TextureAsset>(container2SpecularGuidRes.value),
   ]);
-  if (!woodTexRes.ok || !container2TexRes.ok || !container2SpecularTexRes.ok) {
+  if (!woodTexRes.ok || !container2TexRes.ok) {
     console.error('[learn-render 5.7 bloom] loadByGuid failed');
     return;
   }
   const woodTex = woodTexRes.value;
   const container2Tex = container2TexRes.value;
-  const container2SpecularTex = container2SpecularTexRes.value;
 
-  // Register materials.
-  // Wood floor: standard PBR + wood base color texture.
+  // Wood floor + container boxes: standard PBR lit by the point lights.
   const floorMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
     'MaterialAsset',
     Materials.standard({
@@ -163,35 +193,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       baseColorTexture: unwrapHandle(world.allocSharedRef('TextureAsset', woodTex)),
     }),
   );
-
-  // Light box helper: standard PBR with emissiveTexture (container2_specular)
-  // used as an emissive mask (metal border glows, painted surface doesn't).
-  function makeBoxMaterial(intensity: number): MaterialAsset {
-    return Materials.standard({
+  const containerMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
+    'MaterialAsset',
+    Materials.standard({
       baseColor: [1.0, 1.0, 1.0, 1.0],
-      roughness: 0.3,
-      metallic: 0.8,
-      emissive: BOX_EMISSIVE_COLOR,
-      emissiveIntensity: intensity,
-      emissiveTexture: unwrapHandle(world.allocSharedRef('TextureAsset', container2SpecularTex)),
+      roughness: 0.8,
       baseColorTexture: unwrapHandle(world.allocSharedRef('TextureAsset', container2Tex)),
-    });
-  }
-
-  const boxAMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    makeBoxMaterial(BOX_A_INTENSITY),
-  );
-  const boxBMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    makeBoxMaterial(BOX_B_INTENSITY),
-  );
-  const boxCMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    makeBoxMaterial(BOX_C_INTENSITY),
+    }),
   );
 
-  // Spawn wood floor: HANDLE_CUBE scaled flat and wide.
+  // Spawn wood floor.
   world
     .spawn(
       {
@@ -201,7 +212,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           posY: FLOOR_POS_Y,
           posZ: 0,
           scaleX: FLOOR_SCALE_X,
-          scaleY: 0.1,
+          scaleY: FLOOR_SCALE_Y,
           scaleZ: FLOOR_SCALE_Z,
         },
       },
@@ -210,44 +221,88 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     )
     .unwrap();
 
-  // Spawn 3 emissive light boxes.
-  for (const [posX, handle] of [
-    [BOX_A_POS_X, boxAMatHandle],
-    [BOX_B_POS_X, boxBMatHandle],
-    [BOX_C_POS_X, boxCMatHandle],
-  ] as const) {
+  // Spawn the six wooden container boxes.
+  const rot = quat.create();
+  for (const box of CONTAINER_BOXES) {
+    quat.fromAxisAngle(rot, box.axis, box.deg * DEG2RAD);
     world
       .spawn(
         {
           component: Transform,
           data: {
-            posX,
-            posY: BOX_POS_Y,
-            posZ: BOX_POS_Z,
-            scaleX: BOX_SCALE,
-            scaleY: BOX_SCALE,
-            scaleZ: BOX_SCALE,
+            posX: box.pos[0],
+            posY: box.pos[1],
+            posZ: box.pos[2],
+            quatX: rot[0] ?? 0,
+            quatY: rot[1] ?? 0,
+            quatZ: rot[2] ?? 0,
+            quatW: rot[3] ?? 1,
+            scaleX: box.scale,
+            scaleY: box.scale,
+            scaleZ: box.scale,
           },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-        { component: MeshRenderer, data: { materials: [handle] } },
+        { component: MeshRenderer, data: { materials: [containerMatHandle] } },
       )
       .unwrap();
   }
 
-  // Point light to illuminate the scene.
-  world.spawn(
-    {
-      component: Transform,
-      data: { posX: LIGHT_POS_X, posY: LIGHT_POS_Y, posZ: LIGHT_POS_Z },
-    },
-    { component: PointLight, data: {} },
-  );
+  // Spawn the four HDR point lights + their bright light-box cubes.
+  // The light box is an unlit cube painted with the light colour (HDR,
+  // channels up to 15.0) -- this is the bloom source, mirroring the
+  // tutorial's 7.light_box.fs (FragColor = lightColor).
+  LIGHT_POSITIONS.forEach((pos, i) => {
+    const color = LIGHT_COLORS[i] ?? [1, 1, 1];
+
+    // Point light illuminating the floor + containers.
+    world
+      .spawn(
+        {
+          component: Transform,
+          data: { posX: pos[0], posY: pos[1], posZ: pos[2] },
+        },
+        {
+          component: PointLight,
+          data: {
+            colorR: color[0],
+            colorG: color[1],
+            colorB: color[2],
+            intensity: POINT_LIGHT_INTENSITY,
+            range: POINT_LIGHT_RANGE,
+          },
+        },
+      )
+      .unwrap();
+
+    // Bright light-box cube (unlit, HDR light colour -> bloom source).
+    const lightBoxMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
+      'MaterialAsset',
+      Materials.unlit([color[0], color[1], color[2], 1.0], { castShadow: false }),
+    );
+    world
+      .spawn(
+        {
+          component: Transform,
+          data: {
+            posX: pos[0],
+            posY: pos[1],
+            posZ: pos[2],
+            scaleX: LIGHT_BOX_SCALE,
+            scaleY: LIGHT_BOX_SCALE,
+            scaleZ: LIGHT_BOX_SCALE,
+          },
+        },
+        { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+        { component: MeshRenderer, data: { materials: [lightBoxMat] } },
+      )
+      .unwrap();
+  });
 
   // Camera with bloom + tonemap enabled.
   // Camera.bloom=BLOOM_ENABLED opt-in drives the URP default bloom chain
   // (bright-filter -> blur-h -> blur-v -> composite). No custom pipeline
-  // code needed — this is the "Camera fields as API" paradigm, contrasted
+  // code needed -- this is the "Camera fields as API" paradigm, contrasted
   // with 6.hdr's custom RenderPipeline paradigm.
   const cameraEntity = world
     .spawn(
@@ -265,6 +320,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
             far: CAMERA_FAR,
           }),
           tonemap: TONEMAP_REINHARD_EXTENDED,
+          exposure: TONEMAP_EXPOSURE,
           bloom: BLOOM_ENABLED,
           bloomThreshold: BLOOM_THRESHOLD,
           bloomIntensity: BLOOM_INTENSITY,
@@ -280,13 +336,45 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     overrideBackend: undefined,
   });
 
+  // Space-key toggle for the bloom A/B comparison -- the core interaction of
+  // LearnOpenGL 5.7 (the tutorial flips `bloom` to show the same scene with
+  // and without glow). Mirrors apps/hello/bloom: read the spacebar from the
+  // input snapshot, derive a press-edge from prev-frame level, flip
+  // Camera.bloom between BLOOM_ENABLED and BLOOM_DISABLED via world.set.
+  // The engine re-reads bloom every frame at extract; no other change needed.
+  // InputSnapshot.keyboard matches KeyboardEvent.key, so the spacebar is the
+  // literal ' ' (NOT 'Space', which is ev.code).
+  let prevSpace = false;
+  let currentBloom: number = BLOOM_ENABLED;
+  world.addSystem({
+    name: 'learn-render-5.7-bloom-space-toggle',
+    after: ['input-frame-start-scan'],
+    queries: [],
+    fn: () => {
+      const snap = app.renderer.input.snapshot(world);
+      if (snap === undefined) return;
+      const cur = snap.keyboard.down(' ');
+      if (cur && !prevSpace) {
+        const target = currentBloom === BLOOM_ENABLED ? BLOOM_DISABLED : BLOOM_ENABLED;
+        const setRes = world.set(cameraEntity, Camera, { bloom: target });
+        if (setRes.ok) {
+          currentBloom = target;
+          updateHud(currentBloom);
+        } else {
+          console.error('[learn-render 5.7 bloom] toggle world.set failed:', setRes.error.code);
+        }
+      }
+      prevSpace = cur;
+    },
+  });
+
   const startRes = app.start();
   if (!startRes.ok) {
     console.error('[learn-render 5.7 bloom] app.start failed:', startRes.error);
     return;
   }
 
-  // HUD: display bloom status and light box intensity reference.
+  // HUD: display bloom status + scene reference.
   window.addEventListener('resize', () => {
     const dpr = devicePixelRatio;
     target.width = window.innerWidth * dpr;
@@ -294,13 +382,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.set(cameraEntity, Camera, { aspect: window.innerWidth / window.innerHeight });
   });
 
-  const hudElement = document.getElementById('hud');
-  if (hudElement !== null) {
-    hudElement.innerText =
-      'bloom: ON (threshold=1.0, intensity=1.0) | boxes: emissiveIntensity A=2.0 B=1.5 C=0.4';
-  }
+  updateHud(currentBloom);
 
-  console.warn(`[learn-render 5.7 bloom] backend=${renderer.backend}`);
+  console.warn(`[learn-render 5.7 bloom] backend=${renderer.backend}. Press Space to toggle bloom.`);
+}
+
+// HUD reflecting the current bloom state + the Space-toggle hint, so the A/B
+// comparison (LO 5.7's whole point) is discoverable from the on-screen text.
+function updateHud(bloom: number): void {
+  const hudElement = document.getElementById('hud');
+  if (hudElement === null) return;
+  const state = bloom === BLOOM_ENABLED ? 'ON' : 'OFF';
+  hudElement.innerText = `bloom: ${state} (threshold=1.0) -- press [Space] to toggle | 4 HDR light boxes (colors up to 15.0) glow over 6 wooden crates`;
 }
 
 declare global {

@@ -556,23 +556,27 @@ describe('w9 M4 SharedRefStore: stale detection (resolve/retain/release + retire
     }
   });
 
-  it('AC-07: retire-on-255 — gen pushed to MAX_GEN then slot not in freeSlots after release', () => {
+  it('AC-07: retire-on-255 — gen pushed past MAX_GEN then slot not in freeSlots after release', () => {
     const store = new SharedRefStore();
     const h = store.alloc('MeshAsset', { mesh: 'cube' });
     const slot = handleSlot(h);
 
-    // Bump _generations[slot] to 254, manually push slot to freeSlots
-    // so the next alloc reuses it with gen=254.
+    // gen=255 is still a usable handle under the new gen > MAX_GEN predicate.
+    // Bump _generations[slot] to 255 and push to freeSlots so the next alloc
+    // reuses it with gen=255.
     // biome-ignore lint/suspicious/noExplicitAny: private mutation for retire edge boundary
-    (store as any)._generations[slot] = 254;
+    (store as any)._generations[slot] = 255;
     // biome-ignore lint/suspicious/noExplicitAny: push slot to free list so alloc reuses
     (store as any).freeSlots.push(slot);
 
-    // Alloc reuses slot, reads gen=254 from _generations.
+    // Alloc reuses slot, reads gen=255 from _generations.
     const h2 = store.alloc('MeshAsset', { mesh: 'sphere' });
-    expect(handleGeneration(h2)).toBe(254);
+    expect(handleGeneration(h2)).toBe(255);
+    // Verify gen=255 is a usable handle — resolve succeeds.
+    const rResolve = store.resolve(h2);
+    expect(rResolve.ok).toBe(true);
 
-    // Release h2: gen matches (254==254), proceed, gen++ to 255 (=MAX_GEN), retired.
+    // Release h2: gen matches (255==255), proceed, gen++ to 256 (>MAX_GEN), retired.
     expect(store.release(h2).ok).toBe(true);
 
     // Verify slot is NOT in freeSlots (retired)

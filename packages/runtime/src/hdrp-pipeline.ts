@@ -431,8 +431,10 @@ export const hdrpPipeline: RenderPipeline = {
     // camera.tonemap === 'none' (recordTonemapPass at render-system-record.ts
     // line ~4326).
     // No bloom path under HDRP yet, so the tonemap pass reads hdrColor
-    // directly (URP routes through hdrComposited alias because bloom-
-    // composite is the producer; we don't have one).
+    // directly (URP routes through the separate hdrComposited target written by
+    // bloom-composite; HDRP has no such producer). With hdrColorWhenBloomOff
+    // defaulting to hdrComposited, both keys are hdrColor here -> single read,
+    // always resolves hdrColor.
     addTonemapPass(graph, 'tonemap', { hdrComposited: 'hdrColor' });
 
     // 11. DebugOverlay: immediate-mode debug overlay on top of everything

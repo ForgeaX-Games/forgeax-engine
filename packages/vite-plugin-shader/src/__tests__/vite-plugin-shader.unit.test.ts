@@ -1071,6 +1071,43 @@ import { toRollupLog } from '../wrap.js';
       );
       expect(skyboxAsMaterial, 'skybox must not appear in materialShaders[]').toBe(false);
     });
+
+    // bug-20260625 regression: createRenderer identifies the 3 bloom post-
+    // process entries by the uniform-struct-name markers BloomBrightParams /
+    // BloomBlurParams / BloomCompositeParams. The original triage used `//`
+    // content-marker COMMENTS (bloomBrightExtract / bloomBlurDir /
+    // bloomComposite) which naga_oil's WGSL writeback strips (comments are not
+    // naga IR), so the markers vanished from the composed entry.wgsl, the
+    // triage never matched, bloom resources stayed null, and bloom silently
+    // never rendered. Worse, buildEngineShaderManifest() (the dawn-smoke path)
+    // omitted the bloom entries entirely, so no smoke could catch it. This
+    // test locks BOTH the dawn-path presence AND the survives-naga property.
+    it('buildEngineShaderManifest() includes the 3 bloom entries with code-marker structs', async () => {
+      const manifest = await buildEngineShaderManifest();
+      // Each bloom struct name must appear in exactly one composed entry, and
+      // must appear as a real WGSL `struct` declaration (naga IR survivor) --
+      // NOT merely inside a comment that naga would drop.
+      for (const struct of ['BloomBrightParams', 'BloomBlurParams', 'BloomCompositeParams']) {
+        const hits = manifest.entries.filter((e) => e.wgsl.includes(struct));
+        expect(hits, `exactly one composed entry must carry ${struct}`).toHaveLength(1);
+        const wgsl = hits[0]?.wgsl ?? '';
+        expect(
+          wgsl,
+          `${struct} must survive naga_oil as a struct decl, not a stripped comment`,
+        ).toMatch(new RegExp(`struct\\s+${struct}\\b`));
+        // Guard the actual bug: the old comment markers must NOT be relied on
+        // (they are gone after composition). Their absence is expected.
+        expect(
+          wgsl.includes('// bloom'),
+          `${struct} entry must not depend on comment markers`,
+        ).toBe(false);
+      }
+      // Bloom entries are utility post-process shaders, not material shaders.
+      const bloomAsMaterial = manifest.materialShaders.some((ms) =>
+        ms.identifier.toLowerCase().includes('bloom'),
+      );
+      expect(bloomAsMaterial, 'bloom must not appear in materialShaders[]').toBe(false);
+    });
   });
 }
 

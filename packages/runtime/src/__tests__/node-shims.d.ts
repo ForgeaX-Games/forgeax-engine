@@ -8,13 +8,16 @@
 // - shadow-m3.dawn.test.ts
 // - shadow-m3-calibrate-run.dawn.test.ts
 // - tilemap-chunk-y-sort-bench.unit.test.ts (perf_hooks + process.env)
+// - render-system-fold-scene-instances.unit.test.ts (readdirSync + dirname)
 
 declare module 'node:fs' {
   export function readFileSync(path: string, encoding: string): string;
+  export function readdirSync(path: string): string[];
 }
 
 declare module 'node:path' {
   export function resolve(...paths: string[]): string;
+  export function dirname(p: string): string;
 }
 
 declare module 'node:url' {

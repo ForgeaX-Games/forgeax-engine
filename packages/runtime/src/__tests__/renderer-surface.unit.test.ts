@@ -200,6 +200,7 @@ function makeFrameState(): MockObj {
     hdrpOncePerFrameFired: new Set(),
     pointShadowAtlas: null,
     pointShadowSnapshots: [],
+    lastFoldBucketCount: 0,
   };
 }
 

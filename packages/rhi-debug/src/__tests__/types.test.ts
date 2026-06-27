@@ -117,7 +117,7 @@ describe('RhiCallEvent — closed union constructibility', () => {
 describe('Tape — constructibility', () => {
   it('minimal tape compiles', () => {
     const tape: Tape = {
-      formatVersion: 1,
+      formatVersion: 2,
       rhiCapsRecorded: {
         canvasFormat: 'bgra8unorm',
         rgba16floatRenderable: true,
@@ -135,14 +135,14 @@ describe('Tape — constructibility', () => {
       blobPool: new Map(),
     };
     expectTypeOf(tape).toMatchTypeOf<Tape>();
-    expect(tape.formatVersion).toBe(1);
+    expect(tape.formatVersion).toBe(2);
     expect(tape.events).toHaveLength(1);
   });
 
   it('tape with events + blobPool compiles', () => {
     const buf = new ArrayBuffer(16);
     const tape: Tape = {
-      formatVersion: 1,
+      formatVersion: 2,
       rhiCapsRecorded: {
         canvasFormat: 'bgra8unorm',
         rgba16floatRenderable: false,
@@ -168,7 +168,7 @@ describe('Tape — constructibility', () => {
       ],
       blobPool: new Map([['a1b2c3', buf]]),
     };
-    expect(tape.formatVersion).toBe(1);
+    expect(tape.formatVersion).toBe(2);
     expect(tape.blobPool.get('a1b2c3')).toBe(buf);
   });
 });

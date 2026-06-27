@@ -18,9 +18,10 @@
 //   caught deterministically and returns `UniqueRefStaleError` ('unique-ref-
 //   stale') — it no longer silently resolves to the next payload.
 //
-//   Generation advances on release and retires the slot at MAX_GEN (255)
+//   Generation advances on release and retires the slot when gen would exceed
+//   MAX_GEN (255) — gen 255 is still usable; the bump to 256 triggers retire —
 //   rather than wrapping, so a re-used slot can never collide with an old
-//   handle's generation (retire-on-255; mirrors EntityHandle).
+//   handle's generation (mirrors EntityHandle via the isRetiredSlot SSOT).
 //
 //   AC-06 (unique-ref-double-release) remains payload-presence detected
 //   (`payloads.has(raw)`) for a handle whose generation still matches; the
@@ -233,13 +234,14 @@ export class UniqueRefStore {
     const cb = this.releaseCallbacks.get(raw);
     this.releaseCallbacks.delete(raw);
     this.payloads.delete(raw);
-    // Gen increment + retire-on-255 (AC-07): bump gen; if it reaches MAX_GEN
-    // the slot is permanently retired — NOT pushed to freeSlots.
+    // Gen increment + retire (AC-07): bump gen; once it would exceed MAX_GEN
+    // (gen 255 is still usable; the bump to 256 triggers retire) the slot is
+    // permanently retired — NOT pushed to freeSlots.
     this._generations[slot] = storeGen + 1;
     if (!isRetiredSlot(this._generations[slot])) {
       this.freeSlots.push(slot);
     }
-    // else: slot retired at MAX_GEN — never returns to freeSlots (no aliasing).
+    // else: slot retired (gen exceeded MAX_GEN) — never returns to freeSlots.
     if (cb !== undefined) {
       cb(payload);
     }

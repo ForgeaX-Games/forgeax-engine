@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { computePassOffsets, deserializeTape, serializeTape } from '../tape-format';
-import type { RhiCallEvent, Tape } from '../types';
+import type { RhiCallEvent, RhiCallEventInitialData, Tape } from '../types';
 
 // ============================================================================
 // Helper: build a minimal Tape
@@ -23,7 +23,7 @@ import type { RhiCallEvent, Tape } from '../types';
 
 function makeEmptyTape(): Tape {
   return {
-    formatVersion: 1,
+    formatVersion: 2,
     rhiCapsRecorded: {
       canvasFormat: 'bgra8unorm' as GPUTextureFormat,
       rgba16floatRenderable: false,
@@ -726,7 +726,7 @@ describe('tape-format — event kind round-trip', () => {
 // ============================================================================
 
 describe('tape-format — formatVersion reject', () => {
-  it('formatVersion = 0 -> reject', () => {
+  it('formatVersion = 0 -> reject (expectedVersion=2)', () => {
     const b = makeEmptyTape();
     const badTape: Tape = { ...b, formatVersion: 0 };
     const { json, blob } = serializeTape(badTape);
@@ -734,12 +734,16 @@ describe('tape-format — formatVersion reject', () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.error.code).toBe('tape-format-version-mismatch');
+      const detail = res.error.detail;
+      if (detail && 'expectedVersion' in detail) {
+        expect(detail.expectedVersion).toBe(2);
+      }
     }
   });
 
-  it('formatVersion = 2 -> reject', () => {
+  it('formatVersion = 3 -> reject', () => {
     const b = makeEmptyTape();
-    const badTape: Tape = { ...b, formatVersion: 2 };
+    const badTape: Tape = { ...b, formatVersion: 3 };
     const { json, blob } = serializeTape(badTape);
     const res = deserializeTape(json, blob);
     expect(res.ok).toBe(false);
@@ -747,8 +751,24 @@ describe('tape-format — formatVersion reject', () => {
       expect(res.error.code).toBe('tape-format-version-mismatch');
       const detail = res.error.detail;
       if (detail && 'tapeVersion' in detail) {
-        expect(detail.tapeVersion).toBe(2);
-        expect(detail.expectedVersion).toBe(1);
+        expect(detail.tapeVersion).toBe(3);
+        expect(detail.expectedVersion).toBe(2);
+      }
+    }
+  });
+
+  it('v1 tape (formatVersion=1) -> explicit reject with expectedVersion=2', () => {
+    const b = makeEmptyTape();
+    const v1Tape: Tape = { ...b, formatVersion: 1 };
+    const { json, blob } = serializeTape(v1Tape);
+    const res = deserializeTape(json, blob);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('tape-format-version-mismatch');
+      const detail = res.error.detail;
+      if (detail && 'tapeVersion' in detail) {
+        expect(detail.tapeVersion).toBe(1);
+        expect(detail.expectedVersion).toBe(2);
       }
     }
   });
@@ -994,7 +1014,7 @@ describe('tape-format — empty tape', () => {
     if (res.ok) {
       expect(res.value.events).toHaveLength(0);
       expect(res.value.blobPool.size).toBe(0);
-      expect(res.value.formatVersion).toBe(1);
+      expect(res.value.formatVersion).toBe(2);
     }
   });
 });
@@ -1066,7 +1086,7 @@ describe('tape-format — full frame tape', () => {
     if (res.ok) {
       expect(res.value.events.length).toBe(events.length);
       expect(res.value.blobPool.has('cafe')).toBe(true);
-      expect(res.value.formatVersion).toBe(1);
+      expect(res.value.formatVersion).toBe(2);
       // Verify frameMark is present
       expect(res.value.events.some((e) => e.kind === 'frameMark')).toBe(true);
     }
@@ -1078,7 +1098,7 @@ describe('tape-format — full frame tape', () => {
     const res = deserializeTape(json, blob);
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.value.formatVersion).toBe(1);
+      expect(res.value.formatVersion).toBe(2);
     }
   });
 
@@ -1091,7 +1111,7 @@ describe('tape-format — full frame tape', () => {
       storageBuffer: true,
       timestampQuery: true,
     };
-    const tape: Tape = { formatVersion: 1, rhiCapsRecorded: caps, events: [], blobPool: new Map() };
+    const tape: Tape = { formatVersion: 2, rhiCapsRecorded: caps, events: [], blobPool: new Map() };
     const { json, blob } = serializeTape(tape);
     const res = deserializeTape(json, blob);
     expect(res.ok).toBe(true);
@@ -1649,5 +1669,182 @@ describe('computePassOffsets — compute fixture', () => {
     // No dispatches: start > end (empty range)
     expect(offsets[0]!.startDrawIdx).toBe(0);
     expect(offsets[0]!.endDrawIdx).toBe(-1);
+  });
+});
+
+// ============================================================================
+// initialData round-trip (w4 — M1)
+// ============================================================================
+
+describe('tape-format — initialData round-trip', () => {
+  it('initialData event round-trip (serialize -> deserialize)', () => {
+    const initialDataEvent: RhiCallEventInitialData = {
+      kind: 'initialData',
+      handleId: 'buf:vbo',
+      dataHash: 'deadbeef',
+    };
+    const tape = makeTapeWithEventsAndBlobs(
+      [
+        {
+          kind: 'createBuffer' as const,
+          handleId: 'buf:vbo',
+          desc: { size: 72, usage: 0x01 | 0x10, mappedAtCreation: false },
+        },
+        initialDataEvent as RhiCallEvent,
+      ],
+      [['deadbeef', new Uint8Array([0, 1, 2, 3])]],
+    );
+    const { json, blob } = serializeTape(tape);
+    const res = deserializeTape(json, blob);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const events = res.value.events;
+      expect(events).toHaveLength(2);
+      // Verify createBuffer preserved
+      expect(events[0]!.kind).toBe('createBuffer');
+      // Verify initialData preserved
+      const idEvent = events[1];
+      expect(idEvent!.kind).toBe('initialData');
+      const id = idEvent as { kind: 'initialData'; handleId: string; dataHash: string };
+      expect(id.handleId).toBe('buf:vbo');
+      expect(id.dataHash).toBe('deadbeef');
+    }
+  });
+
+  it('multiple initialData events in bootstrap prefix round-trip', () => {
+    const id1: RhiCallEventInitialData = {
+      kind: 'initialData',
+      handleId: 'buf:vbo',
+      dataHash: 'aaa111',
+    };
+    const id2: RhiCallEventInitialData = {
+      kind: 'initialData',
+      handleId: 'buf:ibo',
+      dataHash: 'bbb222',
+    };
+    const tape = makeTapeWithEventsAndBlobs(
+      [
+        {
+          kind: 'createBuffer' as const,
+          handleId: 'buf:vbo',
+          desc: { size: 72, usage: 0x01 | 0x10, mappedAtCreation: false },
+        },
+        {
+          kind: 'createBuffer' as const,
+          handleId: 'buf:ibo',
+          desc: { size: 36, usage: 0x01 | 0x10, mappedAtCreation: false },
+        },
+        id1 as RhiCallEvent,
+        id2 as RhiCallEvent,
+      ],
+      [
+        ['aaa111', new Uint8Array([10, 20, 30])],
+        ['bbb222', new Uint8Array([40, 50])],
+      ],
+    );
+    const { json, blob } = serializeTape(tape);
+    const res = deserializeTape(json, blob);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const events = res.value.events;
+      expect(events).toHaveLength(4);
+      expect(events[0]!.kind).toBe('createBuffer');
+      expect(events[2]!.kind).toBe('initialData');
+      expect(events[3]!.kind).toBe('initialData');
+      const ev1 = events[2] as { kind: 'initialData'; handleId: string; dataHash: string };
+      expect(ev1.handleId).toBe('buf:vbo');
+      expect(ev1.dataHash).toBe('aaa111');
+      const ev2 = events[3] as { kind: 'initialData'; handleId: string; dataHash: string };
+      expect(ev2.handleId).toBe('buf:ibo');
+      expect(ev2.dataHash).toBe('bbb222');
+    }
+  });
+
+  it('v2 tape with initialData round-trip (formatVersion=2, passes when TAPE_FORMAT_VERSION=2)', () => {
+    const v2InitialData: RhiCallEventInitialData = {
+      kind: 'initialData',
+      handleId: 'buf:1',
+      dataHash: 'abc123',
+    };
+    const tape: Tape = {
+      formatVersion: 2,
+      rhiCapsRecorded: {
+        canvasFormat: 'bgra8unorm' as GPUTextureFormat,
+        rgba16floatRenderable: false,
+        float32Filterable: false,
+        textureCompression: false,
+        storageBuffer: false,
+        timestampQuery: false,
+      },
+      events: [
+        {
+          kind: 'createBuffer' as const,
+          handleId: 'buf:1',
+          desc: { size: 128, usage: 0x01 | 0x10, mappedAtCreation: false },
+        },
+        v2InitialData as RhiCallEvent,
+      ],
+      blobPool: new Map([['abc123', new Uint8Array([7, 8, 9]).buffer as ArrayBuffer]]),
+    };
+    // M2: TAPE_FORMAT_VERSION=2, so v2 tape deserializes successfully.
+    const { json, blob } = serializeTape(tape);
+    const res = deserializeTape(json, blob);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.formatVersion).toBe(2);
+      expect(res.value.events).toHaveLength(2);
+      const idEvent = res.value.events[1];
+      expect(idEvent!.kind).toBe('initialData');
+      const id = idEvent as { kind: 'initialData'; handleId: string; dataHash: string };
+      expect(id.handleId).toBe('buf:1');
+      expect(id.dataHash).toBe('abc123');
+      expect(res.value.blobPool.has('abc123')).toBe(true);
+    }
+  });
+
+  // ============================================================================
+  // (i) initialData handle graph integrity (w10)
+  // ============================================================================
+
+  describe('tape-format — initialData handle graph', () => {
+    it('initialData dangling handleId (handleId not in declared set) -> reject', () => {
+      const idEvent: RhiCallEventInitialData = {
+        kind: 'initialData',
+        handleId: 'buf:nonexistent',
+        dataHash: 'deadbeef',
+      };
+      const tape = makeTapeWithEventsAndBlobs(
+        [idEvent as RhiCallEvent],
+        [['deadbeef', new Uint8Array([0, 1, 2, 3])]],
+      );
+      const { json, blob } = serializeTape(tape);
+      const res = deserializeTape(json, blob);
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error.code).toBe('tape-handle-graph-broken');
+      }
+    });
+
+    it('initialData with declared handleId -> ok', () => {
+      const idEvent: RhiCallEventInitialData = {
+        kind: 'initialData',
+        handleId: 'buf:vbo',
+        dataHash: 'deadbeef',
+      };
+      const tape = makeTapeWithEventsAndBlobs(
+        [
+          {
+            kind: 'createBuffer' as const,
+            handleId: 'buf:vbo',
+            desc: { size: 72, usage: 0x01 | 0x10, mappedAtCreation: false },
+          },
+          idEvent as RhiCallEvent,
+        ],
+        [['deadbeef', new Uint8Array([0, 1, 2, 3])]],
+      );
+      const { json, blob } = serializeTape(tape);
+      const res = deserializeTape(json, blob);
+      expect(res.ok).toBe(true);
+    });
   });
 });

@@ -3,7 +3,7 @@
 #import forgeax_pbr::ibl_sampling::{sampleIblDiffuse, sampleIblSpecular}
 #import forgeax_pbr::tbn::{decodeTangentSpaceNormalRg, applyTBN}
 #import forgeax_pbr::lighting_directional::{evalDirectional}
-#import forgeax_pbr::lighting_punctual::{evalPoint, evalSpot}
+#import forgeax_pbr::lighting_punctual::{evalPoint, evalSpot, evalSpotShadowed}
 #ifdef POINT_SHADOW_AVAILABLE
 #import forgeax_pbr::lighting_punctual::{evalPointShadowed}
 #import forgeax_view::common::{shadowParams}
@@ -398,11 +398,30 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let spotCount = spotLightsBuffer.count;
   for (var i: u32 = 0u; i < spotCount; i = i + 1u) {
     let s = spotLightsBuffer.slots[i];
-    color = color + evalSpot(
-      s.position, s.direction, s.colorTimesIntensity,
-      s.cosInner, s.cosOuter, s.invRangeSquared,
-      in.worldPos, n, v, albedo, metallic, a, f0,
-    );
+    // feat-20260625-spot-light-shadow-mapping M3 / w15 (plan-strategy D-1
+    // fragment side + D-3 + D-4): gate on the host-assigned shadowAtlasTile
+    // (>= 0 means a spot atlas tile was allocated; -1 sentinel means no
+    // shadow / clipped / direction-degenerate). The shadowed path reads the
+    // per-spot perspective matrix from the View UBO `view.spotLightViewProj`
+    // array (lane N = shadowAtlasTile N; folded from the standalone binding 9
+    // into the View UBO in feat-20260625 w25 for WebGL2 uniform-buffer budget);
+    // the unshadowed path stays on evalSpot. bias hardcoded 0.005 / 0.05 aligns
+    // with the DirectionalLight defaults (D-6); the OOB/NaN gate lives inside
+    // evalSpotShadowed, not here.
+    if (s.shadowAtlasTile >= 0) {
+      color = color + evalSpotShadowed(
+        s.position, s.direction, s.colorTimesIntensity,
+        s.cosInner, s.cosOuter, s.invRangeSquared,
+        in.worldPos, n, v, albedo, metallic, a, f0,
+        view.spotLightViewProj[s.shadowAtlasTile], s.shadowAtlasTile, 0.005, 0.05,
+      );
+    } else {
+      color = color + evalSpot(
+        s.position, s.direction, s.colorTimesIntensity,
+        s.cosInner, s.cosOuter, s.invRangeSquared,
+        in.worldPos, n, v, albedo, metallic, a, f0,
+      );
+    }
   }
 #endif // CLUSTER_FORWARD_AVAILABLE
   let emissiveSample = textureSample(emissiveTexture, emissiveSampler, in.uv).rgb;

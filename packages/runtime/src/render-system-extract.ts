@@ -341,6 +341,14 @@ export interface PointShadowSnapshot {
  * SpotLightSnapshot — cone-restricted variant. `position` from companion
  * Transform; `direction` raw outgoing-vector; `cosInner` / `cosOuter` host
  * pre-converted via `degToCos` so the shader sees only cosines (D-S2).
+ *
+ * feat-20260625-spot-light-shadow-mapping M1 w5: added shadow fields.
+ * castShadow (bool) gates shadow projection; lightViewProj is the perspective
+ * light-view-projection matrix computed in extract (undefined when castShadow
+ * is false, dir degenerates, or the light is clipped). shadowAtlasTile
+ * (i32 sentinel -1) is the allocated tile index 0..3 or -1 for unassigned
+ * (plan-strategy D-4). mapSize / nearPlane / farPlane are the source
+ * component shadow parameters carried through to the record stage.
  */
 export interface SpotLightSnapshot {
   readonly kind: 'spot';
@@ -351,6 +359,13 @@ export interface SpotLightSnapshot {
   readonly invRangeSquared: number;
   readonly cosInner: number;
   readonly cosOuter: number;
+  // ── shadow fields (feat-20260625-spot-light-shadow-mapping M1) ──
+  readonly castShadow: boolean;
+  readonly lightViewProj: Float32Array | undefined;
+  readonly mapSize: number;
+  readonly nearPlane: number;
+  readonly farPlane: number;
+  readonly shadowAtlasTile: number;
 }
 
 /**
@@ -1589,6 +1604,10 @@ export function extractFrame(
     with: [SpotLight, Entity],
     optional: [Transform],
   });
+  // feat-20260625-spot-light-shadow-mapping M1 w5: tile allocation for castShadow spots.
+  // Cap = 4 (OOS-5), sentinel -1 = unassigned (plan-strategy D-4).
+  // Direction degeneration (near-zero) also skips shadow (requirements $112).
+  let spotTileNext = 0;
   queryRun(spotLightQuery, world, (bundle) => {
     const s = bundle.SpotLight;
     const entitySelf = bundle.Entity.self;
@@ -1608,12 +1627,60 @@ export function extractFrame(
         worldMat !== undefined
           ? mat4.getTranslation(vec3.create(), worldMat as unknown as mat4.Mat4Like)
           : vec3.create(0, 0, 0);
+      const dir = vec3.create(s.directionX[i] ?? 0, s.directionY[i] ?? -1, s.directionZ[i] ?? 0);
+
+      // ── shadow fields (feat-20260625-spot-light-shadow-mapping M1) ──
+      const castShadow = (s.castShadow[i] ?? 1) !== 0;
+      const sMapSize = s.mapSize[i] ?? 2048;
+      const sNearPlane = s.nearPlane[i] ?? 0.1;
+      const sFarPlane = s.farPlane[i] ?? 50;
+
+      let lightViewProj: Float32Array | undefined;
+      let shadowAtlasTile = -1;
+
+      if (castShadow) {
+        // D-4 / requirements $112: normalize direction; skip shadow if degenerate.
+        const dirLen = Math.sqrt(
+          (dir[0] ?? 0) * (dir[0] ?? 0) +
+            (dir[1] ?? 0) * (dir[1] ?? 0) +
+            (dir[2] ?? 0) * (dir[2] ?? 0),
+        );
+        const EPSILON = 1e-6;
+        if (dirLen > EPSILON) {
+          const dirN = vec3.create(
+            (dir[0] ?? 0) / dirLen,
+            (dir[1] ?? 0) / dirLen,
+            (dir[2] ?? 0) / dirLen,
+          );
+          const target = vec3.create(
+            (position[0] ?? 0) + (dirN[0] ?? 0),
+            (position[1] ?? 0) + (dirN[1] ?? 0),
+            (position[2] ?? 0) + (dirN[2] ?? 0),
+          );
+          // D-1: perspective(outerConeDeg*2, aspect=1, near, far) x lookAt(pos, pos+dir).
+          // FOV = outerConeDeg * 2 in degrees; mat4.perspective takes fov in radians.
+          const fov = outerConeDeg * 2 * (Math.PI / 180);
+          const proj = mat4.create();
+          mat4.perspective(proj, fov, 1, sNearPlane, sFarPlane);
+          const view = mat4.create();
+          mat4.lookAt(view, position, target, vec3.create(0, 1, 0));
+          lightViewProj = new Float32Array(16);
+          mat4.multiply(lightViewProj as Mat4, proj, view);
+
+          // D-4: allocate tile 0..3; 5th+ = -1 sentinel.
+          if (spotTileNext < 4) {
+            shadowAtlasTile = spotTileNext;
+            spotTileNext += 1;
+          }
+        }
+      }
+
       spotSnapshots.push({
         kind: 'spot',
         // D-6: position reflects world transform; direction stays sourced
         // from SpotLight.directionX/Y/Z (NOT rotated by the parent).
         position,
-        direction: vec3.create(s.directionX[i] ?? 0, s.directionY[i] ?? -1, s.directionZ[i] ?? 0),
+        direction: dir,
         color: vec3.create(
           (s.colorR[i] ?? 1) * intensity,
           (s.colorG[i] ?? 1) * intensity,
@@ -1623,6 +1690,13 @@ export function extractFrame(
         invRangeSquared: computeInvRangeSquared(range),
         cosInner: degToCos(innerConeDeg),
         cosOuter: degToCos(outerConeDeg),
+        // ── shadow fields ──
+        castShadow,
+        lightViewProj,
+        mapSize: sMapSize,
+        nearPlane: sNearPlane,
+        farPlane: sFarPlane,
+        shadowAtlasTile,
       });
     }
   });

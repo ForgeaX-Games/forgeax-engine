@@ -7,6 +7,8 @@
 
 This package records every RHI call (createBuffer, writeBuffer, beginRenderPass, setPipeline, draw, etc.) into a **tape** -- an ordered sequence of `RhiCallEvent` items plus a hash-deduplicated binary blob pool. The tape can be **replayed** on a fresh `RhiDevice` (caps permitting) and **inspected** at any draw index, yielding bind group bindings, draw call metadata, and RT readback PNGs.
 
+Starting in v2, the tape is **self-contained**: `snapshotResource(handleId)` reads back the actual GPU bytes of live resources at capture-start and stores them as `initialData` events in the tape's bootstrap prefix. Replay follows a strict create-then-seed-then-dispatch order, making the tape independent of any pre-recording command history (e.g., load-time VBO/IBO uploads that happened before the recording window opened).
+
 Three key properties:
 - **Proxy-based**: `wrap(rhiInstance)` returns a `DebugRhiInstance` that intercepts all RHI calls without modifying `@forgeax/engine-rhi` or `@forgeax/engine-rhi-webgpu`.
 - **Deterministic replay**: on dawn-node, replay RT pixels match original within epsilon <= 0.01 (same device, same caps).
@@ -38,7 +40,9 @@ L1 is the byte-on-disk handoff: the dev-server POST endpoint and the Node `final
 
 | export | signature | description |
 |:--|:--|:--|
-| `wrap` | `(instance: RhiInstance): DebugRhiInstance` | Proxy-wrap an RhiInstance. `DebugRhiInstance extends RhiInstance` with added `arm(frames)`, `onFrameEnd()`, `finalize()`, `getTape()`, `getState()`, `getEvents()`, `getBlobPool()`, `transitionToError()`, `disposeError()`. |
+| `wrap` | `(instance: RhiInstance): DebugRhiInstance` | Proxy-wrap an RhiInstance. `DebugRhiInstance extends RhiInstance` with added `arm(frames)`, `onFrameEnd()`, `finalize()`, `getTape()`, `getState()`, `getEvents()`, `getBlobPool()`, `transitionToError()`, `disposeError()`, `snapshotResource(handleId)`, `snapshotAllLiveResources()`. |
+| `snapshotResource` | `(handleId: HandleId): Promise<Result<{handleId, dataHash}, DebugError>>` | Snapshot a resource's GPU bytes into the tape as an `initialData` event. Reads the resource descriptor from the internal registry, copies bytes via copyToBuffer/mapAsync, stores them in the blobPool with djb2 hash-dedup, and pushes an `RhiCallEventInitialData` into the event stream. Returns `snapshot-readback-failed` on any readback/storeBlob failure. Async because the GPU readback chain (copyToBuffer -> submit -> onSubmittedWorkDone -> mapAsync) is inherently asynchronous. |
+| `snapshotAllLiveResources` | `(): Promise<Result<void, DebugError>>` | Frame-header snapshot entry point: awaits all submitted GPU work (`onSubmittedWorkDone`), then iterates the live descriptor registry full-table, calling `snapshotResource` on every entry. Advances the recorder Armed -> Snapshotting -> Recording on success. Returns the first snapshot failure as a Result — fail-fast, not partial seed (architecture section 5). This is the function AC-01 tests call; `snapshotResource` is the per-resource building block it loops over. |
 | `wrapCreateShaderModule` | `(originalFn: CreateShaderModuleFn, debugInst: DebugRhiInstance): CreateShaderModuleFn` | Standalone wrapper for `createShaderModule` (which is not on `RhiDevice` in rhi-webgpu). Records `createShaderModule` events in the tape. |
 | `createReplay` | `(tape: Tape, device: RhiDevice, createShaderModuleFn?: CreateShaderModuleFn): Result<Replay, DebugError>` | Create a Replay object from a tape. Performs caps fail-fast check (returns `caps-mismatch` if `tape.rhiCapsRecorded` is not a subset of `device.caps`). `createShaderModuleFn` is **type-optional but required for any tape carrying `createShaderModule` events** (every real-demo tape does — only shader-free self-contained test tapes omit them): pass `createShaderModule` from `@forgeax/engine-rhi-webgpu`. Omitting it silently skips those events, so downstream pipeline creation fails at the RHI layer (no `DebugError`) — not at `createReplay`. |
 | `inspectAt` | `(replay: Replay, drawIdx: number, events: readonly RhiCallEvent[], fields: readonly InspectFields[] \| undefined, device: RhiDevice, outputDir: string): Promise<Result<InspectReport, DebugError>>` | Inspect replay state at a specific draw index. `events` supplies frame/pass info; `fields` controls which data is computed (`['bindings']` skips RT readback; `['rt']` triggers `copyTextureToBuffer` + PNG; `undefined` = all); `device` performs RT readback; `outputDir` is where the RT PNG is written. |
@@ -120,7 +124,7 @@ if (inspectRes.ok) {
   console.log('bindings:', inspectRes.value.bindings);
   console.log('drawCall:', inspectRes.value.drawCall);
 } else {
-  // DebugErrorCode is a 12-member closed union -- exhaustive switch.
+  // DebugErrorCode is a 14-member closed union -- exhaustive switch.
   const err = inspectRes.error;
   switch (err.code) {
     case 'replay-step-out-of-range':
@@ -132,7 +136,7 @@ if (inspectRes.ok) {
     case 'caps-mismatch':
       console.error('missing caps:', err.detail?.missingCaps);
       break;
-    // ... remaining 9 cases handled by TypeScript exhaustiveness check.
+    // ... remaining 11 cases handled by TypeScript exhaustiveness check.
     default:
       console.error(err.code, err.hint);
   }
@@ -183,7 +187,7 @@ Mounted by `@forgeax/engine-vite-plugin-rhi-debug` (`vitePluginRhiDebug()`, defa
 
 On success: writes `.forgeax-debug/<runId>/frame-0.tape.bin` + `frame-0.report.json` (via the D-3 single-writer `assembleReport`, byte-identical to the Node finalize tail) and returns `200 { tapePath, reportPath, runId }`.
 
-On a malformed body / wrong method: returns a `{ error, hint }` JSON envelope (`400` for bad body, `405` for non-POST) and **writes nothing** (Fail Fast / AC-06). HTTP-layer errors never enter `DebugError` (OOS-6 / D-9) -- the 12-member union is unchanged.
+On a malformed body / wrong method: returns a `{ error, hint }` JSON envelope (`400` for bad body, `405` for non-POST) and **writes nothing** (Fail Fast / AC-06). HTTP-layer errors never enter `DebugError` (OOS-6 / D-9) -- the 14-member union is unchanged.
 
 ### Dev-server endpoint: POST `/__forgeax-debug/trigger` (L2a)
 
@@ -248,18 +252,21 @@ The package exposes the CLI two ways: `package.json#bin` declares `forgeax-rhi-d
 ### State machine
 
 ```
-idle -> armed -> recording -> finalizing -> idle       (normal path)
-idle -> armed -> recording -> error                     (capture failure)
+idle -> armed -> snapshotting -> recording -> finalizing -> idle  (normal path, v2)
+idle -> armed -> recording -> finalizing -> idle                  (v1 path, no snapshotting)
+idle -> armed -> recording -> error                               (capture failure)
 error -> idle           (via disposeError())
 ```
 
-8 legal transitions: `idle->armed` (arm), `armed->recording` (first frame-end after arm), `recording->idle` (N frames done, auto-finalize), `recording->error` (device.lost), `error->idle` (disposeError).
+9 legal transitions: `idle->armed` (arm), `armed->snapshotting` (v2: frame-header snapshot window, calls snapshotResource for all live resources), `armed->recording` (v1 path when snapshotting is skipped), `snapshotting->recording` (snapshot complete, frame commands begin), `recording->idle` (N frames done, auto-finalize), `recording->error` (device.lost), `error->idle` (disposeError).
 
 3 illegal: duplicate arm returns `recorder-already-armed`; arm from error returns `recorder-already-armed`; finalize from error writes `valid: false`.
 
+**Seed insertion point (v2 replay order):** During replay, events are processed in tape order. The bootstrap prefix carries `create*` events first, then `initialData` events, then frame commands. Replay follows: create resources -> seed initialData (writeBuffer/writeTexture from blobPool) -> dispatch frame commands. The `replayInitialData` handler returns `Result` — failures bubble up through `stepToImpl` as `seed-initial-data-failed` (not void-silent-return).
+
 ## Error codes
 
-`DebugErrorCode` is a 12-member closed union, completely independent from `RhiErrorCode`.
+`DebugErrorCode` is a 14-member closed union, completely independent from `RhiErrorCode`.
 
 | code | hint template |
 |:--|:--|
@@ -275,6 +282,8 @@ error -> idle           (via disposeError())
 | `png-encode-failed` | PNG encoding of RT readback data failed |
 | `rpc-target-not-wired` | `wireDefaultInspectors(reg, ctx)` called without `debugRhi` injector |
 | `replay-dispose-busy` | in-flight inspect at draw indices `{inFlightDrawIndices}`; `await` them first |
+| `snapshot-readback-failed` | snapshotResource GPU byte readback failed (copy/mapAsync/storeBlob). `.detail = {handleId, stage: 'copy' | 'map' | 'store'}` |
+| `seed-initial-data-failed` | replayInitialData seed failed (handleId missing / dataHash missing / writeBuffer failed). `.detail = {handleId, stage: 'lookup' | 'write'}` |
 
 Each error object carries structured `.code` / `.expected` / `.hint` / `.detail` (discriminated union narrowed on `.code`). AI users consume via `switch (err.code)` exhaustive -- TypeScript catches missing branches at compile time.
 
@@ -282,10 +291,52 @@ Each error object carries structured `.code` / `.expected` / `.hint` / `.detail`
 
 | constant | value | locked in |
 |:--|:--|:--|
-| `TAPE_FORMAT_VERSION` | `1` | m1-3 types.ts |
+| `TAPE_FORMAT_VERSION` | `2` | w8 tape-format.ts (bumped in v2 for initialData events) |
 | `PER_EVENT_OVERHEAD` | `192` bytes | plan-strategy 5.3; m2-4 blob pool |
 
 Serialization: `serializeTape(tape) -> { json: string, bin: ArrayBuffer }`. JSON header contains `formatVersion` + `rhiCapsRecorded` + events array. Binary blob pool contains hash-keyed `ArrayBuffer` data for `writeBuffer` / `writeTexture` / shader source.
+
+### Initial-state capture (v2)
+
+> **Contract SSOT** — new readers can reuse the interface seam by reading only this section, without consulting implementation source (AC-04). Feat-B consumers reference this section to avoid drift.
+
+Starting in v2, the recorder snapshots live resource GPU bytes at capture-start and stores them as `initialData` events in the tape's bootstrap prefix. Replay follows a strict **create -> seed -> dispatch** order. This makes the tape self-contained: resources whose bytes were uploaded before the recording window (e.g., load-time VBO/IBO) are faithfully restored during replay.
+
+**Three-piece interface seam:**
+
+| piece | location | contract |
+|:--|:--|:--|
+| `initialData` event schema | `types.ts` `RhiCallEventInitialData` | `{ kind:'initialData', handleId: HandleId, dataHash: string }` — joined into `RhiCallEvent` closed union as the 40th member. `handleId` points to a resource declared by a prior `create*` event in the bootstrap prefix. `dataHash` is a djb2 hash key into the tape's `blobPool`, which stores the actual GPU bytes. Bytes are read back via copyToBuffer/mapAsync and stored with hash-dedup (reuses existing blobPool, no separate pool). |
+| `snapshotResource` signature | `recorder.ts` `DebugRhiInstance` | `snapshotResource(handleId: HandleId): Promise<Result<{handleId, dataHash}, DebugError>>` — per-resource building block. Reads the resource descriptor from the internal registry, copies GPU bytes via copyToBuffer/mapAsync, stores them in blobPool via storeBlob, and pushes an `RhiCallEventInitialData` into the event stream. Returns `snapshot-readback-failed` with `.detail = {handleId, stage:'copy'\|'map'\|'store'}` on any failure. Async because the GPU readback chain is inherently asynchronous. |
+| `snapshotAllLiveResources` signature | `recorder.ts` `DebugRhiInstance` | `snapshotAllLiveResources(): Promise<Result<void, DebugError>>` — frame-header full-table snapshot entry point. Awaits all submitted GPU work via `onSubmittedWorkDone`, then iterates every live resource in the descriptor registry, calling `snapshotResource` on each. Advances the recorder Armed -> Snapshotting -> Recording on success. Returns the first snapshot failure as a Result — fail-fast, not partial seed. This is what AC-01 tests call; `snapshotResource` is the per-resource building block it loops over. |
+| seed insertion point | `replayer.ts` `replayInitialData` | `replayInitialData(event, tape, handleMap, queue): Result<void, DebugError>` — called during replay when the dispatch switch hits `case 'initialData'`. Looks up the recreated resource from `handleMap`, fetches its bytes from `tape.blobPool.get(event.dataHash)`, writes them via `queue.writeBuffer` (for buffers) or `queue.writeTexture` (for textures). Returns `seed-initial-data-failed` with `.detail = {handleId, stage:'lookup'\|'write'}` on failure. Failures bubble up through `stepToImpl` — not void-silent-return. |
+
+**Capture flow (recording side):**
+
+```text
+arm() -> armed -> snapshotting state
+  for each live resource in descriptor registry:
+    await queue.onSubmittedWorkDone()  // conservative timing (C-3)
+    snapshotResource(handleId)         // reads GPU bytes -> blobPool -> pushEvent(initialData)
+  -> recording state
+  frame commands proceed normally
+```
+
+Snapshot-internal copy/submit calls are wrapped with `_skipRecord=true` — they are never recorded in the tape event stream (only the `initialData` events appear).
+
+**Replay flow (consumption side):**
+
+```text
+bootstrap prefix events in tape order:
+  createBuffer / createTexture / ...  (resources created, stored in handleMap)
+  initialData { handleId, dataHash }  (seed: handleMap.get -> blobPool.get -> writeBuffer/writeTexture)
+frame commands:
+  writeBuffer / draw / submit / ...   (commands execute normally with seeded resources)
+```
+
+**v1-v2 boundary:** v1 tapes (`formatVersion=1`) are explicitly rejected by `deserializeTape` with a structured `tape-format-version-mismatch` error (`.detail.expectedVersion=2`, `.detail.tapeVersion=1`). No silent degradation or best-effort migration. v1 was never a published format — all tapes are ephemeral and expect runtime-version-lock.
+
+**Design constraints this section enforces:** `initialData` reuses the unified serialization path (no separate blob pool, D-1 / C-5). `snapshotResource` and `replayInitialData` return `Result` (not void-silent, D-3 / AC-07). The descriptor registry (internal to `recorder.ts`) records resource kind/size/format/usage at `create*` time and removes entries at `destroy*` — `snapshotResource` reads it to determine whether a resource is a buffer or texture and what shape to copy.
 
 ### PassOffset and computePassOffsets
 

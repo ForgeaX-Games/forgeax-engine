@@ -153,21 +153,21 @@ describe('unpackGen', () => {
 });
 
 describe('isRetiredSlot', () => {
-  it('returns true when gen === MAX_GEN (255)', () => {
-    expect(isRetiredSlot(MAX_GEN)).toBe(true);
-    expect(isRetiredSlot(255)).toBe(true);
+  it('returns false when gen <= MAX_GEN (255 is usable)', () => {
+    expect(isRetiredSlot(MAX_GEN)).toBe(false);
+    expect(isRetiredSlot(255)).toBe(false);
   });
 
-  it('returns false when gen < MAX_GEN', () => {
-    expect(isRetiredSlot(0)).toBe(false);
-    expect(isRetiredSlot(1)).toBe(false);
-    expect(isRetiredSlot(128)).toBe(false);
-    expect(isRetiredSlot(254)).toBe(false);
+  it('returns false for gen 0..254 (non-regression sweep)', () => {
+    for (let gen = 0; gen <= 254; gen++) {
+      expect(isRetiredSlot(gen)).toBe(false);
+    }
   });
 
-  it('returns false for gen > MAX_GEN (masked by caller, strict equality)', () => {
-    expect(isRetiredSlot(256)).toBe(false);
-    expect(isRetiredSlot(511)).toBe(false);
+  it('returns true when gen > MAX_GEN (256+ is retired)', () => {
+    expect(isRetiredSlot(256)).toBe(true);
+    expect(isRetiredSlot(511)).toBe(true);
+    expect(isRetiredSlot(512)).toBe(true);
   });
 });
 

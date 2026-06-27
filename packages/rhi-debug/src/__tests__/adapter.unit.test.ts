@@ -227,7 +227,7 @@ describe('createDebugRhiAdapter + wireDebugRhiInspector — I-2 production wirin
       events: Array<{ kind: string }>;
       valid: boolean;
     };
-    expect(report.header.formatVersion).toBe(1);
+    expect(report.header.formatVersion).toBe(2);
     expect(report.valid).toBe(true);
     const kinds = report.events.map((e) => e.kind);
     expect(kinds).toContain('createBuffer');

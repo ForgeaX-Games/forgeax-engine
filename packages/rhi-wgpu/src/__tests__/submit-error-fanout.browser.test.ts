@@ -58,6 +58,7 @@ function recoveryHint(code: RhiErrorCode): string {
     case 'hierarchy-broken':
     case 'destroy-after-destroy':
     case 'rhi-descriptor-invalid':
+    case 'instancing-exceeds-uniform-cap':
       return 'inspect RhiError.expected / .hint';
   }
 }

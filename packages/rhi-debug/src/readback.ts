@@ -7,7 +7,7 @@
 
 /// <reference types="@webgpu/types" />
 
-import type { RhiDevice, RhiQueue } from '@forgeax/engine-rhi';
+import type { Buffer, MappedBuffer, RhiDevice, RhiQueue } from '@forgeax/engine-rhi';
 import type { Result } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import { DebugError } from './errors';
@@ -140,13 +140,29 @@ export async function readbackTexturePixels(
   queue.submit([finishResult.value as unknown as never] as unknown as readonly never[]);
   await queue.onSubmittedWorkDone();
 
-  // GPUMapMode.READ = 2
-  await (readbackBuffer as unknown as { mapAsync(mode: number): Promise<void> }).mapAsync(2);
+  // RHI Buffer.mapAsync / MappedBuffer.getMappedRange return Result wrappers, not
+  // the raw spec void / ArrayBuffer. The previous `as unknown as { ... }` casts
+  // hid that: mapAsync was called with mode=2 (which is GPUMapMode.WRITE, not
+  // READ=0x1) and getMappedRange's Result object was fed straight into
+  // `new Uint8Array(...)`, yielding a zero-length array — every RT readback came
+  // back all-zero (transparent black), which the e2e delta check missed because
+  // baseline and replay were equally empty (empty-vs-empty trap).
+  const buffer = readbackBuffer as unknown as Buffer;
+  // GPUMapMode.READ = 0x1
+  const mapResult = await buffer.mapAsync(0x1);
+  if (!mapResult.ok) {
+    device.destroyBuffer(readbackBuffer);
+    throw new Error(`mapAsync(READ) failed: ${mapResult.error.code}`);
+  }
+  const mapped: MappedBuffer = mapResult.value;
 
-  const mappedRange = (
-    readbackBuffer as unknown as { getMappedRange(offset?: number, size?: number): ArrayBuffer }
-  ).getMappedRange();
-  const fullPixels = new Uint8Array(mappedRange);
+  const rangeResult = mapped.getMappedRange();
+  if (!rangeResult.ok) {
+    mapped.unmap();
+    device.destroyBuffer(readbackBuffer);
+    throw new Error(`getMappedRange failed: ${rangeResult.error.code}`);
+  }
+  const fullPixels = new Uint8Array(rangeResult.value);
 
   // Extract tight pixels (strip alignment padding)
   const tightPixels = new Uint8Array(texWidth * texHeight * bytesPerPixel);
@@ -159,10 +175,116 @@ export async function readbackTexturePixels(
   }
 
   // Cleanup
-  (readbackBuffer as unknown as { unmap(): void }).unmap();
+  mapped.unmap();
   device.destroyBuffer(readbackBuffer);
 
   return tightPixels;
+}
+
+// ============================================================================
+// readbackBufferBytes — copyBufferToBuffer + mapAsync + getMappedRange (D-7)
+// ============================================================================
+
+/**
+ * Read back the raw bytes of a GPU buffer into a host-side ArrayBuffer.
+ *
+ * Sibling of readbackTexturePixels under the single "GPU byte readback"
+ * responsibility unit (plan-strategy D-7) — snapshotResource calls this to
+ * capture a buffer's initial GPU bytes at frame-header time.
+ *
+ * Steps:
+ * 1. Create a staging buffer (COPY_DST | MAP_READ) sized to `size`.
+ * 2. Create a command encoder + copyBufferToBuffer(src, 0, staging, 0, size).
+ * 3. Finish + submit + await onSubmittedWorkDone.
+ * 4. mapAsync(READ=0x1) + getMappedRange() -> sliced ArrayBuffer copy.
+ * 5. Unmap + destroy staging buffer.
+ *
+ * Returns Ok(ArrayBuffer) (a detached copy independent of the mapped range)
+ * or Err(DebugError snapshot-readback-failed) with `.detail.stage` narrowing
+ * the failure point (copy / map). The buffer is passed opaque (`unknown`)
+ * because RHI handles are branded; the caller resolved it from the descriptor
+ * registry. `.detail.handleId` is left empty here — the caller (snapshotResource)
+ * holds the handleId and re-stamps it on the failure path.
+ *
+ * Reuses the M0-fixed mapAsync(0x1) + Result-unwrap pattern from
+ * readbackTexturePixels (never the all-zero mode=2 bug).
+ *
+ * @param device - The RHI device that owns the buffer.
+ * @param buffer - The source buffer (opaque branded handle) to read back.
+ * @param size - Number of bytes to read back (the buffer's recorded size).
+ */
+export async function readbackBufferBytes(
+  device: RhiDevice,
+  buffer: unknown,
+  size: number,
+): Promise<Result<ArrayBuffer, DebugError>> {
+  const fail = (stage: 'copy' | 'map', hint: string): Result<ArrayBuffer, DebugError> =>
+    err(
+      new DebugError({
+        code: 'snapshot-readback-failed',
+        expected: 'buffer GPU byte readback to succeed',
+        hint,
+        detail: { handleId: '', stage },
+      }),
+    );
+
+  // GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9
+  const COPY_DST_MAP_READ = 9;
+
+  const readbackBufferResult = device.createBuffer({ size, usage: COPY_DST_MAP_READ });
+  if (!readbackBufferResult.ok) {
+    return fail('copy', `staging buffer creation failed: ${readbackBufferResult.error.code}`);
+  }
+  const readbackBuffer = readbackBufferResult.value;
+
+  const encoderResult = device.createCommandEncoder({});
+  if (!encoderResult.ok) {
+    device.destroyBuffer(readbackBuffer);
+    return fail('copy', `command encoder creation failed: ${encoderResult.error.code}`);
+  }
+  const encoder = encoderResult.value;
+
+  try {
+    encoder.copyBufferToBuffer(buffer as Buffer, 0, readbackBuffer, 0, size);
+  } catch (e) {
+    device.destroyBuffer(readbackBuffer);
+    return fail('copy', `copyBufferToBuffer failed: ${String(e)}`);
+  }
+
+  const finishResult = encoder.finish();
+  if (!finishResult.ok) {
+    device.destroyBuffer(readbackBuffer);
+    return fail('copy', `encoder.finish failed: ${finishResult.error.code}`);
+  }
+
+  const queue: RhiQueue = device.queue;
+  queue.submit([finishResult.value as unknown as never] as unknown as readonly never[]);
+  await queue.onSubmittedWorkDone();
+
+  const stagingBuffer = readbackBuffer as unknown as Buffer;
+  // GPUMapMode.READ = 0x1
+  const mapResult = await stagingBuffer.mapAsync(0x1);
+  if (!mapResult.ok) {
+    device.destroyBuffer(readbackBuffer);
+    return fail('map', `mapAsync(READ) failed: ${mapResult.error.code}`);
+  }
+  const mapped: MappedBuffer = mapResult.value;
+
+  const rangeResult = mapped.getMappedRange();
+  if (!rangeResult.ok) {
+    mapped.unmap();
+    device.destroyBuffer(readbackBuffer);
+    return fail('map', `getMappedRange failed: ${rangeResult.error.code}`);
+  }
+
+  // Copy the mapped bytes into a standalone ArrayBuffer before unmap — the
+  // mapped range is invalidated on unmap.
+  const bytes = new Uint8Array(rangeResult.value).slice();
+
+  mapped.unmap();
+  device.destroyBuffer(readbackBuffer);
+
+  return ok(bytes.buffer as ArrayBuffer);
 }
 
 // ============================================================================

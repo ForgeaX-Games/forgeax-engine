@@ -890,6 +890,15 @@ export interface PipelineState {
    */
   readonly shadowParamsBuffer: Buffer;
 
+  // feat-20260625-spot-light-shadow-mapping w25 (scope-amend webkit-fallback):
+  // the per-spot fragment-read perspective lightViewProj matrices no longer
+  // occupy a dedicated `spotLightViewProjBuffer` / view-BG binding 9 — they fold
+  // into the View UBO tail (`view.spotLightViewProj`, bytes 528..784) written by
+  // render-system-record's viewPayload. The standalone uniform buffer pushed the
+  // WebGL2 fallback fragment uniform-buffer count to 12, over GLES 3.0's
+  // `max_uniform_buffers_per_shader_stage = 11`. Caster vertex channel (binding
+  // 7) is untouched: same-frame write contention only applies to casters (D-1).
+
   // ── feat-20260520-directional-light-shadow-mapping M2 / w15 (AC-12) ─────
   //
   // GPU shadow-factor probe pipeline. `debugSampleShadowFactor` packs N world
@@ -1209,7 +1218,13 @@ export interface PerPassResources {
   readonly bloomCompositeBindGroupLayout: BindGroupLayout | null;
   readonly bloomSampler: Sampler | null;
   readonly bloomBrightParamsBuffer: Buffer | null;
-  readonly bloomBlurParamsBuffer: Buffer | null;
+  // bug-20260625: H and V blur passes need SEPARATE params UBOs. They run in
+  // the same frame encoder; with one shared buffer the later writeBuffer (V's
+  // texelSize=(0,1/h)) clobbers H's (texelSize=(1/w,0)) before the GPU runs the
+  // H pass, so both passes blurred vertically -> only vertical bloom, no
+  // horizontal spread. One buffer per axis keeps each pass's params intact.
+  readonly bloomBlurHParamsBuffer: Buffer | null;
+  readonly bloomBlurVParamsBuffer: Buffer | null;
   readonly bloomCompositeParamsBuffer: Buffer | null;
 
   // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
@@ -1405,6 +1420,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     // initial steady state.
     pointShadowAtlas: null,
     pointShadowSnapshots: [],
+    // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4 (D-1):
+    // initial fold-bucket count is 0; recordFrame writes the per-frame
+    // value from foldDispatchBuckets(...) before dispatch.
+    lastFoldBucketCount: 0,
+    // feat-20260625-spot-light-shadow-mapping M2 / w9 (D-2): empty initial spot
+    // shadow snapshot list so the spotShadowDepth caster pass renders zero
+    // tiles until the first frame with a castShadow spot (AC-03).
+    spotShadowSnapshots: [],
   };
   // feat-20260601 M1 / w7: pipeline registry (id -> impl) + the handle the memoized
   // perFrameGraph was last built for. Both live in the createRenderSystem closure

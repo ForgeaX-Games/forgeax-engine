@@ -120,11 +120,29 @@ import type {
   RenderableSnapshot,
   SkyboxSnapshot,
   SkylightSnapshot,
+  SpotLightSnapshot,
 } from './render-system-extract';
+// feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4 (D-1 record-stage
+// fold operator). Pure linear-scan helper that groups transparent-dispatch
+// entries with equal (Layer.value, posZ, materialHandle) into FoldBucket
+// descriptors. The drawIndexed swap (1 instanced draw per bucket vs N
+// per-entity draws) hooks into the sprite-pass dispatch loop below
+// (w4-record-swap), using {@link buildFoldDispatchPlan} to translate
+// renderableIndex-keyed buckets into validatedOrdered-index-keyed
+// head/skip maps.
+import {
+  buildFoldDispatchPlan,
+  evaluateFoldBucketUniformCap,
+  type FoldBucket,
+  type FoldDispatchPlan,
+  foldDispatchBuckets,
+  incrementFoldedDrawsMetric,
+} from './render-system-fold';
 import { resolveAssetHandle } from './resolve-asset-handle';
 import { ShadowAtlas } from './shadow-atlas';
 import { getOrCreateSsaoBuffers } from './ssao-buffers';
 import { matchPass } from './systems/pass-selector';
+import { getTransparentSortConfig } from './systems/transparent-sort-config';
 import { VIDEO_ELEMENT_PROVIDER_KEY, type VideoElementProvider } from './video-element-provider';
 import { probeVideoHighPerfUpload } from './video-player-system';
 
@@ -378,6 +396,30 @@ export interface RenderFrameState {
    * being non-zero (AC-09 zero-shadow zero-pass).
    */
   pointShadowSnapshots: readonly PointShadowSnapshot[];
+  /**
+   * feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4 (D-1):
+   * last fold-pass output, computed at `recordFrame` entry from the
+   * transparent-sort-ordered dispatch + mode-gate (D-5: only mode 0
+   * folds; other modes yield singleton buckets). Currently an
+   * observational compute — the drawIndexed swap (1 instanced draw per
+   * fold bucket) is the follow-on integration that wires each bucket
+   * into the sprite-pass / geometry-pass dispatch loops. The bucket
+   * count is the source of truth for `render.instancing.foldedDraws`
+   * metric (M3 / w13) — every fold-eligible bucket (bucketSize >= 1
+   * under mode 0 AND not bypassed) contributes one increment.
+   */
+  lastFoldBucketCount: number;
+  /**
+   * feat-20260625-spot-light-shadow-mapping M2 / w9 (D-2): per-frame projection
+   * of `lights.spot` from the extract stage. The URP `addSpotShadowPass` graph
+   * closure (`recordSpotShadowPass`) reads this list to render each
+   * castShadow spot's perspective depth into its `spotShadowDepth` atlas tile
+   * (viewport keyed on `shadowAtlasTile`). `recordFrame` writes it before
+   * `graph.execute`. Spots with `shadowAtlasTile < 0` (castShadow:false,
+   * degenerate direction, or clipped beyond cap 4) are skipped — zero
+   * shadow-casting spots means zero spot shadow passes (AC-03).
+   */
+  spotShadowSnapshots: readonly SpotLightSnapshot[];
 }
 
 /**
@@ -1346,6 +1388,34 @@ export function recordFrame(
     const camera = activeCameras[0];
     if (!camera) return;
 
+    // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4 + w5 (D-1, D-5):
+    // record-stage fold operator linear scan. Groups transparent-sort-ordered
+    // dispatch entries with equal (Layer.value, posZ, materialHandle) into
+    // fold buckets. Mode-gate (D-5): only mode 0 (LAYER_Z) folds; mode 1/2/3
+    // bypass per-entity (each entry becomes a singleton bucket, current
+    // behavior preserved byte-identically — AC-04 y-sort interleave intact).
+    // The scan output drives the drawIndexed swap (w4-record-swap: 1 instanced
+    // draw per non-singleton bucket on the sprite pass) and the AC-06 metric
+    // (M3 / w13: `render.instancing.foldedDraws`). For singleton buckets
+    // (bucketSize=1) the dispatch loop falls through to the existing per-
+    // entity path byte-identically. Empty dispatch short-circuits the helper
+    // + skips reading TransparentSortConfig (test fixtures pass null world).
+    let foldBuckets: readonly FoldBucket[] = [];
+    if (transparentDispatch.length === 0) {
+      frameState.lastFoldBucketCount = 0;
+    } else {
+      const transparentSortCfg = getTransparentSortConfig(world);
+      foldBuckets = foldDispatchBuckets(transparentDispatch, transparentSortCfg.mode, renderables);
+      // Count only fold-eligible buckets (bucketSize > 1) so the metric
+      // surfaces fold actually reducing draws — singleton buckets under
+      // mode bypass do not change draw count, so they do not contribute.
+      let foldEligibleCount = 0;
+      for (const b of foldBuckets) {
+        if (b.bucketSize > 1) foldEligibleCount += 1;
+      }
+      frameState.lastFoldBucketCount = foldEligibleCount;
+    }
+
     if (lights.directionalCount > 1) {
       warnMultiLightDirectional(frameState, lights.directionalCount);
     }
@@ -1381,6 +1451,12 @@ export function recordFrame(
     // buildGraph time reads the same list to decide whether to insert the
     // shadow pass declaration into the graph.
     frameState.pointShadowSnapshots = lights.pointShadow;
+    // feat-20260625-spot-light-shadow-mapping M2 / w9 (D-2): pin the spot
+    // snapshots for the spotShadowDepth caster pass closure. The spot atlas is
+    // a graph-owned color target (declared in urp-pipeline buildGraph), not a
+    // runtime ShadowAtlas, so no allocation happens here — the graph compile
+    // owns the depth texture lifetime. recordSpotShadowPass reads this list.
+    frameState.spotShadowSnapshots = lights.spot;
     if (lights.pointShadow.length > 0) {
       if (frameState.pointShadowAtlas === null) {
         const firstSnap = lights.pointShadow[0];
@@ -1752,6 +1828,13 @@ export function recordFrame(
         internals.errorRegistry.fire(shadowParamsWriteRes.error);
       }
     }
+
+    // feat-20260625-spot-light-shadow-mapping w25 (scope-amend webkit-fallback):
+    // the per-spot perspective `lightViewProj` matrices fold into the View UBO
+    // tail (`view.spotLightViewProj`, floats 132..195 / bytes 528..784) and are
+    // written as part of the per-frame viewPayload below — no standalone binding
+    // 9 uniform buffer (it overflowed the WebGL2 fallback fragment uniform-buffer
+    // budget). See the viewPayload construction (VIEW_PAYLOAD_FLOATS = 196).
 
     const canvasContext: RhiCanvasContext | null = internals.context;
     if (canvasContext === null) return;
@@ -2429,6 +2512,95 @@ export function recordFrame(
       validatedOrdered = validatedOrdered.slice(0, meshSsboCapResult.degradedToSlotCount);
     }
 
+    // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4-record-swap
+    // (D-1): build the fold dispatch plan once `validatedOrdered` is final
+    // (post truncation by mesh-SSBO capacity gate). The plan re-keys each
+    // non-singleton bucket from `renderableIndex` to the validated-ordered
+    // index `i` consumed by the dispatch loops; the loops use it to skip
+    // non-head bucket members and emit one instanced drawIndexed per
+    // bucket head. Empty plan (no fold-eligible buckets) is a byte-
+    // identical no-op for the dispatch loops below (charter P3: silent
+    // pass-through, no error path).
+    let renderableToValidatedIdx: Map<number, number> | null = null;
+    let foldDispatchPlan: FoldDispatchPlan | null = null;
+    if (foldBuckets.length > 0) {
+      renderableToValidatedIdx = new Map<number, number>();
+      for (let i = 0; i < validatedOrdered.length; i++) {
+        const e = validatedOrdered[i];
+        if (e === undefined) continue;
+        renderableToValidatedIdx.set(e.renderableIndex, i);
+      }
+      foldDispatchPlan = buildFoldDispatchPlan(foldBuckets, renderableToValidatedIdx);
+
+      // feat-20260622 M2 / w11 (D-2 + D-9 + AC-05): WebGL2 uniform-fallback
+      // per-bucket instance-count cap. When caps.storageBuffer===false AND
+      // a fold bucket carries more than FOLD_UNIFORM_INSTANCE_CAP (128)
+      // instances, fire RhiError({code:'instancing-exceeds-uniform-cap'})
+      // AND remove the bucket from the dispatch plan so its members fall
+      // through to the per-entity drawIndexed exit (the same exit the
+      // mode-gate bypass uses — D-9 "shared fallback exit"). The frame
+      // stays visually correct (charter proposition 9 graceful
+      // degradation: no identity-collapse / black screen) while the cap
+      // event surfaces structurally for AI users (proposition 4 explicit
+      // failure on .code).
+      //
+      // Scope discrimination: tilemap-chunk-extract-system encodes
+      // Layer.value = (layerOrder<<20) | (chunkIndex & 0xfffff), so a
+      // bucket whose head entry carries non-zero low-20-bits is
+      // definitively a tilemap-chunk dispatch site. Plain sprite buckets
+      // use SPRITE_LAYER_VALUE = layerOrder<<20 (low-20 zero) by the
+      // documented convention (apps/hello/asi-world main.ts pattern).
+      // The chunkIndex===0 edge case maps to 'sprite' (the helper's
+      // default branch) — a one-bucket ambiguity per layerOrder that is
+      // acceptable for the AI-user affordance level (the error semantics
+      // — "this bucket exceeded the cap" — is the actionable signal;
+      // scope=sprite vs tilemap-chunk only refines the recovery hint).
+      if (foldDispatchPlan.headBuckets.size > 0 && !internals.device.caps.storageBuffer) {
+        const filteredHeads = new Map<number, FoldBucket>(foldDispatchPlan.headBuckets);
+        const filteredSkips = new Set<number>(foldDispatchPlan.skipIndices);
+        let filteredCount = foldDispatchPlan.foldedBucketCount;
+        for (const [headIdx, bucket] of foldDispatchPlan.headBuckets) {
+          const scope: 'sprite' | 'tilemap-chunk' =
+            (bucket.layer & 0xfffff) !== 0 ? 'tilemap-chunk' : 'sprite';
+          const decision = evaluateFoldBucketUniformCap(bucket, internals.device.caps, scope);
+          if (decision.fallback && decision.error !== undefined) {
+            internals.errorRegistry.fire(decision.error);
+            filteredHeads.delete(headIdx);
+            filteredCount -= 1;
+            for (let j = 1; j < bucket.entries.length; j++) {
+              const memberEntry = bucket.entries[j];
+              if (memberEntry === undefined) continue;
+              const memberValidatedIdx = renderableToValidatedIdx.get(memberEntry.renderableIndex);
+              if (memberValidatedIdx !== undefined) {
+                filteredSkips.delete(memberValidatedIdx);
+              }
+            }
+          }
+        }
+        if (filteredCount !== foldDispatchPlan.foldedBucketCount) {
+          foldDispatchPlan = {
+            headBuckets: filteredHeads,
+            skipIndices: filteredSkips,
+            foldedBucketCount: filteredCount,
+          };
+        }
+      }
+
+      // feat-20260622-chunk-gpu-instancing-sprite-tilemap M3 / w13 (D-3 +
+      // AC-06): increment `render.instancing.foldedDraws` once per fold-
+      // eligible head bucket retained after the cap-fallback filter above.
+      // The metric tracks instanced drawIndexed call count for this frame
+      // — cap-overrun buckets routed through the per-entity fallback exit
+      // are removed from `foldDispatchPlan` and therefore not counted, by
+      // construction (M2 / w11 cap-fallback + plan-strategy D-3 semantics).
+      // Singleton buckets (mode-bypass under D-5, or non-foldable under
+      // mode 0) carry `bucketSize === 1` and never enter `headBuckets`, so
+      // the per-entity drawIndexed path correctly does not count.
+      // SSOT helper lives in `render-system-fold.ts` — engine code never
+      // hardcodes the metric key string.
+      incrementFoldedDrawsMetric(foldDispatchPlan, internals.metrics);
+    }
+
     // D-2 (bug-20260527): LDR sprite pass split.
     // When the LDR path (tonemapActive=false) has sprite entities in the
     // validated draw list, the render is split into two serial passes sharing
@@ -2489,8 +2661,12 @@ export function recordFrame(
       //   [108]/[112]/[116]/[120] splitPlanes (vec4 stride),
       //   [124] cascadeCount, [125] cascadeBlend,
       //   [126] depthBias, [127] normalBias, [128] pcfKernelSize (feat-20260621
-      //   M3 / m3-t2-t3), [129..147] tail pad.
-      const VIEW_PAYLOAD_FLOATS = 148;
+      //   M3 / m3-t2-t3), [129..131] align pad,
+      //   [132..195] spotLightViewProj array<mat4x4<f32>, 4> (feat-20260625 w25:
+      //   folded from standalone binding 9 to fix WebGL2 fragment uniform-buffer
+      //   overflow; lane N = spot with shadowAtlasTile === N, 16 f32 / lane,
+      //   16 B-aligned at byte 528 = float 132).
+      const VIEW_PAYLOAD_FLOATS = 196;
       const viewPayload = new Float32Array(VIEW_PAYLOAD_FLOATS);
       for (let i = 0; i < 16; i++) viewPayload[i] = (worldViewProj as unknown as number[])[i] ?? 0;
       viewPayload[16] = (light.direction[0] ?? 0) * light.intensity;
@@ -2546,6 +2722,35 @@ export function recordFrame(
       viewPayload[126] = lights.depthBias ?? 0.005;
       viewPayload[127] = lights.normalBias ?? 0.05;
       viewPayload[128] = clampPcfKernelSize(lights.pcfKernelSize);
+
+      // feat-20260625-spot-light-shadow-mapping w25 (scope-amend webkit-fallback):
+      // spotLightViewProj array<mat4x4<f32>, 4> at floats [132..195] (byte 528,
+      // 16 B-aligned after pcfKernelSize). Lane N = the spot with
+      // `shadowAtlasTile === N` (cap = 4); the perspective matrix was already
+      // computed by the extract stage (SpotLightSnapshot.lightViewProj) — record
+      // never recomputes it (Derive). Lanes for non-shadow / clipped spots (tile
+      // < 0 or lightViewProj undefined) stay zeroed; the WGSL sample path gates
+      // on `SpotLight.shadowAtlasTile >= 0` so zeroed lanes are never read.
+      // Folded from the former standalone binding 9 UBO to keep the WebGL2
+      // fallback fragment uniform-buffer count <= 11 (GLES 3.0).
+      {
+        const SPOT_LVP_BASE_FLOAT = 132;
+        const SPOT_LVP_LANE_COUNT = 4;
+        const SPOT_LVP_FLOATS_PER_LANE = 16;
+        const spotSnaps = frameState.spotShadowSnapshots;
+        for (let i = 0; i < spotSnaps.length; i++) {
+          const ss = spotSnaps[i];
+          if (ss === undefined) continue;
+          const tile = ss.shadowAtlasTile;
+          if (tile < 0 || tile >= SPOT_LVP_LANE_COUNT) continue;
+          const lvp = ss.lightViewProj;
+          if (lvp === undefined) continue;
+          const base = SPOT_LVP_BASE_FLOAT + tile * SPOT_LVP_FLOATS_PER_LANE;
+          for (let f = 0; f < SPOT_LVP_FLOATS_PER_LANE; f++) {
+            viewPayload[base + f] = lvp[f] ?? 0;
+          }
+        }
+      }
 
       const viewUploadResult = internals.device.queue.writeBuffer(
         pipelineState.viewUniformBuffer,
@@ -2613,35 +2818,62 @@ export function recordFrame(
       // lets the fragment shader transform normals correctly under
       // non-uniform scale. The host computes once per renderable per
       // frame using `mat3.normalMatrix` (math package SSOT helper).
+      //
+      // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4-record-swap
+      // (D-1): when index `i` is a fold-bucket head, write **identity** into
+      // the mesh slot instead of the entity's world matrix. The fold path
+      // assembles per-instance world matrices into the @group(3) instances
+      // buffer (each member's absolute world); the sprite/unlit shader then
+      // computes `world = identity * instance_world * pos = instance_world *
+      // pos` which is per-instance correct. Non-head fold members and
+      // non-fold entries follow the existing per-entity world write
+      // unchanged. Normal matrix becomes identity for fold heads (sprite +
+      // tilemap unlit shaders ignore normals; AC-01 sprite + AC-02 tilemap
+      // are normal-free workloads — verify-time PNG covers AC-07 visual
+      // equivalence).
       for (let i = 0; i < validatedOrdered.length; i++) {
         const entry = validatedOrdered[i];
         if (entry === undefined) continue;
+        const isFoldHead = foldDispatchPlan?.headBuckets.has(i) === true;
         // feat-20260601 D-3: the world mat4 is the resolved `Transform.world`
         // view (propagateTransforms output) carried verbatim on the snapshot;
         // copy the 16 floats straight into the SSBO slot with zero `mat4.compose`
         // (AC-07). The normal matrix is derived from the same world mat4.
-        const worldFromLocal = entry.source.transform.world;
-        // Build a 28-float (112 byte) slot: [0..16) mat4 + [16..28) mat3
-        // padded as 3 vec4 (12 floats; columns 0/1/2 at slot offsets
-        // 16/20/24; padding at indices 19/23/27 stays 0).
+        // For fold heads the slot is overwritten to identity (16 floats: [0,5,
+        // 10,15] = 1) so the shader computes per-instance world from @group(3).
         const slot = new Float32Array(28);
-        for (let k = 0; k < 16; k++) slot[k] = worldFromLocal[k] ?? 0;
-        const normal = mat3.normalMatrix(
-          mat3.create(),
-          worldFromLocal as unknown as Parameters<typeof mat3.normalMatrix>[1],
-        );
-        // mat3 column 0 -> slot[16..19]
-        slot[16] = normal[0] ?? 0;
-        slot[17] = normal[1] ?? 0;
-        slot[18] = normal[2] ?? 0;
-        // mat3 column 1 -> slot[20..23]
-        slot[20] = normal[3] ?? 0;
-        slot[21] = normal[4] ?? 0;
-        slot[22] = normal[5] ?? 0;
-        // mat3 column 2 -> slot[24..27]
-        slot[24] = normal[6] ?? 0;
-        slot[25] = normal[7] ?? 0;
-        slot[26] = normal[8] ?? 0;
+        if (isFoldHead) {
+          slot[0] = 1;
+          slot[5] = 1;
+          slot[10] = 1;
+          slot[15] = 1;
+          // identity mat3 normal
+          slot[16] = 1;
+          slot[20] = 1;
+          slot[24] = 1;
+        } else {
+          const worldFromLocal = entry.source.transform.world;
+          // Build a 28-float (112 byte) slot: [0..16) mat4 + [16..28) mat3
+          // padded as 3 vec4 (12 floats; columns 0/1/2 at slot offsets
+          // 16/20/24; padding at indices 19/23/27 stays 0).
+          for (let k = 0; k < 16; k++) slot[k] = worldFromLocal[k] ?? 0;
+          const normal = mat3.normalMatrix(
+            mat3.create(),
+            worldFromLocal as unknown as Parameters<typeof mat3.normalMatrix>[1],
+          );
+          // mat3 column 0 -> slot[16..19]
+          slot[16] = normal[0] ?? 0;
+          slot[17] = normal[1] ?? 0;
+          slot[18] = normal[2] ?? 0;
+          // mat3 column 1 -> slot[20..23]
+          slot[20] = normal[3] ?? 0;
+          slot[21] = normal[4] ?? 0;
+          slot[22] = normal[5] ?? 0;
+          // mat3 column 2 -> slot[24..27]
+          slot[24] = normal[6] ?? 0;
+          slot[25] = normal[7] ?? 0;
+          slot[26] = normal[8] ?? 0;
+        }
 
         const meshUpload = internals.device.queue.writeBuffer(
           pipelineState.meshStorageBuffer.buffer,
@@ -2701,6 +2933,20 @@ export function recordFrame(
         : null;
       const b5View =
         atlasViewMaybe !== null ? atlasViewMaybe : pipelineState.shadowAtlasFallbackTextureView;
+      // feat-20260625-spot-light-shadow-mapping M2 / w21 (D-1 fragment side +
+      // D-5): bind the real `spotShadowDepth` 2D atlas view (graph-owned) when
+      // spot shadows run this frame; otherwise the 1x1 depth fallback cleared to
+      // 1.0 (fully lit) — same `texture_depth_2d` shape as binding 3, so it
+      // satisfies the BGL without a dedicated spot fallback allocation. binding
+      // 9 always binds the real spotLightViewProj UBO (zeroed lanes are safe via
+      // the shadowAtlasTile >= 0 shader gate).
+      const graphSpotShadowView = frameState.perFrameGraph?.getColorTargetView('spotShadowDepth') as
+        | TextureView
+        | undefined;
+      const b8View =
+        graphSpotShadowView !== undefined
+          ? graphSpotShadowView
+          : pipelineState.shadowFallbackTextureView;
       viewBindGroup = getOrCreateFromChain(
         frameState.viewBindGroupCache,
         [
@@ -2711,6 +2957,7 @@ export function recordFrame(
           pipelineState.perPassResources.shadowSampler,
           b5View,
           pipelineState.shadowParamsBuffer,
+          b8View,
         ],
         'view-main',
         () => {
@@ -2788,6 +3035,20 @@ export function recordFrame(
                   value: { buffer: pipelineState.shadowCasterCascadeBuffer },
                 },
               },
+              // feat-20260625-spot-light-shadow-mapping M3 / w21 (D-5):
+              // spot shadow 2D atlas (real spotShadowDepth view when spot
+              // shadows run this frame, else the 1x1 depth fallback). Always-on.
+              {
+                binding: 8,
+                resource: {
+                  kind: 'textureView',
+                  value: b8View,
+                },
+              },
+              // feat-20260625-spot-light-shadow-mapping w25: the per-spot
+              // fragment-read lightViewProj matrices fold into the View UBO
+              // (binding 0, `view.spotLightViewProj`) — no standalone binding 9
+              // (WebGL2 fragment uniform-buffer budget). binding 8 is the last.
             ],
           });
           if (!viewBindGroupResult.ok) throw viewBindGroupResult.error;
@@ -2936,6 +3197,7 @@ export function recordFrame(
       postProcessParams,
       dispatch: transparentDispatch,
       hdrpClusterBindGroup,
+      foldDispatchPlan,
     };
     // feat-20260601 M2 / w12 (D-B): the per-frame projected snapshot handed to
     // `buildGraph` as the second argument. Cross-frame-stable deps live on ctx;
@@ -3166,6 +3428,7 @@ export function recordShadowPass(
           pipelineState.perPassResources.shadowSampler,
           pipelineState.shadowAtlasFallbackTextureView,
           pipelineState.shadowParamsBuffer,
+          pipelineState.shadowFallbackTextureView,
         ],
         'view-shadow',
         () => {
@@ -3235,6 +3498,22 @@ export function recordShadowPass(
                   value: { buffer: pipelineState.shadowCasterCascadeBuffer },
                 },
               },
+              // feat-20260625-spot-light-shadow-mapping M3 / w21 (D-5): spot
+              // shadow 2D atlas. The shadow-view BG always binds the 1x1 depth
+              // fallback (NOT the real spotShadowDepth view) — the spot caster
+              // pass write-attaches that atlas, so sampling it here would create
+              // a same-frame write+sample hazard; shadow_caster.wgsl never reads
+              // binding 8 anyway, this entry only satisfies the BGL shape.
+              {
+                binding: 8,
+                resource: {
+                  kind: 'textureView',
+                  value: pipelineState.shadowFallbackTextureView,
+                },
+              },
+              // feat-20260625-spot-light-shadow-mapping w25: spot lightViewProj
+              // matrices folded into the View UBO (binding 0) — no binding 9.
+              // binding 8 is the last shared view-BG entry.
             ],
           });
           if (!shadowViewBgResult.ok) throw shadowViewBgResult.error;
@@ -3734,6 +4013,8 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
           pipelineState.perPassResources.shadowSampler,
           pipelineState.shadowAtlasFallbackTextureView,
           pipelineState.shadowParamsBuffer,
+          pipelineState.shadowCasterCascadeBuffer,
+          pipelineState.shadowFallbackTextureView,
         ],
         'view-shadow',
         () => {
@@ -3771,6 +4052,28 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
               {
                 binding: 6,
                 resource: { kind: 'buffer', value: { buffer: pipelineState.shadowParamsBuffer } },
+              },
+              // feat-20260625-spot-light-shadow-mapping M2 / w21 + w25: this
+              // on-demand shadow-view BG builder previously stopped at binding 6,
+              // predating the cascade UBO (binding 7) and the spot binding 8. It
+              // shares the 'view-shadow' cache variant with the directional
+              // shadow-pass builder above, so it must produce a BGL-identical bind
+              // group; bindings 7/8 are added here in lock-step (BGL declares
+              // 0..8 — the former binding 9 spot lightViewProj UBO folded into the
+              // View UBO in w25 for the WebGL2 fragment uniform-buffer budget).
+              {
+                binding: 7,
+                resource: {
+                  kind: 'buffer',
+                  value: { buffer: pipelineState.shadowCasterCascadeBuffer },
+                },
+              },
+              {
+                binding: 8,
+                resource: {
+                  kind: 'textureView',
+                  value: pipelineState.shadowFallbackTextureView,
+                },
               },
             ],
           });
@@ -3973,6 +4276,415 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
 }
 
 /**
+ * Build (or reuse) the shared `view-shadow` @group(0) BG for the spot shadow
+ * caster pass. Reuses the exact same cache key + entry shape as recordShadowPass
+ * / recordPointShadowPass so all three shadow paths share one allocation per
+ * frame (D-6). Returns null on a createBindGroup failure (fired to the error
+ * registry). The shadow_caster vertex shader reads only binding 0 (view UBO,
+ * carrying the spot matrix via shadowCasterCascade at binding 7) — bindings
+ * 3/5 bind fallback views since the depth attachment is written here.
+ */
+function ensureSpotShadowViewBg(c: _InternalRenderPipelineContext): BindGroup | null {
+  const { runtime, frameState, pipelineState } = c;
+  try {
+    return getOrCreateFromChain(
+      frameState.viewBindGroupCache,
+      [
+        pipelineState.viewUniformBuffer,
+        pipelineState.pointLightsBuffer,
+        pipelineState.spotLightsBuffer,
+        pipelineState.shadowFallbackTextureView,
+        pipelineState.perPassResources.shadowSampler,
+        pipelineState.shadowAtlasFallbackTextureView,
+        pipelineState.shadowParamsBuffer,
+        pipelineState.shadowCasterCascadeBuffer,
+        pipelineState.shadowFallbackTextureView,
+      ],
+      'view-shadow',
+      () => {
+        const r = runtime.device.createBindGroup({
+          label: 'shadow-view-bg',
+          layout: pipelineState.viewBindGroupLayout,
+          entries: [
+            {
+              binding: 0,
+              resource: { kind: 'buffer', value: { buffer: pipelineState.viewUniformBuffer } },
+            },
+            {
+              binding: 1,
+              resource: { kind: 'buffer', value: { buffer: pipelineState.pointLightsBuffer } },
+            },
+            {
+              binding: 2,
+              resource: { kind: 'buffer', value: { buffer: pipelineState.spotLightsBuffer } },
+            },
+            {
+              binding: 3,
+              resource: { kind: 'textureView', value: pipelineState.shadowFallbackTextureView },
+            },
+            {
+              binding: 4,
+              resource: { kind: 'sampler', value: pipelineState.perPassResources.shadowSampler },
+            },
+            {
+              binding: 5,
+              resource: {
+                kind: 'textureView',
+                value: pipelineState.shadowAtlasFallbackTextureView,
+              },
+            },
+            {
+              binding: 6,
+              resource: { kind: 'buffer', value: { buffer: pipelineState.shadowParamsBuffer } },
+            },
+            {
+              binding: 7,
+              resource: {
+                kind: 'buffer',
+                value: { buffer: pipelineState.shadowCasterCascadeBuffer },
+              },
+            },
+            // feat-20260625-spot-light-shadow-mapping M3 / w21 (D-5): spot
+            // shadow 2D atlas. The spot caster pass write-attaches
+            // spotShadowDepth, so bind the 1x1 fallback here (the caster shader
+            // never samples binding 8 — this entry only satisfies the BGL).
+            {
+              binding: 8,
+              resource: {
+                kind: 'textureView',
+                value: pipelineState.shadowFallbackTextureView,
+              },
+            },
+            // feat-20260625-spot-light-shadow-mapping w25: spot lightViewProj
+            // matrices folded into the View UBO (binding 0) — no binding 9.
+            // binding 8 is the last shared view-BG entry.
+          ],
+        });
+        if (!r.ok) throw r.error;
+        return r.value;
+      },
+      c.bindGroupCounts,
+    );
+  } catch (e) {
+    if (e instanceof RhiError) {
+      runtime.errorRegistry.fire(e);
+      return null;
+    }
+    throw e;
+  }
+}
+
+/**
+ * Build (or reuse) the dummy `shadow-material-singleton` @group(1) BG for the
+ * spot shadow caster pass. The vertex-only shadow_caster shader never consumes
+ * @group(1) but the PSO's BGL must validate. Reuses the same singleton Map
+ * entry recordShadowPass / recordPointShadowPass write so the three paths share
+ * one allocation per frame (D-6).
+ */
+function ensureSpotShadowMaterialBg(c: _InternalRenderPipelineContext): BindGroup | null {
+  const { runtime, frameState, pipelineState } = c;
+  const cached = frameState.singletonMaterialCache.get('shadow-material-singleton');
+  if (cached !== undefined) return cached;
+  const fb = pipelineState.skylightFallback;
+  const fallbackEntries = [
+    {
+      binding: 0,
+      resource: {
+        kind: 'buffer' as const,
+        value: {
+          buffer: pipelineState.materialUniformBuffer.buffer,
+          offset: 0,
+          size: STANDARD_PBR_UBO_SIZE,
+        },
+      },
+    },
+    { binding: 1, resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler } },
+    {
+      binding: 2,
+      resource: { kind: 'textureView' as const, value: pipelineState.fallbackTextureView },
+    },
+    { binding: 3, resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler } },
+    {
+      binding: 4,
+      resource: { kind: 'textureView' as const, value: pipelineState.defaultNormalTextureView },
+    },
+    { binding: 5, resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler } },
+    {
+      binding: 6,
+      resource: { kind: 'textureView' as const, value: pipelineState.fallbackTextureView },
+    },
+  ];
+  const merged =
+    fb !== null
+      ? assembleMaterialWithSkylightEntries(
+          fallbackEntries,
+          {
+            irradianceView: fb.irradianceView,
+            irradianceSampler: fb.sampler,
+            prefilterView: fb.prefilterView,
+            prefilterSampler: fb.sampler,
+            brdfLutView: fb.brdfLutView,
+            brdfLutSampler: fb.sampler,
+            intensityBuffer: fb.intensityBuffer,
+          },
+          {
+            emissiveSampler: pipelineState.defaultSampler,
+            emissiveView: pipelineState.defaultWhiteTextureView,
+            occlusionSampler: pipelineState.defaultSampler,
+            occlusionView: pipelineState.defaultWhiteTextureView,
+          },
+        )
+      : fallbackEntries;
+  const r = runtime.device.createBindGroup({
+    label: 'shadow-material-bg',
+    layout: pipelineState.materialBindGroupLayout,
+    entries: merged,
+  });
+  if (!r.ok) {
+    runtime.errorRegistry.fire(r.error);
+    return null;
+  }
+  c.bindGroupCounts.createBindGroup += 1;
+  c.bindGroupCounts.keys.push('shadow-material-singleton');
+  frameState.singletonMaterialCache.set('shadow-material-singleton', r.value);
+  return r.value;
+}
+
+/**
+ * feat-20260625-spot-light-shadow-mapping M2 / w11 (D-1 + D-2). Records the
+ * spot-light shadow caster passes — one render pass per castShadow spot (cap 4)
+ * — that write each spot's perspective depth into its `spotShadowDepth` atlas
+ * tile. Driven by the URP `addSpotShadowPass` graph closure; reads
+ * `frameState.spotShadowSnapshots`.
+ *
+ * Per spot with `shadowAtlasTile >= 0` (castShadow + non-degenerate dir + not
+ * clipped) and a valid `lightViewProj`:
+ *   (1) Write the spot perspective matrix into `shadowCasterCascadeBuffer`
+ *       (D-1: spotLightViewProj lane at byte 16) and set `isSpot = 1` so the
+ *       shadow_caster vertex shader routes through the spot matrix instead of
+ *       the directional `view.lightViewProj_A..D` slots. The per-pass
+ *       independent command encoder + queue.submit serialize each host write
+ *       against that pass's GPU read.
+ *   (2) Open an INDEPENDENT command encoder targeting the spotShadowDepth view
+ *       with `depthLoadOp = (first valid tile ? clear : load)` — independent
+ *       clear counting decoupled from the directional cascadeIndex (D-2). Set a
+ *       per-tile viewport (col = tile % 2, row = tile / 2).
+ *   (3) Reuse the vertex-only `forgeax::default-shadow-caster` PSO + the cached
+ *       `view-shadow` BG + `shadow-material-singleton` + meshBindGroup built by
+ *       recordShadowPass (or built on-demand here when no directional shadow
+ *       ran this frame).
+ *
+ * AC-03 zero-shadow zero-pass: early-returns when no spot has a valid tile, so
+ * castShadow:false scenes (all tile=-1) record zero spot passes. After the
+ * loop, `isSpot` is reset to 0 so the next directional cascade pass (or next
+ * frame) sees the directional routing.
+ */
+export function recordSpotShadowPass(c: _InternalRenderPipelineContext): void {
+  const { runtime, frameState, meshBindGroup, pipelineState } = c;
+  const snapshots = frameState.spotShadowSnapshots;
+  // AC-03: skip entirely when no spot projects a shadow this frame.
+  const casters = snapshots.filter((s) => s.shadowAtlasTile >= 0 && s.lightViewProj !== undefined);
+  if (casters.length === 0) return;
+  if (meshBindGroup === null) return;
+
+  const shadowPipeline =
+    runtime.getMaterialShaderPipeline?.(
+      'forgeax::default-shadow-caster',
+      false,
+      undefined,
+      'triangle-list',
+      undefined,
+      undefined,
+      'shadow-caster',
+    ) ?? null;
+  if (shadowPipeline === null) return;
+
+  const spotView =
+    (frameState.perFrameGraph?.getColorTargetView('spotShadowDepth') as TextureView | undefined) ??
+    null;
+  if (spotView === null) return;
+
+  const shadowViewBg = ensureSpotShadowViewBg(c);
+  const shadowMaterialBg = ensureSpotShadowMaterialBg(c);
+  if (shadowViewBg === null || shadowMaterialBg === null) return;
+
+  const tileCtx: SpotTileContext = {
+    spotView,
+    shadowViewBg,
+    shadowMaterialBg,
+    shadowPipeline,
+    meshBindGroup,
+    tileSize: pipelineState.perPassResources.shadowMapSize,
+  };
+
+  let clearedAtlas = false;
+  for (let ci = 0; ci < casters.length; ci++) {
+    const snap = casters[ci];
+    if (snap === undefined || snap.lightViewProj === undefined) continue;
+    if (recordSpotTile(c, snap.lightViewProj, snap.shadowAtlasTile, clearedAtlas, tileCtx)) {
+      clearedAtlas = true;
+    }
+  }
+
+  // Reset isSpot so the next directional cascade pass / next frame routes
+  // through view.lightViewProj_A..D again (D-1).
+  const resetPayload = new Uint32Array([0, 0, 0, 0]);
+  const resetWrite = runtime.device.queue.writeBuffer(
+    pipelineState.shadowCasterCascadeBuffer,
+    0,
+    resetPayload,
+  );
+  if (!resetWrite.ok) runtime.errorRegistry.fire(resetWrite.error);
+}
+
+/** Per-tile resources shared across the spot caster passes in one frame. */
+interface SpotTileContext {
+  readonly spotView: TextureView;
+  readonly shadowViewBg: BindGroup;
+  readonly shadowMaterialBg: BindGroup;
+  readonly shadowPipeline: NonNullable<
+    ReturnType<NonNullable<_InternalRenderPipelineContext['runtime']['getMaterialShaderPipeline']>>
+  >;
+  readonly meshBindGroup: BindGroup;
+  readonly tileSize: number;
+}
+
+/**
+ * Render one spot's perspective depth into its atlas tile. Writes isSpot=1 +
+ * the spot matrix into the cascade UBO (D-1), opens an independent encoder with
+ * a per-tile viewport, and clears the atlas on the first tile / loads on the
+ * rest (D-2). Returns true when this pass cleared the atlas (so the caller
+ * tracks the clear/load boundary). Errors fire to the registry and return the
+ * incoming `alreadyCleared` unchanged.
+ */
+function recordSpotTile(
+  c: _InternalRenderPipelineContext,
+  lightViewProj: Float32Array,
+  tile: number,
+  alreadyCleared: boolean,
+  ctx: SpotTileContext,
+): boolean {
+  const { runtime, pipelineState } = c;
+  // D-1: cascade UBO byte offset of the spotLightViewProj mat4 lane (16 B for
+  // index/isSpot/2pad vec4, then the mat4). isSpot lane is u32 word 1.
+  const SPOT_LVP_OFFSET = 16;
+
+  const headerWrite = runtime.device.queue.writeBuffer(
+    pipelineState.shadowCasterCascadeBuffer,
+    0,
+    new Uint32Array([0, 1, 0, 0]), // index=0, isSpot=1, pad
+  );
+  if (!headerWrite.ok) {
+    runtime.errorRegistry.fire(headerWrite.error);
+    return alreadyCleared;
+  }
+  const matWrite = runtime.device.queue.writeBuffer(
+    pipelineState.shadowCasterCascadeBuffer,
+    SPOT_LVP_OFFSET,
+    lightViewProj,
+  );
+  if (!matWrite.ok) {
+    runtime.errorRegistry.fire(matWrite.error);
+    return alreadyCleared;
+  }
+
+  const encResult = runtime.device.createCommandEncoder({ label: `spot-shadow-tile${tile}` });
+  if (!encResult.ok) {
+    runtime.errorRegistry.fire(encResult.error);
+    return alreadyCleared;
+  }
+  const enc = encResult.value;
+  const pass: RhiRenderPassEncoder = enc.beginRenderPass(
+    buildBeginRenderPassDescriptor(
+      { colorFormats: [], depthFormat: 'depth32float', sampleCount: 1 },
+      { colorViews: [], depthView: ctx.spotView },
+      'shadow-caster',
+      { depthLoadOp: alreadyCleared ? 'load' : 'clear' },
+    ) as never,
+  );
+
+  pass.setPipeline(ctx.shadowPipeline);
+  const col = tile % 2;
+  const row = Math.floor(tile / 2);
+  pass.setViewport(col * ctx.tileSize, row * ctx.tileSize, ctx.tileSize, ctx.tileSize, 0, 1);
+  pass.setBindGroup(0, ctx.shadowViewBg);
+  pass.setBindGroup(1, ctx.shadowMaterialBg, [0]);
+  recordSpotShadowGeometry(c, pass, ctx.meshBindGroup);
+
+  pass.end();
+  const finishResult = enc.finish();
+  if (!finishResult.ok) {
+    runtime.errorRegistry.fire(finishResult.error);
+    return alreadyCleared;
+  }
+  const submitResult = runtime.device.queue.submit([finishResult.value]);
+  if (!submitResult.ok) runtime.errorRegistry.fire(submitResult.error);
+  return true;
+}
+
+/**
+ * Walk the validated renderables and emit shadow-caster draws for the current
+ * spot tile pass. Triangle topologies only (line/point meshes cast no shadow).
+ * Reuses the per-entity instance BGs cached by recordShadowPass; falls back to
+ * the identity instance buffer when none is cached.
+ */
+function recordSpotShadowGeometry(
+  c: _InternalRenderPipelineContext,
+  pass: RhiRenderPassEncoder,
+  meshBindGroup: BindGroup,
+): void {
+  const { frameState, validated, pipelineState } = c;
+  let lastVB: GpuBuffer | null = null;
+  let lastIB: GpuBuffer | null = null;
+  for (let ei = 0; ei < validated.length; ei++) {
+    const entry = validated[ei];
+    if (entry === undefined) continue;
+    const submeshes = entry.mesh.submeshes;
+    const hasTriangle = submeshes.some(
+      (sm) => sm.topology === 'triangle-list' || sm.topology === 'triangle-strip',
+    );
+    if (!hasTriangle) continue;
+    if (entry.mesh.vertexBuffer !== lastVB) {
+      pass.setVertexBuffer(0, entry.mesh.vertexBuffer.handle);
+      lastVB = entry.mesh.vertexBuffer;
+    }
+    if (entry.mesh.indexed && entry.mesh.indexBuffer !== lastIB && entry.mesh.indexBuffer) {
+      pass.setIndexBuffer(entry.mesh.indexBuffer.handle, entry.mesh.indexFormat);
+      lastIB = entry.mesh.indexBuffer;
+    }
+    pass.setBindGroup(2, meshBindGroup, [ei * MESH_PER_ENTITY_STRIDE]);
+    const inst = entry.source.instances;
+    let instCount = 1;
+    let instBufferKey: object = pipelineState.identityInstanceBuffer as unknown as object;
+    if (inst !== undefined) {
+      const cached = frameState.instanceBuffers.get(inst.cacheKey);
+      if (
+        cached !== undefined &&
+        cached.uploadedArchVersion === inst.archVersion &&
+        cached.uploadedByteLength === inst.transforms.byteLength
+      ) {
+        instBufferKey = cached.buffer.handle as unknown as object;
+        instCount = Math.max(1, inst.instanceCount);
+      }
+    }
+    const spotInstLeaf = frameState.instancesBgPerEntity
+      .get(entry.source.entityKey)
+      ?.get(instBufferKey) as Map<string, BindGroup> | undefined;
+    const cachedInstBg = spotInstLeaf?.get('shadow-instances');
+    if (cachedInstBg === undefined) continue;
+    pass.setBindGroup(3, cachedInstBg);
+    for (const sm of submeshes) {
+      if (sm.topology !== 'triangle-list' && sm.topology !== 'triangle-strip') continue;
+      if (entry.mesh.indexed) {
+        pass.drawIndexed(sm.indexCount, instCount, sm.indexOffset, 0, 0);
+      } else {
+        pass.draw(sm.vertexCount, instCount, 0, 0);
+      }
+    }
+  }
+}
+
+/**
  * feat-20260531-skybox-env-background M2 / w8: skybox pass recording stub.
  * Renders a fullscreen triangle that samples a cubemap using the camera's
  * inverseViewProj from the View UBO and writes the result to the hdrColor
@@ -4120,6 +4832,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
     ldrSpriteColorView,
     dispatch,
     hdrpClusterBindGroup,
+    foldDispatchPlan,
   } = c;
   // bug-20260615 M3 / m3-1: sampleCount is threaded through every
   // getMaterialShaderPipeline call site so the cache key / builder
@@ -5424,6 +6137,12 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         if (spriteEntry === undefined || spriteEntry.source.material.shadingModel !== 'sprite')
           continue;
 
+        // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4-record-swap
+        // (D-1): fold-bucket non-head member — skip; the bucket head emits one
+        // instanced drawIndexed covering all members.
+        if (foldDispatchPlan?.skipIndices.has(i) === true) continue;
+        const foldHeadBucket = foldDispatchPlan?.headBuckets.get(i);
+
         // feat-20260609 M2: skip entities that don't match the pass selector.
         if (matchedIndices !== null && !matchedIndices.has(spriteEntry.renderableIndex)) continue;
 
@@ -5467,10 +6186,86 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         // identical cap-gate sequence (storageBuffer cap → limit-exceeded →
         // cache-lookup → createBuffer → writeBuffer); variable names carry
         // "sprite" prefix; logic divergence would be a bug.
+        //
+        // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4-record-swap
+        // (D-1): when `foldHeadBucket !== undefined` AND the sprite entity has
+        // no explicit Instances component, assemble the bucket transforms into
+        // a transient instance buffer + override `spriteInstanceCount =
+        // bucket.bucketSize`. The mesh slot at `i*MESH_PER_ENTITY_STRIDE` was
+        // already overwritten to identity in the mesh SSBO upload loop above,
+        // so the shader computes `world = identity * bucket.transforms[idx] *
+        // pos`, per-instance correct. Entities with explicit Instances bypass
+        // fold (their per-entity Instances semantic wins); bucket key forces
+        // such an entity to be a singleton bucket in practice because its
+        // material is distinct or unfolded, but defensively check here as a
+        // belt-and-suspenders guard.
         let spriteInstanceBuffer: Buffer = pipelineState.identityInstanceBuffer;
         let spriteInstanceCount = 1;
         const spriteInst = spriteEntry.source.instances;
-        if (spriteInst !== undefined) {
+        const useFold = foldHeadBucket !== undefined && spriteInst === undefined;
+        if (useFold && foldHeadBucket !== undefined) {
+          // w6 (D-8): bucket transient buffer reuse — composite cacheKey from
+          // (materialHandle, layer, validatedOrdered head index) so the
+          // existing `frameState.instanceBuffers` byteLength/archVersion path
+          // covers static steady-state upload-skip. Numeric Map<number,…> key
+          // requires a 32-bit-safe fold; we use a negative number-space prefix
+          // (-1, -2, ...) by `((materialHandle << 16) | i)` shifted into the
+          // negative half so it never collides with positive entity-Instances
+          // cacheKeys (which are extracted from Instances component cacheKey
+          // numeric ids, always non-negative). The `archVersion` proxy is
+          // bucketSize (a structural-shape signal) so static frames hit the
+          // cache.
+          const bucketCacheKey =
+            -1 - (((foldHeadBucket.materialHandle & 0xffff) << 16) | (i & 0xffff));
+          const bucketBytes = foldHeadBucket.transforms.byteLength;
+          const uniformFallback = runtime.device.caps.storageBuffer === false;
+          const bucketBufUsage = uniformFallback
+            ? UNIFORM_USAGE | COPY_DST_USAGE
+            : STORAGE_USAGE | COPY_DST_USAGE;
+          const cachedBucket = frameState.instanceBuffers.get(bucketCacheKey);
+          let activeBucket: InstanceBufferCacheEntry | null = null;
+          if (
+            cachedBucket !== undefined &&
+            cachedBucket.uploadedArchVersion === foldHeadBucket.bucketSize &&
+            cachedBucket.uploadedByteLength === bucketBytes
+          ) {
+            activeBucket = cachedBucket;
+          } else if (bucketBytes > 0) {
+            const bufRes = runtime.device.createBuffer({
+              size: bucketBytes,
+              usage: bucketBufUsage,
+              mappedAtCreation: false,
+            });
+            if (!bufRes.ok) {
+              runtime.errorRegistry.fire(bufRes.error);
+            } else {
+              if (cachedBucket !== undefined && !cachedBucket.buffer.isDestroyed) {
+                const r = cachedBucket.buffer.destroy();
+                if (!r.ok) runtime.errorRegistry.fire(r.error);
+              }
+              const newBuf = new GpuBuffer(runtime.device, bufRes.value);
+              activeBucket = {
+                buffer: newBuf,
+                uploadedArchVersion: foldHeadBucket.bucketSize,
+                uploadedByteLength: bucketBytes,
+              };
+              frameState.instanceBuffers.set(bucketCacheKey, activeBucket);
+            }
+          }
+          if (activeBucket !== null) {
+            const writeRes = runtime.device.queue.writeBuffer(
+              activeBucket.buffer.handle,
+              0,
+              foldHeadBucket.transforms,
+            );
+            if (!writeRes.ok) {
+              runtime.errorRegistry.fire(writeRes.error);
+            } else {
+              spriteInstanceBuffer = activeBucket.buffer.handle;
+              spriteInstanceCount = foldHeadBucket.bucketSize;
+            }
+          }
+        } else if (spriteInst !== undefined) {
           const uniformFallback = runtime.device.caps.storageBuffer === false;
           let spriteBufUsage = STORAGE_USAGE | COPY_DST_USAGE;
 
@@ -5793,7 +6588,7 @@ export function recordBloomBlurHPass(
     pp.bloomBlurHPipeline === null ||
     pp.bloomBlurBindGroupLayout === null ||
     pp.bloomSampler === null ||
-    pp.bloomBlurParamsBuffer === null
+    pp.bloomBlurHParamsBuffer === null
   )
     return;
 
@@ -5803,7 +6598,8 @@ export function recordBloomBlurHPass(
   const bloomBrightView = resolve?.resolve('bloomBright') as TextureView | undefined;
   if (!bloomBlurHView || !bloomBrightView) return;
 
-  // 2. Write blur params UBO (16 B std140: texelSize.xy + radius + pad).
+  // 2. Write H-axis blur params into the H-only UBO (bug-20260625: a separate
+  // buffer per axis so V's write cannot clobber H's before the GPU runs).
   // H-axis: texel offset along x only.
   const bw = Math.floor(targetW / 2);
   const blurParams = new Float32Array(4);
@@ -5811,7 +6607,7 @@ export function recordBloomBlurHPass(
   blurParams[1] = 0; // texelSize.y = 0 for H pass
   blurParams[2] = camera.bloomBlurRadius;
   blurParams[3] = 0;
-  const paramsWrite = runtime.device.queue.writeBuffer(pp.bloomBlurParamsBuffer, 0, blurParams);
+  const paramsWrite = runtime.device.queue.writeBuffer(pp.bloomBlurHParamsBuffer, 0, blurParams);
   if (!paramsWrite.ok) throw paramsWrite.error;
 
   // 3. Lazy BindGroup (reads bloomBright from graph).
@@ -5822,7 +6618,7 @@ export function recordBloomBlurHPass(
       entries: [
         { binding: 0, resource: { kind: 'textureView', value: bloomBrightView } },
         { binding: 1, resource: { kind: 'sampler', value: pp.bloomSampler } },
-        { binding: 2, resource: { kind: 'buffer', value: { buffer: pp.bloomBlurParamsBuffer } } },
+        { binding: 2, resource: { kind: 'buffer', value: { buffer: pp.bloomBlurHParamsBuffer } } },
       ],
     });
     if (!bgRes.ok) throw bgRes.error;
@@ -5855,7 +6651,7 @@ export function recordBloomBlurVPass(
     pp.bloomBlurVPipeline === null ||
     pp.bloomBlurBindGroupLayout === null ||
     pp.bloomSampler === null ||
-    pp.bloomBlurParamsBuffer === null
+    pp.bloomBlurVParamsBuffer === null
   )
     return;
 
@@ -5865,7 +6661,8 @@ export function recordBloomBlurVPass(
   const bloomBlurHView = resolve?.resolve('bloomBlurH') as TextureView | undefined;
   if (!bloomBlurVView || !bloomBlurHView) return;
 
-  // 2. Write blur params UBO (16 B std140: texelSize.xy + radius + pad).
+  // 2. Write V-axis blur params into the V-only UBO (bug-20260625: separate
+  // buffer per axis -- see the H pass comment).
   // V-axis: texel offset along y only.
   const bh = Math.floor(targetH / 2);
   const blurParams = new Float32Array(4);
@@ -5873,7 +6670,7 @@ export function recordBloomBlurVPass(
   blurParams[1] = bh > 0 ? 1.0 / bh : 1.0; // texelSize.y
   blurParams[2] = camera.bloomBlurRadius;
   blurParams[3] = 0;
-  const paramsWrite = runtime.device.queue.writeBuffer(pp.bloomBlurParamsBuffer, 0, blurParams);
+  const paramsWrite = runtime.device.queue.writeBuffer(pp.bloomBlurVParamsBuffer, 0, blurParams);
   if (!paramsWrite.ok) throw paramsWrite.error;
 
   // 3. Lazy BindGroup (reads bloomBlurH from graph).
@@ -5884,7 +6681,7 @@ export function recordBloomBlurVPass(
       entries: [
         { binding: 0, resource: { kind: 'textureView', value: bloomBlurHView } },
         { binding: 1, resource: { kind: 'sampler', value: pp.bloomSampler } },
-        { binding: 2, resource: { kind: 'buffer', value: { buffer: pp.bloomBlurParamsBuffer } } },
+        { binding: 2, resource: { kind: 'buffer', value: { buffer: pp.bloomBlurVParamsBuffer } } },
       ],
     });
     if (!bgRes.ok) throw bgRes.error;
@@ -5922,9 +6719,12 @@ export function recordBloomCompositePass(
     return;
 
   // M1 / w7: hdrColor + bloomBlurV textures owned by render-graph.
+  // bug-20260625: composite READS hdrColor (scene, binding 0) and WRITES the
+  // separate hdrComposited target -- never the same texture in one pass.
   const hdrColorView = resolve?.resolve('hdrColor') as TextureView | undefined;
   const bloomBlurVView = resolve?.resolve('bloomBlurV') as TextureView | undefined;
-  if (!hdrColorView || !bloomBlurVView) return;
+  const hdrCompositedView = resolve?.resolve('hdrComposited') as TextureView | undefined;
+  if (!hdrColorView || !bloomBlurVView || !hdrCompositedView) return;
 
   // 1. Write composite params UBO (16 B std140: intensity + 12 B pad).
   const compositeParams = new Float32Array(4);
@@ -5958,14 +6758,17 @@ export function recordBloomCompositePass(
     pp.bloomCompositeBindGroup = bgRes.value;
   }
 
-  // 3. Render pass: write hdrColor in-place (composite adds bloom on top).
-  // bloom-composite policy is the only color-only kind with default loadOp='load'
-  // (preserves the geometry beneath the additive composite).
+  // 3. Render pass: write the separate hdrComposited target (bug-20260625).
+  // The fragment shader outputs the COMPLETE composited colour
+  // (scene + intensity*bloom, sampling scene from hdrColor itself), so the
+  // destination needs no prior content -> loadOp='clear' (no stale dependency
+  // on hdrComposited's previous-frame content, and no in-place hazard).
   const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
     buildBeginRenderPassDescriptor(
       { colorFormats: ['rgba16float'], depthFormat: undefined, sampleCount: 1 },
-      { colorViews: [hdrColorView] },
+      { colorViews: [hdrCompositedView] },
       'bloom-composite',
+      { colorLoadOp: 'clear' },
     ) as never,
   );
   pass.setPipeline(pp.bloomCompositePipeline);

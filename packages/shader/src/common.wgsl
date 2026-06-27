@@ -33,12 +33,14 @@
 //   [504..508) depthBias        f32           (align 4, size 4)
 //   [508..512) normalBias       f32           (align 4, size 4)
 //   [512..516) pcfKernelSize    f32           (align 4, size 4)
-//   [516..528) _tail_pad       —             (WGSL struct tail pad, 12 B)
-//   WGSL struct = 528 B. Host UBO = 592 B: 16 f32 (64 B) of tail zeros
-//   appended by render-system-record.ts to satisfy AC-08 fixed-size
-//   invariant — the WGSL struct only reads its fields; the extra padding
-//   in the GPU buffer is never accessed by the shader.
-//   total = 592 B.
+//   [516..528) _align_pad      —             (mat4 array align=16, 12 B)
+//   [528..784) spotLightViewProj array<mat4x4<f32>,4>  (align 16, size 256)
+//   WGSL struct = 784 B. Host UBO = VIEW_UBO_BYTES = 784 B (createRenderer.ts);
+//   render-system-record.ts writes the full 196 f32 payload. The spot matrix
+//   array fold (feat-20260625 w25) removes the standalone @group(0) binding 9
+//   uniform buffer so the WebGL2 fallback fragment uniform-buffer count returns
+//   to 11 (GLES 3.0 max).
+//   total = 784 B.
 //
 // Field order must stay byte-for-byte identical to every prior release
 // (charter P4 consistent abstraction); new fields append at the tail.
@@ -69,6 +71,26 @@
 // 592 B (host UBO size unchanged, AC-08). lighting-directional.wgsl drives the
 // directional shadow bias (D-1: bias = max(normalBias*(1-N.L), depthBias)) and
 // a pcfKernelSize-wide PCF loop from these fields.
+//
+// feat-20260625-spot-light-shadow-mapping w25 (scope-amend webkit-fallback):
+// the per-spot perspective `spotLightViewProj` matrices (4 lanes, fragment-read)
+// fold into the View UBO tail instead of a standalone @group(0) binding 9
+// uniform buffer. The standalone binding pushed the fragment-stage uniform
+// buffer count to 12 (view + pointLights + spotLights + shadowParams +
+// shadowCasterCascade + spotLightViewProj on the WebGL2 fallback path),
+// exceeding GLES 3.0's `max_uniform_buffers_per_shader_stage = 11` so the
+// WebGL2 fallback (mobile / WebKit — this feat's compat target) crashed
+// pipeline-layout creation. Folding into the View UBO costs zero new bindings
+// (the count drops back to 11). D-1 rejected the View UBO for the CASTER vertex
+// channel (binding 7) because directional + spot casters both need a light-view
+// matrix in the same frame (same-frame write contention); the FRAGMENT read
+// channel has no such contention — the host writes all <=4 spot matrices once
+// per frame before the forward pass, so the fold is safe. mat4 array align=16:
+// the array lands at byte 528 (next 16 B-aligned offset after pcfKernelSize at
+// byte 512..516), spanning bytes 528..784. WGSL struct = 784 B; the host
+// allocates VIEW_UBO_BYTES = 784 (createRenderer.ts) and writes the full 196 f32
+// payload (render-system-record.ts). Lane N = the spot with `shadowAtlasTile
+// === N` (cap = 4); `evalSpotShadowed` reads `view.spotLightViewProj[tile]`.
 struct View {
   worldViewProj   : mat4x4<f32>,
   lightDir        : vec3<f32>,
@@ -85,6 +107,12 @@ struct View {
   depthBias       : f32,
   normalBias      : f32,
   pcfKernelSize   : f32,
+  // feat-20260625-spot-light-shadow-mapping w25: per-spot perspective
+  // light-view-projection matrices, fragment-read. Auto-aligned to byte 528
+  // (mat4 array align=16, after pcfKernelSize at byte 512); spans bytes
+  // 528..784. Lane N = spot with shadowAtlasTile === N (cap = 4). Zeroed lanes
+  // are safe (sample gated on shadowAtlasTile >= 0 in default-standard-pbr.wgsl).
+  spotLightViewProj : array<mat4x4<f32>, 4>,
 };
 
 // Per-instance mesh slot (feat-20260518-pbr-direct-lighting-mvp M2 / w8.5,
@@ -113,7 +141,7 @@ struct Mesh {
 //             color * intensity so the shader avoids the per-fragment mul)
 //     [   7 ] pad f32 = 0
 //
-//   SpotLight (48 B / 12 floats):
+//   SpotLight (64 B / 16 floats):
 //     [ 0..2 ] position vec3<f32>
 //     [   3 ] invRangeSquared f32
 //     [ 4..6 ] colorTimesIntensity vec3<f32>
@@ -122,14 +150,20 @@ struct Mesh {
 //     [ 8..10] direction vec3<f32> (raw outgoing vector; shader reads
 //             via dot(L, -direction) for cone angle test)
 //     [  11 ] cosOuter f32
+//     [12..14] spotPad vec3<f32> = 0 (std430 vec4-alignment padding)
+//     [  15 ] shadowAtlasTile i32 (sentinel -1 = unassigned/clipped,
+//             0..3 = spot atlas tile index; feat-20260625 M2/M3 D-4)
 //
 // WGSL std430 alignment audit: vec3<f32> alignof=16 / sizeof=12. The
 // f32 lane wedged immediately after each vec3 fills the 4 B remainder
 // (WGSL struct member rule: next.offset = roundUp(prev.offset +
 // prev.size, this.alignof) - for f32 alignof=4 the round-up is a
 // no-op, so position[3] / color[3] / direction[3] sit at byte
-// offsets 12 / 28 / 44 with zero internal padding). Total struct
-// sizes 32 / 48 B match the host packers exactly.
+// offsets 12 / 28 / 44 with zero internal padding). PointLight stays
+// 32 B; SpotLight grows to 64 B (feat-20260625 M2/M3 D-4): the trailing
+// `spotPad: vec3<f32>` + `shadowAtlasTile: i32` form one vec4-aligned block
+// at bytes 48..64, with `shadowAtlasTile` at byte 60. These struct sizes
+// match the host packers (packPointLight 32 B / packSpotLight 64 B) exactly.
 //
 // Header `count: u32` lives in a wrapper struct with the trailing
 // runtime-sized array. Array-of-vec4-aligned-struct alignof = 16, so
@@ -159,6 +193,20 @@ struct SpotLight {
   cosInner            : f32,
   direction           : vec3<f32>,
   cosOuter            : f32,
+  // feat-20260625-spot-light-shadow-mapping M3 / w13 (plan-strategy D-4):
+  // The prior 8-lane (48 B) SpotLight had no spare pad lane (unlike PointLight
+  // which repurposed `pointPadW`), so the clip-signal field needs a fresh
+  // vec4-aligned block. `spotPad` fills bytes 48..60 (host packSpotLight slots
+  // 12..14 stay zero); `shadowAtlasTile` (i32 sentinel, -1 = no shadow /
+  // clipped, 0..3 = spot atlas tile) lands at byte 60 (host slot 15, written
+  // through an Int32Array view). The fragment path gates on
+  // `shadowAtlasTile >= 0` (evalSpotShadowed vs evalSpot). Field names are
+  // unique across the composed module surface so naga_oil writeback
+  // substitution does not collide with prior `pad0` members. (naga_oil
+  // reserves the `__` identifier prefix, so the pad lane is `spotPad`, not
+  // `__pad`.)
+  spotPad             : vec3<f32>,
+  shadowAtlasTile     : i32,
 };
 
 struct PointLightsArray {
@@ -232,20 +280,59 @@ struct SpotLightsArray {
 // (cube_array atlas + params UBO; FRAGMENT-only) so the cascade UBO —
 // which needs VERTEX|FRAGMENT visibility — moved to the next free slot.
 // `pbr-pipeline.ts buildPbrViewBglEntries` is the matching SSOT.
+// feat-20260625-spot-light-shadow-mapping M2 / w10 (D-1): the cascade UBO
+// gains a spot-specific perspective light-view-projection matrix + an `isSpot`
+// discriminant. The spot shadow pass writes its own perspective matrix into
+// `spotLightViewProj` + sets `isSpot = 1u` before each tile pass; the
+// shadow_caster vertex shader then routes through the spot matrix instead of
+// the directional `view.lightViewProj_A..D` cascade slots. This keeps the spot
+// matrix OUT of the directional View UBO (no same-frame write contention —
+// directional and spot both need light-view-proj matrices in one frame). The
+// `index` lane is unused on the spot path (spot tile order is tracked
+// host-side via depthLoadOp clear/load counting, decoupled from directional
+// cascadeIndex per D-2).
 struct ShadowCasterCascade {
   index : u32,
-  // Three trailing u32 pad lanes (zero-initialised host-side, ignored
-  // shader-side) lift the struct from 4 B → 16 B so the WebGL2 (GLES 3.0)
-  // 16 B uniform-buffer alignment requirement is satisfied
-  // (`DownlevelFlags::BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED` is unset on
-  // GLES). Field names are unique across the composed module surface so
-  // naga_oil's writeback substitution does not collide with prior `pad0`
-  // / `pad1` member names in other shared structs (Material, SkylightUniforms).
-  shadowCasterPadA : u32,
+  // feat-20260625 M2 / w10 (D-1): spot-path discriminant (0 = directional
+  // cascade, 1 = spot perspective). Repurposes the former `shadowCasterPadA`
+  // lane. The shadow_caster vertex shader branches on this.
+  isSpot : u32,
+  // Two trailing u32 pad lanes (zero-initialised host-side) keep `index`/
+  // `isSpot` in the first 16 B vec4 so the `mat4x4<f32>` below starts at a
+  // 16 B-aligned offset (WebGL2 GLES 3.0 requirement). Field names are unique
+  // across the composed module surface so naga_oil's writeback substitution
+  // does not collide with prior `pad0` / `pad1` members in other shared
+  // structs (Material, SkylightUniforms).
   shadowCasterPadB : u32,
   shadowCasterPadC : u32,
+  // feat-20260625 M2 / w10 (D-1): spot perspective light-view-projection
+  // matrix (perspective(outerCone*2) x lookAt). Written per spot tile pass.
+  // Ignored on the directional path (isSpot = 0).
+  spotLightViewProj : mat4x4<f32>,
 };
 @group(0) @binding(7) var<uniform> shadowCasterCascade : ShadowCasterCascade;
+
+// feat-20260625-spot-light-shadow-mapping M3 / w13 (plan-strategy D-5):
+// Spot shadow atlas (single 2D depth texture; the host packs up to 4 spot
+// shadows into a 2x2 tile grid — see urp-pipeline.ts spotShadowDepth). Bound
+// at @group(0) binding 8 (smallest free slot after the cascade UBO at 7).
+//
+// ALWAYS-ON, no #ifdef gate (unlike the point cube_array atlas at binding 5,
+// which rides POINT_SHADOW_AVAILABLE because cube_array is unavailable in the
+// WebGPU compat profile). Spot shadows are `texture_depth_2d` only, which is
+// compat-safe everywhere, so the binding is unconditionally declared — keeping
+// the BGL <-> WGSL alignment surface minimal (D-5: a define axis here would be
+// pure burden). The matching runtime SSOT is `buildPbrViewBglEntries`
+// (pbr-pipeline.ts) which declares binding 8 unconditionally.
+//
+// The comparison sampler is REUSED from binding 4 (`shadowSampler`): spot
+// perspective-depth sampling needs the exact same descriptor (clamp-to-edge +
+// compare less) as directional/point, so no binding 9 sampler is introduced.
+// The per-spot perspective lightViewProj matrices that the forward (fragment)
+// shadow sample needs live in the View UBO (binding 0, `view.spotLightViewProj`)
+// — folded there in feat-20260625 w25 (scope-amend) to keep the WebGL2 fallback
+// fragment uniform-buffer count <= 11; binding 8 is the last view-BG binding.
+@group(0) @binding(8) var spotShadowMap : texture_depth_2d;
 
 #if STORAGE_BUFFER_AVAILABLE == true
 @group(2) @binding(0) var<storage, read> meshes : array<Mesh>;

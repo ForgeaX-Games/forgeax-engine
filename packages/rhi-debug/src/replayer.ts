@@ -65,6 +65,7 @@ import type {
   RhiCallEventEndComputePass,
   RhiCallEventEndRenderPass,
   RhiCallEventFinish,
+  RhiCallEventInitialData,
   RhiCallEventInsertDebugMarker,
   RhiCallEventPopDebugGroup,
   RhiCallEventPushDebugGroup,
@@ -396,7 +397,7 @@ async function stepToImpl(
     const event = events[i];
     if (event === undefined) break;
 
-    await replayEvent(
+    const replayResult = await replayEvent(
       event,
       tape,
       device,
@@ -406,6 +407,10 @@ async function stepToImpl(
       passEncoderMap,
       createShaderModuleFn,
     );
+    // Fail Fast (architecture §5): a seed failure (or any future Result-
+    // returning event handler) stops replay immediately rather than advancing
+    // currentIdx over an unseeded resource.
+    if (!replayResult.ok) return replayResult;
     setCurrentIdx(i + 1);
   }
 
@@ -457,7 +462,7 @@ async function replayEvent(
   encoderMap: Map<HandleId, RhiCommandEncoder>,
   passEncoderMap: Map<HandleId, PassEncoder>,
   createShaderModuleFn?: CreateShaderModuleFn,
-): Promise<void> {
+): Promise<Result<void, DebugError>> {
   switch (event.kind) {
     case 'frameMark':
       break;
@@ -616,10 +621,21 @@ async function replayEvent(
       replayEndComputePass(event, passEncoderMap);
       break;
 
+    case 'initialData': {
+      // Seed handler returns Result — bubble it so stepToImpl fails fast on a
+      // seed miss rather than silently leaving the resource unseeded (D-3, R6,
+      // architecture §5 Fail Fast).
+      const seed = replayInitialData(event, tape, handleMap, queue);
+      if (!seed.ok) return seed;
+      break;
+    }
+
     default:
       void (event as never);
       break;
   }
+
+  return ok(undefined);
 }
 
 // ============================================================================
@@ -785,7 +801,14 @@ function replayCreateBindGroup(
         // Re-wrap raw Rhi objects into RhiBindingResource shape
         // so rhi-webgpu.createBindGroup can dispatch on .kind.
         if (resourceKind === 'buffer') {
-          entry.resource = { kind: 'buffer', value: { buffer: resource } };
+          // Preserve the recorded sub-range so a dynamic-offset slice binds
+          // `bufferSize` bytes rather than the whole buffer (the latter
+          // exceeds the device uniform/storage binding-size limit).
+          const serial = event.entries[j];
+          const value: { buffer: unknown; offset?: number; size?: number } = { buffer: resource };
+          if (serial?.bufferOffset !== undefined) value.offset = serial.bufferOffset;
+          if (serial?.bufferSize !== undefined) value.size = serial.bufferSize;
+          entry.resource = { kind: 'buffer', value };
         } else if (resourceKind === 'sampler') {
           entry.resource = { kind: 'sampler', value: resource };
         } else if (resourceKind === 'textureView') {
@@ -1306,6 +1329,135 @@ function replayEndComputePass(
   const pass = passEncoderMap.get(event.passHandleId);
   if (pass === undefined) return;
   (pass as RhiComputePassEncoder).end();
+}
+
+// ============================================================================
+// replayInitialData — seed handler (M1 signature stub)
+// ============================================================================
+
+/**
+ * Resolve whether an initialData handleId names a buffer or a texture by
+ * scanning the tape's create* events. The initialData event carries only
+ * {handleId, dataHash} (shape lives in the descriptor registry at record time,
+ * not duplicated on the wire, types.ts SSOT) — so the replay side reads the
+ * kind back from the createBuffer / createTexture event that declared the
+ * handle in the bootstrap prefix.
+ */
+function resolveInitialDataKind(
+  events: readonly RhiCallEvent[],
+  handleId: HandleId,
+): 'buffer' | 'texture' | undefined {
+  for (const ev of events) {
+    if (ev.kind === 'createBuffer' && ev.handleId === handleId) return 'buffer';
+    if (ev.kind === 'createTexture' && ev.handleId === handleId) return 'texture';
+  }
+  return undefined;
+}
+
+/**
+ * Seed a recreated resource with its recorded initial bytes.
+ *
+ * Called during replay when the event stream reaches an initialData event
+ * (positioned after all create* events in the bootstrap prefix). Looks up
+ * the recreated resource from handleMap, fetches its bytes from the tape's
+ * blobPool via dataHash, resolves the resource kind from the tape's create*
+ * events, and writes the bytes into the resource via queue.writeBuffer (buffer)
+ * or queue.writeTexture (texture).
+ *
+ * Returns Result<void, DebugError> — failures bubble up through stepToImpl
+ * (not void-silently-return, per D-3 / AC-07). `seed-initial-data-failed`
+ * carries `.detail = {handleId, stage}` where stage is 'lookup' (handleMap /
+ * blobPool / kind miss) or 'write' (queue.writeBuffer / writeTexture threw).
+ * On success the resource contains the exact bytes captured at recording time.
+ */
+export function replayInitialData(
+  event: RhiCallEventInitialData,
+  tape: Tape,
+  handleMap: Map<HandleId, unknown>,
+  queue: RhiQueue,
+): Result<void, DebugError> {
+  const seedFail = (stage: 'lookup' | 'write', hint: string): Result<void, DebugError> =>
+    err(
+      new DebugError({
+        code: 'seed-initial-data-failed',
+        expected: 'replayInitialData to seed the recreated resource with its recorded bytes',
+        hint,
+        detail: { handleId: event.handleId, stage },
+      }),
+    );
+
+  const resource = handleMap.get(event.handleId);
+  if (resource === undefined) {
+    return seedFail(
+      'lookup',
+      `handleId '${event.handleId}' not found in handleMap; its create* event must replay before the initialData seed`,
+    );
+  }
+
+  const data = tape.blobPool.get(event.dataHash);
+  if (data === undefined) {
+    return seedFail(
+      'lookup',
+      `dataHash '${event.dataHash}' not found in tape.blobPool for handleId '${event.handleId}'`,
+    );
+  }
+
+  const kind = resolveInitialDataKind(tape.events, event.handleId);
+  if (kind === undefined) {
+    return seedFail(
+      'lookup',
+      `no createBuffer/createTexture event declares handleId '${event.handleId}'; cannot determine whether to writeBuffer or writeTexture`,
+    );
+  }
+
+  try {
+    if (kind === 'buffer') {
+      queue.writeBuffer(resource as any, 0, data);
+    } else {
+      const { width, height } = resolveTextureExtent(tape.events, event.handleId);
+      queue.writeTexture(
+        { texture: resource, mipLevel: 0, origin: { x: 0, y: 0, z: 0 } } as any,
+        data,
+        { offset: 0, bytesPerRow: width * 4, rowsPerImage: height } as any,
+        { width, height, depthOrArrayLayers: 1 },
+      );
+    }
+  } catch (e) {
+    return seedFail(
+      'write',
+      `queue.${kind === 'buffer' ? 'writeBuffer' : 'writeTexture'} threw for handleId '${event.handleId}': ${String(e)}`,
+    );
+  }
+
+  return ok(undefined);
+}
+
+/**
+ * Resolve a texture's {width, height} from its createTexture event size for
+ * the writeTexture dataLayout. Mirrors readback.resolveAttachmentSize extent
+ * handling so seed and readback agree on extent interpretation. Falls back to
+ * a 1x1 layout when the create event is absent (seed lookup already guards the
+ * missing-create case before this is reached).
+ */
+function resolveTextureExtent(
+  events: readonly RhiCallEvent[],
+  handleId: HandleId,
+): { width: number; height: number } {
+  for (const ev of events) {
+    if (ev.kind === 'createTexture' && ev.handleId === handleId) {
+      const sz = ev.desc.size;
+      if (Array.isArray(sz)) {
+        const w = typeof sz[0] === 'number' ? sz[0] : 1;
+        const h = typeof sz[1] === 'number' ? sz[1] : w;
+        return { width: w, height: h };
+      }
+      const obj = sz as { width: number; height?: number };
+      const w = typeof obj.width === 'number' ? obj.width : 1;
+      const h = typeof obj.height === 'number' ? obj.height : w;
+      return { width: w, height: h };
+    }
+  }
+  return { width: 1, height: 1 };
 }
 
 // ============================================================================

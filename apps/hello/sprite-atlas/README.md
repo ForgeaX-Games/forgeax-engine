@@ -1,6 +1,6 @@
 # hello-sprite-atlas
 
-> **1 atlas / 100 sprite instances / 1 draw call** -- the minimal end-to-end host that demonstrates the M2 atlas + animation surface: `SpriteAnimation` (6-field ECS component) + `SpriteRegionOverride` (per-entity UV override) + `spriteAnimationTickSystem` (dt-accumulator frame-advance) + `Instances` (100 mat4 transforms in one flat Float32Array) + `forgeax-engine-console-asset atlas` CLI (build-time atlas baker).
+> **1 atlas / 10000 independent sprite entities / 1 instanced drawIndexed** -- the canonical AI-user spawn shape (Transform + MeshFilter + MeshRenderer + SpriteRegionOverride per entity) collapsed transparently into a single GPU draw by the record-stage fold operator (feat-20260622-chunk-gpu-instancing-sprite-tilemap M1). No `Instances` component on any entity -- AC-03 transparent abstraction (charter P4).
 
 ## 4-step recipe (charter F1 progressive disclosure)
 
@@ -147,9 +147,9 @@ git add -f apps/hello/sprite-atlas/scripts/reference-dawn-walk-frame-0.png
 | Path | Purpose |
 |:--|:--|
 | `index.html` | `<canvas id="app">` host page |
-| `src/main.ts` | Bootstrap: createApp + asset loading + 10x10 instance grid + SpriteAnimation spawn + tick system registration |
+| `src/main.ts` | Bootstrap: createApp + asset loading + spawn 10000 independent sprite entities (no `Instances` component) sharing one atlas material |
 | `src/__tests__/main-type-affordance.test-d.ts` | AC-08 IDE autocomplete type inference: SpriteAnimation 6-field shape + SpriteRegionOverride 1-field shape |
-| `scripts/smoke-dawn.mjs` | dawn-node headless smoke: synthetic 64x64 atlas, 300-frame loop, pixel readback vs reference PNG (eps<=0.05) |
+| `scripts/smoke-dawn.mjs` | dawn-node headless smoke: 10000 sprite entities, 300-frame loop, asserts drawIndexed=1/frame + instanceCount=10000 + foldedDraws metric advance (M4 / w17) |
 | `vite.config.ts` | forgeaxShader + pluginPack, port 5194 |
 | `assets/walk.atlas.meta.json` | Atlas sidecar (charter F2 text channel): 4 regions [name, uMin, vMin, uW, vH] |
 | `assets/walk.atlas.png.meta.json` | GUID sidecar for `loadByGuid<TextureAsset>` resolution |

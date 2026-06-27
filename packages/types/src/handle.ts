@@ -230,7 +230,9 @@ export const BUILTIN_BASE = 1024;
 // === Gen-slot codec SSOT (feat-20260623-asset-handle-generation M1 / w2) ==========
 //
 // Domain-agnostic pure bit operations — max-slot, max-gen, pack, unpack-slot,
-// unpack-gen, and retire-on-255 primitive. This is the single definition point
+// unpack-gen, and the retire predicate (isRetiredSlot: gen > MAX_GEN, so gen
+// 255 is usable and a slot retires only when its bump would reach 256). This
+// is the single definition point
 // for the `(gen << 24) | slot` layout across entity and asset handles (D-1,
 // AC-15). Callers (ecs / runtime / ref stores) import from
 // @forgeax/engine-types; entity-side overflow throw and sentinel stay in ecs
@@ -274,11 +276,13 @@ export function unpackGen(v: number): number {
 }
 
 /**
- * Retire-on-255 semantic: returns `true` when gen has reached MAX_GEN (255).
- * A retired slot never returns to the free list (AC-07).
+ * Retire-when-gen-exceeds-MAX_GEN semantic: returns `true` when gen has
+ * exceeded MAX_GEN (255), i.e. gen 255 is still a usable handle; a slot
+ * retires only when its bumped generation reaches 256. A retired slot
+ * never returns to the free list (AC-07).
  */
 export function isRetiredSlot(gen: number): boolean {
-  return gen === MAX_GEN;
+  return gen > MAX_GEN;
 }
 
 // === Handle inspection helpers (feat-20260623-asset-handle-generation M1 / w2) ====

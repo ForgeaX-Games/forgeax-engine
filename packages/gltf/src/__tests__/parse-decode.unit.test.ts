@@ -209,6 +209,50 @@ import { decomposeNodeTransform } from '../transform.js';
         expect(mesh.positions[1]).toBeCloseTo(2.0);
         expect(mesh.positions[2]).toBeCloseTo(3.0);
       });
+
+      // U32 indices (componentType 5125) are preserved end-to-end rather than
+      // rejected. Blender / UniGLTF commonly export U32 even for tiny meshes;
+      // the decoder keeps the source width (bridge.ts narrows to U16 when the
+      // merged maxIndex fits). Regression guard for the prior over-rejection
+      // that surfaced as gltf-accessor-type-mismatch / unknownComponentType.
+      it('preserves U32 SCALAR INDICES as Uint32Array (no rejection)', async () => {
+        const posBytes = new Uint8Array(36);
+        const posF32 = new Float32Array(posBytes.buffer);
+        // 3 vertices forming one triangle.
+        posF32.set([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+        const idxBytes = new Uint8Array(12);
+        new Uint32Array(idxBytes.buffer).set([0, 1, 2]);
+
+        const toDataUri = (bytes: Uint8Array) =>
+          `data:application/octet-stream;base64,${btoa(String.fromCharCode(...bytes))}`;
+
+        const json = {
+          asset: { version: '2.0' },
+          buffers: [{ uri: toDataUri(posBytes) }, { uri: toDataUri(idxBytes) }],
+          bufferViews: [
+            { buffer: 0, byteOffset: 0, byteLength: 36 },
+            { buffer: 1, byteOffset: 0, byteLength: 12 },
+          ],
+          accessors: [
+            { bufferView: 0, componentType: 5126, type: 'VEC3', count: 3 },
+            { bufferView: 1, componentType: 5125, type: 'SCALAR', count: 3 },
+          ],
+          meshes: [{ name: 'U32Mesh', primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+          materials: [],
+          nodes: [],
+          scenes: [],
+        };
+
+        const result = await parseGltf(json, noopLoader, '/u32.gltf');
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+
+        const mesh: GltfMeshIr | undefined = result.value.meshes[0];
+        expect(mesh).toBeDefined();
+        if (!mesh) return;
+        expect(mesh.indices).toBeInstanceOf(Uint32Array);
+        expect(Array.from(mesh.indices ?? [])).toEqual([0, 1, 2]);
+      });
     });
   });
 }

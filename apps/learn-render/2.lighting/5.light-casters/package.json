@@ -33,8 +33,8 @@
         "reason": "pixel-parity bench drives parity-forgeax vs parity-threejs; learn-render entries land as bench:pixel-parity placeholders only"
       },
       "gate": {
-        "enabled": false,
-        "reason": "no smoke test yet for light-casters demo"
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/app-learn-render-2-lighting-5-light-casters smoke"
       },
       "spike-report": {
         "enabled": false,

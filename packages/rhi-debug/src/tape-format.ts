@@ -37,6 +37,7 @@ import type {
   RhiCallEventDrawIndexed,
   RhiCallEventEndComputePass,
   RhiCallEventEndRenderPass,
+  RhiCallEventInitialData,
   RhiCallEventPushDebugGroup,
   RhiCallEventSetBindGroup,
   RhiCallEventSetComputePipeline,
@@ -52,7 +53,7 @@ import type {
   Tape,
 } from './types';
 
-export const TAPE_FORMAT_VERSION = 1 as const;
+export const TAPE_FORMAT_VERSION = 2 as const;
 
 // ============================================================================
 // Local Result factories (mirrors recorder.ts pattern)
@@ -312,6 +313,8 @@ function collectDeclaredHandleIds(event: RhiCallEvent, declared: Set<HandleId>):
     case 'beginComputePass':
       declared.add((event as RhiCallEventBeginRenderPass).passHandleId);
       break;
+    case 'initialData':
+      break;
     default:
       break;
   }
@@ -484,6 +487,11 @@ function findDanglingHandleId(event: RhiCallEvent, declared: Set<HandleId>): Han
     case 'createTextureView': {
       const e = event as RhiCallEventCreateTextureView;
       if (!declared.has(e.sourceHandleId)) return e.sourceHandleId;
+      return null;
+    }
+    case 'initialData': {
+      const e = event as RhiCallEventInitialData;
+      if (!declared.has(e.handleId)) return e.handleId;
       return null;
     }
     case 'pushDebugGroup':

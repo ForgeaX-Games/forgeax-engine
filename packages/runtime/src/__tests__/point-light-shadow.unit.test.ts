@@ -667,6 +667,12 @@ import { buildPointShadowMatrices } from '../render-system-extract';
           invRangeSquared: 0,
           cosInner: 0.95,
           cosOuter: 0.85,
+          castShadow: false,
+          lightViewProj: undefined,
+          mapSize: 2048,
+          nearPlane: 0.1,
+          farPlane: 50,
+          shadowAtlasTile: -1,
         };
         // Even when shadow info is passed, spot lights ignore the lanes
         // (only point lights with shadow ride the pad lanes).

@@ -22,7 +22,7 @@ async function importCore(): Promise<any> {
 
 function makeSimpleTape(events?: readonly RhiCallEvent[]) {
   return {
-    formatVersion: 1,
+    formatVersion: 2,
     rhiCapsRecorded: {
       canvasFormat: 'bgra8unorm' as const,
       rgba16floatRenderable: false,
@@ -239,7 +239,7 @@ describe('assembleReport (w2)', () => {
     }
     const { assembleReport } = core;
 
-    const header = { formatVersion: 1, rhiCapsRecorded: {} };
+    const header = { formatVersion: 2, rhiCapsRecorded: {} };
     const events = [{ kind: 'draw', vertexCount: 3 }];
     const json = JSON.stringify({ header, events });
     const passOffsets = [{ passIdx: 0, startDrawIdx: 0, endDrawIdx: 0 }];

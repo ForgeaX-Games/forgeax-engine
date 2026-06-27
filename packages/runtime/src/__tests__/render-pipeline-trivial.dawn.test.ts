@@ -383,9 +383,15 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
     // fxaa (declared unconditionally in urp-pipeline.ts buildGraph;
     // attachDebugOverlayPass no-ops when no DebugDraw is registered so
     // the zero-draw scene pays no GPU cost).
+    // feat-20260625-spot-light-shadow-mapping M2 / w9 (D-2): 'spot-shadow'
+    // joins the chain after 'point-shadow' (declared unconditionally in
+    // urp-pipeline.ts buildGraph; recordSpotShadowPass early-returns when no
+    // castShadow spot has a valid tile so the zero-spot-shadow scene pays no
+    // GPU cost — the graph node still surfaces at topology-build time).
     expect(renderer.perFramePassNames).toEqual([
       'shadowCascade0',
       'point-shadow',
+      'spot-shadow',
       'skybox',
       'main',
       'bloom-bright',

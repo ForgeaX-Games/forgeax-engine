@@ -39,7 +39,7 @@ describe('AC-07: flag drift grep gate', () => {
 });
 
 describe('AC-09: DebugErrorCode member count gate', () => {
-  it('DebugErrorCode union has exactly 12 members', () => {
+  it('DebugErrorCode union has exactly 14 members', () => {
     const errorsPath = path.resolve(__dirname, '..', '..', 'src', 'errors.ts');
     const content = readFileSync(errorsPath, 'utf-8');
     const lines = content.split('\n');
@@ -58,7 +58,7 @@ describe('AC-09: DebugErrorCode member count gate', () => {
         break;
       }
     }
-    expect(memberCount).toBe(12);
+    expect(memberCount).toBe(14);
   });
 });
 

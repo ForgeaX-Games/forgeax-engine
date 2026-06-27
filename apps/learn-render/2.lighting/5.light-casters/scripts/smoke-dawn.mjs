@@ -1,42 +1,52 @@
 #!/usr/bin/env node
 // apps/learn-render/2.lighting/5.light-casters/scripts/smoke-dawn.mjs
 //
-// LearnOpenGL section 2.5 light-casters dawn-node smoke (feat-20260611
-// w13 / M3 round-2 fix-up I-5 -- real-scene adaptation per src/index.ts).
+// LearnOpenGL section 2.5 light-casters dawn-node smoke
+// (feat-20260625-spot-light-shadow-mapping w17 / M4).
 //
-// Walks the LO 2.5 three-light-types scene the demo runs in production:
-//   1. decodeImageFromFile(container2.png + container2_specular.png)
-//      -- same diffuse / specular pair as LO 2.4.
-//   2. registerWithGuid<TextureAsset> for both.
-//   3. registerWithGuid<MeshAsset>(cubeGuid, HANDLE_CUBE asset).
-//   4. unlit material with diffuse baseColorTexture.
-//   5. spawn the 10-cube grid (same CUBE_POSITIONS as LO 1.6) +
-//      DirectionalLight + 4 PointLights at LO POINT_LIGHT_POSITIONS +
-//      a SpotLight at the camera position (LO 2.5 flashlight idiom).
+// This demo is the spot-shadow VISUAL milestone (AC-01: a spot light casts a
+// directionally-correct shadow; AC-06: no acne). The scene mirrors src/index.ts:
+//   - a 30x30 floor plane at y=-2 (Materials.standard, receives shadow)
+//   - one obstructing cube at [0,-0.6,-3] (Materials.standard, casts shadow)
+//   - a FIXED downward SpotLight at [0,4,-3] pointing -Y with castShadow=true
+//   - the LO 2.5 10-cube grid + DirectionalLight + 4 PointLights (regression)
+// A top-down camera frames the floor so the cube's shadow is on-screen.
 //
-// Differential axes vs hello-triangle / lighting-maps (D-2 / D-8
-// byte-level):
-//   - GUID set: same 4 GUIDs as LO 2.4 BUT CUBE_MATERIAL_GUID is LO
-//     2.5's own '019e3969-2000-7000-8000-000000000002' (last byte 02
-//     vs 01).
-//   - clear color: engine teal default.
-//   - sample sites: 10 lit cubes + 3 light types -- probes hit cube_0,
-//     cube_8, and the SpotLight cone area. Names mirror LO 2.5.
+// THE LOAD-BEARING ASSERTION: this is a SHADOW demo, so a pixel sampled on the
+// floor DIRECTLY UNDER the obstructing cube (in the spot's shadow) MUST be
+// measurably DARKER than a pixel on the floor OUTSIDE the cube's shadow but
+// still inside the spot cone. shadowDelta = lit - shadow must exceed
+// SMOKE_PIXEL_THRESHOLD (0.05).
+//
+// FALSIFY modes (NOT run in CI; prove the shadow assertion is discriminating --
+// see plan-strategy 5.4):
+//   - FALSIFY=no-shadow : fixed spot castShadow=false -> no shadow pass, floor
+//     under the cube is no longer darkened -> shadowDelta collapses -> FAIL.
+//   - FALSIFY=no-occluder : remove the obstructing cube -> nothing to cast a
+//     shadow, both sample sites are lit equally -> shadowDelta collapses -> FAIL.
+// Shader-internal falsifications (force evalSpotShadowed=1.0; invert the
+// shadowAtlasTile>=0 gate) are exercised by hand-patching the shader during
+// manual verification; they are documented in the implement report, not env-driven
+// here (the shader is engine source, not demo source).
 //
 // Output literals (preserved byte-for-byte for grep tooling):
 //   - `[learn-render-light-casters] backend=webgpu`
 //   - `[smoke] frames observed=<N>`
 //   - `[smoke] pixelSamples=<json>`
-//   - `[smoke] PASS - 4 criteria GREEN: ...`
+//   - `[smoke] PASS`
+//   - `[smoke] FAIL`
 
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { deflateSync } from 'node:zlib';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
+const SMOKE_WRITE_BASELINE = process.env.SMOKE_WRITE_BASELINE === '1';
+const FALSIFY = process.env.FALSIFY ?? '';
 
 const WIDTH = 800;
 const HEIGHT = 600;
@@ -44,45 +54,96 @@ const HEIGHT = 600;
 const here = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(here, '..');
 const MONOREPO_ROOT = resolve(APP_ROOT, '..', '..', '..', '..');
-const TEXTURES_DIR = resolve(MONOREPO_ROOT, 'forgeax-engine-assets', 'learn-opengl', 'textures');
-const DIFFUSE_SRC_PATH = resolve(TEXTURES_DIR, 'container2.png');
-const DIFFUSE_META_PATH = resolve(TEXTURES_DIR, 'container2.png.meta.json');
-const SPECULAR_SRC_PATH = resolve(TEXTURES_DIR, 'container2_specular.png');
-const SPECULAR_META_PATH = resolve(TEXTURES_DIR, 'container2_specular.png.meta.json');
+const BASELINE_DIR = resolve(
+  MONOREPO_ROOT,
+  'forgeax-engine-assets',
+  'smoke-baselines',
+  'learn-render-2-5-light-casters',
+);
+const BASELINE_PNG_PATH = resolve(BASELINE_DIR, 'spot-shadow.ref.png');
 
 const SMOKE_WALL_BUDGET_MS = Number.parseInt(process.env.SMOKE_WALL_BUDGET_MS ?? '45000', 10);
 
-const CUBE_MESH_GUID = '019e3968-6007-71ae-856e-1fd6c9728cfb';
-// LO 2.5 own material GUID -- last byte 02 (vs 01 in LO 2.4).
-const CUBE_MATERIAL_GUID = '019e3969-2000-7000-8000-000000000002';
+// --- Minimal PNG encoder (no dependencies; mirrors hello-debug-draw smoke) ---
 
-// LO 2.5 cubePositions -- same array as LO 1.6.
-const CUBE_POSITIONS = [
-  [0.0, 0.0, 0.0],
-  [2.0, 5.0, -15.0],
-  [-1.5, -2.2, -2.5],
-  [-3.8, -2.0, -12.3],
-  [2.4, -0.4, -3.5],
-  [-1.7, 3.0, -7.5],
-  [1.3, -2.0, -2.5],
-  [1.5, 2.0, -2.5],
-  [1.5, 0.2, -1.5],
-  [-1.3, 1.0, -1.5],
-];
+function crc32(buf) {
+  let crc = -1;
+  for (let i = 0; i < buf.length; i++) {
+    crc ^= buf[i];
+    for (let j = 0; j < 8; j++) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ -1) >>> 0;
+}
 
-// LO 2.5 PointLight positions + colours.
-const POINT_LIGHT_POSITIONS = [
-  [0.7, 0.2, 2.0],
-  [2.3, -3.3, -4.0],
-  [-4.0, 2.0, -12.0],
-  [0.0, 0.0, -3.0],
-];
-const POINT_LIGHT_COLORS = [
-  [1.0, 1.0, 1.0],
-  [1.0, 0.0, 0.0],
-  [0.0, 1.0, 0.0],
-  [0.0, 0.0, 1.0],
-];
+function writeU32(arr, off, val) {
+  arr[off] = (val >>> 24) & 0xff;
+  arr[off + 1] = (val >>> 16) & 0xff;
+  arr[off + 2] = (val >>> 8) & 0xff;
+  arr[off + 3] = val & 0xff;
+}
+
+function writePng(width, height, rgba) {
+  const rawData = new Uint8Array(height * (1 + width * 4));
+  for (let y = 0; y < height; y++) {
+    const rowOff = y * (1 + width * 4);
+    rawData[rowOff] = 0; // filter: None
+    for (let x = 0; x < width; x++) {
+      const src = (y * width + x) * 4;
+      const dst = rowOff + 1 + x * 4;
+      rawData[dst] = rgba[src];
+      rawData[dst + 1] = rgba[src + 1];
+      rawData[dst + 2] = rgba[src + 2];
+      rawData[dst + 3] = rgba[src + 3];
+    }
+  }
+  const compressed = deflateSync(rawData);
+
+  const ihdrData = new Uint8Array(13);
+  writeU32(ihdrData, 0, width);
+  writeU32(ihdrData, 4, height);
+  ihdrData[8] = 8; // bit depth
+  ihdrData[9] = 6; // color type: RGBA
+  ihdrData[10] = 0;
+  ihdrData[11] = 0;
+  ihdrData[12] = 0;
+
+  const chunks = [];
+  function addChunk(type, data) {
+    const typeBytes = new Uint8Array(4);
+    typeBytes[0] = type.charCodeAt(0);
+    typeBytes[1] = type.charCodeAt(1);
+    typeBytes[2] = type.charCodeAt(2);
+    typeBytes[3] = type.charCodeAt(3);
+    const typeAndData = Buffer.concat([typeBytes, data]);
+    const c = crc32(typeAndData);
+    const len = data.length;
+    const buf = new Uint8Array(12 + len);
+    writeU32(buf, 0, len);
+    buf.set(typeBytes, 4);
+    buf.set(data, 8);
+    writeU32(buf, 8 + len, c);
+    chunks.push(buf);
+  }
+
+  addChunk('IHDR', ihdrData);
+  addChunk('IDAT', compressed);
+  addChunk('IEND', new Uint8Array(0));
+
+  const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const totalLen = 8 + chunks.reduce((s, c) => s + c.length, 0);
+  const out = Buffer.alloc(totalLen);
+  sig.forEach((b, i) => {
+    out[i] = b;
+  });
+  let off = 8;
+  for (const chunk of chunks) {
+    out.set(chunk, off);
+    off += chunk.length;
+  }
+  return out;
+}
 
 // --- 1. dawn.node binding setup ----------------------------------------------
 
@@ -110,11 +171,6 @@ Object.defineProperty(globalThis.navigator, 'gpu', {
   configurable: true,
   writable: true,
 });
-// bug-20260612 dawn-only stub: pin getPreferredCanvasFormat to 'rgba8unorm' so this
-// smoke harness's hardcoded rgba8unorm-srgb viewFormats stay compatible with the
-// dawn-node webgpu module's actual UA preference (which is bgra8unorm). Browser
-// path (test:browser project) does not run smoke-dawn.mjs; the real Channel 2
-// BGRA path is exercised through the helper unmodified there.
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
 
 let sharedDevice;
@@ -133,7 +189,7 @@ globalThis.navigator.gpu.requestAdapter = async (opts) => {
   return rawAdapter;
 };
 
-// --- 2. Mock canvas ---------------------------------------------------------
+// --- 2. Mock canvas (COPY_SRC so we can read back) --------------------------
 
 let renderTarget;
 function ensureRenderTarget(device, format) {
@@ -147,6 +203,8 @@ function ensureRenderTarget(device, format) {
   return renderTarget;
 }
 const mockCanvas = {
+  tagName: 'CANVAS',
+  isConnected: true,
   width: WIDTH,
   height: HEIGHT,
   getContext(kind) {
@@ -171,53 +229,30 @@ const mockCanvas = {
 
 // --- 3. Drive engine ECS path -----------------------------------------------
 
-if (
-  !existsSync(DIFFUSE_SRC_PATH) ||
-  !existsSync(DIFFUSE_META_PATH) ||
-  !existsSync(SPECULAR_SRC_PATH) ||
-  !existsSync(SPECULAR_META_PATH)
-) {
-  console.error('[smoke] FAIL - container2 / container2_specular asset fixtures missing');
-  process.exit(1);
-}
-
 const { World } = await import('@forgeax/engine-ecs');
-const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const enginePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
+  createPlaneGeometry,
   createRenderer,
   DirectionalLight,
   HANDLE_CUBE,
+  Materials,
   MeshFilter,
   MeshRenderer,
+  perspective,
   PointLight,
-  resolveAssetHandle,
   SpotLight,
   Transform,
 } = enginePkg;
-const { unwrapHandle } = await import('@forgeax/engine-types');
-const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-
-const diffuseRes = await decodeImageFromFile(DIFFUSE_SRC_PATH);
-const specularRes = await decodeImageFromFile(SPECULAR_SRC_PATH);
-if (!diffuseRes.ok || !specularRes.ok) {
-  console.error('[smoke] FAIL - decodeImageFromFile failed');
-  process.exit(1);
-}
-const { decoded: diffuseDecoded, meta: diffuseMeta } = diffuseRes.value;
-const { decoded: specularDecoded, meta: specularMeta } = specularRes.value;
-console.log(
-  `[learn-render-light-casters] decoded diffuse=${diffuseDecoded.width}x${diffuseDecoded.height} specular=${specularDecoded.width}x${specularDecoded.height}`,
-);
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
-const EMPTY_MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
+const MANIFEST_URL = `data:application/json,${encodeURIComponent(JSON.stringify(ENGINE_MANIFEST))}`;
 
 let renderer;
 try {
-  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: EMPTY_MANIFEST_URL });
+  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 } catch (err) {
   console.error(
     `[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`,
@@ -243,129 +278,164 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-const diffuseGuidRes = AssetGuid.parse(diffuseMeta.guid);
-const specularGuidRes = AssetGuid.parse(specularMeta.guid);
-const cubeGuidRes = AssetGuid.parse(CUBE_MESH_GUID);
-const matGuidRes = AssetGuid.parse(CUBE_MATERIAL_GUID);
-if (!diffuseGuidRes.ok || !specularGuidRes.ok || !cubeGuidRes.ok || !matGuidRes.ok) {
-  console.error('[smoke] FAIL - GUID parse failure');
-  process.exit(1);
-}
-const mkTex = (decoded) => ({
-  kind: 'texture',
-  width: decoded.width,
-  height: decoded.height,
-  format: decoded.colorSpace === 'srgb' ? 'rgba8unorm-srgb' : 'rgba8unorm',
-  data: decoded.bytes,
-  colorSpace: decoded.colorSpace,
-  mipmap: decoded.mipmap,
-});
 const world = new World();
-// feat-20260614 M8 (D-15/D-17): textures mint user-tier column handles via
-// allocSharedRef; GUIDs are catalogued for loadByGuid parity.
-const diffuseHandle = world.allocSharedRef('TextureAsset', mkTex(diffuseDecoded));
-const specularHandle = world.allocSharedRef('TextureAsset', mkTex(specularDecoded));
-assets.catalog(diffuseGuidRes.value, mkTex(diffuseDecoded));
-assets.catalog(specularGuidRes.value, mkTex(specularDecoded));
-const cubeAssetRes = resolveAssetHandle(world, HANDLE_CUBE);
-if (!cubeAssetRes.ok) {
-  console.error('[smoke] FAIL - HANDLE_CUBE asset unavailable');
-  process.exit(1);
-}
-assets.catalog(cubeGuidRes.value, cubeAssetRes.value);
 
-const cubeMaterial = world.allocSharedRef('MaterialAsset', {
-  kind: 'material',
-  passes: [{ name: 'Forward', shader: 'forgeax::default-unlit', tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues: { baseColor: [1.0, 1.0, 1.0, 1.0], baseColorTexture: unwrapHandle(diffuseHandle) },
-});
-void specularHandle;
-// LO 2.5 10-cube grid (same array as LO 1.6).
-for (let i = 0; i < CUBE_POSITIONS.length; i++) {
-  const pos = CUBE_POSITIONS[i];
+// LO 2.5 cube grid + lights (regression: AC-07 the original scene survives).
+const CUBE_POSITIONS = [
+  [0.0, 0.0, 0.0],
+  [2.0, 5.0, -15.0],
+  [-1.5, -2.2, -2.5],
+  [-3.8, -2.0, -12.3],
+  [2.4, -0.4, -3.5],
+  [-1.7, 3.0, -7.5],
+  [1.3, -2.0, -2.5],
+  [1.5, 2.0, -2.5],
+  [1.5, 0.2, -1.5],
+  [-1.3, 1.0, -1.5],
+];
+const gridMat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.6, 0.6, 0.6, 1] }));
+for (const pos of CUBE_POSITIONS) {
   world.spawn(
     {
       component: Transform,
-      data: {
-        posX: pos[0],
-        posY: pos[1],
-        posZ: pos[2],
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+      data: { posX: pos[0], posY: pos[1], posZ: pos[2], quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [cubeMaterial] } },
+    { component: MeshRenderer, data: { materials: [gridMat] } },
   );
 }
 
-// LO 2.5 DirectionalLight (sun-equivalent).
 world.spawn({
   component: DirectionalLight,
-  data: {
-    directionX: -0.2,
-    directionY: -1,
-    directionZ: -0.3,
-    colorR: 1,
-    colorG: 1,
-    colorB: 1,
-    intensity: 0.5,
-  },
+  data: { directionX: -0.2, directionY: -1, directionZ: -0.3, colorR: 1, colorG: 1, colorB: 1, intensity: 0.5 },
 });
 
-// LO 2.5 4 PointLights with distinct colours -- white / red / green /
-// blue. Each spawned as own entity at POINT_LIGHT_POSITIONS[i] with
-// PointLight component carrying the colour triple.
+const POINT_LIGHT_POSITIONS = [
+  [0.7, 0.2, 2.0],
+  [2.3, -3.3, -4.0],
+  [-4.0, 2.0, -12.0],
+  [0.0, 0.0, -3.0],
+];
+const POINT_LIGHT_COLORS = [
+  [1.0, 1.0, 1.0],
+  [1.0, 0.0, 0.0],
+  [0.0, 1.0, 0.0],
+  [0.0, 0.0, 1.0],
+];
 for (let i = 0; i < POINT_LIGHT_POSITIONS.length; i++) {
   const plPos = POINT_LIGHT_POSITIONS[i];
   const plColor = POINT_LIGHT_COLORS[i];
   world.spawn(
     {
       component: Transform,
-      data: {
-        posX: plPos[0],
-        posY: plPos[1],
-        posZ: plPos[2],
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+      data: { posX: plPos[0], posY: plPos[1], posZ: plPos[2], quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
     },
     {
       component: PointLight,
-      data: {
-        colorR: plColor[0],
-        colorG: plColor[1],
-        colorB: plColor[2],
-        intensity: 100,
-        range: 50,
-      },
+      data: { colorR: plColor[0], colorG: plColor[1], colorB: plColor[2], intensity: 100, range: 50 },
     },
   );
 }
 
-// LO 2.5 camera-coupled SpotLight (flashlight idiom; cone 12.5/17.5
-// inner/outer).
+// w16 spot-shadow scene: floor + obstructing cube + fixed downward spot.
+const floorRes = createPlaneGeometry(30, 30);
+if (!floorRes.ok) {
+  console.error('[smoke] FAIL - createPlaneGeometry failed:', floorRes.error.code);
+  process.exit(1);
+}
+const floorMesh = world.allocSharedRef('MeshAsset', floorRes.value);
+const floorMat = world.allocSharedRef(
+  'MaterialAsset',
+  Materials.standard({ baseColor: [0.55, 0.55, 0.6, 1], metallic: 0, roughness: 0.9 }),
+);
+const FLOOR_QUAT_X = Math.sin(-Math.PI / 4);
+const FLOOR_QUAT_W = Math.cos(-Math.PI / 4);
+world
+  .spawn(
+    {
+      component: Transform,
+      data: { posX: 0, posY: -2, posZ: -3, quatX: FLOOR_QUAT_X, quatW: FLOOR_QUAT_W, scaleX: 1, scaleY: 1, scaleZ: 1 },
+    },
+    { component: MeshFilter, data: { assetHandle: floorMesh } },
+    { component: MeshRenderer, data: { materials: [floorMat] } },
+  )
+  .unwrap();
+
+// The spot-shadow sub-scene sits at x=SHADOW_X, well clear of the LO 2.5
+// point-light cluster (x in {0.7,2.3,-4,0}, intensity 100) so the strong
+// point-light floor glow does not saturate the shadow sample sites. Same
+// coordinates as src/index.ts so the smoke validates the real demo scene.
+const SHADOW_X = -9;
+const SHADOW_Z = -3;
+
+// FALSIFY=no-occluder removes the cube -> nothing casts a shadow.
+const occluderPresent = FALSIFY !== 'no-occluder';
+if (!occluderPresent) {
+  console.log('[smoke] FALSIFY=no-occluder -- obstructing cube omitted (no shadow caster)');
+} else {
+  const obstructorMat = world.allocSharedRef(
+    'MaterialAsset',
+    Materials.standard({ baseColor: [0.85, 0.5, 0.25, 1], metallic: 0, roughness: 0.6 }),
+  );
+  world
+    .spawn(
+      {
+        component: Transform,
+        data: { posX: SHADOW_X, posY: -0.6, posZ: SHADOW_Z, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      },
+      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshRenderer, data: { materials: [obstructorMat] } },
+    )
+    .unwrap();
+}
+
+// FALSIFY=no-shadow turns off the fixed spot's shadow -> floor under the cube
+// is no longer darkened (proves the shadow-darkness assertion can fail).
+const spotShadowPresent = FALSIFY !== 'no-shadow';
+if (!spotShadowPresent) {
+  console.log('[smoke] FALSIFY=no-shadow -- fixed SpotLight castShadow=false');
+}
+// Spot offset to the +X side of the cube, angled down-and-toward-(-X) so the
+// cube's shadow is cast laterally onto the floor where the top-down camera sees
+// it next to the cube -- a directly-overhead spot would hide its shadow.
+const SPOT_DIR_LEN = Math.hypot(-0.6, -1, 0);
+world.spawn(
+  {
+    component: Transform,
+    data: { posX: SHADOW_X + 2.2, posY: 4, posZ: SHADOW_Z, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+  },
+  {
+    component: SpotLight,
+    data: {
+      directionX: -0.6 / SPOT_DIR_LEN,
+      directionY: -1 / SPOT_DIR_LEN,
+      directionZ: 0,
+      colorR: 1,
+      colorG: 1,
+      colorB: 1,
+      intensity: 40,
+      range: 50,
+      innerConeDeg: 22,
+      outerConeDeg: 32,
+      ...(spotShadowPresent ? {} : { castShadow: false }),
+    },
+  },
+);
+
+// Top-down camera looking straight down at the spot-shadow sub-scene so the
+// lateral shadow is clearly on-screen, away from the point-light blowout.
+const CAM_PITCH = -Math.PI / 2.3; // look mostly down
 world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0,
-      posY: 0,
-      posZ: 3,
-      quatX: 0,
+      posX: SHADOW_X,
+      posY: 6,
+      posZ: SHADOW_Z + 2.5,
+      quatX: Math.sin(CAM_PITCH / 2),
       quatY: 0,
       quatZ: 0,
-      quatW: 1,
+      quatW: Math.cos(CAM_PITCH / 2),
       scaleX: 1,
       scaleY: 1,
       scaleZ: 1,
@@ -373,21 +443,11 @@ world.spawn(
   },
   {
     component: Camera,
-    data: { fov: Math.PI / 4, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 },
-  },
-  {
-    component: SpotLight,
     data: {
-      directionX: 0,
-      directionY: 0,
-      directionZ: -1,
-      colorR: 1,
-      colorG: 1,
-      colorB: 1,
-      intensity: 4,
-      range: 50,
-      innerConeDeg: 12.5,
-      outerConeDeg: 17.5,
+      ...perspective({ fov: Math.PI / 3, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 }),
+      clearR: 0.02,
+      clearG: 0.02,
+      clearB: 0.04,
     },
   },
 );
@@ -407,9 +467,7 @@ if (!device) {
 }
 await device.queue.onSubmittedWorkDone();
 const frameWall = Date.now() - frameStart;
-console.log(
-  `[smoke] frames observed=${framesObserved} (wall=${frameWall}ms, target=${TARGET_FRAMES})`,
-);
+console.log(`[smoke] frames observed=${framesObserved} (wall=${frameWall}ms, target=${TARGET_FRAMES})`);
 
 // --- 4. Pixel readback ------------------------------------------------------
 
@@ -448,54 +506,114 @@ const readRgba = (px, py) => {
   const b = (bytes[off + 2] ?? 0) / 255;
   return [r, g, b];
 };
-// LO 2.5 sample sites: spotlightCenter at NDC origin (camera-coupled
-// SpotLight points at -Z) + pointLightLitL/R for cubes near the
-// PointLight cluster. Names tied to LO 2.5 light type names.
-const sites = [
-  { name: 'spotlightCenter', x: Math.floor(WIDTH / 2), y: Math.floor(HEIGHT / 2) },
-  { name: 'directionalLitUL', x: Math.floor(WIDTH * 0.38), y: Math.floor(HEIGHT * 0.45) },
-  { name: 'directionalLitBR', x: Math.floor(WIDTH * 0.62), y: Math.floor(HEIGHT * 0.55) },
-  { name: 'pointLightCluster', x: Math.floor(WIDTH * 0.7), y: Math.floor(HEIGHT * 0.65) },
-  { name: 'cornerTL', x: Math.floor(WIDTH * 0.05), y: Math.floor(HEIGHT * 0.05) },
-];
+// Average luminance over a small box (robust to PCF edge / dither noise).
+const luminanceBox = (cx, cy, half) => {
+  let sum = 0;
+  let count = 0;
+  for (let y = cy - half; y <= cy + half; y++) {
+    for (let x = cx - half; x <= cx + half; x++) {
+      if (x < 0 || y < 0 || x >= WIDTH || y >= HEIGHT) continue;
+      const [r, g, b] = readRgba(x, y);
+      sum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      count++;
+    }
+  }
+  return count > 0 ? sum / count : 0;
+};
+
+// Sample sites empirically calibrated to this scene + top-down camera (verified
+// by SMOKE_DUMP_GRID=1 + reading the baseline PNG):
+//   shadowFloor   = inside the dark shadow patch cast to the -X side of the cube
+//   litFloorLeft  = spot-lit floor left of the cube, outside its shadow
+//   litFloorBelow = spot-lit floor below the cube, outside its shadow
+// Both lit sites are clear of the point-light glow on the right so the only
+// difference vs shadowFloor is the spot occlusion. Re-run with SMOKE_DUMP_GRID=1
+// and Read the baseline PNG if the scene geometry ever changes.
+const SITES = {
+  shadowFloor: { x: 335, y: 255 },
+  litFloorLeft: { x: 195, y: 280 },
+  litFloorBelow: { x: 360, y: 410 },
+};
+const HALF = 5;
 const pixelSamples = {};
-for (const s of sites) pixelSamples[s.name] = readRgba(s.x, s.y);
-console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
-
-// --- 5. Verdict (4 criteria) ------------------------------------------------
-
-const distance = (a, b) =>
-  Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2);
-const CLEAR_COLOR = [0.2, 0.3, 0.3];
-const meshSiteNames = ['spotlightCenter', 'directionalLitUL', 'directionalLitBR'];
-let meshedRenderCount = 0;
-const perSiteDistance = {};
-for (const name of meshSiteNames) {
-  const site = pixelSamples[name];
-  const dist = distance(site, CLEAR_COLOR);
-  perSiteDistance[name] = dist.toFixed(4);
-  if (dist > SMOKE_PIXEL_THRESHOLD) meshedRenderCount++;
+const lumSamples = {};
+for (const [name, s] of Object.entries(SITES)) {
+  pixelSamples[name] = readRgba(s.x, s.y);
+  lumSamples[name] = Number(luminanceBox(s.x, s.y, HALF).toFixed(4));
 }
-console.log(`[smoke] perSiteDistance=${JSON.stringify(perSiteDistance)}`);
+console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
+console.log(`[smoke] lumSamples=${JSON.stringify(lumSamples)}`);
+
+if (process.env.SMOKE_DUMP_GRID === '1') {
+  const cols = 40;
+  const rows = 30;
+  let grid = '';
+  for (let r = 0; r < rows; r++) {
+    const py = Math.floor(((r + 0.5) / rows) * HEIGHT);
+    let line = '';
+    for (let c = 0; c < cols; c++) {
+      const px = Math.floor(((c + 0.5) / cols) * WIDTH);
+      const l = luminanceBox(px, py, 2);
+      const ch = l < 0.1 ? '.' : l < 0.2 ? ':' : l < 0.35 ? '+' : l < 0.5 ? '*' : '#';
+      line += ch;
+    }
+    grid += `${String(py).padStart(3)} ${line}\n`;
+  }
+  console.log(`[smoke] lumGrid (cols x=0..${WIDTH}):\n${grid}`);
+}
+
+// --- 5. Optional baseline write ---------------------------------------------
+
+if (SMOKE_WRITE_BASELINE) {
+  const rgba = new Uint8Array(WIDTH * HEIGHT * 4);
+  for (let y = 0; y < HEIGHT; y++) {
+    for (let x = 0; x < WIDTH; x++) {
+      const off = y * bytesPerRow + x * bytesPerPixel;
+      const dst = (y * WIDTH + x) * 4;
+      rgba[dst] = bytes[off] ?? 0;
+      rgba[dst + 1] = bytes[off + 1] ?? 0;
+      rgba[dst + 2] = bytes[off + 2] ?? 0;
+      rgba[dst + 3] = bytes[off + 3] ?? 255;
+    }
+  }
+  mkdirSync(BASELINE_DIR, { recursive: true });
+  writeFileSync(BASELINE_PNG_PATH, writePng(WIDTH, HEIGHT, rgba));
+  console.log(`[smoke] baseline written to ${BASELINE_PNG_PATH}`);
+}
+
+// --- 6. Verdict -------------------------------------------------------------
 
 const wallTotalMs = Date.now() - frameStart;
 console.log(`[smoke] wallTotalMs=${wallTotalMs} (budget=${SMOKE_WALL_BUDGET_MS})`);
 
-void matGuidRes;
+const litFloorLum = Math.max(lumSamples.litFloorLeft, lumSamples.litFloorBelow);
+const shadowDelta = Number((litFloorLum - lumSamples.shadowFloor).toFixed(4));
+console.log(`[smoke] shadowDelta=${shadowDelta} (litFloor=${litFloorLum}, shadowFloor=${lumSamples.shadowFloor})`);
 
 const failures = [];
-if (renderer.backend !== 'webgpu')
-  failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
-if (framesObserved < SMOKE_MIN_FRAMES)
-  failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
-if (meshedRenderCount < 1) {
+if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
+
+// (c) the floor must actually be rendered (non-clear) at the lit site -- guards
+// against an empty / black frame falsely passing the shadow delta.
+const CLEAR_LUM = 0.2126 * 0.02 + 0.7152 * 0.02 + 0.0722 * 0.04;
+if (litFloorLum - CLEAR_LUM < SMOKE_PIXEL_THRESHOLD) {
   failures.push(
-    `(c) LO 2.5 3-light-types - 0 of ${meshSiteNames.length} meshed sites exceed threshold=${SMOKE_PIXEL_THRESHOLD}; perSiteDistance=${JSON.stringify(perSiteDistance)}`,
+    `(c) lit floor luminance=${litFloorLum} ~= clear (${CLEAR_LUM.toFixed(4)}); floor not rendered / empty frame`,
   );
 }
+
+// (d) THE shadow assertion: lit floor must be clearly brighter than the
+// shadowed floor under the cube. FALSIFY=no-shadow / no-occluder collapse this.
+if (shadowDelta < SMOKE_PIXEL_THRESHOLD) {
+  failures.push(
+    `(d) shadowDelta=${shadowDelta} < ${SMOKE_PIXEL_THRESHOLD}; floor under cube not darkened by spot shadow (litFloor=${litFloorLum}, shadowFloor=${lumSamples.shadowFloor})`,
+  );
+}
+
 if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(', ');
-  failures.push(`(d) Renderer.onError fired ${errors.length} times: [${codes}]`);
+  failures.push(`(e) Renderer.onError fired ${errors.length} times: [${codes}]`);
 }
 
 if (failures.length > 0) {
@@ -510,7 +628,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 4 criteria GREEN: backend=webgpu, frames=${framesObserved}, LO 2.5 directional+4point+spot lit cube grid sites above threshold=${meshedRenderCount}/${meshSiteNames.length}, RhiError count=0, wallTotalMs=${wallTotalMs}`,
+  `[smoke] PASS - 5 criteria GREEN: backend=webgpu, frames=${framesObserved}, floorRendered, spotShadowDelta=${shadowDelta} (>=${SMOKE_PIXEL_THRESHOLD}), RhiError count=0, wallTotalMs=${wallTotalMs}`,
 );
 
 device.destroy?.();

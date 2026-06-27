@@ -6237,7 +6237,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         '../light-buffer-layout'
       );
       expect(POINT_LIGHT_STD430_BYTES).toBe(32);
-      expect(SPOT_LIGHT_STD430_BYTES).toBe(48);
+      // feat-20260625-spot-light-shadow-mapping M2 / w8 (D-4): SpotLight grew
+      // 48 -> 64 for the shadowAtlasTile i32 clip-signal lane (4th vec4 column).
+      expect(SPOT_LIGHT_STD430_BYTES).toBe(64);
     });
   });
 }

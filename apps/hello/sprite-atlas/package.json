@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
-    "smoke": "node scripts/smoke-dawn.mjs"
+    "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-sprite-atlas smoke",
@@ -21,7 +22,7 @@
       },
       "fps": {
         "enabled": false,
-        "reason": "fps no-regression covered by hello-cube / hello-room / hello-app gates"
+        "reason": "feat-20260622-chunk-gpu-instancing-sprite-tilemap M3 / D-4 / L-8: AC-01 10k sprite p95>=60 fps gate cannot be validated on the GH-hosted ubuntu metrics-validate runner — that runner falls back to swiftshader WebGL2 and fps was previously fake-green (bug-20260612 — rAF kept ticking at vsync without rendering, so run-fps measured 60.06 fps every time). With fold landed, the swiftshader software path slows progressively at 10k sprite count, so the gate would either flake or report unrealistic numbers. AC-01 p95 SSOT moved to verify-stage local sandbox run (charter P5); re-enable when a hardware-WebGPU CI runner (chrome-beta + lavapipe + --enable-unsafe-swiftshader, or self-hosted GPU runner) is wired."
       },
       "bench": {
         "enabled": false,

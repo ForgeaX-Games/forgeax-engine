@@ -1,11 +1,11 @@
 // @forgeax/engine-rhi-debug/src/errors — DebugError + closed DebugErrorCode union.
 //
 // Shape:
-// - DebugErrorCode = closed union 12 members, independent from RhiErrorCode (per Q&A q8).
+// - DebugErrorCode = closed union 14 members, independent from RhiErrorCode (per Q&A q8).
 // - DebugError class has readonly .code / .expected / .hint / .detail four-field surface,
 //   same shape as RhiError (AGENTS.md "Errors are structured").
 // - .detail is a discriminated union narrowed on .code via switch exhaustive.
-// - Requirements §7 error model complete list (12 members, closed union).
+// - Requirements §7 error model complete list (14 members, closed union).
 //
 // Related: requirements §7 / AC-23 / AC-24; plan-strategy §3.1 errors.ts module.
 
@@ -24,7 +24,7 @@ import type { RhiCapsRecorded } from './types';
 export type RhiCapsRecordedKey = keyof RhiCapsRecorded;
 
 /**
- * Closed DebugErrorCode union. 12 members, completely independent from
+ * Closed DebugErrorCode union. 14 members, completely independent from
  * RhiErrorCode (no overlap per Q&A q8). `switch` exhaustive checks need
  * no default fallback — tsc strict mode guards union completeness.
  *
@@ -39,7 +39,9 @@ export type RhiCapsRecordedKey = keyof RhiCapsRecorded;
  * | `'replay-step-out-of-range'` | stepTo(N) where N > totalEvents or N < currentEventIdx. |
  * | `'replay-deterministic-violation'` | After submit + onSubmittedWorkDone, RT pixels differ from original (test-only). |
  * | `'rt-readback-failed'` | copyTextureToBuffer / mapAsync chain failed. |
- * | `'png-encode-failed'` | PNG encoding **or** disk write of RT readback / tape / report data failed. The `.hint` field discriminates: `'failed to ...'` describes the specific I/O step (PNG encode vs `mkdirSync` vs `writeFileSync`). The 12-member union stays locked (AC-23) by widening this code's semantic to cover the writeFileSync / mkdirSync paths — adding a 13th `disk-write-failed` member would break the requirements §7 12-member commitment. |
+ * | `'png-encode-failed'` | PNG encoding **or** disk write of RT readback / tape / report data failed. The `.hint` field discriminates: `'failed to ...'` describes the specific I/O step (PNG encode vs `mkdirSync` vs `writeFileSync`). |
+ * | `'snapshot-readback-failed'` | snapshotResource GPU byte readback failed (copy/mapAsync/storeBlob failed). |
+ * | `'seed-initial-data-failed'` | replayInitialData seed failed (handleId missing/dataHash missing/writeBuffer failed). |
  * | `'rpc-target-not-wired'` | wireDefaultInspectors was called without a debugRhi injector. |
  * | `'replay-dispose-busy'` | dispose() called while in-flight inspect is still running. |
  */
@@ -54,6 +56,8 @@ export type DebugErrorCode =
   | 'replay-deterministic-violation'
   | 'rt-readback-failed'
   | 'png-encode-failed'
+  | 'snapshot-readback-failed'
+  | 'seed-initial-data-failed'
   | 'rpc-target-not-wired'
   | 'replay-dispose-busy';
 
@@ -136,6 +140,35 @@ export interface DeterministicViolationDetail {
 }
 
 /**
+ * Detail type exclusive to the 'snapshot-readback-failed' path.
+ *
+ * `handleId` is the resource that snapshotResource attempted to read back.
+ * `stage` identifies which stage of the readback pipeline failed:
+ * 'copy' (copyBufferToBuffer/copyTextureToBuffer), 'map' (mapAsync), or
+ * 'store' (storeBlob hash computation / blobPool insertion).
+ */
+export interface SnapshotReadbackFailedDetail {
+  readonly handleId: string;
+  readonly stage: 'copy' | 'map' | 'store';
+}
+
+/**
+ * Detail type exclusive to the 'seed-initial-data-failed' path.
+ *
+ * `handleId` is the resource replayInitialData attempted to seed.
+ * `stage` identifies which stage of the seed pipeline failed:
+ * 'lookup' (handleMap miss / blobPool miss / unresolved resource kind) or
+ * 'write' (queue.writeBuffer / queue.writeTexture threw).
+ *
+ * The detail shape is locked by the README contract SSOT (Phase 0, w3) — the
+ * seed handler is its first consumer (Phase 1, w15).
+ */
+export interface SeedInitialDataFailedDetail {
+  readonly handleId: string;
+  readonly stage: 'lookup' | 'write';
+}
+
+/**
  * Tagged union of `.detail` shapes carried by DebugError.
  *
  * Each variant is exclusively associated with one DebugErrorCode:
@@ -145,6 +178,8 @@ export interface DeterministicViolationDetail {
  *   - `DisposeBusyDetail` -> 'replay-dispose-busy'
  *   - `HandleGraphBrokenDetail` -> 'tape-handle-graph-broken'
  *   - `DeterministicViolationDetail` -> 'replay-deterministic-violation'
+ *   - `SnapshotReadbackFailedDetail` -> 'snapshot-readback-failed'
+ *   - `SeedInitialDataFailedDetail` -> 'seed-initial-data-failed'
  *
  * The other 6 paths leave `.detail = undefined`.
  */
@@ -154,7 +189,9 @@ export type DebugErrorDetail =
   | StepRangeDetail
   | DisposeBusyDetail
   | HandleGraphBrokenDetail
-  | DeterministicViolationDetail;
+  | DeterministicViolationDetail
+  | SnapshotReadbackFailedDetail
+  | SeedInitialDataFailedDetail;
 
 /**
  * Structured debug error.

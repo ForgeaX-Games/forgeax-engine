@@ -1,11 +1,19 @@
 // shadow-csm-ubo.test.ts - feat-20260613-csm-cascaded-shadow-maps-unique-shadow-path
 // M4 / w14: View UBO std140 layout test (RED, test-first).
 //
-// Covers AC-08: View UBO tail pre-allocation for 4 cascades, fixed 592 B size
+// Covers AC-08: View UBO tail pre-allocation for 4 cascades, fixed size
 // independent of runtime cascadeCount. Validates std140 byte offsets for
 // lightViewProj[4], splitPlanes[4], cascadeCount, cascadeBlend.
 //
-// Layout (592 B std140, 148 f32):
+// feat-20260625-spot-light-shadow-mapping w25 (scope-amend webkit-fallback):
+// the View UBO grew 592 -> 784 B (148 -> 196 f32). The directional cascade
+// offsets [0..128] are byte-for-byte UNCHANGED; the per-spot fragment-read
+// `spotLightViewProj` array<mat4x4<f32>,4> (256 B) folded into the tail at
+// byte 528 (float 132), replacing the former zero tail-pad and removing the
+// standalone @group(0) binding 9 uniform buffer that overflowed the WebGL2
+// fallback fragment uniform-buffer budget.
+//
+// Layout (784 B std140, 196 f32):
 //   [  0.. 16) worldViewProj   mat4x4<f32>  (align 16, size 64)
 //   [ 16.. 19) lightDir        vec3<f32>    (align 16, 12 + 4 pad)
 //   [ 20.. 22) lightColor      vec3<f32>    (align 16, 12 + 4 pad)
@@ -21,14 +29,22 @@
 //   [120..123) splitPlanes[3]  f32 + 12 pad (vec4 wrapper, 16 B)
 //   [124]      cascadeCount    f32          (align 4, size 4)
 //   [125]      cascadeBlend    f32          (align 4, size 4)
-//   [126..147] tail padding    f32[22]      (struct tail 16 B align)
+//   [126]      depthBias       f32          (align 4, size 4)
+//   [127]      normalBias      f32          (align 4, size 4)
+//   [128]      pcfKernelSize   f32          (align 4, size 4)
+//   [129..131] align padding   f32[3]       (mat4 array align 16)
+//   [132..195] spotLightViewProj array<mat4x4<f32>,4> (align 16, size 256)
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const VIEW_UBO_FLOAT_COUNT = 148;
-const VIEW_UBO_BYTES = 592;
+const VIEW_UBO_FLOAT_COUNT = 196;
+const VIEW_UBO_BYTES = 784;
+// feat-20260625 w25: spot lightViewProj array folded into the View UBO tail.
+const OFFSET_SPOT_LIGHT_VIEW_PROJ = 132; // byte 528 (16 B-aligned after pcfKernelSize)
+const SPOT_LVP_LANE_COUNT = 4;
+const SPOT_LVP_FLOATS_PER_LANE = 16;
 
 // feat-20260621-merge-directionallightshadow-into-directionallight M3:
 // the merged DirectionalLight's shadow tail-pad slots — depthBias [126]/byte504,
@@ -63,19 +79,31 @@ const SPLIT_STRIDE_FLOATS = 4;
 
 describe('View UBO std140 layout (w14)', () => {
   describe('size invariants', () => {
-    it('UBO total size is 592 B (148 f32)', () => {
-      expect(VIEW_UBO_FLOAT_COUNT).toBe(148);
+    it('UBO total size is 784 B (196 f32)', () => {
+      expect(VIEW_UBO_FLOAT_COUNT).toBe(196);
       expect(VIEW_UBO_BYTES).toBe(VIEW_UBO_FLOAT_COUNT * F32_BYTES);
-      expect(VIEW_UBO_BYTES).toBe(592);
+      expect(VIEW_UBO_BYTES).toBe(784);
     });
 
     it('UBO size is fixed — independent of cascadeCount', () => {
-      // The host always allocates 592 B regardless of whether cascadeCount
+      // The host always allocates 784 B regardless of whether cascadeCount
       // is 1, 2, 3, or 4 at runtime. This validates AC-08.
       const sizeForN1 = VIEW_UBO_FLOAT_COUNT * F32_BYTES; // cascadeCount=1
       const sizeForN4 = VIEW_UBO_FLOAT_COUNT * F32_BYTES; // cascadeCount=4
       expect(sizeForN1).toBe(sizeForN4);
-      expect(sizeForN1).toBe(592);
+      expect(sizeForN1).toBe(784);
+    });
+
+    it('spotLightViewProj array lands at byte 528 (float 132), 16 B-aligned, last field', () => {
+      // feat-20260625 w25: the 4-lane spot perspective matrix array folds into
+      // the View UBO tail after pcfKernelSize (float 128 / byte 512), 16 B-aligned
+      // so it starts at byte 528 (float 132). It is the last struct field.
+      expect(OFFSET_SPOT_LIGHT_VIEW_PROJ * F32_BYTES).toBe(528);
+      expect((OFFSET_SPOT_LIGHT_VIEW_PROJ * F32_BYTES) % 16).toBe(0);
+      const spotArrayEndFloat =
+        OFFSET_SPOT_LIGHT_VIEW_PROJ + SPOT_LVP_LANE_COUNT * SPOT_LVP_FLOATS_PER_LANE;
+      expect(spotArrayEndFloat).toBe(VIEW_UBO_FLOAT_COUNT);
+      expect(spotArrayEndFloat * F32_BYTES).toBe(784);
     });
   });
 
@@ -210,15 +238,18 @@ describe('pcfKernelSize tail-pad slot wiring (M0, AC-14)', () => {
     'utf8',
   );
 
-  it('shadow tail-pad slots [126..128], layout unchanged (148 f32 / 592 B)', () => {
+  it('shadow tail floats [126..128] at fixed offsets, before the spot matrix array', () => {
     expect(OFFSET_DEPTH_BIAS * F32_BYTES).toBe(504);
     expect(OFFSET_NORMAL_BIAS * F32_BYTES).toBe(508);
     expect(OFFSET_PCF_KERNEL_SIZE * F32_BYTES).toBe(512);
     expect(OFFSET_DEPTH_BIAS).toBeGreaterThan(OFFSET_CASCADE_BLEND);
     expect(OFFSET_PCF_KERNEL_SIZE).toBeLessThan(VIEW_UBO_FLOAT_COUNT);
-    // The float count / byte size invariant must NOT grow (D-0).
-    expect(VIEW_UBO_FLOAT_COUNT).toBe(148);
-    expect(VIEW_UBO_BYTES).toBe(592);
+    // feat-20260625 w25: the shadow bias floats stay at [126..128]; the spot
+    // matrix array follows them at float 132 (byte 528). The struct grew to
+    // 196 f32 / 784 B to carry the folded-in spot matrices (was 148 / 592).
+    expect(OFFSET_PCF_KERNEL_SIZE).toBeLessThan(OFFSET_SPOT_LIGHT_VIEW_PROJ);
+    expect(VIEW_UBO_FLOAT_COUNT).toBe(196);
+    expect(VIEW_UBO_BYTES).toBe(784);
   });
 
   it('record writes the merged shadow tail-pad floats [126]/[127]/[128]', () => {
@@ -229,8 +260,12 @@ describe('pcfKernelSize tail-pad slot wiring (M0, AC-14)', () => {
     );
   });
 
-  it('record does NOT grow VIEW_PAYLOAD_FLOATS past 148', () => {
-    expect(recordSrc).toMatch(/VIEW_PAYLOAD_FLOATS\s*=\s*148/);
+  it('record grows VIEW_PAYLOAD_FLOATS to 196 to carry the folded spot matrices (w25)', () => {
+    // feat-20260625 w25: the per-spot fragment-read lightViewProj matrices fold
+    // into the View UBO tail, so VIEW_PAYLOAD_FLOATS grew 148 -> 196.
+    expect(recordSrc).toMatch(/VIEW_PAYLOAD_FLOATS\s*=\s*196/);
+    // The spot matrix array is written at base float 132.
+    expect(recordSrc).toMatch(/SPOT_LVP_BASE_FLOAT\s*=\s*132/);
   });
 
   it('common.wgsl View struct declares depthBias/normalBias/pcfKernelSize after cascadeBlend', () => {

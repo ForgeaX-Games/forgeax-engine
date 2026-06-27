@@ -351,6 +351,14 @@ export interface PbrCaps {
  *   declare the binding via `common.wgsl` but do not reference it; WebGPU
  *   still requires a populated entry on every view BG so the host writes a
  *   stable singleton buffer.
+ * binding 8 = spot shadow atlas (texture_depth_2d; fragment-only).
+ *   feat-20260625-spot-light-shadow-mapping M3 / w14 (D-5). A single 2D depth
+ *   texture holding up to 4 spot shadows in a 2x2 tile grid. ALWAYS-ON (no caps
+ *   gate — `texture_depth_2d` is compat-safe everywhere), matching the
+ *   unconditional `spotShadowMap` WGSL declaration in common.wgsl. Reuses the
+ *   comparison sampler at binding 4 (no binding 9). Every view BG must populate
+ *   binding 8 (real spotShadowDepth view when spot shadows run, else a 1x1
+ *   fallback depth view cleared to fully-lit).
  *
  * Mirrors feat-20260519-light-casters M3 D-S1 layout +
  * feat-20260520-directional-light-shadow-mapping M2 / w14 (D-1) shadow
@@ -432,6 +440,33 @@ export function buildPbrViewBglEntries(caps: PbrCaps): GPUBindGroupLayoutEntry[]
       binding: 7,
       visibility: GPU_SHADER_STAGE_VERTEX | GPU_SHADER_STAGE_FRAGMENT,
       buffer: { type: 'uniform' },
+    },
+    // feat-20260625-spot-light-shadow-mapping M3 / w14 (D-5): spot shadow
+    // atlas. A single `texture_depth_2d` holding up to 4 spot shadows in a 2x2
+    // tile grid (urp-pipeline.ts spotShadowDepth). FRAGMENT-only — the spot
+    // shadow factor is reconstructed at fragment time via perspective-divide in
+    // `evalSpotShadowed` (lighting-punctual.wgsl).
+    //
+    // ALWAYS-ON (no caps gate, unlike the point cube_array atlas at binding 5
+    // which rides POINT_SHADOW_AVAILABLE): spot uses `texture_depth_2d` which is
+    // compat-safe in every WebGPU profile, so the binding is unconditionally
+    // declared. The matching WGSL declaration is `spotShadowMap` at @group(0)
+    // binding 8 in common.wgsl (also unconditional) — the two must stay in
+    // lock-step or WebGPU validation rejects the bind group at smoke time
+    // (memory: BGL shape mismatch is a browser-path-only bug). No binding 9
+    // sampler: spot reuses the comparison sampler at binding 4.
+    // feat-20260625-spot-light-shadow-mapping M3 / w14 (D-5): spot shadow 2D
+    // atlas, the LAST view-BG binding. The per-spot fragment-read perspective
+    // lightViewProj matrices that w24 originally declared at a standalone
+    // binding 9 uniform buffer were folded into the View UBO (binding 0,
+    // `view.spotLightViewProj`) in w25 (scope-amend webkit-fallback): the
+    // standalone binding pushed the WebGL2 fallback fragment uniform-buffer
+    // count to 12, over GLES 3.0's `max_uniform_buffers_per_shader_stage = 11`,
+    // crashing pipeline-layout creation on the compat path (this feat's target).
+    {
+      binding: 8,
+      visibility: GPU_SHADER_STAGE_FRAGMENT,
+      texture: { sampleType: 'depth', viewDimension: '2d' },
     },
   ];
 }

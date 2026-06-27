@@ -289,7 +289,7 @@ describe('recorder state machine', () => {
     debugInst.onFrameEnd();
     const tape = debugInst.getTape() as any;
     expect(tape).toBeDefined();
-    expect(tape?.formatVersion).toBe(1);
+    expect(tape?.formatVersion).toBe(2);
     expect(tape?.events.some((e: any) => e.kind === 'frameMark')).toBe(true);
   });
 });
@@ -753,7 +753,7 @@ describe('finalize golden byte comparison (w4)', () => {
       expect(report1).toHaveProperty('events');
       expect(report1).toHaveProperty('passOffsets');
       expect(report1).toHaveProperty('valid');
-      expect(report1.header).toHaveProperty('formatVersion', 1);
+      expect(report1.header).toHaveProperty('formatVersion', 2);
       expect(Array.isArray(report1.events)).toBe(true);
       expect(Array.isArray(report1.passOffsets)).toBe(true);
       expect(typeof report1.valid).toBe('boolean');
@@ -1233,5 +1233,108 @@ describe('getTape closure (w5)', () => {
     const allCreateBufs = tape.events.filter((e) => e.kind === 'createBuffer');
     // After w8: only the referenced buffer's create should appear
     expect(allCreateBufs.length).toBe(1);
+  });
+});
+
+// ================================================================
+// w16: descriptor registry register / destroy (AC-09)
+// ================================================================
+
+describe('descriptor registry (w16)', () => {
+  it('createBuffer registers a buffer entry with size + usage (COPY_SRC promoted)', async () => {
+    const { debugInst } = await bootstrap();
+    const adapter = await getAdapter(debugInst);
+    const device = await getDevice(adapter);
+
+    const res = device.createBuffer({ size: 64, usage: 16 });
+    expect(res.ok).toBe(true);
+
+    const table = debugInst._getDescriptorTable();
+    expect(table.size).toBe(1);
+    const entry = [...table.values()][0]!;
+    expect(entry.kind).toBe('buffer');
+    expect(entry.size).toBe(64);
+    // Buffer COPY_SRC (0x04, distinct from texture's 0x01) promoted onto the
+    // recorded usage (w12); the original INDEX (0x10) bit is preserved.
+    expect((entry.usage & 0x04) !== 0).toBe(true);
+    expect((entry.usage & 0x10) !== 0).toBe(true);
+  });
+
+  it('createTexture registers a texture entry with format + usage', async () => {
+    const { debugInst } = await bootstrap();
+    const adapter = await getAdapter(debugInst);
+    const device = await getDevice(adapter);
+
+    const res = device.createTexture({
+      size: { width: 32, height: 16 },
+      format: 'rgba8unorm',
+      usage: 0x10,
+    });
+    expect(res.ok).toBe(true);
+
+    const table = debugInst._getDescriptorTable();
+    expect(table.size).toBe(1);
+    const entry = [...table.values()][0]!;
+    expect(entry.kind).toBe('texture');
+    expect(entry.format).toBe('rgba8unorm');
+    expect((entry.usage & 0x01) !== 0).toBe(true);
+  });
+
+  it('destroyBuffer removes the entry for that handleId', async () => {
+    const { debugInst } = await bootstrap();
+    const adapter = await getAdapter(debugInst);
+    const device = await getDevice(adapter);
+
+    const res = device.createBuffer({ size: 64, usage: 16 });
+    expect(debugInst._getDescriptorTable().size).toBe(1);
+
+    device.destroyBuffer((res as any).value);
+    expect(debugInst._getDescriptorTable().size).toBe(0);
+  });
+
+  it('destroyTexture removes the entry for that handleId', async () => {
+    const { debugInst } = await bootstrap();
+    const adapter = await getAdapter(debugInst);
+    const device = await getDevice(adapter);
+
+    const res = device.createTexture({
+      size: { width: 4, height: 4 },
+      format: 'rgba8unorm',
+      usage: 0x10,
+    });
+    expect(debugInst._getDescriptorTable().size).toBe(1);
+
+    device.destroyTexture((res as any).value);
+    expect(debugInst._getDescriptorTable().size).toBe(0);
+  });
+
+  it('create N + destroy N leaves the registry empty (no unbounded growth)', async () => {
+    const { debugInst } = await bootstrap();
+    const adapter = await getAdapter(debugInst);
+    const device = await getDevice(adapter);
+
+    const bufs: unknown[] = [];
+    for (let i = 0; i < 5; i++) {
+      const r = device.createBuffer({ size: 32 * (i + 1), usage: 16 });
+      bufs.push((r as any).value);
+    }
+    expect(debugInst._getDescriptorTable().size).toBe(5);
+
+    for (const b of bufs) device.destroyBuffer(b);
+    expect(debugInst._getDescriptorTable().size).toBe(0);
+  });
+
+  it('destroyBuffer on a never-registered handle is a silent no-op', async () => {
+    const { debugInst } = await bootstrap();
+    const adapter = await getAdapter(debugInst);
+    const device = await getDevice(adapter);
+
+    device.createBuffer({ size: 64, usage: 16 });
+    expect(debugInst._getDescriptorTable().size).toBe(1);
+
+    // An object the recorder never saw -> no handleId -> delete is a no-op,
+    // and the underlying device call still runs without throwing.
+    expect(() => device.destroyBuffer({} as any)).not.toThrow();
+    expect(debugInst._getDescriptorTable().size).toBe(1);
   });
 });

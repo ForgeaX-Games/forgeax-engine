@@ -425,7 +425,9 @@ export function buildPipelineDescriptor(
  *    - `'unlit-material'` — 7 entries: base PBR material only (no inject)
  *    - `'hdrp-7-slot'` — 7 entries (binding 0 + 3..8): HDRP cluster + SSAO group(2) BGL
  * 2. Caps-driven literal shapes (no shader):
- *    - `'pbr-view'` — 8 entries: view UBO + lights + 4 shadow bindings
+ *    - `'pbr-view'` — 10 entries: view UBO + lights + 6 shadow bindings
+ *      (directional 3/4, point 5/6, cascade 7, spot atlas 8, spot
+ *      lightViewProj matrices 9 — feat-20260625)
  *    - `'pbr-mesh-array'` — 1 entry: per-entity mesh SSBO (dynamic-offset)
  *    - `'pbr-instances'` — 1 entry: per-instance SSBO (no dynamic-offset)
  *    - `'pbr-skin-mesh-array'` — 2 entries: meshes + skin palette

@@ -19,8 +19,11 @@ description: >-
 | 概念 | 是什么 |
 |:--|:--|
 | **wrap** | `wrap(rhi)` 返回 `DebugRhiInstance extends RhiInstance`，proxy 拦截 `createBuffer` / `beginRenderPass` / `setPipeline` / `draw` 等全部调用 |
-| **tape** | 录制产出：有序 `RhiCallEvent[]` + hash 去重的二进制 blob pool。文件组合 `frame-0.tape.bin` + `frame-0.report.json` |
-| **replay** | tape 在 fresh `RhiDevice` 上按 event 序列重建（caps 匹配为前提）。dawn-node 保证 RT 像素一致 ε≤0.01 |
+| **tape** | 录制产出：有序 `RhiCallEvent[]` + hash 去重的二进制 blob pool。v2 自包含：含 create* 声明 + `initialData` 真实 GPU 字节 + frame 命令，不再依赖历史命令重建资源内容。`TAPE_FORMAT_VERSION=2`，v1 tape（formatVersion=1）反序列化返回 `tape-format-version-mismatch` 结构化错误（`.detail.expectedVersion=2`） |
+| **replay** | tape 在 fresh `RhiDevice` 上按 event 序列重建（caps 匹配为前提）。遵循 create 资源→seed `initialData`（writeBuffer/writeTexture 从 blobPool 取字节写回）→dispatch frame 命令的严格顺序。dawn-node 保证 RT 像素一致 ε≤0.01 |
+| **initialData** | 截帧时帧头快照所有活资源的真实 GPU 字节构成 `initialData` 事件，存入 tape bootstrap 前缀区。replay 时靠它恢复资源内容（如加载期上传的 VBO/IBO/instance buffer），消除"从历史命令重建"导致的 replay 全零问题 |
+| **snapshotResource** | `snapshotResource(handleId): Promise<Result>` — 策略层唯一交互口。读资源 descriptor→GPU copyToBuffer/mapAsync→blobPool hash 去重存字节→push `RhiCallEventInitialData` 入事件流。返回 `snapshot-readback-failed`（copy/mapAsync/storeBlob 任一失败，`.detail = {handleId, stage}`）。异步（GPU readback 链本就异步） |
+| **snapshotAllLiveResources** | `snapshotAllLiveResources(): Promise<Result>` — 帧头全表快照入口。先 `await onSubmittedWorkDone`（排空已提交工作），再遍历整个活资源注册表逐个调 `snapshotResource`。全成功则推进 Armed→Snapshotting→Recording。任一失败立刻返 `Result`（fail-fast，不留部分种子）。此即 AC-01 测试真实调用的入口；`snapshotResource` 是其单资源构建块 |
 | **inspectAt** | 在 replay 的指定 drawIdx 抓 bindings / drawCall / RT PNG。`fields` 裁剪避免 context 爆炸；RT 永远是 PNG 路径字符串，**不内联 base64** |
 
 ## 开启 + 注入链路
@@ -60,7 +63,7 @@ flowchart TD
 - `--target` 默认 `ws://localhost:5732`；`--frames` 默认 `1`；`--label` 默认空。
 - `--dev-url` 默认 `http://localhost:5173`（trigger-browser 用的 dev-server HTTP 地址）。
 - `fields` 未传 = **全字段**（bindings + drawCall + rt）；传 `--fields=bindings` 跳过 RT readback（省 `copyTextureToBuffer`）；传 `--fields=rt` 只要 PNG。
-- **trigger-browser HTTP 错误信封**：非 200 响应返回 `{ error: string, hint: string }`（非 `DebugError`，不扩张 12 成员闭并集）：`no-browser-tab`（503，hint 提示检查 dev-url 是否打开且浏览器 tab 已加载 HMR）、`recorder-busy`（409，hint 提示等待当前 capture 完成）。
+- **trigger-browser HTTP 错误信封**：非 200 响应返回 `{ error: string, hint: string }`（非 `DebugError`，不扩张 14 成员闭并集）：`no-browser-tab`（503，hint 提示检查 dev-url 是否打开且浏览器 tab 已加载 HMR）、`recorder-busy`（409，hint 提示等待当前 capture 完成）。
 
 > [!NOTE]
 > CLI 当前调用形态是 `node packages/rhi-debug/dist/cli.mjs <subcommand>`（需先 `pnpm -F @forgeax/engine-rhi-debug build`）。README 表里的 `forgeax-engine-console capture-frame` 是 end-state（plugin-bin 未落地，follow-up tweak）。未落地前 WS:5732 RPC 是 canonical 端到端通道。
@@ -87,7 +90,7 @@ flowchart LR
 ```
 
 - **L0 隔离**：`/capture-browser` 只 import `recorder-core` + `tape-format`（皆 node-free），无 `node:` / `pngjs` / `ws`。**不进 barrel**，只能经 subpath 触达——保 tree-shake gate。
-- **L1 单写者**：dev-server POST 端点与 Node finalize 尾都走同一 `assembleReport`，故浏览器录的 tape 与 Node 录的在盘上无法区分（D-3 / AC-05）。非法 body -> `{error, hint}` envelope 不落盘（AC-06），HTTP 层错误不进 `DebugError`（12 成员不扩张）。dev-server 端点由 `@forgeax/engine-vite-plugin-rhi-debug` 的 `vitePluginRhiDebug()` 挂载（加进 `vite.config` 的 `plugins[]` 即可，零样板自注入 flag）。`POST /__forgeax-debug/trigger` 端点同步返回 `{ runId, tapePath, reportPath }`（20ms ~ 30s，取决 tab 响应速度），非 200 返回 HTTP 错误信封 `{ error, hint }`（`no-browser-tab` 503 / `recorder-busy` 409）。
+- **L1 单写者**：dev-server POST 端点与 Node finalize 尾都走同一 `assembleReport`，故浏览器录的 tape 与 Node 录的在盘上无法区分（D-3 / AC-05）。非法 body -> `{error, hint}` envelope 不落盘（AC-06），HTTP 层错误不进 `DebugError`（14 成员不扩张）。dev-server 端点由 `@forgeax/engine-vite-plugin-rhi-debug` 的 `vitePluginRhiDebug()` 挂载（加进 `vite.config` 的 `plugins[]` 即可，零样板自注入 flag）。`POST /__forgeax-debug/trigger` 端点同步返回 `{ runId, tapePath, reportPath }`（20ms ~ 30s，取决 tab 响应速度），非 200 返回 HTTP 错误信封 `{ error, hint }`（`no-browser-tab` 503 / `recorder-busy` 409）。
 - **L2c 串 L3a**：`captureFrame(n)` 返回 `{ runId, tapePath, reportPath }`，把 `tapePath` 原样作为 `inspect-offline` 第一位置参。`FORGEAX_ENGINE_RHI_DEBUG=1` 时 `createAppFromCanvas` 才挂 `window.__forgeax`；未设 -> 不存在 -> 调用抛 `TypeError`（显式失败，非静默）。`trigger-browser` CLI 子命令是 `captureFrame` 的 Node 侧等价物——同样调用 `captureAndUpload`，但触发信道是 CLI HTTP POST 而非 DevTools 控制台。
 - **L2a 串 L3a**：`trigger-browser` 走 `POST /__forgeax-debug/trigger` 同步往返，返回的 `tapePath` 可直喂 `inspect-offline`。`--dev-url` 默认 `http://localhost:5173`，`--frames` 默认 `1`，`--label` 可选。**多 tab 行为**：HMR custom event 广播到所有连接 tab，每个 tab 各自截帧并上传 tape；trigger 响应只返回首个到达的 tape 路径，但后续 tab 的上传仍正常写盘——磁盘可能出现多份 tape（不同 `runId`），这是预期行为，非 bug。（见下方踩坑条目。）
 - **L3a 离线**：`inspect-offline` 读盘 + 自举 dawn-node device + replay，**不连 WS**——区别于 `inspect-at`（WS:5732 活设备）。bin 是 `forgeax-rhi-debug`（`package.json#bin`），programmatic 用法经 `exports['./cli']`。
@@ -130,14 +133,14 @@ const rtRes = await renderRtToCanvas(replay, 0, device, canvas);
 
 ## 错误码速查
 
-`DebugErrorCode` 12 成员闭并集，**完全独立**于 `RhiErrorCode`；`switch (err.code)` 穷尽，TS 编译期抓漏分支。
+`DebugErrorCode` 14 成员闭并集，**完全独立**于 `RhiErrorCode`；`switch (err.code)` 穷尽，TS 编译期抓漏分支。
 
 | code | 触发 |
 |:--|:--|
 | `recorder-not-attached` | RPC `debug.captureFrame` 但 bootstrap 时 `FORGEAX_ENGINE_RHI_DEBUG !== '1'` |
 | `recorder-already-armed` | 上次 arm 未完成又 arm；先 `disposeError()` 或等 capture 收尾 |
 | `frame-end-hook-missing` | `_onFrameEnd` 注入点缺失（理论不可达） |
-| `tape-format-version-mismatch` | tape `formatVersion` 与 runtime 不一致 |
+| `tape-format-version-mismatch` | tape `formatVersion` 与 runtime 不一致（v1 tape 被 v2 runtime 拒绝：`.detail.expectedVersion=2`、`.detail.tapeVersion=1`） |
 | `tape-handle-graph-broken` | event 引用未声明的 handleId |
 | `caps-mismatch` | replay 设备 caps 不足（`.detail.missingCaps` 列缺失项） |
 | `replay-step-out-of-range` | `stepTo(N)` 超界或回溯 |
@@ -146,6 +149,8 @@ const rtRes = await renderRtToCanvas(replay, 0, device, canvas);
 | `png-encode-failed` | PNG 编码失败 |
 | `rpc-target-not-wired` | `wireDefaultInspectors` 没传 `debugRhi` injector |
 | `replay-dispose-busy` | `dispose()` 时存在未完成的 in-flight inspect（`.detail.inFlightDrawIndices`）|
+| `snapshot-readback-failed` | snapshotResource GPU 字节读回失败（copy/mapAsync/storeBlob）。`.detail = {handleId, stage: 'copy' \| 'map' \| 'store'}` |
+| `seed-initial-data-failed` | replayInitialData 种子写入失败（handleId 缺失/dataHash 缺失/writeBuffer 失败）。`.detail = {handleId, stage: 'lookup' \| 'write'}` |
 
 ## 跨后端注意
 
@@ -267,7 +272,7 @@ AI 经 page.evaluate 读取：`await page.evaluate(() => window.__forgeaxViewer.
 | **no-webgpu** | `navigator.gpu === undefined` / adapter 请求失败 | 正常 | `"no-webgpu"` + "WebGPU not available" 居中文案，布局保留 |
 | **error** | shader 编译失败 / replay stepTo 失败 | 正常 | `"error"` + 错误消息 |
 
-> **不新增 `DebugErrorCode`** —— 复用既有的 12 成员闭并集（`rt-readback-failed` / `tape-format-version-mismatch` 等）。
+> **不新增 `DebugErrorCode`** —— 复用既有的 14 成员闭并集（`rt-readback-failed` / `tape-format-version-mismatch` 等）。
 
 ### shader 编译路径（C1 修正）
 

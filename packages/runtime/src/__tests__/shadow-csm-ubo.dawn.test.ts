@@ -5,7 +5,10 @@
 // back. Validates lightViewProj[4] + splitPlanes[4] + cascadeCount/cascadeBlend
 // survive the queue.writeBuffer round-trip without corruption.
 //
-// Layout matches shadow-csm-ubo.test.ts (w14) — 148 f32 / 592 B std140.
+// Layout matches shadow-csm-ubo.test.ts — 196 f32 / 784 B std140 after
+// feat-20260625 w25 folded the spot lightViewProj array into the View UBO tail.
+// The directional cascade offsets [0..125] this test exercises are unchanged;
+// the extra tail (floats 132..195) stays zero in this round-trip.
 //
 // Red phase: common.wgsl still has lightSpaceMatrix (not lightViewProj array);
 // record.ts still writes single lightSpaceMatrix. This test writes the NEW
@@ -14,10 +17,10 @@
 
 import { describe, expect, it } from 'vitest';
 
-// ── Constants (mirrors w14 layout) ──────────────────────────────────────────
+// ── Constants (mirrors current View UBO layout) ─────────────────────────────
 
-const VIEW_UBO_FLOAT_COUNT = 148;
-const VIEW_UBO_BYTES = 592;
+const VIEW_UBO_FLOAT_COUNT = 196;
+const VIEW_UBO_BYTES = 784;
 
 // f32 indices matching std140 byte offsets.
 const OFF = {
@@ -64,7 +67,7 @@ const UNIFORM = 0x0040; // GPUBufferUsage.UNIFORM
 const dawnReady = typeof navigator !== 'undefined' && (navigator as any).gpu !== undefined;
 
 /**
- * Build a 148-float View UBO payload with known test values.
+ * Build a 196-float View UBO payload with known test values.
  * All 4 lightViewProj matrices are identity; splitPlanes use
  * monotonic values; cascadeCount=4, cascadeBlend=0.2.
  */

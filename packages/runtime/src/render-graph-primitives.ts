@@ -110,6 +110,7 @@ import {
   recordPointShadowPass,
   recordShadowPass,
   recordSkyboxPass,
+  recordSpotShadowPass,
 } from './render-system-record';
 import { getOrCreateSsaoBuffers } from './ssao-buffers';
 
@@ -310,6 +311,37 @@ export function addPointShadowPass(graph: RenderGraph<RenderPipelineContext>, na
     reads: [],
     writes: [],
     execute: recordPointShadowPass as (c: RenderPipelineContext) => void,
+  });
+}
+
+export interface AddSpotShadowPassOptions {
+  /** Graph depth target (depth32float 2x2 tile atlas) the spot casters write. */
+  readonly depth: string;
+}
+
+/**
+ * feat-20260625-spot-light-shadow-mapping M2 / w9 + w11 (D-1 + D-2). Render the
+ * spot-light shadow caster passes into the graph-owned `spotShadowDepth` atlas
+ * (a single 2D depth32float texture of 2x2 tiles — NOT a 2d-array). One graph
+ * pass NODE; the execute closure (`recordSpotShadowPass`) loops the per-frame
+ * `frameState.spotShadowSnapshots`, rendering each castShadow spot's perspective
+ * depth into its tile (viewport keyed on `shadowAtlasTile`) with first-tile
+ * clear / rest load (independent of the directional cascadeIndex; D-2). Unlike
+ * `addPointShadowPass` the spot atlas IS a graph color target, so the pass
+ * declares `writes: [opts.depth]` — `addScenePass.reads` lists the same key to
+ * order spot-shadow -> main. The single-node-with-internal-loop shape keeps the
+ * memoized graph from rebuilding on spot-count drift (AC-03 zero-spot scenes
+ * record zero passes via the early-return inside recordSpotShadowPass).
+ */
+export function addSpotShadowPass(
+  graph: RenderGraph<RenderPipelineContext>,
+  name: string,
+  opts: AddSpotShadowPassOptions,
+): void {
+  graph.addPass(name, {
+    reads: [],
+    writes: [opts.depth],
+    execute: recordSpotShadowPass as (c: RenderPipelineContext) => void,
   });
 }
 
@@ -871,8 +903,17 @@ function recordSsaoBlurPass(
 }
 
 export interface AddTonemapPassOptions {
-  /** Logical HDR resource the tonemap reads (typically the bloom composite alias). */
+  /** Logical HDR resource tonemap reads when bloom is on (the bloom composite output). */
   readonly hdrComposited: string;
+  /**
+   * Logical HDR resource tonemap reads when bloom is OFF (the bloom composite
+   * pass is gated off and never writes hdrComposited). Defaults to
+   * `hdrComposited` for pipelines where the two are the same texture (e.g.
+   * HDRP passes `hdrColor` for both). URP passes `hdrColor` here so that with
+   * bloom off, tonemap reads the main-rendered scene directly instead of an
+   * unwritten hdrComposited target (bug-20260625).
+   */
+  readonly hdrColorWhenBloomOff?: string;
 }
 
 /**
@@ -906,8 +947,17 @@ export function addTonemapPass(
   name: string,
   opts: AddTonemapPassOptions,
 ): void {
+  // Declare both potential read sources so the topo-sort keeps tonemap after
+  // BOTH the composite writer (hdrComposited) and the main writer (hdrColor),
+  // regardless of which one the dispatch resolves at record time. resolveCtx
+  // exposes every compiled texture, so the runtime pick below always resolves.
+  const hdrColorWhenBloomOff = opts.hdrColorWhenBloomOff ?? opts.hdrComposited;
+  const tonemapReads =
+    hdrColorWhenBloomOff === opts.hdrComposited
+      ? [opts.hdrComposited]
+      : [opts.hdrComposited, hdrColorWhenBloomOff];
   graph.addPass(name, {
-    reads: [opts.hdrComposited],
+    reads: tonemapReads,
     writes: [],
     execute: (ctx: RenderPipelineContext, resolveCtx?: ResolveContext) => {
       // tonemapActive SSOT: derived from camera.tonemap (mirrors recordFrame's
@@ -925,14 +975,12 @@ export function addTonemapPass(
         );
         return;
       }
-      dispatchFullscreenPass(
-        ctx,
-        name,
-        TONEMAP_POST_PROCESS_ID,
-        'swapchain',
-        [opts.hdrComposited],
-        resolveCtx,
-      );
+      // Pick the read source by bloom state: when bloom is on the composite
+      // pass wrote hdrComposited; when off it was gated and never ran, so read
+      // the main-rendered hdrColor instead (bug-20260625). Same texture for
+      // pipelines that pass identical keys (e.g. HDRP).
+      const src = ctx.camera.bloom === 'on' ? opts.hdrComposited : hdrColorWhenBloomOff;
+      dispatchFullscreenPass(ctx, name, TONEMAP_POST_PROCESS_ID, 'swapchain', [src], resolveCtx);
     },
   });
 }

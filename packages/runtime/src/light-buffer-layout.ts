@@ -15,13 +15,23 @@
 //             PointLight in common.wgsl. -1 (0xFFFFFFFF) is the no-shadow
 //             sentinel — shader path samples shadow only when layer >= 0.
 //
-//   SpotLight (48 B / 12 floats):
+//   SpotLight (64 B / 16 floats):
 //     [ 0..2 ] position vec3<f32>
 //     [   3 ] invRangeSquared f32
 //     [ 4..6 ] color vec3<f32> (host-pre-multiplied)
 //     [   7 ] cosInner f32
 //     [ 8..10] direction vec3<f32> (raw outgoing vector)
 //     [  11 ] cosOuter f32
+//     [12..14] pad f32 = 0 (std430 vec4 stride alignment)
+//     [  15 ] shadowAtlasTile i32 (sentinel -1 = unassigned/clipped; 0..3 = tile)
+//             — feat-20260625-spot-light-shadow-mapping M2 / w8 (D-4):
+//             SpotLight GPU struct had no free pad lane (8 lanes full), so the
+//             clip signal extends the struct to a 4th vec4 column. The lane is
+//             written i32 via an Int32Array view of the same backing
+//             ArrayBuffer; the shader reads `shadowAtlasTile: i32` from byte
+//             60..64 of struct SpotLight (common.wgsl). -1 (0xFFFFFFFF) is the
+//             unassigned/clipped sentinel — shader samples shadow only when
+//             tile >= 0. Mirrors point's slot-7 shadowAtlasLayer pattern.
 //
 // Array header (16 B, std430 stride alignment):
 //     [ 0 ] count u32 (number of valid slots in the trailing array)
@@ -124,8 +134,17 @@ export const STORAGE_BUFFER_MIN_REQUIRED = 4;
 
 /** Byte size of one PointLight std430 slot (vec4 * 2). */
 export const POINT_LIGHT_STD430_BYTES = 32;
-/** Byte size of one SpotLight std430 slot (vec4 * 3). */
-export const SPOT_LIGHT_STD430_BYTES = 48;
+/**
+ * Byte size of one SpotLight std430 slot (vec4 * 4).
+ *
+ * feat-20260625-spot-light-shadow-mapping M2 / w8 (D-4): grew 48 -> 64 to make
+ * room for the `shadowAtlasTile: i32` clip-signal lane (slot 15). Slots 0..11
+ * keep the prior layout; slots 12..14 are vec4-alignment padding.
+ */
+export const SPOT_LIGHT_STD430_BYTES = 64;
+
+/** Sentinel value for SpotLight slot[15] meaning "no shadow / clipped". */
+export const SPOT_LIGHT_SHADOW_TILE_SENTINEL = -1;
 /** Byte size of the array header (count u32 + 12 B pad to 16 B stride). */
 export const LIGHT_ARRAY_HEADER_BYTES = 16;
 /** Maximum number of slots packed in the first-slice cap layout (D-S3). */
@@ -161,14 +180,18 @@ export function packPointLight(snap: PointLightSnapshot): Float32Array {
 }
 
 /**
- * Pack one SpotLightSnapshot into 12 floats (48 B byte-for-byte std430).
+ * Pack one SpotLightSnapshot into 16 floats (64 B byte-for-byte std430).
  *
  * cosInner / cosOuter ride the otherwise-padding `.w` lanes of the
  * `color` and `direction` vec4 columns (AC-04 c + plan D-S2 16 B alignment
- * via packing rather than padding rows).
+ * via packing rather than padding rows). Slot 15 carries `shadowAtlasTile: i32`
+ * (sentinel -1 = unassigned/clipped, 0..3 = atlas tile) written through an
+ * Int32Array view so the shader's `i32` read at byte 60..64 of struct SpotLight
+ * (common.wgsl) sees the correct two's-complement bits (-1 = 0xFFFFFFFF).
+ * Slots 12..14 stay zero (vec4-alignment padding). feat-20260625 M2 / w8 (D-4).
  */
 export function packSpotLight(snap: SpotLightSnapshot): Float32Array {
-  const out = new Float32Array(12);
+  const out = new Float32Array(16);
   out[0] = snap.position[0] ?? 0;
   out[1] = snap.position[1] ?? 0;
   out[2] = snap.position[2] ?? 0;
@@ -181,6 +204,10 @@ export function packSpotLight(snap: SpotLightSnapshot): Float32Array {
   out[9] = snap.direction[1] ?? 0;
   out[10] = snap.direction[2] ?? 0;
   out[11] = snap.cosOuter;
+  // Slots 12..14 stay zero (vec4-alignment padding).
+  // Slot 15: shadowAtlasTile i32 via Int32Array view (sentinel -1 default).
+  const i32 = new Int32Array(out.buffer);
+  i32[15] = snap.shadowAtlasTile ?? SPOT_LIGHT_SHADOW_TILE_SENTINEL;
   return out;
 }
 

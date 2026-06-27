@@ -80,12 +80,17 @@ export function RtPanel({ selectedDrawIdx, tape, viewModel }: RtPanelProps) {
 
       const { replay, device } = sessionResult.value;
 
-      // Step the replay to the target draw index so its enclosing render pass
-      // is replayed and the pipeline + resources are created on the device.
-      // We need to find the last event index within the enclosing render pass.
-      // The draw event index in the raw events array may not match drawIdx,
-      // but stepTo expects the event index. We step to the end of all events
-      // to ensure the full frame is replayed before reading back.
+      // The replay session is cached and reused across draw selections (C7), and
+      // stepTo only moves forward — re-selecting a draw after the first render
+      // leaves currentEventIdx at the end, so a second stepTo(eventCount-1) hits
+      // replay-step-out-of-range. reset() rewinds to event 0 (destroying the
+      // recreated handles) so every selection replays the full frame cleanly.
+      replay.reset();
+
+      // Step the replay to the end of all events so the full frame (including
+      // the color pass + its submit) is replayed before reading back. The draw
+      // event index in the raw events array may not match drawIdx, but stepping
+      // to the end guarantees the RT holds committed pixels.
       const eventCount = tape.events.length;
       const stepResult = await replay.stepTo(eventCount - 1);
       if (cancelled) return;
@@ -168,13 +173,21 @@ export function RtPanel({ selectedDrawIdx, tape, viewModel }: RtPanelProps) {
     >
       <h3 className="text-sm font-medium text-slate-900 dark:text-slate-100 mb-3">Render Target</h3>
 
-      {status === 'ok' && (
-        <canvas
-          ref={canvasRef}
-          {...{ [rtCanvasAnchor()]: '' }}
-          className="max-w-full h-auto block"
-        />
-      )}
+      {/*
+        The canvas must stay mounted whenever RT rendering is possible, not only
+        once status === 'ok'. The render effect resolves the canvas ref *before*
+        it can set status to 'ok' (renderRtToCanvas needs a live canvas), so a
+        conditional `status === 'ok' && <canvas>` races: selecting an RT-bearing
+        draw while the previous status was no-rt / error left the canvas
+        unmounted, and the effect failed with "Canvas element not mounted".
+        Keep it mounted and just hide it when not showing RT.
+      */}
+      <canvas
+        ref={canvasRef}
+        {...{ [rtCanvasAnchor()]: '' }}
+        className="max-w-full h-auto block"
+        style={{ display: status === 'ok' ? 'block' : 'none' }}
+      />
 
       {status === 'no-rt' && (
         <p className="text-sm text-slate-500 dark:text-slate-400 text-center py-8">

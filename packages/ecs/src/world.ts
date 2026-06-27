@@ -21,6 +21,7 @@ import type {
 import {
   BUILTIN_BASE,
   err,
+  isRetiredSlot,
   ok,
   PACK_ERROR_HINTS,
   pack,
@@ -65,7 +66,6 @@ import { fillComponentDefaults, validateComponentDataKeys } from './component-de
 // type-space `Entity` handle imported below from `./entity`.
 import { Entity as EntityComponent } from './entity';
 import {
-  ENTITY_MAX_GENERATION,
   ENTITY_MAX_INDEX,
   ENTITY_NULL_RAW,
   type EntityHandle,
@@ -949,7 +949,7 @@ export class World {
     // retired slot keeps gen > 255 forever, so its records[] entry is dead but
     // intact.
     record.generation += 1;
-    if (record.generation <= ENTITY_MAX_GENERATION) {
+    if (!isRetiredSlot(record.generation)) {
       this.freeIndices.push(slot);
     }
     // else: index permanently retired (D-08).

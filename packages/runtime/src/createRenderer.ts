@@ -2851,7 +2851,15 @@ const GPU_SHADER_STAGE_FRAGMENT = 0x2;
 // append at the formerly-free tail pad (bytes 504/508/512, floats 126/127/128).
 // VIEW_UBO_BYTES stays 592 (the host tail pad shrinks 88 B -> 64 B); the WGSL
 // View struct in common.wgsl carries the matching 3 f32 (SSOT comment synced).
-const VIEW_UBO_BYTES = 592;
+// feat-20260625-spot-light-shadow-mapping w25 (scope-amend webkit-fallback):
+// grew 592 -> 784. The per-spot fragment-read perspective lightViewProj matrices
+// (`array<mat4x4<f32>, 4>` = 256 B) fold from a standalone @group(0) binding 9
+// uniform buffer into the View UBO tail (bytes 528..784, 16 B-aligned after
+// pcfKernelSize at byte 512). This removes the 12th fragment-stage uniform
+// buffer that overflowed GLES 3.0's max_uniform_buffers_per_shader_stage = 11 on
+// the WebGL2 fallback path. render-system-record writes the full 196 f32 payload;
+// common.wgsl `View.spotLightViewProj` is the matching SSOT.
+const VIEW_UBO_BYTES = 784;
 
 // ── feat-20260520-directional-light-shadow-mapping M2 / w15 (AC-12 numeric flip)
 //
@@ -3843,26 +3851,32 @@ async function buildReadyWebGPU(
         continue;
       }
       // feat-20260531-bloom-first-declarative-render-graph-pass / w13:
-      // bloom marker triage (D-7). The 3 WGSL modules embed unique content
-      // markers: 'bloomBrightExtract' (bloom-bright.wgsl), 'bloomBlurDir'
-      // (bloom-blur.wgsl, shared by H/V pipelines), 'bloomComposite'
-      // (bloom-composite.wgsl). Blur H/V share the same module (D-1).
-      if (entry.wgsl.includes('bloomBrightExtract')) {
+      // bloom marker triage (D-7). Identify the 3 bloom WGSL modules by their
+      // unique uniform-struct names ('BloomBrightParams' in bloom-bright.wgsl,
+      // 'BloomBlurParams' in bloom-blur.wgsl shared by H/V pipelines,
+      // 'BloomCompositeParams' in bloom-composite.wgsl). Struct names are naga
+      // IR and survive naga_oil composition unchanged -- unlike the original
+      // `// bloomBrightExtract` content-marker COMMENTS, which naga's WGSL
+      // writeback drops (comments are not part of the IR), leaving the markers
+      // absent from the composed `entry.wgsl` so the triage never matched and
+      // bloom silently never initialised (bug-20260625). Same survives-naga
+      // rationale as the SSAO `fs_ssao_calc` entry-point marker below.
+      if (entry.wgsl.includes('BloomBrightParams')) {
         bloomBrightEntry ??= entry;
         continue;
       }
-      if (entry.wgsl.includes('bloomBlurDir')) {
+      if (entry.wgsl.includes('BloomBlurParams')) {
         bloomBlurEntry ??= entry;
         continue;
       }
-      if (entry.wgsl.includes('bloomComposite')) {
+      if (entry.wgsl.includes('BloomCompositeParams')) {
         bloomCompositeEntry ??= entry;
         continue;
       }
       // feat-20260612-hdrp-ssao M6 / w27: SSAO marker triage (D-E).
       // The composed WGSL contains 'fs_ssao_calc' fragment entry point
       // which survives naga_oil composition unchanged. Same pattern as
-      // bloomBrightExtract marker.
+      // the bloom struct-name markers above.
       if (entry.wgsl.includes('fs_ssao_calc')) {
         ssaoEntry ??= entry;
         continue;
@@ -4137,8 +4151,9 @@ async function buildReadyWebGPU(
 
     // feat-20260531-bloom-first-declarative-render-graph-pass / w13:
     // bloom shader modules are optional (apps with legacy manifests without
-    // bloom.wgsl continue to boot). Identified by the D-7 content markers
-    // 'bloomBrightExtract' / 'bloomBlurDir' / 'bloomComposite'. When
+    // bloom.wgsl continue to boot). Identified by the uniform-struct-name
+    // markers 'BloomBrightParams' / 'BloomBlurParams' / 'BloomCompositeParams'
+    // (see triage above; struct names survive naga_oil composition). When
     // present, each module is compiled here; pipeline construction happens
     // alongside the FXAA / tonemap pipelines below.
     if (bloomBrightEntry !== undefined) {
@@ -4557,16 +4572,22 @@ async function buildReadyWebGPU(
   if (!viewUboResult.ok) throw viewUboResult.error;
 
   // feat-20260613-csm-cascaded-shadow-maps M5 / w28: per-pass cascade-index
-  // UBO consumed by shadow_caster.wgsl. 16 B (u32 index + 12 B pad to clear
-  // the WebGL2 16 B uniform alignment requirement). Stable singleton; the
-  // record stage queue.writeBuffer-overwrites the index immediately before
-  // each cascade pass's command-encoder submit, and the per-pass submits
-  // serialize host writes against GPU reads.
+  // UBO consumed by shadow_caster.wgsl. Stable singleton; the record stage
+  // queue.writeBuffer-overwrites the fields immediately before each pass's
+  // command-encoder submit, and the per-pass submits serialize host writes
+  // against GPU reads.
+  //
+  // feat-20260625-spot-light-shadow-mapping M2 / w10 + w11 (D-1): grew 16 -> 80
+  // B. First 16 B carry `index` u32 + `isSpot` u32 + 2 pad u32 (keeps the
+  // mat4 16 B-aligned for WebGL2); the trailing 64 B carry `spotLightViewProj`
+  // mat4x4<f32>, written per spot tile pass by recordSpotShadowPass and read by
+  // the shadow_caster spot branch. Directional cascade passes leave isSpot=0
+  // and ignore the matrix lanes.
   const shadowCasterCascadeUboResult = runShimSyncStep(
     () =>
       rhiDevice.createBuffer({
         label: 'shadow-caster-cascade-ubo',
-        size: 16,
+        size: 80,
         usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
         mappedAtCreation: false,
       }),
@@ -5096,6 +5117,15 @@ async function buildReadyWebGPU(
     SHADOW_PARAMS_ZEROES,
   );
   if (!shadowParamsZeroWriteRes.ok) throw shadowParamsZeroWriteRes.error;
+
+  // feat-20260625-spot-light-shadow-mapping w25 (scope-amend webkit-fallback):
+  // the per-spot fragment-read perspective lightViewProj matrices no longer have
+  // a standalone uniform buffer — they fold into the View UBO tail
+  // (`view.spotLightViewProj`, bytes 528..784, allocated as part of
+  // VIEW_UBO_BYTES = 784 above). The View UBO's createBuffer already zero-fills
+  // on first writeBuffer; render-system-record writes the spot lanes inside the
+  // per-frame viewPayload. Removing the dedicated buffer drops the WebGL2
+  // fallback fragment uniform-buffer count from 12 back to 11.
 
   // feat-20260520-skylight-ibl-cubemap M2 round-4 / t40 amend
   // (plan-strategy D-5 round-4 REVISED): allocate the fallback Skylight
@@ -5659,7 +5689,9 @@ async function buildReadyWebGPU(
   let bloomCompositeBglHandle: BindGroupLayout | null = null;
   let bloomSamplerHandle: Sampler | null = null;
   let bloomBrightParamsBufferHandle: Buffer | null = null;
-  let bloomBlurParamsBufferHandle: Buffer | null = null;
+  // bug-20260625: separate H/V blur params UBOs (see PerPassResources comment).
+  let bloomBlurHParamsBufferHandle: Buffer | null = null;
+  let bloomBlurVParamsBufferHandle: Buffer | null = null;
   let bloomCompositeParamsBufferHandle: Buffer | null = null;
   // feat-20260612-hdrp-ssao M6 / w26 + w43: SSAO pipeline handles (D-A).
   // calc + blur RenderPipeline pair sharing a dedicated 6-entry BGL.
@@ -6157,21 +6189,38 @@ async function buildReadyWebGPU(
           bloomBlurHPipelineHandle as unknown as typeof bloomBlurVPipelineHandle;
       }
 
-      // Blur params UBO: 16 B std140 (texelSize.xy + radius + pad).
-      const blurParamsResult = runShimSyncStep(
+      // Blur params UBOs: 16 B std140 (texelSize.xy + radius + pad) each.
+      // bug-20260625: one per axis -- H and V must not share a buffer (the
+      // shared-buffer writeBuffer race made both passes blur vertically).
+      const blurHParamsResult = runShimSyncStep(
         () =>
           rhiDevice.createBuffer({
-            label: 'bloom-blur-params-ubo',
+            label: 'bloom-blur-h-params-ubo',
             size: BLUR_PARAMS_BYTES,
             usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
             mappedAtCreation: false,
           }),
         'webgpu-runtime-error',
-        'createBuffer (bloom-blur params UBO) succeeded',
+        'createBuffer (bloom-blur-h params UBO) succeeded',
         'check device.limits.maxUniformBufferBindingSize',
       );
-      if (!blurParamsResult.ok) throw blurParamsResult.error;
-      bloomBlurParamsBufferHandle = blurParamsResult.value;
+      if (!blurHParamsResult.ok) throw blurHParamsResult.error;
+      bloomBlurHParamsBufferHandle = blurHParamsResult.value;
+
+      const blurVParamsResult = runShimSyncStep(
+        () =>
+          rhiDevice.createBuffer({
+            label: 'bloom-blur-v-params-ubo',
+            size: BLUR_PARAMS_BYTES,
+            usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
+            mappedAtCreation: false,
+          }),
+        'webgpu-runtime-error',
+        'createBuffer (bloom-blur-v params UBO) succeeded',
+        'check device.limits.maxUniformBufferBindingSize',
+      );
+      if (!blurVParamsResult.ok) throw blurVParamsResult.error;
+      bloomBlurVParamsBufferHandle = blurVParamsResult.value;
     }
 
     // Bloom composite: 2-tex + sampler + UBO@3 BGL (D-4, D-5).
@@ -6641,6 +6690,9 @@ async function buildReadyWebGPU(
     // shadow params UBO bound at viewBindGroup binding(6). Written per
     // frame from `frameState.pointShadowSnapshots`.
     shadowParamsBuffer: shadowParamsBufferResult.value,
+    // feat-20260625-spot-light-shadow-mapping w25: the spot lightViewProj
+    // matrices fold into the View UBO tail (`view.spotLightViewProj`); no
+    // dedicated buffer / view-BG binding 9 (WebGL2 uniform-buffer budget).
     // feat-20260520-directional-light-shadow-mapping M2 / w15 (AC-12):
     // shadow-factor probe pipeline + supporting GPU resources. All fields
     // null when the shader manifest is empty (no shaders -> no probe).
@@ -6720,7 +6772,8 @@ async function buildReadyWebGPU(
       bloomCompositeBindGroupLayout: bloomCompositeBglHandle,
       bloomSampler: bloomSamplerHandle,
       bloomBrightParamsBuffer: bloomBrightParamsBufferHandle,
-      bloomBlurParamsBuffer: bloomBlurParamsBufferHandle,
+      bloomBlurHParamsBuffer: bloomBlurHParamsBufferHandle,
+      bloomBlurVParamsBuffer: bloomBlurVParamsBufferHandle,
       bloomCompositeParamsBuffer: bloomCompositeParamsBufferHandle,
       bloomBrightTexture: null,
       bloomBrightView: null,

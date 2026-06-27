@@ -353,7 +353,11 @@ async function renderConfigWithSpy(
         ): void => {
           const view = data as ArrayBufferView & { length?: number; BYTES_PER_ELEMENT?: number };
           const nb = view.byteLength ?? (view.length ?? 0) * (view.BYTES_PER_ELEMENT ?? 4);
-          if (nb >= 592 && off === 0) {
+          // feat-20260625 w25: the View UBO grew 592 -> 784 B (148 -> 196 f32)
+          // when the spot lightViewProj array folded into its tail. The
+          // directional fields this test reads live in floats [0..148); capture
+          // that leading window from the now-784 B view write.
+          if (nb >= 784 && off === 0) {
             const copy = new Float32Array(148);
             if (data instanceof Float32Array) copy.set(data.subarray(0, 148));
             else if (ArrayBuffer.isView(data)) {

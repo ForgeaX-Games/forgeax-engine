@@ -7,9 +7,11 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera,
   createDevImportTransport,
+  createPlaneGeometry,
   DirectionalLight,
   EngineEnvironmentError,
   HANDLE_CUBE,
+  Materials,
   MeshFilter,
   MeshRenderer,
   PointLight,
@@ -243,6 +245,128 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       )
       .unwrap();
   }
+
+  // feat-20260625 spot-shadow w16: the LO 2.5 scene is 10 floating cubes with
+  // no receiver surface, so a spot shadow has nowhere to land. Add a large
+  // floor plane below the scene + one obstructing cube sitting on it, then a
+  // FIXED SpotLight aimed at the cube so its shadow falls on the floor (AC-01).
+  // The floor + obstructing cube use Materials.standard, which ships a
+  // ShadowCaster pass by default, so the cube writes the spot depth atlas and
+  // the floor receives via fragment binding 8/9. The existing camera-coupled
+  // flashlight SpotLight is kept (AC-07 no regression); the fixed spot
+  // guarantees a deterministic, camera-independent shadow.
+  //
+  // The sub-scene sits at x=SHADOW_X, well clear of the LO 2.5 point-light
+  // cluster (x in {0.7,2.3,-4,0}, intensity 100) so the strong point-light
+  // floor glow does not wash out the spot shadow. The spot is offset to the +X
+  // side and angled toward -X so the cube's shadow is cast laterally (not
+  // hidden directly under the cube). These coordinates match the dawn smoke
+  // (scripts/smoke-dawn.mjs) so the smoke validates the real demo scene.
+  const SHADOW_X = -9;
+  const SHADOW_Z = -3;
+  const floorMeshRes = createPlaneGeometry(30, 30);
+  if (!floorMeshRes.ok) {
+    console.error(
+      '[learn-render 2.5 light-casters] createPlaneGeometry failed:',
+      floorMeshRes.error.code,
+    );
+    return;
+  }
+  const floorMeshHandle = world.allocSharedRef('MeshAsset', floorMeshRes.value);
+  const floorMatHandle = world.allocSharedRef(
+    'MaterialAsset',
+    Materials.standard({ baseColor: [0.55, 0.55, 0.6, 1], metallic: 0, roughness: 0.9 }),
+  );
+  // Lay the XY plane flat on XZ (rotate -90deg about X) at y=-2.
+  const FLOOR_QUAT_X = Math.sin(-Math.PI / 4);
+  const FLOOR_QUAT_W = Math.cos(-Math.PI / 4);
+  world
+    .spawn(
+      {
+        component: Transform,
+        data: {
+          posX: 0,
+          posY: -2,
+          posZ: SHADOW_Z,
+          quatX: FLOOR_QUAT_X,
+          quatY: 0,
+          quatZ: 0,
+          quatW: FLOOR_QUAT_W,
+          scaleX: 1,
+          scaleY: 1,
+          scaleZ: 1,
+        },
+      },
+      { component: MeshFilter, data: { assetHandle: floorMeshHandle } },
+      { component: MeshRenderer, data: { materials: [floorMatHandle] } },
+    )
+    .unwrap();
+
+  // Obstructing cube sitting on the floor; the fixed spot casts its shadow
+  // laterally onto the floor beside it.
+  const obstructorMatHandle = world.allocSharedRef(
+    'MaterialAsset',
+    Materials.standard({ baseColor: [0.85, 0.5, 0.25, 1], metallic: 0, roughness: 0.6 }),
+  );
+  world
+    .spawn(
+      {
+        component: Transform,
+        data: {
+          posX: SHADOW_X,
+          posY: -0.6,
+          posZ: SHADOW_Z,
+          quatX: 0,
+          quatY: 0,
+          quatZ: 0,
+          quatW: 1,
+          scaleX: 1,
+          scaleY: 1,
+          scaleZ: 1,
+        },
+      },
+      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshRenderer, data: { materials: [obstructorMatHandle] } },
+    )
+    .unwrap();
+
+  // Fixed SpotLight offset to the +X side of the cube, angled down-and-toward
+  // -X so the shadow is cast laterally onto the floor (castShadow defaults
+  // true). intensity 40 keeps the spot dominant over the distant point-light
+  // glow so the shadow reads clearly.
+  const SPOT_DIR_LEN = Math.hypot(-0.6, -1, 0);
+  world.spawn(
+    {
+      component: Transform,
+      data: {
+        posX: SHADOW_X + 2.2,
+        posY: 4,
+        posZ: SHADOW_Z,
+        quatX: 0,
+        quatY: 0,
+        quatZ: 0,
+        quatW: 1,
+        scaleX: 1,
+        scaleY: 1,
+        scaleZ: 1,
+      },
+    },
+    {
+      component: SpotLight,
+      data: {
+        directionX: -0.6 / SPOT_DIR_LEN,
+        directionY: -1 / SPOT_DIR_LEN,
+        directionZ: 0,
+        colorR: 1,
+        colorG: 1,
+        colorB: 1,
+        intensity: 40,
+        range: 50,
+        innerConeDeg: 22,
+        outerConeDeg: 32,
+      },
+    },
+  );
 
   world.spawn(
     {

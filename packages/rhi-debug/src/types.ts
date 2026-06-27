@@ -1,7 +1,7 @@
 // @forgeax/engine-rhi-debug/src/types — RhiCallEvent closed union, Tape, InspectReport, RhiCapsRecorded.
 //
 // Shape:
-// - RhiCallEvent: closed union ~32 kind, each kind name 1:1 with RHI method name.
+// - RhiCallEvent: closed union (~40 kind incl. initialData + frameMark), each kind name 1:1 with RHI method name.
 //   Excludes: destroy* calls (per OOS-5), writeTimestamp/resolveQuerySet (per OOS-3).
 //   Includes: core RHI + copyExternalImageToTexture + clearBuffer (per IS-11).
 // - Tape: header with formatVersion, rhiCapsRecorded, events array, blobPool map.
@@ -132,6 +132,13 @@ export interface RhiCallEventCreateBindGroup {
   readonly entries: readonly {
     readonly binding: GPUBindGroupEntry['binding'];
     readonly resourceKind: RhiBindResourceKind;
+    // Buffer bindings only: the sub-range the recording bound. A dynamic-offset
+    // uniform/storage slice (`hasDynamicOffset` BGL entry) binds `size` bytes,
+    // not the whole buffer; dropping these binds the entire buffer on replay,
+    // which exceeds the device's uniform/storage binding-size limit and fails
+    // createBindGroup. undefined = bind whole buffer from offset 0 (spec default).
+    readonly bufferOffset?: number;
+    readonly bufferSize?: number;
   }[];
   readonly resourceHandleIds: readonly HandleId[];
 }
@@ -429,6 +436,24 @@ export interface RhiCallEventEndComputePass {
 }
 
 /**
+ * Initial-data event representing a resource snapshot captured at recording start.
+ *
+ * handleId points to a resource declared by a prior create* event in the
+ * bootstrap prefix. dataHash is a key into the tape's blobPool, where the
+ * resource's actual GPU bytes (read back via copyToBuffer/mapAsync) are stored
+ * with djb2 hash-dedup (D-1: reuse unified serialization path, no separate pool).
+ *
+ * The resource kind (buffer vs texture) and its shape are recorded in the
+ * descriptor registry (snapshotResource reads it), not duplicated in this event
+ * (architecture-principles #1 SSOT — avoid two sources for shape).
+ */
+export interface RhiCallEventInitialData {
+  readonly kind: 'initialData';
+  readonly handleId: HandleId;
+  readonly dataHash: string;
+}
+
+/**
  * Closed union of all recordable RHI call events.
  *
  * v1 covers: core RHI methods + copyExternalImageToTexture + clearBuffer (IS-11).
@@ -477,7 +502,8 @@ export type RhiCallEvent =
   | RhiCallEventEndRenderPass
   | RhiCallEventSetComputePipeline
   | RhiCallEventDispatchWorkgroups
-  | RhiCallEventEndComputePass;
+  | RhiCallEventEndComputePass
+  | RhiCallEventInitialData;
 
 // ============================================================================
 // Tape

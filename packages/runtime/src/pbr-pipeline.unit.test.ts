@@ -44,7 +44,7 @@ function makeSpec(): PipelineSpec {
 
 describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', () => {
   describe('pbr-view', () => {
-    it('storageBuffer=true: 8 entries with read-only-storage on bindings 1+2', () => {
+    it('storageBuffer=true: 9 entries with read-only-storage on bindings 1+2', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'pbr-view',
@@ -55,7 +55,13 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
         entries: buildPbrViewBglEntries({ storageBuffer: true }),
       };
       expect(out).toEqual(expected);
-      expect(out.entries.length).toBe(8);
+      // feat-20260625-spot-light-shadow-mapping: binding 8 (spot shadow atlas,
+      // w14) raised the view BGL to 9 entries (always-on, D-5). w25 (scope-amend
+      // webkit-fallback) folded the former binding 9 spotLightViewProj matrices
+      // UBO into the View UBO (`view.spotLightViewProj`), so the BGL stays at 9
+      // entries (bindings 0..8) — keeping the WebGL2 fallback fragment uniform-
+      // buffer count <= 11 (GLES 3.0).
+      expect(out.entries.length).toBe(9);
     });
 
     it('storageBuffer=false: bindings 1+2 fall back to uniform', () => {

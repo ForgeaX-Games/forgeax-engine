@@ -1,4 +1,4 @@
-// Type-level — DebugErrorCode 12-member closed union exhaustive switch + detail narrowing.
+// Type-level — DebugErrorCode 14-member closed union exhaustive switch + detail narrowing.
 //
 // AC-23: switch (err.code) without default branch must compile (TS2367 guards completeness).
 // AC-24: err.detail discriminated union narrowing in consumer path.
@@ -13,13 +13,14 @@ import type {
   DebugErrorDetail,
   DisposeBusyDetail,
   HandleGraphBrokenDetail,
+  SnapshotReadbackFailedDetail,
   StepRangeDetail,
   TapeFormatVersionDetail,
 } from '../errors';
 
-describe('DebugErrorCode — 12-member closed union', () => {
+describe('DebugErrorCode — 14-member closed union', () => {
   it('exhaustive switch compiles without default branch (AC-23)', () => {
-    // AC-23: switch on all 12 members without `default` compiles.
+    // AC-23: switch on all 14 members without `default` compiles.
     // TS compiler proves completeness; no runtime function needed.
     type ExhaustiveSwitchResult = {
       'recorder-not-attached': string;
@@ -32,10 +33,12 @@ describe('DebugErrorCode — 12-member closed union', () => {
       'replay-deterministic-violation': string;
       'rt-readback-failed': string;
       'png-encode-failed': string;
+      'snapshot-readback-failed': string;
+      'seed-initial-data-failed': string;
       'rpc-target-not-wired': string;
       'replay-dispose-busy': string;
     };
-    // Verify all 12 keys exist in the mapped type
+    // Verify all 14 keys exist in the mapped type
     expectTypeOf<keyof ExhaustiveSwitchResult>().toMatchTypeOf<DebugErrorCode>();
   });
 
@@ -43,12 +46,12 @@ describe('DebugErrorCode — 12-member closed union', () => {
     expectTypeOf<'caps-mismatch'>().toMatchTypeOf<DebugErrorCode>();
   });
 
-  it('contains replay-dispose-busy (member 11)', () => {
+  it('contains replay-dispose-busy (member 13)', () => {
     expectTypeOf<'replay-dispose-busy'>().toMatchTypeOf<DebugErrorCode>();
   });
 
   it('rejects unknown code at consumption (type-level guard)', () => {
-    // Verify DebugErrorCode is exactly 12 members (structural check:
+    // Verify DebugErrorCode is exactly 14 members (structural check:
     // if a new member is added, ExhaustiveSwitchResult must also gain a key)
     type AllCodes = DebugErrorCode;
     expectTypeOf<'recorder-not-attached' | 'recorder-already-armed'>().toMatchTypeOf<AllCodes>();
@@ -75,5 +78,9 @@ describe('DebugErrorDetail — discriminated union narrowing on .code', () => {
 
   it('HandleGraphBrokenDetail narrows correctly', () => {
     expectTypeOf<HandleGraphBrokenDetail>().toMatchTypeOf<DebugErrorDetail>();
+  });
+
+  it('SnapshotReadbackFailedDetail narrows correctly', () => {
+    expectTypeOf<SnapshotReadbackFailedDetail>().toMatchTypeOf<DebugErrorDetail>();
   });
 });

@@ -84,6 +84,17 @@ export async function buildEngineShaderManifest(): Promise<{
     eng.iblBrdfLut,
     eng.fxaa,
     eng.skybox,
+    // bug-20260625: the 3 bloom post-process entries must be in the
+    // dawn-node manifest too, otherwise createRenderer never finds them and
+    // bloom stays uninitialised on the smoke path (browser-only manifests
+    // had them via the buildStart hook, but buildEngineShaderManifest -- used
+    // by dawn smoke -- omitted them, so smoke could never catch a bloom
+    // break). They import only forgeax_view::common, like tonemap/fxaa, so
+    // they compose through naga_oil cleanly; identified downstream by their
+    // BloomBrightParams / BloomBlurParams / BloomCompositeParams struct names.
+    eng.bloomBright,
+    eng.bloomBlur,
+    eng.bloomComposite,
   ]) {
     const r = await compileShader(stripPragmas(file.source), {
       id: file.id,

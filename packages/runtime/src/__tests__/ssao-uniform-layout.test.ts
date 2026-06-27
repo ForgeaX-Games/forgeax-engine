@@ -123,11 +123,12 @@ describe('SSAO uniform layout', () => {
     expect(payload[PROJECTION_OFFSET + 12]).toBe(113);
   });
 
-  it('SSAO uniform is separate from View UBO layout (592B invariant)', () => {
-    // The View UBO in common.wgsl is 592 B (148 floats).
+  it('SSAO uniform is separate from View UBO layout', () => {
+    // The View UBO in common.wgsl is 784 B (196 floats) after feat-20260625 w25
+    // folded the spot lightViewProj matrices into its tail.
     // SSAO uniform is a separate buffer, not a View UBO slice.
     // Assert that SSAO uniform does not share any bytes with View UBO.
-    const VIEW_UBO_FLOATS = 148;
+    const VIEW_UBO_FLOATS = 196;
     const ssaoUniformFloats = TOTAL_FLOATS;
     // They are in different buffers — this test verifies
     // the conceptual separation, not byte-level memory sharing.

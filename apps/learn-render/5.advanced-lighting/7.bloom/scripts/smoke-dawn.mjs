@@ -6,6 +6,9 @@
 // 4 bloom passes + tonemap. Camera.bloom readback asserts spawn wiring.
 // No pixel readback (bloom visual verdict is verify-step territory).
 //
+// Scene mirrors src/index.ts: wood floor + 6 container crates + 4 HDR
+// point lights with bright unlit light-box cubes (the bloom source).
+//
 // Output literals (preserved for grep tooling):
 //   - `[learn-render-7-bloom] backend=<backend>`
 //   - `[smoke] frames observed=<N>`
@@ -26,11 +29,33 @@ const MONOREPO_ROOT = resolve(APP_ROOT, '..', '..', '..', '..');
 const TEXTURES_DIR = resolve(MONOREPO_ROOT, 'forgeax-engine-assets', 'learn-opengl', 'textures');
 const WOOD_SRC_PATH = resolve(TEXTURES_DIR, 'wood.png');
 const CONTAINER2_SRC_PATH = resolve(TEXTURES_DIR, 'container2.png');
-const CONTAINER2_SPECULAR_SRC_PATH = resolve(TEXTURES_DIR, 'container2_specular.png');
 
 const WOOD_GUID_STR = '019e3969-1d48-7c3b-ac24-6d68f457065f';
 const CONTAINER2_GUID_STR = '019e3969-1d46-7945-a75a-ef97d537531e';
-const CONTAINER2_SPECULAR_GUID_STR = '019e3969-1d46-76ca-9a46-2168b746a292';
+
+// Scene constants -- kept in lockstep with src/index.ts (the dawn smoke
+// rebuilds the same scene without the dev-server pack path).
+const LIGHT_COLORS = [
+  [5.0, 5.0, 5.0],
+  [10.0, 0.0, 0.0],
+  [0.0, 0.0, 15.0],
+  [0.0, 5.0, 0.0],
+];
+const LIGHT_POSITIONS = [
+  [0.0, 0.5, 1.5],
+  [-4.0, 0.5, -3.0],
+  [3.0, 0.5, 1.0],
+  [-0.8, 2.4, -1.0],
+];
+const CONTAINER_BOXES = [
+  { pos: [0.0, 1.5, 0.0], scale: 0.5, axis: [1, 0, 0], deg: 0 },
+  { pos: [2.0, 0.0, 1.0], scale: 0.5, axis: [1, 0, 0], deg: 0 },
+  { pos: [-1.0, -1.0, 2.0], scale: 1.0, axis: [1, 0, 1], deg: 60 },
+  { pos: [0.0, 2.7, 4.0], scale: 1.25, axis: [1, 0, 1], deg: 23 },
+  { pos: [-2.0, 1.0, -3.0], scale: 1.0, axis: [1, 0, 1], deg: 124 },
+  { pos: [-3.0, 0.0, 0.0], scale: 0.5, axis: [1, 0, 0], deg: 0 },
+];
+const DEG2RAD = Math.PI / 180;
 
 // Bloom pass names expected in the URP default 9-pass chain when bloom is enabled.
 const BLOOM_PASS_NAMES = ['bloom-bright', 'bloom-blur-h', 'bloom-blur-v', 'bloom-composite'];
@@ -132,9 +157,9 @@ const mockCanvas = {
 
 // --- 3. Asset fixtures check ---
 
-if (!existsSync(WOOD_SRC_PATH) || !existsSync(CONTAINER2_SRC_PATH) || !existsSync(CONTAINER2_SPECULAR_SRC_PATH)) {
+if (!existsSync(WOOD_SRC_PATH) || !existsSync(CONTAINER2_SRC_PATH)) {
   console.error(
-    `[smoke] FAIL - asset fixtures missing: ${WOOD_SRC_PATH}, ${CONTAINER2_SRC_PATH}, or ${CONTAINER2_SPECULAR_SRC_PATH}`,
+    `[smoke] FAIL - asset fixtures missing: ${WOOD_SRC_PATH} or ${CONTAINER2_SRC_PATH}`,
   );
   console.error(
     '  rerun: git submodule update --init --recursive (forgeax-engine-assets submodule must be checked out)',
@@ -152,6 +177,7 @@ const {
   Camera,
   createRenderer,
   HANDLE_CUBE,
+  Materials,
   MeshFilter,
   MeshRenderer,
   PointLight,
@@ -160,30 +186,25 @@ const {
 } = enginePkg;
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
+const { quat } = await import('@forgeax/engine-math');
 
 const woodDecodeRes = await decodeImageFromFile(WOOD_SRC_PATH);
 const container2DecodeRes = await decodeImageFromFile(CONTAINER2_SRC_PATH);
-const container2SpecularDecodeRes = await decodeImageFromFile(CONTAINER2_SPECULAR_SRC_PATH);
-if (!woodDecodeRes.ok || !container2DecodeRes.ok || !container2SpecularDecodeRes.ok) {
+if (!woodDecodeRes.ok || !container2DecodeRes.ok) {
   console.error(
     '[smoke] FAIL - decodeImageFromFile failed:',
     woodDecodeRes.ok ? null : woodDecodeRes.error.code,
     container2DecodeRes.ok ? null : container2DecodeRes.error.code,
-    container2SpecularDecodeRes.ok ? null : container2SpecularDecodeRes.error.code,
   );
   process.exit(1);
 }
 const { decoded: woodDecoded } = woodDecodeRes.value;
 const { decoded: container2Decoded } = container2DecodeRes.value;
-const { decoded: container2SpecularDecoded } = container2SpecularDecodeRes.value;
 console.log(
   `[learn-render-7-bloom] decoded wood=${woodDecoded.width}x${woodDecoded.height} ${woodDecoded.mime}`,
 );
 console.log(
   `[learn-render-7-bloom] decoded container2=${container2Decoded.width}x${container2Decoded.height} ${container2Decoded.mime}`,
-);
-console.log(
-  `[learn-render-7-bloom] decoded container2_specular=${container2SpecularDecoded.width}x${container2SpecularDecoded.height} ${container2SpecularDecoded.mime}`,
 );
 
 const { buildEngineShaderManifest } = await import(
@@ -224,8 +245,7 @@ if (!ready.ok) {
 // Register textures under their GUIDs.
 const woodGuidRes = AssetGuid.parse(WOOD_GUID_STR);
 const container2GuidRes = AssetGuid.parse(CONTAINER2_GUID_STR);
-const container2SpecularGuidRes = AssetGuid.parse(CONTAINER2_SPECULAR_GUID_STR);
-if (!woodGuidRes.ok || !container2GuidRes.ok || !container2SpecularGuidRes.ok) {
+if (!woodGuidRes.ok || !container2GuidRes.ok) {
   console.error('[smoke] FAIL - GUID parse failed');
   process.exit(1);
 }
@@ -247,70 +267,40 @@ const world = new World();
 // Catalogue the textures under their GUIDs, then mint shared-ref column handles.
 const woodTexAsset = makeTexAsset(woodDecoded);
 const container2TexAsset = makeTexAsset(container2Decoded);
-const container2SpecularTexAsset = makeTexAsset(container2SpecularDecoded);
 assets.catalog(woodGuidRes.value, woodTexAsset);
 assets.catalog(container2GuidRes.value, container2TexAsset);
-assets.catalog(container2SpecularGuidRes.value, container2SpecularTexAsset);
 const woodHandle = world.allocSharedRef('TextureAsset', woodTexAsset);
 const container2Handle = world.allocSharedRef('TextureAsset', container2TexAsset);
-const container2SpecularHandle = world.allocSharedRef('TextureAsset', container2SpecularTexAsset);
 console.log(`[learn-render-7-bloom] registered wood handle id=${woodHandle}`);
 console.log(`[learn-render-7-bloom] registered container2 handle id=${container2Handle}`);
-console.log(`[learn-render-7-bloom] registered container2Specular handle id=${container2SpecularHandle}`);
 
-// Register materials: wood floor + 3 emissive light boxes.
-const floorMatHandle = world.allocSharedRef('MaterialAsset', {
-  kind: 'material',
-  passes: [
-    {
-      name: 'Forward',
-      shader: 'forgeax::default-standard-pbr',
-      tags: { LightMode: 'Forward' },
-    },
-  ],
-  paramValues: {
+// Register materials: wood floor + container crates (standard PBR).
+const floorMatHandle = world.allocSharedRef(
+  'MaterialAsset',
+  Materials.standard({
     baseColor: [1.0, 1.0, 1.0, 1.0],
-    metallic: 0.0,
     roughness: 0.9,
     baseColorTexture: unwrapHandle(woodHandle),
-  },
-});
+  }),
+);
+const containerMatHandle = world.allocSharedRef(
+  'MaterialAsset',
+  Materials.standard({
+    baseColor: [1.0, 1.0, 1.0, 1.0],
+    roughness: 0.8,
+    baseColorTexture: unwrapHandle(container2Handle),
+  }),
+);
 
-function makeBoxMaterial(intensity) {
-  return world.allocSharedRef('MaterialAsset', {
-    kind: 'material',
-    passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::default-standard-pbr',
-        tags: { LightMode: 'Forward' },
-      },
-    ],
-    paramValues: {
-      baseColor: [1.0, 1.0, 1.0, 1.0],
-      metallic: 0.8,
-      roughness: 0.3,
-      emissive: [2.0, 1.8, 1.5],
-      emissiveIntensity: intensity,
-      emissiveTexture: unwrapHandle(container2SpecularHandle),
-      baseColorTexture: unwrapHandle(container2Handle),
-    },
-  });
-}
-
-const boxAMatHandle = makeBoxMaterial(2.0);
-const boxBMatHandle = makeBoxMaterial(1.5);
-const boxCMatHandle = makeBoxMaterial(0.4);
-
-// Spawn wood floor: HANDLE_CUBE scaled flat and wide.
+// Spawn wood floor (bloom.cpp: translate (0,-1,0), scale (12.5,0.5,12.5)).
 world
   .spawn(
     {
       component: Transform,
       data: {
-        posX: 0, posY: -0.5, posZ: 0,
+        posX: 0, posY: -1.0, posZ: 0,
         quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 10, scaleY: 0.1, scaleZ: 4,
+        scaleX: 12.5, scaleY: 0.5, scaleZ: 12.5,
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -318,40 +308,60 @@ world
   )
   .unwrap();
 
-// Spawn 3 emissive light boxes at (-3, 0, 3) along X.
-for (const [posX, handle] of [
-  [-3.0, boxAMatHandle],
-  [0.0, boxBMatHandle],
-  [3.0, boxCMatHandle],
-]) {
+// Spawn the six wooden container boxes.
+const rot = quat.create();
+for (const box of CONTAINER_BOXES) {
+  quat.fromAxisAngle(rot, box.axis, box.deg * DEG2RAD);
   world
     .spawn(
       {
         component: Transform,
         data: {
-          posX, posY: 0.6, posZ: 0,
-          quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-          scaleX: 0.7, scaleY: 0.7, scaleZ: 0.7,
+          posX: box.pos[0], posY: box.pos[1], posZ: box.pos[2],
+          quatX: rot[0], quatY: rot[1], quatZ: rot[2], quatW: rot[3],
+          scaleX: box.scale, scaleY: box.scale, scaleZ: box.scale,
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [handle] } },
+      { component: MeshRenderer, data: { materials: [containerMatHandle] } },
     )
     .unwrap();
 }
 
-// Point light above the scene.
-world.spawn(
-  {
-    component: Transform,
-    data: {
-      posX: 0, posY: 3, posZ: 2,
-      quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-      scaleX: 1, scaleY: 1, scaleZ: 1,
+// Spawn the four HDR point lights + their bright unlit light-box cubes
+// (the bloom source: unlit cube painted with the HDR light colour).
+for (let i = 0; i < LIGHT_POSITIONS.length; i++) {
+  const pos = LIGHT_POSITIONS[i];
+  const color = LIGHT_COLORS[i];
+  world.spawn(
+    {
+      component: Transform,
+      data: { posX: pos[0], posY: pos[1], posZ: pos[2], quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
     },
-  },
-  { component: PointLight, data: {} },
-);
+    {
+      component: PointLight,
+      data: { colorR: color[0], colorG: color[1], colorB: color[2], intensity: 1.0, range: 30.0 },
+    },
+  );
+  const lightBoxMat = world.allocSharedRef(
+    'MaterialAsset',
+    Materials.unlit([color[0], color[1], color[2], 1.0], { castShadow: false }),
+  );
+  world
+    .spawn(
+      {
+        component: Transform,
+        data: {
+          posX: pos[0], posY: pos[1], posZ: pos[2],
+          quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
+          scaleX: 0.25, scaleY: 0.25, scaleZ: 0.25,
+        },
+      },
+      { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+      { component: MeshRenderer, data: { materials: [lightBoxMat] } },
+    )
+    .unwrap();
+}
 
 // Camera with bloom enabled + tonemap (URP default pipeline path).
 const cameraEntity = world
@@ -359,7 +369,7 @@ const cameraEntity = world
     {
       component: Transform,
       data: {
-        posX: 0, posY: 1.5, posZ: 8,
+        posX: 0, posY: 0, posZ: 5,
         quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
         scaleX: 1, scaleY: 1, scaleZ: 1,
       },
@@ -372,6 +382,7 @@ const cameraEntity = world
         near: 0.1,
         far: 100,
         tonemap: TONEMAP_REINHARD_EXTENDED,
+        exposure: 1.0,
         bloom: BLOOM_ENABLED,
         bloomThreshold: 1.0,
         bloomIntensity: 1.0,

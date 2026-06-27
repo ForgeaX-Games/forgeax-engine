@@ -54,6 +54,7 @@ import {
   addScenePass,
   addShadowPass,
   addSkyboxPass,
+  addSpotShadowPass,
   addTonemapPass,
 } from './render-graph-primitives';
 import type { RenderPipeline } from './render-pipeline';
@@ -77,10 +78,13 @@ export const URP_PIPELINE_ID = 'forgeax::urp';
  *
  * The 9-pass topology is data-flow driven: shadow writes shadowDepth, skybox
  * writes hdrColor, main reads both + writes hdrColor + depth, the 4 bloom
- * passes form a half-res blur chain composing back into hdrComposited (alias
- * of hdrColor), tonemap reads the alias + writes the swap-chain, and fxaa
- * does a final pass over the swap-chain. See the AGENTS.md "RenderPipeline"
- * section for a guided walk-through.
+ * passes form a half-res blur chain whose composite reads hdrColor + the
+ * blurred bloom and writes the SEPARATE hdrComposited target (not an in-place
+ * alias of hdrColor -- that triggered a WebGPU read+write-same-texture hazard,
+ * bug-20260625). Tonemap reads hdrComposited when bloom is on, hdrColor when
+ * bloom is off (composite is gated off), and writes the swap-chain; fxaa does
+ * a final pass over the swap-chain. See the AGENTS.md "RenderPipeline" section
+ * for a guided walk-through.
  */
 export const urpPipeline: RenderPipeline = {
   buildGraph(
@@ -138,6 +142,23 @@ export const urpPipeline: RenderPipeline = {
       usage: 0x10 | 0x04 | 0x01, // RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_SRC
     });
 
+    // feat-20260625-spot-light-shadow-mapping M2 / w9 (D-2): independent spot
+    // shadow depth atlas, separate from the directional `shadowDepth` above so
+    // each owns its own clear/load lifecycle (no cross-light-type tile
+    // contention; OOS-3 unified atlas is a later feat). A single 2D texture of
+    // 2x2 tiles (mapSize per tile, holds the cap-4 spots) — NOT a WebGPU
+    // 2d-array; each tile is written through a per-spot viewport in
+    // recordSpotShadowPass and sampled via perspective-divide UV in the forward
+    // pass. mapSize follows the same ECS-driven shadow map size as directional;
+    // falls back to the same 1024 default when no shadow map size is wired.
+    const spotAtlasSize = 2 * shadowMapSize;
+    graph.addColorTarget('spotShadowDepth', {
+      format: 'depth32float',
+      size: { w: spotAtlasSize, h: spotAtlasSize },
+      sample: 1,
+      usage: 0x10 | 0x04 | 0x01, // RENDER_ATTACHMENT | TEXTURE_BINDING | COPY_SRC
+    });
+
     // FXAA scratch RT (pass writes intermediate copy of swap-chain; final
     // fragment pass samples it back into swap-chain via non-srgb storage view).
     // bug-20260610: aligned with v18 swap-chain RGBA unification — must match
@@ -164,10 +185,21 @@ export const urpPipeline: RenderPipeline = {
       sample: 1,
       usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING
     });
-    // hdrComposited is a logical ordering resource (bloom-composite writes it,
-    // tonemap reads it) — the actual GPU texture is hdrColor. Fold via alias
-    // (KB-1 / D-2).
-    graph.addColorTargetAlias('hdrComposited', 'hdrColor');
+    // hdrComposited holds the bloom-composited HDR scene that tonemap reads.
+    // It MUST be a distinct physical texture from hdrColor, not an alias: the
+    // composite pass samples hdrColor (scene) while writing the composite, and
+    // a same-texture read+write in one render pass is a WebGPU synchronization
+    // hazard ("usage includes writable usage and another usage in the same
+    // synchronization scope") that invalidates the whole frame (bug-20260625).
+    // With a separate target, composite reads hdrColor and writes hdrComposited
+    // cleanly. When bloom is off the composite pass is gated off and tonemap
+    // falls back to reading hdrColor directly (see addTonemapPass dynamic src).
+    graph.addColorTarget('hdrComposited', {
+      format: 'rgba16float',
+      size: 'swapchain',
+      sample: 1,
+      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING
+    });
 
     // Half-res bloom chain.
     graph.addColorTarget('bloomBright', {
@@ -283,6 +315,20 @@ export const urpPipeline: RenderPipeline = {
     // ensure path in recordFrame).
     addPointShadowPass(graph, 'point-shadow');
 
+    // 1.c feat-20260625-spot-light-shadow-mapping M2 / w9 (D-2): spot shadow
+    // caster pass. ONE graph pass node writes the spotShadowDepth atlas; the
+    // execute closure (recordSpotShadowPass) loops the per-frame
+    // `frameState.spotShadowSnapshots`, rendering each castShadow spot's
+    // perspective depth into its tile (viewport keyed on shadowAtlasTile) with
+    // first-tile clear / rest load (independent of the directional cascadeIndex
+    // counting; D-2). A single node — not N nodes — keeps `buildGraph` a pure
+    // topology declaration so the memoized graph never rebuilds on spot-count
+    // drift (same discipline as addPointShadowPass). recordSpotShadowPass early-
+    // returns when no spot has a valid tile, so zero-spot-shadow scenes pay
+    // nothing (AC-03). The pass writes `spotShadowDepth` so the main pass can
+    // declare it under `reads` to enforce spot-shadow -> main order.
+    addSpotShadowPass(graph, 'spot-shadow', { depth: 'spotShadowDepth' });
+
     // 2. Skybox: writes hdrColor as far-plane background. Declaring writes:
     //    [hdrColor] forces skybox -> main topological order via the data
     //    dependency (main reads hdrColor).
@@ -293,7 +339,9 @@ export const urpPipeline: RenderPipeline = {
     addScenePass(graph, 'main', {
       color: 'hdrColor',
       depth: 'depth',
-      reads: ['shadowDepth', 'hdrColor'],
+      // feat-20260625 M2 / w9 (D-2): read spotShadowDepth so the spot caster
+      // pass orders before the forward pass that samples it (binding 8).
+      reads: ['shadowDepth', 'spotShadowDepth', 'hdrColor'],
       selector: { LightMode: ['Forward'] },
     });
 
@@ -306,8 +354,12 @@ export const urpPipeline: RenderPipeline = {
       blurV: 'bloomBlurV',
     });
 
-    // 8. Tonemap: HDR -> LDR. Reads the bloom composite alias.
-    addTonemapPass(graph, 'tonemap', { hdrComposited: 'hdrComposited' });
+    // 8. Tonemap: HDR -> LDR. Reads hdrComposited when bloom is on, or hdrColor
+    //    directly when bloom is off (composite gated off -> hdrComposited unwritten).
+    addTonemapPass(graph, 'tonemap', {
+      hdrComposited: 'hdrComposited',
+      hdrColorWhenBloomOff: 'hdrColor',
+    });
 
     // 9. FXAA: fullscreen post-process over the swap-chain. Writes
     //    fxaaIntermediate (the RT used to copy swap-chain -> sample -> write).

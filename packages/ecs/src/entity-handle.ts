@@ -2,11 +2,12 @@
 //
 // Encoding: u32 = (generation << 24) | (index & 0xFFFFFF)
 //   - index:      24 bits — supports up to 16_777_215 simultaneous entities.
-//   - generation:  8 bits — retirement at 255 (index permanently retired).
+//   - generation:  8 bits — retirement when gen exceeds 255 (gen 255 usable);
+//     index permanently retired when bumped generation would reach 256.
 //
 // Key difference from @forgeax/engine-ecs: generation does NOT wrap 255 → 0.
-// When generation reaches 255, the index is permanently retired from the
-// free list to prevent handle aliasing (D-08).
+// When generation would exceed 255 (256), the index is permanently retired
+// from the free list to prevent handle aliasing (D-08).
 //
 // feat-20260623-asset-handle-generation M2 / w4: encodeEntity/decodeEntity/
 // entityIndex/entityGeneration are now thin wrappers over the shared gen-slot

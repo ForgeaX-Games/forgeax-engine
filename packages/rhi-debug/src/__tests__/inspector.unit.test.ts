@@ -864,11 +864,13 @@ describe('I-7: RT readback resolves real attachment dimensions (round 1 fix)', (
   function makeSizedMockDevice(width: number, height: number): any {
     const alignedRow = Math.ceil((width * 4) / 256) * 256;
     const bufferSize = alignedRow * height;
-    const mockBuffer = {
-      mapAsync: vi.fn().mockResolvedValue(undefined),
-      getMappedRange: vi.fn().mockReturnValue(new ArrayBuffer(bufferSize)),
+    // Real RHI Buffer contract: mapAsync -> Result<MappedBuffer>,
+    // getMappedRange -> Result<ArrayBuffer>.
+    const mockBuffer: any = {
+      getMappedRange: vi.fn().mockReturnValue({ ok: true, value: new ArrayBuffer(bufferSize) }),
       unmap: vi.fn(),
     };
+    mockBuffer.mapAsync = vi.fn().mockResolvedValue({ ok: true, value: mockBuffer });
     const mockEncoder = {
       copyTextureToBuffer: vi.fn(),
       finish: vi.fn().mockReturnValue({ ok: true, value: { __brand: 'CommandBuffer' } }),
@@ -876,13 +878,12 @@ describe('I-7: RT readback resolves real attachment dimensions (round 1 fix)', (
     return {
       createBuffer: vi.fn().mockImplementation((desc: { size: number }) => {
         // Return a buffer-shape that supports mapping at the requested size.
-        return {
-          ok: true,
-          value: {
-            ...mockBuffer,
-            getMappedRange: vi.fn().mockReturnValue(new ArrayBuffer(desc.size)),
-          },
+        const buf: any = {
+          ...mockBuffer,
+          getMappedRange: vi.fn().mockReturnValue({ ok: true, value: new ArrayBuffer(desc.size) }),
         };
+        buf.mapAsync = vi.fn().mockResolvedValue({ ok: true, value: buf });
+        return { ok: true, value: buf };
       }),
       createCommandEncoder: vi.fn().mockReturnValue({ ok: true, value: mockEncoder }),
       destroyBuffer: vi.fn(),
@@ -1007,11 +1008,13 @@ describe('I-7: RT readback resolves real attachment dimensions (round 1 fix)', (
 // ============================================================================
 
 function makeMockDevice(): any {
-  const mockBuffer = {
-    mapAsync: vi.fn().mockResolvedValue(undefined),
-    getMappedRange: vi.fn().mockReturnValue(new ArrayBuffer(512 * 512 * 4)),
+  // Real RHI Buffer contract: mapAsync -> Result<MappedBuffer>,
+  // getMappedRange -> Result<ArrayBuffer>.
+  const mockBuffer: any = {
+    getMappedRange: vi.fn().mockReturnValue({ ok: true, value: new ArrayBuffer(512 * 512 * 4) }),
     unmap: vi.fn(),
   };
+  mockBuffer.mapAsync = vi.fn().mockResolvedValue({ ok: true, value: mockBuffer });
 
   const mockEncoder = {
     copyTextureToBuffer: vi.fn(),

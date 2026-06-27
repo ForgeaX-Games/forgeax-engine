@@ -215,8 +215,10 @@ export interface GltfMeshIr {
    * bug-20260612 hello-skin visual layered gate: prior shape coerced
    * undefined into Uint16Array(0) and tripped MeshAsset.indices !==
    * undefined branches downstream into drawIndexed(0).
+   * U16 (incl. widened U8) or U32 — width preserved from the source accessor;
+   * bridge.ts narrows U32 to U16 when the merged maxIndex fits.
    */
-  readonly indices?: Uint16Array;
+  readonly indices?: Uint16Array | Uint32Array;
   readonly materialIndex: number | null;
   /**
    * Owning glTF mesh index in the original document (`gltf.meshes[meshIndex]`).
@@ -684,7 +686,7 @@ async function parseGltfWithBin(
       // primitive.indices optional; undefined means non-indexed geometry.
       // Leave indices undefined here; bridge.ts handles the non-indexed
       // path by routing MeshAsset.indices to undefined.
-      let indices: Uint16Array | undefined;
+      let indices: Uint16Array | Uint32Array | undefined;
       if (prim.indices !== undefined) {
         const indexAccessor = accessors[prim.indices];
         const indexBufferView = bufferViews[indexAccessor?.bufferView ?? -1];
@@ -726,14 +728,16 @@ async function parseGltfWithBin(
           owned.set(src);
           indices = owned;
         } else if (indexDecoded.value.kind === 'u32') {
-          // Tier-B v1 mesh asset stores U16 only; widening U32 down would
-          // truncate, so reject explicitly.
-          return err(
-            gltfErr('gltf-accessor-type-mismatch', {
-              accessorIndex: prim.indices,
-              reason: 'unknownComponentType',
-            }),
-          );
+          // U32 indices ride through end-to-end: MeshAsset.indices is
+          // `Uint16Array | Uint32Array`, mesh-bin serializes iwidth=4, and
+          // the GPU runtime auto-selects 'uint32' via `instanceof Uint32Array`
+          // (createRenderer.ts). bridge.ts merges by value, so small meshes
+          // whose maxIndex < 65536 are losslessly narrowed to Uint16 there.
+          // Re-allocate over a fresh ArrayBuffer for the same reason as u16.
+          const src = indexDecoded.value.data;
+          const owned = new Uint32Array(src.length);
+          owned.set(src);
+          indices = owned;
         } else {
           return err(
             gltfErr('gltf-accessor-type-mismatch', {

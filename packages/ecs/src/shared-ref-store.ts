@@ -23,8 +23,9 @@
 //   `_generations[slot]` BEFORE any refcount/payload work, so a handle whose
 //   slot was released and re-allocated returns `SharedRefStaleError`
 //   ('shared-ref-stale') instead of silently resolving the next payload.
-//   Generation advances on the rc=0 drop and retires the slot at MAX_GEN
-//   (retire-on-255, no wrap). AI users keep the rule "don't cache a handle
+//   Generation advances on the rc=0 drop and retires the slot when gen would
+//   exceed MAX_GEN (gen 255 is still usable; retire at would-be 256, no wrap).
+//   AI users keep the rule "don't cache a handle
 //   past release" - the AssetRegistry mediates most shared handle lifecycles,
 //   but a stale handle now fails structurally rather than silently.
 //
@@ -269,14 +270,15 @@ export class SharedRefStore {
     const payload = this.payloads.get(raw);
     this.refcounts.delete(raw);
     this.payloads.delete(raw);
-    // Gen increment + retire-on-255 (AC-07): bump gen; if it reaches MAX_GEN
-    // the slot is permanently retired — NOT pushed to freeSlots. This prevents
-    // handle aliasing after 255 generations.
+    // Gen increment + retire (AC-07): bump gen; once it would exceed MAX_GEN
+    // (gen 255 is still usable; the bump to 256 triggers retire) the slot is
+    // permanently retired — NOT pushed to freeSlots. This prevents handle
+    // aliasing. Shares the isRetiredSlot SSOT predicate with EntityHandle.
     this._generations[slot] = storeGen + 1;
     if (!isRetiredSlot(this._generations[slot])) {
       this.freeSlots.push(slot);
     }
-    // else: slot retired at MAX_GEN — never returns to freeSlots (no aliasing).
+    // else: slot retired (gen exceeded MAX_GEN) — never returns to freeSlots.
     if (cb !== undefined) {
       cb(payload);
     }

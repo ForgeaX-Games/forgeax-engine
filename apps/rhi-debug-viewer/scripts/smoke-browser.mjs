@@ -265,21 +265,32 @@ if (!hasGpu) {
     console.log(`[smoke-browser] AC-06: data-forgeax-rt-status=${rtStatus}`);
 
     if (rtStatus === 'ok') {
-      // Check that the RT canvas has non-zero pixels
-      const canvasPixelResult = await page.evaluate(() => {
-        const canvas = document.querySelector('canvas[data-forgeax-rt-canvas]');
-        if (!canvas) return 'no-canvas';
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return 'no-context';
-        const imageData = ctx.getImageData(0, 0, Math.min(canvas.width, 100), Math.min(canvas.height, 100));
-        let allZero = true;
-        for (let i = 0; i < imageData.data.length; i++) {
-          if (imageData.data[i] !== 0) {
-            allZero = false;
-            break;
+      // Check that the RT canvas has non-zero pixels. The status attribute flips
+      // to "ok" the moment renderRtToCanvas resolves, but the React re-render +
+      // putImageData paint can lag a frame, so poll the canvas (bounded) rather
+      // than sampling once -- a single-shot read races and reports all-zero on a
+      // canvas that is about to paint.
+      const canvasPixelResult = await page.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        for (let attempt = 0; attempt < 40; attempt++) {
+          const canvas = document.querySelector('canvas[data-forgeax-rt-canvas]');
+          if (canvas) {
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              const imageData = ctx.getImageData(
+                0,
+                0,
+                Math.min(canvas.width, 100),
+                Math.min(canvas.height, 100),
+              );
+              for (let i = 0; i < imageData.data.length; i++) {
+                if (imageData.data[i] !== 0) return 'non-zero';
+              }
+            }
           }
+          await sleep(50);
         }
-        return allZero ? 'all-zero' : 'non-zero';
+        return document.querySelector('canvas[data-forgeax-rt-canvas]') ? 'all-zero' : 'no-canvas';
       });
 
       if (canvasPixelResult === 'no-canvas') {

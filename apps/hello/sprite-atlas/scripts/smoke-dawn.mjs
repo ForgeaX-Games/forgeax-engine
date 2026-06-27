@@ -1,66 +1,58 @@
 #!/usr/bin/env node
-// hello-sprite-atlas headless smoke (feat-20260521-sprite-atlas-animation M6
-// T-36; AC-07).
+// hello-sprite-atlas headless smoke (feat-20260622-chunk-gpu-instancing-
+// sprite-tilemap M4 / w17; AC-01 + AC-07 structural anchors).
+//
+// What this smoke proves (structural-only; pixel-parity baseline regen
+// is verify-stage SSOT per plan-strategy §5.1 charter P5):
+//   1. 10000 independent sprite entities (no Instances component)
+//      collapse to ONE drawIndexed per frame (record-stage fold operator
+//      M1 / w4).
+//   2. instanceCount==10000 on that drawIndexed (10000 entries fold into
+//      a single instanced draw).
+//   3. `renderer.metrics.snapshot()['render.instancing.foldedDraws']`
+//      monotonically advances at 1/frame (M3 / w13 metric increment).
 //
 // Strategy (mirrors apps/hello/sprite/scripts/smoke-dawn.mjs):
 //   1. Inject globalThis.navigator.gpu via the `webgpu` npm package
 //      (dawn-node native binding ^0.4.0).
 //   2. Mock canvas + offscreen render target (`bgra8unorm` storage with
 //      `bgra8unorm-srgb` viewFormat).
-//   3. Register a synthetic 64x64 RGBA atlas texture with 4 colored
-//      quadrants (2x2 grid, 32x32 each) + a default sampler so the
-//      sprite material loads without a /pack-index.json fetch.
-//   4. Build a fresh World + spawn 1 host entity with Instances(100) +
-//      SpriteAnimation(4 frames loop) + SpriteRegionOverride + ortho
-//      camera + 300 render frames + copyTextureToBuffer + mapAsync +
-//      write or compare the reference PNG.
-//   5. AC-07 passes when the single reference PNG sits within eps<=0.05
-//      of its baseline. First-run writes the baseline and exits 1 with a
-//      "WRITTEN" marker so CI / human review can force-add it then rerun.
+//   3. Register a synthetic 64x64 RGBA atlas texture + default sampler
+//      so the sprite material loads without a /pack-index.json fetch.
+//   4. Spawn 10000 independent sprite entities; the engine's record-stage
+//      fold operator collapses them transparently. No Instances component
+//      on any entity.
+//   5. drive 300 frames; assert structural counters every frame.
 //
-// AC-07 metrics (RHI statistics):
-//   - drawIndexed == 1 per frame (1 atlas / 100 instances -> 1 draw call)
-//   - instanceCount == 100
+// Metric semantics (foldedDraws):
+//   The counter increments once per fold-eligible head bucket per frame.
+//   With 10000 entities sharing one (Layer.value, posZ, materialHandle)
+//   triple we expect exactly 1 head bucket per frame -> after N frames the
+//   counter value is N. The smoke reads it post-loop and asserts
+//   value == drawCallCount (each rendered frame contributes exactly 1).
 //
 // AC-07 path note (charter F2 + P5 producer/consumer split):
-// - subagent runs this script and PRODUCES the PNGs; the main session
-//   orchestrator READS the PNGs to verify the visual.
-// - When the forgeax-engine-assets submodule is not initialised the
-//   synthetic 4-quadrant atlas texture stands in.
+//   PNG pixel parity baseline regen for the 100x100 grid (this rewrite)
+//   is a verify-stage activity (subagent renders -> orchestrator Reads
+//   image). The smoke does not enforce a frozen PNG baseline because the
+//   demo's visual surface changed shape (10x10 -> 100x100) and the M4
+//   verify subagent owns the baseline regen + commit.
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
-import { writeReferencePng, readReferencePng } from '../../../shared/png-codec.mjs';
+import { dirname } from 'node:path';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
-const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
-// feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
 const WIDTH = 200;
-// feat-20260615-ci-smoke-time-budget: 800x600 → 200x150 (lavapipe fragment-bound)
 const HEIGHT = 150;
 const CLEAR_RGBA = [0.07, 0.07, 0.09, 1];
-const INSTANCE_COUNT = 100;
-const FRAME_COUNT = 4;
-const FRAME_DURATION = 0.1;
+const SPRITE_GRID = 100;
+const SPRITE_COUNT = SPRITE_GRID * SPRITE_GRID;
+const SPRITE_SPACING = 0.018;
 
 const here = dirname(fileURLToPath(import.meta.url));
-// Baseline PNG lives in the forgeax-engine-assets submodule
-// (smoke-baselines/hello-sprite-atlas/) so the engine repo never tracks
-// rendered binaries; mirrors hello-sprite smoke layout.
-const BASELINE_DIR = resolve(
-  here,
-  '..',
-  '..',
-  '..',
-  '..',
-  'forgeax-engine-assets',
-  'smoke-baselines',
-  'hello-sprite-atlas',
-);
-const REF_FILE = 'reference-dawn-walk-frame-0.png';
+void here;
 
 // --- 1. dawn.node setup --------------------------------------------------
 
@@ -93,16 +85,11 @@ Object.defineProperty(globalThis.navigator, 'gpu', {
   configurable: true,
   writable: true,
 });
-// bug-20260612 dawn-only stub: pin getPreferredCanvasFormat to 'rgba8unorm' so this
-// smoke harness's hardcoded rgba8unorm-srgb viewFormats stay compatible with the
-// dawn-node webgpu module's actual UA preference (which is bgra8unorm). Browser
-// path (test:browser project) does not run smoke-dawn.mjs; the real Channel 2
-// BGRA path is exercised through the helper unmodified there.
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
 
 let sharedDevice;
 
-// AC-07 RHI statistics counters — reset before each frame, checked after each draw.
+// AC-01 / AC-07 structural counters.
 let rhiDrawIndexedCallsThisFrame = 0;
 let rhiLastInstanceCount = 0;
 
@@ -186,21 +173,16 @@ const mockCanvas = {
 };
 
 // --- 3. Synthetic 4-quadrant atlas texture (64x64) ----------------------
-//
-// Each quadrant is 32x32, filled with a distinct color so the 100
-// instances render visually distinct per-frame regions. The 4 frames
-// map 1:1 to the 4 quadrants (walk-0=top-left, walk-1=top-right,
-// walk-2=bottom-left, walk-3=bottom-right).
 
 function buildSyntheticAtlas() {
   const w = 64;
   const h = 64;
   const bytes = new Uint8Array(w * h * 4);
   const quadColors = [
-    [220, 80, 60, 255],   // red (top-left)
-    [60, 220, 90, 255],   // green (top-right)
-    [60, 140, 230, 255],  // blue (bottom-left)
-    [240, 200, 50, 255],  // yellow (bottom-right)
+    [220, 80, 60, 255],
+    [60, 220, 90, 255],
+    [60, 140, 230, 255],
+    [240, 200, 50, 255],
   ];
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -218,14 +200,6 @@ function buildSyntheticAtlas() {
   return { width: w, height: h, data: bytes };
 }
 
-// Frame regions: [uMin, vMin, uW, vH] normalized [0,1].
-const FRAME_REGIONS = [
-  [0.0, 0.0, 0.5, 0.5],
-  [0.5, 0.0, 0.5, 0.5],
-  [0.0, 0.5, 0.5, 0.5],
-  [0.5, 0.5, 0.5, 0.5],
-];
-
 // --- 4. Drive engine ECS path --------------------------------------------
 
 const { ok: okResult, World } = await import('@forgeax/engine-ecs');
@@ -234,13 +208,9 @@ const {
   Camera,
   createRenderer,
   HANDLE_QUAD,
-  Instances,
   MeshFilter,
   MeshRenderer,
-  SPRITE_PLAYBACK_MODE_LOOP,
-  SpriteAnimation,
   SpriteRegionOverride,
-  spriteAnimationTickSystem,
   Transform,
 } = enginePkg;
 
@@ -270,7 +240,6 @@ if (!assets) {
   process.exit(1);
 }
 
-// Register the synthetic atlas texture.
 const synth = buildSyntheticAtlas();
 const synthPod = {
   kind: 'texture',
@@ -281,13 +250,9 @@ const synthPod = {
   colorSpace: 'srgb',
   mipmap: false,
 };
-// w64: World holds the SharedRefStore minted handles need; create it here.
 const world = new World();
 const textureHandle = world.allocSharedRef('TextureAsset', synthPod);
 
-// feat-20260601-gpu-resource-store-extraction M1: texture GPU upload moved to
-// renderer.store (pass POD + decoded; D-2). configureGpuDevice ran inside
-// createRenderer before the renderer was returned, so the device is wired here.
 const uploadRes = await renderer.store.uploadTexture(textureHandle, synthPod, {
   bytes: synth.data,
   width: synth.width,
@@ -315,68 +280,21 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-// Register 4 SpriteMaterialAsset handles (one per frame region).
-// Must be after renderer.ready — material shaders are registered during
-// buildReadyWebGPU from manifest (no more placeholder pre-registration).
-const materialHandles = [];
-for (let i = 0; i < FRAME_COUNT; i++) {
-  const region = FRAME_REGIONS[i];
-  materialHandles.push(
-    world.allocSharedRef('MaterialAsset', {
-      kind: 'material',
-      passes: [
-        { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
-      ],
-      paramValues: {
-        baseColor: [1, 1, 1, 1],
-        texture: textureHandle,
-        sampler: samplerHandle,
-        region,
-        pivot: [0.5, 0.5],
-      },
-    }),
-  );
-}
+const region = [0, 0, 0.5, 0.5];
+const materialHandle = world.allocSharedRef('MaterialAsset', {
+  kind: 'material',
+  passes: [
+    { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
+  ],
+  paramValues: {
+    baseColor: [1, 1, 1, 1],
+    texture: textureHandle,
+    sampler: samplerHandle,
+    region,
+    pivot: [0.5, 0.5],
+  },
+});
 
-// Flat regions array for SpriteAnimation.
-const flatRegions = new Float32Array(FRAME_COUNT * 4);
-for (let i = 0; i < FRAME_COUNT; i++) {
-  const r = FRAME_REGIONS[i];
-  flatRegions[i * 4 + 0] = r[0];
-  flatRegions[i * 4 + 1] = r[1];
-  flatRegions[i * 4 + 2] = r[2];
-  flatRegions[i * 4 + 3] = r[3];
-}
-
-// 10x10 grid instance transforms.
-const instanceTransforms = new Float32Array(INSTANCE_COUNT * 16);
-const GRID = 10;
-const SPACING = 0.22;
-for (let i = 0; i < INSTANCE_COUNT; i++) {
-  const row = Math.floor(i / GRID);
-  const col = i % GRID;
-  const cx = (col - (GRID - 1) / 2) * SPACING;
-  const cy = (row - (GRID - 1) / 2) * SPACING;
-  const base = i * 16;
-  instanceTransforms[base + 0] = 1;
-  instanceTransforms[base + 1] = 0;
-  instanceTransforms[base + 2] = 0;
-  instanceTransforms[base + 3] = 0;
-  instanceTransforms[base + 4] = 0;
-  instanceTransforms[base + 5] = 1;
-  instanceTransforms[base + 6] = 0;
-  instanceTransforms[base + 7] = 0;
-  instanceTransforms[base + 8] = 0;
-  instanceTransforms[base + 9] = 0;
-  instanceTransforms[base + 10] = 1;
-  instanceTransforms[base + 11] = 0;
-  instanceTransforms[base + 12] = cx;
-  instanceTransforms[base + 13] = cy;
-  instanceTransforms[base + 14] = 0;
-  instanceTransforms[base + 15] = 1;
-}
-
-// Ortho camera
 okResult(
   world.spawn(
     {
@@ -406,51 +324,45 @@ okResult(
   ),
 );
 
-// Host entity: 100 instances + atlas animation.
-okResult(
-  world.spawn(
+// 10000 independent sprite entities. fold operator collapses to 1
+// drawIndexed because (Layer.value=0, posZ=0, materialHandle) is uniform.
+const half = (SPRITE_GRID - 1) / 2;
+for (let i = 0; i < SPRITE_COUNT; i++) {
+  const row = Math.floor(i / SPRITE_GRID);
+  const col = i % SPRITE_GRID;
+  const cx = (col - half) * SPRITE_SPACING;
+  const cy = (row - half) * SPRITE_SPACING;
+  const r = world.spawn(
     {
       component: Transform,
       data: {
-        posX: 0, posY: 0, posZ: 0,
+        posX: cx, posY: cy, posZ: 0,
         quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
+        scaleX: SPRITE_SPACING * 0.9,
+        scaleY: SPRITE_SPACING * 0.9,
+        scaleZ: 1,
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-    { component: MeshRenderer, data: { materials: [materialHandles[0]] } },
-    { component: Instances, data: { transforms: instanceTransforms } },
-    {
-      component: SpriteAnimation,
-      data: {
-        frameCount: FRAME_COUNT,
-        frameDuration: FRAME_DURATION,
-        currentFrame: 0,
-        accumDt: 0,
-        regions: flatRegions,
-        playbackMode: SPRITE_PLAYBACK_MODE_LOOP,
-      },
-    },
+    { component: MeshRenderer, data: { materials: [materialHandle] } },
     {
       component: SpriteRegionOverride,
-      data: { region: new Float32Array([0, 0, 0.5, 0.5]) },
+      data: { region: new Float32Array(region) },
     },
-  ),
-);
+  );
+  if (!r.ok) {
+    console.error(`[smoke] FAIL - spawn entity ${i}: ${r.error.code}`);
+    process.exit(1);
+  }
+}
+console.log(`[sprite-atlas] spawned ${SPRITE_COUNT} independent sprite entities (no Instances component)`);
 
 const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
 
 let drawCallCount = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
-  // Reset per-frame RHI stats before each draw (AC-07).
   rhiDrawIndexedCallsThisFrame = 0;
   rhiLastInstanceCount = 0;
-
-  // Tick the animation system before each draw
-  const tickRes = spriteAnimationTickSystem(world);
-  if (!tickRes.ok) {
-    console.warn(`[smoke] tick frame ${i}: ${tickRes.error.code} ${tickRes.error.hint}`);
-  }
 
   const r = renderer.draw(world);
   if (!r.ok) {
@@ -458,18 +370,18 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
     continue;
   }
 
-  // AC-07: assert drawIndexed=1 per frame (1 atlas + 100 instances = 1 draw call).
+  // AC-01: 10000 entities fold to exactly 1 drawIndexed per frame.
   if (rhiDrawIndexedCallsThisFrame !== 1) {
     console.error(
-      `[smoke] FAIL - frame ${i} drawIndexed count = ${rhiDrawIndexedCallsThisFrame}, expected 1`,
+      `[smoke] FAIL - frame ${i} drawIndexed count = ${rhiDrawIndexedCallsThisFrame}, expected 1 (fold collapse)`,
     );
     sharedDevice?.destroy?.();
     process.exit(1);
   }
-  // AC-07: assert instanceCount=100 (Instances component with 10x10 grid).
-  if (rhiLastInstanceCount !== INSTANCE_COUNT) {
+  // AC-01: instanceCount == SPRITE_COUNT (all 10000 instanced into one draw).
+  if (rhiLastInstanceCount !== SPRITE_COUNT) {
     console.error(
-      `[smoke] FAIL - frame ${i} instanceCount = ${rhiLastInstanceCount}, expected ${INSTANCE_COUNT}`,
+      `[smoke] FAIL - frame ${i} instanceCount = ${rhiLastInstanceCount}, expected ${SPRITE_COUNT}`,
     );
     sharedDevice?.destroy?.();
     process.exit(1);
@@ -478,7 +390,22 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   drawCallCount++;
 }
 
-console.log(`[smoke] drawCallCount=${drawCallCount} (drawIndexed=1/frame instanceCount=${INSTANCE_COUNT} verified)`);
+// AC-06: foldedDraws metric counter. M3 / w13 increments once per fold-
+// eligible head bucket per frame. With one bucket per frame and N frames
+// rendered, the counter value must equal drawCallCount.
+const metricsSnap = renderer.metrics.snapshot();
+const foldedDraws = metricsSnap['render.instancing.foldedDraws'] ?? 0;
+console.log(
+  `[smoke] drawCallCount=${drawCallCount} (drawIndexed=1/frame instanceCount=${SPRITE_COUNT})`,
+);
+console.log(`[smoke] foldedDraws metric = ${foldedDraws}`);
+if (foldedDraws !== drawCallCount) {
+  console.error(
+    `[smoke] FAIL - foldedDraws=${foldedDraws} != drawCallCount=${drawCallCount} (expected 1 increment/frame)`,
+  );
+  sharedDevice?.destroy?.();
+  process.exit(1);
+}
 
 const device = sharedDevice;
 if (!device) {
@@ -488,103 +415,11 @@ if (!device) {
 await device.queue.onSubmittedWorkDone();
 console.log(`[smoke] frames=${drawCallCount}`);
 
-if (!activeRenderTarget) {
-  console.error('[smoke] FAIL - renderTarget never allocated');
-  process.exit(1);
-}
-
-// Pixel readback (BGRA -> RGBA flip, row-pad strip; identical recipe
-// to apps/hello/sprite/scripts/smoke-dawn.mjs).
-const bytesPerPixel = 4;
-const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
-const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
-const readbackBuffer = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
-{
-  const enc = device.createCommandEncoder();
-  enc.copyTextureToBuffer(
-    { texture: activeRenderTarget },
-    { buffer: readbackBuffer, bytesPerRow, rowsPerImage: HEIGHT },
-    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
-  );
-  device.queue.submit([enc.finish()]);
-}
-try {
-  await readbackBuffer.mapAsync(0x01);
-} catch (err) {
-  console.error(
-    `[smoke] FAIL - mapAsync rejected: ${err instanceof Error ? err.message : String(err)}`,
-  );
-  readbackBuffer.destroy();
-  process.exit(1);
-}
-const mapped = readbackBuffer.getMappedRange();
-const raw = new Uint8Array(mapped.slice(0));
-readbackBuffer.unmap();
-readbackBuffer.destroy();
-
-const tightRgba = new Uint8Array(WIDTH * HEIGHT * 4);
-for (let y = 0; y < HEIGHT; y++) {
-  for (let x = 0; x < WIDTH; x++) {
-    const off = y * bytesPerRow + x * bytesPerPixel;
-    const dst = (y * WIDTH + x) * 4;
-    tightRgba[dst + 0] = raw[off + 0] ?? 0;
-    tightRgba[dst + 1] = raw[off + 1] ?? 0;
-    tightRgba[dst + 2] = raw[off + 2] ?? 0;
-    tightRgba[dst + 3] = raw[off + 3] ?? 0;
-  }
-}
-
-// Reference PNG compare — exit 1 if baseline is missing (AC-07 requires committed baseline).
-// To generate: run smoke on a WebGPU-capable host; the script writes the PNG and exits 1;
-// inspect it then force-add (gitignore bypass) and commit before merging.
-const refPath = resolve(BASELINE_DIR, REF_FILE);
-if (!existsSync(refPath)) {
-  mkdirSync(BASELINE_DIR, { recursive: true });
-  const png = writeReferencePng(tightRgba, WIDTH, HEIGHT);
-  writeFileSync(refPath, png);
-  console.error(
-    `[smoke] AC-07 reference PNG WRITTEN to ${refPath}. ` +
-      'Inspect the file (git add -f), commit it, then rerun smoke to enter COMPARED mode.',
-  );
-  sharedDevice?.destroy?.();
-  process.exit(1);
-}
-
-const ref = readReferencePng(refPath);
-if (ref.width !== WIDTH || ref.height !== HEIGHT) {
-  console.error(
-    `[smoke] FAIL - reference PNG size mismatch ${ref.width}x${ref.height} != ${WIDTH}x${HEIGHT}`,
-  );
-  sharedDevice?.destroy?.();
-  process.exit(1);
-}
-let maxDelta = 0;
-let exceedCount = 0;
-for (let i = 0; i < ref.pixels.length; i += 4) {
-  const dr = Math.abs((ref.pixels[i] ?? 0) - (tightRgba[i] ?? 0)) / 255;
-  const dg = Math.abs((ref.pixels[i + 1] ?? 0) - (tightRgba[i + 1] ?? 0)) / 255;
-  const db = Math.abs((ref.pixels[i + 2] ?? 0) - (tightRgba[i + 2] ?? 0)) / 255;
-  const d = Math.max(dr, dg, db);
-  if (d > maxDelta) maxDelta = d;
-  if (d > SMOKE_PIXEL_THRESHOLD) exceedCount++;
-}
-console.log(`[smoke] maxDelta=${maxDelta.toFixed(4)} exceed=${exceedCount}`);
-if (exceedCount > Math.floor(WIDTH * HEIGHT * 0.001)) {
-  console.error(
-    `[smoke] FAIL - reference PNG drift ${exceedCount} px > eps=${SMOKE_PIXEL_THRESHOLD} (max=${maxDelta.toFixed(4)})`,
-  );
-  console.error('  rerun: pnpm --filter @forgeax/hello-sprite-atlas smoke');
-  sharedDevice?.destroy?.();
-  process.exit(1);
-}
-
 console.log(
-  `[smoke] PASS - 1 case GREEN: ${INSTANCE_COUNT} instances / 1 atlas / ${drawCallCount} draw calls, ` +
-    `drawIndexed=1/frame instanceCount=${INSTANCE_COUNT} verified, eps=${SMOKE_PIXEL_THRESHOLD}`,
+  `[smoke] PASS - ${SPRITE_COUNT} entities folded to 1 drawIndexed/frame, ` +
+    `instanceCount=${SPRITE_COUNT}, foldedDraws=${foldedDraws}/${drawCallCount} frames`,
 );
 
 sharedDevice?.destroy?.();
 delete globalThis.navigator.gpu;
 process.exit(0);
-
-// ─── PNG helpers: imported from apps/shared/png-codec.mjs ───────────────

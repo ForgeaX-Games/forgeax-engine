@@ -27,7 +27,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildCatalogStrict } from '../build-catalog.js';
 import { importTextureEntry } from '../import-texture.js';
-import { pluginPack } from '../index.js';
+import { ASSET_CHANGED_EVENT, type AssetChangedPayload, pluginPack } from '../index.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
@@ -346,6 +346,37 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
 
       expect(server.ws.calls.length).toBeGreaterThan(0);
       expect(server.ws.calls.some((c) => c.type === 'full-reload')).toBe(true);
+    });
+
+    it('(e) sidecar change also pushes a structured forgeax:asset-changed event', async () => {
+      // P2: alongside `full-reload` (for the running game), the dev server pushes
+      // a custom catalog-change event so a tooling subscriber (editor Content
+      // Browser) can re-query `/__pack/index` instead of polling the filesystem.
+      await writeFile(join(hmrAssetsDir, 'wood-container.jpg'), HMR_ONE_BYTE_JPG);
+      await writeFile(join(hmrAssetsDir, 'wood-container.meta.json'), hmrWoodImageMeta());
+
+      const server = makeHmrMockServer();
+      const plugin = pluginPack({ roots: [hmrAssetsDir] });
+      plugin.configureServer(server);
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      await writeFile(join(hmrAssetsDir, 'wood-container.meta.json'), hmrWoodImageMeta());
+
+      const isSidecarChanged = (c: RecordedWsSend): boolean => {
+        if (c.type !== 'custom') return false;
+        const p = c.payload as { event?: string; data?: AssetChangedPayload };
+        return p.event === ASSET_CHANGED_EVENT && p.data?.kind === 'sidecar';
+      };
+
+      await waitFor(() => server.ws.calls.some(isSidecarChanged));
+
+      const custom = server.ws.calls.find(isSidecarChanged);
+      expect(custom).toBeDefined();
+      const data = (custom?.payload as { data?: AssetChangedPayload }).data;
+      expect(data?.kind).toBe('sidecar');
+      expect(data?.file).toContain('wood-container.meta.json');
+      expect(typeof data?.event).toBe('string');
     });
   });
 }
@@ -671,8 +702,53 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
 
       const res = await dihPostImport(handler, AUD_GUID);
       expect(res.statusCode).toBe(422);
-      const body = JSON.parse(res.body) as { error: string };
+      const body = JSON.parse(res.body) as { error: string; code?: string; hint?: string };
       expect(body.error).toBe('import-failed');
+      // A BENIGN skip carries no structured `code` (it is not a cook failure);
+      // the hint names the benign causes, not a generic "could not be imported".
+      expect(body.code).toBeUndefined();
+      expect(body.hint).toContain('not an importable texture');
+    });
+
+    it('(c) a REAL cook failure (corrupt source) 422s with a structured code + reason', async () => {
+      // A `.png`-extension source whose bytes are not a decodable PNG: the
+      // per-asset path's importTextureEntry throws -> importOneTexture rethrows
+      // a structured ImportError -> the route surfaces code + reason (not the
+      // generic benign hint). Regression for the silent `[]` -> generic 422.
+      const PNG_GUID = '019e3969-1d49-7c3b-ac24-6d68f457065f';
+      await writeFile(join(assetsDir, 'broken.png'), new Uint8Array([0x00, 0x01, 0x02, 0x03]));
+      await writeFile(
+        join(assetsDir, 'broken.png.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'image',
+          source: 'broken.png',
+          importSettings: {},
+          subAssets: [{ guid: PNG_GUID, sourceIndex: 0, kind: 'image' }],
+        }),
+      );
+
+      const cap = makeDihServer();
+      const plugin = pluginPack({ roots: [assetsDir], importers: [imageImporter] });
+      plugin.configureServer(cap.server as never);
+      await new Promise((r) => setTimeout(r, 80));
+      const handler = cap.getHandler();
+      if (handler === undefined) throw new Error('handler not mounted');
+
+      const res = await dihPostImport(handler, PNG_GUID);
+      expect(res.statusCode).toBe(422);
+      const body = JSON.parse(res.body) as {
+        error: string;
+        code?: string;
+        reason?: string;
+      };
+      expect(body.error).toBe('import-failed');
+      // Structured cause, aligned with the per-meta (gltf/fbx) path: a real
+      // failure carries `code` + the underlying `reason`, not just a hint.
+      expect(body.code).toBe('import-internal-error');
+      expect(typeof body.reason).toBe('string');
+      expect(body.reason?.length ?? 0).toBeGreaterThan(0);
     });
   });
 }

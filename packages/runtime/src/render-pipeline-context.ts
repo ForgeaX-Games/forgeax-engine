@@ -280,6 +280,29 @@ export interface _StandardForwardSceneView {
    * BGL is the same per-entity mesh SSBO.
    */
   readonly hdrpClusterBindGroup: BindGroup | null;
+  /**
+   * @internal — feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 /
+   * w4-record-swap (D-1).
+   *
+   * The per-frame fold dispatch plan keyed by validatedOrdered index.
+   * `null` when `transparentDispatch.length === 0` or when no fold-eligible
+   * (bucketSize > 1) bucket exists this frame — the dispatch loops fall
+   * through to the existing per-entity drawIndexed path byte-identically.
+   *
+   * Non-null carries:
+   * - `headBuckets[i]` — bucket descriptor for index `i` (head of an
+   *   instanced draw); the dispatch loop overrides @group(3) instances BG
+   *   and emits one `drawIndexed(idxCount, bucket.bucketSize)`.
+   * - `skipIndices[i]` — true when index `i` is a non-head member of
+   *   a fold bucket; the dispatch loop emits `continue`.
+   *
+   * Plan D-1 (record-stage transparent fold): the plan reuses the
+   * transparent-sort equivalence class as the bucket key, so no new
+   * BinKey type. Mode-gate (D-5): only mode 0 produces non-singleton
+   * buckets; modes 1/2/3 produce all-singleton plans which are byte-
+   * identical to no plan.
+   */
+  readonly foldDispatchPlan: import('./render-system-fold').FoldDispatchPlan | null;
 }
 
 /**

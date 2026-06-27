@@ -2061,6 +2061,22 @@ setTransparentSortConfig(world, { mode: TRANSPARENT_SORT_MODE_DISTANCE });
 
 完整 5 段最小契约（AC-13）— 单 component 入口示例 / spawn-site 用法 / group transform 链式语义 / 错误码消费 / per-draw fallback —— 在 [`src/components/instances.ts`](src/components/instances.ts) 文件头注释（IDE hover `Instances` 即可见）。本节给 packed mat4 内存布局图 + version-flag dirty 流程图作 README 速查锚点，不重复源码 SSOT。
 
+### 双源（discoverability index — feat-20260622）
+
+`Instances` 的 `transforms` 数据有两个来源；详细命题在 [`src/components/instances.ts`](src/components/instances.ts) 文件头注释顶端的 "Two sources" 段（charter P1 渐进披露：JSDoc 是 SSOT，本节仅给可发现性入口，不复述）。
+
+| 来源 | 触发 | ECS 可见？ | 观测信号 |
+|:--|:--|:--|:--|
+| Source 1（显式手挂） | AI 用户主动 `world.set(e, Instances, { transforms })` | 是（`world.get(e, Instances)` 取回原 payload） | 该 entity 的 ECS row |
+| Source 2（引擎透明折叠） | record-stage 把同 `(Layer.value, posZ, materialHandle)` 桶折成 1 instanced draw | **否**（不回写 `Instances` 组件，使用内部 transient buffer） | `renderer.metrics.snapshot()['render.instancing.foldedDraws']` 计数；超 cap 时 `RhiError 'instancing-exceeds-uniform-cap'` |
+
+grep 入口（源即 SSOT）：
+
+- 折叠计数：`renderer.metrics.snapshot()['render.instancing.foldedDraws']` —— 既有 `EngineMetrics` API（见上文 `Renderer.metrics` 行）；折叠生效时该值 = 当帧折叠桶数。
+- 错误码：`grep -nE "RhiErrorCode" packages/rhi/src/errors.ts` 命中含 `'instancing-exceeds-uniform-cap'` 的闭并集；`.detail` 形态 `{ requested, limit: 128, scope: 'sprite' | 'tilemap-chunk' }`。
+- 双源命题完整文本：`packages/runtime/src/components/instances.ts` 头注释（charter P4 一致抽象 + P1 渐进披露的双源边界论证）。
+
+
 ### packed mat4 内存布局（column-major）
 
 `Instances.transforms`（schema-vocab `'array<f32>'`）的 BufferPool slot 字节数必为非零的 `16 * 4 = 64 B` 倍数；instance i 占用 slot 的 `[i*16 .. i*16+15]` f32 范围，每段 16 floats 是一个 column-major mat4：

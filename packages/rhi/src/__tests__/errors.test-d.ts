@@ -172,6 +172,8 @@ describe('MVP-1.7 — RhiErrorCode closed union 20 members', () => {
           return 'destroy-after-destroy';
         case 'rhi-descriptor-invalid':
           return 'descriptor-invalid';
+        case 'instancing-exceeds-uniform-cap':
+          return 'instancing-cap';
       }
       // No default — TS guards: union drift here triggers compile-time red.
     }

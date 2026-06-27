@@ -1,6 +1,6 @@
-// Unit — DebugError construction + 4-field surface for 12-member DebugErrorCode.
+// Unit — DebugError construction + 4-field surface for 14-member DebugErrorCode.
 //
-// Tests at least 5 of the 12 error codes (per m1-4 description), verifying
+// Tests at least 7 of the 14 error codes (per m1-4 description), verifying
 // .code / .expected / .hint / .detail exist and carry the right types.
 // Includes caps-mismatch structured .detail.missingCaps assertion.
 
@@ -10,6 +10,7 @@ import type {
   DebugErrorCode,
   DisposeBusyDetail,
   HandleGraphBrokenDetail,
+  SnapshotReadbackFailedDetail,
   StepRangeDetail,
   TapeFormatVersionDetail,
 } from '../errors';
@@ -128,9 +129,37 @@ describe('DebugError — construction surface', () => {
     const detail = err.detail as DisposeBusyDetail;
     expect(detail.inFlightDrawIndices).toEqual([42, 55]);
   });
+
+  it('snapshot-readback-failed: structured stage detail', () => {
+    const err = new DebugError({
+      code: 'snapshot-readback-failed',
+      expected: 'GPU byte readback to succeed',
+      hint: 'copy stage failed for handleId buf:1',
+      detail: {
+        handleId: 'buf:1',
+        stage: 'copy',
+      } satisfies SnapshotReadbackFailedDetail,
+    });
+    expect(err.code).toBe('snapshot-readback-failed');
+    const detail = err.detail as SnapshotReadbackFailedDetail;
+    expect(detail.handleId).toBe('buf:1');
+    expect(detail.stage).toBe('copy');
+  });
+
+  it('seed-initial-data-failed: code + expected + hint exist (detail undefined)', () => {
+    const err = new DebugError({
+      code: 'seed-initial-data-failed',
+      expected: 'replayInitialData to seed resource bytes',
+      hint: 'handleId missing from handleMap or dataHash missing from blobPool',
+    });
+    expect(err.code).toBe('seed-initial-data-failed');
+    expect(err.expected).toBeTruthy();
+    expect(err.hint).toBeTruthy();
+    expect(err.detail).toBeUndefined();
+  });
 });
 
-describe('DebugErrorCode completeness — all 12 members', () => {
+describe('DebugErrorCode completeness — all 14 members', () => {
   const allCodes: DebugErrorCode[] = [
     'recorder-not-attached',
     'recorder-already-armed',
@@ -142,12 +171,14 @@ describe('DebugErrorCode completeness — all 12 members', () => {
     'replay-deterministic-violation',
     'rt-readback-failed',
     'png-encode-failed',
+    'snapshot-readback-failed',
+    'seed-initial-data-failed',
     'rpc-target-not-wired',
     'replay-dispose-busy',
   ];
 
-  it('has exactly 12 members', () => {
-    expect(allCodes).toHaveLength(12);
+  it('has exactly 14 members', () => {
+    expect(allCodes).toHaveLength(14);
   });
 
   it('every member constructs a DebugError with the right code', () => {
@@ -163,6 +194,6 @@ describe('DebugErrorCode completeness — all 12 members', () => {
   });
 
   it('no duplicate codes', () => {
-    expect(new Set(allCodes).size).toBe(12);
+    expect(new Set(allCodes).size).toBe(14);
   });
 });

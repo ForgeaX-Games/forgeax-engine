@@ -1,7 +1,7 @@
 // @forgeax/engine-rhi/src/errors - RhiError + closed RhiErrorCode union + Result<T, E>.
 //
 // Shape:
-// - RhiErrorCode = closed union 20 members (charter proposition 4: closed-union
+// - RhiErrorCode = closed union 21 members (charter P3: closed-union
 //   exhaustive switch needs no default fallback; tsc strict mode guards
 //   completeness). Extended from 6 to 10 in feat-20260508-rhi-surface-completion
 //   w7 (D-S3): added 'command-encoder-finished' / 'render-pass-not-ended' /
@@ -39,6 +39,23 @@
 //   caller bug (malformed descriptor data passed from TS), distinct from
 //   'webgpu-runtime-error' = runtime condition (valid descriptor rejected by
 //   wgpu backend). Minor add-only per AGENTS.md evolution contract.
+//   Extended from 20 to 21 in feat-20260622-chunk-gpu-instancing-sprite-
+//   tilemap M2 w10 (D-2 + AC-05 + research N-1): added
+//   'instancing-exceeds-uniform-cap' for the WebGL2 uniform-fallback path
+//   when a record-stage fold bucket carries more than 128 instances
+//   (128 = MAX_UNIFORM_INSTANCES; 128 * 64B = 8192B comfortably fits the
+//   WebGL2 minimum 16384B UBO size, leaving headroom for the per-frame
+//   material UBO slice — research N-1 implements the locked value). The
+//   record-stage dispatch site fires the error AND falls the offending
+//   bucket back to per-entity drawIndexed (the same exit the mode-gate
+//   bypass uses — plan-strategy D-9 "shared fallback exit"). Semantics:
+//   distinct from 'limit-exceeded' (byte-cap against
+//   maxStorageBufferBindingSize) — this code targets the per-bucket
+//   instance-count cap, which is a backend-capability ceiling rather than
+//   an allocation-size ceiling. AI users branch on .code first then read
+//   detail.requested / .limit / .scope through property access (charter
+//   P3 + plan-strategy 8.3 actionable hint). Minor add-only
+//   per AGENTS.md evolution contract.
 // - RhiError class has readonly .code / .expected / .hint three-field surface
 //   (AGENTS.md "Errors are structured" / D-5); the 'shader-compile-failed' path
 //   exposes .detail = RhiShaderCompileDetail (compilerMessages array);
@@ -88,6 +105,7 @@
  * | `'hierarchy-broken'` | `propagateTransforms` system (ECS `'pre-render'` schedule) encountered a `ChildOf` component whose referenced parent entity no longer exists (entity destroyed or ref never registered). The single entity's subtree is skipped (other entities continue; charter proposition 9 graceful degradation + architecture-principles #5 Fail Fast). `.expected` / `.hint` template: `expected: 'ChildOf component references a live entity in the world'` / `hint: 'remove the stale ChildOf via world.removeComponent(entity, ChildOf) before destroying the referenced ancestor, or call engine.assets.inspect() to audit hierarchy'` (feat-20260511-asset-system-v1 D-P2 + requirements §9 row 8). Minor add-only per AGENTS.md evolution contract; `'render-system-*'` / `'hierarchy-*'` share the render-system / schedule semantic domain. |
  * | `'destroy-after-destroy'` | A `RhiDevice.destroyBuffer(buf)` / `RhiDevice.destroyTexture(tex)` call observed the same handle had already been destroyed (per-handle `destroyed: boolean` bookkeeping in the shim layer). The forgeax form prefers fail-fast over the spec idempotent-void path (W3C WebGPU §22 / wgpu wasm both treat double-destroy as a no-op): double-destroy is almost always a lifecycle bug — caching a stale handle, a forgotten registry slot, a race between dispose paths — and surfacing it is more useful than swallowing it (plan-strategy D-7). `.expected` / `.hint` template: `expected: 'GPU buffer/texture handle has not been destroyed yet'` / `hint: 'object already destroyed; track lifecycle in caller or check isDestroyed before re-destroy'` (feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle D-6 + D-7). Minor add-only per AGENTS.md evolution contract. |
  * | `'rhi-descriptor-invalid'` | A `createRenderPipeline` (or other create* entry) descriptor failed to parse in the wgpu-wasm backend (Rust `#[wasm_bindgen(catch)]` Err with the stable prefix `[wgpu-wasm] failed to parse`). The descriptor data shape passed from TS was malformed — this is a caller bug (the caller passed descriptor data that the wasm deserializer rejected), not a runtime condition. Differs from `'webgpu-runtime-error'`: the latter is a valid descriptor rejected by the wgpu runtime (e.g. binding count exceeds limits); this code means the descriptor never reached the runtime because its shape was unparseable. `.hint` carries the parse-error message including the failing field index (e.g. `fragment.targets[0]`) for human triage. `.expected` / `.hint` template: `expected: 'caller passed well-formed descriptor data matching the wgpu-wasm serialization contract'` / `hint: 'check the descriptor field named in the error message for type mismatch or missing required fields'` (feat-20260619-wasm-fault-isolation D-1/D-2/D-8). Minor add-only per AGENTS.md evolution contract. |
+ * | `'instancing-exceeds-uniform-cap'` | A record-stage fold bucket carries more than 128 instances on the WebGL2 uniform-fallback path (`caps.storageBuffer === false`). The engine fires the error AND falls the offending bucket back to per-entity drawIndexed (the same exit the mode-gate bypass uses — plan-strategy D-9 "shared fallback exit"), so the frame is still visually correct (no identity-collapse / black screen). The 128 cap comes from research N-1: 128 instances × 64 B/mat4 = 8192 B fits comfortably inside the WebGL2 minimum 16384 B UBO size, leaving headroom for the per-frame material UBO slice. `.detail = { requested: number, limit: 128, scope: 'sprite' | 'tilemap-chunk' }` carries the offending bucket size + the scope discriminator (sprite vs tilemap-chunk dispatch site). Differs from `'limit-exceeded'`: that code targets a static `device.limits.maxStorageBufferBindingSize` byte ceiling; this code targets a per-bucket instance-count ceiling enforced only when the backend lacks storage-buffer bindings. AI users branch on `.code === 'instancing-exceeds-uniform-cap'` first, then read `.detail.requested` / `.detail.limit` / `.detail.scope` through property access (charter P3 + plan-strategy 8.3 actionable hint). `.expected` / `.hint` template: `expected: 'bucket instance count <= 128 (uniform fallback cap)'` / `hint: 'reduce the bucket size (smaller layer/material groupings), switch to a WebGPU-capable backend (storage buffers lift the cap), or accept the per-cell drawIndexed fallback'` (feat-20260622-chunk-gpu-instancing-sprite-tilemap D-2 + D-9 + N-1). Minor add-only per AGENTS.md evolution contract. |
  *
  * @example AI-user exhaustive switch on the 4 command/queue members (no default fallback)
  * ```ts
@@ -125,7 +143,8 @@ export type RhiErrorCode =
   | 'internal-error'
   | 'hierarchy-broken'
   | 'destroy-after-destroy'
-  | 'rhi-descriptor-invalid';
+  | 'rhi-descriptor-invalid'
+  | 'instancing-exceeds-uniform-cap';
 
 /**
  * Detail structure exclusive to the `shader-compile-failed` path.
@@ -229,6 +248,53 @@ export interface RhiMultiLightDetail {
 }
 
 /**
+ * Detail structure exclusive to the `'instancing-exceeds-uniform-cap'` path
+ * (feat-20260622-chunk-gpu-instancing-sprite-tilemap M2 / w10 +
+ * plan-strategy 2 D-2 + research N-1).
+ *
+ * Emitted by the record-stage fold dispatch loop
+ * (`packages/runtime/src/render-system-record.ts`) when
+ * `caps.storageBuffer === false` AND a fold bucket carries more than
+ * `limit` instances. The engine fires the error AND falls the offending
+ * bucket back to per-entity drawIndexed via the same exit the mode-gate
+ * bypass uses (plan-strategy D-9 "shared fallback exit"), so the frame
+ * is still visually correct (no identity-collapse / black screen) and
+ * the cap event surfaces structurally for AI users to observe.
+ *
+ * Fields:
+ *   - `requested` — the offending bucket's instance count
+ *     (`FoldBucket.bucketSize`); always strictly greater than `limit` at
+ *     emit time (the cap-check helper guards `requested > limit`).
+ *   - `limit` — the literal 128. The value is locked at the type level
+ *     because the cap is structurally tied to the WebGL2 minimum 16384 B
+ *     UBO size (128 * 64 B mat4 stride = 8192 B leaves headroom for the
+ *     per-frame material UBO slice — research N-1). A future cap change
+ *     would be a major evolution, not a runtime knob.
+ *   - `scope` — closed `'sprite' | 'tilemap-chunk'` discriminator that
+ *     pinpoints the dispatch site (sprite-pass entry that came directly
+ *     from a user-spawned Sprite vs one derived by
+ *     `tilemap-chunk-extract-system`). AI users branch on `.scope` to
+ *     decide whether to shrink the sprite batch size or the tilemap
+ *     chunk size.
+ *
+ * AI-user consumption (charter P3 + plan-strategy 8.3):
+ * ```ts
+ * if (err.code === 'instancing-exceeds-uniform-cap') {
+ *   const d = err.detail as RhiInstancingExceedsUniformCapDetail;
+ *   if (d.scope === 'sprite')        shrinkSpriteBatchSize(d.requested);
+ *   else if (d.scope === 'tilemap-chunk') shrinkTileChunkSize(d.requested);
+ * }
+ * ```
+ * — never parse `err.message`. The discriminated `detail` field is the
+ * surface; the human-readable `err.message` is for logs only.
+ */
+export interface RhiInstancingExceedsUniformCapDetail {
+  readonly requested: number;
+  readonly limit: 128;
+  readonly scope: 'sprite' | 'tilemap-chunk';
+}
+
+/**
  * Tagged union of `.detail` shapes carried by structured errors.
  *
  * Entries:
@@ -255,7 +321,8 @@ export type RhiErrorDetail =
   | RhiAssetNotRegisteredDetail
   | RhiWebgpuRuntimeDetail
   | LimitExceededDetail
-  | RhiMultiLightDetail;
+  | RhiMultiLightDetail
+  | RhiInstancingExceedsUniformCapDetail;
 
 /**
  * Structured RHI error.

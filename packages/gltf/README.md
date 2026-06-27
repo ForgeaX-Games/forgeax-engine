@@ -8,7 +8,7 @@ This package consumes:
 
 - `scenes` + `nodes` (TRS or matrix decomposed via `mat4.decompose` wrapper)
 - `meshes` with **multiple primitives** -- each primitive produces an independent `MeshIr` with UUIDv7 GUID; `SceneAsset` nodes reference individual primitive-level mesh sub-assets
-- Vertex attributes: `POSITION` (VEC3, mandatory), `NORMAL` (VEC3), `TEXCOORD_0` (VEC2), `TANGENT` (VEC4, optional) -- decoded via `decodeAccessor` SoA path; `INDICES` (U16 scalar)
+- Vertex attributes: `POSITION` (VEC3, mandatory), `NORMAL` (VEC3), `TEXCOORD_0` (VEC2), `TANGENT` (VEC4, optional) -- decoded via `decodeAccessor` SoA path; `INDICES` (U8/U16/U32 scalar — U8 widens to U16; U32 preserved, narrowed to U16 by bridge when maxIndex < 65536)
 - `materials` with `pbrMetallicRoughness` 6-field mapping to `MaterialAsset { shadingModel: 'standard' }` (see MaterialIr table below)
 - `textures` / `images` / `samplers` top-level arrays parsed into `GltfDoc` IR; texture index -> image index -> URI two-hop resolution via `externalLoader`
 - `cameras` of `type: 'perspective'`

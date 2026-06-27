@@ -80,16 +80,85 @@ world.spawn({ component: Camera, data: {} }).unwrap();
 - **物体不在该在的位置**：`Transform` 写的是 local TRS，引擎每帧派生 world mat4；要读世界坐标见 [`forgeax-engine-math`](../forgeax-engine-math/SKILL.md)。
 - **glTF 蒙皮模型 (`.glb` w/ JOINTS_0+WEIGHTS_0) 自动用 `pbr-skin` shader**：cooker (`@forgeax/engine-gltf` `gltfDocToSceneAsset`) 在 mesh 含 `skinAttrs` 时把 material `passes[].shader` 从 `forgeax::default-standard-pbr` 改写为 `forgeax::pbr-skin` (feat-20260611 w17-a)；不需要手写 `.pack.json` 选 shader。下游 18F vertex layout / `pbr-skin-pl` pipeline-layout / extract 18F↔pbr-skin 同进同退由 runtime 自动接通。整链路诊断见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §skin-vertex-attribute-chain。
 - **方向光阴影不出现**：`DirectionalLight.castShadow` 默认为 `true`（feat-20260621 合并后），zero-config spawn 即投射 CSM 阴影。阴影不出现的两大根因：(a) `castShadow` 被手动设为 `false`——设回 `true` 或不填（走默认 true）；(b) **mesh 的材质缺少 `ShadowCaster` pass**——`Materials.standard(...)` 工厂自动产出 `passKind='shadow-caster'` 的 pass，引擎拿它把 mesh 画进 shadow depth atlas。手写 `MaterialAsset` 字面量如果只声明了 `forward` / `deferred` pass 而缺少 `shadow-caster`，该 mesh 静默不写入 shadow atlas——`castShadow` 开着也没阴影。修法：在 `passes[]` 里加一条 `{ name: 'ShadowCaster', shader: 'forgeax::default-standard-pbr' }` 或直接改用 `Materials.standard(...)` 工厂。详见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §方向光阴影不出现。
+- **聚光灯阴影不出现**：`SpotLight.castShadow` 默认为 `true`（feat-20260625 起），zero-config spawn 即投射 hard PCF 阴影（通过独立 `spotShadowDepth` atlas，`texture_depth_2d` + `sampler_comparison`，compat-safe）。阴影不出现的三大根因：(a) `castShadow` 被手动设为 `false`——删掉字段或设 `true`；(b) 场景超过 **4 盏** castShadow spot 灯——第 5 盏起被 clip（`shadowAtlasTile = -1`），灯仍正常直接光照但不投阴影；(c) mesh 的材质缺少 `ShadowCaster` pass——`Materials.standard(...)` 工厂自动产出，手写 `MaterialAsset` 须显式声明。`shadowAtlasTile` 是程序化检测锚点：`-1` 说明被 clip 或 `castShadow=false`，AI 用户/测试可据此断言撞了 4 灯上限。详见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §聚光灯阴影不出现。
 
 ## 深入
 
 - 渲染流程（zero-config 默认 vs tonemap opt-in）/ FXAA / built-in mesh handles：见 `packages/runtime/README.md` §Render flow · §Built-in mesh handles
 - 灯光 / shadow mapping / `DirectionalLight` shadow 字段（合并后，`castShadow` 开关）：见 `packages/runtime/README.md` §Lights · §Shadow mapping（`pcfKernelSize` drives directional shadow PCF kernel size, 1=hard / 3=soft / 5=softer；`depthBias`/`normalBias` drive the slope-scaled shadow bias）
+- `SpotLight` 阴影（默认投射，zero-config，feat-20260625）：见下 §SpotLight 阴影
 - `Materials` 工厂 + `MaterialAsset` pass 结构：源码 SSOT `packages/runtime/src/materials.ts` + `packages/runtime/src/asset-registry.ts`
 - 组件字段定义：源码 `packages/runtime/src/components/{mesh-filter,mesh-renderer,directional-light,point-light,spot-light,skylight}.ts`
 - Skylight 环境光（可选 cubemap 纯色 fallback + color/intensity）：源码 SSOT `packages/runtime/src/components/skylight.ts` + `packages/runtime/src/ibl/skylight-bind-group.ts`（白 fallback irradiance cube）+ IBL 完整链路见 `packages/runtime/README.md` §Skylight / IBL
 - `RuntimeErrorCode` 全集（勿抄）：`packages/runtime/src/errors.ts`
 - 非三角形绘制（线框 / 点云 / debug-line）：`MeshAsset.submeshes[]`（必填非空）每项 `Submesh` 自带 `topology`（全 5 种：`'point-list' | 'line-list' | 'line-strip' | 'triangle-list' | 'triangle-strip'`，缺省 `'triangle-list'`）；vertex-only 的 line-list/point-list 可省 indices 走非索引 draw。用法见 `apps/hello/topology` demo + 源码 SSOT `packages/types/src/index.ts` `Submesh` JSDoc
+
+### SpotLight 阴影（默认投射，zero-config）
+
+> [!IMPORTANT]
+> **一句话价值：** `SpotLight.castShadow` 默认为 `true`——spawn 即投 hard PCF 阴影，零配置。字段命名与调参语义对齐 `DirectionalLight`（同一套 `castShadow/mapSize/depthBias/normalBias/nearPlane/farPlane/pcfKernelSize`），从方向光迁移认知零成本。
+
+**阴影字段速查（全部嵌入 `SpotLight`，无独立阴影组件）：**
+
+| 字段 | 类型 | 默认值 | 用途 |
+|:--|:--|:--|:--|
+| `castShadow` | `bool` | `true` | 阴影开关；设 `false` 即不投阴影、不占 atlas tile、零深度 pass 开销（AC-03） |
+| `mapSize` | `f32` | `2048` | 每 tile 阴影贴图分辨率（spot atlas = `2×2` tile，总大小 `2×mapSize × 2×mapSize`） |
+| `depthBias` | `f32` | `0.005` | 深度偏移削 shadow acne；atch 对齐 DirectionalLight 默认值 |
+| `normalBias` | `f32` | `0.05` | 法线偏移削掠射角自遮挡条纹 |
+| `nearPlane` | `f32` | `0.1` | shadow-camera 近平面 |
+| `farPlane` | `f32` | `50` | shadow-camera 远平面 |
+| `pcfKernelSize` | `f32` | `3` | PCF 核宽度（本轮固定 9-tap 3×3，5×5 标记 OOS-defer） |
+
+#### idiom
+
+```ts
+// 最小 spawn：默认投射阴影，零配置
+world.spawn(
+  { component: Transform, data: { posX: 0, posY: 5, posZ: 0 } },
+  { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0 } },
+);
+
+// 显式关阴影（零开销路径）
+world.spawn(
+  { component: Transform, data: { posX: 0, posY: 5, posZ: 0 } },
+  { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0, castShadow: false } },
+);
+
+// 调参消 self-shadow acne（对齐 directional 词汇）
+world.spawn(
+  { component: Transform, data: { posX: 0, posY: 5, posZ: 0 } },
+  { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0, depthBias: 0.01, normalBias: 0.08, mapSize: 1024 } },
+);
+```
+
+#### 4 灯上限 + clip 检测
+
+spot 阴影 atlas 容量上限 **4 盏** castShadow 灯（对齐 point 灯数上限）。第 5 盏起被 clip——**不静默全黑**：灯仍正常直接光照（position/direction/color 不变），但 `shadowAtlasTile = -1` 是程序化检测锚点。AI 用户/测试可据此断言撞了上限：
+
+```ts
+// extract 阶段分配的 tile 索引：0..3 有效，-1 = 被 clip 或 castShadow=false
+// AI 用户可通过 SpotLightSnapshot（extract 返回值）读 shadowAtlasTile
+if (shadowAtlasTile === -1) {
+  // 灯超限或显式关阴影——灯仍亮但无影
+}
+```
+
+当场景不需阴影时把多余的 `castShadow` 设 `false` 释放 tile 名额。
+
+#### compat-safe 硬约束
+
+spot shadow 全链路**只用** `texture_depth_2d` + `sampler_comparison`（无 `texture_cube_array`、无 cube-array view）。WGSL binding 布局：binding 8 = `spotShadowMap`（`texture_depth_2d`，FRAGMENT-only）、sampler **复用** binding 4 `shadowSampler`（不占新 slot）；≤4 盏 spot 的透视矩阵随 **View UBO（binding 0）** 携带（字段 `view.spotLightViewProj: array<mat4x4,4>`，与 directional cascade 矩阵同处），**不占独立 binding**——这是为压回 WebGL2 fallback 的 `max_uniform_buffers_per_shader_stage=11` 上限（独立 binding 会成第 12 个 fragment uniform buffer 而炸移动端）。全部 always-on（无 `#ifdef` 条件门控），移动端 WebGPU Compatibility Mode 兼容。directional binding 3/4 与 point 5/6/7 不变。
+
+spot 阴影深度采样调用共享低层核 `sample_shadow_2d`（`forgeax_pbr::shadow_pcf`，9-tap 固定核），与 directional 路径共享透视除法 + PCF 逻辑——不复制 PCF 循环代码。
+
+**跨灯类型完整阴影绑定速查：**
+
+| 灯类型 | atlas texture | sampler | 矩阵 / 参数 UBO |
+|:--|:--|:--|:--|
+| DirectionalLight | binding 3 (`shadowDepth`, `texture_depth_2d_array` CSM) | binding 4 `shadowSampler` | view UBO `lightViewProj_A..D` + shadow-params |
+| PointLight | binding 5 (`pointShadowMap`, `texture_cube_array`) | binding 4 `shadowSampler` | binding 6 `shadowParams` (4×vec4) |
+| **SpotLight** | **binding 8 (`spotShadowMap`, `texture_depth_2d`)** | **binding 4 `shadowSampler` (复用)** | **view UBO `view.spotLightViewProj` (4×mat4，不占独立 binding，WebGL2 uniform 预算)** |
 
 ### 贴图字段白名单（`MATERIAL_PARAM_TEXTURE_FIELDS`）
 

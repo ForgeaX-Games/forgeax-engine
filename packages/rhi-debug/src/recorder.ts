@@ -4,7 +4,8 @@
 // - wrap(rhiInstance) produces a DebugRhiInstance extending RhiInstance,
 //   with all RHI method calls intercepted and recorded as RhiCallEvents.
 // - handleMap: WeakMap<branded handle object, HandleId> for single-level mapping.
-// - State machine: idle -> armed -> recording -> finalizing/error -> idle.
+// - State machine: idle -> armed -> snapshotting -> recording -> finalizing/error -> idle.
+//   (snapshotting: frame-header initial-state capture; copy/submit suppressed from the tape.)
 // - blob pool: fast-hash-based dedup of binary data.
 // - perEventOverhead = 192 bytes (plan-strategy 5.3 locked; 256B is AC-06 upper bound).
 // - _skipRecord flag prevents recursive recording of recorder-internal RHI calls.
@@ -47,6 +48,7 @@ import type {
 } from '@forgeax/engine-rhi';
 import { err as makeErr, ok as makeOk } from '@forgeax/engine-types';
 import { DebugError } from './errors';
+import { readbackBufferBytes, readbackTexturePixels } from './readback';
 import { assembleReport, finalizeToMemory } from './recorder-core';
 import type {
   HandleId,
@@ -69,6 +71,25 @@ import type {
 
 export const PER_EVENT_OVERHEAD = 192 as const;
 
+// COPY_SRC promotion bit values (D-5). GPUBufferUsage and GPUTextureUsage have
+// DIFFERENT bit layouts — COPY_SRC is 0x04 for buffers but 0x01 for textures:
+//   GPUBufferUsage:  MAP_READ=0x01 MAP_WRITE=0x02 COPY_SRC=0x04 COPY_DST=0x08 ...
+//   GPUTextureUsage: COPY_SRC=0x01 COPY_DST=0x02 TEXTURE_BINDING=0x04 ...
+// A buffer carrying MAP_READ / MAP_WRITE cannot also carry COPY_SRC (WebGPU
+// validation: a mappable buffer's only other allowed usage is the matching
+// COPY_DST / COPY_SRC), so promotion is skipped for mappable buffers — those
+// are staging buffers, never frame-header snapshot targets.
+const BUFFER_USAGE_COPY_SRC = 0x04;
+const BUFFER_USAGE_MAP_READ = 0x01;
+const BUFFER_USAGE_MAP_WRITE = 0x02;
+const TEXTURE_USAGE_COPY_SRC = 0x01;
+
+/** Add COPY_SRC to a buffer usage unless it is a mappable (MAP_READ/WRITE) buffer. */
+function promoteBufferUsage(usage: number): number {
+  if ((usage & (BUFFER_USAGE_MAP_READ | BUFFER_USAGE_MAP_WRITE)) !== 0) return usage;
+  return usage | BUFFER_USAGE_COPY_SRC;
+}
+
 import { TAPE_FORMAT_VERSION } from './tape-format';
 
 export { generateRunId } from './recorder-core';
@@ -81,6 +102,7 @@ export { TAPE_FORMAT_VERSION };
 enum RecorderState {
   Idle = 'idle',
   Armed = 'armed',
+  Snapshotting = 'snapshotting',
   Recording = 'recording',
   Finalizing = 'finalizing',
   Error = 'error',
@@ -114,6 +136,47 @@ function storeBlob(state: RecorderInternal, data: ArrayBuffer): string {
   return hash;
 }
 
+/**
+ * Narrow a readbackBufferBytes failure to a snapshot-readback-failed stage.
+ * readbackBufferBytes already tags `.detail.stage` with 'copy' | 'map'; carry
+ * it through so the re-wrapped error preserves the failure point. Falls back to
+ * 'copy' when the inner error lacks a snapshot detail.
+ */
+function snapshotStageOf(error: DebugError): 'copy' | 'map' | 'store' {
+  const d = error.detail;
+  if (
+    d !== undefined &&
+    'stage' in d &&
+    (d.stage === 'copy' || d.stage === 'map' || d.stage === 'store')
+  ) {
+    return d.stage;
+  }
+  return 'copy';
+}
+
+/**
+ * Project a recorded texture extent (number | {width,height?,...} | [w,h?,d?])
+ * onto {width, height} for readbackTexturePixels. Mirrors the extent handling
+ * in readback.resolveAttachmentSize so the two readback entry points agree on
+ * extent interpretation.
+ */
+function extentToWidthHeight(size: number | GPUExtent3DStrict | undefined): {
+  width: number;
+  height: number;
+} {
+  if (size === undefined) return { width: 1, height: 1 };
+  if (typeof size === 'number') return { width: size, height: 1 };
+  if (Array.isArray(size)) {
+    const w = typeof size[0] === 'number' ? size[0] : 1;
+    const h = typeof size[1] === 'number' ? size[1] : w;
+    return { width: w, height: h };
+  }
+  const obj = size as { width: number; height?: number };
+  const w = typeof obj.width === 'number' ? obj.width : 1;
+  const h = typeof obj.height === 'number' ? obj.height : w;
+  return { width: w, height: h };
+}
+
 // ============================================================================
 // Internal recorder state
 // ============================================================================
@@ -135,6 +198,29 @@ interface RecorderInternal {
    * Preserved across arm() cycles (SSOT for closure computation in getTape).
    */
   bootstrapCreates: Map<HandleId, RhiCallEvent>;
+  /**
+   * @internal
+   * Descriptor registry of currently-live resources. Written by createBuffer /
+   * createTexture (after registerHandle) and cleared by destroyBuffer /
+   * destroyTexture. Distinct from handleMap (WeakMap, handle object -> handleId
+   * identity, one-way): descriptorTable carries the descriptor *content* (kind /
+   * size / format / usage) AND the resource object keyed by handleId, so
+   * snapshotResource can both determine a resource's shape and reach the object
+   * for readback at frame-header time without re-scanning the event stream or
+   * reverse-walking the WeakMap (which cannot be iterated). destroy* removes the
+   * entry so the live-resource set never grows unbounded (AC-09). One registry,
+   * one delete on destroy — shape and object share the same lifecycle (SSOT).
+   */
+  descriptorTable: Map<
+    HandleId,
+    {
+      kind: 'buffer' | 'texture';
+      size?: number | GPUExtent3DStrict;
+      format?: GPUTextureFormat;
+      usage: number;
+      resource: object;
+    }
+  >;
   /** @internal */
   _skipRecord: boolean;
   frameIdx: number;
@@ -155,7 +241,13 @@ interface RecorderInternal {
 
 function pushEvent(s: RecorderInternal, event: RhiCallEvent): void {
   if (s._skipRecord) return;
-  if (s.state !== RecorderState.Armed && s.state !== RecorderState.Recording) return;
+  if (
+    s.state !== RecorderState.Armed &&
+    s.state !== RecorderState.Recording &&
+    s.state !== RecorderState.Snapshotting
+  ) {
+    return;
+  }
   s.events.push(event);
 }
 
@@ -189,9 +281,15 @@ function getHandleId(s: RecorderInternal, handle: object, kind: string): HandleI
  * @internal
  * Collect all handleIds referenced by frame events in `s.events`.
  *
- * Scans events for fields that reference resources created by create* calls
- * (buffer/texture/pipeline/bindGroup/sampler/textureView/shaderModule).
- * Excludes pass handleIds, cmd handleIds, and inline 'layout:auto' strings.
+ * Scans events for ALL fields that reference resources — mirrors
+ * the reference categories checked by findDanglingHandleId in
+ * tape-format.ts to achieve producer/consumer convergence (D-2).
+ *
+ * Includes: buffer/texture/pipeline/bindGroup/sampler/textureView/
+ * shaderModule handles (persistent), plus passHandleId and cmdHandleId
+ * from pass/encoder events (per-frame transient). Transient handles
+ * that are declared in-frame are excluded later by the inFrameHandleIds
+ * filter in getTape().
  */
 function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]): Set<HandleId> {
   const refs = new Set<HandleId>();
@@ -204,31 +302,111 @@ function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]): Set<
         break;
       }
       case 'setVertexBuffer': {
-        const we = e as { bufferHandleId: HandleId };
+        const we = e as { passHandleId: HandleId; bufferHandleId: HandleId };
+        refs.add(we.passHandleId);
         refs.add(we.bufferHandleId);
         break;
       }
       case 'setIndexBuffer': {
-        const we = e as { bufferHandleId: HandleId };
+        const we = e as { passHandleId: HandleId; bufferHandleId: HandleId };
+        refs.add(we.passHandleId);
         refs.add(we.bufferHandleId);
         break;
       }
       case 'setPipeline': {
-        const we = e as { pipelineHandleId: HandleId };
+        const we = e as { passHandleId: HandleId; pipelineHandleId: HandleId };
+        refs.add(we.passHandleId);
         refs.add(we.pipelineHandleId);
         break;
       }
       case 'setComputePipeline': {
-        const we = e as { pipelineHandleId: HandleId };
+        const we = e as { passHandleId: HandleId; pipelineHandleId: HandleId };
+        refs.add(we.passHandleId);
         refs.add(we.pipelineHandleId);
         break;
       }
       case 'setBindGroup': {
-        const we = e as { bindGroupHandleId: HandleId };
+        const we = e as { passHandleId: HandleId; bindGroupHandleId: HandleId };
+        refs.add(we.passHandleId);
         refs.add(we.bindGroupHandleId);
         break;
       }
+      case 'draw': {
+        const we = e as { passHandleId: HandleId };
+        refs.add(we.passHandleId);
+        break;
+      }
+      case 'drawIndexed': {
+        const we = e as { passHandleId: HandleId };
+        refs.add(we.passHandleId);
+        break;
+      }
+      case 'setViewport': {
+        const we = e as { passHandleId: HandleId };
+        refs.add(we.passHandleId);
+        break;
+      }
+      case 'setScissorRect': {
+        const we = e as { passHandleId: HandleId };
+        refs.add(we.passHandleId);
+        break;
+      }
+      case 'endRenderPass': {
+        const we = e as { passHandleId: HandleId };
+        refs.add(we.passHandleId);
+        break;
+      }
+      case 'dispatchWorkgroups': {
+        const we = e as { passHandleId: HandleId };
+        refs.add(we.passHandleId);
+        break;
+      }
+      case 'endComputePass': {
+        const we = e as { passHandleId: HandleId };
+        refs.add(we.passHandleId);
+        break;
+      }
+      case 'submit': {
+        const we = e as { cmdHandleIds: readonly HandleId[] };
+        for (const id of we.cmdHandleIds) refs.add(id);
+        break;
+      }
+      case 'beginRenderPass': {
+        const we = e as {
+          cmdHandleId: HandleId;
+          colorAttachmentViewHandleIds: readonly (HandleId | undefined)[];
+          depthStencilViewHandleId?: HandleId;
+        };
+        refs.add(we.cmdHandleId);
+        for (const vhId of we.colorAttachmentViewHandleIds) {
+          if (vhId !== undefined) refs.add(vhId);
+        }
+        if (we.depthStencilViewHandleId !== undefined) refs.add(we.depthStencilViewHandleId);
+        break;
+      }
+      case 'beginComputePass': {
+        const we = e as { cmdHandleId: HandleId };
+        refs.add(we.cmdHandleId);
+        break;
+      }
+      case 'finish': {
+        const we = e as { cmdHandleId: HandleId };
+        refs.add(we.cmdHandleId);
+        break;
+      }
+      case 'pushDebugGroup':
+      case 'popDebugGroup':
+      case 'insertDebugMarker': {
+        const we = e as { cmdHandleId: HandleId };
+        refs.add(we.cmdHandleId);
+        break;
+      }
       case 'writeTexture': {
+        const we = e as { destination: { textureHandleId: HandleId } };
+        refs.add(we.destination.textureHandleId);
+        break;
+      }
+      case 'copyExternalImageToTexture': {
         const we = e as { destination: { textureHandleId: HandleId } };
         refs.add(we.destination.textureHandleId);
         break;
@@ -266,21 +444,20 @@ function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]): Set<
         refs.add(we.destination.textureHandleId);
         break;
       }
-      case 'beginRenderPass': {
-        const we = e as {
-          colorAttachmentViewHandleIds: readonly (HandleId | undefined)[];
-          depthStencilViewHandleId?: HandleId;
-        };
-        for (const vhId of we.colorAttachmentViewHandleIds) {
-          if (vhId !== undefined) refs.add(vhId);
-        }
-        if (we.depthStencilViewHandleId !== undefined) refs.add(we.depthStencilViewHandleId);
+      case 'frameMark':
+      case 'createBuffer':
+      case 'createTexture':
+      case 'createSampler':
+      case 'createBindGroupLayout':
+      case 'createBindGroup':
+      case 'createPipelineLayout':
+      case 'createRenderPipeline':
+      case 'createComputePipeline':
+      case 'createShaderModule':
+      case 'createCommandEncoder':
+      case 'createTextureView':
+        // Declaration events — no references to collect.
         break;
-      }
-      // submit.cmdHandleIds refer to per-frame transient CommandEncoder
-      // handles (allocated via allocHandleId, never written to bootstrapCreates).
-      // Including them in the seed set would cause closure lookups to fail
-      // with a spurious tape-handle-graph-broken on every valid capture.
       default:
         break;
     }
@@ -461,6 +638,29 @@ export interface DebugRhiInstance extends RhiInstance {
   /** Clear error state to idle, allowing re-arm. */
   disposeError(): void;
   /**
+   * Snapshot a resource's GPU bytes into the tape as an initialData event.
+   *
+   * Reads the resource descriptor from the internal registry, copies the
+   * resource's bytes via copyToBuffer/mapAsync, stores the bytes into the
+   * blobPool (djb2 hash-dedup), and pushes an RhiCallEventInitialData into
+   * the event stream. Returns Result with {handleId, dataHash} on success,
+   * or snapshot-readback-failed on any readback/storeBlob failure.
+   *
+   * Async: the GPU readback chain (copyToBuffer -> submit ->
+   * onSubmittedWorkDone -> mapAsync) is inherently asynchronous.
+   */
+  snapshotResource(
+    handleId: HandleId,
+  ): Promise<Result<{ handleId: HandleId; dataHash: string }, DebugError>>;
+  /**
+   * Frame-header snapshot loop: awaits all submitted GPU work, then snapshots
+   * every live resource in the descriptor registry (full-table dump, no
+   * trimming). Advances the recorder Armed -> Snapshotting -> Recording on
+   * success. Returns the first snapshot failure as a Result so the caller can
+   * fail fast rather than record a partial seed set.
+   */
+  snapshotAllLiveResources(): Promise<Result<void, DebugError>>;
+  /**
    * @internal
    * Append an event from a standalone wrapper (e.g. `wrapCreateShaderModule`)
    * through the same `_skipRecord` + state-machine guard that the proxy
@@ -507,6 +707,22 @@ export interface DebugRhiInstance extends RhiInstance {
    * without going through getTape() closure computation (M2).
    */
   _getBootstrapCreatesSize(): number;
+  /**
+   * @internal
+   * Read-only view of the descriptor registry keyed by handleId. Test-only
+   * accessor so unit tests can verify create* register / destroy* remove
+   * semantics (AC-09) without reaching into the closed-over recorder state.
+   */
+  _getDescriptorTable(): ReadonlyMap<
+    HandleId,
+    {
+      kind: 'buffer' | 'texture';
+      size?: number | GPUExtent3DStrict;
+      format?: GPUTextureFormat;
+      usage: number;
+      resource: object;
+    }
+  >;
 }
 
 // ============================================================================
@@ -532,6 +748,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     handleMap: new WeakMap(),
     textureViewHandleMap: new WeakMap(),
     bootstrapCreates: new Map(),
+    descriptorTable: new Map(),
     _skipRecord: false,
     frameIdx: 0,
     bootstrap: true,
@@ -547,6 +764,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
   function arm(frames: number): Result<void, DebugError> {
     if (
       s.state === RecorderState.Armed ||
+      s.state === RecorderState.Snapshotting ||
       s.state === RecorderState.Recording ||
       s.state === RecorderState.Finalizing
     ) {
@@ -586,7 +804,12 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       return;
     }
 
-    if (s.state === RecorderState.Armed) {
+    // Armed or Snapshotting at frame end -> recording. The explicit
+    // snapshotAllLiveResources() path advances Armed -> Snapshotting ->
+    // Recording before any frame ends; this branch is the fallback for hosts
+    // that never call it (the snapshot loop is opt-in at the seam, M4 wires it
+    // into the real capture flow).
+    if (s.state === RecorderState.Armed || s.state === RecorderState.Snapshotting) {
       s.state = RecorderState.Recording;
       s.bootstrap = false;
     }
@@ -620,8 +843,22 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     // per-frame resources like swapchain textures, command encoders).
     // These handles do NOT need bootstrap prefixing -- they were born
     // during the recorded frame and their create event is in s.events.
+    // Collect handleIds that are directly declared by create* events in s.events.
+    // Only include the handleId field of the create event itself — NOT backward-refs
+    // (layoutHandleId, resourceHandleIds, etc.) from _getCreateEventReferencedHandleIds.
+    //
+    // Backward-refs from in-frame create events often point to persistent resources
+    // (buffers, textures, pipelines) that were created before arm(). Including them
+    // in inFrameHandleIds would exclude those resources from bootstrap prefixing,
+    // causing tapes to be non-self-contained (missing create* events for early handles).
+    //
+    // Swapchain textures that have no createTexture event are handled elsewhere:
+    // createTextureView (line 1237) detects missing bootstrap entries and constructs
+    // faithful createTexture events at capture time, so they are already in both
+    // bootstrapCreates and s.events.
     const inFrameHandleIds = new Set<HandleId>();
     for (const e of s.events) {
+      // create* events declare handleId (or resultHandleId for createTextureView).
       if (
         e.kind.startsWith('create') &&
         'handleId' in e &&
@@ -629,14 +866,29 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       ) {
         inFrameHandleIds.add((e as { handleId: HandleId }).handleId);
       }
-      // Also collect backward-referenced handleIds from create events in
-      // s.events. For example, createTextureView.sourceHandleId points to
-      // swapchain textures (from getCurrentTexture) that never get their own
-      // createTexture event. These handleIds exist only as references within
-      // frame events and must not trigger bootstrap lookup.
-      const backwardRefs = _getCreateEventReferencedHandleIds(e);
-      for (const ref of backwardRefs) {
-        inFrameHandleIds.add(ref);
+      // createTextureView declares the result via resultHandleId.
+      if (
+        e.kind === 'createTextureView' &&
+        'resultHandleId' in e &&
+        typeof (e as { resultHandleId: unknown }).resultHandleId === 'string'
+      ) {
+        inFrameHandleIds.add((e as { resultHandleId: HandleId }).resultHandleId);
+      }
+      // createCommandEncoder declares the cmd via cmdHandleId.
+      if (
+        e.kind === 'createCommandEncoder' &&
+        'cmdHandleId' in e &&
+        typeof (e as { cmdHandleId: unknown }).cmdHandleId === 'string'
+      ) {
+        inFrameHandleIds.add((e as { cmdHandleId: HandleId }).cmdHandleId);
+      }
+      // beginRenderPass / beginComputePass declare passHandleId.
+      if (
+        (e.kind === 'beginRenderPass' || e.kind === 'beginComputePass') &&
+        'passHandleId' in e &&
+        typeof (e as { passHandleId: unknown }).passHandleId === 'string'
+      ) {
+        inFrameHandleIds.add((e as { passHandleId: HandleId }).passHandleId);
       }
     }
 
@@ -784,6 +1036,157 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       s.blobPool = new Map();
       s.valid = true;
     }
+  }
+
+  /**
+   * Snapshot a resource's GPU bytes into the tape as an initialData event.
+   *
+   * Reads the resource shape from the descriptor registry, copies the bytes
+   * back from the GPU via readbackBufferBytes (buffer) / readbackTexturePixels
+   * (texture), stores them in the blobPool (djb2 hash-dedup), and pushes an
+   * `initialData` event into the stream. The snapshot's own copy/submit are
+   * wrapped in `_skipRecord = true` so they never leak into the tape event
+   * stream (D-8 isolation).
+   *
+   * Async because the GPU readback chain (copyToBuffer -> submit ->
+   * onSubmittedWorkDone -> mapAsync) is inherently asynchronous; the M1 stub
+   * locked a sync signature, but no caller existed yet — the frame-header loop
+   * added here is the first consumer (Change stance: optimal > compatible).
+   *
+   * Returns Result with {handleId, dataHash} on success, or
+   * snapshot-readback-failed (with `.detail = {handleId, stage}`) on any
+   * failure, so AI users can switch-exhaustive narrow the code (D-3).
+   */
+  async function snapshotResource(
+    handleId: HandleId,
+  ): Promise<Result<{ handleId: HandleId; dataHash: string }, DebugError>> {
+    type SnapshotResult = Result<{ handleId: HandleId; dataHash: string }, DebugError>;
+    const fail = (
+      stage: 'copy' | 'map' | 'store',
+      expected: string,
+      hint: string,
+    ): SnapshotResult =>
+      makeErr(
+        new DebugError({
+          code: 'snapshot-readback-failed',
+          expected,
+          hint,
+          detail: { handleId, stage },
+        }),
+      ) as unknown as SnapshotResult;
+
+    const entry = s.descriptorTable.get(handleId);
+    if (entry === undefined) {
+      return fail(
+        'copy',
+        'handleId present in descriptor registry',
+        `no live resource registered for handleId '${handleId}'; it may have been destroyed or never created through the recorder proxy`,
+      );
+    }
+
+    const device = s.capturedDevice;
+    if (device === undefined) {
+      return fail(
+        'copy',
+        'a captured RhiDevice to drive GPU readback',
+        'no device has been acquired through the recorder proxy yet; drive requestAdapter().requestDevice() before snapshotting',
+      );
+    }
+
+    // Resolve the unwrapped real device — readback issues copy/submit/mapAsync
+    // through it. The proxy device would re-record those calls were it not for
+    // the _skipRecord guard below; using the real device sidesteps the proxy
+    // entirely for the readback staging buffer.
+    const realDevice = (device as RhiDevice & { _realDevice?: RhiDevice })._realDevice ?? device;
+
+    let bytes: ArrayBuffer;
+    const prevSkip = s._skipRecord;
+    s._skipRecord = true;
+    try {
+      if (entry.kind === 'buffer') {
+        const size = typeof entry.size === 'number' ? entry.size : 0;
+        const res = await readbackBufferBytes(realDevice, entry.resource, size);
+        if (!res.ok) return fail(snapshotStageOf(res.error), res.error.expected, res.error.hint);
+        bytes = res.value;
+      } else {
+        const { width, height } = extentToWidthHeight(entry.size);
+        try {
+          const pixels = await readbackTexturePixels(realDevice, entry.resource, width, height);
+          bytes = pixels.buffer.slice(
+            pixels.byteOffset,
+            pixels.byteOffset + pixels.byteLength,
+          ) as ArrayBuffer;
+        } catch (e) {
+          return fail(
+            'copy',
+            'texture GPU byte readback to succeed',
+            `readbackTexturePixels failed: ${String(e)}`,
+          );
+        }
+      }
+    } finally {
+      s._skipRecord = prevSkip;
+    }
+
+    // storeBlob: djb2 hash-dedup into the unified blobPool (D-1, no separate
+    // init-data pool). Reuses the same tag space as writeBuffer/writeTexture.
+    let dataHash: string;
+    try {
+      dataHash = storeBlob(s, bytes);
+    } catch (e) {
+      return fail(
+        'store',
+        'storeBlob to hash + insert the snapshot bytes',
+        `storeBlob failed: ${String(e)}`,
+      );
+    }
+
+    pushEvent(s, { kind: 'initialData', handleId, dataHash });
+    return makeOk({ handleId, dataHash }) as unknown as SnapshotResult;
+  }
+
+  /**
+   * Frame-header snapshot loop (D-5, C-3, C-4): with the recorder in the
+   * Snapshotting middle state, await all submitted work, then snapshot every
+   * live resource in the descriptor registry (full-table dump, no size
+   * threshold / allowlist trimming — that for-loop is the single Phase 2
+   * policy seam, OOS-4 / OOS-5). On full success the recorder advances to
+   * Recording; any single snapshot failure aborts with its Result so the
+   * caller fails fast (architecture §5) rather than recording a partial seed.
+   */
+  async function snapshotAllLiveResources(): Promise<Result<void, DebugError>> {
+    if (s.state !== RecorderState.Armed && s.state !== RecorderState.Snapshotting) {
+      return makeErr(
+        new DebugError({
+          code: 'recorder-not-attached',
+          expected: 'snapshotAllLiveResources called while recorder is armed',
+          hint: `recorder is in '${s.state}' state; call arm() before the frame-header snapshot`,
+        }),
+      ) as unknown as Result<void, DebugError>;
+    }
+    s.state = RecorderState.Snapshotting;
+
+    // C-3 conservative timing: drain queued work so snapshots read frame-outside
+    // / historical content, never a half-written in-frame value (A-2).
+    const device = s.capturedDevice;
+    if (device !== undefined) {
+      const realDevice = (device as RhiDevice & { _realDevice?: RhiDevice })._realDevice ?? device;
+      const prevSkip = s._skipRecord;
+      s._skipRecord = true;
+      try {
+        await realDevice.queue.onSubmittedWorkDone();
+      } finally {
+        s._skipRecord = prevSkip;
+      }
+    }
+
+    for (const handleId of s.descriptorTable.keys()) {
+      const res = await snapshotResource(handleId);
+      if (!res.ok) return res as unknown as Result<void, DebugError>;
+    }
+
+    s.state = RecorderState.Recording;
+    return makeOk(undefined) as unknown as Result<void, DebugError>;
   }
 
   // --------------------------------------------------
@@ -1183,24 +1586,46 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       },
 
       createBuffer(desc: BufferDescriptor) {
-        const res = realDevice.createBuffer(desc);
+        // COPY_SRC promotion (D-5): every recorded resource must be readable
+        // back via copyBufferToBuffer so snapshotResource can capture its GPU
+        // bytes at frame-header time. Promote the live resource's usage too,
+        // not just the recorded event — a buffer created without COPY_SRC is
+        // an invalid copy source on the real device. Mappable buffers are
+        // skipped (MAP_READ|COPY_SRC is invalid) — they are staging buffers,
+        // never snapshot targets.
+        const promotedUsage = promoteBufferUsage(desc.usage ?? 0);
+        const res = realDevice.createBuffer({ ...desc, usage: promotedUsage });
         if (!res.ok) return res;
         const event: RhiCallEvent = {
           kind: 'createBuffer',
           handleId: '' as HandleId,
           desc: {
             size: desc.size ?? 0,
-            usage: desc.usage ?? 0,
+            usage: promotedUsage,
             mappedAtCreation: desc.mappedAtCreation,
           },
         };
-        registerHandle(s, res.value as unknown as object, 'buffer', event);
+        const bufResource = res.value as unknown as object;
+        const bufHandleId = registerHandle(s, bufResource, 'buffer', event);
+        s.descriptorTable.set(bufHandleId, {
+          kind: 'buffer',
+          size: desc.size ?? 0,
+          usage: promotedUsage,
+          resource: bufResource,
+        });
         pushEvent(s, event);
         return res;
       },
 
       createTexture(desc: TextureDescriptor) {
-        const res = realDevice.createTexture(desc);
+        // COPY_SRC promotion (D-5): same rationale as createBuffer — a texture
+        // without COPY_SRC cannot be a copyTextureToBuffer source, so promote
+        // the live resource's usage as well as the recorded event's. The
+        // swapchain-reconstruction path (createTextureView below) already does
+        // this for the synthetic createTexture it emits. Texture COPY_SRC is
+        // 0x01 (distinct from the buffer bit 0x04).
+        const promotedUsage = (desc.usage ?? 0) | TEXTURE_USAGE_COPY_SRC;
+        const res = realDevice.createTexture({ ...desc, usage: promotedUsage });
         if (!res.ok) return res;
         const event: RhiCallEvent = {
           kind: 'createTexture',
@@ -1211,12 +1636,20 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
             sampleCount: desc.sampleCount,
             dimension: desc.dimension,
             format: desc.format ?? ('bgra8unorm' as GPUTextureFormat),
-            usage: desc.usage ?? 0,
+            usage: promotedUsage,
             viewFormats: desc.viewFormats,
             textureBindingViewDimension: desc.textureBindingViewDimension,
           },
         };
-        registerHandle(s, res.value as unknown as object, 'texture', event);
+        const texResource = res.value as unknown as object;
+        const texHandleId = registerHandle(s, texResource, 'texture', event);
+        s.descriptorTable.set(texHandleId, {
+          kind: 'texture',
+          size: desc.size ?? { width: 1, height: 1 },
+          format: desc.format ?? ('bgra8unorm' as GPUTextureFormat),
+          usage: promotedUsage,
+          resource: texResource,
+        });
         pushEvent(s, event);
         return res;
       },
@@ -1345,10 +1778,26 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
           kind: 'createBindGroup',
           handleId: '' as HandleId,
           layoutHandleId: layoutId,
-          entries: entries.map((e, idx) => ({
-            binding: e.binding,
-            resourceKind: resourceKinds[idx] as RhiBindResourceKind,
-          })),
+          entries: entries.map((e, idx) => {
+            const entry: {
+              binding: number;
+              resourceKind: RhiBindResourceKind;
+              bufferOffset?: number;
+              bufferSize?: number;
+            } = {
+              binding: e.binding,
+              resourceKind: resourceKinds[idx] as RhiBindResourceKind,
+            };
+            // Capture the bound sub-range for buffer entries so a
+            // dynamic-offset slice (e.g. a 256 B view of a 256 KiB pool)
+            // replays as that slice, not the whole buffer.
+            if (e.resource.kind === 'buffer') {
+              const { offset, size } = e.resource.value;
+              if (offset !== undefined) entry.bufferOffset = offset;
+              if (size !== undefined) entry.bufferSize = size;
+            }
+            return entry;
+          }),
           resourceHandleIds,
         };
         registerHandle(s, res.value as unknown as object, 'bindGroup', event);
@@ -1447,10 +1896,14 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       },
 
       destroyBuffer(buf: Buffer) {
+        const hId = s.handleMap.get(buf as unknown as object);
+        if (hId !== undefined) s.descriptorTable.delete(hId);
         return realDevice.destroyBuffer(buf);
       },
 
       destroyTexture(tex: Texture) {
+        const hId = s.handleMap.get(tex as unknown as object);
+        if (hId !== undefined) s.descriptorTable.delete(hId);
         return realDevice.destroyTexture(tex);
       },
 
@@ -1487,6 +1940,8 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     getBlobPool,
     transitionToError,
     disposeError,
+    snapshotResource,
+    snapshotAllLiveResources,
     _pushExternalEvent(event: RhiCallEvent): void {
       pushEvent(s, event);
     },
@@ -1506,6 +1961,9 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     },
     _getBootstrapCreatesSize(): number {
       return s.bootstrapCreates.size;
+    },
+    _getDescriptorTable() {
+      return s.descriptorTable;
     },
 
     async requestAdapter(

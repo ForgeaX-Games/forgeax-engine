@@ -31,7 +31,7 @@ export {
 // pngjs (Node.js dep) into downstream bundles (e.g., the app package).
 // Import from '@forgeax/engine-rhi-debug/inspector' for inspector APIs.
 export type { Replay } from './replayer';
-export { createReplay } from './replayer';
+export { createReplay, replayInitialData } from './replayer';
 export type { DebugRhiAdapter } from './rpc-bridge';
 export { wireDebugRhiInspector } from './rpc-bridge';
 export type { PassOffset } from './tape-format';
@@ -47,6 +47,7 @@ export type {
   InspectFields,
   InspectReport,
   RhiCallEvent,
+  RhiCallEventInitialData,
   RhiCapsRecorded,
   Tape,
 } from './types';

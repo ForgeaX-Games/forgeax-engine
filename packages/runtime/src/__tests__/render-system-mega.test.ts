@@ -816,6 +816,10 @@ import { extractFrame } from '../render-system-extract';
         // + 1 for the built-in tonemap params UBO defaultValue seed at register
         // (feat-20260621 M-A3 / D-5: postProcess.register('forgeax::tonemap')
         // eager-writes its 16 B defaultValue during ready).
+        // feat-20260625-spot-light-shadow-mapping w25 (scope-amend webkit-
+        // fallback): the boot-time spot lightViewProj UBO 256 B zero-init seed
+        // is GONE — the spot matrices folded into the View UBO tail (no standalone
+        // buffer to zero-init), so the boot writeBuffer count dropped 14 -> 13.
         // HANDLE_QUAD joined the builtin upload loop in
         // feat-20260520-2d-sprite-layer-mvp post-merge fix; HANDLE_SPHERE
         // (id=4) joined in feat-20260529-fxaa-runtime-toggle;
