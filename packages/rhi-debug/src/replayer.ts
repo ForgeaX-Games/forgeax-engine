@@ -36,8 +36,10 @@ import type {
 } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-types';
 import { DebugError } from './errors';
+import { findEventIdxForDraw } from './inspect-core';
 import { readbackTexturePixels, resolveAttachmentSize } from './readback';
 import type { CreateShaderModuleFn } from './recorder';
+import { computeTextureLayout } from './texel-layout';
 import type {
   HandleId,
   RhiCallEvent,
@@ -62,18 +64,25 @@ import type {
   RhiCallEventDispatchWorkgroups,
   RhiCallEventDraw,
   RhiCallEventDrawIndexed,
+  RhiCallEventDrawIndexedIndirect,
+  RhiCallEventDrawIndirect,
   RhiCallEventEndComputePass,
   RhiCallEventEndRenderPass,
   RhiCallEventFinish,
   RhiCallEventInitialData,
   RhiCallEventInsertDebugMarker,
+  RhiCallEventPassInsertDebugMarker,
+  RhiCallEventPassPopDebugGroup,
+  RhiCallEventPassPushDebugGroup,
   RhiCallEventPopDebugGroup,
   RhiCallEventPushDebugGroup,
   RhiCallEventSetBindGroup,
+  RhiCallEventSetBlendConstant,
   RhiCallEventSetComputePipeline,
   RhiCallEventSetIndexBuffer,
   RhiCallEventSetPipeline,
   RhiCallEventSetScissorRect,
+  RhiCallEventSetStencilReference,
   RhiCallEventSetVertexBuffer,
   RhiCallEventSetViewport,
   RhiCallEventSubmit,
@@ -160,6 +169,36 @@ export interface Replay {
       DebugError
     >
   >;
+
+  /**
+   * Replay forward and leave the target draw's color attachment COMMITTED with
+   * the cumulative state right after global draw #drawIdx executes.
+   *
+   * Unlike `stepTo` (which replays raw events and leaves an open, uncommitted
+   * render pass when it stops mid-pass — a color attachment cannot be read
+   * mid-pass per WebGPU), this replays every event up to & including the target
+   * draw, then SYNTHESIZES endRenderPass + finish + submit on the target pass's
+   * recorded encoder so the attachment holds committed pixels. Earlier passes
+   * are committed by their own recorded submit events replayed along the way.
+   *
+   * After a successful `{committed:true}` return, `readbackDrawRt(drawIdx)` (or
+   * the inspector's RT readback) reads exactly the draws-0..N pixels — so two
+   * different draws in one pass yield different images.
+   *
+   * Monotonic-forward like `stepTo`: to re-target an earlier draw, call
+   * `reset()` first (the per-draw consumers already do).
+   *
+   * @param drawIdx - Global draw index (Nth draw/dispatch in the tape).
+   * @returns Ok({committed:true}) when the target pass has a color attachment
+   *   and was committed; Ok({committed:false}) when the draw is in a depth-only
+   *   render pass or a compute pass (no color RT to show — consumers render a
+   *   "no-rt" state); Err 'replay-step-out-of-range' on an out-of-range or
+   *   non-monotonic drawIdx, or 'rt-readback-failed' when the recorded pass /
+   *   encoder handles cannot be resolved.
+   */
+  readonly commitThroughDraw: (
+    drawIdx: number,
+  ) => Promise<Result<{ readonly committed: boolean }, DebugError>>;
 
   /**
    * @internal
@@ -249,6 +288,12 @@ export function createReplay(
 
     reset(): void {
       resetImpl(handleMap, device);
+      // Clear command/pass encoder maps too: after reset, currentIdx returns to
+      // 0 and the next replay re-runs createCommandEncoder/beginRenderPass, so
+      // stale encoders/passes from the prior run must not linger (commitThrough-
+      // Draw resolves the open pass via these maps).
+      encoderMap.clear();
+      passEncoderMap.clear();
       _currentEventIdx = 0;
       _disposed = false;
     },
@@ -273,6 +318,26 @@ export function createReplay(
       >
     > {
       return readbackRtImpl(tape, device, handleMap, rtIdx);
+    },
+
+    commitThroughDraw(
+      drawIdx: number,
+    ): Promise<Result<{ readonly committed: boolean }, DebugError>> {
+      return commitThroughDrawImpl(
+        tape,
+        device,
+        deviceQueue,
+        handleMap,
+        encoderMap,
+        passEncoderMap,
+        drawIdx,
+        () => _currentEventIdx,
+        (v: number) => {
+          _currentEventIdx = v;
+        },
+        () => _disposed,
+        createShaderModuleFn,
+      );
     },
 
     _events: tape.events,
@@ -415,6 +480,202 @@ async function stepToImpl(
   }
 
   return ok(undefined);
+}
+
+// ============================================================================
+// commitThroughDrawImpl — per-draw cumulative RT commit
+// ============================================================================
+
+/**
+ * Replay through global draw #drawIdx and synthetically commit the enclosing
+ * render pass so its color attachment holds the draws-0..N cumulative pixels.
+ * See Replay.commitThroughDraw for the contract.
+ */
+async function commitThroughDrawImpl(
+  tape: Tape,
+  device: RhiDevice,
+  queue: RhiQueue,
+  handleMap: Map<HandleId, unknown>,
+  encoderMap: Map<HandleId, RhiCommandEncoder>,
+  passEncoderMap: Map<HandleId, PassEncoder>,
+  drawIdx: number,
+  getCurrentIdx: () => number,
+  setCurrentIdx: (v: number) => void,
+  getDisposed: () => boolean,
+  createShaderModuleFn?: CreateShaderModuleFn,
+): Promise<Result<{ readonly committed: boolean }, DebugError>> {
+  const events = tape.events;
+  const totalEvents = events.length;
+
+  const outOfRange = (hint: string): Result<{ readonly committed: boolean }, DebugError> =>
+    err(
+      new DebugError({
+        code: 'replay-step-out-of-range',
+        expected: 'drawIdx in range and >= current replay position',
+        hint,
+        detail: { requestedStep: drawIdx, currentStep: getCurrentIdx(), totalEvents },
+      }),
+    );
+
+  if (getDisposed()) {
+    return outOfRange('Replay is already disposed; create a new Replay session');
+  }
+
+  // Map global draw -> event index (shared SSOT helper).
+  const targetEventIdx = findEventIdxForDraw(events, drawIdx);
+  if (targetEventIdx === -1) {
+    return outOfRange(`drawIdx ${drawIdx} is out of range; tape has fewer draw/dispatch calls`);
+  }
+  // Monotonic-forward, same contract as stepTo.
+  if (targetEventIdx < getCurrentIdx()) {
+    return outOfRange(
+      `cannot commit backward from event ${getCurrentIdx()} to draw ${drawIdx} ` +
+        `(event ${targetEventIdx}); call reset() first`,
+    );
+  }
+
+  // Walk back to the enclosing pass. A render pass commits a color attachment;
+  // a compute pass (or a depth-only render pass) has no color RT to show.
+  let beginEv: RhiCallEventBeginRenderPass | undefined;
+  for (let i = targetEventIdx; i >= 0; i--) {
+    const ev = events[i];
+    if (ev === undefined) continue;
+    if (ev.kind === 'beginRenderPass') {
+      beginEv = ev;
+      break;
+    }
+    if (ev.kind === 'beginComputePass') {
+      // Compute dispatch: nothing to render-commit; let the caller show no-rt.
+      // Still advance replay through the dispatch for state consistency.
+      const fwd = await replayForward(
+        events,
+        targetEventIdx,
+        tape,
+        device,
+        queue,
+        handleMap,
+        encoderMap,
+        passEncoderMap,
+        getCurrentIdx,
+        setCurrentIdx,
+        createShaderModuleFn,
+      );
+      if (!fwd.ok) return fwd;
+      return ok({ committed: false });
+    }
+  }
+  if (beginEv === undefined) {
+    return err(
+      new DebugError({
+        code: 'rt-readback-failed',
+        expected: 'a beginRenderPass enclosing the target draw',
+        hint: `no beginRenderPass found before draw ${drawIdx} (event ${targetEventIdx})`,
+      }),
+    );
+  }
+
+  // Depth-only pass: no color attachment to commit.
+  const hasColor =
+    beginEv.colorAttachmentViewHandleIds.some((id) => id !== undefined && id !== null) &&
+    Array.from(beginEv.desc.colorAttachments).some((a) => a !== undefined && a !== null);
+
+  // Replay forward up to & including the target draw (earlier passes commit via
+  // their own recorded submit; interleaved writeBuffer events replay in order).
+  const fwd = await replayForward(
+    events,
+    targetEventIdx,
+    tape,
+    device,
+    queue,
+    handleMap,
+    encoderMap,
+    passEncoderMap,
+    getCurrentIdx,
+    setCurrentIdx,
+    createShaderModuleFn,
+  );
+  if (!fwd.ok) return fwd;
+
+  if (!hasColor) {
+    return ok({ committed: false });
+  }
+
+  // Synthetic commit of the (still-open) target pass, derived from beginEv's
+  // recorded handles — mirrors replayEndRenderPass + replayFinish + replaySubmit
+  // but stops at the target draw instead of replaying the recorded pass tail.
+  const pass = passEncoderMap.get(beginEv.passHandleId);
+  if (pass === undefined) {
+    return err(
+      new DebugError({
+        code: 'rt-readback-failed',
+        expected: 'the target render pass encoder to be open at the target draw',
+        hint: `pass '${beginEv.passHandleId}' not found in replay pass map`,
+      }),
+    );
+  }
+  (pass as RhiRenderPassEncoder).end();
+
+  const encoder = encoderMap.get(beginEv.cmdHandleId);
+  if (encoder === undefined) {
+    return err(
+      new DebugError({
+        code: 'rt-readback-failed',
+        expected: 'the target command encoder to exist at the target draw',
+        hint: `encoder '${beginEv.cmdHandleId}' not found in replay encoder map`,
+      }),
+    );
+  }
+  const finishRes = encoder.finish();
+  if (!finishRes.ok) {
+    return err(
+      new DebugError({
+        code: 'rt-readback-failed',
+        expected: 'synthetic encoder.finish() to succeed',
+        hint: `finish failed: ${finishRes.error.code}`,
+      }),
+    );
+  }
+  handleMap.set(beginEv.cmdHandleId, finishRes.value);
+  queue.submit([finishRes.value as unknown as never] as unknown as readonly never[]);
+  await queue.onSubmittedWorkDone();
+
+  return ok({ committed: true });
+}
+
+/**
+ * Replay events[currentIdx..targetEventIdx] inclusive (Fail-Fast on any event
+ * error). Shared by commitThroughDrawImpl's render and compute arms.
+ */
+async function replayForward(
+  events: readonly RhiCallEvent[],
+  targetEventIdx: number,
+  tape: Tape,
+  device: RhiDevice,
+  queue: RhiQueue,
+  handleMap: Map<HandleId, unknown>,
+  encoderMap: Map<HandleId, RhiCommandEncoder>,
+  passEncoderMap: Map<HandleId, PassEncoder>,
+  getCurrentIdx: () => number,
+  setCurrentIdx: (v: number) => void,
+  createShaderModuleFn?: CreateShaderModuleFn,
+): Promise<Result<{ readonly committed: boolean }, DebugError>> {
+  for (let i = getCurrentIdx(); i <= targetEventIdx; i++) {
+    const event = events[i];
+    if (event === undefined) break;
+    const res = await replayEvent(
+      event,
+      tape,
+      device,
+      queue,
+      handleMap,
+      encoderMap,
+      passEncoderMap,
+      createShaderModuleFn,
+    );
+    if (!res.ok) return res as unknown as Result<{ readonly committed: boolean }, DebugError>;
+    setCurrentIdx(i + 1);
+  }
+  return ok({ committed: false });
 }
 
 // ============================================================================
@@ -605,8 +866,36 @@ async function replayEvent(
       replaySetScissorRect(event, passEncoderMap);
       break;
 
+    case 'setStencilReference':
+      replaySetStencilReference(event, passEncoderMap);
+      break;
+
     case 'endRenderPass':
       replayEndRenderPass(event, passEncoderMap);
+      break;
+
+    case 'setBlendConstant':
+      replaySetBlendConstant(event, passEncoderMap);
+      break;
+
+    case 'passPushDebugGroup':
+      replayPassPushDebugGroup(event, passEncoderMap);
+      break;
+
+    case 'passPopDebugGroup':
+      replayPassPopDebugGroup(event, passEncoderMap);
+      break;
+
+    case 'passInsertDebugMarker':
+      replayPassInsertDebugMarker(event, passEncoderMap);
+      break;
+
+    case 'drawIndirect':
+      replayDrawIndirect(event, passEncoderMap);
+      break;
+
+    case 'drawIndexedIndirect':
+      replayDrawIndexedIndirect(event, passEncoderMap);
       break;
 
     case 'setComputePipeline':
@@ -660,21 +949,45 @@ async function replayEvent(
  * offline replay device cannot reconstruct the canvas's implicit srgb-view
  * compatibility on a plain texture.
  *
- * The remap rewrites both canvas BGRA formats (`bgra8unorm` and `bgra8unorm-srgb`)
- * to the byte-compatible `rgba8unorm`, applied consistently to the texture, its
- * view, and the pipeline color target so all three agree. Both are 8-bit-per-channel
- * RGBA, so per-draw binding/RT inspection and pixel readback are unaffected. Every
- * other format — including `rgba8unorm` itself — passes through unchanged, so the
- * existing same-format replay path is not perturbed.
+ * The remap rewrites the canvas BGRA formats to their byte-compatible RGBA
+ * counterparts, **preserving srgb-ness**: `bgra8unorm` -> `rgba8unorm` and
+ * `bgra8unorm-srgb` -> `rgba8unorm-srgb`. Preserving srgb is required for pixel
+ * fidelity: the live canvas is a `bgra8unorm` surface viewed as `bgra8unorm-srgb`,
+ * so the render encodes to srgb on store and `getImageData` reads srgb bytes.
+ * Replaying the color view + pipeline target as srgb makes the offline render
+ * encode identically, so `readbackRt` reads matching bytes. Collapsing srgb to
+ * plain `rgba8unorm` (the earlier shape) dropped that encode and left the replay
+ * uniformly ~0.046 darker than the demo (a visible, not cosmetic, gap).
+ *
+ * The reconstructed swapchain TEXTURE stays a plain `rgba8unorm` storage texture
+ * (its recorded create event has no srgb format); `replayCreateTexture` declares
+ * `viewFormats: ['rgba8unorm-srgb']` on it so the srgb VIEW is valid over the
+ * non-srgb storage. All three (texture storage / view / pipeline target) then
+ * agree the way the live canvas does. Every other format -- including
+ * `rgba8unorm` itself -- passes through unchanged.
  *
  * This adaptation is replay-layer-generic (every browser-captured tape replayed
  * offline needs it), which is why it lives here rather than in any per-demo script.
  */
 function adaptReplayFormat(format: string | undefined): string | undefined {
-  if (format === 'bgra8unorm' || format === 'bgra8unorm-srgb') {
-    return 'rgba8unorm';
-  }
+  if (format === 'bgra8unorm-srgb') return 'rgba8unorm-srgb';
+  if (format === 'bgra8unorm') return 'rgba8unorm';
   return format;
+}
+
+/**
+ * Ensure a reconstructed texture descriptor can host an srgb view. When the
+ * (adapted) storage format is plain `rgba8unorm`, the replayed color view may be
+ * `rgba8unorm-srgb` (see adaptReplayFormat); that view is only legal if the
+ * texture declares the srgb format in `viewFormats`. The live canvas implies this
+ * compatibility for its swapchain texture, but a manually-recreated texture must
+ * state it explicitly. Idempotent: adds the entry only when missing.
+ */
+function withSrgbViewFormat<T extends { format?: unknown; viewFormats?: unknown }>(desc: T): T {
+  if (desc.format !== 'rgba8unorm') return desc;
+  const existing = Array.isArray(desc.viewFormats) ? (desc.viewFormats as unknown[]) : [];
+  if (existing.includes('rgba8unorm-srgb')) return desc;
+  return { ...desc, viewFormats: [...existing, 'rgba8unorm-srgb'] };
 }
 
 /**
@@ -682,10 +995,28 @@ function adaptReplayFormat(format: string | undefined): string | undefined {
  * `adaptReplayFormat`, or the original `desc` unchanged when the format needs
  * no adaptation (so the same-format replay path allocates nothing extra).
  * Shared by the createTexture / createTextureView handlers.
+ *
+ * `viewFormats` is remapped in lockstep: a texture recorded as
+ * `{ format: 'bgra8unorm', viewFormats: ['bgra8unorm-srgb'] }` becomes invalid
+ * if only `.format` is rewritten to `rgba8unorm` while `viewFormats` keeps the
+ * BGRA srgb entry (CreateTexture rejects with "viewFormats[0] not compatible
+ * with the texture format"). Rewriting both keeps the descriptor self-consistent
+ * and lets the subsequent initialData WriteTexture seed land on a valid texture.
  */
-function descWithAdaptedFormat<T extends { format?: unknown }>(desc: T): T {
-  const adapted = adaptReplayFormat(desc.format as string | undefined);
-  return adapted === desc.format ? desc : { ...desc, format: adapted };
+function descWithAdaptedFormat<T extends { format?: unknown; viewFormats?: unknown }>(desc: T): T {
+  const adaptedFormat = adaptReplayFormat(desc.format as string | undefined);
+
+  let adaptedViewFormats: unknown = desc.viewFormats;
+  let viewFormatsChanged = false;
+  const originalViewFormats = desc.viewFormats;
+  if (Array.isArray(originalViewFormats)) {
+    const remapped = originalViewFormats.map((f) => adaptReplayFormat(f as string | undefined));
+    viewFormatsChanged = remapped.some((f, i) => f !== originalViewFormats[i]);
+    if (viewFormatsChanged) adaptedViewFormats = remapped;
+  }
+
+  if (adaptedFormat === desc.format && !viewFormatsChanged) return desc;
+  return { ...desc, format: adaptedFormat, viewFormats: adaptedViewFormats };
 }
 
 /**
@@ -732,12 +1063,23 @@ function replayCreateBuffer(
   }
 }
 
+// GPUTextureUsage.COPY_DST — a recreated texture must accept queue.writeTexture
+// to be seeded from its initialData event. Some source textures (e.g. an
+// r32float LUT recorded with RENDER_ATTACHMENT|COPY_SRC|TEXTURE_BINDING) lack
+// COPY_DST; without promoting it here the seed's writeTexture is rejected.
+const TEXTURE_USAGE_COPY_DST = 0x02;
+
 function replayCreateTexture(
   event: RhiCallEventCreateTexture,
   device: RhiDevice,
   handleMap: Map<HandleId, unknown>,
 ): void {
-  const result = device.createTexture(descWithAdaptedFormat(event.desc) as any);
+  const adapted = withSrgbViewFormat(descWithAdaptedFormat(event.desc));
+  const seedableDesc = {
+    ...adapted,
+    usage: ((adapted.usage as number | undefined) ?? 0) | TEXTURE_USAGE_COPY_DST,
+  };
+  const result = device.createTexture(seedableDesc as any);
   if (result.ok) {
     handleMap.set(event.handleId, result.value);
   }
@@ -1292,6 +1634,15 @@ function replaySetScissorRect(
   (pass as RhiRenderPassEncoder).setScissorRect(event.x, event.y, event.w, event.h);
 }
 
+function replaySetStencilReference(
+  event: RhiCallEventSetStencilReference,
+  passEncoderMap: Map<HandleId, PassEncoder>,
+): void {
+  const pass = passEncoderMap.get(event.passHandleId);
+  if (pass === undefined) return;
+  (pass as RhiRenderPassEncoder).setStencilReference(event.reference);
+}
+
 function replayEndRenderPass(
   event: RhiCallEventEndRenderPass,
   passEncoderMap: Map<HandleId, PassEncoder>,
@@ -1299,6 +1650,70 @@ function replayEndRenderPass(
   const pass = passEncoderMap.get(event.passHandleId);
   if (pass === undefined) return;
   (pass as RhiRenderPassEncoder).end();
+}
+
+// -- New handlers (M3 w11) --
+
+function replaySetBlendConstant(
+  event: RhiCallEventSetBlendConstant,
+  passEncoderMap: Map<HandleId, PassEncoder>,
+): void {
+  const pass = passEncoderMap.get(event.passHandleId);
+  if (pass === undefined) return;
+  // Only render pass encoders have setBlendConstant; compute pass silently skipped
+  // because passEncoderMap.get returns undefined for compute-only pass handles
+  // that were never registered as render passes.
+  (pass as RhiRenderPassEncoder).setBlendConstant(event.color);
+}
+
+function replayPassPushDebugGroup(
+  event: RhiCallEventPassPushDebugGroup,
+  passEncoderMap: Map<HandleId, PassEncoder>,
+): void {
+  const pass = passEncoderMap.get(event.passHandleId);
+  if (pass === undefined) return;
+  // Compute pass encoders do not have pushDebugGroup (GPUDebugCommandsMixin
+  // is bound to render pass only per WebGPU spec). Check method presence
+  // instead of type-narrowing: RhiComputePassEncoder lacks the debug mixin.
+  if (typeof (pass as any).pushDebugGroup !== 'function') return;
+  (pass as RhiRenderPassEncoder).pushDebugGroup(event.groupLabel);
+}
+
+function replayPassPopDebugGroup(
+  event: RhiCallEventPassPopDebugGroup,
+  passEncoderMap: Map<HandleId, PassEncoder>,
+): void {
+  const pass = passEncoderMap.get(event.passHandleId);
+  if (pass === undefined) return;
+  if (typeof (pass as any).popDebugGroup !== 'function') return;
+  (pass as RhiRenderPassEncoder).popDebugGroup();
+}
+
+function replayPassInsertDebugMarker(
+  event: RhiCallEventPassInsertDebugMarker,
+  passEncoderMap: Map<HandleId, PassEncoder>,
+): void {
+  const pass = passEncoderMap.get(event.passHandleId);
+  if (pass === undefined) return;
+  if (typeof (pass as any).insertDebugMarker !== 'function') return;
+  (pass as RhiRenderPassEncoder).insertDebugMarker(event.markerLabel);
+}
+
+function replayDrawIndirect(
+  _event: RhiCallEventDrawIndirect,
+  _passEncoderMap: Map<HandleId, PassEncoder>,
+): void {
+  // Indirect buffer bytes are not available (not in blobPool/initialData).
+  // Silently skip precise replay; Pipeline State is still extractable from
+  // the original event for viewer consumption. The draw that followed this
+  // event in the original frame is not replayed, but subsequent events are.
+}
+
+function replayDrawIndexedIndirect(
+  _event: RhiCallEventDrawIndexedIndirect,
+  _passEncoderMap: Map<HandleId, PassEncoder>,
+): void {
+  // Same as drawIndirect: buffer content unavailable -> skip precise replay.
 }
 
 function replaySetComputePipeline(
@@ -1414,13 +1829,43 @@ export function replayInitialData(
     if (kind === 'buffer') {
       queue.writeBuffer(resource as any, 0, data);
     } else {
-      const { width, height } = resolveTextureExtent(tape.events, event.handleId);
-      queue.writeTexture(
-        { texture: resource, mipLevel: 0, origin: { x: 0, y: 0, z: 0 } } as any,
-        data,
-        { offset: 0, bytesPerRow: width * 4, rowsPerImage: height } as any,
-        { width, height, depthOrArrayLayers: 1 },
+      const shape = resolveTextureShape(tape.events, event.handleId);
+      const layout = computeTextureLayout(
+        shape.format,
+        shape.width,
+        shape.height,
+        shape.layerCount,
+        shape.mipLevelCount,
       );
+      if (layout === undefined) {
+        // The recorder gate only snapshots formats with a known texel size, so a
+        // texture initialData event should always have a computable layout.
+        return seedFail(
+          'write',
+          `texture '${event.handleId}' has format '${shape.format}' with no byte layout; cannot seed`,
+        );
+      }
+      // Walk the same canonical (layer, mip) order the snapshot used: each slice
+      // is tight-packed in the blob at slice.byteOffset; writeTexture it back to
+      // its (mipLevel, baseArrayLayer) with bytesPerRow = mipWidth * bytesPerTexel.
+      const dataBytes = new Uint8Array(data);
+      for (const slice of layout.slices) {
+        const sliceData = dataBytes.subarray(slice.byteOffset, slice.byteOffset + slice.byteLength);
+        queue.writeTexture(
+          {
+            texture: resource,
+            mipLevel: slice.mip,
+            origin: { x: 0, y: 0, z: slice.layer },
+          } as any,
+          sliceData,
+          {
+            offset: 0,
+            bytesPerRow: slice.width * layout.bytesPerTexel,
+            rowsPerImage: slice.height,
+          } as any,
+          { width: slice.width, height: slice.height, depthOrArrayLayers: 1 },
+        );
+      }
     }
   } catch (e) {
     return seedFail(
@@ -1433,31 +1878,49 @@ export function replayInitialData(
 }
 
 /**
- * Resolve a texture's {width, height} from its createTexture event size for
- * the writeTexture dataLayout. Mirrors readback.resolveAttachmentSize extent
- * handling so seed and readback agree on extent interpretation. Falls back to
- * a 1x1 layout when the create event is absent (seed lookup already guards the
- * missing-create case before this is reached).
+ * Resolve a texture's full snapshot shape (extent + format + layers + mips) from
+ * its createTexture event, so the seed walks the identical layout the snapshot
+ * readback produced (architecture-principles #1 SSOT: the createTexture event is
+ * the single source for shape; seed and readback both derive from it). Falls back
+ * to a 1x1 single-layer single-mip rgba8 layout when the create event is absent
+ * (seed lookup already guards the missing-create case before this is reached).
  */
-function resolveTextureExtent(
+function resolveTextureShape(
   events: readonly RhiCallEvent[],
   handleId: HandleId,
-): { width: number; height: number } {
+): {
+  width: number;
+  height: number;
+  layerCount: number;
+  mipLevelCount: number;
+  format: GPUTextureFormat | undefined;
+} {
   for (const ev of events) {
     if (ev.kind === 'createTexture' && ev.handleId === handleId) {
       const sz = ev.desc.size;
+      let width = 1;
+      let height = 1;
+      let layerCount = 1;
       if (Array.isArray(sz)) {
-        const w = typeof sz[0] === 'number' ? sz[0] : 1;
-        const h = typeof sz[1] === 'number' ? sz[1] : w;
-        return { width: w, height: h };
+        width = typeof sz[0] === 'number' ? sz[0] : 1;
+        height = typeof sz[1] === 'number' ? sz[1] : width;
+        layerCount = typeof sz[2] === 'number' ? sz[2] : 1;
+      } else {
+        const obj = sz as { width: number; height?: number; depthOrArrayLayers?: number };
+        width = typeof obj.width === 'number' ? obj.width : 1;
+        height = typeof obj.height === 'number' ? obj.height : width;
+        layerCount = typeof obj.depthOrArrayLayers === 'number' ? obj.depthOrArrayLayers : 1;
       }
-      const obj = sz as { width: number; height?: number };
-      const w = typeof obj.width === 'number' ? obj.width : 1;
-      const h = typeof obj.height === 'number' ? obj.height : w;
-      return { width: w, height: h };
+      return {
+        width,
+        height,
+        layerCount,
+        mipLevelCount: ev.desc.mipLevelCount ?? 1,
+        format: ev.desc.format as GPUTextureFormat | undefined,
+      };
     }
   }
-  return { width: 1, height: 1 };
+  return { width: 1, height: 1, layerCount: 1, mipLevelCount: 1, format: undefined };
 }
 
 // ============================================================================

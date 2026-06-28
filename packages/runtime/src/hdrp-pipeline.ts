@@ -41,8 +41,8 @@
 //   AC-05: installPipeline(hdrpAsset) succeeds on caps-ok paths
 
 import { mat4 } from '@forgeax/engine-math';
-import { RenderGraph } from '@forgeax/engine-render-graph';
-import { err, ok, type Result, RhiError } from '@forgeax/engine-rhi';
+import { RenderGraph, type ResolveContext } from '@forgeax/engine-render-graph';
+import { err, ok, type Result, RhiError, type TextureView } from '@forgeax/engine-rhi';
 import { attachDebugOverlayPass } from './debug-draw-glue';
 import { HdrpDeferredCapsInsufficientError } from './errors';
 import { getOrCreateHdrpBuffers } from './hdrp-buffers';
@@ -410,6 +410,16 @@ export const hdrpPipeline: RenderPipeline = {
     // Opaque geometry was already rendered in g-buffer; this pass handles
     // alpha-blended materials via cluster-forward (existing code path, same
     // recordMainPass delegate as the old 'cluster-forward' pass).
+    // feat-20260612-hdrp-ssao wiring fix: the cluster-forward shader (fs_main)
+    // is what actually shades opaque HDRP geometry and samples the SSAO factor
+    // at @group(2) @binding(7). The `ssaoBlurred` texture is a graph-transient
+    // resolved only inside an execute closure (resolveCtx), so the group(2)
+    // bind group built ahead of graph.execute (render-system-record.ts) cannot
+    // carry it. Here we rebuild the unified group(2) bind group with the real
+    // ssaoBlurred view and hand it to recordMainPass via ctx.hdrpSsaoBindGroup.
+    // When SSAO is off, ssaoForwardReads stays empty and recordMainPass uses the
+    // existing white-fallback bind group (identity AO).
+    const ssaoForwardReads: string[] = data.config?.ssao?.enabled ? ['ssaoBlurred'] : [];
     graph.addPass('forward', {
       reads: [
         'hdrDepth',
@@ -417,10 +427,15 @@ export const hdrpPipeline: RenderPipeline = {
         'hdrpClusterGrid',
         'hdrpLightIndexList',
         'hdrpClusterUniform',
+        ...ssaoForwardReads,
       ],
       writes: ['hdrColor'],
-      execute: (ctx: RenderPipelineContext) => {
-        recordMainPass(ctx as _InternalRenderPipelineContext, { LightMode: ['Forward'] });
+      execute: (ctx: RenderPipelineContext, resolveCtx?: ResolveContext) => {
+        const internal = ctx as _InternalRenderPipelineContext;
+        if (data.config?.ssao?.enabled && resolveCtx !== undefined) {
+          internal.hdrpSsaoBlurredView = resolveCtx.resolve('ssaoBlurred') as TextureView;
+        }
+        recordMainPass(internal, { LightMode: ['Forward'] });
       },
     });
 

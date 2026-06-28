@@ -6,7 +6,7 @@
 //
 // Design locks:
 //   - branded Float32Array storage (types.ts SSOT); `as Vec2` casts are funneled through factory
-//     functions (D-P15 / lint-brand-cast.sh guard).
+//     functions (D-P15 / lint-brand-cast.mjs guard).
 //   - Out-param first + aliasing-safe (gl-matrix four ironclad rules): every function reads
 //     a/b components into locals before writing out, so vec2.add(v, v, v) / vec2.lerp(out, out, b, t)
 //     are legal.

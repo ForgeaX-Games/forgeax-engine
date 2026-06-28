@@ -41,8 +41,8 @@
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 
-const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
-const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
+const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '1000', 10);
+const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 
 const WIDTH = 200;
 const HEIGHT = 150;

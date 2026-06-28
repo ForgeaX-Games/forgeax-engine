@@ -5,7 +5,7 @@
 
 ## Proposition
 
-This package records every RHI call (createBuffer, writeBuffer, beginRenderPass, setPipeline, draw, etc.) into a **tape** -- an ordered sequence of `RhiCallEvent` items plus a hash-deduplicated binary blob pool. The tape can be **replayed** on a fresh `RhiDevice` (caps permitting) and **inspected** at any draw index, yielding bind group bindings, draw call metadata, and RT readback PNGs.
+This package records the **full RHI command surface** -- every encoder and pass-encoder method (except the 5 explicit `DEFERRED_COMMANDS` exemptions) -- into a **tape**. v3 coverage is enforced by a type-level invariant test (exhaustive `keyof` on all three encoder interfaces) -- an ordered sequence of `RhiCallEvent` items plus a hash-deduplicated binary blob pool. The tape can be **replayed** on a fresh `RhiDevice` (caps permitting) and **inspected** at any draw index, yielding bind group bindings, draw call metadata, and RT readback PNGs.
 
 Starting in v2, the tape is **self-contained**: `snapshotResource(handleId)` reads back the actual GPU bytes of live resources at capture-start and stores them as `initialData` events in the tape's bootstrap prefix. Replay follows a strict create-then-seed-then-dispatch order, making the tape independent of any pre-recording command history (e.g., load-time VBO/IBO uploads that happened before the recording window opened).
 
@@ -45,7 +45,8 @@ L1 is the byte-on-disk handoff: the dev-server POST endpoint and the Node `final
 | `snapshotAllLiveResources` | `(): Promise<Result<void, DebugError>>` | Frame-header snapshot entry point: awaits all submitted GPU work (`onSubmittedWorkDone`), then iterates the live descriptor registry full-table, calling `snapshotResource` on every entry. Advances the recorder Armed -> Snapshotting -> Recording on success. Returns the first snapshot failure as a Result — fail-fast, not partial seed (architecture section 5). This is the function AC-01 tests call; `snapshotResource` is the per-resource building block it loops over. |
 | `wrapCreateShaderModule` | `(originalFn: CreateShaderModuleFn, debugInst: DebugRhiInstance): CreateShaderModuleFn` | Standalone wrapper for `createShaderModule` (which is not on `RhiDevice` in rhi-webgpu). Records `createShaderModule` events in the tape. |
 | `createReplay` | `(tape: Tape, device: RhiDevice, createShaderModuleFn?: CreateShaderModuleFn): Result<Replay, DebugError>` | Create a Replay object from a tape. Performs caps fail-fast check (returns `caps-mismatch` if `tape.rhiCapsRecorded` is not a subset of `device.caps`). `createShaderModuleFn` is **type-optional but required for any tape carrying `createShaderModule` events** (every real-demo tape does — only shader-free self-contained test tapes omit them): pass `createShaderModule` from `@forgeax/engine-rhi-webgpu`. Omitting it silently skips those events, so downstream pipeline creation fails at the RHI layer (no `DebugError`) — not at `createReplay`. |
-| `inspectAt` | `(replay: Replay, drawIdx: number, events: readonly RhiCallEvent[], fields: readonly InspectFields[] \| undefined, device: RhiDevice, outputDir: string): Promise<Result<InspectReport, DebugError>>` | Inspect replay state at a specific draw index. `events` supplies frame/pass info; `fields` controls which data is computed (`['bindings']` skips RT readback; `['rt']` triggers `copyTextureToBuffer` + PNG; `undefined` = all); `device` performs RT readback; `outputDir` is where the RT PNG is written. |
+| `replay.commitThroughDraw` | `(drawIdx: number): Promise<Result<{committed: boolean}, DebugError>>` | **Per-draw cumulative RT.** Replays up to & including global draw #`drawIdx`, then synthesizes `endRenderPass` + `finish` + `submit` on the enclosing pass so its color attachment holds the **draws-0..N cumulative** pixels (selecting draw N shows the frame as it stood right after N, not the final composite). After `{committed:true}`, `readbackDrawRt(drawIdx)` / `inspectDrawJson(..., ['rt'])` read those pixels. `{committed:false}` = the draw is in a depth-only render pass or a compute pass (no color RT — render a "no-rt" state). Monotonic-forward like `stepTo`: `reset()` before re-targeting an earlier draw. Out-of-range/non-monotonic → `replay-step-out-of-range`. Use this (not `stepTo(end)`) whenever inspecting a *specific* draw; use `stepTo(events.length-1)` only for the whole composited frame. |
+| `inspectAt` | `(replay: Replay, drawIdx: number, events: readonly RhiCallEvent[], fields: readonly InspectFields[] \| undefined, device: RhiDevice, outputDir: string): Promise<Result<InspectReport, DebugError>>` | Inspect replay state at a specific draw index. `events` supplies frame/pass info; `fields` controls which data is computed (`['bindings']` skips RT readback; `['rt']` triggers `copyTextureToBuffer` + PNG; `undefined` = all); `device` performs RT readback; `outputDir` is where the RT PNG is written. Step the replay with `commitThroughDraw(drawIdx)` first for per-draw pixels (the CLI `inspect-at` path does this). |
 | `wireDebugRhiInspector` | `(reg: Registry, ctx: WireDefaultInspectorsContext): RegisterRootResult` | Register 3 RPC methods (`debug.captureFrame`, `debug.inspectAt`, `debug.replayDispose`) on a console `Registry`. Used by `wireDefaultInspectors` as the `debugRhi` injector. |
 
 ### Browser capture subpath (`@forgeax/engine-rhi-debug/capture-browser`)
@@ -153,7 +154,7 @@ if (!rtRes.ok) {
 replay.dispose();
 ```
 
-`device` is the engine's abstract `RhiDevice` -- callers pass the live device that wrapped the RHI instance (e.g. from `navigator.gpu` or the `debugInst` proxy chain). `tapeObj.events` holds the ordered `RhiCallEvent[]` produced by the capture. `replay.stepTo(N)` replays events `[0..N]` onto the GPU so `inspectDrawJson` and `renderRtToCanvas` see the full driver state at draw index N.
+`device` is the engine's abstract `RhiDevice` -- callers pass the live device that wrapped the RHI instance (e.g. from `navigator.gpu` or the `debugInst` proxy chain). `tapeObj.events` holds the ordered `RhiCallEvent[]` produced by the capture. `replay.stepTo(N)` replays events `[0..N]` onto the GPU and leaves the pass open at N — for the **whole composited frame** step to `events.length-1`. To inspect a **specific draw**, call `replay.commitThroughDraw(drawIdx)` instead: it replays through that draw and synthesizes the pass commit so `inspectDrawJson` / `renderRtToCanvas` read the draws-0..N cumulative pixels (a color attachment cannot be read mid-pass, so a bare `stepTo` to a mid-pass draw would read uncommitted/black).
 
 ### Browser one-line trigger (L2c)
 
@@ -291,10 +292,64 @@ Each error object carries structured `.code` / `.expected` / `.hint` / `.detail`
 
 | constant | value | locked in |
 |:--|:--|:--|
-| `TAPE_FORMAT_VERSION` | `2` | w8 tape-format.ts (bumped in v2 for initialData events) |
+| `TAPE_FORMAT_VERSION` | `3` | bumped in v3 for 6 new event types + full-command capture |
+| `SUPPORTED_TAPE_VERSIONS` | `new Set([2, 3])` | deserialize accepts {2,3}; v2 tapes readable, missing new events naturally empty |
 | `PER_EVENT_OVERHEAD` | `192` bytes | plan-strategy 5.3; m2-4 blob pool |
 
-Serialization: `serializeTape(tape) -> { json: string, bin: ArrayBuffer }`. JSON header contains `formatVersion` + `rhiCapsRecorded` + events array. Binary blob pool contains hash-keyed `ArrayBuffer` data for `writeBuffer` / `writeTexture` / shader source.
+Serialization: `serializeTape(tape) -> { json: string, bin: ArrayBuffer }`. JSON header contains `formatVersion` + `rhiCapsRecorded` + events array. Binary blob pool contains hash-keyed `ArrayBuffer` data for `writeBuffer` / `writeTexture` / shader source. Newly recorded tapes always write `formatVersion = 3`. v2 tapes deserialize without version-mismatch error; missing new events produce natural empty state (commands array lacks those kinds, pipelineState fields are undefined) -- no separate error branch.
+
+### v3 event additions
+
+Six new event kinds were added to the `RhiCallEvent` closed union, plus 10 previously-existing event kinds that were missing `pushEvent` calls in the recorder:
+
+**New event kinds (6):**
+
+| event kind | source method | payload highlights |
+|:--|:--|:--|
+| `setBlendConstant` | `RhiRenderPassEncoder.setBlendConstant` | `color: GPUColor` |
+| `drawIndirect` | `RhiRenderPassEncoder.drawIndirect` | `indirectBufferHandleId, indirectOffset` |
+| `drawIndexedIndirect` | `RhiRenderPassEncoder.drawIndexedIndirect` | `indirectBufferHandleId, indirectOffset` |
+| `passPushDebugGroup` | `RhiRenderPassEncoder.pushDebugGroup` | `passHandleId, groupLabel` |
+| `passPopDebugGroup` | `RhiRenderPassEncoder.popDebugGroup` | `passHandleId` |
+| `passInsertDebugMarker` | `RhiRenderPassEncoder.insertDebugMarker` | `passHandleId, markerLabel` |
+
+**Previously-existing event kinds, now recorded (10):**
+
+| category | event kinds |
+|:--|:--|
+| Copy/clear (5) | `copyBufferToBuffer`, `copyBufferToTexture`, `copyTextureToBuffer`, `copyTextureToTexture`, `clearBuffer` |
+| Viewport/scissor (2) | `setViewport`, `setScissorRect` |
+| Encoder-level debug group (3) | `pushDebugGroup`, `popDebugGroup`, `insertDebugMarker` |
+
+The recorder `_collectFrameReferencedHandleIds` explicitly collects `passHandleId` + `indirectBufferHandleId` for `drawIndirect`/`drawIndexedIndirect`, and the switch uses an exhaustive `default: void (e as never)` guard -- any future unhandled event kind becomes a compile error.
+
+### Coverage invariant
+
+The file `packages/rhi-debug/src/__tests__/coverage-invariant.test-d.ts` contains a type-level invariant: it enumerates every method on the three RHI encoder interfaces (`RhiCommandEncoder`, `RhiRenderPassEncoder`, `RhiComputePassEncoder`) and asserts that every method either maps to a captured `RhiCallEvent.kind` or appears in the `DEFERRED_COMMANDS` exemption set.
+
+```text
+type Uncovered = Exclude<keyof<Interface>, CapturedMethods | DeferredMethods>
+// Assertion: Uncovered = never for all three interfaces
+```
+
+A falsification variant injects a fake uncovered method and asserts the type becomes non-never, proving the guard is sensitive. Two non-1:1 method-name-to-kind-name mappings are handled via an explicit mapping table:
+
+1. Method `end()` on both pass encoders maps to `endRenderPass` / `endComputePass` kinds
+2. Render-pass `pushDebugGroup`/`popDebugGroup`/`insertDebugMarker` map to `passPushDebugGroup`/`passPopDebugGroup`/`passInsertDebugMarker` (the `pass` prefix distinguishes from encoder-level events)
+
+### DEFERRED_COMMANDS
+
+Explicitly exempt from recording -- these 5 RHI commands never produce a `RhiCallEvent`:
+
+| command | interface | reason |
+|:--|:--|:--|
+| `beginOcclusionQuery` | `RhiRenderPassEncoder` | OOS-2: occlusion query not yet supported |
+| `endOcclusionQuery` | `RhiRenderPassEncoder` | OOS-2 |
+| `executeBundles` | `RhiRenderPassEncoder` | OOS-2: bundle execution not yet supported |
+| `writeTimestamp` | `RhiCommandEncoder` | OOS-3: timestamp trace deferred |
+| `resolveQuerySet` | `RhiCommandEncoder` | OOS-3: query set resolve deferred |
+
+The `DEFERRED_COMMANDS` constant in `types.ts` is a `Set<string>` with exactly these 5 members, used by the coverage invariant as the known-exempt arm. A unit test (`coverage-invariant.unit.test.ts`) asserts the set has exactly 5 members, no more and no less.
 
 ### Initial-state capture (v2)
 
@@ -308,7 +363,7 @@ Starting in v2, the recorder snapshots live resource GPU bytes at capture-start 
 |:--|:--|:--|
 | `initialData` event schema | `types.ts` `RhiCallEventInitialData` | `{ kind:'initialData', handleId: HandleId, dataHash: string }` — joined into `RhiCallEvent` closed union as the 40th member. `handleId` points to a resource declared by a prior `create*` event in the bootstrap prefix. `dataHash` is a djb2 hash key into the tape's `blobPool`, which stores the actual GPU bytes. Bytes are read back via copyToBuffer/mapAsync and stored with hash-dedup (reuses existing blobPool, no separate pool). |
 | `snapshotResource` signature | `recorder.ts` `DebugRhiInstance` | `snapshotResource(handleId: HandleId): Promise<Result<{handleId, dataHash}, DebugError>>` — per-resource building block. Reads the resource descriptor from the internal registry, copies GPU bytes via copyToBuffer/mapAsync, stores them in blobPool via storeBlob, and pushes an `RhiCallEventInitialData` into the event stream. Returns `snapshot-readback-failed` with `.detail = {handleId, stage:'copy'\|'map'\|'store'}` on any failure. Async because the GPU readback chain is inherently asynchronous. |
-| `snapshotAllLiveResources` signature | `recorder.ts` `DebugRhiInstance` | `snapshotAllLiveResources(): Promise<Result<void, DebugError>>` — frame-header full-table snapshot entry point. Awaits all submitted GPU work via `onSubmittedWorkDone`, then iterates every live resource in the descriptor registry, calling `snapshotResource` on each. Advances the recorder Armed -> Snapshotting -> Recording on success. Returns the first snapshot failure as a Result — fail-fast, not partial seed. This is what AC-01 tests call; `snapshotResource` is the per-resource building block it loops over. |
+| `snapshotAllLiveResources` signature | `recorder.ts` `DebugRhiInstance` | `snapshotAllLiveResources(): Promise<Result<void, DebugError>>` — frame-header full-table snapshot entry point. Awaits all submitted GPU work via `onSubmittedWorkDone`, then iterates every live resource in the descriptor registry, calling `snapshotResource` on each (**buffers + single-layer 4-byte-per-texel color textures only** — see *Snapshot scope* below). Advances the recorder Armed -> Snapshotting -> Recording on success. Returns the first snapshot failure as a Result — fail-fast, not partial seed. **Wired into the real capture path**: `adapter.ts captureFrames` and `capture-browser.ts captureFramesToMemory` call it right after `arm()`, so every real-demo tape carries initialData (not just hand-written test tapes). |
 | seed insertion point | `replayer.ts` `replayInitialData` | `replayInitialData(event, tape, handleMap, queue): Result<void, DebugError>` — called during replay when the dispatch switch hits `case 'initialData'`. Looks up the recreated resource from `handleMap`, fetches its bytes from `tape.blobPool.get(event.dataHash)`, writes them via `queue.writeBuffer` (for buffers) or `queue.writeTexture` (for textures). Returns `seed-initial-data-failed` with `.detail = {handleId, stage:'lookup'\|'write'}` on failure. Failures bubble up through `stepToImpl` — not void-silent-return. |
 
 **Capture flow (recording side):**
@@ -323,6 +378,15 @@ arm() -> armed -> snapshotting state
 ```
 
 Snapshot-internal copy/submit calls are wrapped with `_skipRecord=true` — they are never recorded in the tape event stream (only the `initialData` events appear).
+
+**Snapshot scope (what gets seeded).** `snapshotAllLiveResources` snapshots only resources the readback/seed path can round-trip faithfully today: **all buffers**, and **color textures that are single-layer and 4-byte-per-texel** (`rgba8unorm`/`bgra8unorm`/`-srgb`, `r32float`, `rg16float`, …). It **skips**:
+- **depth/stencil textures** — their content is render-pass output (shadow maps, z-buffers), never an uploaded payload, and `queue.writeTexture` rejects them (no CopyDst);
+- **non-4-byte-per-texel formats** (e.g. `rgba16float`, 8 B) and **multi-layer/cubemap textures** (e.g. IBL prefiltered envmaps) — the seed path (`replayInitialData` + `readbackTexturePixels`) hardcodes `bytesPerRow = width*4` and `depthOrArrayLayers: 1`, so wider texels and array layers are not yet round-trippable.
+
+Skipping is **Fail-Fast, correct-but-incomplete**: emitting an `initialData` for an un-seedable resource would throw on every replay, so the snapshot omits it rather than recording a corrupt seed. Consequence: a tape whose visible output depends on a pre-frame-uploaded HDR/IBL cubemap will replay with that resource unseeded. Lifting this (format→bytes-per-texel table + multi-layer copy loop + `viewFormats` declaration) is the documented follow-up for full IBL/HDR replay fidelity. On replay, `replayCreateTexture` always adds `COPY_DST` to recreated textures so a seedable texture can receive its `writeTexture`.
+
+> [!IMPORTANT]
+> **Snapshotting is an onFrameEnd-non-preemptible critical section.** The snapshot loop `await`s per-resource GPU readback, yielding the event loop. The host rAF loop's `onFrameEnd` MUST NOT advance the state machine while state is `snapshotting` — if it did, the loop would race to `recording -> finalizing -> idle` and the still-running loop's later `pushEvent(initialData)` calls would hit the `idle` gate and be **silently dropped** (the bug that lost every texture initialData -> all-zero material textures -> black cube). `onFrameEnd` therefore ignores the tick in `snapshotting`; the loop itself sets `recording` when done, and the next `onFrameEnd` records the real frame. Any future async work at the snapshot/record boundary (e.g. Phase 2 first-read hooks) must preserve this invariant.
 
 **Replay flow (consumption side):**
 
@@ -386,18 +450,18 @@ const offsets = computePassOffsets(events);
 
 The original AC-01 wording is preserved as a **descriptive intent** ("debug instrumentation should not pull in the RHI backends"), but the *literal* one-dep constraint was relaxed to honor the SSOT axiom (`@forgeax/engine-types`) and to avoid a base64-encoded inline PNG implementation (`pngjs`). Backends remain `peer`, satisfying the original tree-shake intent: AC-03 (tree-shake grep gate) verifies no `engine-rhi-debug` import survives in `FORGEAX_ENGINE_RHI_DEBUG=0` bundles.
 
-## Out of scope (v1)
+## Out of scope
 
-| id | item | deferred to |
+| id | item | status |
 |:--|:--|:--|
 | OOS-1 | Override (edit UBO / swap shader / skip draw) during replay | v2 |
 | OOS-2 | Per-pixel history | v2 |
-| OOS-3 | Timestamp trace (`writeTimestamp` / `resolveQuerySet`) | v2 |
-| OOS-4 | UI panel | v3 |
+| OOS-3 | Timestamp trace (`writeTimestamp` / `resolveQuerySet`) | v2; in `DEFERRED_COMMANDS` |
+| OOS-4 | UI panel | shipped in v3 (four-panel dockview viewer at `apps/rhi-debug-viewer/`) |
 | OOS-5 | Destroy-event recording (`destroyBuffer` / `destroyTexture`) | add-only minor when destroy feat lands |
-| OOS-6 | Tape cross-version compatibility | v2 (formatVersion mismatch rejects) |
+| OOS-6 | Tape cross-version compatibility | shipped in v3 (`SUPPORTED_TAPE_VERSIONS = {2,3}`) |
 | OOS-7 | rhi-wgpu (wasm) backend capture/replay testing | v2 |
-| OOS-8 | Browser pixel-deterministic replay | v1: dawn-node only epsilon <= 0.01; browser: non-zero + structural only |
-| OOS-9 | URL param `?forgeax-debug=1` trigger | v2 (v1: `FORGEAX_ENGINE_RHI_DEBUG=1` env only) |
-| OOS-10 | `executeBundles` event recording | v2 (currently placeholder returns `rhi-not-available`) |
+| OOS-8 | Browser pixel-deterministic replay | dawn-node only epsilon <= 0.01; browser: non-zero + structural only |
+| OOS-9 | URL param `?forgeax-debug=1` trigger | v2 (`FORGEAX_ENGINE_RHI_DEBUG=1` env only) |
+| OOS-10 | `executeBundles` / occlusion queries event recording | in `DEFERRED_COMMANDS`; replay support deferred |
 | OOS-11 | Auto-recovery from capture failure (recording -> idle) | v1: manual `disposeError()` required |

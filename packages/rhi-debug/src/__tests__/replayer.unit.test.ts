@@ -17,7 +17,7 @@ import { DebugError } from '../errors';
 import { pixelDeltaAbsMean } from '../pixel-diff';
 import type { Replay } from '../replayer';
 import { createReplay } from '../replayer';
-import type { RhiCallEventCreateBuffer, RhiCapsRecorded, Tape } from '../types';
+import type { RhiCallEvent, RhiCallEventCreateBuffer, RhiCapsRecorded, Tape } from '../types';
 
 // ============================================================================
 // Helpers
@@ -484,5 +484,173 @@ describe('replay-deterministic-violation real emit (m5b-4)', () => {
     expect(error.code).toBe('replay-deterministic-violation');
     expect(error.expected).toBeTruthy();
     expect(error.hint).toBeTruthy();
+  });
+});
+
+// ============================================================================
+// commitThroughDraw — per-draw cumulative RT commit
+// ============================================================================
+
+// A device whose beginRenderPass/createCommandEncoder return SHARED spy
+// instances so a test can assert end()/finish()/submit() call counts.
+function makeSpyDevice() {
+  const pass = makeMockPassEncoder();
+  const finishSpy = vi.fn().mockReturnValue({ ok: true, value: { _cmd: true } });
+  const encoder = {
+    ...makeMockEncoder(),
+    beginRenderPass: vi.fn().mockReturnValue(pass),
+    finish: finishSpy,
+  };
+  const submitSpy = vi.fn();
+  const mockQueue = {
+    writeBuffer: vi.fn().mockReturnValue({ ok: true }),
+    writeTexture: vi.fn().mockReturnValue({ ok: true }),
+    submit: submitSpy,
+    onSubmittedWorkDone: vi.fn().mockResolvedValue(undefined),
+  } as unknown as RhiQueue;
+  const device = {
+    caps: {
+      backendKind: 'webgpu' as const,
+      compute: true,
+      timestampQuery: true,
+      indirectDrawing: false,
+      textureCompression: true,
+      multiDrawIndirect: false,
+      pushConstants: false,
+      textureBindingArray: false,
+      samplerAliasing: true,
+      firstInstanceIndirect: false,
+      storageBuffer: true,
+      storageTexture: false,
+      rgba16floatRenderable: true,
+      rg11b10ufloatRenderable: false,
+      float32Filterable: true,
+    },
+    features: new Set(),
+    limits: {} as never,
+    queue: mockQueue,
+    createBuffer: vi.fn().mockReturnValue({ ok: true, value: {} }),
+    createTexture: vi.fn().mockReturnValue({ ok: true, value: {} }),
+    createTextureView: vi.fn().mockReturnValue({ ok: true, value: {} }),
+    createCommandEncoder: vi.fn().mockReturnValue({ ok: true, value: encoder }),
+    destroyBuffer: vi.fn().mockReturnValue({ ok: true }),
+    destroyTexture: vi.fn().mockReturnValue({ ok: true }),
+    lost: Promise.resolve({ reason: 'unknown' as const, message: '' }),
+  } as unknown as RhiDevice;
+  return { device, pass, finishSpy, submitSpy };
+}
+
+// Build a one-render-pass tape: createCommandEncoder, beginRenderPass(color),
+// setPipeline, drawIndexed x N, endRenderPass, finish, submit. colorView !=
+// undefined => the pass has a color attachment.
+function makeColorPassTape(drawCount: number, withColor = true): Tape {
+  const events: RhiCallEvent[] = [
+    { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+    {
+      kind: 'beginRenderPass',
+      cmdHandleId: 'cmd:1',
+      passHandleId: 'pass:1',
+      desc: {
+        colorAttachments: withColor
+          ? [
+              {
+                view: {},
+                loadOp: 'clear',
+                storeOp: 'store',
+                clearValue: { r: 0, g: 0, b: 0, a: 1 },
+              } as never,
+            ]
+          : [],
+      },
+      colorAttachmentViewHandleIds: withColor ? ['view:1'] : [],
+      ...(withColor ? {} : { depthStencilViewHandleId: 'view:depth' }),
+    } as never,
+  ];
+  for (let i = 0; i < drawCount; i++) {
+    events.push({
+      kind: 'drawIndexed',
+      passHandleId: 'pass:1',
+      indexCount: 3,
+      instanceCount: 1,
+      firstIndex: 0,
+      baseVertex: 0,
+      firstInstance: 0,
+    });
+  }
+  events.push({ kind: 'endRenderPass', passHandleId: 'pass:1' });
+  events.push({ kind: 'finish', cmdHandleId: 'cmd:1' });
+  events.push({ kind: 'submit', cmdHandleIds: ['cmd:1'] });
+  return makeTape({}, events);
+}
+
+describe('commitThroughDraw', () => {
+  it('synthesizes end + finish + submit through the target draw, skipping the recorded tail', async () => {
+    const { device, pass, finishSpy, submitSpy } = makeSpyDevice();
+    const tape = makeColorPassTape(3); // draws 0,1,2
+    const r = createReplay(tape, device);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    const res = await r.value.commitThroughDraw(0); // first draw only
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.committed).toBe(true);
+
+    // exactly one synthetic commit (not the recorded endRenderPass/finish/submit
+    // tail, which sits past the target draw and is never replayed).
+    expect(pass.end).toHaveBeenCalledTimes(1);
+    expect(finishSpy).toHaveBeenCalledTimes(1);
+    expect(submitSpy).toHaveBeenCalledTimes(1);
+    // only draw 0 drawn (draws 1,2 are past the target).
+    expect(pass.drawIndexed).toHaveBeenCalledTimes(1);
+  });
+
+  it('commits cumulatively: draw 2 replays all three draws', async () => {
+    const { device, pass } = makeSpyDevice();
+    const tape = makeColorPassTape(3);
+    const r = createReplay(tape, device);
+    if (!r.ok) return;
+    const res = await r.value.commitThroughDraw(2);
+    expect(res.ok).toBe(true);
+    expect(pass.drawIndexed).toHaveBeenCalledTimes(3);
+    expect(pass.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns committed:false for a depth-only pass and does not synthesize end', async () => {
+    const { device, pass, finishSpy, submitSpy } = makeSpyDevice();
+    const tape = makeColorPassTape(2, /*withColor*/ false);
+    const r = createReplay(tape, device);
+    if (!r.ok) return;
+    const res = await r.value.commitThroughDraw(0);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.committed).toBe(false);
+    expect(pass.end).not.toHaveBeenCalled();
+    expect(finishSpy).not.toHaveBeenCalled();
+    expect(submitSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects an out-of-range drawIdx', async () => {
+    const { device } = makeSpyDevice();
+    const tape = makeColorPassTape(2);
+    const r = createReplay(tape, device);
+    if (!r.ok) return;
+    const res = await r.value.commitThroughDraw(5);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('replay-step-out-of-range');
+  });
+
+  it('is monotonic-forward: backward without reset errors, reset re-enables', async () => {
+    const { device } = makeSpyDevice();
+    const tape = makeColorPassTape(3);
+    const r = createReplay(tape, device);
+    if (!r.ok) return;
+    const replay = r.value;
+
+    expect((await replay.commitThroughDraw(2)).ok).toBe(true);
+    const backward = await replay.commitThroughDraw(0);
+    expect(backward.ok).toBe(false);
+    if (!backward.ok) expect(backward.error.code).toBe('replay-step-out-of-range');
+
+    replay.reset();
+    expect((await replay.commitThroughDraw(0)).ok).toBe(true);
   });
 });

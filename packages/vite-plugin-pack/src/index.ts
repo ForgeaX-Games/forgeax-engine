@@ -31,6 +31,8 @@ import {
   type RunImportMeta,
   runImport,
 } from '@forgeax/engine-import';
+import { loadAssetConfig } from '@forgeax/engine-pack/config';
+import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
 import { scan } from '@forgeax/engine-pack/scanner';
 import type { ImageMetadata, Importer, PackIndexEntry } from '@forgeax/engine-types';
 import { buildCatalog } from './build-catalog.js';
@@ -176,9 +178,9 @@ export interface PluginPackOptions {
   readonly importers?: readonly Importer[] | undefined;
 }
 
-// ─── Root resolution ────────────────────────────────────────────────────────
+// ─── Config loading ──────────────────────────────────────────────────────────
 
-async function resolveRoots(opts: PluginPackOptions): Promise<string[]> {
+function resolveRoots(opts: PluginPackOptions): string[] {
   const cwd = process.cwd();
 
   if (opts.roots !== undefined) {
@@ -186,22 +188,9 @@ async function resolveRoots(opts: PluginPackOptions): Promise<string[]> {
     return opts.roots.map((r) => (resolve(r) === r ? r : join(cwd, r)));
   }
 
-  // Try reading root package.json#forgeax.assets.roots
-  try {
-    const pkgPath = join(cwd, 'package.json');
-    const raw = await readFile(pkgPath, 'utf-8');
-    const pkg = JSON.parse(raw) as {
-      forgeax?: { assets?: { roots?: unknown } };
-    };
-    const configuredRoots = pkg.forgeax?.assets?.roots;
-    if (Array.isArray(configuredRoots) && configuredRoots.length > 0) {
-      return (configuredRoots as string[]).map((r) => join(cwd, r));
-    }
-  } catch {
-    // No package.json or forgeax.assets.roots absent — fall back to default.
-  }
-
-  return [join(cwd, 'assets')];
+  // Delegate to loadAssetConfig (SSOT for package.json#forgeax.assets).
+  const config = loadAssetConfig(cwd);
+  return config.roots as string[];
 }
 
 // ─── Catalog builder ────────────────────────────────────────────────────────
@@ -453,22 +442,38 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   // resulting PackIndexEntry[] for all rows belonging to this meta.
   async function startMetaImport(metaPath: string): Promise<PackIndexEntry[]> {
     const cwd = process.cwd();
+    const { paths } = loadAssetConfig(cwd);
     let rm: unknown;
     try {
       rm = JSON.parse(await readFile(metaPath, 'utf-8'));
     } catch {
-      return [];
+      throw new ImportError({
+        code: 'import-internal-error',
+        expected: `parseable JSON meta sidecar at ${metaPath}`,
+        hint: IMPORT_ERROR_HINTS['import-internal-error'],
+        detail: { reason: `failed to read or parse meta sidecar: ${metaPath}` },
+      });
     }
     const meta = rm as {
       importer: string;
-      source: string;
+      source?: string;
       importSettings?: unknown;
       subAssets: ReadonlyArray<{ guid: string; sourceIndex: number; kind: string }>;
     };
 
+    const sourceResult = resolveAssetSource(metaPath, meta.source, paths);
+    if (!sourceResult.ok) {
+      throw new ImportError({
+        code: 'import-internal-error',
+        expected: `resolvable source in meta sidecar at ${metaPath}`,
+        hint: sourceResult.error.hint,
+        detail: { reason: `source resolution failed: ${sourceResult.error.code}` },
+      });
+    }
+
     const runMeta: RunImportMeta = {
       importer: meta.importer,
-      source: resolve(dirname(metaPath), meta.source),
+      source: sourceResult.value,
       subAssets: meta.subAssets,
     };
     if (meta.importSettings !== undefined) {
@@ -485,7 +490,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     if (
       !runResult.ok &&
       runResult.error.code === 'import-produced-no-assets' &&
-      meta.source.toLowerCase().endsWith('.hdr') &&
+      runMeta.source.toLowerCase().endsWith('.hdr') &&
       meta.subAssets.every((s) => s.kind === 'cube-texture')
     ) {
       return [];
@@ -698,94 +703,73 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
 
   function configureServer(server: ViteDevServerLike): void {
     // Async startup: scan roots to build the initial catalog.
-    resolveRoots(opts)
-      .then((roots) => {
-        return Promise.all([buildCatalog(roots, opts.base), buildGuidToMetaMap(roots)]).then(
-          ([rawEntries, g2m]) => {
-            // The dev catalog passes the discoverable bare-source texture rows
-            // straight through, with the per-asset import overlay applied so any
-            // already-imported `.bin` row survives the rebuild (monotonic import).
-            // The runtime loader (import-on-demand sentinel) routes any non-`.bin`
-            // texture row to the dev transport for lazy import; keeping the row
-            // discoverable is the precondition for Sponza's catalog-first
-            // findTextureGuidByFilename.
-            catalog = applyImportedRows(rawEntries);
-            guidToMeta = g2m;
-            urlToAbs = buildUrlToAbs(catalog);
-            catalogReady = true;
+    const roots = resolveRoots(opts);
+    Promise.all([buildCatalog(roots, opts.base), buildGuidToMetaMap(roots)])
+      .then(([rawEntries, g2m]) => {
+        // The dev catalog passes the discoverable bare-source texture rows
+        // straight through, with the per-asset import overlay applied so any
+        // already-imported `.bin` row survives the rebuild (monotonic import).
+        // The runtime loader (import-on-demand sentinel) routes any non-`.bin`
+        // texture row to the dev transport for lazy import; keeping the row
+        // discoverable is the precondition for Sponza's catalog-first
+        // findTextureGuidByFilename.
+        catalog = applyImportedRows(rawEntries);
+        guidToMeta = g2m;
+        urlToAbs = buildUrlToAbs(catalog);
+        catalogReady = true;
 
-            // Watch .meta.json + .pack.json + .jpg / .jpeg / .png / .gltf via
-            // node:fs.watch. fs.watch is non-recursive on Linux; for dev
-            // HMR precision we watch each root directory tree individually
-            // by relying on the recursive option (available on macOS and
-            // Windows, and polyfilled by the Node 22+ watcher on Linux).
-            //
-            // 6-suffix list (D-3 + feat-20260523 M3): sidecar / pack-index
-            // changes rebuild the catalog AND emit `full-reload` (AC-11
-            // widens the existing rebuild branch); JPG / JPEG / PNG / glTF
-            // source changes skip the catalog rebuild (catalog rows are
-            // produced from sidecars, not from source bytes) and only emit
-            // `full-reload` so the browser fetches the new bytes.
-            for (const root of roots) {
-              try {
-                const watcher = fsWatch(root, { recursive: true }, (eventType, filename) => {
-                  if (filename === null) return;
-                  const isSidecar =
-                    filename.endsWith('.meta.json') || filename.endsWith('.pack.json');
-                  const isImage =
-                    filename.endsWith('.jpg') ||
-                    filename.endsWith('.jpeg') ||
-                    filename.endsWith('.png') ||
-                    filename.endsWith('.gltf');
-                  if (!isSidecar && !isImage) return;
+        // Watch .meta.json + .pack.json + .jpg / .jpeg / .png / .gltf via
+        // node:fs.watch. fs.watch is non-recursive on Linux; for dev
+        // HMR precision we watch each root directory tree individually
+        // by relying on the recursive option (available on macOS and
+        // Windows, and polyfilled by the Node 22+ watcher on Linux).
+        //
+        // 6-suffix list (D-3 + feat-20260523 M3): sidecar / pack-index
+        // changes rebuild the catalog AND emit `full-reload` (AC-11
+        // widens the existing rebuild branch); JPG / JPEG / PNG / glTF
+        // source changes skip the catalog rebuild (catalog rows are
+        // produced from sidecars, not from source bytes) and only emit
+        // `full-reload` so the browser fetches the new bytes.
+        for (const root of roots) {
+          try {
+            const watcher = fsWatch(root, { recursive: true }, (eventType, filename) => {
+              if (filename === null) return;
+              const isSidecar = filename.endsWith('.meta.json') || filename.endsWith('.pack.json');
+              const isImage =
+                filename.endsWith('.jpg') ||
+                filename.endsWith('.jpeg') ||
+                filename.endsWith('.png') ||
+                filename.endsWith('.gltf');
+              if (!isSidecar && !isImage) return;
 
-                  if (isSidecar) {
-                    // Rebuild catalog on next tick before broadcasting full-reload
-                    // so the browser's first fetch lands on the new state.
-                    Promise.all([buildCatalog(roots, opts.base), buildGuidToMetaMap(roots)])
-                      .then(([rawEntries, g2m]) => {
-                        // Rebuild passes discoverable bare-source rows through,
-                        // overlaid with the per-asset import overlay so imported
-                        // `.bin` rows survive a sidecar-triggered rebuild.
-                        catalog = applyImportedRows(rawEntries);
-                        guidToMeta = g2m;
-                        urlToAbs = buildUrlToAbs(catalog);
-                        server.watcher?.on('change', () => {});
-                        server.ws?.send({ type: 'full-reload' });
-                        // Push a structured catalog-change event so a subscriber
-                        // (e.g. an editor Content Browser) can re-query
-                        // `/__pack/index` on demand instead of polling the
-                        // filesystem -- the catalog-owner (this dev server, the
-                        // only side that holds catalog truth + already watches
-                        // sidecars) is the right emit source. `full-reload`
-                        // stays for the running game; the custom event is the
-                        // tooling channel. Vite HMR custom-event convention:
-                        // `{ type: 'custom', event, data }`, received via
-                        // `import.meta.hot.on('forgeax:asset-changed', ...)`.
-                        emitAssetChanged(server, filename, eventType, 'sidecar');
-                        console.warn(
-                          `[forgeax-pack] pack file changed: ${filename} (${eventType})`,
-                        );
-                      })
-                      .catch((err: unknown) => {
-                        console.warn('[forgeax-pack] rebuild catalog error:', err);
-                      });
-                    return;
-                  }
-                  // Image content change: catalog stays valid (rows derive
-                  // from sidecars), only the rendered pixels need to reload.
-                  server.ws?.send({ type: 'full-reload' });
-                  emitAssetChanged(server, filename, eventType, 'source');
-                  console.warn(`[forgeax-pack] image content changed: ${filename} (${eventType})`);
-                });
-                watcher.unref();
-                watcher.on('error', () => {});
-              } catch {
-                // Root does not exist yet — skip watching.
+              if (isSidecar) {
+                // Rebuild catalog on next tick before broadcasting full-reload
+                // so the browser's first fetch lands on the new state.
+                Promise.all([buildCatalog(roots, opts.base), buildGuidToMetaMap(roots)])
+                  .then(([rawEntries2, g2m2]) => {
+                    catalog = applyImportedRows(rawEntries2);
+                    guidToMeta = g2m2;
+                    urlToAbs = buildUrlToAbs(catalog);
+                    server.watcher?.on('change', () => {});
+                    server.ws?.send({ type: 'full-reload' });
+                    emitAssetChanged(server, filename, eventType, 'sidecar');
+                    console.warn(`[forgeax-pack] pack file changed: ${filename} (${eventType})`);
+                  })
+                  .catch((err: unknown) => {
+                    console.warn('[forgeax-pack] rebuild catalog error:', err);
+                  });
+                return;
               }
-            }
-          },
-        );
+              server.ws?.send({ type: 'full-reload' });
+              emitAssetChanged(server, filename, eventType, 'source');
+              console.warn(`[forgeax-pack] image content changed: ${filename} (${eventType})`);
+            });
+            watcher.unref();
+            watcher.on('error', () => {});
+          } catch {
+            // Root does not exist yet — skip watching.
+          }
+        }
       })
       .catch((err: unknown) => {
         console.warn('[forgeax-pack] startup scan error:', err);
@@ -1057,7 +1041,8 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
 
   async function generateBundle(this: MinimalPluginContext): Promise<void> {
     const cwd = process.cwd();
-    const roots = await resolveRoots(opts);
+    const roots = resolveRoots(opts);
+    const { paths } = loadAssetConfig(cwd);
     const entries = await buildCatalog(roots, opts.base);
     const basePrefix = (opts.base ?? '/').replace(/\/$/, '');
 
@@ -1161,7 +1146,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       }
       const meta = rm as {
         importer: string;
-        source: string;
+        source?: string;
         importSettings?: unknown;
         subAssets: ReadonlyArray<{ guid: string; sourceIndex: number; kind: string }>;
       };
@@ -1171,9 +1156,31 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         guidSeen.add(sub.guid.toLowerCase());
       }
 
+      // Pass1 (the import step above) already decoded these images, emitted the
+      // hashed `.bin`, and folded width/height/format/colorSpace/mipmap into the
+      // pack-index row's `relativeUrl` + `metadata`. The runtime textureLoader
+      // dispatches on `entry.kind === 'texture'` and reads only that `.bin` + the
+      // inline pack-index metadata; it never fetches the per-image `.pack.json`
+      // that runImport would emit here. Re-running the full import for an
+      // `importer: 'image'` meta therefore re-decodes every image a second time
+      // and emits a `.pack.json` Rollup asset nothing consumes. Skip it. glTF /
+      // FBX metas (whose texture sub-assets are a disjoint GUID set produced by
+      // their own importer) and any other importer still flow through below.
+      if (meta.importer === 'image') {
+        continue;
+      }
+
+      const sourceResult = resolveAssetSource(metaPath, meta.source, paths);
+      if (!sourceResult.ok) {
+        console.warn(
+          `[forgeax-pack] source resolution failed for ${metaPath}: ${sourceResult.error.code} — skipping pre-import`,
+        );
+        continue;
+      }
+
       const runMeta: RunImportMeta = {
         importer: meta.importer,
-        source: resolve(dirname(metaPath), meta.source),
+        source: sourceResult.value,
         subAssets: meta.subAssets,
       };
       if (meta.importSettings !== undefined) {
@@ -1208,7 +1215,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         // wired import. Warn and continue.
         if (
           runResult.error.code === 'import-produced-no-assets' &&
-          meta.source.toLowerCase().endsWith('.hdr') &&
+          runMeta.source.toLowerCase().endsWith('.hdr') &&
           meta.subAssets.every((s) => s.kind === 'cube-texture')
         ) {
           // eslint-disable-next-line no-console

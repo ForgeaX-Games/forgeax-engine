@@ -89,8 +89,11 @@ export async function readbackTexturePixels(
   texture: unknown,
   texWidth: number,
   texHeight: number,
+  opts?: { bytesPerTexel?: number; mipLevel?: number; baseArrayLayer?: number },
 ): Promise<Uint8Array> {
-  const bytesPerPixel = 4;
+  const bytesPerPixel = opts?.bytesPerTexel ?? 4;
+  const mipLevel = opts?.mipLevel ?? 0;
+  const baseArrayLayer = opts?.baseArrayLayer ?? 0;
   const rowBytes = texWidth * bytesPerPixel;
   const alignedRowBytes = Math.ceil(rowBytes / 256) * 256; // WebGPU alignment
   const bufferSize = alignedRowBytes * texHeight;
@@ -116,7 +119,11 @@ export async function readbackTexturePixels(
 
   try {
     encoder.copyTextureToBuffer(
-      { texture, mipLevel: 0, origin: { x: 0, y: 0, z: 0 } } as unknown as never,
+      {
+        texture,
+        mipLevel,
+        origin: { x: 0, y: 0, z: baseArrayLayer },
+      } as unknown as never,
       {
         buffer: readbackBuffer,
         offset: 0,

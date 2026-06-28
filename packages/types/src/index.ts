@@ -2542,7 +2542,7 @@ export type AssetGuid = Uint8Array & { readonly __guidBrand: 'AssetGuid' };
 // - AGENTS.md §Error model (structurally parallel to AssetErrorCode / InspectorErrorCode)
 
 /**
- * Closed PackErrorCode union — 13 members.
+ * Closed PackErrorCode union — 15 members.
  * Used exclusively by the @forgeax/engine-pack scanner fail-fast chain.
  *
  * | code | trigger |
@@ -2560,11 +2560,14 @@ export type AssetGuid = Uint8Array & { readonly __guidBrand: 'AssetGuid' };
  * | `'pack-mount-count-mismatch'` | mount memberCount disagrees with referenced child SceneAsset |
  * | `'pack-mount-override-localid-out-of-range'` | override.localId outside the mount's member window |
  * | `'pack-mount-override-unknown-field'` | override.comp / override.field unknown to the schema vocab |
+ * | `'pack-unknown-path'` | @name references a name not declared in package.json#forgeax.assets.paths |
+ * | `'pack-malformed-path-ref'` | source starts with @ but does not match @<name>/<rest> format, or resolves to a path outside the declared directory |
  *
  * Membership history: 8 -> 9 added 'payload-schema-mismatch' (feat-20260523
  * shader-template-instance-split); 9 -> 13 adds the four mount-* codes
  * (feat-20260608-scene-nesting-ecs-fication M1 / w8, plan-strategy D-8 literals
- * locked).
+ * locked); 13 -> 15 adds 'pack-unknown-path' + 'pack-malformed-path-ref'
+ * (feat-20260625-asset-meta-source-mount-prefix M1 / w1).
  */
 export type PackErrorCode =
   | 'pack-malformed-meta'
@@ -2582,7 +2585,10 @@ export type PackErrorCode =
   | 'pack-mount-localid-overlap'
   | 'pack-mount-count-mismatch'
   | 'pack-mount-override-localid-out-of-range'
-  | 'pack-mount-override-unknown-field';
+  | 'pack-mount-override-unknown-field'
+  // === 2 new codes (feat-20260625-asset-meta-source-mount-prefix M1 / w1) ===
+  | 'pack-unknown-path'
+  | 'pack-malformed-path-ref';
 
 /**
  * Discriminated detail union for PackError — narrowed per PackError.code.
@@ -2710,6 +2716,28 @@ export type PackErrorDetail =
       readonly field: string;
       /** localId of the parent mount carrying the override. */
       readonly mountLocalId: number;
+    }
+  // === 2 new variants (feat-20260625-asset-meta-source-mount-prefix M1 / w1) ===
+  | {
+      readonly code: 'pack-unknown-path';
+      /** The @name that was not found in package.json#forgeax.assets.paths. */
+      readonly pathName: string;
+      /** All known path names declared in package.json#forgeax.assets.paths. */
+      readonly knownNames: readonly string[];
+    }
+  | {
+      readonly code: 'pack-malformed-path-ref';
+      /**
+       * Which malformation occurred, so an AI user can branch on a property
+       * instead of parsing the human-facing .hint:
+       * - 'format': source starts with @ but does not match @<name>/<rest>
+       * - 'escape': rest segment resolves outside the declared path directory
+       */
+      readonly reason: 'format' | 'escape';
+      /** The raw source string as written in the .meta.json. */
+      readonly rawSource: string;
+      /** The expected format description for self-correction. */
+      readonly expectedFormat: string;
     };
 
 /**
@@ -2745,6 +2773,11 @@ export const PACK_ERROR_HINTS: Readonly<Record<PackErrorCode, string>> = {
     'override.localId must be in [0, mount.memberCount); shrink the override or extend memberCount to match the child SceneAsset',
   'pack-mount-override-unknown-field':
     'override.comp / override.field must match a defined component schema; check defineComponent registry or rebuild mount sidecar after the child SceneAsset reimport',
+  // === 2 new hints (feat-20260625-asset-meta-source-mount-prefix M1 / w1) ===
+  'pack-unknown-path':
+    'the @name in source is not declared in package.json#forgeax.assets.paths; add it there or use a known name from the list in error.detail.knownNames',
+  'pack-malformed-path-ref':
+    'source must be @<name>/<rest> where name is a key in package.json#forgeax.assets.paths; the resolved path must not escape the declared directory',
 };
 
 // === AudioErrorCode / AudioError / AudioErrorDetail -- audio error SSOT (feat-20260527-audio-system M1 / w4) ===

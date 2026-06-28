@@ -19,12 +19,11 @@ description: >-
 | 概念 | 是什么 |
 |:--|:--|
 | **wrap** | `wrap(rhi)` 返回 `DebugRhiInstance extends RhiInstance`，proxy 拦截 `createBuffer` / `beginRenderPass` / `setPipeline` / `draw` 等全部调用 |
-| **tape** | 录制产出：有序 `RhiCallEvent[]` + hash 去重的二进制 blob pool。v2 自包含：含 create* 声明 + `initialData` 真实 GPU 字节 + frame 命令，不再依赖历史命令重建资源内容。`TAPE_FORMAT_VERSION=2`，v1 tape（formatVersion=1）反序列化返回 `tape-format-version-mismatch` 结构化错误（`.detail.expectedVersion=2`） |
-| **replay** | tape 在 fresh `RhiDevice` 上按 event 序列重建（caps 匹配为前提）。遵循 create 资源→seed `initialData`（writeBuffer/writeTexture 从 blobPool 取字节写回）→dispatch frame 命令的严格顺序。dawn-node 保证 RT 像素一致 ε≤0.01 |
-| **initialData** | 截帧时帧头快照所有活资源的真实 GPU 字节构成 `initialData` 事件，存入 tape bootstrap 前缀区。replay 时靠它恢复资源内容（如加载期上传的 VBO/IBO/instance buffer），消除"从历史命令重建"导致的 replay 全零问题 |
-| **snapshotResource** | `snapshotResource(handleId): Promise<Result>` — 策略层唯一交互口。读资源 descriptor→GPU copyToBuffer/mapAsync→blobPool hash 去重存字节→push `RhiCallEventInitialData` 入事件流。返回 `snapshot-readback-failed`（copy/mapAsync/storeBlob 任一失败，`.detail = {handleId, stage}`）。异步（GPU readback 链本就异步） |
-| **snapshotAllLiveResources** | `snapshotAllLiveResources(): Promise<Result>` — 帧头全表快照入口。先 `await onSubmittedWorkDone`（排空已提交工作），再遍历整个活资源注册表逐个调 `snapshotResource`。全成功则推进 Armed→Snapshotting→Recording。任一失败立刻返 `Result`（fail-fast，不留部分种子）。此即 AC-01 测试真实调用的入口；`snapshotResource` 是其单资源构建块 |
+| **tape** | 录制产出：有序 `RhiCallEvent[]` + hash 去重的二进制 blob pool。v2 起**自包含**——帧头快照活资源真实 GPU 字节为 `initialData` 事件存入 bootstrap 前缀，replay 不再依赖历史命令重建资源内容 |
+| **replay** | tape 在 fresh `RhiDevice` 上严格按 **create 资源 → seed `initialData` → dispatch frame 命令** 顺序重建（caps 匹配为前提）。dawn-node 保证 RT 像素一致 ε≤0.01 |
 | **inspectAt** | 在 replay 的指定 drawIdx 抓 bindings / drawCall / RT PNG。`fields` 裁剪避免 context 爆炸；RT 永远是 PNG 路径字符串，**不内联 base64** |
+
+> v2 自包含的三件接口缝（`initialData` schema / `snapshotResource` / `snapshotAllLiveResources` / `replayInitialData` 签名 + capture-replay 时序）SSOT 在 README §Initial-state capture (v2)，本 skill 不复述。
 
 ## 开启 + 注入链路
 
@@ -50,74 +49,51 @@ flowchart TD
 
 ## 三连工作流：capture -> inspect -> dispose
 
-两条对等通道，RPC（in-process / WS 客户端）与 CLI（进程外）：
+每个动作两条对等通道——RPC（in-process / WS:5732 客户端）与 CLI（进程外）。RPC param / CLI flag / 产出形状 SSOT 在 README §RPC methods、§CLI subcommands。
 
-| 动作 | RPC method (WS:5732) | CLI | 产出 |
-|:--|:--|:--|:--|
-| 录 N 帧 | `debug.captureFrame({ frames, label? })` | `capture-frame [--frames=N] [--label=STR] [--target=WS]` | `{ tapes: [{ frameIdx, runId, tapePath, reportPath }] }` |
-| 外触发 1 帧 | —（HMR custom event 信道，非 WS RPC） | `trigger-browser [--frames=N] [--label=STR] [--dev-url=URL]` | `{ runId, tapePath, reportPath }`——`tapePath` 喂 `inspect-offline` |
-| 查 drawIdx | `debug.inspectAt({ tapePath, drawIdx, fields? })` | `inspect-at <tapePath> <drawIdx> [--fields=LIST] [--target=WS]` | `InspectReport`（JSON；RT 是 PNG 路径） |
-| 释放 replay | `debug.replayDispose({ tapePath })` | — | `{ ok: true }`（LRU cache 清退） |
+| 动作 | RPC method | CLI |
+|:--|:--|:--|
+| 录 N 帧 | `debug.captureFrame` | `capture-frame` |
+| 外触发 1 帧 | —（HMR custom event，非 WS） | `trigger-browser` |
+| 查 drawIdx | `debug.inspectAt` | `inspect-at`（活设备）/ `inspect-offline`（离线自举） |
+| 释放 replay | `debug.replayDispose` | — |
 
 - 输出落 `.forgeax-debug/<runId>/frame-0.tape.bin` + `frame-0.report.json`。
-- `--target` 默认 `ws://localhost:5732`；`--frames` 默认 `1`；`--label` 默认空。
-- `--dev-url` 默认 `http://localhost:5173`（trigger-browser 用的 dev-server HTTP 地址）。
-- `fields` 未传 = **全字段**（bindings + drawCall + rt）；传 `--fields=bindings` 跳过 RT readback（省 `copyTextureToBuffer`）；传 `--fields=rt` 只要 PNG。
-- **trigger-browser HTTP 错误信封**：非 200 响应返回 `{ error: string, hint: string }`（非 `DebugError`，不扩张 14 成员闭并集）：`no-browser-tab`（503，hint 提示检查 dev-url 是否打开且浏览器 tab 已加载 HMR）、`recorder-busy`（409，hint 提示等待当前 capture 完成）。
+- `fields` 未传 = 全字段；`--fields=bindings` 跳过 RT readback（省 `copyTextureToBuffer`）；`--fields=rt` 只要 PNG。
 
 > [!NOTE]
 > CLI 当前调用形态是 `node packages/rhi-debug/dist/cli.mjs <subcommand>`（需先 `pnpm -F @forgeax/engine-rhi-debug build`）。README 表里的 `forgeax-engine-console capture-frame` 是 end-state（plugin-bin 未落地，follow-up tweak）。未落地前 WS:5732 RPC 是 canonical 端到端通道。
 
-## browser + offline 通道：七层渐进披露（L0 / L1 / L2c / L2a / L3a / L3b / L3c）
+## browser + offline 通道：七层渐进披露
 
-与上面 WS-RPC 活设备通道**并列**的另一条通道：浏览器里录帧落盘，CLI 里离线查看。每层都能单独用；L2c 返回的 `tapePath` 就是 L3a 的第一参——这是串联点。
+与 WS-RPC 活设备通道**并列**的另一条：浏览器里录帧落盘，CLI / 浏览器里离线查看。每层单独可用；串联点是 **L2 返回的 `tapePath` 即 L3a 第一位置参**。各层入口签名 SSOT 在 README §Layered progressive disclosure。
 
-| 层 | 表面 | 入口 | 产出 |
-|:--|:--|:--|:--|
-| **L0** | node-free subpath（原始字节） | `@forgeax/engine-rhi-debug/capture-browser` 的 `captureFramesToMemory(debugInst, frames, label?)` | `CaptureBrowserTape { runId, json, blob, passOffsets, valid }`（纯内存，零 fs / 零网络） |
-| **L1** | 落盘 tape | POST `/__forgeax-debug/tape`（dev-server）或 Node `finalize()` 尾 | `.forgeax-debug/<runId>/frame-0.tape.bin` + `frame-0.report.json`（两写者经同一 `assembleReport`，逐字节一致 D-3） |
-| **L2c** | 浏览器一行触发 | `window.__forgeax.captureFrame(n)`（控制台 autocomplete 可发现） | `{ runId, tapePath, reportPath }`——`tapePath` 喂 L3a |
-| **L2a** | 外部 CLI 触发 | `node packages/rhi-debug/dist/cli.mjs trigger-browser [--frames=N] [--label=STR] [--dev-url=URL]` | `{ runId, tapePath, reportPath }`——`tapePath` 喂 L3a |
-| **L3a** | 离线 CLI inspect | `node packages/rhi-debug/dist/cli.mjs inspect-offline <tapePath> <drawIdx> [--fields=...]` | 结构化 InspectReport JSON（bindings / drawCall）+ RT PNG 路径 |
-| **L3b** | browser per-draw JSON | `@forgeax/engine-rhi-debug/inspect-core` -> `inspectDrawJson(replay, drawIdx, events, device, fields?)` | structured `InspectReport` (bindings + drawCall, no PNG path) |
-| **L3c** | browser RT to canvas | `@forgeax/engine-rhi-debug/rt-to-canvas` -> `renderRtToCanvas(replay, drawIdx, device, canvas)` | RT pixels rendered onto external canvas (no fs/pngjs) |
+| 层 | 干什么 | 入口子路径 / 命令 |
+|:--|:--|:--|
+| **L0** | 截帧到内存（零 fs / 零网络） | `/capture-browser` `captureFramesToMemory` |
+| **L1** | 落盘 tape | POST `/__forgeax-debug/tape` 或 Node `finalize()` 尾 |
+| **L2c** | 浏览器一行触发 | `window.__forgeax.captureFrame(n)`（控制台 autocomplete） |
+| **L2a** | 外部 CLI 触发 | `cli.mjs trigger-browser` → POST `/__forgeax-debug/trigger` |
+| **L3a** | 离线 CLI inspect（自举 dawn-node，不连 WS） | `cli.mjs inspect-offline <tapePath> <drawIdx>` |
+| **L3b** | 浏览器 per-draw JSON | `/inspect-core` `inspectDrawJson` |
+| **L3c** | 浏览器 RT 上屏 canvas | `/rt-to-canvas` `renderRtToCanvas` |
 
 ```mermaid
 flowchart LR
-  L0["L0 captureFramesToMemory (subpath, in-memory)"] --> L1["L1 POST /__forgeax-debug/tape -> .forgeax-debug/<runId>/frame-0.*"]
+  L0["L0 captureFramesToMemory (in-memory)"] --> L1["L1 POST /tape -> .forgeax-debug/<runId>/frame-0.*"]
   L2c["L2c window.__forgeax.captureFrame(n)"] -->|captureAndUpload| L0
   L1 -->|returns tapePath| L3a["L3a cli.mjs inspect-offline <tapePath> <drawIdx>"]
 ```
 
-- **L0 隔离**：`/capture-browser` 只 import `recorder-core` + `tape-format`（皆 node-free），无 `node:` / `pngjs` / `ws`。**不进 barrel**，只能经 subpath 触达——保 tree-shake gate。
-- **L1 单写者**：dev-server POST 端点与 Node finalize 尾都走同一 `assembleReport`，故浏览器录的 tape 与 Node 录的在盘上无法区分（D-3 / AC-05）。非法 body -> `{error, hint}` envelope 不落盘（AC-06），HTTP 层错误不进 `DebugError`（14 成员不扩张）。dev-server 端点由 `@forgeax/engine-vite-plugin-rhi-debug` 的 `vitePluginRhiDebug()` 挂载（加进 `vite.config` 的 `plugins[]` 即可，零样板自注入 flag）。`POST /__forgeax-debug/trigger` 端点同步返回 `{ runId, tapePath, reportPath }`（20ms ~ 30s，取决 tab 响应速度），非 200 返回 HTTP 错误信封 `{ error, hint }`（`no-browser-tab` 503 / `recorder-busy` 409）。
-- **L2c 串 L3a**：`captureFrame(n)` 返回 `{ runId, tapePath, reportPath }`，把 `tapePath` 原样作为 `inspect-offline` 第一位置参。`FORGEAX_ENGINE_RHI_DEBUG=1` 时 `createAppFromCanvas` 才挂 `window.__forgeax`；未设 -> 不存在 -> 调用抛 `TypeError`（显式失败，非静默）。`trigger-browser` CLI 子命令是 `captureFrame` 的 Node 侧等价物——同样调用 `captureAndUpload`，但触发信道是 CLI HTTP POST 而非 DevTools 控制台。
-- **L2a 串 L3a**：`trigger-browser` 走 `POST /__forgeax-debug/trigger` 同步往返，返回的 `tapePath` 可直喂 `inspect-offline`。`--dev-url` 默认 `http://localhost:5173`，`--frames` 默认 `1`，`--label` 可选。**多 tab 行为**：HMR custom event 广播到所有连接 tab，每个 tab 各自截帧并上传 tape；trigger 响应只返回首个到达的 tape 路径，但后续 tab 的上传仍正常写盘——磁盘可能出现多份 tape（不同 `runId`），这是预期行为，非 bug。（见下方踩坑条目。）
-- **L3a 离线**：`inspect-offline` 读盘 + 自举 dawn-node device + replay，**不连 WS**——区别于 `inspect-at`（WS:5732 活设备）。bin 是 `forgeax-rhi-debug`（`package.json#bin`），programmatic 用法经 `exports['./cli']`。
-- **L3b 浏览器 per-draw JSON**：`inspectDrawJson(replay, drawIdx, events, device, fields?)` 在浏览器内直接产出 `InspectReport`，不需要 CLI / Node / 落盘。`events` 就是 capture 产出的 `RhiCallEvent[]`；`device` 是 caller 传入的 `RhiDevice`（来自 `navigator.gpu`）。`fields` 裁剪同 `inspectAt`：`undefined` = 全量，`['bindings']` 跳过 RT readback，`['rt']` 返回 `{width, height, pixels}`（是 `Uint8Array` 像素数据，**不是 PNG 路径**——那是 Node `inspectAt` 独有）。入口是 subpath `@forgeax/engine-rhi-debug/inspect-core`。
-- **L3c 浏览器 RT 上屏**：`renderRtToCanvas(replay, drawIdx, device, canvas)` 把 RT 像素直接画到任意 canvas 元素上（通过 `getContext('2d')` + `putImageData`），零文件系统。支持 `HTMLCanvasElement` 和 `OffscreenCanvas`（Worker 场景）。入口是 subpath `@forgeax/engine-rhi-debug/rt-to-canvas`。
+只有 skill 用户会踩的串联 / 隔离要点（签名细节见 README）：
 
-### 浏览器内 inspect (L3b + L3c)
+- **L1 单写者**：dev-server POST 与 Node finalize 尾共用 `assembleReport`，浏览器 tape 与 Node tape 在盘上无法区分（D-3 / AC-05）。非法 body → `{error, hint}` envelope 不落盘（AC-06）；HTTP 层错误不进 `DebugError` 闭并集。
+- **L2 → L3a 串联**：`captureFrame(n)` / `trigger-browser` 返回的 `tapePath` 原样作 `inspect-offline` 第一参。`FORGEAX_ENGINE_RHI_DEBUG=1` 时 `createAppFromCanvas` 才挂 `window.__forgeax`；未设 → 调用抛 `TypeError`（显式失败，非静默）。
+- **L3b vs L3a 输出差异**：浏览器 `inspectDrawJson` 的 `['rt']` 返回 `{width, height, pixels: Uint8Array}`；Node `inspectAt` 返回 RT **PNG 路径字符串**——PNG 编码是 Node-only。
+- **per-draw RT 必须 `commitThroughDraw(drawIdx)` 先步进**：看「draw #N 当时的画面」时，先 `replay.reset()` → `replay.commitThroughDraw(drawIdx)` 再 `inspectDrawJson`/`readbackDrawRt`/`renderRtToCanvas`。它重放到该 draw 并合成 `endRenderPass+finish+submit`，让 color attachment 拿到 **draw 0..N 累积**像素（选 N 看到的是执行到 N 那一刻，不是最终合成帧）。WebGPU 不能读进行中 pass 的 attachment，所以裸 `stepTo` 停在 pass 中间会读到未提交/全黑——这正是 `stepTo(end)` 被滥用导致「点哪个 draw 都看最终帧」的根因。返回 `{committed:false}` = 该 draw 在 depth-only / compute pass（无颜色 RT，渲染 no-rt 态）。单调前进，回看更早 draw 须先 `reset()`。**整帧**才用 `stepTo(events.length-1)`。CLI `inspect-offline` 与 viewer RtPanel 均已走此路。
+- **node-free 隔离**：`/capture-browser`、`/inspect-core`、`/rt-to-canvas` 皆零 `node:` / `pngjs` / `ws` 且**不进 barrel**，只能经 subpath 触达（保 tree-shake gate，见 §tree-shake 约束）。
 
-浏览器侧 per-draw inspect 不需要 CLI / Node / 落盘——capture 产出的 `RhiCallEvent[]` + `Replay` 直接喂给 `inspectDrawJson` 出结构化 JSON，或者 `renderRtToCanvas` 把 RT 像素画到 canvas 上。两者皆 node-free（subpath 零 `node:` / `pngjs` / `ws` 导入），可在浏览器控制台或 dev 脚本内使用。
-
-```ts
-// Browser console / dev script -- no CLI, no Node.
-import { inspectDrawJson } from '@forgeax/engine-rhi-debug/inspect-core';
-import { renderRtToCanvas } from '@forgeax/engine-rhi-debug/rt-to-canvas';
-
-// inspectDrawJson: per-draw JSON report
-const report = await inspectDrawJson(replay, 0, events, device, ['bindings', 'drawCall']);
-if (report.ok) {
-  console.log(report.value.bindings, report.value.drawCall);
-}
-
-// renderRtToCanvas: render RT pixels to canvas
-const canvas = document.getElementById('debug-canvas') as HTMLCanvasElement;
-const rtRes = await renderRtToCanvas(replay, 0, device, canvas);
-```
-
-`contract SSOT` 是 [`packages/rhi-debug/README.md`](../../packages/rhi-debug/README.md)——API 签名、错误码 hint 全串、完整用法示例都在那里。本 skill 是"怎么定位渲染 bug"的决策流参照，不重复 API 签名。
+> 完整浏览器控制台 capture → replay → inspect 代码示例在 README §Browser inspect usage example。
 
 ## 症状 -> tape -> inspect 决策流
 
@@ -129,28 +105,19 @@ const rtRes = await renderRtToCanvas(replay, 0, device, canvas);
 4. **inspectAt per-draw** — 缩窄到出错 draw，`['bindings']` 对比 bind group entries 与预期（贴图 GUID 未解析 / UBO 值不对 / sampler 类型错）。
 5. **falsification check** — 在 tape 里 swap 一个 binding index，confirm 像素变化，证明定位正确。
 
-**真实 demo 抓帧支持**：非自包含抓帧 `captureFrame(n)` 在真实 demo（hello-cube 等）上也能产出自洽 tape，经 `deserializeTape` → `createReplay(tape, device, createShaderModule)` → `stepTo(N)` → `inspectDrawJson` 全链端到端可用。swapchain RT 经忠实 createTexture（真实尺寸 / format / usage+COPY_SRC）在 fresh device 上重建为 offscreen RT；带资源 bindGroup（buffer / sampler / textureView）经 `RhiBindingResource {kind,value}` 包装满足 replay 的 4-kind bind 路径。浏览器抓帧把 canvas swapchain 录为 `bgra8unorm` texture，但以 `bgra8unorm-srgb` 建 view / pipeline target（多数平台 canvas 偏好的 srgb view）；离线 replay 时该 srgb view 套在 plain bgra texture 上是 incompatible-view-format 错（在 `beginRenderPass` 暴露）。`createReplay` 在 replay 层内部把 canvas BGRA format 一致地适配为字节兼容的 `rgba8unorm`（createTexture / createTextureView / pipeline target 三处同步），浏览器 tape 因此可直接喂入 `createReplay`，无需 per-script format 改写。`wrap()` 须在资源创建前调用；否则 `finalize()` 返回 `tape-handle-graph-broken`（`.hint` 含 bootstrap table 标记，指引重新抓帧）。旧式稳态帧 tape deserialize 报 `tape-handle-graph-broken` 且 `.hint` 含稳态帧/self-contained 恢复指引（指向 deserialize 侧标记，不含 bootstrap 子串），提示重新抓帧或改用自包含 tape。
+**真实 demo 抓帧已打通**：非自包含 `captureFrame(n)` 在真实 demo（hello-cube 等）上产出自洽 tape，经 `deserializeTape` → `createReplay(tape, device, createShaderModule)` → `stepTo(N)` → `inspectDrawJson` 全链可用（swapchain RT 忠实重建、bgra→rgba 适配、bindGroup 资源包装等机制 SSOT 在 README §Layered progressive disclosure 真实 demo 段）。
 
-## 错误码速查
+> [!CAUTION]
+> **`createReplay` 第三参 `createShaderModule` 必传**——真实 demo tape 都带 `createShaderModule` events；漏传则静默跳过，下游 pipeline 创建在 RHI 层炸（**非** `DebugError`，`createReplay` 不报错）。从 `@forgeax/engine-rhi-webgpu` import（它不在 `RhiDevice` 上）。
 
-`DebugErrorCode` 14 成员闭并集，**完全独立**于 `RhiErrorCode`；`switch (err.code)` 穷尽，TS 编译期抓漏分支。
+定位 `tape-handle-graph-broken`（同 code 两种 `.hint`，**按 hint 文本分支**选恢复路径，不按 code）：
 
-| code | 触发 |
-|:--|:--|
-| `recorder-not-attached` | RPC `debug.captureFrame` 但 bootstrap 时 `FORGEAX_ENGINE_RHI_DEBUG !== '1'` |
-| `recorder-already-armed` | 上次 arm 未完成又 arm；先 `disposeError()` 或等 capture 收尾 |
-| `frame-end-hook-missing` | `_onFrameEnd` 注入点缺失（理论不可达） |
-| `tape-format-version-mismatch` | tape `formatVersion` 与 runtime 不一致（v1 tape 被 v2 runtime 拒绝：`.detail.expectedVersion=2`、`.detail.tapeVersion=1`） |
-| `tape-handle-graph-broken` | event 引用未声明的 handleId |
-| `caps-mismatch` | replay 设备 caps 不足（`.detail.missingCaps` 列缺失项） |
-| `replay-step-out-of-range` | `stepTo(N)` 超界或回溯 |
-| `replay-deterministic-violation` | replay RT 与原帧像素超阈（test-only） |
-| `rt-readback-failed` | `copyTextureToBuffer` / `mapAsync` 链失败 |
-| `png-encode-failed` | PNG 编码失败 |
-| `rpc-target-not-wired` | `wireDefaultInspectors` 没传 `debugRhi` injector |
-| `replay-dispose-busy` | `dispose()` 时存在未完成的 in-flight inspect（`.detail.inFlightDrawIndices`）|
-| `snapshot-readback-failed` | snapshotResource GPU 字节读回失败（copy/mapAsync/storeBlob）。`.detail = {handleId, stage: 'copy' \| 'map' \| 'store'}` |
-| `seed-initial-data-failed` | replayInitialData 种子写入失败（handleId 缺失/dataHash 缺失/writeBuffer 失败）。`.detail = {handleId, stage: 'lookup' \| 'write'}` |
+- **finalize 侧**（`.hint` 含 bootstrap table）：`wrap()` 晚于资源创建 → 重新抓帧（wrap 须在资源创建前）。
+- **deserialize 侧**（`.hint` 含稳态帧/self-contained 指引，无 bootstrap 子串）：旧式稳态帧 tape → 重新抓帧或改用自包含 tape。
+
+## 错误码
+
+`DebugErrorCode` 14 成员闭并集，**完全独立**于 `RhiErrorCode`；`switch (err.code)` 穷尽，TS 编译期抓漏分支。各 code 触发条件 + hint 模板 + `.detail` 形状全表 SSOT 在 README §Error codes——本 skill 的 §踩坑 只解释定位渲染 bug 时实际撞到的几个。
 
 ## 跨后端注意
 
@@ -166,8 +133,8 @@ const rtRes = await renderRtToCanvas(replay, 0, device, canvas);
 
 - **`recorder-not-attached`**：忘设 `FORGEAX_ENGINE_RHI_DEBUG=1`，或在 bootstrap 之后才设——必须 bootstrap 时已 `=1`，否则 wrap 注入跳过。
 - **console 查不到 `debug.*` root**：host 没把 `debugRhi` injector 传给 `wireDefaultInspectors`（→ `rpc-target-not-wired`）。createApp 只产 `_debugAdapter`，wiring 是 host 的活。
-- **import 找不到 inspector / cli / capture-browser**：barrel（`@forgeax/engine-rhi-debug`）只导出 recorder/replayer/tape-format/errors + node-free L0 原语（`finalizeToMemory` / `assembleReport` / `generateRunId`）；inspector 走 `/inspector`、CLI 走 `/cli`、adapter 走 `/adapter`、L0 浏览器截帧走 `/capture-browser` 子路径（pngjs / WS 是 Node-only，刻意不进 barrel 以保 tree-shake）。`inspect-core` 走 `/inspect-core`、`rt-to-canvas` 走 `/rt-to-canvas`——它们也不进 barrel。
-- **inspector subpath vs inspect-core 混淆**：`@forgeax/engine-rhi-debug/inspector` 是 Node-only（含 pngjs / fs），提供 `inspectAt`（返回 RT PNG 路径字符串），需 `outputDir` 参数用于写 PNG 文件。`@forgeax/engine-rhi-debug/inspect-core` 是 node-free 浏览器安全入口，提供 `inspectDrawJson`（返回 RT 像素 Uint8Array，不写文件），无 `outputDir` 参数，`device` 从 caller 传入。浏览器端必须用 `/inspect-core`，用 `/inspector` 会在浏览器里炸（Node builtin 不存在）。contract SSOT 是 [`packages/rhi-debug/README.md`](../../packages/rhi-debug/README.md)。
+- **import 找不到 inspector / cli / capture-browser / inspect-core / rt-to-canvas**：barrel 只导出 recorder/replayer/tape-format/errors + node-free L0 原语（`finalizeToMemory` / `assembleReport` / `generateRunId`）；其余全走对应子路径（不进 barrel 的清单 + 原因见 §tree-shake 约束）。
+- **inspector vs inspect-core 选错（浏览器里炸）**：`/inspector` 是 Node-only（pngjs / fs），`inspectAt` 返 RT **PNG 路径**、需 `outputDir`；`/inspect-core` 是 node-free 浏览器安全口，`inspectDrawJson` 返 RT **像素 Uint8Array**、无 `outputDir`、`device` caller 传入。浏览器端用 `/inspector` 会因 Node builtin 不存在而炸。
 - **`replay-dispose-busy`**：还有 in-flight `inspectAt` 时 dispose；先 `await` 完所有 inspect 再 dispose。
 - **`trigger-browser` 返回 503 `no-browser-tab`**：trigger 通过 `Promise.race` 等待浏览器 tab 回传 tape，30 秒内无 tab 响应即超时。常见原因：(a) dev-server 未启动（`pnpm dev` 没跑）；(b) 浏览器未打开 `http://localhost:5173`；(c) 页面未加载完成或 HMR 未连接（检查浏览器控制台有无 `[vite] connected` 日志）；(d) `FORGEAX_ENGINE_RHI_DEBUG` 未设 `1`（HMR listener 在 gate 内，未设时不会注册）。先确认 dev-server 运行 + 浏览器 tab 打开 + HMR 已连接，再重试。
 - **`trigger-browser` 磁盘出现多份 tape**：多 tab 同时在线时，HMR custom event 广播到每个 tab，各 tab 各自截帧上传——trigger 响应只返回首个到达的 tape 路径，但其余 tab 的 tape 仍正常落盘（不同 `runId`）。这是 broadcast 语义下的预期行为，非 bug；若不想多份 tape，确保 trigger 时只开一个 tab。
@@ -182,124 +149,114 @@ const rtRes = await renderRtToCanvas(replay, 0, device, canvas);
 - pngjs / WS 在 `/inspector` / `/cli` / `/adapter`（node-only）子路径，刻意不进 barrel。
 - **`/inspect-core` 与 `/rt-to-canvas` 不进 barrel**：这两个 subpath 是 node-free 的浏览器 inspect 入口（L3b + L3c），只 import `./readback` / `./tape-format` / `./errors`（皆 node-free），刻意不走 barrel 以保持 tree-shake gate。各自由 dist grep gate 守卫：`dist/inspect-core.mjs` 与 `dist/rt-to-canvas.mjs` 皆不含 `node:fs` / `node:path` / `pngjs` / `ws` 等 Node-only 标识符（AC-10 / AC-11）。
 
-## L3d 离线 viewer 页面（PR4）
+## L3d 离线 viewer 页面（dockview-based）
 
-> 最顶层 **L3d**：纯离线 web app 把一份截帧 tape 可视化成 RenderDoc 风格 —— pass/draw 树 + 选中 draw 的 bindings 面板 + RT 图。**不需要游戏在跑**：拖 `frame-0.tape.bin` + `frame-0.report.json` 进去就能看。
+> 最顶层 **L3d**：纯离线 web app 把一份截帧 tape 可视化成 RenderDoc 风格的四面板 dockview 工作区。**不需要游戏在跑**：拖 `frame-0.tape.bin` + `frame-0.report.json` 进去就能看。布局可 float / split / stack，持久化到 localStorage，支持 Reset Layout 恢复默认。
 
 | 属性 | 内容 |
 |:--|:--|
 | **入口** | `apps/rhi-debug-viewer/`（独立 Vite + React app） |
 | **启动** | `pnpm -F @forgeax/rhi-debug-viewer dev` → localhost:5173 |
-| **消费原语** | PR1-PR3 已 ship 的全部 browser inspect 原语（`deserializeTape` / `computePassOffsets` / `extractDrawInfo` / `createReplay` / `renderRtToCanvas`） |
-| **浏览器依赖** | 树和 bindings 纯 events 计算无需 GPU；RT 面板需 WebGPU（无 GPU 时格调降级，见下） |
+| **消费原语** | `deserializeTape` / `computePassOffsets` / `extractDrawInfo` / `createReplay` / `renderRtToCanvas` / `readbackTexturePixels` |
+| **浏览器依赖** | 纯事件面板（EventBrowser / PipelineState / ResourceInspector）零 GPU；TextureViewer 面板需 WebGPU（无 GPU 时 per-texture 降级） |
+| **tape 版本兼容** | viewer 读 `TAPE_FORMAT_VERSION` ∈ {2, 3}（`deserializeTape` 接受旧 v2 tape）。v2 tape 缺失的 v3 新事件（setBlendConstant / drawIndirect / pass-level debug group 等）视为「命令不存在」，对应面板区域呈空态而非报错 |
+
+### 四面板 dockview 工作区
+
+```
++-------------------+------------------------------------+
+| Event Browser     | Pipeline State | Texture Viewer    |
+| (pass->draw tree  +----------------+--------------------+
+|  + full command   | Resource Inspector                 |
+|  stream,          |                                    |
+|  draw focus)      |                                    |
++-------------------+------------------------------------+
+```
+
+默认布局硬编码为 RenderDoc 式四面板排布，经 dockview layout API 加载。四面板通过 React Context 共享选择状态：选中一个 draw 时全部面板联动刷新。
+
+| 面板 | 组件 | 功能 |
+|:--|:--|:--|
+| **Event Browser** | `EventBrowser.tsx` | pass->draw 树 + 完整命令流（含非 draw 命令：setPipeline/setBindGroup/copy*/clearBuffer/debug marker）。非 draw 命令暗色小图标，draw 高亮。`pushDebugGroup`->`popDebugGroup` 形成可折叠嵌套。顶部 `draws only` / `all commands` 过滤开关，默认 `draws only` |
+| **Pipeline State** | `PipelineState.tsx` | 选中 draw 的完整管线状态，RenderDoc 式七阶段：IA（topology/index format）/ Vertex Input（per-slot buffer + layout）/ Shaders（vertex/fragment module handle + 内联展开 WGSL 源码）/ Rasterizer（cull mode/front face）/ Depth-Stencil（format/compare/stencil reference）/ Blend（per-target blend + blendConstant）/ Multisample（count/mask） |
+| **Texture Viewer** | `TextureViewer.tsx` | 左侧缩略图列表（color RT 0..N + depth-stencil + 绑定纹理）+ 右侧大图预览。depth 附件以 auto-normalize 灰度可视化（two-pass min/max 归一化 + 除零退化）。per-selection 一次性回读全部纹理，缩略图切换零额外 GPU。per-texture 退化矩阵（ok/no-rt/no-webgpu/error），单纹理失败不影响其余 |
+| **Resource Inspector** | `ResourceInspector.tsx` | 全部 `create*` 资源描述符（Buffers/Textures/Samplers/BindGroupLayouts/PipelineLayouts/Pipelines/ShaderModules）。usage flags 解码为可读字符串。handle 显示为超链接，点击跳转并高亮匹配行。选中非 draw 命令时显示该命令的 src/dst 资源 |
+
+### Dock 操作 + 布局持久化
+
+- **Float / Split / Stack**：dockview 内置，通过拖拽标题栏或右键菜单操作面板
+- **布局持久化**：`onDidLayoutChange` 自动存档到 `localStorage`，key = `forgeax-viewer-layout-v<schemaVersion>`（schemaVersion 当前=1）。面板增减时 bump schemaVersion
+- **版本不匹配回退**：`localStorage` 中 schemaVersion 不匹配时丢弃旧布局，使用硬编码默认四面板排布，不抛错
+- **Reset Layout** 按钮：Header 栏 Reset Layout 按钮 → `api.clear()` → 重新应用默认布局
 
 ### 心智模型
 
 | 概念 | 是什么 |
 |:--|:--|
-| **ViewModel** | `buildViewModel(tape)` 产出的纯数据对象：`{ tree: PassNode[], draws: DrawEntry[], meta: ViewModelMeta }`。预算阶段全量计算（纯 events，零 GPU） |
-| **两阶段加载** | 预算阶段（拖入 tape 时）跑 `computePassOffsets` + 逐 draw `extractDrawInfo` → 树立刻出；惰性阶段（选中某 draw 时）跑 `renderRtToCanvas` → RT 像素上屏 |
-| **window.__forgeaxViewer** | ViewModel 的同一对象引用（零副本），page.evaluate AI 读数据唯一口 |
-| **data-* 锚点** | `selectors.ts` 唯一定义：组件渲染 + smoke 测试 + AI 操作都 import 它；不做数据镜像，只做交互/状态定位 |
+| **buildViewModel** | `Tape -> ViewModel` 纯函数（零 GPU）。预算阶段一次计算 `tree`（pass/draw 树）、`draws`（全部 draw/dispatch 信息）、`commands`（完整命令流，含非 draw）、`resources`（handleId -> 解析后 create* 描述符 Map）。惰性阶段（选中 draw）才跑 GPU readback 填 RT 像素 |
 | **Replay 会话** | `ensureReplaySession(tape)` 建一次独立 WebGPU 设备 + `createReplay`，跨 draw 重选复用（C7） |
+| **React Context** | `SelectionContext` 提供 `selectedDrawIdx` / `selectedCommandIdx`，四面板经 `useContext` 消费。选中 draw 刷新 Panel 2/3/4；选中非 draw 命令（如 copyBuffer）则 Panel 2/3 显示缺省文案，Panel 4 显示 src/dst 资源 |
 
 ### 工作流
 
 ```
 拖入 frame-0.tape.bin + frame-0.report.json
-  → tape-source.ts pair 匹配 + 重建 {header,events} + deserializeTape
-  → buildViewModel: computePassOffsets(events) 算树 + extractDrawInfo 算 draws
-  → window.__forgeaxViewer = vm（零副本暴露）
-  → TreePanel 渲染 pass/draw 树（data-forgeax-draw / data-forgeax-pass 锚点）
-  → 默认首 pass 展开 + 首 draw 选中（data-forgeax-selected="true"）
-  → 点选 draw → BindingsPanel 显示 bindings 表 + drawCall 摘要
-  → 点选 draw → RtPanel 惰性 boot GPU replay → renderRtToCanvas 到 <canvas>
+  -> tape-source.ts pair 匹配 + 重建 {header,events} + deserializeTape
+  -> buildViewModel: computePassOffsets(events) 算树 + extractDrawInfo 算 draws
+     + 遍历 events 建 commands/commands[] 数组 + resources Map
+     + 逐 draw 提取 pipelineState（createRenderPipeline.desc）
+     + 逐 pass 收集 vertexBuffers/depthStencil
+  -> window.__forgeaxViewer = vm（零副本暴露同对象引用）
+  -> 默认首 draw 选中（data-forgeax-selected="true"）
+  -> 四面板联动：EventBrowser 选 draw -> PipelineState/TextureViewer/ResourceInspector 刷新
+  -> TextureViewer 选中 draw -> 一次性回读全部纹理（per-selection readback）
 ```
 
-### window.__forgeaxViewer 契约（AI 读数据唯一口）
+### AI 操作 viewer：结构化数据通道 + 定位元素
 
-```ts
-// window.__forgeaxViewer 类型 = ViewModel（apps/rhi-debug-viewer/src/viewer-model.ts）
-
-interface ViewModel {
-  tree: PassNode[];    // pass/draw 树（render+compute 混合）
-  draws: DrawEntry[];  // 每 draw 全量 bindings + drawCall + colorAttachmentHandleId
-  meta: ViewModelMeta; // { totalDraws, totalPasses, hasCompute }
-}
-
-interface PassNode {
-  kind: 'render' | 'compute';
-  passIdx: number;
-  draws: { drawIdx: number; eventKind: 'draw' | 'drawIndexed' | 'dispatchWorkgroups' }[];
-}
-
-interface DrawEntry {
-  frameIdx: number;
-  passIdx: number;
-  bindings: InspectBindingEntry[];  // 预算阶段已存全量
-  drawCall: InspectDrawCall;        // 预算阶段已存全量
-  colorAttachmentHandleId: string | undefined;
-}
-```
-
-> `DrawEntry.bindings` 和 `DrawEntry.drawCall` 在**预算阶段**已通过 `extractDrawInfo`（纯 events）填充全量，**不清惰性阶段补**——惰性阶段只负责 RT 像素（`renderRtToCanvas`）。
-
-AI 经 page.evaluate 读取：`await page.evaluate(() => window.__forgeaxViewer.draws[0].bindings)`。
-
-### data-forgeax-* 锚点契约（selectors.ts SSOT）
-
-所有锚点常量定义在 `apps/rhi-debug-viewer/src/selectors.ts`，命名 `data-forgeax-<noun>` 全小写连字符：
-
-| 锚点 | 值 | 用途 |
-|:--|:--|:--|
-| `data-forgeax-draw` | `"<N>"`（整数 drawIdx） | TreePanel 每行 draw 定位；`page.locator('[data-forgeax-draw="3"]').click()` |
-| `data-forgeax-pass` | `"<N>"`（整数 passIdx） | TreePanel 每行 pass 定位 |
-| `data-forgeax-selected` | `"true"` | 当前选中 draw 行标记 |
-| `data-forgeax-load-status` | `"loaded"` / `"parse-error"` / `"empty"` | 容器加载状态 |
-| `data-forgeax-rt-status` | `"ok"` / `"no-rt"` / `"no-webgpu"` / `"error"` | RT 面板状态 |
-| `data-forgeax-rt-canvas` | （无值，存在即标记） | RT canvas 元素定位 |
-
-> **不靠** tailwind/shadcn class 名（cosmetic，会变）。
+- **读数据唯一口**：`window.__forgeaxViewer`（类型 `ViewModel`，零副本）。扩展字段（v3）：
+  - `viewModel.commands` — 完整命令流数组，含非 draw 事件（copy*/clear/debug marker），每项含 `passIdx` / `eventKind` / `isDraw`
+  - `viewModel.resources` — `Map<HandleId, CreateDescriptor>`，含全部 `create*` 资源（buffer desc / texture desc / sampler desc / bindGroupLayout / pipelineLayout / renderPipeline desc / wgslCode）
+  - `viewModel.draws[i].pipelineState` — 七阶段管线状态（inputAssembly / vertexInput / shaders / rasterizer / depthStencil / blend / multisample）
+  - `viewModel.draws[i].vertexBuffers` — `Map<slot, bufferHandleId>`（来自 setVertexBuffer events）
+  - `viewModel.draws[i].depthStencil` — `{ depthStencilViewHandleId, depthStencilAttachment }`（来自 beginRenderPass）
+  - 既有字段：`viewModel.tree`（pass 节点 + draws 列表）、`viewModel.draws[i].bindings` / `.drawCall` / `.colorAttachmentHandleId`、`viewModel.meta`
+- **定位元素**：用 `data-forgeax-*` 锚点（SSOT `apps/rhi-debug-viewer/src/selectors.ts`）：
+  - `data-forgeax-event-browser` — EventBrowser 面板容器
+  - `data-forgeax-pipeline-state` — PipelineState 面板容器
+  - `data-forgeax-texture-viewer` — TextureViewer 面板容器
+  - `data-forgeax-resource-inspector` — ResourceInspector 面板容器
+  - `data-forgeax-command-row="<idx>"` — 命令流中第 idx 条命令行
+  - `data-forgeax-texture-thumbnail="<idx>"` — 纹理缩略图第 idx
+  - `data-forgeax-resource-row="<handleId>"` — 资源表中某 handle 对应行
 
 ### 退化矩阵
 
-| 状态 | 触发条件 | 树+bindings | RT 面板 |
+| 状态 | 触发条件 | 纯事件面板（Event/Pipeline/Resource） | Texture Viewer |
 |:--|:--|:--|:--|
-| **loaded** | tape 成功加载 | 正常渲染 | `ok` + canvas 像素非全零（有 WebGPU） |
+| **loaded** | tape 成功加载 | 正常渲染 | per-texture status（见下） |
 | **parse-error** | `deserializeTape` 失败 / JSON 解析失败 | 不渲染（ErrorBanner 红条 + code/hint） | 不渲染 |
 | **empty** | 未拖入 tape | 空页（DropZone 可见） | 不渲染 |
-| **no-rt** | compute-only draw / 无 color attachment → `renderRtToCanvas` 返 `rt-readback-failed` | 正常（其他 draw 仍可查看） | `data-forgeax-rt-status="no-rt"` + "This draw has no render target" |
-| **no-webgpu** | `navigator.gpu === undefined` / adapter 请求失败 | 正常 | `"no-webgpu"` + "WebGPU not available" 居中文案，布局保留 |
-| **error** | shader 编译失败 / replay stepTo 失败 | 正常 | `"error"` + 错误消息 |
 
-> **不新增 `DebugErrorCode`** —— 复用既有的 14 成员闭并集（`rt-readback-failed` / `tape-format-version-mismatch` 等）。
+**Per-texture 退化（Texture Viewer，画板 3）：**
 
-### shader 编译路径（C1 修正）
-
-viewer 的 `replay-session.ts` 经 `@forgeax/engine-rhi-webgpu` 的 standalone `createShaderModule(device, {code, label?})` 编译 shader（NOT 幽灵的 `RhiDevice.createShaderModule`，该方法在 fix-f3 已移除）。签名匹配 `createReplay` 第三参 `CreateShaderModuleFn`。
-
-```ts
-// replay-session.ts 实际调用（apps/rhi-debug-viewer/src/replay-session.ts）
-import { createShaderModule, rhi } from '@forgeax/engine-rhi-webgpu';
-import { createReplay } from '@forgeax/engine-rhi-debug';
-
-const replayResult = createReplay(tape, device, createShaderModule);
-```
-
-### 与 inspect-offline CLI 的关系
-
-| 维度 | L3a CLI `inspect-offline` | L3d viewer 页面 |
+| status | 触发条件 | 显示 |
 |:--|:--|:--|
-| **定位** | AI 可脚本化的单 draw 查询 | 人类/AI 可交互浏览的全帧可视化 |
-| **运行方式** | `node cli.mjs inspect-offline <tapePath> <drawIdx>` | 浏览器拖拽文件 |
-| **输出** | 结构化 JSON + RT PNG 路径 | 交互式 UI（树 + bindings 面板 + RT canvas） |
-| **消费原语** | 同一套（`deserializeTape` / `inspectAt` / `computePassOffsets`） | 同一套（`deserializeTape` / `computePassOffsets` / `extractDrawInfo` / `renderRtToCanvas`） |
+| **ok** | 纹理回读成功 | 正常像素（color: RGBA; depth: auto-normalize 灰度） |
+| **no-rt** | compute-only draw / 无 color/depth attachment | "no-rt" 占位 |
+| **no-webgpu** | `navigator.gpu === undefined` / adapter 请求失败 | "no-webgpu" 占位，布局保留 |
+| **error** | 回读失败（如 depth24plus 不可 copy） | "error" + 错误消息 |
+
+Single texture error does not affect other textures in the same draw.
+
+> **不新增 `DebugErrorCode`** —— 复用既有的 14 成员闭并集。
 
 ### 踩坑
 
-- **viewer 不走 `inspectDrawJson` 取 bindings**：ViewModel.draws[].bindings 由 `extractDrawInfo`（纯 events）在预算阶段填充，不是惰性阶段跑 `inspectDrawJson`。`inspectDrawJson` 只在 PR3 L3b 浏览器控制台手动 inspect 时使用；viewer 的 bindings 面板直接读 ViewModel，零 GPU。
+- **viewer 不走 `inspectDrawJson` 取 bindings**：`draws[].bindings` 由 `extractDrawInfo`（纯 events）在预算阶段填充，零 GPU。`inspectDrawJson` 只在 L3b 浏览器控制台手动 inspect 时用。
 - **report.json.passOffsets 不可信**：viewer 一律从 events 经 `computePassOffsets` 重算树结构（D-3），不读 report.json 里的 `passOffsets`（render-only，可能缺 compute pass）。
-- **RT 面板独立 WebGPU 设备**：viewer 自己 `requestAdapter/requestDevice` 开独立 reply 设备，与被截帧的游戏无关。
+- **shader 用 standalone `createShaderModule`**：viewer `replay-session.ts` 从 `@forgeax/engine-rhi-webgpu` import standalone `createShaderModule` 喂 `createReplay` 第三参——**不是**幽灵 `RhiDevice.createShaderModule`（fix-f3 已移除）。
+- **RT 面板独立 WebGPU 设备**：viewer 自己 `requestAdapter/requestDevice`，与被截帧的游戏无关。
 
 ## 深入
 

@@ -24,7 +24,7 @@ import type { RhiDevice, RhiInstance } from '@forgeax/engine-rhi';
 import { afterAll, describe, expect, it } from 'vitest';
 import { inspectDrawJson } from '../inspect-core';
 import { pixelDeltaAbsMean } from '../pixel-diff';
-import { readbackTexturePixels } from '../readback';
+import { readbackDrawRt, readbackTexturePixels } from '../readback';
 import { type CreateShaderModuleFn, wrap, wrapCreateShaderModule } from '../recorder';
 import { createReplay } from '../replayer';
 import { deserializeTape, serializeTape } from '../tape-format';
@@ -1698,5 +1698,114 @@ describe.skipIf(SKIP_DAWN)('e2e dawn -- cross-device pixel epsilon AC-14 (m5b-3)
     expect(report.drawCall).toBeDefined();
     expect(report.rt).toBeDefined();
     expect(report.bindings).toBeDefined();
+  }, 60_000);
+
+  // ---------------------------------------------------------------
+  // commitThroughDraw: per-draw cumulative RT (draw N != draw M in one pass)
+  // ---------------------------------------------------------------
+  // Two fullscreen draws in ONE render pass with DIFFERENT pipelines: draw 0
+  // paints red, draw 1 overpaints blue. commitThroughDraw(0) must read red (only
+  // draw 0 executed); commitThroughDraw(1) must read blue (draw 1 overpaint).
+  // Before this feature both read the final composited (blue) frame -- the
+  // regression. (Scissor would be cleaner but the recorder does not record
+  // setScissorRect, so we differentiate via pipeline color instead.)
+  it('commitThroughDraw: draw 0 and draw 1 in one pass differ; last == full frame', async () => {
+    const pack = await loadDawnRhi();
+    if (!pack) return;
+
+    const { debugInst, wrappedCreateShader, wrappedDevice, rawDevice } = await makeWrappedCtx(pack);
+    debugInst.arm(1);
+
+    const tex = createRTTexture(wrappedDevice, RT_WIDTH, RT_HEIGHT);
+    const viewRes = wrappedDevice.createTextureView(tex, {});
+    if (!viewRes.ok) throw new Error(`view`);
+
+    const vs = await wrappedCreateShader(rawDevice, { code: FULLSCREEN_TRI_VS });
+    if (!vs.ok) throw new Error(`vs:${(vs.error as any).code}`);
+    const fsRed = await wrappedCreateShader(rawDevice, { code: TRIANGLE_FS }); // red
+    if (!fsRed.ok) throw new Error(`fsRed:${(fsRed.error as any).code}`);
+    const fsBlue = await wrappedCreateShader(rawDevice, {
+      code: `@fragment fn main() -> @location(0) vec4<f32> { return vec4(0.0, 0.0, 1.0, 1.0); }`,
+    });
+    if (!fsBlue.ok) throw new Error(`fsBlue:${(fsBlue.error as any).code}`);
+
+    const bglRes = wrappedDevice.createBindGroupLayout({ entries: [] });
+    if (!bglRes.ok) throw new Error(`bgl`);
+    const plRes = wrappedDevice.createPipelineLayout({ bindGroupLayouts: [bglRes.value] });
+    if (!plRes.ok) throw new Error(`pl`);
+    const mkPipe = (fsMod: unknown) =>
+      wrappedDevice.createRenderPipeline({
+        layout: plRes.value,
+        vertex: { module: vs.value, entryPoint: 'main', buffers: [] },
+        fragment: { module: fsMod, entryPoint: 'main', targets: [{ format: 'rgba8unorm' }] },
+        primitive: { topology: 'triangle-list' },
+      } as any);
+    const pipeRed = mkPipe(fsRed.value);
+    if (!pipeRed.ok) throw new Error(`pipeRed`);
+    const pipeBlue = mkPipe(fsBlue.value);
+    if (!pipeBlue.ok) throw new Error(`pipeBlue`);
+
+    const encRes = wrappedDevice.createCommandEncoder({});
+    if (!encRes.ok) throw new Error(`enc`);
+    const enc = encRes.value;
+    const pass = enc.beginRenderPass({
+      colorAttachments: [
+        {
+          view: viewRes.value as any,
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        },
+      ],
+    } as any);
+    pass.setPipeline(pipeRed.value as any);
+    pass.draw(3, 1, 0, 0); // draw 0: red
+    pass.setPipeline(pipeBlue.value as any);
+    pass.draw(3, 1, 0, 0); // draw 1: blue (overpaints)
+    pass.end();
+    const fin = enc.finish();
+    if (!fin.ok) throw new Error(`finish`);
+    wrappedDevice.queue.submit([fin.value] as unknown as readonly never[]);
+    await wrappedDevice.queue.onSubmittedWorkDone();
+
+    const fullFrame = await readbackTexturePixels(wrappedDevice, tex, RT_WIDTH, RT_HEIGHT);
+    debugInst.onFrameEnd();
+    const tape = debugInst.getTape() as any;
+    if (!tape) throw new Error('tape');
+
+    const { json, blob } = serializeTape(tape);
+    const rt = deserializeTape(json, blob);
+    if (!rt.ok) throw new Error(`deserialize`);
+    const clean = rt.value;
+
+    const { rawDev2 } = await makeFreshReplayDevice(pack);
+    const replayRes = createReplay(clean, rawDev2, pack.createShaderModule);
+    if (!replayRes.ok) throw new Error(`createReplay`);
+    const replay = replayRes.value;
+
+    // draw 0 -> red only
+    replay.reset();
+    const c0 = await replay.commitThroughDraw(0);
+    if (!c0.ok) throw new Error(`commitThroughDraw(0): ${c0.error.code}`);
+    expect(c0.value.committed).toBe(true);
+    const rb0 = await readbackDrawRt(replay, 0, rawDev2);
+    if (!rb0.ok) throw new Error(`readbackDrawRt(0): ${rb0.error.code}`);
+    const pixels0 = rb0.value.pixels;
+
+    // draw 1 -> blue overpaint
+    replay.reset();
+    const c1 = await replay.commitThroughDraw(1);
+    if (!c1.ok) throw new Error(`commitThroughDraw(1): ${c1.error.code}`);
+    const rb1 = await readbackDrawRt(replay, 1, rawDev2);
+    if (!rb1.ok) throw new Error(`readbackDrawRt(1): ${rb1.error.code}`);
+    const pixels1 = rb1.value.pixels;
+
+    // The regression: these were identical (both = final blue frame) before fix.
+    const deltaAcrossDraws = pixelDeltaAbsMean(pixels0, pixels1);
+    expect(deltaAcrossDraws).toBeGreaterThan(0.05);
+
+    // cumulative-after-the-last-draw must equal the real full frame (blue).
+    const deltaVsFull = pixelDeltaAbsMean(pixels1, fullFrame);
+    expect(deltaVsFull).toBeLessThanOrEqual(0.01);
   }, 60_000);
 });

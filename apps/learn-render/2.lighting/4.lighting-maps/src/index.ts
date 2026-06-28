@@ -300,6 +300,29 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   if (!startRes.ok) {
     console.error('[learn-render 2.4 lighting-maps] app.start failed:', startRes.error.code, startRes.error.hint);
   }
+
+  installCaptureHook(app, world);
+}
+
+// RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
+// one update + draw + readPixels so the live canvas read is anchored to the same
+// frame the capture records. Only meaningful when the page is served with
+// FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
+function installCaptureHook(app: App, world: App['world']): void {
+  type CaptureHook = () => Promise<Uint8Array>;
+  const win = window as unknown as { __captureLightingMaps?: CaptureHook };
+  const renderer = app.renderer;
+  win.__captureLightingMaps = async (): Promise<Uint8Array> => {
+    world.update();
+    renderer.draw(world);
+    const r = await renderer.readPixels();
+    if (!r.ok) {
+      throw new Error(
+        `[learn-render 2.4 lighting-maps] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+      );
+    }
+    return r.value;
+  };
 }
 
 function readMaterialPackEntry(rawPack: unknown): MaterialPackEntry | null {
@@ -359,6 +382,7 @@ function reportBootstrapError(error: CanvasAppError): void {
 
 declare global {
   interface Window {
+    __captureLightingMaps?: () => Promise<Uint8Array>;
     __lightingMapsInputBackend?: () => InputBackend;
     __learnRenderErrors?: Array<{ code: string; hint?: string }>;
   }

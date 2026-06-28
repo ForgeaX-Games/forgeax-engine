@@ -25,7 +25,9 @@
     "build": "tsup",
     "test": "vitest run",
     "bench": "vitest bench --run",
-    "bench:json": "FORGEAX_BENCH=fast vitest bench --run --outputJson bench-result.json"
+    "bench:json": "FORGEAX_BENCH=fast vitest bench --run --outputJson bench-result.json",
+    "lint:brand-cast": "node scripts/lint-brand-cast.mjs",
+    "lint:brand-runtime": "node scripts/lint-brand-runtime.mjs"
   },
   "forgeax": {
     "metrics": {

@@ -26,6 +26,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDebugRhiAdapter } from '../adapter';
 import { wrap } from '../recorder';
 import { wireDebugRhiInspector } from '../rpc-bridge';
+import { TAPE_FORMAT_VERSION } from '../tape-format';
 
 // ============================================================================
 // Mock Registry mirroring console's surface (3 method route table).
@@ -227,7 +228,7 @@ describe('createDebugRhiAdapter + wireDebugRhiInspector — I-2 production wirin
       events: Array<{ kind: string }>;
       valid: boolean;
     };
-    expect(report.header.formatVersion).toBe(2);
+    expect(report.header.formatVersion).toBe(TAPE_FORMAT_VERSION);
     expect(report.valid).toBe(true);
     const kinds = report.events.map((e) => e.kind);
     expect(kinds).toContain('createBuffer');

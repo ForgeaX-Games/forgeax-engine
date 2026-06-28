@@ -1,6 +1,8 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { gltfImporter } from '@forgeax/engine-gltf';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { playwright } from '@vitest/browser-playwright';
@@ -129,6 +131,11 @@ export default defineConfig({
               resolve(rootDir, 'apps/learn-render/1.getting-started/7.camera/assets'),
               resolve(rootDir, 'forgeax-engine-assets/learn-opengl/textures'),
               resolve(rootDir, 'forgeax-engine-assets/learn-opengl/meshes'),
+              // feat-learn-render-5.9 ssao: the SSAO demo loadByGuid<SceneAsset>
+              // the LearnOpenGL backpack (learn-opengl/objects/backpack/), so its
+              // onerror-gate (shipped path, no ImportTransport) needs the objects/
+              // root scanned for the gltf scene + diffuse/specular/normal textures.
+              resolve(rootDir, 'forgeax-engine-assets/learn-opengl/objects'),
               resolve(rootDir, 'forgeax-engine-assets/khronos-gltf-samples/Sponza'),
               // apps/preview e2e (preview.browser.test.ts): the game-default
               // template root holds scene.pack.json + material packs; the
@@ -137,6 +144,12 @@ export default defineConfig({
               resolve(rootDir, 'templates/game-default'),
               resolve(rootDir, 'forgeax-engine-assets/demo-assets/template-game-default'),
             ],
+            // feat-learn-render-5.9 ssao: the backpack is a .gltf scene whose
+            // sub-assets (mesh / material / textures) must be importable through
+            // the middleware for the SSAO onerror-gate. Without these the gltf
+            // meta resolves to importer-not-registered (422). imageImporter also
+            // covers any non-pre-baked image sidecars under the scanned roots.
+            importers: [imageImporter, gltfImporter],
           }),
         ],
         server: {

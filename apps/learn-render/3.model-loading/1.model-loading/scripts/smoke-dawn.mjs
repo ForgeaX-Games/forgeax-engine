@@ -1,35 +1,27 @@
 #!/usr/bin/env node
-// learn-render 3.1 model-loading dawn-node smoke (feat-20260608 / w32 / AC-19).
+// learn-render 3.1 model-loading dawn-node smoke.
 //
-// Structural-channel smoke (round-2 reviewer-approved scope split): the smoke
-// drives the engine bridge SSOT (parseGltf -> meshIrToMeshAsset /
-// toMaterialAsset / gltfDocToSceneAsset, all from @forgeax/engine-gltf) plus
-// the runtime AssetRegistry instantiate path so any regression in those
-// surfaces here. AC-19's production-pipeline pixel evidence (loadByGuid<SceneAsset>
-// against the browser dev / build artefacts, real pixel correctness across
-// the 69-texture atrium) is owned by the verify step's playwright sandbox.
+// The smoke loads Sponza via the canonical loadByGuid<SceneAsset> path
+// (configurePackIndex + loadByGuid + allocSharedRef + instantiate), mirroring
+// production and the demo's src/index.ts. The HDR Skylight also loads via
+// loadByGuid.
+//
+// A thin static file server (globalThis.fetch monkeypatch) serves every
+// sub-asset from the built dist/ directory as-is, so loadByGuid resolves the
+// scene + its full cross-ref graph without a dev server. The build already
+// decoded textures to RGBA .bin; the smoke reads those pre-decoded bins
+// directly — no on-the-fly decode, same path as production.
 //
 // Verdict criteria:
 //   (a) backend=webgpu (dawn-node bound the WebGPU adapter)
-//   (b) frames>=300 (the standard smoke gate; was 60 in round-1)
+//   (b) frames>=300 (the standard smoke gate)
 //   (c) renderer.onError fired 0 times for RhiError / RuntimeError / EcsError
 //       families (the production crash channel)
-//   (d) console.error fired 0 times during render (finding 6 mitigation:
-//       RenderSystem.extract surfaces material / pipeline shape failures via
-//       console.error, which the hello-gltf smoke missed by gating only on
-//       onError. The learn-render-3.1 smoke captures this channel so a
-//       material-resolved-empty-passes regression FAILs here, not in
-//       production).
+//   (d) console.error fired 0 times during render
 //
-// Falsification (FALSIFY=missing-bridge, plan section 5.4): bypass the
-// engine bridge SSOT and register a wrong-shape MaterialAsset POD (passes:[])
-// for every Sponza material. AssetRegistry.register catches the empty-passes
-// shape and returns asset-invalid-value, the smoke's register-fail branch
-// exits non-zero on the first material. This is the same shape failure
-// hello-gltf finding 6 surfaced (where it slipped past the smoke because
-// onError-only gates miss the console.error path). Run:
-//   FALSIFY=missing-bridge pnpm -F @forgeax/app-learn-render-3-model-loading-1-model-loading smoke
-// must exit non-zero, proving the gate is falsifiable rather than always-green.
+// Falsification (FALSIFY=wrong-guid): loadByGuid with a deliberately-wrong
+// SceneAsset GUID must return an error and the smoke must exit non-zero.
+//   FALSIFY=wrong-guid pnpm -F @forgeax/app-learn-render-3-model-loading-1-model-loading smoke
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -39,14 +31,14 @@ const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 const FALSIFY = process.env.FALSIFY ?? '';
 
-const WIDTH = 800;
-const HEIGHT = 600;
+const WIDTH = 200;
+const HEIGHT = 150;
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SPONZA_GLTF_PATH = resolve(here, '..', '..', '..', '..', '..',
-  'forgeax-engine-assets', 'khronos-gltf-samples', 'Sponza', 'Sponza.gltf');
-const SPONZA_DIR = resolve(here, '..', '..', '..', '..', '..',
-  'forgeax-engine-assets', 'khronos-gltf-samples', 'Sponza');
+const DIST_DIR = resolve(here, '..', 'dist');
+const SPONZA_SCENE_GUID = '019e4fe2-523b-7506-99e5-ccd39795ecda';
+const NEWPORT_LOFT_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
+const FALSIFY_WRONG_GUID = FALSIFY === 'wrong-guid';
 
 // --- 1. dawn.node binding setup --------------------------------------------
 
@@ -70,11 +62,6 @@ try {
   process.exit(1);
 }
 Object.defineProperty(globalThis.navigator, 'gpu', { value: gpu, configurable: true, writable: true });
-// bug-20260612 dawn-only stub: pin getPreferredCanvasFormat to 'rgba8unorm' so this
-// smoke harness's hardcoded rgba8unorm-srgb viewFormats stay compatible with the
-// dawn-node webgpu module's actual UA preference (which is bgra8unorm). Browser
-// path (test:browser project) does not run smoke-dawn.mjs; the real Channel 2
-// BGRA path is exercised through the helper unmodified there.
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
 
 let sharedDevice;
@@ -128,11 +115,29 @@ const mockCanvas = {
   removeEventListener() {},
 };
 
-// --- 3. Drive engine ECS path through the gltf importer -------------------
-//
-// Drives the same engine bridge SSOT (meshIrToMeshAsset / toMaterialAsset /
-// gltfDocToSceneAsset) the runtime AssetRegistry consumes after a successful
-// loadByGuid<SceneAsset>. Any regression in those bridges surfaces here.
+// --- 3. Load Sponza + HDR via canonical loadByGuid path -------------------
+
+// 3a. Read pack-index, build URL maps.
+const PACK_INDEX_PATH = resolve(DIST_DIR, 'pack-index.json');
+let packIndexJson;
+try {
+  packIndexJson = JSON.parse(readFileSync(PACK_INDEX_PATH, 'utf8'));
+} catch (err) {
+  console.error(`[smoke] FAIL - cannot read pack-index at ${PACK_INDEX_PATH}: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
+
+// Build: URL -> disk path.
+const urlToPath = new Map();
+for (const entry of packIndexJson) {
+  if (!urlToPath.has(entry.relativeUrl)) {
+    urlToPath.set(entry.relativeUrl, resolve(DIST_DIR, entry.relativeUrl.replace(/^\//, '')));
+  }
+}
+console.log(`[smoke] pack-index: ${packIndexJson.length} entries, ${urlToPath.size} URLs`);
+
+const MANIFEST_PATH = resolve(DIST_DIR, 'shaders', 'manifest.json');
+const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
@@ -141,21 +146,10 @@ const {
   createRenderer,
   DirectionalLight,
   PointLight,
-  resolveAssetHandle,
   Skylight,
   Transform,
 } = enginePkg;
-const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
-const {
-  toMaterialAsset,
-  meshIrToMeshAsset,
-  gltfDocToSceneAsset,
-  parseGltf,
-} = await import('@forgeax/engine-gltf');
-
-const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
 
 let renderer;
 try {
@@ -175,213 +169,119 @@ if (!assets) {
   process.exit(1);
 }
 
-// feat-20260614 M8 (D-15/D-17): the World owns the user-tier sharedRefs store
-// that mesh / texture / sampler / material / scene handles are minted into;
-// it must exist before any allocSharedRef call.
 const world = new World();
 
-// --- 3a. Parse Sponza glTF + externalLoader for flat-directory textures --
-
-const gltfJson = JSON.parse(readFileSync(SPONZA_GLTF_PATH, 'utf8'));
-const externalLoader = async (uri) => {
-  const texPath = resolve(SPONZA_DIR, uri);
-  const buf = readFileSync(texPath);
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-};
-
-const docResult = await parseGltf(gltfJson, externalLoader, SPONZA_GLTF_PATH);
-if (!docResult.ok) {
-  console.error(`[smoke] FAIL - parseGltf: ${docResult.error.code}`);
-  process.exit(1);
-}
-const doc = docResult.value;
-
-// --- 3b. Register MeshAssets via the bridge SSOT --------------------------
-//
-// One MeshAsset per glTF mesh-index (Sponza ships 1 glTF mesh = 1 MeshAsset
-// with 103 submeshes). Bridge keys MeshFilter on the same glTF mesh-index so
-// MeshRenderer.materials[] (one per primitive) lines up positionally with
-// MeshAsset.submeshes[] (#317 multi-material contract).
-
-const meshHandles = new Map();
-const seenMeshIndices = new Set();
-for (const m of doc.meshes) {
-  if (!m) continue;
-  if (seenMeshIndices.has(m.meshIndex)) continue;
-  seenMeshIndices.add(m.meshIndex);
-  const prims = doc.meshes.filter((p) => p && p.meshIndex === m.meshIndex);
-  const meshAsset = meshIrToMeshAsset(prims);
-  const h = world.allocSharedRef('MeshAsset', meshAsset);
-  meshHandles.set(m.meshIndex, h);
-}
-
-// --- 3c. Register TextureAssets (flat-directory load + parseImage) -------
-
-const { parseImage } = await import('@forgeax/engine-image/parse-image');
-const textureHandles = new Map();
-if (doc.textures && doc.images) {
-  for (let ti = 0; ti < doc.textures.length; ti++) {
-    const tex = doc.textures[ti];
-    if (!tex) continue;
-    const img = doc.images[tex.source];
-    if (!img || img.uri === undefined) continue;
-    const texPath = resolve(SPONZA_DIR, img.uri);
-    let bytes;
-    try {
-      const buf = readFileSync(texPath);
-      bytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-    } catch {
-      continue;
-    }
-    const mime = img.uri.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-    const isBaseColor = img.uri.includes('baseColor') || img.uri.includes('basecolor');
-    const decoded = parseImage(bytes, mime, {
-      colorSpace: isBaseColor ? 'srgb' : 'linear',
-      mipmap: false,
-    });
-    if (!decoded.ok) continue;
-    const texAsset = {
-      kind: 'texture',
-      data: decoded.value.bytes,
-      width: decoded.value.width,
-      height: decoded.value.height,
-      format: 'rgba8unorm',
-      colorSpace: decoded.value.colorSpace,
-      mipmap: false,
-    };
-    const guid = `00000000-0000-7000-8000-0000000${String(ti).padStart(5, '0')}`;
-    const guidRes = AssetGuid.parse(guid);
-    if (!guidRes.ok) continue;
-    // Mint a user-tier column handle; toMaterialAsset copies the numeric
-    // handle into paramValues for the render-system extract to bind.
-    const h = unwrapHandle(world.allocSharedRef('TextureAsset', texAsset));
-    assets.catalog(guidRes.value, texAsset);
-    textureHandles.set(ti, h);
-  }
-}
-
-// --- 3d. Register SamplerAssets ------------------------------------------
-
-const samplerHandles = new Map();
-if (doc.samplers) {
-  for (let si = 0; si < doc.samplers.length; si++) {
-    const sampIr = doc.samplers[si];
-    if (!sampIr) continue;
-    const gpuFilter = (glFilter) => glFilter === 9728 ? 'nearest' : 'linear';
-    const gpuAddressMode = (glWrap) => {
-      if (glWrap === 33071) return 'clamp-to-edge';
-      if (glWrap === 33648) return 'mirror-repeat';
-      return 'repeat';
-    };
-    const samplerAsset = {
-      kind: 'sampler',
-      ...(sampIr.magFilter !== undefined ? { magFilter: gpuFilter(sampIr.magFilter) } : {}),
-      ...(sampIr.minFilter !== undefined ? { minFilter: gpuFilter(sampIr.minFilter) } : {}),
-      addressModeU: gpuAddressMode(sampIr.wrapS),
-      addressModeV: gpuAddressMode(sampIr.wrapT),
-    };
-    const guid = `00000000-0000-7000-8000-00000001${String(si).padStart(4, '0')}`;
-    const guidRes = AssetGuid.parse(guid);
-    if (!guidRes.ok) continue;
-    const h = unwrapHandle(world.allocSharedRef('SamplerAsset', samplerAsset));
-    assets.catalog(guidRes.value, samplerAsset);
-    samplerHandles.set(si, h);
-  }
-}
-
-// --- 3e. Register MaterialAssets via bridge SSOT --------------------------
-//
-// FALSIFY=missing-bridge: bypass toMaterialAsset and register a wrong-shape
-// MaterialAsset POD (passes:[]) that triggers RenderSystem.extract's
-// `material-resolved-empty-passes` console.error every frame. This proves
-// the smoke's console.error gate (criterion (e)) catches the exact
-// false-green pattern the hello-gltf smoke fell into (review finding 6).
-
-const materialHandles = new Map();
-const FALSIFY_MISSING_BRIDGE = FALSIFY === 'missing-bridge';
-if (FALSIFY_MISSING_BRIDGE) {
-  console.warn('[smoke] FALSIFY=missing-bridge: registering wrong-shape MaterialAsset (passes:[]) for every Sponza material');
-}
-for (let i = 0; i < doc.materials.length; i++) {
-  const matIr = doc.materials[i];
-  if (!matIr) continue;
-  const matAsset = FALSIFY_MISSING_BRIDGE
-    ? { kind: 'material', passes: [], paramValues: {} }
-    : toMaterialAsset(matIr, { textureHandles, samplerHandles });
-  // FALSIFY=missing-bridge: allocSharedRef does not validate the empty-passes
-  // shape (it holds any payload); the wrong shape instead trips
-  // RenderSystem.extract's `material-resolved-empty-passes` console.error
-  // every frame, which criterion (d) below catches.
-  const h = world.allocSharedRef('MaterialAsset', matAsset);
-  materialHandles.set(i, h);
-}
-
-// --- 3f. Build SceneAsset via bridge SSOT --------------------------------
-
-const sceneAsset = gltfDocToSceneAsset(doc, { meshHandles, materialHandles });
-
-// --- 3g. Instantiate the scene -------------------------------------------
-// feat-20260614 M8 (D-15/D-17): mint a user-tier SceneAsset handle and pass it
-// to instantiate, which resolves the payload + cross-refs via the two-tier
-// resolveAssetHandle (no SceneAssetResolver wiring needed).
-
-const sceneHandle = world.allocSharedRef('SceneAsset', sceneAsset);
-const instRes = assets.instantiate(sceneHandle, world);
-if (!instRes.ok) {
-  console.error(`[smoke] FAIL - instantiate: ${instRes.error.code}`);
-  process.exit(1);
-}
-
-// --- 3h. HDR Skylight (production loadByGuid path through built dist) ---
-
-const NEWPORT_LOFT_GUID = '019e4a26-3c29-7420-af5d-20f2724a16b0';
-const PACK_INDEX_PATH = resolve(here, '..', 'dist', 'pack-index.json');
-const packIndexRaw = readFileSync(PACK_INDEX_PATH, 'utf8');
-const packIndexJson = JSON.parse(packIndexRaw);
-
+// 3b. Find HDR entry.
 const hdrEntry = packIndexJson.find((e) => e.guid === NEWPORT_LOFT_GUID);
 if (!hdrEntry) {
-  console.error(`[smoke] FAIL - HDR GUID ${NEWPORT_LOFT_GUID} not found in pack-index at ${PACK_INDEX_PATH}; run 'pnpm build' first.`);
+  console.error(`[smoke] FAIL - HDR GUID ${NEWPORT_LOFT_GUID} not found in pack-index`);
   process.exit(1);
 }
 console.log(`[smoke] HDR pack-index entry: kind=${hdrEntry.kind} format=${hdrEntry.metadata?.format} ${hdrEntry.metadata?.width}x${hdrEntry.metadata?.height}`);
 
-const importedBinPath = resolve(here, '..', 'dist', hdrEntry.relativeUrl.replace(/^\//, ''));
-const binBuf = readFileSync(importedBinPath);
-const importedBinBytes = new Uint8Array(binBuf.buffer, binBuf.byteOffset, binBuf.byteLength);
-
-const FALSIFY_HDR_BIN_EMPTY = FALSIFY === 'hdr-bin-empty';
-if (FALSIFY_HDR_BIN_EMPTY) {
-  console.warn('[smoke] FALSIFY=hdr-bin-empty: zeroing imported .bin payload');
-  importedBinBytes.fill(0);
-}
-
+// 3c. Install fetch monkeypatch: thin static file server over dist/.
+//
+// - /pack-index.json: served from memory.
+// - .pack.json files: read from dist/, return parsed JSON.
+// - All .bin files: read pre-decoded bytes from dist/ as-is.
 const originalFetch = globalThis.fetch;
+
 globalThis.fetch = async (url) => {
-  if (typeof url === 'string' && url === '/pack-index.json') {
+  const urlStr = typeof url === 'string' ? url : String(url);
+
+  if (urlStr === '/pack-index.json') {
     return { ok: true, json: () => Promise.resolve(packIndexJson), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
   }
-  if (typeof url === 'string' && url === hdrEntry.relativeUrl) {
-    const ab = new ArrayBuffer(importedBinBytes.byteLength);
-    new Uint8Array(ab).set(importedBinBytes);
-    return { ok: true, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(ab) };
+
+  const filePath = urlToPath.get(urlStr);
+  if (!filePath) {
+    return { ok: false, status: 404, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
   }
-  return { ok: false, status: 404, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
+
+  // .pack.json files.
+  if (urlStr.endsWith('.json')) {
+    let buf;
+    try {
+      buf = readFileSync(filePath);
+    } catch {
+      return { ok: false, status: 404, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
+    }
+    const text = new TextDecoder().decode(buf);
+    return {
+      ok: true,
+      json: () => Promise.resolve(JSON.parse(text)),
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+    };
+  }
+
+  // All .bin files (texture, mesh, scene, HDR, embedded).
+  return {
+    ok: true,
+    json: () => Promise.resolve({}),
+    arrayBuffer: async () => {
+      let buf;
+      try {
+        buf = readFileSync(filePath);
+      } catch {
+        throw new Error(`ENOENT: no such file, open '${filePath}'`);
+      }
+      const bytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+      const ab = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(ab).set(bytes);
+      return ab;
+    },
+  };
 };
 
+// 3d. configurePackIndex + loadByGuid<SceneAsset> + allocSharedRef + instantiate.
 assets.configurePackIndex('/pack-index.json');
 
+const sceneGuidStr = FALSIFY_WRONG_GUID ? '00000000-0000-0000-0000-000000000000' : SPONZA_SCENE_GUID;
+if (FALSIFY_WRONG_GUID) {
+  console.warn('[smoke] FALSIFY=wrong-guid: loading a deliberately-wrong SceneAsset GUID');
+}
+
+const loadStart = Date.now();
+const sceneGuidRes = AssetGuid.parse(sceneGuidStr);
+if (!sceneGuidRes.ok) {
+  console.error(`[smoke] FAIL - AssetGuid.parse(scene): ${sceneGuidRes.error.code}`);
+  process.exit(1);
+}
+
+const sceneRes = await assets.loadByGuid(sceneGuidRes.value);
+if (!sceneRes.ok) {
+  if (FALSIFY_WRONG_GUID) {
+    console.error(`[smoke] FALSIFY=wrong-guid PASS - loadByGuid correctly failed: ${sceneRes.error.code} (exit non-zero proves gate is falsifiable)`);
+    process.exit(1);
+  }
+  console.error(`[smoke] FAIL - loadByGuid<SceneAsset>: ${sceneRes.error.code} - ${sceneRes.error.hint ?? ''}`);
+  process.exit(1);
+}
+
+if (FALSIFY_WRONG_GUID) {
+  console.error('[smoke] FALSIFY=wrong-guid BROKEN - loadByGuid succeeded with wrong GUID (gate is NOT falsifiable)');
+  process.exit(1);
+}
+
+const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
+const instRes = assets.instantiate(sceneHandle, world);
+if (!instRes.ok) {
+  console.error(`[smoke] FAIL - scene instantiate: ${instRes.error.code}`);
+  process.exit(1);
+}
+const loadWall = Date.now() - loadStart;
+console.log(`[smoke] Sponza scene instantiated via loadByGuid<SceneAsset> (load wall=${loadWall}ms)`);
+
+// 3e. HDR Skylight.
 const hdrGuidRes = AssetGuid.parse(NEWPORT_LOFT_GUID);
 if (!hdrGuidRes.ok) {
   console.error(`[smoke] FAIL - AssetGuid.parse(HDR): ${hdrGuidRes.error.code}`);
   process.exit(1);
 }
 
-// loadByGuid returns the TextureAsset PAYLOAD (M8 D-17); mint a user-tier
-// source handle and pass world + handle + pod to uploadCubemapFromEquirect.
 const hdrPodRes = await assets.loadByGuid(hdrGuidRes.value);
 if (!hdrPodRes.ok) {
-  console.error(`[smoke] FAIL - loadByGuid(HDR): ${hdrPodRes.error.code} - ${hdrPodRes.error.hint}`);
+  console.error(`[smoke] FAIL - loadByGuid(HDR): ${hdrPodRes.error.code} - ${hdrPodRes.error.hint ?? ''}`);
   process.exit(1);
 }
 const hdrPod = hdrPodRes.value;
@@ -389,7 +289,7 @@ const hdrSrcHandle = world.allocSharedRef('TextureAsset', hdrPod);
 
 const cubemapRes = await renderer.store.uploadCubemapFromEquirect(world, hdrSrcHandle, hdrPod);
 if (!cubemapRes.ok) {
-  console.error(`[smoke] FAIL - uploadCubemapFromEquirect: ${cubemapRes.error.code} - ${cubemapRes.error.hint}`);
+  console.error(`[smoke] FAIL - uploadCubemapFromEquirect: ${cubemapRes.error.code} - ${cubemapRes.error.hint ?? ''}`);
   process.exit(1);
 }
 
@@ -399,7 +299,6 @@ world.spawn({
 });
 console.log(`[smoke] HDR loadByGuid + Skylight spawn OK (format=${hdrPod.format} ${hdrPod.width}x${hdrPod.height})`);
 
-// Restore native fetch so subsequent renders / readback are clean.
 globalThis.fetch = originalFetch;
 
 // --- 4. Spawn lights + camera (mirror src/main.ts) ------------------------
@@ -410,15 +309,15 @@ world.spawn(
   { component: DirectionalLight, data: {
     directionX: d[0] * invLen, directionY: d[1] * invLen, directionZ: d[2] * invLen,
     colorR: 1.0, colorG: 0.95, colorB: 0.85, intensity: 3.0,
-    mapSize: 2048, farPlane: 4500, depthBias: 0.005,
+    mapSize: 2048, farPlane: 36, depthBias: 0.005,
   } },
 );
 
 const pointDefs = [
-  { pos: [-800, 200, 0], color: [1.0, 0.85, 0.5], intensity: 500000, range: 2500 },
-  { pos: [800, 200, 0], color: [0.4, 0.85, 1.0], intensity: 500000, range: 2500 },
-  { pos: [0, 200, -400], color: [0.95, 0.4, 0.85], intensity: 500000, range: 2500 },
-  { pos: [0, 200, 400], color: [1.0, 1.0, 1.0], intensity: 500000, range: 2500 },
+  { pos: [-6.4, 1.6, 0], color: [1.0, 0.85, 0.5], intensity: 32, range: 20 },
+  { pos: [6.4, 1.6, 0], color: [0.4, 0.85, 1.0], intensity: 32, range: 20 },
+  { pos: [0, 1.6, -3.2], color: [0.95, 0.4, 0.85], intensity: 32, range: 20 },
+  { pos: [0, 1.6, 3.2], color: [1.0, 1.0, 1.0], intensity: 32, range: 20 },
 ];
 for (const pd of pointDefs) {
   world.spawn(
@@ -430,13 +329,12 @@ for (const pd of pointDefs) {
 }
 
 world.spawn(
-  { component: Transform, data: { posX: 800, posY: 600, posZ: 0,
+  { component: Transform, data: { posX: 0, posY: 1.5, posZ: 4,
     quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
-  { component: Camera, data: { fov: Math.PI / 3, aspect: WIDTH / HEIGHT, near: 10, far: 10000,
-    projection: 1, left: -2200, right: 2200, bottom: -2200, top: 2200 } },
+  { component: Camera, data: { fov: Math.PI / 3, aspect: WIDTH / HEIGHT, near: 0.08, far: 120 } },
 );
 
-// --- 5. Wire error capture (both onError + console.error) ----------------
+// --- 5. Wire error capture ------------------------------------------------
 
 const errors = [];
 const consoleErrors = [];
@@ -453,7 +351,7 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-// --- 6. Run frames -----------------------------------------------------
+// --- 6. Run frames -------------------------------------------------------
 
 const frameStart = Date.now();
 let framesObserved = 0;
@@ -471,7 +369,7 @@ await device.queue.onSubmittedWorkDone();
 const frameWall = Date.now() - frameStart;
 console.log(`[smoke] frames observed=${framesObserved} (wall=${frameWall}ms)`);
 
-// --- 7. Pixel readback (advisory; pixel correctness is verify-step's job) -
+// --- 7. Pixel readback ----------------------------------------------------
 
 if (!renderTarget) {
   console.error('[smoke] FAIL - renderTarget never allocated');
@@ -516,7 +414,7 @@ const pixelSamples = {};
 for (const s of sites) pixelSamples[s.name] = readBgra(s.x, s.y);
 console.log(`[smoke] pixelSamples=${JSON.stringify(pixelSamples)}`);
 
-// --- 8. Verdict --------------------------------------------------------
+// --- 8. Verdict -----------------------------------------------------------
 
 const failures = [];
 if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
@@ -526,21 +424,12 @@ const rhiErrors = errors.filter((e) =>
 if (rhiErrors.length > 0) {
   failures.push(`(c) Renderer.onError fired ${rhiErrors.length} times: [${rhiErrors.map((e) => e.code).join(', ')}]`);
 }
-// finding 6 mitigation + falsification anchor: capture the console.error
-// channel. RenderSystem.extract surfaces material/pipeline shape failures
-// via console.error, which the hello-gltf smoke missed by gating only on
-// onError. FALSIFY=missing-bridge triggers exactly this code path so the
-// smoke's gate is provably falsifiable.
 const renderConsoleErrors = consoleErrors.filter((line) => !line.startsWith('[smoke]'));
 if (renderConsoleErrors.length > 0) {
   failures.push(
     `(d) console.error fired ${renderConsoleErrors.length} times during render: [${renderConsoleErrors.slice(0, 3).join(' | ').slice(0, 300)}]`,
   );
 }
-// SMOKE_PIXEL_THRESHOLD reserved for verify-step browser harness (advisory
-// here; the dawn-node pose has the camera inside the atrium and tone-mapping
-// produces a uniform gray-blue regardless of mesh visibility -- a meshed-
-// distance gate would false-green or false-red).
 void SMOKE_PIXEL_THRESHOLD;
 
 if (failures.length > 0) {

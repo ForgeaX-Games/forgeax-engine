@@ -295,12 +295,39 @@ function countDraws(events: readonly RhiCallEvent[]): number {
 }
 
 /**
+ * Map a global drawIdx (the Nth draw/dispatch call in the tape) to its event
+ * index. `Replay.stepTo` / `commitThroughDraw` take an event index, not a draw
+ * index, so callers walk the events linearly counting draw / drawIndexed /
+ * dispatchWorkgroups occurrences. Returns -1 when the tape has fewer draws than
+ * requested. SSOT for the draw->event mapping: replayer.ts and cli.ts both
+ * import this rather than keeping private copies.
+ */
+export function findEventIdxForDraw(events: readonly RhiCallEvent[], drawIdx: number): number {
+  let count = 0;
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (ev === undefined) continue;
+    if (ev.kind === 'draw' || ev.kind === 'drawIndexed' || ev.kind === 'dispatchWorkgroups') {
+      if (count === drawIdx) return i;
+      count++;
+    }
+  }
+  return -1;
+}
+
+/**
  * Inspect a specific drawIdx within a replay session and return a structured
  * JSON report.
  *
  * Receives an **already-built** Replay (not a tape) — per D-1, Node
  * `inspectAt` and browser callers both pass an existing replay, so
  * `inspectDrawJson` does NOT call `createReplay`.
+ *
+ * Stepping is the CALLER's responsibility and decides what the `rt` field shows:
+ * for cumulative-after-N pixels (the per-draw RT inspect contract) the caller
+ * must `replay.commitThroughDraw(drawIdx)` first; for the whole composited frame
+ * the caller uses `replay.stepTo(events.length - 1)`. `readbackDrawRt` here only
+ * reads the target attachment's current GPU state — it does not step.
  *
  * @param replay - The already-constructed Replay session.
  * @param drawIdx - The global draw event index to inspect (0-based).

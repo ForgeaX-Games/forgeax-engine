@@ -9,6 +9,7 @@ export {
   type RhiCapsRecordedKey,
 } from './errors';
 export { pixelDeltaAbsMean } from './pixel-diff';
+export { readbackTexturePixels } from './readback';
 export {
   type CreateShaderModuleFn,
   type DebugRhiInstance,

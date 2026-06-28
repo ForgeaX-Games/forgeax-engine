@@ -1,5 +1,5 @@
-// pack-error-code-exhaustive.test-d - exhaustive switch over the 13-member
-// PackErrorCode union (feat-20260608-scene-nesting-ecs-fication M1 / w4).
+// pack-error-code-exhaustive.test-d - exhaustive switch over the 15-member
+// PackErrorCode union.
 //
 // Coverage (AC-09):
 //   The exhaustive switch below visits every PackErrorCode literal. If any
@@ -8,7 +8,7 @@
 //   without being added here, the same line raises TS2322. Either way tsc
 //   surfaces the drift (charter proposition 4: explicit failure).
 //
-// Members (current + 4 new from this feat, D-8 string literals):
+// Members (15; feat-20260625-asset-meta-source-mount-prefix):
 //   - pack-malformed-meta
 //   - pack-malformed-pack
 //   - pack-guid-malformed
@@ -18,14 +18,12 @@
 //   - pack-cyclic-reference
 //   - pack-subasset-index-out-of-range
 //   - payload-schema-mismatch
-//   - pack-mount-localid-overlap          (NEW; AC-04)
-//   - pack-mount-count-mismatch           (NEW; AC-05)
-//   - pack-mount-override-localid-out-of-range (NEW; AC-06)
-//   - pack-mount-override-unknown-field   (NEW; AC-07)
-//
-// TDD red signal: until w8 widens PackErrorCode to 13 members the four
-// new case clauses below are flagged TS2678 ('Type X is not comparable
-// to type PackErrorCode'). w8 turns this red into green.
+//   - pack-mount-localid-overlap
+//   - pack-mount-count-mismatch
+//   - pack-mount-override-localid-out-of-range
+//   - pack-mount-override-unknown-field
+//   - pack-unknown-path                  (NEW; feat-20260625-asset-meta-source-mount-prefix M1 / w1)
+//   - pack-malformed-path-ref            (NEW; feat-20260625-asset-meta-source-mount-prefix M1 / w1)
 
 import { describe, it } from 'vitest';
 import type { PackErrorCode } from '../index';
@@ -58,6 +56,10 @@ function exhaustivePackErrorCodeSwitch(code: PackErrorCode): string {
       return 'mount-override-localid-out-of-range';
     case 'pack-mount-override-unknown-field':
       return 'mount-override-unknown-field';
+    case 'pack-unknown-path':
+      return 'unknown-path';
+    case 'pack-malformed-path-ref':
+      return 'malformed-path-ref';
     default: {
       const _exhaustiveCheck: never = code;
       return _exhaustiveCheck;
@@ -65,7 +67,7 @@ function exhaustivePackErrorCodeSwitch(code: PackErrorCode): string {
   }
 }
 
-describe('PackErrorCode exhaustive switch (AC-09; 13 members)', () => {
+describe('PackErrorCode exhaustive switch (AC-09; 15 members)', () => {
   it('compiles when every PackErrorCode member has a matching case', () => {
     // Smoke-call so the function gets type-checked end-to-end (vitest
     // typecheck pass) instead of being tree-shaken.

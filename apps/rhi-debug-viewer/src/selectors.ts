@@ -97,3 +97,79 @@ export function rtStatusAnchor(): string {
 export function rtCanvasAnchor(): string {
   return 'data-forgeax-rt-canvas';
 }
+
+// ============================================================================
+// M7: dockview four-panel anchors (AC-13 SSOT: all data-forgeax-* only here)
+// ============================================================================
+
+/**
+ * Attribute name for data-forgeax-event-browser. Value is 'draws-only' or 'all-commands'.
+ *
+ * SSOT anchor consumed by EventBrowser panel to mark its root container.
+ * Smoke CSS selector: `[data-forgeax-event-browser]`.
+ */
+export function eventBrowserAnchor(): string {
+  return 'data-forgeax-event-browser';
+}
+
+/**
+ * Attribute name for data-forgeax-command-row. Value is the integer event index.
+ *
+ * SSOT anchor consumed by EventBrowser to mark individual command rows.
+ * Callers write: `{...{ [commandRowAnchor()]: String(eventIdx) }}`.
+ * Smoke CSS selector: `[data-forgeax-command-row="N"]`.
+ */
+export function commandRowAnchor(): string {
+  return 'data-forgeax-command-row';
+}
+
+/**
+ * Attribute name for data-forgeax-pipeline-state. Value is 'selected' or 'default'.
+ *
+ * SSOT anchor consumed by PipelineState panel to mark its container.
+ * Smoke CSS selector: `[data-forgeax-pipeline-state]`.
+ */
+export function pipelineStateAnchor(): string {
+  return 'data-forgeax-pipeline-state';
+}
+
+/**
+ * Attribute name for data-forgeax-texture-viewer. Value is 'selected' or 'default'.
+ *
+ * SSOT anchor consumed by TextureViewer panel to mark its container.
+ * Smoke CSS selector: `[data-forgeax-texture-viewer]`.
+ */
+export function textureViewerAnchor(): string {
+  return 'data-forgeax-texture-viewer';
+}
+
+/**
+ * Attribute name for data-forgeax-texture-thumbnail. Value is the integer thumbnail index.
+ *
+ * SSOT anchor consumed by TextureViewer to mark individual thumbnail entries.
+ * Smoke CSS selector: `[data-forgeax-texture-thumbnail="N"]`.
+ */
+export function textureThumbnailAnchor(): string {
+  return 'data-forgeax-texture-thumbnail';
+}
+
+/**
+ * Attribute name for data-forgeax-resource-inspector. Value is 'loaded' or 'empty'.
+ *
+ * SSOT anchor consumed by ResourceInspector panel to mark its container.
+ * Smoke CSS selector: `[data-forgeax-resource-inspector]`.
+ */
+export function resourceInspectorAnchor(): string {
+  return 'data-forgeax-resource-inspector';
+}
+
+/**
+ * Attribute name for data-forgeax-resource-row. Value is the resource handleId string.
+ *
+ * SSOT anchor consumed by ResourceInspector to mark individual resource rows.
+ * Callers write: `{...{ [resourceRowAnchor()]: handleId }}`.
+ * Smoke CSS selector: `[data-forgeax-resource-row="<handleId>"]`.
+ */
+export function resourceRowAnchor(): string {
+  return 'data-forgeax-resource-row';
+}

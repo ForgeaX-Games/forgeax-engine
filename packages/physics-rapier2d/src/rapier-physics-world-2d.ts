@@ -13,7 +13,7 @@
 
 import type { Component, EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem, Entity as EntityComponent, resolveComponent } from '@forgeax/engine-ecs';
-import { quat, type Vec2, type Vec3Like } from '@forgeax/engine-math';
+import { quat, type Vec2, type Vec3Like, vec2 } from '@forgeax/engine-math';
 import type { PhysicsWorld2D, RaycastHit2D } from '@forgeax/engine-physics';
 import {
   CharacterController,
@@ -150,8 +150,7 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
 
   getGravity(): Vec2 {
     const { x, y } = this.currentGravity;
-    // biome-ignore lint/suspicious/noExplicitAny: Vec2 is a branded Float32Array
-    return Float32Array.of(x, y) as any as Vec2;
+    return vec2.create(x, y);
   }
 
   raycast(
@@ -200,10 +199,8 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
 
     return {
       entity,
-      // biome-ignore lint/suspicious/noExplicitAny: Vec2 brand cast
-      point: Float32Array.of(point.x, point.y) as any as Vec2,
-      // biome-ignore lint/suspicious/noExplicitAny: Vec2 brand cast
-      normal: Float32Array.of(hit.normal.x, hit.normal.y) as any as Vec2,
+      point: vec2.create(point.x, point.y),
+      normal: vec2.create(hit.normal.x, hit.normal.y),
       timeOfImpact: hit.timeOfImpact,
     };
   }
@@ -345,8 +342,7 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
       ctx.world.set(entity as EntityHandle, ctx.characterController, { grounded });
     }
 
-    // biome-ignore lint/suspicious/noExplicitAny: Vec2 brand cast
-    return Float32Array.of(movement.x, movement.y) as any as Vec2;
+    return vec2.create(movement.x, movement.y);
   }
 
   /**

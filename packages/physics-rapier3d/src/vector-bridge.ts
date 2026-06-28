@@ -7,7 +7,7 @@
 // Conversions live in the backend package (not the interface package) so
 // engine-math types don't leak into the Rapier-specific layer.
 
-import type { Quat, Vec3 } from '@forgeax/engine-math';
+import { type Quat, quat, type Vec3, vec3 } from '@forgeax/engine-math';
 
 /** Convert a forgeax Vec3 (Float32Array) to a Rapier 3D vector {x,y,z}. */
 export function toRapierVec3(v: Vec3): { x: number; y: number; z: number } {
@@ -16,8 +16,7 @@ export function toRapierVec3(v: Vec3): { x: number; y: number; z: number } {
 
 /** Convert a Rapier 3D vector {x,y,z} to a forgeax Vec3 (Float32Array). */
 export function fromRapierVec3(v: { x: number; y: number; z: number }): Vec3 {
-  // biome-ignore lint/suspicious/noExplicitAny: Vec3 is a branded Float32Array
-  return Float32Array.of(v.x, v.y, v.z) as any as Vec3;
+  return vec3.create(v.x, v.y, v.z);
 }
 
 /** Convert a forgeax Quat to a Rapier 3D quaternion {w,x,y,z}. */
@@ -27,6 +26,5 @@ export function toRapierQuat(q: Quat): { w: number; x: number; y: number; z: num
 
 /** Convert a Rapier 3D quaternion {w,x,y,z} to a forgeax Quat. */
 export function fromRapierQuat(q: { w: number; x: number; y: number; z: number }): Quat {
-  // biome-ignore lint/suspicious/noExplicitAny: Quat is a branded Float32Array
-  return Float32Array.of(q.x, q.y, q.z, q.w) as any as Quat;
+  return quat.clone([q.x, q.y, q.z, q.w]);
 }

@@ -29,11 +29,12 @@ import * as path from 'node:path';
 import type { RhiDevice } from '@forgeax/engine-rhi';
 import { defaultConnect } from '@forgeax/engine-types/inspector-client';
 import { DebugError } from './errors';
+import { findEventIdxForDraw } from './inspect-core';
 import { inspectAt as inspectAtCore } from './inspector';
 import type { CreateShaderModuleFn } from './recorder';
 import { createReplay } from './replayer';
 import { deserializeTape } from './tape-format';
-import type { InspectFields, InspectReport, RhiCallEvent } from './types';
+import type { InspectFields, InspectReport } from './types';
 
 type OfflineResult =
   | { readonly ok: true; readonly value: { readonly report: InspectReport } }
@@ -319,26 +320,8 @@ export async function runInspectAt(options: {
 // Offline inspect-at entry (w23 + w24)
 // ============================================================================
 
-/**
- * Map a global drawIdx (the Nth draw call in the tape) to its event index.
- * replay.stepTo takes an event index, not a draw index, so walk the events
- * linearly counting draw / drawIndexed / dispatchWorkgroups occurrences.
- * Returns -1 when the tape contains fewer draws than requested. Mirrors the
- * same-named helper in adapter.ts (the inspector / replayer cores stay
- * untouched, OOS-5); inlined rather than shared to avoid touching adapter.ts.
- */
-function findEventIdxForDraw(events: readonly RhiCallEvent[], drawIdx: number): number {
-  let count = 0;
-  for (let i = 0; i < events.length; i++) {
-    const ev = events[i];
-    if (ev === undefined) continue;
-    if (ev.kind === 'draw' || ev.kind === 'drawIndexed' || ev.kind === 'dispatchWorkgroups') {
-      if (count === drawIdx) return i;
-      count++;
-    }
-  }
-  return -1;
-}
+// findEventIdxForDraw is the shared draw->event SSOT, imported from inspect-core
+// (drops the former local copy; the adapter.ts copy stays per OOS-5).
 
 interface DawnDevicePack {
   readonly device: RhiDevice;
@@ -527,18 +510,17 @@ export async function runOfflineInspectAt(opts: {
     };
   }
 
-  // Step through the rest of the tape, not just the draw event: the RT only
-  // holds committed pixels after the render pass is ended + the command buffer
-  // is finished + submitted. Stepping to the draw alone leaves an uncommitted
-  // (black) attachment, so readbackRt / inspector RT readback would return an
-  // all-zero frame even though bindings/drawCall are correct. For the AC-09
-  // single-frame capture contract this replays the whole frame; targetEventIdx
-  // is still validated above so an out-of-range drawIdx is rejected before
-  // replay. (findEventIdxForDraw guards the drawIdx; stepping to the end gives
-  // the actual rendered RT -- the empty-frame-falsely-passes trap otherwise.)
-  const stepResult = await replay.stepTo(tape.events.length - 1);
-  if (!stepResult.ok) {
-    return { ok: false, error: stepResult.error };
+  // Commit through the target draw: replay up to & including it, then end +
+  // finish + submit the enclosing pass so its color attachment holds the
+  // draws-0..N CUMULATIVE pixels (not the whole composited frame). This is what
+  // makes inspecting draw #N show the frame as it stood right after draw N, and
+  // is the empty-frame guard too (a mid-pass attachment is uncommitted/black, so
+  // we synthesize the commit). committed:false (depth-only / compute pass) is
+  // not an error here; the inspect report's rt field surfaces the no-color case
+  // via readbackDrawRt when 'rt' is requested.
+  const commitResult = await replay.commitThroughDraw(opts.drawIdx);
+  if (!commitResult.ok) {
+    return { ok: false, error: commitResult.error };
   }
 
   const outputDir = path.dirname(opts.tapePath);

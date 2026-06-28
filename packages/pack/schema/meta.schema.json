@@ -5,7 +5,7 @@
   "description": "Schema for .meta.json files describing an external asset package (source file + import settings + derived sub-assets).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "kind", "importer", "source", "importSettings", "subAssets"],
+  "required": ["schemaVersion", "kind", "importer", "importSettings", "subAssets"],
   "properties": {
     "schemaVersion": {
       "oneOf": [{ "type": "string" }, { "type": "integer" }],
@@ -24,7 +24,7 @@
     "source": {
       "type": "string",
       "minLength": 1,
-      "description": "Relative path to the source file from the directory containing this .meta.json."
+      "description": "Optional. Omit to derive the companion file in the same directory (strip .meta.json suffix from the meta filename). Or write @<name>/<rest> to reference a declared path table entry (see package.json#forgeax.assets.paths). Existing relative paths remain unchanged."
     },
     "importSettings": {
       "type": "object",

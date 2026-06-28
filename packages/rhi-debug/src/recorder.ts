@@ -50,6 +50,7 @@ import { err as makeErr, ok as makeOk } from '@forgeax/engine-types';
 import { DebugError } from './errors';
 import { readbackBufferBytes, readbackTexturePixels } from './readback';
 import { assembleReport, finalizeToMemory } from './recorder-core';
+import { bytesPerTexel, computeTextureLayout } from './texel-layout';
 import type {
   HandleId,
   RhiBindResourceKind,
@@ -84,10 +85,63 @@ const BUFFER_USAGE_MAP_READ = 0x01;
 const BUFFER_USAGE_MAP_WRITE = 0x02;
 const TEXTURE_USAGE_COPY_SRC = 0x01;
 
+/**
+ * True for any depth / stencil texture format. Their content is render-pass
+ * output (shadow maps, z-buffers), never an uploaded byte payload, and
+ * queue.writeTexture rejects them (no CopyDst), so the frame-header snapshot
+ * loop skips them rather than emitting an un-seedable initialData event.
+ */
+function isDepthOrStencilFormat(format: GPUTextureFormat | undefined): boolean {
+  return format !== undefined && (format.startsWith('depth') || format.startsWith('stencil'));
+}
+
+/**
+ * True for a texture the frame-header snapshot can read back AND re-seed
+ * faithfully: any uncompressed color format whose texel byte size is known
+ * (`bytesPerTexel`), at any array-layer count and any mip count. The
+ * readback + seed path (readbackTexturePixels + computeTextureLayout +
+ * replayInitialData) walks every (layer, mip) subresource with the correct
+ * bytesPerRow = mipWidth * bytesPerTexel, so rgba16float (8 B), cubemaps
+ * (6 layers), and mip chains (e.g. the IBL prefilter map: rgba16float / 6
+ * layers / 5 mips) all round-trip.
+ *
+ * Still skipped (no faithful path today, Fail Fast rather than corrupt seed):
+ * - depth/stencil formats: queue.writeTexture rejects them (no CopyDst seed).
+ * - block-compressed formats (bc/etc/astc): texel != byte-addressable row, not
+ *   in the bytesPerTexel table -> returns undefined -> skipped.
+ * - multisample (sampleCount > 1): writeTexture rejects an MSAA target. MSAA
+ *   attachments are transient (resolved into a single-sample texture that IS
+ *   snapshottable), so skipping loses no seed.
+ */
+function isSnapshottableColorTexture(
+  format: GPUTextureFormat | undefined,
+  _size: number | GPUExtent3DStrict | undefined,
+  sampleCount?: number,
+): boolean {
+  if (isDepthOrStencilFormat(format)) return false;
+  // Multisample textures reject queue.writeTexture; skip (resolved target seeds).
+  if (sampleCount !== undefined && sampleCount > 1) return false;
+  // Round-trippable iff its texel byte size is known (uncompressed color).
+  return bytesPerTexel(format) !== undefined;
+}
+
 /** Add COPY_SRC to a buffer usage unless it is a mappable (MAP_READ/WRITE) buffer. */
 function promoteBufferUsage(usage: number): number {
   if ((usage & (BUFFER_USAGE_MAP_READ | BUFFER_USAGE_MAP_WRITE)) !== 0) return usage;
   return usage | BUFFER_USAGE_COPY_SRC;
+}
+
+/**
+ * True for a mappable (MAP_READ / MAP_WRITE) buffer. These are staging buffers
+ * (e.g. shadow-probe-staging): promoteBufferUsage deliberately does NOT add
+ * COPY_SRC to them (MAP_READ|COPY_SRC is an invalid WebGPU usage combo), so they
+ * cannot be a copyBufferToBuffer source. The frame-header snapshot loop must skip
+ * them — driving readbackBufferBytes on one throws "usage doesn't include
+ * CopySrc". Their bytes are transient readback scratch, never seed payload, so
+ * losing them is correct (mirrors promoteBufferUsage's own exclusion).
+ */
+function isMappableBuffer(usage: number): boolean {
+  return (usage & (BUFFER_USAGE_MAP_READ | BUFFER_USAGE_MAP_WRITE)) !== 0;
 }
 
 import { TAPE_FORMAT_VERSION } from './tape-format';
@@ -177,6 +231,18 @@ function extentToWidthHeight(size: number | GPUExtent3DStrict | undefined): {
   return { width: w, height: h };
 }
 
+/**
+ * Project a recorded texture extent onto its array-layer count
+ * (depthOrArrayLayers). A cubemap is 6 layers; a plain 2D texture is 1. The
+ * snapshot blob covers every layer, so the layout helper needs this.
+ */
+function extentLayerCount(size: number | GPUExtent3DStrict | undefined): number {
+  if (size === undefined || typeof size === 'number') return 1;
+  if (Array.isArray(size)) return typeof size[2] === 'number' ? size[2] : 1;
+  const obj = size as { depthOrArrayLayers?: number };
+  return typeof obj.depthOrArrayLayers === 'number' ? obj.depthOrArrayLayers : 1;
+}
+
 // ============================================================================
 // Internal recorder state
 // ============================================================================
@@ -217,6 +283,8 @@ interface RecorderInternal {
       kind: 'buffer' | 'texture';
       size?: number | GPUExtent3DStrict;
       format?: GPUTextureFormat;
+      sampleCount?: number;
+      mipLevelCount?: number;
       usage: number;
       resource: object;
     }
@@ -296,7 +364,12 @@ function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]): Set<
   for (const e of events) {
     switch (e.kind) {
       case 'writeBuffer':
-      case 'clearBuffer': {
+      case 'clearBuffer':
+      // initialData seeds a pre-arm resource's bytes; its handleId must be
+      // prefix-pulled so the resource's create* event lands in the bootstrap
+      // closure (otherwise the tape references a handle with no create event ->
+      // tape-handle-graph-broken on deserialize).
+      case 'initialData': {
         const we = e as { handleId: HandleId };
         refs.add(we.handleId);
         break;
@@ -347,6 +420,43 @@ function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]): Set<
         break;
       }
       case 'setScissorRect': {
+        const we = e as { passHandleId: HandleId };
+        refs.add(we.passHandleId);
+        break;
+      }
+      case 'setBlendConstant': {
+        const we = e as { passHandleId: HandleId };
+        refs.add(we.passHandleId);
+        break;
+      }
+      case 'setStencilReference': {
+        const we = e as { passHandleId: HandleId };
+        refs.add(we.passHandleId);
+        break;
+      }
+      case 'drawIndirect': {
+        const we = e as { passHandleId: HandleId; indirectBufferHandleId: HandleId };
+        refs.add(we.passHandleId);
+        refs.add(we.indirectBufferHandleId);
+        break;
+      }
+      case 'drawIndexedIndirect': {
+        const we = e as { passHandleId: HandleId; indirectBufferHandleId: HandleId };
+        refs.add(we.passHandleId);
+        refs.add(we.indirectBufferHandleId);
+        break;
+      }
+      case 'passPushDebugGroup': {
+        const we = e as { passHandleId: HandleId };
+        refs.add(we.passHandleId);
+        break;
+      }
+      case 'passPopDebugGroup': {
+        const we = e as { passHandleId: HandleId };
+        refs.add(we.passHandleId);
+        break;
+      }
+      case 'passInsertDebugMarker': {
         const we = e as { passHandleId: HandleId };
         refs.add(we.passHandleId);
         break;
@@ -458,8 +568,14 @@ function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]): Set<
       case 'createTextureView':
         // Declaration events — no references to collect.
         break;
-      default:
+      default: {
+        // Exhaustiveness guard: if a new RhiCallEvent member is added to the
+        // union without a corresponding handle-collection case, tsc fails here.
+        // This prevents silent omission of handle references (tape-handle-graph-broken).
+        const _exhaustive: never = e;
+        void _exhaustive;
         break;
+      }
     }
   }
   return refs;
@@ -804,12 +920,24 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       return;
     }
 
-    // Armed or Snapshotting at frame end -> recording. The explicit
-    // snapshotAllLiveResources() path advances Armed -> Snapshotting ->
-    // Recording before any frame ends; this branch is the fallback for hosts
-    // that never call it (the snapshot loop is opt-in at the seam, M4 wires it
-    // into the real capture flow).
-    if (s.state === RecorderState.Armed || s.state === RecorderState.Snapshotting) {
+    // Snapshotting = the async frame-header snapshot loop is mid-flight. Its
+    // readbacks await between resources, so the host rAF loop CAN fire
+    // onFrameEnd while the loop is still pushing initialData events. If we let
+    // that tick advance the state machine (Recording -> frameMark -> Finalizing
+    // -> Idle), the still-running snapshot loop's later pushEvent() calls hit
+    // the Idle gate and are silently dropped -- the exact race that lost every
+    // texture initialData (material default textures all-zero -> black cube).
+    // Ignore the tick entirely: snapshotAllLiveResources() sets Recording when
+    // it completes, and the NEXT onFrameEnd records the real frame.
+    if (s.state === RecorderState.Snapshotting) {
+      s.bootstrap = false;
+      return;
+    }
+
+    // Armed at frame end -> recording. This is the fallback for hosts that
+    // never call snapshotAllLiveResources() (the snapshot loop is opt-in at the
+    // seam); they record straight from Armed with no frame-header snapshot.
+    if (s.state === RecorderState.Armed) {
       s.state = RecorderState.Recording;
       s.bootstrap = false;
     }
@@ -1110,11 +1238,45 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         bytes = res.value;
       } else {
         const { width, height } = extentToWidthHeight(entry.size);
+        const layout = computeTextureLayout(
+          entry.format,
+          width,
+          height,
+          extentLayerCount(entry.size),
+          entry.mipLevelCount ?? 1,
+        );
+        if (layout === undefined) {
+          // Should not happen: the snapshot loop's isSnapshottableColorTexture
+          // gate already excludes formats with no texel size. Fail fast rather
+          // than emit a corrupt seed.
+          return fail(
+            'copy',
+            'a snapshottable color format with a known texel size',
+            `format '${entry.format}' has no byte layout; the snapshot gate should have skipped it`,
+          );
+        }
         try {
-          const pixels = await readbackTexturePixels(realDevice, entry.resource, width, height);
-          bytes = pixels.buffer.slice(
-            pixels.byteOffset,
-            pixels.byteOffset + pixels.byteLength,
+          // Read every (layer, mip) subresource and concatenate tight into one
+          // blob in the canonical order computeTextureLayout defines; the seed
+          // side walks the same layout to writeTexture each slice back.
+          const blob = new Uint8Array(layout.totalBytes);
+          for (const slice of layout.slices) {
+            const sub = await readbackTexturePixels(
+              realDevice,
+              entry.resource,
+              slice.width,
+              slice.height,
+              {
+                bytesPerTexel: layout.bytesPerTexel,
+                mipLevel: slice.mip,
+                baseArrayLayer: slice.layer,
+              },
+            );
+            blob.set(sub.subarray(0, slice.byteLength), slice.byteOffset);
+          }
+          bytes = blob.buffer.slice(
+            blob.byteOffset,
+            blob.byteOffset + blob.byteLength,
           ) as ArrayBuffer;
         } catch (e) {
           return fail(
@@ -1180,7 +1342,27 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       }
     }
 
-    for (const handleId of s.descriptorTable.keys()) {
+    for (const [handleId, entry] of s.descriptorTable.entries()) {
+      // Skip mappable (MAP_READ/WRITE) staging buffers: promoteBufferUsage never
+      // gives them COPY_SRC, so readbackBufferBytes' copyBufferToBuffer throws
+      // "usage doesn't include CopySrc" (e.g. shadow-probe-staging on shadow/IBL
+      // demos). Their bytes are transient readback scratch, never seed payload.
+      if (entry.kind === 'buffer' && isMappableBuffer(entry.usage)) {
+        continue;
+      }
+      // Skip textures the readback/seed path cannot round-trip faithfully today:
+      // depth/stencil (render-pass output, writeTexture rejects them) and any
+      // non-4-byte-per-texel or multi-layer color format (rgba16float, IBL
+      // cubemaps) whose byte layout the width*4 / single-layer seed path gets
+      // wrong. Emitting an initialData for these would throw on replay; skipping
+      // is correct-but-incomplete rather than silently-corrupt (Fail Fast).
+      if (
+        entry.kind === 'texture' &&
+        (isDepthOrStencilFormat(entry.format) ||
+          !isSnapshottableColorTexture(entry.format, entry.size, entry.sampleCount))
+      ) {
+        continue;
+      }
       const res = await snapshotResource(handleId);
       if (!res.ok) return res as unknown as Result<void, DebugError>;
     }
@@ -1360,30 +1542,87 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
 
       // Pass-through methods (not in v1 event set, but must not break the proxy)
       setViewport(x, y, w, h, minDepth, maxDepth) {
+        pushEvent(s, {
+          kind: 'setViewport',
+          passHandleId: passHId,
+          x,
+          y,
+          w,
+          h,
+          minDepth: minDepth ?? 0,
+          maxDepth: maxDepth ?? 1,
+        });
         realPass.setViewport(x, y, w, h, minDepth, maxDepth);
       },
       setScissorRect(x, y, w, h) {
+        pushEvent(s, {
+          kind: 'setScissorRect',
+          passHandleId: passHId,
+          x,
+          y,
+          w,
+          h,
+        });
         realPass.setScissorRect(x, y, w, h);
       },
       setBlendConstant(color) {
+        pushEvent(s, {
+          kind: 'setBlendConstant',
+          passHandleId: passHId,
+          color,
+        });
         realPass.setBlendConstant(color);
       },
       setStencilReference(reference) {
+        // Recorded (not a no-op pass-through): stencil pipelines compare against
+        // this dynamic reference, so without it replay defaults ref=0 and any
+        // not-equal/equal stencil test (e.g. the 4.2 stencil-testing outline
+        // pass) silently breaks -- the outline vanishes on replay.
+        pushEvent(s, {
+          kind: 'setStencilReference',
+          passHandleId: passHId,
+          reference,
+        });
         realPass.setStencilReference(reference);
       },
       drawIndirect(indirectBuffer, indirectOffset) {
+        const ibId = getHandleId(s, indirectBuffer as unknown as object, 'buffer');
+        pushEvent(s, {
+          kind: 'drawIndirect',
+          passHandleId: passHId,
+          indirectBufferHandleId: ibId,
+          indirectOffset,
+        });
         realPass.drawIndirect(indirectBuffer, indirectOffset);
       },
       drawIndexedIndirect(indirectBuffer, indirectOffset) {
+        const ibId = getHandleId(s, indirectBuffer as unknown as object, 'buffer');
+        pushEvent(s, {
+          kind: 'drawIndexedIndirect',
+          passHandleId: passHId,
+          indirectBufferHandleId: ibId,
+          indirectOffset,
+        });
         realPass.drawIndexedIndirect(indirectBuffer, indirectOffset);
       },
       pushDebugGroup(groupLabel) {
+        pushEvent(s, {
+          kind: 'passPushDebugGroup',
+          passHandleId: passHId,
+          groupLabel,
+        });
         realPass.pushDebugGroup(groupLabel);
       },
       popDebugGroup() {
+        pushEvent(s, { kind: 'passPopDebugGroup', passHandleId: passHId });
         realPass.popDebugGroup();
       },
       insertDebugMarker(markerLabel) {
+        pushEvent(s, {
+          kind: 'passInsertDebugMarker',
+          passHandleId: passHId,
+          markerLabel,
+        });
         realPass.insertDebugMarker(markerLabel);
       },
       executeBundles(bundles) {
@@ -1495,25 +1734,139 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       copyBufferToBuffer(...args: unknown[]) {
         // Overloaded: 3-arg or 5-arg
         if (typeof args[1] === 'number') {
+          // 5-arg form: (source, sourceOffset, destination, destinationOffset, size)
+          const sourceId = getHandleId(s, args[0] as unknown as object, 'buffer');
+          const destinationId = getHandleId(s, args[2] as unknown as object, 'buffer');
+          pushEvent(s, {
+            kind: 'copyBufferToBuffer',
+            cmdHandleId: cmdHId,
+            sourceHandleId: sourceId,
+            sourceOffset: args[1] as number,
+            destinationHandleId: destinationId,
+            destinationOffset: args[3] as number,
+            size: args[4] as number,
+          });
           (realEnc.copyBufferToBuffer as unknown as (...args: unknown[]) => void)(...args);
         } else {
-          realEnc.copyBufferToBuffer(
-            args[0] as Buffer,
-            args[1] as Buffer,
-            args[2] as number | undefined,
-          );
+          // 3-arg form: (source, destination, size?)
+          const sourceId = getHandleId(s, args[0] as unknown as object, 'buffer');
+          const destinationId = getHandleId(s, args[1] as unknown as object, 'buffer');
+          const size = args[2] as number | undefined;
+          pushEvent(s, {
+            kind: 'copyBufferToBuffer',
+            cmdHandleId: cmdHId,
+            sourceHandleId: sourceId,
+            sourceOffset: 0,
+            destinationHandleId: destinationId,
+            destinationOffset: 0,
+            size: (size ?? 0) as number,
+          });
+          realEnc.copyBufferToBuffer(args[0] as Buffer, args[1] as Buffer, size);
         }
       },
       copyBufferToTexture(source, destination, copySize) {
+        const bufId = getHandleId(
+          s,
+          (source as { buffer: object }).buffer as unknown as object,
+          'buffer',
+        );
+        const texId = getHandleId(
+          s,
+          (destination as { texture: object }).texture as unknown as object,
+          'texture',
+        );
+        const dstPayload: Record<string, unknown> = { textureHandleId: texId };
+        if (destination.mipLevel !== undefined) dstPayload.mipLevel = destination.mipLevel;
+        if (destination.origin !== undefined) dstPayload.origin = destination.origin;
+        if (destination.aspect !== undefined) dstPayload.aspect = destination.aspect;
+        pushEvent(s, {
+          kind: 'copyBufferToTexture',
+          cmdHandleId: cmdHId,
+          source: {
+            bufferHandleId: bufId,
+            offset: source.offset ?? 0,
+            bytesPerRow: source.bytesPerRow ?? 0,
+            rowsPerImage: source.rowsPerImage ?? 0,
+          },
+          destination: dstPayload as unknown as Omit<GPUTexelCopyTextureInfo, 'texture'> & {
+            readonly textureHandleId: HandleId;
+          },
+          copySize,
+        });
         realEnc.copyBufferToTexture(source, destination, copySize);
       },
       copyTextureToBuffer(source, destination, copySize) {
+        const texId = getHandleId(
+          s,
+          (source as { texture: object }).texture as unknown as object,
+          'texture',
+        );
+        const bufId = getHandleId(
+          s,
+          (destination as { buffer: object }).buffer as unknown as object,
+          'buffer',
+        );
+        const srcPayload: Record<string, unknown> = { textureHandleId: texId };
+        if (source.mipLevel !== undefined) srcPayload.mipLevel = source.mipLevel;
+        if (source.origin !== undefined) srcPayload.origin = source.origin;
+        if (source.aspect !== undefined) srcPayload.aspect = source.aspect;
+        pushEvent(s, {
+          kind: 'copyTextureToBuffer',
+          cmdHandleId: cmdHId,
+          source: srcPayload as unknown as Omit<GPUTexelCopyTextureInfo, 'texture'> & {
+            readonly textureHandleId: HandleId;
+          },
+          destination: {
+            bufferHandleId: bufId,
+            offset: destination.offset ?? 0,
+            bytesPerRow: destination.bytesPerRow ?? 0,
+            rowsPerImage: destination.rowsPerImage ?? 0,
+          },
+          copySize,
+        });
         realEnc.copyTextureToBuffer(source, destination, copySize);
       },
       copyTextureToTexture(source, destination, copySize) {
+        const srcTexId = getHandleId(
+          s,
+          (source as { texture: object }).texture as unknown as object,
+          'texture',
+        );
+        const dstTexId = getHandleId(
+          s,
+          (destination as { texture: object }).texture as unknown as object,
+          'texture',
+        );
+        const srcPayload: Record<string, unknown> = { textureHandleId: srcTexId };
+        if (source.mipLevel !== undefined) srcPayload.mipLevel = source.mipLevel;
+        if (source.origin !== undefined) srcPayload.origin = source.origin;
+        if (source.aspect !== undefined) srcPayload.aspect = source.aspect;
+        const dstPayload: Record<string, unknown> = { textureHandleId: dstTexId };
+        if (destination.mipLevel !== undefined) dstPayload.mipLevel = destination.mipLevel;
+        if (destination.origin !== undefined) dstPayload.origin = destination.origin;
+        if (destination.aspect !== undefined) dstPayload.aspect = destination.aspect;
+        pushEvent(s, {
+          kind: 'copyTextureToTexture',
+          cmdHandleId: cmdHId,
+          source: srcPayload as unknown as Omit<GPUTexelCopyTextureInfo, 'texture'> & {
+            readonly textureHandleId: HandleId;
+          },
+          destination: dstPayload as unknown as Omit<GPUTexelCopyTextureInfo, 'texture'> & {
+            readonly textureHandleId: HandleId;
+          },
+          copySize,
+        });
         realEnc.copyTextureToTexture(source, destination, copySize);
       },
       clearBuffer(buffer, offset, size) {
+        const bufId = getHandleId(s, buffer as unknown as object, 'buffer');
+        pushEvent(s, {
+          kind: 'clearBuffer',
+          cmdHandleId: cmdHId,
+          handleId: bufId,
+          offset,
+          size,
+        });
         realEnc.clearBuffer(buffer, offset, size);
       },
       resolveQuerySet(querySet, firstQuery, queryCount, destination, destinationOffset) {
@@ -1529,12 +1882,15 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         realEnc.writeTimestamp(querySet, queryIndex);
       },
       pushDebugGroup(groupLabel) {
+        pushEvent(s, { kind: 'pushDebugGroup', cmdHandleId: cmdHId, groupLabel });
         realEnc.pushDebugGroup(groupLabel);
       },
       popDebugGroup() {
+        pushEvent(s, { kind: 'popDebugGroup', cmdHandleId: cmdHId });
         realEnc.popDebugGroup();
       },
       insertDebugMarker(markerLabel) {
+        pushEvent(s, { kind: 'insertDebugMarker', cmdHandleId: cmdHId, markerLabel });
         realEnc.insertDebugMarker(markerLabel);
       },
       finish() {
@@ -1647,6 +2003,8 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
           kind: 'texture',
           size: desc.size ?? { width: 1, height: 1 },
           format: desc.format ?? ('bgra8unorm' as GPUTextureFormat),
+          ...(desc.sampleCount !== undefined ? { sampleCount: desc.sampleCount } : {}),
+          ...(desc.mipLevelCount !== undefined ? { mipLevelCount: desc.mipLevelCount } : {}),
           usage: promotedUsage,
           resource: texResource,
         });

@@ -90,6 +90,20 @@ export function createDebugRhiAdapter(args: CreateDebugRhiAdapterArgs): DebugRhi
         throw armResult.error;
       }
 
+      // Frame-header snapshot (roadmap Phase 1 §5, wires the snapshot loop into
+      // the real capture flow — the "M4" seam noted at recorder.ts onFrameEnd).
+      // Resources uploaded during the loading phase (VBO/IBO/instance buffers)
+      // were writeBuffer'd BEFORE arm(), so the recorder never saw those writes;
+      // without seeding their bytes into initialData events the replayed buffers
+      // are all-zero -> vertices collapse to the origin -> black RT. Snapshotting
+      // advances Armed -> Snapshotting -> Recording and must complete before the
+      // first frame's commands record (it drains in-flight writes via
+      // onSubmittedWorkDone, so the captured bytes are the pre-frame content).
+      const snapResult = await debugInst.snapshotAllLiveResources();
+      if (!snapResult.ok) {
+        throw snapResult.error;
+      }
+
       // Wait until recorder finishes the requested frames. The host's
       // rAF loop drives onFrameEnd; the recorder transitions back to
       // idle once `frames` frame-marks have been emitted.

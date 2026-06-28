@@ -1531,3 +1531,123 @@ console.log('import-hdr-test entry');
     });
   });
 }
+
+{
+  // ─── AC-6/AC-7 integration: catalog row sourcePath with resolveAssetSource (w15) ───
+
+  const AC67_IMAGE_GUID = '019e2cc6-0c86-79da-aa76-b0984c86f101';
+  const ONE_BYTE_FILE = new Uint8Array([0xff]);
+
+  function ac67ImageMeta(source?: string): string {
+    return JSON.stringify({
+      schemaVersion: '1.0.0',
+      kind: 'external-asset-package',
+      importer: 'image',
+      source,
+      importSettings: { colorSpace: 'srgb', mipmap: 'auto' },
+      subAssets: [{ guid: AC67_IMAGE_GUID, sourceIndex: 0, kind: 'image' }],
+    });
+  }
+
+  describe('w15-AC-6-catalog-row-sourcepath.test.ts', () => {
+    let originalCwd: string;
+    let tmpRoot: string;
+
+    beforeEach(async () => {
+      originalCwd = process.cwd();
+      tmpRoot = await mkdtemp(join(tmpdir(), 'forgeax-ac6-'));
+      process.chdir(tmpRoot);
+    });
+
+    afterEach(async () => {
+      process.chdir(originalCwd);
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('AC-6: explicit source=test.png → catalog row sourcePath endswith test.png', async () => {
+      await writeFile(join(tmpRoot, 'test.png.meta.json'), ac67ImageMeta('test.png'));
+      await writeFile(join(tmpRoot, 'test.png'), ONE_BYTE_FILE);
+
+      const result = await buildCatalogStrict([tmpRoot]);
+      expect(result.errors).toHaveLength(0);
+      expect(result.catalog).toHaveLength(1);
+      const row = result.catalog[0];
+      expect(row).toBeDefined();
+      if (row) {
+        expect(row.sourcePath.endsWith('test.png')).toBe(true);
+        expect(row.kind).toBe('texture');
+        expect(row.guid.toLowerCase()).toBe(AC67_IMAGE_GUID);
+      }
+    });
+
+    it('AC-6: omitted source (=derive) → catalog row sourcePath ends with derived filename', async () => {
+      // meta file: Inter.atlas.png.meta.json — derived source = Inter.atlas.png
+      await writeFile(join(tmpRoot, 'Inter.atlas.png.meta.json'), ac67ImageMeta(undefined));
+      await writeFile(join(tmpRoot, 'Inter.atlas.png'), ONE_BYTE_FILE);
+
+      const result = await buildCatalogStrict([tmpRoot]);
+      expect(result.errors).toHaveLength(0);
+      expect(result.catalog).toHaveLength(1);
+      const row = result.catalog[0];
+      expect(row).toBeDefined();
+      if (row) {
+        expect(row.sourcePath.endsWith('Inter.atlas.png')).toBe(true);
+      }
+    });
+
+    it('AC-6: @name/ path prefix → catalog row sourcePath resolves into declared path dir', async () => {
+      // path-table dir lives OUTSIDE the scan root (the whole point of @name/
+      // is cross-directory reference). Declared in package.json#forgeax.assets.paths.
+      const sharedDir = join(tmpRoot, 'shared-lib', 'assets');
+      await mkdir(sharedDir, { recursive: true });
+      await writeFile(join(sharedDir, 'cross.png'), ONE_BYTE_FILE);
+      await writeFile(
+        join(tmpRoot, 'package.json'),
+        JSON.stringify({
+          name: 'ac6-paths-tmp',
+          forgeax: { assets: { paths: { shared: 'shared-lib/assets' } } },
+        }),
+      );
+      const scanRoot = join(tmpRoot, 'metas');
+      await mkdir(scanRoot, { recursive: true });
+      await writeFile(join(scanRoot, 'cross.png.meta.json'), ac67ImageMeta('@shared/cross.png'));
+
+      const result = await buildCatalogStrict([scanRoot]);
+      expect(result.errors).toHaveLength(0);
+      expect(result.catalog).toHaveLength(1);
+      const row = result.catalog[0];
+      expect(row).toBeDefined();
+      if (row) {
+        expect(row.sourcePath.endsWith('shared-lib/assets/cross.png')).toBe(true);
+        expect(row.guid.toLowerCase()).toBe(AC67_IMAGE_GUID);
+      }
+    });
+
+    it('AC-7: relative path sub/dir/tex.png resolved correctly in catalog', async () => {
+      const subDir = join(tmpRoot, 'sub', 'dir');
+      await mkdir(subDir, { recursive: true });
+      await writeFile(
+        join(subDir, 'tex.png.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'image',
+          source: 'tex.png',
+          importSettings: {},
+          subAssets: [{ guid: AC67_IMAGE_GUID, sourceIndex: 0, kind: 'image' }],
+        }),
+      );
+      await writeFile(join(subDir, 'tex.png'), ONE_BYTE_FILE);
+
+      const result = await buildCatalogStrict([tmpRoot]);
+      expect(result.errors).toHaveLength(0);
+      expect(result.catalog).toHaveLength(1);
+      const row = result.catalog[0];
+      expect(row).toBeDefined();
+      if (row) {
+        const absSourcePath = join(tmpRoot, row.sourcePath);
+        expect(absSourcePath.endsWith('tex.png')).toBe(true);
+      }
+    });
+  });
+}

@@ -394,10 +394,14 @@ export async function generatePassPng(
 
   const drawIdx = passOffset.endDrawIdx;
 
-  // Step replay to end of pass
-  const stepResult = await replay.stepTo(drawIdx);
-  if (!stepResult.ok) {
-    return err(stepResult.error);
+  // Commit through the pass's last draw so the color attachment holds that pass's
+  // committed pixels. (Previously this passed the global drawIdx to stepTo, which
+  // expects an EVENT index, and never committed the pass — so non-final passes
+  // read back wrong/uncommitted pixels. commitThroughDraw takes a draw index and
+  // synthesizes the end+finish+submit.)
+  const commitResult = await replay.commitThroughDraw(drawIdx);
+  if (!commitResult.ok) {
+    return err(commitResult.error);
   }
 
   // Read back and encode PNG

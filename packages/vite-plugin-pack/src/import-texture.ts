@@ -27,6 +27,7 @@ import type {
   PackIndexEntry,
   TextureAsset,
 } from '@forgeax/engine-types';
+import { read as ddcRead, write as ddcWrite, keyFor } from './ddc-cache.js';
 
 /** Options for {@link importTextureEntry}. */
 export interface ImportTextureOptions {
@@ -98,20 +99,46 @@ export async function importTextureEntry(
     };
   }
 
+  // Read the source bytes up front. They are needed both to derive the
+  // content-addressed build-DDC key (D-2: key = hash(sourceBytes) +
+  // hash(importSettings)) and -- on a cache miss -- by the importer's
+  // `readSource`. Reading once avoids a double read.
+  let sourceBytes: Uint8Array;
+  try {
+    sourceBytes = new Uint8Array(await readFile(sourceAbs));
+  } catch (e) {
+    return {
+      skipped: `failed to read source ${entry.sourcePath}: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+      real: true,
+    };
+  }
+
+  // `importSettings` carries the colorSpace / mipmap the catalog already
+  // derived so the importer folds the same texture format -- and is the
+  // settings half of the DDC key (D-2).
+  const importSettings = { colorSpace: meta.colorSpace, mipmap: meta.mipmap };
+
+  // Build-time DDC (D-1): the decode is deterministic for a given
+  // (source bytes, import settings), so a cache hit returns the previously
+  // decoded RGBA bytes + metadata and skips `imageImporter.import` entirely.
+  // The cache lives at the decoded-bytes seam BEFORE the caller's emitFile, so
+  // a hit still flows through emitFile + getFileName unchanged (hashed names +
+  // pack-index stay byte-identical to a cold build). Fail-open: a missing /
+  // unwritable cache simply decodes.
+  const ddcKey = keyFor(sourceBytes, importSettings);
+  const cached = ddcRead(opts.cwd, ddcKey);
+  if (cached !== null) {
+    return { bytes: cached.bytes, metadata: cached.metadata };
+  }
+
   // Build the one-subAsset ImportContext (GUID import-stable iron law: the
-  // produced GUID is the entry's GUID). `readSource` reads the source bytes
-  // lazily; `importSettings` carries the colorSpace / mipmap the catalog
-  // already derived so the importer folds the same texture format.
+  // produced GUID is the entry's GUID). `readSource` returns the bytes we
+  // already read above.
   const ctx: ImportContext = {
     source: sourceAbs,
-    readSource: async () => {
-      try {
-        const buf = await readFile(sourceAbs);
-        return { ok: true, value: new Uint8Array(buf) };
-      } catch (e) {
-        return { ok: false, error: e };
-      }
-    },
+    readSource: async () => ({ ok: true, value: sourceBytes }),
     // image-source-bare cook does not chase sibling refs nor invoke the
     // decodeImage seam (gltfImporter is the only consumer of those today);
     // wire fail-fast stubs so the gap is loud if a future importer reaches
@@ -123,7 +150,7 @@ export async function importTextureEntry(
       );
     },
     subAssets: [{ guid: entry.guid, sourceIndex: 0, kind: 'image' }],
-    importSettings: { colorSpace: meta.colorSpace, mipmap: meta.mipmap },
+    importSettings,
   };
   let produced: readonly { guid: string; payload: unknown }[];
   try {
@@ -149,15 +176,16 @@ export async function importTextureEntry(
     imported.data instanceof Uint8Array
       ? imported.data
       : new Uint8Array(imported.data.buffer, imported.data.byteOffset, imported.data.byteLength);
-  return {
-    bytes,
-    metadata: {
-      kind: 'texture',
-      width: imported.width,
-      height: imported.height,
-      format: meta.format,
-      colorSpace: meta.colorSpace,
-      mipmap: meta.mipmap,
-    },
+  const metadata: ImageMetadata = {
+    kind: 'texture',
+    width: imported.width,
+    height: imported.height,
+    format: meta.format,
+    colorSpace: meta.colorSpace,
+    mipmap: meta.mipmap,
   };
+  // Populate the build DDC so the next build with identical (source, settings)
+  // hits and skips this decode (D-1). Fail-open inside ddcWrite.
+  ddcWrite(opts.cwd, ddcKey, { bytes, metadata });
+  return { bytes, metadata };
 }

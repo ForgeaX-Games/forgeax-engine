@@ -1,8 +1,10 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { PackErrorCode } from '@forgeax/engine-types';
 import { MATERIAL_PARAM_TYPES, PACK_ERROR_HINTS } from '@forgeax/engine-types';
+import { loadAssetConfig } from './config.js';
 import { PackError } from './errors.js';
+import { resolveAssetSource } from './resolve-asset-source.js';
 import { buildMaterialAssetValidator, validateMeta, validatePack } from './schema-compiled.js';
 
 // Minimal Result<T, E> — structurally compatible with @forgeax/engine-rhi Result
@@ -268,6 +270,7 @@ export async function scan(
   }
 
   // Step 2 + 3 + 5: parse + schema validate + GUID format validate + orphan check for meta files
+  const { paths: assetPaths } = loadAssetConfig(process.cwd());
   for (const metaPath of metaPaths) {
     let parsed: unknown;
     try {
@@ -297,7 +300,7 @@ export async function scan(
 
     // Step 3: validate GUIDs in meta subAssets
     const metaObj = parsed as {
-      source: string;
+      source?: string;
       subAssets: { guid: string; sourceIndex: number }[];
     };
     for (const sub of metaObj.subAssets) {
@@ -311,9 +314,14 @@ export async function scan(
       }
     }
 
-    // Step 5: orphan .meta.json check — the source file declared in meta.source must exist
-    const metaDir = dirname(metaPath);
-    const expectedSourcePath = join(metaDir, metaObj.source);
+    // Step 5: orphan .meta.json check — the source file declared in meta.source must exist.
+    // Uses resolveAssetSource for three-mode dispatch (undefined derivation / @name/ path table /
+    // relative path), replacing the former hardcoded join(metaDir, metaObj.source).
+    const sourceResolved = resolveAssetSource(metaPath, metaObj.source, assetPaths);
+    if (!sourceResolved.ok) {
+      return packErr(sourceResolved.error);
+    }
+    const expectedSourcePath = sourceResolved.value;
     try {
       await stat(expectedSourcePath);
     } catch {

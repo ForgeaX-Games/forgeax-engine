@@ -49,8 +49,22 @@ interface PendingTrigger {
   resolve: (result: TriggerResult) => void;
 }
 
-/** Standard base64 (RFC 4648) -- canonical padding, no whitespace. */
-const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+// Standard base64 (RFC 4648) -- canonical padding, no whitespace. Validated with
+// two flat (no nested-quantifier) regexes so a large blob does not blow the V8
+// regex stack: `(?:[A-Za-z0-9+/]{4})*` recurses per 4-char group and throws
+// RangeError on multi-MB initialData payloads. CHARS checks the alphabet + at
+// most 2 trailing '=' in a single linear pass; the length-multiple-of-4 and
+// padding-position constraints are enforced separately below.
+const BASE64_CHARS = /^[A-Za-z0-9+/]*={0,2}$/;
+
+/** Validate canonical RFC 4648 base64 without nested-quantifier backtracking. */
+function isValidBase64(s: string): boolean {
+  if (s.length % 4 !== 0) return false;
+  if (!BASE64_CHARS.test(s)) return false;
+  // '=' may appear only as the final 1-2 chars; the flat regex already pins
+  // padding to the tail, so a length-multiple-of-4 + alphabet match is sufficient.
+  return true;
+}
 
 type ParseResult =
   | { readonly ok: true; readonly body: TapeBody }
@@ -79,7 +93,7 @@ function parseTapeBody(raw: unknown): ParseResult {
       hint: 'blobBase64 must be a base64 string of the tape blob',
     };
   }
-  if (!BASE64_RE.test(b.blobBase64)) {
+  if (!isValidBase64(b.blobBase64)) {
     return {
       ok: false,
       error: 'invalid-blobBase64',

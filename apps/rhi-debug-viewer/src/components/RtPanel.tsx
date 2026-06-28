@@ -80,24 +80,28 @@ export function RtPanel({ selectedDrawIdx, tape, viewModel }: RtPanelProps) {
 
       const { replay, device } = sessionResult.value;
 
-      // The replay session is cached and reused across draw selections (C7), and
-      // stepTo only moves forward — re-selecting a draw after the first render
-      // leaves currentEventIdx at the end, so a second stepTo(eventCount-1) hits
-      // replay-step-out-of-range. reset() rewinds to event 0 (destroying the
-      // recreated handles) so every selection replays the full frame cleanly.
+      // The replay session is cached and reused across draw selections (C7).
+      // commitThroughDraw is monotonic-forward like stepTo, so reset() first to
+      // rewind to event 0 (destroying the recreated handles) before re-targeting
+      // a (possibly earlier) draw.
       replay.reset();
 
-      // Step the replay to the end of all events so the full frame (including
-      // the color pass + its submit) is replayed before reading back. The draw
-      // event index in the raw events array may not match drawIdx, but stepping
-      // to the end guarantees the RT holds committed pixels.
-      const eventCount = tape.events.length;
-      const stepResult = await replay.stepTo(eventCount - 1);
+      // Commit through the SELECTED draw: replay up to & including it, then end +
+      // finish + submit the enclosing pass so the color attachment holds the
+      // draws-0..N cumulative pixels — selecting draw #N shows the frame as it
+      // stood right after draw N (not the final composited frame). committed:
+      // false means the draw is in a depth-only or compute pass (no color RT) —
+      // render the no-rt state.
+      const commitResult = await replay.commitThroughDraw(selectedDrawIdx);
       if (cancelled) return;
 
-      if (!stepResult.ok) {
+      if (!commitResult.ok) {
         setStatus('error');
-        setErrorMessage(`Replay stepTo failed: ${stepResult.error.code}`);
+        setErrorMessage(`Replay commitThroughDraw failed: ${commitResult.error.code}`);
+        return;
+      }
+      if (!commitResult.value.committed) {
+        setStatus('no-rt');
         return;
       }
 

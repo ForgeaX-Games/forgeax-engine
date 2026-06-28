@@ -53,7 +53,15 @@ import type {
   Tape,
 } from './types';
 
-export const TAPE_FORMAT_VERSION = 2 as const;
+export const TAPE_FORMAT_VERSION = 3 as const;
+
+/**
+ * Set of tape format versions accepted by this runtime's deserializer.
+ * v2 tapes (with initialData events, without new v3 event kinds) are
+ * accepted via backward-compat; new v3 events are naturally absent in
+ * v2 data (D-9). serialize always writes `formatVersion = TAPE_FORMAT_VERSION` (3).
+ */
+export const SUPPORTED_TAPE_VERSIONS = new Set<number>([2, 3]);
 
 // ============================================================================
 // Local Result factories (mirrors recorder.ts pattern)
@@ -206,13 +214,14 @@ export function deserializeTape(json: string, blob: Uint8Array): Result<Tape, De
     );
   }
 
-  // m4-2: formatVersion reject
-  if (header.formatVersion !== TAPE_FORMAT_VERSION) {
+  // formatVersion reject: accept SUPPORTED_TAPE_VERSIONS (D-2: {2,3})
+  if (!SUPPORTED_TAPE_VERSIONS.has(header.formatVersion)) {
+    const supported = Array.from(SUPPORTED_TAPE_VERSIONS).join(', ');
     return makeErr(
       new DebugError({
         code: 'tape-format-version-mismatch',
-        expected: `formatVersion = ${TAPE_FORMAT_VERSION}`,
-        hint: `this runtime expects formatVersion ${TAPE_FORMAT_VERSION} but the tape has formatVersion ${header.formatVersion}; re-record the tape with a compatible runtime`,
+        expected: `formatVersion ∈ {${supported}}`,
+        hint: `this runtime accepts formatVersion ${supported} but the tape has formatVersion ${header.formatVersion}; re-record the tape with a compatible runtime`,
         detail: {
           tapeVersion: header.formatVersion,
           expectedVersion: TAPE_FORMAT_VERSION,
@@ -502,6 +511,53 @@ function findDanglingHandleId(event: RhiCallEvent, declared: Set<HandleId>): Han
       if (!declared.has(e.cmdHandleId)) return e.cmdHandleId;
       return null;
     }
+    // v3 new event kinds (w7)
+    case 'setBlendConstant': {
+      type E = { readonly kind: 'setBlendConstant'; readonly passHandleId: string };
+      const e = event as unknown as E;
+      if (!declared.has(e.passHandleId)) return e.passHandleId;
+      return null;
+    }
+    case 'drawIndirect': {
+      type E = {
+        readonly kind: 'drawIndirect';
+        readonly passHandleId: string;
+        readonly indirectBufferHandleId: string;
+      };
+      const e = event as unknown as E;
+      if (!declared.has(e.passHandleId)) return e.passHandleId;
+      if (!declared.has(e.indirectBufferHandleId)) return e.indirectBufferHandleId;
+      return null;
+    }
+    case 'drawIndexedIndirect': {
+      type E = {
+        readonly kind: 'drawIndexedIndirect';
+        readonly passHandleId: string;
+        readonly indirectBufferHandleId: string;
+      };
+      const e = event as unknown as E;
+      if (!declared.has(e.passHandleId)) return e.passHandleId;
+      if (!declared.has(e.indirectBufferHandleId)) return e.indirectBufferHandleId;
+      return null;
+    }
+    case 'passPushDebugGroup': {
+      type E = { readonly kind: 'passPushDebugGroup'; readonly passHandleId: string };
+      const e = event as unknown as E;
+      if (!declared.has(e.passHandleId)) return e.passHandleId;
+      return null;
+    }
+    case 'passPopDebugGroup': {
+      type E = { readonly kind: 'passPopDebugGroup'; readonly passHandleId: string };
+      const e = event as unknown as E;
+      if (!declared.has(e.passHandleId)) return e.passHandleId;
+      return null;
+    }
+    case 'passInsertDebugMarker': {
+      type E = { readonly kind: 'passInsertDebugMarker'; readonly passHandleId: string };
+      const e = event as unknown as E;
+      if (!declared.has(e.passHandleId)) return e.passHandleId;
+      return null;
+    }
     case 'frameMark':
     case 'createBuffer':
     case 'createTexture':
@@ -586,6 +642,8 @@ export function computePassOffsets(events: readonly RhiCallEvent[]): PassOffset[
     } else if (
       (event.kind === 'draw' ||
         event.kind === 'drawIndexed' ||
+        event.kind === 'drawIndirect' ||
+        event.kind === 'drawIndexedIndirect' ||
         event.kind === 'dispatchWorkgroups') &&
       inPass
     ) {

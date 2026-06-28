@@ -5,7 +5,7 @@
 // Returns null when the viewProj is near-singular (determinant ~ 0).
 // No staging / GPU concerns; consumed by DebugDraw class.
 
-import type { Mat4 } from '@forgeax/engine-math';
+import { type Mat4, mat4 } from '@forgeax/engine-math';
 
 function at(m: { readonly [index: number]: number }, i: number): number {
   return m[i] as number;
@@ -43,7 +43,7 @@ export function frustumVertices(viewProj: Mat4): [number, number, number][] | nu
 
   // 4x4 inverse via cofactor expansion
   const invDet = 1.0 / det;
-  const inv = new Array<number>(16) as unknown as Mat4;
+  const inv = mat4.create();
   inv[0] =
     (at(m, 5) * (at(m, 10) * at(m, 15) - at(m, 14) * at(m, 11)) -
       at(m, 9) * (at(m, 6) * at(m, 15) - at(m, 14) * at(m, 7)) +

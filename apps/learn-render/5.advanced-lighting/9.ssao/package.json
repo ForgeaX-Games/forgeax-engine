@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "learn-render LearnOpenGL section 5.advanced-lighting 9.ssao -- HDRP SSAO with config.ssao.enabled=true, cube+sphere scene with floor plane.",
+  "description": "learn-render LearnOpenGL section 5.advanced-lighting 9.ssao -- HDRP SSAO with config.ssao.enabled=true; enclosing room + backpack.gltf model + dim light + Skylight ambient (faithful LO 5.9 SSAO scene).",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -43,10 +43,14 @@
     "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-gltf": "workspace:*",
+    "@forgeax/engine-image": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.70",
     "vite": "8.0.10"

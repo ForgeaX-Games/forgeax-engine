@@ -52,6 +52,9 @@ function asReplay(stub: StubReplayWithMocks): Replay {
       ok: false,
       error: new DebugError({ code: 'rt-readback-failed', expected: 'mocked', hint: 'mocked' }),
     }) as Replay['readbackRt'],
+    commitThroughDraw: vi
+      .fn()
+      .mockResolvedValue({ ok: true, value: { committed: true } }) as Replay['commitThroughDraw'],
     _events: stub.events,
   };
 }

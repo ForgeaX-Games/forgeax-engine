@@ -32,6 +32,8 @@ function fakeViewModel(): ViewModel {
     ],
     draws: [],
     meta: { totalDraws: 2, totalPasses: 1, hasCompute: false },
+    commands: [],
+    resources: new Map(),
   };
 }
 

@@ -57,4 +57,4 @@ Synth assets -> registerWithGuid -> world.spawn(Skin + AnimationPlayer)
 > [!NOTE]
 > PR #361（feat-20260611-fox-skinning-vertex-attribute-chain）落地时 Fox 渲染**bind-pose 静态**——layer-1..4（VBO + BGL + PSO + record-stage BG）已通，但 palette UBO 是 16320 B identity-mat4 静态 stub。feat-20260612 接通了 `AnimationPlayer` -> `advanceAnimationPlayer` -> `propagateTransforms` -> `extractFrame hasSkin` 段 -> `SkinPaletteAllocator` -> record-stage dynOffset 全链，三只 Fox 在 Survey / Walk / Run 下真动起来。
 
-详见 [`packages/runtime/README.md` §SkinPaletteAllocator](../../../packages/runtime/README.md#skinpaletteallocator-feat-20260612-skin-palette-per-frame-upload) + [`forgeax-engine-render-pipeline` §skin palette per-frame upload](../../../skills/forgeax-engine-render-pipeline/SKILL.md#skin-palette-per-frame-upload-feat-20260612)。
+详见 [`packages/runtime/README.md` §SkinPaletteAllocator](../../../packages/runtime/README.md#skinpaletteallocator-skin-palette-per-frame-upload) + [`forgeax-engine-render-pipeline` §skin palette per-frame upload](../../../skills/forgeax-engine-render-pipeline/SKILL.md#skin-palette-per-frame-upload-feat-20260612)。

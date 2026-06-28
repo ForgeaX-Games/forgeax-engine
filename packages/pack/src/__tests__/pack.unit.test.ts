@@ -1746,3 +1746,310 @@ const V1_WHITELIST = new Set([
     });
   });
 }
+
+{
+  // ─── AC-17:+AC-5+AC-10 scanner orphan with resolveAssetSource (w14+w15) ───
+
+  interface TestMeta {
+    schemaVersion: string;
+    kind: string;
+    importer: string;
+    source?: string;
+    importSettings: Record<string, unknown>;
+    subAssets: { guid: string; sourceIndex: number; kind: string }[];
+  }
+
+  function makeMeta(overrides: Partial<TestMeta> = {}): string {
+    return JSON.stringify({
+      schemaVersion: '1.0.0',
+      kind: 'external-asset-package',
+      importer: 'image',
+      source: 'test.png',
+      importSettings: {},
+      subAssets: [{ guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'image' }],
+      ...overrides,
+    });
+  }
+
+  describe('w14-scanner-orphan-optional.test.ts — AC-17 falsification', () => {
+    let tmpDir: string;
+
+    beforeEach(async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), 'forgeax-ac17-'));
+    });
+    afterEach(async () => {
+      await rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it('AC-17: omitted source + no companion file → pack-orphan-meta with derived expectedFile', async () => {
+      const metaContent = makeMeta({ source: undefined });
+      await writeFile(join(tmpDir, 'ghost.png.meta.json'), metaContent);
+      // Do NOT create ghost.png — omitted source derives to ghost.png, which is missing
+
+      const result = await scan([tmpDir]);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('pack-orphan-meta');
+        if (result.error.code === 'pack-orphan-meta') {
+          expect(result.error.detail.metaPath).toContain('ghost.png.meta.json');
+          expect(result.error.detail.expectedFile).toContain('ghost.png');
+          expect(result.error.detail.expectedFile.endsWith('ghost.png')).toBe(true);
+        }
+      }
+    });
+
+    it('AC-17: omitted source + companion file exists → scan passes (derivation succeeds)', async () => {
+      const metaContent = makeMeta({ source: undefined });
+      await writeFile(join(tmpDir, 'test.png.meta.json'), metaContent);
+      await writeFile(join(tmpDir, 'test.png'), Buffer.from('fake png'));
+
+      const result = await scan([tmpDir]);
+      expect(result.ok).toBe(true);
+    });
+
+    it('AC-17: explicit source=hero.png + companion file → scan passes (backward compat)', async () => {
+      await writeFile(join(tmpDir, 'hero.png.meta.json'), makeMeta({ source: 'hero.png' }));
+      await writeFile(join(tmpDir, 'hero.png'), Buffer.from('fake png'));
+
+      const result = await scan([tmpDir]);
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  describe('w15-scanner-path-integration.test.ts — AC-5+AC-10', () => {
+    let tmpDir: string;
+
+    beforeEach(async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), 'forgeax-ac5-'));
+    });
+    afterEach(async () => {
+      await rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it('AC-5: @name/ path resolves correctly when file exists', async () => {
+      const libDir = join(tmpDir, 'lib');
+      await mkdir(libDir);
+      await writeFile(join(libDir, 'shared.png'), Buffer.from('fake png'));
+      const metaContent = JSON.stringify({
+        schemaVersion: '1.0.0',
+        kind: 'external-asset-package',
+        importer: 'image',
+        source: '@shared/shared.png',
+        importSettings: {},
+        subAssets: [
+          { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'image' },
+        ],
+      });
+      await writeFile(join(tmpDir, 'ref.meta.json'), metaContent);
+
+      // The scan runs inside its own process.cwd() — paths table resolution uses cwd
+      // The tmpDir is not the cwd, so @shared/ will report pack-unknown-path.
+      // AC-5: we need the path table to be configured at the scan's cwd.
+      // For a unit test, we verify instead via resolveAssetSource directly:
+      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
+      const paths = { shared: libDir };
+      const result = resolveAS(join(tmpDir, 'ref.meta.json'), '@shared/shared.png', paths);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(join(libDir, 'shared.png'));
+      }
+    });
+
+    it('AC-10: path configured but file missing → pack-orphan-meta', async () => {
+      const libDir = join(tmpDir, 'lib');
+      await mkdir(libDir);
+      // Do NOT create missing.png in libDir
+      const metaContent = JSON.stringify({
+        schemaVersion: '1.0.0',
+        kind: 'external-asset-package',
+        importer: 'image',
+        source: '@shared/missing.png',
+        importSettings: {},
+        subAssets: [
+          { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'image' },
+        ],
+      });
+      await writeFile(join(tmpDir, 'ref.meta.json'), metaContent);
+
+      // resolveAssetSource resolves the path but does not stat — the resolved path will be returned ok
+      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
+      const paths = { shared: libDir };
+      const result = resolveAS(join(tmpDir, 'ref.meta.json'), '@shared/missing.png', paths);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(join(libDir, 'missing.png'));
+        // The actual orphan check (stat) is done by the scanner caller
+      }
+    });
+
+    it('AC-10: scanner reports pack-orphan-meta when resolved path file does not exist', async () => {
+      const metaContent = makeMeta({ source: 'nowhere.png' });
+      await writeFile(join(tmpDir, 'orphan.meta.json'), metaContent);
+      // Do NOT create nowhere.png
+
+      const result = await scan([tmpDir]);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('pack-orphan-meta');
+        if (result.error.code === 'pack-orphan-meta') {
+          expect(result.error.detail.expectedFile).toContain('nowhere.png');
+        }
+      }
+    });
+  });
+
+  describe('scanner @name/ end-to-end via cwd package.json — AC-5/AC-8', () => {
+    let tmpDir: string;
+    let originalCwd: string;
+
+    beforeEach(async () => {
+      originalCwd = process.cwd();
+      tmpDir = await mkdtemp(join(tmpdir(), 'forgeax-ac5e2e-'));
+      process.chdir(tmpDir);
+    });
+    afterEach(async () => {
+      process.chdir(originalCwd);
+      await rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it('AC-5: scan() passes orphan check for @name/ meta when cwd package.json path table resolves to an existing file', async () => {
+      const sharedDir = join(tmpDir, 'shared-lib', 'assets');
+      await mkdir(sharedDir, { recursive: true });
+      await writeFile(join(sharedDir, 'cross.png'), Buffer.from('fake png'));
+      await writeFile(
+        join(tmpDir, 'package.json'),
+        JSON.stringify({
+          name: 'ac5-e2e-tmp',
+          forgeax: { assets: { paths: { shared: 'shared-lib/assets' } } },
+        }),
+      );
+      const scanRoot = join(tmpDir, 'metas');
+      await mkdir(scanRoot, { recursive: true });
+      await writeFile(
+        join(scanRoot, 'cross.png.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'image',
+          source: '@shared/cross.png',
+          importSettings: {},
+          subAssets: [
+            { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'image' },
+          ],
+        }),
+      );
+
+      const result = await scan([scanRoot]);
+      expect(result.ok).toBe(true);
+    });
+
+    it('AC-8: scan() reports pack-unknown-path when @name/ references an undeclared path name', async () => {
+      await writeFile(
+        join(tmpDir, 'package.json'),
+        JSON.stringify({ name: 'ac8-e2e-tmp', forgeax: { assets: { paths: {} } } }),
+      );
+      const scanRoot = join(tmpDir, 'metas');
+      await mkdir(scanRoot, { recursive: true });
+      await writeFile(
+        join(scanRoot, 'x.png.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'image',
+          source: '@nope/x.png',
+          importSettings: {},
+          subAssets: [
+            { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'image' },
+          ],
+        }),
+      );
+
+      const result = await scan([scanRoot]);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('pack-unknown-path');
+      }
+    });
+  });
+}
+
+{
+  // ─── AC-1 regression w15 — resolveAssetSource explicit source backwards compat ───
+
+  describe('w15-AC-1-regression.test.ts', () => {
+    it('AC-1: explicit source=foo.png with resolveAssetSource == resolve(metaDir, foo.png)', async () => {
+      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
+      const { resolve } = await import('node:path');
+      const metaPath = '/home/you/assets/foo.png.meta.json';
+      const result = resolveAS(metaPath, 'foo.png', {});
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(resolve('/home/you/assets', 'foo.png'));
+      }
+    });
+
+    it('AC-1: explicit source=sub/deep.png with resolveAssetSource == resolve(metaDir, sub/deep.png)', async () => {
+      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
+      const { resolve } = await import('node:path');
+      const metaPath = '/home/you/assets/main.meta.json';
+      const result = resolveAS(metaPath, 'sub/deep.png', {});
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(resolve('/home/you/assets', 'sub/deep.png'));
+      }
+    });
+
+    it('AC-1: omitted source derives from meta filename', async () => {
+      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
+      const { resolve } = await import('node:path');
+      const metaPath = '/home/you/assets/foo.png.meta.json';
+      const result = resolveAS(metaPath, undefined, {});
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(resolve('/home/you/assets', 'foo.png'));
+      }
+    });
+  });
+
+  // ─── AC-5/AC-10 source path table scanner integration (w15) ───
+
+  describe('w15-AC-5-AC-10-path-table.test.ts', () => {
+    it('AC-5: @shared/ resource resolves correctly when path table configured', async () => {
+      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
+      const { resolve } = await import('node:path');
+      const metaPath = '/project/assets/ref.meta.json';
+      const paths = { shared: '/project/lib' };
+      const result = resolveAS(metaPath, '@shared/tex.png', paths);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(resolve('/project/lib', 'tex.png'));
+      }
+    });
+
+    it('AC-5: @shared/ with nested rest path', async () => {
+      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
+      const { resolve } = await import('node:path');
+      const metaPath = '/project/assets/ref.meta.json';
+      const paths = { shared: '/project/lib' };
+      const result = resolveAS(metaPath, '@shared/sub/dir/tex.png', paths);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(resolve('/project/lib', 'sub/dir/tex.png'));
+      }
+    });
+
+    it('AC-10: @unknown/ path name → pack-unknown-path error', async () => {
+      const { resolveAssetSource: resolveAS } = await import('../resolve-asset-source.js');
+      const metaPath = '/project/assets/ref.meta.json';
+      const result = resolveAS(metaPath, '@nope/tex.png', {});
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('pack-unknown-path');
+        if (result.error.code === 'pack-unknown-path') {
+          expect(result.error.detail.pathName).toBe('nope');
+          expect(result.error.detail.knownNames).toEqual([]);
+        }
+      }
+    });
+  });
+}

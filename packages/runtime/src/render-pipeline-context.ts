@@ -303,6 +303,20 @@ export interface _StandardForwardSceneView {
    * identical to no plan.
    */
   readonly foldDispatchPlan: import('./render-system-fold').FoldDispatchPlan | null;
+  /**
+   * @internal — feat-20260612-hdrp-ssao wiring fix.
+   *
+   * The compiled `ssaoBlurred` graph-transient TextureView, resolved inside the
+   * HDRP forward pass execute closure (the only place `resolveCtx` is live) and
+   * stashed here for recordMainPass to build the SSAO-enabled unified group(2)
+   * bind group. `undefined` when SSAO is disabled or on URP frames — then
+   * recordMainPass keeps the white-fallback bind group (identity AO=1.0).
+   *
+   * Mutable (not readonly): the forward pass closure assigns it per frame just
+   * before delegating to recordMainPass. The group(2) bind group cannot carry
+   * the view ahead of graph.execute because the texture is a graph transient.
+   */
+  hdrpSsaoBlurredView?: import('@forgeax/engine-rhi').TextureView;
 }
 
 /**

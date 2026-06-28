@@ -38,6 +38,16 @@
       "types": "./dist/deriveAssetName.d.ts",
       "import": "./dist/name.mjs"
     },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "node": "./dist/config.mjs",
+      "default": null
+    },
+    "./resolve": {
+      "types": "./dist/resolve-asset-source.d.ts",
+      "node": "./dist/resolve-asset-source.mjs",
+      "default": null
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",

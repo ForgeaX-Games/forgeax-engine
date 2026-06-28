@@ -1,23 +1,38 @@
 // apps/learn-render/5.advanced-lighting/9.ssao/src/main.ts
 // LearnOpenGL section 5.9 — Screen-Space Ambient Occlusion.
 //
-// LO 5.9 extends 5.8 deferred-shading by enabling SSAO on the same scene
-// (9-cube 3x3 grid + 32 point lights, glibc seed=13). The visual delta is
-// AO darkening at cube-floor contact edges + cube-cube cluster corners.
+// Faithful to the LearnOpenGL 5.9 scene:
+//   - an enclosing room the camera sits inside (LO scales one cube to 7.5 with
+//     inverted normals; the engine's deferred g-buffer pass uses default
+//     back-face culling, so SSAO would not see an inverted cube's inner walls —
+//     we build the same box from inward-facing slabs instead, which the
+//     g-buffer renders correctly);
+//   - ONE detailed model resting on the floor: the SAME backpack LO 5.9 uses
+//     (`forgeax-engine-assets/learn-opengl/objects/backpack/backpack.gltf`,
+//     converted from the upstream LearnOpenGL `backpack.obj`). Loaded as a
+//     SceneAsset by GUID + instantiated — the gltfImporter already wired its
+//     diffuse / specular / normal textures, so SSAO reads its many straps,
+//     buckles and pockets as crease AO;
+//   - ONE dim light-blue point light (LO `lightColor=(0.2,0.2,0.7)`);
+//   - a dominant ambient term that SSAO modulates. LO computes
+//     `ambient = vec3(0.3) * AO`; the engine's ambient comes from Skylight/IBL,
+//     so a solid-color Skylight at low intensity reproduces the 0.3 constant
+//     ambient that SSAO darkens.
 //
-// Scene parity SSOT: the 5.8 main.ts numerical set + spawn structure is
-// reproduced verbatim here; the only delta is `config.ssao = { enabled: true }`
-// on the HDRP RenderPipelineAsset and a slightly tighter camera so AO contact
-// shadows are unambiguous.
+// SSAO darkens the ambient term in creases / concave corners / contact seams.
+// SSAO reads the deferred g-buffer (normal + depth), so EVERY surface that
+// should receive AO is drawn with `Materials.standard` (deferred + forward).
+//
+// SSAO is turned on by one literal field on the HDRP RenderPipelineAsset config
+// (`config.ssao = { enabled: true }`). `FALSIFY=ssao-off` disables it for A/B.
 //
 // Charter mapping:
-//   - F1 single-entry indexability: SSAO turn-on is one literal field on the
-//     HDRP config; AI users should not need to read the SSAO source to wire it.
+//   - F1 single-entry indexability: SSAO turn-on is one literal field.
 //   - P3 explicit failure: bad ssao.radius / ssao.bias raise PostProcessError.
 //
 // GREP anchors for AI users:
 //   - "// 1. engine usage"    public engine API consumed
-//   - "// 2. scene constants" LO 5.8.1 numerical set + RNG (parity with 5.8)
+//   - "// 2. scene constants" room + model + light + SSAO config
 //   - "// 3. bootstrap"       entry point wiring
 
 // 1. engine usage
@@ -26,6 +41,7 @@ import { createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import {
   Camera,
+  createDevImportTransport,
   EngineEnvironmentError,
   HANDLE_CUBE,
   HDRP_PIPELINE_ID,
@@ -34,82 +50,63 @@ import {
   MeshRenderer,
   perspective,
   PointLight,
+  Skylight,
   Transform,
 } from '@forgeax/engine-runtime';
-import type { Handle, MaterialAsset } from '@forgeax/engine-types';
+import type { MaterialAsset, SceneAsset } from '@forgeax/engine-types';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
-// 2. scene constants — parity with 5.8 deferred-shading + 5.9 SSAO config
+// 2. scene constants — faithful LO 5.9 SSAO scene (room + model)
 
-const NUM_LIGHTS = 32;
 const CLUSTER_GRID = { x: 16, y: 9, z: 24 } as const;
-const CUBE_SCALE = 0.5;
-const CUBE_SPACING = 3.0;
-const CUBE_Y = -0.5;
+const PACK_INDEX_URL = '/pack-index.json';
 
-// Floor below the cube grid; large flat slab so SSAO has clear contact-edge
-// darkening to render. Not in the 5.8 scene; added here because the AO effect
-// reads strongest at object-floor contact, which 5.8 doesn't have.
+// Enclosing room: floor + ceiling + back/left/right walls, each a thin slab
+// with inward-facing surfaces (default culling, all in the g-buffer). The box
+// spans [-ROOM, ROOM] horizontally and [FLOOR_Y, FLOOR_Y + 2*ROOM] vertically.
+const ROOM = 5.0;
 const FLOOR_Y = -1.0;
-const FLOOR_SCALE_XZ = 8.0;
-const FLOOR_SCALE_Y = 0.1;
-const FLOOR_COLOR: [number, number, number, number] = [0.6, 0.6, 0.6, 1];
+const SLAB_T = 0.1; // slab half-thickness scale
+const ROOM_COLOR: [number, number, number, number] = [0.73, 0.73, 0.73, 1];
 
-// SSAO tuning: radius=0.5, bias=0.025, intensity=1.0 (LO 5.9 defaults).
+// LearnOpenGL backpack (forgeax-engine-assets/learn-opengl/objects/backpack/
+// backpack.gltf — vendored via `scripts/convert-objects.mjs` from the upstream
+// LO `backpack.obj`, byte-determinism verified). Loaded as a SceneAsset and
+// instantiated under a placement parent entity (scale + yaw + rest-on-floor),
+// so the vendored gltf stays pristine. The gltfImporter already wired the
+// diffuse / specular / normal sub-asset textures. THE SSAO showcase model.
+const BACKPACK_SCENE_GUID = AssetGuid.parse('019f0414-203f-75e8-b952-c58b7b7ae04b');
+
+// Backpack native bbox: extent ~3.7 x 4.6 x 3.5, min-y ~ -1.74. Scale 0.95,
+// yaw 35deg so straps + side pockets catch the rim light, and lift so the
+// bottom pouch rests on the floor (floor top = FLOOR_Y + SLAB_T).
+const BACKPACK_SCALE = 0.95;
+const BACKPACK_YAW = (35 * Math.PI) / 180;
+// The native bbox min-y (-1.74) belongs to a dangling strap, not the bag body;
+// the visible bottom pouch sits ~0.2 above it, so an empirical drop plants the
+// pouch on the floor for a crisp contact-shadow seam.
+const BACKPACK_POS_Y = FLOOR_Y + SLAB_T - -1.74 * BACKPACK_SCALE - 0.55;
+
+// Single dim light-blue point light (LO `lightColor=(0.2,0.2,0.7)`).
+const LIGHT_POS: [number, number, number] = [2.0, 4.0, 2.0];
+const LIGHT_COLOR: [number, number, number] = [0.45, 0.45, 0.9];
+const LIGHT_INTENSITY = 5.0;
+const LIGHT_RANGE = 25.0;
+
+// Skylight = the constant ambient term SSAO modulates (LO's `vec3(0.3) * AO`).
+// Solid color (no cubemap) so it is live on frame 0 with no async IBL.
+const SKYLIGHT_COLOR: [number, number, number] = [0.85, 0.85, 0.9];
+const SKYLIGHT_INTENSITY = 0.7;
+
+// SSAO tuning: LO 5.9 defaults radius=0.5, bias=0.025; intensity is the engine
+// dial for how strongly AO darkens ambient.
 const SSAO_CONFIG = {
   enabled: true,
   radius: 0.5,
   bias: 0.025,
-  intensity: 1.0,
+  intensity: 0.9,
 } as const;
-
-// glibc-compatible LCG: matches `srand(13)` + `rand()` from LO 5.8.1.
-// Verbatim from apps/learn-render/5.advanced-lighting/8.deferred-shading/src/main.ts.
-function glibcRand(state: number): [number, number] {
-  const next = ((state * 1103515245 + 12345) >>> 0) & 0x7fffffff;
-  const value = (next >> 16) & 0x7fff;
-  return [next, value];
-}
-
-function randomPosition(state: number): [number, number, number, number] {
-  const [s1, xv] = glibcRand(state);
-  const [s2, yv] = glibcRand(s1);
-  const [s3, zv] = glibcRand(s2);
-  const x = ((xv % 100) / 100.0) * 6.0 - 3.0;
-  const y = ((yv % 100) / 100.0) * 6.0 - 3.0;
-  const z = ((zv % 100) / 100.0) * 6.0 - 3.0;
-  return [x, y, z, s3];
-}
-
-function randomColor(state: number): [number, number, number, number] {
-  const [s1, rv] = glibcRand(state);
-  const [s2, gv] = glibcRand(s1);
-  const [s3, bv] = glibcRand(s2);
-  const r = ((rv % 100) / 200.0) + 0.5;
-  const g = ((gv % 100) / 200.0) + 0.5;
-  const b = ((bv % 100) / 200.0) + 0.5;
-  return [r, g, b, s3];
-}
-
-function generateLightData(): Array<{
-  posX: number; posY: number; posZ: number;
-  colorR: number; colorG: number; colorB: number;
-}> {
-  let state = 13;
-  const lights: Array<{
-    posX: number; posY: number; posZ: number;
-    colorR: number; colorG: number; colorB: number;
-  }> = [];
-  for (let i = 0; i < NUM_LIGHTS; i++) {
-    const [px, py, pz, sa] = randomPosition(state);
-    const [cr, cg, cb, sb] = randomColor(sa);
-    state = sb;
-    lights.push({ posX: px, posY: py, posZ: pz, colorR: cr, colorG: cg, colorB: cb });
-  }
-  return lights;
-}
-
-const LIGHT_DATA = generateLightData();
 
 const FALSIFY = (() => {
   if (typeof window !== 'undefined') {
@@ -137,7 +134,11 @@ bootstrap(canvas).catch((err: unknown) => {
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const appRes = await createApp(target, {}, forgeaxBundlerAdapter());
+  const appRes = await createApp(
+    target,
+    {},
+    { ...forgeaxBundlerAdapter(), importTransport: createDevImportTransport() },
+  );
   if (!appRes.ok) {
     reportAppError(appRes.error);
     return;
@@ -156,6 +157,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 5.9 ssao] AssetRegistry is null');
     return;
   }
+  assets.configurePackIndex(PACK_INDEX_URL);
 
   // Wire the __learnRenderErrors bus for onerror-gate coverage.
   const bus = (globalThis as unknown as { __learnRenderErrors?: Array<{ code: string; hint?: string }> }).__learnRenderErrors;
@@ -167,10 +169,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const world = app.world;
 
-  // AC-01: install HDRP with config.ssao. feat-20260614 M8 (D-19):
-  // installPipeline takes the RenderPipelineAsset POD directly (no register
-  // round-trip; the AssetRegistry holds no handle concept). Type narrowing
-  // from pipelineId, no `as` assertion.
+  // Install HDRP with config.ssao.
   const ssaoEnabled = FALSIFY !== 'ssao-off';
   const installRes = app.renderer.installPipeline({
     kind: 'render-pipeline',
@@ -189,120 +188,130 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // Floor material. feat-20260614 M8 (D-17): mint a user-tier column handle
-  // directly via world.allocSharedRef (returns a bare Handle, not a Result).
-  const floorMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    Materials.standard({ baseColor: FLOOR_COLOR }),
-  );
-
-  // Floor: large thin slab below the cube grid. Distinct from 5.8 scene —
-  // 5.9 needs explicit ground plane so AO at object-floor contact is visible.
-  world.spawn(
-    {
-      component: Transform,
-      data: {
-        posX: 0,
-        posY: FLOOR_Y,
-        posZ: 0,
-        quatW: 1,
-        scaleX: FLOOR_SCALE_XZ,
-        scaleY: FLOOR_SCALE_Y,
-        scaleZ: FLOOR_SCALE_XZ,
-      },
+  // Skylight: the constant ambient term SSAO modulates.
+  world.spawn({
+    component: Skylight,
+    data: {
+      colorR: SKYLIGHT_COLOR[0],
+      colorG: SKYLIGHT_COLOR[1],
+      colorB: SKYLIGHT_COLOR[2],
+      intensity: SKYLIGHT_INTENSITY,
     },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [floorMatHandle] } },
-  ).unwrap();
+  });
 
-  // Cube colors: 9 distinct hues for the 3x3 grid (parity with 5.8).
-  const cubeColors: Array<[number, number, number]> = [
-    [1.0, 0.3, 0.3], [0.3, 1.0, 0.3], [0.3, 0.3, 1.0],
-    [1.0, 1.0, 0.3], [0.3, 1.0, 1.0], [1.0, 0.3, 1.0],
-    [0.7, 0.7, 0.3], [0.3, 0.7, 0.7], [0.7, 0.3, 0.7],
+  // Enclosing room: 5 inward-facing slabs (floor, ceiling, back + 2 side walls).
+  // All standard materials so they appear in the deferred g-buffer SSAO samples;
+  // the wall/floor corners are the concave AO hot-spots.
+  const roomMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
+    'MaterialAsset',
+    Materials.standard({ baseColor: ROOM_COLOR, roughness: 0.95 }),
+  );
+  const CEIL_Y = FLOOR_Y + 2 * ROOM;
+  const slabs: Array<{ pos: [number, number, number]; scale: [number, number, number] }> = [
+    { pos: [0, FLOOR_Y, 0], scale: [ROOM, SLAB_T, ROOM] }, // floor
+    { pos: [0, CEIL_Y, 0], scale: [ROOM, SLAB_T, ROOM] }, // ceiling
+    { pos: [0, FLOOR_Y + ROOM, -ROOM], scale: [ROOM, ROOM, SLAB_T] }, // back wall
+    { pos: [-ROOM, FLOOR_Y + ROOM, 0], scale: [SLAB_T, ROOM, ROOM] }, // left wall
+    { pos: [ROOM, FLOOR_Y + ROOM, 0], scale: [SLAB_T, ROOM, ROOM] }, // right wall
   ];
-
-  // Spawn 9 cubes in 3x3 grid at y=-0.5, spacing 3.0 (parity with 5.8).
-  const cubeHandles: Handle<'MaterialAsset', 'shared'>[] = [];
-  let idx = 0;
-  for (let row = 0; row < 3; row++) {
-    for (let col = 0; col < 3; col++) {
-      const cx = (col - 1) * CUBE_SPACING;
-      const cz = (row - 1) * CUBE_SPACING;
-      const [r, g, b] = cubeColors[idx]!;
-
-      const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-        'MaterialAsset',
-        Materials.standard({ baseColor: [r, g, b, 1] }),
-      );
-      cubeHandles.push(matHandle);
-
-      world.spawn(
-        {
-          component: Transform,
-          data: {
-            posX: cx, posY: CUBE_Y, posZ: cz,
-            quatW: 1,
-            scaleX: CUBE_SCALE, scaleY: CUBE_SCALE, scaleZ: CUBE_SCALE,
-          },
-        },
-        { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-        { component: MeshRenderer, data: { materials: [matHandle] } },
-      ).unwrap();
-      idx++;
-    }
-  }
-
-  // Spawn 32 point lights from the pre-computed deterministic seed=13 data
-  // (parity with 5.8). Each light gets a small light-box visualisation cube.
-  for (let i = 0; i < NUM_LIGHTS; i++) {
-    const ld = LIGHT_DATA[i]!;
-    world.spawn(
-      {
-        component: Transform,
-        data: { posX: ld.posX, posY: ld.posY, posZ: ld.posZ, quatW: 1 },
-      },
-      {
-        component: PointLight,
-        data: {
-          colorR: ld.colorR,
-          colorG: ld.colorG,
-          colorB: ld.colorB,
-          intensity: 1.0,
-          range: 6.0,
-        },
-      },
-    );
-
+  for (const s of slabs) {
     world.spawn(
       {
         component: Transform,
         data: {
-          posX: ld.posX, posY: ld.posY, posZ: ld.posZ,
+          posX: s.pos[0],
+          posY: s.pos[1],
+          posZ: s.pos[2],
           quatW: 1,
-          scaleX: 0.125, scaleY: 0.125, scaleZ: 0.125,
+          scaleX: s.scale[0],
+          scaleY: s.scale[1],
+          scaleZ: s.scale[2],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-      { component: MeshRenderer, data: { materials: [cubeHandles[0]!] } },
-    );
+      { component: MeshRenderer, data: { materials: [roomMat] } },
+    ).unwrap();
   }
 
-  // Camera at (0, 1.5, 6) looking -Z (parity with 5.8). Eye height 1.5 +
-  // cube grid at y=-0.5 keeps both the cube tops and the floor visible so
-  // SSAO contact-edge darkening reads clearly.
+  // The SSAO showcase model: LearnOpenGL backpack, loaded as a SceneAsset and
+  // instantiated. The gltfImporter already produced the SceneAsset + every
+  // referenced mesh / material / texture sub-asset; the runtime resolves the
+  // cross-refs transparently. Placement (scale + yaw + rest-on-floor) lives on
+  // a parent entity passed to instantiate(), so the vendored gltf stays pristine
+  // and transform propagation lands the whole 79-node tree at the contact seam.
+  if (!BACKPACK_SCENE_GUID.ok) {
+    console.error('[learn-render 5.9 ssao] invalid backpack scene GUID');
+    return;
+  }
+  const sceneRes = await assets.loadByGuid<SceneAsset>(BACKPACK_SCENE_GUID.value);
+  if (!sceneRes.ok) {
+    console.error('[learn-render 5.9 ssao] loadByGuid<SceneAsset>(backpack) failed:', sceneRes.error.code, sceneRes.error.hint);
+    if (bus !== undefined) bus.push({ code: sceneRes.error.code, hint: sceneRes.error.hint });
+    return;
+  }
+  const placementRes = world.spawn({
+    component: Transform,
+    data: {
+      posX: 0,
+      posY: BACKPACK_POS_Y,
+      posZ: 0,
+      quatX: 0,
+      quatY: Math.sin(BACKPACK_YAW / 2),
+      quatZ: 0,
+      quatW: Math.cos(BACKPACK_YAW / 2),
+      scaleX: BACKPACK_SCALE,
+      scaleY: BACKPACK_SCALE,
+      scaleZ: BACKPACK_SCALE,
+    },
+  });
+  if (!placementRes.ok) {
+    console.error('[learn-render 5.9 ssao] backpack placement spawn failed:', placementRes.error);
+    return;
+  }
+  const sceneHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
+  const instRes = assets.instantiate<SceneAsset>(sceneHandle, world, placementRes.value);
+  if (!instRes.ok) {
+    const e = instRes.error as { code: string; hint?: string };
+    console.error('[learn-render 5.9 ssao] backpack scene instantiate failed:', e.code, e.hint);
+    if (bus !== undefined) bus.push({ code: e.code, ...(e.hint !== undefined ? { hint: e.hint } : {}) });
+    return;
+  }
+
+  // Single dim light-blue point light (LO uses one light; ambient dominates).
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 1.5, posZ: 6.0, quatW: 1 },
+      data: { posX: LIGHT_POS[0], posY: LIGHT_POS[1], posZ: LIGHT_POS[2], quatW: 1 },
+    },
+    {
+      component: PointLight,
+      data: {
+        colorR: LIGHT_COLOR[0],
+        colorG: LIGHT_COLOR[1],
+        colorB: LIGHT_COLOR[2],
+        intensity: LIGHT_INTENSITY,
+        range: LIGHT_RANGE,
+      },
+    },
+  );
+
+  // Camera inside the room, looking at the rock so its crevices + the floor
+  // contact + the room corners (the AO showcase) fill the frame. Pitched down.
+  const pitch = -0.22;
+  const qx = Math.sin(pitch / 2);
+  const qw = Math.cos(pitch / 2);
+  world.spawn(
+    {
+      component: Transform,
+      data: { posX: 0, posY: 2.2, posZ: 7.5, quatX: qx, quatW: qw },
     },
     {
       component: Camera,
       data: {
         ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 50 }),
-        clearR: 0.02,
-        clearG: 0.02,
-        clearB: 0.04,
+        clearR: 0.04,
+        clearG: 0.04,
+        clearB: 0.06,
       },
     },
   ).unwrap();
@@ -313,7 +322,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   console.warn(
-    `[learn-render 5.9 ssao] running. SSAO=${ssaoEnabled ? 'enabled' : 'OFF'} (radius=${SSAO_CONFIG.radius}, bias=${SSAO_CONFIG.bias}, intensity=${SSAO_CONFIG.intensity}). 9-cube 3x3 grid + 32 point lights + floor (parity with 5.8 deferred-shading).`,
+    `[learn-render 5.9 ssao] running. SSAO=${ssaoEnabled ? 'enabled' : 'OFF'} (radius=${SSAO_CONFIG.radius}, bias=${SSAO_CONFIG.bias}, intensity=${SSAO_CONFIG.intensity}). Enclosing room + backpack.gltf model + Skylight ambient + 1 dim light (LO 5.9 SSAO scene).`,
   );
 }
 

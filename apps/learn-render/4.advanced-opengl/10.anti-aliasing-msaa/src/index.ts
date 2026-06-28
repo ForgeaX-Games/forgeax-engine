@@ -32,7 +32,7 @@
 //   (5) app.start()
 
 import { createApp } from '@forgeax/engine-app';
-import type { CanvasAppError } from '@forgeax/engine-app';
+import type { App, CanvasAppError } from '@forgeax/engine-app';
 
 import {
   ANTIALIAS_MSAA,
@@ -221,6 +221,29 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   console.warn('[msaa] running. Press Space to toggle MSAA.');
+
+  installCaptureHook(app, world);
+}
+
+// RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
+// one update + draw + readPixels so the live canvas read is anchored to the same
+// frame the capture records. Only meaningful when the page is served with
+// FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
+function installCaptureHook(app: App, world: App['world']): void {
+  type CaptureHook = () => Promise<Uint8Array>;
+  const win = window as unknown as { __captureAntiAliasingMsaa?: CaptureHook };
+  const renderer = app.renderer;
+  win.__captureAntiAliasingMsaa = async (): Promise<Uint8Array> => {
+    world.update();
+    renderer.draw(world);
+    const r = await renderer.readPixels();
+    if (!r.ok) {
+      throw new Error(
+        `[learn-render 4.10 anti-aliasing-msaa] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+      );
+    }
+    return r.value;
+  };
 }
 
 function reportAppError(err: CanvasAppError | EngineEnvironmentError): void {
@@ -235,6 +258,7 @@ function reportAppError(err: CanvasAppError | EngineEnvironmentError): void {
 
 declare global {
   interface Window {
+    __captureAntiAliasingMsaa?: () => Promise<Uint8Array>;
     __learnRenderErrors?: Array<{ code: string; hint?: string }>;
   }
 }

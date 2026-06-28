@@ -16,6 +16,7 @@ import {
   PER_EVENT_OVERHEAD,
   wrap,
 } from '../recorder';
+import { TAPE_FORMAT_VERSION } from '../tape-format';
 import type { Tape } from '../types';
 
 // ---------------------------------------------------------------
@@ -289,7 +290,7 @@ describe('recorder state machine', () => {
     debugInst.onFrameEnd();
     const tape = debugInst.getTape() as any;
     expect(tape).toBeDefined();
-    expect(tape?.formatVersion).toBe(2);
+    expect(tape?.formatVersion).toBe(TAPE_FORMAT_VERSION);
     expect(tape?.events.some((e: any) => e.kind === 'frameMark')).toBe(true);
   });
 });
@@ -753,7 +754,7 @@ describe('finalize golden byte comparison (w4)', () => {
       expect(report1).toHaveProperty('events');
       expect(report1).toHaveProperty('passOffsets');
       expect(report1).toHaveProperty('valid');
-      expect(report1.header).toHaveProperty('formatVersion', 2);
+      expect(report1.header).toHaveProperty('formatVersion', TAPE_FORMAT_VERSION);
       expect(Array.isArray(report1.events)).toBe(true);
       expect(Array.isArray(report1.passOffsets)).toBe(true);
       expect(typeof report1.valid).toBe('boolean');

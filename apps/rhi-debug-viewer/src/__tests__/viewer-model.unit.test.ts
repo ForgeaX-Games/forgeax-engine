@@ -519,3 +519,251 @@ describe('buildViewModel — empty pass before draw pass (F-3)', () => {
     }
   });
 });
+
+// ============================================================================
+// w12 tests — extended ViewModel fields (commands, resources, pipelineState, vertexBuffers, depthStencil)
+// ============================================================================
+
+function makeExtendedViewModelFixtureEvents(): readonly RhiCallEvent[] {
+  const events: RhiCallEvent[] = [
+    // -- Bootstrap creates --
+    {
+      kind: 'createBuffer',
+      handleId: 'buf:vbo',
+      desc: { size: 72, usage: 0x20 as GPUBufferUsageFlags },
+    },
+    {
+      kind: 'createBuffer',
+      handleId: 'buf:ibo',
+      desc: { size: 12, usage: 0x20 as GPUBufferUsageFlags },
+    },
+    {
+      kind: 'createShaderModule',
+      handleId: 'shader:vs',
+      wgslCode: '@vertex fn main() -> @builtin(position) vec4f { return vec4f(0.0); }',
+    },
+    {
+      kind: 'createShaderModule',
+      handleId: 'shader:fs',
+      wgslCode: '@fragment fn main() -> @location(0) vec4f { return vec4f(1.0); }',
+    },
+    {
+      kind: 'createRenderPipeline',
+      handleId: 'pipe:1',
+      desc: {
+        vertex: {
+          module: undefined as unknown as GPUShaderModule,
+          entryPoint: 'main',
+          buffers: [
+            {
+              arrayStride: 12,
+              stepMode: 'vertex' as GPUVertexStepMode,
+              attributes: [
+                { format: 'float32x3' as GPUVertexFormat, offset: 0, shaderLocation: 0 },
+              ],
+            },
+          ],
+        },
+        primitive: {
+          topology: 'triangle-list' as GPUPrimitiveTopology,
+          cullMode: 'back' as GPUCullMode,
+          frontFace: 'ccw' as GPUFrontFace,
+        },
+        depthStencil: {
+          format: 'depth32float' as GPUTextureFormat,
+          depthWriteEnabled: true,
+          depthCompare: 'less' as GPUCompareFunction,
+          stencilFront: {
+            compare: 'always' as GPUCompareFunction,
+            failOp: 'keep' as GPUStencilOperation,
+            depthFailOp: 'keep' as GPUStencilOperation,
+            passOp: 'keep' as GPUStencilOperation,
+          },
+          stencilBack: {
+            compare: 'always' as GPUCompareFunction,
+            failOp: 'keep' as GPUStencilOperation,
+            depthFailOp: 'keep' as GPUStencilOperation,
+            passOp: 'keep' as GPUStencilOperation,
+          },
+          stencilReadMask: 0xff,
+          stencilWriteMask: 0xff,
+          depthBias: 0,
+          depthBiasSlopeScale: 0,
+          depthBiasClamp: 0,
+        },
+        multisample: {
+          count: 1,
+          mask: 0xffffffff,
+          alphaToCoverageEnabled: false,
+        },
+        fragment: {
+          module: undefined as unknown as GPUShaderModule,
+          entryPoint: 'main',
+          targets: [
+            {
+              format: 'bgra8unorm' as GPUTextureFormat,
+              blend: {
+                color: {
+                  srcFactor: 'src-alpha' as GPUBlendFactor,
+                  dstFactor: 'one-minus-src-alpha' as GPUBlendFactor,
+                  operation: 'add' as GPUBlendOperation,
+                },
+                alpha: {
+                  srcFactor: 'one' as GPUBlendFactor,
+                  dstFactor: 'one-minus-src-alpha' as GPUBlendFactor,
+                  operation: 'add' as GPUBlendOperation,
+                },
+              },
+              writeMask: 0xf as GPUColorWriteFlags,
+            },
+          ],
+        },
+      },
+      layoutHandleId: 'layout:1',
+      vertexShaderModuleHandleId: 'shader:vs',
+      fragmentShaderModuleHandleId: 'shader:fs',
+    },
+    {
+      kind: 'frameMark',
+      frameIdx: 0,
+    },
+    // -- Render pass with depth attachment + setVertexBuffer + setBlendConstant + draw --
+    {
+      kind: 'beginRenderPass',
+      cmdHandleId: 'cmd:1',
+      passHandleId: 'pass:1',
+      desc: {
+        colorAttachments: [
+          {
+            view: undefined as unknown as GPUTextureView,
+            loadOp: 'clear' as GPULoadOp,
+            storeOp: 'store' as GPUStoreOp,
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          },
+        ],
+        depthStencilAttachment: {
+          view: undefined as unknown as GPUTextureView,
+          depthLoadOp: 'clear' as GPULoadOp,
+          depthStoreOp: 'store' as GPUStoreOp,
+          depthClearValue: 1.0,
+        },
+      },
+      colorAttachmentViewHandleIds: ['tv:color'],
+      depthStencilViewHandleId: 'tv:depth',
+    },
+    {
+      kind: 'setPipeline',
+      passHandleId: 'pass:1',
+      pipelineHandleId: 'pipe:1',
+    },
+    {
+      kind: 'setVertexBuffer',
+      passHandleId: 'pass:1',
+      slot: 0,
+      bufferHandleId: 'buf:vbo',
+    },
+    {
+      kind: 'setVertexBuffer',
+      passHandleId: 'pass:1',
+      slot: 1,
+      bufferHandleId: 'buf:ibo',
+      offset: 0,
+      size: 12,
+    },
+    {
+      kind: 'setBlendConstant',
+      passHandleId: 'pass:1',
+      color: { r: 0.5, g: 0.5, b: 1.0, a: 1.0 },
+    },
+    {
+      kind: 'setStencilReference',
+      passHandleId: 'pass:1',
+      reference: 0x42,
+    },
+    {
+      kind: 'draw',
+      passHandleId: 'pass:1',
+      vertexCount: 3,
+      instanceCount: 1,
+      firstVertex: 0,
+      firstInstance: 0,
+    },
+    {
+      kind: 'endRenderPass',
+      passHandleId: 'pass:1',
+    },
+  ];
+  return events;
+}
+
+describe('buildViewModel — extended fields (w12)', () => {
+  let vm: ViewModel;
+
+  beforeAll(() => {
+    const events = makeExtendedViewModelFixtureEvents();
+    const tape = makeTapeFromEvents(events);
+    vm = buildViewModel(tape);
+  });
+
+  it('commands is non-empty array with all events in tape order', () => {
+    expect(vm.commands).toBeDefined();
+    expect(Array.isArray(vm.commands)).toBe(true);
+    expect(vm.commands.length).toBeGreaterThan(0);
+    // First event should be createBuffer, last should be endRenderPass
+    expect(vm.commands[0]?.kind).toBe('createBuffer');
+    expect(vm.commands[vm.commands.length - 1]?.kind).toBe('endRenderPass');
+  });
+
+  it('resources is non-empty Map from handleId to parsed create descriptor', () => {
+    expect(vm.resources).toBeDefined();
+    expect(vm.resources instanceof Map).toBe(true);
+    expect(vm.resources.size).toBeGreaterThan(0);
+    // buffer resource
+    const bufVbo = vm.resources.get('buf:vbo');
+    expect(bufVbo).toBeDefined();
+    expect(bufVbo?.kind).toBe('createBuffer');
+    // shader module resource
+    const shaderVs = vm.resources.get('shader:vs');
+    expect(shaderVs).toBeDefined();
+    expect(shaderVs?.kind).toBe('createShaderModule');
+  });
+
+  it('draws[].pipelineState.blend has expected structure', () => {
+    expect(vm.draws.length).toBeGreaterThan(0);
+    const d = vm.draws[0]!;
+    expect(d.pipelineState.blend).toBeDefined();
+    expect(d.pipelineState.blend.blendConstant).toBeDefined();
+    // blendConstant comes from setBlendConstant event
+    const bc = d.pipelineState.blend.blendConstant;
+    expect(bc).toEqual({ r: 0.5, g: 0.5, b: 1.0, a: 1.0 });
+    // colorTargets contains the per-target blend state
+    expect(Array.isArray(d.pipelineState.blend.colorTargets)).toBe(true);
+    const ct = d.pipelineState.blend.colorTargets[0];
+    expect(ct).toBeDefined();
+    expect(ct?.color?.srcFactor).toBe('src-alpha');
+  });
+
+  it('draws[].vertexBuffers maps slot -> bufferHandleId', () => {
+    const d = vm.draws[0]!;
+    expect(d.vertexBuffers).toBeDefined();
+    expect(d.vertexBuffers instanceof Map).toBe(true);
+    expect(d.vertexBuffers.size).toBe(2);
+    expect(d.vertexBuffers.get(0)).toBe('buf:vbo');
+    expect(d.vertexBuffers.get(1)).toBe('buf:ibo');
+  });
+
+  it('draws[].depthStencil references the depthStencilViewHandleId', () => {
+    const d = vm.draws[0]!;
+    expect(d.depthStencil).toBeDefined();
+    expect(d.depthStencil.depthStencilViewHandleId).toBe('tv:depth');
+    expect(d.depthStencil.depthStencilAttachment).toBeDefined();
+  });
+
+  it('draws[].pipelineState.shaders contains vertex/fragment module handles', () => {
+    const d = vm.draws[0]!;
+    const shaders = d.pipelineState.shaders;
+    expect(shaders).toBeDefined();
+    expect(shaders.vertexShaderModuleHandleId).toBe('shader:vs');
+    expect(shaders.fragmentShaderModuleHandleId).toBe('shader:fs');
+  });
+});

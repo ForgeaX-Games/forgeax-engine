@@ -15,7 +15,7 @@
 //     EPS chosen from wiki §4.4 recommendation table (annotated inline below)
 //
 // brand cast: this file lives under packages/math/src/__tests__/, which is inside
-// lint-brand-cast.sh's allow-list (the packages/math/src/ prefix is OK).
+// lint-brand-cast.mjs's allow-list (the packages/math/src/ prefix is OK).
 //
 // Related: requirements §AC-11 property ≥ 12 / ≥ 5 categories / ≤ 4 per category;
 //          plan-strategy D-P5 numRuns default 100;

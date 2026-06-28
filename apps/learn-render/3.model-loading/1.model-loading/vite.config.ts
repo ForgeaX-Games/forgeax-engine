@@ -33,6 +33,10 @@ export default defineConfig({
   },
   build: {
     target: 'esnext',
+    // The pack plugin emits decoded RGBA .bin assets (~787MB across 200 textures);
+    // computing their gzip sizes for the build report is meaningless (binary GPU
+    // payloads are never gzip-served) and adds wall time. Skip it.
+    reportCompressedSize: false,
     rollupOptions: {
       input: {
         main: resolve(here, 'index.html'),

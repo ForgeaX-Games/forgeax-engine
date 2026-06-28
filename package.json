@@ -19,7 +19,7 @@
     "templates/game-default"
   ],
   "scripts": {
-    "build": "pnpm -r build && tsc -b",
+    "build": "pnpm -r build && tsc -b --clean && tsc -b",
     "build:apps": "node scripts/build-apps.mjs",
     "typecheck": "tsc -b && node scripts/typecheck-apps.mjs",
     "test": "vitest run --project='@forgeax/*' --project=hello-triangle --project=unit",
@@ -88,6 +88,7 @@
     "@changesets/cli": "2.31.0",
     "@fast-check/vitest": "0.4.1",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",

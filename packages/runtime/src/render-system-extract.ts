@@ -981,6 +981,74 @@ const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
 ];
 
 /**
+ * tweak-20260627-model-loading-smoke-build-perf M4: per-World intern cache for
+ * the loadByGuid texture/sampler resolution path. A MaterialAsset's
+ * texture/sampler paramValues remain embedded GUID strings (dash-form) after
+ * loadByGuid; the extract stage re-resolves each GUID to a column handle every
+ * frame. Before this cache each resolution called `world.allocSharedRef`, which
+ * mints a NEW monotonically-increasing slot id per call. Because the GPU
+ * residency cache (`GpuResourceStore.textureGpuHandles`) is keyed on
+ * `handleSlot(handle)`, a fresh slot every frame meant the residency check
+ * ALWAYS missed -> all textures re-uploaded to the GPU every frame, old GPU
+ * textures never freed (refcount never hits 0). Unbounded GPU memory +
+ * unbounded per-frame upload cost (628ms -> 2764ms over 12 frames, SIGKILL).
+ *
+ * The fix interns the GUID-string -> column-handle resolution: each unique
+ * `(guid, brand)` pair mints EXACTLY ONE stable shared handle per World, reused
+ * across frames (architecture-principle §6 idempotency: same GUID resolved N
+ * times yields the same handle). The handle is intentionally long-lived -- it
+ * lives as long as the World references the material, which is exactly the
+ * desired lifetime; the `onLastRelease` -> `gpuStore.evictTexture` wiring stays
+ * coherent because the handle is no longer churned per frame.
+ *
+ * Invariant boundary (asset-registry.ts:1958-1962): the AssetRegistry is a
+ * GUID -> payload catalogue with NO handle/World concept -- it cannot mint a
+ * column handle. So this intern cache lives in the extract/render layer, keyed
+ * per-World via a WeakMap (the World owns the SharedRefStore that mints slots).
+ *
+ * Inner key is `${lowercasedGuid} ${brand}` -- a GUID catalogues to a
+ * single asset kind in practice, but the brand keeps the key correct if the
+ * same GUID is ever resolved under two brands.
+ *
+ * Boundary (OOS): this cache is NOT invalidated by `AssetRegistry.invalidate`
+ * / `invalidateAll`. After re-cataloguing a GUID with new bytes the extract
+ * would return the stale interned handle, so live texture hot-reload does not
+ * reach the GPU through this path. `invalidate` already disclaims GPU coherence
+ * (OOS-1); a future hot-reload feature should drop the per-world entry (or
+ * stamp a generation) on invalidate. Static scenes (the only current consumer)
+ * are unaffected.
+ */
+const guidHandleInternByWorld = new WeakMap<World, Map<string, number>>();
+
+function internSharedRefFromGuid<B extends string>(
+  world: World,
+  assetsRef: AssetRegistry,
+  guid: string,
+  brand: B,
+  onLastRelease?: (handle: Handle<B, 'shared'>) => void,
+): Handle<B, 'shared'> | undefined {
+  let perWorld = guidHandleInternByWorld.get(world);
+  if (perWorld === undefined) {
+    perWorld = new Map<string, number>();
+    guidHandleInternByWorld.set(world, perWorld);
+  }
+  const key = `${guid.toLowerCase()} ${brand}`;
+  const cached = perWorld.get(key);
+  if (cached !== undefined) return cached as unknown as Handle<B, 'shared'>;
+  const payload = assetsRef.lookup(guid);
+  if (payload === undefined) return undefined;
+  // Mint exactly once per (world, guid, brand). The onLastRelease deleter is
+  // wired against this same long-lived handle; since the handle is interned it
+  // is reused every frame and evicted only when the World drops it.
+  let handle: Handle<B, 'shared'> = -1 as unknown as Handle<B, 'shared'>;
+  handle = world.allocSharedRef(brand, payload, () => {
+    if (onLastRelease !== undefined) onLastRelease(handle);
+  });
+  perWorld.set(key, handle as unknown as number);
+  return handle;
+}
+
+/**
  * feat-20260623-world-space-video-asset M4 / w14 (D-5): if a user-region
  * texture field's paramValue is an embedded GUID string that catalogues to a
  * VideoAsset (`kind === 'video'`), mint a `VideoAsset`-branded column handle for
@@ -1006,7 +1074,11 @@ function resolveVideoFieldHandle(
   if (typeof value !== 'string') return undefined;
   const payload = assetsRef.lookup(value);
   if (payload === undefined || payload.kind !== 'video') return undefined;
-  return world.allocSharedRef('VideoAsset', payload) as Handle<'VideoAsset', 'shared'>;
+  // M4: intern so a video GUID mints one stable VideoAsset handle per World
+  // instead of a fresh slot every frame. The transient per-frame view is
+  // resolved downstream by this handle (DynamicTextureStore); minting the
+  // handle once does not freeze the view (P5: handle != frame data).
+  return internSharedRefFromGuid(world, assetsRef, value, 'VideoAsset');
 }
 
 /**
@@ -1125,23 +1197,18 @@ function resolveMaterialSnapshot(
   ): Handle<B, 'shared'> | undefined => {
     if (typeof value === 'number') return value as unknown as Handle<B, 'shared'>;
     if (typeof value === 'string') {
-      const payload = assetsRef.lookup(value);
-      if (payload === undefined) return undefined;
-      // feat-20260619 M2 / w8 (Issue 6 fix-up): wire onLastRelease for
-      // TextureAsset brand matched by this resolver, mirroring the
-      // resolveParamHandle wiring at :2220. Other brands (SamplerAsset)
-      // bypass — their lifecycle is releaseUnreferenced-fallback.
+      // M4: intern the GUID -> column-handle resolution so each unique
+      // (world, guid, brand) mints exactly ONE stable handle reused across
+      // frames (stops the per-frame slot churn that defeated the GPU
+      // residency cache). feat-20260619 M2 / w8: TextureAsset brand wires
+      // onLastRelease -> gpuStore.evictTexture; other brands (SamplerAsset)
+      // bypass (releaseUnreferenced-fallback lifecycle).
       if (gpuStore !== undefined && brand === 'TextureAsset') {
-        let handle: Handle<'TextureAsset', 'shared'> = -1 as unknown as Handle<
-          'TextureAsset',
-          'shared'
-        >;
-        handle = world.allocSharedRef(brand, payload, () => {
-          gpuStore.evictTexture(handle);
-        }) as Handle<'TextureAsset', 'shared'>;
-        return handle as Handle<B, 'shared'>;
+        return internSharedRefFromGuid(world, assetsRef, value, brand, (handle) => {
+          gpuStore.evictTexture(handle as Handle<'TextureAsset', 'shared'>);
+        });
       }
-      return world.allocSharedRef(brand, payload) as Handle<B, 'shared'>;
+      return internSharedRefFromGuid(world, assetsRef, value, brand);
     }
     return undefined;
   };
@@ -1665,6 +1732,8 @@ export function extractFrame(
           const view = mat4.create();
           mat4.lookAt(view, position, target, vec3.create(0, 1, 0));
           lightViewProj = new Float32Array(16);
+          // Reinterpret the Float32Array surface field as a Mat4 out-param; a
+          // factory would force a needless alloc+copy. brand-cast-ok
           mat4.multiply(lightViewProj as Mat4, proj, view);
 
           // D-4: allocate tile 0..3; 5th+ = -1 sentinel.
@@ -2509,11 +2578,14 @@ export function extractFrame(
             let handle: Handle<'TextureAsset', 'shared'>;
             if (typeof raw === 'string') {
               if (assets === null || assets === undefined) return undefined;
-              const payload = assets.lookup(raw);
-              if (payload === undefined) return undefined;
-              handle = world.allocSharedRef('TextureAsset', payload, () => {
-                if (gpuStore) gpuStore.evictTexture(handle);
+              // M4: intern so the GUID mints one stable handle per World
+              // instead of a fresh slot every frame (GPU residency relies on
+              // a stable handleSlot). onLastRelease -> gpuStore.evictTexture.
+              const interned = internSharedRefFromGuid(world, assets, raw, 'TextureAsset', (h) => {
+                if (gpuStore) gpuStore.evictTexture(h);
               });
+              if (interned === undefined) return undefined;
+              handle = interned;
             } else if (typeof raw === 'number') {
               handle = raw as unknown as Handle<'TextureAsset', 'shared'>;
             } else {
@@ -2549,19 +2621,14 @@ export function extractFrame(
             if (typeof raw === 'number') return raw as unknown as Handle<B, 'shared'>;
             if (typeof raw === 'string') {
               if (assets === null || assets === undefined) return undefined;
-              const payload = assets.lookup(raw);
-              if (payload === undefined) return undefined;
+              // M4: intern the GUID -> column-handle resolution (one stable
+              // handle per (world, guid, brand), reused across frames).
               if (gpuStore !== undefined && brand === 'TextureAsset') {
-                let handle: Handle<'TextureAsset', 'shared'> = -1 as unknown as Handle<
-                  'TextureAsset',
-                  'shared'
-                >;
-                handle = world.allocSharedRef(brand, payload, () => {
-                  gpuStore.evictTexture(handle);
-                }) as Handle<'TextureAsset', 'shared'>;
-                return handle as Handle<B, 'shared'>;
+                return internSharedRefFromGuid(world, assets, raw, brand, (handle) => {
+                  gpuStore.evictTexture(handle as Handle<'TextureAsset', 'shared'>);
+                });
               }
-              return world.allocSharedRef(brand, payload) as Handle<B, 'shared'>;
+              return internSharedRefFromGuid(world, assets, raw, brand);
             }
             return undefined;
           };
@@ -2890,6 +2957,7 @@ export function extractFrame(
               }
               // The view aliases the column-stored 16-float mat4 (column-major).
               // Allocator's writeJointPalette expects a Mat4-shaped Float32Array.
+              // brand-cast-ok: reinterpret an existing storage view, no alloc.
               jointWorlds[jIdx] = r.value.world as unknown as Mat4;
             }
             if (jointDangling >= 0) {

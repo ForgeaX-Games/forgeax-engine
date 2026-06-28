@@ -4855,8 +4855,37 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
   // cluster bindings off the rest of the layout. Plan D-1 (URP path zero
   // change) is preserved — when `!isHdrpActive` the URP `meshBindGroup`
   // path runs verbatim.
+  // feat-20260612-hdrp-ssao wiring fix: when the HDRP forward pass resolved a
+  // real `ssaoBlurred` view (stashed on ctx by the pass execute closure), build
+  // the unified group(2) bind group with that view at binding 7 so fs_main reads
+  // the actual occlusion factor instead of the 1x1 white fallback. The default
+  // `hdrpClusterBindGroup` (built ahead of graph.execute) always carries the
+  // fallback because the transient SSAO texture does not exist that early.
+  // Built per frame (the SSAO target is a graph transient, so no cross-frame
+  // cache); HDRP-only and SSAO-only, so URP and SSAO-off paths are untouched.
+  let hdrpSsaoBindGroup: BindGroup | null = null;
+  if (
+    frameState.isHdrpActive &&
+    hdrpClusterBindGroup !== null &&
+    c.hdrpSsaoBlurredView !== undefined
+  ) {
+    const hdrpBuffers = getOrCreateHdrpBuffers(
+      runtime,
+      frameState.installedPipelineConfig?.clusterGrid,
+    );
+    if (hdrpBuffers !== null) {
+      hdrpSsaoBindGroup = createHdrpUnifiedBindGroup(
+        runtime,
+        hdrpBuffers,
+        pipelineState.meshStorageBuffer.buffer,
+        { enabled: true, ssaoBlurredView: c.hdrpSsaoBlurredView },
+      );
+    }
+  }
   const meshGroup2: BindGroup | null =
-    frameState.isHdrpActive && hdrpClusterBindGroup !== null ? hdrpClusterBindGroup : meshBindGroup;
+    frameState.isHdrpActive && hdrpClusterBindGroup !== null
+      ? (hdrpSsaoBindGroup ?? hdrpClusterBindGroup)
+      : meshBindGroup;
   // ── Geometry (main colour) pass ──────────────────────────────────
   // D-2: tracks whether the geometry pass was explicitly ended inside
   // the `if (validatedOrdered.length > 0)` block (sprite split path),
@@ -6868,6 +6897,7 @@ export function computeViewMatrix(camera: CameraSnapshot): Mat4 {
   // world mat4 (propagateTransforms output) is read straight off the snapshot;
   // no recompose from decomposed TRS.
   const cameraFromWorld = mat4.create();
+  // brand-cast-ok: camera.world is an existing snapshot view read as Mat4 input.
   mat4.invert(cameraFromWorld, camera.world as unknown as Mat4);
   return cameraFromWorld;
 }

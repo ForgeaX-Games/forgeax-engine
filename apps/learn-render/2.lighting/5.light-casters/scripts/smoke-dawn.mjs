@@ -48,8 +48,8 @@ const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOL
 const SMOKE_WRITE_BASELINE = process.env.SMOKE_WRITE_BASELINE === '1';
 const FALSIFY = process.env.FALSIFY ?? '';
 
-const WIDTH = 800;
-const HEIGHT = 600;
+const WIDTH = 400;
+const HEIGHT = 300;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(here, '..');
@@ -530,9 +530,9 @@ const luminanceBox = (cx, cy, half) => {
 // difference vs shadowFloor is the spot occlusion. Re-run with SMOKE_DUMP_GRID=1
 // and Read the baseline PNG if the scene geometry ever changes.
 const SITES = {
-  shadowFloor: { x: 335, y: 255 },
-  litFloorLeft: { x: 195, y: 280 },
-  litFloorBelow: { x: 360, y: 410 },
+  shadowFloor: { x: 185, y: 140 },
+  litFloorLeft: { x: 130, y: 128 },
+  litFloorBelow: { x: 175, y: 210 },
 };
 const HALF = 5;
 const pixelSamples = {};

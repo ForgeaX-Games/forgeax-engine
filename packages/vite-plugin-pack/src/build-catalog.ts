@@ -44,8 +44,10 @@
 // admits image sidecars instead of returning `pack-malformed-meta`.
 
 import { readFile } from 'node:fs/promises';
-import { dirname, posix, relative, resolve } from 'node:path';
+import { posix, relative } from 'node:path';
+import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { deriveAssetName } from '@forgeax/engine-pack/name';
+import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
 import { scan } from '@forgeax/engine-pack/scanner';
 import { validateMeta } from '@forgeax/engine-pack/schema';
 import type { CubeTextureMetadata, ImageMetadata, PackIndexEntry } from '@forgeax/engine-types';
@@ -77,7 +79,7 @@ interface ExternalAssetMetaJson {
   readonly schemaVersion: string | number;
   readonly kind: 'external-asset-package';
   readonly importer: 'image' | 'gltf' | 'fbx' | 'audio' | 'font';
-  readonly source: string;
+  readonly source?: string;
   readonly importSettings: {
     readonly colorSpace?: 'srgb' | 'linear';
     readonly mipmap?: 'auto' | 'none';
@@ -158,6 +160,7 @@ async function processMetaSidecar(
   cwd: string,
   out: PackIndexEntry[],
   base: string,
+  paths: Record<string, string>,
 ): Promise<CatalogBuildError | null> {
   let metaRaw: unknown;
   try {
@@ -219,8 +222,15 @@ async function processMetaSidecar(
   // from that source (e.g. a glTF file produces mesh/material/scene/texture
   // sub-assets). deriveAssetName uses this path + the sub-asset count to apply
   // the same XOR name-resolution rule as the .pack.json arm (D-6 SSOT).
-  const sidecarDir = dirname(rawPath);
-  const sourceAbsPath = resolve(sidecarDir, meta.source);
+  const sourceResolved = resolveAssetSource(rawPath, meta.source, paths);
+  if (!sourceResolved.ok) {
+    return {
+      code: 'catalog-meta-schema-invalid',
+      path: rawPath,
+      message: `source resolution failed: ${sourceResolved.error.code} - ${sourceResolved.error.hint}`,
+    };
+  }
+  const sourceAbsPath = sourceResolved.value;
   const subAssetCount = meta.subAssets.length;
 
   function subName(sub: { readonly name?: string }): string {
@@ -252,7 +262,7 @@ async function processMetaSidecar(
         // kind:'texture' + ImageMetadata so the runtime textureLoader
         // (UPSTREAM_ENTRY_KINDS={'texture','font'}) can pick it up.
         // 6-PNG cube (non-.hdr) stays kind:'cube-texture' (OOS-1 / R-4).
-        if (meta.source.toLowerCase().endsWith('.hdr')) {
+        if (sourceAbsPath.toLowerCase().endsWith('.hdr')) {
           out.push({
             guid: sub.guid,
             relativeUrl: normalizedUrl,
@@ -479,15 +489,16 @@ async function processMetaSidecar(
  *   - `.meta.json` -- 5-field rows (4 core + `metadata`) from `subAssets[]`
  */
 async function foldPaths(
-  paths: readonly string[],
+  rawPaths: readonly string[],
   cwd: string,
   base: string,
+  assetPaths: Record<string, string>,
 ): Promise<{ catalog: PackIndexEntry[]; errors: CatalogBuildError[] }> {
   const catalog: PackIndexEntry[] = [];
   const errors: CatalogBuildError[] = [];
-  for (const rawPath of paths) {
+  for (const rawPath of rawPaths) {
     if (rawPath.endsWith('.meta.json') && !rawPath.endsWith('.pack.json')) {
-      const err = await processMetaSidecar(rawPath, cwd, catalog, base);
+      const err = await processMetaSidecar(rawPath, cwd, catalog, base, assetPaths);
       if (err) errors.push(err);
       continue;
     }
@@ -545,6 +556,7 @@ export async function buildCatalog(
   if (roots.length === 0) return [];
 
   const cwd = process.cwd();
+  const { paths: assetPaths } = loadAssetConfig(cwd);
   const result = await scan(roots);
 
   const warnErrors = (errors: readonly CatalogBuildError[]): void => {
@@ -554,7 +566,7 @@ export async function buildCatalog(
   };
 
   if (result.ok) {
-    const { catalog, errors } = await foldPaths(result.value, cwd, base);
+    const { catalog, errors } = await foldPaths(result.value, cwd, base, assetPaths);
     warnErrors(errors);
     return catalog;
   }
@@ -575,7 +587,7 @@ export async function buildCatalog(
       );
       continue;
     }
-    const folded = await foldPaths(r.value, cwd, base);
+    const folded = await foldPaths(r.value, cwd, base, assetPaths);
     errors.push(...folded.errors);
     for (const row of folded.catalog) {
       const key = row.guid.toLowerCase();
@@ -600,6 +612,7 @@ export async function buildCatalogStrict(
   if (roots.length === 0) return { catalog: [], errors: [] };
 
   const cwd = process.cwd();
+  const { paths: assetPaths } = loadAssetConfig(cwd);
   const result = await scan(roots);
   if (!result.ok) {
     return {
@@ -614,5 +627,5 @@ export async function buildCatalogStrict(
     };
   }
 
-  return foldPaths(result.value, cwd, base);
+  return foldPaths(result.value, cwd, base, assetPaths);
 }

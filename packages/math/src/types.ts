@@ -8,7 +8,7 @@
 //   - When uploading to GPU the brand widens to Float32Array automatically, no unbrand needed
 //
 // `as Vec*/Mat*/Quat/Color` casts are only allowed inside factory functions under
-// packages/math/src/ (enforced by lint-brand-cast.sh).
+// packages/math/src/ (enforced by lint-brand-cast.mjs).
 //
 // Related: requirements §AC-01 type ABI seven-piece + AC-02 brand mutual exclusion;
 //          research §Finding 7.1 types.ts template (copy verbatim);

@@ -14,6 +14,7 @@
 
 // 1. engine usage
 import { createApp } from '@forgeax/engine-app';
+import type { App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera,
@@ -223,10 +224,34 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
   console.warn(`[learn-render 4.6 cubemaps] backend=${renderer.backend}`);
+
+  installCaptureHook(app, world);
+}
+
+// RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
+// one update + draw + readPixels so the live canvas read is anchored to the same
+// frame the capture records. Only meaningful when the page is served with
+// FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
+function installCaptureHook(app: App, world: App['world']): void {
+  type CaptureHook = () => Promise<Uint8Array>;
+  const win = window as unknown as { __captureCubemaps?: CaptureHook };
+  const renderer = app.renderer;
+  win.__captureCubemaps = async (): Promise<Uint8Array> => {
+    world.update();
+    renderer.draw(world);
+    const r = await renderer.readPixels();
+    if (!r.ok) {
+      throw new Error(
+        `[learn-render 4.6 cubemaps] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+      );
+    }
+    return r.value;
+  };
 }
 
 declare global {
   interface Window {
+    __captureCubemaps?: () => Promise<Uint8Array>;
     __learnRenderErrors?: Array<{ code: string; hint?: string }>;
   }
 }

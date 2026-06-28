@@ -1,34 +1,10 @@
-import { defineConfig } from 'vite';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
-import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 
+// RHI-debug frame capture wired via the shared preset (forgeaxShader +
+// vitePluginRhiDebug + fs.allow). Capture stays gated behind
+// FORGEAX_ENGINE_RHI_DEBUG=1 at runtime; a plain `pnpm dev` pays zero cost.
 const here = dirname(fileURLToPath(import.meta.url));
-const monorepoRoot = resolve(here, '..', '..', '..', '..');
 
-export default defineConfig({
-  plugins: [forgeaxShader() as never],
-  server: {
-    port: 5191,
-    strictPort: true,
-    fs: {
-      allow: [monorepoRoot],
-    },
-  },
-  build: {
-    target: 'esnext',
-    rollupOptions: {
-      input: {
-        main: resolve(here, 'index.html'),
-      },
-    },
-  },
-  test: {
-    exclude: [
-      '**/node_modules/**',
-      '**/dist/**',
-      '**/*.browser.test.ts',
-      '**/*.dawn.test.ts',
-    ],
-  },
-});
+export default withRhiDebug({ here, rootDepth: 4, port: 5191 });

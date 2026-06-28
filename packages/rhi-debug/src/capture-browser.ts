@@ -28,6 +28,7 @@ import type { PassOffset } from './tape-format';
  */
 export interface CaptureBrowserRecorder {
   arm(frames: number): { ok: true } | { ok: false; error: unknown };
+  snapshotAllLiveResources(): Promise<{ ok: true } | { ok: false; error: unknown }>;
   getState(): string;
   getEvents(): readonly unknown[];
   // biome-ignore lint/suspicious/noExplicitAny: structural view avoids importing recorder.ts (Node-builtin deps); finalizeToMemory accepts the same shape
@@ -75,6 +76,16 @@ export async function captureFramesToMemory(
   const armResult = debugInst.arm(frames);
   if (!armResult.ok) {
     throw armResult.error;
+  }
+
+  // Frame-header snapshot (roadmap Phase 1 §5): seed initialData for resources
+  // uploaded before arm() (VBO/IBO/instance buffers writeBuffer'd in the loading
+  // phase). Without this the replayed buffers are all-zero -> vertices collapse
+  // to the origin -> black RT. Mirrors adapter.ts captureFrames; runs before the
+  // rAF loop records the first frame's commands.
+  const snapResult = await debugInst.snapshotAllLiveResources();
+  if (!snapResult.ok) {
+    throw snapResult.error;
   }
 
   await waitForRecorderIdle(debugInst, 30_000);

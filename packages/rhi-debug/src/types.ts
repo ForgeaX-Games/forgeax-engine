@@ -409,9 +409,52 @@ export interface RhiCallEventSetScissorRect {
   readonly h: number;
 }
 
+export interface RhiCallEventSetStencilReference {
+  readonly kind: 'setStencilReference';
+  readonly passHandleId: HandleId;
+  readonly reference: number;
+}
+
 export interface RhiCallEventEndRenderPass {
   readonly kind: 'endRenderPass';
   readonly passHandleId: HandleId;
+}
+
+export interface RhiCallEventSetBlendConstant {
+  readonly kind: 'setBlendConstant';
+  readonly passHandleId: HandleId;
+  readonly color: GPUColor;
+}
+
+export interface RhiCallEventDrawIndirect {
+  readonly kind: 'drawIndirect';
+  readonly passHandleId: HandleId;
+  readonly indirectBufferHandleId: HandleId;
+  readonly indirectOffset: number;
+}
+
+export interface RhiCallEventDrawIndexedIndirect {
+  readonly kind: 'drawIndexedIndirect';
+  readonly passHandleId: HandleId;
+  readonly indirectBufferHandleId: HandleId;
+  readonly indirectOffset: number;
+}
+
+export interface RhiCallEventPassPushDebugGroup {
+  readonly kind: 'passPushDebugGroup';
+  readonly passHandleId: HandleId;
+  readonly groupLabel: string;
+}
+
+export interface RhiCallEventPassPopDebugGroup {
+  readonly kind: 'passPopDebugGroup';
+  readonly passHandleId: HandleId;
+}
+
+export interface RhiCallEventPassInsertDebugMarker {
+  readonly kind: 'passInsertDebugMarker';
+  readonly passHandleId: HandleId;
+  readonly markerLabel: string;
 }
 
 // -- RhiComputePassEncoder operations --
@@ -499,7 +542,14 @@ export type RhiCallEvent =
   | RhiCallEventDrawIndexed
   | RhiCallEventSetViewport
   | RhiCallEventSetScissorRect
+  | RhiCallEventSetStencilReference
   | RhiCallEventEndRenderPass
+  | RhiCallEventSetBlendConstant
+  | RhiCallEventDrawIndirect
+  | RhiCallEventDrawIndexedIndirect
+  | RhiCallEventPassPushDebugGroup
+  | RhiCallEventPassPopDebugGroup
+  | RhiCallEventPassInsertDebugMarker
   | RhiCallEventSetComputePipeline
   | RhiCallEventDispatchWorkgroups
   | RhiCallEventEndComputePass
@@ -626,3 +676,22 @@ export interface InspectReport {
  * undefined means "full report" (all fields including RT PNG).
  */
 export type InspectFields = 'bindings' | 'drawCall' | 'rt';
+
+/**
+ * RHI commands that are known to be out-of-scope for current capture.
+ *
+ * These commands remain silent pass-throughs in the recorder (no pushEvent)
+ * but are explicitly listed here so the coverage-invariant test can
+ * distinguish "known-exempt" from "forgotten". New commands added to an
+ * encoder interface that are not in this set AND have no RhiCallEvent kind
+ * will cause the coverage-invariant .test-d.ts to fail at compile time.
+ *
+ * @internal
+ */
+export const DEFERRED_COMMANDS = new Set<string>([
+  'beginOcclusionQuery',
+  'endOcclusionQuery',
+  'executeBundles',
+  'writeTimestamp',
+  'resolveQuerySet',
+]);

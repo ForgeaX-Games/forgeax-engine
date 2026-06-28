@@ -172,7 +172,7 @@ interface RowLocator {
 /**
  * Compose an entity's local TRS scalar columns (at `row`) into `out` (mat4).
  * `out` is a `FieldView` (the live `Transform.world` view, a `Float32Array` at
- * runtime); the `as unknown as Mat4` cast below reinterprets it for `mat4.compose`.
+ * runtime); the cast below reinterprets it as the `mat4.compose` out-param.
  */
 function composeLocalInto(out: FieldView, arch: Archetype, row: number): void {
   mat4.compose(

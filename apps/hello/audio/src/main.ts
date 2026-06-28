@@ -30,7 +30,7 @@
 //   README records this ergonomics honestly (AC-08).
 //
 // SFX GUID SSOT:
-//   forgeax-engine-assets/sfx/dragon-studio-correct-472358.mp3.audio.meta.json
+//   forgeax-engine-assets/sfx/dragon-studio-correct-472358.mp3.meta.json
 //   subAssets[0].guid = 019e7535-5e5e-75fe-a328-0b08e3a72744
 const SFX_GUID = '019e7535-5e5e-75fe-a328-0b08e3a72744';
 

@@ -14,7 +14,12 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions on deserialized optional fields use non-null assertions because serialized data is always complete; safe at test compile time
 
 import { describe, expect, it } from 'vitest';
-import { computePassOffsets, deserializeTape, serializeTape } from '../tape-format';
+import {
+  computePassOffsets,
+  deserializeTape,
+  serializeTape,
+  TAPE_FORMAT_VERSION,
+} from '../tape-format';
 import type { RhiCallEvent, RhiCallEventInitialData, Tape } from '../types';
 
 // ============================================================================
@@ -23,7 +28,7 @@ import type { RhiCallEvent, RhiCallEventInitialData, Tape } from '../types';
 
 function makeEmptyTape(): Tape {
   return {
-    formatVersion: 2,
+    formatVersion: TAPE_FORMAT_VERSION,
     rhiCapsRecorded: {
       canvasFormat: 'bgra8unorm' as GPUTextureFormat,
       rgba16floatRenderable: false,
@@ -726,7 +731,7 @@ describe('tape-format — event kind round-trip', () => {
 // ============================================================================
 
 describe('tape-format — formatVersion reject', () => {
-  it('formatVersion = 0 -> reject (expectedVersion=2)', () => {
+  it('formatVersion = 0 -> reject (expectedVersion=3)', () => {
     const b = makeEmptyTape();
     const badTape: Tape = { ...b, formatVersion: 0 };
     const { json, blob } = serializeTape(badTape);
@@ -736,14 +741,14 @@ describe('tape-format — formatVersion reject', () => {
       expect(res.error.code).toBe('tape-format-version-mismatch');
       const detail = res.error.detail;
       if (detail && 'expectedVersion' in detail) {
-        expect(detail.expectedVersion).toBe(2);
+        expect(detail.expectedVersion).toBe(3);
       }
     }
   });
 
-  it('formatVersion = 3 -> reject', () => {
+  it('formatVersion = 4 -> reject (v3 accepts {2,3} only)', () => {
     const b = makeEmptyTape();
-    const badTape: Tape = { ...b, formatVersion: 3 };
+    const badTape: Tape = { ...b, formatVersion: 4 };
     const { json, blob } = serializeTape(badTape);
     const res = deserializeTape(json, blob);
     expect(res.ok).toBe(false);
@@ -751,13 +756,24 @@ describe('tape-format — formatVersion reject', () => {
       expect(res.error.code).toBe('tape-format-version-mismatch');
       const detail = res.error.detail;
       if (detail && 'tapeVersion' in detail) {
-        expect(detail.tapeVersion).toBe(3);
-        expect(detail.expectedVersion).toBe(2);
+        expect(detail.tapeVersion).toBe(4);
+        expect(detail.expectedVersion).toBe(3);
       }
     }
   });
 
-  it('v1 tape (formatVersion=1) -> explicit reject with expectedVersion=2', () => {
+  it('formatVersion = 3 (current) -> accepted (v3 supports {2,3})', () => {
+    const b = makeEmptyTape();
+    const v3Tape: Tape = { ...b, formatVersion: 3 };
+    const { json, blob } = serializeTape(v3Tape);
+    const res = deserializeTape(json, blob);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.formatVersion).toBe(3);
+    }
+  });
+
+  it('v1 tape (formatVersion=1) -> explicit reject with expectedVersion=3', () => {
     const b = makeEmptyTape();
     const v1Tape: Tape = { ...b, formatVersion: 1 };
     const { json, blob } = serializeTape(v1Tape);
@@ -768,7 +784,7 @@ describe('tape-format — formatVersion reject', () => {
       const detail = res.error.detail;
       if (detail && 'tapeVersion' in detail) {
         expect(detail.tapeVersion).toBe(1);
-        expect(detail.expectedVersion).toBe(2);
+        expect(detail.expectedVersion).toBe(3);
       }
     }
   });
@@ -1014,7 +1030,7 @@ describe('tape-format — empty tape', () => {
     if (res.ok) {
       expect(res.value.events).toHaveLength(0);
       expect(res.value.blobPool.size).toBe(0);
-      expect(res.value.formatVersion).toBe(2);
+      expect(res.value.formatVersion).toBe(TAPE_FORMAT_VERSION);
     }
   });
 });
@@ -1086,7 +1102,7 @@ describe('tape-format — full frame tape', () => {
     if (res.ok) {
       expect(res.value.events.length).toBe(events.length);
       expect(res.value.blobPool.has('cafe')).toBe(true);
-      expect(res.value.formatVersion).toBe(2);
+      expect(res.value.formatVersion).toBe(TAPE_FORMAT_VERSION);
       // Verify frameMark is present
       expect(res.value.events.some((e) => e.kind === 'frameMark')).toBe(true);
     }
@@ -1098,7 +1114,7 @@ describe('tape-format — full frame tape', () => {
     const res = deserializeTape(json, blob);
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.value.formatVersion).toBe(2);
+      expect(res.value.formatVersion).toBe(TAPE_FORMAT_VERSION);
     }
   });
 
@@ -1111,7 +1127,12 @@ describe('tape-format — full frame tape', () => {
       storageBuffer: true,
       timestampQuery: true,
     };
-    const tape: Tape = { formatVersion: 2, rhiCapsRecorded: caps, events: [], blobPool: new Map() };
+    const tape: Tape = {
+      formatVersion: TAPE_FORMAT_VERSION,
+      rhiCapsRecorded: caps,
+      events: [],
+      blobPool: new Map(),
+    };
     const { json, blob } = serializeTape(tape);
     const res = deserializeTape(json, blob);
     expect(res.ok).toBe(true);
