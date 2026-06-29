@@ -39,7 +39,7 @@ function mockEntry(opts: {
 
 function mockRenderable(tz: number): {
   transform: { world: Float32Array };
-  material: { shadingModel: 'unlit' | 'sprite' | undefined };
+  material: { transparent?: true | undefined };
 } {
   const world = new Float32Array(16);
   world[0] = 1;
@@ -47,9 +47,11 @@ function mockRenderable(tz: number): {
   world[10] = 1;
   world[15] = 1;
   world[14] = tz;
-  // PR #502 fix: 'sprite' preserves the fold-eligible behavior these
-  // material-keyed tests exercise.
-  return { transform: { world }, material: { shadingModel: 'sprite' } };
+  // PR #502 fix + feat-20260625 R2 fix-up: `transparent: true` preserves the
+  // fold-eligible behavior these material-keyed tests exercise. The
+  // discriminator migrated from `shadingModel === 'sprite'` to
+  // `transparent === true` (M3 / w15 collapsed the sprite union member).
+  return { transform: { world }, material: { transparent: true } };
 }
 
 describe('foldDispatchBuckets — AC-10 multi-material boundary (w2)', () => {

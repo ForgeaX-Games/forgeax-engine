@@ -17,11 +17,13 @@ import { World } from '@forgeax/engine-ecs';
 import {
   CharacterController,
   Collider,
+  ColliderShapeValue,
+  CollidingEntities,
   PhysicsError,
   RigidBody,
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
-import { Transform } from '@forgeax/engine-runtime';
+import { ChildOf, registerPropagateTransforms, Transform } from '@forgeax/engine-runtime';
 import { describe, expect, it } from 'vitest';
 import { createRapier3DPhysicsWorld, registerPhysicsSystems } from '../rapier-physics-world-3d';
 import { detectSimd3D, loadRapier3D } from '../wasm-loader';
@@ -395,6 +397,102 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         expect(bodyCount).toBe(2);
       });
     });
+
+    describe('childof-kinematic-world-mirror.test.ts (regression)', () => {
+      // A ChildOf kinematic collider (e.g. a Guardian attack sensor parented to
+      // its body) must have its Rapier collider follow the parent in WORLD space.
+      // The bug: physicsSyncBackend's kinematic mirror fed LOCAL posX/Y/Z to
+      // setKinematicPosition, so a child with local pos (0,0,0) had its collider
+      // pinned at the world origin forever while only its ECS Transform followed
+      // the parent (via propagateTransforms). Symptom in the collectathon: the
+      // player at spawn (origin) overlapped ALL guardian attack sensors at once,
+      // and once the player roamed off-origin no sensor could ever reach it.
+      it('a ChildOf kinematic sensor overlaps a probe at the parent world pos, not the origin', async () => {
+        const RAPIER = await loadRapier3D();
+        if ('code' in RAPIER) {
+          expect(RAPIER.code).toBe('wasm-load-failed');
+          return;
+        }
+
+        const world = new World();
+        const pw = createRapier3DPhysicsWorld(RAPIER);
+        world.insertResource('PhysicsWorld', pw);
+
+        // Parent: a kinematic body (NO CharacterController, so the kinematic
+        // mirror -- not moveAndSlide -- drives it) placed far from the origin.
+        const PARENT_X = 8;
+        const parent = world
+          .spawn(
+            { component: Transform as never, data: { posX: PARENT_X, posY: 0, posZ: 0 } },
+            { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+            {
+              component: Collider as never,
+              data: { shape: ColliderShapeValue.sphere, radius: 0.3 },
+            },
+          )
+          .unwrap();
+
+        // Child sensor: ChildOf the parent with LOCAL pos (0,0,0), so its world
+        // pos equals the parent's. This is the shape that regressed.
+        const sensor = world
+          .spawn(
+            { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+            { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+            {
+              component: Collider as never,
+              data: { shape: ColliderShapeValue.sphere, radius: 1, isSensor: true },
+            },
+            { component: ChildOf as never, data: { parent } },
+            { component: CollidingEntities as never, data: { entities: [] } },
+          )
+          .unwrap();
+
+        // Probe at the ORIGIN: if the sensor collider were (wrongly) pinned at
+        // the origin, it would overlap this probe.
+        const originProbe = world
+          .spawn(
+            { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+            { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+            {
+              component: Collider as never,
+              data: { shape: ColliderShapeValue.sphere, radius: 0.3 },
+            },
+          )
+          .unwrap();
+
+        // Probe at the PARENT world pos: the sensor must overlap THIS one once it
+        // correctly follows the parent.
+        const farProbe = world
+          .spawn(
+            { component: Transform as never, data: { posX: PARENT_X, posY: 0, posZ: 0 } },
+            { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+            {
+              component: Collider as never,
+              data: { shape: ColliderShapeValue.sphere, radius: 0.3 },
+            },
+          )
+          .unwrap();
+
+        registerPropagateTransforms(world);
+        registerPhysicsSystems(world);
+        for (let i = 0; i < 5; i++) {
+          world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
+          world.update();
+        }
+
+        const colliding = world.get(sensor, CollidingEntities as never);
+        expect(colliding.ok).toBe(true);
+        if (!colliding.ok) return;
+        const overlaps = Array.from(
+          (colliding.value as unknown as { entities: ArrayLike<number> }).entities,
+        );
+
+        // The sensor follows the parent to world x=8: it overlaps the far probe
+        // and NOT the origin probe.
+        expect(overlaps).toContain(farProbe as unknown as number);
+        expect(overlaps).not.toContain(originProbe as unknown as number);
+      });
+    });
   });
 }
 
@@ -626,6 +724,84 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         const actual = pw.moveAndSlide(char, Float32Array.of(1, 0, 1) as never);
         expect(actual[2]).toBeGreaterThan(0.3); // tangential z preserved
         expect(actual[0]).toBeLessThan(1); // normal x absorbed
+      });
+    });
+
+    describe('moveAndSlide multi-character (regression: two KCCs coexist)', () => {
+      // A second KinematicCharacterController in the same world must not freeze
+      // the first. Before the fix, the per-move propagateModifiedBodyPositionsToColliders
+      // refresh of the shared query pipeline was skipped on the SECOND-and-later
+      // call of a frame, so once a guardian KCC also moved, the player's
+      // computeColliderMovement returned zero from the next frame onward (the
+      // collectathon "character stuck, can't move while a guardian exists" bug).
+      it('two characters far apart both keep moving across frames', async () => {
+        const RAPIER = await loadOrNull();
+        if (!RAPIER) return;
+        const world = new World();
+        const pw = createRapier3DPhysicsWorld(RAPIER);
+        world.insertResource('PhysicsWorld', pw);
+        registerPhysicsSystems(world);
+
+        // Shared ground; two characters 10m apart so they never interact.
+        spawnStaticBox(world, { pos: [0, -0.85, 0], halfExtents: [30, 0.5, 30] });
+        const a = spawnCharacter(world, [0, 0, 0]);
+        const b = spawnCharacter(world, [10, 0, 0]);
+
+        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
+        world.update();
+
+        // Drive both KCCs every frame, mirroring player-move + guardian-ai.
+        const startA = tfPos(world, a).x;
+        for (let i = 0; i < 5; i++) {
+          pw.moveAndSlide(a, Float32Array.of(0.1, -0.01, 0) as never);
+          pw.moveAndSlide(b, Float32Array.of(-0.1, -0.01, 0) as never);
+          world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 2) / 60 });
+          world.update();
+        }
+
+        // Character A must have advanced well past a single frame's step
+        // (~0.5 over 5 frames); the bug froze it at ~0.1 (one frame only).
+        expect(tfPos(world, a).x - startA).toBeGreaterThan(0.3);
+        // Character B moved the other way by a similar magnitude.
+        expect(tfPos(world, b).x).toBeLessThan(10 - 0.3);
+      });
+
+      it('overlapping SENSOR does not jam a grounded character (sensors are not obstacles)', async () => {
+        const RAPIER = await loadOrNull();
+        if (!RAPIER) return;
+        const world = new World();
+        const pw = createRapier3DPhysicsWorld(RAPIER);
+        world.insertResource('PhysicsWorld', pw);
+        registerPhysicsSystems(world);
+
+        spawnStaticBox(world, { pos: [0, -0.85, 0], halfExtents: [30, 0.5, 30] });
+        const char = spawnCharacter(world, [0, 0, 0]);
+        // A sensor sphere sitting exactly on the character spawn (mirrors the
+        // collectathon guardian attack-sensor whose physics body stayed at world
+        // origin). A sensor reports overlaps but must NEVER act as a solid wall
+        // for the KCC -- before the fix this froze the character in place.
+        world
+          .spawn(
+            { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+            { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+            {
+              component: Collider as never,
+              data: { shape: ColliderShapeValue.sphere, radius: 1.5, isSensor: 1 },
+            },
+          )
+          .unwrap();
+
+        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
+        world.update();
+
+        const start = tfPos(world, char).x;
+        for (let i = 0; i < 5; i++) {
+          pw.moveAndSlide(char, Float32Array.of(0.1, -0.01, 0) as never);
+          world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 2) / 60 });
+          world.update();
+        }
+        // The character must slide through the sensor, not be walled by it.
+        expect(tfPos(world, char).x - start).toBeGreaterThan(0.3);
       });
     });
 
@@ -1006,6 +1182,12 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         const world = new World();
         const pw = createRapier3DPhysicsWorld(RAPIER);
         world.insertResource('PhysicsWorld', pw);
+        // The kinematic mirror drives the collider from Transform.world (so a
+        // ChildOf collider follows its parent), which propagateTransforms
+        // populates; register it (createApp always does, and physicsSyncBackend
+        // declares `after: propagateTransforms`). For this root platform
+        // world == compose(local), so x ends at 5 either way once propagate runs.
+        registerPropagateTransforms(world);
         registerPhysicsSystems(world);
 
         // Platform: kinematic body + collider, NO CharacterController.
@@ -1161,6 +1343,121 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         // After the tick, ensureBody has run and the body exists.
         expect(pw.hasBody(char)).toBe(true);
       });
+    });
+  });
+}
+
+{
+  // ─── colliding-entities.test.ts (feat-20260626 M3 engine fix) ───
+  //
+  // The CollidingEntities component is documented as the contact/sensor set-query
+  // path but was never populated: the event queue was constructed + drained on
+  // overflow only, and colliders carried no activeEvents/activeCollisionTypes.
+  // These tests prove the PhysicsCollisionSync system now writes the overlap set
+  // -- specifically the kinematic-sensor vs kinematic-body case the collectathon
+  // Core pickup needs (DEFAULT active-collision-types omits KINEMATIC_KINEMATIC).
+
+  describe('colliding-entities.test.ts', () => {
+    async function loadOrNull() {
+      const RAPIER = await loadRapier3D();
+      if ('code' in RAPIER) {
+        expect(RAPIER.code).toBe('wasm-load-failed');
+        return null;
+      }
+      return RAPIER;
+    }
+
+    it('a kinematic sensor overlapping a kinematic body populates CollidingEntities both ways', async () => {
+      const RAPIER = await loadOrNull();
+      if (!RAPIER) return;
+      const world = new World();
+      const pw = createRapier3DPhysicsWorld(RAPIER);
+      world.insertResource('PhysicsWorld', pw);
+      registerPhysicsSystems(world);
+
+      // A "player" kinematic body + CollidingEntities, sitting at the origin.
+      const player = world
+        .spawn(
+          { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.5 },
+          },
+          { component: CollidingEntities as never, data: { entities: [] } },
+        )
+        .unwrap();
+
+      // A "Core" kinematic SENSOR overlapping the player.
+      const core = world
+        .spawn(
+          { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.sphere, radius: 0.35, isSensor: true },
+          },
+          { component: CollidingEntities as never, data: { entities: [] } },
+        )
+        .unwrap();
+
+      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
+      // A few ticks: tick 1 builds bodies (ensureBody), the next steps + drains.
+      for (let i = 0; i < 4; i++) world.update();
+
+      const playerSet = world.get(player, CollidingEntities as never);
+      const coreSet = world.get(core, CollidingEntities as never);
+      expect(playerSet.ok).toBe(true);
+      expect(coreSet.ok).toBe(true);
+      if (!playerSet.ok || !coreSet.ok) return;
+      expect(Array.from(playerSet.value.entities as Uint32Array)).toContain(core as number);
+      expect(Array.from(coreSet.value.entities as Uint32Array)).toContain(player as number);
+    });
+
+    it('despawning a collided sensor clears it from the survivor CollidingEntities', async () => {
+      const RAPIER = await loadOrNull();
+      if (!RAPIER) return;
+      const world = new World();
+      const pw = createRapier3DPhysicsWorld(RAPIER);
+      world.insertResource('PhysicsWorld', pw);
+      registerPhysicsSystems(world);
+
+      const player = world
+        .spawn(
+          { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.5 },
+          },
+          { component: CollidingEntities as never, data: { entities: [] } },
+        )
+        .unwrap();
+      const core = world
+        .spawn(
+          { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+          { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
+          {
+            component: Collider as never,
+            data: { shape: ColliderShapeValue.sphere, radius: 0.35, isSensor: true },
+          },
+          { component: CollidingEntities as never, data: { entities: [] } },
+        )
+        .unwrap();
+
+      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
+      for (let i = 0; i < 4; i++) world.update();
+      const before = world.get(player, CollidingEntities as never);
+      expect(before.ok && Array.from(before.value.entities as Uint32Array)).toContain(
+        core as number,
+      );
+
+      world.despawn(core);
+      for (let i = 0; i < 2; i++) world.update();
+      const after = world.get(player, CollidingEntities as never);
+      expect(after.ok).toBe(true);
+      if (!after.ok) return;
+      expect(Array.from(after.value.entities as Uint32Array)).not.toContain(core as number);
     });
   });
 }

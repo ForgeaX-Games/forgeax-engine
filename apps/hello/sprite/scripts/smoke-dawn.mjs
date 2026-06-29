@@ -46,6 +46,20 @@ const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOLD ?? '0.05');
 
+// feat-20260626-sprite-transparent-collapse M5-T1 (plan-strategy D-5):
+// FALSIFY env routes opt-in falsifier branches. Existing token
+// `nineslice-anchor` is wired further below in the nineslice section.
+// New token `missing-sprite-blend` here proves charter P3 "explicit
+// failure > implicit default": when a user authoring a sprite material
+// omits `renderState.blend`, the engine no longer silently picks
+// premultiplied-alpha -- the sprite paints opaque-over-clear and the
+// 4-PNG matrix readback drifts beyond eps, which surfaces as exit != 0.
+// fail-when-passes shape: in FALSIFY mode, an exit 0 (i.e. all 4 PNG
+// cases within eps) would itself be the falsifier failure -- it would
+// mean the legacy implicit-premul path is still alive somewhere.
+const FALSIFY = process.env.FALSIFY ?? '';
+const FALSIFY_MISSING_SPRITE_BLEND = FALSIFY === 'missing-sprite-blend';
+
 const WIDTH = 800;
 const HEIGHT = 600;
 const CLEAR_RGBA = [0.07, 0.07, 0.09, 1];
@@ -188,6 +202,7 @@ const {
   MeshFilter,
   MeshRenderer,
   setTransparentSortConfig,
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
   TONEMAP_NONE,
   TONEMAP_REINHARD_EXTENDED,
   TRANSPARENT_SORT_MODE_LAYER_Y,
@@ -338,19 +353,33 @@ async function mintSpriteAssets(world, layout) {
     addressModeV: 'repeat',
   });
   const materialHandles = [];
+  // feat-20260626 M5-T1 (plan-strategy D-5): FALSIFY=missing-sprite-blend
+  // omits `renderState.blend` from the pass descriptor (renderState empty)
+  // so the engine cannot infer transparent/premul; the 4-PNG matrix readback
+  // is then expected to drift beyond eps, asserting that the implicit
+  // premul fallback was actually retired.
+  const spritePassRenderState = FALSIFY_MISSING_SPRITE_BLEND
+    ? {}
+    : { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND };
   for (let i = 0; i < 3; i++) {
     materialHandles.push(
       world.allocSharedRef('MaterialAsset', {
         kind: 'material',
         passes: [
-          { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
+          // feat-20260626-sprite-transparent-collapse M3 — post M1/M2
+          // SSOT: `renderState.blend` drives LDR split + premultiplied-
+          // alpha blend pipeline (preset `SPRITE_PREMULTIPLIED_ALPHA_BLEND`).
+          { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000, renderState: spritePassRenderState },
         ],
         paramValues: {
-          baseColor: SPRITE_COLOR_TINTS[i],
-          texture: textureHandle,
+          // feat-20260625 M3 / w11 (D-4): UBO-aligned field names. layout.pivot
+          // [px, py] folds into pivotAndSize.xy; .zw is the unused legacy size
+          // slot kept for std140 byte stability (sprite.wgsl ignores it).
+          colorTint: SPRITE_COLOR_TINTS[i],
+          baseColorTexture: textureHandle,
           sampler: samplerHandle,
           region: [0, 0, 1, 1],
-          pivot: layout.pivot,
+          pivotAndSize: [layout.pivot[0], layout.pivot[1], 1, 1],
         },
       }),
     );
@@ -519,6 +548,16 @@ for (const matrixCase of MATRIX) {
   // into the forgeax-engine-assets submodule (BASELINE_DIR above).
   const refPath = resolve(BASELINE_DIR, refFile);
   if (!existsSync(refPath)) {
+    if (FALSIFY_MISSING_SPRITE_BLEND) {
+      // feat-20260626 M5-T1: refuse to seed baselines while a falsifier
+      // is active -- writing the falsified frame would lock the broken
+      // visual into the baseline (charter F2 image-trust). Surface the
+      // gap and let the caller rerun without FALSIFY to seed.
+      failures.push(
+        `case ${scene}/${tonemap}: FALSIFY=missing-sprite-blend active and baseline absent at ${refPath}; rerun without FALSIFY to seed`,
+      );
+      continue;
+    }
     mkdirSync(BASELINE_DIR, { recursive: true });
     const png = writeReferencePng(tightRgba, WIDTH, HEIGHT);
     writeFileSync(refPath, png);
@@ -594,7 +633,6 @@ for (const matrixCase of MATRIX) {
 //   formula `posY - pivotY * sizeY` stay 9-slice-agnostic). The smoke greps
 //   the two files inline and fails if either contains a hit.
 
-const FALSIFY = process.env.FALSIFY ?? '';
 const FALSIFY_NINESLICE_ANCHOR = FALSIFY === 'nineslice-anchor';
 
 console.log(
@@ -668,29 +706,34 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
     assets.catalog('00000000-0000-4000-8000-0000000000c2', {
       kind: 'material',
       passes: [
-        { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
+        // feat-20260626 M3: renderState.blend SSOT.
+        { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND } },
       ],
       paramValues: {
-        baseColor: [1, 1, 1, 1],
+        // feat-20260625 M3/w11 (D-4): UBO-aligned. slicesAndMode merges legacy
+        // slices[4] (LTRB) + sliceMode sign (mode>=0 stretch, <0 tile) into
+        // one vec4 (sprite.wgsl.meta.json paramSchema).
+        colorTint: [1, 1, 1, 1],
         sampler: clampSamplerGuid,
-        slices: ninesliceSlices,
-        sliceMode: 1, // tile
+        slicesAndMode: [ninesliceSlices[0], ninesliceSlices[1], ninesliceSlices[2], -ninesliceSlices[3]],
       },
     }),
   );
   const ninesliceMatHandle = world.allocSharedRef('MaterialAsset', {
     kind: 'material',
     passes: [
-      { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
+      // feat-20260626 M3: renderState.blend SSOT.
+      { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND } },
     ],
     paramValues: {
-      baseColor: [1, 1, 1, 1],
-      texture: ninesliceTextureHandle,
+      // feat-20260625 M3/w11 (D-4): UBO-aligned. slicesAndMode merges legacy
+      // slices[4] (LTRB) + sliceMode (mode>=0 stretch, <0 tile) into vec4.
+      colorTint: [1, 1, 1, 1],
+      baseColorTexture: ninesliceTextureHandle,
       sampler: clampSamplerHandle,
       region: [0, 0, 1, 1],
-      pivot: [0.5, 0.5],
-      slices: ninesliceSlices,
-      sliceMode: 1, // tile
+      pivotAndSize: [0.5, 0.5, 1, 1],
+      slicesAndMode: [ninesliceSlices[0], ninesliceSlices[1], ninesliceSlices[2], -ninesliceSlices[3]],
     },
   });
   const ninesliceMetricsAfter = renderer.metrics.snapshot();
@@ -843,6 +886,32 @@ for (const filePath of AC12_FILES) {
   }
 }
 console.log(`[smoke] AC-12 grep gate: 0 hits in sort-key.ts + layer.ts`);
+
+// feat-20260626 M5-T1 (plan-strategy D-5, AC-08): FALSIFY=missing-sprite-blend
+// verdict. fail-when-passes shape -- the 4-case matrix above was authored
+// without `renderState.blend`, so its PNG readbacks SHOULD drift beyond eps.
+// We count 4-case failures by the `reference PNG drift` / `FALSIFY` substrings
+// pushed during the matrix loop. predicate-held => at least one 4-case drift
+// observed; predicate-NOT-held => engine silently restored the legacy
+// implicit-premul path and we must push an extra failure so exit != 0.
+if (FALSIFY_MISSING_SPRITE_BLEND) {
+  const matrixFailureSubstrings = ['reference PNG drift', 'FALSIFY=missing-sprite-blend active'];
+  const matrixFailureCount = failures.filter((f) =>
+    matrixFailureSubstrings.some((needle) => f.includes(needle)),
+  ).length;
+  if (matrixFailureCount > 0) {
+    console.log(
+      `[smoke] FALSIFY=missing-sprite-blend: predicate held (matrixFailures=${matrixFailureCount}; missing renderState.blend triggers PNG drift / refuse-to-seed as designed)`,
+    );
+  } else {
+    console.error(
+      `[smoke] FALSIFY=missing-sprite-blend: predicate NOT held -- 4 PNG cases stayed within eps despite omitting renderState.blend; engine may still apply implicit premultiplied-alpha fallback`,
+    );
+    failures.push(
+      'FALSIFY=missing-sprite-blend: predicate NOT held -- engine still painted sprites correctly without renderState.blend',
+    );
+  }
+}
 
 if (failures.length > 0) {
   console.error(`[smoke] FAIL - ${failures.length} criteria failed:`);

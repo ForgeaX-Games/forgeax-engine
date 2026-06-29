@@ -63,7 +63,7 @@ const WIDTH = 200;
 const HEIGHT = 150;
 const CLEAR_RGBA = [0, 0, 0, 1];
 const TOTAL_PIXELS = WIDTH * HEIGHT;
-const FRAMES = 300;
+const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 
 // A bright-cyan unit-cube wireframe (12 thin edges) viewed obliquely covers a
 // small fraction of the frame. A SOLID filled cube (the falsify geometry) at

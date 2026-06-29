@@ -24,7 +24,7 @@ import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
 import { ANTIALIAS_NONE, TONEMAP_NONE } from '../components/camera';
-import { createRenderer, HANDLE_QUAD } from '../index';
+import { createRenderer, HANDLE_QUAD, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../index';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -262,14 +262,32 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
     const spriteMaterial = worldFlip.allocSharedRef('MaterialAsset', {
       kind: 'material',
       passes: [
-        { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
+        // feat-20260625-refactor-sprite-as-transparent-mesh M2 / w6 (Q3=b):
+        // transparent first-pass flag drives LDR split + premultiplied-alpha
+        // blend pipeline selection. Mandatory after w15 (the legacy
+        // shadingModel='sprite' arm was ablated; transparent is now SSOT).
+        // feat-20260626-sprite-transparent-collapse M1/M4: the boolean
+        // `transparent` field has collapsed into `renderState.blend` as the
+        // single asset-side SSOT; `SPRITE_PREMULTIPLIED_ALPHA_BLEND` is the
+        // exported preset for sprite-like premultiplied-alpha composition.
+        {
+          name: 'Forward',
+          shader: 'forgeax::sprite',
+          tags: { LightMode: 'Forward' },
+          queue: 3000,
+          renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+        },
       ],
       paramValues: {
-        baseColor: [1.0, 1.0, 1.0, 1.0],
-        texture: textureHandle,
+        // feat-20260625 M3 / w11 (D-4): paramValues field names are UBO-aligned
+        // to sprite.wgsl.meta.json paramSchema 1:1 (colorTint / region /
+        // pivotAndSize / baseColorTexture). The legacy baseColor / texture /
+        // pivot field names lose their backwards-compat fold post-R1.
+        colorTint: [1.0, 1.0, 1.0, 1.0],
+        baseColorTexture: textureHandle,
         sampler: samplerHandle,
         region: [0, 0, 1, 1],
-        pivot: [0.5, 0.5],
+        pivotAndSize: [0.5, 0.5, 1, 1],
       },
     } as never);
 
@@ -393,14 +411,32 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
     const spriteMaterial = worldFlipBoth.allocSharedRef('MaterialAsset', {
       kind: 'material',
       passes: [
-        { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
+        // feat-20260625-refactor-sprite-as-transparent-mesh M2 / w6 (Q3=b):
+        // transparent first-pass flag drives LDR split + premultiplied-alpha
+        // blend pipeline selection. Mandatory after w15 (the legacy
+        // shadingModel='sprite' arm was ablated; transparent is now SSOT).
+        // feat-20260626-sprite-transparent-collapse M1/M4: the boolean
+        // `transparent` field has collapsed into `renderState.blend` as the
+        // single asset-side SSOT; `SPRITE_PREMULTIPLIED_ALPHA_BLEND` is the
+        // exported preset for sprite-like premultiplied-alpha composition.
+        {
+          name: 'Forward',
+          shader: 'forgeax::sprite',
+          tags: { LightMode: 'Forward' },
+          queue: 3000,
+          renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+        },
       ],
       paramValues: {
-        baseColor: [1.0, 1.0, 1.0, 1.0],
-        texture: textureHandle,
+        // feat-20260625 M3 / w11 (D-4): paramValues field names are UBO-aligned
+        // to sprite.wgsl.meta.json paramSchema 1:1 (colorTint / region /
+        // pivotAndSize / baseColorTexture). The legacy baseColor / texture /
+        // pivot field names lose their backwards-compat fold post-R1.
+        colorTint: [1.0, 1.0, 1.0, 1.0],
+        baseColorTexture: textureHandle,
         sampler: samplerHandle,
         region: [0, 0, 1, 1],
-        pivot: [0.5, 0.5],
+        pivotAndSize: [0.5, 0.5, 1, 1],
       },
     } as never);
 

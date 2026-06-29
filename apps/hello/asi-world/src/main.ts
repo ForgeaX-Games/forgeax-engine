@@ -32,12 +32,14 @@ import {
   Camera,
   ChildOf,
   EngineEnvironmentError,
+  encodeSortScope,
   HANDLE_QUAD,
   Layer,
   MeshFilter,
   MeshRenderer,
   setTransparentSortConfig,
   SpriteRegionOverride,
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
   TRANSPARENT_SORT_MODE_LAYER_Y,
   Tilemap,
   TileLayer,
@@ -71,8 +73,8 @@ const CHARACTER = '/character';
 
 const PLAYER_SPEED = 6;
 
-// Object TileLayer uses ySort=1 so all derived entities share
-// Layer.value = OBJECT_LAYER_ORDER << 20 (no chunkIndex contamination).
+// Object TileLayer uses sortScope: 'per-cell' so all derived entities
+// share Layer.value = OBJECT_LAYER_ORDER << 20 (no chunkIndex contamination).
 // This lets the player Y-interleave with every object tile: the player
 // and all trees/stumps/grass are in the same transparent-sort bucket and
 // sorted by foot-Y, giving the JRPG walk-behind-tree effect.
@@ -82,7 +84,7 @@ const PLAYER_SPEED = 6;
 const OBJECT_LAYER_ORDER = 1000;
 
 // Must equal OBJECT_LAYER_ORDER<<20 so the player sits in the same
-// transparent-sort bucket as ySort object-tile entities.
+// transparent-sort bucket as sortScope: 'per-cell' object-tile entities.
 const SPRITE_LAYER_VALUE = OBJECT_LAYER_ORDER << 20;
 
 // Tile id encoding (engine reads `tileset.tiles[tileLayerCellValue - 1]`):
@@ -293,7 +295,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const objectLayerSpawn = world.spawn(
     {
       component: TileLayer,
-      data: { tiles: objectTiles, layerOrder: OBJECT_LAYER_ORDER, ySort: 1 },
+      data: {
+        tiles: objectTiles,
+        layerOrder: OBJECT_LAYER_ORDER,
+        sortScope: encodeSortScope('per-cell'),
+      },
     },
     { component: ChildOf, data: { parent: tilemapEntity } },
     { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
@@ -583,14 +589,23 @@ function registerCharacterMaterial(
         shader: 'forgeax::sprite',
         tags: { LightMode: 'Forward' },
         queue: 3000,
+        // feat-20260626-sprite-transparent-collapse M3 — post M1/M2 SSOT:
+        // `renderState.blend` drives LDR split + premultiplied-alpha
+        // pipeline + transparentDispatch routing (preset
+        // `SPRITE_PREMULTIPLIED_ALPHA_BLEND`).
+        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
       },
     ],
     paramValues: {
-      baseColor: [1, 1, 1, 1],
-      texture: args.texture,
+      // feat-20260625 M3 / w11 (D-4): UBO-aligned 1:1 with paramSchema.
+      // flipY is still a recognised user input (extract folds it into region
+      // sign-negation per plan-strategy D-8); colorTint / baseColorTexture /
+      // pivotAndSize replace the legacy baseColor / texture / pivot keys.
+      colorTint: [1, 1, 1, 1],
+      baseColorTexture: args.texture,
       sampler: args.sampler,
       region: [0, 0, 1, 1],
-      pivot: [0.5, 0.0],
+      pivotAndSize: [0.5, 0.0, 1, 1],
       flipY: 1,
     },
   });

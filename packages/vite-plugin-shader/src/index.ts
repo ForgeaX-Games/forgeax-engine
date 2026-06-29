@@ -107,7 +107,11 @@ export async function buildEngineShaderManifest(): Promise<{
       // is bound when no PointLightShadow snapshots are active so the cube
       // sample returns 1.0 (fully lit) and AC-09 zero-shadow zero-allocation
       // is preserved (the atlas itself is still lazy-allocated by ShadowAtlas).
-      defines: { STORAGE_BUFFER_AVAILABLE: true, POINT_SHADOW_AVAILABLE: true },
+      defines: {
+        STORAGE_BUFFER_AVAILABLE: true,
+        POINT_SHADOW_AVAILABLE: true,
+        PER_INSTANCE_REGION: false,
+      },
     });
     if (!r.ok) {
       throw Object.assign(new Error(r.error.message), toRollupLog(r.error));
@@ -1361,9 +1365,24 @@ async function compileEngineEntry(
       // pointLight/spotLight bindings. Without the define the WGSL falls to
       // var<uniform> while the runtime BGL uses read-only-storage, causing
       // pipeline validation mismatch (M4-repair pre-existing fix).
+      //
+      // feat-20260625 M2 fix: PER_INSTANCE_REGION is a sprite.wgsl-local axis
+      // (D-4); common.wgsl uses `#if PER_INSTANCE_REGION == true` which
+      // naga_oil rejects with `Composer error: Unknown shader def` when the
+      // key is absent. Inject `PER_INSTANCE_REGION: false` as a global default
+      // so any entry (variant or non-variant) whose own axis list does NOT
+      // declare it gets a safe defined-as-false fallback. The variant's own
+      // axis-declared value (true/false at cartesian product) overrides via
+      // spread order.
       ...(variantAxes.length > 0
-        ? { defines }
-        : { defines: { STORAGE_BUFFER_AVAILABLE: true, POINT_SHADOW_AVAILABLE: true } }),
+        ? { defines: { PER_INSTANCE_REGION: false, ...defines } }
+        : {
+            defines: {
+              STORAGE_BUFFER_AVAILABLE: true,
+              POINT_SHADOW_AVAILABLE: true,
+              PER_INSTANCE_REGION: false,
+            },
+          }),
     });
     if (!r.ok) {
       throw Object.assign(new Error(r.error.message), toRollupLog(r.error));
@@ -1769,7 +1788,11 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       const r = await compileShader(stripPragmas(code), {
         id,
         imports,
-        defines: { STORAGE_BUFFER_AVAILABLE: true, POINT_SHADOW_AVAILABLE: true },
+        defines: {
+          STORAGE_BUFFER_AVAILABLE: true,
+          POINT_SHADOW_AVAILABLE: true,
+          PER_INSTANCE_REGION: false,
+        },
       });
       if (!r.ok) {
         // bug-20260512-rolldown-this-error-wasm-crash: rolldown@1.0.0-rc.17

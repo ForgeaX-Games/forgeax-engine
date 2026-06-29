@@ -2,8 +2,9 @@
 // templates/game-default bootstrap entry it loads. Runs in the vitest `browser`
 // project (chrome-beta + lavapipe, real WebGPU), so it covers the
 // browser-only path that dawn-node smokes cannot: createApp's canvas form,
-// the bootstrap entry's scene.pack.json fetch via import.meta.url, loadByGuid
-// through the pluginPack dev-server middleware, and N frames of real draw.
+// the bootstrap entry's scene load by GUID (forge.json.defaultScene ->
+// loadByGuid<SceneAsset>) through the pluginPack dev-server middleware (which
+// indexes assets/scene.pack.json), and N frames of real draw.
 //
 // What it asserts (charter P3 explicit failure -- every gate is a hard
 // expect, no silent skip):
@@ -71,9 +72,9 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
       registerUpdate: (fn: (dt: number) => void) => app.registerUpdate(fn),
     };
 
-    // bootstrap(world, ctx) awaits scene.pack.json fetch + loadByGuid; a throw
-    // here is a real failure (stale pack schema, missing asset, broken
-    // instantiate).
+    // bootstrap(world, ctx) awaits the scene loadByGuid<SceneAsset> +
+    // instantiate; a throw here is a real failure (stale pack schema, missing
+    // asset, broken instantiate).
     await bootstrap(app.world, ctx);
 
     const startRes = app.start();

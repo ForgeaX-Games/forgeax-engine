@@ -259,7 +259,30 @@ export class DebugDraw implements DebugDrawInterface {
     }
 
     if (newCap > this.capVal) {
+      // Bug B fix (feat-20260626 m6-4): the GPU vertex buffer must grow with the
+      // CPU staging, or flush() binds a buffer too small for the staged vertex
+      // count and the backend rejects the draw ("Vertex range requires a larger
+      // buffer than the bound buffer size"). This was latent until the overlay
+      // pass actually flushed -- before the glue merge the pass was a no-op stub,
+      // so the GPU vbo was never bound past its initial size. Reallocate at the
+      // new size + destroy the old; on alloc failure keep the old cap (the draw
+      // stays bounded + correct, just truncated) rather than growing the staging
+      // past the GPU buffer.
+      const newVbo = this.rhiDevice.createBuffer({
+        size: newCap * VERTEX_STRIDE_BYTES,
+        usage: 8 | 32, // COPY_DST | VERTEX (mirrors createDebugDraw factory)
+        label: 'debug-draw-vbo',
+      });
+      if (!newVbo.ok) {
+        console.warn(
+          `[DebugDraw] GPU vertex buffer grow to ${newCap} failed (${newVbo.error.code}); ` +
+            `keeping ${this.capVal} -- excess vertices are truncated this frame.`,
+        );
+        return;
+      }
       console.warn(`[DebugDraw] Resizing vertex buffer from ${this.capVal} to ${newCap} vertices.`);
+      if (this.gpuVbo !== null) this.rhiDevice.destroyBuffer(this.gpuVbo);
+      this.gpuVbo = newVbo.value;
       this.capVal = newCap;
       const newStaging = new Float32Array(newCap * (VERTEX_STRIDE_BYTES / 4));
       newStaging.set(this.stagingArr.subarray(0, this.stagingLen * 4));

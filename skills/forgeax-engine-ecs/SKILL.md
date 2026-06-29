@@ -251,6 +251,54 @@ if (r.ok) {
 
 - **resolver 挂错地方**：`engine.assets.instantiate(...)` 自动 wire 内部 SceneAsset resolver；只有 unit test 才走 `world._setSceneAssetResolver`（`@internal`，前缀 `_`）。demo 不要写 `if (world.setSceneAssetResolver)` 防御逻辑——这教坏下个 AI。
 
+## SpriteInstances / TileLayer.sortScope (feat-20260625)
+
+2D 批绘 + tilemap terrain 折叠：把 779+ per-cell render entity 折叠为 $\leq 16N$ 个 per-(layer, chunk, atlas) 桶 entity（$N$ = terrain layer 数）。ECS 一等公民两条：(1) `SpriteInstances` 组件（runtime 包导出），(2) `TileLayer.sortScope: 'layer' | 'per-cell'` 字面量联合。
+
+### SpriteInstances 组件（2D peer of `Instances`）
+
+```ts
+import { SpriteInstances, type SpriteInstancesData } from '@forgeax/engine-runtime';
+
+world.spawn(
+  { component: MeshFilter,      data: { assetHandle: HANDLE_QUAD } },
+  { component: MeshRenderer,    data: { materials: [spriteMatHandle] } },
+  { component: SpriteInstances, data: { transforms, regions } },
+);
+```
+
+| field | schema | stride / instance |
+|:--|:--|:--|
+| `transforms` | `array<f32>` | 16 f32（column-major mat4，translation 在 m03/m13/m23） |
+| `regions` | `array<f32>` | 4 f32（`[uMin, vMin, uW, vH]` atlas-normalized UV rect） |
+
+不变量：`transforms.length / 16 === regions.length / 4`（per-instance 计数一致）。RenderSystem extract entry 做防御性校验，违规走 Layer-3 ErrorHandler，三条新 `EcsErrorCode` 字面量收敛于 ECS 闭合联合：
+
+| code | 触发 | `detail` 关键字段 |
+|:--|:--|:--|
+| `sprite-instances-count-mismatch` | `transforms.length/16 !== regions.length/4` | `transformsLength` / `regionsLength` / `expectedStride: { transforms: 16, regions: 4 }` |
+| `sprite-instances-requires-sprite-shader` | MaterialAsset 首 pass shader 非 `'forgeax::sprite'` | `entityId` / `observedMaterialShaderId` |
+| `sprite-instances-mutually-exclusive-with-instances` | 同 entity 同时挂 `Instances` + `SpriteInstances` | `entityId` |
+
+charter P4 一致抽象：`Instances`（3D, 16 f32 / instance）↔ `SpriteInstances`（2D, 16+4 f32 / instance interleaved 80B）—AI 用户按"per-instance 是否带 UV"挑组件，不按 API 形态挑。两条均走 array-vocab + Layer-3 error envelope，**不**新增 ECS 概念。
+
+### `TileLayer.sortScope` 字面量联合（取代 `ySort: 0 | 1`）
+
+```ts
+type TileLayer = {
+  readonly sortScope: 'layer' | 'per-cell';
+  // ... 其它 tilemap 字段
+};
+```
+
+| 字面量 | 语义 | 渲染路径 |
+|:--|:--|:--|
+| `'layer'` | 整层 y-sort（terrain 默认） | `tilemap-chunk-extract` 聚合为 per-(layer,chunk,atlas) 桶 → `SpriteInstances` 单 drawcall |
+| `'per-cell'` | per-cell y-sort（object 层、Y-sort interleave） | 保留 per-cell 派生 entity，走 `render-system-extract` 主路径 |
+
+迁移：旧字段 `ySort: 0 | 1` 一刀切（Optimal > compatible）；TS exhaustive switch 在所有 sortScope 消费方守门。grep `sortScope` 命中点是迁移单一锚点（charter F1）。
+
+
 ## skinned animation (feat-20260612)
 
 挂三件套即可让 glTF skinned mesh 真动起来：

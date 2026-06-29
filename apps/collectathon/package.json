@@ -1,0 +1,68 @@
+{
+  "name": "@forgeax/collectathon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "3D third-person collectathon showcase game — 11 forgeax engine capabilities combined in a single level",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:browser": "node scripts/smoke-browser.mjs"
+  },
+  "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/collectathon smoke",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle shape downstream of runtime + assets sizes already tracked at package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "dynamic gameplay scene not a stable fps baseline anchor"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "collectathon game integration app; bench focus on @forgeax/engine-math + @forgeax/engine-ecs"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/collectathon smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-physics": "workspace:*",
+    "@forgeax/engine-physics-rapier3d": "workspace:*",
+    "@forgeax/engine-audio": "workspace:*",
+    "@forgeax/engine-audio-webaudio": "workspace:*",
+    "@forgeax/engine-state": "workspace:*",
+    "@forgeax/engine-font": "workspace:*",
+    "@forgeax/engine-debug-draw": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-fbx": "workspace:*",
+    "@forgeax/engine-gltf": "workspace:*",
+    "@forgeax/engine-image": "workspace:*",
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@forgeax/engine-shader": "workspace:*",
+    "@types/node": "^25.8.0",
+    "@webgpu/types": "^0.1.70",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0"
+  }
+}

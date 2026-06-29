@@ -134,8 +134,8 @@ function stencilOpLabel(o: string): string {
 function KvRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex gap-2 text-xs py-0.5">
-      <span className="text-slate-500 shrink-0 w-36">{label}:</span>
-      <span className="text-slate-300 font-mono">{value}</span>
+      <span className="text-muted-foreground shrink-0 w-36">{label}:</span>
+      <span className="text-foreground font-mono">{value}</span>
     </div>
   );
 }
@@ -153,7 +153,7 @@ function SectionHeader({
     <button
       type="button"
       onClick={onToggle}
-      className="flex items-center gap-1.5 w-full text-left px-2 py-1 text-xs font-medium text-blue-400/80 hover:text-blue-300 transition-colors"
+      className="flex items-center gap-1.5 w-full text-left px-2 py-1 text-xs font-medium text-brand hover:text-brand transition-colors"
     >
       {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
       {label}
@@ -169,10 +169,7 @@ function VertexInputSection({ draw }: { draw: DrawEntry }) {
   return (
     <div className="space-y-1">
       {vi.buffers.map((buf, si) => (
-        <div
-          key={`vb-${buf.arrayStride}-${si}`}
-          className="ml-2 border-l-2 border-slate-700/30 pl-2"
-        >
+        <div key={`vb-${buf.arrayStride}-${si}`} className="ml-2 border-l-2 border-border pl-2">
           <KvRow
             label={`Slot ${si}`}
             value={`stride=${buf.arrayStride}, stepMode=${buf.stepMode}`}
@@ -226,12 +223,12 @@ function ShadersSection({
           <button
             type="button"
             onClick={() => toggleWgsl(ps.vertexShaderModuleHandleId ?? '')}
-            className="text-xs text-amber-400/60 hover:text-amber-300"
+            className="text-xs text-warning/80 hover:text-warning"
           >
             {expanded.has(ps.vertexShaderModuleHandleId ?? '') ? 'Hide' : 'Show'} WGSL
           </button>
           {expanded.has(ps.vertexShaderModuleHandleId ?? '') && (
-            <pre className="mt-1 p-2 bg-slate-800 rounded text-xs text-slate-400 font-mono max-h-48 overflow-auto whitespace-pre-wrap">
+            <pre className="mt-1 p-2 bg-muted rounded text-xs text-muted-foreground font-mono max-h-48 overflow-auto whitespace-pre-wrap">
               {vsDesc.wgslCode}
             </pre>
           )}
@@ -243,12 +240,12 @@ function ShadersSection({
           <button
             type="button"
             onClick={() => toggleWgsl(ps.fragmentShaderModuleHandleId ?? '')}
-            className="text-xs text-amber-400/60 hover:text-amber-300"
+            className="text-xs text-warning/80 hover:text-warning"
           >
             {expanded.has(ps.fragmentShaderModuleHandleId ?? '') ? 'Hide' : 'Show'} WGSL
           </button>
           {expanded.has(ps.fragmentShaderModuleHandleId ?? '') && (
-            <pre className="mt-1 p-2 bg-slate-800 rounded text-xs text-slate-400 font-mono max-h-48 overflow-auto whitespace-pre-wrap">
+            <pre className="mt-1 p-2 bg-muted rounded text-xs text-muted-foreground font-mono max-h-48 overflow-auto whitespace-pre-wrap">
               {fsDesc.wgslCode}
             </pre>
           )}
@@ -278,15 +275,15 @@ function DepthStencilSection({ draw }: { draw: DrawEntry }) {
       <KvRow label="Stencil Ref" value={String(ds.stencilReference)} />
       <KvRow label="Stencil Read Mask" value={`0x${ds.stencilReadMask.toString(16)}`} />
       <KvRow label="Stencil Write Mask" value={`0x${ds.stencilWriteMask.toString(16)}`} />
-      <div className="ml-2 border-l-2 border-slate-700/30 pl-2">
-        <span className="text-xs text-slate-500">Front</span>
+      <div className="ml-2 border-l-2 border-border pl-2">
+        <span className="text-xs text-muted-foreground">Front</span>
         <KvRow label="  Compare" value={compareLabel(sfCompare)} />
         <KvRow label="  Fail" value={stencilOpLabel(sfFail)} />
         <KvRow label="  Z-Fail" value={stencilOpLabel(sfDepthFail)} />
         <KvRow label="  Pass" value={stencilOpLabel(sfPass)} />
       </div>
-      <div className="ml-2 border-l-2 border-slate-700/30 pl-2">
-        <span className="text-xs text-slate-500">Back</span>
+      <div className="ml-2 border-l-2 border-border pl-2">
+        <span className="text-xs text-muted-foreground">Back</span>
         <KvRow label="  Compare" value={compareLabel(sbCompare)} />
         <KvRow label="  Fail" value={stencilOpLabel(sbFail)} />
         <KvRow label="  Z-Fail" value={stencilOpLabel(sbDepthFail)} />
@@ -318,7 +315,7 @@ function BlendSection({ draw }: { draw: DrawEntry }) {
         />
       )}
       {bl.colorTargets.map((ct, ti) => (
-        <div key={`rt-${ct.format}-${ti}`} className="ml-2 border-l-2 border-slate-700/30 pl-2">
+        <div key={`rt-${ct.format}-${ti}`} className="ml-2 border-l-2 border-border pl-2">
           <KvRow label={`RT ${ti}`} value={`format=${ct.format}`} />
           <KvRow label="  Write Mask" value={`0x${ct.writeMask.toString(16)}`} />
           {ct.color && (
@@ -362,10 +359,12 @@ export function PipelineState(_props: IDockviewPanelProps) {
   if (noDraw) {
     return (
       <div
-        className="p-4 h-full bg-slate-900 flex items-center justify-center"
+        className="p-4 h-full bg-background flex items-center justify-center"
         {...{ [pipelineStateAnchor()]: mode }}
       >
-        <p className="text-xs text-slate-500">Select a draw command to view pipeline state</p>
+        <p className="text-xs text-muted-foreground">
+          Select a draw command to view pipeline state
+        </p>
       </div>
     );
   }
@@ -374,10 +373,12 @@ export function PipelineState(_props: IDockviewPanelProps) {
   if (!draw) {
     return (
       <div
-        className="p-4 h-full bg-slate-900 flex items-center justify-center"
+        className="p-4 h-full bg-background flex items-center justify-center"
         {...{ [pipelineStateAnchor()]: mode }}
       >
-        <p className="text-xs text-slate-500">Select a draw command to view pipeline state</p>
+        <p className="text-xs text-muted-foreground">
+          Select a draw command to view pipeline state
+        </p>
       </div>
     );
   }
@@ -386,7 +387,7 @@ export function PipelineState(_props: IDockviewPanelProps) {
 
   return (
     <div
-      className="h-full bg-slate-900 flex flex-col overflow-y-auto p-1"
+      className="h-full bg-background flex flex-col overflow-y-auto p-1"
       {...{ [pipelineStateAnchor()]: mode }}
     >
       {/* IA */}
@@ -396,7 +397,7 @@ export function PipelineState(_props: IDockviewPanelProps) {
         onToggle={() => toggleSection('ia')}
       />
       {openSections.has('ia') && (
-        <div className="ml-2 border-l border-slate-700/30 pl-2 py-1">
+        <div className="ml-2 border-l border-border pl-2 py-1">
           <KvRow label="Topology" value={topologyLabel(ps.inputAssembly.topology)} />
           <KvRow label="Strip Index" value={ps.inputAssembly.stripIndexFormat ?? '(none)'} />
         </div>
@@ -409,7 +410,7 @@ export function PipelineState(_props: IDockviewPanelProps) {
         onToggle={() => toggleSection('vertexInput')}
       />
       {openSections.has('vertexInput') && (
-        <div className="ml-2 border-l border-slate-700/30 pl-2 py-1">
+        <div className="ml-2 border-l border-border pl-2 py-1">
           <VertexInputSection draw={draw} />
         </div>
       )}
@@ -421,7 +422,7 @@ export function PipelineState(_props: IDockviewPanelProps) {
         onToggle={() => toggleSection('shaders')}
       />
       {openSections.has('shaders') && (
-        <div className="ml-2 border-l border-slate-700/30 pl-2 py-1">
+        <div className="ml-2 border-l border-border pl-2 py-1">
           <ShadersSection draw={draw} resources={vm.resources} />
         </div>
       )}
@@ -433,7 +434,7 @@ export function PipelineState(_props: IDockviewPanelProps) {
         onToggle={() => toggleSection('rasterizer')}
       />
       {openSections.has('rasterizer') && (
-        <div className="ml-2 border-l border-slate-700/30 pl-2 py-1">
+        <div className="ml-2 border-l border-border pl-2 py-1">
           <KvRow label="Cull Mode" value={cullLabel(ps.rasterizer.cullMode)} />
           <KvRow label="Front Face" value={ps.rasterizer.frontFace.toUpperCase()} />
         </div>
@@ -446,7 +447,7 @@ export function PipelineState(_props: IDockviewPanelProps) {
         onToggle={() => toggleSection('depthStencil')}
       />
       {openSections.has('depthStencil') && (
-        <div className="ml-2 border-l border-slate-700/30 pl-2 py-1">
+        <div className="ml-2 border-l border-border pl-2 py-1">
           <DepthStencilSection draw={draw} />
         </div>
       )}
@@ -458,7 +459,7 @@ export function PipelineState(_props: IDockviewPanelProps) {
         onToggle={() => toggleSection('blend')}
       />
       {openSections.has('blend') && (
-        <div className="ml-2 border-l border-slate-700/30 pl-2 py-1">
+        <div className="ml-2 border-l border-border pl-2 py-1">
           <BlendSection draw={draw} />
         </div>
       )}
@@ -470,7 +471,7 @@ export function PipelineState(_props: IDockviewPanelProps) {
         onToggle={() => toggleSection('multisample')}
       />
       {openSections.has('multisample') && (
-        <div className="ml-2 border-l border-slate-700/30 pl-2 py-1">
+        <div className="ml-2 border-l border-border pl-2 py-1">
           <KvRow label="Count" value={String(ps.multisample.count)} />
           <KvRow label="Mask" value={`0x${ps.multisample.mask.toString(16)}`} />
           <KvRow

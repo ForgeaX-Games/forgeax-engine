@@ -45,7 +45,10 @@ import {
   type BindGroupEntry,
   type Buffer,
   type CommandBuffer,
+  err,
+  ok,
   type RenderPipeline,
+  type Result,
   type RhiCanvasContext,
   type RhiCommandEncoder,
   RhiError,
@@ -56,7 +59,10 @@ import type {
   Handle,
   MaterialRenderState,
   MeshAsset,
+  ParamSchemaEntry,
+  PassKind,
   PassSelector,
+  PrimitiveTopology,
   RenderPipelineAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
@@ -94,6 +100,7 @@ import {
   packSpotLight,
   SPOT_LIGHT_STD430_BYTES,
 } from './light-buffer-layout';
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
 import { SKIN_MATERIAL_SHADER_ID } from './pbr-pipeline';
 import { buildBeginRenderPassDescriptor } from './pipeline-spec';
 import type { RenderPipeline as RenderPipelineDef } from './render-pipeline';
@@ -121,6 +128,7 @@ import type {
   SkyboxSnapshot,
   SkylightSnapshot,
   SpotLightSnapshot,
+  SpriteInstancesSnapshot,
 } from './render-system-extract';
 // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4 (D-1 record-stage
 // fold operator). Pure linear-scan helper that groups transparent-dispatch
@@ -156,6 +164,98 @@ import { probeVideoHighPerfUpload } from './video-player-system';
  * (`zero-camera-clear-fallback.test.ts`). AC-05.
  */
 export const ZERO_CAMERA_CLEAR_FALLBACK: readonly [number, number, number, number] = [0, 0, 0, 1];
+
+// ─── feat-20260625 M3 / w11 — sprite-pass 80B interleaved upload helpers ─────
+//
+// Plan-strategy D-1 (interleaved single buffer 80B/instance) + D-9 (cacheKey
+// = entity packed u32). The sprite-pass record stage consumes
+// `SpriteInstancesSnapshot` (from render-system-extract) and produces a single
+// GPU buffer interleaving mat4 transforms with vec4 regions per instance;
+// the BGL stays untouched (D-1 single binding slot @group(3) @binding(0)).
+//
+// Layout (per instance, byte offset 0..80):
+//   [0..64)  mat4 column-major (16 f32)
+//   [64..80) region vec4 [uMin, vMin, uW, vH] (4 f32)
+//   second instance starts at byte 80.
+//
+// The cache fingerprint is the triple `(cacheKey, archVersion, byteLength)`;
+// `spriteInstancesCacheHit` is the boolean side of the fingerprint check the
+// record stage runs once per sprite-pass entity. Pure functions — the GPU
+// device + buffer wrapper layer stays out of this module so the unit test
+// (w9) exercises both helpers without standing up a device mock.
+
+/** Re-export of the extract-stage snapshot so test sites can build it. */
+export type { SpriteInstancesSnapshot };
+
+/**
+ * Interleave SpriteInstances transforms (stride 16) and regions (stride 4)
+ * into a single Float32Array with stride 20 (= 80 bytes per instance,
+ * plan-strategy D-1). Callers feed the output buffer to
+ * `device.queue.writeBuffer` against the per-entity GPU buffer slot.
+ *
+ * Pre-conditions guaranteed by render-system-extract M3 / w10:
+ *   - `transforms.length` is a multiple of 16
+ *   - `regions.length` is a multiple of 4
+ *   - `transforms.length / 16 === regions.length / 4`
+ *
+ * Violations fire `sprite-instances-count-mismatch` at the extract entry and
+ * never reach this helper. The helper itself does NOT re-validate the
+ * pre-conditions — single-validator invariant (charter P4 explicit failure
+ * routed once at the extract boundary; downstream consumers trust the
+ * snapshot shape).
+ *
+ * @param transforms — packed mat4 (column-major) Float32Array (stride 16).
+ * @param regions    — packed vec4 [uMin, vMin, uW, vH] Float32Array (stride 4).
+ * @returns interleaved Float32Array with length `(transforms.length + regions.length)`.
+ */
+export function interleaveSpriteInstanceBuffer(
+  transforms: Float32Array,
+  regions: Float32Array,
+): Float32Array {
+  const count = transforms.length / 16;
+  const out = new Float32Array(count * 20);
+  for (let i = 0; i < count; i++) {
+    const dstBase = i * 20;
+    const tSrcBase = i * 16;
+    const rSrcBase = i * 4;
+    // mat4 (16 floats) — explicit loop avoids subarray copy overhead.
+    for (let k = 0; k < 16; k++) out[dstBase + k] = transforms[tSrcBase + k] ?? 0;
+    // region (4 floats).
+    for (let k = 0; k < 4; k++) out[dstBase + 16 + k] = regions[rSrcBase + k] ?? 0;
+  }
+  return out;
+}
+
+/**
+ * Boolean side of the per-entity sprite-pass GPU buffer cache fingerprint
+ * check. Returns true iff the existing entry is byte-for-byte safe to reuse:
+ *
+ *   - `entry` exists (the entity has been recorded at least once);
+ *   - `entry.uploadedArchVersion === snapshot.archVersion` (archetype
+ *     storage has not been re-allocated since last upload);
+ *   - `entry.uploadedByteLength === requestedBytes` (byte count matches the
+ *     interleaved layout this frame would write).
+ *
+ * The record stage gates the `createBuffer + queue.writeBuffer` round on the
+ * negation of this predicate; a hit short-circuits to a `writeBuffer`-only
+ * refresh against the existing GPU buffer.
+ *
+ * @param entry — cached `InstanceBufferCacheEntry` for this `cacheKey`, or
+ *   `undefined` if the entity has never been recorded.
+ * @param snapshot — current frame's snapshot (carries `cacheKey + archVersion`).
+ * @param requestedBytes — `transforms.byteLength + regions.byteLength` =
+ *   80 * `instanceCount` for SpriteInstances (D-1 interleaved layout).
+ */
+export function spriteInstancesCacheHit(
+  entry: import('./instance-buffer-cache').InstanceBufferCacheEntry | undefined,
+  snapshot: SpriteInstancesSnapshot,
+  requestedBytes: number,
+): boolean {
+  if (entry === undefined) return false;
+  if (entry.uploadedArchVersion !== snapshot.archVersion) return false;
+  if (entry.uploadedByteLength !== requestedBytes) return false;
+  return true;
+}
 
 /**
  * Build a synthetic CameraSnapshot the record stage uses when the world
@@ -847,16 +947,10 @@ export interface ValidatedRenderable {
 
 function selectGeometryPipeline(
   pipelineState: PipelineState,
-  shading: 'unlit' | 'standard' | 'sprite',
+  shading: 'unlit' | 'standard',
   tonemapActive: boolean,
   msaaActive: boolean,
 ): RenderPipeline | null {
-  if (shading === 'sprite') {
-    if (tonemapActive) {
-      return msaaActive ? pipelineState.spritePipelineHdrMsaa : pipelineState.spritePipelineHdr;
-    }
-    return msaaActive ? pipelineState.spritePipelineMsaa : pipelineState.spritePipeline;
-  }
   if (shading === 'standard') {
     if (tonemapActive) {
       return msaaActive ? pipelineState.standardPipelineHdrMsaa : pipelineState.standardPipelineHdr;
@@ -869,6 +963,125 @@ function selectGeometryPipeline(
   }
   return msaaActive ? pipelineState.unlitPipelineMsaa : pipelineState.unlitPipeline;
 }
+
+// === feat-20260625 M2 / w7 transparent-aware helpers ============================
+//
+// Three small pure helpers replace the inline sprite-specific switches inside
+// recordFrame so the transparent / sprite / pipeline-miss paths become unit-
+// testable without a GPU device (charter P2 structure-over-prose).
+//
+// Plan anchors:
+//   - requirements AC-05 / AC-14
+//   - plan-strategy section 2 D-3 (MaterialSnapshot.transparent drives split
+//     + blend; charter P3 explicit failure on cache miss)
+//   - plan-strategy section 5.6 gate R-H (helpers only read MaterialSnapshot
+//     paramSnapshot / transparent / shadingModel fields; they MUST NOT touch
+//     the MaterialAsset registry directly or cast over firstMaterial)
+
+/**
+ * Decides whether the LDR (tonemapActive=false) main pass needs the
+ * sprite-style split into two serial sub-passes (geometry sRGB + transparent
+ * unorm). Triggered by any validated dispatch entry carrying
+ * `material.transparent === true` — derived by the extract stage from
+ * `passes[0].renderState.blend !== undefined` (post-feat-20260626-collapse
+ * SSOT, plan-strategy D-3; MaterialPassDescriptor no longer carries a
+ * dedicated `transparent` field).
+ *
+ * feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13: the M2 union
+ * with `shadingModel === 'sprite'` is gone — sprite materials now declare
+ * `transparent: true` on their pass descriptor (or extract folds it onto
+ * `MaterialSnapshot.transparent`), so the legacy arm is redundant.
+ *
+ * @internal
+ */
+export function computeSplitLdrSprite(
+  validatedOrdered: readonly (
+    | { readonly source: { readonly material: MaterialSnapshot } }
+    | undefined
+  )[],
+  tonemapActive: boolean,
+): boolean {
+  if (tonemapActive) return false;
+  for (let i = 0; i < validatedOrdered.length; i++) {
+    const v = validatedOrdered[i];
+    if (v === undefined) continue;
+    const m = v.source.material;
+    if (m.transparent === true) return true;
+  }
+  return false;
+}
+
+/**
+ * Selects the PSO for a transparent (or any generic materialShaderId) draw
+ * via the runtime's per-MaterialShader pipeline cache. Returns a
+ * structured RhiError on cache miss / pending build -- the caller MUST
+ * surface this via the error registry rather than substituting a silent
+ * fallback (charter P3 explicit failure).
+ *
+ * The `getMaterialShaderPipeline` argument mirrors
+ * {@link RenderSystemRuntime.getMaterialShaderPipeline}'s 9-arg signature
+ * but is injected so the helper is unit-testable with a plain
+ * `() => null` stand-in. The helper threads only the inputs the caller
+ * already has on the dispatch entry -- it never reads from
+ * MaterialAsset internals (plan-strategy section 5.6 gate R-H).
+ *
+ * @internal
+ */
+export function selectMaterialPipelineForRender(args: {
+  readonly materialShaderId: string;
+  readonly isHdr: boolean;
+  readonly renderState?: MaterialRenderState | undefined;
+  readonly topology?: PrimitiveTopology | undefined;
+  readonly indexFormat?: 'uint16' | 'uint32' | undefined;
+  readonly variantSet?: string | undefined;
+  readonly sampleCount?: number | undefined;
+  readonly getMaterialShaderPipeline:
+    | ((
+        materialShaderId: string,
+        isHdr: boolean,
+        renderState?: MaterialRenderState,
+        topology?: PrimitiveTopology,
+        indexFormat?: 'uint16' | 'uint32',
+        variantSet?: string,
+        passKind?: PassKind,
+        meshAttributes?: import('@forgeax/engine-types').VertexAttributeMap,
+        sampleCount?: number,
+      ) => RenderPipeline | null)
+    | undefined;
+}): Result<RenderPipeline, RhiError> {
+  if (args.getMaterialShaderPipeline === undefined) {
+    return err(
+      new RhiError({
+        code: 'internal-error',
+        expected: `runtime.getMaterialShaderPipeline registered before draw of ${args.materialShaderId}`,
+        hint: `material shader ${args.materialShaderId} has no resolver; the renderer was not initialised with a pipeline cache`,
+      }),
+    );
+  }
+  const pipeline = args.getMaterialShaderPipeline(
+    args.materialShaderId,
+    args.isHdr,
+    args.renderState,
+    args.topology,
+    args.indexFormat,
+    args.variantSet,
+    undefined, // passKind defaults to 'forward'
+    undefined, // meshAttributes -- transparent path uses the default vertex layout
+    args.sampleCount,
+  );
+  if (pipeline === null) {
+    return err(
+      new RhiError({
+        code: 'internal-error',
+        expected: `pipeline cache hit for ${args.materialShaderId} (renderState=${args.renderState ? 'set' : 'unset'}, isHdr=${args.isHdr})`,
+        hint: `material shader pipeline ${args.materialShaderId} missed the runtime cache; the underlying shader-module build may still be pending, or the id is not registered in ShaderRegistry`,
+      }),
+    );
+  }
+  return ok(pipeline);
+}
+
+// === end feat-20260625 M2 / w7 transparent-aware helpers ========================
 
 /**
  * feat-20260601-gpu-resource-store-extraction M1 / D-9: resolve a texture's
@@ -1064,101 +1277,6 @@ export function detectNineSliceScaleTooSmall(
 }
 
 /**
- * Build the 80-byte Material UBO payload for a sprite material entry
- * (feat-20260527-sprite-nineslice M2 / w11, plan-strategy §D-3 + §D-7).
- *
- * Layout (16 floats, std140 4 vec4 slots):
- *   slot 0  [ 0..15] colorTint     vec4
- *   slot 1  [16..31] region        vec4 (uMin, vMin, uW, vH; flip pre-applied)
- *   slot 2  [32..47] pivotAndSize  vec4 (pivotX, pivotY, 1, 1)
- *   slot 3  [48..63] slicesAndMode vec4 (left, top, right, bottom; tile sentinel: bottom < 0)
- *   slot 4  [64..79] reserved zero (PBR payload occupies this slot but the
- *                                   sprite path leaves it untouched, so the
- *                                   80B buffer slice is zero-initialised).
- *
- * The first 48 B (colorTint / region / pivotAndSize) are byte-for-byte
- * equivalent to the legacy hard-coded sprite write path: D-7 isolation
- * regression net (`render-system-record-pbr-ubo-stable.test.ts`) detects
- * any byte drift in the PBR variant; the sprite three-state regression net
- * (`render-system-record-sprite-ubo-bytes.test.ts`) covers the slot 3
- * sentinel triple.
- *
- * bug-20260618 (sprite double-scale): pivotAndSize.zw is locked to (1, 1).
- * The earlier feat-20260601 D-3 path wrote the Transform.world column
- * lengths here so the shader's `pos_local = (uv - pivot) * size` produced
- * world-unit-sized quads -- but the same `worldFromLocal` mat4 (with scale
- * baked in) is left-multiplied into `pos_local` downstream, which scales
- * the quad a SECOND time. The net world-space size was `scaleX^2 / scaleY^2`
- * (invisible at scale=1, breaks asi-world tilemap object tiles where
- * widthCells / heightCells != 1). Locking size to the unit-quad value
- * lets `worldFromLocal` solely own the scale (consistent with PBR / unlit
- * mesh paths -- charter P4 single-source TRS application).
- *
- * The helper does NOT consult the texture upload state — missing-texture
- * debug-pink override and the per-frame RhiError fire stay in the inline
- * caller (they require runtime / errorRegistry / frameState). The helper
- * stays a pure POD writer so unit tests can run without a GPU device.
- *
- * @param material  the extracted MaterialSnapshot (shadingModel='sprite')
- * @returns 80-byte ArrayBuffer ready for `queue.writeBuffer`.
- */
-export function buildSpriteMaterialUboPayload(material: MaterialSnapshot): ArrayBuffer {
-  const buf = new ArrayBuffer(STANDARD_PBR_UBO_SIZE);
-  const f32 = new Float32Array(buf);
-  const sf = material.spriteFields;
-  const baseColor = material.baseColor;
-  const colorTintR = baseColor[0] ?? 1;
-  const colorTintG = baseColor[1] ?? 1;
-  const colorTintB = baseColor[2] ?? 1;
-  const colorTintA = sf?.colorTintAlpha ?? 1;
-  let regionX = sf?.region[0] ?? 0;
-  let regionY = sf?.region[1] ?? 0;
-  let regionZ = sf?.region[2] ?? 1;
-  let regionW = sf?.region[3] ?? 1;
-  const pivotX = sf?.pivot[0] ?? 0.5;
-  const pivotY = sf?.pivot[1] ?? 0.5;
-  if (sf?.flipX === true) {
-    regionX = regionX + regionZ;
-    regionZ = -regionZ;
-  }
-  if (sf?.flipY === true) {
-    regionY = regionY + regionW;
-    regionW = -regionW;
-  }
-  // slot 0 — colorTint
-  f32[0] = colorTintR;
-  f32[1] = colorTintG;
-  f32[2] = colorTintB;
-  f32[3] = colorTintA;
-  // slot 1 — region
-  f32[4] = regionX;
-  f32[5] = regionY;
-  f32[6] = regionZ;
-  f32[7] = regionW;
-  // slot 2 — pivotAndSize. zw locked to (1, 1) -- worldFromLocal owns scale
-  // (bug-20260618 sprite double-scale fix; see docstring above).
-  f32[8] = pivotX;
-  f32[9] = pivotY;
-  f32[10] = 1;
-  f32[11] = 1;
-  // slot 3 — slicesAndMode (D-3 sentinel: extract pre-encodes sliceMode=1
-  // by negating slices.w; this writer copies verbatim and the shader
-  // recovers the magnitude with abs() + reads the sign for tile vs stretch).
-  // Default (no slices on snapshot) is [0, 0, 0, 0] which lets the shader
-  // early-out to the legacy sprite path (HANDLE_QUAD topology, no 9-slice).
-  const slices = sf?.slices;
-  if (slices !== undefined) {
-    f32[12] = slices[0];
-    f32[13] = slices[1];
-    f32[14] = slices[2];
-    f32[15] = slices[3];
-  }
-  // slot 4 (16..19) stays zero — sprite path does not consume the PBR-only
-  // occlusionStrength byte.
-  return buf;
-}
-
-/**
  * Build the 80-byte Material UBO payload for a PBR / unlit material entry
  * (feat-20260527-sprite-nineslice M2 / w11; D-7 regression-net helper).
  *
@@ -1242,6 +1360,80 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): ArrayBuf
     void colorSnap;
   }
   return buf;
+}
+
+/**
+ * Generic std140 UBO writer driven by `derive(paramSchema).uboLayout.entries`
+ * (feat-20260625-refactor-sprite-as-transparent-mesh M1 / w3, plan-strategy
+ * section 2 D-2).
+ *
+ * For each numeric entry in the schema, looks up the matching value in
+ * `paramSnapshot` and writes it at the std140 offset `derive` computed.
+ * Vec / color entries pull from `paramSnapshot[name]` as a `readonly number[]`
+ * (writes `min(size/4, value.length)` floats, padding with 0 if shorter for
+ * the field's declared width); scalar entries pull a single number.
+ *
+ * Behaviour:
+ *   - schema or snapshot `undefined` -> no writes (caller may keep payload
+ *     baseline).
+ *   - missing snapshot field -> that field's bytes are left untouched
+ *     (overlay semantics; same shape the legacy inline overlay had).
+ *   - field type the writer cannot interpret (texture / sampler / storage_
+ *     buffer / value-type mismatch) -> skipped silently; `derive` strips
+ *     non-numeric entries from `uboLayout.entries` so the loop only iterates
+ *     numeric fields.
+ *
+ * The writer reads `paramSnapshot` only -- it does NOT call
+ * `runtime.assets.get<MaterialAsset>` or cast `firstMaterial`. Gate R-H
+ * (plan-strategy section 5.6) bans those paths through
+ * `scripts/forgeax/check-render-record-no-material-asset-get.mjs`.
+ *
+ * standard-pbr remains byte-identical to `buildPbrMaterialUboPayload`: the
+ * engine's stock PBR material ships `paramSnapshot: undefined`, so this
+ * writer is a no-op on that path; the explicit field writes in the helper
+ * above cover every byte. User shaders (sprite-shaped 4 x vec4 or any other
+ * paramSchema) get their fields written at the offsets declared by derive.
+ *
+ * @internal export-for-test (consumed inside `recordFrame` + render-system-
+ * record.test.ts; not part of the package's public surface).
+ */
+export function applyParamSnapshotToUbo(
+  payload: ArrayBuffer,
+  paramSchema: readonly ParamSchemaEntry[] | undefined,
+  paramSnapshot:
+    | Readonly<Record<string, number | readonly number[] | string | undefined>>
+    | undefined,
+): void {
+  if (paramSchema === undefined) return;
+  if (paramSnapshot === undefined) return;
+  const f32 = new Float32Array(payload);
+  const { uboLayout } = derive(paramSchema);
+  for (const entry of uboLayout.entries) {
+    const value = paramSnapshot[entry.name];
+    if (value === undefined) continue;
+    const f32Offset = entry.offset / 4;
+    const f32Width = entry.size / 4;
+    if (typeof value === 'number') {
+      // Scalar f32 / i32 / u32 -- single-slot write. (i32 / u32 still arrive
+      // as a JS number; the GPU side reads the four bytes as the declared
+      // type, so an f32 write is the correct bit pattern when the caller
+      // already produced an integer value.)
+      if (f32Width >= 1) f32[f32Offset] = value;
+      continue;
+    }
+    if (Array.isArray(value)) {
+      const arr = value as readonly number[];
+      const writeCount = Math.min(arr.length, f32Width);
+      for (let i = 0; i < writeCount; i++) {
+        const v = arr[i];
+        if (typeof v === 'number') f32[f32Offset + i] = v;
+      }
+    }
+    // string values (texture GUIDs) belong to texture bindings, not the
+    // UBO; derive's uboLayout.entries already strips non-numeric schema
+    // entries, so we will not see a uboLayout entry whose snapshot value
+    // is a string under normal flow. Skip defensively if we do.
+  }
 }
 
 /**
@@ -1760,8 +1952,8 @@ export function recordFrame(
     // An unlit material also carries a materialShaderId (extract sets both
     // shadingModel='unlit' and materialShaderId for the renderState-aware
     // pipeline route), so the standard-material test must additionally exclude
-    // shadingModel==='unlit' / 'sprite' -- only true standard (lit) materials
-    // render black with 0 lights.
+    // shadingModel==='unlit' — only true standard (lit) materials render
+    // black with 0 lights.
     const hasStandardMaterial = renderables.some(
       (r) => r.material.materialShaderId !== undefined && r.material.shadingModel === undefined,
     );
@@ -2365,21 +2557,29 @@ export function recordFrame(
         );
         continue;
       }
-      // feat-20260527-sprite-nineslice M2 / w11 (plan-strategy §D-2):
-      // sprite branch with non-zero `slices` overrides the user-supplied
-      // mesh handle (typically HANDLE_QUAD = 3) with the 16-vertex / 54-index
-      // HANDLE_NINESLICE_QUAD (id=5) topology so the vertex shader sees the
-      // 4×4 grid required for 9-region anchor mapping. Default slices
-      // ([0, 0, 0, 0]) keeps the legacy HANDLE_QUAD path; a flip from
-      // zero to non-zero on the same entity routes here per-frame so AI
-      // users can toggle 9-slice on the fly without re-spawning the entity
-      // (charter F1 minimum surface). The HANDLE_NINESLICE_QUAD GPU buffers
-      // are seeded by createRenderer step-3 (w12 patch).
+      // feat-20260527-sprite-nineslice M2 / w11 (plan-strategy section D-2):
+      // sprite branch with non-zero `slicesAndMode` (post-w12 paramSnapshot
+      // entry name) overrides the user-supplied mesh handle (typically
+      // HANDLE_QUAD = 3) with the 16-vertex / 54-index HANDLE_NINESLICE_QUAD
+      // (id=5) topology so the vertex shader sees the 4x4 grid required for
+      // 9-region anchor mapping. Default slicesAndMode ([0, 0, 0, 0]) keeps
+      // the legacy HANDLE_QUAD path; a flip from zero to non-zero on the
+      // same entity routes here per-frame so AI users can toggle 9-slice
+      // on the fly without re-spawning the entity (charter F1 minimum
+      // surface). The HANDLE_NINESLICE_QUAD GPU buffers are seeded by
+      // createRenderer step-3.
+      //
+      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13: judgement
+      // key migrated from `shadingModel === 'sprite'` to
+      // `materialShaderId === 'forgeax::sprite'` (plan-strategy D-10); slices
+      // sourced from `paramSnapshot.slicesAndMode` (post-w12 UBO-aligned
+      // overlay path).
       let effectiveMeshHandles = meshHandles;
-      if (r.material.shadingModel === 'sprite') {
-        const slicesArr = r.material.spriteFields?.slices;
+      if (r.material.materialShaderId === 'forgeax::sprite') {
+        const slicesArr = r.material.paramSnapshot?.slicesAndMode as readonly number[] | undefined;
         if (
           slicesArr !== undefined &&
+          slicesArr.length >= 4 &&
           (slicesArr[0] !== 0 || slicesArr[1] !== 0 || slicesArr[2] !== 0 || slicesArr[3] !== 0)
         ) {
           const nineSliceHandles = pipelineState.meshes.get(NINESLICE_QUAD_RAW_ID);
@@ -2498,12 +2698,13 @@ export function recordFrame(
     // so we size against the larger of the two requirements: entity count
     // (mesh-SSBO consumer) vs cumulative material-slot count (material-UBO
     // consumer). Sprite entities collapse to 1 slot per the materialSlotStart
-    // computation below, mirroring the same rule (sprite per-submesh OOS-1).
+    // computation below, mirroring the same rule (sprite per-submesh OOS-1;
+    // post-w13 judgement key migrated to materialShaderId).
     let neededMaterialSlots = 0;
     for (const e of validatedOrdered) {
       if (e === undefined) continue;
       neededMaterialSlots +=
-        e.source.material.shadingModel === 'sprite' ? 1 : e.source.materials.length;
+        e.source.material.materialShaderId === 'forgeax::sprite' ? 1 : e.source.materials.length;
     }
     const neededSlots = Math.max(validatedOrdered.length, neededMaterialSlots);
     const meshSsboCapResult = ensureMeshSsboCapacity(internals, neededSlots);
@@ -2601,21 +2802,28 @@ export function recordFrame(
       incrementFoldedDrawsMetric(foldDispatchPlan, internals.metrics);
     }
 
-    // D-2 (bug-20260527): LDR sprite pass split.
-    // When the LDR path (tonemapActive=false) has sprite entities in the
-    // validated draw list, the render is split into two serial passes sharing
-    // the same swap-chain texture:
-    //   geometry pass — sRGB view (bgra8unorm-srgb), loadOp=clear, non-sprite entities
-    //   sprite pass   — unorm view (bgra8unorm), loadOp=load, sprite entities
-    // The sprite LDR pipeline targets bgra8unorm (blendable; D-1) so it cannot
-    // share the same render pass with the bgra8unorm-srgb–targeted geometry
-    // pipelines (WebGPU requires attachment view format == pipeline target
-    // format). bgra8unorm is the storage format of the swap-chain texture and
-    // is always a valid view format (spec: storage format is implicitly in
-    // viewFormats); no viewFormats change needed (D-4).
-    const splitLdrSprite =
-      !tonemapActive &&
-      validatedOrdered.some((v) => v !== undefined && v.source.material.shadingModel === 'sprite');
+    // D-2 (bug-20260527): LDR sprite pass split, generalised feat-20260625
+    // M2 / w7 via {@link computeSplitLdrSprite}; M3 w13 finalised by deleting
+    // the legacy shadingModel arm — transparent is the single SSOT. AC-05
+    // (non-sprite shader carrying transparent:true) trips the split too;
+    // the unit suite render-system-record.test.ts 'transparent decouples
+    // from sprite shader' locks the contract.
+    //
+    // When the LDR path (tonemapActive=false) has transparent entities in
+    // the validated draw list, the render is split into two serial passes
+    // sharing the same swap-chain texture:
+    //   geometry pass    -- sRGB view (bgra8unorm-srgb), loadOp=clear,
+    //                       opaque entities
+    //   transparent pass -- unorm view (bgra8unorm), loadOp=load,
+    //                       transparent / sprite entities
+    // The sprite LDR pipeline targets bgra8unorm (blendable; D-1) so it
+    // cannot share the same render pass with the bgra8unorm-srgb-targeted
+    // geometry pipelines (WebGPU requires attachment view format ==
+    // pipeline target format). bgra8unorm is the storage format of the
+    // swap-chain texture and is always a valid view format (spec: storage
+    // format is implicitly in viewFormats); no viewFormats change needed
+    // (D-4).
+    const splitLdrSprite = computeSplitLdrSprite(validatedOrdered, tonemapActive);
     let ldrSpriteUnormView: TextureView | null = null;
     if (splitLdrSprite) {
       const unormViewRes = internals.device.createTextureView(currentTextureResult.value, {});
@@ -5107,9 +5315,10 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         const e = validatedOrdered[i];
         if (e === undefined) continue;
         // Sprite path stays single-slot regardless of materials.length
-        // (sprite per-submesh is OOS-1; the sprite UBO has its own layout).
+        // (sprite per-submesh is OOS-1; plan-strategy D-10: judgement key
+        // migrated to materialShaderId post-feat-20260625 M3 / w13).
         const slotsForEntity =
-          e.source.material.shadingModel === 'sprite' ? 1 : e.source.materials.length;
+          e.source.material.materialShaderId === 'forgeax::sprite' ? 1 : e.source.materials.length;
         cursor += slotsForEntity;
       }
     }
@@ -5117,165 +5326,101 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
       const entry = validatedOrdered[i];
       if (entry === undefined) continue;
       const entitySlotStart = materialSlotStart[i] ?? 0;
-      const slotOffset = entitySlotStart * MATERIAL_PER_ENTITY_STRIDE;
-      let payloadBuffer: ArrayBuffer;
-      let payloadF32: Float32Array;
 
-      if (entry.source.material.shadingModel === 'sprite') {
-        // feat-20260527-sprite-nineslice M2 / w11 (D-3 + D-7): the inline
-        // sprite UBO writer is now the `buildSpriteMaterialUboPayload`
-        // helper. It produces a 4-vec4 payload (colorTint / region /
-        // pivotAndSize / slicesAndMode); the slot 3 carries the 9-slice
-        // sentinel (extract pre-encodes sliceMode=1 by negating slices.w).
-        // The first 48 B are byte-for-byte equivalent to the legacy
-        // hard-coded write path so existing sprite fixtures stay green
-        // (D-7 isolation). D-7 PBR regression net (`render-system-record-
-        // pbr-ubo-stable.test.ts`) catches any byte drift in the PBR
-        // counterpart `buildPbrMaterialUboPayload` below.
-        // feat-20260608 M5 amend / w16-a: sprite stays single-slot (sprite
-        // per-submesh is OOS-1) -- one writeBuffer at slotOffset only.
-        payloadBuffer = buildSpriteMaterialUboPayload(entry.source.material);
-        payloadF32 = new Float32Array(payloadBuffer);
-        // Sprite missing-texture detection: helper produced the byte
-        // baseline; the runtime / errorRegistry-bound debug-pink override
-        // stays here because the helper is a pure POD writer.
-        const matHandleRaw = entry.source.material.baseColorTexture as
-          | Handle<'TextureAsset', 'shared'>
-          | undefined;
-        if (matHandleRaw !== undefined) {
-          const view = residentTextureView(world, store, runtime, matHandleRaw);
-          if (view === undefined) {
-            const rawId = matHandleRaw as unknown as number;
-            if (!frameState.warnedMissingSpriteTextureHandles.has(rawId)) {
-              frameState.warnedMissingSpriteTextureHandles.add(rawId);
-              console.warn(
-                `[forgeax] sprite texture ${rawId} missing GPU view, rendering debug pink (entityIndex=${entry.renderableIndex})`,
+      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13 (D-2):
+      // single unified Material UBO write path. Sprite materials now flow
+      // through the same `buildPbrMaterialUboPayload` baseline +
+      // `applyParamSnapshotToUbo` generic std140 overlay every other
+      // paramSchema-driven material uses. Extract folds the sprite-specific
+      // user inputs into the UBO-aligned paramSnapshot vec4 entries
+      // (colorTint / region / pivotAndSize / slicesAndMode); the writer
+      // walks `derive(paramSchema).uboLayout.entries` and writes each at
+      // its std140 offset. The legacy sprite-specific UBO builder + the
+      // sprite-vs-PBR branch are gone (AC-03).
+      const matsArr = entry.source.materials;
+      for (let mk = 0; mk < matsArr.length; mk++) {
+        const mat = matsArr[mk];
+        if (mat === undefined) continue;
+        const slotPayload = buildPbrMaterialUboPayload(mat);
+        // Schema-driven paramSnapshot overlay generalised in feat-20260625
+        // M1 / w3: the writer walks `derive(paramSchema).uboLayout.entries`
+        // and writes each numeric field at its std140 offset (plan-strategy
+        // section 2 D-2). The engine's stock PBR material ships
+        // `paramSnapshot: undefined`, so this is a no-op on the default
+        // PBR path -- the explicit field writes in buildPbrMaterialUboPayload
+        // already cover every byte. User shaders carrying a paramSnapshot
+        // (including the post-ablation sprite path) get their fields
+        // written at the derive-computed offsets; R-H gate keeps the
+        // helper snapshot-only, no asset get.
+        const materialShaderId = mat.materialShaderId;
+        const schema =
+          materialShaderId !== undefined ? runtime.getParamSchema?.(materialShaderId) : undefined;
+        applyParamSnapshotToUbo(slotPayload, schema, mat.paramSnapshot);
+
+        // Sprite missing-texture detection: structural debug-pink fallback
+        // overrides the colorTint slot when the bound baseColorTexture
+        // handle resolves to no GPU view. Keyed on materialShaderId so the
+        // generic writer above stays shader-agnostic (plan-strategy R-H
+        // gate: still no asset.get<MaterialAsset> reach-back; the override
+        // reads only `mat.baseColorTexture` + the GPU view registry).
+        if (materialShaderId === 'forgeax::sprite') {
+          const matHandleRaw = mat.baseColorTexture as Handle<'TextureAsset', 'shared'> | undefined;
+          if (matHandleRaw !== undefined) {
+            const view = residentTextureView(world, store, runtime, matHandleRaw);
+            if (view === undefined) {
+              const rawId = matHandleRaw as unknown as number;
+              if (!frameState.warnedMissingSpriteTextureHandles.has(rawId)) {
+                frameState.warnedMissingSpriteTextureHandles.add(rawId);
+                console.warn(
+                  `[forgeax] sprite texture ${rawId} missing GPU view, rendering debug pink (entityIndex=${entry.renderableIndex})`,
+                );
+              }
+              runtime.errorRegistry.fire(
+                new RhiError({
+                  code: 'asset-not-registered',
+                  expected: 'sprite material baseColor TextureAsset uploaded to GPU',
+                  hint: 'register + uploadTexture the sprite texture before draw(world); rendering falls back to debug pink quad until then',
+                  detail: { assetHandle: rawId },
+                }),
+              );
+              // Debug pink override on slot 0 colorTint.rgb (alpha preserved).
+              const payloadF32 = new Float32Array(slotPayload);
+              payloadF32[0] = 1.0;
+              payloadF32[1] = 0.4;
+              payloadF32[2] = 0.7;
+            }
+          }
+          // 9-slice scale-too-small detection: anchors sourced from the
+          // post-w12 paramSnapshot.slicesAndMode vec4 entry.
+          const slicesAndMode = mat.paramSnapshot?.slicesAndMode as readonly number[] | undefined;
+          if (slicesAndMode !== undefined && slicesAndMode.length >= 4) {
+            const slicesArr: readonly [number, number, number, number] = [
+              slicesAndMode[0] ?? 0,
+              slicesAndMode[1] ?? 0,
+              slicesAndMode[2] ?? 0,
+              slicesAndMode[3] ?? 0,
+            ];
+            const anyNonZero =
+              slicesArr[0] !== 0 || slicesArr[1] !== 0 || slicesArr[2] !== 0 || slicesArr[3] !== 0;
+            if (anyNonZero) {
+              detectNineSliceScaleTooSmall(
+                entry.source.transform.world,
+                slicesArr,
+                entry.renderableIndex,
+                frameState.warnedNineSliceScaleEntities,
+                runtime.metrics,
               );
             }
-            runtime.errorRegistry.fire(
-              new RhiError({
-                code: 'asset-not-registered',
-                expected: 'sprite material baseColor TextureAsset uploaded to GPU',
-                hint: 'register + uploadTexture the sprite texture before draw(world); rendering falls back to debug pink quad until then',
-                detail: { assetHandle: rawId },
-              }),
-            );
-            // Debug pink override on slot 0 colorTint.rgb (alpha preserved).
-            payloadF32[0] = 1.0;
-            payloadF32[1] = 0.4;
-            payloadF32[2] = 0.7;
           }
         }
-        // feat-20260527-sprite-nineslice M2 / w11 + AC-16: register-time
-        // fail-fast catches static `slices` violations (validateSpriteSlices
-        // 6 branches); runtime catches the dynamic case where Transform.scale
-        // is too small to host the four corner anchors. M4 / w16 (D-5)
-        // replaces the M2 placeholder console.warn with a real
-        // `runtime.metrics.increment('nineslice.scale-too-small')` call so AI
-        // users observe the breach through `renderer.metrics.snapshot()`
-        // (charter P3 machine-readable signal over text). Per-frame anchor-
-        // budget formula:
-        //   scale_x must accommodate slices.x (left) + |slices.z| (right);
-        //   scale_y must accommodate slices.y (top)  + |slices.w| (bottom).
-        // The counter increments once per offending entity per RenderSystem
-        // lifetime (the warnedNineSliceScaleEntities Set guards re-entry on
-        // the same renderable index across frames so AI users see a single
-        // counter bump instead of one-per-frame inflation; consistent with
-        // the missing-texture warn-once anchor below).
-        const sf = entry.source.material.spriteFields;
-        const slicesArr = sf?.slices;
-        if (slicesArr !== undefined) {
-          detectNineSliceScaleTooSmall(
-            entry.source.transform.world,
-            slicesArr,
-            entry.renderableIndex,
-            frameState.warnedNineSliceScaleEntities,
-            runtime.metrics,
-          );
-        }
-      } else {
-        // PBR / unlit: byte-stable helper produces the baseline; schema-
-        // driven paramSnapshot overlay (feat-20260523 M9-T05, AC-14) lives
-        // here because it requires the runtime ref to look up paramSchema.
-        // feat-20260608 M5 amend / w16-a: build N payloads (one per
-        // submesh material) and write them at consecutive slots starting
-        // at materialSlotStart[i]. The single-material path (length=1)
-        // collapses to one write at slotOffset, byte-stable with the
-        // pre-amend layout (render-system-record-pbr-ubo-stable.test.ts).
-        const matsArr = entry.source.materials;
-        for (let mk = 0; mk < matsArr.length; mk++) {
-          const mat = matsArr[mk];
-          if (mat === undefined) continue;
-          const slotPayload = buildPbrMaterialUboPayload(mat);
-          const slotPayloadF32 = new Float32Array(slotPayload);
-          const paramSnap = mat.paramSnapshot;
-          if (paramSnap !== undefined) {
-            const f32Snap = (name: string): number | undefined => {
-              const v = paramSnap[name];
-              return typeof v === 'number' ? v : undefined;
-            };
-            const colorSnap = (name: string): readonly number[] | undefined => {
-              const v = paramSnap[name];
-              return Array.isArray(v) && v.every((x) => typeof x === 'number')
-                ? (v as readonly number[])
-                : undefined;
-            };
-            const materialShaderId = mat.materialShaderId;
-            const schema =
-              materialShaderId !== undefined
-                ? runtime.getParamSchema?.(materialShaderId)
-                : undefined;
-            if (schema !== undefined) {
-              let f32SlotIdx = 0;
-              let vec4SlotFilled = false;
-              for (const sentry of schema) {
-                if (sentry.type === 'color' || sentry.type === 'vec4') {
-                  if (!vec4SlotFilled) {
-                    const v = colorSnap(sentry.name);
-                    if (v !== undefined) {
-                      slotPayloadF32[0] = v[0] ?? 0;
-                      slotPayloadF32[1] = v[1] ?? 0;
-                      slotPayloadF32[2] = v[2] ?? 0;
-                      slotPayloadF32[3] = v[3] ?? 1;
-                    }
-                    vec4SlotFilled = true;
-                  }
-                } else if (sentry.type === 'f32') {
-                  const v = f32Snap(sentry.name);
-                  if (v !== undefined) {
-                    if (f32SlotIdx === 0) slotPayloadF32[4] = v;
-                    else if (f32SlotIdx === 1) slotPayloadF32[5] = v;
-                  }
-                  f32SlotIdx++;
-                }
-              }
-            }
-          }
-          const subMatUpload = runtime.device.queue.writeBuffer(
-            pipelineState.materialUniformBuffer.buffer,
-            (entitySlotStart + mk) * MATERIAL_PER_ENTITY_STRIDE,
-            new Uint8Array(slotPayload),
-          );
-          if (!subMatUpload.ok) throw subMatUpload.error;
-        }
-        // The first material's payload is also published into payloadBuffer
-        // so the legacy single-write branch below can stay a no-op for the
-        // PBR/unlit path (we already wrote N slots inside the loop above).
-        // Setting `payloadBuffer` to a 0-byte sentinel is unsafe (the
-        // sprite branch shares this var); the cleanest exit is to skip the
-        // post-block writeBuffer entirely for non-sprite. We do that with
-        // an `else continue` before the post-block writeBuffer. Sprite
-        // path falls through with its single slot.
-        // Continue to the next entity -- the per-material writes above
-        // already covered every slot.
-        continue;
+
+        const subMatUpload = runtime.device.queue.writeBuffer(
+          pipelineState.materialUniformBuffer.buffer,
+          (entitySlotStart + mk) * MATERIAL_PER_ENTITY_STRIDE,
+          new Uint8Array(slotPayload),
+        );
+        if (!subMatUpload.ok) throw subMatUpload.error;
       }
-      const materialUpload = runtime.device.queue.writeBuffer(
-        pipelineState.materialUniformBuffer.buffer,
-        slotOffset,
-        new Uint8Array(payloadBuffer),
-      );
-      if (!materialUpload.ok) throw materialUpload.error;
     }
 
     pass.setBindGroup(0, viewBindGroup as BindGroup);
@@ -5288,12 +5433,13 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
     // M-3 / w12: vertexBuffer/indexBuffer state locals migrate to GpuBuffer.
     let lastVertexBuffer: GpuBuffer | null = null;
     let lastIndexBuffer: GpuBuffer | null = null;
-    // feat-20260520-2d-sprite-layer-mvp M-3 / w25 (@new-surface): pipeline
-    // tag widened from 2-literal ('unlit' | 'standard') to 3-literal
-    // (+ 'sprite'). The sprite path picks `spritePipeline` (LDR) or
-    // `spritePipelineHdr` (HDR rgba16float target) and binds a per-
-    // entity sprite material BindGroup (D-1 candidate b — 4 unused
-    // entries 3..6 bind defaultSampler + defaultWhiteTextureView).
+    // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w14 (D-7):
+    // sprite PSO selection no longer maintains a dedicated tag — the
+    // generic materialShaderId path covers sprite via the same per-
+    // MaterialShader pipeline cache PBR / unlit use. The 4-placeholder
+    // BG bindings (D-1 candidate b) still apply via the generic per-
+    // submesh BG construction below; sprite's `forgeax::sprite` shader
+    // module ships through the same cache key formula.
     // biome-ignore lint/suspicious/noExplicitAny: opaque RHI pipeline handle
     let lastPipelineHandle: any = null;
 
@@ -5304,35 +5450,27 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
       // feat-20260609 M2: skip entities that don't match the pass selector.
       if (matchedIndices !== null && !matchedIndices.has(entry.renderableIndex)) continue;
 
-      // D-2: sprite entities are dispatched in the separate sprite pass
-      // (bgra8unorm unorm view, loadOp=load) so they must NOT be drawn
-      // here in the geometry pass (bgra8unorm-srgb sRGB view, loadOp=clear).
-      // In the HDR path (tonemapActive=true) or when there are no sprites,
-      // splitLdrSprite=false and this guard is a no-op.
-      if (splitLdrSprite && entry.source.material.shadingModel === 'sprite') continue;
+      // D-2 generalised feat-20260625 M2 / w7: transparent entities are
+      // dispatched in the separate sub-pass (bgra8unorm unorm view,
+      // loadOp=load) so they must NOT be drawn here in the geometry pass
+      // (bgra8unorm-srgb sRGB view, loadOp=clear). In the HDR path
+      // (tonemapActive=true) or when there are no transparent entries,
+      // splitLdrSprite=false and this guard is a no-op. Post-w13 the
+      // legacy shadingModel arm is gone; transparent is the single SSOT
+      // mirrored on `computeSplitLdrSprite`.
+      if (splitLdrSprite && entry.source.material.transparent === true) continue;
 
-      // feat-20260520-2d-sprite-layer-mvp M-3 / w25: pipeline pick widens
-      // from 2-way to 3-way (+ sprite). Each shading model routes to its
-      // own LDR / HDR pipeline pair via the `tonemapActive` gate; the
-      // sprite path additionally requires building a per-entity sprite
-      // material BindGroup with the 4-placeholder bindings (D-1
-      // candidate b) so each sprite carries its own texture binding.
+      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13: pipeline
+      // tag closure narrowed from 3-way ('unlit' | 'sprite') to 1-way
+      // ('unlit' carrier) — sprite materials flow through the same generic
+      // materialShaderId pipeline cache PBR / unlit use (plan-strategy D-7).
       const shading = entry.source.material.shadingModel;
       const materialShaderId =
         entry.source.skin !== undefined
           ? SKIN_MATERIAL_SHADER_ID
           : entry.source.material.materialShaderId;
 
-      let pipelineTag: 'unlit' | 'sprite';
-      if (shading === 'unlit') {
-        pipelineTag = 'unlit';
-      } else if (shading === 'sprite') {
-        pipelineTag = 'sprite';
-      } else if (materialShaderId !== undefined) {
-        pipelineTag = 'unlit';
-      } else {
-        pipelineTag = 'unlit';
-      }
+      const pipelineTag: 'unlit' = 'unlit';
 
       // w10: setStencilReference per draw when the dispatch entry carries
       // a stencil reference value (plan-strategy D-3: draw-call dynamic
@@ -5713,111 +5851,16 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
       // and the source-grep gate in skylight-fallback-path.test.ts /
       // systems.unit.test.ts continues to match
       // `setBindGroup\s*\(\s*1\s*,\s*perSubmeshBg\b` on the in-loop call.
+      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13 (D-1
+      // candidate b): the sprite-specific BG construction is gone — sprite
+      // materials reuse the same per-submesh BG path PBR / unlit use. The
+      // 7-entry BGL is byte-for-byte shared (binding 0 = Material UBO,
+      // 1 = baseColorSampler, 2 = baseColorTexture, 3-6 = filler samplers /
+      // textureViews). Sprite's "no metallic/normal/emissive/occlusion
+      // texture" simply falls through to `defaultWhite` / `defaultNormal`
+      // — the same placeholders the unlit path already used. The generic
+      // branch below builds the per-submesh BG.
       let perSubmeshBg: BindGroup | null = null;
-      if (entry.source.material.shadingModel === 'sprite') {
-        const spriteTexHandle = entry.source.material.baseColorTexture as
-          | Handle<'TextureAsset', 'shared'>
-          | undefined;
-        let spriteTexView = pipelineState.defaultWhiteTextureView;
-        if (spriteTexHandle !== undefined) {
-          const view = residentTextureView(world, store, runtime, spriteTexHandle);
-          if (view !== undefined) spriteTexView = view as never;
-        }
-        const spriteSampler = pipelineState.defaultSampler;
-        const spriteBaseMaterialEntries = [
-          {
-            binding: 0,
-            resource: {
-              kind: 'buffer' as const,
-              value: {
-                buffer: pipelineState.materialUniformBuffer.buffer,
-                offset: 0,
-                size: STANDARD_PBR_UBO_SIZE,
-              },
-            },
-          },
-          { binding: 1, resource: { kind: 'sampler' as const, value: spriteSampler } },
-          { binding: 2, resource: { kind: 'textureView' as const, value: spriteTexView } },
-          // @reuses defaultSampler + defaultWhiteTextureView for the 4
-          // unused PBR-layout slots; D-1 candidate (b).
-          {
-            binding: 3,
-            resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
-          },
-          {
-            binding: 4,
-            resource: {
-              kind: 'textureView' as const,
-              value: pipelineState.defaultWhiteTextureView,
-            },
-          },
-          {
-            binding: 5,
-            resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
-          },
-          {
-            binding: 6,
-            resource: {
-              kind: 'textureView' as const,
-              value: pipelineState.defaultNormalTextureView,
-            },
-          },
-        ];
-        const spriteEmissiveAo: EmissiveAoBindGroupResources = {
-          emissiveSampler: pipelineState.defaultSampler,
-          emissiveView: pipelineState.defaultWhiteTextureView,
-          occlusionSampler: pipelineState.defaultSampler,
-          occlusionView: pipelineState.defaultWhiteTextureView,
-        };
-        const spriteMergedEntries = assembleMaterialWithSkylightEntries(
-          spriteBaseMaterialEntries,
-          skylightResources,
-          spriteEmissiveAo,
-        );
-
-        // M3 / w12: sprite material BG cache (D-2 handle-chain).
-        // Per-entity: outerKey = entityKey, chain = the 14 merged-entry
-        // handle objects (D-5 extractEntryResourceHandle). Sprite filler
-        // b3-b6 (defaultSampler/defaultWhite/defaultNormal) are constant
-        // handles — no spurious invalidation.
-        const spriteBg: BindGroup = getOrCreatePerEntity(
-          frameState.materialBgPerEntity,
-          entry.source.entityKey,
-          spriteMergedEntries.map((e) => extractEntryResourceHandle(e)),
-          'material',
-          () => {
-            const result = runtime.device.createBindGroup({
-              label: 'sprite-material-bg',
-              layout: pipelineState.materialBindGroupLayout,
-              entries: spriteMergedEntries,
-            });
-            if (!result.ok) throw result.error;
-            return result.value;
-          },
-          bindGroupCounts,
-        );
-        // feat-20260608 M5 amend / w16-a: dynamic offset uses
-        // materialSlotStart[i] (cumulative from preceding entities) since
-        // multi-material entities now occupy >1 slot. Sprite stays single
-        // slot (sprite per-submesh is OOS-1).
-        pass.setBindGroup(1, spriteBg, [(materialSlotStart[i] ?? 0) * MATERIAL_PER_ENTITY_STRIDE]);
-      } else {
-        // bug-20260610 layer 7d: per-submesh BG construction.
-        //
-        // Prior to this fix, this branch built a single BG per entity using
-        // `entry.source.material` (= materials[0]) for all 5 textureViews
-        // (baseColor / metallicRoughness / normal / emissive / occlusion).
-        // feat-20260608 M5 amend introduced per-submesh MaterialUBO slots
-        // but kept the entity-level texture views, so multi-material
-        // entities (Sponza: 1 entity x 25 materials x 103 submeshes)
-        // sampled materials[0]'s textures across every submesh.
-        //
-        // The actual BG is now built inside the per-submesh draw loop
-        // below using `matsForRebind[smIdx]`. This branch leaves
-        // perSubmeshBg=null and becomes structural so the source-grep
-        // gate (`setBindGroup\s*\(\s*1\s*,\s*perSubmeshBg\b`) keeps
-        // firing on the per-submesh setBindGroup call inside the loop.
-      }
       pass.setBindGroup(3, instancesBindGroup);
       // feat-20260608 M4 / w16: per-submesh pipeline selection + draw loop.
       // Each submesh carries its own topology, so pipeline selection is per-submesh.
@@ -5827,11 +5870,10 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
       // material slot via dynamic offset (entitySlotStart + j) * 256.
       const entityMatBaseOffset = (materialSlotStart[i] ?? 0) * MATERIAL_PER_ENTITY_STRIDE;
       const matsForRebind = entry.source.materials;
-      const isSpriteEntry = entry.source.material.shadingModel === 'sprite';
       for (let smIdx = 0; smIdx < entry.mesh.submeshes.length; smIdx++) {
         const sm = entry.mesh.submeshes[smIdx];
         if (sm === undefined) continue;
-        if (!isSpriteEntry) {
+        {
           // bug-20260610 layer 7d: per-submesh BG construction. Texture
           // views resolve from `matsForRebind[smIdx]` so the j-th submesh
           // sees its own materials[j] textures (baseColor / MR / normal /
@@ -5845,6 +5887,13 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           // objects form the WeakMap chain and fully discriminate the
           // binding state since sampler/textureView/buffer handle identities
           // are stable across frames.
+          //
+          // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13:
+          // sprite materials now use the same per-submesh BG construction
+          // (the sprite-specific BG branch above is deleted; sprite per-
+          // submesh single-slot is still enforced via materialSlotStart
+          // and the sprite-shaped paramSnapshot fills the PBR-shaped BGL
+          // bindings via fallback textures for the 4 unused slots).
           const matSlotIdx = smIdx < matsForRebind.length ? smIdx : 0;
           const submeshMaterial = matsForRebind[matSlotIdx] ?? entry.source.material;
           // feat-20260621-learn-render-5-5-parallax M2 / w8 (D-3): assemble the
@@ -6024,13 +6073,6 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
               : undefined;
           smPipelineHandle =
             unlitRsp ?? selectGeometryPipeline(pipelineState, 'unlit', tonemapActive, msaaActive);
-        } else if (shading === 'sprite') {
-          smPipelineHandle = selectGeometryPipeline(
-            pipelineState,
-            'sprite',
-            tonemapActive,
-            msaaActive,
-          );
         } else if (materialShaderId !== undefined) {
           // feat-20260609 M4.5 / w38 (D-11): the variantSet handed to
           // getMaterialShaderPipeline MUST mirror the boot-time
@@ -6159,12 +6201,66 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
       // M-3 / w12: sprite pass vertexBuffer/indexBuffer state migrate to GpuBuffer.
       let lastSpriteVertexBuffer: GpuBuffer | null = null;
       let lastSpriteIndexBuffer: GpuBuffer | null = null;
-      const spritePH = msaaActive ? pipelineState.spritePipelineMsaa : pipelineState.spritePipeline;
+
+      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w14 (D-7):
+      // sprite PSO resolution migrated from the dedicated boot-time PSO
+      // fields (deleted) to the generic per-MaterialShader pipeline cache.
+      // feat-20260626-collapse M2 / M2-T2: blend factor pair literal moved
+      // to the public `SPRITE_PREMULTIPLIED_ALPHA_BLEND` named constant
+      // (re-exported from `@forgeax/engine-runtime`) so any AI user
+      // building a transparent material declares the same blend by
+      // reference; the previous implicit blend-state factory helper is
+      // gone. Cache miss still surfaces as a structured
+      // `shader-compile-failed` RhiError mirroring the pre-w14 behaviour.
+      //
+      // feat-20260608-tilemap-object-layer-rendering M2 / m2-t6 (D-8): sprite
+      // pipeline cullMode='none'. H/V flip via negative scaleX/scaleY (tilemap
+      // per-cell entity TRS form) inverts the triangle winding; cullMode='back'
+      // would throw the flipped quad away. The sprite pass runs in the
+      // alpha-blend transparent bucket back-to-front already, so cullMode='none'
+      // adds no overdraw cost. Pre-feat-20260625 the dedicated spritePipeline
+      // hard-coded 'none' (deleted in w14); the generic path must replicate
+      // it here or the cullmode-flip dawn smoke goes black on negative-scale.
+      const spritePremulBlend: MaterialRenderState = {
+        depthWriteEnabled: false,
+        depthCompare: 'less-equal',
+        cullMode: 'none',
+        blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND,
+      };
+      const spritePH =
+        runtime.getMaterialShaderPipeline?.(
+          'forgeax::sprite',
+          /* isHdr */ false,
+          spritePremulBlend,
+          'triangle-list',
+          undefined,
+          undefined,
+          'forward',
+          undefined,
+          msaaActive ? 4 : 1,
+          // feat-20260625-refactor-sprite-as-transparent-mesh R2 fix-up:
+          // the LDR sprite split sub-pass writes through the storage
+          // (non-sRGB) view of the swap-chain texture (`ldrSpriteUnormView`;
+          // see beginRenderPass colorFormats=`pipelineState.format` above).
+          // Pre-w14 the dedicated `forgeax::default-sprite` SPEC_CONST
+          // entries baked this non-sRGB mapping into SPRITE_ATTACHMENTS_*
+          // (deleted); the generic lazy build path that replaced them
+          // defaults to `colorAttachmentFormat` (the sRGB VIEW format used
+          // by the geometry pass), so without this override the PSO builds
+          // with `rgba8unorm-srgb` while the encoder declares `rgba8unorm`
+          // — WebGPU rejects SetPipeline with "Attachment state ... not
+          // compatible". Threading `pipelineState.format` (storage,
+          // non-sRGB) here keeps PSO + encoder in sync (bug-20260527-
+          // sprite-pipeline-bgra8unorm-srgb-not-blendable parity).
+          pipelineState.format as unknown as GPUTextureFormat,
+        ) ?? null;
 
       for (let i = 0; i < validatedOrdered.length; i++) {
         const spriteEntry = validatedOrdered[i];
-        if (spriteEntry === undefined || spriteEntry.source.material.shadingModel !== 'sprite')
-          continue;
+        // feat-20260625 M3 / w13: sub-pass entity filter migrated from
+        // `shadingModel === 'sprite'` to `transparent === true` — the
+        // shadingModel arm is gone post-feat (plan-strategy D-3).
+        if (spriteEntry === undefined || spriteEntry.source.material.transparent !== true) continue;
 
         // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4-record-swap
         // (D-1): fold-bucket non-head member — skip; the bucket head emits one
@@ -6395,6 +6491,80 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
                   spriteInstanceBuffer = activeSprite.buffer.handle;
                   spriteInstanceCount = Math.max(1, spriteInst.instanceCount);
                 }
+              }
+            }
+          }
+        }
+
+        // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch
+        // M3 / w11: SpriteInstances 80B-per-instance interleaved upload path.
+        // SSOT for the per-entity 2D mat4 + per-instance UV region buffer
+        // (plan-strategy D-1 interleaved single buffer + single binding slot;
+        // D-9 cacheKey = entity packed u32). The extract-stage validator
+        // (M3 / w10) enforces the XOR contract `Instances XOR SpriteInstances`
+        // (sprite-instances-mutually-exclusive-with-instances), so the
+        // legacy `spriteInst` block above and this block are never both
+        // active for the same entity.
+        const spriteInstancesSnap: SpriteInstancesSnapshot | undefined =
+          spriteEntry.source.spriteInstances;
+        if (spriteInstancesSnap !== undefined) {
+          const requestedBytes =
+            spriteInstancesSnap.transforms.byteLength + spriteInstancesSnap.regions.byteLength;
+          const cap = runtime.device.limits.maxStorageBufferBindingSize;
+          if (typeof cap === 'number' && requestedBytes > cap) {
+            runtime.errorRegistry.fire(
+              new RhiError({
+                code: 'limit-exceeded',
+                expected: `requestedBytes (${requestedBytes}) <= maxStorageBufferBindingSize (${cap})`,
+                hint: 'reduce SpriteInstances instance count to fit within device.limits.maxStorageBufferBindingSize (80 bytes per instance: mat4 64B + region 16B)',
+                detail: {
+                  maxStorageBufferBindingSize: cap,
+                  requestedBytes,
+                },
+              }),
+            );
+          } else {
+            const cachedSpriteInst = frameState.instanceBuffers.get(spriteInstancesSnap.cacheKey);
+            let activeSpriteInst: InstanceBufferCacheEntry | null = null;
+            if (spriteInstancesCacheHit(cachedSpriteInst, spriteInstancesSnap, requestedBytes)) {
+              activeSpriteInst = cachedSpriteInst ?? null;
+            } else if (requestedBytes > 0) {
+              const bufRes = runtime.device.createBuffer({
+                size: requestedBytes,
+                usage: STORAGE_USAGE | COPY_DST_USAGE,
+                mappedAtCreation: false,
+              });
+              if (!bufRes.ok) {
+                runtime.errorRegistry.fire(bufRes.error);
+              } else {
+                if (cachedSpriteInst !== undefined && !cachedSpriteInst.buffer.isDestroyed) {
+                  const r = cachedSpriteInst.buffer.destroy();
+                  if (!r.ok) runtime.errorRegistry.fire(r.error);
+                }
+                const newBuf = new GpuBuffer(runtime.device, bufRes.value);
+                activeSpriteInst = {
+                  buffer: newBuf,
+                  uploadedArchVersion: spriteInstancesSnap.archVersion,
+                  uploadedByteLength: requestedBytes,
+                };
+                frameState.instanceBuffers.set(spriteInstancesSnap.cacheKey, activeSpriteInst);
+              }
+            }
+            if (activeSpriteInst !== null && requestedBytes > 0) {
+              const interleaved = interleaveSpriteInstanceBuffer(
+                spriteInstancesSnap.transforms,
+                spriteInstancesSnap.regions,
+              );
+              const writeRes = runtime.device.queue.writeBuffer(
+                activeSpriteInst.buffer.handle,
+                0,
+                interleaved,
+              );
+              if (!writeRes.ok) {
+                runtime.errorRegistry.fire(writeRes.error);
+              } else {
+                spriteInstanceBuffer = activeSpriteInst.buffer.handle;
+                spriteInstanceCount = spriteInstancesSnap.instanceCount;
               }
             }
           }

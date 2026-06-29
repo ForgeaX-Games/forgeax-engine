@@ -1166,8 +1166,14 @@ beforeAll(async () => {
 // ============================================================================
 
 describe('w3 AC-04 -- common.wgsl #ifdef STORAGE_BUFFER_AVAILABLE dual-path compose', () => {
-  const STORAGE_AVAILABLE_DEFINES = { STORAGE_BUFFER_AVAILABLE: true };
-  const STORAGE_UNAVAILABLE_DEFINES = { STORAGE_BUFFER_AVAILABLE: false };
+  const STORAGE_AVAILABLE_DEFINES = {
+    STORAGE_BUFFER_AVAILABLE: true,
+    PER_INSTANCE_REGION: false,
+  };
+  const STORAGE_UNAVAILABLE_DEFINES = {
+    STORAGE_BUFFER_AVAILABLE: false,
+    PER_INSTANCE_REGION: false,
+  };
 
   it('STORAGE_BUFFER_AVAILABLE=true compose succeeds (storage path)', async () => {
     const entry = stripPragmas(readSrc('default-standard-pbr.wgsl'));
@@ -1203,7 +1209,7 @@ describe('w3 AC-04 -- common.wgsl #ifdef STORAGE_BUFFER_AVAILABLE dual-path comp
 // ============================================================================
 
 describe('w4 AC-08 -- three entry shaders uniform variant (STORAGE_BUFFER_AVAILABLE=false)', () => {
-  const UNIFORM_DEFINES = { STORAGE_BUFFER_AVAILABLE: false };
+  const UNIFORM_DEFINES = { STORAGE_BUFFER_AVAILABLE: false, PER_INSTANCE_REGION: false };
 
   it('forgeax::default-standard-pbr uniform variant compose succeeds', async () => {
     const entry = stripPragmas(readSrc('default-standard-pbr.wgsl'));

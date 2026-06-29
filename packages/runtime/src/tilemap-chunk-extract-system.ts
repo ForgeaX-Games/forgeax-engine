@@ -62,9 +62,11 @@ import {
 import { HANDLE_QUAD } from './asset-registry';
 import {
   ChildOf,
+  decodeSortScope,
   Layer,
   MeshFilter,
   MeshRenderer,
+  type SortScope,
   TileLayer,
   Tilemap,
   Transform,
@@ -97,19 +99,29 @@ export function resetTilemapDerivedEntityTracker(): void {
 
 /**
  * Compute the per-layer / per-chunk packed value carried in `Layer.value`
- * on derived entities. Normal mode: `(layerOrder << 20) | (chunkIndex & 0xFFFFF)` —
- * layerOrder dominates the sort, chunkIndex tiebreaks within a layer.
- * Y-sort mode (`ySort=true`): returns `(layerOrder << 20)` without the
- * chunkIndex so all derived entities in this layer share the exact same
- * Layer.value and can Y-interleave with sprite entities carrying the
- * same value.
+ * on derived entities. `sortScope` is the closed string union from
+ * `TileLayer.sortScope`:
+ *   - `'layer'`    (default): `(layerOrder << 20) | (chunkIndex & 0xFFFFF)` —
+ *                  terrain semantics, layerOrder dominates with chunkIndex
+ *                  tiebreak within the layer.
+ *   - `'per-cell'`: returns `(layerOrder << 20)` (chunkIndex folded to 0)
+ *                  so every derived entity in the layer shares one
+ *                  Layer.value and can Y-interleave with sprite entities
+ *                  carrying the same value (e.g. a player sprite riding
+ *                  `SPRITE_LAYER_VALUE = layerOrder << 20`).
+ *
+ * Round-2 rename (D-V-3): the third arg was `ySort: boolean` before the
+ * sortScope union landed; it is now the closed `SortScope` union with
+ * default `'layer'`. The 0x200000 / chunked-bits semantics for the two
+ * arms are preserved exactly so existing pixel-parity baselines stay
+ * stable (only the AI-user surface widens to a self-documenting literal).
  */
 export function encodeTilemapLayerValue(
   layerOrder: number,
   chunkIndex: number,
-  ySort = false,
+  sortScope: SortScope = 'layer',
 ): number {
-  if (ySort) return (layerOrder << 20) | 0;
+  if (sortScope === 'per-cell') return (layerOrder << 20) | 0;
   return (layerOrder << 20) | (chunkIndex & 0xfffff) | 0;
 }
 
@@ -311,7 +323,7 @@ function spawnDerivedRenderEntities(
   layerOrder: number,
   spec: DerivedSpawnSpec,
   packedTile: number,
-  ySort = false,
+  sortScope: SortScope = 'layer',
 ): EntityHandle {
   const { flipH, flipV, flipDiagonal } = decodeTileBits(packedTile);
   // D-2 first-line: D swaps the X/Y pivot pair so the 90deg rotation
@@ -335,7 +347,7 @@ function spawnDerivedRenderEntities(
   const scaleY = (flipV ? -1 : 1) * spec.heightCells * tilemap.tileSizeY;
   const quatZ = flipDiagonal ? SQRT1_2 : 0;
   const quatW = flipDiagonal ? SQRT1_2 : 1;
-  const layerValue = encodeTilemapLayerValue(layerOrder, spec.chunkIndex, ySort);
+  const layerValue = encodeTilemapLayerValue(layerOrder, spec.chunkIndex, sortScope);
   return world
     .spawn(
       {
@@ -383,7 +395,7 @@ function bucketTileLayer(
         chunkSize: number;
       };
       readonly layerOrder: number;
-      readonly ySort: boolean;
+      readonly sortScope: SortScope;
       readonly specs: readonly DerivedSpawnSpec[];
     }
   | undefined {
@@ -417,7 +429,7 @@ function bucketTileLayer(
   return {
     tilemap,
     layerOrder: layer.layerOrder,
-    ySort: (layer.ySort ?? 0) !== 0,
+    sortScope: decodeSortScope(layer.sortScope),
     specs,
   };
 }
@@ -483,7 +495,7 @@ export function tilemapChunkExtractSystem(world: World): void {
         bucket.layerOrder,
         spec,
         spec.packedTile,
-        bucket.ySort,
+        bucket.sortScope,
       );
       spawned.push(unwrapHandle(e as unknown as Handle<string, 'shared'>));
     }

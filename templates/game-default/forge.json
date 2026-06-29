@@ -3,5 +3,6 @@
   "name": "_template",
   "schemaVersion": "1.0.0",
   "entry": "main.ts",
-  "physics": "3d"
+  "physics": "3d",
+  "defaultScene": "1036f6f0-d3c2-5f31-9593-3432942d4c93"
 }

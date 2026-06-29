@@ -24,9 +24,9 @@ import {
   Play,
   Tag,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSelection } from '../selection-context';
-import { commandRowAnchor, drawAnchor, eventBrowserAnchor } from '../selectors';
+import { commandRowAnchor, drawAnchor, eventBrowserAnchor, selectedAnchor } from '../selectors';
 import { useViewModel } from '../viewer-context';
 import type { CommandEntry } from '../viewer-model';
 
@@ -126,23 +126,23 @@ function CommandRow({
     <button
       type="button"
       onClick={() => onSelect(command)}
-      className={`w-full text-left px-2 py-0.5 text-xs flex items-center gap-1.5 rounded transition-colors hover:bg-slate-700/50 ${
-        isDraw ? 'text-green-300 font-medium' : 'text-slate-500'
+      className={`w-full text-left px-2 py-0.5 text-xs flex items-center gap-1.5 rounded transition-colors hover:bg-muted ${
+        isDraw ? 'text-success font-medium' : 'text-muted-foreground'
       }`}
       {...{ [commandRowAnchor()]: String(command.eventIdx) }}
     >
       {isDraw ? (
-        <Play size={10} className="shrink-0 text-green-400" />
+        <Play size={10} className="shrink-0 text-success" />
       ) : nonDrawIcon(command.kind) === 'marker' ? (
-        <Tag size={10} className="shrink-0 text-amber-500/60" />
+        <Tag size={10} className="shrink-0 text-warning/80" />
       ) : nonDrawIcon(command.kind) === 'copy' ? (
-        <Minus size={10} className="shrink-0 text-slate-600" />
+        <Minus size={10} className="shrink-0 text-muted-foreground" />
       ) : (
-        <Minus size={10} className="shrink-0 text-slate-600" />
+        <Minus size={10} className="shrink-0 text-muted-foreground" />
       )}
       <span className="truncate">{isDraw ? drawKindLabel(command.kind) : command.kind}</span>
       {command.markerLabel && (
-        <span className="text-amber-500/60 truncate">&quot;{command.markerLabel}&quot;</span>
+        <span className="text-warning/80 truncate">&quot;{command.markerLabel}&quot;</span>
       )}
     </button>
   );
@@ -185,7 +185,7 @@ function GroupNode({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 text-xs text-amber-400/70 hover:text-amber-300 py-0.5 w-full text-left"
+        className="flex items-center gap-1 text-xs text-warning hover:text-warning py-0.5 w-full text-left"
       >
         {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         <span className="truncate">{group.openLabel}</span>
@@ -205,12 +205,21 @@ function GroupNode({
 
 export function EventBrowser(_props: IDockviewPanelProps) {
   const vm = useViewModel();
-  const { setSelectedDrawIdx, setSelectedCommandIdx } = useSelection();
+  const { selectedDrawIdx, setSelectedDrawIdx, setSelectedCommandIdx } = useSelection();
   const [filterMode, setFilterMode] = useState<FilterMode>('draws-only');
   const [collapsedPasses, setCollapsedPasses] = useState<Set<number>>(new Set());
 
   const tree = vm?.tree ?? [];
   const commands = vm?.commands ?? [];
+
+  // Auto-select the first draw once a tape loads so the other panels (pipeline
+  // state, texture preview) show data immediately — there is no separate tree
+  // panel to drive the initial selection. Only fires when nothing is selected yet.
+  useEffect(() => {
+    if (selectedDrawIdx < 0 && vm && vm.draws.length > 0) {
+      setSelectedDrawIdx(0);
+    }
+  }, [vm, selectedDrawIdx, setSelectedDrawIdx]);
 
   // Build per-pass command ranges and trees
   const passCommandTree = useMemo(() => {
@@ -238,13 +247,15 @@ export function EventBrowser(_props: IDockviewPanelProps) {
 
   const handleCommandSelect = (cmd: CommandEntry) => {
     if (cmd.isDraw) {
-      // Find global draw index by scanning commands up to this one
-      let drawIdx = 0;
-      for (let c = 0; c < cmd.eventIdx; c++) {
-        const ce = commands[c];
-        if (ce?.isDraw) drawIdx++;
-      }
-      setSelectedDrawIdx(drawIdx);
+      // Global draw index = this draw's position among all draw commands.
+      // `cmd.eventIdx` indexes the raw events array (incl. meta events), while
+      // `commands` is meta-filtered — so counting by eventIdx over `commands`
+      // overshoots by the number of stripped meta events. Match by eventIdx in
+      // the draw-only subsequence instead (vm.draws is built in this same order).
+      const drawIdx = commands
+        .filter((c) => c.isDraw)
+        .findIndex((c) => c.eventIdx === cmd.eventIdx);
+      if (drawIdx >= 0) setSelectedDrawIdx(drawIdx);
     } else {
       setSelectedCommandIdx(cmd.eventIdx);
     }
@@ -253,7 +264,7 @@ export function EventBrowser(_props: IDockviewPanelProps) {
   if (!vm) {
     return (
       <div className="p-4 h-full flex items-center justify-center">
-        <p className="text-xs text-slate-500">No tape loaded</p>
+        <p className="text-xs text-muted-foreground">No tape loaded</p>
       </div>
     );
   }
@@ -261,28 +272,28 @@ export function EventBrowser(_props: IDockviewPanelProps) {
   if (tree.length === 0) {
     return (
       <div className="p-4 h-full flex items-center justify-center">
-        <p className="text-xs text-slate-500">No events in tape</p>
+        <p className="text-xs text-muted-foreground">No events in tape</p>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col bg-slate-900" {...{ [eventBrowserAnchor()]: filterMode }}>
+    <div className="h-full flex flex-col bg-background" {...{ [eventBrowserAnchor()]: filterMode }}>
       {/* Filter toggle header */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-700/50 shrink-0">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
         <button
           type="button"
           onClick={() => setFilterMode(filterMode === 'draws-only' ? 'all-commands' : 'draws-only')}
           className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded transition-colors ${
             filterMode === 'draws-only'
-              ? 'bg-green-800/30 text-green-300 border border-green-700/30'
-              : 'bg-slate-800 text-slate-400 border border-slate-700/30 hover:text-slate-300'
+              ? 'bg-success/15 text-success border border-success/30'
+              : 'bg-muted text-muted-foreground border border-border hover:text-foreground'
           }`}
         >
           {filterMode === 'draws-only' ? <Eye size={12} /> : <EyeOff size={12} />}
           {filterMode === 'draws-only' ? 'Draws Only' : 'All Commands'}
         </button>
-        <span className="text-xs text-slate-600">
+        <span className="text-xs text-muted-foreground">
           {vm.meta.totalDraws} draws, {vm.meta.totalPasses} passes
         </span>
       </div>
@@ -299,23 +310,23 @@ export function EventBrowser(_props: IDockviewPanelProps) {
               <button
                 type="button"
                 onClick={() => togglePass(passNode.passIdx)}
-                className="flex items-center gap-1.5 w-full text-left px-2 py-1 text-xs font-medium text-blue-300/80 hover:text-blue-200 transition-colors"
+                className="flex items-center gap-1.5 w-full text-left px-2 py-1 text-xs font-medium text-brand hover:text-brand transition-colors"
               >
                 {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
                 {passNode.kind === 'render' ? (
-                  <Layers size={12} className="text-blue-400" />
+                  <Layers size={12} className="text-brand" />
                 ) : (
-                  <List size={12} className="text-purple-400" />
+                  <List size={12} className="text-info" />
                 )}
                 <span>
                   Pass #{passNode.passIdx} {passNode.kind === 'render' ? '(Render)' : '(Compute)'}
                 </span>
-                <span className="text-slate-600">({passNode.draws.length} draws)</span>
+                <span className="text-muted-foreground">({passNode.draws.length} draws)</span>
               </button>
 
               {/* Pass body */}
               {!isCollapsed && (
-                <div className="ml-2 border-l border-slate-700/30 pl-1">
+                <div className="ml-2 border-l border-border pl-1">
                   {filterMode === 'all-commands' ? (
                     passTree.length > 0 ? (
                       passTree.map((item, idx) => {
@@ -331,29 +342,35 @@ export function EventBrowser(_props: IDockviewPanelProps) {
                         );
                       })
                     ) : (
-                      <p className="text-xs text-slate-600 px-2 py-1">No commands</p>
+                      <p className="text-xs text-muted-foreground px-2 py-1">No commands</p>
                     )
                   ) : passNode.draws.length > 0 ? (
-                    passNode.draws.map((d) => (
-                      <div key={d.drawIdx} className="pl-0">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedDrawIdx(d.drawIdx)}
-                          className="w-full text-left px-2 py-0.5 text-xs flex items-center gap-1.5 rounded transition-colors hover:bg-slate-700/50 text-green-300 font-medium"
-                          {...{
-                            [commandRowAnchor()]: `draw-${d.drawIdx}`,
-                            [drawAnchor()]: String(d.drawIdx),
-                          }}
-                        >
-                          <Play size={10} className="shrink-0 text-green-400" />
-                          <span>
-                            {drawKindLabel(d.eventKind)} #{d.drawIdx}
-                          </span>
-                        </button>
-                      </div>
-                    ))
+                    passNode.draws.map((d) => {
+                      const isSelected = d.drawIdx === selectedDrawIdx;
+                      return (
+                        <div key={d.drawIdx} className="pl-0">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedDrawIdx(d.drawIdx)}
+                            className={`w-full text-left px-2 py-0.5 text-xs flex items-center gap-1.5 rounded transition-colors font-medium ${
+                              isSelected ? 'bg-brand/15 text-brand' : 'hover:bg-muted text-success'
+                            }`}
+                            {...{
+                              [commandRowAnchor()]: `draw-${d.drawIdx}`,
+                              [drawAnchor()]: String(d.drawIdx),
+                              ...(isSelected ? { [selectedAnchor()]: 'true' } : {}),
+                            }}
+                          >
+                            <Play size={10} className="shrink-0 text-success" />
+                            <span>
+                              {drawKindLabel(d.eventKind)} #{d.drawIdx}
+                            </span>
+                          </button>
+                        </div>
+                      );
+                    })
                   ) : (
-                    <p className="text-xs text-slate-600 px-2 py-1">No draws</p>
+                    <p className="text-xs text-muted-foreground px-2 py-1">No draws</p>
                   )}
                 </div>
               )}

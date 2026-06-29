@@ -24,6 +24,46 @@ import {
   RenderQueue,
 } from '@forgeax/engine-types';
 
+/**
+ * Premultiplied-alpha blend state for sprite materials (and any other
+ * transparent surface that ships pre-multiplied RGB).
+ *
+ * Equation (per WebGPU `GPUBlendState`):
+ *
+ *   color_out = color_src * 1 + color_dst * (1 - alpha_src)
+ *   alpha_out = alpha_src * 1 + alpha_dst * (1 - alpha_src)
+ *
+ * The factor pair (`srcFactor='one'` / `dstFactor='one-minus-src-alpha'`)
+ * is the canonical premultiplied-alpha composite — applicable to texture
+ * atlases and PNGs with premultiplied alpha. Pass it on
+ * {@link MaterialPassDescriptor.renderState}.blend; the runtime treats the
+ * presence of `renderState.blend` as the SSOT for transparent routing
+ * (LDR-split sub-pass + back-to-front sort).
+ *
+ * @example AI users opt sprite materials into transparency:
+ * ```ts
+ * import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-runtime';
+ *
+ * const spriteMaterial: MaterialAsset = {
+ *   kind: 'material',
+ *   passes: [{
+ *     name: 'Forward',
+ *     shader: 'forgeax::sprite',
+ *     renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+ *   }],
+ *   paramValues: { baseColorTexture: textureHandle },
+ * };
+ * ```
+ *
+ * @see {@link MaterialPassDescriptor.renderState} on `@forgeax/engine-types`.
+ * @see `packages/runtime/README.md` section sprite for blend preset alternatives
+ *   (additive / multiply / opaque overlay).
+ */
+export const SPRITE_PREMULTIPLIED_ALPHA_BLEND: GPUBlendState = {
+  color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+  alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+};
+
 const SHADOW_CASTER_PASS = {
   name: 'ShadowCaster',
   shader: 'forgeax::default-shadow-caster',

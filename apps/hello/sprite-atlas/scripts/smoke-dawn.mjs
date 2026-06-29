@@ -211,6 +211,7 @@ const {
   MeshFilter,
   MeshRenderer,
   SpriteRegionOverride,
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
   Transform,
 } = enginePkg;
 
@@ -284,14 +285,21 @@ const region = [0, 0, 0.5, 0.5];
 const materialHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
-    { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
+    // feat-20260626-sprite-transparent-collapse M3 — post M1/M2 SSOT:
+    // `renderState.blend` drives LDR split + premultiplied-alpha
+    // blend pipeline + chunk-gpu-instancing transparentDispatch routing
+    // (preset `SPRITE_PREMULTIPLIED_ALPHA_BLEND`).
+    { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND } },
   ],
   paramValues: {
-    baseColor: [1, 1, 1, 1],
-    texture: textureHandle,
+    // feat-20260625 M3 / w11 (D-4): UBO-aligned field names. Legacy
+    // baseColor / texture / pivot lost their fold post-R1; declare the
+    // 1:1 paramSchema forms directly.
+    colorTint: [1, 1, 1, 1],
+    baseColorTexture: textureHandle,
     sampler: samplerHandle,
     region,
-    pivot: [0.5, 0.5],
+    pivotAndSize: [0.5, 0.5, 1, 1],
   },
 });
 

@@ -15,8 +15,8 @@
   ],
   "paramSchema": [
     {
-      "name": "baseColor",
-      "type": "color",
+      "name": "colorTint",
+      "type": "vec4",
       "default": [1.0, 1.0, 1.0, 1.0]
     },
     {
@@ -25,32 +25,17 @@
       "default": [0.0, 0.0, 1.0, 1.0]
     },
     {
-      "name": "pivot",
-      "type": "vec2",
-      "default": [0.5, 0.5]
+      "name": "pivotAndSize",
+      "type": "vec4",
+      "default": [0.5, 0.5, 1.0, 1.0]
     },
     {
-      "name": "flipX",
-      "type": "f32",
-      "default": 0.0
-    },
-    {
-      "name": "flipY",
-      "type": "f32",
-      "default": 0.0
-    },
-    {
-      "name": "slices",
+      "name": "slicesAndMode",
       "type": "vec4",
       "default": [0.0, 0.0, 0.0, 0.0]
     },
     {
-      "name": "sliceMode",
-      "type": "f32",
-      "default": 0.0
-    },
-    {
-      "name": "texture",
+      "name": "baseColorTexture",
       "type": "texture2d"
     }
   ]

@@ -50,7 +50,7 @@ function mockEntry(opts: {
 
 function mockRenderable(tz: number): {
   transform: { world: Float32Array };
-  material: { shadingModel: 'unlit' | 'sprite' | undefined };
+  material: { transparent?: true | undefined };
 } {
   const world = new Float32Array(16);
   world[0] = 1;
@@ -58,10 +58,12 @@ function mockRenderable(tz: number): {
   world[10] = 1;
   world[15] = 1;
   world[14] = tz;
-  // PR #502 fix: 'sprite' preserves the fold-eligible behavior these
-  // mode-gate tests exercise (mode-0 should fold, mode-1/2/3 should
-  // bypass per-entity); see render-system-fold.ts sprite-pass-only gate.
-  return { transform: { world }, material: { shadingModel: 'sprite' } };
+  // PR #502 fix + feat-20260625 R2 fix-up: `transparent: true` preserves the
+  // fold-eligible behavior these mode-gate tests exercise (mode-0 should
+  // fold, mode-1/2/3 should bypass per-entity); see render-system-fold.ts
+  // transparent-pass-only gate (the sprite discriminator was removed in
+  // M3 / w15 and replaced with the generic `transparent` flag).
+  return { transform: { world }, material: { transparent: true } };
 }
 
 describe('foldDispatchBuckets — mode-gate (D-5, w3)', () => {

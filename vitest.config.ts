@@ -138,7 +138,8 @@ export default defineConfig({
               resolve(rootDir, 'forgeax-engine-assets/learn-opengl/objects'),
               resolve(rootDir, 'forgeax-engine-assets/khronos-gltf-samples/Sponza'),
               // apps/preview e2e (preview.browser.test.ts): the game-default
-              // template root holds scene.pack.json + material packs; the
+              // template's assets/ holds the scene pack + material packs (the
+              // scene is a GUID-discoverable asset, forge.json.defaultScene); the
               // submodule subtree holds sky.hdr (loaded via loadByGuid through
               // this middleware). Mirrors apps/preview/vite.config.ts roots.
               resolve(rootDir, 'templates/game-default'),

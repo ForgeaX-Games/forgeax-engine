@@ -7,7 +7,7 @@
    "kind": "scene",
    "payload": {
     "kind": "scene",
-    "nodes": [
+    "entities": [
      {
       "localId": 0,
       "components": {
@@ -26,10 +26,9 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 1
-       },
-       "Collider": {
-        "shape": "box"
+        "materials": [
+         1
+        ]
        }
       }
      },
@@ -79,7 +78,9 @@
         "assetHandle": 2
        },
        "MeshRenderer": {
-        "material": 3
+        "materials": [
+         3
+        ]
        }
       }
      },
@@ -101,7 +102,9 @@
         "assetHandle": 4
        },
        "MeshRenderer": {
-        "material": 5
+        "materials": [
+         5
+        ]
        }
       }
      },
@@ -123,7 +126,9 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 6
+        "materials": [
+         6
+        ]
        }
       }
      },
@@ -145,7 +150,9 @@
         "assetHandle": 4
        },
        "MeshRenderer": {
-        "material": 7
+        "materials": [
+         7
+        ]
        }
       }
      },
@@ -167,12 +174,14 @@
         "assetHandle": 2
        },
        "MeshRenderer": {
-        "material": 8
+        "materials": [
+         8
+        ]
        }
       }
      },
      {
-      "localId": 14,
+      "localId": 7,
       "components": {
        "Name": {
         "value": "Crate14"
@@ -189,12 +198,14 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 13
+        "materials": [
+         13
+        ]
        }
       }
      },
      {
-      "localId": 15,
+      "localId": 8,
       "components": {
        "Name": {
         "value": "Crate15"
@@ -211,12 +222,14 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 13
+        "materials": [
+         13
+        ]
        }
       }
      },
      {
-      "localId": 16,
+      "localId": 9,
       "components": {
        "Name": {
         "value": "Crate16"
@@ -233,12 +246,14 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 13
+        "materials": [
+         13
+        ]
        }
       }
      },
      {
-      "localId": 17,
+      "localId": 10,
       "components": {
        "Name": {
         "value": "Crate17"
@@ -255,12 +270,14 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 13
+        "materials": [
+         13
+        ]
        }
       }
      },
      {
-      "localId": 18,
+      "localId": 11,
       "components": {
        "Name": {
         "value": "Crate18"
@@ -277,12 +294,14 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 13
+        "materials": [
+         13
+        ]
        }
       }
      },
      {
-      "localId": 19,
+      "localId": 12,
       "components": {
        "Name": {
         "value": "Crate19"
@@ -299,12 +318,14 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 13
+        "materials": [
+         13
+        ]
        }
       }
      },
      {
-      "localId": 20,
+      "localId": 13,
       "components": {
        "Name": {
         "value": "BouncyBall"
@@ -321,12 +342,14 @@
         "assetHandle": 4
        },
        "MeshRenderer": {
-        "material": 14
+        "materials": [
+         14
+        ]
        }
       }
      },
      {
-      "localId": 21,
+      "localId": 14,
       "components": {
        "Name": {
         "value": "Player"
@@ -342,7 +365,7 @@
       }
      },
      {
-      "localId": 22,
+      "localId": 15,
       "components": {
        "Name": {
         "value": "PlayerTorso"
@@ -359,12 +382,14 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 11
+        "materials": [
+         11
+        ]
        }
       }
      },
      {
-      "localId": 23,
+      "localId": 16,
       "components": {
        "Name": {
         "value": "PlayerHead"
@@ -381,12 +406,14 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 10
+        "materials": [
+         10
+        ]
        }
       }
      },
      {
-      "localId": 24,
+      "localId": 17,
       "components": {
        "Name": {
         "value": "PlayerArmL"
@@ -403,12 +430,14 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 10
+        "materials": [
+         10
+        ]
        }
       }
      },
      {
-      "localId": 25,
+      "localId": 18,
       "components": {
        "Name": {
         "value": "PlayerArmR"
@@ -425,12 +454,14 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 10
+        "materials": [
+         10
+        ]
        }
       }
      },
      {
-      "localId": 26,
+      "localId": 19,
       "components": {
        "Name": {
         "value": "PlayerLegL"
@@ -447,12 +478,14 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 12
+        "materials": [
+         12
+        ]
        }
       }
      },
      {
-      "localId": 27,
+      "localId": 20,
       "components": {
        "Name": {
         "value": "PlayerLegR"
@@ -469,7 +502,9 @@
         "assetHandle": 0
        },
        "MeshRenderer": {
-        "material": 12
+        "materials": [
+         12
+        ]
        }
       }
      }

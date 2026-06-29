@@ -13,13 +13,16 @@ import type {
   MaterialAsset,
   MaterialPassDescriptor,
   MeshAsset,
+  ParamSchemaEntry,
   PassSelector,
 } from '@forgeax/engine-types';
+import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
 import { SpriteRegionOverride } from '../components/sprite-region-override';
 import { createEngineMetrics } from '../engine-metrics';
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../materials';
 import type { DispatchEntry } from '../render-system-extract';
 import { extractFrame, type MaterialSnapshot } from '../render-system-extract';
 import * as recordModule from '../render-system-record';
@@ -294,18 +297,19 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       },
     };
     const sr = new ShaderRegistry({ device: mockDevice, manifestUrl: undefined });
+    // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w11+w12: the
+    // sprite paramSchema mirrors the WGSL UBO struct field set (4 vec4 +
+    // baseColorTexture). Legacy user inputs (slices/sliceMode/flipX/flipY/
+    // pivot) are still accepted by extract and folded into the UBO-aligned
+    // paramSnapshot vec4 entries (D-8).
     sr.registerMaterialShader('forgeax::sprite', {
       source: 'fn main() {}',
       paramSchema: [
-        { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
-        { name: 'texture', type: 'texture2d' },
-        { name: 'sampler', type: 'sampler', default: null },
+        { name: 'colorTint', type: 'vec4', default: [1.0, 1.0, 1.0, 1.0] },
         { name: 'region', type: 'vec4', default: [0.0, 0.0, 1.0, 1.0] },
-        { name: 'pivot', type: 'vec2', default: [0.5, 0.5] },
-        { name: 'flipX', type: 'f32', default: 0.0 },
-        { name: 'flipY', type: 'f32', default: 0.0 },
-        { name: 'slices', type: 'vec4', default: [0.0, 0.0, 0.0, 0.0] },
-        { name: 'sliceMode', type: 'f32', default: 0.0 },
+        { name: 'pivotAndSize', type: 'vec4', default: [0.5, 0.5, 1.0, 1.0] },
+        { name: 'slicesAndMode', type: 'vec4', default: [0.0, 0.0, 0.0, 0.0] },
+        { name: 'baseColorTexture', type: 'texture2d' },
       ],
     });
     return sr;
@@ -396,9 +400,13 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         .unwrap();
       propagateTransforms(world);
       const frame = extractFrame(world, assets);
-      const sprite = frame.renderables.find((r) => r.material.shadingModel === 'sprite');
+      // feat-20260625 M3 / w12: sprite filter is now materialShaderId, not
+      // shadingModel; region lands on paramSnapshot.region (D-8 / AC-07).
+      const sprite = frame.renderables.find(
+        (r) => r.material.materialShaderId === 'forgeax::sprite',
+      );
       expect(sprite).toBeDefined();
-      expect(sprite?.material.spriteFields?.region).toEqual([0.1, 0.1, 0.8, 0.8]);
+      expect(sprite?.material.paramSnapshot?.region).toEqual([0.1, 0.1, 0.8, 0.8]);
     });
 
     it('(2) entity with override uses the override region in the snapshot', () => {
@@ -424,12 +432,15 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         .unwrap();
       propagateTransforms(world);
       const frame = extractFrame(world, assets);
-      const sprite = frame.renderables.find((r) => r.material.shadingModel === 'sprite');
+      const sprite = frame.renderables.find(
+        (r) => r.material.materialShaderId === 'forgeax::sprite',
+      );
       expect(sprite).toBeDefined();
       // The override displaces the asset-side [0, 0, 1, 1] region with the
       // half-width [0, 0, 0.5, 1] override, so downstream consumers (record
-      // stage UBO write, 9-slice anchor budget) see the override values.
-      expect(sprite?.material.spriteFields?.region).toEqual([0, 0, 0.5, 1]);
+      // stage UBO write, 9-slice anchor budget) see the override values via
+      // paramSnapshot.region (post-w12).
+      expect(sprite?.material.paramSnapshot?.region).toEqual([0, 0, 0.5, 1]);
     });
 
     it('(3) two entities sharing one material diverge on effective region (compose with 9-slice)', () => {
@@ -441,8 +452,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         passes: [SPRITE_PASS],
         paramValues: {
           region: [0.0, 0.0, 1.0, 1.0],
-          slices: [0.25, 0.25, 0.25, 0.25],
-          sliceMode: 0,
+          slicesAndMode: [0.25, 0.25, 0.25, 0.25],
         },
       });
       spawnCamera(world);
@@ -468,189 +478,189 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         .unwrap();
       propagateTransforms(world);
       const frame = extractFrame(world, assets);
-      const sprites = frame.renderables.filter((r) => r.material.shadingModel === 'sprite');
+      const sprites = frame.renderables.filter(
+        (r) => r.material.materialShaderId === 'forgeax::sprite',
+      );
       expect(sprites.length).toBe(2);
-      const regions = sprites.map((s) => s.material.spriteFields?.region);
+      const regions = sprites.map((s) => s.material.paramSnapshot?.region);
       // One renderable lands on the asset-side region; the other lands on the
       // override. Order is archetype-walk order (we check the set, not which is
       // which, so the test stays robust to archetype iteration order).
       expect(regions).toContainEqual([0, 0, 1, 1]);
       expect(regions).toContainEqual([0, 0, 0.5, 1]);
-      // Slices ride through unchanged on both renderables — slices stay in the
-      // [0..1] local-UV unit; the effective region only governs UV sampling,
-      // not the slices unit (charter P5: producer/consumer split).
+      // Slices ride through unchanged on both renderables -- slicesAndMode
+      // stretch encoding (positive .w, plan-strategy D-3); effective region
+      // governs UV sampling, not the slices unit.
       for (const s of sprites) {
-        expect(s.material.spriteFields?.slices).toEqual([0.25, 0.25, 0.25, 0.25]);
-        expect(s.material.spriteFields?.sliceMode).toBe(0);
+        expect(s.material.paramSnapshot?.slicesAndMode).toEqual([0.25, 0.25, 0.25, 0.25]);
       }
     });
   });
 }
 
-// ─── from render-system-record-sprite-ubo-bytes.test.ts ───
+// --- from render-system-record-sprite-ubo-bytes.test.ts ---
 {
-  // render-system-record-sprite-ubo-bytes - feat-20260527-sprite-nineslice M2 / w5 (b).
+  // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w8 (TDD red).
   //
-  // TDD-red: sprite Material UBO byte-stable across three sentinel states
-  // (plan-strategy §D-3 / §D-7):
-  //   (1) no slices                      -> slot 3 = [0, 0, 0, 0]
-  //   (2) stretch [.25,.25,.25,.25] m=0  -> slot 3 = [.25, .25, .25, .25]
-  //   (3) tile    [.25,.25,.25,.25] m=1  -> slot 3 = [.25, .25, .25, -.25]
+  // Sprite UBO bytes via the GENERIC paramSnapshot writer (M1 / w3
+  // applyParamSnapshotToUbo). The sprite path consumes the same
+  // derive(uboLayout).entries-driven overlay every other paramSchema-bound
+  // material uses, so the 4 vec4 sprite layout (colorTint / region /
+  // pivotAndSize / slicesAndMode) is produced by `applyParamSnapshotToUbo`
+  // walking a sprite-shaped paramSchema -- not by the legacy
+  // `buildSpriteMaterialUboPayload` POD helper.
   //
-  // The first 48 B (colorTint / region / pivotAndSize) MUST be byte-identical
-  // across all three states (D-7 isolation: 9-slice expressions live only in
-  // slot 3).
+  // Plan anchors:
+  //   - plan-strategy section 2 D-2 / D-6: generic std140 writer is the
+  //     single UBO write path; sprite-specific builder is ablated in w13.
+  //   - plan-strategy section 5.3 #1: 4-vec4 std140 layout byte correctness.
+  //   - requirements AC-03: buildSpriteMaterialUboPayload export does not
+  //     survive M3 (closed-loop reverse-grep gate).
   //
-  // Approach: w11 will extract the inline sprite UBO write path
-  // (render-system-record.ts:2091-2193) into a pure helper
-  // `buildSpriteMaterialUboPayload(material, transformWorld) -> ArrayBuffer(80B)`
-  // so this test can exercise it without a GPU. RED before w11 (helper not yet
-  // exported); the dynamic import below resolves at test time.
-  //
-  // Anchors: plan-strategy §5.3 key tests #1 + #7; §R-5 sentinel three-state.
+  // Red phase: the legacy helper still ships; we assert here that the new
+  // production path (generic writer + sprite-shaped paramSnapshot) produces
+  // the expected bytes AND that `buildSpriteMaterialUboPayload` is no longer
+  // exported. Both flip green when w13 lands.
 
   const mod = recordModule as unknown as {
-    buildSpriteMaterialUboPayload?: (material: MaterialSnapshot) => ArrayBuffer;
+    applyParamSnapshotToUbo?: (
+      payload: ArrayBuffer,
+      paramSchema: readonly ParamSchemaEntry[] | undefined,
+      paramSnapshot:
+        | Readonly<Record<string, number | readonly number[] | string | undefined>>
+        | undefined,
+    ) => void;
+    buildSpriteMaterialUboPayload?: unknown;
   };
 
-  function makeSpriteSnapshot(spriteFields: {
+  // Sprite UBO layout (matches sprite.wgsl post-w11 unit-quad struct: four
+  // vec4 fields, total 64 B; the writer fills the leading 64 B of the
+  // STANDARD_PBR_UBO_SIZE-sized payload buffer the runtime reuses).
+  const SPRITE_UBO_SCHEMA: readonly ParamSchemaEntry[] = [
+    { name: 'colorTint', type: 'vec4', default: [1, 1, 1, 1] },
+    { name: 'region', type: 'vec4', default: [0, 0, 1, 1] },
+    { name: 'pivotAndSize', type: 'vec4', default: [0.5, 0.5, 1, 1] },
+    { name: 'slicesAndMode', type: 'vec4', default: [0, 0, 0, 0] },
+  ];
+
+  function makeSpriteSnapshot(opts: {
     colorTintAlpha?: number;
     region?: readonly [number, number, number, number];
     pivot?: readonly [number, number];
-    flipX?: boolean;
-    flipY?: boolean;
     slices?: readonly [number, number, number, number];
-    sliceMode?: number;
-  }): MaterialSnapshot {
+  }): {
+    colorTint: readonly [number, number, number, number];
+    region: readonly [number, number, number, number];
+    pivotAndSize: readonly [number, number, number, number];
+    slicesAndMode: readonly [number, number, number, number];
+  } {
+    const pivot = opts.pivot ?? [0.5, 0.5];
     return {
-      baseColor: [1, 1, 1, 1] as const,
-      metallic: 0,
-      roughness: 1,
-      shadingModel: 'sprite',
-      spriteFields: {
-        colorTintAlpha: spriteFields.colorTintAlpha ?? 1,
-        region: spriteFields.region ?? [0, 0, 1, 1],
-        pivot: spriteFields.pivot ?? [0.5, 0.5],
-        flipX: spriteFields.flipX ?? false,
-        flipY: spriteFields.flipY ?? false,
-        ...(spriteFields.slices !== undefined && { slices: spriteFields.slices }),
-        ...(spriteFields.sliceMode !== undefined && { sliceMode: spriteFields.sliceMode }),
-      },
-    } as unknown as MaterialSnapshot;
+      colorTint: [1, 1, 1, opts.colorTintAlpha ?? 1] as const,
+      region: opts.region ?? ([0, 0, 1, 1] as const),
+      // Unit quad: pivotAndSize.zw=(1,1) is the placeholder slot the shader
+      // no longer reads -- world scale flows entirely through worldFromLocal
+      // (plan-strategy section 2 D-6).
+      pivotAndSize: [pivot[0], pivot[1], 1, 1] as const,
+      slicesAndMode: (opts.slices ?? ([0, 0, 0, 0] as const)) as readonly [
+        number,
+        number,
+        number,
+        number,
+      ],
+    };
   }
 
-  describe('sprite Material UBO byte-stable three-state (M2 / w5b, D-3/D-7)', () => {
-    it('export: buildSpriteMaterialUboPayload helper is exported from render-system-record', () => {
-      expect(typeof mod.buildSpriteMaterialUboPayload).toBe('function');
+  describe('sprite Material UBO bytes via generic writer (M3 / w8)', () => {
+    it('grep: buildSpriteMaterialUboPayload is no longer exported from render-system-record (AC-03)', () => {
+      expect(mod.buildSpriteMaterialUboPayload).toBeUndefined();
     });
 
-    it('(1) no slices -> 80 B; slot 3 = [0,0,0,0]; pivotAndSize.zw = (1,1)', () => {
-      if (typeof mod.buildSpriteMaterialUboPayload !== 'function') {
-        throw new Error('helper not exported yet (red phase)');
+    it('(1) no slices -> 64 B leading bytes; slot 3 = [0,0,0,0]; slots 0..2 = identity defaults', () => {
+      if (typeof mod.applyParamSnapshotToUbo !== 'function') {
+        throw new Error('applyParamSnapshotToUbo not exported');
       }
+      // 80 B buffer mirrors the per-entity slot stride the runtime allocates
+      // (STANDARD_PBR_UBO_SIZE). The sprite writer only touches the leading
+      // 64 B; trailing bytes stay zero on a fresh ArrayBuffer.
+      const buf = new ArrayBuffer(80);
       const snap = makeSpriteSnapshot({});
-      const buf = mod.buildSpriteMaterialUboPayload(snap);
-      expect(buf.byteLength).toBe(80);
+      mod.applyParamSnapshotToUbo(buf, SPRITE_UBO_SCHEMA, snap);
       const f32 = new Float32Array(buf);
-      // slot 3 = [12..15]
-      expect(Array.from(f32.slice(12, 16))).toEqual([0, 0, 0, 0]);
-      // colorTint slot 0
+      // colorTint slot 0 - default identity (1,1,1,1).
       expect(Array.from(f32.slice(0, 4))).toEqual([1, 1, 1, 1]);
-      // region slot 1 - identity region (no flip applied)
+      // region slot 1 - identity (no flip applied at this layer).
       expect(Array.from(f32.slice(4, 8))).toEqual([0, 0, 1, 1]);
-      // pivotAndSize slot 2: pivotX=0.5 pivotY=0.5 size=(1, 1) (the unit
-      // local quad; worldFromLocal owns world-space scale -- see
-      // bug-20260618 sprite double-scale docstring on the helper).
+      // pivotAndSize slot 2 - pivot=(0.5,0.5); .zw=(1,1) dead-slot placeholder.
       expect(Array.from(f32.slice(8, 12))).toEqual([0.5, 0.5, 1, 1]);
+      // slicesAndMode slot 3 - no slices, all zero.
+      expect(Array.from(f32.slice(12, 16))).toEqual([0, 0, 0, 0]);
+      // Trailing 16 B left untouched (overlay semantics, charter P4).
+      expect(Array.from(f32.slice(16, 20))).toEqual([0, 0, 0, 0]);
     });
 
-    it('(2) stretch slices [.25,.25,.25,.25] sliceMode=0 -> slot 3 verbatim; first 48 B unchanged', () => {
-      if (typeof mod.buildSpriteMaterialUboPayload !== 'function') {
-        throw new Error('helper not exported yet (red phase)');
+    it('(2) stretch slices [.25,.25,.25,.25] -> slot 3 verbatim; slots 0..2 byte-stable vs baseline', () => {
+      if (typeof mod.applyParamSnapshotToUbo !== 'function') {
+        throw new Error('applyParamSnapshotToUbo not exported');
       }
-      const baseline = mod.buildSpriteMaterialUboPayload(makeSpriteSnapshot({}));
-      const stretch = mod.buildSpriteMaterialUboPayload(
-        makeSpriteSnapshot({ slices: [0.25, 0.25, 0.25, 0.25], sliceMode: 0 }),
+      const baseBuf = new ArrayBuffer(80);
+      mod.applyParamSnapshotToUbo(baseBuf, SPRITE_UBO_SCHEMA, makeSpriteSnapshot({}));
+      const stretchBuf = new ArrayBuffer(80);
+      mod.applyParamSnapshotToUbo(
+        stretchBuf,
+        SPRITE_UBO_SCHEMA,
+        makeSpriteSnapshot({ slices: [0.25, 0.25, 0.25, 0.25] }),
       );
-      expect(stretch.byteLength).toBe(80);
-      const stretchF32 = new Float32Array(stretch);
-      const baseF32 = new Float32Array(baseline);
-      // first 48 B (12 floats) byte-stable across slices presence (D-7 isolation).
+      const baseF32 = new Float32Array(baseBuf);
+      const stretchF32 = new Float32Array(stretchBuf);
+      // First 48 B (slots 0..2, 12 floats) byte-stable across slices presence
+      // (plan-strategy section D-7 isolation: 9-slice expressions live only in
+      // slot 3).
       expect(Array.from(stretchF32.slice(0, 12))).toEqual(Array.from(baseF32.slice(0, 12)));
-      // slot 3 carries the slices verbatim (sliceMode=0).
+      // Slot 3 verbatim copy of slicesAndMode (sliceMode=0 stretch).
       expect(Array.from(stretchF32.slice(12, 16))).toEqual([0.25, 0.25, 0.25, 0.25]);
     });
 
-    it('(3) tile slices [.25,.25,.25,-.25] -> slot 3 carries sentinel (w negative)', () => {
-      if (typeof mod.buildSpriteMaterialUboPayload !== 'function') {
-        throw new Error('helper not exported yet (red phase)');
+    it('(3) tile slicesAndMode [.25,.25,.25,-.25] -> slot 3 carries sentinel (w negative)', () => {
+      if (typeof mod.applyParamSnapshotToUbo !== 'function') {
+        throw new Error('applyParamSnapshotToUbo not exported');
       }
-      const tile = mod.buildSpriteMaterialUboPayload(
-        makeSpriteSnapshot({ slices: [0.25, 0.25, 0.25, -0.25], sliceMode: 1 }),
+      const buf = new ArrayBuffer(80);
+      // Extract folds sliceMode=1 into a negative slicesAndMode.w (plan-
+      // strategy D-3 sentinel); record writes the snapshot verbatim.
+      mod.applyParamSnapshotToUbo(
+        buf,
+        SPRITE_UBO_SCHEMA,
+        makeSpriteSnapshot({ slices: [0.25, 0.25, 0.25, -0.25] }),
       );
-      expect(tile.byteLength).toBe(80);
-      const f32 = new Float32Array(tile);
-      // first 48 B (12 floats) still byte-identical across slot 3 changes.
-      const baseline = mod.buildSpriteMaterialUboPayload(makeSpriteSnapshot({}));
-      const baseF32 = new Float32Array(baseline);
+      const baseBuf = new ArrayBuffer(80);
+      mod.applyParamSnapshotToUbo(baseBuf, SPRITE_UBO_SCHEMA, makeSpriteSnapshot({}));
+      const f32 = new Float32Array(buf);
+      const baseF32 = new Float32Array(baseBuf);
+      // First 48 B still byte-identical to baseline across slot 3 changes.
       expect(Array.from(f32.slice(0, 12))).toEqual(Array.from(baseF32.slice(0, 12)));
-      // sentinel: slot 3 = [.25, .25, .25, -.25] (extract already encodes the
-      // sign on tile mode; w11 record path writes verbatim from snapshot).
+      // Slot 3 carries the tile sentinel.
       expect(f32[12]).toBe(0.25);
       expect(f32[13]).toBe(0.25);
       expect(f32[14]).toBe(0.25);
       expect(f32[15]).toBe(-0.25);
     });
 
-    // bug-20260618 (sprite double-scale) regression: the prior writer
-    // multiplied `pivotAndSize.zw` by Transform.world column lengths so
-    // the sprite shader's `pos_local = (uv - pivot) * size` produced
-    // pre-scaled local-space verts -- then `worldFromLocal` (which also
-    // carries scale) scaled them AGAIN downstream. Net world-space size
-    // was `scaleX^2 / scaleY^2`. The fix locks pivotAndSize.zw to (1, 1)
-    // so worldFromLocal is the sole TRS source (charter P4). This case
-    // asserts the size stays at the unit-quad value regardless of the
-    // material snapshot shape; the writer no longer accepts a
-    // transformWorld argument at all (signature has dropped it).
-    it('(4) signature is single-argument; size locked to (1, 1) for any pivot', () => {
-      if (typeof mod.buildSpriteMaterialUboPayload !== 'function') {
-        throw new Error('helper not exported yet (red phase)');
+    it('flipped region [0.5,0,-0.5,1] -> slot 1 carries flip-folded coords verbatim (D-8)', () => {
+      if (typeof mod.applyParamSnapshotToUbo !== 'function') {
+        throw new Error('applyParamSnapshotToUbo not exported');
       }
-      expect(mod.buildSpriteMaterialUboPayload.length).toBe(1);
-      const offCentrePivot = mod.buildSpriteMaterialUboPayload(
-        makeSpriteSnapshot({ pivot: [0.25, 0.75] }),
+      const buf = new ArrayBuffer(80);
+      // Extract folds flipX into region (region.x += region.z; region.z = -region.z).
+      // Starting from identity region [0,0,1,1], flipX yields [1,0,-1,1]; the
+      // snapshot reaches the writer with the fold already applied.
+      mod.applyParamSnapshotToUbo(
+        buf,
+        SPRITE_UBO_SCHEMA,
+        makeSpriteSnapshot({ region: [1, 0, -1, 1] }),
       );
-      const offF32 = new Float32Array(offCentrePivot);
-      expect(Array.from(offF32.slice(8, 12))).toEqual([0.25, 0.75, 1, 1]);
-    });
-
-    // bug-20260618 scale != 1 double-scale regression:
-    // The prior writer extracted scaleX/scaleY from the transformWorld mat4
-    // diagonal and wrote them into pivotAndSize.zw (f32[10]/f32[11]). The
-    // sprite shader then produced pre-scaled local verts, which worldFromLocal
-    // (carrying the same scale) scaled again: net size was scale^2. The fix
-    // locks f32[10]/f32[11] to (1, 1) unconditionally; worldFromLocal is the
-    // sole TRS owner (charter P4). This test targets the two scale values
-    // reported in the original bug (2.5 and 4) and asserts the UBO slots
-    // stay at 1.0 regardless of what scale the entity carries at runtime.
-    it('(5) bug-20260618 scale != 1 double-scale regression: f32[10] and f32[11] locked to 1.0', () => {
-      if (typeof mod.buildSpriteMaterialUboPayload !== 'function') {
-        throw new Error('helper not exported yet (red phase)');
-      }
-      // scale=2.5 entity: material snapshot carries no scale -- the function
-      // is single-argument and has no channel to receive scale. Any prior
-      // injection of scale into sizeX/sizeY (f32[10]/f32[11]) was the bug.
-      const snap25 = makeSpriteSnapshot({ pivot: [0.5, 0.5] });
-      const f32_25 = new Float32Array(mod.buildSpriteMaterialUboPayload(snap25));
-      expect(f32_25[10]).toBe(1.0); // sizeX -- must NOT carry scale=2.5
-      expect(f32_25[11]).toBe(1.0); // sizeY -- must NOT carry scale=2.5
-
-      // scale=4 entity: same assertion for a different pivot to show the
-      // lock is unconditional, not dependent on pivot centering.
-      const snap4 = makeSpriteSnapshot({ pivot: [0.25, 0.75] });
-      const f32_4 = new Float32Array(mod.buildSpriteMaterialUboPayload(snap4));
-      expect(f32_4[10]).toBe(1.0); // sizeX -- must NOT carry scale=4
-      expect(f32_4[11]).toBe(1.0); // sizeY -- must NOT carry scale=4
+      const f32 = new Float32Array(buf);
+      expect(Array.from(f32.slice(4, 8))).toEqual([1, 0, -1, 1]);
     });
   });
 }
@@ -800,6 +810,658 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       const result = filterDispatchBySelector(dispatch, { LightMode: ['Forward'] });
       expect(result.length).toBe(1);
       expect(result[0]?.renderableIndex).toBe(1);
+    });
+  });
+}
+
+// --- from feat-20260625-refactor-sprite-as-transparent-mesh M1 / w1 ---
+{
+  // Generic std140 UBO writer driven by derive(paramSchema).uboLayout.entries.
+  //
+  // Plan anchors:
+  //   - plan-strategy section 2 D-2: the inline overlay at render-system-
+  //     record.ts:4334-4374 is generalised to read every uboLayout.entries
+  //     std140 offset and write paramSnapshot[name] (numeric / numeric[])
+  //     into the payload buffer. standard-pbr stays byte-identical to the
+  //     pre-feat buildPbrMaterialUboPayload output (covered by the w2 suite
+  //     appended below); sprite-shaped layouts (4 x vec4 stride 16) are
+  //     honoured per offset/size declared by derive.
+  //   - requirements AC-03 sets buildSpriteMaterialUboPayload ablation as
+  //     the M3 deliverable; M1 only establishes that the generic writer can
+  //     produce sprite-shaped bytes from paramSnapshot alone (no asset get,
+  //     gate R-H from plan-strategy section 5.6 prevents reading internals).
+  //
+  // The suite reads render-system-record dynamically so it sits RED until
+  // w3 lands. The expected helper is a pure function with the signature:
+  //
+  //   applyParamSnapshotToUbo(
+  //     payload: ArrayBuffer,
+  //     paramSchema: readonly ParamSchemaEntry[] | undefined,
+  //     paramSnapshot: { readonly [name: string]: number | readonly number[] }
+  //       | undefined,
+  //   ): void
+  //
+  // The helper is internal (export-for-test) and walks
+  // derive(paramSchema).uboLayout.entries to dispatch each field by its
+  // std140 offset. Vec / color entries pull numeric arrays from the
+  // snapshot; f32 / i32 / u32 entries pull scalars.
+
+  const mod = recordModule as unknown as {
+    applyParamSnapshotToUbo?: (
+      payload: ArrayBuffer,
+      paramSchema: readonly ParamSchemaEntry[] | undefined,
+      paramSnapshot:
+        | Readonly<Record<string, number | readonly number[] | string | undefined>>
+        | undefined,
+    ) => void;
+  };
+
+  // Sprite-shaped paramSchema: four vec4 entries at std140 offsets
+  // 0 / 16 / 32 / 48; total = 64 bytes rounded to 16 (still 64).
+  // This mirrors the post-ablation sprite.wgsl UBO layout (M3 / w11) but
+  // the writer must already accept it in M1 so M3 only needs to wire it in.
+  const SPRITE_SHAPED_SCHEMA: readonly ParamSchemaEntry[] = [
+    { name: 'colorTint', type: 'vec4', default: [1, 1, 1, 1] },
+    { name: 'region', type: 'vec4', default: [0, 0, 1, 1] },
+    { name: 'pivotAndSize', type: 'vec4', default: [0.5, 0.5, 1, 1] },
+    { name: 'slicesAndMode', type: 'vec4', default: [0, 0, 0, 0] },
+  ];
+
+  describe('applyParamSnapshotToUbo: sprite-shaped 4x vec4 std140 (M1 / w1)', () => {
+    it('export: applyParamSnapshotToUbo helper is exported from render-system-record', () => {
+      expect(typeof mod.applyParamSnapshotToUbo).toBe('function');
+    });
+
+    it('derive(uboLayout).entries produces four vec4 entries at offsets 0/16/32/48', () => {
+      const { uboLayout } = derive(SPRITE_SHAPED_SCHEMA);
+      expect(uboLayout.entries.length).toBe(4);
+      expect(uboLayout.entries[0]).toMatchObject({
+        name: 'colorTint',
+        offset: 0,
+        size: 16,
+        type: 'vec4',
+      });
+      expect(uboLayout.entries[1]).toMatchObject({
+        name: 'region',
+        offset: 16,
+        size: 16,
+        type: 'vec4',
+      });
+      expect(uboLayout.entries[2]).toMatchObject({
+        name: 'pivotAndSize',
+        offset: 32,
+        size: 16,
+        type: 'vec4',
+      });
+      expect(uboLayout.entries[3]).toMatchObject({
+        name: 'slicesAndMode',
+        offset: 48,
+        size: 16,
+        type: 'vec4',
+      });
+      // std140 struct alignment rounds up to 16 -- 64 already aligns.
+      expect(uboLayout.totalBytes).toBe(64);
+    });
+
+    it('writes each vec4 at its std140 offset (byte-exact, no f32-slot heuristic)', () => {
+      if (typeof mod.applyParamSnapshotToUbo !== 'function') {
+        throw new Error('helper not exported yet (red phase)');
+      }
+      const buf = new ArrayBuffer(64);
+      // Values chosen to round-trip exactly in IEEE 754 f32 (powers of 2 /
+      // sums thereof) so we can assert with toEqual; the non-exact-encoding
+      // values (0.1 / 0.2 / 0.3) would lose the trailing bit on f32 storage
+      // and force a toBeCloseTo, weakening the byte-level signal.
+      const snapshot = {
+        colorTint: [0.25, 0.5, 0.75, 1] as readonly number[],
+        region: [0.125, 0.25, 0.5, 0.75] as readonly number[],
+        pivotAndSize: [0.5, 0.5, 2, 4] as readonly number[],
+        slicesAndMode: [0.125, 0.125, 0.125, -0.125] as readonly number[],
+      };
+      mod.applyParamSnapshotToUbo(buf, SPRITE_SHAPED_SCHEMA, snapshot);
+      const f32 = new Float32Array(buf);
+      // colorTint at offset 0
+      expect(Array.from(f32.slice(0, 4))).toEqual([0.25, 0.5, 0.75, 1]);
+      // region at offset 16 (f32 index 4)
+      expect(Array.from(f32.slice(4, 8))).toEqual([0.125, 0.25, 0.5, 0.75]);
+      // pivotAndSize at offset 32 (f32 index 8)
+      expect(Array.from(f32.slice(8, 12))).toEqual([0.5, 0.5, 2, 4]);
+      // slicesAndMode at offset 48 (f32 index 12) -- carries 9-slice tile
+      // sentinel via negative w (verbatim from snapshot, charter P3 explicit
+      // signal vs the legacy spriteFields.sliceMode side channel).
+      expect(Array.from(f32.slice(12, 16))).toEqual([0.125, 0.125, 0.125, -0.125]);
+    });
+
+    it('missing snapshot fields leave existing bytes untouched (overlay semantics)', () => {
+      if (typeof mod.applyParamSnapshotToUbo !== 'function') {
+        throw new Error('helper not exported yet (red phase)');
+      }
+      const buf = new ArrayBuffer(64);
+      const pre = new Float32Array(buf);
+      // Seed the buffer with sentinel pre-values; the writer must only
+      // touch offsets it has snapshot values for (charter P4 -- the writer
+      // is an overlay, not a clear-and-fill stamp).
+      pre[0] = 9;
+      pre[1] = 9;
+      pre[2] = 9;
+      pre[3] = 9;
+      pre[12] = 7;
+      pre[13] = 7;
+      pre[14] = 7;
+      pre[15] = 7;
+      const snapshot = {
+        region: [0.125, 0.25, 0.5, 0.75] as readonly number[],
+        pivotAndSize: [0.5, 0.5, 2, 4] as readonly number[],
+      };
+      mod.applyParamSnapshotToUbo(buf, SPRITE_SHAPED_SCHEMA, snapshot);
+      const f32 = new Float32Array(buf);
+      // colorTint (no snapshot value) preserved
+      expect(Array.from(f32.slice(0, 4))).toEqual([9, 9, 9, 9]);
+      // region written
+      expect(Array.from(f32.slice(4, 8))).toEqual([0.125, 0.25, 0.5, 0.75]);
+      // pivotAndSize written
+      expect(Array.from(f32.slice(8, 12))).toEqual([0.5, 0.5, 2, 4]);
+      // slicesAndMode (no snapshot value) preserved
+      expect(Array.from(f32.slice(12, 16))).toEqual([7, 7, 7, 7]);
+    });
+
+    it('no-op when paramSchema or paramSnapshot is undefined', () => {
+      if (typeof mod.applyParamSnapshotToUbo !== 'function') {
+        throw new Error('helper not exported yet (red phase)');
+      }
+      const buf = new ArrayBuffer(64);
+      const pre = new Float32Array(buf);
+      for (let i = 0; i < 16; i++) pre[i] = i + 1;
+      const snapshot = { colorTint: [0.5, 0.5, 0.5, 0.5] as readonly number[] };
+      mod.applyParamSnapshotToUbo(buf, undefined, snapshot);
+      // Schema undefined -> no writes.
+      for (let i = 0; i < 16; i++) expect(pre[i]).toBe(i + 1);
+      mod.applyParamSnapshotToUbo(buf, SPRITE_SHAPED_SCHEMA, undefined);
+      // Snapshot undefined -> no writes.
+      for (let i = 0; i < 16; i++) expect(pre[i]).toBe(i + 1);
+    });
+  });
+}
+
+// --- from feat-20260625-refactor-sprite-as-transparent-mesh M1 / w2 ---
+{
+  // standard-pbr regression: the generic writer over the engine-shipped
+  // default-standard-pbr.wgsl.meta.json paramSchema (10 numeric entries
+  // std140-packed into 80 B) must produce byte-identical output to
+  // buildPbrMaterialUboPayload. This is the gate plan-strategy section 2
+  // D-2 sets so the generic writer can replace the inline overlay without
+  // perturbing PBR rendering. RED until w3 lands the helper.
+
+  const mod = recordModule as unknown as {
+    applyParamSnapshotToUbo?: (
+      payload: ArrayBuffer,
+      paramSchema: readonly ParamSchemaEntry[] | undefined,
+      paramSnapshot:
+        | Readonly<Record<string, number | readonly number[] | string | undefined>>
+        | undefined,
+    ) => void;
+    buildPbrMaterialUboPayload?: (material: MaterialSnapshot) => ArrayBuffer;
+  };
+
+  // Mirror the engine-shipped default-standard-pbr.wgsl.meta.json schema
+  // (the on-disk SSOT; inline here to keep the unit suite free of asset
+  // loads).
+  const STANDARD_PBR_SCHEMA: readonly ParamSchemaEntry[] = [
+    { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
+    { name: 'metallic', type: 'f32', default: 0 },
+    { name: 'roughness', type: 'f32', default: 0.5 },
+    { name: 'metallicChannel', type: 'f32', default: 2 },
+    { name: 'roughnessChannel', type: 'f32', default: 1 },
+    { name: 'aoChannel', type: 'f32', default: 0 },
+    { name: 'extraChannel', type: 'f32', default: 0 },
+    { name: 'emissive', type: 'vec3', default: [0, 0, 0] },
+    { name: 'emissiveIntensity', type: 'f32', default: 0 },
+    { name: 'occlusionStrength', type: 'f32', default: 1 },
+  ];
+
+  describe('applyParamSnapshotToUbo: standard-pbr byte-identical via derive (M1 / w2)', () => {
+    it('derive(standard-pbr).uboLayout matches the 80 B layout the inline PBR writer uses', () => {
+      const { uboLayout } = derive(STANDARD_PBR_SCHEMA);
+      expect(uboLayout.totalBytes).toBe(80);
+      const byName = new Map(uboLayout.entries.map((e) => [e.name, e]));
+      expect(byName.get('baseColor')?.offset).toBe(0);
+      expect(byName.get('metallic')?.offset).toBe(16);
+      expect(byName.get('roughness')?.offset).toBe(20);
+      expect(byName.get('metallicChannel')?.offset).toBe(24);
+      expect(byName.get('roughnessChannel')?.offset).toBe(28);
+      expect(byName.get('aoChannel')?.offset).toBe(32);
+      expect(byName.get('extraChannel')?.offset).toBe(36);
+      // vec3 aligns to 16: cursor at 40 rounds up to 48.
+      expect(byName.get('emissive')?.offset).toBe(48);
+      expect(byName.get('emissiveIntensity')?.offset).toBe(60);
+      expect(byName.get('occlusionStrength')?.offset).toBe(64);
+    });
+
+    it('generic writer over standard-pbr snapshot equals buildPbrMaterialUboPayload bytes', () => {
+      if (typeof mod.applyParamSnapshotToUbo !== 'function') {
+        throw new Error('helper not exported yet (red phase)');
+      }
+      if (typeof mod.buildPbrMaterialUboPayload !== 'function') {
+        throw new Error('buildPbrMaterialUboPayload missing -- baseline broken');
+      }
+      // Construct a snapshot equivalent to the explicit material fields the
+      // legacy helper consumes (baseColor / metallic / roughness / emissive /
+      // emissiveIntensity / occlusionStrength + the channelMap defaults the
+      // helper hard-codes).
+      const baseColor = [0.5, 0.6, 0.7, 1] as readonly number[];
+      const metallic = 0.1;
+      const roughness = 0.4;
+      const emissive = [0, 0, 0] as readonly number[];
+      const emissiveIntensity = 0;
+      const occlusionStrength = 1;
+      const material = {
+        baseColor,
+        metallic,
+        roughness,
+        shadingModel: undefined,
+        materialShaderId: 'forgeax::default-standard-pbr',
+        paramSnapshot: undefined,
+        emissive,
+        emissiveIntensity,
+        occlusionStrength,
+      } as unknown as MaterialSnapshot;
+      const baseline = mod.buildPbrMaterialUboPayload(material);
+      // Construct the generic-writer output: start from the same explicit
+      // PBR baseline, then apply the generic overlay over a paramSnapshot
+      // carrying the same values. The overlay must not perturb any byte
+      // the explicit baseline already wrote (charter P4 -- one writer, one
+      // byte layout).
+      const candidate = mod.buildPbrMaterialUboPayload(material);
+      const snapshot = {
+        baseColor,
+        metallic,
+        roughness,
+        metallicChannel: 2,
+        roughnessChannel: 1,
+        aoChannel: 0,
+        extraChannel: 0,
+        emissive,
+        emissiveIntensity,
+        occlusionStrength,
+      };
+      mod.applyParamSnapshotToUbo(candidate, STANDARD_PBR_SCHEMA, snapshot);
+      expect(new Uint8Array(candidate)).toEqual(new Uint8Array(baseline));
+    });
+
+    it('honours f32 slot offsets independently (slot 1 width = 4 floats from metallic..extraChannel)', () => {
+      if (typeof mod.applyParamSnapshotToUbo !== 'function') {
+        throw new Error('helper not exported yet (red phase)');
+      }
+      const buf = new ArrayBuffer(80);
+      // f32-exact values (powers of 2 / sums) so we can assert toEqual on
+      // every slot; toBeCloseTo would let off-by-one-bit drifts hide.
+      const snapshot = {
+        baseColor: [0.125, 0.25, 0.5, 1] as readonly number[],
+        metallic: 0.5,
+        roughness: 0.25,
+        metallicChannel: 2,
+        roughnessChannel: 1,
+        aoChannel: 0,
+        extraChannel: 0,
+        emissive: [0.5, 0.5, 0.5] as readonly number[],
+        emissiveIntensity: 1.5,
+        occlusionStrength: 0.75,
+      };
+      mod.applyParamSnapshotToUbo(buf, STANDARD_PBR_SCHEMA, snapshot);
+      const f32 = new Float32Array(buf);
+      // baseColor occupies slot 0 (offset 0).
+      expect(Array.from(f32.slice(0, 4))).toEqual([0.125, 0.25, 0.5, 1]);
+      // 4 f32 channels packed at offset 16..36 -- distinct slots, not folded
+      // into one vec4 (regression against legacy "first two f32 only"
+      // overlay at render-system-record.ts:4334-4374).
+      expect(f32[4]).toBe(0.5);
+      expect(f32[5]).toBe(0.25);
+      expect(f32[6]).toBe(2);
+      expect(f32[7]).toBe(1);
+      expect(f32[8]).toBe(0);
+      expect(f32[9]).toBe(0);
+      // emissive vec3 at offset 48 (f32 index 12).
+      expect(Array.from(f32.slice(12, 15))).toEqual([0.5, 0.5, 0.5]);
+      expect(f32[15]).toBe(1.5);
+      expect(f32[16]).toBe(0.75);
+    });
+  });
+}
+
+// --- from feat-20260625-refactor-sprite-as-transparent-mesh M2 / w4 ---
+{
+  // AC-05: a MaterialSnapshot carrying transparent:true on its source pass
+  // (recorded as MaterialSnapshot.transparent === true) must drive the LDR
+  // split-pass decision and the blend-state lookup INDEPENDENTLY of the
+  // shader id. The shader here is a generic 'forgeax::unlit-test' stub -- if
+  // splitLdrSprite or the blend-state helper still keys on
+  // 'forgeax::sprite', this suite stays red.
+  //
+  // Plan anchors:
+  //   - requirements AC-05 (transparent decoupled from sprite shader)
+  //   - plan-strategy section 2 D-3 (MaterialSnapshot.transparent
+  //     transparent passthrough; split reads snapshot, not pass)
+  //   - plan-strategy section 5.4 falsification check (the inline comment
+  //     below records the variant: flipping blend src=one/dst=zero turns
+  //     premultiplied alpha into hard-edge composition and fails the dawn
+  //     msaa-sprite-pixel-diff baseline -- documenting that the pixel
+  //     diff smoke is sensitive to blend factor correctness).
+  //
+  // The `computeSplitLdrSprite` helper is added by w7. The dynamic-import
+  // sentinel keeps this suite red until it lands.
+  //
+  // feat-20260626-sprite-transparent-collapse M2 / M4: the sibling
+  // `resolveTransparentBlendState` helper has been removed — premultiplied-
+  // alpha blend factors are now pinned to the exported
+  // `SPRITE_PREMULTIPLIED_ALPHA_BLEND` constant (the SSOT for asset-side
+  // `renderState.blend`); the tests that exercised the resolver are deleted
+  // and the falsification check now lives on the dawn pixel-diff
+  // baseline + the asset-side constant export check.
+
+  type DispatchEntryLike = {
+    readonly source: {
+      readonly material: MaterialSnapshot;
+      readonly materials: readonly MaterialSnapshot[];
+    };
+  };
+
+  const mod = recordModule as unknown as {
+    computeSplitLdrSprite?: (
+      validatedOrdered: readonly (DispatchEntryLike | undefined)[],
+      tonemapActive: boolean,
+    ) => boolean;
+  };
+
+  function makeTransparentSnap(opts: {
+    transparent?: boolean;
+    materialShaderId?: string;
+  }): MaterialSnapshot {
+    return {
+      baseColor: [1, 1, 1, 1] as const,
+      metallic: 0,
+      roughness: 1,
+      shadingModel: undefined,
+      materialShaderId: opts.materialShaderId ?? 'forgeax::unlit-test',
+      paramSnapshot: {},
+      ...(opts.transparent === true && { transparent: true }),
+    } as unknown as MaterialSnapshot;
+  }
+
+  function makeValidatedEntry(material: MaterialSnapshot): DispatchEntryLike {
+    return { source: { material, materials: [material] } };
+  }
+
+  describe('transparent decouples from sprite shader (M2 / w4, AC-05)', () => {
+    it('export: computeSplitLdrSprite helper is exported from render-system-record', () => {
+      expect(typeof mod.computeSplitLdrSprite).toBe('function');
+    });
+
+    it('non-sprite shader with transparent:true triggers LDR split', () => {
+      if (typeof mod.computeSplitLdrSprite !== 'function') {
+        throw new Error('computeSplitLdrSprite helper not exported yet (red phase)');
+      }
+      const transparentSnap = makeTransparentSnap({
+        transparent: true,
+        materialShaderId: 'forgeax::unlit-test',
+      });
+      const opaqueSnap = makeTransparentSnap({
+        transparent: false,
+        materialShaderId: 'forgeax::unlit-test',
+      });
+      // tonemapActive=false (LDR path) + a transparent entry in the
+      // validated list -- the split decision must trip even though the
+      // shader is not forgeax::sprite (AC-05 proves the decoupling).
+      const split = mod.computeSplitLdrSprite(
+        [makeValidatedEntry(opaqueSnap), makeValidatedEntry(transparentSnap)],
+        false,
+      );
+      expect(split).toBe(true);
+    });
+
+    it('LDR split stays false on pure-opaque non-sprite list', () => {
+      if (typeof mod.computeSplitLdrSprite !== 'function') {
+        throw new Error('computeSplitLdrSprite helper not exported yet (red phase)');
+      }
+      const opaqueA = makeTransparentSnap({
+        transparent: false,
+        materialShaderId: 'forgeax::unlit-test',
+      });
+      const opaqueB = makeTransparentSnap({
+        transparent: false,
+        materialShaderId: 'forgeax::default-standard-pbr',
+      });
+      const split = mod.computeSplitLdrSprite(
+        [makeValidatedEntry(opaqueA), makeValidatedEntry(opaqueB)],
+        false,
+      );
+      expect(split).toBe(false);
+    });
+
+    it('HDR path (tonemapActive=true) suppresses split even with transparent entries', () => {
+      if (typeof mod.computeSplitLdrSprite !== 'function') {
+        throw new Error('computeSplitLdrSprite helper not exported yet (red phase)');
+      }
+      const transparentSnap = makeTransparentSnap({
+        transparent: true,
+        materialShaderId: 'forgeax::unlit-test',
+      });
+      const split = mod.computeSplitLdrSprite([makeValidatedEntry(transparentSnap)], true);
+      expect(split).toBe(false);
+    });
+
+    it('M3 / w13: legacy sprite shadingModel without transparent:true does NOT trigger split (union arm deleted)', () => {
+      if (typeof mod.computeSplitLdrSprite !== 'function') {
+        throw new Error('computeSplitLdrSprite helper not exported yet (red phase)');
+      }
+      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13 (D-3):
+      // the M2 union (`transparent || shadingModel === 'sprite'`) is gone
+      // — transparent is the single SSOT. A legacy snapshot still carrying
+      // `shadingModel: 'sprite'` but no `transparent: true` declaration
+      // MUST NOT trigger the LDR split (forces explicit transparent
+      // attribution on the asset side; AC-04 / AC-05).
+      const legacySpriteNoTransparent = {
+        baseColor: [1, 1, 1, 1] as const,
+        metallic: 0,
+        roughness: 1,
+        shadingModel: 'sprite',
+        materialShaderId: 'forgeax::sprite',
+        paramSnapshot: {},
+      } as unknown as MaterialSnapshot;
+      const splitWithoutTransparent = mod.computeSplitLdrSprite(
+        [makeValidatedEntry(legacySpriteNoTransparent)],
+        false,
+      );
+      expect(splitWithoutTransparent).toBe(false);
+
+      // Same snapshot with `transparent: true` declared on the pass DOES
+      // trigger the split (the only path that should).
+      const spriteTransparent = {
+        ...legacySpriteNoTransparent,
+        transparent: true,
+      } as unknown as MaterialSnapshot;
+      const splitWithTransparent = mod.computeSplitLdrSprite(
+        [makeValidatedEntry(spriteTransparent)],
+        false,
+      );
+      expect(splitWithTransparent).toBe(true);
+    });
+
+    it('transparent:true resolves premultiplied-alpha blend state (src=one/dst=one-minus-src-alpha)', () => {
+      // feat-20260626-sprite-transparent-collapse M2 / M4: the
+      // `resolveTransparentBlendState` resolver is gone — premultiplied-alpha
+      // factors are pinned to the exported `SPRITE_PREMULTIPLIED_ALPHA_BLEND`
+      // constant (the asset-side SSOT for `renderState.blend`). This test
+      // pins the constant's shape so a future maintainer flipping the color
+      // blend to {src:'one', dst:'zero'} (opaque copy) still trips a unit
+      // gate before the dawn msaa-sprite-pixel-diff smoke catches the
+      // regression. AC-10 reaches the human arbiter through both paths.
+      expect(SPRITE_PREMULTIPLIED_ALPHA_BLEND.color.srcFactor).toBe('one');
+      expect(SPRITE_PREMULTIPLIED_ALPHA_BLEND.color.dstFactor).toBe('one-minus-src-alpha');
+      expect(SPRITE_PREMULTIPLIED_ALPHA_BLEND.alpha.srcFactor).toBe('one');
+      expect(SPRITE_PREMULTIPLIED_ALPHA_BLEND.alpha.dstFactor).toBe('one-minus-src-alpha');
+    });
+  });
+}
+
+// --- from feat-20260625-refactor-sprite-as-transparent-mesh M2 / w5 ---
+{
+  // AC-14: a transparent material whose target shader pipeline is not yet
+  // cached must surface a structured RhiError (.code / .expected / .hint),
+  // NOT silently fall back to the debug-pink placeholder. The generic
+  // materialShaderId path is the only resolver -- post feat-20260625 M3 / w14
+  // the dedicated sprite PSO fields are gone; sprite uses the same generic
+  // getMaterialShaderPipeline path every transparent material consumes.
+  //
+  // The helper signature added by w7:
+  //
+  //   selectMaterialPipelineForRender({
+  //     materialShaderId, isHdr, renderState, topology, indexFormat,
+  //     variantSet, sampleCount,
+  //     getMaterialShaderPipeline, // injected at call site (runtime.getMaterialShaderPipeline)
+  //   }): Result<RenderPipeline, RhiError>
+  //
+  // Plan anchors:
+  //   - requirements AC-14 (structured RhiError, no debug-pink fall-through)
+  //   - plan-strategy section 8.3 (error info AI users consume via property
+  //     access: .code / .expected / .hint; charter P3 explicit failure)
+  //   - plan-strategy section 2 D-3 (transparent flows through the generic
+  //     materialShaderId path; the resolver therefore never branches on
+  //     'forgeax::sprite' to recover)
+
+  type SelectArgs = {
+    readonly materialShaderId: string;
+    readonly isHdr: boolean;
+    readonly renderState: {
+      readonly blend?: {
+        readonly color: { readonly srcFactor: string; readonly dstFactor: string };
+        readonly alpha: { readonly srcFactor: string; readonly dstFactor: string };
+      };
+    };
+    readonly topology: 'triangle-list' | 'triangle-strip';
+    readonly indexFormat: 'uint16' | 'uint32';
+    readonly variantSet: string;
+    readonly sampleCount: number;
+    readonly getMaterialShaderPipeline: (
+      materialShaderId: string,
+      isHdr: boolean,
+    ) => unknown | null;
+  };
+
+  const mod = recordModule as unknown as {
+    selectMaterialPipelineForRender?: (
+      args: SelectArgs,
+    ) =>
+      | { readonly ok: true; readonly value: unknown }
+      | { readonly ok: false; readonly error: { code: string; expected: string; hint: string } };
+  };
+
+  function makeSelectArgs(overrides: {
+    materialShaderId?: string;
+    getter?: SelectArgs['getMaterialShaderPipeline'];
+  }): SelectArgs {
+    const pipelineStub = { __pipeline: true };
+    return {
+      materialShaderId: overrides.materialShaderId ?? 'forgeax::unlit-test',
+      isHdr: false,
+      renderState: {
+        blend: {
+          color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+        },
+      },
+      topology: 'triangle-list',
+      indexFormat: 'uint16',
+      variantSet: '',
+      sampleCount: 1,
+      getMaterialShaderPipeline: overrides.getter ?? (() => pipelineStub),
+    };
+  }
+
+  describe('selectMaterialPipelineForRender pipeline-miss surfaces RhiError (M2 / w5, AC-14)', () => {
+    it('export: selectMaterialPipelineForRender helper is exported from render-system-record', () => {
+      expect(typeof mod.selectMaterialPipelineForRender).toBe('function');
+    });
+
+    it('cache miss returns ok=false with structured RhiError (.code/.expected/.hint)', () => {
+      if (typeof mod.selectMaterialPipelineForRender !== 'function') {
+        throw new Error('selectMaterialPipelineForRender helper not exported yet (red phase)');
+      }
+      const result = mod.selectMaterialPipelineForRender(
+        makeSelectArgs({
+          materialShaderId: 'forgeax::unlit-test',
+          getter: () => null, // simulate cache miss / async build pending
+        }),
+      );
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('unreachable -- result.ok asserted false above');
+      const err = result.error;
+      // charter P3 -- AI users branch on .code (string union member from
+      // RhiErrorCode) and consume .expected / .hint as property reads;
+      // they do NOT parse the human-facing .message string.
+      expect(typeof err.code).toBe('string');
+      expect(err.code.length).toBeGreaterThan(0);
+      expect(typeof err.expected).toBe('string');
+      expect(err.expected.length).toBeGreaterThan(0);
+      expect(typeof err.hint).toBe('string');
+      expect(err.hint.length).toBeGreaterThan(0);
+    });
+
+    it('cache miss .hint references the missing materialShaderId (AI users locate the cache key)', () => {
+      if (typeof mod.selectMaterialPipelineForRender !== 'function') {
+        throw new Error('selectMaterialPipelineForRender helper not exported yet (red phase)');
+      }
+      const result = mod.selectMaterialPipelineForRender(
+        makeSelectArgs({
+          materialShaderId: 'forgeax::missing-shader-id',
+          getter: () => null,
+        }),
+      );
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('unreachable -- result.ok asserted false above');
+      // The shader id must appear in .hint (or .expected) so AI users can
+      // grep the registry / pipeline cache straight from the structured
+      // error -- not from a human-prose substring of .message.
+      const exposed = `${result.error.hint} ${result.error.expected}`;
+      expect(exposed).toContain('forgeax::missing-shader-id');
+    });
+
+    it('cache hit returns ok=true with the pipeline (no error path on success)', () => {
+      if (typeof mod.selectMaterialPipelineForRender !== 'function') {
+        throw new Error('selectMaterialPipelineForRender helper not exported yet (red phase)');
+      }
+      const pipeline = { __pipeline: 'forgeax::unlit-test-pso' };
+      const result = mod.selectMaterialPipelineForRender(
+        makeSelectArgs({
+          materialShaderId: 'forgeax::unlit-test',
+          getter: () => pipeline,
+        }),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('unreachable -- result.ok asserted true above');
+      expect(result.value).toBe(pipeline);
+    });
+
+    it('cache miss does NOT silently substitute a debug-pink fallback pipeline', () => {
+      if (typeof mod.selectMaterialPipelineForRender !== 'function') {
+        throw new Error('selectMaterialPipelineForRender helper not exported yet (red phase)');
+      }
+      // Probe: the only branch the getter ever returns is the one passed in.
+      // A cache miss must surface ok=false, NOT a synthesized pipeline value
+      // that hides the miss (charter P3 -- the pre-M6 silent fallback to
+      // pipelineState.standardPipeline* was exactly this anti-pattern, see
+      // render-system-record.ts:5188-5198 commentary).
+      let getterCallCount = 0;
+      const result = mod.selectMaterialPipelineForRender(
+        makeSelectArgs({
+          materialShaderId: 'forgeax::unlit-test',
+          getter: () => {
+            getterCallCount += 1;
+            return null;
+          },
+        }),
+      );
+      expect(getterCallCount).toBeGreaterThanOrEqual(1);
+      expect(result.ok).toBe(false);
     });
   });
 }

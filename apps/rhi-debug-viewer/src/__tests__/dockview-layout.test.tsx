@@ -34,7 +34,7 @@ vi.mock('dockview-react', () => ({
     }
     return (
       <div
-        className="dockview-theme-abyss"
+        className="dockview-theme-forgeax"
         data-testid="dockview-mock"
         data-components={Object.keys(components ?? {}).join(',')}
       />
@@ -67,28 +67,25 @@ describe('AC-21: dockview default layout replaces fixed grid', () => {
     const html = container.innerHTML;
     expect(html).not.toContain('grid-cols-1');
     expect(html).not.toContain('grid-cols-[');
-    expect(html).toContain('dockview-theme-abyss');
+    // Empty state shows the import hint, not the dock; the dock (and its
+    // dockview-theme-forgeax wrapper) mounts only once a tape is loaded — that
+    // path is covered by the browser smoke. Here we only assert the old fixed
+    // grid is gone.
   });
 
-  it('dockview component registry contains exactly 4 panels', () => {
+  it('empty state shows an import affordance, no dock (dock is gated on a loaded tape)', () => {
     const { container } = render(
       <div style={{ width: 1024, height: 768 }}>
         <App />
       </div>,
     );
 
+    // The dock (and its component registry) mounts only once a tape is loaded;
+    // the empty state offers Import instead. The 4-panel registry + render is
+    // covered by the browser smoke (data-forgeax-* anchors on the live layout).
     const mocks = container.querySelectorAll('[data-testid="dockview-mock"]');
-    expect(mocks.length).toBeGreaterThanOrEqual(1);
-
-    const componentsAttr = mocks[0]?.getAttribute('data-components');
-    expect(componentsAttr).not.toBeNull();
-    const registered = (componentsAttr ?? '').split(',');
-    expect(registered.sort()).toEqual([
-      'eventBrowser',
-      'pipelineState',
-      'resourceInspector',
-      'textureViewer',
-    ]);
+    expect(mocks.length).toBe(0);
+    expect(container.textContent).toContain('Import');
   });
 
   it('four placeholder panel components are functions', () => {

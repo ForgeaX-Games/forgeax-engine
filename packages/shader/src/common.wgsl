@@ -353,8 +353,35 @@ struct ShadowCasterCascade {
 // Reuses the STORAGE_BUFFER_AVAILABLE axis (D-2) — the uniform fallback
 // array<InstanceData, 128> caps at MAX_UNIFORM_INSTANCES=128, same as
 // the meshes array. No new INSTANCE_STORAGE_AVAILABLE axis.
+//
+// feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M2 / w7
+// (plan-strategy §2 D-1 + §2 D-4 + research §Q-R-4.1-4.4): the
+// PER_INSTANCE_REGION axis is declared in sprite.wgsl ONLY (D-4 keeps
+// pbr / unlit at their existing 2-variant count). When the sprite
+// pipeline composes this module with `PER_INSTANCE_REGION = true`, the
+// InstanceData struct grows from 64 B (mat4) to 80 B (mat4 + vec4) so
+// the record stage can interleave per-instance UV regions into the same
+// single GPU buffer that already carries the per-instance mat4 (single
+// binding slot, BGL zero-modification per D-R-4). The conditional sits
+// at the tail of the struct so the pre-feat 64 B layout stays
+// byte-identical when PER_INSTANCE_REGION is undefined (sprite-atlas
+// + every non-sprite material).
+//
+// Uniform-fallback safety (R-6): worst case is
+//   80 B × MAX_UNIFORM_INSTANCES (128) = 10240 B
+// which is below the WebGL2 UBO floor of 16384 B; the 128 cap survives
+// the stride bump.
 struct InstanceData {
   localFromInstance : mat4x4<f32>,
+#if PER_INSTANCE_REGION == true
+  // Per-instance atlas region: .xy = (uMin, vMin), .zw = (uW, vH). Pairs
+  // with the legacy `material.region` UBO field (sprite.wgsl Material
+  // struct, 16 B at byte offset 16). Sprite vs_main picks between the
+  // material-level fallback (legacy, single-material-per-draw) and the
+  // per-instance value via the same `#if PER_INSTANCE_REGION == true`
+  // gate so a single sprite.wgsl source supports both shapes.
+  region : vec4<f32>,
+#endif
 };
 #if STORAGE_BUFFER_AVAILABLE == true
 @group(3) @binding(0) var<storage, read> instances : array<InstanceData>;

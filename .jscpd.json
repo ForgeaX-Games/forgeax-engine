@@ -16,6 +16,20 @@
     "**/__snapshots__/**"
   ],
   "filePairIgnore": [
+    {
+      "files": [
+        "apps/collectathon/scripts/smoke-dawn.mjs",
+        "apps/hello/skin/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "feat-20260626-3d-third-person-collectathon-showcase-game M2: collectathon and hello/skin dawn-node smokes share the webgpu global injection + mock GPUCanvasContext + shared-device capture boilerplate. Charter F1 grep-anchor: each demo smoke is a single self-contained driver an AI user reads without traversing a shared helper (same idiom as the hello-* smoke-dawn whitelists below). Per-demo verdict stays inline (collectathon: Camera/DirectionalLight presence + 0 RhiError structural-only)."
+    },
+    {
+      "files": [
+        "apps/collectathon/scripts/smoke-dawn.mjs",
+        "apps/learn-render/4.advanced-opengl/10.anti-aliasing-msaa/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "feat-20260626-3d-third-person-collectathon-showcase-game M2: collectathon and 10.anti-aliasing-msaa dawn-node smokes share the dawn-node loader + mock canvas + N-frame loop + onError tally boilerplate. Charter F1 grep-anchor: each demo smoke is self-contained; per-demo verdict stays inline."
+    },
     ["packages/math/src/quat.ts", "packages/math/src/vec4.ts"],
     ["packages/rhi-webgpu/package.json", "packages/vite-plugin-shader/package.json"],
     [

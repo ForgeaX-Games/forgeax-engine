@@ -608,6 +608,118 @@ export interface InspectDrawCall {
 }
 
 /**
+ * Pipeline state for a single draw call, extracted from createRenderPipeline +
+ * runtime events (pure event analysis, zero GPU). The seven WebGPU pipeline
+ * stages the viewer's PipelineState panel renders; attached to InspectReport so
+ * an AI `inspect-offline` call sees identical data. SSOT producer:
+ * `makePipelineState` in inspect-core.ts; whole-frame producer: buildFrameModel.
+ */
+export interface DrawPipelineState {
+  readonly inputAssembly: {
+    readonly topology: GPUPrimitiveTopology;
+    readonly stripIndexFormat: GPUIndexFormat | undefined;
+  };
+  readonly vertexInput: {
+    readonly buffers: readonly {
+      readonly arrayStride: number;
+      readonly stepMode: GPUVertexStepMode;
+      readonly attributes: readonly {
+        readonly format: GPUVertexFormat;
+        readonly offset: number;
+        readonly shaderLocation: number;
+      }[];
+    }[];
+  };
+  readonly shaders: {
+    readonly vertexShaderModuleHandleId: HandleId | undefined;
+    readonly fragmentShaderModuleHandleId: HandleId | undefined;
+  };
+  readonly rasterizer: {
+    readonly cullMode: GPUCullMode;
+    readonly frontFace: GPUFrontFace;
+  };
+  readonly depthStencil: {
+    readonly format: GPUTextureFormat;
+    readonly depthWriteEnabled: boolean;
+    readonly depthCompare: GPUCompareFunction;
+    readonly stencilFront: NonNullable<GPUDepthStencilState['stencilFront']>;
+    readonly stencilBack: NonNullable<GPUDepthStencilState['stencilBack']>;
+    readonly stencilReadMask: number;
+    readonly stencilWriteMask: number;
+    readonly depthBias: number;
+    readonly depthBiasSlopeScale: number;
+    readonly depthBiasClamp: number;
+    readonly stencilReference: number;
+  };
+  readonly blend: {
+    readonly colorTargets: readonly {
+      readonly format: GPUTextureFormat;
+      readonly color: GPUBlendComponent | undefined;
+      readonly alpha: GPUBlendComponent | undefined;
+      readonly writeMask: GPUColorWriteFlags;
+    }[];
+    readonly blendConstant: GPUColor | undefined;
+  };
+  readonly multisample: {
+    readonly count: number;
+    readonly mask: number;
+    readonly alphaToCoverageEnabled: boolean;
+  };
+}
+
+/**
+ * A resource descriptor parsed from a create* event, discriminated by kind.
+ * Consumed by the viewer's ResourceInspector panel and the cli `summary`
+ * subcommand (via the FrameModel.resources map). SSOT producer: `buildResources`
+ * in inspect-core.ts.
+ */
+export type CreateDescriptor =
+  | {
+      readonly kind: 'createBuffer';
+      readonly handleId: HandleId;
+      readonly size: GPUSize64;
+      readonly usage: GPUBufferUsageFlags;
+    }
+  | {
+      readonly kind: 'createTexture';
+      readonly handleId: HandleId;
+      readonly format: GPUTextureFormat;
+      readonly size: readonly number[];
+      readonly mipLevelCount: number;
+      readonly sampleCount: number;
+      readonly dimension: GPUTextureDimension;
+      readonly usage: GPUTextureUsageFlags;
+    }
+  | {
+      readonly kind: 'createSampler';
+      readonly handleId: HandleId;
+      readonly desc: Partial<GPUSamplerDescriptor> | undefined;
+    }
+  | {
+      readonly kind: 'createBindGroupLayout';
+      readonly handleId: HandleId;
+      readonly entries: readonly GPUBindGroupLayoutEntry[];
+    }
+  | {
+      readonly kind: 'createPipelineLayout';
+      readonly handleId: HandleId;
+      readonly bglHandleIds: readonly HandleId[];
+    }
+  | {
+      readonly kind: 'createRenderPipeline';
+      readonly handleId: HandleId;
+      readonly vertex: GPUVertexState | undefined;
+      readonly primitive: GPUPrimitiveState | undefined;
+      readonly depthStencil: GPUDepthStencilState | undefined;
+      readonly multisample: GPUMultisampleState | undefined;
+      readonly fragment: GPUFragmentState | undefined;
+      readonly layoutHandleId: HandleId;
+      readonly vertexShaderModuleHandleId: HandleId | undefined;
+      readonly fragmentShaderModuleHandleId: HandleId | undefined;
+    }
+  | { readonly kind: 'createShaderModule'; readonly handleId: HandleId; readonly wgslCode: string };
+
+/**
  * Decoded RGBA8 pixels of the RT readback at the inspected draw call — the
  * structured RT payload produced by the node-free browser path (L3b
  * `inspectDrawJson`). `pixels.length === width * height * 4` (tight-packed,
@@ -660,6 +772,10 @@ export type InspectRtPayload = string | InspectRtPixels;
  *     the Node CLI path, or a decoded {width,height,pixels} object on the
  *     browser path. Cropped: present when fields includes 'rt' or is undefined
  *     (full report).
+ * pipelineState: the seven WebGPU pipeline stages active at this draw
+ *     ({@link DrawPipelineState}), derived from pure event analysis. Always
+ *     present for render draws (never gated by `fields`); the AI sees the same
+ *     pipeline state the viewer's PipelineState panel renders.
  */
 export interface InspectReport {
   readonly frameIdx: number;
@@ -668,6 +784,7 @@ export interface InspectReport {
   readonly bindings?: readonly InspectBindingEntry[] | undefined;
   readonly drawCall?: InspectDrawCall | undefined;
   readonly rt?: InspectRtPayload | undefined;
+  readonly pipelineState?: DrawPipelineState | undefined;
 }
 
 /**

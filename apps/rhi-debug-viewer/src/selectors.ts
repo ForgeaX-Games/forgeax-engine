@@ -79,7 +79,7 @@ export function loadStatusAnchor(): string {
 /**
  * Attribute name for data-forgeax-rt-status. Value is an RtStatus string.
  *
- * SSOT anchor key consumed by RtPanel.
+ * SSOT anchor key consumed by TextureViewer (RT/depth preview status).
  * Callers write: `{...{ [rtStatusAnchor()]: status }}`.
  * Smoke CSS selector: `[data-forgeax-rt-status="ok"]`.
  */
@@ -90,7 +90,7 @@ export function rtStatusAnchor(): string {
 /**
  * Attribute name for data-forgeax-rt-canvas. Value is always empty string.
  *
- * SSOT anchor key consumed by RtPanel to mark the RT <canvas>.
+ * SSOT anchor key consumed by TextureViewer to mark the RT/depth preview <canvas>.
  * Callers write: `{...{ [rtCanvasAnchor()]: '' }}`.
  * Smoke CSS selector: `canvas[data-forgeax-rt-canvas]`.
  */

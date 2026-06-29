@@ -18,6 +18,9 @@ import { DebugError } from './errors';
 import { readbackDrawRt } from './readback';
 import { computePassOffsets } from './tape-format';
 import type {
+  CreateDescriptor,
+  DrawPipelineState,
+  HandleId,
   InspectBindingEntry,
   InspectDrawCall,
   InspectFields,
@@ -67,6 +70,230 @@ export function mapResourceKindToInspectKind(
     case 'externalTexture':
       return 'texture';
   }
+}
+
+// ============================================================================
+// Resource + pipeline-state atoms (shared by frame-model + inspectDrawJson)
+// ============================================================================
+
+/** Pipe an Iterable through an array so we can .map() it. */
+function iterToArray<T>(it: Iterable<T>): T[] {
+  const out: T[] = [];
+  for (const v of it) out.push(v);
+  return out;
+}
+
+/** Build the resources map (handleId -> descriptor) from all create* events. */
+export function buildResources(
+  events: readonly RhiCallEvent[],
+): ReadonlyMap<HandleId, CreateDescriptor> {
+  const map = new Map<HandleId, CreateDescriptor>();
+
+  for (const event of events) {
+    switch (event.kind) {
+      case 'createBuffer':
+        map.set(event.handleId, {
+          kind: 'createBuffer',
+          handleId: event.handleId,
+          size: event.desc.size,
+          usage: event.desc.usage,
+        });
+        break;
+      case 'createTexture':
+        map.set(event.handleId, {
+          kind: 'createTexture',
+          handleId: event.handleId,
+          format: event.desc.format,
+          size: [1, 1, 1] as const,
+          mipLevelCount: event.desc.mipLevelCount ?? 1,
+          sampleCount: event.desc.sampleCount ?? 1,
+          dimension: event.desc.dimension ?? '2d',
+          usage: event.desc.usage,
+        });
+        break;
+      case 'createSampler':
+        map.set(event.handleId, {
+          kind: 'createSampler',
+          handleId: event.handleId,
+          desc: event.desc ?? undefined,
+        });
+        break;
+      case 'createBindGroupLayout':
+        map.set(event.handleId, {
+          kind: 'createBindGroupLayout',
+          handleId: event.handleId,
+          entries: iterToArray(event.desc.entries),
+        });
+        break;
+      case 'createPipelineLayout':
+        map.set(event.handleId, {
+          kind: 'createPipelineLayout',
+          handleId: event.handleId,
+          bglHandleIds: event.bglHandleIds,
+        });
+        break;
+      case 'createRenderPipeline':
+        map.set(event.handleId, {
+          kind: 'createRenderPipeline',
+          handleId: event.handleId,
+          vertex: event.desc.vertex,
+          primitive: event.desc.primitive,
+          depthStencil: event.desc.depthStencil,
+          multisample: event.desc.multisample,
+          fragment: event.desc.fragment,
+          layoutHandleId: event.layoutHandleId,
+          vertexShaderModuleHandleId: event.vertexShaderModuleHandleId,
+          fragmentShaderModuleHandleId: event.fragmentShaderModuleHandleId,
+        });
+        break;
+      case 'createShaderModule':
+        map.set(event.handleId, {
+          kind: 'createShaderModule',
+          handleId: event.handleId,
+          wgslCode: event.wgslCode,
+        });
+        break;
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Per-pass state accumulated from a tape scan: the bound pipeline + dynamic
+ * state (vertex buffers, blend constant, stencil reference) and the pass's
+ * depth-stencil attachment. Indexed by passIdx in scanPassStates' return.
+ */
+export interface PassState {
+  handleId: HandleId;
+  pipelineHandleId: HandleId | undefined;
+  vertexBuffers: Map<number, HandleId>;
+  blendConstant: GPUColor | undefined;
+  stencilReference: number;
+  depthStencilViewHandleId: HandleId | undefined;
+  depthStencilAttachment: GPURenderPassDepthStencilAttachment | undefined;
+}
+
+/** Pre-scan events to build per-pass state, indexed by passIdx. */
+export function scanPassStates(events: readonly RhiCallEvent[]): PassState[] {
+  const states: PassState[] = [];
+  let current: PassState | null = null;
+
+  for (const event of events) {
+    if (event.kind === 'beginRenderPass') {
+      current = {
+        handleId: event.passHandleId,
+        pipelineHandleId: undefined,
+        vertexBuffers: new Map(),
+        blendConstant: undefined,
+        stencilReference: 0,
+        depthStencilViewHandleId: event.depthStencilViewHandleId,
+        depthStencilAttachment: event.desc.depthStencilAttachment,
+      };
+      states.push(current);
+    } else if (event.kind === 'beginComputePass') {
+      current = {
+        handleId: event.passHandleId,
+        pipelineHandleId: undefined,
+        vertexBuffers: new Map(),
+        blendConstant: undefined,
+        stencilReference: 0,
+        depthStencilViewHandleId: undefined,
+        depthStencilAttachment: undefined,
+      };
+      states.push(current);
+    } else if (current !== null && event.kind === 'setPipeline') {
+      current.pipelineHandleId = event.pipelineHandleId;
+    } else if (current !== null && event.kind === 'setVertexBuffer') {
+      current.vertexBuffers.set(event.slot, event.bufferHandleId);
+    } else if (current !== null && event.kind === 'setBlendConstant') {
+      current.blendConstant = event.color;
+    } else if (current !== null && event.kind === 'setStencilReference') {
+      current.stencilReference = event.reference;
+    }
+  }
+
+  return states;
+}
+
+const DEFAULT_STENCIL = {
+  compare: 'always' as GPUCompareFunction,
+  failOp: 'keep' as GPUStencilOperation,
+  depthFailOp: 'keep' as GPUStencilOperation,
+  passOp: 'keep' as GPUStencilOperation,
+} as const;
+
+/** Compute per-draw pipelineState from the resource map + the draw's pass state. */
+export function makePipelineState(
+  pipelineHandleId: HandleId | undefined,
+  resources: ReadonlyMap<HandleId, CreateDescriptor>,
+  passState: PassState,
+): DrawPipelineState {
+  const desc = pipelineHandleId ? resources.get(pipelineHandleId) : undefined;
+  const rpDesc = desc?.kind === 'createRenderPipeline' ? desc : undefined;
+
+  const vertexBufs = Array.from(rpDesc?.vertex?.buffers ?? []).filter(
+    (b): b is GPUVertexBufferLayout => b !== null && b !== undefined,
+  );
+  const fragTargets = Array.from(rpDesc?.fragment?.targets ?? []).filter(
+    (t): t is GPUColorTargetState => t !== null && t !== undefined,
+  );
+
+  return {
+    inputAssembly: {
+      topology: rpDesc?.primitive?.topology ?? 'triangle-list',
+      stripIndexFormat: rpDesc?.primitive?.stripIndexFormat,
+    },
+    vertexInput: {
+      buffers: vertexBufs.map((b) => {
+        const attrs = Array.from(b.attributes ?? []).map((a) => ({
+          format: a.format,
+          offset: a.offset,
+          shaderLocation: a.shaderLocation,
+        }));
+        return {
+          arrayStride: b.arrayStride,
+          stepMode: (b.stepMode ?? 'vertex') as GPUVertexStepMode,
+          attributes: attrs,
+        };
+      }),
+    },
+    shaders: {
+      vertexShaderModuleHandleId: rpDesc?.vertexShaderModuleHandleId,
+      fragmentShaderModuleHandleId: rpDesc?.fragmentShaderModuleHandleId,
+    },
+    rasterizer: {
+      cullMode: rpDesc?.primitive?.cullMode ?? 'none',
+      frontFace: rpDesc?.primitive?.frontFace ?? 'ccw',
+    },
+    depthStencil: {
+      format: rpDesc?.depthStencil?.format ?? 'depth24plus',
+      depthWriteEnabled: rpDesc?.depthStencil?.depthWriteEnabled ?? false,
+      depthCompare: rpDesc?.depthStencil?.depthCompare ?? 'always',
+      stencilFront: rpDesc?.depthStencil?.stencilFront ?? DEFAULT_STENCIL,
+      stencilBack: rpDesc?.depthStencil?.stencilBack ?? DEFAULT_STENCIL,
+      stencilReadMask: rpDesc?.depthStencil?.stencilReadMask ?? 0xffffffff,
+      stencilWriteMask: rpDesc?.depthStencil?.stencilWriteMask ?? 0xffffffff,
+      depthBias: rpDesc?.depthStencil?.depthBias ?? 0,
+      depthBiasSlopeScale: rpDesc?.depthStencil?.depthBiasSlopeScale ?? 0,
+      depthBiasClamp: rpDesc?.depthStencil?.depthBiasClamp ?? 0,
+      stencilReference: passState.stencilReference,
+    },
+    blend: {
+      colorTargets: fragTargets.map((t) => ({
+        format: t.format,
+        color: t.blend?.color,
+        alpha: t.blend?.alpha,
+        writeMask: t.writeMask ?? 0xf,
+      })),
+      blendConstant: passState.blendConstant,
+    },
+    multisample: {
+      count: rpDesc?.multisample?.count ?? 1,
+      mask: rpDesc?.multisample?.mask ?? 0xffffffff,
+      alphaToCoverageEnabled: rpDesc?.multisample?.alphaToCoverageEnabled ?? false,
+    },
+  };
 }
 
 // ============================================================================
@@ -409,6 +636,16 @@ export async function inspectDrawJson(
   }
   if (rtPayload !== undefined) {
     result.rt = rtPayload;
+  }
+
+  // pipelineState is always attached (not gated by `fields`) so an AI
+  // inspect-offline call sees the same seven pipeline stages the viewer's
+  // PipelineState panel renders — same SSOT atoms buildFrameModel uses.
+  const passStates = scanPassStates(events);
+  const passState = passStates[passIdx];
+  if (passState !== undefined) {
+    const resources = buildResources(events);
+    result.pipelineState = makePipelineState(passState.pipelineHandleId, resources, passState);
   }
 
   return ok(result);

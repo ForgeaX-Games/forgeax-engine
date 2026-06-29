@@ -41,6 +41,9 @@ import {
   ResourceNotFoundError,
   SchemaUnsupportedFieldError,
   SpriteAnimationInvalidError,
+  SpriteInstancesCountMismatchError,
+  SpriteInstancesMutuallyExclusiveWithInstancesError,
+  SpriteInstancesRequiresSpriteShaderError,
   StaleEntityError,
   UniqueRefDoubleReleaseError,
   UniqueRefReleasedError,
@@ -509,8 +512,19 @@ import {
           'managed-ref-released': 'unique-ref-released',
           'managed-ref-double-release': 'unique-ref-double-release',
         };
+        // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch
+        // post-merge with PR #520 (transparent collapse): PR 520 narrowed
+        // `MaterialSnapshot.shadingModel` to `'unlit' | undefined` — sprite
+        // is no longer a shadingModel enum member; identification is via
+        // `materialShaderId === 'forgeax::sprite'` (OOS-1 path retained).
+        // The guard error code accordingly renames to match the actual
+        // discriminator it checks.
+        const FEAT_20260625_RENAME_MAP: Record<string, string> = {
+          'sprite-instances-requires-sprite-shading-model':
+            'sprite-instances-requires-sprite-shader',
+        };
         const applyRenames = (m: string): string =>
-          FEAT_20260614_RENAME_MAP[m] ?? M4_RENAME_MAP[m] ?? m;
+          FEAT_20260625_RENAME_MAP[m] ?? FEAT_20260614_RENAME_MAP[m] ?? M4_RENAME_MAP[m] ?? m;
         const headSet = new Set(headMembers.map(applyRenames));
         const currentSet = new Set(currentMembers);
 
@@ -523,10 +537,30 @@ import {
         // two SharedRefStore error codes (companion to the existing
         // unique-ref-* pair). Intentional add per the same minor-evolution
         // contract.
+        //
+        // feat-20260623 #511 unified generational handle codec adds the
+        // shared-ref-stale + unique-ref-stale pair (gen-mismatch on
+        // resolve / retain after the entity+asset shared isRetiredSlot
+        // SSOT merge). Intentional add per the same minor-evolution
+        // contract.
         const INTENTIONAL_ADDS = new Set<string>([
           'spawn-data-unknown-field',
           'shared-ref-released',
           'shared-ref-double-release',
+          // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch
+          // M1 / w2 — 3 declared, fired at render-system-extract entry in
+          // M3 w13 (plan-strategy D-6). Minor evolution +3 per AGENTS.md
+          // §Error model evolution contract.
+          'sprite-instances-count-mismatch',
+          'sprite-instances-requires-sprite-shader',
+          'sprite-instances-mutually-exclusive-with-instances',
+          // feat-20260623-asset-handle-generation M4 — `shared-ref-stale` /
+          // `unique-ref-stale` landed on main during this feat's in-flight
+          // window (PR #502 + companion lands). Absorbed at merge into
+          // INTENTIONAL_ADDS so the net-zero gate stays self-consistent
+          // (charter F1: upstream lands must not trigger this feat's fence).
+          'shared-ref-stale',
+          'unique-ref-stale',
         ]);
 
         const added: string[] = [];
@@ -639,6 +673,13 @@ import {
             case 'builtin-slot-not-owned':
             case 'shared-ref-stale':
             case 'unique-ref-stale':
+            // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch
+            // M1 / w2 — 3 new cases for the SpriteInstances primitive (codes
+            // declared in M1, fired in M3 w13). Required to keep this
+            // exhaustive switch over EcsErrorCode visually closed.
+            case 'sprite-instances-count-mismatch':
+            case 'sprite-instances-requires-sprite-shader':
+            case 'sprite-instances-mutually-exclusive-with-instances':
               return code;
             default:
               return assertNever(code);
@@ -1198,6 +1239,153 @@ import {
           }
         }
         expect(describeCode('sprite-animation-invalid')).toBe('sprite-animation-invalid');
+      });
+    });
+  });
+}
+
+{
+  // ─── from sprite-instances-error-codes.test.ts ───
+  // feat-20260625 M1 / w1 — 3 new EcsErrorCode members added by w2 for the
+  // sprite-instances + tilemap-terrain-static-batch feat. Tests assert
+  // (a) literal existence in EcsErrorCode union; (b) class instance carries
+  // `.code` / `.hint` / `.detail` per AGENTS.md §Error model + charter P3
+  // (`.hint` must contain actionable fix wording); (c) `.detail` discriminated
+  // shape narrows correctly under `switch (err.code)` without a default arm.
+  //
+  // Boundary (plan-strategy §2 D-6): these 3 codes are DECLARED here (M1) but
+  // FIRED at the render-system-extract entry (M3 w13). M1 tests intentionally
+  // construct the classes directly — no extract-path fire test (that is M3).
+  describe('sprite-instances-error-codes.test.ts', () => {
+    describe('EcsErrorCode +3 — sprite-instances-* family (M1 w1)', () => {
+      it('type-level: 3 new literals are assignable to EcsErrorCode', () => {
+        const a: EcsErrorCode = 'sprite-instances-count-mismatch';
+        const b: EcsErrorCode = 'sprite-instances-requires-sprite-shader';
+        const c: EcsErrorCode = 'sprite-instances-mutually-exclusive-with-instances';
+        expect(a).toBe('sprite-instances-count-mismatch');
+        expect(b).toBe('sprite-instances-requires-sprite-shader');
+        expect(c).toBe('sprite-instances-mutually-exclusive-with-instances');
+        expectTypeOf<'sprite-instances-count-mismatch'>().toMatchTypeOf<EcsErrorCode>();
+        expectTypeOf<'sprite-instances-requires-sprite-shader'>().toMatchTypeOf<EcsErrorCode>();
+        expectTypeOf<'sprite-instances-mutually-exclusive-with-instances'>().toMatchTypeOf<EcsErrorCode>();
+      });
+
+      it('EcsErrorDetail discriminated variants narrow per `.code`', () => {
+        const countDetail: EcsErrorDetail = {
+          code: 'sprite-instances-count-mismatch',
+          transformsLength: 320,
+          regionsLength: 40,
+          expectedStride: { transforms: 16, regions: 4 },
+        };
+        const shadingDetail: EcsErrorDetail = {
+          code: 'sprite-instances-requires-sprite-shader',
+          entityId: 42,
+          observedMaterialShaderId: 'forgeax::default-standard-pbr',
+        };
+        const mutexDetail: EcsErrorDetail = {
+          code: 'sprite-instances-mutually-exclusive-with-instances',
+          entityId: 17,
+        };
+        expect(countDetail.code).toBe('sprite-instances-count-mismatch');
+        expect(shadingDetail.code).toBe('sprite-instances-requires-sprite-shader');
+        expect(mutexDetail.code).toBe('sprite-instances-mutually-exclusive-with-instances');
+      });
+    });
+
+    describe('SpriteInstancesCountMismatchError class — w2 surface', () => {
+      it('constructs with stride mismatch and exposes .code + .detail + .hint', () => {
+        const err = new SpriteInstancesCountMismatchError(320, 40);
+        expect(err.code).toBe('sprite-instances-count-mismatch');
+        expect(err.detail).toEqual({
+          code: 'sprite-instances-count-mismatch',
+          transformsLength: 320,
+          regionsLength: 40,
+          expectedStride: { transforms: 16, regions: 4 },
+        });
+        expect(err.hint.length).toBeGreaterThan(0);
+        expect(err.hint).toContain('transforms.length / 16');
+        expect(err.hint).toContain('regions.length / 4');
+      });
+
+      it('.name is the class name and .message embeds .code', () => {
+        const err = new SpriteInstancesCountMismatchError(320, 40);
+        expect(err.name).toBe('SpriteInstancesCountMismatchError');
+        expect(err.message).toContain('sprite-instances-count-mismatch');
+      });
+    });
+
+    describe('SpriteInstancesRequiresSpriteShaderError class — w2 surface', () => {
+      it('constructs with entity + observed materialShaderId and exposes .code + .detail + .hint', () => {
+        const err = new SpriteInstancesRequiresSpriteShaderError(
+          42,
+          'forgeax::default-standard-pbr',
+        );
+        expect(err.code).toBe('sprite-instances-requires-sprite-shader');
+        expect(err.detail).toEqual({
+          code: 'sprite-instances-requires-sprite-shader',
+          entityId: 42,
+          observedMaterialShaderId: 'forgeax::default-standard-pbr',
+        });
+        expect(err.hint.length).toBeGreaterThan(0);
+        expect(err.hint).toContain("'forgeax::sprite'");
+        expect(err.hint).toContain('MaterialAsset');
+      });
+
+      it('.name is the class name and .message embeds .code', () => {
+        const err = new SpriteInstancesRequiresSpriteShaderError(42, 'forgeax::default-unlit');
+        expect(err.name).toBe('SpriteInstancesRequiresSpriteShaderError');
+        expect(err.message).toContain('sprite-instances-requires-sprite-shader');
+      });
+    });
+
+    describe('SpriteInstancesMutuallyExclusiveWithInstancesError class — w2 surface', () => {
+      it('constructs with entity and exposes .code + .detail + .hint', () => {
+        const err = new SpriteInstancesMutuallyExclusiveWithInstancesError(17);
+        expect(err.code).toBe('sprite-instances-mutually-exclusive-with-instances');
+        expect(err.detail).toEqual({
+          code: 'sprite-instances-mutually-exclusive-with-instances',
+          entityId: 17,
+        });
+        expect(err.hint.length).toBeGreaterThan(0);
+        expect(err.hint).toContain('remove Instances');
+        expect(err.hint).toContain('SpriteInstances supersedes Instances');
+      });
+
+      it('.name is the class name and .message embeds .code', () => {
+        const err = new SpriteInstancesMutuallyExclusiveWithInstancesError(17);
+        expect(err.name).toBe('SpriteInstancesMutuallyExclusiveWithInstancesError');
+        expect(err.message).toContain('sprite-instances-mutually-exclusive-with-instances');
+      });
+    });
+
+    describe('exhaustive switch over the 3 new codes (no default)', () => {
+      it('compile-time narrows all 3 branches; runtime hits each arm exactly once', () => {
+        const codes: EcsErrorCode[] = [
+          'sprite-instances-count-mismatch',
+          'sprite-instances-requires-sprite-shader',
+          'sprite-instances-mutually-exclusive-with-instances',
+        ];
+        let count = 0;
+        let shading = 0;
+        let mutex = 0;
+        for (const code of codes) {
+          switch (code) {
+            case 'sprite-instances-count-mismatch':
+              count += 1;
+              break;
+            case 'sprite-instances-requires-sprite-shader':
+              shading += 1;
+              break;
+            case 'sprite-instances-mutually-exclusive-with-instances':
+              mutex += 1;
+              break;
+            default:
+              void code;
+          }
+        }
+        expect(count).toBe(1);
+        expect(shading).toBe(1);
+        expect(mutex).toBe(1);
       });
     });
   });

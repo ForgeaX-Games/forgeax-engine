@@ -79,10 +79,11 @@ function mockRenderable(tz: number, tx = 0, ty = 0): FoldRenderableLike {
   world[12] = tx;
   world[13] = ty;
   world[14] = tz;
-  // PR #502 fix: foldDispatchBuckets gates fold to shadingModel='sprite';
-  // these dawn integration tests assume fold-eligible behavior so default
-  // 'sprite' (sprite-pass-only fold consumers).
-  return { transform: { world }, material: { shadingModel: 'sprite' } };
+  // PR #502 fix + feat-20260625 R2 fix-up: foldDispatchBuckets gates fold to
+  // `transparent === true`; these dawn integration tests assume fold-eligible
+  // behavior so default to `transparent: true` (the M3 ablation collapsed the
+  // sprite shadingModel discriminator into the generic transparent flag).
+  return { transform: { world }, material: { transparent: true } };
 }
 
 describe('fold operator dawn integration (w7) — drawIndexed count drops to bucket count', () => {

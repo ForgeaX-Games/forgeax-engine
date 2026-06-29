@@ -39,7 +39,9 @@
 //   `'array<f32, 4>'` is on the `SchemaVocabKeyword` whitelist (line ~94
 //   `array<${ManagedArrayElementType}, ${number}>`).
 // @consumes M3 T-16 (`render-system-extract.ts` sprite bucket branch
-//   reads override into `SpriteFieldsSnapshot.region`).
+//   reads override into `paramSnapshot.region`, post-M3 feat-20260625
+//   ablation -- the pre-ablation per-entity hop through the snapshot
+//   POD layer collapsed into the generic paramSchema-driven path).
 // @produces M4 T-23 (`spriteAnimationTickSystem` writes per-frame UV
 //   slice into `region`).
 //
@@ -61,10 +63,12 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *
  * Carries a fixed-length `Float32Array(4)` of `[uMin, vMin, uW, vH]` that
  * `render-system-extract` reads in the sprite bucket branch and writes
- * into `SpriteFieldsSnapshot.region`, replacing the asset-side region for
- * this entity only. Opaque buckets ignore this component; the AC-11 grep
- * gate keeps the producer / consumer separation structural (this file
- * never names the asset-side sprite discriminant identifier).
+ * into `paramSnapshot.region`, replacing the asset-side region for
+ * this entity only (feat-20260625 M3 ablation: the prior per-entity POD
+ * indirection collapsed into the generic paramSchema-driven snapshot).
+ * Opaque buckets ignore this component; the AC-11 grep gate keeps the
+ * producer / consumer separation structural (this file never names the
+ * asset-side sprite discriminant identifier).
  *
  * Pair with `SpriteAnimation` to drive the override per frame
  * (sprite-animation-tick system, M4 T-23). Standalone use (manual region

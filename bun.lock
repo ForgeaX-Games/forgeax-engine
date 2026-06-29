@@ -35,6 +35,37 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/collectathon": {
+      "name": "@forgeax/collectathon",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-audio": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
+        "@forgeax/engine-debug-draw": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-font": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-physics": "workspace:*",
+        "@forgeax/engine-physics-rapier3d": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-state": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-fbx": "workspace:*",
+        "@forgeax/engine-gltf": "workspace:*",
+        "@forgeax/engine-image": "workspace:*",
+        "@forgeax/engine-shader": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@types/node": "^25.8.0",
+        "@webgpu/types": "^0.1.70",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/dual-impl-spike": {
       "name": "dual-impl-spike",
       "version": "0.0.0",
@@ -2338,6 +2369,8 @@
     "@forgeax/app-learn-render-6-pbr-3-ibl-specular": ["@forgeax/app-learn-render-6-pbr-3-ibl-specular@workspace:apps/learn-render/6.pbr/3.ibl-specular"],
 
     "@forgeax/apps-shared": ["@forgeax/apps-shared@workspace:apps/shared"],
+
+    "@forgeax/collectathon": ["@forgeax/collectathon@workspace:apps/collectathon"],
 
     "@forgeax/engine": ["@forgeax/engine@workspace:packages/engine"],
 

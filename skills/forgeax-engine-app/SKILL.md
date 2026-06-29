@@ -203,6 +203,26 @@ app.start();   // arms the rAF loop
 
 `InputSnapshot` 表面（4 方法）：`keyboard.down(key)` / `keyboard.up(key)`（上一帧释放的 up-edge）/ `mouse.button(0|1|2)` / `mouse.movementDelta` + `mouse.wheelDelta`。未按下的键返回 `false`，不 throw（charter P3：空信号即信号）。
 
+### Sprite bootstrap：`renderState.blend` 是 transparent 的 SSOT
+
+在 `createApp` 之后挂 sprite material 时（hello-sprite / asi-world / tilemap-object-layer 路径），sprite material 必须在 pass 上声明 `renderState.blend`，否则走 opaque pass 出现 hard-edged 非 blended quad。**`renderState.blend !== undefined` 是 transparent 路由的 SSOT 信号**（feat-20260626 把旧 `transparent: boolean` 字段坍缩消亡）。推荐 preset：`SPRITE_PREMULTIPLIED_ALPHA_BLEND`。
+
+```ts
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND, type MaterialAsset } from '@forgeax/engine-runtime';
+
+const spriteMat: MaterialAsset = {
+  kind: 'material',
+  passes: [{
+    name: 'Forward',
+    shader: 'forgeax::sprite',
+    renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+  }],
+  paramValues: { colorTint: [1, 1, 1, 1], baseColorTexture: spriteTextureGuid, sampler: spriteSamplerGuid },
+};
+```
+
+完整字段表 + 9-slice / 备选 blend preset（additive / multiply / straight-alpha / opaque overlay）见 `packages/runtime/README.md` §Sprite materials；material 层 SSOT 见 `forgeax-engine-material` skill §Sprite material。
+
 ## 踩坑
 
 - **canvas 起飞失败别吞**：`createApp` 失败回 `Result`，`res.error` 带结构化 `.code` / `.hint`；按属性消费，别 `String(err)` 解析。后端拿不到时是 `createRenderer` throw `EngineEnvironmentError`，不是 `Result`。
@@ -402,6 +422,7 @@ if (snap.reason !== 'alive') {
 - 输入 4 步 recipe / 形态铁律 / PointerLock 后端 / `InputFrameStartScan` token + `INPUT_BACKEND_KEY` 资源化接线：见 `packages/input/README.md` §4 步 recipe · §4 方法表面；源码 `packages/input/src/input-snapshot.ts` + `packages/input/src/frame-start-scan-system.ts`
 - 蒙皮 / 动画 4 步 recipe（`createApp` + `configurePackIndex` + `loadByGuid<SceneAsset>` + 多实例 instantiate + 每实例独立 `AnimationPlayer`）+ `AdvanceAnimationPlayer` token + `ANIMATION_ASSET_RESOLVER_KEY` 资源化接线：参考 `apps/hello/skin/src/main.ts`；底层 SkinAsset / SkeletonAsset / AnimationClip POD 由 gltfImporter 自动 emit，bridge 自动挂 `Skin` 组件；多实例关节隔离由 postSpawnResolveJoints 子树作用域兜底；源码 `packages/runtime/src/systems/advance-animation-player.ts`
 - 物理 3D/2D 接线（`registerPhysicsSystems(world)` / `registerPhysicsSystems2D(world)`，第二参已删除）：源码 `packages/physics-rapier3d/src/rapier-physics-world-3d.ts` + `packages/physics-rapier2d/src/rapier-physics-world-2d.ts`
+- **完整游戏集成范例**：`apps/collectathon/` —— 单关卡 3D 第三人称 collectathon，把 11 项能力组合在一个 app（third-person `CharacterController`+KCC 移动、`AnimationPlayer` weights[] crossfade、`defineState` 四态机+state-scoped 实体、sensor `CollidingEntities` 拾取/命中、bloom+tonemap+fxaa 后处理 + emissive Core 驱动 bloom glow、sky.hdr IBL `Skylight`+`SkyboxBackground`、3D 空间音频双 bus、HUD DOM overlay 单向派生）。grep 关键词 `third-person` / `core-collect` / `guardian-ai` / `hud-sync` / `audio-cue` 直达对应子系统单文件；单入口能力索引 `apps/collectathon/README.md`
 
 ## AnimationPlayer：N-way SoA 槽位 + 用户每帧驱权重
 

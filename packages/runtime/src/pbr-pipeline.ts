@@ -695,3 +695,43 @@ export function buildUnlitMaterialBindGroupEntries(
 // Surface re-export so consumers can build a complete BindGroup pipeline
 // without reaching into multiple modules.
 export type { BindGroup };
+
+// ─── feat-20260625 M3 / w10 — sprite-pass variantSet selector ────────────────
+//
+// Plan-strategy D-1 + D-4: when an entity carries `SpriteInstances` the
+// sprite-pass record stage must pick the `PER_INSTANCE_REGION=true` sprite
+// shader variant compiled in M2 (w7) so the WGSL `InstanceData` struct
+// includes the per-instance `region: vec4<f32>` field and reads region from
+// the interleaved 80B-per-instance buffer (not from the material UBO).
+//
+// Non-`SpriteInstances` sprite entities (e.g. the sprite-atlas demo) keep
+// the default variant where `PER_INSTANCE_REGION` is undefined and the
+// shader's `#else` branch reads region from material UBO — preserving
+// existing behaviour (plan-strategy D-4 "pbr / unlit / sprite-atlas
+// behaviour unchanged" / requirements Edge Cases).
+//
+// Variant set string format mirrors the existing `URP_PBR_VARIANT_SET` /
+// HDRP variant set string idiom in `pipeline-spec.ts` (`+`-separated kv
+// pairs); the record stage threads this string through the per-shader
+// pipeline-cache key + lazy-build `getMaterialShaderPipeline` lookup.
+
+/**
+ * variantSet string fired into the sprite-pass pipeline cache when the
+ * entity carries `SpriteInstances` (plan-strategy D-1 interleaved single
+ * buffer + D-4 axis on `sprite.wgsl`).
+ */
+export const SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET = 'PER_INSTANCE_REGION=true';
+
+/**
+ * Pick the sprite-pass variant set for the current sprite entry. Returns
+ * `'PER_INSTANCE_REGION=true'` when `hasSpriteInstances` is true (the
+ * extract stage has populated `RenderableSnapshot.spriteInstances`),
+ * otherwise `undefined` so the existing sprite path stays byte-identical
+ * for non-SpriteInstances callers (plan-strategy D-4 reverse-falsifier).
+ *
+ * @param hasSpriteInstances — true when the renderable carries a
+ *   `SpriteInstancesSnapshot` (extracted by render-system-extract M3 w10).
+ */
+export function selectSpritePassVariantSet(hasSpriteInstances: boolean): string | undefined {
+  return hasSpriteInstances ? SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET : undefined;
+}

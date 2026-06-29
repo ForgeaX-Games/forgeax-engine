@@ -71,6 +71,36 @@ world.spawn({ component: DirectionalLight, data: {} }).unwrap();
 world.spawn({ component: Camera, data: {} }).unwrap();
 ```
 
+## SpriteInstances（2D 批绘的让东西可见三件套，feat-20260625）
+
+`SpriteInstances` 是 `Instances` 的 2D 同位组件——把 N 个 sprite 一次 drawcall 画完，per-instance 带 UV region：
+
+```ts
+import {
+  MeshFilter, MeshRenderer, SpriteInstances, type SpriteInstancesData,
+  HANDLE_QUAD,
+} from '@forgeax/engine-runtime';
+
+const transforms = new Float32Array(N * 16);  // column-major mat4 per instance
+const regions    = new Float32Array(N * 4);   // [uMin, vMin, uW, vH] per instance
+world.spawn(
+  { component: MeshFilter,      data: { assetHandle: HANDLE_QUAD } },
+  { component: MeshRenderer,    data: { materials: [spriteMatHandle] } },
+  { component: SpriteInstances, data: { transforms, regions } },
+);
+```
+
+| 选谁 | 什么时候 |
+|:--|:--|
+| `Instances` | 3D 场景批绘（per-instance 仅 mat4，stride 16 f32） |
+| `SpriteInstances` | 2D 场景批绘（per-instance mat4 + atlas UV，interleaved 80B = 64B mat4 + 16B region） |
+
+**materials[0] 首 pass shader 必须是 `'forgeax::sprite'`**（否则 extract 入口 fire `sprite-instances-requires-sprite-shader`）。**不可与 `Instances` 同实体共存**（fire `sprite-instances-mutually-exclusive-with-instances`）。**`transforms.length / 16` 必须等于 `regions.length / 4`**（fire `sprite-instances-count-mismatch`）。三条错误码均收敛于 `EcsErrorCode` 闭合联合，AI 用户通过 `switch (err.code)` 在 `world.onError` 消费（charter P3 显式失败）。
+
+tilemap terrain 透明形态：AI 用户只用 `Tilemap + TileLayer { sortScope: 'layer' | 'per-cell' }`，engine 内部 extract system 自动把 `'layer'` 路径折叠为 `SpriteInstances` 桶（每 `(layer, chunk, atlas)` 一个），无需手挂 SpriteInstances。`'per-cell'` 路径保留 per-cell 派生 entity（Y-sort interleave 语义）。
+
+详见 [`forgeax-engine-ecs` §SpriteInstances / TileLayer.sortScope](../forgeax-engine-ecs/SKILL.md#spriteinstances--tilelayersortscope-feat-20260625)（schema + 3 EcsErrorCode 详表）。
+
 ## 踩坑
 
 - **standard 材质全黑**：场景里没灯。`unlit` 自发光不需要灯，`standard` 没有 `DirectionalLight/PointLight/SpotLight`/`Skylight` 任意一种就一团黑——先 spawn 一盏灯。
@@ -199,6 +229,33 @@ const handle = renderer.assets.register(mat).unwrap();
 ```
 
 POJO 路径仍走完整 loader pipeline：`MATERIAL_PARAM_TEXTURE_FIELDS` 白名单字段照样解析 GUID → handle，shader 标识符同样走 `registerMaterialShader` 注册表查询。区别只是构造期不走工厂语法糖。
+
+### Sprite material：`renderState.blend` 是 transparent 的 SSOT
+
+sprite material 走同一条 `MaterialAsset` POJO 路径，区别仅在 shader id 与 `renderState.blend`。**`renderState.blend !== undefined` 是 transparent 路由（LDR sub-pass split + back-to-front sort）的 SSOT 信号**；旧版 `transparent: boolean` 字段已被 feat-20260626 坍缩消亡。推荐 preset：`SPRITE_PREMULTIPLIED_ALPHA_BLEND`（`@forgeax/engine-runtime` re-export 自 `packages/runtime/src/materials.ts`）。
+
+```ts
+import {
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
+  type MaterialAsset,
+} from '@forgeax/engine-runtime';
+
+const spriteMat: MaterialAsset = {
+  kind: 'material',
+  passes: [{
+    name: 'Forward',
+    shader: 'forgeax::sprite',
+    renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+  }],
+  paramValues: {
+    colorTint: [1, 1, 1, 1],
+    baseColorTexture: spriteTextureGuid,   // dash-form GUID string
+    sampler: spriteSamplerGuid,
+  },
+};
+```
+
+漏写 `renderState.blend` → 走 opaque pass（hard-edged 非 blended quad）。SSOT 与 preset 速查表（additive / multiply / straight-alpha / opaque overlay 字面量）见 `packages/runtime/README.md` §Sprite materials。
 
 ## 世界空间视频纹理 -- VideoPlayer + paramValues video GUID
 

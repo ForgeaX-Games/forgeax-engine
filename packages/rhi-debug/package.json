@@ -27,6 +27,10 @@
       "types": "./dist/inspect-core.d.ts",
       "import": "./dist/inspect-core.mjs"
     },
+    "./frame-model": {
+      "types": "./dist/frame-model.d.ts",
+      "import": "./dist/frame-model.mjs"
+    },
     "./rt-to-canvas": {
       "types": "./dist/rt-to-canvas.d.ts",
       "import": "./dist/rt-to-canvas.mjs"

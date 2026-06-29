@@ -646,29 +646,27 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   });
 }
 
-// ─── from render-system-extract-sprite-slices.test.ts ───
+// --- from render-system-extract-sprite-slices.test.ts ---
 {
-  // render-system-extract-sprite-slices - feat-20260527-sprite-nineslice M2 / w5 (a).
+  // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w9 (TDD red).
   //
-  // TDD-red: SpriteFieldsSnapshot must transparently carry slices + sliceMode
-  // from MaterialAsset.paramValues through extract into the dispatch snapshot.
+  // Sprite extract now walks the same generic else-branch every other
+  // paramSchema-driven material consumes: extract produces a MaterialSnapshot
+  // carrying `materialShaderId === 'forgeax::sprite'` + `paramSnapshot` keyed
+  // on the WGSL Material UBO struct field names (colorTint / region /
+  // pivotAndSize / slicesAndMode). `shadingModel` is undefined on the sprite
+  // path -- the 'sprite' union member is removed (AC-01 w15 closes the type
+  // layer; this test asserts the production behaviour change at w12).
   //
-  // Three sentinel states (plan-strategy §D-3):
-  //   - undefined slices: defaults to [0, 0, 0, 0] / sliceMode = 0
-  //   - stretch:          [0.25, 0.25, 0.25, 0.25] + sliceMode = 0
-  //   - tile:             [0.25, 0.25, 0.25, 0.25] + sliceMode = 1
-  //                       -> snapshot.slices = [0.25, 0.25, 0.25, -0.25]
-  //                          (sentinel encoding: w taken negative on tile mode;
-  //                           shader uses abs() to recover the magnitude).
+  // Three sentinel states match the post-ablation slicesAndMode encoding:
+  //   - undefined slices: paramSnapshot.slicesAndMode === [0, 0, 0, 0]
+  //   - stretch [.25,.25,.25,.25] sliceMode=0 -> [.25, .25, .25, .25]
+  //   - tile    [.25,.25,.25,.25] sliceMode=1 -> [.25, .25, .25, -.25]
+  //     (extract pre-folds sliceMode=1 by negating slicesAndMode.w; the
+  //     shader recovers magnitude via abs() and dispatches on sign.)
   //
-  // Coverage:
-  //   (1) sprite material with no slices in paramValues -> snapshot.slices ===
-  //       [0, 0, 0, 0] and snapshot.sliceMode === 0
-  //   (2) sprite with slices=[0.25,0.25,0.25,0.25] sliceMode=0 -> verbatim
-  //   (3) sprite with slices=[0.25,0.25,0.25,0.25] sliceMode=1 -> snapshot has
-  //       slices.w taken negative (sentinel), sliceMode === 1
-  //
-  // RED before w10 wires extract sprite branch to read these two paramValues.
+  // RED before w12 -- the legacy isSprite branch still emits
+  // shadingModel='sprite' + spriteFields. Goes green after w12.
 
   function makeShaderRegistryWithSprite(): ShaderRegistry {
     const mockDevice: ShaderRegistryDevice = {
@@ -682,18 +680,20 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       },
     };
     const sr = new ShaderRegistry({ device: mockDevice, manifestUrl: undefined });
+    // Sprite paramSchema mirrors sprite.wgsl.meta.json post-w11. The four
+    // UBO entries (colorTint / region / pivotAndSize / slicesAndMode) are
+    // the WGSL Material struct field names; user-facing inputs
+    // (region/pivot/slices/sliceMode/flipX/flipY) are folded into these
+    // entries by the sprite extract branch (D-8 flip + sliceMode fold).
+    // The texture entry uses the post-w11 baseColorTexture name (D-4).
     sr.registerMaterialShader('forgeax::sprite', {
       source: 'fn main() {}',
       paramSchema: [
-        { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
-        { name: 'texture', type: 'texture2d' },
-        { name: 'sampler', type: 'sampler', default: null },
+        { name: 'colorTint', type: 'vec4', default: [1.0, 1.0, 1.0, 1.0] },
         { name: 'region', type: 'vec4', default: [0.0, 0.0, 1.0, 1.0] },
-        { name: 'pivot', type: 'vec2', default: [0.5, 0.5] },
-        { name: 'flipX', type: 'f32', default: 0.0 },
-        { name: 'flipY', type: 'f32', default: 0.0 },
-        { name: 'slices', type: 'vec4', default: [0.0, 0.0, 0.0, 0.0] },
-        { name: 'sliceMode', type: 'f32', default: 0.0 },
+        { name: 'pivotAndSize', type: 'vec4', default: [0.5, 0.5, 1.0, 1.0] },
+        { name: 'slicesAndMode', type: 'vec4', default: [0.0, 0.0, 0.0, 0.0] },
+        { name: 'baseColorTexture', type: 'texture2d' },
       ],
     });
     return sr;
@@ -786,52 +786,91 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return { world, assets };
   }
 
-  describe('render-system-extract sprite slices/sliceMode pass-through (M2 / w5a)', () => {
-    it('(1) no slices in paramValues -> snapshot.slices=[0,0,0,0] sliceMode=0', () => {
+  describe('render-system-extract sprite paramSnapshot slicesAndMode (M3 / w9)', () => {
+    it('(1) no slicesAndMode in paramValues -> paramSnapshot.slicesAndMode absent, shadingModel=undefined', () => {
       const { world, assets } = spawnSpriteScene({});
       const frame = extractFrame(world, assets);
-      const renderable = frame.renderables.find((r) => r.material.shadingModel === 'sprite');
+      // Renderable filter: post-ablation sprite carries forgeax::sprite
+      // shaderId, NOT shadingModel='sprite' (the union member is gone in
+      // AC-01).
+      const renderable = frame.renderables.find(
+        (r) => r.material.materialShaderId === 'forgeax::sprite',
+      );
       expect(renderable).toBeDefined();
-      const sf = renderable?.material.spriteFields as
-        | { slices?: readonly [number, number, number, number]; sliceMode?: number }
-        | undefined;
-      expect(sf).toBeDefined();
-      expect(sf?.slices).toEqual([0, 0, 0, 0]);
-      expect(sf?.sliceMode).toBe(0);
+      expect(renderable?.material.shadingModel).toBeUndefined();
+      const snap = renderable?.material.paramSnapshot;
+      expect(snap).toBeDefined();
+      // Post-fix-up F-1: no legacy `slices`+`sliceMode` fold; absence on the
+      // input means absence on the snapshot (record stage fills the UBO slot
+      // with std140 zero default via derive(uboLayout)).
+      expect(snap?.slicesAndMode).toBeUndefined();
     });
 
-    it('(2) stretch slices [0.25,0.25,0.25,0.25] sliceMode=0 -> snapshot verbatim', () => {
+    it('(2) stretch slicesAndMode [0.25,0.25,0.25,0.25] -> paramSnapshot.slicesAndMode verbatim', () => {
       const { world, assets } = spawnSpriteScene({
-        slices: [0.25, 0.25, 0.25, 0.25],
-        sliceMode: 0,
+        slicesAndMode: [0.25, 0.25, 0.25, 0.25],
       });
       const frame = extractFrame(world, assets);
-      const renderable = frame.renderables.find((r) => r.material.shadingModel === 'sprite');
+      const renderable = frame.renderables.find(
+        (r) => r.material.materialShaderId === 'forgeax::sprite',
+      );
       expect(renderable).toBeDefined();
-      const sf = renderable?.material.spriteFields as
-        | { slices?: readonly [number, number, number, number]; sliceMode?: number }
-        | undefined;
-      expect(sf?.slices).toEqual([0.25, 0.25, 0.25, 0.25]);
-      expect(sf?.sliceMode).toBe(0);
+      expect(renderable?.material.shadingModel).toBeUndefined();
+      const snap = renderable?.material.paramSnapshot;
+      expect(snap?.slicesAndMode).toEqual([0.25, 0.25, 0.25, 0.25]);
     });
 
-    it('(3) tile sliceMode=1 -> snapshot.slices.w taken negative (sentinel)', () => {
+    it('(3) tile slicesAndMode [.25,.25,.25,-.25] -> .w negative sentinel verbatim', () => {
+      // Post-fix-up F-1: callers encode tile mode at the call site by
+      // supplying a negative `.w`; the extract path no longer folds a
+      // separate `sliceMode` scalar (the shim layer is gone).
       const { world, assets } = spawnSpriteScene({
-        slices: [0.25, 0.25, 0.25, 0.25],
-        sliceMode: 1,
+        slicesAndMode: [0.25, 0.25, 0.25, -0.25],
       });
       const frame = extractFrame(world, assets);
-      const renderable = frame.renderables.find((r) => r.material.shadingModel === 'sprite');
+      const renderable = frame.renderables.find(
+        (r) => r.material.materialShaderId === 'forgeax::sprite',
+      );
       expect(renderable).toBeDefined();
-      const sf = renderable?.material.spriteFields as
-        | { slices?: readonly [number, number, number, number]; sliceMode?: number }
-        | undefined;
-      expect(sf?.slices?.[0]).toBe(0.25);
-      expect(sf?.slices?.[1]).toBe(0.25);
-      expect(sf?.slices?.[2]).toBe(0.25);
+      expect(renderable?.material.shadingModel).toBeUndefined();
+      const snap = renderable?.material.paramSnapshot;
+      const slicesAndMode = snap?.slicesAndMode as readonly number[] | undefined;
+      expect(slicesAndMode?.[0]).toBe(0.25);
+      expect(slicesAndMode?.[1]).toBe(0.25);
+      expect(slicesAndMode?.[2]).toBe(0.25);
       // Sentinel encoding: D-3 .w negative on tile mode (shader abs() recovers).
-      expect(sf?.slices?.[3]).toBe(-0.25);
-      expect(sf?.sliceMode).toBe(1);
+      expect(slicesAndMode?.[3]).toBe(-0.25);
+    });
+
+    it('(4) default identity region fold; pivotAndSize absent when not supplied', () => {
+      const { world, assets } = spawnSpriteScene({});
+      const frame = extractFrame(world, assets);
+      const renderable = frame.renderables.find(
+        (r) => r.material.materialShaderId === 'forgeax::sprite',
+      );
+      const snap = renderable?.material.paramSnapshot;
+      // The sprite block still writes paramSnap.region unconditionally because
+      // SpriteRegionOverride + flipX/flipY fold (plan D-8) need a base to
+      // operate on; the [0,0,1,1] identity is that base.
+      expect(snap?.region).toEqual([0, 0, 1, 1]);
+      // Post-fix-up F-1: no legacy `pivot` -> `pivotAndSize` fold; absence on
+      // input means absence on snapshot (UBO writer fills std140 zero).
+      expect(snap?.pivotAndSize).toBeUndefined();
+    });
+
+    it('(5) flipX=1 folds into paramSnapshot.region: region.x += region.z; region.z = -region.z (D-8)', () => {
+      const { world, assets } = spawnSpriteScene({ flipX: 1 });
+      const frame = extractFrame(world, assets);
+      const renderable = frame.renderables.find(
+        (r) => r.material.materialShaderId === 'forgeax::sprite',
+      );
+      const snap = renderable?.material.paramSnapshot;
+      // Identity region [0,0,1,1] with flipX -> [1, 0, -1, 1].
+      const region = snap?.region as readonly number[] | undefined;
+      expect(region?.[0]).toBe(1);
+      expect(region?.[1]).toBe(0);
+      expect(region?.[2]).toBe(-1);
+      expect(region?.[3]).toBe(1);
     });
   });
 }

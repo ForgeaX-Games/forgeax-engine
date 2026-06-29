@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Default GameEntry template -- a lowpoly vignette authored in scene.pack.json (engine-native scene pack) + a movable Player. Loaded by apps/preview via loadGame dynamic import.",
+  "description": "Default GameEntry template -- a lowpoly vignette authored in assets/scene.pack.json (engine-native scene asset, GUID-discoverable via forge.json.defaultScene) + a movable Player. Loaded by apps/preview via loadGame dynamic import.",
   "scripts": {},
   "forgeax": {
     "assets": {

@@ -292,6 +292,8 @@ export {
   Children,
   cameraProjectionFromF32,
   DirectionalLight,
+  decodeSortScope,
+  encodeSortScope,
   Instances,
   type InstancesData,
   Layer,
@@ -313,6 +315,7 @@ export {
   type SkyboxMode,
   Skylight,
   SortKey,
+  type SortScope,
   SPRITE_PLAYBACK_MODE_CLAMP,
   SPRITE_PLAYBACK_MODE_LOOP,
   SpotLight,
@@ -322,6 +325,7 @@ export {
   skyboxModeFromF32,
   spritePlaybackModeFromU32,
   TileLayer,
+  type TileLayerData,
   Tilemap,
   TONEMAP_ACES_FILMIC,
   TONEMAP_AGX,
@@ -345,6 +349,20 @@ export {
  * the system from one package.
  */
 export { GlyphText } from './components/glyph-text';
+/**
+ * feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M1 / w4 —
+ * SpriteInstances primitive: 2D peer of `Instances`. Carries per-instance
+ * mat4 (stride 16) + per-instance UV region (stride 4). Exported directly
+ * from the @forgeax/engine-runtime barrel so AI users discover both
+ * primitives side-by-side via IDE autocomplete on `@forgeax/engine-runtime`.
+ * Per plan-strategy D-8, the barrel re-export lives here (runtime top-level),
+ * not in `@forgeax/engine-ecs` — the ecs package stays unaware of the sprite
+ * shading model concept.
+ */
+export {
+  SpriteInstances,
+  type SpriteInstancesData,
+} from './components/sprite-instances';
 // feat-20260604-hdr-equirect-cube-importer-loader M4 / w15: the dev-only
 // ImportTransport factory. A host wires it into createRenderer / createApp so
 // a DDC miss at runtime triggers an on-demand POST /__import import against the
@@ -595,8 +613,14 @@ export { quat } from '@forgeax/engine-math';
  * const unlitWhite = Materials.unlit([1, 1, 1, 1]);
  * const standardPbr = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
  * ```
+ *
+ * `SPRITE_PREMULTIPLIED_ALPHA_BLEND` is a sibling re-export here for
+ * sprite materials opting into the transparent compositing route —
+ * assign on `MaterialPassDescriptor.renderState.blend`. See
+ * `./materials.ts` for the constant's full JSDoc (factor pair, equation,
+ * paste-able snippet).
  */
-export { Materials } from './materials';
+export { Materials, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Inspector contributor (feat-20260516-console-dependency-inversion / w4rb)
@@ -640,6 +664,15 @@ export { registerRuntimeInspector } from './register-inspector';
 // serializes the POD into a valid internal-text-package JSON object
 // suitable for disk write via forge.json / file system writer.
 export { collectSceneAsset, serializeSceneAssetToPack } from './collect-scene-asset';
+// feat-20260626 M6 / m6-4: debug-draw auto-attach glue is re-exported from the
+// main barrel (was a separate tsup entry). The separate entry produced a SECOND
+// module copy of the mutable `registeredDebugDraw` registry: createApp set it on
+// the subpath copy, but the URP/HDRP pipelines (bundled into index) read their
+// own always-null copy AND tsup dead-code-eliminated the flush body into a stub,
+// so DebugDraw.flush() never ran in the browser build (debug overlay leaked +
+// never rendered). One barrel entry => one module copy => one registry shared by
+// createDebugDrawOnReady (the writer) and attachDebugOverlayPass (the reader).
+export { attachDebugOverlayPass, createDebugDrawOnReady } from './debug-draw-glue';
 export {
   HdrpCapsInsufficientError,
   HdrpIndexListOverflowError,

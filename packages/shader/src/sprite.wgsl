@@ -1,4 +1,5 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#pragma variant_axis PER_INSTANCE_REGION
 
 #import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances}
 
@@ -94,33 +95,28 @@ struct Material {
   // into region (flipX -> region.x += region.z; region.z = -region.z;
   // analog for Y) so the shader does not need an extra flip uniform.
   region       : vec4<f32>,
-  // pivotAndSize: .xy = pivot (0..1 normalized; (0,0)=top-left,
-  // (1,1)=bottom-left of texture UV space), .zw = size in LOCAL quad
-  // units. Always (1, 1) on the live host writer; the world-space size
-  // of the sprite quad is owned by `meshes[i].worldFromLocal` (which
-  // carries Transform.scale). bug-20260618 sprite-double-scale: the
-  // earlier path wrote |worldFromLocal.col0| / |col1| here, which then
-  // got multiplied AGAIN by worldFromLocal downstream -- quads ended up
-  // scaleX^2 wide. The field stays in the UBO for byte-stability with
-  // the PBR layout (slot 2 vec4 alignment) and as a future hook if a
-  // sprite shader variant wants to opt into local-quad-units sizing.
-  // The sort path consumes pivot.y * |Transform.scaleY| (NOT size.y)
-  // as the foot-offset so the Y-sort formula stays SSOT-aligned with
-  // `worldFromLocal` (requirements §AC-10 + transparent-sort.ts w23
-  // formula; charter P4 single TRS source).
+  // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w11 (D-6):
+  // pivotAndSize.xy = pivot (0..1 normalised; (0,0)=top-left, (1,1)=
+  // bottom-left of texture UV space). The legacy .zw=size pair is now
+  // a DEAD SLOT — the sprite quad is a local-space unit quad (1x1) and
+  // world scale flows entirely through meshes[i].worldFromLocal, no
+  // longer double-applied by both the UBO size factor and the world
+  // matrix (research F-4 "scale^2 -> scale^1" correction). The .zw
+  // half stays in the struct so the std140 layout slot 2 is byte-stable
+  // for the generic UBO writer (plan-strategy D-2 derive(uboLayout)
+  // offsets); shaders MUST NOT read material.pivotAndSize.zw post-w11.
   pivotAndSize : vec4<f32>,
   // 9-slice placeholder (feat-20260527-sprite-nineslice M1 / w3): .xyz =
   // L/T/R/B inset values folded into a single vec4 by the schema-driven
   // UBO writer (M2), .w = mode signed-encoded (positive = stretch / 0,
-  // negative = tile per plan-strategy §D-3 sliceMode-on-vec4.w sentinel).
-  // M1 is placeholder-only -- vs_main / fs_main do NOT read this field;
-  // the field exists so the std140 layout has slot 3 reserved at the
-  // wgsl side, letting the M2 record-stage writer hit a byte-stable
-  // offset (plan-strategy §D-7 byte-stable UBO write contract).
+  // negative = tile per plan-strategy section D-3 sliceMode-on-vec4.w
+  // sentinel). M1 is placeholder-only — vs_main / fs_main do NOT read
+  // this field; the field exists so the std140 layout has slot 3 reserved
+  // at the wgsl side, letting the M2 record-stage writer hit a byte-stable
+  // offset (plan-strategy D-7 byte-stable UBO write contract).
   // sprite UBO grows 48 B -> 64 B; legacy sprite renders byte-identically
   // because slicesAndMode is never sampled in the vertex / fragment paths
-  // (requirements §AC-02 zero-branch GPU path when slices===undefined,
-  // requirements §AC-03 hello-sprite dawn smoke 0-pixel diff at M1 close).
+  // when slices=[0,0,0,0] (zero-branch GPU path).
   slicesAndMode : vec4<f32>,
 };
 
@@ -155,12 +151,16 @@ struct VsOut {
 
 @vertex
 fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index) vertex_index : u32) -> VsOut {
-  // Q8 two-end pivot rule: pos_local = (uv - pivot) * size. The mesh's
-  // built-in vertex.pos is NOT consumed — the sprite quad geometry is
-  // fully re-derived from uv + pivot + size, so HANDLE_QUAD's mesh.pos
-  // is effectively a placeholder that drives the vertex count (4) and
-  // the topology (two triangles per createPlaneGeometry(1, 1)). pos.xy
-  // lives in [-pivot, 1-pivot] * size; +z = 0 (sprite quad lies in XY).
+  // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w11 (D-6):
+  // pos_local = (uv - pivot) * 1, NOT (uv - pivot) * size. The sprite quad
+  // is now a UNIT QUAD in local space ([-pivot, 1-pivot]) and world scale
+  // flows entirely through meshes[i].worldFromLocal. Pre-w11 the UBO's
+  // pivotAndSize.zw scaled the local quad AND the world matrix also scaled
+  // it, producing the scale^2 visual size debt that research F-4 flagged.
+  // Post-w11 there is one and only one scale source: the entity's
+  // Transform.world. The mesh's built-in vertex.pos is NOT consumed (sprite
+  // geometry is fully re-derived from uv + pivot) so HANDLE_QUAD's mesh.pos
+  // remains a placeholder driving vertex count (4) and topology only.
   //
   // Compensation: since bug-20260601-procedural-geometry-uv-v-axis-vs-webgpu-sampler-ori
   // M1 flipped procedural HANDLE_QUAD from bottom-left V (1-t) to top-left
@@ -170,18 +170,17 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index)
   // are byte-identical. We define uv_eff = (in.uv.x, 1 - in.uv.y) and consume
   // it in BOTH pos_local and uv_atlas below.
   let pivot = material.pivotAndSize.xy;
-  let size  = material.pivotAndSize.zw;
 
-  // feat-20260527-sprite-nineslice M3 / w15 (plan-strategy §D-3 + §D-4):
+  // feat-20260527-sprite-nineslice M3 / w15 (plan-strategy section D-3 + D-4):
   // 9-region map. Early-out when slicesAndMode is the all-zero sentinel so
   // the legacy single-quad path stays byte-identical for sprites without
-  // slices (charter P5 progressive disclosure: zero-slice sprite users pay
-  // zero perf for the new feature). When useSlices fires, the 16-vertex
-  // HANDLE_NINESLICE_QUAD mesh is bound by the record stage (D-2); we
-  // reinterpret vertex_index as a 4x4 grid (i = column 0..3, j = row 0..3)
-  // and route each grid point through 4 anchor lanes:
+  // slices (zero-slice sprite users pay zero perf for the new feature). When
+  // useSlices fires, the 16-vertex HANDLE_NINESLICE_QUAD mesh is bound by
+  // the record stage (D-2); we reinterpret vertex_index as a 4x4 grid (i =
+  // column 0..3, j = row 0..3) and route each grid point through 4 anchor
+  // lanes:
   //   u_pos_arr / v_pos_arr -> position anchors (atlas-UV space, mapped to
-  //                              world via legacy `(u - pivot) * size`)
+  //                              world via legacy `(u - pivot) * 1`)
   //   u_uv_arr / v_uv_arr   -> atlas UV anchors (region-local, then folded
   //                              through region.zw / region.xy)
   // Stretch mode (slicesAndMode.w >= 0): u/v_uv_arr == u/v_pos_arr, the
@@ -190,7 +189,7 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index)
   // addressMode='repeat' (D-4 sampler.repeat path; D-9 register-time
   // soft-warn flags missing repeat) wraps the middle band and re-emits
   // the texture. Vertex shader does NOT call wgsl `fract` — the wrap is
-  // entirely sampler-driven (charter P3 + plan-strategy §D-4 fract veto).
+  // entirely sampler-driven (charter P3 + plan-strategy D-4 fract veto).
   let useSlices = any(material.slicesAndMode != vec4<f32>(0.0));
   var pos_local : vec3<f32>;
   var uv_atlas : vec2<f32>;
@@ -205,9 +204,9 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index)
     let v_pos_arr = array<f32, 4>(0.0, abs_slices.y, 1.0 - abs_slices.w, 1.0);
     let u_pos = u_pos_arr[i];
     let v_pos_top = v_pos_arr[j];
-    // Flip V to bottom-left convention before the legacy `(u - pivot) * size`.
+    // Flip V to bottom-left convention before the legacy `(u - pivot) * 1`.
     let v_pos_eff = 1.0 - v_pos_top;
-    pos_local = vec3<f32>((u_pos - pivot.x) * size.x, (v_pos_eff - pivot.y) * size.y, 0.0);
+    pos_local = vec3<f32>(u_pos - pivot.x, v_pos_eff - pivot.y, 0.0);
 
     // UV anchors. Stretch == position anchors. Tile pushes middle past 1.
     var u_uv_arr = array<f32, 4>(0.0, abs_slices.x, 1.0 - abs_slices.z, 1.0);
@@ -228,7 +227,7 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index)
     uv_atlas = vec2<f32>(uv_u, uv_v_eff) * material.region.zw + material.region.xy;
   } else {
     let uv_eff = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
-    pos_local = vec3<f32>((uv_eff - pivot) * size, 0.0);
+    pos_local = vec3<f32>(uv_eff - pivot, 0.0);
     // Q7 single-mad uv_atlas = uv * region.zw + region.xy. host folds
     // flipX / flipY by negating region.zw + offsetting region.xy so this
     // formula handles every flip case without a per-fragment branch.
@@ -238,7 +237,23 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32, @builtin(vertex_index)
     // operates on atlas-space coordinates independently — no double-flip
     // risk, because the region adjustment is a linear transform applied
     // after uv_eff and neither path depends on the other's sign convention.
-    uv_atlas = uv_eff * material.region.zw + material.region.xy;
+    //
+    // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M2 /
+    // w7 (plan-strategy §2 D-5 + research §Q-R-4.4): when the sprite
+    // pipeline composes this module with PER_INSTANCE_REGION=true the
+    // region source is the per-instance value carried in
+    // `instances[idx].region` (host-uploaded 80 B-per-instance interleaved
+    // buffer; D-1 + D-9). When PER_INSTANCE_REGION is unset (legacy
+    // sprite-atlas / non-SpriteInstances entities) the region still comes
+    // from the material UBO. The 9-slice branch above keeps reading
+    // `material.region` regardless — 9-slice config is material-level by
+    // construction (OOS-3 + D-5) and the two region semantics do not mix.
+#if PER_INSTANCE_REGION == true
+    let region_src = instances[idx].region;
+#else
+    let region_src = material.region;
+#endif
+    uv_atlas = uv_eff * region_src.zw + region_src.xy;
   }
 
   // feat-20260604-instances-per-instance-transform-shader-group3-bin M2 / w8:

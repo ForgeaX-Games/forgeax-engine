@@ -35,6 +35,16 @@ interface NextStatePayload {
  * Collect entities whose ScopedTo component matches a given mode and value,
  * then despawn all of them. Single despawn fault (already-dead entity) does
  * not abort the batch — despawn tolerance per requirements sec 7.
+ *
+ * A scoped entity that is a SceneInstance root is torn down with `despawnScene`
+ * (cascade over its instantiated members), NOT plain `world.despawn`. Plain
+ * despawn does not cascade through `ChildOf` (which ships `linkedSpawn=false`),
+ * so a scoped scene root would orphan every member entity it instantiated. On a
+ * state replay (e.g. Title->Play->Title->Play) those orphans linger, their index
+ * slots are reused at a new generation, and a surviving member's stale
+ * `ChildOf -> (oldRoot, oldGen)` makes `propagateTransforms` throw
+ * `hierarchy-broken` every frame. Cascading via `despawnScene` removes the whole
+ * instantiated subtree so nothing is left pointing at the dead root.
  */
 function scopeDespawn(world: World, scopedComponent: Component, mode: number, value: number): void {
   const state = createQueryState({ with: [scopedComponent, Entity] });
@@ -53,7 +63,24 @@ function scopeDespawn(world: World, scopedComponent: Component, mode: number, va
       }
     }
   });
+  // SceneInstance is resolved by name through the global registry so the state
+  // package stays free of a runtime dependency (layering: state -> ecs only).
+  const sceneInstance = resolveComponent('SceneInstance');
+  // Tear down SceneInstance roots FIRST, via despawnScene (cascade over their
+  // instantiated members). This must precede the plain despawns: a scoped scene
+  // root is often ChildOf a scoped non-scene entity (e.g. a character rig parented
+  // under a KCC body), and despawning that parent first invalidates the root
+  // handle before we can cascade it -- leaving the scene's members orphaned with a
+  // stale ChildOf -> dead-root ref. Doing the cascades up front guarantees each
+  // SceneInstance subtree is fully removed while its root is still live.
+  if (sceneInstance !== undefined) {
+    for (const e of despawns) {
+      if (world.get(e, sceneInstance).ok) world.despawnScene(e);
+    }
+  }
   for (const e of despawns) {
+    // Scene roots already torn down above are now dead -> world.despawn is a
+    // tolerated no-op (requirements sec 7); every other scoped entity despawns here.
     world.despawn(e);
   }
 }

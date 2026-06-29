@@ -738,8 +738,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       defaultWhiteTextureView: { __label: 'default-white-view' },
       unlitPipeline: { __label: 'unlit' },
       standardPipeline: { __label: 'standard' },
-      spritePipeline: { __label: 'sprite' },
-      spritePipelineHdr: { __label: 'sprite-hdr' },
       unlitPipelineHdr: null,
       standardPipelineHdr: null,
       shadowFallbackTextureView: { __label: 'shadow-fallback-view' },
@@ -3635,12 +3633,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       defaultWhiteTextureView: { __label: 'default-white-view' },
       unlitPipeline: f.fakeUnlitPipeline,
       standardPipeline: f.fakeStandardPipeline,
-      // feat-20260520-2d-sprite-layer-mvp M-3 / w24: sprite alpha-blend
-      // pipeline pair added to PipelineState SSOT. Tonemap-pipeline-split
-      // fixture stays an opaque-bucket test (no sprite entity); fields
-      // present so PipelineState type-check passes but never bound.
-      spritePipeline: { __label: 'sprite-pipeline' },
-      spritePipelineHdr: { __label: 'sprite-pipeline-hdr' },
+      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w10:
+      // sprite-specific PipelineState fields removed (AC-12). Sprite PSO
+      // now flows through the same generic per-MaterialShader pipeline cache
+      // every other transparent material uses (plan-strategy D-7).
       unlitPipelineHdr: f.fakeUnlitHdrPipeline,
       standardPipelineHdr: f.fakeStandardHdrPipeline,
       perPassResources: {
@@ -9682,13 +9678,15 @@ type ExtractFrameWithPipeline = (
   // (4ead9e82) by asserting the two surfaces AI users reach for from the
   // `@forgeax/engine-runtime` barrel:
   //
-  //   AC-02 -- `encodeTilemapLayerValue(layerOrder, chunkIndex, ySort?)`
-  //            ySort=true folds chunkIndex into 0 (`(layerOrder << 20)`),
-  //            ySort=false keeps the standard `(layerOrder << 20) | chunkIndex`
-  //            encoding. Tilemap-layer entities that opt into Y-sort share one
+  //   AC-02 -- `encodeTilemapLayerValue(layerOrder, chunkIndex, sortScope?)`
+  //            sortScope='per-cell' folds chunkIndex into 0 (`(layerOrder << 20)`),
+  //            sortScope='layer' (default) keeps the standard
+  //            `(layerOrder << 20) | chunkIndex` encoding. Tilemap-layer entities
+  //            that opt into Y-interleave (`sortScope: 'per-cell'`) share one
   //            Layer.value across their derived per-cell entities so they
   //            interleave with sprite entities carrying the same Layer.value
-  //            (requirements AC-02 + plan-strategy D-2).
+  //            (requirements AC-02 + plan-strategy D-2; D-V-3 round-2 renames
+  //            `ySort: boolean` -> `sortScope: 'layer' | 'per-cell'`).
   //
   //   AC-03 -- The 4 mode constants are reachable through the runtime
   //            barrel (`@forgeax/engine-runtime`) under their canonical
@@ -9702,20 +9700,20 @@ type ExtractFrameWithPipeline = (
   // historically use relative paths; this slab opts into the published
   // alias path on purpose (charter F1 -- single-import barrel SSOT).
 
-  describe('AC-02 encodeTilemapLayerValue (Y-sort folds chunkIndex)', () => {
-    it('ySort=true: encodeTilemapLayerValue(2, 5, true) === 0x200000', async () => {
+  describe('AC-02 encodeTilemapLayerValue (sortScope=per-cell folds chunkIndex)', () => {
+    it("sortScope='per-cell': encodeTilemapLayerValue(2, 5, 'per-cell') === 0x200000", async () => {
       const { encodeTilemapLayerValue } = await import('@forgeax/engine-runtime');
-      expect(encodeTilemapLayerValue(2, 5, true)).toBe(0x200000);
+      expect(encodeTilemapLayerValue(2, 5, 'per-cell')).toBe(0x200000);
     });
 
-    it('ySort=false: encodeTilemapLayerValue(2, 5, false) === ((2 << 20) | 5)', async () => {
+    it("sortScope='layer': encodeTilemapLayerValue(2, 5, 'layer') === ((2 << 20) | 5)", async () => {
       const { encodeTilemapLayerValue } = await import('@forgeax/engine-runtime');
-      expect(encodeTilemapLayerValue(2, 5, false)).toBe((2 << 20) | 5);
+      expect(encodeTilemapLayerValue(2, 5, 'layer')).toBe((2 << 20) | 5);
     });
 
-    it('ySort defaults to false (third arg omitted matches ySort=false)', async () => {
+    it("sortScope defaults to 'layer' (third arg omitted matches 'layer')", async () => {
       const { encodeTilemapLayerValue } = await import('@forgeax/engine-runtime');
-      expect(encodeTilemapLayerValue(2, 5)).toBe(encodeTilemapLayerValue(2, 5, false));
+      expect(encodeTilemapLayerValue(2, 5)).toBe(encodeTilemapLayerValue(2, 5, 'layer'));
     });
   });
 

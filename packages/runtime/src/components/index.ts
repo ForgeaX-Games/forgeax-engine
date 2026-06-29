@@ -95,7 +95,21 @@ export {
   spritePlaybackModeFromU32,
 } from './sprite-playback-mode';
 export { SpriteRegionOverride } from './sprite-region-override';
+// feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 / w10 —
+// SpriteInstances component routed through the components barrel so
+// render-system-extract can list it as an optional in `createQueryState`
+// (peer to Instances). The runtime `@forgeax/engine-runtime` public re-export
+// stays via packages/runtime/src/index.ts (D-7 + D-8: barrel surface is the
+// public seam; module-level re-export from `./components` is the internal seam).
+export { SpriteInstances, type SpriteInstancesData } from './sprite-instances';
 // feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild
-export { TileLayer, markTileLayerDirty } from './tile-layer';
+export {
+  decodeSortScope,
+  encodeSortScope,
+  markTileLayerDirty,
+  type SortScope,
+  TileLayer,
+  type TileLayerData,
+} from './tile-layer';
 export { Tilemap } from './tilemap';
 export { Transform } from './transform';

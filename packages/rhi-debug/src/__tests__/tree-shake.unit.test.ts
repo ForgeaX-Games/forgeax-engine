@@ -136,6 +136,9 @@ const INSPECT_CORE_DIST_EXISTS = fs.existsSync(INSPECT_CORE_DIST);
 const RT_TO_CANVAS_DIST = path.resolve(__dirname, '..', '..', 'dist', 'rt-to-canvas.mjs');
 const RT_TO_CANVAS_DIST_EXISTS = fs.existsSync(RT_TO_CANVAS_DIST);
 
+const FRAME_MODEL_DIST = path.resolve(__dirname, '..', '..', 'dist', 'frame-model.mjs');
+const FRAME_MODEL_DIST_EXISTS = fs.existsSync(FRAME_MODEL_DIST);
+
 const FORBIDDEN_NODE_RE: RegExp[] = [
   /\bnode:fs\b/,
   /\bnode:path\b/,
@@ -161,6 +164,15 @@ describe('inspect-core + rt-to-canvas subpath isolation (AC-10, AC-11)', () => {
     'rt-to-canvas.mjs + import closure contain no fs / pngjs / ws identifiers',
     () => {
       const content = fs.readFileSync(RT_TO_CANVAS_DIST, 'utf-8');
+      const hits = FORBIDDEN_NODE_RE.filter((re) => re.test(content)).map((re) => re.source);
+      expect(hits).toEqual([]);
+    },
+  );
+
+  it.skipIf(!FRAME_MODEL_DIST_EXISTS)(
+    'frame-model.mjs + import closure contain no fs / pngjs / ws identifiers',
+    () => {
+      const content = fs.readFileSync(FRAME_MODEL_DIST, 'utf-8');
       const hits = FORBIDDEN_NODE_RE.filter((re) => re.test(content)).map((re) => re.source);
       expect(hits).toEqual([]);
     },

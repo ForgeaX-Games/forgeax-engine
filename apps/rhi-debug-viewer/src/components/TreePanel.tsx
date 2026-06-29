@@ -39,7 +39,7 @@ export function TreePanel({ viewModel, selectedDrawIdx, onSelectDraw }: TreePane
 
   if (viewModel.tree.length === 0) {
     return (
-      <div className="text-slate-500 dark:text-slate-400 text-sm italic py-4">
+      <div className="text-muted-foreground dark:text-muted-foreground text-sm italic py-4">
         No draw calls in tape
       </div>
     );
@@ -74,31 +74,28 @@ function PassNodeRow({
   readonly selectedDrawIdx: number;
   readonly onSelectDraw: (drawIdx: number) => void;
 }) {
-  const kindBadge =
-    node.kind === 'compute'
-      ? 'bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300'
-      : 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300';
+  const kindBadge = node.kind === 'compute' ? 'bg-info/15 text-info' : 'bg-brand/15 text-brand';
 
   return (
     <div>
       <button
         type="button"
         onClick={onToggle}
-        className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer select-none w-full text-left bg-inherit border-0"
+        className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-muted dark:hover:bg-muted cursor-pointer select-none w-full text-left bg-inherit border-0"
         {...{ [passAnchor()]: String(node.passIdx) }}
       >
-        <span className="w-4 text-center text-slate-400">{isExpanded ? '▼' : '▶'}</span>
+        <span className="w-4 text-center text-muted-foreground">{isExpanded ? '▼' : '▶'}</span>
         <span className={`text-xs px-1.5 py-0.5 rounded font-semibold ${kindBadge}`}>
           {node.kind}
         </span>
-        <span className="text-slate-700 dark:text-slate-300">Pass {node.passIdx}</span>
-        <span className="text-slate-400 text-xs">
+        <span className="text-foreground">Pass {node.passIdx}</span>
+        <span className="text-muted-foreground text-xs">
           ({node.draws.length} {node.draws.length === 1 ? 'call' : 'calls'})
         </span>
       </button>
 
       {isExpanded && (
-        <div className="ml-6 border-l border-slate-200 dark:border-slate-800 pl-4">
+        <div className="ml-6 border-l border-border dark:border-border pl-4">
           {node.draws.map((drawItem) => {
             const isSelected = drawItem.drawIdx === selectedDrawIdx;
             return (
@@ -108,16 +105,12 @@ function PassNodeRow({
                 onClick={() => onSelectDraw(drawItem.drawIdx)}
                 className={`
                   py-1 px-2 rounded cursor-pointer select-none text-xs w-full text-left bg-inherit border-0
-                  ${
-                    isSelected
-                      ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-200'
-                      : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400'
-                  }
+                  ${isSelected ? 'bg-brand/15 text-brand' : 'hover:bg-muted text-muted-foreground'}
                 `}
                 {...{ [drawAnchor()]: String(drawItem.drawIdx) }}
                 {...(isSelected ? { [selectedAnchor()]: 'true' } : {})}
               >
-                <span className="text-slate-400 w-16 inline-block">#{drawItem.drawIdx}</span>
+                <span className="text-muted-foreground w-16 inline-block">#{drawItem.drawIdx}</span>
                 <span>
                   {drawItem.eventKind === 'dispatchWorkgroups' ? 'dispatch' : drawItem.eventKind}
                 </span>

@@ -1416,6 +1416,20 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // antialias setting), not a material renderState value. Default 1 preserves
     // byte-identity of every existing pre-M2 cache slot + descriptor.
     sampleCount: number = 1,
+    // feat-20260625-refactor-sprite-as-transparent-mesh R2 fix-up: LDR-color
+    // override for sub-passes that write to a non-default attachment view.
+    // Pre-feat the dedicated `forgeax::default-sprite` SPEC_CONST entries
+    // (SPRITE_ATTACHMENTS_LDR_S1/S4) targeted the swap-chain STORAGE format
+    // (non-sRGB) directly. Post-w14 sprite falls into the generic lazy build
+    // path which defaults to `pipelineState.colorAttachmentFormat` (the sRGB
+    // VIEW format used by the geometry pass) — incompatible with the sprite
+    // sub-pass's non-sRGB attachment view (bgra8unorm / rgba8unorm), firing
+    // a per-frame "Attachment state ... not compatible" validation error.
+    // The sprite sub-pass call site passes `pipelineState.format` (storage,
+    // non-sRGB) here so the resulting PSO matches the encoder's attachment
+    // state. Undefined preserves the default (sRGB view) path used by every
+    // pre-fix-up caller. Ignored when `isHdr=true` or `passKind='shadow-caster'`.
+    colorFormatOverride?: GPUTextureFormat,
   ): RenderPipeline | null => {
     const ctx = buildPipelineContext(variantSet, materialShaderId, meshAttributes);
     if (ctx === null) return null;
@@ -1425,7 +1439,8 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // (search "buildAndCachePipeline" call sites — every one is preceded by
     // the explicit null check).
     if (pipelineState === null) return null;
-    const ldrColorFormat = pipelineState.colorAttachmentFormat as unknown as GPUTextureFormat;
+    const ldrColorFormat =
+      colorFormatOverride ?? (pipelineState.colorAttachmentFormat as unknown as GPUTextureFormat);
     const built = buildPipelineForMaterialShader(
       cacheKey,
       // biome-ignore lint/suspicious/noExplicitAny: cast through any to satisfy MaterialShaderEntry shape
@@ -1491,6 +1506,22 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // sets the multisample descriptor field. Default 1 preserves byte-identity
     // of every pre-M2 caller.
     sampleCount: number = 1,
+    // feat-20260625-refactor-sprite-as-transparent-mesh R2 fix-up: LDR-color
+    // override for sub-passes that write to a non-default attachment view.
+    // The LDR sprite split sub-pass writes through the storage (non-sRGB)
+    // view of the swap-chain texture; the encoder's beginRenderPass
+    // colorFormats uses `pipelineState.format` (storage), so the PSO must
+    // build with the same non-sRGB format or WebGPU rejects SetPipeline
+    // with "Attachment state ... not compatible". Pre-w14 the dedicated
+    // `forgeax::default-sprite` SPEC_CONST entries (deleted) baked this
+    // mapping into SPRITE_ATTACHMENTS_LDR_S1/S4; the generic lazy build
+    // path that replaced them defaults to `colorAttachmentFormat` (the
+    // sRGB view used by the geometry pass), so transparent-split callers
+    // must override. Threaded into both the cache key (via the spec's
+    // `attachments.colorFormats`) and the actual PSO descriptor. Ignored
+    // for `isHdr=true` (HDR sub-pass uses rgba16float) and
+    // `passKind='shadow-caster'` (depth-only, no color attachment).
+    colorFormatOverride?: GPUTextureFormat,
   ): RenderPipeline | null => {
     // feat-20260615-pipeline-spec-ssot M2-T2: cache key derived from PipelineSpec
     // 4-axis SSOT via cacheKeyOf(spec). The spec carries all 4 axes (shader /
@@ -1504,9 +1535,10 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // getPreferredCanvasFormat returns rgba8unorm (dawn-node, lavapipe, wgpu-wasm GLES),
     // forcing a redundant second PSO build on first-frame URP record path.
     const ldrColorFormat: GPUTextureFormat =
-      pipelineState !== null
+      colorFormatOverride ??
+      (pipelineState !== null
         ? (pipelineState.colorAttachmentFormat as unknown as GPUTextureFormat)
-        : ('bgra8unorm-srgb' as unknown as GPUTextureFormat);
+        : ('bgra8unorm-srgb' as unknown as GPUTextureFormat));
     const colorFormat: GPUTextureFormat =
       passKind === 'shadow-caster'
         ? (undefined as unknown as GPUTextureFormat)
@@ -1574,6 +1606,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         // layout chain reads from the deriveVertexBufferLayout SSOT here too.
         meshAttributes,
         sampleCount,
+        colorFormatOverride,
       );
     }
     // feat-20260609 M4 / w31: resolve variant WGSL from manifest when
@@ -1659,6 +1692,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       // sentinel inside buildPipelineContext keeps the layout deterministic.
       meshAttributes,
       sampleCount,
+      colorFormatOverride,
     );
   };
   const getParamSchema = (materialShaderId: string) => {
@@ -4103,6 +4137,21 @@ async function buildReadyWebGPU(
       );
       if (!spriteShaderResult.ok) throw spriteShaderResult.error;
       spriteModule = spriteShaderResult.value;
+      // feat-20260625-refactor-sprite-as-transparent-mesh CI-fix: seed the
+      // lazy adapter cache under the same label (`module-forgeax::sprite`)
+      // that `getMaterialShaderPipeline -> buildAndCachePipeline ->
+      // buildPipelineForMaterialShader` uses, so the first lazy build of
+      // the sprite PSO at LDR transparent-split time hits the module cache
+      // on frame 1 and does NOT trip the 1-frame `rhi-not-available` skip
+      // (which surfaces as `shader-compile-failed` "manifest entries
+      // include sprite.wgsl" at the spritePH===null branch in
+      // render-system-record.ts §spritePass). Mirrors the
+      // `module-forgeax::default-shadow-caster` prewarm above; the pre-
+      // feat-20260625 dedicated `spritePipeline` baked the module into a
+      // boot-time PSO so this seed step was implicit. Post-w14 the sprite
+      // shares the generic per-MaterialShader lazy build path, which now
+      // needs the explicit seed to preserve frame-1 readiness.
+      seedShaderModule('module-forgeax::sprite', spriteShaderResult.value);
     }
 
     // feat-20260528-fxaa-post-processing: fxaa shader module is optional
@@ -5196,7 +5245,13 @@ async function buildReadyWebGPU(
       fragment: pbrModule,
     });
   if (spriteModule !== null)
-    shaderModuleMap.set('forgeax::default-sprite', {
+    // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w14 (D-7):
+    // sprite shader registers under the single canonical id `forgeax::sprite`
+    // (previously double-mapped via the engine-built default-sprite id for
+    // the deleted boot-time pre-warm path). The generic per-MaterialShader
+    // pipeline cache reads this entry when a sprite material lands a
+    // transparent pass through the LDR split.
+    shaderModuleMap.set('forgeax::sprite', {
       vertex: spriteModule,
       fragment: spriteModule,
     });
@@ -5286,10 +5341,7 @@ async function buildReadyWebGPU(
   // (sprite LDR target — pre-feat sprite PSO targeted swapChainFormats.storage
   // directly so the alpha-blend pass writes the raw, non-srgb view of the
   // swap-chain texture; see pipeline-spec.ts SPRITE_ATTACHMENTS jsdoc).
-  const runtimeSpecConstTable = buildSpecConstTable(
-    swapChainFormats.view,
-    swapChainFormats.storage,
-  );
+  const runtimeSpecConstTable = buildSpecConstTable(swapChainFormats.view);
 
   // Boot-time pre-warm: build SPEC_CONST entries whose shader modules are
   // compiled. Entries referencing a missing module are silently skipped
@@ -6581,8 +6633,12 @@ async function buildReadyWebGPU(
     standardPipeline: getCachedPipelineOrNull('forgeax::default-standard-pbr', false, 1),
     unlitPipelineMsaa: getCachedPipelineOrNull('forgeax::default-unlit', false, 4),
     standardPipelineMsaa: getCachedPipelineOrNull('forgeax::default-standard-pbr', false, 4),
-    spritePipelineMsaa: getCachedPipelineOrNull('forgeax::default-sprite', false, 4),
-    spritePipelineHdrMsaa: getCachedPipelineOrNull('forgeax::default-sprite', true, 4),
+    // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w14 (D-7):
+    // four sprite-dedicated boot-time pre-warms are gone. Sprite PSO now
+    // lands lazily through the generic per-MaterialShader pipeline cache
+    // (`getMaterialShaderPipeline('forgeax::sprite', ...)`) keyed on
+    // premultiplied-alpha renderState at draw time. -4 entries off
+    // SPEC_CONST_TABLE (15 from 19); -4 fields off PipelineState.
     unlitPipelineHdrMsaa: getCachedPipelineOrNull('forgeax::default-unlit', true, 4),
     standardPipelineHdrMsaa: getCachedPipelineOrNull('forgeax::default-standard-pbr', true, 4),
     // feat-20260523-shader-template-instance-split M9-T03 (D-PipelineBuilder):
@@ -6629,15 +6685,6 @@ async function buildReadyWebGPU(
     // pipeline-layout build itself failed.
     skinPaletteAllocator:
       unlitModule !== null && pbrModule !== null ? skinPaletteAllocatorHandle : null,
-    // feat-20260520-2d-sprite-layer-mvp M-3 / w24 (@new-surface): sprite
-    // alpha-blend pipeline pair — LDR (bgra8unorm-srgb) + HDR
-    // (rgba16float). The record stage routes sprite-bucket entities here
-    // when the active camera carries `tonemap === 'none'` (LDR) or
-    // `tonemap !== 'none'` (HDR; M-3 / w25). `null` on legacy 3-tuple
-    // manifests; the record stage narrows on `=== null` and reports
-    // through the structured RhiError surface (charter P3 explicit failure).
-    spritePipeline: getCachedPipelineOrNull('forgeax::default-sprite', false, 1),
-    spritePipelineHdr: getCachedPipelineOrNull('forgeax::default-sprite', true, 1),
     meshes: meshHandles,
     format: swapChainFormats.storage,
     colorAttachmentFormat: swapChainFormats.view,

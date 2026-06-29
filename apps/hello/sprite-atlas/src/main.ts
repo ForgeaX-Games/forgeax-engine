@@ -43,6 +43,7 @@ import {
   MeshFilter,
   MeshRenderer,
   SpriteRegionOverride,
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
   Transform,
 } from '@forgeax/engine-runtime';
 
@@ -143,6 +144,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // sprite entities reference this same handle so the fold operator
   // can collapse them into one drawIndexed; charter P4 transparent
   // optimisation).
+  //
+  // feat-20260626-sprite-transparent-collapse M3 — post M1/M2 SSOT:
+  //   - first-pass `renderState.blend` drives the LDR split + premulti-
+  //     plied-alpha blend pipeline (preset `SPRITE_PREMULTIPLIED_ALPHA_BLEND`;
+  //     replaces ablated `transparent` boolean flag + earlier
+  //     shadingModel='sprite' arm; requirements §2 NOTE breaking change).
+  //   - paramValues UBO-aligned: colorTint (was baseColor),
+  //     baseColorTexture (was texture), pivotAndSize (was pivot).
+  //     SpriteRegionOverride still writes the .region vec4 into
+  //     paramSnapshot every frame, untouched by the rename.
   const samplerHandle: Handle<'SamplerAsset', 'shared'> = world.allocSharedRef<
     'SamplerAsset',
     SamplerAsset
@@ -162,14 +173,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         shader: 'forgeax::sprite',
         tags: { LightMode: 'Forward' },
         queue: 3000,
+        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
       },
     ],
     paramValues: {
-      baseColor: [1.0, 1.0, 1.0, 1.0],
-      texture: textureHandle,
+      colorTint: [1.0, 1.0, 1.0, 1.0],
+      baseColorTexture: textureHandle,
       sampler: samplerHandle,
       region: [...WALK_REGION_FRAME_0],
-      pivot: [0.5, 0.5],
+      pivotAndSize: [0.5, 0.5, 1, 1],
     },
   };
   const materialHandle = world.allocSharedRef('MaterialAsset', material);

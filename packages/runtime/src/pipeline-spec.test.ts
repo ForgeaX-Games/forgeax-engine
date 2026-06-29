@@ -446,8 +446,8 @@ describe('getOrBuildPipeline', () => {
 // =============================================================================
 
 describe('SPEC_CONST_TABLE', () => {
-  it('has exactly 19 entries (12 base material + 4 URP-variant PBR + 3 fullscreen-post)', () => {
-    expect(SPEC_CONST_TABLE).toHaveLength(19);
+  it('has exactly 15 entries (8 base material + 4 URP-variant PBR + 3 fullscreen-post)', () => {
+    expect(SPEC_CONST_TABLE).toHaveLength(15);
   });
 
   it('every entry has attachments.sampleCount in {1, 4}', () => {
@@ -456,16 +456,22 @@ describe('SPEC_CONST_TABLE', () => {
     }
   });
 
-  it('every entry has shader.id in the standard set', () => {
+  it('every entry has shader.id in the standard set (forgeax::default-sprite removed in M3 AC-12)', () => {
     const allowedIds = new Set([
       'forgeax::default-unlit',
       'forgeax::default-standard-pbr',
-      'forgeax::default-sprite',
       'forgeax::post::tonemap',
       'forgeax::skybox::cube',
     ]);
     for (const entry of SPEC_CONST_TABLE) {
       expect(allowedIds.has(entry.shader.id)).toBe(true);
+    }
+    // Reverse-grep assertion: 'forgeax::default-sprite' spec entries are
+    // gone from the boot-time pre-warm table (AC-12). Sprite PSO now flows
+    // through the generic per-MaterialShader pipeline cache keyed on
+    // 'forgeax::sprite' + premultiplied-alpha renderState.
+    for (const entry of SPEC_CONST_TABLE) {
+      expect(entry.shader.id).not.toBe('forgeax::default-sprite');
     }
   });
 
@@ -487,7 +493,7 @@ describe('SPEC_CONST_TABLE', () => {
     }
   });
 
-  it('all 19 cache keys are mutually unique', () => {
+  it('all 15 cache keys are mutually unique', () => {
     const keys = new Set<string>();
     for (const entry of SPEC_CONST_TABLE) {
       const key = cacheKeyOf(entry);
@@ -497,7 +503,7 @@ describe('SPEC_CONST_TABLE', () => {
       }
       keys.add(key);
     }
-    expect(keys.size).toBe(19);
+    expect(keys.size).toBe(15);
   });
 
   it('changing sampleCount produces a different key', () => {

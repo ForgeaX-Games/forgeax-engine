@@ -16,13 +16,20 @@
 //
 // Related: m7-4; t6; requirements AC-10/AC-22.
 
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   getCaptureFrameHelp,
   getInspectAtHelp,
+  getSummaryHelp,
   getTriggerBrowserHelp,
   parseTriggerBrowserArgs,
+  runSummary,
 } from '../cli';
+import { serializeTape } from '../tape-format';
+import type { RhiCallEvent, Tape } from '../types';
 
 describe('CLI --help output', () => {
   describe('capture-frame --help', () => {
@@ -323,5 +330,114 @@ describe('parseTriggerBrowserArgs (AC-10 parsing logic)', () => {
         expect(result.exitCode).toBe(1);
       }
     });
+  });
+});
+
+// ============================================================================
+// summary: --help text + runSummary FrameModel emission (AI-first CLI/UI parity)
+//
+// `summary <tape>` is the CLI mirror of the viewer's whole-frame view: it emits
+// buildFrameModel(tape) JSON without a GPU device. These tests pin the help text
+// and that runSummary returns the same structural model the viewer renders.
+// ============================================================================
+
+function makeSummaryTape(): Tape {
+  const events: RhiCallEvent[] = [
+    { kind: 'createPipelineLayout', handleId: 'layout:1', bglHandleIds: [] },
+    {
+      kind: 'createRenderPipeline',
+      handleId: 'pipe:1',
+      desc: {
+        vertex: { module: undefined as unknown as GPUShaderModule, entryPoint: 'main' },
+        primitive: { topology: 'triangle-list' as GPUPrimitiveTopology },
+        fragment: {
+          module: undefined as unknown as GPUShaderModule,
+          entryPoint: 'main',
+          targets: [{ format: 'bgra8unorm' as GPUTextureFormat, writeMask: 0xf }],
+        },
+      },
+      layoutHandleId: 'layout:1',
+      vertexShaderModuleHandleId: undefined,
+      fragmentShaderModuleHandleId: undefined,
+    },
+    { kind: 'frameMark', frameIdx: 0 },
+    { kind: 'createCommandEncoder', cmdHandleId: 'cmd:1' },
+    {
+      kind: 'beginRenderPass',
+      cmdHandleId: 'cmd:1',
+      passHandleId: 'pass:1',
+      desc: { colorAttachments: [] },
+      colorAttachmentViewHandleIds: [],
+    },
+    { kind: 'setPipeline', passHandleId: 'pass:1', pipelineHandleId: 'pipe:1' },
+    {
+      kind: 'draw',
+      passHandleId: 'pass:1',
+      vertexCount: 3,
+      instanceCount: 1,
+      firstVertex: 0,
+      firstInstance: 0,
+    },
+    { kind: 'endRenderPass', passHandleId: 'pass:1' },
+  ];
+  return {
+    formatVersion: 3,
+    rhiCapsRecorded: {
+      canvasFormat: 'bgra8unorm' as GPUTextureFormat,
+      rgba16floatRenderable: false,
+      float32Filterable: false,
+      textureCompression: false,
+      storageBuffer: false,
+      timestampQuery: false,
+    },
+    events,
+    blobPool: new Map(),
+  };
+}
+
+describe('summary subcommand', () => {
+  it('--help text contains usage, argument, example, and output sections', () => {
+    const help = getSummaryHelp();
+    expect(help).toContain('Usage: summary <tapePath>');
+    expect(help).toContain('tapePath');
+    expect(help).toContain('Example:');
+    expect(help).toContain('FrameModel');
+  });
+
+  it('runSummary emits a FrameModel with meta/tree/draws/resources for an on-disk tape', () => {
+    const { json, blob } = serializeTape(makeSummaryTape());
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'summary-cli-'));
+    const tapePath = path.join(dir, 'frame-0.tape.bin');
+    const reportPath = path.join(dir, 'frame-0.report.json');
+    const parsed = JSON.parse(json) as { header: unknown; events: unknown };
+    fs.writeFileSync(tapePath, Buffer.from(blob));
+    fs.writeFileSync(reportPath, JSON.stringify(parsed));
+
+    const result = runSummary({ tapePath });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const model = JSON.parse(result.value) as {
+      meta: { totalDraws: number; totalPasses: number };
+      tree: unknown[];
+      draws: { pipelineState: { inputAssembly: { topology: string } } }[];
+      resources: unknown[];
+    };
+    expect(model.meta.totalDraws).toBe(1);
+    expect(model.meta.totalPasses).toBe(1);
+    expect(model.tree).toHaveLength(1);
+    expect(model.draws[0]?.pipelineState.inputAssembly.topology).toBe('triangle-list');
+    // resources Map is serialized as an array (JSON-safe), not {}
+    expect(Array.isArray(model.resources)).toBe(true);
+    expect(model.resources.length).toBeGreaterThan(0);
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('runSummary returns a tape-format error for a missing tape', () => {
+    const result = runSummary({ tapePath: '/nonexistent/frame-0.tape.bin' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('tape-format-version-mismatch');
+    }
   });
 });

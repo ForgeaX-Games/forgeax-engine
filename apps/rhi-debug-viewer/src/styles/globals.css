@@ -80,3 +80,34 @@
     font-family: "Geist Mono", ui-monospace, "SF Mono", monospace;
   }
 }
+
+/* dockview-theme-forgeax — maps dockview's --dv-* chrome variables onto our
+   design tokens (monitor/matrix palette: near-black bg, dark panels, subtle
+   borders, cyan brand accent) so the dock matches the panels. The app root sets
+   the `dark` class; these tokens resolve from the .dark scope in globals.css. */
+.dockview-theme-forgeax {
+  --dv-background-color: hsl(var(--background));
+  --dv-paneview-active-outline-color: hsl(var(--brand));
+
+  --dv-group-view-background-color: hsl(var(--background));
+  --dv-tabs-and-actions-container-background-color: hsl(var(--card));
+  --dv-activegroup-visiblepanel-tab-background-color: hsl(var(--background));
+  --dv-activegroup-hiddenpanel-tab-background-color: hsl(var(--card));
+  --dv-inactivegroup-visiblepanel-tab-background-color: hsl(var(--background));
+  --dv-inactivegroup-hiddenpanel-tab-background-color: hsl(var(--card));
+
+  --dv-activegroup-visiblepanel-tab-color: hsl(var(--foreground));
+  --dv-activegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground));
+  --dv-inactivegroup-visiblepanel-tab-color: hsl(var(--muted-foreground));
+  --dv-inactivegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground));
+
+  --dv-tab-divider-color: hsl(var(--border));
+  --dv-separator-border: hsl(var(--border));
+  --dv-paneview-header-border-color: hsl(var(--border));
+  --dv-tabs-container-scrollbar-color: hsl(var(--muted-foreground));
+
+  --dv-active-sash-color: hsl(var(--brand));
+  --dv-icon-hover-background-color: hsl(var(--muted));
+
+  --dv-tab-active-border-bottom-color: hsl(var(--brand));
+}

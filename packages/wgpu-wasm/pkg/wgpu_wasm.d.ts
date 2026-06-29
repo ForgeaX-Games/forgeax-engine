@@ -292,6 +292,7 @@ export class RhiWgpuSampler {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
+    readonly forgeaxResourceKind: string;
     readonly forgeaxToken: number;
 }
 
@@ -374,6 +375,7 @@ export class RhiWgpuTextureView {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
+    readonly forgeaxResourceKind: string;
     readonly forgeaxToken: number;
 }
 
@@ -504,6 +506,7 @@ export interface InitOutput {
     readonly rhiwgpurenderpass_setStencilReference: (a: number, b: number) => void;
     readonly rhiwgpurenderpass_setVertexBuffer: (a: number, b: number, c: number, d: bigint, e: number, f: bigint) => void;
     readonly rhiwgpurenderpass_setViewport: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly rhiwgpusampler_forgeaxResourceKind: (a: number) => [number, number];
     readonly rhiwgpusampler_forgeaxToken: (a: number) => number;
     readonly rhiwgpushadermodule_forgeaxToken: (a: number) => number;
     readonly rhiwgpusurface_configure: (a: number, b: any) => [number, number];
@@ -515,6 +518,7 @@ export interface InitOutput {
     readonly rhiwgputexture_destroy: (a: number) => void;
     readonly rhiwgputexture_height: (a: number) => number;
     readonly rhiwgputexture_width: (a: number) => number;
+    readonly rhiwgputextureview_forgeaxResourceKind: (a: number) => [number, number];
     readonly rhiwgputextureview_forgeaxToken: (a: number) => number;
     readonly start: () => void;
     readonly validate: (a: number) => [number, number, number];

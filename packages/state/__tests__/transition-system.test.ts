@@ -463,8 +463,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     const child1 = world.spawn({ component: ChildOf, data: { parent: root } }).unwrap();
     const child2 = world.spawn({ component: ChildOf, data: { parent: root } }).unwrap();
 
-    // Grandchild under child1 -- transitive cascade via Children.entities.
-    // (Two-level depth is covered by the independent child-of.test.ts.)
+    // Grandchild under child1 -- a depth-2 descendant of the scene root.
     const grandchild = world.spawn({ component: ChildOf, data: { parent: child1 } }).unwrap();
 
     // Player entity -- no ScopedTo, should survive.
@@ -497,10 +496,12 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
     // Child2 cascade-despawned.
     expect(world.get(child2, EntityToken).ok).toBe(false);
 
-    // Grandchild: transitive cascade not asserted here -- two-level depth is
-    // independently covered by child-of.test.ts AC-08. The m5w1 gate focuses
-    // on scoped-root -> immediate children cascade via linkedSpawn=true.
-    expect(world.get(grandchild, EntityToken).ok).toBe(true);
+    // Grandchild also despawned: a scoped SceneInstance root is torn down via
+    // world.despawnScene (fully recursive iterDescendants walk), NOT the
+    // one-level linkedSpawn cascade. The whole subtree goes, so no descendant is
+    // left orphaned with a stale ChildOf -> dead-root ref (the collectathon
+    // `hierarchy-broken` regression).
+    expect(world.get(grandchild, EntityToken).ok).toBe(false);
 
     // Player survives -- no ScopedTo component.
     expect(world.get(player, EntityToken).ok).toBe(true);
@@ -948,5 +949,117 @@ describe('SceneInstance transition survival (m5w1)', () => {
     const r = setNextState(world, LateToken, 'b');
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('state-not-registered');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// SceneInstance cascade teardown on scoped despawn (regression)
+//
+// A scoped entity that is a SceneInstance root must be torn down with
+// despawnScene (cascade over its instantiated members), not plain world.despawn.
+// Plain despawn does NOT cascade through ChildOf (linkedSpawn=false), so a scoped
+// scene root would orphan every member it instantiated. On a state replay the
+// orphans linger, their index slots get reused at a new generation, and a
+// surviving member's stale ChildOf -> dead-root makes propagateTransforms throw
+// `hierarchy-broken` every frame (the collectathon "stuck character once a
+// guardian replays the Play state" bug).
+//
+// SceneInstance / ChildOf are runtime concepts, but the state package may not
+// import runtime. The cascade itself (world.despawnScene -> iterDescendants) walks
+// any `array<entity>` field, so the test reconstructs the exact shape in pure ECS:
+// a `SceneInstance` component with a `mapping: array<entity>` field listing the
+// members, plus a `ChildOf` parent ref. This mirrors what assets.instantiate
+// builds without pulling in the runtime package.
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('scoped despawn cascades SceneInstance roots fully (regression)', () => {
+  // Reuses the module-level SceneInstance + ChildOf (linkedSpawn=true) tokens and
+  // the m5w1 buildScene / registerSceneAsset / readMapping helpers -- do NOT
+  // redefine those components here (it would overwrite the global registry the
+  // other m5w1 tests rely on).
+  //
+  // Gap this closes vs the existing m5w1 cascade tests: linkedSpawn cascade is
+  // intentionally ONE level deep (world.ts _despawnCore passes internal=true to
+  // child despawns, so grandchildren are NOT collected -- see the m5w1 test that
+  // asserts a grandchild survives). A real instantiated scene (e.g. an FBX rig:
+  // root -> Armature -> Hips -> Spine -> ...) is many levels deep, so a plain
+  // world.despawn of a scoped scene root would orphan every member below depth 1.
+  // The fix routes scoped SceneInstance roots through world.despawnScene, whose
+  // iterDescendants walk is fully recursive -- so the WHOLE subtree, mapping
+  // members included, is torn down. Orphans are what made propagateTransforms
+  // throw `hierarchy-broken` after a Play->Title->Play replay in the collectathon.
+
+  it('a scoped scene root despawns ALL mapping members (full subtree), not just depth-1', () => {
+    const world = makeWorld();
+
+    // A multi-node scene -> instantiateScene records every member in mapping.
+    const nodes: SceneEntity[] = [
+      { localId: localId(0), components: {} },
+      { localId: localId(1), components: {} },
+      { localId: localId(2), components: {} },
+      { localId: localId(3), components: {} },
+    ];
+    const handle = registerSceneAsset(world, buildScene(nodes));
+    const r = world.instantiateScene(handle);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const root = r.value.root;
+    const mapping = Array.from(readMapping(world, root));
+    expect(mapping.length).toBeGreaterThanOrEqual(4);
+
+    // ONLY the root is scoped (mirrors the app: members are never individually
+    // marked despawnOnExit -- they ride the root's teardown).
+    despawnOnExit(world, root, LevelId, 'main-menu');
+
+    // Leave 'main-menu' -> the scoped root is torn down via despawnScene.
+    setNextState(world, LevelId, 'tutorial');
+    world.update();
+
+    const EntityToken = resolveComponent('Entity')!;
+    // Root gone.
+    expect(world.get(root, EntityToken).ok).toBe(false);
+    // EVERY mapping member gone -- no orphan left with a stale ChildOf -> dead root.
+    for (const m of mapping) {
+      if (m === 0) continue; // root sentinel
+      expect(world.get(m as unknown as EntityHandle, EntityToken).ok).toBe(false);
+    }
+  });
+
+  it('scoped scene root parented under another scoped entity still tears down its members', () => {
+    // Reproduces the collectathon ordering hazard: the scene root is ChildOf a
+    // scoped KCC body. If the KCC body is despawned (plain) before the root is
+    // cascaded, the root handle dies first and its members orphan. The fix runs
+    // SceneInstance teardown FIRST, so order within the batch does not matter.
+    const world = makeWorld();
+
+    const kccParent = world.spawn().unwrap();
+    despawnOnExit(world, kccParent, LevelId, 'main-menu');
+
+    const nodes: SceneEntity[] = [
+      { localId: localId(0), components: {} },
+      { localId: localId(1), components: {} },
+    ];
+    const handle = registerSceneAsset(world, buildScene(nodes));
+    const r = world.instantiateScene(handle);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const root = r.value.root;
+    const mapping = Array.from(readMapping(world, root));
+
+    // Parent the scene root under the KCC body, then scope the root too.
+    const ChildOfToken = resolveComponent('ChildOf')!;
+    world.addComponent(root, { component: ChildOfToken, data: { parent: kccParent } });
+    despawnOnExit(world, root, LevelId, 'main-menu');
+
+    setNextState(world, LevelId, 'tutorial');
+    world.update();
+
+    const EntityToken = resolveComponent('Entity')!;
+    expect(world.get(kccParent, EntityToken).ok).toBe(false);
+    expect(world.get(root, EntityToken).ok).toBe(false);
+    for (const m of mapping) {
+      if (m === 0) continue;
+      expect(world.get(m as unknown as EntityHandle, EntityToken).ok).toBe(false);
+    }
   });
 });

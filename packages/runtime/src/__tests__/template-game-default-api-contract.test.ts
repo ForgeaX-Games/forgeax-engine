@@ -234,13 +234,16 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
   // — exists in the live component schema, i.e. the exact key check
   // `_buildSceneEntityComponentDatas` runs at instantiate time.
   //
-  // The projection mirrors `templates/game-default/main.ts` (~L54-58): the
-  // loader strips Studio-only components (Collider) and renames the ref-int
-  // handle field `MeshRenderer.material` -> `materials` (engine #317). Anything
-  // OUTSIDE that projection — DirectionalLightShadow.orthoHalfExtent included —
-  // reaches the engine verbatim and must satisfy the schema. Keep this in sync
-  // if the template's STRIP/rename surface changes.
-  it('(e) [regression] every shipped scene.pack.json component field exists in its live schema (post template projection)', () => {
+  // scene-as-asset (2026-06-29): the shipped pack now lives at
+  // `assets/scene.pack.json` and is authored DIRECTLY in the current engine
+  // schema — `payload.entities` (not `nodes`), `MeshRenderer.materials` (not
+  // the legacy ref-int `material`), no Studio-only `Collider`, dense localIds.
+  // main.ts loads it through the pure-GUID path (loadByGuid<SceneAsset> ->
+  // instantiate) with NO preprocessing projection, so every authored field must
+  // satisfy the live schema VERBATIM — that's what _buildSceneEntityComponentDatas
+  // enforces at instantiate time. STRIP/FIELD_RENAME below are retained as
+  // defensive no-ops in case an Edit round-trip ever re-writes a legacy shape.
+  it('(e) [regression] every shipped scene.pack.json component field exists in its live schema', () => {
     // Touch the barrel bindings so the component-table side-effect import is
     // not tree-shaken (resolveComponent reads that global table).
     void Transform;
@@ -248,7 +251,9 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
     void ChildOf;
     void SceneInstance;
 
-    // Mirror templates/game-default/main.ts loader projection.
+    // Defensive back-compat projection (the shipped pack is already clean):
+    // an editor ✎ Edit save would write `Collider` (Studio metadata) and could
+    // emit the legacy singular `material`; tolerate both so the gate is stable.
     const STRIP_COMPONENTS = new Set(['Collider']);
     const FIELD_RENAME: Record<string, Record<string, string>> = {
       MeshRenderer: { material: 'materials' },
@@ -256,16 +261,19 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
 
     const here = fileURLToPath(import.meta.url);
     const repoRoot = resolve(here, '..', '..', '..', '..', '..');
-    const packPath = resolve(repoRoot, 'templates', 'game-default', 'scene.pack.json');
+    const packPath = resolve(repoRoot, 'templates', 'game-default', 'assets', 'scene.pack.json');
     const pack = JSON.parse(readFileSync(packPath, 'utf-8')) as {
-      assets: { kind: string; payload?: { kind?: string; nodes?: SceneEntity[] } }[];
+      assets: {
+        kind: string;
+        payload?: { kind?: string; entities?: SceneEntity[]; nodes?: SceneEntity[] };
+      }[];
     };
 
     const offenders: string[] = [];
     let scanned = 0;
     for (const asset of pack.assets) {
       if (asset.payload?.kind !== 'scene') continue;
-      for (const node of asset.payload.nodes ?? []) {
+      for (const node of asset.payload.entities ?? asset.payload.nodes ?? []) {
         for (const [compName, data] of Object.entries(node.components)) {
           if (STRIP_COMPONENTS.has(compName)) continue;
           scanned++;

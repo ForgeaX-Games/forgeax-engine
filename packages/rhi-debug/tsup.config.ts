@@ -9,6 +9,9 @@ export default defineConfig({
     'src/adapter.ts',
     'src/capture-browser.ts',
     'src/inspect-core.ts',
+    // Pure whole-frame analysis SSOT shared by apps/rhi-debug-viewer (ViewModel)
+    // and the cli `summary` subcommand + inspect-core pipelineState. Node-free.
+    'src/frame-model.ts',
     'src/inspector.ts',
     'src/rt-to-canvas.ts',
     // m4 / w25: the CLI entry. Builds to dist/cli.mjs so the package.json#bin

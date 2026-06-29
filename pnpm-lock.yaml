@@ -93,6 +93,79 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
 
+  apps/collectathon:
+    dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../packages/app
+      '@forgeax/engine-audio':
+        specifier: workspace:*
+        version: link:../../packages/audio
+      '@forgeax/engine-audio-webaudio':
+        specifier: workspace:*
+        version: link:../../packages/audio-webaudio
+      '@forgeax/engine-debug-draw':
+        specifier: workspace:*
+        version: link:../../packages/debug-draw
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../../packages/ecs
+      '@forgeax/engine-font':
+        specifier: workspace:*
+        version: link:../../packages/font
+      '@forgeax/engine-math':
+        specifier: workspace:*
+        version: link:../../packages/math
+      '@forgeax/engine-pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
+      '@forgeax/engine-physics':
+        specifier: workspace:*
+        version: link:../../packages/physics
+      '@forgeax/engine-physics-rapier3d':
+        specifier: workspace:*
+        version: link:../../packages/physics-rapier3d
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@forgeax/engine-state':
+        specifier: workspace:*
+        version: link:../../packages/state
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../../packages/types
+    devDependencies:
+      '@forgeax/engine-fbx':
+        specifier: workspace:*
+        version: link:../../packages/fbx
+      '@forgeax/engine-gltf':
+        specifier: workspace:*
+        version: link:../../packages/gltf
+      '@forgeax/engine-image':
+        specifier: workspace:*
+        version: link:../../packages/image
+      '@forgeax/engine-shader':
+        specifier: workspace:*
+        version: link:../../packages/shader
+      '@forgeax/engine-vite-plugin-pack':
+        specifier: workspace:*
+        version: link:../../packages/vite-plugin-pack
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../../packages/vite-plugin-shader
+      '@types/node':
+        specifier: ^25.8.0
+        version: 25.8.0
+      '@webgpu/types':
+        specifier: ^0.1.70
+        version: 0.1.70
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
+
   apps/dual-impl-spike:
     dependencies:
       '@forgeax/engine-rhi':

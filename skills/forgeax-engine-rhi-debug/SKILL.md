@@ -74,9 +74,10 @@ flowchart TD
 | **L1** | 落盘 tape | POST `/__forgeax-debug/tape` 或 Node `finalize()` 尾 |
 | **L2c** | 浏览器一行触发 | `window.__forgeax.captureFrame(n)`（控制台 autocomplete） |
 | **L2a** | 外部 CLI 触发 | `cli.mjs trigger-browser` → POST `/__forgeax-debug/trigger` |
-| **L3a** | 离线 CLI inspect（自举 dawn-node，不连 WS） | `cli.mjs inspect-offline <tapePath> <drawIdx>` |
-| **L3b** | 浏览器 per-draw JSON | `/inspect-core` `inspectDrawJson` |
+| **L3a** | 离线 CLI inspect（自举 dawn-node，不连 WS） | `cli.mjs inspect-offline <tapePath> <drawIdx>`（输出含 `pipelineState`） |
+| **L3b** | 浏览器 per-draw JSON | `/inspect-core` `inspectDrawJson`（输出含 `pipelineState`） |
 | **L3c** | 浏览器 RT 上屏 canvas | `/rt-to-canvas` `renderRtToCanvas` |
+| **L3e** | 整帧结构模型（纯函数，零 GPU） | `cli.mjs summary <tapePath>` 或 `/frame-model` `buildFrameModel(tape)` → `FrameModel`（viewer 与 CLI 同一 SSOT） |
 
 ```mermaid
 flowchart LR
@@ -90,8 +91,9 @@ flowchart LR
 - **L1 单写者**：dev-server POST 与 Node finalize 尾共用 `assembleReport`，浏览器 tape 与 Node tape 在盘上无法区分（D-3 / AC-05）。非法 body → `{error, hint}` envelope 不落盘（AC-06）；HTTP 层错误不进 `DebugError` 闭并集。
 - **L2 → L3a 串联**：`captureFrame(n)` / `trigger-browser` 返回的 `tapePath` 原样作 `inspect-offline` 第一参。`FORGEAX_ENGINE_RHI_DEBUG=1` 时 `createAppFromCanvas` 才挂 `window.__forgeax`；未设 → 调用抛 `TypeError`（显式失败，非静默）。
 - **L3b vs L3a 输出差异**：浏览器 `inspectDrawJson` 的 `['rt']` 返回 `{width, height, pixels: Uint8Array}`；Node `inspectAt` 返回 RT **PNG 路径字符串**——PNG 编码是 Node-only。
-- **per-draw RT 必须 `commitThroughDraw(drawIdx)` 先步进**：看「draw #N 当时的画面」时，先 `replay.reset()` → `replay.commitThroughDraw(drawIdx)` 再 `inspectDrawJson`/`readbackDrawRt`/`renderRtToCanvas`。它重放到该 draw 并合成 `endRenderPass+finish+submit`，让 color attachment 拿到 **draw 0..N 累积**像素（选 N 看到的是执行到 N 那一刻，不是最终合成帧）。WebGPU 不能读进行中 pass 的 attachment，所以裸 `stepTo` 停在 pass 中间会读到未提交/全黑——这正是 `stepTo(end)` 被滥用导致「点哪个 draw 都看最终帧」的根因。返回 `{committed:false}` = 该 draw 在 depth-only / compute pass（无颜色 RT，渲染 no-rt 态）。单调前进，回看更早 draw 须先 `reset()`。**整帧**才用 `stepTo(events.length-1)`。CLI `inspect-offline` 与 viewer RtPanel 均已走此路。
-- **node-free 隔离**：`/capture-browser`、`/inspect-core`、`/rt-to-canvas` 皆零 `node:` / `pngjs` / `ws` 且**不进 barrel**，只能经 subpath 触达（保 tree-shake gate，见 §tree-shake 约束）。
+- **per-draw RT 必须 `commitThroughDraw(drawIdx)` 先步进**：看「draw #N 当时的画面」时，先 `replay.reset()` → `replay.commitThroughDraw(drawIdx)` 再 `inspectDrawJson`/`readbackDrawRt`/`renderRtToCanvas`。它重放到该 draw 并合成 `endRenderPass+finish+submit`，让 color attachment 拿到 **draw 0..N 累积**像素（选 N 看到的是执行到 N 那一刻，不是最终合成帧）。WebGPU 不能读进行中 pass 的 attachment，所以裸 `stepTo` 停在 pass 中间会读到未提交/全黑——这正是 `stepTo(end)` 被滥用导致「点哪个 draw 都看最终帧」的根因。返回 `{committed:false}` = 该 draw 在 depth-only / compute pass（无颜色 RT，渲染 no-rt 态）。单调前进，回看更早 draw 须先 `reset()`。**整帧**才用 `stepTo(events.length-1)`。CLI `inspect-offline` 与 viewer TextureViewer 均已走此路（viewer 的真实 RT/depth 渲染逻辑收进 TextureViewer，旧 RtPanel 已删）。
+- **node-free 隔离**：`/capture-browser`、`/inspect-core`、`/rt-to-canvas`、`/frame-model` 皆零 `node:` / `pngjs` / `ws` 且**不进 barrel**，只能经 subpath 触达（保 tree-shake gate，见 §tree-shake 约束）。
+- **整帧分析单一 SSOT（L3e）**：`buildFrameModel(tape)`（`/frame-model`，纯函数零 GPU）产出 viewer 与 CLI `summary` 共用的 `FrameModel`；它复用 `/inspect-core` 的 `scanPassStates` / `makePipelineState` / `buildResources` 原子，`inspect-core.inspectDrawJson` 也用同一组原子给每个 draw 挂 `pipelineState`。viewer 的 `apps/rhi-debug-viewer/src/viewer-model.ts` 只是 `/frame-model` 的薄 re-export（`ViewModel = FrameModel`）——UI 看到的整帧结构与 AI `cli.mjs summary` 输出**逐字段一致**（charter F1）。
 
 > 完整浏览器控制台 capture → replay → inspect 代码示例在 README §Browser inspect usage example。
 
@@ -151,14 +153,14 @@ flowchart LR
 
 ## L3d 离线 viewer 页面（dockview-based）
 
-> 最顶层 **L3d**：纯离线 web app 把一份截帧 tape 可视化成 RenderDoc 风格的四面板 dockview 工作区。**不需要游戏在跑**：拖 `frame-0.tape.bin` + `frame-0.report.json` 进去就能看。布局可 float / split / stack，持久化到 localStorage，支持 Reset Layout 恢复默认。
+> 最顶层 **L3d**：纯离线 web app 把一份截帧 tape 可视化成 RenderDoc 风格的四面板 dockview 工作区。**不需要游戏在跑**：把 `frame-0.tape.bin` + `frame-0.report.json` 拖到**窗口任意位置**即导入（也可点右上角 Import 按钮）。布局可 float / split / stack，持久化到 localStorage，支持 Reset Layout 恢复默认。整帧分析与 AI 的 `cli.mjs summary`（L3e）**共用同一 `buildFrameModel` SSOT**——UI 看到的结构就是 AI 能用 CLI 取到的结构（charter F1，monitor 式 CLI-unified）。
 
 | 属性 | 内容 |
 |:--|:--|
 | **入口** | `apps/rhi-debug-viewer/`（独立 Vite + React app） |
 | **启动** | `pnpm -F @forgeax/rhi-debug-viewer dev` → localhost:5173 |
-| **消费原语** | `deserializeTape` / `computePassOffsets` / `extractDrawInfo` / `createReplay` / `renderRtToCanvas` / `readbackTexturePixels` |
-| **浏览器依赖** | 纯事件面板（EventBrowser / PipelineState / ResourceInspector）零 GPU；TextureViewer 面板需 WebGPU（无 GPU 时 per-texture 降级） |
+| **消费原语** | `buildFrameModel`（`/frame-model`，整帧分析 SSOT）/ `deserializeTape` / `createReplay` / `renderRtToCanvas` / `readbackTexturePixels` |
+| **浏览器依赖** | 纯事件面板（EventBrowser / PipelineState / ResourceInspector）零 GPU；TextureViewer 面板需 WebGPU 才能渲染真实像素（无 GPU 时 per-texture 降级为 no-webgpu 文案） |
 | **tape 版本兼容** | viewer 读 `TAPE_FORMAT_VERSION` ∈ {2, 3}（`deserializeTape` 接受旧 v2 tape）。v2 tape 缺失的 v3 新事件（setBlendConstant / drawIndirect / pass-level debug group 等）视为「命令不存在」，对应面板区域呈空态而非报错 |
 
 ### 四面板 dockview 工作区
@@ -179,7 +181,7 @@ flowchart LR
 |:--|:--|:--|
 | **Event Browser** | `EventBrowser.tsx` | pass->draw 树 + 完整命令流（含非 draw 命令：setPipeline/setBindGroup/copy*/clearBuffer/debug marker）。非 draw 命令暗色小图标，draw 高亮。`pushDebugGroup`->`popDebugGroup` 形成可折叠嵌套。顶部 `draws only` / `all commands` 过滤开关，默认 `draws only` |
 | **Pipeline State** | `PipelineState.tsx` | 选中 draw 的完整管线状态，RenderDoc 式七阶段：IA（topology/index format）/ Vertex Input（per-slot buffer + layout）/ Shaders（vertex/fragment module handle + 内联展开 WGSL 源码）/ Rasterizer（cull mode/front face）/ Depth-Stencil（format/compare/stencil reference）/ Blend（per-target blend + blendConstant）/ Multisample（count/mask） |
-| **Texture Viewer** | `TextureViewer.tsx` | 左侧缩略图列表（color RT 0..N + depth-stencil + 绑定纹理）+ 右侧大图预览。depth 附件以 auto-normalize 灰度可视化（two-pass min/max 归一化 + 除零退化）。per-selection 一次性回读全部纹理，缩略图切换零额外 GPU。per-texture 退化矩阵（ok/no-rt/no-webgpu/error），单纹理失败不影响其余 |
+| **Texture Viewer** | `TextureViewer.tsx`（已吸收旧 RtPanel，旧文件已删） | 左侧缩略图列表（color RT 0..N + depth-stencil + 绑定纹理）+ 右侧 `<canvas>` **真实像素**预览。color RT 走 `ensureReplaySession`+`commitThroughDraw`+`renderRtToCanvas`；可 copy 的 depth（depth32float/depth16unorm）走 `readbackDepthTexture`+`normalizeDepth` 灰度。不可 copy 的 depth（depth24plus*）给出诚实说明（WebGPU 禁 copyTextureToBuffer，建议改用 depth32float 重截），不是裸红 error。canvas 带 `data-forgeax-rt-status` / `data-forgeax-rt-canvas` 锚点（smoke 据此验证真实出图）。per-texture 退化矩阵（ok/no-rt/no-webgpu/error），单纹理失败不影响其余 |
 | **Resource Inspector** | `ResourceInspector.tsx` | 全部 `create*` 资源描述符（Buffers/Textures/Samplers/BindGroupLayouts/PipelineLayouts/Pipelines/ShaderModules）。usage flags 解码为可读字符串。handle 显示为超链接，点击跳转并高亮匹配行。选中非 draw 命令时显示该命令的 src/dst 资源 |
 
 ### Dock 操作 + 布局持久化
@@ -193,23 +195,24 @@ flowchart LR
 
 | 概念 | 是什么 |
 |:--|:--|
-| **buildViewModel** | `Tape -> ViewModel` 纯函数（零 GPU）。预算阶段一次计算 `tree`（pass/draw 树）、`draws`（全部 draw/dispatch 信息）、`commands`（完整命令流，含非 draw）、`resources`（handleId -> 解析后 create* 描述符 Map）。惰性阶段（选中 draw）才跑 GPU readback 填 RT 像素 |
+| **buildViewModel / buildFrameModel** | viewer 的 `viewer-model.ts` 只是 `@forgeax/engine-rhi-debug/frame-model` 的薄 re-export（`buildViewModel = buildFrameModel`、`ViewModel = FrameModel`）。`Tape -> FrameModel` 纯函数（零 GPU）一次算 `tree`（pass/draw 树）、`draws`（含 `pipelineState`）、`commands`（完整命令流，含非 draw）、`resources`（handleId -> create* 描述符 Map）。**同一函数喂 CLI `summary`**——这是 UI/CLI 一致的根。选中 draw 后 TextureViewer 才跑 GPU readback 渲染真实像素 |
 | **Replay 会话** | `ensureReplaySession(tape)` 建一次独立 WebGPU 设备 + `createReplay`，跨 draw 重选复用（C7） |
 | **React Context** | `SelectionContext` 提供 `selectedDrawIdx` / `selectedCommandIdx`，四面板经 `useContext` 消费。选中 draw 刷新 Panel 2/3/4；选中非 draw 命令（如 copyBuffer）则 Panel 2/3 显示缺省文案，Panel 4 显示 src/dst 资源 |
 
 ### 工作流
 
 ```
-拖入 frame-0.tape.bin + frame-0.report.json
+窗口任意处拖入 frame-0.tape.bin + frame-0.report.json（或点 Header 的 Import）
   -> tape-source.ts pair 匹配 + 重建 {header,events} + deserializeTape
-  -> buildViewModel: computePassOffsets(events) 算树 + extractDrawInfo 算 draws
-     + 遍历 events 建 commands/commands[] 数组 + resources Map
-     + 逐 draw 提取 pipelineState（createRenderPipeline.desc）
-     + 逐 pass 收集 vertexBuffers/depthStencil
+  -> buildFrameModel（= /frame-model SSOT，CLI summary 同款）:
+       computePassOffsets 算树 + extractDrawInfo 算 draws
+     + scanPassStates/makePipelineState 逐 draw 挂 pipelineState（七阶段）
+     + buildResources 建 resources Map + 遍历 events 建 commands[]
   -> window.__forgeaxViewer = vm（零副本暴露同对象引用）
-  -> 默认首 draw 选中（data-forgeax-selected="true"）
+  -> tape 同时进 TapeContext（TextureViewer 据此自举 replay 渲染真实像素）
+  -> EventBrowser 自动选中首 draw（data-forgeax-selected="true"），无独立树面板
   -> 四面板联动：EventBrowser 选 draw -> PipelineState/TextureViewer/ResourceInspector 刷新
-  -> TextureViewer 选中 draw -> 一次性回读全部纹理（per-selection readback）
+  -> TextureViewer 选中缩略图 -> commitThroughDraw + renderRtToCanvas/depth readback 出图
 ```
 
 ### AI 操作 viewer：结构化数据通道 + 定位元素
@@ -227,7 +230,9 @@ flowchart LR
   - `data-forgeax-texture-viewer` — TextureViewer 面板容器
   - `data-forgeax-resource-inspector` — ResourceInspector 面板容器
   - `data-forgeax-command-row="<idx>"` — 命令流中第 idx 条命令行
+  - `data-forgeax-draw="<idx>"` — draws-only 模式第 idx 个 draw 行；当前选中行额外带 `data-forgeax-selected="true"`
   - `data-forgeax-texture-thumbnail="<idx>"` — 纹理缩略图第 idx
+  - `data-forgeax-rt-status="ok|no-rt|no-webgpu|error"` + `data-forgeax-rt-canvas`（预览 canvas）— TextureViewer 出图状态与画布
   - `data-forgeax-resource-row="<handleId>"` — 资源表中某 handle 对应行
 
 ### 退化矩阵
@@ -236,7 +241,7 @@ flowchart LR
 |:--|:--|:--|:--|
 | **loaded** | tape 成功加载 | 正常渲染 | per-texture status（见下） |
 | **parse-error** | `deserializeTape` 失败 / JSON 解析失败 | 不渲染（ErrorBanner 红条 + code/hint） | 不渲染 |
-| **empty** | 未拖入 tape | 空页（DropZone 可见） | 不渲染 |
+| **empty** | 未拖入 tape | 居中提示 + Import 按钮（无大块 DropZone；拖放命中整窗，拖拽时显示全屏 overlay） | 不渲染 |
 
 **Per-texture 退化（Texture Viewer，画板 3）：**
 
@@ -256,7 +261,9 @@ Single texture error does not affect other textures in the same draw.
 - **viewer 不走 `inspectDrawJson` 取 bindings**：`draws[].bindings` 由 `extractDrawInfo`（纯 events）在预算阶段填充，零 GPU。`inspectDrawJson` 只在 L3b 浏览器控制台手动 inspect 时用。
 - **report.json.passOffsets 不可信**：viewer 一律从 events 经 `computePassOffsets` 重算树结构（D-3），不读 report.json 里的 `passOffsets`（render-only，可能缺 compute pass）。
 - **shader 用 standalone `createShaderModule`**：viewer `replay-session.ts` 从 `@forgeax/engine-rhi-webgpu` import standalone `createShaderModule` 喂 `createReplay` 第三参——**不是**幽灵 `RhiDevice.createShaderModule`（fix-f3 已移除）。
-- **RT 面板独立 WebGPU 设备**：viewer 自己 `requestAdapter/requestDevice`，与被截帧的游戏无关。
+- **TextureViewer 独立 WebGPU 设备**：viewer 自己 `requestAdapter/requestDevice`，与被截帧的游戏无关；渲染逻辑在 TextureViewer（旧 RtPanel 已删）。
+- **viewer ↔ CLI 改一处动两处**：整帧分析在 `/frame-model`（包内），viewer 与 `cli.mjs summary` 共用。改 `FrameModel` 形状要同步 `viewer-model.ts` re-export 与 CLI `summary` 序列化（resources/vertexBuffers Map → 数组）。`InspectReport.pipelineState` 由 `inspect-core.inspectDrawJson` 用同组原子填充，改 `makePipelineState` 同时影响 viewer、`summary`、`inspect-offline`。
+- **TextureViewer 乐观初值**：`data-forgeax-rt-status` 在异步 replay 完成前先同步给乐观值（color-rt+WebGPU→ok），消费方再 poll canvas 像素确认真实出图——否则 smoke 一次性读到的是初始 `no-rt` 而误判 SKIP。
 
 ## 深入
 

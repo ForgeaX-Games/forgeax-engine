@@ -50,12 +50,12 @@ export function ErrorBanner({ error }: ErrorBannerProps) {
   return (
     <div
       {...{ [loadStatusAnchor()]: 'parse-error' }}
-      className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg p-4 space-y-1"
+      className="bg-danger/10 border border-danger/30 rounded-lg p-4 space-y-1"
     >
-      <p className="text-sm font-semibold text-red-700 dark:text-red-300">
-        Error: <code className="bg-red-100 dark:bg-red-900 px-1 rounded">{code}</code>
+      <p className="text-sm font-semibold text-danger">
+        Error: <code className="bg-danger/15 px-1 rounded">{code}</code>
       </p>
-      <p className="text-xs text-red-600 dark:text-red-400">{hint}</p>
+      <p className="text-xs text-danger/90">{hint}</p>
     </div>
   );
 }

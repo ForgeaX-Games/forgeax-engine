@@ -20,6 +20,7 @@ import {
   HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
   Transform,
 } from '@forgeax/engine-runtime';
 import type { MaterialAsset, SamplerAsset, TextureAsset } from '@forgeax/engine-types';
@@ -162,16 +163,38 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
     // Sprite material with non-zero slices -- this triggers the w11 mesh
     // routing override to HANDLE_NINESLICE_QUAD. paramValues includes
     // texture + sampler so the missing-texture debug-pink branch stays cold.
+    //
+    // feat-20260625-refactor-sprite-as-transparent-mesh M4 / w16 — updated
+    // to use the post-M2/M3 SSOT material shape:
+    //   - first-pass `transparent: true` flag (M2 / w6, Q3=b) drives the
+    //     LDR split + premultiplied-alpha blend pipeline (replaces the
+    //     legacy shadingModel='sprite' arm ablated in M3 / w15).
+    //   - paramValues field names are UBO-aligned to sprite.wgsl.meta.json
+    //     paramSchema (M3 / w11, D-4): `baseColorTexture` (was `texture`)
+    //     and `slicesAndMode` vec4 (was `slices` + `sliceMode` split).
+    // feat-20260626-sprite-transparent-collapse M1/M4: the boolean
+    // `transparent` field has collapsed into `renderState.blend` as the
+    // single asset-side SSOT; transparent routing now derives from
+    // `renderState.blend !== undefined`.
+    // The slices mesh routing decision (D-2 sentinel:
+    // HANDLE_QUAD -> HANDLE_NINESLICE_QUAD when slices != [0,0,0,0]) is
+    // unchanged; the record stage reads it via the materialShaderId ===
+    // 'forgeax::sprite' + non-zero `slicesAndMode.xyz` predicate.
     const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
       kind: 'material',
       passes: [
-        { name: 'Sprite', shader: 'forgeax::sprite', queue: 3000, tags: { LightMode: 'Forward' } },
+        {
+          name: 'Sprite',
+          shader: 'forgeax::sprite',
+          queue: 3000,
+          tags: { LightMode: 'Forward' },
+          renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+        },
       ],
       paramValues: {
-        texture: texHandle as unknown as string,
+        baseColorTexture: texHandle as unknown as string,
         sampler: samplerHandle as unknown as string,
-        slices: [0.25, 0.25, 0.25, 0.25],
-        sliceMode: 0,
+        slicesAndMode: [0.25, 0.25, 0.25, 0.25],
       },
     });
 

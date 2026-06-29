@@ -194,6 +194,9 @@ describe('[w13] EcsErrorCode union completeness — stale codes present', () => 
         case 'remove-essential-component':
         case 'scene-override-type-mismatch':
         case 'spawn-data-unknown-field':
+        case 'sprite-instances-count-mismatch':
+        case 'sprite-instances-requires-sprite-shader':
+        case 'sprite-instances-mutually-exclusive-with-instances':
           return code;
       }
     };

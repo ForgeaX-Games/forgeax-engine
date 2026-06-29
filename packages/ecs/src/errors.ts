@@ -1487,6 +1487,169 @@ export class SpawnDataUnknownFieldError extends Error {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M1 / w2 —
+// closed-union evolution +3 for the SpriteInstances primitive + tilemap
+// terrain static-batch path. AGENTS.md §Error model evolution contract: minor
+// (add member only).
+//
+// All 3 codes are DECLARED here (M1) but FIRED at the render-system-extract
+// queryRun callback (M3 w13) — plan-strategy D-6 "fail-fast at the render
+// domain entry, not at ECS spawn-time (avoids reverse dep ECS -> AssetRegistry
+// to look up MaterialAsset.shadingModel)". M1 carries class declarations only;
+// the `_routeError` call sites land in M3.
+//
+// Three codes, three failure shapes:
+//   - 'sprite-instances-count-mismatch' — transforms.length / 16 !==
+//     regions.length / 4 (stride contract; cf. instance-transforms-stride-
+//     mismatch which guards Instances stride 16).
+//   - 'sprite-instances-requires-sprite-shader' — the entity's MaterialAsset's
+//     first pass shader is not 'forgeax::sprite' (extract-time check; AI users
+//     using SpriteInstances must pick a sprite-shaded material).
+//   - 'sprite-instances-mutually-exclusive-with-instances' — the same entity
+//     carries both Instances + SpriteInstances (the two primitives are peers;
+//     SpriteInstances supersedes Instances when per-instance UV region is
+//     needed).
+//
+// .hint follows charter P3: each contains the literal repair step AI users
+// can paste back into spawn code (transforms/regions stride math; shading
+// model field write; component removal).
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Thrown / returned via Layer-3 error route when `SpriteInstances.transforms`
+ * (stride 16 — column-major mat4 per instance) and `SpriteInstances.regions`
+ * (stride 4 — per-instance UV vec4) instance counts disagree at render-system-
+ * extract entry.
+ *
+ * `.code = 'sprite-instances-count-mismatch'`
+ * `.detail = { transformsLength, regionsLength, expectedStride: { transforms: 16, regions: 4 } }`
+ * `.hint` — instructs the AI user to enforce
+ *   `transforms.length / 16 === regions.length / 4`.
+ */
+export class SpriteInstancesCountMismatchError extends Error {
+  override readonly name = 'SpriteInstancesCountMismatchError';
+  readonly code = 'sprite-instances-count-mismatch' as const;
+  readonly hint: string;
+  readonly expected: string;
+  readonly detail: {
+    readonly code: 'sprite-instances-count-mismatch';
+    readonly transformsLength: number;
+    readonly regionsLength: number;
+    readonly expectedStride: { readonly transforms: 16; readonly regions: 4 };
+  };
+
+  constructor(transformsLength: number, regionsLength: number) {
+    const hint =
+      'SpriteInstances.transforms (stride 16) and SpriteInstances.regions (stride 4) ' +
+      'must describe the same instance count: ensure transforms.length / 16 === regions.length / 4 ' +
+      'at the spawn / set site (resize both arrays together).';
+    const expected = 'transforms.length / 16 === regions.length / 4';
+    super(
+      `SpriteInstances: per-instance count mismatch between transforms and regions.\n` +
+        `  code: sprite-instances-count-mismatch\n` +
+        `  transformsLength: ${transformsLength} (count = ${transformsLength / 16})\n` +
+        `  regionsLength: ${regionsLength} (count = ${regionsLength / 4})\n` +
+        `  expected: ${expected}\n` +
+        `  hint: ${hint}`,
+    );
+    this.hint = hint;
+    this.expected = expected;
+    this.detail = {
+      code: 'sprite-instances-count-mismatch',
+      transformsLength,
+      regionsLength,
+      expectedStride: { transforms: 16, regions: 4 },
+    };
+  }
+}
+
+/**
+ * Thrown / returned via Layer-3 error route when an entity carrying
+ * `SpriteInstances` references a MaterialAsset whose first pass shader is not
+ * `'forgeax::sprite'`. Detected at render-system-extract entry (M3 w13).
+ *
+ * `.code = 'sprite-instances-requires-sprite-shader'`
+ * `.detail = { entityId, observedMaterialShaderId }`
+ * `.hint` — instructs the AI user to bind a MaterialAsset whose first pass
+ *   `shader` is `'forgeax::sprite'`.
+ */
+export class SpriteInstancesRequiresSpriteShaderError extends Error {
+  override readonly name = 'SpriteInstancesRequiresSpriteShaderError';
+  readonly code = 'sprite-instances-requires-sprite-shader' as const;
+  readonly hint: string;
+  readonly expected: string;
+  readonly detail: {
+    readonly code: 'sprite-instances-requires-sprite-shader';
+    readonly entityId: number;
+    readonly observedMaterialShaderId: string;
+  };
+
+  constructor(entityId: number, observedMaterialShaderId: string) {
+    const hint =
+      "bind a MaterialAsset whose first pass `shader` is 'forgeax::sprite' to this entity's " +
+      'MeshRenderer (SpriteInstances requires the sprite shader so the per-instance ' +
+      'UV region is consumed by the sprite vertex shader path).';
+    const expected = "MaterialAsset.passes[0].shader === 'forgeax::sprite'";
+    super(
+      `SpriteInstances: entity ${entityId} requires a sprite-shaded MaterialAsset.\n` +
+        `  code: sprite-instances-requires-sprite-shader\n` +
+        `  entityId: ${entityId}\n` +
+        `  observedMaterialShaderId: ${observedMaterialShaderId}\n` +
+        `  expected: ${expected}\n` +
+        `  hint: ${hint}`,
+    );
+    this.hint = hint;
+    this.expected = expected;
+    this.detail = {
+      code: 'sprite-instances-requires-sprite-shader',
+      entityId,
+      observedMaterialShaderId,
+    };
+  }
+}
+
+/**
+ * Thrown / returned via Layer-3 error route when the same entity carries both
+ * `Instances` (3D per-instance mat4) and `SpriteInstances` (2D per-instance
+ * mat4 + UV region). The two primitives are peers — pick one. Detected at
+ * render-system-extract entry (M3 w13).
+ *
+ * `.code = 'sprite-instances-mutually-exclusive-with-instances'`
+ * `.detail = { entityId }`
+ * `.hint` — instructs the AI user to remove one of the two components.
+ */
+export class SpriteInstancesMutuallyExclusiveWithInstancesError extends Error {
+  override readonly name = 'SpriteInstancesMutuallyExclusiveWithInstancesError';
+  readonly code = 'sprite-instances-mutually-exclusive-with-instances' as const;
+  readonly hint: string;
+  readonly expected: string;
+  readonly detail: {
+    readonly code: 'sprite-instances-mutually-exclusive-with-instances';
+    readonly entityId: number;
+  };
+
+  constructor(entityId: number) {
+    const hint =
+      'remove Instances or replace with SpriteInstances; SpriteInstances supersedes ' +
+      'Instances when per-instance region is needed.';
+    const expected = 'entity carries Instances XOR SpriteInstances (not both)';
+    super(
+      `SpriteInstances: entity ${entityId} carries both Instances and SpriteInstances.\n` +
+        `  code: sprite-instances-mutually-exclusive-with-instances\n` +
+        `  entityId: ${entityId}\n` +
+        `  expected: ${expected}\n` +
+        `  hint: ${hint}`,
+    );
+    this.hint = hint;
+    this.expected = expected;
+    this.detail = {
+      code: 'sprite-instances-mutually-exclusive-with-instances',
+      entityId,
+    };
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // EcsErrorCode closed union (w5)
 //
 // Merges every `.code` literal across the EcsError family. Downstream
@@ -1614,7 +1777,17 @@ export type EcsErrorCode =
   // path and producing invisible / mid-grey entities downstream. AI users
   // narrow on `.code` then read `.detail.field` for the offending key and
   // `.detail.knownFields` for the valid field whitelist.
-  | 'spawn-data-unknown-field';
+  | 'spawn-data-unknown-field'
+  // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M1 / w2 —
+  // SpriteInstances primitive + tilemap terrain static-batch path. Three
+  // codes declared together; fire path lands in M3 w13 at the
+  // render-system-extract queryRun callback. Minor evolution +3 per
+  // AGENTS.md §Error model evolution contract; plan-strategy D-6 keeps the
+  // detection in the render domain (not the ECS spawn path) to avoid an
+  // ECS -> AssetRegistry reverse dep for the shader-id lookup.
+  | 'sprite-instances-count-mismatch'
+  | 'sprite-instances-requires-sprite-shader'
+  | 'sprite-instances-mutually-exclusive-with-instances';
 
 /**
  * Discriminated `.detail` payload per `.code`.
@@ -1813,6 +1986,24 @@ export type EcsErrorDetail =
       readonly component: string;
       readonly field: string;
       readonly knownFields: readonly string[];
+    }
+  // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M1 / w2 —
+  // 3 discriminated detail variants for the SpriteInstances primitive
+  // (declared in M1, fired at render-system-extract entry in M3).
+  | {
+      readonly code: 'sprite-instances-count-mismatch';
+      readonly transformsLength: number;
+      readonly regionsLength: number;
+      readonly expectedStride: { readonly transforms: 16; readonly regions: 4 };
+    }
+  | {
+      readonly code: 'sprite-instances-requires-sprite-shader';
+      readonly entityId: number;
+      readonly observedMaterialShaderId: string;
+    }
+  | {
+      readonly code: 'sprite-instances-mutually-exclusive-with-instances';
+      readonly entityId: number;
     };
 
 // ────────────────────────────────────────────────────────────────────────────

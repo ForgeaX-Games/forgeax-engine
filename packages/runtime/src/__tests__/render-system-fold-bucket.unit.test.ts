@@ -48,19 +48,20 @@ function mockEntry(opts: {
 
 // Minimal renderable snapshot — only the world mat4 is consulted (for posZ
 // and for assembled transforms). Build an identity mat4 with a chosen tz.
-// PR #502 fix: foldDispatchBuckets now reads `material.shadingModel` to
-// gate fold to sprite entries only. The `shadingModel` parameter is a
-// 3-arity optional discriminator: omitted (arity=1) defaults to 'sprite'
-// so legacy basic-paths tests keep their fold-eligible behavior; passed
-// explicit values include `undefined` (standard-PBR carrier) which must
-// land as undefined in the renderable (do NOT collapse to default via
-// arity-2 default-parameter substitution).
+// PR #502 fix + feat-20260625 R2 fix-up: foldDispatchBuckets gates fold to
+// transparent entries (the M3 ablation collapsed `shadingModel === 'sprite'`
+// into `transparent === true` as the LDR-split-sub-pass discriminator). The
+// `transparent` parameter is a 3-arity optional flag: omitted (arity=1)
+// defaults to `true` so legacy basic-paths tests keep their fold-eligible
+// behavior; explicit values may pass `undefined` (non-transparent /
+// geometry-pass) which must land as undefined in the renderable (do NOT
+// collapse to default via arity-2 default-parameter substitution).
 function mockRenderable(
   tz: number,
-  ...rest: ['unlit' | 'sprite' | undefined] | []
+  ...rest: [true | undefined] | []
 ): {
   transform: { world: Float32Array };
-  material: { shadingModel: 'unlit' | 'sprite' | undefined };
+  material: { transparent?: true | undefined };
 } {
   const world = new Float32Array(16);
   world[0] = 1;
@@ -68,8 +69,8 @@ function mockRenderable(
   world[10] = 1;
   world[15] = 1;
   world[14] = tz; // posZ
-  const shadingModel = rest.length === 0 ? 'sprite' : rest[0];
-  return { transform: { world }, material: { shadingModel } };
+  const transparent = rest.length === 0 ? true : rest[0];
+  return { transform: { world }, material: { transparent } };
 }
 
 describe('foldDispatchBuckets — mode 0 basic paths (w1)', () => {
@@ -164,32 +165,36 @@ describe('foldDispatchBuckets — mode 0 basic paths (w1)', () => {
   });
 });
 
-// PR #502 hello-room CI red regression: geometry-pass entries (shadingModel
-// 'unlit' or undefined standard-PBR / skin) were folded into multi-entry
-// buckets when they shared (layer, posZ, materialHandle). The mesh-SSBO
-// upload loop then overwrote their slot with identity (because
-// `headBuckets.has(i)` was true), but the geometry-pass dispatch loop
-// does NOT branch on `headBuckets` — it kept emitting per-entity
-// drawIndexed which then read identity and rendered the 3D geometry at
-// the world origin, collapsing the frame to black.
+// PR #502 hello-room CI red regression + feat-20260625 R2 fix-up:
+// geometry-pass entries (non-transparent: standard-PBR / unlit / skin) were
+// folded into multi-entry buckets when they shared (layer, posZ,
+// materialHandle). The mesh-SSBO upload loop then overwrote their slot
+// with identity (because `headBuckets.has(i)` was true), but the
+// geometry-pass dispatch loop does NOT branch on `headBuckets` — it kept
+// emitting per-entity drawIndexed which then read identity and rendered
+// the 3D geometry at the world origin, collapsing the frame to black.
 //
-// The fix gates fold to sprite-shading-model entries at the bucket-key
-// level (`foldDispatchBuckets` itself), so non-sprite entries always
-// produce singleton buckets that `buildFoldDispatchPlan` filters out
-// from `headBuckets` / `skipIndices`. The mesh-SSBO upload loop then
-// keeps writing the entity's real world matrix for those slots, and
-// both dispatch loops behave byte-identically to the pre-fold path.
-describe('foldDispatchBuckets — sprite-only gate (PR #502 fix)', () => {
-  it('non-sprite (shadingModel=unlit) entries never form multi-entry buckets', () => {
+// The fix gates fold to transparent entries at the bucket-key level
+// (`foldDispatchBuckets` itself), so non-transparent entries always
+// produce singleton buckets that `buildFoldDispatchPlan` filters out from
+// `headBuckets` / `skipIndices`. The mesh-SSBO upload loop then keeps
+// writing the entity's real world matrix for those slots, and both
+// dispatch loops behave byte-identically to the pre-fold path.
+//
+// feat-20260625 R2 fix-up: the gate migrated from `shadingModel ===
+// 'sprite'` to `transparent === true` (the M3 ablation collapsed the
+// sprite discriminator into the generic transparent flag).
+describe('foldDispatchBuckets — transparent-only gate (PR #502 fix + feat-20260625 R2 fix-up)', () => {
+  it('non-transparent (unlit-shading) entries never form multi-entry buckets', () => {
     // 4 entries sharing (layer, posZ, materialHandle) — pre-fix would have
-    // folded into a single bucketSize=4 bucket. With the sprite-only gate
-    // they MUST each be their own singleton.
+    // folded into a single bucketSize=4 bucket. With the transparent-only
+    // gate they MUST each be their own singleton.
     const N = 4;
     const entries: DispatchEntry[] = [];
     const renderables: ReturnType<typeof mockRenderable>[] = [];
     for (let i = 0; i < N; i++) {
       entries.push(mockEntry({ renderableIndex: i, materialHandle: 7, layer: 0 }));
-      renderables.push(mockRenderable(1.0, 'unlit')); // <-- not sprite
+      renderables.push(mockRenderable(1.0, undefined)); // <-- not transparent
     }
 
     const buckets = foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Z, renderables);
@@ -200,7 +205,7 @@ describe('foldDispatchBuckets — sprite-only gate (PR #502 fix)', () => {
     }
   });
 
-  it('standard-PBR (shadingModel=undefined) entries never form multi-entry buckets', () => {
+  it('standard-PBR (non-transparent) entries never form multi-entry buckets', () => {
     // Standard / PBR materials carry shadingModel=undefined + materialShaderId
     // (feat-20260523-shader-template-instance-split M4-T05). They must also
     // stay singleton — same hello-room CI red root cause (sphereChild +
@@ -210,7 +215,7 @@ describe('foldDispatchBuckets — sprite-only gate (PR #502 fix)', () => {
     const renderables: ReturnType<typeof mockRenderable>[] = [];
     for (let i = 0; i < N; i++) {
       entries.push(mockEntry({ renderableIndex: i, materialHandle: 9, layer: 0 }));
-      renderables.push(mockRenderable(2.0, undefined)); // <-- not sprite
+      renderables.push(mockRenderable(2.0, undefined)); // <-- not transparent
     }
 
     const buckets = foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Z, renderables);
@@ -221,10 +226,10 @@ describe('foldDispatchBuckets — sprite-only gate (PR #502 fix)', () => {
     }
   });
 
-  it('mixed sprite + non-sprite entries: sprite run folds, non-sprite stays singleton', () => {
-    // Three sprite entries (fold-eligible) followed by three unlit (non-
-    // sprite). Result: 1 bucket of size 3 (the sprite run) + 3 singletons
-    // (one per unlit entry).
+  it('mixed transparent + non-transparent entries: transparent run folds, non-transparent stays singleton', () => {
+    // Three transparent entries (fold-eligible) followed by three non-
+    // transparent. Result: 1 bucket of size 3 (the transparent run) + 3
+    // singletons (one per non-transparent entry).
     const entries: DispatchEntry[] = [
       mockEntry({ renderableIndex: 0, materialHandle: 11, layer: 0 }),
       mockEntry({ renderableIndex: 1, materialHandle: 11, layer: 0 }),
@@ -234,29 +239,30 @@ describe('foldDispatchBuckets — sprite-only gate (PR #502 fix)', () => {
       mockEntry({ renderableIndex: 5, materialHandle: 11, layer: 0 }),
     ];
     const renderables: ReturnType<typeof mockRenderable>[] = [
-      mockRenderable(1.0, 'sprite'),
-      mockRenderable(1.0, 'sprite'),
-      mockRenderable(1.0, 'sprite'),
-      mockRenderable(1.0, 'unlit'),
-      mockRenderable(1.0, 'unlit'),
-      mockRenderable(1.0, 'unlit'),
+      mockRenderable(1.0, true),
+      mockRenderable(1.0, true),
+      mockRenderable(1.0, true),
+      mockRenderable(1.0, undefined),
+      mockRenderable(1.0, undefined),
+      mockRenderable(1.0, undefined),
     ];
 
     const buckets = foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Z, renderables);
 
     expect(buckets).toHaveLength(4);
-    expect(buckets[0]?.bucketSize).toBe(3); // sprite run
-    expect(buckets[1]?.bucketSize).toBe(1); // unlit singletons
+    expect(buckets[0]?.bucketSize).toBe(3); // transparent run
+    expect(buckets[1]?.bucketSize).toBe(1); // non-transparent singletons
     expect(buckets[2]?.bucketSize).toBe(1);
     expect(buckets[3]?.bucketSize).toBe(1);
   });
 
-  it('sprite run interrupted by non-sprite breaks fold even with matching key', () => {
-    // sprite, sprite, unlit, sprite — pre-fix the (layer, posZ, material)
-    // equality would have folded all four; the gate now splits at the
-    // unlit entry (forcing it singleton) and the trailing sprite starts a
-    // fresh head (which becomes a singleton bucket since the run ends
-    // immediately — no further matching entry follows in this fixture).
+  it('transparent run interrupted by non-transparent breaks fold even with matching key', () => {
+    // transparent, transparent, non-transparent, transparent — pre-fix the
+    // (layer, posZ, material) equality would have folded all four; the gate
+    // now splits at the non-transparent entry (forcing it singleton) and
+    // the trailing transparent starts a fresh head (which becomes a
+    // singleton bucket since the run ends immediately — no further matching
+    // entry follows in this fixture).
     const entries: DispatchEntry[] = [
       mockEntry({ renderableIndex: 0, materialHandle: 2, layer: 0 }),
       mockEntry({ renderableIndex: 1, materialHandle: 2, layer: 0 }),
@@ -264,17 +270,17 @@ describe('foldDispatchBuckets — sprite-only gate (PR #502 fix)', () => {
       mockEntry({ renderableIndex: 3, materialHandle: 2, layer: 0 }),
     ];
     const renderables: ReturnType<typeof mockRenderable>[] = [
-      mockRenderable(0.5, 'sprite'),
-      mockRenderable(0.5, 'sprite'),
-      mockRenderable(0.5, 'unlit'), // breaks the run
-      mockRenderable(0.5, 'sprite'),
+      mockRenderable(0.5, true),
+      mockRenderable(0.5, true),
+      mockRenderable(0.5, undefined), // breaks the run
+      mockRenderable(0.5, true),
     ];
 
     const buckets = foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Z, renderables);
 
     expect(buckets).toHaveLength(3);
-    expect(buckets[0]?.bucketSize).toBe(2); // sprite run [0,1]
-    expect(buckets[1]?.bucketSize).toBe(1); // unlit singleton [2]
-    expect(buckets[2]?.bucketSize).toBe(1); // sprite singleton [3]
+    expect(buckets[0]?.bucketSize).toBe(2); // transparent run [0,1]
+    expect(buckets[1]?.bucketSize).toBe(1); // non-transparent singleton [2]
+    expect(buckets[2]?.bucketSize).toBe(1); // transparent singleton [3]
   });
 });

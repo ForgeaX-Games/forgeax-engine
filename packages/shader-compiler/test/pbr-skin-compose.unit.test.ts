@@ -58,7 +58,7 @@ describe('T-32 — default-standard-pbr-skin.wgsl compose test', () => {
     const r = await compileShader(source, {
       id: srcPath,
       imports: engineImports,
-      defines: { STORAGE_BUFFER_AVAILABLE: true },
+      defines: { STORAGE_BUFFER_AVAILABLE: true, PER_INSTANCE_REGION: false },
     });
     if (!r.ok) {
       throw new Error(`compileShader failed: ${r.error.message}\nhint: ${r.error.hint}`);

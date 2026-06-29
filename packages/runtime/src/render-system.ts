@@ -83,7 +83,7 @@ import { urpPipeline } from './urp-pipeline';
  * | 3 (DISTANCE)  | `-(dist² from camera)` ASC (back-to-front, layer ignored) |
  *
  * `posX/Y/Z` = translation column of the entity's world mat4 (indices 12/13/14).
- * `pivotY` = `RenderableSnapshot.material.spriteFields.pivot[1]` (default 0.5).
+ * `pivotY` = `RenderableSnapshot.material.paramSnapshot.pivotAndSize[1]` (default 0.5).
  * `sizeY`  = length of the Y-axis column of the world mat4 (indices 4/5/6).
  */
 function sortTransparentDispatch(
@@ -139,8 +139,12 @@ function sortTransparentDispatch(
       const posZ = (w?.[14] ?? 0) as number;
       if (mode === TRANSPARENT_SORT_MODE_LAYER_Z) return posZ;
       const mat = renderables[entry.renderableIndex]?.material;
-      const pivotY = ((mat?.spriteFields?.pivot as readonly number[] | undefined)?.[1] ??
-        0.5) as number;
+      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w15: post
+      // SpriteFieldsSnapshot ablation, pivot lives in paramSnapshot
+      // .pivotAndSize[0..1] (UBO-aligned vec4 slot 2, plan D-6). Non-sprite
+      // materials carry paramSnapshot=undefined and fall back to 0.5.
+      const pivotAndSize = mat?.paramSnapshot?.pivotAndSize as readonly number[] | undefined;
+      const pivotY = (pivotAndSize?.[1] ?? 0.5) as number;
       const wy4 = (w?.[4] ?? 0) as number;
       const wy5 = (w?.[5] ?? 1) as number;
       const wy6 = (w?.[6] ?? 0) as number;
@@ -419,6 +423,15 @@ export interface RenderSystemRuntime {
     // antialias setting). Default 1 preserves byte-identity of every
     // pre-M2 cache slot + descriptor.
     sampleCount?: number,
+    // feat-20260625-refactor-sprite-as-transparent-mesh R2 fix-up:
+    // LDR-color override for sub-passes whose attachment view is not the
+    // sRGB swap-chain view (LDR sprite split sub-pass writes through the
+    // storage / non-sRGB view of the same texture so premultiplied-alpha
+    // blends correctly). Threaded into the cache key + PSO descriptor.
+    // Undefined preserves the default sRGB view used by the geometry +
+    // tonemap + skybox callers. Ignored when `isHdr=true` or
+    // `passKind='shadow-caster'`.
+    colorFormatOverride?: GPUTextureFormat,
   ) => RenderPipeline | null;
   /**
    * feat-20260527 M2 / w7: schema lookup for material param overlay.
@@ -716,8 +729,15 @@ export interface PipelineState {
    */
   readonly unlitPipelineMsaa: RenderPipeline | null;
   readonly standardPipelineMsaa: RenderPipeline | null;
-  readonly spritePipelineMsaa: RenderPipeline | null;
-  readonly spritePipelineHdrMsaa: RenderPipeline | null;
+  // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w14 (D-7 / AC-12):
+  // the four sprite-dedicated PSO fields are gone — sprite PSO now flows
+  // through `runtime.getMaterialShaderPipeline('forgeax::sprite', ...)`
+  // keyed on the premultiplied-alpha renderState the record stage
+  // assembles for any transparent material (plan-strategy D-7). Concept
+  // count -4 fields on PipelineState; sprite's "is a transparent mesh"
+  // story is told entirely by the generic cache + `material.transparent`
+  // (derived by the extract stage from `passes[0].renderState.blend !==
+  // undefined`, the post-feat-20260626-collapse SSOT).
   readonly unlitPipelineHdrMsaa: RenderPipeline | null;
   readonly standardPipelineHdrMsaa: RenderPipeline | null;
   /**
@@ -786,36 +806,6 @@ export interface PipelineState {
    * hard-disabled, mirroring the prior stub field's gating).
    */
   readonly skinPaletteAllocator: SkinPaletteAllocator | null;
-  /**
-   * Sprite alpha-blend pipeline pair (feat-20260520-2d-sprite-layer-mvp
-   * M-3 / w24 + @new-surface). Mirrors `unlitPipeline` / `standardPipeline`
-   * shape: same 4-BindGroupLayout chain, same 12-float vertex stride, same
-   * `pipelineLayoutResult` reference. The differences are:
-   *
-   *   - module = sprite.wgsl (4th engine entry; w20 vite-plugin-shader
-   *     registration; sprite material reads colorTint / region /
-   *     pivotAndSize uniforms + baseColor sampler + texture; the 4 unused
-   *     binding-3..6 slots bind `defaultSampler` + `defaultWhiteTextureView`
-   *     in the record stage via plan-strategy D-1 candidate (b)).
-   *   - blend = premultiplied alpha (`one` / `one-minus-src-alpha`); sprite
-   *     fragment emits premultiplied RGB so over-composite math is direct.
-   *   - depthWriteEnabled = false; depthCompare = 'less-equal'. The
-   *     transparent bucket runs back-to-front (post-sort, w23 CPU sort)
-   *     under depth test only — the opaque bucket already wrote depth
-   *     correctly so sprites occlude what is behind but do not write depth
-   *     themselves (transparent layering convention).
-   *
-   * Routing: the record stage picks `spritePipeline` (LDR) when the active
-   * camera carries `tonemap === 'none'` and `spritePipelineHdr` (HDR) when
-   * `tonemap !== 'none'` — same gate the unlit / standard HDR siblings use.
-   *
-   * Null when the manifest carries the pre-feat 3-tuple (legacy back-compat
-   * — apps that pinned manifest URL pre-feat-20260520 keep working without
-   * sprite render; spawning a sprite material in that build raises
-   * `shader-compile-failed` via the record stage's null-narrow path).
-   */
-  readonly spritePipeline: RenderPipeline | null;
-  readonly spritePipelineHdr: RenderPipeline | null;
   // 1x1 white texture view (feat-20260518 M3 / w13 + AC-06): seeds the
   // baseColorTexture (binding 2) and metallicRoughnessTexture (binding 4)
   // entries when the schema-driven MaterialAsset paramValues omit the optional textures.

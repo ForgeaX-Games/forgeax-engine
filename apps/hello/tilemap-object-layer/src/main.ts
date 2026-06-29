@@ -46,6 +46,7 @@ import {
   HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
   TileLayer,
   Tilemap,
   Transform,
@@ -197,14 +198,19 @@ async function main(): Promise<void> {
     {
       kind: 'material',
       passes: [
-        { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000 },
+        // feat-20260626-sprite-transparent-collapse M3 — post M1/M2 SSOT:
+        // `renderState.blend` drives LDR split + premultiplied-alpha
+        // pipeline routing (preset `SPRITE_PREMULTIPLIED_ALPHA_BLEND`).
+        { name: 'Forward', shader: 'forgeax::sprite', tags: { LightMode: 'Forward' }, queue: 3000, renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND } },
       ],
       paramValues: {
-        baseColor: [1, 1, 1, 1],
-        texture: atlasA,
+        // feat-20260625 M3 / w11 (D-4): UBO-aligned field names 1:1 with
+        // sprite.wgsl.meta.json paramSchema.
+        colorTint: [1, 1, 1, 1],
+        baseColorTexture: atlasA,
         sampler: samplerHandle,
         region: [0, 0, 1, 1],
-        pivot: [0.5, 0.5],
+        pivotAndSize: [0.5, 0.5, 1, 1],
       },
     },
   );

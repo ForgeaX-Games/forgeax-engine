@@ -29,16 +29,67 @@ import * as path from 'node:path';
 import type { RhiDevice } from '@forgeax/engine-rhi';
 import { defaultConnect } from '@forgeax/engine-types/inspector-client';
 import { DebugError } from './errors';
+import { buildFrameModel } from './frame-model';
 import { findEventIdxForDraw } from './inspect-core';
 import { inspectAt as inspectAtCore } from './inspector';
 import type { CreateShaderModuleFn } from './recorder';
 import { createReplay } from './replayer';
 import { deserializeTape } from './tape-format';
-import type { InspectFields, InspectReport } from './types';
+import type { InspectFields, InspectReport, Tape } from './types';
 
 type OfflineResult =
   | { readonly ok: true; readonly value: { readonly report: InspectReport } }
   | { readonly ok: false; readonly error: DebugError };
+
+/**
+ * Read an on-disk L1 tape pair (frame-0.tape.bin + frame-0.report.json) from
+ * `tapePath` and reassemble it via deserializeTape. Shared by runOfflineInspectAt
+ * (replay path) and runSummary (pure path) so the two-file read schema has one
+ * SSOT (mirror of adapter.ts:inspectAt on-disk schema, derive-don't-duplicate
+ * read side). Returns the existing DebugError union on any read/parse failure.
+ */
+function loadTapeFromDisk(
+  tapePath: string,
+): { readonly ok: true; readonly tape: Tape } | { readonly ok: false; readonly error: DebugError } {
+  let blobBuf: Buffer;
+  let reportRaw: string;
+  try {
+    blobBuf = fs.readFileSync(tapePath);
+    const reportPath = tapePath.replace(/\.tape\.bin$/, '.report.json');
+    reportRaw = fs.readFileSync(reportPath, 'utf-8');
+  } catch (e) {
+    return {
+      ok: false,
+      error: new DebugError({
+        code: 'tape-format-version-mismatch',
+        expected: 'frame-0.tape.bin + frame-0.report.json present at the tape path',
+        hint: `failed to read tape files for '${tapePath}': ${e instanceof Error ? e.message : String(e)}`,
+      }),
+    };
+  }
+
+  let reportObj: { header: unknown; events: unknown };
+  try {
+    reportObj = JSON.parse(reportRaw) as { header: unknown; events: unknown };
+  } catch {
+    return {
+      ok: false,
+      error: new DebugError({
+        code: 'tape-format-version-mismatch',
+        expected: 'a parseable JSON report file alongside the tape binary',
+        hint: `failed to parse the .report.json for '${tapePath}'`,
+      }),
+    };
+  }
+
+  const json = JSON.stringify({ header: reportObj.header, events: reportObj.events });
+  const blob = new Uint8Array(blobBuf.buffer, blobBuf.byteOffset, blobBuf.byteLength).slice();
+  const tapeResult = deserializeTape(json, blob);
+  if (!tapeResult.ok) {
+    return { ok: false, error: tapeResult.error };
+  }
+  return { ok: true, tape: tapeResult.value };
+}
 
 // ============================================================================
 // Help text generation
@@ -115,6 +166,31 @@ export function getInspectOfflineHelp(): string {
     'Output:',
     '  JSON InspectReport with frameIdx, drawIdx, passIdx, bindings, drawCall, and rt (PNG path).',
     '  Requires an importable dawn-node backend (@forgeax/engine-rhi-webgpu or -rhi-wgpu).',
+  ].join('\n');
+}
+
+/**
+ * Summary help text with flag table and example invocation.
+ */
+export function getSummaryHelp(): string {
+  return [
+    'Usage: summary <tapePath>',
+    '',
+    'Print the whole-frame structural model of an on-disk tape WITHOUT a running',
+    'engine and WITHOUT a GPU device. Reads frame-0.tape.bin + frame-0.report.json',
+    'and emits the same FrameModel the viewer renders: pass/draw tree, per-draw',
+    'pipeline state (7 stages), bindings, draw call, resources, and the full',
+    'command stream.',
+    '',
+    'Arguments:',
+    '  tapePath     Path to the .tape.bin file (its .report.json sits alongside).',
+    '',
+    'Example:',
+    '  forgeax-rhi-debug summary .forgeax-debug/<runId>/frame-0.tape.bin',
+    '',
+    'Output:',
+    '  JSON FrameModel with meta (totalDraws/totalPasses/hasCompute), tree, draws',
+    '  (each with pipelineState), commands, and resources.',
   ].join('\n');
 }
 
@@ -446,46 +522,12 @@ export async function runOfflineInspectAt(opts: {
     createShaderModule ??= pack.createShaderModule;
   }
 
-  // Reassemble the deserializeTape JSON form from the two L1 files (mirror of
-  // adapter.ts:inspectAt on-disk schema, derive-don't-duplicate read side).
-  let blobBuf: Buffer;
-  let reportRaw: string;
-  try {
-    blobBuf = fs.readFileSync(opts.tapePath);
-    const reportPath = opts.tapePath.replace(/\.tape\.bin$/, '.report.json');
-    reportRaw = fs.readFileSync(reportPath, 'utf-8');
-  } catch (e) {
-    return {
-      ok: false,
-      error: new DebugError({
-        code: 'tape-format-version-mismatch',
-        expected: 'frame-0.tape.bin + frame-0.report.json present at the tape path',
-        hint: `failed to read tape files for '${opts.tapePath}': ${e instanceof Error ? e.message : String(e)}`,
-      }),
-    };
+  // Read the two L1 files via the shared SSOT loader (D-1).
+  const tapeLoad = loadTapeFromDisk(opts.tapePath);
+  if (!tapeLoad.ok) {
+    return { ok: false, error: tapeLoad.error };
   }
-
-  let reportObj: { header: unknown; events: unknown };
-  try {
-    reportObj = JSON.parse(reportRaw) as { header: unknown; events: unknown };
-  } catch {
-    return {
-      ok: false,
-      error: new DebugError({
-        code: 'tape-format-version-mismatch',
-        expected: 'a parseable JSON report file alongside the tape binary',
-        hint: `failed to parse the .report.json for '${opts.tapePath}'`,
-      }),
-    };
-  }
-
-  const json = JSON.stringify({ header: reportObj.header, events: reportObj.events });
-  const blob = new Uint8Array(blobBuf.buffer, blobBuf.byteOffset, blobBuf.byteLength).slice();
-  const tapeResult = deserializeTape(json, blob);
-  if (!tapeResult.ok) {
-    return { ok: false, error: tapeResult.error };
-  }
-  const tape = tapeResult.value;
+  const tape = tapeLoad.tape;
 
   const replayResult = createReplay(tape, device, createShaderModule);
   if (!replayResult.ok) {
@@ -540,6 +582,42 @@ export async function runOfflineInspectAt(opts: {
 }
 
 // ============================================================================
+// Summary entry (whole-frame FrameModel, pure — no device, no replay)
+// ============================================================================
+
+type SummaryResult =
+  | { readonly ok: true; readonly value: string }
+  | { readonly ok: false; readonly error: DebugError };
+
+/**
+ * Read an on-disk L1 tape and return the JSON of buildFrameModel(tape) — the
+ * same whole-frame model the viewer renders. Pure: no GPU device, no replay
+ * (D-1 SSOT: buildFrameModel is the shared analysis). The `resources` map is
+ * serialized as a plain array of descriptors (Map has no JSON form).
+ */
+export function runSummary(opts: { readonly tapePath: string }): SummaryResult {
+  const tapeLoad = loadTapeFromDisk(opts.tapePath);
+  if (!tapeLoad.ok) {
+    return { ok: false, error: tapeLoad.error };
+  }
+
+  const model = buildFrameModel(tapeLoad.tape);
+  // Map -> array so JSON.stringify keeps the resources (Map serializes to {}).
+  // vertexBuffers (per-draw Map<number, HandleId>) likewise -> entries array.
+  const wire = {
+    meta: model.meta,
+    tree: model.tree,
+    draws: model.draws.map((d) => ({
+      ...d,
+      vertexBuffers: Array.from(d.vertexBuffers.entries()),
+    })),
+    commands: model.commands,
+    resources: Array.from(model.resources.values()),
+  };
+  return { ok: true, value: JSON.stringify(wire, null, 2) };
+}
+
+// ============================================================================
 // Main CLI entry (parseArgs-style dispatch)
 // ============================================================================
 
@@ -552,7 +630,7 @@ export async function runOfflineInspectAt(opts: {
  *   node cli.mjs inspect-offline <tapePath> 42 --fields=bindings,rt
  */
 const USAGE =
-  'Usage: rhi-debug-cli <capture-frame|inspect-at|inspect-offline|trigger-browser> [args...]\n';
+  'Usage: rhi-debug-cli <capture-frame|inspect-at|inspect-offline|summary|trigger-browser> [args...]\n';
 
 export async function main(argv: string[]): Promise<void> {
   const args = argv.slice(2); // skip node and script path
@@ -570,6 +648,8 @@ export async function main(argv: string[]): Promise<void> {
     await inspectAtDispatch(args.slice(1));
   } else if (subcommand === 'inspect-offline') {
     await inspectOfflineDispatch(args.slice(1));
+  } else if (subcommand === 'summary') {
+    summaryDispatch(args.slice(1));
   } else if (subcommand === 'trigger-browser') {
     await triggerBrowserDispatch(args.slice(1));
   } else {
@@ -761,6 +841,48 @@ async function inspectOfflineDispatch(args: string[]): Promise<void> {
     process.exit(1);
   }
   process.stdout.write(JSON.stringify(result.value.report, null, 2));
+  process.stdout.write('\n');
+}
+
+/**
+ * Parse summary arguments and dispatch.
+ *
+ * Single positional <tapePath>, no flags (pure read; no device, no fields
+ * selector — the whole frame model is always emitted). Prints the FrameModel
+ * JSON to stdout, or the DebugError code + hint to stderr (exit 1).
+ */
+function summaryDispatch(args: string[]): void {
+  let tapePath: string | undefined;
+
+  for (const arg of args) {
+    if (arg === '--help' || arg === '-h') {
+      process.stdout.write(getSummaryHelp());
+      process.stdout.write('\n');
+      process.exit(0);
+    }
+    if (!arg.startsWith('--')) {
+      if (tapePath === undefined) {
+        tapePath = arg;
+        continue;
+      }
+      process.stderr.write(`Unknown extra argument: ${arg}\n`);
+      process.exit(1);
+    }
+    process.stderr.write(`Unknown argument: ${arg}\n`);
+    process.exit(1);
+  }
+
+  if (tapePath === undefined) {
+    process.stderr.write('Missing required argument: <tapePath>\n');
+    process.exit(1);
+  }
+
+  const result = runSummary({ tapePath });
+  if (!result.ok) {
+    process.stderr.write(`Error: [${result.error.code}] ${result.error.hint}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(result.value);
   process.stdout.write('\n');
 }
 

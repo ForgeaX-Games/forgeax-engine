@@ -768,7 +768,20 @@ export interface MaterialPassDescriptor {
   readonly defines?: Record<string, string>;
   /** Free key-value tags for pass routing via {@link PassSelector}. Default: `{}`. */
   readonly tags?: Record<string, string>;
-  /** Per-pass GPU pipeline render state overrides. Default: engine defaults (D-2). */
+  /**
+   * Per-pass GPU pipeline render state overrides. Default: engine defaults (D-2).
+   *
+   * The presence of `renderState.blend` is the SSOT for transparent routing:
+   * the runtime derives `MaterialSnapshot.transparent` from
+   * `passes[0].renderState?.blend !== undefined`, drives the LDR-split
+   * sub-pass + premultiplied-alpha composite + back-to-front sort, and
+   * folds the geometry into the transparent bucket. AI users opt into
+   * transparency by assigning a {@link MaterialBlendState} on `blend`
+   * (recommended preset: `SPRITE_PREMULTIPLIED_ALPHA_BLEND` from
+   * `@forgeax/engine-runtime` for sprite atlases / PNGs with
+   * premultiplied alpha) — no separate boolean flag exists; omit `blend`
+   * for opaque.
+   */
   readonly renderState?: MaterialRenderState;
   /** Sort key for the single dispatch list. Default: {@link RenderQueue.Geometry} (2000). */
   readonly queue?: number;

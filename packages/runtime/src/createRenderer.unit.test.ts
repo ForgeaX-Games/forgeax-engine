@@ -115,20 +115,26 @@ describe('cacheKeyOf 5-input functional equivalence (M2-T2-TEST)', () => {
       cullMode: 'none',
     };
 
-    const spec = makeSpec('forgeax::default-sprite', false, blendState, 'triangle-list');
+    // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w10:
+    // sprite PSO id is now the single `forgeax::sprite` (the double-id
+    // `forgeax::default-sprite` boot-time pre-warm path is gone in
+    // AC-12 / w14). makeSpec is shader-id-agnostic; the cache-key test
+    // still exercises blend / cullMode / msaa axes around the same
+    // generic cache key formula.
+    const spec = makeSpec('forgeax::sprite', false, blendState, 'triangle-list');
     const key = cacheKeyOf(spec);
 
     expect(key).toBeTypeOf('string');
     expect(key.length).toBeGreaterThan(0);
     expect(cacheKeyOf(spec)).toBe(key);
 
-    // Different renderState → different key.
-    const specNoBlend = makeSpec('forgeax::default-sprite', false);
+    // Different renderState -> different key.
+    const specNoBlend = makeSpec('forgeax::sprite', false);
     expect(cacheKeyOf(specNoBlend)).not.toBe(key);
 
-    // Different cullMode → different key.
+    // Different cullMode -> different key.
     const specBackCull: PipelineSpec = {
-      ...makeSpec('forgeax::default-sprite', false),
+      ...makeSpec('forgeax::sprite', false),
       renderState: { cullMode: 'back' },
     };
     expect(cacheKeyOf(specBackCull)).not.toBe(key);

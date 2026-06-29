@@ -1244,10 +1244,15 @@ const TRI_GEOMETRY = {
 const URP_PBR_VARIANT_SET = 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true';
 
 /**
- * Build the boot-time pre-warm table: 19 standard PipelineSpec variants.
+ * Build the boot-time pre-warm table: 15 standard PipelineSpec variants.
+ *
+ * feat-20260625-refactor-sprite-as-transparent-mesh M3 / w14 (AC-12): the
+ * four `forgeax::default-sprite` entries (LDR S1 + LDR S4 + HDR S1 + HDR S4)
+ * are gone — sprite PSO lands lazily through the generic
+ * per-MaterialShader pipeline cache. Pre-feat count was 19; post-feat 15.
  *
  * Matrix:
- *   - 12 base material variants — {unlit, standard-pbr, sprite} x {LDR, HDR} x {S1, S4}
+ *   - 8 base material variants — {unlit, standard-pbr} x {LDR, HDR} x {S1, S4}
  *   - 4 URP-variant standard-pbr — standard-pbr (variantSet=URP_PBR_VARIANT_SET)
  *     x {LDR, HDR} x {S1, S4}; URP record path requests these specs by
  *     `getMaterialShaderPipeline` keying off `cacheKeyOf` so the boot-time
@@ -1255,11 +1260,11 @@ const URP_PBR_VARIANT_SET = 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAI
  *     async-compile skip-draw (M6 fix-up; see render-system-record.ts §URP)
  *   - 3 fullscreen-post — tonemap (LDR S1) + skybox (HDR S1, HDR S4)
  *
- * Total: 19. The URP variant is PBR-only because:
+ * Total: 15. The URP variant is PBR-only because:
  *   - unlit URP record path passes `variantSet=undefined` (the no-variant
  *     boot-default entries already cover it; createRenderer.ts §unlitRsp)
- *   - sprite path doesn't go through `getMaterialShaderPipeline` at all
- *     (`selectGeometryPipeline('sprite', …)` reads `pipelineState.spritePipeline*`)
+ *   - sprite goes through `getMaterialShaderPipeline('forgeax::sprite', ...)`
+ *     lazily at first transparent-LDR-split draw — no boot-time pre-warm.
  *   - HDRP variant (`variantSet=''` or compound `=true` form) is registered
  *     lazily on `installPipeline(hdrpAsset)`, not at boot — adding HDRP
  *     prewarm here would build PSOs against the URP layout (the boot-time
@@ -1282,7 +1287,6 @@ const URP_PBR_VARIANT_SET = 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAI
  */
 export function buildSpecConstTable(
   ldrViewFormat: GPUTextureFormat,
-  ldrStorageFormat: GPUTextureFormat = ldrViewFormat,
 ): readonly Readonly<PipelineSpec>[] {
   const TRI_ATTACHMENTS_LDR_S1 = {
     colorFormats: [ldrViewFormat],
@@ -1296,24 +1300,18 @@ export function buildSpecConstTable(
     sampleCount: 4 as const,
   };
 
-  // Sprite LDR pass writes the raw (non-srgb) storage view of the swap-chain
-  // texture (`ldrSpriteUnormView` in render-system-record.ts); pre-multiplied
-  // alpha blending operates in linear-encoded storage so geometry-pass-encoded
-  // pixels compose correctly. Pre-feat the sprite PSO target was wired to
-  // `swapChainFormats.storage` directly (createRenderer.ts pre-feat line 5155);
-  // these dedicated attachments preserve that contract end-to-end through the
-  // SPEC_CONST table (bug-20260616 fix-up).
-  const SPRITE_ATTACHMENTS_LDR_S1 = {
-    colorFormats: [ldrStorageFormat],
-    depthFormat: DEPTH_DS,
-    sampleCount: 1 as const,
-  };
-
-  const SPRITE_ATTACHMENTS_LDR_S4 = {
-    colorFormats: [ldrStorageFormat],
-    depthFormat: DEPTH_DS,
-    sampleCount: 4 as const,
-  };
+  // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w14 (AC-12 / D-7):
+  // SPRITE_ATTACHMENTS_LDR_S1 / S4 (the dedicated non-srgb storage-format
+  // attachments the sprite spec entries consumed) were deleted alongside the
+  // four `forgeax::default-sprite` SPEC_CONST entries. The bgra8unorm storage
+  // format itself is still enforced at the LDR sprite sub-pass attachment
+  // level (the WebGPU pipeline `colorFormats` derive from the actual render
+  // pass attachment view, which is built off `pipelineState.format` =
+  // swap-chain storage format — see `render-system-record.ts` LDR split
+  // beginRenderPass call). The triggering source migrated from the
+  // spec-table id to `material.transparent` (derived by the extract stage
+  // from `passes[0].renderState.blend !== undefined`, the
+  // post-feat-20260626-collapse SSOT; w7 onwards).
 
   const TRI_ATTACHMENTS_HDR_S1 = {
     colorFormats: [HDR_FORMAT],
@@ -1438,74 +1436,12 @@ export function buildSpecConstTable(
       renderState: undefined,
     },
 
-    // sprite LDR S1 (storage / non-srgb format; matches sprite-pass attachment
-    // view created from raw swap-chain view — see SPRITE_ATTACHMENTS jsdoc above)
-    // feat-20260608 M2 m2-t6 (D-8): cullMode 'none' — H/V flip via negative
-    // scaleX/scaleY (tilemap per-cell entity TRS) inverts winding; 'back' would
-    // cull the flipped quad. Alpha-blend transparent bucket runs back-to-front
-    // already, so 'none' adds no overdraw cost.
-    {
-      shader: { id: 'forgeax::default-sprite', passKind: 'forward', variantSet: undefined },
-      attachments: SPRITE_ATTACHMENTS_LDR_S1,
-      geometry: TRI_GEOMETRY,
-      renderState: {
-        depthWriteEnabled: false,
-        depthCompare: 'less-equal',
-        cullMode: 'none',
-        blend: {
-          color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-        },
-      },
-    },
-    // sprite LDR S4 (storage / non-srgb format; see comment above)
-    // feat-20260608 M2 m2-t6 (D-8): same cullMode 'none' rationale as LDR S1.
-    {
-      shader: { id: 'forgeax::default-sprite', passKind: 'forward', variantSet: undefined },
-      attachments: SPRITE_ATTACHMENTS_LDR_S4,
-      geometry: TRI_GEOMETRY,
-      renderState: {
-        depthWriteEnabled: false,
-        depthCompare: 'less-equal',
-        cullMode: 'none',
-        blend: {
-          color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-        },
-      },
-    },
-    // sprite HDR S1
-    // feat-20260608 M2 m2-t6 (D-8): same cullMode 'none' rationale as LDR S1.
-    {
-      shader: { id: 'forgeax::default-sprite', passKind: 'forward', variantSet: undefined },
-      attachments: TRI_ATTACHMENTS_HDR_S1,
-      geometry: TRI_GEOMETRY,
-      renderState: {
-        depthWriteEnabled: false,
-        depthCompare: 'less-equal',
-        cullMode: 'none',
-        blend: {
-          color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-        },
-      },
-    },
-    // sprite HDR S4
-    // feat-20260608 M2 m2-t6 (D-8): same cullMode 'none' rationale as LDR S1.
-    {
-      shader: { id: 'forgeax::default-sprite', passKind: 'forward', variantSet: undefined },
-      attachments: TRI_ATTACHMENTS_HDR_S4,
-      geometry: TRI_GEOMETRY,
-      renderState: {
-        depthWriteEnabled: false,
-        depthCompare: 'less-equal',
-        cullMode: 'none',
-        blend: {
-          color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-        },
-      },
-    },
+    // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w14 (AC-12 / D-7):
+    // the four `forgeax::default-sprite` boot-time pre-warm entries (LDR S1
+    // + LDR S4 + HDR S1 + HDR S4) are gone. Sprite PSO lands lazily through
+    // the generic per-MaterialShader pipeline cache keyed on
+    // `forgeax::sprite` + premultiplied-alpha renderState; SPEC_CONST_TABLE
+    // shrinks from 19 to 15 entries (-4 boot-time PSOs).
 
     // ── M2-T4: fullscreen-post boot-time pre-warm (tonemap + skybox) ──────────
     //

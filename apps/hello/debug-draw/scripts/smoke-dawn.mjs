@@ -42,7 +42,7 @@ const WIDTH = 256;
 const HEIGHT = 256;
 const CLEAR_RGBA = [0, 0, 0, 1];
 const TOTAL_PIXELS = WIDTH * HEIGHT;
-const FRAMES = 300;
+const FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
 const FOREGROUND_CHANNEL_MIN = 24;
 
 const FALSIFY = process.env.FALSIFY ?? '';

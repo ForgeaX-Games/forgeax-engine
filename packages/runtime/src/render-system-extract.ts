@@ -103,13 +103,15 @@ import {
   InstanceTransformsStrideMismatchError,
   queryRun,
   Severity,
+  SpriteInstancesCountMismatchError,
+  SpriteInstancesMutuallyExclusiveWithInstancesError,
+  SpriteInstancesRequiresSpriteShaderError,
 } from '@forgeax/engine-ecs';
 import { box3, frustum, type Mat4, mat4, type Vec3, vec3 } from '@forgeax/engine-math';
 import { RhiError } from '@forgeax/engine-rhi';
 import type {
   Asset,
   Handle,
-  MaterialAsset,
   MaterialRenderState,
   MeshAsset,
   SkeletonAsset,
@@ -131,6 +133,7 @@ import {
   Skylight,
   SortKey,
   SpotLight,
+  SpriteInstances,
   SpriteRegionOverride,
   Transform,
 } from './components';
@@ -549,6 +552,26 @@ export interface RenderableSnapshot {
    */
   readonly instances?: InstancesSnapshot;
   /**
+   * feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 / w10
+   * (plan-strategy D-1 + D-9): when the entity carries a `SpriteInstances`
+   * component the extract stage materialises a paired snapshot — packed mat4
+   * `transforms` (16 f32, stride 16) + per-instance UV `regions` (4 f32,
+   * stride 4) — plus the same cache fingerprint pair (`cacheKey` = entity
+   * packed u32, `archVersion` = archetype version stamp at snapshot time).
+   * The record stage interleaves the two arrays into an 80B-per-instance
+   * single GPU buffer routed through `@group(3) @binding(0)` (BGL unchanged,
+   * D-1). Absent (`undefined`) means the entity is not a `SpriteInstances`
+   * carrier; the record stage falls back to its existing sprite path
+   * (material UBO region + identity-instance buffer).
+   *
+   * Three structured `EcsError` codes fire at extract entry and skip the
+   * renderable on violation (charter P3 explicit failure):
+   *   - `'sprite-instances-mutually-exclusive-with-instances'`
+   *   - `'sprite-instances-requires-sprite-shading-model'`
+   *   - `'sprite-instances-count-mismatch'`
+   */
+  readonly spriteInstances?: SpriteInstancesSnapshot;
+  /**
    * feat-20260523-skin-skeleton-animation M2 / T-21: when the entity carries
    * a `Skin` component the extract stage populates this field with the
    * skin palette slice metadata. The record stage uses this to route the
@@ -606,6 +629,37 @@ export interface InstancesSnapshot {
 }
 
 /**
+ * feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 / w10:
+ * extract-stage view of a `SpriteInstances` carrier (2D peer of
+ * `InstancesSnapshot`).
+ *
+ * Field shapes mirror `InstancesSnapshot` so the record-stage cache protocol
+ * (`(cacheKey, archVersion, byteLength)` fingerprint triple) is reused
+ * verbatim. The byte length consumed at upload time is the sum
+ * `transforms.byteLength + regions.byteLength` (= 80*N for N instances,
+ * plan-strategy D-1 interleaved single-buffer); the record stage builds the
+ * 80B/instance interleaved buffer once per (entity, archVersion, byteLength)
+ * fingerprint change.
+ */
+export interface SpriteInstancesSnapshot {
+  /** Packed column-major mat4 transforms (16 f32 per instance, stride 16). */
+  readonly transforms: Float32Array;
+  /** Per-instance UV vec4 regions (4 f32 per instance, stride 4). */
+  readonly regions: Float32Array;
+  /**
+   * Number of instances. Derived from `transforms.length / 16` (equivalently
+   * `regions.length / 4`); the extract-entry validator guarantees the two
+   * derivations agree, otherwise it fires
+   * `'sprite-instances-count-mismatch'` and skips the renderable.
+   */
+  readonly instanceCount: number;
+  /** Stable per-entity GPU buffer cache key (the packed Entity u32, D-9). */
+  readonly cacheKey: number;
+  /** Archetype version stamp at snapshot time (cache invalidation fingerprint). */
+  readonly archVersion: number;
+}
+
+/**
  * TransformSnapshot: extract-stage view of one entity's resolved world
  * transform (feat-20260601 D-3). Holds the single `world` mat4 (column-major
  * 16 floats, copied from the entity's `Transform.world` view written by
@@ -644,23 +698,24 @@ export interface MaterialSnapshot {
   readonly metallic: number;
   readonly roughness: number;
   /**
-   * Discriminator into the record-stage pipeline pick. feat-20260520-2d-
-   * sprite-layer-mvp M-3 / w21: closure widened 2 -> 3 to include
-   * `'sprite'`; the matching {@link MaterialPipelineTag} closure +1
-   * (`'sprite'`) drives record-stage pipeline selection (charter P3
-   * explicit failure - `switch (s.shadingModel)` exhaustive guards stay
-   * sync via the never-typed default arm).
+   * Discriminator into the record-stage pipeline pick. Closed union
+   * `'unlit' | undefined`:
    *
-   * Sprite-specific fields (`colorTint.a` / `region` / `pivot` / flip
-   * pair) live on {@link spriteFields}; opaque-bucket entries leave
-   * `spriteFields` undefined.
+   * - `'unlit'` — engine-shipped unlit material (default-unlit shader);
+   *   shadow-caster default-material variant also tags this.
+   * - `undefined` — every other shaderId (PBR / sprite / user shaders);
+   *   record routes via {@link materialShaderId} + paramSnapshot.
    *
-   * feat-20260523-shader-template-instance-split M4-T05: 'standard'
-   * variant removed from the snapshot union — standard materials now
-   * carry materialShaderId + paramSnapshot instead. The shadingModel
-   * field stays 'unlit' | 'sprite' for backward-compat routing.
+   * feat-20260625-refactor-sprite-as-transparent-mesh M3 / w15 (D-3 / AC-01):
+   * the `'sprite'` member is gone — sprite materials carry
+   * `shadingModel: undefined` + `materialShaderId === 'forgeax::sprite'`
+   * (Δ-concept-count: closed union members 3 -> 2).
+   *
+   * feat-20260523-shader-template-instance-split M4-T05: 'standard' was
+   * already removed (standard materials carry materialShaderId +
+   * paramSnapshot instead).
    */
-  readonly shadingModel: 'unlit' | 'sprite' | undefined;
+  readonly shadingModel: 'unlit' | undefined;
   /**
    * Schema-driven material shader identifier (feat-20260523 M4-T05).
    * Populated when the material asset uses the schema-driven path
@@ -715,8 +770,8 @@ export interface MaterialSnapshot {
   readonly sampler?: Handle<'SamplerAsset', 'shared'> | undefined;
   /**
    * PBR metallic-roughness texture handle (standard shadingModel only).
-   * Undefined for `'unlit'` / `'sprite'` shading models. The record stage
-   * reads this to write GPU view at material bind-group binding 4, falling
+   * Undefined for `'unlit'` shading models. The record stage reads
+   * this to write GPU view at material bind-group binding 4, falling
    * back to a 1x1 white placeholder when undefined.
    *
    * feat-20260522-learn-render-3-1-sponza-model-loading-with-multi-l M4:
@@ -727,8 +782,8 @@ export interface MaterialSnapshot {
   readonly metallicRoughnessTexture?: Handle<'TextureAsset', 'shared'> | undefined;
   /**
    * PBR tangent-space normal texture handle (standard shadingModel only).
-   * Undefined for `'unlit'` / `'sprite'` shading models. The record stage
-   * reads this to write GPU view at material bind-group binding 6, falling
+   * Undefined for `'unlit'` shading models. The record stage reads
+   * this to write GPU view at material bind-group binding 6, falling
    * back to a (0.5,0.5,1.0) flat-normal placeholder when undefined.
    *
    * feat-20260522-learn-render-3-1-sponza-model-loading-with-multi-l M4:
@@ -742,68 +797,29 @@ export interface MaterialSnapshot {
   readonly occlusionTexture?: Handle<'TextureAsset', 'shared'> | undefined;
   readonly occlusionStrength?: number | undefined;
   /**
-   * Sprite-only POD fields the record stage needs to write the sprite
-   * material UBO without re-fetching {@link MaterialAsset} from the
-   * registry (feat-20260520-2d-sprite-layer-mvp R1 F-1: closes the
-   * `internals.assets.get<MaterialAsset>` regrowth on record-side that
-   * tripped the AC-07 reverse-grep gate). Always populated when
-   * `shadingModel === 'sprite'`; always undefined for `'unlit'` /
-   * `'standard'`. Pipeline Isolation: extract owns the
-   * `SpriteMaterialAsset` to {@link SpriteFieldsSnapshot} translation;
-   * record consumes the POD only.
-   */
-  readonly spriteFields?: SpriteFieldsSnapshot | undefined;
-}
-
-/**
- * Sprite-specific snapshot fields lifted off {@link SpriteMaterialAsset}
- * at extract time so the record stage writes the sprite Material UBO
- * (48 B layout — colorTint vec4 + region vec4 + pivotAndSize vec4)
- * without reaching back into the asset registry. Mirrors the
- * `SpriteMaterialAsset` field semantics:
- *
- * - `colorTintAlpha`: `SpriteMaterialAsset.colorTint[3]` (the rgb side
- *   already lives on {@link MaterialSnapshot.baseColor}; alpha lifted
- *   separately so record reads one POD).
- * - `region`: `[uMin, vMin, uW, vH]` (shader does `uv * region.zw +
- *   region.xy`).
- * - `pivot`: `[x, y]` in unit-quad space (used by both the vertex
- *   `(uv - pivot) * size` recentering and the transparent-sort
- *   foot-Y formula).
- * - `flipX` / `flipY`: UV flip booleans (vertex stage; record folds
- *   them into the region tuple before upload).
- *
- * feat-20260520-2d-sprite-layer-mvp R1 F-1 (review round 1): introduced
- * to remove the record-side `internals.assets.get<MaterialAsset>`
- * regrowth + the O(n^2) `transparentDispatch` back-scan that fronted it.
- */
-export interface SpriteFieldsSnapshot {
-  readonly colorTintAlpha: number;
-  readonly region: readonly [number, number, number, number];
-  readonly pivot: readonly [number, number];
-  readonly flipX: boolean;
-  readonly flipY: boolean;
-  /**
-   * 9-slice anchors `[left, top, right, bottom]` in region-local UV space
-   * (feat-20260527-sprite-nineslice / M2 / w10, plan-strategy §D-3).
+   * Transparent composition flag derived from the first pass's
+   * `renderState.blend` presence on the underlying
+   * {@link MaterialPassDescriptor} (feat-20260626-collapse M2: blend
+   * presence is the SSOT after `MaterialPassDescriptor.transparent` was
+   * dropped in M1).
    *
-   * - All-zero (`[0, 0, 0, 0]`) is the legacy sprite path (`HANDLE_QUAD`,
-   *   no 9-slice geometry).
-   * - Non-zero entries activate the `HANDLE_NINESLICE_QUAD` mesh + 9-region
-   *   vertex shader path; the four anchors split the source region into
-   *   four corners + four edges + one centre.
-   * - Tile mode (`sliceMode === 1`) encodes the sentinel by negating
-   *   `slices.w` (`[left, top, right, -bottom]`); the shader recovers the
-   *   magnitude with `abs()` and uses the sign to dispatch tile vs stretch.
+   * The record stage reads this to drive both the LDR split-pass
+   * decision and the premultiplied-alpha blend resolution on the
+   * generic materialShaderId pipeline path — shader-agnostic, decoupled
+   * from `shadingModel` (feat-20260625 M2 D-3, finalised in w15).
+   *
+   * Extract derives this from the first pass's `renderState.blend !==
+   * undefined` (post-feat-20260626-collapse: blend presence is the
+   * single SSOT for "this material is transparent on the geometry
+   * pipeline cache key"). Multi-pass materials whose mix of opaque +
+   * transparent passes need finer routing should split into separate
+   * MaterialAsset entries (the normal forgeax pattern).
+   *
+   * Type is `boolean | undefined` (derived): `undefined` means "no
+   * passes / unknown"; consumers must read `=== true` / `!== true` to
+   * stay correct under both populated and absent cases.
    */
-  readonly slices?: readonly [number, number, number, number];
-  /**
-   * Slice mode discriminator: `0` = stretch (linear interpolate edges /
-   * centre), `1` = tile (sampler.repeat hardware wrap; sampler must declare
-   * `addressModeU/V === 'repeat'` or D-9 fires a metrics counter at register
-   * time). Default `0`.
-   */
-  readonly sliceMode?: number;
+  readonly transparent?: boolean | undefined;
 }
 
 // === DispatchEntry — M3 / w26 single dispatch list (feat-20260526-material-asset-multipass-renderstate) ===
@@ -2243,7 +2259,16 @@ export function extractFrame(
 
   const meshRendererQuery = createQueryState({
     with: [MeshRenderer, Entity],
-    optional: [Transform, MeshFilter, Instances, Skin, Layer, SortKey, SpriteRegionOverride],
+    optional: [
+      Transform,
+      MeshFilter,
+      Instances,
+      Skin,
+      Layer,
+      SortKey,
+      SpriteRegionOverride,
+      SpriteInstances,
+    ],
   });
   const graph = worldInternal._getGraph();
   queryRun(meshRendererQuery, world, (bundle) => {
@@ -2265,6 +2290,16 @@ export function extractFrame(
     const hasMeshFilter = bundle.MeshFilter !== undefined;
     const hasInstances = bundle.Instances !== undefined;
     const hasSkin = bundle.Skin !== undefined;
+    // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 / w10:
+    // SpriteInstances optional component archetype-edge sniff. Three structured
+    // EcsError codes fire at the row-loop entry (D-6 fail-fast at extract):
+    //   - 'sprite-instances-mutually-exclusive-with-instances'
+    //       (hasInstances && hasSpriteInstances) — Instances + SpriteInstances peers.
+    //   - 'sprite-instances-requires-sprite-shading-model'
+    //       (materialSnap.shadingModel !== 'sprite') — non-sprite material.
+    //   - 'sprite-instances-count-mismatch'
+    //       (transforms.length / 16 !== regions.length / 4) — stride pair desync.
+    const hasSpriteInstances = bundle.SpriteInstances !== undefined;
     const isRenderable = hasTransform && hasMeshFilter;
 
     // feat-20260601 D-3: the resolved world transform is read per-entity from
@@ -2551,10 +2586,16 @@ export function extractFrame(
               }
             }
           }
-          // feat-20260527 M3 / w10: sprite materials are now pass-based
-          // (plan-strategy D-3). The extract stage recognizes
-          // 'forgeax::sprite' and produces shadingModel='sprite' +
-          // spriteFields so the record stage pipeline routing is unchanged.
+          // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w12 (D-3):
+          // sprite materials now flow through the same generic paramSchema-
+          // driven extract path PBR / unlit use. The narrow `forgeax::sprite`
+          // exception block below covers exactly 2 plan-authorised cases:
+          //   1. SpriteRegionOverride per-entity region displacement (Q4=a)
+          //   2. flipX / flipY -> region fold (plan-strategy D-8)
+          // No legacy paramValues field-name shim; demos and SpriteParamValues
+          // are UBO-aligned (no `texture` / `baseColor` / `pivot` / `slices`
+          // / `sliceMode` keys reaching this code path). AGENTS.md §Change
+          // stance: "no shim layer, no v1/v2 dual-path".
           const isSprite = firstPassShader === 'forgeax::sprite';
           const inferredShadingModel: 'unlit' | undefined =
             firstPassShader === 'forgeax::default-unlit' ? 'unlit' : undefined;
@@ -2673,20 +2714,29 @@ export function extractFrame(
           );
           const emissivePv = pv.emissive as readonly number[] | undefined;
 
+          // feat-20260625 M2 / w6: first-pass transparency flag folds into
+          // MaterialSnapshot.transparent so the record stage can drive the
+          // LDR split + premultiplied-alpha blend decision without
+          // re-reading passes[]. feat-20260626-collapse M2: derive from
+          // `passes[0].renderState.blend !== undefined` (blend presence is
+          // the SSOT after MaterialPassDescriptor.transparent was dropped).
+          // Result is plain boolean (always defined here) — written as-is
+          // into the snapshot (`boolean | undefined` field, see L759).
+          const firstPassTransparent: boolean = allPasses[0]?.renderState?.blend !== undefined;
+
+          // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w12 (D-8):
+          // narrow `forgeax::sprite` extract block --- folds the legacy user
+          // paramValues format (flipX / flipY / slices / sliceMode + free
+          // region / pivot) into the UBO-aligned paramSnapshot vec4 fields
+          // (region / pivotAndSize / slicesAndMode + colorTint). Also folds
+          // per-entity SpriteRegionOverride (Q4=a). After this block the
+          // generic else branch picks up the snapshot via the same writer
+          // path PBR / unlit use; no more shadingModel='sprite' arm, no
+          // spriteFields POD (AC-02 / AC-07: extract has exactly 2 hard
+          // `forgeax::sprite` checks --- this fold + the slices mesh swap on
+          // the record side).
           if (isSprite) {
-            // Sprite pass-based material: read spriteFields from paramValues
-            // (plan-strategy D-3/D-7). Record stage still routes on
-            // shadingModel='sprite' and reads spriteFields for UBO layout.
-            const tex = resolveParamHandle(pv.texture, 'TextureAsset');
-            const smp = resolveParamHandle(pv.sampler, 'SamplerAsset');
-            // feat-20260527-sprite-nineslice M4 / w17 (AC-14): per-entity
-            // SpriteRegionOverride displaces the asset-side region. Read the
-            // 4 floats via `_getArrayView` for the row-window slice (the
-            // bundle path now exposes the full stride-4 flat view post
-            // bug-20260612, but `_getArrayView` keeps the row-accessor
-            // contract uniform with variable-length array reads). Asset-side
-            // fallback is `pv.region`; default is the unit rectangle
-            // [0, 0, 1, 1].
+            // SpriteRegionOverride: per-entity per-frame region displacement.
             let overrideRegion: readonly [number, number, number, number] | undefined;
             if (hasSpriteRegionOverride) {
               const overrideView = worldInternal._getArrayView(
@@ -2703,91 +2753,72 @@ export function extractFrame(
                 ];
               }
             }
-            const reg =
-              overrideRegion !== undefined
-                ? overrideRegion
-                : (pv.region as readonly number[] | undefined);
-            const pvt = pv.pivot as readonly number[] | undefined;
+            // Region resolution priority: SpriteRegionOverride > paramSnapshot.
+            // region (UBO-aligned user input) > [0,0,1,1] identity.
+            const regionPv = paramSnap.region as readonly number[] | undefined;
+            let regionX = overrideRegion?.[0] ?? regionPv?.[0] ?? 0;
+            let regionY = overrideRegion?.[1] ?? regionPv?.[1] ?? 0;
+            let regionZ = overrideRegion?.[2] ?? regionPv?.[2] ?? 1;
+            let regionW = overrideRegion?.[3] ?? regionPv?.[3] ?? 1;
+            // flipX / flipY fold into region (D-8): the shader does
+            // `uv * region.zw + region.xy`, so flipping along U is a sign
+            // negation of region.z plus an origin offset.
             const flipXPv = typeof pv.flipX === 'number' ? pv.flipX : 0;
             const flipYPv = typeof pv.flipY === 'number' ? pv.flipY : 0;
-            // feat-20260527-sprite-nineslice M2 / w10: pass 9-slice
-            // anchors + sliceMode through (plan-strategy §D-3 sentinel
-            // encoding — sliceMode=1 negates slices.w so the shader can
-            // distinguish tile vs stretch with a single sign check).
-            const slicesPv = pv.slices as readonly number[] | undefined;
-            const sliceModePv = typeof pv.sliceMode === 'number' ? pv.sliceMode : 0;
-            const sliceLeft = slicesPv?.[0] ?? 0;
-            const sliceTop = slicesPv?.[1] ?? 0;
-            const sliceRight = slicesPv?.[2] ?? 0;
-            const sliceBottomAbs = slicesPv?.[3] ?? 0;
-            const sliceBottom = sliceModePv === 1 ? -sliceBottomAbs : sliceBottomAbs;
-            const slices: readonly [number, number, number, number] = [
-              sliceLeft,
-              sliceTop,
-              sliceRight,
-              sliceBottom,
-            ];
-            materialSnap = {
-              baseColor,
-              metallic: 0,
-              roughness: 1,
-              shadingModel: 'sprite',
-              baseColorTexture: tex,
-              sampler: smp,
-              spriteFields: {
-                colorTintAlpha: baseColorPv?.[3] ?? 1,
-                region: [reg?.[0] ?? 0, reg?.[1] ?? 0, reg?.[2] ?? 1, reg?.[3] ?? 1] as readonly [
-                  number,
-                  number,
-                  number,
-                  number,
-                ],
-                pivot: [pvt?.[0] ?? 0.5, pvt?.[1] ?? 0.5],
-                flipX: flipXPv !== 0,
-                flipY: flipYPv !== 0,
-                slices,
-                sliceMode: sliceModePv,
-              },
-            };
-          } else {
-            materialSnap = {
-              baseColor,
-              metallic: metallicPv,
-              roughness: roughnessPv,
-              shadingModel: inferredShadingModel,
-              materialShaderId: firstPassShader,
-              paramSnapshot: paramSnap,
-              ...(textureHandles.size > 0 && { textureHandles }),
-              ...(videoTextureFields.size > 0 && { videoTextureFields }),
-              ...(baseColorTextureHandle !== undefined && {
-                baseColorTexture: baseColorTextureHandle,
-              }),
-              ...(metallicRoughnessTextureHandle !== undefined && {
-                metallicRoughnessTexture: metallicRoughnessTextureHandle,
-              }),
-              ...(normalTextureHandle !== undefined && { normalTexture: normalTextureHandle }),
-              ...(samplerHandle !== undefined && { sampler: samplerHandle }),
-              ...(emissivePv !== undefined && {
-                emissive: [emissivePv[0] ?? 0, emissivePv[1] ?? 0, emissivePv[2] ?? 0] as readonly [
-                  number,
-                  number,
-                  number,
-                ],
-              }),
-              ...(typeof pv.emissiveIntensity === 'number' && {
-                emissiveIntensity: pv.emissiveIntensity,
-              }),
-              ...(emissiveTextureHandle !== undefined && {
-                emissiveTexture: emissiveTextureHandle,
-              }),
-              ...(occlusionTextureHandle !== undefined && {
-                occlusionTexture: occlusionTextureHandle,
-              }),
-              ...(typeof pv.occlusionStrength === 'number' && {
-                occlusionStrength: pv.occlusionStrength,
-              }),
-            };
+            if (flipXPv !== 0) {
+              regionX += regionZ;
+              regionZ = -regionZ;
+            }
+            if (flipYPv !== 0) {
+              regionY += regionW;
+              regionW = -regionW;
+            }
+            paramSnap.region = [regionX, regionY, regionZ, regionW] as unknown as number[];
           }
+
+          // Generic materialShaderId snapshot --- sprite included now flows
+          // through this single branch (plan-strategy D-3 / AC-01 / AC-02 /
+          // AC-07). The sprite block above only writes paramSnap.region (D-8
+          // SpriteRegionOverride + flip fold); the rest of the UBO is filled
+          // by the same paramSchema-driven path PBR / unlit use.
+          materialSnap = {
+            baseColor,
+            metallic: metallicPv,
+            roughness: roughnessPv,
+            shadingModel: inferredShadingModel,
+            materialShaderId: firstPassShader,
+            paramSnapshot: paramSnap,
+            ...(textureHandles.size > 0 && { textureHandles }),
+            ...(videoTextureFields.size > 0 && { videoTextureFields }),
+            ...(baseColorTextureHandle !== undefined && {
+              baseColorTexture: baseColorTextureHandle,
+            }),
+            ...(metallicRoughnessTextureHandle !== undefined && {
+              metallicRoughnessTexture: metallicRoughnessTextureHandle,
+            }),
+            ...(normalTextureHandle !== undefined && { normalTexture: normalTextureHandle }),
+            ...(samplerHandle !== undefined && { sampler: samplerHandle }),
+            ...(emissivePv !== undefined && {
+              emissive: [emissivePv[0] ?? 0, emissivePv[1] ?? 0, emissivePv[2] ?? 0] as readonly [
+                number,
+                number,
+                number,
+              ],
+            }),
+            ...(typeof pv.emissiveIntensity === 'number' && {
+              emissiveIntensity: pv.emissiveIntensity,
+            }),
+            ...(emissiveTextureHandle !== undefined && {
+              emissiveTexture: emissiveTextureHandle,
+            }),
+            ...(occlusionTextureHandle !== undefined && {
+              occlusionTexture: occlusionTextureHandle,
+            }),
+            ...(typeof pv.occlusionStrength === 'number' && {
+              occlusionStrength: pv.occlusionStrength,
+            }),
+            transparent: firstPassTransparent,
+          };
 
           // Build dispatch entries from resolved passes.
           if (isRenderable) {
@@ -3023,6 +3054,87 @@ export function extractFrame(
             materialsArr.push(resolveMaterialSnapshot(subHandle, world, assets, gpuStore));
           }
         }
+
+        // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 /
+        // w10: SpriteInstances validation + snapshot materialisation.
+        // Three structured EcsError fires at this single point (plan-strategy
+        // D-6 "fail-fast at the render domain entry, not at ECS spawn-time"):
+        let spriteInstancesSnap: SpriteInstancesSnapshot | undefined;
+        if (hasSpriteInstances) {
+          // (1) mutually exclusive with Instances (peers — pick one).
+          if (hasInstances) {
+            worldInternal._routeError(
+              new SpriteInstancesMutuallyExclusiveWithInstancesError(
+                entity as unknown as number,
+              ) as unknown as Error,
+              {
+                severity: Severity.Error,
+                systemName: 'RenderSystem.extract (sprite-instances-mutually-exclusive)',
+              },
+            );
+            continue;
+          }
+          // (2) requires sprite shader — the per-instance UV region is
+          // consumed by the sprite vertex shader path only (plan-strategy D-4
+          // axis on sprite.wgsl). Post-collapse (PR #520): sprite is no longer
+          // a `shadingModel` enum member; identification is via the first-pass
+          // `materialShaderId === 'forgeax::sprite'` (OOS-1 path retained).
+          if (materialSnap.materialShaderId !== 'forgeax::sprite') {
+            worldInternal._routeError(
+              new SpriteInstancesRequiresSpriteShaderError(
+                entity as unknown as number,
+                materialSnap.materialShaderId ?? 'undefined',
+              ) as unknown as Error,
+              {
+                severity: Severity.Error,
+                systemName: 'RenderSystem.extract (sprite-instances-requires-sprite-shader)',
+              },
+            );
+            continue;
+          }
+          // (3) count mismatch — transforms.length / 16 === regions.length / 4
+          // (transforms.length=0 + regions.length=0 is the zero-instance lawful
+          // boundary; both derivations are 0 and equality holds, so no fire).
+          const spriteRes = world.get(entity, SpriteInstances);
+          if (spriteRes.ok) {
+            const transforms = spriteRes.value.transforms;
+            const regions = spriteRes.value.regions;
+            const transformsLength = transforms.length;
+            const regionsLength = regions.length;
+            // Stride sanity: transforms must be mod 16, regions must be mod 4.
+            // A stride violation expresses as a count mismatch under the
+            // canonical derivation transforms/16 vs regions/4 — fire the
+            // count-mismatch code (the same code carries detail.expectedStride).
+            const tCount = transformsLength / 16;
+            const rCount = regionsLength / 4;
+            if (transformsLength % 16 !== 0 || regionsLength % 4 !== 0 || tCount !== rCount) {
+              worldInternal._routeError(
+                new SpriteInstancesCountMismatchError(
+                  transformsLength,
+                  regionsLength,
+                ) as unknown as Error,
+                {
+                  severity: Severity.Error,
+                  systemName: 'RenderSystem.extract (sprite-instances-count-mismatch)',
+                },
+              );
+              continue;
+            }
+            // Validation passes — build the snapshot. transforms.length === 0
+            // is lawful (zero-instance) and produces instanceCount=0; the
+            // record stage skips drawIndexed when instanceCount===0.
+            const transformsCopy = new Float32Array(transforms);
+            const regionsCopy = new Float32Array(regions);
+            spriteInstancesSnap = {
+              transforms: transformsCopy,
+              regions: regionsCopy,
+              instanceCount: tCount,
+              cacheKey: entity as unknown as number,
+              archVersion,
+            };
+          }
+        }
+
         const baseRenderable: RenderableSnapshot = {
           assetHandle: Math.round(fAssetHandle?.get(i) ?? 0),
           transform: transformSnap,
@@ -3030,6 +3142,7 @@ export function extractFrame(
           materials: materialsArr,
           entityKey: 0,
           ...(skinSlice !== undefined ? { skin: skinSlice } : {}),
+          ...(spriteInstancesSnap !== undefined ? { spriteInstances: spriteInstancesSnap } : {}),
         };
 
         // feat-20260528-frustum-culling M3 / w10: frustum culling check.

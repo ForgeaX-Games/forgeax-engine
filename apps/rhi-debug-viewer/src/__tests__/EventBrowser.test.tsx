@@ -322,6 +322,49 @@ describe('AC-14: draw and non-draw selection', () => {
     });
     expect(calledCmdIdx).toBe(0);
   });
+
+  it('all-commands: clicking the last draw selects its global draw index (eventIdx != commands index)', () => {
+    // Regression for the off-by-one: commands[].eventIdx indexes the raw events
+    // array (with meta events stripped from `commands`), so the global draw index
+    // must be the draw's position among draw-commands, NOT a count by eventIdx.
+    // Here eventIdx values are sparse (gaps emulate stripped meta events): the two
+    // draws sit at eventIdx 5 and 9 but are draw #0 and draw #1.
+    let calledDrawIdx = -1;
+    const vm = mockViewModel([
+      makeCommand({ kind: 'setPipeline', isDraw: false, eventIdx: 1 }),
+      makeCommand({ kind: 'drawIndexed', isDraw: true, eventIdx: 5 }),
+      makeCommand({ kind: 'setBindGroup', isDraw: false, eventIdx: 7 }),
+      makeCommand({ kind: 'drawIndexed', isDraw: true, eventIdx: 9 }),
+    ]);
+
+    const { container } = render(
+      <ViewModelContext.Provider value={vm}>
+        <SelectionContext.Provider
+          value={
+            makeSelection((idx: number) => {
+              calledDrawIdx = idx;
+            }) as never
+          }
+        >
+          <EventBrowser {...mockProps} />
+        </SelectionContext.Provider>
+      </ViewModelContext.Provider>,
+    );
+
+    // Switch to all-commands mode so handleCommandSelect (the buggy path) runs.
+    const filterBtn = findByTextAll(container, 'Draws Only')[0];
+    act(() => {
+      filterBtn && fireEvent.click(filterBtn);
+    });
+
+    // The last draw row (eventIdx 9) must resolve to global draw index 1, not 2.
+    const lastDrawRow = container.querySelector('[data-forgeax-command-row="9"]') as HTMLElement;
+    expect(lastDrawRow).not.toBeNull();
+    act(() => {
+      fireEvent.click(lastDrawRow);
+    });
+    expect(calledDrawIdx).toBe(1);
+  });
 });
 
 // --------------- Empty / no-tape states ---------------

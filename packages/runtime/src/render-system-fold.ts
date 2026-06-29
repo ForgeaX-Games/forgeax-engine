@@ -24,7 +24,7 @@
 //     consumer treats singleton buckets identically to today's per-entity
 //     drawIndexed, so the bypass is byte-for-byte the current behavior
 //     (charter P3 silent fallback — no error fired, AC-04 zero-difference
-//     for ySort modes preserved).
+//     for sortScope modes preserved).
 //
 // Uniform-cap fallback (M2 / D-2 + D-9):
 //   - When `caps.storageBuffer === false` (WebGL2 path) AND a fold bucket
@@ -86,19 +86,30 @@ export interface FoldBucket {
  * Minimal renderable shape consumed by the helper. The real
  * `RenderableSnapshot` carries many more fields; the helper only reads
  * `transform.world` (a Float32Array of 16 column-major floats) and
- * `material.shadingModel` (the sprite-only fold gate, see PR #502 fix:
- * geometry-pass entities — `'unlit'` / `undefined` standard-PBR / skin —
- * MUST stay singleton because the sprite-pass dispatch path that consumes
- * `headBuckets` does not run for them; folding them would overwrite their
- * mesh-SSBO slot with identity and collapse 3D geometry to origin).
+ * `material.transparent` (the LDR-split-sub-pass fold gate, see PR #502
+ * fix + feat-20260625 R2 fix-up: geometry-pass entities — non-transparent
+ * materials — MUST stay singleton because the sprite-pass dispatch path
+ * that consumes `headBuckets` does not run for them; folding them would
+ * overwrite their mesh-SSBO slot with identity and collapse 3D geometry
+ * to origin).
  *
  * Production callers pass `RenderableSnapshot[]` straight through —
- * `RenderableSnapshot.material.shadingModel` is `'unlit' | 'sprite' | undefined`
- * which is structurally compatible with this minimal shape.
+ * `RenderableSnapshot.material.transparent` is `boolean | undefined`
+ * (derived by the extract stage from `passes[0].renderState.blend !==
+ * undefined`, the post-feat-20260626-collapse SSOT; see
+ * `MaterialSnapshot.transparent`), structurally compatible with this
+ * minimal shape. The gate read inside the helper uses `=== true` /
+ * `!== true` so both `false` and `undefined` enter the singleton branch.
+ *
+ * feat-20260625-refactor-sprite-as-transparent-mesh R2 fix-up: gate
+ * migrated from `shadingModel === 'sprite'` (the union member was
+ * removed in M3 / w15) to `transparent === true` (the new SSOT for
+ * "routes through the LDR split sub-pass" — same predicate the
+ * `splitLdrSprite` filter at render-system-record.ts:4826/5612 uses).
  */
 export interface FoldRenderableLike {
   readonly transform: { readonly world: Float32Array };
-  readonly material: { readonly shadingModel: 'unlit' | 'sprite' | undefined };
+  readonly material: { readonly transparent?: boolean | undefined };
 }
 
 /**
@@ -147,30 +158,39 @@ export function foldDispatchBuckets(
   // Fold branch (mode 0 = LAYER_Z): linear scan, collect runs with equal
   // (layer, posZ, materialHandle).
   //
-  // Sprite-pass-only gate (PR #502 fix): the only dispatch site that
-  // consumes `headBuckets` to emit one instanced drawIndexed per bucket
-  // is the sprite-pass loop in `render-system-record.ts` (~line 5500).
-  // The geometry-pass loop (~line 4660) iterates `validatedOrdered` and
-  // emits per-entity drawIndexed unchanged; it does NOT branch on
-  // `headBuckets`. So when a non-sprite entry (geometry-pass: shadingModel
-  // 'unlit' / undefined standard-PBR / skin) is folded into a multi-entry
-  // bucket, the mesh-SSBO upload loop (~line 2710) still overwrites its
-  // mesh slot with identity (because `headBuckets.has(i)` is true), but
-  // the geometry-pass then reads identity and renders the 3D geometry at
-  // the origin — collapsing the frame to black (hello-room CI regression).
+  // Transparent-pass-only gate (PR #502 fix + feat-20260625 R2 fix-up):
+  // the only dispatch site that consumes `headBuckets` to emit one
+  // instanced drawIndexed per bucket is the transparent-pass loop in
+  // `render-system-record.ts` (~line 5500; routed via `splitLdrSprite`
+  // filter on `material.transparent === true`). The geometry-pass loop
+  // (~line 4660) iterates `validatedOrdered` and emits per-entity
+  // drawIndexed unchanged; it does NOT branch on `headBuckets`. So when
+  // a non-transparent entry (geometry-pass: unlit / standard-PBR / skin)
+  // is folded into a multi-entry bucket, the mesh-SSBO upload loop
+  // (~line 2710) still overwrites its mesh slot with identity (because
+  // `headBuckets.has(i)` is true), but the geometry-pass then reads
+  // identity and renders the 3D geometry at the origin — collapsing the
+  // frame to black (hello-room CI regression).
   //
-  // Concept-count fix: encode "fold is sprite-pass-only" at the head
-  // selection point — the gate is the single bucket-key invariant that
-  // makes both dispatch sites correct without coupling identity-overwrite
-  // logic to a separate shadingModel check (avoiding the D-9 shared-exit
+  // Concept-count fix: encode "fold is transparent-sub-pass-only" at the
+  // head selection point — the gate is the single bucket-key invariant
+  // that makes both dispatch sites correct without coupling identity-
+  // overwrite logic to a separate check (avoiding the D-9 shared-exit
   // violation that selecting fix-location B would produce).
   //
-  // Non-sprite entries (shadingModel !== 'sprite') always produce
+  // Non-transparent entries (`transparent !== true`) always produce
   // singleton buckets (bucketSize=1), which `buildFoldDispatchPlan`
   // filters out (`if (bucket.bucketSize <= 1) continue`), so they never
-  // enter `headBuckets` / `skipIndices` — the mesh-SSBO upload, sprite-
-  // pass, and geometry-pass loops all see them as byte-identical to the
-  // pre-fold per-entity path.
+  // enter `headBuckets` / `skipIndices` — the mesh-SSBO upload,
+  // transparent-pass, and geometry-pass loops all see them as byte-
+  // identical to the pre-fold per-entity path.
+  //
+  // feat-20260625 R2 fix-up: pre-feat the gate was `shadingModel ===
+  // 'sprite'`; M3 / w15 narrowed the shadingModel union to
+  // `'unlit' | undefined` (the `'sprite'` discriminator was the design
+  // ablation target), so the gate now reads `material.transparent` —
+  // the new SSOT for "routes through the LDR split sub-pass" mirrored
+  // on `computeSplitLdrSprite` + the `splitLdrSprite` skip filter.
   const buckets: FoldBucket[] = [];
   let runStart = 0;
   while (runStart < orderedEntries.length) {
@@ -179,12 +199,14 @@ export function foldDispatchBuckets(
       runStart += 1;
       continue;
     }
-    // Sprite-pass-only gate (PR #502 fix): non-sprite heads emit a
-    // singleton bucket and advance the cursor by 1 — no run extension.
-    // RenderableSnapshot.material.shadingModel is the SSOT carrier
-    // (extract stage populates it from MaterialAsset.shadingModel).
-    const headShading = renderables[head.renderableIndex]?.material.shadingModel;
-    if (headShading !== 'sprite') {
+    // Transparent-pass-only gate (feat-20260625 R2 fix-up): non-transparent
+    // heads emit a singleton bucket and advance the cursor by 1 — no run
+    // extension. `RenderableSnapshot.material.transparent` is the SSOT
+    // carrier (extract stage derives it from the first pass's
+    // `renderState.blend !== undefined`, post-feat-20260626-collapse;
+    // see `MaterialSnapshot.transparent`).
+    const headTransparent = renderables[head.renderableIndex]?.material.transparent;
+    if (headTransparent !== true) {
       buckets.push(makeSingletonBucket(head, renderables));
       runStart += 1;
       continue;
@@ -196,12 +218,12 @@ export function foldDispatchBuckets(
       if (cand === undefined) break;
       if (cand.layer !== head.layer) break;
       if (cand.materialHandle !== head.materialHandle) break;
-      // Defensive: cand shadingModel must also be 'sprite' to join the
-      // run. Same materialHandle implies same shadingModel in production
+      // Defensive: cand transparent must also be true to join the run.
+      // Same materialHandle implies same transparent flag in production
       // (material asset identity), but the check costs O(1) per cand and
       // makes the bucket invariant locally readable.
-      const candShading = renderables[cand.renderableIndex]?.material.shadingModel;
-      if (candShading !== 'sprite') break;
+      const candTransparent = renderables[cand.renderableIndex]?.material.transparent;
+      if (candTransparent !== true) break;
       const candPosZ = readPosZ(cand.renderableIndex, renderables);
       if (candPosZ !== headPosZ) break;
       runEnd += 1;

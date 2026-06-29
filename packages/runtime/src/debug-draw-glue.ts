@@ -18,6 +18,7 @@ import { createDebugDraw } from '@forgeax/engine-debug-draw';
 import type { Mat4 } from '@forgeax/engine-math';
 import type { RenderGraph } from '@forgeax/engine-render-graph';
 import type { TextureFormat, TextureView } from '@forgeax/engine-rhi';
+import { selectSwapChainFormat } from './createRenderer';
 import type { RenderPipelineContext } from './render-pipeline-context';
 import type { Renderer } from './renderer';
 
@@ -64,24 +65,37 @@ async function resolveCreateShaderModule(): Promise<CreateShaderModule> {
  * complete before creating the DebugDraw PSO. Stores the instance in the
  * package-internal registry so graph pass closures can reach it.
  *
- * The format defaults to `'bgra8unorm'` (WebGPU swap-chain default) and
- * can be overridden for non-WebGPU backends (e.g. `'rgba8unorm'` for
- * wgpu-native/dawn).
+ * Bug A fix (feat-20260626 m6-4): the PSO color format MUST equal the swap-chain
+ * LDR view the overlay pass draws into (`attachDebugOverlayPass` flushes to
+ * `ctx.view`), or the backend rejects the render pass with an attachment-state
+ * mismatch every frame. The view format is the SSOT
+ * `selectSwapChainFormat(caps.storageBuffer).view` -- `bgra8unorm-srgb` on
+ * native WebGPU (follows getPreferredCanvasFormat + the srgb-via-viewFormats
+ * route) and `rgba8unorm-srgb` on wgpu-wasm GLES -- the same derivation
+ * `PipelineState.colorAttachmentFormat` uses (memory
+ * offscreen-rt-format-must-follow-swapchain-not-hardcode-rgba). The hardcoded
+ * `'bgra8unorm'` default was latent until the overlay pass actually flushed
+ * (before the glue merge the pass was a no-op stub that never validated). A
+ * caller may still pass an explicit `format` to target a custom surface.
  */
 export async function createDebugDrawOnReady(
   renderer: Renderer,
-  format: TextureFormat = 'bgra8unorm',
+  format?: TextureFormat,
 ): Promise<DebugDraw> {
   const ready = await renderer.ready;
   if (!ready.ok) throw ready.error;
 
   const createShaderModule = await resolveCreateShaderModule();
 
+  const resolvedFormat =
+    format ??
+    (selectSwapChainFormat(renderer.device.caps.storageBuffer).view as unknown as TextureFormat);
+
   const ddResult = await createDebugDraw({
     device: renderer.device,
     queue: renderer.device.queue,
     createShaderModule,
-    format,
+    format: resolvedFormat,
   });
   if (!ddResult.ok) throw ddResult.error;
 

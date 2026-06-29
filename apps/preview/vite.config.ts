@@ -17,8 +17,9 @@ export default defineConfig({
     forgeaxShader() as never,
     pluginPack({
       roots: [
-        // game-default root holds scene.pack.json (the entry SceneAsset);
-        // assets/ holds material packs; submodule holds binary demo assets.
+        // game-default/assets/ holds the entry SceneAsset (scene.pack.json,
+        // GUID-discoverable via forge.json.defaultScene) + material packs;
+        // submodule holds binary demo assets.
         resolve(templatesDir, 'game-default'),
         resolve(submoduleDemoAssetsDir, 'template-game-default'),
       ],

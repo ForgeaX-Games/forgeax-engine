@@ -23,6 +23,7 @@ import type { PhysicsWorld, RaycastHit } from '@forgeax/engine-physics';
 import {
   CharacterController,
   Collider,
+  CollidingEntities,
   colliderShapeFromF32,
   PHYSICS_ERROR_HINTS,
   PhysicsError,
@@ -121,6 +122,15 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
 
   /** Event queue for collision events. */
   private readonly eventQueue: RapierEventQueue;
+
+  /**
+   * Active overlap set per entity, maintained by draining the event queue each
+   * step. `started` events add the pair both ways; `stopped` events remove it.
+   * Read out into each entity's `CollidingEntities` component by
+   * `writebackCollidingEntities`. Covers both solid contacts and sensor
+   * intersections (Rapier emits CollisionEvent for both).
+   */
+  private readonly collisionPairs = new Map<number, Set<number>>();
 
   private currentGravity: { x: number; y: number; z: number };
 
@@ -230,6 +240,76 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     void deltaTime;
     // biome-ignore lint/suspicious/noExplicitAny: Rapier World.step
     (this.raw as any).step(this.eventQueue);
+    this.drainCollisionEvents();
+  }
+
+  /**
+   * Drain the Rapier event queue into `collisionPairs`. Each event names two
+   * collider handles + a `started` flag; we resolve each collider to its owning
+   * entity (collider.parent() -> body.userData) and add/remove the symmetric
+   * pair. This is what populates `CollidingEntities` for sensor pickup + contact
+   * queries (the queue is otherwise drained-on-overflow and never observed).
+   */
+  private drainCollisionEvents(): void {
+    this.eventQueue.drainCollisionEvents((handle1: number, handle2: number, started: boolean) => {
+      const a = this.colliderHandleToEntity(handle1);
+      const b = this.colliderHandleToEntity(handle2);
+      if (a === undefined || b === undefined) return;
+      if (started) {
+        this.addPair(a, b);
+      } else {
+        this.removePair(a, b);
+      }
+    });
+  }
+
+  /** Resolve a Rapier collider handle to its owning ECS entity, or undefined. */
+  private colliderHandleToEntity(colliderHandle: number): number | undefined {
+    // getCollider(handle).parent() returns the owning RigidBody (compat build),
+    // whose userData holds the ECS entity raw value (set in ensureBody).
+    // biome-ignore lint/suspicious/noExplicitAny: Rapier World.getCollider from dynamic module
+    const collider = (this.raw as any).getCollider(colliderHandle) as {
+      parent(): { userData: number } | null;
+    } | null;
+    if (collider === null || collider === undefined) return undefined;
+    const body = collider.parent();
+    if (body === null || body === undefined) return undefined;
+    return body.userData;
+  }
+
+  private addPair(a: number, b: number): void {
+    let setA = this.collisionPairs.get(a);
+    if (!setA) {
+      setA = new Set<number>();
+      this.collisionPairs.set(a, setA);
+    }
+    setA.add(b);
+    let setB = this.collisionPairs.get(b);
+    if (!setB) {
+      setB = new Set<number>();
+      this.collisionPairs.set(b, setB);
+    }
+    setB.add(a);
+  }
+
+  private removePair(a: number, b: number): void {
+    this.collisionPairs.get(a)?.delete(b);
+    this.collisionPairs.get(b)?.delete(a);
+  }
+
+  /**
+   * Write the current overlap set into each entity's `CollidingEntities`
+   * component (entities that carry it). Called by the PhysicsCollisionSync
+   * system after writeback. Entities with no current overlaps get an empty set,
+   * so a Core that the player has left clears correctly. Only entities that own
+   * a CollidingEntities component are written (others are skipped).
+   */
+  writebackCollidingEntities(world: World, collidingComponent: Component): void {
+    for (const [entity, others] of this.collisionPairs) {
+      const handle = entity as EntityHandle;
+      if (!world.get(handle, collidingComponent).ok) continue;
+      world.set(handle, collidingComponent, { entities: [...others] });
+    }
   }
 
   getBodyCount(): number {
@@ -314,12 +394,15 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     // ── Step 1: solve collisions (D-1 self-exclude predicate) ──
     // Rapier's filter predicate returns true to INCLUDE a collider as a
     // potential obstacle, false to skip it; this excludes the character's own
-    // collider so it never collides with itself.
+    // collider so it never collides with itself. EXCLUDE_SENSORS makes the KCC
+    // treat sensor colliders as non-solid (their purpose is overlap detection,
+    // not blocking) -- without it any sensor overlapping the character (e.g. a
+    // pickup/attack trigger volume) walls the KCC and freezes it in place.
     const delta = { x: desiredDelta[0] ?? 0, y: desiredDelta[1] ?? 0, z: desiredDelta[2] ?? 0 };
     ctrl.computeColliderMovement(
       collider,
       delta,
-      undefined,
+      RAPIER.QueryFilterFlags.EXCLUDE_SENSORS,
       undefined,
       // biome-ignore lint/suspicious/noExplicitAny: Rapier Collider in filter predicate
       (other: any) => other.handle !== collider.handle,
@@ -507,6 +590,13 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     this.registerBody(entity, body.handle);
 
     // ── Create ColliderDesc ──
+    // Enable collision events + all body-type combinations so sensors register
+    // overlaps against kinematic/fixed bodies too (the default omits non-dynamic
+    // pairs, which would silence kinematic-sensor-vs-kinematic-body pickup).
+    // biome-ignore lint/suspicious/noExplicitAny: Rapier enums from dynamic module
+    const activeEvents = (RAPIER as any).ActiveEvents.COLLISION_EVENTS as number;
+    // biome-ignore lint/suspicious/noExplicitAny: Rapier enums from dynamic module
+    const activeCollisionTypes = (RAPIER as any).ActiveCollisionTypes.ALL as number;
     const cShape = colliderShapeFromF32(collider.shape);
     switch (cShape) {
       case 'cuboid': {
@@ -520,7 +610,9 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
           .setRestitution(collider.restitution)
           .setDensity(collider.density)
           .setCollisionGroups(collider.collisionGroups)
-          .setSolverGroups(collider.solverGroups);
+          .setSolverGroups(collider.solverGroups)
+          .setActiveEvents(activeEvents)
+          .setActiveCollisionTypes(activeCollisionTypes);
         if (collider.isSensor) desc.setSensor(true);
         // biome-ignore lint/suspicious/noExplicitAny: Rapier World.createCollider
         (this.raw as any).createCollider(desc, body);
@@ -533,7 +625,9 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
           .setRestitution(collider.restitution)
           .setDensity(collider.density)
           .setCollisionGroups(collider.collisionGroups)
-          .setSolverGroups(collider.solverGroups);
+          .setSolverGroups(collider.solverGroups)
+          .setActiveEvents(activeEvents)
+          .setActiveCollisionTypes(activeCollisionTypes);
         if (collider.isSensor) desc.setSensor(true);
         // biome-ignore lint/suspicious/noExplicitAny: Rapier World.createCollider
         (this.raw as any).createCollider(desc, body);
@@ -546,7 +640,9 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
           .setRestitution(collider.restitution)
           .setDensity(collider.density)
           .setCollisionGroups(collider.collisionGroups)
-          .setSolverGroups(collider.solverGroups);
+          .setSolverGroups(collider.solverGroups)
+          .setActiveEvents(activeEvents)
+          .setActiveCollisionTypes(activeCollisionTypes);
         if (collider.isSensor) desc.setSensor(true);
         // biome-ignore lint/suspicious/noExplicitAny: Rapier World.createCollider
         (this.raw as any).createCollider(desc, body);
@@ -621,6 +717,14 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     // biome-ignore lint/suspicious/noExplicitAny: Rapier World.removeRigidBody
     (this.raw as any).removeRigidBody({ handle: record.bodyHandle } as RapierRigidBody);
     this.entityMap.delete(entity);
+    // Clear the despawned entity from every overlap set so a collected Core does
+    // not linger in the player's CollidingEntities (Rapier emits no `stopped`
+    // event when a collider is removed mid-overlap).
+    const own = this.collisionPairs.get(entity);
+    if (own) {
+      for (const other of own) this.collisionPairs.get(other)?.delete(entity);
+      this.collisionPairs.delete(entity);
+    }
   }
 }
 
@@ -700,6 +804,7 @@ function registerBackendForRemoveHook(pw: RapierPhysicsWorld3D): void {
 const PHYSICS_SYNC_BACKEND = 'physicsSyncBackend' as const;
 const PHYSICS_STEP_SIMULATION = 'physicsStepSimulation' as const;
 const PHYSICS_WRITEBACK = 'physicsWriteback' as const;
+const PHYSICS_COLLISION_SYNC = 'physicsCollisionSync' as const;
 
 /**
  * Resolve the runtime `Transform` component token from the global ECS
@@ -783,6 +888,15 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
       const tfPx = tfCols.get('posX')?.view as Float32Array | undefined;
       const tfPy = tfCols.get('posY')?.view as Float32Array | undefined;
       const tfPz = tfCols.get('posZ')?.view as Float32Array | undefined;
+      // Transform.world is an inline `array<f32, 16>` column (stride 16,
+      // column-major mat4); row r's world-space translation is at
+      // [r*16 + 12 .. +14]. The kinematic mirror MUST drive the Rapier collider
+      // from WORLD space, not local posX/Y/Z: a ChildOf collider (e.g. a Guardian
+      // attack sensor parented to its body) has local pos (0,0,0), so mirroring
+      // local would pin its collider at the world origin forever while only its
+      // ECS Transform follows the parent (via propagateTransforms). physicsSync
+      // runs AFTER propagateTransforms, so this column is fresh this frame.
+      const tfWorld = tfCols.get('world')?.view as Float32Array | undefined;
 
       if (
         !rbType ||
@@ -866,13 +980,17 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
         pw.ensureBody(entity, transform, rigidBody, collider);
 
         // Kinematic position sync (D-5: skip character entities — moveAndSlide
-        // owns their kinematic body + Transform).
+        // owns their kinematic body + Transform). Drive the collider from WORLD
+        // space (Transform.world translation) so a ChildOf kinematic collider
+        // follows its parent; fall back to local pos only if the world column is
+        // somehow absent (it never is for a Transform-carrying archetype).
         const rbTypeVal = rigidBodyTypeFromF32(rigidBody.type);
         if (rbTypeVal === 'kinematic' && !hasCharacterController) {
+          const base = row * 16;
           pw.setKinematicPosition(entity, {
-            x: transform.posX,
-            y: transform.posY,
-            z: transform.posZ,
+            x: tfWorld ? (tfWorld[base + 12] ?? transform.posX) : transform.posX,
+            y: tfWorld ? (tfWorld[base + 13] ?? transform.posY) : transform.posY,
+            z: tfWorld ? (tfWorld[base + 14] ?? transform.posZ) : transform.posZ,
           });
         }
       }
@@ -946,12 +1064,37 @@ export const PhysicsWriteback: SystemHandle<readonly []> = defineSystem({
 });
 
 /**
- * Register three-phase physics tick systems into an ECS World.
+ * `physicsCollisionSync` system token — writes the drained overlap set into each
+ * entity's `CollidingEntities` component (the contact/sensor set-query path).
  *
- * The three systems ({@link PhysicsSyncBackend} / {@link PhysicsStepSimulation}
- * / {@link PhysicsWriteback}) are module-level `defineSystem` tokens; this
- * helper wires the moveAndSlide context + despawn cleanup hook, then adds the
- * three tokens to the schedule.
+ * Runs after writeback so the component reflects this step's contacts. Without
+ * it the `CollidingEntities` component documented in the physics README never
+ * updates (the event queue was drained-on-overflow only), so sensor pickup +
+ * proximity queries silently saw an empty set.
+ */
+export const PhysicsCollisionSync: SystemHandle<readonly []> = defineSystem({
+  name: PHYSICS_COLLISION_SYNC,
+  queries: [],
+  labels: ['physics'],
+  after: [PHYSICS_WRITEBACK],
+  fn: (world) => {
+    let pw: RapierPhysicsWorld3D;
+    try {
+      pw = world.getResource<RapierPhysicsWorld3D>('PhysicsWorld');
+    } catch {
+      return; // C-2: safe early out
+    }
+    pw.writebackCollidingEntities(world, CollidingEntities as unknown as Component);
+  },
+});
+
+/**
+ * Register the physics tick systems into an ECS World.
+ *
+ * The systems ({@link PhysicsSyncBackend} / {@link PhysicsStepSimulation} /
+ * {@link PhysicsWriteback} / {@link PhysicsCollisionSync}) are module-level
+ * `defineSystem` tokens; this helper wires the moveAndSlide context + despawn
+ * cleanup hook, then adds the tokens to the schedule.
  *
  * Transform is resolved from the global ECS registry (`resolveComponent`,
  * D-3) — the previous `transformComponent` second parameter was redundant once
@@ -979,4 +1122,5 @@ export function registerPhysicsSystems(world: World): void {
   world.addSystem(PhysicsSyncBackend);
   world.addSystem(PhysicsStepSimulation);
   world.addSystem(PhysicsWriteback);
+  world.addSystem(PhysicsCollisionSync);
 }

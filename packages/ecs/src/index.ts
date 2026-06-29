@@ -510,6 +510,12 @@ export {
   SpawnDataUnknownFieldError,
   SpawnLightInvalidBoundsError,
   SpriteAnimationInvalidError,
+  // feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M3 / w10 —
+  // surface the 3 sprite-instances error classes declared in M1 / w2 so the
+  // runtime extract path can route them via worldInternal._routeError.
+  SpriteInstancesCountMismatchError,
+  SpriteInstancesMutuallyExclusiveWithInstancesError,
+  SpriteInstancesRequiresSpriteShaderError,
   StaleEntityError,
   UniqueRefDoubleReleaseError,
   UniqueRefReleasedError,

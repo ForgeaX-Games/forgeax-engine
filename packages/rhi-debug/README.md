@@ -26,9 +26,10 @@ The browser-to-CLI loop is: **one line in the browser console to capture a frame
 | **L1** | on-disk tape | POST `/__forgeax-debug/tape` (dev-server) or the Node `finalize()` tail | `.forgeax-debug/<runId>/frame-0.tape.bin` + `frame-0.report.json` (byte-identical from both writers, D-3) |
 | **L2a** | external CLI trigger | `forgeax-rhi-debug trigger-browser [--frames=N] [--label=STR] [--dev-url=URL]` | `{ runId, tapePath, reportPath }` -- synchronous round-trip; no browser DevTools console switch |
 | **L2c** | one-line browser trigger | `window.__forgeax.captureFrame(n)` (console autocomplete) | `{ runId, tapePath, reportPath }` -- `tapePath` feeds L3a |
-| **L3a** | offline CLI inspect | `forgeax-rhi-debug inspect-offline <tapePath> <drawIdx> [--fields=...]` | structured InspectReport JSON (bindings / drawCall) + RT PNG path |
-| **L3b** | browser per-draw JSON | `@forgeax/engine-rhi-debug/inspect-core` -> `inspectDrawJson(replay, idx, events, device, fields?)` | structured `InspectReport` (bindings + drawCall, no PNG path) |
+| **L3a** | offline CLI inspect | `forgeax-rhi-debug inspect-offline <tapePath> <drawIdx> [--fields=...]` | structured InspectReport JSON (bindings / drawCall / **pipelineState**) + RT PNG path |
+| **L3b** | browser per-draw JSON | `@forgeax/engine-rhi-debug/inspect-core` -> `inspectDrawJson(replay, idx, events, device, fields?)` | structured `InspectReport` (bindings + drawCall + pipelineState, no PNG path) |
 | **L3c** | browser RT to canvas | `@forgeax/engine-rhi-debug/rt-to-canvas` -> `renderRtToCanvas(replay, idx, device, canvas)` | RT pixels rendered onto external canvas (no fs/pngjs) |
+| **L3e** | whole-frame model | `forgeax-rhi-debug summary <tapePath>` (CLI) or `@forgeax/engine-rhi-debug/frame-model` -> `buildFrameModel(tape)` (pure, no GPU) | `FrameModel { meta, tree, draws[] (each with pipelineState), commands, resources }` -- the same model the RHI debug viewer (L3d) renders; the AI inspects the whole frame with the same operation the UI exposes |
 
 L1 is the byte-on-disk handoff: the dev-server POST endpoint and the Node `finalize()` tail both route through the single `assembleReport` writer, so a browser-captured tape and a Node-captured tape are indistinguishable on disk (D-3 / AC-05). L2a and L2c chain straight into L3a -- the `tapePath` they return is the first positional argument of `inspect-offline`. L2a is the Node-side equivalent of L2c: an AI user runs one CLI command instead of switching to the browser DevTools console to type `window.__forgeax.captureFrame(n)`.
 
@@ -221,6 +222,7 @@ Error envelopes (all `{ error, hint }`, never `DebugError` -- OOS-6, union stays
 | `forgeax-engine-console capture-frame [--frames=1] [--label=<str>] [--target=ws://localhost:5732]` | Connect to running console server, dispatch `debug.captureFrame` RPC, print tapePaths. |
 | `forgeax-engine-console inspect-at <tapePath> <drawIdx> [--fields=bindings,rt] [--target=ws://localhost:5732]` | Connect to console server, dispatch `debug.inspectAt` RPC, print InspectReport JSON. |
 | `forgeax-rhi-debug trigger-browser [--frames=N] [--label=STR] [--dev-url=URL]` (L2a) | POST `/__forgeax-debug/trigger` to the dev-server (default `http://localhost:5173`), wait for a tab to capture + upload, print `{ runId, tapePath, reportPath }`. Ships today under the real `forgeax-rhi-debug` bin (no console plugin-bin dependency). |
+| `forgeax-rhi-debug summary <tapePath>` (L3d) | Read an on-disk tape and print the whole-frame `FrameModel` JSON (tree / per-draw pipelineState / bindings / drawCall / resources / commands / meta). Pure: no device, no replay. Ships today under the real `forgeax-rhi-debug` bin. |
 
 #### Offline inspect (L3a) -- the canonical entry today
 
@@ -238,7 +240,19 @@ node packages/rhi-debug/dist/cli.mjs inspect-offline .forgeax-debug/<runId>/fram
 | `<drawIdx>` | global draw event index to inspect (integer >= 0) |
 | `--fields=LIST` | comma-separated subset of `bindings,drawCall,rt` (default: all). `bindings` skips RT readback; `rt` writes the RT PNG into the tape's own directory |
 
-Outputs a structured `InspectReport` JSON (`frameIdx`, `drawIdx`, `passIdx`, `bindings`, `drawCall`, `rt` PNG path). Failure reuses the existing `DebugError` union (OOS-6: no new error code) -- e.g. `recorder-not-attached` when no dawn-node backend is importable. Requires `@forgeax/engine-rhi-webgpu` (dawn-node) or `@forgeax/engine-rhi-wgpu` (wasm) to be installed.
+Outputs a structured `InspectReport` JSON (`frameIdx`, `drawIdx`, `passIdx`, `bindings`, `drawCall`, `rt` PNG path, `pipelineState`). `pipelineState` (the seven WebGPU pipeline stages) is always present for render draws -- it is **not** gated by `--fields`, so an AI sees the same pipeline state the viewer's Pipeline State panel renders. Failure reuses the existing `DebugError` union (OOS-6: no new error code) -- e.g. `recorder-not-attached` when no dawn-node backend is importable. Requires `@forgeax/engine-rhi-webgpu` (dawn-node) or `@forgeax/engine-rhi-wgpu` (wasm) to be installed.
+
+#### Whole-frame summary (L3e) -- pure, no GPU
+
+`summary` reads an on-disk tape and prints `buildFrameModel(tape)` JSON: the whole-frame structural model the RHI debug viewer renders (pass/draw `tree`, per-draw `pipelineState`, `bindings`, `drawCall`, `resources`, full `commands` stream, `meta`). It needs **no device and no replay** -- pure event analysis -- so it runs anywhere, instantly. This is the CLI mirror of the viewer's whole-frame view: the AI inspects the frame with the same operation the UI exposes (charter F1).
+
+```bash
+node packages/rhi-debug/dist/cli.mjs summary <tapePath>
+# example:
+node packages/rhi-debug/dist/cli.mjs summary .forgeax-debug/<runId>/frame-0.tape.bin
+```
+
+`buildFrameModel` is also importable directly from the node-free `@forgeax/engine-rhi-debug/frame-model` subpath (zero `node:` / `pngjs` / GPU, tree-shake gated like `inspect-core`); the RHI debug viewer re-exports it as its `ViewModel` so the UI and the CLI share one analysis SSOT. The `resources` map and per-draw `vertexBuffers` map serialize to arrays in the CLI JSON (`Map` has no JSON form).
 
 The package exposes the CLI two ways: `package.json#bin` declares `forgeax-rhi-debug -> ./dist/cli.mjs`, and `package.json#exports['./cli']` re-exports the subcommand functions for programmatic use. The barrel does **not** re-export CLI symbols (Node `ws` / `pngjs` are reached only via `/cli`, `/inspector`, `/adapter` subpaths, keeping the tree-shake gate intact).
 
@@ -247,7 +261,7 @@ The package exposes the CLI two ways: `package.json#bin` declares `forgeax-rhi-d
 | method | params | returns |
 |:--|:--|:--|
 | `debug.captureFrame` | `{ frames: number, label?: string }` | `{ tapes: Array<{ frameIdx, runId, tapePath, reportPath }> }` |
-| `debug.inspectAt` | `{ tapePath: string, drawIdx: number, fields?: string[] }` | `InspectReport` (JSON; RT is PNG path string) |
+| `debug.inspectAt` | `{ tapePath: string, drawIdx: number, fields?: string[] }` | `InspectReport` (JSON; RT is PNG path string; includes `pipelineState` for render draws) |
 | `debug.replayDispose` | `{ tapePath: string }` | `{ disposed: true }` |
 
 ### State machine

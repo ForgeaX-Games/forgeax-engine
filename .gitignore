@@ -96,6 +96,12 @@ apps/**/*.tsbuildinfo
 # lock when multiple worktrees install browsers concurrently.
 .pw-browsers/
 
+# superpowers local state (auth tokens, temp files)
+.superpowers/
+
 # M8 stray debug capture dirs from unit tests
 .forgeax-debug/
 packages/*/.forgeax-debug/
+
+# Template-local forgeax workspace prefs (layouts etc.) — per-project user state
+templates/game-default/.forgeax/

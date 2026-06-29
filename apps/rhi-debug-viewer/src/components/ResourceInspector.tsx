@@ -173,7 +173,7 @@ function ResourceTable({
 
   return (
     <div className="mb-3">
-      <div className="px-2 py-1 text-xs font-medium text-blue-400/80 border-b border-slate-700/30">
+      <div className="px-2 py-1 text-xs font-medium text-brand border-b border-border">
         {category} ({filtered.length})
       </div>
       <div className="max-h-48 overflow-y-auto">
@@ -205,8 +205,8 @@ function ResourceRow({
 
   const className = `text-xs px-2 py-0.5 flex items-center gap-2 transition-colors ${
     isHighlighted
-      ? 'bg-blue-900/30 border-l-2 border-blue-500'
-      : 'hover:bg-slate-800/50 border-l-2 border-transparent'
+      ? 'bg-brand/15 border-l-2 border-brand'
+      : 'hover:bg-muted/50 border-l-2 border-transparent'
   }`;
 
   const detail = renderDetail(item);
@@ -216,11 +216,11 @@ function ResourceRow({
       <button
         type="button"
         onClick={handleClick}
-        className="text-blue-400 hover:text-blue-300 font-mono shrink-0 text-left"
+        className="text-brand hover:text-brand font-mono shrink-0 text-left"
       >
         {item.handleId}
       </button>
-      <span className="text-slate-500 truncate">{detail}</span>
+      <span className="text-muted-foreground truncate">{detail}</span>
     </div>
   );
 }
@@ -279,30 +279,30 @@ export function ResourceInspector(_props: IDockviewPanelProps) {
   if (!vm || resources === undefined || resources.size === 0) {
     return (
       <div
-        className="p-4 h-full bg-slate-900 flex items-center justify-center"
+        className="p-4 h-full bg-background flex items-center justify-center"
         {...{ [resourceInspectorAnchor()]: 'empty' }}
       >
-        <p className="text-xs text-slate-500">No resources in tape</p>
+        <p className="text-xs text-muted-foreground">No resources in tape</p>
       </div>
     );
   }
 
   return (
     <div
-      className="h-full bg-slate-900 flex flex-col"
+      className="h-full bg-background flex flex-col"
       ref={containerRef}
       {...{ [resourceInspectorAnchor()]: 'loaded' }}
     >
       {/* Search bar */}
-      <div className="px-2 py-1.5 border-b border-slate-700/50 shrink-0">
-        <div className="flex items-center gap-1.5 bg-slate-800 rounded px-2 py-1">
-          <Search size={12} className="text-slate-500 shrink-0" />
+      <div className="px-2 py-1.5 border-b border-border shrink-0">
+        <div className="flex items-center gap-1.5 bg-muted rounded px-2 py-1">
+          <Search size={12} className="text-muted-foreground shrink-0" />
           <input
             type="text"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter resources..."
-            className="bg-transparent text-xs text-slate-300 outline-none flex-1 w-0"
+            className="bg-transparent text-xs text-foreground outline-none flex-1 w-0"
           />
         </div>
       </div>
@@ -322,7 +322,7 @@ export function ResourceInspector(_props: IDockviewPanelProps) {
       </div>
 
       {/* Footer info */}
-      <div className="px-2 py-1 border-t border-slate-700/50 shrink-0 text-xs text-slate-600">
+      <div className="px-2 py-1 border-t border-border shrink-0 text-xs text-muted-foreground">
         {resources.size} resources
         {selectedDrawIdx >= 0 && ` | Draw #${selectedDrawIdx}`}
       </div>

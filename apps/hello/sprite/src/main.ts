@@ -59,6 +59,28 @@
 //         entry (zero new component); the demo never imports a
 //         SpriteRenderer / 2D-only surface (charter P4 consistent
 //         abstraction; Bevy 0.19 SpriteBundle retracement is avoided).
+//
+// feat-20260626-sprite-transparent-collapse-to-bare-renderstate-blend
+// M3 — post M1/M2 SSOT collapse:
+//   - Pass-side `renderState.blend` is the SSOT for premultiplied-alpha
+//     blend pipeline selection + LDR pass split (Q3=b). The legacy
+//     `transparent` boolean flag (ablated in feat-20260625 M2 + collapsed
+//     in this feat M1) used to imply the premultiplied preset; demos
+//     now declare the blend preset directly via the
+//     `SPRITE_PREMULTIPLIED_ALPHA_BLEND` named constant re-exported
+//     from `@forgeax/engine-runtime`. Passes that omit `renderState`
+//     render through the opaque geometry pass.
+//   - paramValues field names are UBO-aligned to sprite.wgsl.meta.json
+//     paramSchema 1:1 (D-4): colorTint (was baseColor),
+//     baseColorTexture (was texture), pivotAndSize vec4 (was pivot +
+//     size split), slicesAndMode vec4 (was slices + sliceMode split;
+//     tile sentinel = negative .w).
+//   - Transform.scale numeric values updated for visual equivalence
+//     under the F-4 unit-quad change (scale^2 -> scale^1): the sprite
+//     quad is a local-space unit quad and world scale flows entirely
+//     through Transform.world. New scale = old scale^2 keeps the same
+//     screen footprint (0.4 -> 0.16, [0.3,0.18] -> [0.09,0.0324],
+//     [0.6,0.4] -> [0.36,0.16]).
 
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
@@ -75,6 +97,7 @@ import {
   MeshRenderer,
   orthographic,
   setTransparentSortConfig,
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
   TRANSPARENT_SORT_MODE_LAYER_Y,
   TRANSPARENT_SORT_MODE_LAYER_Z,
   Transform,
@@ -380,8 +403,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
             posX: slot.pos[0],
             posY: slot.pos[1],
             posZ: slot.pos[2],
-            scaleX: 0.4,
-            scaleY: 0.4,
+            // feat-20260625 M4 / w17 (research F-4 + D-6): post-w11 the
+            // sprite quad is a local-space unit quad and world scale flows
+            // entirely through Transform.world (scale^1), not the old
+            // scale^2 path. To preserve visual size, set new scale = old
+            // scale^2; original 0.4 -> 0.16 keeps the same screen area.
+            scaleX: 0.16,
+            scaleY: 0.16,
             scaleZ: 1,
           },
         },
@@ -407,9 +435,20 @@ function buildSpriteMaterial(args: {
   pivot: readonly [number, number];
 }): MaterialAsset {
   const texture = args.texture ?? (0 as unknown as Handle<'TextureAsset', 'shared'>);
-  // feat-20260527 M3 / w10: pass-based sprite material (plan-strategy D-3).
-  // The extract stage recognizes 'forgeax::sprite' shader and produces
-  // shadingModel='sprite' + spriteFields for the record stage pipeline.
+  // feat-20260626-sprite-transparent-collapse M3 — post M1/M2 SSOT
+  // collapse: sprite is a regular MaterialAsset whose pass-side
+  // `renderState.blend` drives the LDR split + premultiplied-alpha
+  // blend pipeline. The legacy `transparent` boolean flag (ablated in
+  // feat-20260625 M2 + collapsed in this feat M1) used to imply this
+  // preset; post-collapse the demo declares the
+  // `SPRITE_PREMULTIPLIED_ALPHA_BLEND` constant directly.
+  //
+  // paramValues uses UBO-aligned field names that match sprite.wgsl.meta.
+  // json paramSchema 1:1 (M3 / w11, D-4): colorTint (was baseColor),
+  // baseColorTexture (was texture). region/pivot are folded into
+  // pivotAndSize via the extract-stage compat path; here we declare
+  // pivotAndSize directly to keep the demo aligned with the post-w11
+  // SSOT (no reliance on the compat fold).
   return {
     kind: 'material',
     passes: [
@@ -418,12 +457,14 @@ function buildSpriteMaterial(args: {
         shader: 'forgeax::sprite',
         tags: { LightMode: 'Forward' },
         queue: 3000,
+        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
       },
     ],
     paramValues: {
-      baseColor: args.colorTint,
-      texture,
+      colorTint: args.colorTint,
+      baseColorTexture: texture,
       sampler: args.sampler,
+      pivotAndSize: [args.pivot[0], args.pivot[1], 1, 1],
     },
   };
 }
@@ -469,6 +510,14 @@ function setupNineSliceSection(
   // sliceMode=0 (stretch). Corners stay pixel-fixed at any scale; the
   // 4 edges stretch along their major axis only; centre stretches
   // bilinearly. Shared by both stretch entities below.
+  //
+  // feat-20260626-sprite-transparent-collapse M3 — post M1/M2 SSOT:
+  //   - first-pass `renderState.blend` drives LDR split + blend pipeline
+  //     (preset `SPRITE_PREMULTIPLIED_ALPHA_BLEND`).
+  //   - paramValues UBO-aligned: colorTint / baseColorTexture (was
+  //     baseColor / texture), pivotAndSize vec4 (was pivot + size split),
+  //     slicesAndMode vec4 (was slices + sliceMode split). Tile mode is
+  //     sentinel-encoded on .w (negative = tile).
   const panelMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
@@ -477,16 +526,16 @@ function setupNineSliceSection(
         shader: 'forgeax::sprite',
         tags: { LightMode: 'Forward' },
         queue: 3000,
+        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
       },
     ],
     paramValues: {
-      baseColor: [1.0, 1.0, 1.0, 1.0],
-      texture,
+      colorTint: [1.0, 1.0, 1.0, 1.0],
+      baseColorTexture: texture,
       sampler: samplerHandle,
       region: [0, 0, 1, 1],
-      pivot: [0.5, 0.5],
-      slices: [0.25, 0.25, 0.25, 0.25],
-      sliceMode: 0,
+      pivotAndSize: [0.5, 0.5, 1, 1],
+      slicesAndMode: [0.25, 0.25, 0.25, 0.25], // .w>=0 -> stretch
     },
   });
 
@@ -496,7 +545,7 @@ function setupNineSliceSection(
   // 'repeat' lets the vs_main uv > 1 outputs wrap to multiple atlas
   // copies (D-4). Different `slices` value from the panel material
   // so the AI user can grep on these literal numbers and see the two
-  // configurations side by side.
+  // configurations side by side. Tile sentinel: slicesAndMode.w < 0.
   const tileMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
     passes: [
@@ -505,27 +554,32 @@ function setupNineSliceSection(
         shader: 'forgeax::sprite',
         tags: { LightMode: 'Forward' },
         queue: 3000,
+        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
       },
     ],
     paramValues: {
-      baseColor: [1.0, 1.0, 1.0, 1.0],
-      texture,
+      colorTint: [1.0, 1.0, 1.0, 1.0],
+      baseColorTexture: texture,
       sampler: samplerHandle,
       region: [0, 0, 1, 1],
-      pivot: [0.5, 0.5],
-      slices: [0.3, 0.3, 0.3, 0.3],
-      sliceMode: 1,
+      pivotAndSize: [0.5, 0.5, 1, 1],
+      slicesAndMode: [0.3, 0.3, 0.3, -0.3], // .w<0 -> tile (sentinel)
     },
   });
 
   // 2 stretch panels: same material, different scale. AC-06 falsifier
   // is "the four corners stretch with scale" — visible in one frame.
+  //
+  // feat-20260625 M4 / w17 (D-6): scale^2 -> scale^1 visual-equivalence
+  // remap. Old [0.3, 0.18] visual was [0.09, 0.0324]; the wide thin
+  // panel and tall narrow panel keep the same screen footprint when the
+  // post-w11 unit-quad path uses Transform.scale directly.
   const STRETCH_PANELS: ReadonlyArray<{
     pos: readonly [number, number, number];
     scale: readonly [number, number];
   }> = [
-    { pos: [-0.5, 0.7, 0], scale: [0.3, 0.18] }, // wide thin panel
-    { pos: [0.5, 0.7, 0], scale: [0.18, 0.3] }, // tall narrow panel
+    { pos: [-0.5, 0.7, 0], scale: [0.09, 0.0324] }, // wide thin panel
+    { pos: [0.5, 0.7, 0], scale: [0.0324, 0.09] }, // tall narrow panel
   ];
   for (const slot of STRETCH_PANELS) {
     world
@@ -550,9 +604,8 @@ function setupNineSliceSection(
 
   // 1 tile entity: scale chosen so centre-cell repeats >= 2 times.
   // With slices=[0.3,0.3,0.3,0.3] the centre cell occupies the inner
-  // 0.4 of the UV region; setting scaleX/Y to 0.6 (vs the panel
-  // baseline 0.3) gives the inner band ~0.4 world units to fill,
-  // which the wrap-around sampler tiles >=2 times.
+  // 0.4 of the UV region; post-w11 scale^1 path keeps the same screen
+  // footprint as the pre-w11 scale^2=[0.36, 0.16] visual size.
   world
     .spawn(
       {
@@ -561,8 +614,8 @@ function setupNineSliceSection(
           posX: 0.0,
           posY: -0.7,
           posZ: 0,
-          scaleX: 0.6,
-          scaleY: 0.4,
+          scaleX: 0.36,
+          scaleY: 0.16,
           scaleZ: 1,
         },
       },

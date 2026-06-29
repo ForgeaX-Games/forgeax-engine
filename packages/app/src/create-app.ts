@@ -57,6 +57,7 @@ import {
   CAMERA_PROJECTION_PERSPECTIVE,
   Camera,
   createAnimationAssetResolver,
+  createDebugDrawOnReady,
   createRenderer,
   EngineEnvironmentError,
   type PostProcessError,
@@ -67,7 +68,6 @@ import {
   timePlugin,
   transformPlugin,
 } from '@forgeax/engine-runtime';
-import { createDebugDrawOnReady } from '@forgeax/engine-runtime/debug-draw-glue';
 import { statePlugin } from '@forgeax/engine-state';
 import type { AppErrorCode, AppErrorDetailFor } from './errors';
 import { AppError } from './errors';
