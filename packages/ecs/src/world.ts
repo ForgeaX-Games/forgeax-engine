@@ -418,7 +418,7 @@ export class World {
    * - err branch with `.code === 'system-before-unknown'`: no system carries
    *   this name; `.detail.candidates` lists the registered names.
    *
-   * Designed to support `@forgeax/engine-console`'s typed `injectSystem` /
+   * Designed to support `@forgeax/engine-remote`'s typed `injectSystem` /
    * `removeSystem` channel and the WS-disconnect reverse-remove path.
    *
    * @example

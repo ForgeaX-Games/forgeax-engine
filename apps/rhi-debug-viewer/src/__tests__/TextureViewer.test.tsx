@@ -11,11 +11,12 @@
 //
 // Related: requirements AC-16/AC-18/AC-26; plan-strategy 5.1/5.2.
 
+import type { RhiCallEvent, Tape } from '@forgeax/engine-rhi-debug';
 import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { TextureViewer } from '../components/TextureViewer';
 import { SelectionContext } from '../selection-context';
-import { ViewModelContext } from '../viewer-context';
+import { TapeContext, ViewModelContext } from '../viewer-context';
 import type { ViewModel } from '../viewer-model';
 
 const mockProps = {
@@ -122,6 +123,241 @@ function mockViewModel(): ViewModel {
   };
 }
 
+/**
+ * Build a minimal Tape whose `tex-1` bound texture resolves to a createTexture of
+ * the given format/dimension. The mock draw's binding handleId is `tex-1` (a direct
+ * texture handle, no view event), so resolveTextureDescriptor finds it by handleId.
+ *
+ * `arrayLayers` sets the source texture's depthOrArrayLayers (slice count); it is
+ * used to drive the slice selector for cube-array / 2d-array textures.
+ */
+function tapeWithBoundTexture(
+  format: string,
+  dimension: '2d' | 'cube' | '2d-array' | 'cube-array' = '2d',
+  arrayLayers = dimension === 'cube' || dimension === 'cube-array' ? 6 : 1,
+): Tape {
+  const events: RhiCallEvent[] = [
+    {
+      kind: 'createTexture',
+      handleId: 'tex-1',
+      desc: { size: [64, 64, 1], format, dimension: '2d', usage: 0x14 },
+    } as RhiCallEvent,
+  ];
+  // Non-2d is expressed via a view over the texture (view dimension wins). The
+  // source texture carries the real array layer count.
+  if (dimension !== '2d') {
+    events[0] = {
+      kind: 'createTexture',
+      handleId: 'src-1',
+      desc: { size: [64, 64, arrayLayers], format, dimension: '2d', usage: 0x14 },
+    } as RhiCallEvent;
+    events.push({
+      kind: 'createTextureView',
+      sourceHandleId: 'src-1',
+      resultHandleId: 'tex-1',
+      desc: { dimension },
+    } as RhiCallEvent);
+  }
+  return {
+    formatVersion: 1,
+    rhiCapsRecorded: {} as Tape['rhiCapsRecorded'],
+    events,
+    blobPool: new Map(),
+  };
+}
+
+function renderWithTape(vm: ViewModel, tape: Tape, selectedDrawIdx = 0) {
+  return render(
+    <ViewModelContext.Provider value={vm}>
+      <TapeContext.Provider value={tape}>
+        <SelectionContext.Provider value={makeSelection({ selectedDrawIdx }) as never}>
+          <TextureViewer {...mockProps} />
+        </SelectionContext.Provider>
+      </TapeContext.Provider>
+    </ViewModelContext.Provider>,
+  );
+}
+
+/** Locate the bound-texture (`Texture tex-1`) thumbnail element. */
+function boundThumb(container: HTMLElement): Element | undefined {
+  return Array.from(container.querySelectorAll('[data-forgeax-texture-thumbnail]')).find((el) =>
+    el.textContent?.includes('Texture tex-1'),
+  );
+}
+
+// --------------- bound-texture format resolution + previewability ---------------
+
+describe('bound-texture format resolution', () => {
+  it('resolves the real createTexture format (not hard-coded unknown)', () => {
+    const { container } = renderWithTape(mockViewModel(), tapeWithBoundTexture('rgba8unorm'));
+    const thumb = boundThumb(container);
+    expect(thumb).toBeDefined();
+
+    // Select the bound-texture thumbnail so the main preview shows its format.
+    if (thumb) fireEvent.click(thumb);
+    expect(container.textContent).toContain('format: rgba8unorm');
+    expect(container.textContent).not.toContain('format: unknown');
+  });
+
+  it('a previewable 2D rgba8unorm bound texture does not show the fallback message', () => {
+    const { container } = renderWithTape(mockViewModel(), tapeWithBoundTexture('rgba8unorm'));
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    // jsdom has no WebGPU, so the optimistic status seeds 'no-webgpu' (not the
+    // honest "not directly previewable" fallback used for non-2D/non-8bit formats).
+    expect(container.textContent).not.toContain('not directly previewable');
+  });
+
+  it('a 3D bound texture shows the honest not-previewable fallback', () => {
+    // 2d-array / cube are now previewable; a 3d view is not in SLICEABLE_DIMENSIONS.
+    const tape3d = tapeWithBoundTexture('rgba8unorm', '2d-array');
+    (tape3d.events[1] as { desc: { dimension: string } }).desc.dimension = '3d';
+    const { container } = renderWithTape(mockViewModel(), tape3d);
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    expect(container.textContent).toContain('not directly previewable');
+  });
+
+  it('a float-format bound texture (r32float) is now previewable (host decode, no fallback)', () => {
+    const { container } = renderWithTape(mockViewModel(), tapeWithBoundTexture('r32float'));
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    expect(container.textContent).toContain('format: r32float');
+    // Any uncompressed color format is decoded to RGBA8 on the host now, so it
+    // must NOT show the honest "not directly previewable" fallback.
+    expect(container.textContent).not.toContain('not directly previewable');
+  });
+
+  it('an HDR rgba16float cube bound texture is previewable (host decode, no fallback)', () => {
+    const { container } = renderWithTape(
+      mockViewModel(),
+      tapeWithBoundTexture('rgba16float', 'cube'),
+    );
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    expect(container.textContent).toContain('format: rgba16float');
+    expect(container.textContent).not.toContain('not directly previewable');
+  });
+
+  it('a compressed bc7 bound texture still shows the honest not-previewable fallback', () => {
+    const { container } = renderWithTape(mockViewModel(), tapeWithBoundTexture('bc7-rgba-unorm'));
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    expect(container.textContent).toContain('format: bc7-rgba-unorm');
+    // Compressed formats have no formatInfo entry -> no host decode -> fallback.
+    expect(container.textContent).toContain('not directly previewable');
+  });
+
+  it('a 2D depth32float bound texture is previewable (no fallback) via the depth path', () => {
+    const { container } = renderWithTape(mockViewModel(), tapeWithBoundTexture('depth32float'));
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    expect(container.textContent).toContain('format: depth32float');
+    // A 2D depth texture routes through readbackDepthAuto (grayscale), so it must
+    // NOT show the honest "not directly previewable" fallback — same as color.
+    expect(container.textContent).not.toContain('not directly previewable');
+  });
+
+  it('a 2D depth24plus-stencil8 bound texture is previewable (blit depth path)', () => {
+    const { container } = renderWithTape(
+      mockViewModel(),
+      tapeWithBoundTexture('depth24plus-stencil8'),
+    );
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    expect(container.textContent).toContain('format: depth24plus-stencil8');
+    expect(container.textContent).not.toContain('not directly previewable');
+  });
+
+  it('a cube-array depth32float bound texture is previewable (no fallback)', () => {
+    const { container } = renderWithTape(
+      mockViewModel(),
+      tapeWithBoundTexture('depth32float', 'cube-array', 12),
+    );
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    expect(container.textContent).toContain('format: depth32float');
+    expect(container.textContent).not.toContain('not directly previewable');
+  });
+
+  it('the preview canvas fills the viewport in fit mode (upscales small textures)', () => {
+    // Regression lock for the "Fit does nothing on a 1x1 texture" report: fit mode
+    // must size the canvas element to the container (w-full h-full) so object-contain
+    // UPSCALES a tiny bitmap. The old `max-w-*` fit left a 1px texture at 1px. jsdom
+    // can't lay out CSS, but the className branch keys on the default zoom='fit', so we
+    // assert the class string regardless of WebGPU availability.
+    const { container } = renderWithTape(mockViewModel(), tapeWithBoundTexture('rgba8unorm'));
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    const canvas = container.querySelector('canvas[data-forgeax-rt-canvas]');
+    expect(canvas).not.toBeNull();
+    const cls = canvas?.getAttribute('class') ?? '';
+    expect(cls).toContain('w-full');
+    expect(cls).toContain('h-full');
+    expect(cls).toContain('object-contain');
+    // The buggy fit used max-w-full/max-h-full, which never upscales — must be gone.
+    expect(cls).not.toContain('max-w-full');
+    expect(cls).not.toContain('max-h-full');
+  });
+});
+
+// --------------- bound-texture slice selector (cube / cube-array / 2d-array) ---------------
+
+/** Locate the slice <select> in the preview header. */
+function sliceSelect(container: HTMLElement): HTMLSelectElement | null {
+  return container.querySelector<HTMLSelectElement>('[data-forgeax-texture-slice]');
+}
+
+describe('bound-texture slice selector', () => {
+  it('a plain 2D texture shows NO slice selector', () => {
+    const { container } = renderWithTape(mockViewModel(), tapeWithBoundTexture('rgba8unorm'));
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    expect(sliceSelect(container)).toBeNull();
+  });
+
+  it('a cube texture shows a 6-option face-named selector (+X..-Z)', () => {
+    const { container } = renderWithTape(
+      mockViewModel(),
+      tapeWithBoundTexture('rgba8unorm', 'cube'),
+    );
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    const sel = sliceSelect(container);
+    expect(sel).not.toBeNull();
+    const opts = Array.from(sel?.options ?? []).map((o) => o.textContent);
+    expect(opts).toEqual(['+X', '-X', '+Y', '-Y', '+Z', '-Z']);
+  });
+
+  it('a cube-array texture labels slices "L{layer} {face}"', () => {
+    const { container } = renderWithTape(
+      mockViewModel(),
+      tapeWithBoundTexture('depth32float', 'cube-array', 12),
+    );
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    const sel = sliceSelect(container);
+    expect(sel).not.toBeNull();
+    expect(sel?.options.length).toBe(12);
+    expect(sel?.options[0]?.textContent).toBe('L0 +X');
+    expect(sel?.options[6]?.textContent).toBe('L1 +X');
+    expect(sel?.options[11]?.textContent).toBe('L1 -Z');
+  });
+
+  it('a 2d-array texture labels slices "Layer N"', () => {
+    const { container } = renderWithTape(
+      mockViewModel(),
+      tapeWithBoundTexture('rgba8unorm', '2d-array', 3),
+    );
+    const thumb = boundThumb(container);
+    if (thumb) fireEvent.click(thumb);
+    const sel = sliceSelect(container);
+    expect(sel).not.toBeNull();
+    const opts = Array.from(sel?.options ?? []).map((o) => o.textContent);
+    expect(opts).toEqual(['Layer 0', 'Layer 1', 'Layer 2']);
+  });
+});
+
 // --------------- AC-16: thumbnail list + per-texture status badge ---------------
 
 describe('AC-16: thumbnail list rendering', () => {
@@ -201,11 +437,11 @@ describe('AC-18: per-texture status badge', () => {
     expect(container.textContent).toMatch(/ok/);
   });
 
-  it('depth attachment with non-copyable format (depth24plus) degrades to error, not ok', () => {
-    // AC-18 regression guard: the depth thumbnail must read the real
-    // pipelineState.depthStencil.format and route through computeTextureStatus.
-    // A previous bug hardcoded format='depth32float'+status='ok', so a
-    // depth24plus attachment falsely reported 'ok' (charter P3 violation).
+  it('depth attachment with depth24plus is now previewable (blit) — NOT error', () => {
+    // Behavior change: depth24plus's depth plane is non-copyable, but it is now
+    // previewed via the depth-sampling blit (blitDepthToR32), so its thumbnail no
+    // longer carries the 'error' badge. (Previously it degraded to 'error' since
+    // there was no readback path.) The optimistic status seeds ok/no-webgpu.
     const vm = mockViewModel(); // fixture's depthStencil.format = 'depth24plus'
 
     const { container } = render(
@@ -216,13 +452,11 @@ describe('AC-18: per-texture status badge', () => {
       </ViewModelContext.Provider>,
     );
 
-    // The Depth thumbnail must carry an 'error' badge (non-copyable depth format).
     const depthThumb = Array.from(
       container.querySelectorAll('[data-forgeax-texture-thumbnail]'),
     ).find((el) => el.textContent?.includes('Depth'));
     expect(depthThumb).toBeDefined();
-    expect(depthThumb?.textContent).toMatch(/error/);
-    expect(depthThumb?.textContent).not.toMatch(/\bok\b/);
+    expect(depthThumb?.textContent).not.toMatch(/error/);
   });
 
   it('main preview area shows selected texture info', () => {
@@ -239,6 +473,73 @@ describe('AC-18: per-texture status badge', () => {
     // Main preview area should show the initially selected (first) thumbnail's info
     expect(container.textContent).toContain('Color RT 0');
     expect(container.textContent).toContain('format');
+  });
+});
+
+// --------------- depth-stencil split into Depth + Stencil thumbnails ---------------
+
+/** Clone the mock with a specific depth-stencil format. */
+function mockViewModelWithDepthFormat(format: string): ViewModel {
+  const vm = mockViewModel();
+  const draw = vm.draws[0];
+  if (!draw) throw new Error('mock has no draw');
+  const patched = {
+    ...draw,
+    pipelineState: {
+      ...draw.pipelineState,
+      depthStencil: { ...draw.pipelineState.depthStencil, format },
+    },
+  };
+  return { ...vm, draws: [patched] } as ViewModel;
+}
+
+describe('depth-stencil split: Depth + Stencil thumbnails', () => {
+  it('depth24plus-stencil8 yields BOTH a Depth and a Stencil thumbnail', () => {
+    const vm = mockViewModelWithDepthFormat('depth24plus-stencil8');
+    const { container } = render(
+      <ViewModelContext.Provider value={vm}>
+        <SelectionContext.Provider value={makeSelection({ selectedDrawIdx: 0 }) as never}>
+          <TextureViewer {...mockProps} />
+        </SelectionContext.Provider>
+      </ViewModelContext.Provider>,
+    );
+    const labels = Array.from(container.querySelectorAll('[data-forgeax-texture-thumbnail]')).map(
+      (el) => el.textContent ?? '',
+    );
+    expect(labels.some((t) => t.includes('Depth'))).toBe(true);
+    expect(labels.some((t) => t.includes('Stencil'))).toBe(true);
+  });
+
+  it('depth32float (no stencil) yields a Depth thumbnail but NO Stencil', () => {
+    const vm = mockViewModelWithDepthFormat('depth32float');
+    const { container } = render(
+      <ViewModelContext.Provider value={vm}>
+        <SelectionContext.Provider value={makeSelection({ selectedDrawIdx: 0 }) as never}>
+          <TextureViewer {...mockProps} />
+        </SelectionContext.Provider>
+      </ViewModelContext.Provider>,
+    );
+    const labels = Array.from(container.querySelectorAll('[data-forgeax-texture-thumbnail]')).map(
+      (el) => el.textContent ?? '',
+    );
+    expect(labels.some((t) => t.includes('Depth'))).toBe(true);
+    expect(labels.some((t) => t.includes('Stencil'))).toBe(false);
+  });
+
+  it('both Depth and Stencil thumbnails of depth24plus-stencil8 are NOT error', () => {
+    const vm = mockViewModelWithDepthFormat('depth24plus-stencil8');
+    const { container } = render(
+      <ViewModelContext.Provider value={vm}>
+        <SelectionContext.Provider value={makeSelection({ selectedDrawIdx: 0 }) as never}>
+          <TextureViewer {...mockProps} />
+        </SelectionContext.Provider>
+      </ViewModelContext.Provider>,
+    );
+    const thumbs = Array.from(container.querySelectorAll('[data-forgeax-texture-thumbnail]'));
+    const depth = thumbs.find((el) => el.textContent?.includes('Depth'));
+    const stencil = thumbs.find((el) => el.textContent?.includes('Stencil'));
+    expect(depth?.textContent).not.toMatch(/error/);
+    expect(stencil?.textContent).not.toMatch(/error/);
   });
 });
 

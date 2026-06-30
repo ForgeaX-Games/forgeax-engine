@@ -1,109 +1,268 @@
 ---
 name: forgeax-engine-cli
 description: >-
-  forgeax-engine 控制台与命令行：JSON-RPC inspector + kubectl 式 plugin bin。
-  Use when inspecting a running World over JSON-RPC, scanning/verifying assets,
-  importing gltf/font from the CLI, or wiring a console server into a host.
+  forgeax-engine 远程求值：对运行中引擎活实例执行 eval(script) + kubectl 式 plugin bin。
+  Use when eval'ing code against a running engine, discovering entities via
+  queryRun, capturing frames, or calling CLI bin tools on live/offline data.
 ---
 
 # forgeax-engine-cli
 
-> **控制台 = 一个 inspector 基座 + 四条 plugin bin**。`@forgeax/engine-console` 物理零导入 `@forgeax/engine-{runtime,ecs,pack,gltf,image}`——能力不靠基座 import，而是从外向内注入：CLI 侧用各包自带的 plugin bin（kubectl 第四路），in-process 侧用 `register*Inspector` 纯函数挂进 `Registry`。Host 端三步装配：`new Registry()` → `wireDefaultInspectors(...)` → `await startConsoleServer({ port: 5732, registry })`，随后任何 JSON-RPC 2.0 客户端经 WS:5732 查询运行中的 World。聚合 `@forgeax/engine-console`（基座 + base CLI）+ 4 个 plugin bin（`@forgeax/engine-{pack,gltf,ecs,font}` 各自 owner）。
+> **唯一能力 = `eval` 活引擎**。`@forgeax/engine-remote` 提供单一入口：把一段 JS 代码发给运行中的引擎实例求值并取回结果。AI 用户不需记 Registry 路由表或预制命令名册——会写 `queryRun` 就能发现 handle、读状态、改值、抓帧。对齐 Bevy BRP / Unreal Remote Control 的"对活实例求值"心智，不暗示 console/inspector（带 UI/devtools）语义。
 
 ## 心智模型
 
-console 是**基座**，不是全家桶——它只懂 JSON-RPC 路由（`Registry` 的 `registerRoot` / `registerMethod`）与 base CLI 框架，对引擎其余包一无所知。要让它能查 ECS / runtime / asset，得把能力**注入**进去，有两条正交通道：
+`eval(script)` 就是全部。一段脚本被送到 host 进程中的 `new Function` 作用域执行，作用域内注入四个活根：
 
-- **in-process Inspector**：host 自己 `import { registerEcsInspector }` / `registerRuntimeInspector`，经 `wireDefaultInspectors` 挂进 `Registry`；console 自身从不 value-import 它们（P1 渐进式披露——能力由 host 决定）。
-- **CLI plugin bin**：每个能力包发布一个独立可执行（`forgeax-engine-console-asset` 等），是 kubectl 式的"第四路"子命令入口，进程外调用，不进 runtime bundle。
+| 活根 | 类型 | 用途 |
+|:--|:--|:--|
+| `world` | `World`（来自 `@forgeax/engine-ecs`） | ECS 读写：spawn / despawn / set / queryRun |
+| `renderer` | `Renderer` | 渲染器控制：创建/销毁 RT、读 backbuffer |
+| `assets` | `AssetRegistry` | 资产查询：loadByGuid / resolveName / rename |
+| `debugAdapter` | `DebugRhiAdapter \| undefined` | RHI 帧抓取：`captureFrame({...})` / `inspectAt({...})`。**仅当 createApp 运行在 `FORGEAX_ENGINE_RHI_DEBUG=1` 时注入**，否则 `undefined`（用前先 guard）。world / renderer / assets 三根恒在场。 |
 
-同名 `registerRoot` / `registerMethod` **fail-fast**（不覆盖）——一个 `Registry` 实例只能挂一次同名 inspector，重载时 `new Registry()`。
+脚本内通过 `_import(specifier)` 按需引入引擎包（如 `const ecs = await _import('@forgeax/engine-ecs')`），拿到 `createQueryState` / `queryRun` / `Entity` 等。`_import` 是 eval 作用域注入的 import 函数——脚本内**无**裸 `import` 关键字。
+
+> [!NOTE]
+> **协议层另有一个内建方法 `introspect`**（与 `eval` 并列）：返回 OpenRPC L2 子集文档，列出可用方法（`eval` / `introspect`）+ eval 作用域活根。AI 用户连上后可先 `introspect` 自描述，无需读源码即知能 eval 什么。错误码映射 JSON-RPC -32001..-32006。
+
+**安全模型**：eval 全开（无只读拦截、无能力黑名单）。唯一边界是 host 起不起 server：`createApp` dev 模式默认 wire `app.remote`（WS server 在场）；production 默认不起 server（天然安全）。危险 API（`renderer.dispose()` / `world.despawn`）允许执行，详见末尾 NOTE。
+
+## 传输路径
+
+三条路径统一收束到同一个 `eval(script)` 协议：
+
+```mermaid
+flowchart TD
+    A[AI 用户 / CLI / 进程内] -->|eval| E[eval 核心<br/>host realm new Function]
+    E -.->|_import| ECS["@forgeax/engine-ecs<br/>queryRun / Entity"]
+    E --> R["eval 作用域活根<br/>world · renderer · assets · debugAdapter"]
+    R --> W[运行中 World / Renderer]
+```
+
+| 路径 | 形态 | 适用场景 |
+|:--|:--|:--|
+| 进程内 client | `app` 获取 `RemoteHandle`，`client.eval(script)` | host 自身做查询/调试（零网络开销） |
+| WS JSON-RPC 2.0 | `ws://localhost:5732` 发 `{"method":"eval","params":{"script":"..."}}` | 外部工具 / AI 代理连运行中引擎 |
+| CLI plugin bin | `forgeax-engine-remote-{ecs,asset,gltf,font,state}` | 离线/进程外数据工具 |
 
 ## 核心 API / bin 速查
 
 | 名字 | 来源 | 形态 | 用途 |
 |:--|:--|:--|:--|
-| `Registry` | console | class | JSON-RPC root/method 路由表；`registerRoot` / `registerMethod` 同名 fail-fast |
-| `wireDefaultInspectors` | console | fn | 把传入的 `register*Inspector` 批量挂进 `Registry`（host 注入点） |
-| `startConsoleServer` | `console/server` | `async fn` | 起 WS:5732 JSON-RPC 服务，返回 server handle |
-| `registerEcsInspector` | ecs | fn | 注册 ECS inspector root（entities / components / systems / resources / world） |
-| `registerRuntimeInspector` | runtime | fn | 注册 runtime inspector root（engine / assets） |
-| `forgeax-engine-console-asset` | pack | plugin bin | `scan` / `lookup` / `verify` / `atlas` |
-| `forgeax-engine-console-gltf` | gltf | plugin bin | `import` |
-| `forgeax-engine-console-ecs` | ecs | plugin bin | `entities` / `components` / `systems` / `resources` / `world` |
-| `forgeax-engine-console-font` | font | plugin bin | `bake` |
-| `forgeax-engine-console-state` | state | plugin bin | `list` / `get <name>` |
+| `client.eval(script)` | `@forgeax/engine-remote` | `async (script: string) => Promise<Result<unknown, RemoteError>>` | 对运行中引擎执行一段 JS，取返回值 |
+| `RemoteHandle` | `@forgeax/engine-types` | `{ port: number; close(): Promise<void> }` | `app.remote` 的类型；暴露 server 端口与关闭方法 |
+| `RemoteError` | `@forgeax/engine-remote` | class extends Error，含 `.code` / `.expected` / `.hint` | 结构化错误，4 成员 `RemoteErrorCode` 闭集 |
+| `forgeax-engine-remote-ecs` | ecs | plugin bin | `entities` / `components` / `systems` / `resources` / `world` |
+| `forgeax-engine-remote-asset` | pack | plugin bin | `scan` / `lookup` / `verify` / `atlas` |
+| `forgeax-engine-remote-gltf` | gltf | plugin bin | `import` |
+| `forgeax-engine-remote-font` | font | plugin bin | `bake` |
+| `forgeax-engine-remote-state` | state | plugin bin | `list` / `get <name>` |
 
 > [!IMPORTANT]
-> base CLI 是 `forgeax-engine-console`（基座自带，连 WS host 跑 JSON-RPC）；上表后四行是各能力包发布的**独立** plugin bin，进程外直接调用，**不**经 base CLI 转发。`InspectorErrorCode`（6 成员，勿抄）见 `packages/types/src/index.ts` + `packages/console/src/errors.ts`。
+> CLI plugin bin 是各能力包自带的独立可执行文件，进程外直接调用。`RemoteErrorCode`（4 成员：`script-syntax-error` / `script-runtime-error` / `server-startup-failed` / `server-not-running`）SSOT 见 `packages/types/src/index.ts` + `packages/remote/src/errors.ts`。
 
-## 规范装配顺序（host 端 in-process inspector）
+## handle 发现配方
 
-```mermaid
-flowchart TD
-  R["const reg = new Registry()"] --> W["wireDefaultInspectors(reg, ctx, { registerEcsInspector, registerRuntimeInspector })"]
-  W --> S["const handle = await startConsoleServer({ port: 5732, registry: reg })"]
-  S --> Q["JSON-RPC 2.0 客户端经 WS:5732 查询运行中的 World"]
+eval 内发现 entity handle 的唯一方法是写 `queryRun` 查询——零新 ECS API。**必须用真实 callback 形态**（`queryRun(state, world, (bundle) => { ... })` ——返回 `void`，结果在 `bundle` 参数内拿到）：
+
+```js
+// eval 脚本内
+const ecs = await _import('@forgeax/engine-ecs');
+const state = ecs.createQueryState({ with: [ecs.Entity] });
+
+let handles;
+ecs.queryRun(state, world, (bundle) => {
+  // bundle.Entity.self 是 Uint32Array，包含所有匹配 entity 的 handle
+  handles = Array.from(bundle.Entity.self);
+});
+
+// handles 现在是一个 number[]，每个都是 entity handle
 ```
 
-## idiom 代码骨架
+**带组件的精确查询**：
+
+```js
+const ecs = await _import('@forgeax/engine-ecs');
+const { createQueryState, queryRun, Entity, Transform, MeshRenderer } = ecs;
+
+const state = createQueryState({ with: [MeshRenderer, Transform, Entity] });
+let result = [];
+queryRun(state, world, (bundle) => {
+  for (let i = 0; i < bundle.Entity.self.length; i++) {
+    result.push({
+      entity: bundle.Entity.self[i],
+      position: [bundle.Transform.position.x[i], bundle.Transform.position.y[i], bundle.Transform.position.z[i]],
+    });
+  }
+});
+```
+
+> [!NOTE]
+> `Entity` 是 id=0 的 essential 组件，每个 archetype 必带——`bundle.Entity.self` 永远是 `Uint32Array`。引擎自身用此形态做反射，外部 eval 脚本亦然。
+
+## 读写配方
+
+### 读组件值
+
+```js
+const ecs = await _import('@forgeax/engine-ecs');
+const state = ecs.createQueryState({ with: [ecs.Transform, ecs.Entity] });
+
+ecs.queryRun(state, world, (bundle) => {
+  for (let i = 0; i < bundle.Entity.self.length; i++) {
+    const h = bundle.Entity.self[i];
+    const x = bundle.Transform.position.x[i];
+    const y = bundle.Transform.position.y[i];
+    const z = bundle.Transform.position.z[i];
+    // 使用 h / x / y / z
+  }
+});
+```
+
+### 写组件值 / 生命周期
+
+```js
+// spawn——带组件
+const h = world.spawn([new Transform({ position: [0, 5, 0] })]);
+
+// set——直接修改已存在实体的组件值
+world.set(h, new Transform({ position: [1, 2, 3] }));
+
+// despawn
+world.despawn(h);
+```
+
+eval 无任何写入拦截——`spawn` / `set` / `despawn` 直接执行，不会返回 `inspector-write-denied`（该错误码已随 sandbox 删除）。危险操作（`renderer.dispose()` 等）见末尾 NOTE。
+
+## debugAdapter 帧抓取
+
+eval 内通过第 4 活根 `debugAdapter` 做 RHI 帧抓取：
+
+```js
+// 抓取当前帧的稳态 tape（结构化 draw-call 数据）
+const tape = await debugAdapter.captureFrame({ label: 'my-snapshot' });
+// tape.frameModel 是结构化 FrameModel（与 RHI debug viewer / CLI summary 同一 SSOT）
+
+// per-draw inspect
+const draw = await debugAdapter.inspectAt({ tape, drawIdx: 3 });
+// draw.pipelineState / draw.bindings / draw.renderTargetPNG
+```
+
+离线子命令（`inspect-offline` / `summary` / `trigger-browser`）是纯本地工具，不连 WS，不受 eval 收编影响。详见 [`forgeax-engine-rhi-debug`](../forgeax-engine-rhi-debug/SKILL.md)。
+
+## createApp 默认在场
+
+`createApp` dev 模式默认起 remote server，消隐"没 wire 等于没有"黑洞：
 
 ```ts
-import { Registry, wireDefaultInspectors } from '@forgeax/engine-console';
-import { startConsoleServer } from '@forgeax/engine-console/server';
-import { registerEcsInspector } from '@forgeax/engine-ecs';
-import { registerRuntimeInspector } from '@forgeax/engine-runtime';
+import { createApp } from '@forgeax/engine-app';
 
-const reg = new Registry();
-wireDefaultInspectors(
-  reg,
-  { world, engine: renderer, assets: renderer.assets },
-  { registerEcsInspector, registerRuntimeInspector },
-);
-const handle = await startConsoleServer({ port: 5732, registry: reg });
+const app = await createApp({ canvas });
+
+// dev 模式：app.remote 非 undefined，port > 0
+if (app.remote) {
+  console.log('remote eval server on port', app.remote.port);
+  // 进程内直接 client.eval(...)
+  // 或外部工具连 ws://localhost:<port>
+}
+
+// production 模式：app.remote 为 undefined（server 不启，天然安全）
 ```
 
-CLI plugin bin 进程外直接调用，**不造新脚本**——子命令名见上表 plugin bin 行。`asset verify` 跑 6 步 fail-fast（schema / GUID / collision / orphan / cycle / subasset-index）。
+`RemoteHandle` 类型（`{ port: number; close(): Promise<void> }`）定义在 `@forgeax/engine-types`，host 类型面不静态引 `@forgeax/engine-remote`。
+
+## RemoteErrorCode 闭集（4 成员）
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    script-syntax-error: 脚本语法错
+    script-runtime-error: 脚本运行期抛错
+    server-startup-failed: server 起不来（端口被占等）
+    server-not-running: server 未运行（客户端尝试连接但 host 未起）
+```
+
+| code | JSON-RPC 段位 | `.expected` | `.hint` |
+|:--|:--|:--|:--|
+| `script-syntax-error` | -32001 | `'script body is valid JavaScript'` | `'check syntax position in errMessage; fix and resubmit'` |
+| `script-runtime-error` | -32002 | `'script executes without throwing'` | `'inspect error; verify symbol availability; eval has full access to world/renderer/assets'` |
+| `server-startup-failed` | -32003 | `'server starts successfully on requested port'` | `'check if port is already in use (default 5732); pass different port; or kill existing process holding the port'` |
+| `server-not-running` | -32004 | `'server is reachable at ws://localhost:<port>'` | `'start the demo first; verify app.remote is wired; pass --port to override default 5732'` |
+
+消费方式——`switch (err.code)` 穷举 4 成员，无 `default` 分支（TS 严格模式守完整性）：
+
+```ts
+import { RemoteError, type RemoteErrorCode } from '@forgeax/engine-remote';
+
+function recover(code: RemoteErrorCode): string {
+  switch (code) {
+    case 'script-syntax-error':     return 'fix script body syntax and resubmit';
+    case 'script-runtime-error':    return 'inspect stack trace; verify symbol availability';
+    case 'server-startup-failed':   return 'pick a different port or free port 5732';
+    case 'server-not-running':      return 'start demo dev or wire app.remote';
+  }
+}
+```
+
+## CLI plugin bin
+
+plugin bin 是各能力包自带的独立可执行文件，进程外直接调用：
+
+```bash
+# ECS 查询
+forgeax-engine-remote-ecs entities
+forgeax-engine-remote-ecs entities --with Transform,Velocity --without Frozen
+forgeax-engine-remote-ecs systems
+forgeax-engine-remote-ecs components
+
+# 资产扫描/校验
+forgeax-engine-remote-asset scan ./assets
+forgeax-engine-remote-asset verify
+forgeax-engine-remote-asset lookup <guid>
+
+# glTF 导入
+forgeax-engine-remote-gltf import ./model.glb
+
+# 字体烘焙
+forgeax-engine-remote-font bake ./font.ttf
+
+# 状态机查询
+forgeax-engine-remote-state list
+forgeax-engine-remote-state get <tokenName>
+
+# 切端口
+forgeax-engine-remote-ecs entities --port 5731
+```
 
 ## 踩坑
 
-- **`registerRoot` / `registerMethod` 报重复**：一个 `Registry` 实例同名只能挂一次（fail-fast，不覆盖）；热重载 / 复用时 `new Registry()` 重建，别想着二次注册同名 root。
-- **console 找不到 ECS / runtime 能力**：基座物理零导入引擎包——能力必须由 host 经 `wireDefaultInspectors` 注入；忘了传 `register*Inspector` 就只有空路由表。
-- **base CLI vs plugin bin 混淆**：`forgeax-engine-console` 是 JSON-RPC 客户端入口；`forgeax-engine-console-asset` 等是独立可执行的离线工具。查运行中的 World 用前者（WS:5732），扫磁盘资产用后者。
-- **asset / gltf / font 链路细节**：见 [`forgeax-engine-assets`](../forgeax-engine-assets/SKILL.md)；ECS 查询语义见 [`forgeax-engine-ecs`](../forgeax-engine-ecs/SKILL.md)。
-
-## inspector assets root 的 name 展示 / rename 错误路径
-
-> feat-20260618（Package + resolveName）使 inspector `assets` root 每个 entry 携带 resolved name，CLI 侧按名展示资产而非只列 GUID。
-
-- **`InspectEntry.name`** -- `inspect().assets[i]` 每行含 `name: string`（非可选，空串合法值），值经 runtime `resolveName(guid)` 同源解析，不各自复刻 XOR 规则
-- **`PackIndexEntry.name?`** -- `asset verify` / `asset scan` 产出的 pack-index 行含 `name?: string`（add-only 可选），构建期经 `deriveAssetName` 算，与 runtime `resolveName` 同源
-- **`assets.rename(guid, newName)` 内存态改名** -- 返 `Result<void, AssetError>`：撞同 package 已有名返 `asset-invalid-value`（`.detail` 含冲突 name + packagePath），目标 guid 未注册返 `asset-not-found`；始终经 `switch (err.code)` 结构消费，不解析 `.message`
+- **eval 内不能用裸 `import`**：脚本作用域不认 `import` 关键字——用注入的 `_import(specifier)` 函数做动态 ESM 引入。`const ecs = await _import('@forgeax/engine-ecs')`。
+- **`queryRun` 返回 `void`，结果在回调的 `bundle` 里**：`queryRun(state, world, callback)` 是 **batch-callback 形态**——参数顺序是 `(state, world, callback)`，不是链式 `.Entity.self`。把结果变量声明在回调外、回调内赋值。
+- **`app.remote` 为 `undefined`**：`createApp` 仅 dev 模式默认起 server。production / headless / dawn-node（无显式 env opt-in）下 `app.remote` 为 `undefined`。dawn-node 需要时设环境变量 `FORGEAX_REMOTE_SERVER=1`。
+- **plugin bin 找不到**：确认 `@forgeax/engine-{ecs,pack,font,gltf,state}` 已安装（`pnpm install`），bin 会自动出现在 `node_modules/.bin/`。
 
 ## 深入
 
-- console 包定位 / Inspector 主入口索引 / Plugin contract / 统一抽象（CLI plugin + script raw 通道）：见 `packages/console/README.md` §Plugin contract / §CLI 子命令；源码 `packages/console/src/registry.ts` · `wire-default-inspectors.ts` · `server.ts`
-- host 装配代码块（与本 skill idiom 同源）：AGENTS.md §Inspector / Console
-- 4 个 plugin bin 的 owner 包与子命令表：AGENTS.md §Inspector / Console（plugin-bin 表）
-- ECS plugin bin（`entities` / `components` / `systems` / `resources` / `world`）源码：`packages/ecs/src/cli-ecs.ts`；register inspector `packages/ecs/src/register-inspector.ts`
-- runtime inspector：源码 `packages/runtime/src/register-inspector.ts`
-- `InspectorErrorCode`（6 成员，勿抄）：`packages/types/src/index.ts` + `packages/console/src/errors.ts`
-- `InspectEntry`（含 `name: string`）定义 + `PackIndexEntry.name?`：`packages/types/src/index.ts`
-- identity / resolveName / rename 完整语义： [`forgeax-engine-assets`](../forgeax-engine-assets/SKILL.md) §identity 三支 + 边界
-- 术语三层消歧（asset name / entity Name / ShaderAsset.name）：见 [`packages/types/README.md`](../../packages/types/README.md) §Name disambiguation
+- 包定位 / RemoteError 类 / RemoteErrorCode SSOT / 物理隔离 gate：见 `packages/remote/README.md`
+- 错误模型源码：`packages/remote/src/errors.ts`
+- eval 执行引擎源码：`packages/remote/src/execute.ts`
+- server 源码：`packages/remote/src/server.ts`
+- `RemoteHandle` / `RemoteErrorCode` / `RemoteError` 类型定义：`packages/types/src/index.ts`
+- 5 个 plugin bin 的 owner 包源码：`packages/ecs/src/cli-ecs.ts` / `packages/pack/src/cli-pack.ts` / `packages/font/src/cli-font.ts` / `packages/gltf/src/cli-gltf.ts` / `packages/state/src/cli-state.ts`
 
 ## RHI 录帧 CLI（capture-frame / inspect-at / inspect-offline / summary）
 
-> `@forgeax/engine-rhi-debug` 的 `capture-frame` / `inspect-at` 子命令走本 skill 的 JSON-RPC WS:5732 通道（`debug.captureFrame` / `debug.inspectAt` / `debug.replayDispose`）；离线子命令 `inspect-offline <tape> <drawIdx>`（自举 dawn-node，per-draw，输出含 `pipelineState`）与 `summary <tape>`（纯函数零 GPU，整帧 `FrameModel`——RHI debug viewer 与 CLI 同一 SSOT）不连 WS。flag 表、输出 schema、`debugRhi` injector 装配与症状定位工作流全在 [`forgeax-engine-rhi-debug`](../forgeax-engine-rhi-debug/SKILL.md)（SSOT）。host 端把 debug adapter 接进 `wireDefaultInspectors` 的范式同那里。
+> `@forgeax/engine-rhi-debug` 的 `capture-frame` / `inspect-at` 子命令经 `client.eval` 通道（构造 `debugAdapter.captureFrame({...})` 脚本发送），不再走独立 JSON-RPC method。离线子命令 `inspect-offline <tape> <drawIdx>`（自举 dawn-node，per-draw，输出含 `pipelineState`）与 `summary <tape>`（纯函数零 GPU，整帧 `FrameModel`——RHI debug viewer 与 CLI 同一 SSOT）不连 WS。flag 表、输出 schema、症状定位工作流全在 [`forgeax-engine-rhi-debug`](../forgeax-engine-rhi-debug/SKILL.md)（SSOT）。
 
-## forgeax-engine-console-state plugin bin
+## forgeax-engine-remote-state plugin bin
 
-> `@forgeax/engine-state` provides a CLI plugin bin for inspecting state machines. Two subcommands, discoverable via the `forgeax-engine-console-` prefix scan.
+> `@forgeax/engine-state` provides a CLI plugin bin for inspecting state machines. Two subcommands, discoverable via the `forgeax-engine-remote-` prefix scan.
 
 ### list
 
 ```bash
-forgeax-engine-console-state list
+forgeax-engine-remote-state list
 ```
 
 Output format: one line per registered state token:
@@ -117,7 +276,7 @@ If no state tokens are registered, prints `(no state tokens registered)`.
 ### get
 
 ```bash
-forgeax-engine-console-state get <tokenName>
+forgeax-engine-remote-state get <tokenName>
 ```
 
 Prints the current variant string for the named state token. Exit code 0 on success, exit code 1 with structured error on unknown token name or if `getState` returns `Result.err`.
@@ -126,3 +285,8 @@ Prints the current variant string for the named state token. Exit code 0 on succ
 
 - Plugin bin source: `packages/state/src/cli-state.ts`
 - State machine API surface: [`forgeax-engine-state`](../forgeax-engine-state/SKILL.md)
+
+---
+
+> [!CAUTION]
+> **危险 API NOTE**：eval 全开可读写——脚本内可以调用 `renderer.dispose()`（销毁 GPU 上下文、整个 app 崩溃）、`world.despawn` 批量清实体、`AssetRegistry.clear()` 等破坏性操作。引擎不做代码层拦截。production 环境的天然安全来自不起 server（`app.remote` 为 `undefined`）；dev 环境的保护靠开发者自觉。AI 用户在 dev 模式 eval 前确认脚本不含毁灭性 API 调用。

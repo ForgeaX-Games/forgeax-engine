@@ -9,14 +9,13 @@
 //   - packages/ecs/src/__tests__/column.test.ts
 //   - packages/ecs/src/__tests__/entity-column.test.ts
 //   - packages/ecs/src/__tests__/fixed-array-inline.test.ts
-//   - packages/ecs/src/__tests__/mutating-methods.test.ts
 //   - packages/ecs/src/__tests__/query-preregister.test.ts
 //   - packages/ecs/src/__tests__/query.test.ts
 //
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Archetype } from '../archetype';
 import { appendEntity, createArchetype, growArchetype, removeEntity } from '../archetype';
@@ -40,8 +39,6 @@ import {
 } from '../component';
 import { Entity } from '../entity';
 import type { EntityHandle } from '../entity-handle';
-import { ECS_MUTATING_METHODS } from '../index';
-import { ECS_MUTATING_METHODS as REIMPORT_ECS_MUTATING_METHODS } from '../mutating-methods';
 import { createQueryState, type QueryDescriptor, type QueryState, queryRun } from '../query';
 import { World } from '../world';
 
@@ -1383,53 +1380,6 @@ import { World } from '../world';
 
         world.despawn(e1).unwrap();
         expect(liveCount(world)).toBe(0);
-      });
-    });
-  });
-}
-
-{
-  // ─── from mutating-methods.test.ts ───
-  const F1_FROZEN_14: readonly string[] = [
-    'addSystem',
-    'removeSystem',
-    'replaceSystem',
-    'setErrorHandler',
-    'update',
-    'insertResource',
-    'removeResource',
-    'spawn',
-    'despawn',
-    'addComponent',
-    'removeComponent',
-    'set',
-    'push',
-    'pop',
-  ];
-
-  describe('mutating-methods.test.ts', () => {
-    describe('ECS_MUTATING_METHODS export shape (feat-20260517 D-6 / research F1)', () => {
-      it('(a) is a ReadonlySet<string>', () => {
-        expectTypeOf<typeof ECS_MUTATING_METHODS>().toEqualTypeOf<ReadonlySet<string>>();
-        expect(ECS_MUTATING_METHODS).toBeInstanceOf(Set);
-      });
-
-      it('(b) holds 14 members', () => {
-        expect(ECS_MUTATING_METHODS.size).toBe(14);
-      });
-
-      it('(c) member literals exactly match the frozen list (Schedule 5 + Resource 2 + Entity 4 + Field 3, no Schema member)', () => {
-        for (const name of F1_FROZEN_14) {
-          expect(ECS_MUTATING_METHODS.has(name)).toBe(true);
-        }
-        expect([...ECS_MUTATING_METHODS].slice().sort()).toStrictEqual(
-          [...F1_FROZEN_14].slice().sort(),
-        );
-        expect(ECS_MUTATING_METHODS.has('registerComponent')).toBe(false);
-      });
-
-      it('(d) reference identity is stable across two imports (module-level singleton — registerMutatingMethods === dedup key per D-5)', () => {
-        expect(ECS_MUTATING_METHODS).toBe(REIMPORT_ECS_MUTATING_METHODS);
       });
     });
   });

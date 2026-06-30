@@ -25,10 +25,7 @@
 
 import { createApp } from '@forgeax/engine-app';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
-import { InspectorError, Registry, wireDefaultInspectors } from '@forgeax/engine-console';
-import { startConsoleServer } from '@forgeax/engine-console/server';
-import { registerEcsInspector, World } from '@forgeax/engine-ecs';
-import { wireDebugRhiInspector, type DebugRhiAdapter } from '@forgeax/engine-rhi-debug';
+import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera,
@@ -36,7 +33,6 @@ import {
   DirectionalLight,
   EngineEnvironmentError,
   PointLight,
-  registerRuntimeInspector,
   Skylight,
   Transform,
 } from '@forgeax/engine-runtime';
@@ -163,60 +159,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Expose scene-ready hook for visual tests (M4 playwright visual sentinel).
   (window as unknown as Record<string, unknown>).__sponzaSceneReady = true;
 
-  // M8-3 (AC-29): debug capture console-server injection.
-  // When FORGEAX_ENGINE_RHI_DEBUG=1, createAppFromCanvas dynamically imports
-  // @forgeax/engine-rhi-debug, wraps the RHI, creates a DebugRhiAdapter,
-  // and exposes it as app._debugAdapter. This demo wires that adapter into
-  // wireDefaultInspectors + starts the WS:5732 console server so the CLI
-  // capture-frame command reaches a real recorder chain.
-  //
-  // The debug adapter is NOT auto-wired by createApp itself -- the demo host
-  // owns the inspector wiring (same pattern as inspector-demo's host assembly).
-  // wireDefaultInspectors supports an optional debugRhi injector (round 1 M7
-  // WireDefaultInspectorsInjectors.debugRhi field, plan-strategy D-5).
-  const proc = (globalThis as { process?: { env?: { FORGEAX_ENGINE_RHI_DEBUG?: string } } }).process;
-  if (proc?.env?.FORGEAX_ENGINE_RHI_DEBUG === '1' && (app as App & { _debugAdapter?: unknown })._debugAdapter) {
-    const reg = new Registry();
-    const wired = wireDefaultInspectors(
-      reg,
-      { world, engine: renderer, assets: renderer.assets },
-      {
-        registerEcsInspector,
-        registerRuntimeInspector,
-        debugRhi: (r) => {
-          const res = wireDebugRhiInspector(
-            r,
-            (app as App & { _debugAdapter: DebugRhiAdapter })._debugAdapter,
-          );
-          if (!res.ok)
-            return {
-              ok: false,
-              error: new InspectorError({
-                code: 'console-startup-failed',
-                expected: 'wireDebugRhiInspector to succeed',
-                hint: res.error.hint,
-              }),
-            };
-          return res;
-        },
-      },
-    );
-    if (!wired.ok) {
-      console.error('[learn-render 3.1] wireDefaultInspectors failed:', wired.error);
-    } else {
-      const srvRes = await startConsoleServer({ port: 5732, registry: reg });
-      if (srvRes.ok) {
-        console.warn(
-          `[learn-render 3.1] debug inspector server on ws://localhost:${srvRes.value.port}/inspector`,
-        );
-        console.warn(
-          '[learn-render 3.1] try: forgeax-engine-console capture-frame --frames=1 --label sponza-debug --target ws://localhost:5732',
-        );
-        (window as unknown as Record<string, unknown>).__sponzaDebugCaptureReady = true;
-      } else {
-        console.error('[learn-render 3.1] startConsoleServer failed:', srvRes.error);
-      }
-    }
+  // createApp now auto-wires app.remote in dev mode (feat-20260629-inspector-two-layer-model M4).
+  // The remote eval server exposes world/renderer/assets/debugAdapter (when
+  // FORGEAX_ENGINE_RHI_DEBUG=1) as eval-scope roots — client.eval(script) replaces
+  // the old Registry/wireDefaultInspectors/startConsoleServer manual assembly.
+  // Per M5 w23: the manual console wiring block is deleted; the eval channel
+  // is zero-cost present through app.remote.
+  if (app.remote) {
+    console.warn(`[learn-render 3.1] remote eval on ws://localhost:${app.remote.port}/inspector`);
   }
 }
 
@@ -386,7 +336,6 @@ function reportBootstrapError(err: CanvasAppError): void {
 declare global {
   interface Window {
     __sponzaSceneReady?: boolean;
-    __sponzaDebugCaptureReady?: boolean;
     __learnRenderErrors?: Array<{ code: string; hint?: string }>;
   }
 }

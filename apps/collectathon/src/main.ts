@@ -26,7 +26,6 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { physicsPlugin } from '@forgeax/engine-physics';
 import {
   ANTIALIAS_FXAA,
-  AnimationPlayer,
   BLOOM_ENABLED,
   Camera,
   createDevImportTransport,
@@ -78,7 +77,6 @@ import {
   cameraLookAtQuat,
   createMoveSystem,
   createPlayerMoveSignal,
-  setCameraFollowEnabled,
 } from './systems/player-move';
 import { createPortalSystem } from './systems/portal-activate';
 import { createArbiterSystem } from './systems/win-lose-arbiter';
@@ -284,94 +282,12 @@ function installSmokeHook(world: World): void {
 }
 
 /**
- * Dev-only verification hook. Exposes `globalThis.__cg` with the live World and
- * the player/camera handles so a Playwright harness can:
- *   - read the player parent pose (pos + quat) frame-over-frame to confirm
- *     translation + facing yaw numerically, and
- *   - call `fixCamera(eye, target)` to pin the camera at a fixed wide vantage so
- *     player motion is visible in static screenshots (the follow camera centers
- *     the player every frame, hiding translation/facing).
- * Gated to DEV at the call site; never present in a production build.
+ * Dev-only verification hook deleted (feat-20260629-inspector-two-layer-model M5 w24).
+ * createApp now auto-wires app.remote in dev mode — host can read player pose
+ * frame-over-frame and fix the camera via client.eval(script) against the
+ * remote eval channel. The old window.__cg manual hook (installDevHook) is
+ * no longer needed — the eval server makes World access zero-cost present.
  */
-function installDevHook(
-  world: World,
-  player: EntityHandle,
-  sceneRoot: EntityHandle,
-  skin: EntityHandle,
-  camera: EntityHandle,
-): void {
-  const pose = (e: EntityHandle): Record<string, number> | null => {
-    const t = world.get(e, Transform);
-    if (!t.ok) return null;
-    const v = t.value;
-    // world is a 16-float column-major mat4; translation is elements 12,13,14.
-    const wm = v.world as unknown as ArrayLike<number> | undefined;
-    return {
-      posX: v.posX,
-      posY: v.posY,
-      posZ: v.posZ,
-      quatX: v.quatX,
-      quatY: v.quatY,
-      quatZ: v.quatZ,
-      quatW: v.quatW,
-      worldX: wm ? (wm[12] ?? Number.NaN) : Number.NaN,
-      worldY: wm ? (wm[13] ?? Number.NaN) : Number.NaN,
-      worldZ: wm ? (wm[14] ?? Number.NaN) : Number.NaN,
-    };
-  };
-  const hook = {
-    player: (): Record<string, number> | null => pose(player),
-    sceneRoot: (): Record<string, number> | null => pose(sceneRoot),
-    skin: (): Record<string, number> | null => pose(skin),
-    camera: (): Record<string, number> | null => pose(camera),
-    // Animation player clock + weights, to confirm the run clip advances while
-    // moving (times[0] grows) and the idle/run crossfade settles (weights).
-    anim: (): Record<string, unknown> | null => {
-      const r = world.get(skin, AnimationPlayer);
-      if (!r.ok) return null;
-      const a = r.value as unknown as {
-        times: ArrayLike<number>;
-        weights: ArrayLike<number>;
-        speeds: ArrayLike<number>;
-      };
-      return {
-        times: Array.from(a.times),
-        weights: Array.from(a.weights),
-        speeds: Array.from(a.speeds),
-      };
-    },
-    // Pin the camera at a fixed eye looking at target; disables follow so the
-    // camera stays put while the player moves across the frame.
-    fixCamera(eye: [number, number, number], target: [number, number, number]): void {
-      setCameraFollowEnabled(false);
-      const look = cameraLookAtQuat(
-        eye[0],
-        eye[1],
-        eye[2],
-        target[0],
-        target[1],
-        target[2],
-        0,
-        1,
-        0,
-      );
-      world.set(camera, Transform, {
-        posX: eye[0],
-        posY: eye[1],
-        posZ: eye[2],
-        quatX: look.quatX,
-        quatY: look.quatY,
-        quatZ: look.quatZ,
-        quatW: look.quatW,
-      });
-    },
-    // Restore the third-person follow.
-    followCamera(): void {
-      setCameraFollowEnabled(true);
-    },
-  };
-  (globalThis as unknown as { __cg?: typeof hook }).__cg = hook;
-}
 
 function wireStates(
   app: import('@forgeax/engine-app').App,
@@ -504,14 +420,10 @@ function wireStates(
     }
     w.addSystem({ ...createAudioCueSystem(cues, signal), runIf: playOnly });
 
-    // Dev-only verification hook (DEV builds only): expose the live World + the
-    // player/camera handles + Transform so a Playwright harness can read player
-    // pose over time and pin the camera at a fixed wide vantage (the third-person
-    // follow centers the player every frame, hiding translation/facing in static
-    // screenshots). No production behavior depends on this; it is gated to DEV.
-    if (import.meta.env.DEV) {
-      installDevHook(w, player.parent, player.sceneRoot, player.skin, camera);
-    }
+    // Dev-only verification hook deleted (M5 w24): createApp auto-wires
+    // app.remote in dev mode — host reads player pose / fixes camera via
+    // client.eval(script) against the eval channel. The old __cg hook is
+    // replaced by the zero-cost present remote eval server.
   });
 
   // Hide the HUD when leaving Play (Win/Lose result screens land later); the

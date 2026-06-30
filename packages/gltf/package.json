@@ -5,9 +5,9 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Runtime glTF 2.0 importer (Tier-B subset: scenes + nodes + meshes (POSITION + INDICES) + UnlitMaterial.baseColor + Camera.perspective). Pure-function pipeline parseGlb / parseGltf / toAssetPack consumed by build-time CLI (forgeax-engine-console-gltf import) writing <source>.meta.json (external-asset-package; assetType=gltf) for runtime loadByGuid<SceneAsset>.",
+  "description": "Runtime glTF 2.0 importer (Tier-B subset: scenes + nodes + meshes (POSITION + INDICES) + UnlitMaterial.baseColor + Camera.perspective). Pure-function pipeline parseGlb / parseGltf / toAssetPack consumed by build-time CLI (forgeax-engine-remote-gltf import) writing <source>.meta.json (external-asset-package; assetType=gltf) for runtime loadByGuid<SceneAsset>.",
   "bin": {
-    "forgeax-engine-console-gltf": "./dist/cli-gltf.mjs"
+    "forgeax-engine-remote-gltf": "./dist/cli-gltf.mjs"
   },
   "exports": {
     ".": {

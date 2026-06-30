@@ -46,14 +46,7 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import type {
-  Handle,
-  Handler,
-  InspectorError as InspectorErrorShape,
-  RegisterMethodResult,
-  RegisterRootResult,
-  Registry,
-} from '@forgeax/engine-types';
+import type { Handle } from '@forgeax/engine-types';
 import { err } from '@forgeax/engine-types';
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { BufferPool } from '../buffer-pool';
@@ -81,8 +74,6 @@ import {
   ResourceNotFoundError,
   UniqueRefStaleError,
 } from '../errors';
-import { ECS_MUTATING_METHODS } from '../mutating-methods';
-import { registerEcsInspector } from '../register-inspector';
 import { type ErrorContext, matchSeverity, Severity } from '../schedule';
 import { UniqueRefStore } from '../unique-ref-store';
 import { World, type WorldInspection } from '../world';
@@ -135,7 +126,7 @@ import { handleNumeric } from './utils/handle-numeric';
     it('(g) cli-ecs help body lists 5 subcommands (entities/components/systems/resources/world)', async () => {
       const mod = await import('../cli-ecs');
       const help = mod.helpBody();
-      expect(help).toMatch(/forgeax-engine-console-ecs/);
+      expect(help).toMatch(/forgeax-engine-remote-ecs/);
       for (const sub of ['entities', 'components', 'systems', 'resources', 'world']) {
         expect(help).toContain(sub);
       }
@@ -248,121 +239,6 @@ import { handleNumeric } from './utils/handle-numeric';
 
       store.release(h2);
       expect(sequence).toEqual(['a', 'b']);
-    });
-  });
-}
-{
-  // --- from register-ecs-inspector.test.ts ---
-  interface FakeRegistry extends Registry {
-    readonly methods: Map<string, Handler>;
-    readonly mutatingContributions: ReadonlySet<string>[];
-  }
-
-  function makeFakeRegistry(): FakeRegistry {
-    const methods = new Map<string, Handler>();
-    const roots = new Map<string, unknown>();
-    const mutatingContributions: ReadonlySet<string>[] = [];
-    const merged = new Set<string>();
-    const reg: FakeRegistry = {
-      methods,
-      mutatingContributions,
-      registerRoot(name, value): RegisterMethodResult {
-        if (roots.has(name)) {
-          return {
-            ok: false,
-            error: Object.assign(
-              new Error(`[InspectorError console-startup-failed] root ${name} already registered`),
-              {
-                name: 'InspectorError',
-                code: 'console-startup-failed' as const,
-                expected: `unique root name`,
-                hint: 'use a different name',
-              },
-            ),
-          };
-        }
-        roots.set(name, value);
-        return { ok: true, value: undefined };
-      },
-      registerMethod(name, handler): RegisterMethodResult {
-        if (methods.has(name)) {
-          return {
-            ok: false,
-            error: Object.assign(
-              new Error(
-                `[InspectorError console-startup-failed] method ${name} already registered`,
-              ),
-              {
-                name: 'InspectorError',
-                code: 'console-startup-failed' as const,
-                expected: `unique method name`,
-                hint: 'use a different name',
-              },
-            ),
-          };
-        }
-        methods.set(name, handler);
-        return { ok: true, value: undefined };
-      },
-      registerMutatingMethods(contribution): RegisterMethodResult {
-        if (mutatingContributions.includes(contribution)) {
-          return {
-            ok: false,
-            error: Object.assign(
-              new Error(
-                `[InspectorError console-startup-failed] mutating-methods contribution already registered`,
-              ),
-              {
-                name: 'InspectorError',
-                code: 'console-startup-failed' as const,
-                expected: 'each contribution registered exactly once (=== identity)',
-                hint: 'pass a fresh ReadonlySet<string> per host assembly',
-              },
-            ),
-          };
-        }
-        mutatingContributions.push(contribution);
-        for (const m of contribution) merged.add(m);
-        return { ok: true, value: undefined };
-      },
-      lookupRoot(name) {
-        return roots.has(name) ? { ok: true, value: roots.get(name) } : null;
-      },
-      lookupMethod(name): Handler | undefined {
-        return methods.get(name);
-      },
-      lookupMutatingMethods() {
-        return merged;
-      },
-    };
-    return reg;
-  }
-
-  describe('feat-20260517 M3 w12 registerEcsInspector mutating-methods step', () => {
-    it('(a) fresh registry: contributes ECS_MUTATING_METHODS via registerMutatingMethods', () => {
-      const reg = makeFakeRegistry();
-      const world = new World();
-      const r = registerEcsInspector(reg, world);
-      expect(r.ok).toBe(true);
-      expect(reg.mutatingContributions.length).toBe(1);
-      expect(reg.mutatingContributions[0]).toBe(ECS_MUTATING_METHODS);
-      // The four ECS handlers registered (entities / components / systems / resources).
-      expect(reg.methods.has('entities')).toBe(true);
-      expect(reg.methods.has('components')).toBe(true);
-      expect(reg.methods.has('systems')).toBe(true);
-      expect(reg.methods.has('resources')).toBe(true);
-    });
-
-    it('(b) duplicate registration fails fast with console-startup-failed', () => {
-      const reg = makeFakeRegistry();
-      const world = new World();
-      const r1 = registerEcsInspector(reg, world);
-      expect(r1.ok).toBe(true);
-      const r2 = registerEcsInspector(reg, world);
-      expect(r2.ok).toBe(false);
-      if (!r2.ok) {
-        expect(r2.error.code).toBe('console-startup-failed');
-      }
     });
   });
 }
@@ -2846,129 +2722,6 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(r.error.hint.length).toBeGreaterThan(0);
       expect(r.error.expected.length).toBeGreaterThan(0);
       expect(typeof (r.error as UniqueRefStaleError).detail.slot).toBe('number');
-    });
-  });
-}
-{
-  // --- from register-inspector.test.ts ---
-  class FakeRegistry implements Registry {
-    readonly rootCalls: Array<{ name: string }> = [];
-    readonly methodCalls: Array<{ method: string; handler: Handler }> = [];
-    private readonly roots = new Set<string>();
-    private readonly methods = new Set<string>();
-
-    registerRoot(name: string, root: unknown): RegisterRootResult {
-      this.rootCalls.push({ name });
-      if (this.roots.has(name)) {
-        return {
-          ok: false,
-          error: makeDuplicateError(`root "${name}" not yet registered`, name),
-        };
-      }
-      this.roots.add(name);
-      void root;
-      return { ok: true, value: undefined };
-    }
-
-    registerMethod(method: string, handler: Handler): RegisterMethodResult {
-      this.methodCalls.push({ method, handler });
-      if (this.methods.has(method)) {
-        return {
-          ok: false,
-          error: makeDuplicateError(`method "${method}" not yet registered`, method),
-        };
-      }
-      this.methods.add(method);
-      return { ok: true, value: undefined };
-    }
-
-    lookupRoot(name: string): unknown {
-      return this.roots.has(name) ? {} : undefined;
-    }
-
-    lookupMethod(method: string): Handler | undefined {
-      void method;
-      return undefined;
-    }
-    // feat-20260517 D-5 stub — ECS plugin assembly is M2 w14; M1 keeps the
-    // FakeRegistry tsc-compatible by returning empty merged set.
-    registerMutatingMethods(): RegisterRootResult {
-      return { ok: true, value: undefined };
-    }
-    lookupMutatingMethods(): ReadonlySet<string> {
-      return EMPTY_MUTATING_METHODS;
-    }
-  }
-
-  const EMPTY_MUTATING_METHODS: ReadonlySet<string> = new Set<string>();
-
-  function makeDuplicateError(expected: string, name: string): InspectorErrorShape {
-    return Object.assign(new Error('Console startup failed'), {
-      code: 'console-startup-failed' as const,
-      expected,
-      hint: `call registerEcsInspector at most once per Registry instance (duplicate on "${name}")`,
-    });
-  }
-
-  describe('registerEcsInspector — purity (AC-10)', () => {
-    it('importing @forgeax/engine-ecs does not call registerRoot / registerMethod', async () => {
-      const reg = new FakeRegistry();
-      // Dynamic import to mirror real-world consumers; pure top-level functions
-      // must NOT call reg.* during import resolution.
-      const mod = await import('../index');
-      expect(reg.rootCalls).toHaveLength(0);
-      expect(reg.methodCalls).toHaveLength(0);
-      // Sanity: registerEcsInspector is exported (plan-strategy §3.1
-      // contributor symbol).
-      expect(typeof mod.registerEcsInspector).toBe('function');
-    });
-  });
-
-  describe('registerEcsInspector — happy path', () => {
-    it('registers entities / components / systems / resources methods', async () => {
-      const { registerEcsInspector } = await import('../index');
-      const reg = new FakeRegistry();
-      const world = new World();
-      const result = registerEcsInspector(reg, world);
-      expect(result.ok).toBe(true);
-      const methodNames = reg.methodCalls.map((c) => c.method);
-      expect(methodNames).toEqual(['entities', 'components', 'systems', 'resources']);
-    });
-
-    it('handlers return shapes compatible with world.inspect() consumers', async () => {
-      const { registerEcsInspector } = await import('../index');
-      const reg = new FakeRegistry();
-      const world = new World();
-      registerEcsInspector(reg, world);
-      const byName = new Map<string, Handler>(reg.methodCalls.map((c) => [c.method, c.handler]));
-      // The four handlers must each return an object derived from
-      // world.inspect(). We assert the shape minimally (AC-12 byte freeze of
-      // inspect-scripts.ts is checked separately in the console layer).
-      const entities = byName.get('entities')?.(null);
-      expect(entities).toBeTypeOf('object');
-      const components = byName.get('components')?.(null) as { componentCount: number };
-      expect(typeof components.componentCount).toBe('number');
-      const systems = byName.get('systems')?.(null) as { systemCount: number };
-      expect(typeof systems.systemCount).toBe('number');
-      const resources = byName.get('resources')?.(null) as { resourceCount: number };
-      expect(typeof resources.resourceCount).toBe('number');
-    });
-  });
-
-  describe('registerEcsInspector — fail-fast on duplicate (R-REG-CONFLICT)', () => {
-    it('returns Result.err with console-startup-failed on second call', async () => {
-      const { registerEcsInspector } = await import('../index');
-      const reg = new FakeRegistry();
-      const world = new World();
-      const first = registerEcsInspector(reg, world);
-      expect(first.ok).toBe(true);
-      const second = registerEcsInspector(reg, world);
-      expect(second.ok).toBe(false);
-      if (second.ok) throw new Error('unreachable');
-      expect(second.error.code).toBe('console-startup-failed');
-      // Short-circuits on the first duplicate (entities) per plan-strategy
-      // §3.3 error path 1; we do not collect every duplicate.
-      expect(second.error.expected).toContain('entities');
     });
   });
 }

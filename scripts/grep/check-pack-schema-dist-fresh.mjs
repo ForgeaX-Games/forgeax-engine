@@ -46,10 +46,22 @@ if (!existsSync(DIST)) {
 const sourceJson = JSON.parse(readFileSync(SOURCE, 'utf8'));
 const sourceKinds = sourceJson?.$defs?.subAsset?.properties?.kind?.enum;
 if (!Array.isArray(sourceKinds)) {
+  // feat-20260629: subAssets[].kind is no longer a closed enum — D-1 opened it
+  // to `{ type: 'string', minLength: 1 }` so host importers declare their own
+  // kinds. With no enum, there is no enum-membership to drift between source and
+  // dist (runtime AJV validates `type: string` regardless of build freshness),
+  // so the load-bearing check this gate was built for is moot. Pass cleanly.
+  const kindShape = sourceJson?.$defs?.subAsset?.properties?.kind;
+  if (kindShape?.type === 'string') {
+    console.log(
+      `[check-pack-schema-dist-fresh] OK — subAssets[].kind is open string (no enum to keep fresh).`,
+    );
+    process.exit(0);
+  }
   console.error(
     `[check-pack-schema-dist-fresh] source schema missing $defs.subAsset.properties.kind.enum:\n` +
       `  ${SOURCE}\n` +
-      `  expected an array under that path; got ${JSON.stringify(sourceKinds)}`,
+      `  expected an array (closed enum) or { type: 'string' } (open kind); got ${JSON.stringify(kindShape)}`,
   );
   process.exit(2);
 }

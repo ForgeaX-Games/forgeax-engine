@@ -12,7 +12,7 @@
 //      PackIndexEntry per `assets[]` row (4-field, no `metadata`).
 //   - `*.meta.json`  -- `external-asset-package` arm. Reads `meta.importer`.
 //      The catalog knows how to fold four importer keys: 'image' emits a
-//      5-field row per `subAssets[]` of `kind: 'image'` or `kind: 'cube-texture'`.
+//      5-field row per `subAssets[]` of `kind: 'texture'` or `kind: 'cube-texture'`.
 //      'gltf' emits a 4-field row per `subAssets[]` of kind 'mesh' / 'material' /
 //      'scene' + a 5-field row per 'texture' with ImageMetadata defaults
 //      (linear colorSpace / no mipmap -- enriched at import time, M4 AC-16).
@@ -78,7 +78,12 @@ function withBase(base: string, sourceRel: string): string {
 interface ExternalAssetMetaJson {
   readonly schemaVersion: string | number;
   readonly kind: 'external-asset-package';
-  readonly importer: 'image' | 'gltf' | 'fbx' | 'audio' | 'font';
+  // P2 (feat-20260629 D-4): the importer key is an open string. The catalog
+  // dispatches the engine-built-in arms (image / gltf / fbx / audio / font) on
+  // literal comparisons below; any other key is a host importer, folded via
+  // the registered-key set (default passthrough) or kept as a raw-source row
+  // when unregistered. There is no closed whitelist of foldable keys.
+  readonly importer: string;
   readonly source?: string;
   readonly importSettings: {
     readonly colorSpace?: 'srgb' | 'linear';
@@ -110,11 +115,43 @@ interface ExternalAssetMetaJson {
 export interface CatalogBuildError {
   readonly code:
     | 'catalog-meta-missing-importer'
-    | 'catalog-meta-unfoldable-importer'
-    | 'catalog-meta-schema-invalid';
+    | 'catalog-meta-schema-invalid'
+    // P2 (feat-20260629 D-7): a registered host importer declared a sub.kind
+    // that collides with an engine-owned kind. Reported, never silently
+    // shadowing the engine kind.
+    | 'catalog-host-kind-conflict';
   readonly path: string;
   readonly message: string;
 }
+
+// The importer keys the catalog folds via dedicated, hard-coded arms below.
+// Any other key is a host importer: folded via default passthrough when the
+// host registered it (`pluginPack({ importers })`), or kept as a raw-source
+// row when unregistered (P2 / feat-20260629 D-3/D-4).
+const ENGINE_BUILTIN_IMPORTER_KEYS: ReadonlySet<string> = new Set([
+  'image',
+  'gltf',
+  'fbx',
+  'audio',
+  'font',
+]);
+
+// The pack-index `kind` values the engine's own arms + runtime loaders own. A
+// registered host importer must NOT pass one of these through as its sub.kind
+// (it would shadow the engine loader). D-7: the fold layer reports the conflict
+// rather than silently overriding the engine kind.
+const ENGINE_BUILTIN_KINDS: ReadonlySet<string> = new Set([
+  'texture',
+  'cube-texture',
+  'mesh',
+  'material',
+  'scene',
+  'skeleton',
+  'skin',
+  'animation-clip',
+  'audio',
+  'font',
+]);
 
 function mipmapTokenToBoolean(token: 'auto' | 'none' | undefined): boolean {
   // D-5 mapping. Unknown / missing tokens fall back to `false` -- single mip
@@ -143,6 +180,27 @@ function buildImageMetadata(meta: ExternalAssetMetaJson): ImageMetadata {
 }
 
 /**
+ * D-7 host-kind conflict check: a registered host importer must not declare a
+ * sub.kind the engine already owns. Returns the first conflicting
+ * `CatalogBuildError`, or `null` when all sub.kinds are host-namespaced.
+ */
+function findHostKindConflict(
+  meta: ExternalAssetMetaJson,
+  rawPath: string,
+): CatalogBuildError | null {
+  for (const sub of meta.subAssets) {
+    if (ENGINE_BUILTIN_KINDS.has(sub.kind)) {
+      return {
+        code: 'catalog-host-kind-conflict',
+        path: rawPath,
+        message: `host importer ${JSON.stringify(meta.importer)} declares sub.kind ${JSON.stringify(sub.kind)}, which collides with an engine-owned kind; rename the host kind (engine-owned: ${[...ENGINE_BUILTIN_KINDS].join(', ')})`,
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * Shared processor for a single `*.meta.json` sidecar -- reads the file,
  * runs the fail-fast validation (parse -> importer field -> full schema),
  * and on success emits image-arm catalog rows by appending to `out`.
@@ -161,6 +219,7 @@ async function processMetaSidecar(
   out: PackIndexEntry[],
   base: string,
   paths: Record<string, string>,
+  registeredImporterKeys: ReadonlySet<string>,
 ): Promise<CatalogBuildError | null> {
   let metaRaw: unknown;
   try {
@@ -176,31 +235,18 @@ async function processMetaSidecar(
 
   // Fail-fast validation: meta.importer is a required non-empty string
   // (feat-20260603-asset-import-loader-injection M2; replaces the former
-  // closed `assetType` enum). The catalog only knows how to fold four
-  // importer keys into pack-index rows; an importer key outside that set is
-  // not a schema breach (the open key is valid; an Importer is registered
-  // for it elsewhere), but it is unfoldable here, so the catalog surfaces a
-  // distinct structured error rather than silently emitting zero rows.
+  // closed `assetType` enum). P2 (feat-20260629 D-4) removed the closed
+  // 5-key whitelist wall that used to reject any other importer key with
+  // `catalog-meta-unfoldable-importer`: fold is now driven by the registered
+  // importer set, not a hard-coded key list. A non-engine-built-in key is a
+  // host importer -- folded via default passthrough when registered, or kept
+  // as a raw-source row when unregistered (see the host-importer arm below).
   const metaObj = (metaRaw ?? {}) as Record<string, unknown>;
   if (typeof metaObj.importer !== 'string' || metaObj.importer.length === 0) {
     return {
       code: 'catalog-meta-missing-importer',
       path: rawPath,
-      message:
-        "sidecar missing required top-level non-empty 'importer' field (catalog folds 'image' | 'gltf' | 'audio' | 'font')",
-    };
-  }
-  if (
-    metaObj.importer !== 'image' &&
-    metaObj.importer !== 'gltf' &&
-    metaObj.importer !== 'fbx' &&
-    metaObj.importer !== 'audio' &&
-    metaObj.importer !== 'font'
-  ) {
-    return {
-      code: 'catalog-meta-unfoldable-importer',
-      path: rawPath,
-      message: `sidecar 'importer' = ${JSON.stringify(metaObj.importer)}; the pack catalog only folds 'image' | 'gltf' | 'fbx' | 'audio' | 'font' (other importer keys are valid but produce no catalog rows)`,
+      message: "sidecar missing required top-level non-empty 'importer' field",
     };
   }
   const valid = validateMeta(metaRaw);
@@ -248,16 +294,7 @@ async function processMetaSidecar(
     // built lazily so non-cube image sidecars do not pay the synth cost.
     let cubeMetadata: CubeTextureMetadata | undefined;
     for (const sub of meta.subAssets) {
-      if (sub.kind === 'image') {
-        out.push({
-          guid: sub.guid,
-          relativeUrl: normalizedUrl,
-          kind: 'texture',
-          sourcePath: sourceRel,
-          name: subName(sub),
-          metadata,
-        });
-      } else if (sub.kind === 'cube-texture') {
+      if (sub.kind === 'cube-texture') {
         // D-1: HDR equirect single-source (.hdr extension) folds to
         // kind:'texture' + ImageMetadata so the runtime textureLoader
         // (UPSTREAM_ENTRY_KINDS={'texture','font'}) can pick it up.
@@ -297,6 +334,19 @@ async function processMetaSidecar(
             metadata: cubeMetadata,
           });
         }
+      } else {
+        // P1: default passthrough — sub.kind (e.g. 'texture') becomes the
+        // pack-index kind. The former 'image'→'texture' hard-coded remap
+        // (sub.kind === 'image' gate) is removed; sidecars now declare
+        // the real kind directly.
+        out.push({
+          guid: sub.guid,
+          relativeUrl: normalizedUrl,
+          kind: sub.kind,
+          sourcePath: sourceRel,
+          name: subName(sub),
+          metadata,
+        });
       }
     }
   }
@@ -440,7 +490,7 @@ async function processMetaSidecar(
   }
 
   // importer === 'font': the engine-font bake path emits a sidecar whose
-  // subAssets carry the MSDF atlas (kind='image') alongside the glyph-metrics
+  // subAssets carry the MSDF atlas (kind='texture') alongside the glyph-metrics
   // FontAsset (kind='font'). The atlas folds into a 5-field texture row with
   // ImageMetadata (mirroring the image arm: the atlas PNG is sampled like any
   // other texture; distanceRange / atlas dimensions live in the FontAsset
@@ -454,7 +504,7 @@ async function processMetaSidecar(
     const atlasMetadata = buildImageMetadata(meta);
 
     for (const sub of meta.subAssets) {
-      if (sub.kind === 'image') {
+      if (sub.kind === 'texture') {
         out.push({
           guid: sub.guid,
           relativeUrl: normalizedUrl,
@@ -472,6 +522,51 @@ async function processMetaSidecar(
           name: subName(sub),
         });
       }
+    }
+  }
+
+  // Host importer arm (P2 / feat-20260629 D-3/D-4): any importer key that is
+  // not an engine built-in is a host importer. Fold is registry-driven --
+  //   - registered (host wired it via `pluginPack({ importers })`): default
+  //     passthrough, emitting one row per subAsset with `sub.kind` carried
+  //     through verbatim as the pack-index kind (no engine remap).
+  //   - unregistered: skip the import enrichment but still keep a raw-source
+  //     row per subAsset so the declared GUID stays discoverable and the
+  //     runtime can fall back to the source (AC-08). The catalog rows are the
+  //     same passthrough shape; the difference is the import step (index.ts
+  //     generateBundle) only enriches registered importers.
+  // Engine built-in arms above own their keys; this arm never runs for them.
+  if (!ENGINE_BUILTIN_IMPORTER_KEYS.has(meta.importer)) {
+    const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
+    const normalizedUrl = withBase(base, sourceRel);
+    const isRegistered = registeredImporterKeys.has(meta.importer);
+
+    if (isRegistered) {
+      // D-7: a registered host importer must not pass through a kind the engine
+      // already owns (that would silently shadow the engine loader). Report the
+      // conflict instead of folding the row.
+      const conflict = findHostKindConflict(meta, rawPath);
+      if (conflict) return conflict;
+    } else {
+      // Unregistered host importer: keep raw-source rows but hint the host that
+      // the importer was never wired (AC-08 discoverability -- "I forgot to
+      // inject it in pluginPack({ importers })"). The rows still resolve to the
+      // source so the build does not fail. No kind-conflict check: an
+      // unregistered importer never enriches a row, so it cannot shadow an
+      // engine loader.
+      console.warn(
+        `[forgeax-pack] sidecar 'importer' = ${JSON.stringify(meta.importer)} @ ${rawPath} is not a registered importer; keeping raw-source rows. Wire it via pluginPack({ importers }) to enable build-time import.`,
+      );
+    }
+
+    for (const sub of meta.subAssets) {
+      out.push({
+        guid: sub.guid,
+        relativeUrl: normalizedUrl,
+        kind: sub.kind,
+        sourcePath: sourceRel,
+        name: subName(sub),
+      });
     }
   }
 
@@ -493,12 +588,20 @@ async function foldPaths(
   cwd: string,
   base: string,
   assetPaths: Record<string, string>,
+  registeredImporterKeys: ReadonlySet<string>,
 ): Promise<{ catalog: PackIndexEntry[]; errors: CatalogBuildError[] }> {
   const catalog: PackIndexEntry[] = [];
   const errors: CatalogBuildError[] = [];
   for (const rawPath of rawPaths) {
     if (rawPath.endsWith('.meta.json') && !rawPath.endsWith('.pack.json')) {
-      const err = await processMetaSidecar(rawPath, cwd, catalog, base, assetPaths);
+      const err = await processMetaSidecar(
+        rawPath,
+        cwd,
+        catalog,
+        base,
+        assetPaths,
+        registeredImporterKeys,
+      );
       if (err) errors.push(err);
       continue;
     }
@@ -552,6 +655,7 @@ async function foldPaths(
 export async function buildCatalog(
   roots: readonly string[],
   base = '/',
+  registeredImporterKeys: ReadonlySet<string> = new Set(),
 ): Promise<PackIndexEntry[]> {
   if (roots.length === 0) return [];
 
@@ -566,7 +670,13 @@ export async function buildCatalog(
   };
 
   if (result.ok) {
-    const { catalog, errors } = await foldPaths(result.value, cwd, base, assetPaths);
+    const { catalog, errors } = await foldPaths(
+      result.value,
+      cwd,
+      base,
+      assetPaths,
+      registeredImporterKeys,
+    );
     warnErrors(errors);
     return catalog;
   }
@@ -587,7 +697,7 @@ export async function buildCatalog(
       );
       continue;
     }
-    const folded = await foldPaths(r.value, cwd, base, assetPaths);
+    const folded = await foldPaths(r.value, cwd, base, assetPaths, registeredImporterKeys);
     errors.push(...folded.errors);
     for (const row of folded.catalog) {
       const key = row.guid.toLowerCase();
@@ -608,6 +718,7 @@ export async function buildCatalog(
 export async function buildCatalogStrict(
   roots: readonly string[],
   base = '/',
+  registeredImporterKeys: ReadonlySet<string> = new Set(),
 ): Promise<{ catalog: PackIndexEntry[]; errors: CatalogBuildError[] }> {
   if (roots.length === 0) return { catalog: [], errors: [] };
 
@@ -627,5 +738,5 @@ export async function buildCatalogStrict(
     };
   }
 
-  return foldPaths(result.value, cwd, base, assetPaths);
+  return foldPaths(result.value, cwd, base, assetPaths, registeredImporterKeys);
 }

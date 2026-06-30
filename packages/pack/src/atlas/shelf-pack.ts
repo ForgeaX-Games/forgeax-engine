@@ -1,4 +1,4 @@
-// Pure-function shelf packer for the `forgeax-engine-console-asset atlas`
+// Pure-function shelf packer for the `forgeax-engine-remote-asset atlas`
 // subcommand (feat-20260521-sprite-atlas-animation M5' T-31). Maps a list
 // of decoded RGBA sprites to a non-overlapping atlas region map +
 // atlasWidth / atlasHeight envelope.

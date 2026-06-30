@@ -80,7 +80,7 @@ function woodImageMeta(): string {
       {
         guid: WOOD_GUID,
         sourceIndex: 0,
-        kind: 'image',
+        kind: 'texture',
       },
     ],
   });
@@ -351,7 +351,7 @@ describe('w10 - build-time import emit integration (vite build end-to-end)', () 
   });
 
   // fix(fbx) regression: an `.hdr` equirect `cube-texture` sidecar produces no
-  // build-time assets (imageImporter folds only `kind:'image'`; the faces ride
+  // build-time assets (imageImporter folds only `kind:'texture'`; the faces ride
   // the runtime IBL cook). generateBundle's fail-fast must treat this as a
   // legitimate skip, not throw `import-produced-no-assets` -- else any demo
   // shipping an .hdr skylight (learn-render-3, 6.pbr, template-game-default)
@@ -402,5 +402,58 @@ describe('w10 - build-time import emit integration (vite build end-to-end)', () 
     expect(hdrRow).toBeDefined();
     expect(hdrRow?.kind).toBe('texture');
     expect(hdrRow?.sourcePath.toLowerCase().endsWith('.hdr')).toBe(true);
+  });
+
+  // feat-20260629 M4 / w9: a host-declared importer key (not an engine
+  // built-in) folds end-to-end through a real vite build. The host wires a
+  // passthrough `{ key, import }` importer via pluginPack({ importers }); the
+  // fold layer must emit a pack-index row whose `kind` is the host sub.kind
+  // verbatim -- no whitelist gate, no engine remap (AC-05 / AC-08).
+  it('(g) host importer key folds end-to-end: pack-index row carries the host kind', async () => {
+    const HOST_GUID = '019e4001-0c86-79da-aa76-b0984c8600a1';
+    await writeFile(
+      join(assetsDir, 'level.reel.meta.json'),
+      JSON.stringify({
+        schemaVersion: '1.0.0',
+        kind: 'external-asset-package',
+        importer: 'reel-game',
+        source: 'level.reel',
+        importSettings: {},
+        subAssets: [{ guid: HOST_GUID, sourceIndex: 0, kind: 'reel-level' }],
+      }),
+    );
+    await writeFile(join(assetsDir, 'level.reel'), new Uint8Array([0x7b, 0x7d]));
+
+    // Passthrough host importer: stamps the declared GUID onto a thin POD.
+    const reelImporter = {
+      key: 'reel-game',
+      import(ctx: { subAssets: readonly { guid: string; kind: string }[] }) {
+        return ctx.subAssets.map((s) => ({
+          guid: s.guid,
+          kind: s.kind,
+          payload: { kind: s.kind } as never,
+          refs: [],
+        }));
+      },
+    };
+
+    await viteBuild({
+      root: tmpRoot,
+      logLevel: 'silent',
+      configFile: false,
+      build: {
+        outDir: distDir,
+        emptyOutDir: true,
+        write: true,
+        rollupOptions: { input: { main: 'main.js' } },
+      },
+      plugins: [pluginPack({ roots: [assetsDir], importers: [reelImporter] })],
+    });
+
+    const entries = await readPackIndex();
+    const hostRow = entries.find((e) => e.guid.toLowerCase() === HOST_GUID);
+    expect(hostRow).toBeDefined();
+    expect(hostRow?.kind).toBe('reel-level');
+    expect(hostRow?.sourcePath.endsWith('level.reel')).toBe(true);
   });
 });

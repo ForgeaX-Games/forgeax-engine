@@ -48,7 +48,7 @@ L1 is the byte-on-disk handoff: the dev-server POST endpoint and the Node `final
 | `createReplay` | `(tape: Tape, device: RhiDevice, createShaderModuleFn?: CreateShaderModuleFn): Result<Replay, DebugError>` | Create a Replay object from a tape. Performs caps fail-fast check (returns `caps-mismatch` if `tape.rhiCapsRecorded` is not a subset of `device.caps`). `createShaderModuleFn` is **type-optional but required for any tape carrying `createShaderModule` events** (every real-demo tape does — only shader-free self-contained test tapes omit them): pass `createShaderModule` from `@forgeax/engine-rhi-webgpu`. Omitting it silently skips those events, so downstream pipeline creation fails at the RHI layer (no `DebugError`) — not at `createReplay`. |
 | `replay.commitThroughDraw` | `(drawIdx: number): Promise<Result<{committed: boolean}, DebugError>>` | **Per-draw cumulative RT.** Replays up to & including global draw #`drawIdx`, then synthesizes `endRenderPass` + `finish` + `submit` on the enclosing pass so its color attachment holds the **draws-0..N cumulative** pixels (selecting draw N shows the frame as it stood right after N, not the final composite). After `{committed:true}`, `readbackDrawRt(drawIdx)` / `inspectDrawJson(..., ['rt'])` read those pixels. `{committed:false}` = the draw is in a depth-only render pass or a compute pass (no color RT — render a "no-rt" state). Monotonic-forward like `stepTo`: `reset()` before re-targeting an earlier draw. Out-of-range/non-monotonic → `replay-step-out-of-range`. Use this (not `stepTo(end)`) whenever inspecting a *specific* draw; use `stepTo(events.length-1)` only for the whole composited frame. |
 | `inspectAt` | `(replay: Replay, drawIdx: number, events: readonly RhiCallEvent[], fields: readonly InspectFields[] \| undefined, device: RhiDevice, outputDir: string): Promise<Result<InspectReport, DebugError>>` | Inspect replay state at a specific draw index. `events` supplies frame/pass info; `fields` controls which data is computed (`['bindings']` skips RT readback; `['rt']` triggers `copyTextureToBuffer` + PNG; `undefined` = all); `device` performs RT readback; `outputDir` is where the RT PNG is written. Step the replay with `commitThroughDraw(drawIdx)` first for per-draw pixels (the CLI `inspect-at` path does this). |
-| `wireDebugRhiInspector` | `(reg: Registry, ctx: WireDefaultInspectorsContext): RegisterRootResult` | Register 3 RPC methods (`debug.captureFrame`, `debug.inspectAt`, `debug.replayDispose`) on a console `Registry`. Used by `wireDefaultInspectors` as the `debugRhi` injector. |
+| `debugAdapter` | eval scope live root | `debugAdapter` is directly available inside `@forgeax/engine-remote` eval scope (no Registry wiring needed — `createApp` auto-injects it alongside `world`, `renderer`, `assets`). Call `await debugAdapter.captureFrame({label: 'my-snapshot'})` and `await debugAdapter.inspectAt({tape, drawIdx: 3})` inside eval scripts. The offline CLI subcommands (`inspect-offline`, `summary`, `trigger-browser`) do not route through eval and remain direct CLI entry points. |
 
 ### Browser capture subpath (`@forgeax/engine-rhi-debug/capture-browser`)
 
@@ -215,13 +215,11 @@ Error envelopes (all `{ error, hint }`, never `DebugError` -- OOS-6, union stays
 ### CLI subcommands
 
 > [!NOTE]
-> **Current invocation: `node packages/rhi-debug/dist/cli.mjs <subcommand>`** (after `pnpm -F @forgeax/engine-rhi-debug build`). The `forgeax-engine-console` plugin-bin route below is the documented end-state shape — landing it requires either (a) a `forgeax-engine-console-rhi-debug` plugin bin in `packages/rhi-debug/package.json#bin` (kubectl 4th-path discovery), or (b) a built-in `capture-frame` / `inspect-at` registration in `packages/console/src/cli.ts#FORGEAX_CLI_SPEC.subcommands`. Tracked as follow-up tweak. Until then, the WS:5732 RPC route (`debug.captureFrame` / `debug.inspectAt` / `debug.replayDispose`) is the canonical end-to-end path; the CLI's `--help` text + flag table is snapshot-tested in `cli.test.ts`.
+> **Current invocation: `node packages/rhi-debug/dist/cli.mjs <subcommand>`** (after `pnpm -F @forgeax/engine-rhi-debug build`). The offline subcommands (`inspect-offline`, `summary`, `trigger-browser`) are direct CLI entry points -- no engine server or WS connection required. Live-inspect (`capture-frame` / `inspect-at` on a running engine) routes through `@forgeax/engine-remote` eval scope: `await debugAdapter.captureFrame({label})` and `await debugAdapter.inspectAt({tape, drawIdx: 3})` are the canonical live paths.
 
 | command (end-state shape) | description |
 |:--|:--|
-| `forgeax-engine-console capture-frame [--frames=1] [--label=<str>] [--target=ws://localhost:5732]` | Connect to running console server, dispatch `debug.captureFrame` RPC, print tapePaths. |
-| `forgeax-engine-console inspect-at <tapePath> <drawIdx> [--fields=bindings,rt] [--target=ws://localhost:5732]` | Connect to console server, dispatch `debug.inspectAt` RPC, print InspectReport JSON. |
-| `forgeax-rhi-debug trigger-browser [--frames=N] [--label=STR] [--dev-url=URL]` (L2a) | POST `/__forgeax-debug/trigger` to the dev-server (default `http://localhost:5173`), wait for a tab to capture + upload, print `{ runId, tapePath, reportPath }`. Ships today under the real `forgeax-rhi-debug` bin (no console plugin-bin dependency). |
+| `forgeax-rhi-debug trigger-browser [--frames=N] [--label=STR] [--dev-url=URL]` (L2a) | POST `/__forgeax-debug/trigger` to the dev-server (default `http://localhost:5173`), wait for a tab to capture + upload, print `{ runId, tapePath, reportPath }`. Ships today under the real `forgeax-rhi-debug` bin. |
 | `forgeax-rhi-debug summary <tapePath>` (L3d) | Read an on-disk tape and print the whole-frame `FrameModel` JSON (tree / per-draw pipelineState / bindings / drawCall / resources / commands / meta). Pure: no device, no replay. Ships today under the real `forgeax-rhi-debug` bin. |
 
 #### Offline inspect (L3a) -- the canonical entry today
@@ -256,13 +254,22 @@ node packages/rhi-debug/dist/cli.mjs summary .forgeax-debug/<runId>/frame-0.tape
 
 The package exposes the CLI two ways: `package.json#bin` declares `forgeax-rhi-debug -> ./dist/cli.mjs`, and `package.json#exports['./cli']` re-exports the subcommand functions for programmatic use. The barrel does **not** re-export CLI symbols (Node `ws` / `pngjs` are reached only via `/cli`, `/inspector`, `/adapter` subpaths, keeping the tree-shake gate intact).
 
-### RPC methods (WS:5732)
+### Live inspect via eval scope
+
+In a running engine with `app.remote` wired (default in dev mode), the `debugAdapter` live root inside eval scope exposes two methods:
 
 | method | params | returns |
 |:--|:--|:--|
-| `debug.captureFrame` | `{ frames: number, label?: string }` | `{ tapes: Array<{ frameIdx, runId, tapePath, reportPath }> }` |
-| `debug.inspectAt` | `{ tapePath: string, drawIdx: number, fields?: string[] }` | `InspectReport` (JSON; RT is PNG path string; includes `pipelineState` for render draws) |
-| `debug.replayDispose` | `{ tapePath: string }` | `{ disposed: true }` |
+| `debugAdapter.captureFrame` | `{ frames: number, label?: string }` | `Promise<{ frameModel, ... }>` — structured FrameModel shared SSOT with RHI debug viewer and CLI `summary` |
+| `debugAdapter.inspectAt` | `{ tape, drawIdx: number }` | `Promise<InspectReport>` — JSON; includes `pipelineState` for render draws |
+
+```js
+// Inside eval scope:
+await debugAdapter.captureFrame({ label: 'my-snapshot' });
+await debugAdapter.inspectAt({ tape: someTape, drawIdx: 3 });
+```
+
+Offline subcommands (`inspect-offline`, `summary`, `trigger-browser`) do NOT route through eval and remain direct CLI entry points.
 
 ### State machine
 
@@ -295,7 +302,7 @@ error -> idle           (via disposeError())
 | `replay-deterministic-violation` | RT pixel diff between original and replay exceeds threshold (test-only error) |
 | `rt-readback-failed` | `copyTextureToBuffer` / `mapAsync` chain failed |
 | `png-encode-failed` | PNG encoding of RT readback data failed |
-| `rpc-target-not-wired` | `wireDefaultInspectors(reg, ctx)` called without `debugRhi` injector |
+| `rpc-target-not-wired` | `debugAdapter` not available in eval scope — ensure `createApp` is used (auto-wires `debugAdapter` alongside `world`, `renderer`, `assets`) |
 | `replay-dispose-busy` | in-flight inspect at draw indices `{inFlightDrawIndices}`; `await` them first |
 | `snapshot-readback-failed` | snapshotResource GPU byte readback failed (copy/mapAsync/storeBlob). `.detail = {handleId, stage: 'copy' | 'map' | 'store'}` |
 | `seed-initial-data-failed` | replayInitialData seed failed (handleId missing / dataHash missing / writeBuffer failed). `.detail = {handleId, stage: 'lookup' | 'write'}` |

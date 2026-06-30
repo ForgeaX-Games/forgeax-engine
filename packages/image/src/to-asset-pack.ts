@@ -3,7 +3,7 @@ import type { DecodedImage, ImageMeta } from '@forgeax/engine-types';
 /**
  * External-asset-package envelope shape mirroring the
  * `packages/pack/schema/meta.schema.json` $defs/ExternalAssetPackage.
- * Consumed by `forgeax-engine-console-asset import` (CLI entry, M3b) +
+ * Consumed by `forgeax-engine-remote-asset import` (CLI entry, M3b) +
  * the image importer in M2 build-time path. The internal-text-package
  * variant ($defs/InternalTextPackage) is owned by the gltf-loader feat.
  */
@@ -48,7 +48,7 @@ export interface ExternalSubAsset {
  *    the GUID is freshly minted or reused via `reimportReuseMeta`)
  *  - `sourceIndex: 0` (single-sub-asset shape; cubemap / array reserved
  *    for future feat)
- *  - `kind: 'image'` (closed literal for image-importer emit)
+ *  - `kind: 'texture'` (closed literal for image-importer emit)
  *
  * Two consecutive calls with identical inputs produce JSON.stringify
  * byte-equal output (AC-16 idempotent reimport).
@@ -77,7 +77,7 @@ export function toAssetPack(decoded: DecodedImage, meta: ImageMeta): ExternalAss
       {
         guid: meta.guid,
         sourceIndex: 0,
-        kind: 'image',
+        kind: 'texture',
       },
     ],
   };

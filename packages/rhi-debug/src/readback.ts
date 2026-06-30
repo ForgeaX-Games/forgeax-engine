@@ -16,6 +16,87 @@ import type { Replay } from './replayer';
 import type { RhiCallEvent } from './types';
 
 // ============================================================================
+// resolveTextureDescriptor — tape handle -> source texture descriptor (SSOT)
+// ============================================================================
+
+/** Resolved descriptor for a texture (or texture-view) handle from the tape. */
+export interface ResolvedTextureDescriptor {
+  /** The source GPUTexture handleId (copyTextureToBuffer needs a texture, not a view). */
+  readonly handleId: string;
+  readonly width: number;
+  readonly height: number;
+  readonly format: string;
+  /** The view's dimension ('2d' | 'cube' | '2d-array' | '3d' | ...); '2d' when no view event. */
+  readonly dimension: string;
+  /** The source texture's depthOrArrayLayers (slice count); 1 for a plain 2D texture. */
+  readonly arrayLayers: number;
+}
+
+/**
+ * Walk the tape events to resolve a view-or-texture handleId to its source
+ * GPUTexture descriptor (handleId, real dimensions, format, view dimension).
+ *
+ * The single source of truth for "tape handle -> texture descriptor": both the
+ * color-attachment RT path (resolveAttachmentSize / readbackDrawRt) and the
+ * viewer's depth + bound-texture preview paths resolve handles this way —
+ * createTextureView.resultHandleId -> sourceHandleId -> createTexture, falling
+ * back to the id itself when it is a direct texture handle (no view event).
+ *
+ * Size is read from the raw createTexture event (FrameModel.resources hard-codes
+ * size to [1,1,1]; see inspect-core buildResources). Returns null when no
+ * createTexture event declares the resolved handle.
+ */
+export function resolveTextureDescriptor(
+  events: readonly RhiCallEvent[],
+  viewOrTextureHandleId: string,
+): ResolvedTextureDescriptor | null {
+  // Step 1: resolve texture view -> source texture handleId + capture view dimension.
+  let sourceTextureHandleId: string | undefined;
+  let viewDimension: string | undefined;
+  for (const ev of events) {
+    if (ev.kind === 'createTextureView' && ev.resultHandleId === viewOrTextureHandleId) {
+      sourceTextureHandleId = ev.sourceHandleId;
+      viewDimension = ev.desc.dimension;
+      break;
+    }
+  }
+  // Some handles are texture handles directly (no view event).
+  const targetHandleId = sourceTextureHandleId ?? viewOrTextureHandleId;
+
+  // Step 2: find the createTexture event for the resolved texture handleId.
+  for (const ev of events) {
+    if (ev.kind === 'createTexture' && ev.handleId === targetHandleId) {
+      const sz = ev.desc.size;
+      let width: number;
+      let height: number;
+      let arrayLayers: number;
+      // GPUExtent3DStrict: { width, height?, depthOrArrayLayers? } or [w, h?, d?]
+      if (Array.isArray(sz)) {
+        width = typeof sz[0] === 'number' ? sz[0] : 512;
+        height = typeof sz[1] === 'number' ? sz[1] : width;
+        arrayLayers = typeof sz[2] === 'number' ? sz[2] : 1;
+      } else {
+        const obj = sz as { width: number; height?: number; depthOrArrayLayers?: number };
+        width = typeof obj.width === 'number' ? obj.width : 512;
+        height = typeof obj.height === 'number' ? obj.height : width;
+        arrayLayers = typeof obj.depthOrArrayLayers === 'number' ? obj.depthOrArrayLayers : 1;
+      }
+      return {
+        handleId: targetHandleId,
+        width,
+        height,
+        format: ev.desc.format,
+        // View dimension wins; else the texture's own dimension; else '2d'.
+        dimension: viewDimension ?? ev.desc.dimension ?? '2d',
+        arrayLayers,
+      };
+    }
+  }
+
+  return null;
+}
+
+// ============================================================================
 // resolveAttachmentSize — walk tape events to find texture dimensions
 // ============================================================================
 
@@ -23,42 +104,17 @@ import type { RhiCallEvent } from './types';
  * Walk the tape events to find the real texture dimensions for a given
  * color attachment view/target handleId. Avoids hard-coding 512×512.
  *
- * Returns { width: 512, height: 512 } as a conservative fallback when no
- * createTexture event is found (should not happen for a real frame).
+ * Thin wrapper over {@link resolveTextureDescriptor}; returns
+ * { width: 512, height: 512 } as a conservative fallback when no createTexture
+ * event is found (should not happen for a real frame).
  */
 export function resolveAttachmentSize(
   events: readonly RhiCallEvent[],
   attachmentViewHandleId: string,
 ): { readonly width: number; readonly height: number } {
-  // Find the createTextureView whose resultHandleId matches.
-  let sourceTextureHandleId: string | undefined;
-  for (const ev of events) {
-    if (ev.kind === 'createTextureView' && ev.resultHandleId === attachmentViewHandleId) {
-      sourceTextureHandleId = ev.sourceHandleId;
-      break;
-    }
-  }
-  // Some attachments are texture handles directly (no view event).
-  const targetHandleId = sourceTextureHandleId ?? attachmentViewHandleId;
-
-  // Find the createTexture event for the resolved texture handleId.
-  for (const ev of events) {
-    if (ev.kind === 'createTexture' && ev.handleId === targetHandleId) {
-      const sz = ev.desc.size;
-      // GPUExtent3DStrict: { width, height? } or [w, h?, d?]
-      if (Array.isArray(sz)) {
-        const w = typeof sz[0] === 'number' ? sz[0] : 512;
-        const h = typeof sz[1] === 'number' ? sz[1] : w;
-        return { width: w, height: h };
-      }
-      const obj = sz as { width: number; height?: number };
-      const w = typeof obj.width === 'number' ? obj.width : 512;
-      const h = typeof obj.height === 'number' ? obj.height : w;
-      return { width: w, height: h };
-    }
-  }
-
-  return { width: 512, height: 512 };
+  const desc = resolveTextureDescriptor(events, attachmentViewHandleId);
+  if (desc === null) return { width: 512, height: 512 };
+  return { width: desc.width, height: desc.height };
 }
 
 // ============================================================================
@@ -89,11 +145,17 @@ export async function readbackTexturePixels(
   texture: unknown,
   texWidth: number,
   texHeight: number,
-  opts?: { bytesPerTexel?: number; mipLevel?: number; baseArrayLayer?: number },
+  opts?: {
+    bytesPerTexel?: number;
+    mipLevel?: number;
+    baseArrayLayer?: number;
+    aspect?: 'all' | 'depth-only' | 'stencil-only';
+  },
 ): Promise<Uint8Array> {
   const bytesPerPixel = opts?.bytesPerTexel ?? 4;
   const mipLevel = opts?.mipLevel ?? 0;
   const baseArrayLayer = opts?.baseArrayLayer ?? 0;
+  const aspect = opts?.aspect;
   const rowBytes = texWidth * bytesPerPixel;
   const alignedRowBytes = Math.ceil(rowBytes / 256) * 256; // WebGPU alignment
   const bufferSize = alignedRowBytes * texHeight;
@@ -123,6 +185,10 @@ export async function readbackTexturePixels(
         texture,
         mipLevel,
         origin: { x: 0, y: 0, z: baseArrayLayer },
+        // aspect selects depth vs stencil plane on combined depth-stencil
+        // textures. stencil-only IS copyable on depth24plus-stencil8 (the
+        // depth plane is not). Omitted -> backend default ('all').
+        ...(aspect !== undefined ? { aspect } : {}),
       } as unknown as never,
       {
         buffer: readbackBuffer,
@@ -370,17 +436,10 @@ export async function readbackDrawRt(
     );
   }
 
-  // colorAttachmentHandleId is the textureVIEW handle. copyTextureToBuffer
-  // needs the source GPUTexture, so walk back the createTextureView event
-  // to its sourceHandleId.
-  let sourceTextureHandleId: string | undefined;
-  for (const ev of events) {
-    if (ev.kind === 'createTextureView' && ev.resultHandleId === drawInfo.colorAttachmentHandleId) {
-      sourceTextureHandleId = ev.sourceHandleId;
-      break;
-    }
-  }
-  const textureHandleId = sourceTextureHandleId ?? drawInfo.colorAttachmentHandleId;
+  // colorAttachmentHandleId is the textureVIEW handle. copyTextureToBuffer needs
+  // the source GPUTexture, so resolve view -> source texture (+ real dimensions).
+  const resolved = resolveTextureDescriptor(events, drawInfo.colorAttachmentHandleId);
+  const textureHandleId = resolved?.handleId ?? drawInfo.colorAttachmentHandleId;
 
   const texture = resolveHandle(textureHandleId);
   // biome-ignore lint/suspicious/noExplicitAny: texture is an opaque branded type from RHI
@@ -396,9 +455,8 @@ export async function readbackDrawRt(
   }
 
   // Resolve real texture dimensions from tape events
-  const texSize = resolveAttachmentSize(events, drawInfo.colorAttachmentHandleId);
-  const texWidth = texSize.width;
-  const texHeight = texSize.height;
+  const texWidth = resolved?.width ?? 512;
+  const texHeight = resolved?.height ?? 512;
 
   // Read back tight-packed RGBA8 pixels from the GPU texture
   let pixels: Uint8Array;

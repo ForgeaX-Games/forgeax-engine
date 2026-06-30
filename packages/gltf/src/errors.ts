@@ -260,7 +260,7 @@ export type GltfError =
 
 export const GLTF_ERROR_HINTS: Readonly<Record<GltfErrorCode, string>> = {
   'gltf-malformed-header':
-    'verify .glb is not truncated; rerun: forgeax-engine-console-gltf import <path>',
+    'verify .glb is not truncated; rerun: forgeax-engine-remote-gltf import <path>',
   'gltf-version-unsupported': 'asset.version must be "2.0"; v1 or v3 not supported',
   'gltf-buffer-out-of-bounds':
     'rebuild .gltf with valid bufferViews; check accessor index; ensure accessor.byteOffset + EFFECTIVE_STRIDE * (count - 1) + element_size <= bufferView.byteLength',
@@ -270,7 +270,7 @@ export const GLTF_ERROR_HINTS: Readonly<Record<GltfErrorCode, string>> = {
     'sparse: see feat-future-gltf-sparse-accessor; morph: see feat-future-gltf-morph; interleaved: see feat-future-gltf-mesh-multi-section',
   'gltf-texture-load-failed':
     'check sidecar meta.json + textures/ directory + vite-plugin-pack /__pack/lookup route',
-  'gltf-meta-missing': 'run: forgeax-engine-console-gltf import <path>',
+  'gltf-meta-missing': 'run: forgeax-engine-remote-gltf import <path>',
   'gltf-instancing-count-mismatch':
     'EXT_mesh_gpu_instancing requires TRANSLATION/ROTATION/SCALE accessors to share count; see https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/EXT_mesh_gpu_instancing/README.md#extending-nodes-with-instance-attributes',
   'gltf-image-mime-unsupported':
@@ -284,7 +284,7 @@ export const GLTF_ERROR_HINTS: Readonly<Record<GltfErrorCode, string>> = {
   'gltf-skin-joint-name-missing':
     'ensure every joint node in the skin has a non-empty name in the DCC tool',
   'gltf-image-extract-failed':
-    'verify the bufferView byte range / data: URI base64 / external URI sibling file is intact next to the .gltf source; rerun: forgeax-engine-console-gltf import <path>',
+    'verify the bufferView byte range / data: URI base64 / external URI sibling file is intact next to the .gltf source; rerun: forgeax-engine-remote-gltf import <path>',
   'gltf-skin-attr-asymmetric':
     'glTF spec requires JOINTS_0 and WEIGHTS_0 to appear together for each skinned primitive; add the missing attribute or remove the present one in the DCC tool',
 };

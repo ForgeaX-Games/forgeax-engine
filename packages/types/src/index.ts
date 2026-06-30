@@ -1867,7 +1867,7 @@ export type AssetErrorCode =
 /**
  * Structured asset error -- four-field surface (`.code` / `.expected` /
  * `.hint` / `.message`) structurally parallel to `@forgeax/engine-rhi`
- * `RhiError` + `@forgeax/engine-console` `InspectorError` + `MetricError`
+ * `RhiError` + `@forgeax/engine-remote` `InspectorError` + `MetricError`
  * (charter proposition 5 consistent abstraction; AGENTS.md "Errors are
  * structured. Return Result, never throw for expected failures.").
  *
@@ -1934,7 +1934,7 @@ export const ASSET_ERROR_HINTS: Readonly<Record<AssetErrorCode, string>> = {
   'asset-parse-failed':
     'check file bytes are not corrupted; for procedural geometry: verify all dimensions > 0 and segments >= 1',
   'asset-format-unsupported':
-    'v1 supports png/jpg only; convert .bmp/.webp etc. via image tooling; gltf/glb supported via @forgeax/engine-gltf importer (forgeax-engine-console-gltf import <gltf-or-glb>)',
+    'v1 supports png/jpg only; convert .bmp/.webp etc. via image tooling; gltf/glb supported via @forgeax/engine-gltf importer (forgeax-engine-remote-gltf import <gltf-or-glb>)',
   'asset-not-found':
     'handle id not in registry; verify register() was called before get(); inspect() returns all live handles',
   'asset-invalid-value':
@@ -2433,7 +2433,7 @@ export interface ImageError extends Error {
  *
  * Each hint embeds an executable command so AI users self-recover by
  * copy-pasting the hint into the shell (plan-strategy Tier 2 "hint must
- * carry forgeax-engine-console-image import <path>" or similar; the image
+ * carry forgeax-engine-remote-image import <path>" or similar; the image
  * plugin bin lands in feat-future-console-plugin-image — until then the
  * hint references the in-package importer surface).
  */
@@ -2444,7 +2444,7 @@ export const IMAGE_ERROR_HINTS: Readonly<Record<ImageErrorCode, string>> = {
     'v1 supports PNG / JPG only; convert with: cwebp / magick convert <input> <output>.png; check importSettings.colorSpace consistency with format family if formatColorSpaceConflict present',
   'image-dimension-out-of-bounds':
     'downscale source under device caps (typical maxTextureDimension2D = 8192 / 16384); use mipmap chain instead of larger source if lod is the goal',
-  'image-meta-missing': 'run: forgeax-engine-console-asset import <path>',
+  'image-meta-missing': 'run: forgeax-engine-remote-asset import <path>',
   'image-hdr-decode-failed':
     'check .hdr file integrity; verify Radiance RGBE header magic (#?RADIANCE) and FORMAT=32-bit_rle_rgbe header field; ensure file was not truncated',
   // feat-20260521-sprite-atlas-animation M1 T-02 — atlas hook hint strings
@@ -2453,11 +2453,11 @@ export const IMAGE_ERROR_HINTS: Readonly<Record<ImageErrorCode, string>> = {
   // or into the build config (charter P3 explicit failure + AGENTS.md
   // Error model "hint must carry executable recovery").
   'atlas-empty-input':
-    'verify forgeax-engine-console-asset atlas --input <glob> --name <prefix> --output <dir> matches at least 1 PNG on disk; run `ls <glob>` to inspect the resolved file set; add the missing sprite source or fix the glob pattern',
+    'verify forgeax-engine-remote-asset atlas --input <glob> --name <prefix> --output <dir> matches at least 1 PNG on disk; run `ls <glob>` to inspect the resolved file set; add the missing sprite source or fix the glob pattern',
   'atlas-size-exceeded':
-    'downscale the source PNG so width * height <= maxAtlasSize^2 (default 4096); or split sprites across multiple atlas runs (forgeax-engine-console-asset atlas --input <subset-glob> --name <other-prefix> --output <dir>); or raise the cap via --max-atlas-size 8192 if device caps allow it',
+    'downscale the source PNG so width * height <= maxAtlasSize^2 (default 4096); or split sprites across multiple atlas runs (forgeax-engine-remote-asset atlas --input <subset-glob> --name <other-prefix> --output <dir>); or raise the cap via --max-atlas-size 8192 if device caps allow it',
   'atlas-region-mismatch':
-    'shelfPack returned regions exceeding atlas footprint — packer safety net; file a forgeax-engine bug; rerun forgeax-engine-console-asset atlas with a smaller input set or lower --max-atlas-size as temporary recovery',
+    'shelfPack returned regions exceeding atlas footprint — packer safety net; file a forgeax-engine bug; rerun forgeax-engine-remote-asset atlas with a smaller input set or lower --max-atlas-size as temporary recovery',
 };
 
 /**
@@ -2766,11 +2766,11 @@ export const PACK_ERROR_HINTS: Readonly<Record<PackErrorCode, string>> = {
     'use AssetGuid.random() or a UUIDv7 generator; all GUID fields must be 36-char RFC 4122 dash-form',
   'pack-orphan-meta': 'remove the orphan .meta.json or add the missing source file next to it',
   'pack-meta-missing':
-    'run forgeax-engine-console-asset scan --roots <dir> to list source files without .meta.json',
+    'run forgeax-engine-remote-asset scan --roots <dir> to list source files without .meta.json',
   'pack-guid-collision':
-    'run forgeax-engine-console-asset verify to list all GUID collisions; each GUID must be globally unique',
+    'run forgeax-engine-remote-asset verify to list all GUID collisions; each GUID must be globally unique',
   'pack-cyclic-reference':
-    'run forgeax-engine-console-asset verify to print the cycle path; break the cycle by removing a refs[] entry',
+    'run forgeax-engine-remote-asset verify to print the cycle path; break the cycle by removing a refs[] entry',
   'pack-subasset-index-out-of-range':
     'check subAssets[].sourceIndex does not exceed the actual sub-image count in the source file',
   // === 1 new hint (feat-20260523-shader-template-instance-split M1-T02) ===
@@ -2781,7 +2781,7 @@ export const PACK_ERROR_HINTS: Readonly<Record<PackErrorCode, string>> = {
   'pack-mount-localid-overlap':
     'check parent SceneAsset.mounts[].memberFirst windows do not overlap with each other or with entities[].localId; rebuild mount sidecar after the child SceneAsset reimport',
   'pack-mount-count-mismatch':
-    'mount.memberCount must equal the referenced child SceneAsset totalSlots (entities.length + sum(mounts[].memberCount) + mounts.length); rebuild mount sidecar via forgeax-engine-console-asset verify <dir> after the child SceneAsset reimport',
+    'mount.memberCount must equal the referenced child SceneAsset totalSlots (entities.length + sum(mounts[].memberCount) + mounts.length); rebuild mount sidecar via forgeax-engine-remote-asset verify <dir> after the child SceneAsset reimport',
   'pack-mount-override-localid-out-of-range':
     'override.localId must be in [0, mount.memberCount); shrink the override or extend memberCount to match the child SceneAsset',
   'pack-mount-override-unknown-field':
@@ -3662,61 +3662,84 @@ export interface BindGroupLayoutEntry {
   readonly storageTexture?: GPUStorageTextureBindingLayout | undefined;
 }
 
-// === Inspector / Console error model SSOT (feat-20260511-inspector-p0-spike) ====
+// === RemoteHandle (feat-20260629-inspector-two-layer-model M4 / w17) ========
 //
 // Decision anchors:
-// - requirements §10.1 + §10.2 + AC-10 + AC-12 (`InspectorErrorCode` 6-member
-//   closed union + 4-field `InspectorError` shape independent from RhiError /
+// - plan-strategy secondary D-6: RemoteHandle defined in @forgeax/engine-types
+//   (neutral package, no temporal coupling to @forgeax/engine-remote)
+// - requirements AC-11: app.remote typed as RemoteHandle | undefined,
+//   exposed on the createApp return value for host inspection
+//
+// Shape:
+//   port  — number, the listen port (determined by the server on startup)
+//   close — Promise<void>, tear down the server (Surface Plugin pattern
+//           from startServer's returned ConsoleHandle)
+
+/**
+ * Handle for a running remote eval server (feat-20260629-inspector-two-layer-model M4).
+ *
+ * AI users access `app.remote.port` for WS connection / status, and call
+ * `await app.remote.close()` to tear down. The field is `undefined` when the
+ * server is not started (production build or headless without opt-in).
+ *
+ * @see {@link startServer} in @forgeax/engine-remote for the producer side
+ */
+export interface RemoteHandle {
+  /** Server listen port (number). Non-zero when the server is running. */
+  readonly port: number;
+  /** Tear down the server. Returns a Promise that resolves once the WS
+   *  server has closed all connections. */
+  close(): Promise<void>;
+}
+
+// === Remote error model SSOT (feat-20260629-inspector-two-layer-model) ====
+//
+// Decision anchors:
+// - requirements §10.1 + §10.2 + AC-05 (`RemoteErrorCode` 4-member
+//   closed union + 4-field `RemoteError` shape independent from RhiError /
 //   ShaderError)
-// - plan-strategy §7.3 (kebab-case domain prefix + state/action suffix)
+// - plan-strategy §2 D-5 (rename InspectorErrorCode -> RemoteErrorCode,
+//   delete inspector-write-denied, delete script-timeout, rename
+//   console-* -> server-*)
 // - charter proposition 3 (machine-readable union > prose) +
 //   proposition 4 (explicit failure — `switch (err.code)` is exhaustive
 //   without default fallback) + proposition 5 (consistent abstraction —
 //   structurally aligned with @forgeax/engine-rhi's RhiError surface)
-// - architecture-principles #1 SSOT (the 6 string literals + 4-field
-//   structural shape live here once; @forgeax/engine-console's runtime `InspectorError`
-//   class implements this interface; @forgeax/engine-runtime consumes the type
+// - architecture-principles #1 SSOT (the 4 string literals + 4-field
+//   structural shape live here once; @forgeax/engine-remote's runtime `RemoteError`
+//   class implements this interface; consumers import the type
 //   alias without dragging the runtime class through static deps —
 //   parallel to the existing ShaderErrorCode pattern)
-// - Round 2 fix-up F-1 (feat-20260511-inspector-p0-spike): the Renderer
-//   surface needs to type `Result<ConsoleHandle, InspectorError>` without
-//   statically importing @forgeax/engine-console (AC-09 bundle isolation grep
-//   gate); placing the type alias here is the minimal cross-package
-//   contract surface that satisfies both red lines.
 
 /**
- * Closed `InspectorErrorCode` union — 6 members (feat-20260511-inspector-p0-spike
- * D-P3 RD-1 lock-in; requirements AC-10). Exhaustive `switch` needs no default
+ * Closed `RemoteErrorCode` union — 4 members (feat-20260629-inspector-two-layer-model
+ * D-5; requirements AC-05). Exhaustive `switch` needs no default
  * fallback — TypeScript guards union completeness at compile time
  * (charter proposition 4 explicit failure + proposition 3 machine-readable
  * union > prose).
  *
  * | code | trigger |
  * |:--|:--|
- * | `'script-syntax-error'` | `vm.runInContext(script, ...)` threw a `SyntaxError` (script body is not parseable JavaScript). |
- * | `'script-runtime-error'` | `vm.runInContext` threw a non-syntax, non-timeout exception (e.g. `world.nonExistentMethod()` -> TypeError). |
- * | `'script-timeout'` | `vm.runInContext(..., { timeout })` exceeded the configured budget (default 5000ms; configurable per `engine.startConsole({ port, scriptTimeoutMs })`). |
- * | `'inspector-write-denied'` | The read-only Proxy (alpha mode) intercepted a mutation method call on the world / engine / assets context. |
- * | `'console-startup-failed'` | The console subsystem failed to come up: WebSocketServer raised 'error' (EADDRINUSE / other listen failure), dynamic-import resolution failed, or the dynamic-import target package lacks the `startConsoleServer` factory. |
- * | `'console-not-running'` | CLI client's `new WebSocket('ws://localhost:<port>/inspector')` failed to connect (server not started; `engine.startConsole` not wired in the demo). |
+ * | `'script-syntax-error'` | Script body is not parseable JavaScript (SyntaxError from eval). |
+ * | `'script-runtime-error'` | Script threw a non-syntax exception during execution (e.g. ReferenceError / TypeError). |
+ * | `'server-startup-failed'` | The remote eval server failed to come up: WebSocketServer raised 'error' (EADDRINUSE / other listen failure), dynamic-import resolution failed, or the target package lacks the `startServer` factory. |
+ * | `'server-not-running'` | CLI client's `new WebSocket('ws://localhost:<port>/inspector')` failed to connect (server not started; `app.remote` not wired in the demo). |
  *
- * **Independence from 18-member `RhiError | ShaderError` union** — `InspectorErrorCode`
+ * **Independence from `RhiError | ShaderError` union** — `RemoteErrorCode`
  * is **not** merged into the GPU / asset error union (charter proposition 5 +
  * architecture-principles #1 SSOT). Engine-side errors stream is OOS-1
- * (errors.subscribe v2 spinoff); P0 console callers only face these 6
- * inspector-domain alternatives.
+ * (errors.subscribe v2 spinoff); remote callers only face these 4
+ * alternatives.
  */
-export type InspectorErrorCode =
+export type RemoteErrorCode =
   | 'script-syntax-error'
   | 'script-runtime-error'
-  | 'script-timeout'
-  | 'inspector-write-denied'
-  | 'console-startup-failed'
-  | 'console-not-running';
+  | 'server-startup-failed'
+  | 'server-not-running';
 
 /**
- * Structural shape of a forgeax inspector error (feat-20260511-inspector-p0-spike
- * AC-10). Four-field surface mirroring `@forgeax/engine-rhi` `RhiError`
+ * Structural shape of a forgeax remote error (feat-20260629-inspector-two-layer-model
+ * D-5). Four-field surface mirroring `@forgeax/engine-rhi` `RhiError`
  * (charter proposition 5 consistent abstraction; AGENTS.md "Errors are
  * structured"):
  *
@@ -3725,23 +3748,18 @@ export type InspectorErrorCode =
  * - `.hint`      actionable recovery guidance (L2 detail).
  * - `.message`   auto-composed string for human stack traces (AI users
  *                prefer property access on `.code` / `.expected` / `.hint`).
- * - `.name`      Error name marker (`'InspectorError'`) for cross-realm
+ * - `.name`      Error name marker (`'RemoteError'`) for cross-realm
  *                dispatch under JSON-RPC transport.
  *
- * This interface intentionally extends `Error` so a runtime `InspectorError`
- * **class** (defined in `@forgeax/engine-console/errors`) satisfies the contract
- * without re-declaring the inherited `name` / `message` slots. Engine-side
- * fallback paths (Round 2 F-1 fix-up: dynamic-import failure inside
- * `Renderer.startConsole`) construct minimal `Error & { code, expected,
- * hint }` instances that also satisfy this interface without statically
- * importing `@forgeax/engine-console` (the AC-09 + AC-22 bundle-isolation grep
- * gate continues to hold).
+ * This interface intentionally extends `Error` so a runtime `RemoteError`
+ * **class** (defined in `@forgeax/engine-remote/errors`) satisfies the contract
+ * without re-declaring the inherited `name` / `message` slots.
  *
  * AI users consume the structured triple via property access — never by
  * parsing `.message` (charter proposition 4 explicit failure red line).
  */
-export interface InspectorError extends Error {
-  readonly code: InspectorErrorCode;
+export interface RemoteError extends Error {
+  readonly code: RemoteErrorCode;
   readonly expected: string;
   readonly hint: string;
   /**
@@ -3751,31 +3769,31 @@ export interface InspectorError extends Error {
    * `.detail` slot is `undefined` for codes whose discriminator has no
    * payload (charter P4 explicit failure: signal absence by type).
    */
-  readonly detail?: InspectorErrorDetail;
+  readonly detail?: RemoteErrorDetail;
 }
 
 /**
- * Discriminated detail union for {@link InspectorError} (feat-20260517 D-7).
- * Each variant pairs an {@link InspectorErrorCode} member with the
+ * Discriminated detail union for {@link RemoteError} (feat-20260517 D-7).
+ * Each variant pairs a {@link RemoteErrorCode} member with the
  * structured payload AI users need to act on the error without grepping
  * prose. Variants without payload are intentionally absent — the
- * `InspectorError.detail` slot is `undefined` for those codes.
+ * `RemoteError.detail` slot is `undefined` for those codes.
  *
- * The `console-startup-failed` variant captures the historical narrative
+ * The `server-startup-failed` variant captures the historical narrative
  * tokens (`removedAt` + `docAnchor`) that previously lived inside the
  * `.hint` copy; AC-13 binary-form hint phrasing stays terse and
  * executable, while AI users that need provenance read it via
  * `err.detail.removedAt` / `err.detail.docAnchor` after a code-narrow.
  */
-export type InspectorErrorDetail = ConsoleStartupFailedDetail;
+export type RemoteErrorDetail = ServerStartupFailedDetail;
 
 /**
- * `console-startup-failed` discriminator variant. Carries the legacy
+ * `server-startup-failed` discriminator variant. Carries the legacy
  * inspect-routing context plus historical narrative tokens.
  *
  * - `legacyInspectTarget`: when populated, the offending CLI subcommand
  *   chain matched the deleted `inspect <legacyInspectTarget>` built-in form
- *   and the `did you mean 'forgeax-engine-console-ecs <legacyInspectTarget>'?`
+ *   and the `did you mean 'forgeax-engine-remote-ecs <legacyInspectTarget>'?`
  *   hint copy is the canonical recovery path (AC-12).
  * - `removedAt`: ISO date of the breaking change that deleted the inline
  *   `inspect <target>` built-in subcommand (the day the loop landed).
@@ -3783,8 +3801,8 @@ export type InspectorErrorDetail = ConsoleStartupFailedDetail;
  *   (so AI users that consume `.detail` JSON-RPC payloads can navigate
  *   straight to the row without parsing prose).
  */
-export interface ConsoleStartupFailedDetail {
-  readonly code: 'console-startup-failed';
+export interface ServerStartupFailedDetail {
+  readonly code: 'server-startup-failed';
   readonly legacyInspectTarget?: string;
   readonly removedAt: string;
   readonly docAnchor: string;
@@ -3793,7 +3811,7 @@ export interface ConsoleStartupFailedDetail {
 /**
  * SSOT for the legacy-inspect routing hint template (feat-20260517 AC-12).
  * Producers (the CLI plugin-fallthrough path + any downstream tooling that
- * formats `console-startup-failed` for human consumption) should compose
+ * formats `server-startup-failed` for human consumption) should compose
  * the hint via this helper so the `did you mean` copy stays byte-identical
  * across producers.
  *
@@ -3802,285 +3820,8 @@ export interface ConsoleStartupFailedDetail {
  * machine-readable hint > prose.
  */
 export function legacyInspectHint(legacyInspectTarget: string): string {
-  return `did you mean 'forgeax-engine-console-ecs ${legacyInspectTarget}'?`;
+  return `did you mean 'forgeax-engine-remote-ecs ${legacyInspectTarget}'?`;
 }
-
-// === Inspector Registry contract SSOT (feat-20260516-console-dependency-inversion) ====
-//
-// Decision anchors:
-// - requirements AC-07 + AC-08 + AC-09 (Registry interface lives in
-//   @forgeax/engine-types; runtime class lives in @forgeax/engine-console;
-//   register* same-name duplicate fails fast via Result<void, InspectorError>
-//   with code='console-startup-failed')
-// - plan-strategy §2.4 (interface in types, class in console — strict
-//   structural parallel to InspectorError two-layer SSOT) + §2.5 (fail-fast
-//   on duplicate; reuse existing 6-member InspectorErrorCode closed union;
-//   no new error code per §2.11 wire-protocol freeze) + §3.1 component
-//   diagram (ecs / runtime / pack / gltf depend only on this interface,
-//   never on console runtime)
-// - charter proposition 3 (Result<T,E> over throw) + proposition 4
-//   (explicit failure via closed union member) + proposition 5 (consistent
-//   abstraction — abstraction sits in types alongside InspectorError; the
-//   in-process runtime class implements the interface without re-declaring
-//   the contract surface, mirroring the InspectorError type/class split)
-// - architecture-principles #1 SSOT (the structural shape lives here once;
-//   @forgeax/engine-console's runtime class implements this interface so
-//   the two sides cannot drift; @forgeax/engine-{ecs,runtime,pack,gltf}
-//   import the type alias without statically pulling the console runtime —
-//   parallel to InspectorError placement) + #4 Pipeline Isolation (the
-//   plugin contributor packages exchange data with console only through
-//   this interface; no implicit dependency on the console class shape)
-
-/**
- * Inspector Registry contributor handler — pure function bound to one
- * JSON-RPC method name on the in-process Registry. Receives the params
- * payload verbatim from the WebSocket transport (`null` when the caller
- * omitted `params`) and returns the introspection payload that will be
- * serialised back as `result`. Implementations must not throw on expected
- * domain errors — return `Result.err(InspectorError)` instead (charter
- * proposition 3).
- *
- * AI users typically wrap a domain-specific query (e.g. `world.entities()`)
- * inside a `Handler` closure so the host can register it via
- * `registry.registerMethod('entities', handler)`. The handler body itself
- * is the SSOT for what the method returns; the JSON-RPC server merely
- * forwards `params` and serialises the return value.
- */
-export type Handler = (params: unknown) => unknown;
-
-/**
- * Result alias used by the {@link Registry} interface. Mirrors the
- * structurally identical `Result<T, E>` discriminator already used by
- * `@forgeax/engine-rhi`, `@forgeax/engine-ecs`, and the in-process
- * `@forgeax/engine-console/server` runtime — kept local to this types
- * package so neither side has to dynamically import the other (charter
- * proposition 5 consistent abstraction; AC-09 + AC-22 bundle isolation).
- */
-export type RegisterRootResult = { ok: true; value: void } | { ok: false; error: InspectorError };
-
-/**
- * Result alias for {@link Registry.registerMethod}. Same structural shape as
- * {@link RegisterRootResult}; declared as a separate alias so JSDoc can
- * surface method-specific failure copy without aliasing both names back to
- * a single `Result<void, InspectorError>` import dependency.
- */
-export type RegisterMethodResult = { ok: true; value: void } | { ok: false; error: InspectorError };
-
-/**
- * Inspector Registry contributor contract — abstraction SSOT shared by
- * `@forgeax/engine-ecs` / `@forgeax/engine-runtime` and any third-party
- * inspector contributor package (charter §C Bevy `Plugin` parallel;
- * plan-strategy §2.4 / §3.1).
- *
- * The four-sentence contract — JSDoc as SSOT, plan-strategy §8.5
- * "code-internal documentation" decision:
- *
- * 1. **register timing** — `register*` is invoked **eagerly during host
- *    assembly** (e.g. inside `apps/inspector-demo/src/main.ts` before
- *    `startConsoleServer` returns); calling `register*` after the server
- *    has begun accepting connections is undefined behaviour and SHOULD
- *    surface as a future evolution (currently the runtime class allows it
- *    but the JSON-RPC dispatch table is read once per `execute` call).
- * 2. **fail-fast behaviour** — same-name `registerRoot(name, ...)` or
- *    `registerMethod(method, ...)` returns `Result.err(InspectorError {
- *    code: 'console-startup-failed', expected, hint })` — never throws,
- *    never silently overwrites the previous binding (charter proposition 3
- *    + proposition 4; plan-strategy §2.5 explicit failure).
- * 3. **purity of contributors** — `register*Inspector(reg, ctx)` top-level
- *    functions in domain packages are **pure** (no module-load side-
- *    effects); importing `@forgeax/engine-ecs` does not call
- *    `registry.registerMethod` until the host explicitly invokes
- *    `registerEcsInspector(reg, world)` (plan-strategy §3.1 + AC-10).
- * 4. **assembly chain** — host assembly is a one-line `wireDefaultInspectors(reg, {world, engine, assets})`
- *    convenience (recommended, charter proposition 1 progressive
- *    disclosure) plus optional individual `register<Domain>Inspector(reg, ctx)`
- *    drilldown calls; the host instantiates a single `Registry` (the
- *    runtime class lives in `@forgeax/engine-console` and `implements`
- *    this interface) and passes it through every contributor.
- *
- * Independence from `@forgeax/engine-console` runtime class — domain
- * packages (`@forgeax/engine-ecs`, `@forgeax/engine-runtime`,
- * `@forgeax/engine-pack`, `@forgeax/engine-gltf`) import only this
- * `Registry` interface (`import type { Registry } from
- * '@forgeax/engine-types'`); they never statically import the runtime
- * class. The in-process runtime class lives in
- * `@forgeax/engine-console/registry` and `implements Registry` so the
- * structural surface cannot drift (parallel to the
- * `InspectorError` interface / class split above).
- *
- * @example AI-user assembly (host side, plan-strategy §3.3 success path)
- * ```ts
- * import { Registry, startConsoleServer, wireDefaultInspectors } from '@forgeax/engine-console';
- * import { registerEcsInspector } from '@forgeax/engine-ecs';
- *
- * const reg = new Registry();
- * const wired = wireDefaultInspectors(reg, { world, engine: renderer, assets: renderer.assets });
- * if (!wired.ok) { console.error(wired.error); process.exit(1); }
- * const handle = await startConsoleServer({ port: 5732, registry: reg });
- * ```
- *
- * @example Domain-package contributor (pure top-level function)
- * ```ts
- * import type { Registry } from '@forgeax/engine-types';
- *
- * export function registerEcsInspector(reg: Registry, world: World): RegisterMethodResult {
- *   return reg.registerMethod('entities', (params) => world.queryAll(params));
- * }
- * ```
- */
-export interface Registry {
-  /**
-   * Register a top-level inspector root object under `name`. Roots are the
-   * named entry points exposed to the JSON-RPC sandbox (e.g. `world` /
-   * `engine` / `assets`); their structural shape is opaque to the registry
-   * (`unknown`) — the contributor side decides what to expose. Same-name
-   * duplicate returns `Result.err` per the §2.5 fail-fast contract.
-   */
-  registerRoot(name: string, root: unknown): RegisterRootResult;
-  /**
-   * Register a JSON-RPC `execute`-routable method handler under `method`
-   * name (e.g. `entities` / `components` / `renderer.metrics`). Same-name
-   * duplicate returns `Result.err` per the §2.5 fail-fast contract.
-   */
-  registerMethod(method: string, handler: Handler): RegisterMethodResult;
-  /**
-   * Look up a previously registered root object by `name`. Returns the
-   * stored value or `undefined` when the name was never registered.
-   * Server-side lookup of root objects (e.g. `world` / `engine` / `assets`)
-   * is the consumer of this read API — the JSON-RPC sandbox builds its
-   * read-only context by iterating roots through this entry point
-   * (plan-strategy §2.4 + §3.1: server depends on the Registry interface,
-   * never on the contributor's source data directly).
-   */
-  lookupRoot(name: string): unknown;
-  /**
-   * Look up a previously registered method handler by `method` name.
-   * Returns the stored `Handler` or `undefined` when the name was never
-   * registered. JSON-RPC dispatch in `startConsoleServer` consults this
-   * entry point on every `execute`-style method invocation; the lookup is
-   * read once per invocation and never mutates server state (charter P5
-   * consistent abstraction with the Bevy `App.lookup_resource` parallel
-   * referenced in research §Finding 3 (a)).
-   */
-  lookupMethod(method: string): Handler | undefined;
-  /**
-   * Register an ECS-domain mutating-method name set (feat-20260517 D-5).
-   * `names` is a frozen `ReadonlySet<string>` produced by a domain plugin
-   * (e.g. `ECS_MUTATING_METHODS` in `@forgeax/engine-ecs`); the Registry
-   * accumulates every registered set so the sandbox can later merge them
-   * with its generic Array/Map blacklist via {@link lookupMutatingMethods}.
-   *
-   * Same-instance duplicate detection is **by reference** (`===` on the
-   * passed Set): re-registering the same module-level constant returns
-   * `Result.err(InspectorError 'console-startup-failed')` per the §2.5
-   * fail-fast contract; two distinct `ReadonlySet` instances (even with
-   * identical members) are treated as independent contributions and are
-   * accumulated. Module-level singletons (charter P5 consistent
-   * abstraction with `registerRoot` / `registerMethod`) make the
-   * reference key stable across imports.
-   *
-   * Used by `registerEcsInspector` step 3 (plan-strategy §3.3) — the
-   * ECS plugin contributes its mutating method names exactly once when
-   * the host wires the inspector.
-   */
-  registerMutatingMethods(names: ReadonlySet<string>): RegisterRootResult;
-  /**
-   * Read the merged frozen set of all mutating method names contributed
-   * via {@link registerMutatingMethods} (feat-20260517 D-5). The returned
-   * `ReadonlySet<string>` is **cached** — the sandbox `wrapReadOnly`
-   * implementation reads it once per wrap (research F6: V8 hash-set
-   * O(1) hit, no per-method-call cost) and stores the reference in its
-   * closure for trap-time lookup.
-   *
-   * The result merges every set passed to `registerMutatingMethods` into
-   * a single frozen Set whose identity is stable until a new
-   * `registerMutatingMethods` call lands; sandbox.ts performs no per-call
-   * recomputation. Charter P5 consistent abstraction with `lookupRoot` /
-   * `lookupMethod` (read-only, idempotent, no server-state mutation).
-   */
-  lookupMutatingMethods(): ReadonlySet<string>;
-}
-
-/**
- * Function-injection contract for `wireDefaultInspectors` (feat-20260516
- * round 2 amendment). The host imports `registerEcsInspector` /
- * `registerRuntimeInspector` from the domain packages and passes them in
- * as the third argument; `@forgeax/engine-console` therefore never
- * value-imports `@forgeax/engine-{ecs,runtime}` itself, which is the
- * physical guarantee behind requirement AC-01 + AC-02 (the reverse grep
- * gate `check-console-not-import-engine.mjs` enforces the strict 4-deny-list
- * `@forgeax/engine-{ecs,runtime,pack,gltf}` once this contract is in place).
- *
- * Both injector signatures match the canonical `register*Inspector(reg, ctx)`
- * pure-function contract emitted by domain packages: `reg` is the host's
- * `Registry` instance; `ctx` is the opaque source object the contributor
- * reads (the `World` for ecs, the `Renderer` for runtime). Failure surfaces
- * as `Result.err(InspectorError 'console-startup-failed')` per the §2.5
- * fail-fast contract; `wireDefaultInspectors` short-circuits on the first
- * `Result.err`.
- *
- * Charter alignment: F1 type-safe contract (the function signature, not
- * prose, is the API surface the host writes against) + P5 consistent
- * abstraction (every `register*Inspector` everywhere returns the same
- * `Result<void, InspectorError>` shape, so the injector type can be
- * structurally narrowed to {@link RegisterRootResult}).
- *
- * @example Host assembly with explicit injection (plan-strategy §3.3 round 2)
- * ```ts
- * import { Registry, startConsoleServer, wireDefaultInspectors } from '@forgeax/engine-console';
- * import { registerEcsInspector } from '@forgeax/engine-ecs';
- * import { registerRuntimeInspector } from '@forgeax/engine-runtime';
- *
- * const reg = new Registry();
- * const wired = wireDefaultInspectors(
- *   reg,
- *   { world, engine: renderer, assets: renderer.assets },
- *   { registerEcsInspector, registerRuntimeInspector },
- * );
- * if (!wired.ok) { console.error(wired.error); process.exit(1); }
- * ```
- */
-export interface WireDefaultInspectorsInjectors {
-  /**
-   * `registerEcsInspector` from `@forgeax/engine-ecs` — registers the four
-   * ECS inspector methods (`entities` / `components` / `systems` /
-   * `resources`) by reading the supplied `World` reference. Same-name
-   * duplicate returns `Result.err(InspectorError 'console-startup-failed')`.
-   */
-  registerEcsInspector(reg: Registry, world: unknown): RegisterRootResult;
-  /**
-   * `registerRuntimeInspector` from `@forgeax/engine-runtime` — registers
-   * the runtime-side inspector methods (e.g. `renderer.info`) by reading
-   * the supplied `Renderer` reference. Same-name duplicate returns
-   * `Result.err(InspectorError 'console-startup-failed')`.
-   */
-  registerRuntimeInspector(reg: Registry, engine: unknown): RegisterRootResult;
-  /**
-   * `wireDebugRhiInspector` from `@forgeax/engine-rhi-debug` — registers
-   * three RPC methods (`debug.captureFrame` / `debug.inspectAt` /
-   * `debug.replayDispose`) for frame recording and offline inspection.
-   * Optional: when omitted, `debug.*` RPC methods return
-   * `InspectorError 'rpc-target-not-wired'`.
-   *
-   * Added by feat-20260612-rhi-debug-frame-record-replay M7;
-   * follows the same function-injection pattern as `registerEcsInspector`
-   * and `registerRuntimeInspector` (plan-strategy D-5).
-   */
-  debugRhi?(reg: Registry): RegisterRootResult;
-  /**
-   * `registerPluginInspector` from `@forgeax/engine-console` — registers
-   * the `plugins` JSON-RPC method that returns `{ name: string }[]` from
-   * the plugin registry (Map produced by `runPlugins()`).
-   * Optional: when omitted, the `plugins` method is not registered and
-   * JSON-RPC callers receive `InspectorError 'rpc-target-not-wired'`.
-   *
-   * Added by feat-20260623-plugin-system-unify-build-world-protocol M4;
-   * follows the same function-injection pattern as `registerEcsInspector`
-   * and `registerRuntimeInspector` (plan-strategy D-7).
-   */
-  registerPluginInspector?(reg: Registry, pluginRegistry: unknown): RegisterRootResult;
-}
-
 // === Metric registry error model SSOT (feat-20260512-threejs-pixel-parity-bench) ===
 //
 // Decision anchors:
@@ -4093,11 +3834,11 @@ export interface WireDefaultInspectorsInjectors {
 // - research Finding 9 (`MetricErrorCode` currently has zero TS alias = direct
 //   B-1 regression risk; §6 g9 checklist item 1: introduce
 //   `export type MetricErrorCode = ...` in `packages/types/src/index.ts`,
-//   structurally parallel to ShaderErrorCode / InspectorErrorCode)
+//   structurally parallel to ShaderErrorCode / RemoteErrorCode)
 // - charter proposition 3 (machine-readable union > prose) + proposition 4
 //   (explicit failure — closed-union exhaustive switch needs no default fallback;
 //   tsc strict mode guards completeness) + proposition 5 (consistent abstraction —
-//   structurally aligned with @forgeax/engine-rhi RhiError and InspectorError)
+//   structurally aligned with @forgeax/engine-rhi RhiError and RemoteError)
 // - architecture-principles #1 SSOT (the 4 string literals live here once;
 //   `scripts/check-metrics-declared.mjs` / `scripts/metrics/run-all.mjs` /
 //   `scripts/metrics/run-fps.mjs` are .mjs producer sites that emit the same
@@ -4623,7 +4364,7 @@ export interface Loader<P = Asset> {
  * | `'source-read-failed'` | the source file referenced by `meta.source` could not be read (missing / unreadable); `.detail.source` is the path and `.detail.reason` the underlying error string. |
  * | `'import-produced-no-assets'` | the importer returned an empty `ImportedAsset[]`, or omitted a GUID that `meta.subAssets[]` declared (the produced GUID set is not a superset of the declared set); `.detail.missingGuids` lists the declared GUIDs the importer failed to produce. |
  * | `'guid-mismatch'` | the importer produced a GUID that `meta.subAssets[]` never declared (violates the GUID import-stable iron law); `.detail.unexpectedGuids` lists the produced GUIDs absent from the declared set. |
- * | `'import-internal-error'` | the importer itself threw; the runner wraps the throw into a structured error rather than letting it escape bare (charter P3); `.detail.reason` carries the original message. |
+ * | `'import-internal-error'` | the importer failed at runtime. Two sub-cases ride `.detail` (NOT a new code — closed union stays 5, feat-20260629 D-5): a build-time module-LOAD failure (e.g. the host importer module / native addon could not be imported) surfaces `.detail.loadError`; a conversion THROW (the loaded importer threw while converting the source) surfaces `.detail.reason`. AI users branch on the `.detail` shape after narrowing `err.code === 'import-internal-error'`. |
  */
 export type ImportErrorCode =
   | 'importer-not-registered'
@@ -4661,8 +4402,19 @@ export type ImportErrorDetail =
       readonly unexpectedGuids: readonly string[];
     }
   | {
-      /** The original thrown error message. */
+      /** The original thrown error message (importer loaded but its conversion threw). */
       readonly reason: string;
+    }
+  | {
+      /**
+       * The module-load failure message (feat-20260629 D-5): the importer
+       * module / native addon could not be loaded at build time (e.g.
+       * module-not-found, native-addon-not-built). Distinguishes a LOAD
+       * failure from a conversion THROW (`reason`) under the same
+       * `import-internal-error` code without growing the closed ImportErrorCode
+       * union. AI users branch on `'loadError' in err.detail`.
+       */
+      readonly loadError: string;
     };
 
 /**
@@ -4712,7 +4464,7 @@ export const IMPORT_ERROR_HINTS: Readonly<Record<ImportErrorCode, string>> = {
   'guid-mismatch':
     'the importer produced a GUID that meta.subAssets[] never declared (violates the GUID import-stable iron law: GUIDs come from the external meta, never minted by the importer); err.detail.unexpectedGuids lists the offending GUIDs',
   'import-internal-error':
-    'the importer threw while converting the source; err.detail.reason carries the original message; this is an importer bug, not a meta / source problem',
+    'the importer failed at runtime; branch on err.detail: a conversion THROW carries err.detail.reason (the loaded importer threw while converting the source — an importer bug, not a meta / source problem), while a build-time module-LOAD failure carries err.detail.loadError (the host importer module / native addon could not be imported)',
 };
 
 /**

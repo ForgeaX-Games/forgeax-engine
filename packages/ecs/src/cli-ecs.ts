@@ -1,17 +1,17 @@
 #!/usr/bin/env node
-// @forgeax/engine-ecs/src/cli-ecs - forgeax-engine-console-ecs plugin bin
+// @forgeax/engine-ecs/src/cli-ecs - forgeax-engine-remote-ecs plugin bin
 // (feat-20260517-console-ecs-plugin-extraction · M3 w11).
 //
-// Migrated from @forgeax/engine-console/src/inspect-scripts.ts (commit
+// Migrated from @forgeax/engine-remote/src/inspect-scripts.ts (commit
 // 2439e0f0~1, deleted in M2 w17). The 5 ECS IIFE script literals
 // (entitiesScriptByNames / componentsScript / systemsScript /
 // resourcesScript / worldScript) are carried over byte-identical so the
 // W10 fixture diff stays empty under cosmetic-rename normalization.
 // `packsScript` is intentionally NOT migrated - that target lives in
-// `forgeax-engine-console-asset` (@forgeax/engine-pack since 2026-05-14).
+// `forgeax-engine-remote-asset` (@forgeax/engine-pack since 2026-05-14).
 //
 // Discovery: kubectl 4th-path. The base bin `forgeax-engine-console` finds
-// this binary on PATH via the `forgeax-engine-console-` prefix scan and
+// this binary on PATH via the `forgeax-engine-remote-` prefix scan and
 // forwards stdio + exit code (see packages/console/src/discoverPlugins.ts).
 //
 // 5 subcommands: entities / components / systems / resources / world.
@@ -137,10 +137,10 @@ export function buildWorldScript(): string {
 // packages/ecs/__tests__/cli-ecs-scripts.test.ts).
 export function helpBody(): string {
   return [
-    'forgeax-engine-console-ecs - inspect a running forgeax ECS world via JSON-RPC over WS',
+    'forgeax-engine-remote-ecs - inspect a running forgeax ECS world via JSON-RPC over WS',
     '',
     'Usage:',
-    '  forgeax-engine-console-ecs <subcommand> [flags]',
+    '  forgeax-engine-remote-ecs <subcommand> [flags]',
     '',
     'Subcommands:',
     '  entities    list archetypes filtered by --with / --without component names',
@@ -159,11 +159,11 @@ export function helpBody(): string {
     '  --help, -h           show this help and exit 0',
     '',
     'Examples:',
-    '  forgeax-engine-console-ecs entities --with Transform',
-    '  forgeax-engine-console-ecs entities --filter=SceneInstance',
-    '  forgeax-engine-console-ecs entities --filter=SceneInstance --component=SceneInstance',
-    '  forgeax-engine-console-ecs components',
-    '  forgeax-engine-console-ecs eval-equivalent: \'forgeax-engine-console eval "world.inspect()"\' for the same payload',
+    '  forgeax-engine-remote-ecs entities --with Transform',
+    '  forgeax-engine-remote-ecs entities --filter=SceneInstance',
+    '  forgeax-engine-remote-ecs entities --filter=SceneInstance --component=SceneInstance',
+    '  forgeax-engine-remote-ecs components',
+    '  forgeax-engine-remote-ecs eval-equivalent: \'forgeax-engine-console eval "world.inspect()"\' for the same payload',
     '',
   ].join('\n');
 }
@@ -352,8 +352,8 @@ export async function dispatch(opts: DispatchOptions): Promise<number> {
     stderrWrite(
       [
         `forgeax: ${parsed.code}`,
-        `  expected: forgeax-engine-console-ecs <${SUBCOMMANDS.join('|')}> [flags]`,
-        `  hint:     run 'forgeax-engine-console-ecs --help' for usage`,
+        `  expected: forgeax-engine-remote-ecs <${SUBCOMMANDS.join('|')}> [flags]`,
+        `  hint:     run 'forgeax-engine-remote-ecs --help' for usage`,
         `  detail:   ${parsed.message}`,
       ].join('\n'),
     );
@@ -378,11 +378,11 @@ export async function dispatch(opts: DispatchOptions): Promise<number> {
   }
   const client = connectResult.value;
   try {
-    const result = await client.execute(script);
+    const result = await client.eval(script);
     stdoutWrite(typeof result === 'string' ? result : JSON.stringify(result, null, 2));
     return 0;
   } catch (e) {
-    if (isInspectorError(e)) {
+    if (isRemoteError(e)) {
       stderrWrite(
         [`forgeax: ${e.code}`, `  expected: ${e.expected}`, `  hint:     ${e.hint}`].join('\n'),
       );
@@ -402,7 +402,7 @@ export async function dispatch(opts: DispatchOptions): Promise<number> {
   }
 }
 
-function isInspectorError(e: unknown): e is { code: string; expected: string; hint: string } {
+function isRemoteError(e: unknown): e is { code: string; expected: string; hint: string } {
   return (
     typeof e === 'object' &&
     e !== null &&

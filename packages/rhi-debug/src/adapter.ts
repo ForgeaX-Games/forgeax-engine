@@ -1,49 +1,19 @@
 // @forgeax/engine-rhi-debug/src/adapter -- production wiring factory
-// (createDebugRhiAdapter).
+// (createDebugRhiAdapter). Three RPC surfaces: captureFrames / inspectAt /
+// replayDispose.
 //
-// Bridges the live `DebugRhiInstance` (recorder proxy attached during
-// FORGEAX_ENGINE_RHI_DEBUG=1 bootstrap) to the `DebugRhiAdapter` shape consumed by
-// `wireDebugRhiInspector`. Three RPC surfaces:
-//   - captureFrames(N, label) -> arm + wait for N onFrameEnd ticks ->
-//     finalize -> { tapes: [{ frameIdx, runId, tapePath, reportPath }] }
-//   - inspectAt(tapePath, drawIdx, fields) -> deserializeTape +
-//     createReplay (cached) + inspectAt(replay, drawIdx, fields) ->
-//     InspectReport.
-//   - replayDispose(tapePath) -> InspectorCache.dispose(tapePath) ->
-//     { ok: true }.
-//
-// I-2 (round 1 implement-review) fix: prior to this module, the rpc-bridge
-// expected `DebugRhiAdapter` but no production code constructed one --
-// AC-18 / AC-19 / AC-20 were unreachable end-to-end. createApp now imports
-// this factory dynamically alongside the existing `wrap` import (same
-// dynamic-import gate) and wires the result into the optional debugRhi
-// injector consumed by wireDefaultInspectors.
-//
-// This module is NOT part of the main barrel because it depends on
-// `./inspector` (pngjs Node.js dep). Consumers reach it via the
-// `@forgeax/engine-rhi-debug/adapter` subpath export, which createApp
-// resolves only inside the FORGEAX_ENGINE_RHI_DEBUG=1 dynamic-import branch.
-//
-// Throw boundary (verify round 1 finding B-2): this facade `throw`s on
-// internal `Result.err` (7 sites) instead of returning Result. That is
-// the documented thin-wrapper exception per ai-user-charter §P3 footnote:
-// adapter is the WS:5732 RPC injector boundary, not part of the main
-// recorder/replayer/inspector surface — those still honour Result. The
-// rpc-bridge wraps these throws back into JSON-RPC error envelopes
-// before they leave the process. Direct-import callers wanting Result
-// discipline should call recorder/replayer/inspector primitives instead.
-//
-// Related: requirements AC-18 / AC-19 / AC-20 / AC-22.
+// w10: rpc-bridge.ts deleted alongside routing layer removal. DebugRhiAdapter
+// type (formerly in rpc-bridge.ts) now lives in index.ts barrel.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { RhiDevice } from '@forgeax/engine-rhi';
 import { DebugError } from './errors';
+import type { DebugRhiAdapter } from './index';
 import { InspectorCache, inspectAt as runInspectAt } from './inspector';
 import type { DebugRhiInstance } from './recorder';
 import { waitForRecorderIdle } from './recorder-core';
 import { createReplay, type Replay } from './replayer';
-import type { DebugRhiAdapter } from './rpc-bridge';
 import { deserializeTape } from './tape-format';
 import type { InspectFields } from './types';
 

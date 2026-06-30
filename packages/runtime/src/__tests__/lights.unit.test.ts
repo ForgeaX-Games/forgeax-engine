@@ -21,17 +21,15 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
-import type { Handle, Handler, RegisterMethodResult, Registry } from '@forgeax/engine-types';
+import type { Handle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Camera, DirectionalLight, PointLight, SpotLight, Transform } from '../components';
 import type { ShadowInvalidConfigError } from '../errors';
 import { packLightArrayHeader, packPointLight, packSpotLight } from '../light-buffer-layout';
 import { computeInvRangeSquared, degToCos } from '../light-helpers';
 import { buildPbrViewBglEntries } from '../pbr-pipeline';
-import { registerRuntimeInspector } from '../register-inspector';
 import type { PointLightSnapshot, SpotLightSnapshot } from '../render-system-extract';
 import { extractFrame } from '../render-system-extract';
-import type { Renderer } from '../renderer';
 import { propagateTransforms } from '../systems/propagate-transforms';
 
 {
@@ -760,191 +758,6 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         // The shadow-casting spot still gets tile 0 (the false spot did not
         // consume a slot).
         expect(shadowing.shadowAtlasTile).toBe(0);
-      });
-    });
-  });
-}
-
-{
-  // ─── from inspector-lights-bucket.test.ts ───
-  describe('inspector-lights-bucket.test.ts', () => {
-    class FakeRegistry implements Registry {
-      readonly methods = new Map<string, Handler>();
-      readonly mutating: ReadonlySet<string> = new Set();
-      readonly roots = new Map<string, unknown>();
-      registerRoot(name: string, root: unknown): RegisterMethodResult {
-        this.roots.set(name, root);
-        return { ok: true, value: undefined };
-      }
-      registerMethod(name: string, handler: Handler): RegisterMethodResult {
-        if (this.methods.has(name)) {
-          return {
-            ok: false,
-            error: {
-              code: 'console-startup-failed',
-              expected: 'no duplicate method registration',
-              hint: `method '${name}' already registered`,
-              name: 'InspectorError',
-              message: '',
-            } as never,
-          };
-        }
-        this.methods.set(name, handler);
-        return { ok: true, value: undefined };
-      }
-      lookupRoot(name: string): unknown {
-        return this.roots.get(name);
-      }
-      lookupMethod(method: string): Handler | undefined {
-        return this.methods.get(method);
-      }
-      registerMutatingMethods(): RegisterMethodResult {
-        return { ok: true, value: undefined };
-      }
-      lookupMutatingMethods(): ReadonlySet<string> {
-        return this.mutating;
-      }
-    }
-
-    function makeFakeRenderer(): Renderer {
-      return {
-        backend: 'webgpu',
-        device: null as never,
-        shader: null,
-        assets: null,
-        ready: Promise.resolve({ ok: true, value: undefined }) as never,
-        draw: () => ({ ok: true, value: undefined }) as never,
-        readPixels: () => Promise.resolve({ ok: true, value: new Uint8Array(0) }) as never,
-        dispose: () => undefined,
-        onLost: () => () => undefined,
-        onError: () => () => undefined,
-      } as unknown as Renderer;
-    }
-
-    function spawnDirectional(world: World): void {
-      world
-        .spawn({
-          component: DirectionalLight,
-          data: {
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
-            colorR: 1,
-            colorG: 1,
-            colorB: 1,
-            intensity: 1,
-          },
-        })
-        .unwrap();
-    }
-
-    function spawnPoint(world: World): void {
-      world
-        .spawn({
-          component: PointLight,
-          data: {
-            colorR: 1,
-            colorG: 1,
-            colorB: 1,
-            intensity: 1,
-            range: 10,
-          },
-        })
-        .unwrap();
-    }
-
-    function spawnSpot(world: World): void {
-      world
-        .spawn({
-          component: SpotLight,
-          data: {
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
-            colorR: 1,
-            colorG: 1,
-            colorB: 1,
-            intensity: 1,
-            range: 10,
-            innerConeDeg: 10,
-            outerConeDeg: 30,
-          },
-        })
-        .unwrap();
-    }
-
-    describe('w24 registerRuntimeInspector lights bucket split (AC-11 b)', () => {
-      it('returns three orthogonal counts for 1 directional + 2 point + 1 spot world', () => {
-        const world = new World();
-        spawnDirectional(world);
-        spawnPoint(world);
-        spawnPoint(world);
-        spawnSpot(world);
-        const reg = new FakeRegistry();
-        const renderer = makeFakeRenderer();
-        const r = registerRuntimeInspector(reg, renderer, world);
-        expect(r.ok).toBe(true);
-
-        const directionalHandler = reg.methods.get('runtime.lights.directionalCount');
-        const pointHandler = reg.methods.get('runtime.lights.pointCount');
-        const spotHandler = reg.methods.get('runtime.lights.spotCount');
-        expect(directionalHandler).toBeDefined();
-        expect(pointHandler).toBeDefined();
-        expect(spotHandler).toBeDefined();
-        if (
-          directionalHandler === undefined ||
-          pointHandler === undefined ||
-          spotHandler === undefined
-        )
-          return;
-        expect(directionalHandler({})).toEqual({ count: 1 });
-        expect(pointHandler({})).toEqual({ count: 2 });
-        expect(spotHandler({})).toEqual({ count: 1 });
-      });
-
-      it('returns zero for each bucket when no entities of that kind exist', () => {
-        const world = new World();
-        const reg = new FakeRegistry();
-        const renderer = makeFakeRenderer();
-        registerRuntimeInspector(reg, renderer, world);
-        const directionalHandler = reg.methods.get('runtime.lights.directionalCount');
-        const pointHandler = reg.methods.get('runtime.lights.pointCount');
-        const spotHandler = reg.methods.get('runtime.lights.spotCount');
-        if (
-          directionalHandler === undefined ||
-          pointHandler === undefined ||
-          spotHandler === undefined
-        ) {
-          expect(directionalHandler).toBeDefined();
-          expect(pointHandler).toBeDefined();
-          expect(spotHandler).toBeDefined();
-          return;
-        }
-        expect(directionalHandler({})).toEqual({ count: 0 });
-        expect(pointHandler({})).toEqual({ count: 0 });
-        expect(spotHandler({})).toEqual({ count: 0 });
-      });
-
-      it('legacy `runtime.lights.count` alias is removed (one-cut per charter optimal > compatible)', () => {
-        const world = new World();
-        spawnDirectional(world);
-        const reg = new FakeRegistry();
-        const renderer = makeFakeRenderer();
-        registerRuntimeInspector(reg, renderer, world);
-        expect(reg.methods.has('runtime.lights.count')).toBe(false);
-        expect(reg.lookupMethod('runtime.lights.count')).toBeUndefined();
-      });
-
-      it('skips bucket methods when world is omitted (back-compat with single-arg signature)', () => {
-        const reg = new FakeRegistry();
-        const renderer = makeFakeRenderer();
-        const r = registerRuntimeInspector(reg, renderer);
-        expect(r.ok).toBe(true);
-        expect(reg.methods.has('renderer.info')).toBe(true);
-        expect(reg.methods.has('runtime.lights.directionalCount')).toBe(false);
-        expect(reg.methods.has('runtime.lights.pointCount')).toBe(false);
-        expect(reg.methods.has('runtime.lights.spotCount')).toBe(false);
-        expect(reg.methods.has('runtime.lights.count')).toBe(false);
       });
     });
   });

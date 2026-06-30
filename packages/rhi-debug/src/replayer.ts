@@ -1067,7 +1067,18 @@ function replayCreateBuffer(
 // to be seeded from its initialData event. Some source textures (e.g. an
 // r32float LUT recorded with RENDER_ATTACHMENT|COPY_SRC|TEXTURE_BINDING) lack
 // COPY_DST; without promoting it here the seed's writeTexture is rejected.
+// COPY_SRC is NOT promoted here: the recorder (recorder.ts createTexture) is the
+// SSOT for it — every recorded createTexture event already carries COPY_SRC so
+// snapshot/readback can copyTextureToBuffer the resource. This is what lets the
+// inspector's TextureViewer read back bound input textures after replay.
 const TEXTURE_USAGE_COPY_DST = 0x02;
+// GPUTextureUsage.TEXTURE_BINDING — promoted ONLY for depth/stencil-format textures
+// so the inspector's TextureViewer can sample (textureLoad) the depth plane of a
+// non-copyable depth format (depth24plus*) in a blit pass: WebGPU forbids
+// copyTextureToBuffer on that plane, so the only faithful way to read its real
+// values is to sample it. Widening usage does not change rendered depth values;
+// restricted to depth formats to avoid touching color textures.
+const TEXTURE_USAGE_TEXTURE_BINDING = 0x04;
 
 function replayCreateTexture(
   event: RhiCallEventCreateTexture,
@@ -1075,10 +1086,13 @@ function replayCreateTexture(
   handleMap: Map<HandleId, unknown>,
 ): void {
   const adapted = withSrgbViewFormat(descWithAdaptedFormat(event.desc));
-  const seedableDesc = {
-    ...adapted,
-    usage: ((adapted.usage as number | undefined) ?? 0) | TEXTURE_USAGE_COPY_DST,
-  };
+  const isDepthFormat =
+    typeof event.desc.format === 'string' && event.desc.format.includes('depth');
+  const usage =
+    ((adapted.usage as number | undefined) ?? 0) |
+    TEXTURE_USAGE_COPY_DST |
+    (isDepthFormat ? TEXTURE_USAGE_TEXTURE_BINDING : 0);
+  const seedableDesc = { ...adapted, usage };
   const result = device.createTexture(seedableDesc as any);
   if (result.ok) {
     handleMap.set(event.handleId, result.value);

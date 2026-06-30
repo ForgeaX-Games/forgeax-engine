@@ -1,6 +1,6 @@
 # @forgeax/engine-gltf
 
-> Runtime glTF 2.0 importer (Tier-C subset). Pure-function pipeline `parseGlb` / `parseGltf` / `toAssetPack` consumed by build-time CLI plugin bin `forgeax-engine-console-gltf` (resolved via base bin `forgeax-engine-console-gltf import` per kubectl 4th-path discovery; replaces the deleted `forgeax-engine-console-asset import` per 2026-05-16 UX break) writing `<source>.meta.json` (external-asset-package; dispatch on top-level `importer: 'gltf'`); runtime spawn happens via the existing `loadByGuid<SceneAsset>` plus `world.instantiateScene` 4-step recipe (no `loadGltf(url)` parallel API).
+> Runtime glTF 2.0 importer (Tier-C subset). Pure-function pipeline `parseGlb` / `parseGltf` / `toAssetPack` consumed by build-time CLI plugin bin `forgeax-engine-remote-gltf` (resolved via PATH-prefix scan for `forgeax-engine-remote-`) writing `<source>.meta.json` (external-asset-package; dispatch on top-level `importer: 'gltf'`); runtime spawn happens via the existing `loadByGuid<SceneAsset>` plus `world.instantiateScene` 4-step recipe (no `loadGltf(url)` parallel API).
 
 ## Tier-C scope (upgraded from Tier-B by feat-20260522-learn-render-3-1-sponza-model-loading-with-multi-l)
 
@@ -104,24 +104,19 @@ const root = engine.assets.instantiate(sceneResult.value, world);
 // equivalent to world.instantiateScene(handle).
 ```
 
-## CLI plugin — `forgeax-engine-console-gltf`
+## CLI plugin — `forgeax-engine-remote-gltf`
 
-The build-time CLI subcommand `import` ships as a standalone plugin bin `forgeax-engine-console-gltf` (entry `dist/cli-gltf.mjs`) declared in this package's `package.json#bin`. The base bin `forgeax-engine-console` discovers it via kubectl 4th-path eager PATH scan over the `forgeax-engine-console-` prefix; users invoke the surface as `forgeax-engine-console gltf <sub>` (transparent dispatch through `execvp` to `forgeax-engine-console-gltf`).
-
-The plugin imports `parseGltfFromFile` / `parseGlbFromFile` / `toAssetPack` directly (in-process), so `@forgeax/engine-console` itself zero-imports `@forgeax/engine-gltf` — enforced by reverse grep gate `check-console-not-import-engine.mjs`.
+The build-time CLI subcommand `import` ships as a standalone plugin bin `forgeax-engine-remote-gltf` (entry `dist/cli-gltf.mjs`) declared in this package's `package.json#bin`, discovered via PATH-prefix scan for `forgeax-engine-remote-`.
 
 | Subcommand | Description | Exit code |
 |:--|:--|:--|
-| `forgeax-engine-console-gltf import <path>` | Parse `.gltf` / `.glb`; write sidecar `<source>.meta.json` (top-level `importer: 'gltf'`) next to source; UUIDv7 GUIDs assigned per sub-asset in document order | 0 success / 1 `GltfError` |
-| `forgeax-engine-console-gltf import <path> --check` | Dry-run mode — no sidecar write; surfaces `gltf-meta-missing` route b (cf. importer route a) | 0 if sidecar already present / 1 if missing |
+| `forgeax-engine-remote-gltf import <path>` | Parse `.gltf` / `.glb`; write sidecar `<source>.meta.json` (top-level `importer: 'gltf'`) next to source; UUIDv7 GUIDs assigned per sub-asset in document order | 0 success / 1 `GltfError` |
+| `forgeax-engine-remote-gltf import <path> --check` | Dry-run mode — no sidecar write; surfaces `gltf-meta-missing` route b (cf. importer route a) | 0 if sidecar already present / 1 if missing |
 
 ```bash
-# Invoke via base bin (kubectl-style transparent dispatch)
-forgeax-engine-console-gltf import apps/hello/gltf/assets/box.glb
-forgeax-engine-console-gltf import apps/hello/gltf/assets/ --check
-
 # Direct invocation (after pnpm -F @forgeax/engine-gltf build)
-forgeax-engine-console-gltf import box.glb
+forgeax-engine-remote-gltf import apps/hello/gltf/assets/box.glb
+forgeax-engine-remote-gltf import apps/hello/gltf/assets/ --check
 ```
 
 See `.forgeax-harness/forgeax-loop/feat-20260515-gltf-loader-via-asset-system/plan-strategy.md` for the full roadmap.

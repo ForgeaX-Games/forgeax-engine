@@ -71,7 +71,7 @@ Both `createApp` canvas and assemble forms call `registerStatesPlugin(world)` in
 
 ## CLI plugin
 
-`forgeax-engine-console-state` is a kubectl-style plugin bin (4th-path discovery via `forgeax-engine-console-` prefix scan). Two subcommands:
+`forgeax-engine-remote-state` is a kubectl-style plugin bin (4th-path discovery via `forgeax-engine-remote-` prefix scan). Two subcommands:
 
 - `list` -- prints all registered tokens with name, current variant, and variants list
 - `get <name>` -- prints the current variant string for a named token

@@ -76,6 +76,7 @@ import { ErrorFanoutRegistry } from './internal/error-fanout';
 import { createFrameLoop } from './internal/frame-loop';
 import { registerCaptureHmrListener } from './internal/hmr-capture-listener';
 import { attachInputAuto } from './internal/input-attach';
+import { resolveRemoteServeFlag } from './internal/remote-serve-flag';
 import { resolveRhiDebugFlag } from './internal/rhi-debug-flag';
 import { runPlugins } from './internal/run-plugins';
 import { inputPlugin } from './plugin-factories';
@@ -414,6 +415,18 @@ async function createAppFromCanvas(
     }
   }
 
+  // Step 2.4 decision: resolve whether the remote eval server should start
+  // (feat-20260629-inspector-two-layer-model M4 / w20). Dual-source gating
+  // mirrors the rhi-debug-flag pattern. The actual startServer call is
+  // deferred to after World creation (Step 3) because the server needs
+  // a live World reference.
+  const shouldStartRemote = resolveRemoteServeFlag(
+    typeof import.meta !== 'undefined'
+      ? (import.meta as { env?: { DEV?: boolean } }).env?.DEV
+      : undefined,
+    (globalThis as { process?: { env?: { FORGEAX_ENGINE_REMOTE_SERVE?: string } } }).process?.env,
+  );
+
   // Step 2.5: debug-draw auto-attach (feat-20260615 M5 / w31).
   // Fire-and-forget: createDebugDrawOnReady awaits renderer.ready
   // internally and registers the instance for graph pass closures.
@@ -489,6 +502,45 @@ async function createAppFromCanvas(
     return err(pluginResult.error);
   }
 
+  // Step 3.3: Remote eval server auto-start (deferred from Step 2.4 so
+  // World is available). Dynamic import keeps @forgeax/engine-app free
+  // of static dep on @forgeax/engine-remote.
+  let remoteHandle: { readonly port: number; close(): Promise<void> } | undefined;
+  if (shouldStartRemote) {
+    try {
+      const remoteServerMod = (await import(
+        /* @vite-ignore */ '@forgeax/engine-remote/server'
+      )) as unknown as {
+        startServer: (opts: {
+          port: number;
+          host?: string;
+          world: unknown;
+          renderer?: unknown;
+          assets?: unknown;
+          debugAdapter?: unknown;
+        }) => Promise<{
+          ok: boolean;
+          value?: { port: number; close(): Promise<void> };
+          error?: { code: string };
+        }>;
+      };
+      const serverResult = await remoteServerMod.startServer({
+        port: 0, // OS-assigned ephemeral port
+        host: '127.0.0.1',
+        world,
+        renderer,
+        assets: renderer.assets,
+        ...(_debugAdapter !== undefined ? { debugAdapter: _debugAdapter } : {}),
+      });
+      if (serverResult.ok && serverResult.value) {
+        remoteHandle = { port: serverResult.value.port, close: serverResult.value.close };
+      }
+    } catch (_e) {
+      // Dynamic import or server start failed — app continues without remote.
+      // The error is logged by startServer internally.
+    }
+  }
+
   const buildArgs: BuildAppArgs = {
     renderer,
     world,
@@ -520,6 +572,9 @@ async function createAppFromCanvas(
   }
   if (debugDraw !== undefined) {
     Object.assign(buildArgs, { debugDraw });
+  }
+  if (remoteHandle !== undefined) {
+    Object.assign(buildArgs, { remoteHandle });
   }
 
   // feat-20260617-host-engine-contract-and-video-cutscene / M3 / w13 + D-6:
@@ -699,6 +754,8 @@ interface BuildAppArgs {
   readonly debugAdapter?: unknown;
   /** feat-20260615 debug-draw M5: DebugDraw instance created by createDebugDrawOnReady. */
   readonly debugDraw?: DebugDraw;
+  /** feat-20260629 M4 / w20: remote eval server handle from createAppFromCanvas. */
+  readonly remoteHandle?: { readonly port: number; close(): Promise<void> };
 }
 
 /**
@@ -723,6 +780,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     debugRhi,
     debugAdapter,
     debugDraw,
+    remoteHandle,
   } = args;
 
   // M2 plugin-system-unify (D-1 / D-4): audio resource injection,
@@ -917,6 +975,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     ...(debugRhi !== undefined ? { _debugRhi: debugRhi } : {}),
     ...(debugAdapter !== undefined ? { _debugAdapter: debugAdapter } : {}),
     ...(debugDraw !== undefined ? { debugDraw } : {}),
+    ...(remoteHandle !== undefined ? { remote: remoteHandle } : {}),
   };
 
   // Readiness barrier (charter Fail Fast). createRenderer resolves before

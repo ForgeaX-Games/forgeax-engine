@@ -100,7 +100,7 @@ import {
       await rm(tempDir, { recursive: true, force: true });
     });
 
-    describe('cli-gltf (forgeax-engine-console-gltf plugin bin)', () => {
+    describe('cli-gltf (forgeax-engine-remote-gltf plugin bin)', () => {
       describe('subcommand routing (a)', () => {
         it('prints help on --help and exits 0', async () => {
           const io = makeIO();
@@ -1710,14 +1710,23 @@ import {
         expect(result.error.detail.source).toBe('extensionsRequired');
       });
 
-      it('(b) accepts extensionsUsed (not required) with stderr warn + diagnostics list', () => {
+      it('(b) accepts extensionsUsed (not required) into diagnostics list with no stderr', () => {
         const result = checkExtensions({ extensionsUsed: ['KHR_materials_pbrSpecularGlossiness'] });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         expect(result.value.unsupportedUsed).toEqual(['KHR_materials_pbrSpecularGlossiness']);
-        expect(result.value.warnings.length).toBe(1);
-        expect(result.value.warnings[0]).toContain('feat-future-gltf-extensions-allowlist');
-        expect(stderrSpy).toHaveBeenCalledTimes(1);
+        expect(stderrSpy).not.toHaveBeenCalled();
+      });
+
+      it('(b2) extensionsUsed over-declared (no material references it) stays silent', () => {
+        // Exporters routinely list an extension in extensionsUsed that no
+        // material/node/texture actually references (e.g. KHR_materials_unlit).
+        // It is informational per the glTF spec -> diagnostics-only, never stderr.
+        const result = checkExtensions({ extensionsUsed: ['KHR_materials_unlit'] });
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.value.unsupportedUsed).toEqual(['KHR_materials_unlit']);
+        expect(stderrSpy).not.toHaveBeenCalled();
       });
 
       it('extensionsRequired wins fail-fast over a benign extensionsUsed entry', () => {
@@ -1735,7 +1744,6 @@ import {
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         expect(result.value.unsupportedUsed).toEqual([]);
-        expect(result.value.warnings).toEqual([]);
         expect(stderrSpy).not.toHaveBeenCalled();
       });
 
@@ -1744,7 +1752,6 @@ import {
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         expect(result.value.unsupportedUsed).toEqual([]);
-        expect(result.value.warnings).toEqual([]);
         expect(stderrSpy).not.toHaveBeenCalled();
       });
 
@@ -1753,7 +1760,6 @@ import {
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         expect(result.value.unsupportedUsed).toEqual([]);
-        expect(result.value.warnings).toEqual([]);
         expect(stderrSpy).not.toHaveBeenCalled();
       });
     });

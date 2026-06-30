@@ -1,18 +1,18 @@
 #!/usr/bin/env node
-// @forgeax/engine-gltf/src/cli-gltf — `forgeax-engine-console-gltf` plugin
+// @forgeax/engine-gltf/src/cli-gltf — `forgeax-engine-remote-gltf` plugin
 // bin (feat-20260516-console-dependency-inversion plan-strategy section
 // 2.9). Discovered by the base bin via the kubectl 4th-path
-// `forgeax-engine-console-` prefix scanner.
+// `forgeax-engine-remote-` prefix scanner.
 //
 // Single subcommand `import` for v1 (UX break vs the prior
-// `forgeax-engine-console-asset import`):
+// `forgeax-engine-remote-asset import`):
 //
-//   write mode  `forgeax-engine-console-gltf import <gltf-or-glb>`
+//   write mode  `forgeax-engine-remote-gltf import <gltf-or-glb>`
 //                Parses the source via parseGlb / parseGltf and writes the
 //                sibling `<source>.meta.json` sidecar (sorted-keys, LF line
 //                ending — byte-stable so a clean reimport produces no diff).
 //
-//   --check     `forgeax-engine-console-gltf import --check <dir>`
+//   --check     `forgeax-engine-remote-gltf import --check <dir>`
 //                Dry-run: traverse <dir> reusing SCANNER_BLACKLIST from
 //                @forgeax/engine-pack/scanner and surface the first orphan
 //                .gltf / .glb whose `<source>.meta.json` is absent as
@@ -54,11 +54,11 @@ function emitError(ctx: AssetCtx, err: ErrShape): number {
 
 function helpBody(): string {
   return [
-    'forgeax-engine-console-gltf — glTF / GLB sidecar importer (produces texture/mesh/material/scene sub-assets)',
+    'forgeax-engine-remote-gltf — glTF / GLB sidecar importer (produces texture/mesh/material/scene sub-assets)',
     '',
     'Usage:',
-    '  forgeax-engine-console-gltf import <path.gltf|path.glb>',
-    '  forgeax-engine-console-gltf import --check <dir>',
+    '  forgeax-engine-remote-gltf import <path.gltf|path.glb>',
+    '  forgeax-engine-remote-gltf import --check <dir>',
     '',
     'Produces a sibling <source>.meta.json sidecar with sub-asset entries',
     'for every glTF asset category: texture, mesh, material, scene.',
@@ -76,7 +76,7 @@ export async function runCliGltf(rest: string[], ctx: AssetCtx): Promise<number>
     return emitError(ctx, {
       code: 'unknown-subcommand',
       expected: "subcommand 'import'",
-      hint: "run 'forgeax-engine-console-gltf --help' for usage",
+      hint: "run 'forgeax-engine-remote-gltf --help' for usage",
       detail: { subcommand: sub },
     });
   }
@@ -99,8 +99,8 @@ async function runImport(rest: string[], ctx: AssetCtx): Promise<number> {
     const message = e instanceof Error ? e.message : String(e);
     return emitError(ctx, {
       code: 'cli-parse-error',
-      expected: 'forgeax-engine-console-gltf import [--check] <path>',
-      hint: "run 'forgeax-engine-console-gltf --help' for usage",
+      expected: 'forgeax-engine-remote-gltf import [--check] <path>',
+      hint: "run 'forgeax-engine-remote-gltf --help' for usage",
       detail: { message },
     });
   }
@@ -109,8 +109,8 @@ async function runImport(rest: string[], ctx: AssetCtx): Promise<number> {
     return emitError(ctx, {
       code: 'cli-parse-error',
       expected: check
-        ? 'forgeax-engine-console-gltf import --check <dir>'
-        : 'forgeax-engine-console-gltf import <path.gltf|path.glb>',
+        ? 'forgeax-engine-remote-gltf import --check <dir>'
+        : 'forgeax-engine-remote-gltf import <path.gltf|path.glb>',
       hint: 'pass a positional <gltf-or-glb> argument; with --check pass a directory',
     });
   }
@@ -191,7 +191,7 @@ async function runCheck(target: string, ctx: AssetCtx): Promise<number> {
     const message = e instanceof Error ? e.message : String(e);
     return emitError(ctx, {
       code: 'cli-parse-error',
-      expected: 'forgeax-engine-console-gltf import --check <dir>',
+      expected: 'forgeax-engine-remote-gltf import --check <dir>',
       hint: 'pass a directory that exists and is readable',
       detail: { path: target, message },
     });

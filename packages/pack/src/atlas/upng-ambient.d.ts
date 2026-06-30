@@ -1,5 +1,5 @@
 // Ambient declaration for `upng-js` (PNG decoder/encoder) used by the
-// `forgeax-engine-console-asset atlas` subcommand (run-atlas.ts) and by
+// `forgeax-engine-remote-asset atlas` subcommand (run-atlas.ts) and by
 // its hermetic CLI integration tests under `__tests__/`. The package
 // ships without bundled `.d.ts`; consumer sites cast through local
 // interfaces to match the subset they use.

@@ -211,7 +211,23 @@ async function findRealTtf(): Promise<string | undefined> {
     describe('fontImporter bake mapping (AC-18)', () => {
       it('maps the mock atlas onto the declared atlas + font sub-asset GUIDs', async () => {
         const ctx = makeCtx([
-          { guid: ATLAS_GUID, sourceIndex: 0, kind: 'image' },
+          { guid: ATLAS_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: FONT_GUID, sourceIndex: 0, kind: 'font' },
+        ]);
+        const produced = await fontImporter.import(ctx);
+
+        const atlas = produced.find((a) => a.guid === ATLAS_GUID);
+        expect(atlas?.kind).toBe('texture');
+
+        const font = produced.find((a) => a.guid === FONT_GUID);
+        expect(font?.kind).toBe('font');
+        expect(font?.refs.map((r) => r.guid)).toContain(ATLAS_GUID);
+      });
+
+      // P1: fontImporter atlas lookup uses s.kind === 'texture' instead of 'image'.
+      it('P1: uses s.kind === "texture" to find atlas sub-asset', async () => {
+        const ctx = makeCtx([
+          { guid: ATLAS_GUID, sourceIndex: 0, kind: 'texture' },
           { guid: FONT_GUID, sourceIndex: 0, kind: 'font' },
         ]);
         const produced = await fontImporter.import(ctx);
@@ -233,7 +249,7 @@ async function findRealTtf(): Promise<string | undefined> {
   const PKG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
   describe('plugin-discoverable.test.ts', () => {
-    describe('plugin-discoverable (forgeax-engine-console-font)', () => {
+    describe('plugin-discoverable (forgeax-engine-remote-font)', () => {
       describe('bake subcommand routing (a)', () => {
         it('--help on root exits 0 and prints usage', async () => {
           const code = await runCliFont(['--help']);
@@ -262,24 +278,24 @@ async function findRealTtf(): Promise<string | undefined> {
       });
 
       describe('plugin bin naming contract (b)', () => {
-        it('package.json bin field is forgeax-engine-console-font -> ./dist/cli-font.mjs', async () => {
+        it('package.json bin field is forgeax-engine-remote-font -> ./dist/cli-font.mjs', async () => {
           const pkgPath = join(PKG_DIR, 'package.json');
           const raw = await readFile(pkgPath, 'utf-8');
           const pkg = JSON.parse(raw) as Record<string, unknown>;
           const bin = pkg.bin as Record<string, string>;
           expect(bin).toBeDefined();
           expect(typeof bin).toBe('object');
-          expect(bin['forgeax-engine-console-font']).toBe('./dist/cli-font.mjs');
+          expect(bin['forgeax-engine-remote-font']).toBe('./dist/cli-font.mjs');
         });
 
-        it('bin name starts with forgeax-engine-console- (PLUGIN_PREFIX contract)', async () => {
+        it('bin name starts with forgeax-engine-remote- (PLUGIN_PREFIX contract)', async () => {
           const pkgPath = join(PKG_DIR, 'package.json');
           const raw = await readFile(pkgPath, 'utf-8');
           const pkg = JSON.parse(raw) as Record<string, unknown>;
           const bin = pkg.bin as Record<string, string>;
           const binNames = Object.keys(bin);
           expect(binNames.length).toBe(1);
-          expect(binNames[0]).toBe('forgeax-engine-console-font');
+          expect(binNames[0]).toBe('forgeax-engine-remote-font');
         });
       });
 

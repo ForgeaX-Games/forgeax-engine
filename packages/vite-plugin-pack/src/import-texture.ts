@@ -149,7 +149,7 @@ export async function importTextureEntry(
         'decodeImage seam unwired in vite-plugin-pack import-texture (bare-source path); reach the gltfImporter codepath through buildCatalog instead',
       );
     },
-    subAssets: [{ guid: entry.guid, sourceIndex: 0, kind: 'image' }],
+    subAssets: [{ guid: entry.guid, sourceIndex: 0, kind: 'texture' }],
     importSettings,
   };
   let produced: readonly { guid: string; payload: unknown }[];

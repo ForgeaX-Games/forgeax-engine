@@ -181,7 +181,7 @@ flowchart LR
 |:--|:--|:--|
 | **Event Browser** | `EventBrowser.tsx` | pass->draw 树 + 完整命令流（含非 draw 命令：setPipeline/setBindGroup/copy*/clearBuffer/debug marker）。非 draw 命令暗色小图标，draw 高亮。`pushDebugGroup`->`popDebugGroup` 形成可折叠嵌套。顶部 `draws only` / `all commands` 过滤开关，默认 `draws only` |
 | **Pipeline State** | `PipelineState.tsx` | 选中 draw 的完整管线状态，RenderDoc 式七阶段：IA（topology/index format）/ Vertex Input（per-slot buffer + layout）/ Shaders（vertex/fragment module handle + 内联展开 WGSL 源码）/ Rasterizer（cull mode/front face）/ Depth-Stencil（format/compare/stencil reference）/ Blend（per-target blend + blendConstant）/ Multisample（count/mask） |
-| **Texture Viewer** | `TextureViewer.tsx`（已吸收旧 RtPanel，旧文件已删） | 左侧缩略图列表（color RT 0..N + depth-stencil + 绑定纹理）+ 右侧 `<canvas>` **真实像素**预览。color RT 走 `ensureReplaySession`+`commitThroughDraw`+`renderRtToCanvas`；可 copy 的 depth（depth32float/depth16unorm）走 `readbackDepthTexture`+`normalizeDepth` 灰度。不可 copy 的 depth（depth24plus*）给出诚实说明（WebGPU 禁 copyTextureToBuffer，建议改用 depth32float 重截），不是裸红 error。canvas 带 `data-forgeax-rt-status` / `data-forgeax-rt-canvas` 锚点（smoke 据此验证真实出图）。per-texture 退化矩阵（ok/no-rt/no-webgpu/error），单纹理失败不影响其余 |
+| **Texture Viewer** | `TextureViewer.tsx`（已吸收旧 RtPanel，旧文件已删） | 左侧缩略图列表（color RT 0..N + Depth + Stencil + 绑定纹理）+ 右侧 `<canvas>` **真实像素**预览。color RT 走 `ensureReplaySession`+`commitThroughDraw`+`renderRtToCanvas`；可 copy 的 depth（depth32float/depth16unorm）走 `readbackDepthTexture`+`normalizeDepth` 灰度。**不可 copy 的 depth（depth24plus*）改走深度采样 blit**（`depth-blit.ts blitDepthToR32`：`textureLoad(texture_depth_2d)`→r32float RT→读回→normalize→灰度）——WebGPU 禁对 depth24plus 深度切面 `copyTextureToBuffer`，blit 是不改格式、忠实读真实深度值的唯一办法（replayer 给深度格式纹理补 `TEXTURE_BINDING` 使其可采样）。**depth-stencil 拆成两个缩略图 Depth + Stencil**：stencil8 切面**可** copy（`readbackStencilTexture` 走 `aspect:'stencil-only'` bytesPerTexel=1），归一化灰度呈现（stencil 值小，按 min/max 拉伸）。**绑定输入纹理**（材质 albedo / skybox / SSAO 输入 / 点光阴影 atlas 等）现也出**真实像素**：缩略图按 `resolveTextureDescriptor`（tape handle->源 createTexture，共享 SSOT；含 `arrayLayers`=depthOrArrayLayers）解出真实 format/dimension（不再写死 `unknown`）。**color**：**任意非压缩 color 格式**（任意通道数/位宽：rgba16float/r32float/rg11b10ufloat/rgb10a2unorm/16-bit/单双通道…）走 `commitThroughDraw`+`readbackTexturePixels`（读回字节数由 `bytesPerTexel(format)` 定：rgba16float=8B 等，默认 4 会误读 stride）→ **host CPU 解码** `decodeToRgba8`（`texel-decode.ts`，由 `formatInfo` 驱动逐通道读 half/f32/unorm/snorm/uint/sint + packed 解包 + BGRA swizzle）→ `putImageData`。**float/ufloat 显示走 clamp [0,1]×255**（RenderDoc 默认初始态，>1 高光过曝成白；snorm 负值截黑；uint/sint 小整数 clamp 0..255 保可见）。录制时 recorder 已给每张 createTexture 补 `COPY_SRC`（SSOT，replayer 不重复补；扩展格式纯 CPU 解码，**不改 replay 行为/格式**）。**depth**：绑定的 depth 纹理复用 attachment 同一条忠实路径 `readbackDepthAuto`（按格式分流：depth24plus* 走 blit，其余直读）+ normalize 灰度。**cube / cube-array / 2d-array**：可切片维度逐片预览——头部出**切片选择器**（`<select>`，锚点 `data-forgeax-texture-slice`），cube/cube-array 面名标签 `+X/-X/+Y/-Y/+Z/-Z`（cube-array 前缀 `L{layer}`）、2d-array `Layer N`，选中片经 `baseArrayLayer`（color→origin.z；depth→depth-only 2D view 的 `baseArrayLayer`）单片读回。**缩放工具条**（`status==='ok'` 时出）：Fit / 1:1 / +- 梯级 / 百分比输入（锚点 `data-forgeax-texture-zoom`，值=百分比或 `fit`），numeric 时按 `dims*zoom` 设 canvas CSS 尺寸（drawing buffer 仍=纹理尺寸），始终 `image-rendering:pixelated` 使 1×1/小纹理放大清晰。仅**压缩格式（BC/ETC/ASTC）** 与 `3d` 仍给诚实"not directly previewable，转 Resource Inspector"文案（无 `formatInfo` 条目→无解码路径）。canvas 带 `data-forgeax-rt-status` / `data-forgeax-rt-canvas` 锚点（smoke 据此验证真实出图）。per-texture 退化矩阵（ok/no-rt/no-webgpu/error），单纹理失败不影响其余 |
 | **Resource Inspector** | `ResourceInspector.tsx` | 全部 `create*` 资源描述符（Buffers/Textures/Samplers/BindGroupLayouts/PipelineLayouts/Pipelines/ShaderModules）。usage flags 解码为可读字符串。handle 显示为超链接，点击跳转并高亮匹配行。选中非 draw 命令时显示该命令的 src/dst 资源 |
 
 ### Dock 操作 + 布局持久化
@@ -232,6 +232,8 @@ flowchart LR
   - `data-forgeax-command-row="<idx>"` — 命令流中第 idx 条命令行
   - `data-forgeax-draw="<idx>"` — draws-only 模式第 idx 个 draw 行；当前选中行额外带 `data-forgeax-selected="true"`
   - `data-forgeax-texture-thumbnail="<idx>"` — 纹理缩略图第 idx
+  - `data-forgeax-texture-slice="<idx>"` — cube/cube-array/2d-array 切片选择器（值=当前切片）
+  - `data-forgeax-texture-zoom="<pct>|fit"` — 缩放工具条百分比输入（值=百分比整数或 `fit`）
   - `data-forgeax-rt-status="ok|no-rt|no-webgpu|error"` + `data-forgeax-rt-canvas`（预览 canvas）— TextureViewer 出图状态与画布
   - `data-forgeax-resource-row="<handleId>"` — 资源表中某 handle 对应行
 
@@ -247,10 +249,10 @@ flowchart LR
 
 | status | 触发条件 | 显示 |
 |:--|:--|:--|
-| **ok** | 纹理回读成功 | 正常像素（color: RGBA; depth: auto-normalize 灰度） |
-| **no-rt** | compute-only draw / 无 color/depth attachment | "no-rt" 占位 |
+| **ok** | 纹理回读成功 | 正常像素（color: 任意非压缩格式 host 解码 RGBA，float clamp[0,1]; depth: auto-normalize 灰度）+ 缩放工具条（Fit/1:1/百分比，pixelated） |
+| **no-rt** | compute-only draw / 无 color/depth attachment **/ 不可预览的绑定纹理（3d、压缩格式 BC/ETC/ASTC）** | "no-rt" 占位 + 诚实文案（"not directly previewable，转 Resource Inspector"） |
 | **no-webgpu** | `navigator.gpu === undefined` / adapter 请求失败 | "no-webgpu" 占位，布局保留 |
-| **error** | 回读失败（如 depth24plus 不可 copy） | "error" + 错误消息 |
+| **error** | 回读/渲染运行期失败（GPU 异常、canvas 不可用等；depth24plus 不再走此格——已 blit 预览） | "error" + 错误消息 |
 
 Single texture error does not affect other textures in the same draw.
 
@@ -263,7 +265,7 @@ Single texture error does not affect other textures in the same draw.
 - **shader 用 standalone `createShaderModule`**：viewer `replay-session.ts` 从 `@forgeax/engine-rhi-webgpu` import standalone `createShaderModule` 喂 `createReplay` 第三参——**不是**幽灵 `RhiDevice.createShaderModule`（fix-f3 已移除）。
 - **TextureViewer 独立 WebGPU 设备**：viewer 自己 `requestAdapter/requestDevice`，与被截帧的游戏无关；渲染逻辑在 TextureViewer（旧 RtPanel 已删）。
 - **viewer ↔ CLI 改一处动两处**：整帧分析在 `/frame-model`（包内），viewer 与 `cli.mjs summary` 共用。改 `FrameModel` 形状要同步 `viewer-model.ts` re-export 与 CLI `summary` 序列化（resources/vertexBuffers Map → 数组）。`InspectReport.pipelineState` 由 `inspect-core.inspectDrawJson` 用同组原子填充，改 `makePipelineState` 同时影响 viewer、`summary`、`inspect-offline`。
-- **TextureViewer 乐观初值**：`data-forgeax-rt-status` 在异步 replay 完成前先同步给乐观值（color-rt+WebGPU→ok），消费方再 poll canvas 像素确认真实出图——否则 smoke 一次性读到的是初始 `no-rt` 而误判 SKIP。
+- **TextureViewer 乐观初值**：`data-forgeax-rt-status` 在异步 replay 完成前先同步给乐观值（color-rt+WebGPU→ok；可预览的绑定纹理同 ok，不可预览的绑定纹理→no-rt），消费方再 poll canvas 像素确认真实出图——否则 smoke 一次性读到的是初始 `no-rt` 而误判 SKIP。
 
 ## 深入
 

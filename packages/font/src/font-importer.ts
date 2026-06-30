@@ -2,10 +2,10 @@
 //
 // The `{ key: 'font', import }` Importer the @forgeax/engine-import runner
 // dispatches a `*.meta.json` with `importer: 'font'` to. It absorbs the MSDF
-// bake that previously lived only behind the `forgeax-engine-console-font
+// bake that previously lived only behind the `forgeax-engine-remote-font
 // bake` CLI: read the `.ttf` source -> @zappar/msdf-generator atlas ->
 // (a) one atlas `TextureAsset` ImportedAsset (the RGBA MSDF atlas, kind
-// 'texture') under the declared `kind: 'image'` sub-asset GUID, and (b) one
+// 'texture') under the declared `kind: 'texture'` sub-asset GUID, and (b) one
 // font glyph-metrics ImportedAsset (kind 'font') under the declared
 // `kind: 'font'` sub-asset GUID, carrying the BMFont -> FontAsset glyph map +
 // the common block + an `atlasGuid` ref to the atlas sub-asset.
@@ -21,7 +21,7 @@
 // (M1 w6) reads an already-baked atlas DDC and has no bake dependency.
 //
 // GUID import-stable iron law: produced GUIDs come from `ctx.subAssets[]`. The
-// font sidecar declares a `kind: 'image'` atlas sub-asset and a `kind: 'font'`
+// font sidecar declares a `kind: 'texture'` atlas sub-asset and a `kind: 'font'`
 // glyph-metrics sub-asset; this importer maps the bake output onto those two
 // declared GUIDs and stamps nothing of its own.
 //
@@ -104,7 +104,7 @@ async function importFont(ctx: ImportContext): Promise<readonly ImportedAsset[]>
     await generator.dispose().catch(() => undefined);
   }
 
-  const atlasSub = ctx.subAssets.find((s) => s.kind === 'image');
+  const atlasSub = ctx.subAssets.find((s) => s.kind === 'texture');
   const fontSub = ctx.subAssets.find((s) => s.kind === 'font');
 
   const out: ImportedAsset[] = [];

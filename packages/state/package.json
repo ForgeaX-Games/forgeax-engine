@@ -7,7 +7,7 @@
   "sideEffects": false,
   "description": "Single-world typed-state machine with state-scoped entity lifecycle.",
   "bin": {
-    "forgeax-engine-console-state": "./dist/cli-state.mjs"
+    "forgeax-engine-remote-state": "./dist/cli-state.mjs"
   },
   "exports": {
     ".": {

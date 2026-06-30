@@ -293,7 +293,7 @@ describe('ASSET_ERROR_HINTS - plan-strategy §7.3 locked literals', () => {
 
   it('asset-format-unsupported hint matches plan-strategy §7.3 verbatim', () => {
     expect(ASSET_ERROR_HINTS['asset-format-unsupported']).toBe(
-      'v1 supports png/jpg only; convert .bmp/.webp etc. via image tooling; gltf/glb supported via @forgeax/engine-gltf importer (forgeax-engine-console-gltf import <gltf-or-glb>)',
+      'v1 supports png/jpg only; convert .bmp/.webp etc. via image tooling; gltf/glb supported via @forgeax/engine-gltf importer (forgeax-engine-remote-gltf import <gltf-or-glb>)',
     );
   });
 
@@ -1271,8 +1271,8 @@ describe('AI-user property access (P3 explicit failure)', () => {
 // inspector-client.test - runtime assertions for the new
 // `@forgeax/engine-types/inspector-client` module (feat-20260517 w4 / D-3
 // F2-alpha). The module physically extracts `defaultConnect` from
-// `@forgeax/engine-console/src/cli.ts:367-451` so the WS-JSON-RPC 2.0
-// client becomes a single SSOT shared by `@forgeax/engine-console` (base
+// `@forgeax/engine-remote/src/cli.ts:367-451` so the WS-JSON-RPC 2.0
+// client becomes a single SSOT shared by `@forgeax/engine-remote` (base
 // CLI) and `@forgeax/engine-ecs` (cli-ecs plugin bin, M2 w8/w9).
 //
 // Three assertions (locked by plan-tasks w4):
@@ -1296,7 +1296,7 @@ describe('@forgeax/engine-types/inspector-client - defaultConnect (feat-20260517
     expectTypeOf<ConnectFn>().toEqualTypeOf<(url: string) => Promise<InspectorClientResult>>();
   });
 
-  it('returns Result.err with console-not-running on unreachable WS port (charter P3 explicit failure)', async () => {
+  it('returns Result.err with server-not-running on unreachable WS port (charter P3 explicit failure)', async () => {
     // Pick a port unlikely to be bound (in the ephemeral range above the
     // documented inspector default 5732 and monitor 5731). The connect
     // attempt should fail fast with the structured InspectorError shape;
@@ -1305,7 +1305,7 @@ describe('@forgeax/engine-types/inspector-client - defaultConnect (feat-20260517
     const result = await defaultConnect('ws://127.0.0.1:1/inspector');
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected ok=false on unreachable port');
-    expect(result.error.code).toBe('console-not-running');
+    expect(result.error.code).toBe('server-not-running');
     expect(typeof result.error.expected).toBe('string');
     expect(typeof result.error.hint).toBe('string');
     // Structural InspectorError: 4-field surface (.code, .expected, .hint,

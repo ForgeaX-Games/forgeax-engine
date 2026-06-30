@@ -204,8 +204,8 @@ export class CyclicDependencyError extends Error {
  *
  * Schedule add-only API (`removeSystem` / `replaceSystem`) returns
  * `Result<void, ScheduleMutationError>` carrying one of these codes. The
- * `@forgeax/engine-console` layer (M3) bridges these strings to JSON-RPC
- * `InspectorErrorCode` 1:1 — keeping ECS free of console / wire dependencies.
+ * `@forgeax/engine-remote` layer (M3) bridges these strings to JSON-RPC
+ * `RemoteErrorCode` 1:1 — keeping ECS free of console / wire dependencies.
  *
  * - `system-before-unknown` — name argument does not match any registered system.
  * - `system-name-conflict`  — reserved for the M3 inject path; surfaced from

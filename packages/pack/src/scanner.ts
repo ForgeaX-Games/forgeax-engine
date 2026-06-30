@@ -27,7 +27,7 @@ function packErr<E>(error: E): ScanResult<never, E> {
  * Requirements §3.4 + §5 blacklist.
  *
  * Re-exported as `SCANNER_BLACKLIST` for cross-package reuse: the
- * `forgeax-engine-console-asset import --check` traversal (M4 / w21 +
+ * `forgeax-engine-remote-asset import --check` traversal (M4 / w21 +
  * plan-strategy section 2.8 path b) walks the same set of source-orphan
  * candidates as the scanner, so we share the single SSOT here.
  */

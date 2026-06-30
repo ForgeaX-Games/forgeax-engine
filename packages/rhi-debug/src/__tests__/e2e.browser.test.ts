@@ -428,9 +428,15 @@ fn main() -> @location(0) vec4<f32> {
       // the structural contract (function does not throw, returns Result)
       // is the primary gate. The dawn-node e2e smoke (e2e.dawn.test.ts)
       // covers the full pixel-readback parity path with real GPU readback.
+      //
+      // Regression lock: the canvas is created at its DEFAULT size (300x150) and
+      // deliberately NOT pre-sized. renderRtToCanvas must resize the drawing
+      // buffer to the RT dimensions itself — pre-sizing here previously masked a
+      // bug where a larger RT rendered into a 300x150 buffer showed only its
+      // top-left corner (content-in-a-corner symptom).
       const canvas = document.createElement('canvas');
-      canvas.width = RT_W;
-      canvas.height = RT_H;
+      expect(canvas.width).toBe(300); // default, unset
+      expect(canvas.height).toBe(150);
 
       const renderRes = await renderRtToCanvas(replay, 0, rawDevice, canvas);
       // The renderRtToCanvas call must either succeed (if readback worked)
@@ -439,7 +445,10 @@ fn main() -> @location(0) vec4<f32> {
       // verifies the import path works and the function does not throw.
       expect(renderRes).toBeDefined();
       if (renderRes.ok) {
-        // On success, verify the canvas received image data.
+        // On success, the canvas drawing buffer must have been resized to the
+        // RT dimensions by renderRtToCanvas (not left at the 300x150 default).
+        expect(canvas.width).toBe(RT_W);
+        expect(canvas.height).toBe(RT_H);
         const ctx = canvas.getContext('2d');
         expect(ctx).toBeTruthy();
         if (ctx) {

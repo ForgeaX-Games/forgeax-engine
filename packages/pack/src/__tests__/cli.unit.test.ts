@@ -266,7 +266,7 @@ async function writeSolidPng(
       await rm(tempDir, { recursive: true, force: true });
     });
 
-    describe('cli-asset (forgeax-engine-console-asset plugin bin)', () => {
+    describe('cli-asset (forgeax-engine-remote-asset plugin bin)', () => {
       describe('subcommand routing (a)', () => {
         it('routes scan as a known subcommand and returns 0 on empty roots', async () => {
           const io = makeIO();
@@ -326,7 +326,7 @@ async function writeSolidPng(
               source: 'foo.png',
               importSettings: {},
               subAssets: [
-                { guid: '01234567-89ab-7def-8123-456789abcdef', sourceIndex: 0, kind: 'image' },
+                { guid: '01234567-89ab-7def-8123-456789abcdef', sourceIndex: 0, kind: 'texture' },
               ],
             }),
             'utf-8',
@@ -374,7 +374,7 @@ async function writeSolidPng(
                 addressMode: 'repeat',
                 filterMode: 'linear',
               },
-              subAssets: [{ guid: IMAGE_GUID, sourceIndex: 0, kind: 'image' }],
+              subAssets: [{ guid: IMAGE_GUID, sourceIndex: 0, kind: 'texture' }],
             }),
             'utf-8',
           );
@@ -384,7 +384,7 @@ async function writeSolidPng(
           const parsed = JSON.parse(io.stdout[0] as string);
           expect(parsed).toHaveLength(1);
           expect(parsed[0].guid).toBe(IMAGE_GUID);
-          expect(parsed[0].kind).toBe('image');
+          expect(parsed[0].kind).toBe('texture');
           expect(parsed[0].sourcePath).toContain('wood-container.jpg.meta.json');
         });
 
@@ -405,7 +405,7 @@ async function writeSolidPng(
                 addressMode: 'repeat',
                 filterMode: 'linear',
               },
-              subAssets: [{ guid: IMAGE_GUID, sourceIndex: 0, kind: 'image' }],
+              subAssets: [{ guid: IMAGE_GUID, sourceIndex: 0, kind: 'texture' }],
             }),
             'utf-8',
           );
@@ -417,7 +417,7 @@ async function writeSolidPng(
           expect(code).toBe(0);
           const parsed = JSON.parse(io.stdout[0] as string);
           expect(parsed.guid).toBe(IMAGE_GUID);
-          expect(parsed.kind).toBe('image');
+          expect(parsed.kind).toBe('texture');
         });
       });
 

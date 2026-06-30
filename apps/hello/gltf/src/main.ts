@@ -5,7 +5,7 @@
 // app uses (charter P4 consistent abstraction; plan-strategy section 3.2
 // sequence B). The only difference vs hello-room: instead of authoring
 // .pack.json files by hand, the disk schema sidecar (<source>.meta.json)
-// comes from `forgeax-engine-console-asset import box.gltf` and the runtime
+// comes from `forgeax-engine-remote-asset import box.gltf` and the runtime
 // pipes the .gltf source through `parseGltf` + a small IR -> POD adapter.
 //
 // 4-step recipe (plan-strategy section 3.2 sequence B; AC-07 / AC-14):
@@ -39,7 +39,7 @@ import {
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import boxGltfUrl from '../assets/box.gltf?url';
 // vite resolves these at build / dev time — JSON for the meta sidecar
-// (committed alongside box.gltf via `forgeax-engine-console-asset import`),
+// (committed alongside box.gltf via `forgeax-engine-remote-asset import`),
 // raw URL for the .gltf source so the runtime can fetch + JSON.parse it.
 import metaJson from '../assets/box.gltf.meta.json' with { type: 'json' };
 

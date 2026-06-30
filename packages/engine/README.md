@@ -24,7 +24,7 @@ import { Engine, World } from '@forgeax/engine-runtime'
 | `@forgeax/engine-shader` | Runtime shader registry |
 | `@forgeax/engine-shader-compiler` | Build-time shader compiler |
 | `@forgeax/engine-vite-plugin-shader` | Vite plugin forwarding to shader-compiler |
-| `@forgeax/engine-console` | Inspector P0 server + CLI (`forgeax-engine-console`) |
+| `@forgeax/engine-remote` | Remote eval server + CLI (`forgeax-engine-remote`) |
 
 ## Family rules
 

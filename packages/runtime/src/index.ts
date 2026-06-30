@@ -464,7 +464,7 @@ export { GpuResourceStore } from './gpu-resource-store';
  * Loader-injection surface (feat-20260603-asset-import-loader-injection M1).
  * `LoaderRegistry` is the injectable `asset.kind` -> loader table held by
  * `AssetRegistry`; `wireDefaultLoaders` wires the engine's default loader set
- * onto it in one call (mirrors `@forgeax/engine-console` `wireDefaultInspectors`).
+ * onto it in one call (mirrors `@forgeax/engine-remote` `wireDefaultInspectors`).
  *
  * @example
  *   import { LoaderRegistry, wireDefaultLoaders } from '@forgeax/engine-runtime';
@@ -622,19 +622,9 @@ export { quat } from '@forgeax/engine-math';
  */
 export { Materials, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
 
-// ────────────────────────────────────────────────────────────────────────────
-// Inspector contributor (feat-20260516-console-dependency-inversion / w4rb)
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * `registerRuntimeInspector(reg, engine)` is a top-level pure function
- * (zero import-time side effects per AC-10). Host assembly invokes it
- * explicitly to wire runtime-specific inspection methods (P0:
- * `renderer.info` exposing backend) onto a `Registry` instance from
- * `@forgeax/engine-console`. See `register-inspector.ts` JSDoc for the
- * full contract.
- */
-export type { RegisterRuntimeInspectorResult } from './register-inspector';
+// w8: Inspector contributor (registerRuntimeInspector + RegisterRuntimeInspectorResult)
+// deleted — routing layer (Registry / sandbox) is removed; eval is the sole
+// command channel.
 
 // ─── Animation system wiring (M1 / T-19 - feat-20260523-skin-skeleton-animation) ──
 
@@ -650,7 +640,7 @@ export {
 } from './createRenderer';
 // ─── Plugin factories (M2 / w6 - feat-20260623-plugin-system-unify) ─────────
 export { animationPlugin, timePlugin, transformPlugin } from './plugin-factories';
-export { registerRuntimeInspector } from './register-inspector';
+// w8: registerRuntimeInspector export deleted alongside register-inspector.ts removal.
 
 // ─── Screen-to-entity picking (feat-20260529-picking-raycasting-screen-to-entity M3 / w14) ──
 

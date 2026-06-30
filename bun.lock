@@ -205,6 +205,24 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/hello/custom-importer": {
+      "name": "@forgeax/hello-custom-importer",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-pack": "workspace:^",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.70",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/hello/custom-shader": {
       "name": "@forgeax/hello-custom-shader",
       "version": "0.0.0",
@@ -681,23 +699,6 @@
         "webgpu": "^0.4.0",
       },
     },
-    "apps/inspector-demo": {
-      "name": "inspector-demo",
-      "version": "0.0.0",
-      "dependencies": {
-        "@forgeax/engine-console": "workspace:*",
-        "@forgeax/engine-ecs": "workspace:*",
-        "@forgeax/engine-gltf": "workspace:*",
-        "@forgeax/engine-math": "workspace:*",
-        "@forgeax/engine-pack": "workspace:*",
-        "@forgeax/engine-runtime": "workspace:*",
-      },
-      "devDependencies": {
-        "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
-        "vite": "8.0.10",
-      },
-    },
     "apps/learn-render/1.getting-started/1.hello-window": {
       "name": "@forgeax/app-learn-render-1-getting-started-1-hello-window",
       "version": "0.0.0",
@@ -982,12 +983,12 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
-        "@forgeax/engine-console": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-gltf": "workspace:*",
         "@forgeax/engine-input": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-remote": "workspace:*",
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
@@ -1536,6 +1537,24 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/remote-demo": {
+      "name": "@forgeax/remote-demo",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-gltf": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-remote": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.70",
+        "vite": "8.0.10",
+      },
+    },
     "apps/rhi-debug-viewer": {
       "name": "@forgeax/rhi-debug-viewer",
       "version": "0.0.0",
@@ -1622,6 +1641,7 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
+        "@forgeax/engine-remote": "workspace:*",
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-rhi-wgpu": "workspace:*",
@@ -1651,21 +1671,6 @@
         "@forgeax/engine-import": "workspace:*",
       },
     },
-    "packages/console": {
-      "name": "@forgeax/engine-console",
-      "version": "0.0.0",
-      "bin": {
-        "forgeax-engine-console": "./dist/cli.mjs",
-      },
-      "dependencies": {
-        "@forgeax/engine-types": "workspace:*",
-        "ws": "^8.20.0",
-      },
-      "devDependencies": {
-        "@types/node": "^20.14.0",
-        "@types/ws": "^8.5.10",
-      },
-    },
     "packages/debug-draw": {
       "name": "@forgeax/engine-debug-draw",
       "version": "0.0.0",
@@ -1679,7 +1684,7 @@
       "name": "@forgeax/engine-ecs",
       "version": "0.0.0",
       "bin": {
-        "forgeax-engine-console-ecs": "./dist/cli-ecs.mjs",
+        "forgeax-engine-remote-ecs": "./dist/cli-ecs.mjs",
       },
       "dependencies": {
         "@forgeax/engine-math": "workspace:*",
@@ -1729,8 +1734,8 @@
         "@zappar/msdf-generator": "1.2.4",
       },
       "devDependencies": {
-        "@forgeax/engine-console": "workspace:*",
         "@forgeax/engine-import": "workspace:*",
+        "@forgeax/engine-remote": "workspace:*",
         "@types/node": "^20.14.0",
       },
     },
@@ -1738,7 +1743,7 @@
       "name": "@forgeax/engine-gltf",
       "version": "0.0.0",
       "bin": {
-        "forgeax-engine-console-gltf": "./dist/cli-gltf.mjs",
+        "forgeax-engine-remote-gltf": "./dist/cli-gltf.mjs",
       },
       "dependencies": {
         "@forgeax/engine-math": "workspace:*",
@@ -1801,7 +1806,7 @@
       "name": "@forgeax/engine-pack",
       "version": "0.0.0",
       "bin": {
-        "forgeax-engine-console-asset": "./dist/cli-asset.mjs",
+        "forgeax-engine-remote-asset": "./dist/cli-asset.mjs",
       },
       "dependencies": {
         "@forgeax/engine-types": "workspace:*",
@@ -1867,6 +1872,21 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-ecs": "workspace:*",
+      },
+    },
+    "packages/remote": {
+      "name": "@forgeax/engine-remote",
+      "version": "0.0.0",
+      "bin": {
+        "forgeax-engine-remote": "./dist/cli.mjs",
+      },
+      "dependencies": {
+        "@forgeax/engine-types": "workspace:*",
+        "ws": "^8.20.0",
+      },
+      "devDependencies": {
+        "@types/node": "^20.14.0",
+        "@types/ws": "^8.5.10",
       },
     },
     "packages/render-graph": {
@@ -1983,7 +2003,7 @@
       "name": "@forgeax/engine-state",
       "version": "0.0.0",
       "bin": {
-        "forgeax-engine-console-state": "./dist/cli-state.mjs",
+        "forgeax-engine-remote-state": "./dist/cli-state.mjs",
       },
       "dependencies": {
         "@forgeax/engine-ecs": "workspace:*",
@@ -2380,8 +2400,6 @@
 
     "@forgeax/engine-audio-webaudio": ["@forgeax/engine-audio-webaudio@workspace:packages/audio-webaudio"],
 
-    "@forgeax/engine-console": ["@forgeax/engine-console@workspace:packages/console"],
-
     "@forgeax/engine-debug-draw": ["@forgeax/engine-debug-draw@workspace:packages/debug-draw"],
 
     "@forgeax/engine-ecs": ["@forgeax/engine-ecs@workspace:packages/ecs"],
@@ -2413,6 +2431,8 @@
     "@forgeax/engine-plugin": ["@forgeax/engine-plugin@workspace:packages/plugin"],
 
     "@forgeax/engine-project": ["@forgeax/engine-project@workspace:packages/engine-project"],
+
+    "@forgeax/engine-remote": ["@forgeax/engine-remote@workspace:packages/remote"],
 
     "@forgeax/engine-render-graph": ["@forgeax/engine-render-graph@workspace:packages/render-graph"],
 
@@ -2457,6 +2477,8 @@
     "@forgeax/hello-cube": ["@forgeax/hello-cube@workspace:apps/hello/cube"],
 
     "@forgeax/hello-culling": ["@forgeax/hello-culling@workspace:apps/hello/culling"],
+
+    "@forgeax/hello-custom-importer": ["@forgeax/hello-custom-importer@workspace:apps/hello/custom-importer"],
 
     "@forgeax/hello-custom-shader": ["@forgeax/hello-custom-shader@workspace:apps/hello/custom-shader"],
 
@@ -2517,6 +2539,8 @@
     "@forgeax/parity-urp-vs-hdrp": ["@forgeax/parity-urp-vs-hdrp@workspace:apps/parity/urp-vs-hdrp"],
 
     "@forgeax/preview": ["@forgeax/preview@workspace:apps/preview"],
+
+    "@forgeax/remote-demo": ["@forgeax/remote-demo@workspace:apps/remote-demo"],
 
     "@forgeax/rhi-debug-viewer": ["@forgeax/rhi-debug-viewer@workspace:apps/rhi-debug-viewer"],
 
@@ -2987,8 +3011,6 @@
     "ignore": ["ignore@5.3.2", "", {}, "sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g=="],
 
     "imurmurhash": ["imurmurhash@0.1.4", "", {}, "sha512-JmXMZ6wuvDmLiHEml9ykzqO6lwFbof0GG4IkcGaENdCRDDmMVnny7s5HsIgHCbaq0w2MyPhDqkhTUgS2LU2PHA=="],
-
-    "inspector-demo": ["inspector-demo@workspace:apps/inspector-demo"],
 
     "is-binary-path": ["is-binary-path@2.1.0", "", { "dependencies": { "binary-extensions": "^2.0.0" } }, "sha512-ZMERYes6pDydyuGidse7OsHxtbI7WVeUEozgR/g7rd0xUimYNlvZRE/K2MgZTjWy725IfelLeVcEM97mmtRGXw=="],
 
@@ -3486,8 +3508,6 @@
 
     "@babel/register/make-dir": ["make-dir@2.1.0", "", { "dependencies": { "pify": "^4.0.1", "semver": "^5.6.0" } }, "sha512-LS9X+dc8KLxXCb8dni79fLIIUA5VyZoyjSMCwTluaXA0o27cCK0bhXkpgw+sTXVpPy/lSO57ilRixqk0vDmtRA=="],
 
-    "@forgeax/engine-console/@types/node": ["@types/node@20.19.41", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-ECymXOukMnOoVkC2bb1Vc/w/836DXncOg5m8Xj1RH7xSHZJWNYY6Zh7EH477vcnD5egKNNfy2RpNOmuChhFPgQ=="],
-
     "@forgeax/engine-ecs/@types/node": ["@types/node@20.19.41", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-ECymXOukMnOoVkC2bb1Vc/w/836DXncOg5m8Xj1RH7xSHZJWNYY6Zh7EH477vcnD5egKNNfy2RpNOmuChhFPgQ=="],
 
     "@forgeax/engine-fbx/@types/node": ["@types/node@20.19.41", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-ECymXOukMnOoVkC2bb1Vc/w/836DXncOg5m8Xj1RH7xSHZJWNYY6Zh7EH477vcnD5egKNNfy2RpNOmuChhFPgQ=="],
@@ -3505,6 +3525,8 @@
     "@forgeax/engine-pack/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "@forgeax/engine-project/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "@forgeax/engine-remote/@types/node": ["@types/node@20.19.41", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-ECymXOukMnOoVkC2bb1Vc/w/836DXncOg5m8Xj1RH7xSHZJWNYY6Zh7EH477vcnD5egKNNfy2RpNOmuChhFPgQ=="],
 
     "@forgeax/engine-rhi-debug/@types/node": ["@types/node@20.19.41", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-ECymXOukMnOoVkC2bb1Vc/w/836DXncOg5m8Xj1RH7xSHZJWNYY6Zh7EH477vcnD5egKNNfy2RpNOmuChhFPgQ=="],
 
@@ -3584,8 +3606,6 @@
 
     "@babel/register/make-dir/semver": ["semver@5.7.2", "", { "bin": { "semver": "bin/semver" } }, "sha512-cBznnQ9KjJqU67B52RMC65CMarK2600WFnbkcaiwWq3xy/5haFJlshgnpjovMVJ+Hff49d8GEn0b87C5pDQ10g=="],
 
-    "@forgeax/engine-console/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
-
     "@forgeax/engine-ecs/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@forgeax/engine-fbx/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
@@ -3599,6 +3619,8 @@
     "@forgeax/engine-import/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@forgeax/engine-pack/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
+
+    "@forgeax/engine-remote/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@forgeax/engine-rhi-debug/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 

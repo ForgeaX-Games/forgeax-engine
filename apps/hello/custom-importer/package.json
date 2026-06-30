@@ -1,0 +1,60 @@
+{
+  "name": "@forgeax/hello-custom-importer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "End-to-end acceptance app: a host registers a custom passthrough importer (reel-game-blob) folded into pack-index via pluginPack({ importers }) and resolved at runtime through loadByGuid + a host loader (feat-20260629-importer-self-declared-fold-contract / M5 / w15).",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs"
+  },
+  "forgeax": {
+    "assets": {
+      "roots": [
+        "./assets"
+      ]
+    },
+    "smokeInvocation": "pnpm --filter @forgeax/hello-custom-importer smoke",
+    "_comment": "smokeInvocation = self-contained SSOT (mirrors hello-sprite / hello-cube). hello-custom-importer exercises the host self-declared fold contract end-to-end: the reel-game-blob importer is injected via pluginPack({ importers }) at vite build time, folded into a DDC .pack.json + pack-index row of kind 'reel-game-blob', then resolved at runtime through loadByGuid + a host-registered loader and used to drive the scene (AC-01 real load + real use; AC-07 no Importer.fold method; AC-09 in smoke fleet).",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle (dist/assets) is downstream of @forgeax/engine-runtime + @forgeax/engine-app + @forgeax/engine-rhi-webgpu sizes already tracked at the package level; demo workspace declares no separate bundle-size baseline"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "fps no-regression covered by hello-cube / hello-room / hello-app gates that run the default zero-overhead render path; this app's contribution is the host-importer asset pipeline, not a per-frame perf surface"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "no perf-critical hot path in this demo; the host-importer fold is a build-time one-shot, gated by smoke (structural + real load/use) rather than vitest bench"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-custom-importer smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; this is the feat-20260629 M5 acceptance demo"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-pack": "workspace:^",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@webgpu/types": "^0.1.70",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0"
+  }
+}

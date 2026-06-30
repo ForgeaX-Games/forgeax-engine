@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "feat-20260515-gltf-loader-via-asset-system M5 convergence app - Tier-B BoxTextured fork (single mesh POSITION + INDICES + UnlitMaterial baseColor + Camera perspective). End-to-end proof of charter P4 consistent abstraction: AI users discover the same loadByGuid<SceneAsset> + sceneInstances.instantiate path the hello-room app uses, with the only difference being the disk-schema sidecar (<source>.meta.json, assetType=gltf, e.g. box.gltf.meta.json) coming from forgeax-engine-console-gltf import instead of a hand-written .pack.json.",
+  "description": "feat-20260515-gltf-loader-via-asset-system M5 convergence app - Tier-B BoxTextured fork (single mesh POSITION + INDICES + UnlitMaterial baseColor + Camera perspective). End-to-end proof of charter P4 consistent abstraction: AI users discover the same loadByGuid<SceneAsset> + sceneInstances.instantiate path the hello-room app uses, with the only difference being the disk-schema sidecar (<source>.meta.json, assetType=gltf, e.g. box.gltf.meta.json) coming from forgeax-engine-remote-gltf import instead of a hand-written .pack.json.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",

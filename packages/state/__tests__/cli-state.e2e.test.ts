@@ -49,7 +49,7 @@ async function runCommand(
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const io: CapturedIO = { stdout: [], stderr: [] };
   const exitCode = await dispatch({
-    argv: ['node', 'forgeax-engine-console-state', ...args],
+    argv: ['node', 'forgeax-engine-remote-state', ...args],
     stdoutWrite: (line: string) => io.stdout.push(line),
     stderrWrite: (line: string) => io.stderr.push(line),
     world,

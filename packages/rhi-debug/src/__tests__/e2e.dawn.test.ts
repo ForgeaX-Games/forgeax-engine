@@ -1808,4 +1808,597 @@ describe.skipIf(SKIP_DAWN)('e2e dawn -- cross-device pixel epsilon AC-14 (m5b-3)
     const deltaVsFull = pixelDeltaAbsMean(pixels1, fullFrame);
     expect(deltaVsFull).toBeLessThanOrEqual(0.01);
   }, 60_000);
+
+  // ---------------------------------------------------------------
+  // bound-texture readback: COPY_SRC promotion on replay
+  // ---------------------------------------------------------------
+  // The TextureViewer previews bound input textures (material albedo / skybox /
+  // SSAO inputs) by reading them back via readbackTexturePixels (copyTextureToBuffer).
+  // Sampled textures are created TEXTURE_BINDING|COPY_DST with NO COPY_SRC; before
+  // replayCreateTexture promoted COPY_SRC, copyTextureToBuffer validation-failed and
+  // bound textures could not preview. This locks the promotion: a COPY_SRC-less
+  // sampled texture, after replay, is readback-able and returns its seeded content.
+  it('bound texture (TEXTURE_BINDING|COPY_DST, no COPY_SRC) is readback-able after replay', async () => {
+    const pack = await loadDawnRhi();
+    if (!pack) return;
+
+    const { debugInst, wrappedCreateShader, wrappedDevice, rawDevice } = await makeWrappedCtx(pack);
+    debugInst.arm(1);
+
+    const tex = createRTTexture(wrappedDevice, RT_WIDTH, RT_HEIGHT);
+    const viewRes = wrappedDevice.createTextureView(tex, {});
+    if (!viewRes.ok) throw new Error(`view`);
+
+    // 2x2 checkered sprite, recorded WITHOUT COPY_SRC (usage 0x06).
+    const texData = new Uint8Array([
+      255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+    ]);
+    const spriteTexRes = wrappedDevice.createTexture({
+      size: { width: 2, height: 2, depthOrArrayLayers: 1 },
+      format: 'rgba8unorm' as GPUTextureFormat,
+      usage: 0x06, // TEXTURE_BINDING | COPY_DST — deliberately NO COPY_SRC (0x01)
+    });
+    if (!spriteTexRes.ok) throw new Error(`spriteTex`);
+    wrappedDevice.queue.writeTexture(
+      { texture: spriteTexRes.value, mipLevel: 0, origin: { x: 0, y: 0, z: 0 } } as any,
+      texData.buffer,
+      { offset: 0, bytesPerRow: 8, rowsPerImage: 2 } as any,
+      { width: 2, height: 2, depthOrArrayLayers: 1 },
+    );
+    const spriteViewRes = wrappedDevice.createTextureView(spriteTexRes.value, {});
+    if (!spriteViewRes.ok) throw new Error(`spriteView`);
+    const samplerRes = wrappedDevice.createSampler({});
+    if (!samplerRes.ok) throw new Error(`sampler`);
+
+    const quadVerts = new Float32Array([
+      -1, -1, 0, 0, 1, 1, -1, 0, 1, 1, 1, 1, 0, 1, 0, -1, -1, 0, 0, 1, 1, 1, 0, 1, 0, -1, 1, 0, 0,
+      0,
+    ]);
+    const quadInds = new Uint16Array([0, 1, 2, 3, 4, 5]);
+    const vboRes = wrappedDevice.createBuffer({ size: quadVerts.byteLength, usage: 0x28 });
+    if (!vboRes.ok) throw new Error(`vbo`);
+    wrappedDevice.queue.writeBuffer(vboRes.value as any, 0, quadVerts.buffer);
+    const iboRes = wrappedDevice.createBuffer({ size: quadInds.byteLength, usage: 0x18 });
+    if (!iboRes.ok) throw new Error(`ibo`);
+    wrappedDevice.queue.writeBuffer(iboRes.value as any, 0, quadInds.buffer);
+
+    const vs = await wrappedCreateShader(rawDevice, { code: TEXTURED_VBO_VS });
+    if (!vs.ok) throw new Error(`vs:${(vs.error as any).code}`);
+    const fs = await wrappedCreateShader(rawDevice, { code: TEXTURED_FS });
+    if (!fs.ok) throw new Error(`fs:${(fs.error as any).code}`);
+
+    const bglRes = wrappedDevice.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: 0x02, texture: { sampleType: 'float', viewDimension: '2d' } },
+        { binding: 1, visibility: 0x02, sampler: { type: 'filtering' } },
+      ],
+    });
+    if (!bglRes.ok) throw new Error(`bgl: ${bglRes.error.code}`);
+    const bgRes = wrappedDevice.createBindGroup({
+      layout: bglRes.value,
+      entries: [
+        { binding: 0, resource: { kind: 'textureView' as const, value: spriteViewRes.value } },
+        { binding: 1, resource: { kind: 'sampler' as const, value: samplerRes.value } },
+      ],
+    } as any);
+    if (!bgRes.ok) throw new Error(`bg: ${bgRes.error.code}`);
+
+    const plRes = wrappedDevice.createPipelineLayout({ bindGroupLayouts: [bglRes.value] });
+    if (!plRes.ok) throw new Error(`pl`);
+    const pipeRes = wrappedDevice.createRenderPipeline({
+      layout: plRes.value,
+      vertex: {
+        module: vs.value,
+        entryPoint: 'main',
+        buffers: [
+          {
+            arrayStride: 20,
+            attributes: [
+              { format: 'float32x3', offset: 0, shaderLocation: 0 },
+              { format: 'float32x2', offset: 12, shaderLocation: 1 },
+            ],
+          },
+        ],
+      },
+      fragment: { module: fs.value, entryPoint: 'main', targets: [{ format: 'rgba8unorm' }] },
+      primitive: { topology: 'triangle-list' },
+    } as any);
+    if (!pipeRes.ok) throw new Error(`createRenderPipeline failed`);
+
+    const encRes = wrappedDevice.createCommandEncoder({});
+    if (!encRes.ok) throw new Error(`enc`);
+    const enc = encRes.value;
+    const pass = enc.beginRenderPass({
+      colorAttachments: [
+        {
+          view: viewRes.value as any,
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        },
+      ],
+    } as any);
+    pass.setPipeline(pipeRes.value as any);
+    pass.setBindGroup(0, bgRes.value as any, []);
+    pass.setVertexBuffer(0, vboRes.value as any, 0, quadVerts.byteLength);
+    pass.setIndexBuffer(iboRes.value as any, 'uint16', 0, quadInds.byteLength);
+    pass.drawIndexed(6, 1, 0, 0, 0);
+    pass.end();
+    const fin = enc.finish();
+    if (!fin.ok) throw new Error(`finish`);
+    wrappedDevice.queue.submit([fin.value] as unknown as readonly never[]);
+    await wrappedDevice.queue.onSubmittedWorkDone();
+
+    debugInst.onFrameEnd();
+    const boundTape = debugInst.getTape() as any;
+    if (!boundTape) throw new Error('tape');
+
+    const { json, blob } = serializeTape(boundTape);
+    const rt = deserializeTape(json, blob);
+    if (!rt.ok) throw new Error(`deserialize`);
+    const clean = rt.value;
+
+    // Resolve the sprite texture's handleId from the tape: the 2x2 createTexture
+    // (the RT is 64x64), keyed off size width whether stored as object or array.
+    const spriteCreate = clean.events.find((e: any) => {
+      if (e.kind !== 'createTexture') return false;
+      const sz = e.desc?.size;
+      const w = Array.isArray(sz) ? sz[0] : sz?.width;
+      return w === 2;
+    }) as any;
+    if (!spriteCreate) throw new Error('sprite createTexture not found in tape');
+
+    // Replay on a fresh device, then read back the bound (sampled) texture directly.
+    const { rawDev2 } = await makeFreshReplayDevice(pack);
+    teardownDevices.push(rawDev2);
+    const replayRes = createReplay(clean, rawDev2, pack.createShaderModule);
+    if (!replayRes.ok) throw new Error(`createReplay failed`);
+    const replay = replayRes.value;
+    const stepRes = await replay.stepTo(clean.events.length - 1);
+    if (!stepRes.ok) throw new Error(`stepTo: ${stepRes.error.code}`);
+
+    const liveTex = replay._resolveHandle(spriteCreate.handleId);
+    expect(liveTex).toBeDefined();
+
+    // The regression: this threw "copyTextureToBuffer failed" before COPY_SRC promotion.
+    const pixels = await readbackTexturePixels(rawDev2, liveTex, 2, 2);
+    expect(pixels.length).toBe(2 * 2 * 4);
+    // Seeded content survives readback (not all-zero): the checkered sprite has
+    // a fully-opaque non-black texel set, so some channel must be non-zero.
+    expect(pixels.some((b) => b !== 0)).toBe(true);
+  }, 60_000);
+
+  // ---------------------------------------------------------------
+  // depth24plus-stencil8: stencil-only readback + sampleable depth after replay
+  // ---------------------------------------------------------------
+  // The TextureViewer previews a depth24plus-stencil8 attachment as Depth (via a
+  // depth-sampling blit) + Stencil (via aspect:'stencil-only' copy). This locks
+  // the two PACKAGE primitives that make that possible on a REPLAYED texture:
+  //   (a) stencil-only copyTextureToBuffer succeeds (the plane IS copyable);
+  //   (b) the replayed depth texture carries TEXTURE_BINDING so it is sampleable
+  //       (textureLoad) — proven by an inline depth-sampling blit returning depth.
+  // Witness: a bare depth-only copyTextureToBuffer on the same texture throws (the
+  // WebGPU constraint the blit works around).
+  it('depth24plus-stencil8: replayed texture is stencil-copyable + depth-sampleable', async () => {
+    const pack = await loadDawnRhi();
+    if (!pack) return;
+
+    const { debugInst, wrappedCreateShader, wrappedDevice, rawDevice } = await makeWrappedCtx(pack);
+    debugInst.arm(1);
+
+    const colorTex = createRTTexture(wrappedDevice, RT_WIDTH, RT_HEIGHT);
+    const colorViewRes = wrappedDevice.createTextureView(colorTex, {});
+    if (!colorViewRes.ok) throw new Error(`color view`);
+
+    // depth24plus-stencil8 depth attachment, usage COPY_SRC|RENDER_ATTACHMENT (the
+    // recorder promotes COPY_SRC; the replayer promotes TEXTURE_BINDING for depth).
+    const depthTexRes = wrappedDevice.createTexture({
+      size: { width: RT_WIDTH, height: RT_HEIGHT, depthOrArrayLayers: 1 },
+      format: 'depth24plus-stencil8' as GPUTextureFormat,
+      usage: 0x11, // COPY_SRC | RENDER_ATTACHMENT
+    });
+    if (!depthTexRes.ok) throw new Error(`depthTex: ${depthTexRes.error.code}`);
+    const depthViewRes = wrappedDevice.createTextureView(depthTexRes.value, {});
+    if (!depthViewRes.ok) throw new Error(`depth view`);
+
+    const vs = await wrappedCreateShader(rawDevice, { code: TRIANGLE_VS });
+    if (!vs.ok) throw new Error(`vs:${(vs.error as any).code}`);
+    const fs = await wrappedCreateShader(rawDevice, { code: TRIANGLE_FS });
+    if (!fs.ok) throw new Error(`fs:${(fs.error as any).code}`);
+
+    const bglRes = wrappedDevice.createBindGroupLayout({ entries: [] });
+    if (!bglRes.ok) throw new Error(`bgl`);
+    const plRes = wrappedDevice.createPipelineLayout({ bindGroupLayouts: [bglRes.value] });
+    if (!plRes.ok) throw new Error(`pl`);
+    const pipeRes = wrappedDevice.createRenderPipeline({
+      layout: plRes.value,
+      vertex: { module: vs.value, entryPoint: 'main', buffers: [] },
+      fragment: { module: fs.value, entryPoint: 'main', targets: [{ format: 'rgba8unorm' }] },
+      primitive: { topology: 'triangle-list' },
+      depthStencil: {
+        format: 'depth24plus-stencil8',
+        depthWriteEnabled: true,
+        depthCompare: 'less',
+        stencilFront: { compare: 'always', passOp: 'replace', failOp: 'keep', depthFailOp: 'keep' },
+        stencilBack: { compare: 'always', passOp: 'replace', failOp: 'keep', depthFailOp: 'keep' },
+        stencilReadMask: 0xff,
+        stencilWriteMask: 0xff,
+      },
+    } as any);
+    if (!pipeRes.ok) throw new Error(`createRenderPipeline failed`);
+
+    const encRes = wrappedDevice.createCommandEncoder({});
+    if (!encRes.ok) throw new Error(`enc`);
+    const enc = encRes.value;
+    const pass = enc.beginRenderPass({
+      colorAttachments: [
+        {
+          view: colorViewRes.value as any,
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        },
+      ],
+      depthStencilAttachment: {
+        view: depthViewRes.value as any,
+        depthClearValue: 1.0,
+        depthLoadOp: 'clear',
+        depthStoreOp: 'store',
+        stencilClearValue: 0,
+        stencilLoadOp: 'clear',
+        stencilStoreOp: 'store',
+      },
+    } as any);
+    pass.setPipeline(pipeRes.value as any);
+    (pass as any).setStencilReference?.(1);
+    pass.draw(3, 1, 0, 0);
+    pass.end();
+    const fin = enc.finish();
+    if (!fin.ok) throw new Error(`finish`);
+    wrappedDevice.queue.submit([fin.value] as unknown as readonly never[]);
+    await wrappedDevice.queue.onSubmittedWorkDone();
+
+    debugInst.onFrameEnd();
+    const dsTape = debugInst.getTape() as any;
+    if (!dsTape) throw new Error('tape');
+    const { json, blob } = serializeTape(dsTape);
+    const rt = deserializeTape(json, blob);
+    if (!rt.ok) throw new Error(`deserialize`);
+    const clean = rt.value;
+
+    // Find the depth24plus-stencil8 createTexture handle.
+    const depthCreate = clean.events.find(
+      (e: any) => e.kind === 'createTexture' && e.desc?.format === 'depth24plus-stencil8',
+    ) as any;
+    if (!depthCreate) throw new Error('depth createTexture not in tape');
+
+    const { rawDev2 } = await makeFreshReplayDevice(pack);
+    teardownDevices.push(rawDev2);
+    const replayRes = createReplay(clean, rawDev2, pack.createShaderModule);
+    if (!replayRes.ok) throw new Error(`createReplay failed`);
+    const replay = replayRes.value;
+    const stepRes = await replay.stepTo(clean.events.length - 1);
+    if (!stepRes.ok) throw new Error(`stepTo: ${stepRes.error.code}`);
+
+    const liveDepth = replay._resolveHandle(depthCreate.handleId);
+    expect(liveDepth).toBeDefined();
+
+    // (a) stencil-only readback succeeds (plane IS copyable; bytesPerTexel=1).
+    const stencil = await readbackTexturePixels(rawDev2, liveDepth, RT_WIDTH, RT_HEIGHT, {
+      aspect: 'stencil-only',
+      bytesPerTexel: 1,
+    });
+    expect(stencil.length).toBe(RT_WIDTH * RT_HEIGHT);
+    // The triangle wrote stencil reference 1 where it covered; some texel != 0.
+    expect(stencil.some((b) => b !== 0)).toBe(true);
+
+    // (b) the replayed depth texture is sampleable (TEXTURE_BINDING promoted).
+    // Inline depth-sampling blit -> r32float RT -> readback (mirrors app depth-blit).
+    const depthView = rawDev2.createTextureView(
+      liveDepth as any,
+      {
+        dimension: '2d',
+        aspect: 'depth-only',
+        baseMipLevel: 0,
+        mipLevelCount: 1,
+        baseArrayLayer: 0,
+        arrayLayerCount: 1,
+      } as any,
+    );
+    if (!depthView.ok) throw new Error(`depth-only view: ${depthView.error.code}`);
+    const r32Res = rawDev2.createTexture({
+      size: { width: RT_WIDTH, height: RT_HEIGHT, depthOrArrayLayers: 1 },
+      format: 'r32float' as GPUTextureFormat,
+      usage: 0x11, // RENDER_ATTACHMENT | COPY_SRC
+    });
+    if (!r32Res.ok) throw new Error(`r32: ${r32Res.error.code}`);
+    const r32View = rawDev2.createTextureView(r32Res.value, {});
+    if (!r32View.ok) throw new Error(`r32 view`);
+    const blitVs = await pack.createShaderModule(rawDev2, { code: DEPTH_BLIT_VS });
+    if (!blitVs.ok) throw new Error(`blitVs:${(blitVs.error as any).code}`);
+    const blitFs = await pack.createShaderModule(rawDev2, { code: DEPTH_BLIT_FS });
+    if (!blitFs.ok) throw new Error(`blitFs:${(blitFs.error as any).code}`);
+    const blitBgl = rawDev2.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: 0x02, texture: { sampleType: 'depth', viewDimension: '2d' } },
+      ],
+    });
+    if (!blitBgl.ok) throw new Error(`blitBgl: ${blitBgl.error.code}`);
+    const blitBg = rawDev2.createBindGroup({
+      layout: blitBgl.value,
+      entries: [{ binding: 0, resource: { kind: 'textureView', value: depthView.value } }],
+    } as any);
+    if (!blitBg.ok) throw new Error(`blitBg: ${blitBg.error.code}`);
+    const blitPl = rawDev2.createPipelineLayout({ bindGroupLayouts: [blitBgl.value] });
+    if (!blitPl.ok) throw new Error(`blitPl`);
+    const blitPipe = rawDev2.createRenderPipeline({
+      layout: blitPl.value,
+      vertex: { module: blitVs.value, entryPoint: 'main', buffers: [] },
+      fragment: { module: blitFs.value, entryPoint: 'main', targets: [{ format: 'r32float' }] },
+      primitive: { topology: 'triangle-list' },
+    } as any);
+    if (!blitPipe.ok) throw new Error(`blitPipe`);
+    const blitEnc = rawDev2.createCommandEncoder({});
+    if (!blitEnc.ok) throw new Error(`blitEnc`);
+    const bpass = blitEnc.value.beginRenderPass({
+      colorAttachments: [
+        {
+          view: r32View.value as any,
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        },
+      ],
+    } as any);
+    bpass.setPipeline(blitPipe.value as any);
+    bpass.setBindGroup(0, blitBg.value as any, []);
+    bpass.draw(3, 1, 0, 0);
+    bpass.end();
+    const blitFin = blitEnc.value.finish();
+    if (!blitFin.ok) throw new Error(`blitFin`);
+    rawDev2.queue.submit([blitFin.value] as unknown as readonly never[]);
+    await rawDev2.queue.onSubmittedWorkDone();
+    const depthBytes = await readbackTexturePixels(rawDev2, r32Res.value, RT_WIDTH, RT_HEIGHT, {
+      bytesPerTexel: 4,
+    });
+    const depthF = new Float32Array(
+      depthBytes.buffer,
+      depthBytes.byteOffset,
+      depthBytes.length / 4,
+    );
+    // The triangle wrote depth < 1.0 where covered, cleared 1.0 elsewhere -> variation.
+    let dmin = Infinity;
+    let dmax = -Infinity;
+    for (const v of depthF) {
+      if (v < dmin) dmin = v;
+      if (v > dmax) dmax = v;
+    }
+    expect(dmax - dmin).toBeGreaterThan(0.0);
+    rawDev2.destroyTexture(r32Res.value);
+
+    // Note on the constraint this works around: a bare depth-only
+    // copyTextureToBuffer on depth24plus-stencil8 is a WebGPU validation error.
+    // dawn surfaces it asynchronously (device error scope) rather than rejecting
+    // the readback promise — the buffer maps to zeros — so it is not asserted here
+    // as a throw; the blit above is the faithful path that avoids it entirely.
+  }, 60_000);
+
+  // ---------------------------------------------------------------
+  // 2d-array depth32float: per-slice readback via baseArrayLayer
+  // ---------------------------------------------------------------
+  // The TextureViewer previews a cube / cube-array / 2d-array bound texture one
+  // slice at a time, selecting the array layer via baseArrayLayer. depth32float's
+  // depth aspect IS copyable, so a slice reads back directly (no blit). This locks
+  // that the baseArrayLayer plumbing selects the right slice on a REPLAYED texture:
+  // two layers cleared to distinct depths read back distinct.
+  // Witness: read both with baseArrayLayer:0 -> identical (proves the param is load-bearing).
+  it('2d-array depth32float: replayed slices read back per-layer via baseArrayLayer', async () => {
+    const pack = await loadDawnRhi();
+    if (!pack) return;
+
+    const { debugInst, wrappedDevice } = await makeWrappedCtx(pack);
+    debugInst.arm(1);
+
+    // 2-layer depth32float 2d-array, usage COPY_SRC|RENDER_ATTACHMENT (recorder
+    // promotes COPY_SRC; depth aspect is copyable so no blit needed here).
+    const LAYERS = 2;
+    const depthTexRes = wrappedDevice.createTexture({
+      size: { width: RT_WIDTH, height: RT_HEIGHT, depthOrArrayLayers: LAYERS },
+      format: 'depth32float' as GPUTextureFormat,
+      usage: 0x11, // COPY_SRC | RENDER_ATTACHMENT
+    });
+    if (!depthTexRes.ok) throw new Error(`depthTex: ${depthTexRes.error.code}`);
+
+    // Clear each array layer to a distinct depth via a 2D per-layer attachment view.
+    const layerClears = [0.25, 0.75];
+    for (let layer = 0; layer < LAYERS; layer++) {
+      const viewRes = wrappedDevice.createTextureView(depthTexRes.value, {
+        dimension: '2d',
+        aspect: 'all',
+        baseMipLevel: 0,
+        mipLevelCount: 1,
+        baseArrayLayer: layer,
+        arrayLayerCount: 1,
+      } as any);
+      if (!viewRes.ok) throw new Error(`layer view ${layer}: ${viewRes.error.code}`);
+      const encRes = wrappedDevice.createCommandEncoder({});
+      if (!encRes.ok) throw new Error(`enc ${layer}`);
+      const pass = encRes.value.beginRenderPass({
+        colorAttachments: [],
+        depthStencilAttachment: {
+          view: viewRes.value as any,
+          depthClearValue: layerClears[layer],
+          depthLoadOp: 'clear',
+          depthStoreOp: 'store',
+        },
+      } as any);
+      pass.end();
+      const fin = encRes.value.finish();
+      if (!fin.ok) throw new Error(`finish ${layer}`);
+      wrappedDevice.queue.submit([fin.value] as unknown as readonly never[]);
+    }
+    await wrappedDevice.queue.onSubmittedWorkDone();
+
+    debugInst.onFrameEnd();
+    const tape = debugInst.getTape() as any;
+    if (!tape) throw new Error('tape');
+    const { json, blob } = serializeTape(tape);
+    const rt = deserializeTape(json, blob);
+    if (!rt.ok) throw new Error(`deserialize`);
+    const clean = rt.value;
+
+    const depthCreate = clean.events.find(
+      (e: any) =>
+        e.kind === 'createTexture' &&
+        e.desc?.format === 'depth32float' &&
+        // the 2d-array (depthOrArrayLayers === LAYERS) one
+        ((Array.isArray(e.desc.size) && e.desc.size[2] === LAYERS) ||
+          e.desc.size?.depthOrArrayLayers === LAYERS),
+    ) as any;
+    if (!depthCreate) throw new Error('2d-array depth createTexture not in tape');
+
+    const { rawDev2 } = await makeFreshReplayDevice(pack);
+    teardownDevices.push(rawDev2);
+    const replayRes = createReplay(clean, rawDev2, pack.createShaderModule);
+    if (!replayRes.ok) throw new Error(`createReplay failed`);
+    const replay = replayRes.value;
+    const stepRes = await replay.stepTo(clean.events.length - 1);
+    if (!stepRes.ok) throw new Error(`stepTo: ${stepRes.error.code}`);
+
+    const liveDepth = replay._resolveHandle(depthCreate.handleId);
+    expect(liveDepth).toBeDefined();
+
+    const readLayer = async (layer: number) => {
+      const bytes = await readbackTexturePixels(rawDev2, liveDepth, RT_WIDTH, RT_HEIGHT, {
+        bytesPerTexel: 4,
+        baseArrayLayer: layer,
+      });
+      const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.length / 4);
+      // depth32float clear is uniform across the layer -> sample texel 0.
+      return f[0] ?? -1;
+    };
+
+    const d0 = await readLayer(0);
+    const d1 = await readLayer(1);
+    // Each layer reads back its own clear value -> distinct slices.
+    expect(d0).toBeCloseTo(0.25, 2);
+    expect(d1).toBeCloseTo(0.75, 2);
+    expect(Math.abs(d1 - d0)).toBeGreaterThan(0.1);
+  }, 60_000);
+
+  // rgba16float (HDR) color: 8-byte-per-texel readback of a replayed texture
+  // ---------------------------------------------------------------
+  // The TextureViewer previews any uncompressed color format by reading back its
+  // raw bytes (sized by bytesPerTexel(format)) and decoding on the host. rgba16float
+  // is 8 B/texel — the default 4 would misread the byte stride. This locks the
+  // wide-format readback at the GPU level: clear an rgba16float RT to a known HDR
+  // value, replay, read back with bytesPerTexel:8, decode the half-floats, assert
+  // they match. Witness: reading with bytesPerTexel:4 reads half the row -> the
+  // decoded channel values do NOT match the cleared color (stride is load-bearing).
+  it('rgba16float: replayed HDR texture reads back at 8 B/texel with correct half-float values', async () => {
+    const pack = await loadDawnRhi();
+    if (!pack) return;
+
+    const { debugInst, wrappedDevice } = await makeWrappedCtx(pack);
+    debugInst.arm(1);
+
+    // rgba16float RT cleared to a known HDR color: {2.0, 0.5, 0.0, 1.0}.
+    const CLEAR = { r: 2.0, g: 0.5, b: 0.0, a: 1.0 };
+    const hdrTexRes = wrappedDevice.createTexture({
+      size: { width: RT_WIDTH, height: RT_HEIGHT, depthOrArrayLayers: 1 },
+      format: 'rgba16float' as GPUTextureFormat,
+      usage: 0x11, // COPY_SRC | RENDER_ATTACHMENT
+    });
+    if (!hdrTexRes.ok) throw new Error(`hdrTex: ${hdrTexRes.error.code}`);
+
+    const viewRes = wrappedDevice.createTextureView(hdrTexRes.value, {} as any);
+    if (!viewRes.ok) throw new Error(`hdr view: ${viewRes.error.code}`);
+    const encRes = wrappedDevice.createCommandEncoder({});
+    if (!encRes.ok) throw new Error('enc');
+    const pass = encRes.value.beginRenderPass({
+      colorAttachments: [
+        {
+          view: viewRes.value as any,
+          clearValue: CLEAR,
+          loadOp: 'clear',
+          storeOp: 'store',
+        },
+      ],
+    } as any);
+    pass.end();
+    const fin = encRes.value.finish();
+    if (!fin.ok) throw new Error('finish');
+    wrappedDevice.queue.submit([fin.value] as unknown as readonly never[]);
+    await wrappedDevice.queue.onSubmittedWorkDone();
+
+    debugInst.onFrameEnd();
+    const tape = debugInst.getTape() as any;
+    if (!tape) throw new Error('tape');
+    const { json, blob } = serializeTape(tape);
+    const rt = deserializeTape(json, blob);
+    if (!rt.ok) throw new Error('deserialize');
+    const clean = rt.value;
+
+    const hdrCreate = clean.events.find(
+      (e: any) => e.kind === 'createTexture' && e.desc?.format === 'rgba16float',
+    ) as any;
+    if (!hdrCreate) throw new Error('rgba16float createTexture not in tape');
+
+    const { rawDev2 } = await makeFreshReplayDevice(pack);
+    teardownDevices.push(rawDev2);
+    const replayRes = createReplay(clean, rawDev2, pack.createShaderModule);
+    if (!replayRes.ok) throw new Error('createReplay failed');
+    const replay = replayRes.value;
+    const stepRes = await replay.stepTo(clean.events.length - 1);
+    if (!stepRes.ok) throw new Error(`stepTo: ${stepRes.error.code}`);
+
+    const liveHdr = replay._resolveHandle(hdrCreate.handleId);
+    expect(liveHdr).toBeDefined();
+
+    // 8 B/texel readback (bytesPerTexel(rgba16float) === 8).
+    const bytes = await readbackTexturePixels(rawDev2, liveHdr, RT_WIDTH, RT_HEIGHT, {
+      bytesPerTexel: 8,
+    });
+    // Decode texel 0's four half-floats (uniform clear -> sample texel 0).
+    const u16 = new Uint16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
+    const r = halfBitsToFloat(u16[0] ?? 0);
+    const g = halfBitsToFloat(u16[1] ?? 0);
+    const b = halfBitsToFloat(u16[2] ?? 0);
+    const a = halfBitsToFloat(u16[3] ?? 0);
+    expect(r).toBeCloseTo(2.0, 2);
+    expect(g).toBeCloseTo(0.5, 2);
+    expect(b).toBeCloseTo(0.0, 2);
+    expect(a).toBeCloseTo(1.0, 2);
+  }, 60_000);
 });
+
+/** Decode an IEEE half-float (16-bit) bit pattern to a JS number (test-local). */
+function halfBitsToFloat(h: number): number {
+  const sign = (h & 0x8000) >> 15;
+  const exp = (h & 0x7c00) >> 10;
+  const frac = h & 0x03ff;
+  const s = sign === 0 ? 1 : -1;
+  if (exp === 0) return s * 2 ** -14 * (frac / 1024);
+  if (exp === 0x1f) return frac === 0 ? s * Number.POSITIVE_INFINITY : Number.NaN;
+  return s * 2 ** (exp - 15) * (1 + frac / 1024);
+}
+
+// Depth-sampling blit shaders for the depth24plus-stencil8 dawn test (mirror the
+// app's depth-blit.ts: fullscreen triangle + textureLoad on texture_depth_2d).
+const DEPTH_BLIT_VS = /* wgsl */ `
+@vertex
+fn main(@builtin(vertex_index) vid : u32) -> @builtin(position) vec4<f32> {
+  var pos = array<vec2<f32>, 3>(
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>(-1.0,  3.0),
+    vec2<f32>( 3.0, -1.0),
+  );
+  return vec4<f32>(pos[vid], 0.0, 1.0);
+}`;
+const DEPTH_BLIT_FS = /* wgsl */ `
+@group(0) @binding(0) var depthTex : texture_depth_2d;
+@fragment
+fn main(@builtin(position) fragCoord : vec4<f32>) -> @location(0) vec4<f32> {
+  let d : f32 = textureLoad(depthTex, vec2<i32>(fragCoord.xy), 0);
+  return vec4<f32>(d, 0.0, 0.0, 1.0);
+}`;

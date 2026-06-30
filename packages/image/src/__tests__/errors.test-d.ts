@@ -43,11 +43,11 @@ describe('ImageErrorCode + ImageErrorDetail closed union compile contract', () =
         case 'image-dimension-out-of-bounds':
           return 'downscale source under device caps maxDimension';
         case 'image-meta-missing':
-          return 'run forgeax-engine-console-asset import <path>';
+          return 'run forgeax-engine-remote-asset import <path>';
         case 'image-hdr-decode-failed':
           return 'verify Radiance RGBE header and FORMAT=32-bit_rle_rgbe field';
         case 'atlas-empty-input':
-          return 'verify forgeax-engine-console-asset atlas --input glob matches at least 1 PNG';
+          return 'verify forgeax-engine-remote-asset atlas --input glob matches at least 1 PNG';
         case 'atlas-size-exceeded':
           return 'downscale source or split atlas under maxAtlasSize cap';
         case 'atlas-region-mismatch':

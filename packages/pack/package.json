@@ -5,9 +5,9 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Disk schema, GUID tools, scanner, and fail-fast error chain for the forgeax engine asset package system. CLI surface is provided by @forgeax/engine-console (forgeax-engine-console asset).",
+  "description": "Disk schema, GUID tools, scanner, and fail-fast error chain for the forgeax engine asset package system. CLI surface is provided by @forgeax/engine-remote (forgeax-engine-remote asset).",
   "bin": {
-    "forgeax-engine-console-asset": "./dist/cli-asset.mjs"
+    "forgeax-engine-remote-asset": "./dist/cli-asset.mjs"
   },
   "exports": {
     ".": {

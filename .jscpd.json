@@ -1465,6 +1465,20 @@
         "apps/learn-render/5.advanced-lighting/3.1.shadow-mapping/3.full/scripts/smoke-browser.mjs"
       ],
       "rationale": "feat-20260621-learn-render-5-3-production-shadow-demos M5: 3.3.csm and 3.1.shadow-mapping/3.full Playwright browser smokes share the vite-spawn + Chrome-WebGPU launch + createRenderPipeline-capture harness (canonical browser-smoke shape from 8.deferred-shading). Charter F1 grep-anchor: each demo's browser smoke is self-contained; per-demo assertion stays inline (3.3.csm additionally asserts the overlay fullscreen post-process pipeline composed on top of URP)."
+    },
+    {
+      "files": [
+        "apps/hello/custom-importer/scripts/smoke-dawn.mjs",
+        "apps/learn-render/5.advanced-lighting/2.gamma-correction/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "feat-20260629-importer-self-declared-fold-contract M5: the host-custom-importer acceptance smoke shares the dawn-node webgpu-global injection + mock GPUCanvasContext + offscreen render-target readback boilerplate with the gamma-correction demo smoke (canonical structural-plus-pixel smoke shape). Charter F1 grep-anchor: each demo smoke is a single self-contained driver an AI user reads without traversing a shared helper (same idiom as the hello-* / learn-render smoke-dawn whitelists above). Per-demo verdict stays inline (custom-importer: pack-index reel-game-blob row + loadByGuid typed blob + scene maxDist + 0 RhiError, 6 criteria)."
+    },
+    {
+      "files": [
+        "apps/hello/custom-importer/scripts/smoke-dawn.mjs",
+        "apps/parity/instancing-static/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "feat-20260629-importer-self-declared-fold-contract M5: the host-custom-importer acceptance smoke shares the dawn-node loader + mock canvas + pixel-sampling readback tail with the instancing-static parity smoke (canonical smoke shape). Charter F1 grep-anchor: each demo smoke is self-contained alongside its src/main.ts; the custom-importer per-demo verdict (host {key,import} importer end-to-end -> pack-index kind:reel-game-blob -> loadByGuid -> scene render) stays inline."
     }
   ]
 }

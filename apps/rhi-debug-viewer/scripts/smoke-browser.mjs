@@ -306,6 +306,102 @@ if (!hasGpu) {
         process.exit(1);
       }
       console.log(`[smoke-browser] AC-06 GREEN: RT canvas has non-zero pixels (${canvasPixelResult})`);
+
+      // Regression lock: the RT canvas drawing buffer must be resized to the RT
+      // dimensions (the hello-cube fixture RT is 800x600), NOT left at the
+      // 300x150 HTMLCanvasElement default. A larger RT painted into a 300x150
+      // buffer shows only its top-left corner (content-in-a-corner symptom); the
+      // top-left-100px pixel poll above cannot catch that, so assert size here.
+      const canvasDims = await page.evaluate(() => {
+        const c = document.querySelector('canvas[data-forgeax-rt-canvas]');
+        return c ? { w: c.width, h: c.height } : null;
+      });
+      if (!canvasDims || canvasDims.w === 300 || canvasDims.h === 150) {
+        console.error(
+          `[smoke-browser] AC-06 RED: RT canvas not resized to RT dims (got ${JSON.stringify(canvasDims)}; default 300x150 means putImageData clipped a larger RT to a corner)`,
+        );
+        await browser.close();
+        viteProc.kill('SIGTERM');
+        process.exit(1);
+      }
+      console.log(`[smoke-browser] AC-06 GREEN: RT canvas resized to ${canvasDims.w}x${canvasDims.h}`);
+
+      // Zoom toolbar: with a preview painted (status ok), the zoom control must be
+      // present (default 'fit'). Type 200% and assert the canvas CSS width scales to
+      // 2x its drawing-buffer width and the anchor reflects the percentage.
+      const zoomResult = await page.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const input = document.querySelector('[data-forgeax-texture-zoom]');
+        if (!input) return 'no-zoom-control';
+        if (input.getAttribute('data-forgeax-texture-zoom') !== 'fit') return 'not-fit-default';
+        // Drive a React controlled <input type=number> change.
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          'value',
+        )?.set;
+        setter?.call(input, '200');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        let canvas = null;
+        for (let i = 0; i < 20; i++) {
+          await sleep(50);
+          canvas = document.querySelector('canvas[data-forgeax-rt-canvas]');
+          if (canvas && canvas.style.width) break;
+        }
+        if (!canvas) return 'no-canvas';
+        const cssW = Number.parseFloat(canvas.style.width);
+        const bufW = canvas.width;
+        const anchor = document
+          .querySelector('[data-forgeax-texture-zoom]')
+          ?.getAttribute('data-forgeax-texture-zoom');
+        // 200% -> css width = 2 * drawing-buffer width.
+        if (anchor !== '200') return `anchor-${anchor}`;
+        if (Math.abs(cssW - bufW * 2) > 1) return `css-${cssW}-buf-${bufW}`;
+        return 'ok';
+      });
+      if (zoomResult !== 'ok') {
+        console.error(`[smoke-browser] AC-ZOOM RED: zoom toolbar check failed (${zoomResult})`);
+        await browser.close();
+        viteProc.kill('SIGTERM');
+        process.exit(1);
+      }
+      console.log('[smoke-browser] AC-ZOOM GREEN: 200% scales canvas CSS width to 2x buffer width');
+
+      // Fit must FILL the viewport (upscaling small textures), not pin the canvas to
+      // its intrinsic drawing-buffer size. Click Fit, then assert the canvas rendered
+      // box fills its container (box width >> buffer width / close to parent width).
+      // Regression guard: the old `max-w-*` fit left a 1x1 texture at 1px.
+      const fitResult = await page.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const fitBtn = [...document.querySelectorAll('button')].find(
+          (b) => b.getAttribute('title') === 'Fit to window',
+        );
+        if (!fitBtn) return 'no-fit-button';
+        fitBtn.click();
+        let canvas = null;
+        for (let i = 0; i < 20; i++) {
+          await sleep(50);
+          canvas = document.querySelector('canvas[data-forgeax-rt-canvas]');
+          // In fit mode the explicit CSS width is cleared (auto via w-full).
+          if (canvas && !canvas.style.width) break;
+        }
+        if (!canvas) return 'no-canvas';
+        const box = canvas.getBoundingClientRect();
+        const parent = canvas.parentElement?.getBoundingClientRect();
+        if (!parent) return 'no-parent';
+        // Fit fills the container: the canvas element box reaches most of the parent's
+        // content width (w-full). The old max-w-* fit left a small texture at its 1px
+        // intrinsic size, so box.width would be ~1; this discriminates that regression
+        // for any small texture, and never false-fails on large ones (box = container).
+        if (box.width < parent.width * 0.5) return `box-${box.width}-parent-${parent.width}`;
+        return 'ok';
+      });
+      if (fitResult !== 'ok') {
+        console.error(`[smoke-browser] AC-FIT RED: fit fill check failed (${fitResult})`);
+        await browser.close();
+        viteProc.kill('SIGTERM');
+        process.exit(1);
+      }
+      console.log('[smoke-browser] AC-FIT GREEN: Fit fills the viewport (upscales small textures)');
     } else if (rtStatus === 'no-rt') {
       console.log('[smoke-browser] AC-06 SKIP: RT status is no-rt (fixture may lack color attachment info)');
     } else if (rtStatus === 'no-webgpu') {

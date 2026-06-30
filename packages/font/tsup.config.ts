@@ -7,7 +7,7 @@ export default defineConfig({
   external: [
     '@forgeax/engine-types',
     '@forgeax/engine-pack',
-    '@forgeax/engine-console',
+    '@forgeax/engine-remote',
     '@zappar/msdf-generator',
   ],
 });

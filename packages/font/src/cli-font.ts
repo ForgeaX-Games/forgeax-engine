@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-// @forgeax/engine-font/src/cli-font — `forgeax-engine-console-font` plugin
+// @forgeax/engine-font/src/cli-font — `forgeax-engine-remote-font` plugin
 // bin. Discovered by the base bin via the kubectl 4th-path
-// `forgeax-engine-console-` prefix scanner.
+// `forgeax-engine-remote-` prefix scanner.
 //
 // `bake <ttf> <out>` reads a TrueType font and produces an MSDF atlas PNG +
 // a glyph-metrics sidecar JSON (importer: 'font'). The real bake calls
@@ -359,10 +359,10 @@ export async function realGeneratorFactory(): Promise<MsdfGenerator> {
 
 function bakeHelpBody(): string {
   return [
-    'forgeax-engine-console-font bake — bake MSDF font atlas from TTF',
+    'forgeax-engine-remote-font bake — bake MSDF font atlas from TTF',
     '',
     'Usage:',
-    '  forgeax-engine-console-font bake <ttf> <out>',
+    '  forgeax-engine-remote-font bake <ttf> <out>',
     '',
     'Reads a TrueType font file and produces:',
     `  <out>/<basename>.atlas.png   — ${DEFAULT_TEXTURE_SIZE}x${DEFAULT_TEXTURE_SIZE} MSDF atlas`,
@@ -373,10 +373,10 @@ function bakeHelpBody(): string {
 
 function helpBody(): string {
   return [
-    'forgeax-engine-console-font — MSDF font atlas baking',
+    'forgeax-engine-remote-font — MSDF font atlas baking',
     '',
     'Usage:',
-    '  forgeax-engine-console-font bake <ttf> <out>',
+    '  forgeax-engine-remote-font bake <ttf> <out>',
     '',
   ].join('\n');
 }
@@ -410,7 +410,7 @@ async function runBake(rest: string[]): Promise<number> {
   const ttfPath = positionals[0];
   const outDir = positionals[1];
   if (ttfPath === undefined || outDir === undefined) {
-    process.stderr.write('usage: forgeax-engine-console-font bake <ttf> <out>\n');
+    process.stderr.write('usage: forgeax-engine-remote-font bake <ttf> <out>\n');
     return 1;
   }
   try {

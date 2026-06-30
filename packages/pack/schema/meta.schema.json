@@ -9,7 +9,7 @@
   "properties": {
     "schemaVersion": {
       "oneOf": [{ "type": "string" }, { "type": "integer" }],
-      "description": "Schema version. Strings (e.g. '1.0.0') for hand-authored .meta.json; integers (1, 2, ...) for importer-emitted .meta.json (forgeax-engine-console-asset import writes schemaVersion: 1 as the wire format SSOT, GltfMetaJson literal type)."
+      "description": "Schema version. Strings (e.g. '1.0.0') for hand-authored .meta.json; integers (1, 2, ...) for importer-emitted .meta.json (forgeax-engine-remote-asset import writes schemaVersion: 1 as the wire format SSOT, GltfMetaJson literal type)."
     },
     "kind": {
       "type": "string",
@@ -74,8 +74,8 @@
         },
         "kind": {
           "type": "string",
-          "enum": ["mesh", "material", "scene", "texture", "image", "cube-texture", "material-shader", "skeleton", "skin", "animation-clip", "audio", "font"],
-          "description": "Closed sub-asset kind enum. 'texture' (engine-gltf importer emits per glTF images[] row as TextureAsset POD; feat-20260608 M3). 'mesh' / 'material' / 'scene' (hello-gltf Tier-B set forgeax-engine-console-asset import emits) + 'image' (engine-image emits per *.meta.json sidecar; feat-20260517-vite-plugin-image-build-time-cook M1 w3 added the literal so the catalog builder's image arm can read scanner output) + 'cube-texture' (engine-image emits for HDR equirect sources via assetType='image' arm with importSettings.kind='cube-texture' carrying equirectFaceSize + specularMipLevels; feat-20260520-skylight-ibl-cubemap M5 routes IBL HDR cubemap through the image importer family rather than introducing a third assetType enum value) + 'audio' (engine-audio-webaudio import path, plain AudioBuffer sub-asset with no sidecar metadata; feat-20260527-audio-system M4 w32) + 'font' (engine-font bake path; the FontAsset glyph-metrics sub-asset baked from a TTF source alongside its 'image' atlas sub-asset; feat-20260531-world-space-msdf-text-rendering M5 / w22). Adding a new kind requires (a) a feat-* loop, (b) updating @forgeax/engine-types AssetUnion + the relevant importer pipeline, and (c) extending this enum."
+          "minLength": 1,
+          "description": "Open sub-asset kind string (feat-20260629-importer-self-declared-fold-contract M3 / D-1 scheme A): the prior closed enum is removed — any non-empty string is accepted at the schema layer. Known engine-owned kinds: mesh, material, scene, texture, cube-texture, material-shader, skeleton, skin, animation-clip, audio, font. Host-defined importers declare their own kind values (e.g. 'reel-game-blob') and the schema layer admits them without modification. Validation of unknown kinds is deferred to the fold/import layer where the ImporterRegistry is available. The field itself (subAssets[].kind) is retained (OOS-2: no field deletion, only enum removal)."
         }
       }
     }

@@ -40,7 +40,7 @@ The `transitionStatesSystem` runs every frame (registered by `registerStatesPlug
 | `addOnEnter(token, variant, fn)` | `=> UnsubscribeHandle` | Register a callback to fire when entering `variant` |
 | `addOnExit(token, variant, fn)` | `=> UnsubscribeHandle` | Register a callback to fire when leaving `variant` |
 | `StateError` | structured error | `.code` (4-member closed union) / `.expected` / `.hint` / `.detail` |
-| `forgeax-engine-console-state` | CLI plugin bin | `list` (all registered tokens + current state) / `get <name>` (variant string) |
+| `forgeax-engine-remote-state` | CLI plugin bin | `list` (all registered tokens + current state) / `get <name>` (variant string) |
 
 > [!IMPORTANT]
 > `StateErrorCode` is a 4-member closed union: `'state-already-defined'` | `'state-not-registered'` | `'invalid-variant'` | `'state-default-required'`. SSOT at `packages/state/src/errors.ts` -- do not copy.
@@ -165,6 +165,6 @@ const Gameplay = defineSystem({
 - `transitionStatesSystem` 8-step pipeline: source `packages/state/src/transition-system.ts`
 - `inState` condition factory (predicate closure, resource key derivation): source `packages/state/src/conditions.ts`
 - `registerStatesPlugin` auto-wire in `createApp`: source `packages/app/src/create-app.ts`
-- CLI plugin bin `forgeax-engine-console-state`: source `packages/state/src/cli-state.ts`
+- CLI plugin bin `forgeax-engine-remote-state`: source `packages/state/src/cli-state.ts`
 - Zero-intrusion design (consumes ECS primitives only): see [`forgeax-engine-ecs`](../forgeax-engine-ecs/SKILL.md)
 - App bootstrap + `createApp` auto-register: see [`forgeax-engine-app`](../forgeax-engine-app/SKILL.md)

@@ -144,7 +144,7 @@ import { WebAudioEngine } from '../web-audio-engine';
     });
 
     it('skips a non-audio sub-asset kind', async () => {
-      const ctx = makeCtx([{ guid: GUID, sourceIndex: 0, kind: 'image' }]);
+      const ctx = makeCtx([{ guid: GUID, sourceIndex: 0, kind: 'texture' }]);
       const produced = await audioImporter.import(ctx);
       expect(produced.length).toBe(0);
     });

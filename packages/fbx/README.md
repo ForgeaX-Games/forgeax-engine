@@ -12,7 +12,7 @@ import { importers } from '@forgeax/engine-import';
 
 importers.register(fbxImporter);
 // Then import via vite-plugin-pack with a *.fbx.meta.json sidecar
-// (CLI subcommand `forgeax-engine-console-fbx` is a stub; deferred to follow-up feat).
+// (CLI subcommand `forgeax-engine-remote-fbx` is a stub; deferred to follow-up feat).
 // or via vite-plugin-pack with a *.fbx.meta.json sidecar.
 ```
 
@@ -91,11 +91,11 @@ maps the Phong `shininess` exponent (range ~0-100) to the PBR `roughness` factor
 ## CLI
 
 ```bash
-forgeax-engine-console-fbx import <file>.fbx
+forgeax-engine-remote-fbx import <file>.fbx
 ```
 
 The `cli-fbx.ts` entrypoint is an export-only stub; full CLI subcommand
-registration in `@forgeax/engine-console` is deferred to a follow-up feat.
+registration in `@forgeax/engine-remote` is deferred to a follow-up feat.
 
 ## Toolchain
 

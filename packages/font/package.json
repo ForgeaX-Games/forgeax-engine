@@ -5,9 +5,9 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Build-time MSDF font atlas baking and runtime font asset loading for the forgeax engine. CLI surface is provided by @forgeax/engine-console (forgeax-engine-console-font).",
+  "description": "Build-time MSDF font atlas baking and runtime font asset loading for the forgeax engine. CLI surface is provided by @forgeax/engine-remote (forgeax-engine-remote-font).",
   "bin": {
-    "forgeax-engine-console-font": "./dist/cli-font.mjs"
+    "forgeax-engine-remote-font": "./dist/cli-font.mjs"
   },
   "exports": {
     ".": {
@@ -41,7 +41,7 @@
     "@zappar/msdf-generator": "1.2.4"
   },
   "devDependencies": {
-    "@forgeax/engine-console": "workspace:*",
+    "@forgeax/engine-remote": "workspace:*",
     "@forgeax/engine-import": "workspace:*",
     "@types/node": "^20.14.0"
   },

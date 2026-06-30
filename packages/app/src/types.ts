@@ -283,6 +283,18 @@ export interface App {
    * package out of the app's public type surface.
    */
   readonly _debugAdapter?: unknown;
+  /**
+   * Handle for the remote eval server started by createApp (dev mode).
+   *
+   * `undefined` in production builds and headless/dawn-node without explicit
+   * opt-in. When present, the host can read `app.remote.port` for WS connection
+   * details or call `await app.remote.close()` to tear down the server
+   * (feat-20260629-inspector-two-layer-model M4 / w20).
+   *
+   * Typed as {@link RemoteHandle} from `@forgeax/engine-types` — a neutral
+   * package with no dependency on `@forgeax/engine-remote`.
+   */
+  readonly remote?: import('@forgeax/engine-types').RemoteHandle | undefined;
 }
 
 /**

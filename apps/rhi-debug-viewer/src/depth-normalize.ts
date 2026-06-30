@@ -31,13 +31,15 @@ export interface DepthVisualizeResult {
  * Degenerate case (range <= 0): all output values are 0.5 (uniform gray),
  * no NaN/Inf produced.
  *
- * @param mappedBuffer - Raw depth buffer bytes from mapAsync.
+ * @param mappedBuffer - Raw depth buffer bytes from mapAsync. Accepts any
+ *   ArrayBufferLike since Float32Array views a typed array's .buffer, whose
+ *   static type widened to include SharedArrayBuffer in recent TS libs.
  * @param width - Logical texture width in pixels.
  * @param height - Logical texture height in pixels.
  * @param bytesPerRowAligned - Padded row byte count (Math.ceil(width*4/256)*256).
  */
 export function normalizeDepth(
-  mappedBuffer: ArrayBuffer,
+  mappedBuffer: ArrayBufferLike,
   width: number,
   height: number,
   bytesPerRowAligned: number,

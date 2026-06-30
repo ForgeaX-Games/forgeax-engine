@@ -247,44 +247,35 @@ This README is the **per-package演进契约 anchor** for `Result<T, E>`. AGENTS
 - [`@forgeax/engine-rhi`](../rhi) — the cross-package `Result` SSOT this package aligns with.
 - [`@forgeax/engine-math`](../math) — POD math types consumed by component schemas.
 
-## Inspector contribution
+## Remote eval
 
-`registerEcsInspector(reg, world)` is a top-level pure function that wires four JSON-RPC inspection methods + one mutating-method contribution onto a `Registry` instance from `@forgeax/engine-console`. Method names: `entities` / `components` / `systems` / `resources` (registration order locked, byte freeze of the legacy `inspect-scripts.ts`). The third step (feat-20260517 D-2 / w13) calls `reg.registerMutatingMethods(ECS_MUTATING_METHODS)` — the 15-name frozen Set is the SSOT for ECS write methods that the console sandbox blacklist consults at wrap-time. Importing `@forgeax/engine-ecs` does **not** call `reg.register*` — registration only fires on explicit invocation (AC-10 zero import-time side effect; charter P3 + R-PLUGIN-IMPORT-SIDE-EFFECT mitigation).
+ECS inspection and mutation route through `@forgeax/engine-remote`'s single `eval` channel. The `createApp` entry point wires `app.remote` by default in dev mode (port 5732); the eval scope carries `world`, `renderer`, `assets`, and `debugAdapter` as live roots. Discovery of ECS entities and component data is through `queryRun` — no Registry, no pre-built commands, no read-only proxy:
 
 ```ts
-// host main.ts assembly (plan-strategy section 3.3 success path)
-import { Registry, startConsoleServer, wireDefaultInspectors } from '@forgeax/engine-console';
-import { registerEcsInspector } from '@forgeax/engine-ecs';
-
-const reg = new Registry();
-const r = registerEcsInspector(reg, world);
-if (!r.ok) { console.error(r.error); process.exit(1); }
-await startConsoleServer({ port: 5732, registry: reg });
+// Inside eval scope (via in-process client.eval or WS JSON-RPC 2.0):
+const { createQueryState, queryRun, Entity, Transform } = await _import('@forgeax/engine-ecs');
+const state = createQueryState({ with: [Entity, Transform] });
+queryRun(state, world, (bundle) => {
+  for (let i = 0; i < bundle.Entity.self.length; i++) {
+    const h = bundle.Entity.self[i];
+    const px = bundle.Transform.position.x[i]; // non-optional read
+  }
+});
 ```
 
-Same-name duplicate fails fast on the first conflict and returns `Result.err(InspectorError, code: 'console-startup-failed')` — short-circuits without partial-registration leak. Reuse across reloads requires a fresh `new Registry()`.
+Spawning, setting components, and despawning execute directly through `world.spawn` / `world.set` / `world.despawn` — no `ECS_MUTATING_METHODS` blacklist. See [`@forgeax/engine-remote` README](../remote/README.md) for the full eval API, live roots, and security model.
 
-## CLI — `forgeax-engine-console-ecs`
+## CLI — `forgeax-engine-remote-ecs`
 
-`@forgeax/engine-ecs` ships the `forgeax-engine-console-ecs` plugin bin (kubectl 4th-path; discovered by the base bin `forgeax-engine-console` via PATH-prefix scan). 5 subcommands mirror the inspector method set; the WS client is shared with the base CLI through `@forgeax/engine-types/inspector-client`.
-
-| Subcommand | Flags | Output |
-|:--|:--|:--|
-| `entities` | `--with <name>` / `--without <name>` (repeatable) | archetypes filtered by component-name set + entity counts |
-| `components` | — | registered component name list with archetype + entity rollup |
-| `systems` | — | system count + name list (registration order) |
-| `resources` | — | resource key list |
-| `world` | — | full `world.inspect()` snapshot |
-
-Common flags: `--port <n>` (default 5732) / `--host <s>` (default localhost) / `--help`. Examples:
+`@forgeax/engine-ecs` ships the `forgeax-engine-remote-ecs` plugin bin (kubectl 4th-path; discovered via PATH-prefix scan for `forgeax-engine-remote-`). The bin connects to a running engine instance (default `ws://localhost:5732`) and sends eval scripts over JSON-RPC 2.0.
 
 ```sh
-forgeax-engine-console-ecs entities --with Transform
-forgeax-engine-console-ecs components --port 5731
-forgeax-engine-console-ecs world | jq .archetypes
+forgeax-engine-remote-ecs entities --with Transform
+forgeax-engine-remote-ecs components --port 5731
+forgeax-engine-remote-ecs world | jq .archetypes
 ```
 
-The legacy `forgeax-engine-console inspect <target>` form was removed in feat-20260517-console-ecs-plugin-extraction; the base bin now surfaces a "did you mean 'forgeax-engine-console-ecs <target>'?" hint when AI users type the deleted form.
+Common flags: `--port <n>` (default 5732) / `--host <s>` (default localhost) / `--help`.
 
 ## Schema vocabulary quick-ref
 

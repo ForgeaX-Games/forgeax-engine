@@ -109,7 +109,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
           kind: 'external-asset-package',
           source: 'wood-container.jpg',
           importSettings: { colorSpace: 'srgb', mipmap: 'auto' },
-          subAssets: [{ guid: WOOD_GUID, sourceIndex: 0, kind: 'image' }],
+          subAssets: [{ guid: WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
         }),
       );
       await writeFile(join(tmpRoot, 'wood-container.jpg'), ONE_BYTE_JPG);
@@ -120,7 +120,13 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(result.errors.length).toBeGreaterThan(0);
     });
 
-    it('(b) sidecar with an importer key the catalog cannot fold -> error surfaced + 0 catalog rows', async () => {
+    it('(b) sidecar with an unregistered importer key -> raw-source row, no error (AC-08, w9)', async () => {
+      // P2 (feat-20260629): the former whitelist wall rejected any importer
+      // key outside the 5 engine built-ins with
+      // `catalog-meta-unfoldable-importer`. After the wall is gone, an
+      // unregistered key (here 'video', with an empty registered-key set)
+      // keeps a raw-source row so the runtime can fall back to the source,
+      // rather than failing the build.
       await writeFile(
         join(tmpRoot, 'wood-container.jpg.meta.json'),
         JSON.stringify({
@@ -129,15 +135,17 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
           importer: 'video',
           source: 'wood-container.jpg',
           importSettings: { colorSpace: 'srgb', mipmap: 'auto' },
-          subAssets: [{ guid: WOOD_GUID, sourceIndex: 0, kind: 'image' }],
+          subAssets: [{ guid: WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
         }),
       );
       await writeFile(join(tmpRoot, 'wood-container.jpg'), ONE_BYTE_JPG);
 
-      const result = await buildCatalogStrict([tmpRoot]);
+      const result = await buildCatalogStrict([tmpRoot], '/', new Set());
 
-      expect(result.catalog).toHaveLength(0);
-      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors).toHaveLength(0);
+      expect(result.catalog).toHaveLength(1);
+      expect(result.catalog[0]?.guid.toLowerCase()).toBe(WOOD_GUID);
+      expect(result.catalog[0]?.relativeUrl.endsWith('wood-container.jpg')).toBe(true);
     });
 
     it('(c) sidecar fails ajv schema (broken subAsset) -> error surfaced + 0 catalog rows', async () => {
@@ -149,7 +157,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
           importer: 'image',
           source: 'wood-container.jpg',
           importSettings: { colorSpace: 'srgb', mipmap: 'auto' },
-          subAssets: [{ guid: 'not-a-uuid', sourceIndex: 0, kind: 'image' }],
+          subAssets: [{ guid: 'not-a-uuid', sourceIndex: 0, kind: 'texture' }],
         }),
       );
       await writeFile(join(tmpRoot, 'wood-container.jpg'), ONE_BYTE_JPG);
@@ -174,7 +182,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
             addressMode: 'repeat',
             filterMode: 'linear',
           },
-          subAssets: [{ guid: WOOD_GUID, sourceIndex: 0, kind: 'image' }],
+          subAssets: [{ guid: WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
         }),
       );
       await writeFile(join(tmpRoot, 'wood-container.jpg'), ONE_BYTE_JPG);
@@ -203,7 +211,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       source: 'Inter.atlas.png',
       importSettings: { colorSpace: 'linear', mipmap: 'none' },
       subAssets: [
-        { guid: ATLAS_GUID, sourceIndex: 0, kind: 'image' },
+        { guid: ATLAS_GUID, sourceIndex: 0, kind: 'texture' },
         { guid: FONT_GUID, sourceIndex: 1, kind: 'font' },
       ],
     });
@@ -226,7 +234,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       importer: 'image',
       source: 'wood-container.jpg',
       importSettings: { colorSpace: 'srgb', mipmap: 'auto' },
-      subAssets: [{ guid: IMAGE_GUID, sourceIndex: 0, kind: 'image' }],
+      subAssets: [{ guid: IMAGE_GUID, sourceIndex: 0, kind: 'texture' }],
     });
   }
 
@@ -308,6 +316,40 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(result.catalog.filter((e) => e.kind === 'texture')).toHaveLength(2);
       expect(result.catalog.filter((e) => e.kind === 'font')).toHaveLength(1);
     });
+
+    // P1: font arm atlas sub.kind detection using 'texture' instead of 'image'.
+    // After P1, the font sidecar declares the atlas subAsset with kind='texture'.
+    it('(e) P1: font atlas subAsset with kind="texture" produces atlas texture row', async () => {
+      const ATLAS_TEX_GUID = '019e2cc6-0c86-79da-aa76-b09840000f01';
+      const FONT_TEX_GUID = '019e2cc6-0c86-79da-aa76-b09840000f02';
+      const sidecar = JSON.stringify({
+        schemaVersion: '1.0.0',
+        kind: 'external-asset-package',
+        importer: 'font',
+        source: 'Inter.atlas.png',
+        importSettings: { colorSpace: 'linear', mipmap: 'none' },
+        subAssets: [
+          { guid: ATLAS_TEX_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: FONT_TEX_GUID, sourceIndex: 1, kind: 'font' },
+        ],
+      });
+      await writeFile(join(tmpRoot, 'Inter.atlas.png.meta.json'), sidecar);
+      await writeFile(join(tmpRoot, 'Inter.atlas.png'), ONE_BYTE_FONT_FILE);
+
+      const result = await buildCatalogStrict([tmpRoot]);
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.catalog).toHaveLength(2);
+      const texRows = result.catalog.filter((e) => e.kind === 'texture');
+      expect(texRows).toHaveLength(1);
+      expect(texRows[0]?.guid.toLowerCase()).toBe(ATLAS_TEX_GUID);
+      expect(texRows[0]?.metadata).toBeDefined();
+      expect(texRows[0]?.metadata?.kind).toBe('texture');
+
+      const fontRows = result.catalog.filter((e) => e.kind === 'font');
+      expect(fontRows).toHaveLength(1);
+      expect(fontRows[0]?.guid.toLowerCase()).toBe(FONT_TEX_GUID);
+    });
   });
 }
 
@@ -355,7 +397,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
         addressMode: 'repeat',
         filterMode: 'linear',
       },
-      subAssets: [{ guid: GLTF_WOOD_GUID, sourceIndex: 0, kind: 'image' }],
+      subAssets: [{ guid: GLTF_WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
     });
   }
 
@@ -749,7 +791,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
         {
           guid: IMG_WOOD_GUID,
           sourceIndex: 0,
-          kind: 'image',
+          kind: 'texture',
         },
       ],
     });
@@ -843,6 +885,36 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       if (dMeta === undefined || dMeta.kind !== 'texture') return;
       expect(dMeta.mipmap).toBe(false);
     });
+
+    // P1: image arm sub.kind passthrough — after P1, sub.kind in the sidecar is
+    // 'texture' (not 'image'), and buildCatalog passes it through directly
+    // without the former hard-coded 'image'→'texture' remap.
+    it('(e) P1: sub.kind="texture" in meta.json sidecar → passthrough without hard-coded remap', async () => {
+      const IMG_K_TEXTURE_GUID = '019e2cca-0c86-79da-aa76-b09840000e01';
+      const sidecar = JSON.stringify({
+        schemaVersion: '1.0.0',
+        kind: 'external-asset-package',
+        importer: 'image',
+        source: 'passthrough.jpg',
+        importSettings: { colorSpace: 'srgb', mipmap: 'auto' },
+        subAssets: [{ guid: IMG_K_TEXTURE_GUID, sourceIndex: 0, kind: 'texture' }],
+      });
+      await writeFile(join(tmpRoot, 'passthrough.jpg.meta.json'), sidecar);
+      await writeFile(join(tmpRoot, 'passthrough.jpg'), IMG_ONE_BYTE_JPG);
+
+      const entries = await buildCatalog([tmpRoot]);
+      const textureRows = entries.filter((e) => e.kind === 'texture');
+
+      expect(textureRows).toHaveLength(1);
+      const row = textureRows[0];
+      expect(row).toBeDefined();
+      if (row === undefined) return;
+      expect(row.guid.toLowerCase()).toBe(IMG_K_TEXTURE_GUID);
+      expect(row.metadata).toBeDefined();
+      const meta = row.metadata;
+      if (meta === undefined || meta.kind !== 'texture') return;
+      expect(meta.colorSpace).toBe('srgb');
+    });
   });
 }
 
@@ -871,7 +943,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
         addressMode: 'repeat',
         filterMode: 'linear',
       },
-      subAssets: [{ guid: IMP_WOOD_GUID, sourceIndex: 0, kind: 'image' }],
+      subAssets: [{ guid: IMP_WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
     });
   }
 
@@ -1453,7 +1525,7 @@ console.log('import-hdr-test entry');
             filterMode: 'linear',
           },
           subAssets: [
-            { guid: '019e2cc6-0c86-79da-aa76-000000000000', sourceIndex: 0, kind: 'image' },
+            { guid: '019e2cc6-0c86-79da-aa76-000000000000', sourceIndex: 0, kind: 'texture' },
           ],
         }),
       );
@@ -1545,7 +1617,7 @@ console.log('import-hdr-test entry');
       importer: 'image',
       source,
       importSettings: { colorSpace: 'srgb', mipmap: 'auto' },
-      subAssets: [{ guid: AC67_IMAGE_GUID, sourceIndex: 0, kind: 'image' }],
+      subAssets: [{ guid: AC67_IMAGE_GUID, sourceIndex: 0, kind: 'texture' }],
     });
   }
 
@@ -1634,7 +1706,7 @@ console.log('import-hdr-test entry');
           importer: 'image',
           source: 'tex.png',
           importSettings: {},
-          subAssets: [{ guid: AC67_IMAGE_GUID, sourceIndex: 0, kind: 'image' }],
+          subAssets: [{ guid: AC67_IMAGE_GUID, sourceIndex: 0, kind: 'texture' }],
         }),
       );
       await writeFile(join(subDir, 'tex.png'), ONE_BYTE_FILE);
@@ -1647,6 +1719,390 @@ console.log('import-hdr-test entry');
       if (row) {
         const absSourcePath = join(tmpRoot, row.sourcePath);
         expect(absSourcePath.endsWith('tex.png')).toBe(true);
+      }
+    });
+  });
+}
+
+{
+  // ─── P2: drop the importer-key whitelist wall; fold is driven by the
+  //     registered-importer set (feat-20260629 M4 / w9) ───
+  //
+  // Red baseline: a host importer key (not in the former 5-value whitelist)
+  // is rejected by `catalog-meta-unfoldable-importer`. After w11/w12 the
+  // wall is gone and the fold layer defaults to passing `sub.kind` through
+  // for any registered host importer; an unregistered importer key produces
+  // a raw-source row instead of an error (AC-08).
+  //
+  // The 3rd `buildCatalog` / `buildCatalogStrict` arg is the set of
+  // registered host importer keys (derived from the ImporterRegistry). The
+  // engine-built-in arms (image / gltf / fbx / audio / font) fold
+  // unconditionally and need no entry in this set.
+
+  const HOST_GUID_A = '019e4000-0c86-79da-aa76-b0984c860a01';
+  const HOST_GUID_B = '019e4000-0c86-79da-aa76-b0984c860a02';
+  const ENGINE_IMG_GUID = '019e4000-0c86-79da-aa76-b0984c860a03';
+  const UNREG_GUID = '019e4000-0c86-79da-aa76-b0984c860a04';
+  const ONE_BYTE = new Uint8Array([0xff]);
+
+  function hostMeta(guid: string, subKind: string, source: string): string {
+    return JSON.stringify({
+      schemaVersion: '1.0.0',
+      kind: 'external-asset-package',
+      importer: 'reel-game',
+      source,
+      importSettings: {},
+      subAssets: [{ guid, sourceIndex: 0, kind: subKind }],
+    });
+  }
+
+  describe('build-catalog-host-importer-passthrough.test.ts (w9)', () => {
+    let originalCwd: string;
+    let tmpRoot: string;
+
+    beforeEach(async () => {
+      originalCwd = process.cwd();
+      tmpRoot = await mkdtemp(join(tmpdir(), 'forgeax-vpp-host-fold-'));
+      process.chdir(tmpRoot);
+    });
+
+    afterEach(async () => {
+      process.chdir(originalCwd);
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('(a) registered host importer key folds: sub.kind passes through to a pack-index row', async () => {
+      await writeFile(
+        join(tmpRoot, 'level.reel.meta.json'),
+        hostMeta(HOST_GUID_A, 'reel-level', 'level.reel'),
+      );
+      await writeFile(join(tmpRoot, 'level.reel'), ONE_BYTE);
+
+      const result = await buildCatalogStrict([tmpRoot], '/', new Set(['reel-game']));
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.catalog).toHaveLength(1);
+      const row = result.catalog[0];
+      expect(row?.guid.toLowerCase()).toBe(HOST_GUID_A);
+      // Default passthrough: the host sub.kind becomes the pack-index kind
+      // verbatim (no engine remap, no whitelist gate).
+      expect(row?.kind).toBe('reel-level');
+      expect(row?.relativeUrl.endsWith('level.reel')).toBe(true);
+      expect(row?.sourcePath.endsWith('level.reel')).toBe(true);
+    });
+
+    it('(b) engine built-in importer (image) still folds with zero regression after the wall is gone', async () => {
+      await writeFile(
+        join(tmpRoot, 'wood.jpg.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'image',
+          source: 'wood.jpg',
+          importSettings: { colorSpace: 'srgb', mipmap: 'auto' },
+          subAssets: [{ guid: ENGINE_IMG_GUID, sourceIndex: 0, kind: 'texture' }],
+        }),
+      );
+      await writeFile(join(tmpRoot, 'wood.jpg'), ONE_BYTE);
+
+      // Note: image is an engine built-in arm; it must fold even when the
+      // host registered-key set is empty.
+      const result = await buildCatalogStrict([tmpRoot], '/', new Set());
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.catalog).toHaveLength(1);
+      expect(result.catalog[0]?.kind).toBe('texture');
+      expect(result.catalog[0]?.metadata?.kind).toBe('texture');
+    });
+
+    it('(c) unregistered importer key produces a raw-source row, not an error (AC-08)', async () => {
+      await writeFile(
+        join(tmpRoot, 'mystery.blob.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'not-wired',
+          source: 'mystery.blob',
+          importSettings: {},
+          subAssets: [{ guid: UNREG_GUID, sourceIndex: 0, kind: 'mystery' }],
+        }),
+      );
+      await writeFile(join(tmpRoot, 'mystery.blob'), ONE_BYTE);
+
+      // Empty registered set -> 'not-wired' is unregistered.
+      const result = await buildCatalogStrict([tmpRoot], '/', new Set());
+
+      // AC-08: skip fold + keep a raw-source row (no catalog error). The row
+      // preserves the source so the runtime can still resolve / fall back.
+      expect(result.errors).toHaveLength(0);
+      expect(result.catalog).toHaveLength(1);
+      const row = result.catalog[0];
+      expect(row?.guid.toLowerCase()).toBe(UNREG_GUID);
+      expect(row?.relativeUrl.endsWith('mystery.blob')).toBe(true);
+      expect(row?.sourcePath.endsWith('mystery.blob')).toBe(true);
+    });
+
+    it('(d) dev path (buildCatalog) and build path (buildCatalogStrict) agree on the same host sidecar', async () => {
+      await writeFile(
+        join(tmpRoot, 'a.reel.meta.json'),
+        hostMeta(HOST_GUID_A, 'reel-level', 'a.reel'),
+      );
+      await writeFile(join(tmpRoot, 'a.reel'), ONE_BYTE);
+      await writeFile(
+        join(tmpRoot, 'b.reel.meta.json'),
+        hostMeta(HOST_GUID_B, 'reel-actor', 'b.reel'),
+      );
+      await writeFile(join(tmpRoot, 'b.reel'), ONE_BYTE);
+
+      const keys = new Set(['reel-game']);
+      const devRows = await buildCatalog([tmpRoot], '/', keys);
+      const buildResult = await buildCatalogStrict([tmpRoot], '/', keys);
+
+      expect(buildResult.errors).toHaveLength(0);
+      const norm = (rows: readonly PackIndexEntry[]) =>
+        [...rows]
+          .map((r) => ({ guid: r.guid.toLowerCase(), kind: r.kind, sourcePath: r.sourcePath }))
+          .sort((x, y) => x.guid.localeCompare(y.guid));
+      expect(norm(devRows)).toEqual(norm(buildResult.catalog));
+      // Both kinds passed through verbatim.
+      const kinds = new Set(devRows.map((r) => r.kind));
+      expect(kinds).toEqual(new Set(['reel-level', 'reel-actor']));
+    });
+
+    it('(f) unregistered importer: dev path and build path both keep a raw-source row, no error (AC-08 consistency, w10)', async () => {
+      await writeFile(
+        join(tmpRoot, 'thing.blob.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'unwired-host',
+          source: 'thing.blob',
+          importSettings: {},
+          subAssets: [{ guid: HOST_GUID_B, sourceIndex: 0, kind: 'thing' }],
+        }),
+      );
+      await writeFile(join(tmpRoot, 'thing.blob'), ONE_BYTE);
+
+      const empty = new Set<string>();
+      const devRows = await buildCatalog([tmpRoot], '/', empty);
+      const buildResult = await buildCatalogStrict([tmpRoot], '/', empty);
+
+      // No catalog error on either path (unregistered is a skip-fold +
+      // raw-source-row case, NOT an unfoldable error).
+      expect(buildResult.errors).toHaveLength(0);
+      expect(devRows).toHaveLength(1);
+      expect(buildResult.catalog).toHaveLength(1);
+      expect(devRows[0]?.guid.toLowerCase()).toBe(HOST_GUID_B);
+      expect(buildResult.catalog[0]?.guid.toLowerCase()).toBe(HOST_GUID_B);
+      expect(devRows[0]?.sourcePath).toBe(buildResult.catalog[0]?.sourcePath);
+    });
+
+    it('(g) D-7: a registered host importer whose sub.kind collides with an engine built-in kind reports a conflict (no silent override)', async () => {
+      // 'texture' is an engine built-in kind (the runtime textureLoader owns
+      // it). A host importer that passes 'texture' through must NOT silently
+      // shadow the engine kind -- the fold layer surfaces a structured
+      // conflict error instead.
+      await writeFile(
+        join(tmpRoot, 'clash.reel.meta.json'),
+        hostMeta(HOST_GUID_A, 'texture', 'clash.reel'),
+      );
+      await writeFile(join(tmpRoot, 'clash.reel'), ONE_BYTE);
+
+      const result = await buildCatalogStrict([tmpRoot], '/', new Set(['reel-game']));
+
+      expect(result.catalog).toHaveLength(0);
+      expect(result.errors.length).toBeGreaterThan(0);
+      const conflict = result.errors[0];
+      expect(conflict?.code).toBe('catalog-host-kind-conflict');
+      expect(conflict?.message).toContain('texture');
+    });
+
+    it('(e) R-5: cube-texture sidecar still takes the existing .hdr special arm, not default passthrough', async () => {
+      // A cube-texture sub.kind under the image importer must keep its
+      // dedicated arm output (cube-texture / texture), NOT be passed through
+      // as a literal 'cube-texture' row by the default-passthrough path.
+      const CUBE_GUID = '019e4000-0c86-79da-aa76-b0984c860a05';
+      await writeFile(
+        join(tmpRoot, 'sky.png.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'image',
+          source: 'sky.png',
+          importSettings: { cubeFaceSize: 256 },
+          subAssets: [{ guid: CUBE_GUID, sourceIndex: 0, kind: 'cube-texture' }],
+        }),
+      );
+      await writeFile(join(tmpRoot, 'sky.png'), ONE_BYTE);
+
+      const result = await buildCatalogStrict([tmpRoot], '/', new Set());
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.catalog).toHaveLength(1);
+      const row = result.catalog[0];
+      // The existing image arm folds a non-.hdr cube to kind:'cube-texture'
+      // WITH a CubeTextureMetadata block (faceSize-derived) -- this is the
+      // dedicated arm, distinguishable from a bare passthrough row which
+      // would carry the image ImageMetadata block instead.
+      expect(row?.kind).toBe('cube-texture');
+      expect(row?.metadata?.kind).toBe('cube-texture');
+    });
+  });
+}
+
+{
+  // ─── P2: .hdr / cube-texture zero-regression (feat-20260629 M4 / w14) ───
+  //
+  // The image arm's .hdr / cube-texture special path (build-catalog.ts D-1)
+  // must survive the P2 default-passthrough change untouched (R-5 / OOS-6):
+  //   - a `.hdr` cube-texture sidecar folds to kind:'texture' + rgba16float
+  //   - a 6-PNG cube folds to kind:'cube-texture' + CubeTextureMetadata(faceSize)
+  //   - NO cube-texture sidecar is swallowed by the new host default-passthrough
+  // The three real submodule .hdr sidecars (newport_loft x2, sky) are folded
+  // here to lock their post-P2 output against the pre-P2 baseline.
+
+  const REAL_HDR_SIDECARS = [
+    {
+      label: 'learn-opengl/textures/newport_loft.hdr',
+      guid: '019e4a26-3c29-7420-af5d-20f2724a16b0',
+      source: 'newport_loft.hdr',
+    },
+    {
+      label: 'learn-opengl/textures/hdr/newport_loft.hdr',
+      guid: '019ee3e0-4be6-7f22-88f2-653ebbc5a207',
+      source: 'newport_loft.hdr',
+    },
+    {
+      label: 'demo-assets/template-game-default/sky.hdr',
+      guid: '81eec382-392f-5a93-8998-0ecf11ef7990',
+      source: 'sky.hdr',
+    },
+  ] as const;
+
+  function realHdrCubeMeta(guid: string, source: string): string {
+    // Byte-shape mirror of the shipped submodule sidecars (all three share the
+    // same importSettings shape; only guid / source differ).
+    return JSON.stringify({
+      kind: 'external-asset-package',
+      importer: 'image',
+      schemaVersion: '1.0.0',
+      source,
+      importSettings: {
+        colorSpace: 'linear',
+        mipmap: 'auto',
+        addressMode: 'clamp-to-edge',
+        filterMode: 'linear',
+        cubeFaceSize: 512,
+        specularMipLevels: 5,
+      },
+      subAssets: [{ guid, sourceIndex: 0, kind: 'cube-texture' }],
+    });
+  }
+
+  const W14_ONE_BYTE = new Uint8Array([0xff]);
+
+  describe('build-catalog-hdr-zero-regression.test.ts (w14)', () => {
+    let originalCwd: string;
+    let tmpRoot: string;
+
+    beforeEach(async () => {
+      originalCwd = process.cwd();
+      tmpRoot = await mkdtemp(join(tmpdir(), 'forgeax-vpp-w14-hdr-'));
+      process.chdir(tmpRoot);
+    });
+
+    afterEach(async () => {
+      process.chdir(originalCwd);
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('(a) the 3 real .hdr cube-texture sidecars fold to kind:"texture" + rgba16float (unchanged by P2)', async () => {
+      // Even with a host importer registered, the engine image arm owns 'image'
+      // and the .hdr path must be unaffected.
+      const registered = new Set(['reel-game']);
+      for (const sc of REAL_HDR_SIDECARS) {
+        await writeFile(
+          join(tmpRoot, `${sc.source}.meta.json`),
+          realHdrCubeMeta(sc.guid, sc.source),
+        );
+        await writeFile(join(tmpRoot, sc.source), W14_ONE_BYTE);
+
+        const result = await buildCatalogStrict([tmpRoot], '/', registered);
+        expect(result.errors).toHaveLength(0);
+        expect(result.catalog).toHaveLength(1);
+        const row = result.catalog[0];
+        expect(row?.guid.toLowerCase()).toBe(sc.guid);
+        // D-1: .hdr cube-texture -> kind:'texture' (runtime textureLoader picks
+        // it up), NOT a literal 'cube-texture' passthrough row.
+        expect(row?.kind).toBe('texture');
+        expect(row?.metadata?.kind).toBe('texture');
+        if (row?.metadata?.kind === 'texture') {
+          expect(row.metadata.format).toBe('rgba16float');
+          expect(row.metadata.colorSpace).toBe('linear');
+        }
+
+        await rm(join(tmpRoot, `${sc.source}.meta.json`));
+        await rm(join(tmpRoot, sc.source));
+      }
+    });
+
+    it('(b) a 6-PNG (non-.hdr) cube-texture sidecar still folds to kind:"cube-texture" + faceSize metadata', async () => {
+      const CUBE_GUID = '019e4a26-3c29-7420-af5d-20f2724a1601';
+      await writeFile(
+        join(tmpRoot, 'skybox.png.meta.json'),
+        JSON.stringify({
+          kind: 'external-asset-package',
+          importer: 'image',
+          schemaVersion: '1.0.0',
+          source: 'skybox.png',
+          importSettings: { cubeFaceSize: 256 },
+          subAssets: [{ guid: CUBE_GUID, sourceIndex: 0, kind: 'cube-texture' }],
+        }),
+      );
+      await writeFile(join(tmpRoot, 'skybox.png'), W14_ONE_BYTE);
+
+      const result = await buildCatalogStrict([tmpRoot], '/', new Set());
+      expect(result.errors).toHaveLength(0);
+      expect(result.catalog).toHaveLength(1);
+      const row = result.catalog[0];
+      expect(row?.kind).toBe('cube-texture');
+      expect(row?.metadata?.kind).toBe('cube-texture');
+      if (row?.metadata?.kind === 'cube-texture') {
+        expect(row.metadata.width).toBe(256);
+        expect(row.metadata.height).toBe(256);
+        expect(row.metadata.format).toBe('rgba16float');
+      }
+    });
+
+    it('(c) no cube-texture sidecar is swallowed by the host default-passthrough (still goes through the image arm)', async () => {
+      // Regression guard: a cube-texture sidecar under importer:'image' must
+      // NOT produce a literal kind:'cube-texture' passthrough row carrying the
+      // image ImageMetadata block (that would be the default-passthrough arm
+      // wrongly catching it). The dedicated cube arm carries
+      // CubeTextureMetadata (rgba16float + mipLevels), distinguishing it.
+      const CUBE_GUID = '019e4a26-3c29-7420-af5d-20f2724a1602';
+      await writeFile(
+        join(tmpRoot, 'env.png.meta.json'),
+        JSON.stringify({
+          kind: 'external-asset-package',
+          importer: 'image',
+          schemaVersion: '1.0.0',
+          source: 'env.png',
+          importSettings: { colorSpace: 'srgb', mipmap: 'auto', cubeFaceSize: 128 },
+          subAssets: [{ guid: CUBE_GUID, sourceIndex: 0, kind: 'cube-texture' }],
+        }),
+      );
+      await writeFile(join(tmpRoot, 'env.png'), W14_ONE_BYTE);
+
+      const result = await buildCatalogStrict([tmpRoot], '/', new Set());
+      expect(result.errors).toHaveLength(0);
+      const row = result.catalog[0];
+      expect(row?.metadata?.kind).toBe('cube-texture');
+      // The image default-passthrough remap would have used the image
+      // ImageMetadata (colorSpace srgb -> rgba8unorm-srgb); the cube arm uses
+      // rgba16float. Assert the cube arm won.
+      if (row?.metadata?.kind === 'cube-texture') {
+        expect(row.metadata.format).toBe('rgba16float');
       }
     });
   });

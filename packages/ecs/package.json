@@ -5,9 +5,9 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Archetype ECS framework (World/Entity/Component/Query/System/Schedule) for forgeax-engine. Ships the forgeax-engine-console-ecs plugin bin (kubectl 4th-path: entities / components / systems / resources / world).",
+  "description": "Archetype ECS framework (World/Entity/Component/Query/System/Schedule) for forgeax-engine. Ships the forgeax-engine-remote-ecs plugin bin (kubectl 4th-path: entities / components / systems / resources / world).",
   "bin": {
-    "forgeax-engine-console-ecs": "./dist/cli-ecs.mjs"
+    "forgeax-engine-remote-ecs": "./dist/cli-ecs.mjs"
   },
   "exports": {
     ".": {

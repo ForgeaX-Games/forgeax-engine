@@ -34,10 +34,10 @@ import type { Replay } from './replayer';
  * an external canvas element via ImageData + putImageData.
  *
  * Reuses `readbackDrawRt` (SSOT per-draw GPU readback, D-2) and renders the
- * RGBA8 pixels onto the canvas using a 2d rendering context. The canvas must
- * be sized to at least the RT dimensions before calling — `putImageData`
- * places the image at (0,0) and throws if the image extends beyond the canvas
- * bounds.
+ * RGBA8 pixels onto the canvas using a 2d rendering context. The canvas drawing
+ * buffer is resized to the RT dimensions internally — callers need not pre-size
+ * it (`putImageData` writes at (0,0) and clips to the drawing buffer, so a
+ * default 300x150 canvas would otherwise show only the RT's top-left corner).
  *
  * Supports both `HTMLCanvasElement` (main-thread DOM) and `OffscreenCanvas`
  * (Worker context) — both expose `getContext('2d')` and `putImageData`.
@@ -74,6 +74,14 @@ export async function renderRtToCanvas(
   // (ImageData rejects SharedArrayBuffer backings from shared-memory types).
   const clamped = new Uint8ClampedArray(pixels);
   const imageData = new ImageData(clamped, width, height);
+
+  // Size the canvas drawing buffer to the RT dimensions BEFORE putImageData.
+  // putImageData ignores CSS size and writes into the drawing buffer at (0,0),
+  // clipping anything beyond it — a default 300x150 canvas would show only the
+  // top-left corner of a larger RT (the "content in a corner + black border"
+  // symptom). Mirrors paintDepthGrayscale / paintColorPixels, which self-size.
+  canvas.width = width;
+  canvas.height = height;
 
   // Render onto the canvas via 2d context.
   // Both HTMLCanvasElement and OffscreenCanvas expose getContext('2d').

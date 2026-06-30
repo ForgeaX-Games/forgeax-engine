@@ -2,7 +2,7 @@
 //
 // Byte-identical migration baseline for the 5 ECS IIFE script literals
 // (entities / components / systems / resources / world). Captured from the
-// `@forgeax/engine-console/src/inspect-scripts.ts` file at git commit
+// `@forgeax/engine-remote/src/inspect-scripts.ts` file at git commit
 // 2439e0f0 (one commit before deletion in feat-20260517 w17). Lines and
 // whitespace are preserved exactly as they appeared in the legacy
 // `buildScriptByName(...)` helper output (cosmetic variable rename in the
@@ -11,7 +11,7 @@
 // fixture verbatim under a normalized-newline diff).
 //
 // Historic `packsScript` (asset GUID lookup) is **not** carried over: that
-// concern moves to the `forgeax-engine-console-asset` plugin bin in
+// concern moves to the `forgeax-engine-remote-asset` plugin bin in
 // `@forgeax/engine-pack` (existing since 2026-05-14). The 5 ECS scripts
 // below are the only segments locked by `cli-ecs-scripts.test.ts`.
 

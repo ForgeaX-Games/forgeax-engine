@@ -423,6 +423,40 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
 
+  apps/hello/custom-importer:
+    dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../../../packages/ecs
+      '@forgeax/engine-pack':
+        specifier: workspace:^
+        version: link:../../../packages/pack
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../../../packages/types
+    devDependencies:
+      '@forgeax/engine-vite-plugin-pack':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-pack
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-shader
+      '@webgpu/types':
+        specifier: ^0.1.70
+        version: 0.1.70
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
+
   apps/hello/custom-shader:
     dependencies:
       '@forgeax/engine-ecs':
@@ -1311,37 +1345,6 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
 
-  apps/inspector-demo:
-    dependencies:
-      '@forgeax/engine-console':
-        specifier: workspace:*
-        version: link:../../packages/console
-      '@forgeax/engine-ecs':
-        specifier: workspace:*
-        version: link:../../packages/ecs
-      '@forgeax/engine-gltf':
-        specifier: workspace:*
-        version: link:../../packages/gltf
-      '@forgeax/engine-math':
-        specifier: workspace:*
-        version: link:../../packages/math
-      '@forgeax/engine-pack':
-        specifier: workspace:*
-        version: link:../../packages/pack
-      '@forgeax/engine-runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
-    devDependencies:
-      '@forgeax/engine-vite-plugin-shader':
-        specifier: workspace:*
-        version: link:../../packages/vite-plugin-shader
-      '@webgpu/types':
-        specifier: ^0.1.70
-        version: 0.1.70
-      vite:
-        specifier: 8.0.10
-        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
-
   apps/learn-render/1.getting-started/1.hello-window:
     dependencies:
       '@forgeax/engine-ecs':
@@ -1924,9 +1927,6 @@ importers:
       '@forgeax/engine-app':
         specifier: workspace:*
         version: link:../../../../packages/app
-      '@forgeax/engine-console':
-        specifier: workspace:*
-        version: link:../../../../packages/console
       '@forgeax/engine-ecs':
         specifier: workspace:*
         version: link:../../../../packages/ecs
@@ -1942,6 +1942,9 @@ importers:
       '@forgeax/engine-pack':
         specifier: workspace:*
         version: link:../../../../packages/pack
+      '@forgeax/engine-remote':
+        specifier: workspace:*
+        version: link:../../../../packages/remote
       '@forgeax/engine-rhi-debug':
         specifier: workspace:*
         version: link:../../../../packages/rhi-debug
@@ -3056,6 +3059,40 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
 
+  apps/remote-demo:
+    dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../packages/app
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../../packages/ecs
+      '@forgeax/engine-gltf':
+        specifier: workspace:*
+        version: link:../../packages/gltf
+      '@forgeax/engine-math':
+        specifier: workspace:*
+        version: link:../../packages/math
+      '@forgeax/engine-pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
+      '@forgeax/engine-remote':
+        specifier: workspace:*
+        version: link:../../packages/remote
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+    devDependencies:
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../../packages/vite-plugin-shader
+      '@webgpu/types':
+        specifier: ^0.1.70
+        version: 0.1.70
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+
   apps/rhi-debug-viewer:
     dependencies:
       '@forgeax/engine-rhi':
@@ -3239,6 +3276,9 @@ importers:
         specifier: workspace:*
         version: link:../types
     devDependencies:
+      '@forgeax/engine-remote':
+        specifier: workspace:*
+        version: link:../remote
       '@forgeax/engine-rhi-debug':
         specifier: workspace:*
         version: link:../rhi-debug
@@ -3285,22 +3325,6 @@ importers:
       '@forgeax/engine-import':
         specifier: workspace:*
         version: link:../import
-
-  packages/console:
-    dependencies:
-      '@forgeax/engine-types':
-        specifier: workspace:*
-        version: link:../types
-      ws:
-        specifier: ^8.20.0
-        version: 8.20.0
-    devDependencies:
-      '@types/node':
-        specifier: ^20.14.0
-        version: 20.19.40
-      '@types/ws':
-        specifier: ^8.5.10
-        version: 8.18.1
 
   packages/debug-draw:
     dependencies:
@@ -3373,12 +3397,12 @@ importers:
         specifier: 1.2.4
         version: 1.2.4
     devDependencies:
-      '@forgeax/engine-console':
-        specifier: workspace:*
-        version: link:../console
       '@forgeax/engine-import':
         specifier: workspace:*
         version: link:../import
+      '@forgeax/engine-remote':
+        specifier: workspace:*
+        version: link:../remote
       '@types/node':
         specifier: ^20.14.0
         version: 20.19.40
@@ -3574,6 +3598,22 @@ importers:
       '@forgeax/engine-ecs':
         specifier: workspace:*
         version: link:../ecs
+
+  packages/remote:
+    dependencies:
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../types
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.40
+      '@types/ws':
+        specifier: ^8.5.10
+        version: 8.18.1
 
   packages/render-graph:
     dependencies:

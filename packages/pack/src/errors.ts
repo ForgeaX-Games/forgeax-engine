@@ -1,7 +1,7 @@
 // errors.ts — PackError class (feat-20260513-guid-asset-package-system w15)
 //
 // Four-field surface: .code / .expected / .hint / .detail
-// Structurally parallel to AssetError / RhiError / InspectorError
+// Structurally parallel to AssetError / RhiError / RemoteError
 // (charter proposition 5 consistent abstraction).
 //
 // .detail is narrowed per .code via PackErrorDetail discriminated union

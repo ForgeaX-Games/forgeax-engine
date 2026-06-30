@@ -625,22 +625,16 @@ world.spawn(
 - **AC-15 source-level** — `createRenderer.ts` 用 `globalThis.navigator` 而非 raw `navigator`；从不触碰 `window` / `document`。
 - **AC-06 grep 闸门** — `packages/engine/src/internal/webgpu-backend.ts` 不再含 raw WebGPU 全局入口调用（M3 重构后改走 `RhiDevice` 接口）。
 
-## Inspector contribution
+## Remote eval
 
-`registerRuntimeInspector(reg, engine)` is a top-level pure function that wires runtime-specific JSON-RPC inspection methods onto a `Registry` instance from `@forgeax/engine-console`. P0 surface: a single `renderer.info` method exposing `{ backend }` so AI users can `forgeax inspect renderer.info` without holding a Renderer reference. Importing `@forgeax/engine-runtime` does **not** call `reg.register*` — registration only fires on explicit invocation (AC-10 zero import-time side effect).
+Runtime introspection routes through `@forgeax/engine-remote`'s single `eval` channel. The `createApp` entry point wires `app.remote` by default in dev mode (port 5732); the eval scope carries `renderer` as a live root along with `world`, `assets`, and `debugAdapter`. The renderer backend tag is accessible via `renderer.backend` inside eval:
 
 ```ts
-// host main.ts assembly (plan-strategy §3.3 success path)
-import { Registry, startConsoleServer, wireDefaultInspectors } from '@forgeax/engine-console';
-import { registerRuntimeInspector } from '@forgeax/engine-runtime';
-
-const reg = new Registry();
-const r = registerRuntimeInspector(reg, renderer);
-if (!r.ok) { console.error(r.error); process.exit(1); }
-await startConsoleServer({ port: 5732, registry: reg });
+// Inside eval scope:
+const backend = renderer.backend; // 'webgpu'
 ```
 
-Same-name duplicate fails fast on the first conflict and returns `Result.err(InspectorError, code: 'console-startup-failed')`. Reuse across reloads requires a fresh `new Registry()`.
+No `registerRuntimeInspector`, Registry, or `wireDefaultInspectors` assembly is needed — `createApp` auto-wires the server in dev mode. See [`@forgeax/engine-remote` README](../remote/README.md) for the full eval API, live roots, and security model.
 
 ## 与上游包的关系
 

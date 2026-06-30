@@ -58,7 +58,7 @@ const app = await createApp(canvas, {}, bundler);
 | `CreateAppOptions.plugins` | `Plugin[] \| undefined` | Single entry for capability wiring — add `physicsPlugin('rapier-3d')` / `audioPlugin()` / custom plugins here. The canvas form auto-loads the 5-plugin default set (transform / time / animation / state / input) which merges with user-provided plugins |
 | `App.renderer` | `Renderer` readonly | Reference equality with the assemble input |
 | `App.world` | `World` readonly | Reference equality with the assemble input |
-| `App.pluginRegistry` | `Map<string, Plugin>` readonly | Plugin registry produced by `runPlugins()` — pass to `wireDefaultInspectors` context for inspector `plugins` RPC method |
+| `App.pluginRegistry` | `Map<string, Plugin>` readonly | Plugin registry produced by `runPlugins()` — accessible via eval scope (`world.getResource(...)`) for runtime introspection |
 | `App.input` | `InputBackend \| undefined` readonly | `InputSnapshot` producer when input plugin was loaded (input is in the default canvas set); `undefined` in assemble form without explicit `inputPlugin()` |
 | `App.start()` | `() => Result<void, AppError>` | Begin rAF scheduling. Idempotent state machine: second call returns `'app-already-running'` |
 | `App.stop()` | `() => Result<void, AppError>` | Cancel rAF; trigger triple-funnel cleanup (input detach + removeSystem + device-lost unsubscribe). Returns `'app-not-started'` when called from idle state, `'app-paused-while-stop'` when called from paused state |
@@ -213,7 +213,7 @@ Not subscribing by default is a deliberate charter P3 boundary (host self-decide
 | OOS-5 | gamepad / touch / hot-reload input | Tracked in `@forgeax/engine-input` OOS-1 |
 | OOS-6 | Migrate existing 13 hosts | Each host migrates as a separate small feat once the API stabilises |
 | OOS-7 | `App` ECS Component | `App` identifier reserved; AC-12 grep gate enforces |
-| OOS-8 | `engine-console` integration | Inspector roots exposed by host directly via `wireDefaultInspectors` |
+| OOS-8 | `engine-remote` integration | Remote eval wired by `createApp` in dev mode (`app.remote`); see [`@forgeax/engine-remote` README](../remote/README.md) |
 | OOS-9 | RhiCanvasContext direct configure | `createApp(canvas)` thin wrapper handles WebGPU canvas-context configure internally |
 
 ## Host-engine contract

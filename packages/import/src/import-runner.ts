@@ -38,6 +38,35 @@ import { packMeshBin } from './mesh-bin.js';
 export const SHADER_RESERVED_IMPORTER_KEY = 'shader';
 
 /**
+ * Classify an importer throw as a build-time module-LOAD failure (the importer
+ * module / native addon could not be imported) vs a conversion THROW (the
+ * loaded importer ran and threw). feat-20260629 D-5: both keep the
+ * `import-internal-error` code, but a load failure surfaces `.detail.loadError`
+ * so AI users distinguish "my importer is not loadable / not built" from "my
+ * importer ran and crashed" without parsing `.message`.
+ *
+ * Node signals a module-load failure via `err.code` (`MODULE_NOT_FOUND` for
+ * CJS `require`, `ERR_MODULE_NOT_FOUND` for ESM `import()`, `ERR_DLOPEN_FAILED`
+ * for a broken native `.node` addon) or a recognizable message. Native FBX-style
+ * bindings throw a plain Error whose message names the missing addon.
+ */
+function isModuleLoadFailure(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  const code = (e as { code?: unknown }).code;
+  if (
+    code === 'MODULE_NOT_FOUND' ||
+    code === 'ERR_MODULE_NOT_FOUND' ||
+    code === 'ERR_DLOPEN_FAILED'
+  ) {
+    return true;
+  }
+  const msg = e.message;
+  return (
+    msg.includes('Cannot find module') || msg.includes('native addon') || msg.includes('.node')
+  );
+}
+
+/**
  * bug-20260610-pack-typed-array-roundtrip: normalise a value tree so every
  * typed-array becomes a plain `number[]`. The DDC pack is serialised via
  * `JSON.stringify`; left as-is, a `Float32Array` round-trips to an indexed
@@ -289,12 +318,26 @@ export async function runImport(
   try {
     produced = await importer.import(ctx);
   } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    // D-5: a module-LOAD failure rides `.detail.loadError`; a conversion THROW
+    // rides `.detail.reason`. Same `import-internal-error` code (no new closed
+    // union member); AI users branch on the `.detail` shape.
+    if (isModuleLoadFailure(e)) {
+      return errResult(
+        new ImportError({
+          code: 'import-internal-error',
+          expected: `importer module "${meta.importer}" to load (module + native addon present)`,
+          hint: IMPORT_ERROR_HINTS['import-internal-error'],
+          detail: { loadError: message },
+        }),
+      );
+    }
     return errResult(
       new ImportError({
         code: 'import-internal-error',
         expected: `importer "${meta.importer}" to convert the source without throwing`,
         hint: IMPORT_ERROR_HINTS['import-internal-error'],
-        detail: { reason: e instanceof Error ? e.message : String(e) },
+        detail: { reason: message },
       }),
     );
   }

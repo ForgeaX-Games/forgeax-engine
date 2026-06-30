@@ -171,7 +171,7 @@ const V1_WHITELIST = new Set([
         expect(codes.includes('additionalProperties') || codes.includes('required')).toBe(true);
       });
 
-      it('(c) rejects unknown subAssets[].kind outside the closed enum', () => {
+      it('(c) accepts unknown subAssets[].kind since schema is now open-string (feat-20260629 D-1)', () => {
         const unknownKind = {
           ...VALID_HELLO_GLTF_META,
           subAssets: [
@@ -179,12 +179,10 @@ const V1_WHITELIST = new Set([
           ],
         };
         const valid = validateMeta(unknownKind);
-        expect(valid).toBe(false);
-        const keywords = (validateMeta.errors ?? []).map((e) => e.keyword);
-        expect(keywords).toContain('enum');
+        expect(valid).toBe(true);
       });
 
-      it('(d) accepts the closed enum members all three: mesh, material, scene', () => {
+      it('(d) accepts the formerly-closed-enum kind values: mesh, material, scene', () => {
         for (const kind of ['mesh', 'material', 'scene'] as const) {
           const meta = {
             ...VALID_HELLO_GLTF_META,
@@ -971,7 +969,7 @@ const V1_WHITELIST = new Set([
         const err = new PackError({
           code: 'pack-meta-missing',
           expected: 'every source file must have a corresponding .meta.json in strict mode',
-          hint: 'run forgeax-engine-console-asset scan --roots to list files without .meta.json',
+          hint: 'run forgeax-engine-remote-asset scan --roots to list files without .meta.json',
           detail,
         });
         expect(err.code).toBe('pack-meta-missing' satisfies PackErrorCode);
@@ -989,7 +987,7 @@ const V1_WHITELIST = new Set([
         const err = new PackError({
           code: 'pack-guid-collision',
           expected: 'every GUID must be unique across all .pack.json files in the scan roots',
-          hint: 'run forgeax-engine-console-asset verify to list all GUID collisions',
+          hint: 'run forgeax-engine-remote-asset verify to list all GUID collisions',
           detail,
         });
         expect(err.code).toBe('pack-guid-collision' satisfies PackErrorCode);
@@ -1010,7 +1008,7 @@ const V1_WHITELIST = new Set([
         const err = new PackError({
           code: 'pack-cyclic-reference',
           expected: 'asset reference graph must be acyclic',
-          hint: 'run forgeax-engine-console-asset verify to list the cycle path',
+          hint: 'run forgeax-engine-remote-asset verify to list the cycle path',
           detail,
         });
         expect(err.code).toBe('pack-cyclic-reference' satisfies PackErrorCode);
@@ -1766,7 +1764,9 @@ const V1_WHITELIST = new Set([
       importer: 'image',
       source: 'test.png',
       importSettings: {},
-      subAssets: [{ guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'image' }],
+      subAssets: [
+        { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'texture' },
+      ],
       ...overrides,
     });
   }
@@ -1837,7 +1837,7 @@ const V1_WHITELIST = new Set([
         source: '@shared/shared.png',
         importSettings: {},
         subAssets: [
-          { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'image' },
+          { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'texture' },
         ],
       });
       await writeFile(join(tmpDir, 'ref.meta.json'), metaContent);
@@ -1866,7 +1866,7 @@ const V1_WHITELIST = new Set([
         source: '@shared/missing.png',
         importSettings: {},
         subAssets: [
-          { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'image' },
+          { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'texture' },
         ],
       });
       await writeFile(join(tmpDir, 'ref.meta.json'), metaContent);
@@ -1934,7 +1934,7 @@ const V1_WHITELIST = new Set([
           source: '@shared/cross.png',
           importSettings: {},
           subAssets: [
-            { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'image' },
+            { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'texture' },
           ],
         }),
       );
@@ -1959,7 +1959,7 @@ const V1_WHITELIST = new Set([
           source: '@nope/x.png',
           importSettings: {},
           subAssets: [
-            { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'image' },
+            { guid: 'aaaaaaaa-bbbb-4000-8000-000000000001', sourceIndex: 0, kind: 'texture' },
           ],
         }),
       );

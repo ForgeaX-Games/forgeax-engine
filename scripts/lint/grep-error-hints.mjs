@@ -45,14 +45,14 @@ for (const code of ['pack-meta-missing', 'pack-guid-collision', 'pack-cyclic-ref
     failures.push(`(a) PACK_ERROR_HINTS missing key "${code}"`);
     continue;
   }
-  if (!/forgeax-engine-console-asset\s/.test(h)) {
+  if (!/forgeax-engine-remote-asset\s/.test(h)) {
     failures.push(
-      `(a) PACK_ERROR_HINTS["${code}"] does not reference \`forgeax-engine-console-asset\` binary; got: ${h}`,
+      `(a) PACK_ERROR_HINTS["${code}"] does not reference \`forgeax-engine-remote-asset\` binary; got: ${h}`,
     );
   }
-  if (h.includes('forgeax-engine-console asset ')) {
+  if (h.includes('forgeax-engine-remote asset ')) {
     failures.push(
-      `(a) PACK_ERROR_HINTS["${code}"] still references the deleted subcommand form \`forgeax-engine-console asset \`; got: ${h}`,
+      `(a) PACK_ERROR_HINTS["${code}"] still references the deleted subcommand form \`forgeax-engine-remote asset \`; got: ${h}`,
     );
   }
 }
@@ -64,23 +64,23 @@ for (const code of ['gltf-malformed-header', 'gltf-meta-missing']) {
     failures.push(`(b) GLTF_ERROR_HINTS missing key "${code}"`);
     continue;
   }
-  if (!/forgeax-engine-console-gltf\s/.test(h)) {
+  if (!/forgeax-engine-remote-gltf\s/.test(h)) {
     failures.push(
-      `(b) GLTF_ERROR_HINTS["${code}"] does not reference \`forgeax-engine-console-gltf\` binary; got: ${h}`,
+      `(b) GLTF_ERROR_HINTS["${code}"] does not reference \`forgeax-engine-remote-gltf\` binary; got: ${h}`,
     );
   }
-  if (h.includes('forgeax-engine-console gltf ')) {
+  if (h.includes('forgeax-engine-remote gltf ')) {
     failures.push(
-      `(b) GLTF_ERROR_HINTS["${code}"] still references the deleted subcommand form \`forgeax-engine-console gltf \`; got: ${h}`,
+      `(b) GLTF_ERROR_HINTS["${code}"] still references the deleted subcommand form \`forgeax-engine-remote gltf \`; got: ${h}`,
     );
   }
 }
 
 // (c1-c3) types/index.ts grep gate complement (zero hits for deleted subcommand forms).
 for (const tok of [
-  'forgeax-engine-console asset ',
-  'forgeax-engine-console gltf ',
-  'forgeax-engine-console inspect',
+  'forgeax-engine-remote asset ',
+  'forgeax-engine-remote gltf ',
+  'forgeax-engine-remote inspect',
 ]) {
   if (src.includes(tok)) {
     failures.push(`(c) types/index.ts still contains deleted token "${tok}"`);
@@ -88,21 +88,21 @@ for (const tok of [
 }
 
 // (d) console-startup-failed inspect-routing hint template surfaces binary form.
-if (!/did you mean 'forgeax-engine-console-ecs\s+\$\{[^}]*\}'/.test(src)) {
+if (!/did you mean 'forgeax-engine-remote-ecs\s+\$\{[^}]*\}'/.test(src)) {
   failures.push(
-    `(d) types/index.ts is missing the "did you mean 'forgeax-engine-console-ecs ...'" hint template`,
+    `(d) types/index.ts is missing the "did you mean 'forgeax-engine-remote-ecs ...'" hint template`,
   );
 }
 
-// (e) InspectorErrorDetail console-startup-failed variant declares removedAt + docAnchor.
-if (!/console-startup-failed[\s\S]{0,400}?removedAt/.test(src)) {
+// (e) RemoteErrorDetail server-startup-failed variant declares removedAt + docAnchor.
+if (!/server-startup-failed[\s\S]{0,400}?removedAt/.test(src)) {
   failures.push(
-    `(e) types/index.ts InspectorErrorDetail console-startup-failed variant missing removedAt sub-field`,
+    `(e) types/index.ts RemoteErrorDetail server-startup-failed variant missing removedAt sub-field`,
   );
 }
-if (!/console-startup-failed[\s\S]{0,400}?docAnchor/.test(src)) {
+if (!/server-startup-failed[\s\S]{0,400}?docAnchor/.test(src)) {
   failures.push(
-    `(e) types/index.ts InspectorErrorDetail console-startup-failed variant missing docAnchor sub-field`,
+    `(e) types/index.ts RemoteErrorDetail server-startup-failed variant missing docAnchor sub-field`,
   );
 }
 
@@ -120,23 +120,23 @@ for (const [name, hints] of [
   }
 }
 
-// (g) InspectorErrorCode closed union still surfaces all 6 members in source.
-const inspectorCodes = [
+// (g) RemoteErrorCode closed union still surfaces all 4 members in source
+// (feat-20260629-inspector-two-layer-model: script-timeout + inspector-write-denied
+// deleted with route-B eval + sandbox dismantling; console-* renamed server-*).
+const remoteCodes = [
   "'script-syntax-error'",
   "'script-runtime-error'",
-  "'script-timeout'",
-  "'inspector-write-denied'",
-  "'console-startup-failed'",
-  "'console-not-running'",
+  "'server-startup-failed'",
+  "'server-not-running'",
 ];
-for (const code of inspectorCodes) {
+for (const code of remoteCodes) {
   if (!src.includes(code)) {
-    failures.push(`(g) types/index.ts is missing InspectorErrorCode member ${code}`);
+    failures.push(`(g) types/index.ts is missing RemoteErrorCode member ${code}`);
   }
 }
 
 if (failures.length === 0) {
-  console.log('grep-error-hints: pass (PACK + GLTF binary-form hints + 6 inspector members)');
+  console.log('grep-error-hints: pass (PACK + GLTF binary-form hints + 4 remote members)');
   process.exit(0);
 } else {
   console.error('grep-error-hints: FAIL');

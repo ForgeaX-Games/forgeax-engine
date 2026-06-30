@@ -54,7 +54,7 @@ export interface EmittedSubAsset {
  *  2. On hit -- reuses the existing GUID byte-for-byte.
  *  3. On miss -- mints a fresh UUIDv7 via `AssetGuid.random()`.
  *
- * Image disk schema currently emits a single `kind='image'` sub-asset per
+ * Image disk schema currently emits a single `kind='texture'` sub-asset per
  * source (cubemap face / array layer reserved for future feat); the
  * algorithm scales to multi-sub-asset sources without modification (charter
  * P5 consistent abstraction).
@@ -68,7 +68,7 @@ export function reimportReuseMeta(
 ): readonly EmittedSubAsset[] {
   // Image disk schema is single-sub-asset; the future multi-asset path
   // iterates a producer-side list of sub-asset keys instead of a single one.
-  const freshKeys: readonly SubAssetKey[] = [subAssetKey({ kind: 'image', sourceIndex: 0 })];
+  const freshKeys: readonly SubAssetKey[] = [subAssetKey({ kind: 'texture', sourceIndex: 0 })];
 
   const out: EmittedSubAsset[] = [];
 

@@ -9,7 +9,12 @@ export {
   type RhiCapsRecordedKey,
 } from './errors';
 export { pixelDeltaAbsMean } from './pixel-diff';
-export { readbackTexturePixels } from './readback';
+export {
+  type ResolvedTextureDescriptor,
+  readbackTexturePixels,
+  resolveAttachmentSize,
+  resolveTextureDescriptor,
+} from './readback';
 export {
   type CreateShaderModuleFn,
   type DebugRhiInstance,
@@ -33,14 +38,45 @@ export {
 // Import from '@forgeax/engine-rhi-debug/inspector' for inspector APIs.
 export type { Replay } from './replayer';
 export { createReplay, replayInitialData } from './replayer';
-export type { DebugRhiAdapter } from './rpc-bridge';
-export { wireDebugRhiInspector } from './rpc-bridge';
+// w10: DebugRhiAdapter type inlined here (was in rpc-bridge.ts, which is deleted).
+// wireDebugRhiInspector deleted alongside routing layer removal.
+
+/**
+ * DebugRhiAdapter shape (w10: inlined from deleted rpc-bridge.ts).
+ * Three RPC surfaces: captureFrames / inspectAt / replayDispose.
+ */
+export interface DebugRhiAdapter {
+  captureFrames(
+    frames: number,
+    label?: string,
+  ): Promise<{
+    readonly tapes: Array<{
+      readonly frameIdx: number;
+      readonly runId: string;
+      readonly tapePath: string;
+      readonly reportPath: string;
+    }>;
+  }>;
+  inspectAt(
+    tapePath: string,
+    drawIdx: number,
+    fields?: readonly ('bindings' | 'drawCall' | 'rt')[],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ): Promise<Record<string, unknown>>;
+  replayDispose(tapePath: string): Promise<{ readonly ok: boolean }>;
+}
 export type { PassOffset } from './tape-format';
 export {
   computePassOffsets,
   deserializeTape,
   serializeTape,
 } from './tape-format';
+export {
+  bytesPerTexel,
+  type ChannelType,
+  type FormatInfo,
+  formatInfo,
+} from './texel-layout';
 export type {
   HandleId,
   InspectBindingEntry,

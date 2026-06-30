@@ -71,6 +71,85 @@ const TEXEL_BYTES: Partial<Record<GPUTextureFormat, number>> = {
   rg11b10ufloat: 4,
 };
 
+// ============================================================================
+// formatInfo -- per-channel semantics for CPU-side decode (viewer preview)
+// ============================================================================
+
+/** How a channel's bits are interpreted (drives the host-side decode-to-RGBA8). */
+export type ChannelType = 'unorm' | 'snorm' | 'uint' | 'sint' | 'float' | 'ufloat';
+
+/**
+ * Per-channel layout of an uncompressed color format, enough to decode its raw
+ * GPU bytes into displayable RGBA8 on the host (no GPU). Sits beside
+ * {@link bytesPerTexel} (which stays the SSOT for total texel size); the
+ * per-channel byte width is derived as `bytesPerTexel / channels` for plain
+ * formats, so no byte count is re-stored here. `packed` formats pack all
+ * channels into a single 4-byte word (channels read by bit-field, not by a
+ * uniform per-channel width).
+ */
+export interface FormatInfo {
+  readonly channels: 1 | 2 | 3 | 4;
+  readonly channelType: ChannelType;
+  /** Channels stored blue-first in memory (swizzle B<->R when decoding). */
+  readonly bgra?: boolean;
+  /** Bit-packed layout (channels share one 32-bit word) needing special unpack. */
+  readonly packed?: 'rgb10a2unorm' | 'rg11b10ufloat';
+}
+
+// Keyed to the same uncompressed color formats as TEXEL_BYTES. Depth/stencil and
+// block-compressed formats are absent (return undefined -> caller falls back).
+const FORMAT_INFO: Partial<Record<GPUTextureFormat, FormatInfo>> = {
+  // 8-bit channels
+  r8unorm: { channels: 1, channelType: 'unorm' },
+  r8snorm: { channels: 1, channelType: 'snorm' },
+  r8uint: { channels: 1, channelType: 'uint' },
+  r8sint: { channels: 1, channelType: 'sint' },
+  rg8unorm: { channels: 2, channelType: 'unorm' },
+  rg8snorm: { channels: 2, channelType: 'snorm' },
+  rg8uint: { channels: 2, channelType: 'uint' },
+  rg8sint: { channels: 2, channelType: 'sint' },
+  rgba8unorm: { channels: 4, channelType: 'unorm' },
+  'rgba8unorm-srgb': { channels: 4, channelType: 'unorm' },
+  rgba8snorm: { channels: 4, channelType: 'snorm' },
+  rgba8uint: { channels: 4, channelType: 'uint' },
+  rgba8sint: { channels: 4, channelType: 'sint' },
+  bgra8unorm: { channels: 4, channelType: 'unorm', bgra: true },
+  'bgra8unorm-srgb': { channels: 4, channelType: 'unorm', bgra: true },
+  // 16-bit channels
+  r16uint: { channels: 1, channelType: 'uint' },
+  r16sint: { channels: 1, channelType: 'sint' },
+  r16float: { channels: 1, channelType: 'float' },
+  rg16uint: { channels: 2, channelType: 'uint' },
+  rg16sint: { channels: 2, channelType: 'sint' },
+  rg16float: { channels: 2, channelType: 'float' },
+  rgba16uint: { channels: 4, channelType: 'uint' },
+  rgba16sint: { channels: 4, channelType: 'sint' },
+  rgba16float: { channels: 4, channelType: 'float' },
+  // 32-bit channels
+  r32uint: { channels: 1, channelType: 'uint' },
+  r32sint: { channels: 1, channelType: 'sint' },
+  r32float: { channels: 1, channelType: 'float' },
+  rg32uint: { channels: 2, channelType: 'uint' },
+  rg32sint: { channels: 2, channelType: 'sint' },
+  rg32float: { channels: 2, channelType: 'float' },
+  rgba32uint: { channels: 4, channelType: 'uint' },
+  rgba32sint: { channels: 4, channelType: 'sint' },
+  rgba32float: { channels: 4, channelType: 'float' },
+  // packed (channels share one 32-bit word; decoded by bit-field)
+  rgb10a2unorm: { channels: 4, channelType: 'unorm', packed: 'rgb10a2unorm' },
+  rg11b10ufloat: { channels: 3, channelType: 'ufloat', packed: 'rg11b10ufloat' },
+};
+
+/**
+ * Per-channel layout of an uncompressed color format for host-side decode.
+ * Returns `undefined` for depth/stencil, block-compressed, or unknown formats
+ * (the viewer's preview path treats `undefined` as "not directly previewable").
+ */
+export function formatInfo(format: GPUTextureFormat | string | undefined): FormatInfo | undefined {
+  if (format === undefined) return undefined;
+  return FORMAT_INFO[format as GPUTextureFormat];
+}
+
 /** One mip level of one array layer: its extent + where its tight bytes live in the blob. */
 export interface SubresourceSlice {
   readonly layer: number;

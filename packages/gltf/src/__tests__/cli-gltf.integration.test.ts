@@ -1,6 +1,6 @@
 // packages/gltf/src/__tests__/cli-gltf.integration.test.ts
 //
-// Integration test: run `forgeax-engine-console-gltf import` against real
+// Integration test: run `forgeax-engine-remote-gltf import` against real
 // glTF files and verify the written .meta.json sidecar contains texture
 // sub-assets (feat-20260608 M6 w29 AC-18).
 //

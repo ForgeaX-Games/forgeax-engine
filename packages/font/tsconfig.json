@@ -14,7 +14,7 @@
   "references": [
     { "path": "../types" },
     { "path": "../pack" },
-    { "path": "../console" },
+    { "path": "../remote" },
     { "path": "../import" }
   ]
 }

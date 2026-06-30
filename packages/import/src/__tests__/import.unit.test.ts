@@ -170,7 +170,7 @@ function stubImporter(key: string): Importer {
           key: 'image',
           import: () => {
             invoked = 'image';
-            return [{ guid: GUID_A, kind: 'image', payload: MESH_POD, refs: [] }];
+            return [{ guid: GUID_A, kind: 'texture', payload: MESH_POD, refs: [] }];
           },
         });
         await runImport(meta('image', [GUID_A]), reg, okFs());

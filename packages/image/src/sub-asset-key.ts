@@ -8,13 +8,13 @@
  * split + AC-14 cross-feat alignment).
  *
  * The image disk schema is currently single-sub-asset; this file collapses
- * to `kind='image'` + `indexFallback='images/0'` so the same matching
+ * to `kind='texture'` + `indexFallback='textures/0'` so the same matching
  * algorithm is reusable when the future cubemap / array-layer feat lands
  * (plan-strategy R5 free-form schema).
  */
 
 export interface SubAssetKey {
-  /** Discriminator literal -- 'image' for engine-image; 'mesh' / 'material' / 'scene' / 'image' for gltf-loader. */
+  /** Discriminator literal -- 'texture' for engine-image; 'mesh' / 'material' / 'scene' / 'image' for gltf-loader. */
   readonly kind: string;
   /** Optional human-readable name field; absent when the source has no symbolic identifier. */
   readonly name?: string;

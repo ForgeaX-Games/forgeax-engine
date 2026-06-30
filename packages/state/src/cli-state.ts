@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// @forgeax/engine-state/src/cli-state - forgeax-engine-console-state plugin bin
+// @forgeax/engine-state/src/cli-state - forgeax-engine-remote-state plugin bin
 // (feat-20260616-engine-state-and-state-scoped-entities M6 / m6w2).
 //
 // Two subcommands:
@@ -7,7 +7,7 @@
 //   state get <name> — calls getState and prints the variant string
 //
 // Discovery: kubectl 4th-path. The base bin `forgeax-engine-console` finds
-// this binary on PATH via the `forgeax-engine-console-` prefix scan and
+// this binary on PATH via the `forgeax-engine-remote-` prefix scan and
 // forwards stdio + exit code (see packages/console/src/discoverPlugins.ts).
 //
 // The `connect` field in DispatchOptions is optional — this CLI plugin reads
@@ -42,10 +42,10 @@ export interface DispatchOptions {
 
 function helpBody(): string {
   return [
-    'forgeax-engine-console-state - inspect forgeax state machines',
+    'forgeax-engine-remote-state - inspect forgeax state machines',
     '',
     'Usage:',
-    '  forgeax-engine-console-state <subcommand> [args]',
+    '  forgeax-engine-remote-state <subcommand> [args]',
     '',
     'Subcommands:',
     '  list           list all registered tokens: name, current, previous, default, variants',
@@ -55,8 +55,8 @@ function helpBody(): string {
     '  --help, -h     show this help and exit 0',
     '',
     'Examples:',
-    '  forgeax-engine-console-state list',
-    '  forgeax-engine-console-state get LevelId',
+    '  forgeax-engine-remote-state list',
+    '  forgeax-engine-remote-state get LevelId',
     '',
   ].join('\n');
 }
@@ -64,31 +64,31 @@ function helpBody(): string {
 function subcommandHelp(subcommand: string): string {
   if (subcommand === 'list') {
     return [
-      'forgeax-engine-console-state list - list all registered state tokens',
+      'forgeax-engine-remote-state list - list all registered state tokens',
       '',
       'Usage:',
-      '  forgeax-engine-console-state list',
+      '  forgeax-engine-remote-state list',
       '',
       'Output format: one line per token:',
       '  <tokenName>: <current> (previous: <previous>, default: <default>, variants: <v1>, <v2>, ...)',
       '',
       'Examples:',
-      '  forgeax-engine-console-state list',
+      '  forgeax-engine-remote-state list',
       '',
     ].join('\n');
   }
   if (subcommand === 'get') {
     return [
-      'forgeax-engine-console-state get - inspect one state token',
+      'forgeax-engine-remote-state get - inspect one state token',
       '',
       'Usage:',
-      '  forgeax-engine-console-state get <tokenName>',
+      '  forgeax-engine-remote-state get <tokenName>',
       '',
       'Output: current / previous / default variant, the full variants list,',
       'and the count of ScopedTo entities currently scoped to each variant.',
       '',
       'Examples:',
-      '  forgeax-engine-console-state get LevelId',
+      '  forgeax-engine-remote-state get LevelId',
       '  #   current:  main-menu',
       '  #   previous: main-menu',
       '  #   default:  main-menu',
@@ -130,7 +130,7 @@ function runGet(
       [
         `forgeax: unknown state token "${tokenName}"`,
         `  expected: one of ${[...tokens.keys()].map((k) => `"${k}"`).join(', ') || '(none registered)'}`,
-        "  hint:     use 'forgeax-engine-console-state list' to see registered tokens",
+        "  hint:     use 'forgeax-engine-remote-state list' to see registered tokens",
       ].join('\n'),
     );
     return 1;
@@ -212,8 +212,8 @@ export async function dispatch(opts: DispatchOptions): Promise<number> {
       stderrWrite(
         [
           'forgeax: state get requires a <tokenName> positional argument',
-          '  expected: forgeax-engine-console-state get <tokenName>',
-          "  hint:     use 'forgeax-engine-console-state list' to see registered tokens",
+          '  expected: forgeax-engine-remote-state get <tokenName>',
+          "  hint:     use 'forgeax-engine-remote-state list' to see registered tokens",
         ].join('\n'),
       );
       return 1;
@@ -225,7 +225,7 @@ export async function dispatch(opts: DispatchOptions): Promise<number> {
     [
       `forgeax: unknown subcommand "${subcommand}"`,
       '  expected: list or get',
-      "  hint:     run 'forgeax-engine-console-state --help' for usage",
+      "  hint:     run 'forgeax-engine-remote-state --help' for usage",
     ].join('\n'),
   );
   return 1;

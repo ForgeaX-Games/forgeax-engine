@@ -340,7 +340,7 @@ export { defineSystem, getRegisteredSystems } from './schedule';
 
 /**
  * Type alias for the `fn` field of `SystemDescriptor`. Lets typed console
- * sugar (`@forgeax/engine-console/defineSugar` / `injectSystem`) reference
+ * sugar (`@forgeax/engine-remote/defineSugar` / `injectSystem`) reference
  * the system function shape without the verbose
  * `SystemDescriptor<Qs>['fn']` indexed-access form.
  *
@@ -528,32 +528,7 @@ export {
 
 export { ENTITY_MAX_GENERATION, ENTITY_MAX_INDEX, ENTITY_NULL_RAW } from './entity-handle';
 
-// ────────────────────────────────────────────────────────────────────────────
-// Inspector contributor (feat-20260516-console-dependency-inversion / w4eb)
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * `registerEcsInspector(reg, world)` is a top-level pure function (zero
- * import-time side effects per AC-10). Host assembly invokes it explicitly
- * to wire the four ECS inspection methods (entities / components / systems /
- * resources) onto a `Registry` instance from `@forgeax/engine-console`.
- * See `register-inspector.ts` JSDoc for the full contract.
- */
-export type { RegisterEcsInspectorResult } from './register-inspector';
-export { registerEcsInspector } from './register-inspector';
-
-// ────────────────────────────────────────────────────────────────────────────
-// Mutating-methods SSOT (feat-20260517-console-ecs-plugin-extraction D-6)
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * `ECS_MUTATING_METHODS` is the `ReadonlySet<string>` of 15 World public
- * methods whose invocation mutates ECS state. Module-level singleton —
- * `Registry.registerMutatingMethods` uses reference (`===`) equality as
- * the duplicate-detection key (plan-strategy §2 D-5). The ECS plugin
- * contributor (`registerEcsInspector` step 3, M2 w14) calls
- * `reg.registerMutatingMethods(ECS_MUTATING_METHODS)` once at wire-time
- * so the sandbox can deny calls on its read-only Proxy. See
- * `mutating-methods.ts` JSDoc for the full per-category breakdown.
- */
-export { ECS_MUTATING_METHODS } from './mutating-methods';
+// w8: Inspector contributor (registerEcsInspector + RegisterEcsInspectorResult)
+// deleted — routing layer (Registry / sandbox) is removed; eval is the sole
+// command channel.
+// w9: ECS_MUTATING_METHODS export deleted — sandbox dismantled; mutating-methods.ts removed.

@@ -9,10 +9,10 @@
 //   capture-frame --frames=N --label=X --target=ws://host:port   -> output JSON
 //   inspect-at <tapePath> <drawIdx> --fields=bindings,rt --target=...  -> output JSON
 //
-// The JSON-RPC inspector uses InspectorClient.execute(script) where `script`
-// is a JavaScript expression string sent to the `execute` method.
-// We compose script strings that invoke the debug.* RPC methods registered
-// on the Registry.
+// The JSON-RPC inspector uses InspectorClient.eval(script) where `script`
+// is a JavaScript expression string sent to the `eval` method.
+// We compose script strings that invoke debugAdapter.* methods
+// (eval-scope live root injected by createApp, feat-20260629 M4 / w20).
 //
 // Offline inspect (m4 / w23 + w24): `inspect-offline <tapePath> <drawIdx>`
 // reads an on-disk L1 tape (frame-0.tape.bin + frame-0.report.json), boots a
@@ -298,8 +298,9 @@ export function parseTriggerBrowserArgs(args: readonly string[]): TriggerBrowser
 /**
  * Execute capture-frame command.
  *
- * Connects to the target WebSocket, sends an execute script that calls
- * debug.captureFrame via the RPC Registry, and outputs the result as JSON.
+ * Connects to the target WebSocket, sends an eval script that calls
+ * debugAdapter.captureFrame (eval-scope live root injected by w20),
+ * and outputs the result as JSON.
  */
 export async function runCaptureFrame(options: {
   frames: number;
@@ -315,12 +316,14 @@ export async function runCaptureFrame(options: {
   const client = connectResult.value;
 
   try {
-    // Build the script: call debug.captureFrame with frames + optional label
+    // Build the script: call debugAdapter.captureFrame (eval-scope live root).
+    // debugAdapter is the 4th eval-scope root injected by createApp via
+    // execute.ts ExecuteContext.debugAdapter (w20).
     const framesJson = JSON.stringify(options.frames);
     const labelExpr = options.label !== undefined ? JSON.stringify(options.label) : 'undefined';
-    const script = `debug.captureFrame({ frames: ${framesJson}, label: ${labelExpr} })`;
+    const script = `debugAdapter.captureFrame({ frames: ${framesJson}, label: ${labelExpr} })`;
 
-    const rawResult = await client.execute(script);
+    const rawResult = await client.eval(script);
     const result = rawResult as Record<string, unknown> | undefined;
 
     if (result !== undefined && typeof result === 'object' && result.error !== undefined) {
@@ -344,8 +347,9 @@ export async function runCaptureFrame(options: {
 /**
  * Execute inspect-at command.
  *
- * Connects to the target WebSocket, sends an execute script that calls
- * debug.inspectAt via the RPC Registry, and outputs the result as JSON.
+ * Connects to the target WebSocket, sends an eval script that calls
+ * debugAdapter.inspectAt (eval-scope live root injected by w20),
+ * and outputs the result as JSON.
  */
 export async function runInspectAt(options: {
   tapePath: string;
@@ -362,16 +366,18 @@ export async function runInspectAt(options: {
   const client = connectResult.value;
 
   try {
-    // Build the script: call debug.inspectAt with tapePath, drawIdx, optional fields
+    // Build the script: call debugAdapter.inspectAt (eval-scope live root).
+    // debugAdapter is the 4th eval-scope root injected by createApp via
+    // execute.ts ExecuteContext.debugAdapter (w20).
     const tapePathJson = JSON.stringify(options.tapePath);
     const drawIdxJson = JSON.stringify(options.drawIdx);
     const fieldsExpr =
       options.fields !== undefined
         ? JSON.stringify(options.fields.split(',').map((f) => f.trim()))
         : 'undefined';
-    const script = `debug.inspectAt({ tapePath: ${tapePathJson}, drawIdx: ${drawIdxJson}, fields: ${fieldsExpr} })`;
+    const script = `debugAdapter.inspectAt({ tapePath: ${tapePathJson}, drawIdx: ${drawIdxJson}, fields: ${fieldsExpr} })`;
 
-    const rawResult = await client.execute(script);
+    const rawResult = await client.eval(script);
     const result = rawResult as Record<string, unknown> | undefined;
 
     if (result !== undefined && typeof result === 'object' && result.error !== undefined) {

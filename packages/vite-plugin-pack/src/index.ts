@@ -629,6 +629,12 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   for (const imp of importers) {
     importerRegistry.register(imp);
   }
+  // P2 (feat-20260629 D-3): the host importer key set the catalog fold layer
+  // uses to drive default passthrough vs raw-source rows. Engine built-in arms
+  // fold unconditionally and are NOT part of this set.
+  const registeredImporterKeys: ReadonlySet<string> = new Set(
+    importerRegistry.registeredImporters(),
+  );
 
   // M4 / w32 (AC-20) + feat-20260608 round-2: create the filesystem adapter
   // for the import runner. `decodeImage` and `readSibling` are wired here so
@@ -704,7 +710,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   function configureServer(server: ViteDevServerLike): void {
     // Async startup: scan roots to build the initial catalog.
     const roots = resolveRoots(opts);
-    Promise.all([buildCatalog(roots, opts.base), buildGuidToMetaMap(roots)])
+    Promise.all([buildCatalog(roots, opts.base, registeredImporterKeys), buildGuidToMetaMap(roots)])
       .then(([rawEntries, g2m]) => {
         // The dev catalog passes the discoverable bare-source texture rows
         // straight through, with the per-asset import overlay applied so any
@@ -745,7 +751,10 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
               if (isSidecar) {
                 // Rebuild catalog on next tick before broadcasting full-reload
                 // so the browser's first fetch lands on the new state.
-                Promise.all([buildCatalog(roots, opts.base), buildGuidToMetaMap(roots)])
+                Promise.all([
+                  buildCatalog(roots, opts.base, registeredImporterKeys),
+                  buildGuidToMetaMap(roots),
+                ])
                   .then(([rawEntries2, g2m2]) => {
                     catalog = applyImportedRows(rawEntries2);
                     guidToMeta = g2m2;
@@ -1043,7 +1052,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     const cwd = process.cwd();
     const roots = resolveRoots(opts);
     const { paths } = loadAssetConfig(cwd);
-    const entries = await buildCatalog(roots, opts.base);
+    const entries = await buildCatalog(roots, opts.base, registeredImporterKeys);
     const basePrefix = (opts.base ?? '/').replace(/\/$/, '');
 
     // Import step (M3 / w28, AC-21): the image import no longer inlines
@@ -1206,7 +1215,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           continue;
         }
         // `.hdr` equirect cube-texture sub-assets are intentionally NOT produced
-        // at build time: imageImporter folds only `kind:'image'` rows, and the
+        // at build time: imageImporter folds only `kind:'texture'` rows, and the
         // cube faces ride the runtime IBL multi-face cook (image-importer.ts D-6,
         // build-catalog.ts D-1). runImport therefore reports
         // import-produced-no-assets for these metas. The catalog already folded

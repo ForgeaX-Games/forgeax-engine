@@ -79,7 +79,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
           if (r.error.detail.code !== 'image-meta-missing') return;
           expect(r.error.detail.sourcePath).toBe(sourcePath);
           expect(r.error.detail.expectedSidecarPath).toBe(join(dir, 'wood.png.meta.json'));
-          expect(r.error.hint).toContain('forgeax-engine-console-asset');
+          expect(r.error.hint).toContain('forgeax-engine-remote-asset');
         } finally {
           rmSync(dir, { recursive: true, force: true });
         }
@@ -105,7 +105,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
               {
                 guid: '01928000-7c00-7000-8000-000000000001',
                 sourceIndex: 0,
-                kind: 'image',
+                kind: 'texture',
               },
             ],
           };
@@ -145,7 +145,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
               {
                 guid: '01928000-7c00-7000-8000-000000000002',
                 sourceIndex: 0,
-                kind: 'image',
+                kind: 'texture',
               },
             ],
           };
@@ -182,7 +182,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
               {
                 guid: '01928000-7c00-7000-8000-000000000003',
                 sourceIndex: 0,
-                kind: 'image',
+                kind: 'texture',
               },
             ],
           };
@@ -486,7 +486,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         const ctx = makeBinsCtx(
           'tile.png',
           png,
-          [{ guid: BINS_GUID, sourceIndex: 0, kind: 'image' }],
+          [{ guid: BINS_GUID, sourceIndex: 0, kind: 'texture' }],
           {
             colorSpace: 'srgb',
             mipmap: 'none',
@@ -521,7 +521,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
           {
             importer: 'image',
             source: 'tile.png',
-            subAssets: [{ guid: BINS_GUID, sourceIndex: 0, kind: 'image' }],
+            subAssets: [{ guid: BINS_GUID, sourceIndex: 0, kind: 'texture' }],
           },
           registry,
           {
@@ -614,7 +614,9 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         const width = 8;
         const height = 4;
         const hdr = makeHdrFixture(width, height);
-        const ctx = makeHdrCtx('env.hdr', hdr, [{ guid: HDR_GUID, sourceIndex: 0, kind: 'image' }]);
+        const ctx = makeHdrCtx('env.hdr', hdr, [
+          { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
+        ]);
 
         const produced = await imageImporter.import(ctx);
         expect(produced.length).toBe(1);
@@ -634,7 +636,9 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         const width = 8;
         const height = 4;
         const hdr = makeHdrFixture(width, height);
-        const ctx = makeHdrCtx('env.hdr', hdr, [{ guid: HDR_GUID, sourceIndex: 0, kind: 'image' }]);
+        const ctx = makeHdrCtx('env.hdr', hdr, [
+          { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
+        ]);
 
         const produced = await imageImporter.import(ctx);
         const payload = (produced[0] as { payload: TextureAsset })?.payload;
@@ -643,7 +647,9 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
 
       it('mipmap is false by default (build import always produces single-level)', async () => {
         const hdr = makeHdrFixture(8, 4);
-        const ctx = makeHdrCtx('env.hdr', hdr, [{ guid: HDR_GUID, sourceIndex: 0, kind: 'image' }]);
+        const ctx = makeHdrCtx('env.hdr', hdr, [
+          { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
+        ]);
 
         const produced = await imageImporter.import(ctx);
         const payload = (produced[0] as { payload: TextureAsset })?.payload;
@@ -662,7 +668,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
       it('throws for a corrupt .hdr source (invalid RGBE header)', async () => {
         const corrupt = new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         const ctx = makeHdrCtx('bad.hdr', corrupt, [
-          { guid: HDR_GUID, sourceIndex: 0, kind: 'image' },
+          { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
         ]);
 
         await expect(imageImporter.import(ctx)).rejects.toThrow();
@@ -674,28 +680,30 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
 
       it('.tga source still throws unsupported source extension', async () => {
         const ctx = makeHdrCtx('texture.tga', dummyBytes, [
-          { guid: HDR_GUID, sourceIndex: 0, kind: 'image' },
+          { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
         ]);
         await expect(imageImporter.import(ctx)).rejects.toThrow('unsupported source extension');
       });
 
       it('.bmp source still throws unsupported source extension', async () => {
         const ctx = makeHdrCtx('texture.bmp', dummyBytes, [
-          { guid: HDR_GUID, sourceIndex: 0, kind: 'image' },
+          { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
         ]);
         await expect(imageImporter.import(ctx)).rejects.toThrow('unsupported source extension');
       });
 
       it('source with no extension still throws unsupported source extension', async () => {
         const ctx = makeHdrCtx('texture', dummyBytes, [
-          { guid: HDR_GUID, sourceIndex: 0, kind: 'image' },
+          { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
         ]);
         await expect(imageImporter.import(ctx)).rejects.toThrow('unsupported source extension');
       });
 
       it('source with .hdr extension (upper case) is still recognized via toLowerCase()', async () => {
         const hdr = makeHdrFixture(8, 2);
-        const ctx = makeHdrCtx('ENV.HDR', hdr, [{ guid: HDR_GUID, sourceIndex: 0, kind: 'image' }]);
+        const ctx = makeHdrCtx('ENV.HDR', hdr, [
+          { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
+        ]);
         const produced = await imageImporter.import(ctx);
         expect(produced.length).toBe(1);
         expect(produced[0]?.guid).toBe(HDR_GUID);
@@ -745,7 +753,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         const ctx = makeImpCtx(
           'tile.png',
           png,
-          [{ guid: IMP_GUID, sourceIndex: 0, kind: 'image' }],
+          [{ guid: IMP_GUID, sourceIndex: 0, kind: 'texture' }],
           {
             colorSpace: 'srgb',
             mipmap: 'none',
@@ -772,7 +780,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         const ctx = makeImpCtx(
           'normal.png',
           png,
-          [{ guid: IMP_GUID, sourceIndex: 0, kind: 'image' }],
+          [{ guid: IMP_GUID, sourceIndex: 0, kind: 'texture' }],
           {
             colorSpace: 'linear',
             mipmap: 'none',
@@ -920,7 +928,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         {
           guid: STABLE_GUID,
           sourceIndex: 0,
-          kind: 'image',
+          kind: 'texture',
         },
       ],
     };
@@ -931,7 +939,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
       it('first pass (no existing meta): emits all-fresh subAssets[]', () => {
         const subs = reimportReuseMeta(makeDecoded(), undefined);
         expect(subs).toHaveLength(1);
-        expect(subs[0]?.kind).toBe('image');
+        expect(subs[0]?.kind).toBe('texture');
         expect(subs[0]?.guid).toMatch(
           /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
         );
@@ -945,7 +953,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
       it('reimport with existing meta but different name still falls back via indexFallback (kind+idx phase 2)', () => {
         const meta: ExistingExternalAssetPackage = {
           ...existingMeta(),
-          subAssets: [{ guid: STABLE_GUID, sourceIndex: 0, kind: 'image' }],
+          subAssets: [{ guid: STABLE_GUID, sourceIndex: 0, kind: 'texture' }],
         };
         const subs = reimportReuseMeta(makeDecoded(), meta);
         expect(subs[0]?.guid).toBe(STABLE_GUID);
@@ -958,7 +966,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         };
         const subs = reimportReuseMeta(makeDecoded(), meta);
         expect(subs[0]?.guid).not.toBe(STABLE_GUID);
-        expect(subs[0]?.kind).toBe('image');
+        expect(subs[0]?.kind).toBe('texture');
       });
 
       it('two consecutive reimports of byte-identical bytes produce byte-identical subAssets[] JSON', () => {
@@ -1025,40 +1033,69 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
 
   describe('sub-asset-key.test.ts', () => {
     describe('subAssetKey -- shape mirrors gltf loader (kind, name?, indexFallback)', () => {
-      it('emits kind="image" + indexFallback="images/0" for a single-image source (AC-14)', () => {
-        const k = subAssetKey({ kind: 'image', sourceIndex: 0 });
-        expect(k.kind).toBe('image');
-        expect(k.indexFallback).toBe('images/0');
+      it('emits kind="texture" + indexFallback="textures/0" for a single-image source (AC-14)', () => {
+        const k = subAssetKey({ kind: 'texture', sourceIndex: 0 });
+        expect(k.kind).toBe('texture');
+        expect(k.indexFallback).toBe('textures/0');
         expect(k.name).toBeUndefined();
       });
 
       it('preserves the optional name field when supplied', () => {
-        const k = subAssetKey({ kind: 'image', sourceIndex: 0, name: 'wood-diffuse' });
+        const k = subAssetKey({ kind: 'texture', sourceIndex: 0, name: 'wood-diffuse' });
         expect(k.name).toBe('wood-diffuse');
-        expect(k.indexFallback).toBe('images/0');
+        expect(k.indexFallback).toBe('textures/0');
       });
 
       it('subAssetKeyEqual returns true for same (kind+name+idx) triple', () => {
-        const a = subAssetKey({ kind: 'image', sourceIndex: 0, name: 'wood' });
-        const b = subAssetKey({ kind: 'image', sourceIndex: 0, name: 'wood' });
+        const a = subAssetKey({ kind: 'texture', sourceIndex: 0, name: 'wood' });
+        const b = subAssetKey({ kind: 'texture', sourceIndex: 0, name: 'wood' });
         expect(subAssetKeyEqual(a, b)).toBe(true);
       });
 
       it('subAssetKeyEqual returns false when name differs', () => {
-        const a = subAssetKey({ kind: 'image', sourceIndex: 0, name: 'a' });
-        const b = subAssetKey({ kind: 'image', sourceIndex: 0, name: 'b' });
+        const a = subAssetKey({ kind: 'texture', sourceIndex: 0, name: 'a' });
+        const b = subAssetKey({ kind: 'texture', sourceIndex: 0, name: 'b' });
         expect(subAssetKeyEqual(a, b)).toBe(false);
       });
 
       it('subAssetKeyEqual returns false when sourceIndex differs (indexFallback path differs)', () => {
-        const a = subAssetKey({ kind: 'image', sourceIndex: 0 });
-        const b = subAssetKey({ kind: 'image', sourceIndex: 1 });
+        const a = subAssetKey({ kind: 'texture', sourceIndex: 0 });
+        const b = subAssetKey({ kind: 'texture', sourceIndex: 1 });
         expect(subAssetKeyEqual(a, b)).toBe(false);
       });
 
       it('subAssetKeyEqual returns false when kind differs (gltf vs image co-existence)', () => {
-        const a = subAssetKey({ kind: 'image', sourceIndex: 0 });
+        const a = subAssetKey({ kind: 'texture', sourceIndex: 0 });
         const b = subAssetKey({ kind: 'mesh', sourceIndex: 0 });
+        expect(subAssetKeyEqual(a, b)).toBe(false);
+      });
+
+      // P1: sub-asset-key interface shape invariant — kind is string-typed, not
+      // restricted to 'image'. indexFallback formula uses `${kind}s/${sourceIndex}`
+      // and must survive the kind value change from 'image' to 'texture'.
+      it('P1: subAssetKey with kind="texture" produces indexFallback="textures/0"', () => {
+        const k = subAssetKey({ kind: 'texture', sourceIndex: 0 });
+        expect(k.kind).toBe('texture');
+        expect(k.indexFallback).toBe('textures/0');
+      });
+
+      it('P1: subAssetKey with kind="texture" + name preserves name and indexFallback', () => {
+        const k = subAssetKey({ kind: 'texture', sourceIndex: 1, name: 'atlas-msdf' });
+        expect(k.kind).toBe('texture');
+        expect(k.name).toBe('atlas-msdf');
+        expect(k.indexFallback).toBe('textures/1');
+      });
+
+      it('P1: subAssetKeyEqual works with kind="texture" (same kind+name+idx)', () => {
+        const a = subAssetKey({ kind: 'texture', sourceIndex: 0, name: 'diffuse' });
+        const b = subAssetKey({ kind: 'texture', sourceIndex: 0, name: 'diffuse' });
+        expect(subAssetKeyEqual(a, b)).toBe(true);
+      });
+
+      // subAssetKeyEqual cross-kind: 'texture' is not equal to 'font'.
+      it('P1: subAssetKeyEqual distinguishes "texture" from "font"', () => {
+        const a = subAssetKey({ kind: 'texture', sourceIndex: 0 });
+        const b = subAssetKey({ kind: 'font', sourceIndex: 0 });
         expect(subAssetKeyEqual(a, b)).toBe(false);
       });
     });
@@ -1091,10 +1128,10 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
 
   describe('to-asset-pack.test.ts', () => {
     describe('toAssetPack -- pure function: DecodedImage + ImageMeta -> external-asset-package SubAsset list', () => {
-      it('emits a single subAsset with kind="image" + guid copied from meta', () => {
+      it('emits a single subAsset with kind="texture" + guid copied from meta', () => {
         const pack = toAssetPack(makeTAPDecoded(), makeTAPMeta());
         expect(pack.subAssets).toHaveLength(1);
-        expect(pack.subAssets[0]?.kind).toBe('image');
+        expect(pack.subAssets[0]?.kind).toBe('texture');
         expect(pack.subAssets[0]?.guid).toBe('01928000-7c00-7000-8000-000000000010');
         expect(pack.subAssets[0]?.sourceIndex).toBe(0);
       });
@@ -1111,6 +1148,14 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         const a = JSON.stringify(toAssetPack(makeTAPDecoded(), makeTAPMeta()));
         const b = JSON.stringify(toAssetPack(makeTAPDecoded(), makeTAPMeta()));
         expect(a).toBe(b);
+      });
+
+      // P1: toAssetPack produces subAssets[].kind === 'texture' instead of 'image'.
+      it('P1: emits subAssets[].kind = "texture" (not "image")', () => {
+        const pack = toAssetPack(makeTAPDecoded(), makeTAPMeta());
+        expect(pack.subAssets).toHaveLength(1);
+        expect(pack.subAssets[0]?.kind).toBe('texture');
+        expect(pack.subAssets[0]?.guid).toBe('01928000-7c00-7000-8000-000000000010');
       });
     });
   });

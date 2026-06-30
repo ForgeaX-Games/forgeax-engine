@@ -81,7 +81,7 @@ function deriveSidecarPath(sourcePath: string): string {
  *
  * AC-17 path (a) lock: when the sidecar is absent, the returned error
  * carries `detail.sourcePath` + `detail.expectedSidecarPath` so AI users
- * read .hint and run `forgeax-engine-console-asset import <path>` to
+ * read .hint and run `forgeax-engine-remote-asset import <path>` to
  * self-recover (charter P3 explicit failure + IDE jump-to-source).
  */
 export async function decodeImageFromFile(

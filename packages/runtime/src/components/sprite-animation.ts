@@ -53,7 +53,7 @@
 //
 // 4-step recipe (charter F1 progressive disclosure — minimum walk-cycle
 // host code; full demo lands in M6 hello-sprite-atlas):
-//   1. Build atlas via `forgeax-engine-console-asset atlas --input <glob> --name <prefix> --output <dir>`
+//   1. Build atlas via `forgeax-engine-remote-asset atlas --input <glob> --name <prefix> --output <dir>`
 //      (M5 build-time hook); load the emitted `<name>.atlas.png` plus
 //      `<name>.atlas.meta.json` sidecar.
 //   2. Register the sprite material referencing the atlas

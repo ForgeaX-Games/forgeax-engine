@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// @forgeax/engine-pack/src/cli-asset — `forgeax-engine-console-asset`
+// @forgeax/engine-pack/src/cli-asset — `forgeax-engine-remote-asset`
 // plugin bin (feat-20260516-console-dependency-inversion plan-strategy
 // section 2.9). Discovered by the base bin via the kubectl 4th-path
-// `forgeax-engine-console-` prefix scanner; subcommands scan / lookup /
+// `forgeax-engine-remote-` prefix scanner; subcommands scan / lookup /
 // verify operate offline against the pack scanner.
 //
 // stderr contract (plan-strategy section 2.3 weak-contract): every error
@@ -112,13 +112,13 @@ async function scanEntries(
 
 function helpBody(): string {
   return [
-    'forgeax-engine-console-asset — offline pack scanner / lookup / verifier / atlas builder',
+    'forgeax-engine-remote-asset — offline pack scanner / lookup / verifier / atlas builder',
     '',
     'Usage:',
-    '  forgeax-engine-console-asset scan [--roots <dir>]',
-    '  forgeax-engine-console-asset lookup <guid>',
-    '  forgeax-engine-console-asset verify',
-    '  forgeax-engine-console-asset atlas --input <glob> --name <prefix> [--output <dir>] [--max-atlas-size <n>]',
+    '  forgeax-engine-remote-asset scan [--roots <dir>]',
+    '  forgeax-engine-remote-asset lookup <guid>',
+    '  forgeax-engine-remote-asset verify',
+    '  forgeax-engine-remote-asset atlas --input <glob> --name <prefix> [--output <dir>] [--max-atlas-size <n>]',
     '',
   ].join('\n');
 }
@@ -142,7 +142,7 @@ export async function runCliAsset(rest: string[], ctx: AssetCtx): Promise<number
       return emitError(ctx, {
         code: 'unknown-subcommand',
         expected: 'subcommand in {scan, lookup, verify, atlas}',
-        hint: "run 'forgeax-engine-console-asset --help' for usage",
+        hint: "run 'forgeax-engine-remote-asset --help' for usage",
         detail: { subcommand: sub },
       });
   }
@@ -162,8 +162,8 @@ async function runScan(rest: string[], ctx: AssetCtx): Promise<number> {
     const message = e instanceof Error ? e.message : String(e);
     return emitError(ctx, {
       code: 'cli-parse-error',
-      expected: 'forgeax-engine-console-asset scan [--roots <dir>]',
-      hint: "run 'forgeax-engine-console-asset --help' for usage",
+      expected: 'forgeax-engine-remote-asset scan [--roots <dir>]',
+      hint: "run 'forgeax-engine-remote-asset --help' for usage",
       detail: { message },
     });
   }
@@ -178,7 +178,7 @@ async function runLookup(rest: string[], ctx: AssetCtx): Promise<number> {
   if (typeof guid !== 'string') {
     return emitError(ctx, {
       code: 'cli-parse-error',
-      expected: 'forgeax-engine-console-asset lookup <36-char-uuid>',
+      expected: 'forgeax-engine-remote-asset lookup <36-char-uuid>',
       hint: 'pass a 36-char dash-form UUID positional argument',
     });
   }
@@ -219,8 +219,8 @@ async function runVerify(rest: string[], ctx: AssetCtx): Promise<number> {
     const message = e instanceof Error ? e.message : String(e);
     return emitError(ctx, {
       code: 'cli-parse-error',
-      expected: 'forgeax-engine-console-asset verify',
-      hint: "run 'forgeax-engine-console-asset --help' for usage",
+      expected: 'forgeax-engine-remote-asset verify',
+      hint: "run 'forgeax-engine-remote-asset --help' for usage",
       detail: { message },
     });
   }

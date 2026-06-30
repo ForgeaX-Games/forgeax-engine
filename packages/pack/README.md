@@ -1,6 +1,6 @@
 # @forgeax/engine-pack
 
-Disk schema, GUID tools (`AssetGuid` brand + UUIDv7/v5), scanner fail-fast chain (13-member `PackErrorCode`) for the forgeax engine asset package system. The three CLI surfaces -- `scan`, `lookup`, `verify` -- are shipped as the standalone plugin bin `forgeax-engine-console-asset` (resolved by base bin `forgeax-engine-console` via kubectl 4th-path PATH-prefix discovery; filesystem-mode; offline; no WS connection required).
+Disk schema, GUID tools (`AssetGuid` brand + UUIDv7/v5), scanner fail-fast chain (13-member `PackErrorCode`) for the forgeax engine asset package system. The three CLI surfaces -- `scan`, `lookup`, `verify` -- are shipped as the standalone plugin bin `forgeax-engine-remote-asset` (resolved via PATH-prefix discovery for `forgeax-engine-remote-`; filesystem-mode; offline; no WS connection required).
 
 > Package name vs directory: this package is published as `@forgeax/engine-pack` but lives at `packages/pack` on disk. The `@forgeax/engine-` prefix is the IDE-autocomplete entrypoint AI users discover the package family by; the directory drops the prefix to keep tree depth flat (mirrors the `packages/runtime` / `@forgeax/engine-runtime` pair). All other packages in the engine family follow the same convention.
 
@@ -125,26 +125,21 @@ Exhaustive `switch (err.code)` without `default` -- TS guards completeness.
 
 Access `err.detail.<field>` directly after narrowing via `switch (err.code)` -- full IDE autocomplete.
 
-## CLI plugin -- `forgeax-engine-console-asset`
+## CLI plugin -- `forgeax-engine-remote-asset`
 
-The CLI subcommands ship as a standalone plugin bin `forgeax-engine-console-asset` (entry `dist/cli-asset.mjs`) declared in this package's `package.json#bin`. The base bin `forgeax-engine-console` discovers it via kubectl 4th-path eager PATH scan over the `forgeax-engine-console-` prefix; users invoke the surface as `forgeax-engine-console asset <sub>` (transparent dispatch through `execvp` to `forgeax-engine-console-asset`).
-
-The plugin imports `@forgeax/engine-pack/scanner` directly (in-process), so `@forgeax/engine-console` itself zero-imports `@forgeax/engine-pack` -- enforced by reverse grep gate `check-console-not-import-engine.mjs`.
+The CLI subcommands ship as a standalone plugin bin `forgeax-engine-remote-asset` (entry `dist/cli-asset.mjs`) declared in this package's `package.json#bin`, discovered via PATH-prefix scan for `forgeax-engine-remote-`.
 
 | Subcommand | Description | Exit code |
 |:--|:--|:--|
-| `forgeax-engine-console-asset scan [--roots <dir>...]` | Print JSON array of all discovered `PackEntry` objects to stdout | 0 always |
-| `forgeax-engine-console-asset lookup <guid>` | Print matching `PackEntry` as JSON to stdout (cwd as scan root) | 0 found / 1 not found |
-| `forgeax-engine-console-asset verify [--strict]` | Run fail-fast 7-step scanner; print `PackError` JSON to stderr on first failure; prints `material-validated: <N>` count at end | 0 clean / 1 error |
+| `forgeax-engine-remote-asset scan [--roots <dir>...]` | Print JSON array of all discovered `PackEntry` objects to stdout | 0 always |
+| `forgeax-engine-remote-asset lookup <guid>` | Print matching `PackEntry` as JSON to stdout (cwd as scan root) | 0 found / 1 not found |
+| `forgeax-engine-remote-asset verify [--strict]` | Run fail-fast 7-step scanner; print `PackError` JSON to stderr on first failure; prints `material-validated: <N>` count at end | 0 clean / 1 error |
 
 ```bash
-# Invoke via base bin (kubectl-style transparent dispatch)
-forgeax-engine-console-asset scan --roots apps/hello/room/assets
-forgeax-engine-console-asset lookup 01935f3b-aaaa-7000-8000-000000000001
-forgeax-engine-console-asset verify --strict
-
 # Direct invocation (after pnpm -F @forgeax/engine-pack build)
-forgeax-engine-console-asset scan --roots .
+forgeax-engine-remote-asset scan --roots apps/hello/room/assets
+forgeax-engine-remote-asset lookup 01935f3b-aaaa-7000-8000-000000000001
+forgeax-engine-remote-asset verify --strict
 ```
 
 ## Scanner 7-step validation chain

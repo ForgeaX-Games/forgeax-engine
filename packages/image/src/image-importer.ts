@@ -86,7 +86,7 @@ async function importImage(ctx: ImportContext): Promise<readonly ImportedAsset[]
     for (const sub of ctx.subAssets) {
       // Only flat 2D image sub-assets are folded here; cube-texture sub-assets
       // ride the runtime IBL multi-face cook and are intentionally not produced.
-      if (sub.kind !== 'image') continue;
+      if (sub.kind !== 'texture') continue;
       const payload: TextureAsset = {
         kind: 'texture',
         width: dec.width,
@@ -121,7 +121,7 @@ async function importImage(ctx: ImportContext): Promise<readonly ImportedAsset[]
   for (const sub of ctx.subAssets) {
     // Only flat 2D image sub-assets are folded here; cube-texture sub-assets
     // ride the runtime IBL multi-face cook and are intentionally not produced.
-    if (sub.kind !== 'image') continue;
+    if (sub.kind !== 'texture') continue;
     const payload: TextureAsset = {
       kind: 'texture',
       width: dec.width,

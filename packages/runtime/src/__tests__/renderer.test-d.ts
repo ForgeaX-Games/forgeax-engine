@@ -5,7 +5,7 @@
 //   2. `StartConsoleOptions` / `ConsoleHandle` are not importable from
 //      `@forgeax/engine-runtime` (host wires inspector via `new Registry()`
 //      + `wireDefaultInspectors()` + `startConsoleServer()` from
-//      `@forgeax/engine-console`; plan-strategy section 2.8 one-shot cut).
+//      `@forgeax/engine-remote`; plan-strategy section 2.8 one-shot cut).
 //
 // Source: requirements AC-11 (Renderer.startConsole literally absent) +
 // plan-strategy section 5.3 key test points (type-level surface assertion).

@@ -154,6 +154,32 @@ export function textureThumbnailAnchor(): string {
 }
 
 /**
+ * Attribute name for data-forgeax-texture-slice. Value is the integer slice index.
+ *
+ * SSOT anchor consumed by TextureViewer to mark the array/cube slice <select>
+ * (shown only for cube / cube-array / 2d-array bound textures). The attribute
+ * value tracks the currently selected slice.
+ * Callers write: `{...{ [textureSliceAnchor()]: String(slice) }}`.
+ * Smoke CSS selector: `[data-forgeax-texture-slice]`.
+ */
+export function textureSliceAnchor(): string {
+  return 'data-forgeax-texture-slice';
+}
+
+/**
+ * Attribute name for data-forgeax-texture-zoom. Value is the current zoom: the
+ * percentage as an integer string (e.g. '100', '800'), or 'fit' for fit-to-window.
+ *
+ * SSOT anchor consumed by TextureViewer to mark the zoom toolbar's percentage
+ * input (and surface the active zoom to smoke/e2e).
+ * Callers write: `{...{ [textureZoomAnchor()]: zoom === 'fit' ? 'fit' : String(pct) }}`.
+ * Smoke CSS selector: `[data-forgeax-texture-zoom]`.
+ */
+export function textureZoomAnchor(): string {
+  return 'data-forgeax-texture-zoom';
+}
+
+/**
  * Attribute name for data-forgeax-resource-inspector. Value is 'loaded' or 'empty'.
  *
  * SSOT anchor consumed by ResourceInspector panel to mark its container.

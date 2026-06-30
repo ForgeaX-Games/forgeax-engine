@@ -1,4 +1,4 @@
-// `forgeax-engine-console-asset atlas` subcommand backend
+// `forgeax-engine-remote-asset atlas` subcommand backend
 // (feat-20260521-sprite-atlas-animation M5' T-32). Replaces the v1 vite-
 // plugin idiom (PR #190 deleted `@forgeax/engine-vite-plugin-image`) with
 // a one-shot Node CLI that reads a glob of PNGs, runs the pure shelf
@@ -7,7 +7,7 @@
 //
 // Why CLI not Vite plugin (PR #190 architectural pivot):
 //   - asset importing is producer-side disk work; v2 routes the producer
-//     through the kubectl-style `forgeax-engine-console-` plugin bin so the
+//     through the kubectl-style `forgeax-engine-remote-` plugin bin so the
 //     same surface composes with `scan` / `lookup` / `verify` (charter P5
 //     producer/consumer split).
 //   - vite plugins reach for runtime-coupled hooks (buildStart / emitFile);
@@ -327,7 +327,7 @@ export async function runAtlas(rest: string[], ctx: AssetCtx): Promise<number> {
     return emitError(ctx, {
       code: 'atlas-empty-input',
       expected:
-        'forgeax-engine-console-asset atlas --input <glob> --name <prefix> [--output <dir>] [--max-atlas-size <n>]',
+        'forgeax-engine-remote-asset atlas --input <glob> --name <prefix> [--output <dir>] [--max-atlas-size <n>]',
       hint: argsOutcome.message,
       detail: { receivedCount: 0 },
     });

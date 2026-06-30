@@ -80,7 +80,9 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       importer: 'image',
       source: 'wood-container.jpg',
       importSettings: { colorSpace: 'srgb', mipmap: 'auto' },
-      subAssets: [{ guid: '019e2cc6-0c86-79da-aa76-b0984c86d45c', sourceIndex: 0, kind: 'image' }],
+      subAssets: [
+        { guid: '019e2cc6-0c86-79da-aa76-b0984c86d45c', sourceIndex: 0, kind: 'texture' },
+      ],
     });
   }
 
@@ -246,7 +248,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
         addressMode: 'repeat',
         filterMode: 'linear',
       },
-      subAssets: [{ guid: HMR_WOOD_GUID, sourceIndex: 0, kind: 'image' }],
+      subAssets: [{ guid: HMR_WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
     });
   }
 
@@ -405,7 +407,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
         addressMode: 'repeat',
         filterMode: 'linear',
       },
-      subAssets: [{ guid: DISCOVER_WOOD_GUID, sourceIndex: 0, kind: 'image' }],
+      subAssets: [{ guid: DISCOVER_WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
     });
   }
 
@@ -725,7 +727,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
           importer: 'image',
           source: 'broken.png',
           importSettings: {},
-          subAssets: [{ guid: PNG_GUID, sourceIndex: 0, kind: 'image' }],
+          subAssets: [{ guid: PNG_GUID, sourceIndex: 0, kind: 'texture' }],
         }),
       );
 
@@ -777,7 +779,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
         addressMode: 'repeat',
         filterMode: 'linear',
       },
-      subAssets: [{ guid: DIT_WOOD_GUID, sourceIndex: 0, kind: 'image' }],
+      subAssets: [{ guid: DIT_WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
     });
   }
 
@@ -1531,7 +1533,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
         addressMode: 'repeat',
         filterMode: 'linear',
       },
-      subAssets: [{ guid: SIB_WOOD_GUID, sourceIndex: 0, kind: 'image' }],
+      subAssets: [{ guid: SIB_WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
     });
   }
 
@@ -1919,7 +1921,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
         importer: 'image',
         importSettings: {},
         subAssets: [
-          { guid: 'bbbbbbbb-cccc-4000-8000-000000000001', sourceIndex: 0, kind: 'image' },
+          { guid: 'bbbbbbbb-cccc-4000-8000-000000000001', sourceIndex: 0, kind: 'texture' },
         ],
       });
       // Write meta but NOT the companion file ghost.png

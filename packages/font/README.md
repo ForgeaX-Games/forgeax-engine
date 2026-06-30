@@ -1,6 +1,6 @@
 # @forgeax/engine-font
 
-> Build-time MSDF font atlas baking + runtime `FontAsset` plumbing for world-space text. Bake a TTF into an MSDF atlas + glyph-metrics sidecar via the plugin bin `forgeax-engine-console-font bake`; at runtime an AI user spawns a single `GlyphText` authoring component and the engine's `glyphTextLayoutSystem` lays out, bakes a one-mesh-per-segment `MeshAsset`, and attaches `MeshFilter` + `MeshRenderer` so the text rides the standard forward mesh path.
+> Build-time MSDF font atlas baking + runtime `FontAsset` plumbing for world-space text. Bake a TTF into an MSDF atlas + glyph-metrics sidecar via the plugin bin `forgeax-engine-remote-font bake`; at runtime an AI user spawns a single `GlyphText` authoring component and the engine's `glyphTextLayoutSystem` lays out, bakes a one-mesh-per-segment `MeshAsset`, and attaches `MeshFilter` + `MeshRenderer` so the text rides the standard forward mesh path.
 
 ## One-line spawn = visible (P1)
 
@@ -41,8 +41,8 @@ Runnable exemplar: `apps/hello/text` (four scenes -- HUD label, multi-line, HDR-
 The bake pipeline reads a TTF and produces a `1024x1024` MSDF atlas PNG + a glyph-metrics sidecar (per-glyph uv / size / bearing / advance + a `distanceRange`).
 
 ```bash
-# Discovered by the console base bin via PLUGIN_PREFIX = 'forgeax-engine-console-'.
-forgeax-engine-console-font bake <font.ttf> <out-dir>
+# Discovered via PATH-prefix scan for 'forgeax-engine-remote-'.
+forgeax-engine-remote-font bake <font.ttf> <out-dir>
 ```
 
 | Stage | Detail |
