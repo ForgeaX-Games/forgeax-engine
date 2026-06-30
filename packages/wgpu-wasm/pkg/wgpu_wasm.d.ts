@@ -522,9 +522,9 @@ export interface InitOutput {
     readonly rhiwgputextureview_forgeaxToken: (a: number) => number;
     readonly start: () => void;
     readonly validate: (a: number) => [number, number, number];
-    readonly wasm_bindgen_a677eb11d0f21513___convert__closures_____invoke___alloc_864af3eab0b4f693___string__String__alloc_864af3eab0b4f693___string__String______true_: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
-    readonly wasm_bindgen_a677eb11d0f21513___convert__closures_____invoke___wasm_bindgen_a677eb11d0f21513___JsValue__core_f4ce2b6cc8c3b44d___result__Result_____wasm_bindgen_a677eb11d0f21513___JsError___true_: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen_a677eb11d0f21513___convert__closures_____invoke___js_sys_574a212706f9bab0___Function_fn_wasm_bindgen_a677eb11d0f21513___JsValue_____wasm_bindgen_a677eb11d0f21513___sys__Undefined___js_sys_574a212706f9bab0___Function_fn_wasm_bindgen_a677eb11d0f21513___JsValue_____wasm_bindgen_a677eb11d0f21513___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen_e1691a7b45d7b08b___convert__closures_____invoke___alloc_864af3eab0b4f693___string__String__alloc_864af3eab0b4f693___string__String______true_: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly wasm_bindgen_e1691a7b45d7b08b___convert__closures_____invoke___wasm_bindgen_e1691a7b45d7b08b___JsValue__core_f4ce2b6cc8c3b44d___result__Result_____wasm_bindgen_e1691a7b45d7b08b___JsError___true_: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen_e1691a7b45d7b08b___convert__closures_____invoke___js_sys_b297d463e24e6fe4___Function_fn_wasm_bindgen_e1691a7b45d7b08b___JsValue_____wasm_bindgen_e1691a7b45d7b08b___sys__Undefined___js_sys_b297d463e24e6fe4___Function_fn_wasm_bindgen_e1691a7b45d7b08b___JsValue_____wasm_bindgen_e1691a7b45d7b08b___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;
