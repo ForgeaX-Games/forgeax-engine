@@ -42,6 +42,7 @@
 import type { World } from '@forgeax/engine-ecs';
 import {
   attachBrowserInputBackend,
+  type BrowserInputBackendOptions,
   FRAME_START_SCAN_SYSTEM_NAME,
   INPUT_BACKEND_KEY,
   type InputBackend,
@@ -94,8 +95,27 @@ function makeAppError(
  * still owns the matching removeSystem because it owns the DOM / lifecycle
  * teardown (the plugin has no cleanup seam).
  */
-export function attachInputAuto(canvas: HTMLCanvasElement, world: World): InputAttachHandle {
-  const detach = attachBrowserInputBackend(canvas);
+/**
+ * Options forwarded to attachBrowserInputBackend at attach time. Currently only
+ * the neutral PointerLock gate (host decides whether a canvas click captures the
+ * cursor); the backend stays host-opaque. Optional so existing call sites are
+ * unchanged.
+ */
+export interface InputAttachOptions {
+  readonly pointerLockAllowed?: () => boolean;
+}
+
+export function attachInputAuto(
+  canvas: HTMLCanvasElement,
+  world: World,
+  options: InputAttachOptions = {},
+): InputAttachHandle {
+  const detach = attachBrowserInputBackend(
+    canvas,
+    options.pointerLockAllowed
+      ? ({ pointerLockAllowed: options.pointerLockAllowed } satisfies BrowserInputBackendOptions)
+      : ({} satisfies BrowserInputBackendOptions),
+  );
   const backend = detach.backend;
   world.insertResource(INPUT_BACKEND_KEY, backend);
 

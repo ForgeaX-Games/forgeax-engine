@@ -22,7 +22,7 @@ import { SharedRefStore } from '@forgeax/engine-ecs';
 import type { Buffer, Result, RhiCaps, RhiDevice, Texture } from '@forgeax/engine-rhi';
 import { err, ok, RhiError } from '@forgeax/engine-rhi';
 import {
-  type CubeTextureAsset,
+  type EquirectAsset,
   type Handle,
   type MeshAsset,
   type TextureAsset,
@@ -247,10 +247,10 @@ const mockCaps: RhiCaps = {
 };
 
 function makeRegisterCube(): (
-  pod: CubeTextureAsset,
-) => Result<Handle<'CubeTextureAsset', 'shared'>, never> {
+  pod: EquirectAsset,
+) => Result<Handle<'EquirectAsset', 'shared'>, never> {
   let next = 1000;
-  return () => ok(toShared<'CubeTextureAsset'>(next++));
+  return () => ok(toShared<'EquirectAsset'>(next++));
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: shader-module factory shim
@@ -622,8 +622,8 @@ describe('evictCubemap wrapper shared-dedup (feat-20260619 M1 / w2)', () => {
 
     // Construct a cubemap with two entries sharing one GpuTexture wrapper
     // (mirrors uploadCubemapFromEquirect's dual set at sourceId + cubeId).
-    const srcHandle = toShared<'TextureAsset'>(4001);
-    const cubeHandle = toShared<'CubeTextureAsset'>(4002);
+    const srcHandle = toShared<'EquirectAsset'>(4001);
+    const cubeHandle = toShared<'EquirectAsset'>(4002);
     const sourceId = unwrapHandle(srcHandle);
     const cubeId = unwrapHandle(cubeHandle);
 
@@ -643,11 +643,13 @@ describe('evictCubemap wrapper shared-dedup (feat-20260619 M1 / w2)', () => {
       { __mock: 'face-5' },
     ];
     storeAny.cubemapGpuHandles.set(sourceId, {
+      status: 'ready',
       texture: gpuTex,
       view: sharedView,
       faceViews: sharedFaceViews,
     });
     storeAny.cubemapGpuHandles.set(cubeId, {
+      status: 'ready',
       texture: gpuTex,
       view: sharedView,
       faceViews: sharedFaceViews,
@@ -953,7 +955,7 @@ describe('evict aggregate failure (feat-20260619 M1 / w4)', () => {
 // -> release (rc 1->0) -> onLastRelease callback fires -> gpuStore.evictX.
 //
 // Scope per task description:
-//   (1) Three resource types (TextureAsset / MeshAsset / CubeTextureAsset)
+//   (1) Three resource types (TextureAsset / MeshAsset / EquirectAsset cubemap)
 //       each construct one alloc -> retain -> release-to-rc=0 ->
 //       onLastRelease triggers evict -> assert wrapper.isDestroyed===true.
 //   (2) Covers "no manual evict needed" — entity despawn path auto-recycles.
@@ -1048,18 +1050,19 @@ describe('event-driven recycle closed-loop (feat-20260619 M2 / w7, AC-02)', () =
     expect(probe.destroyedBuffers - baselineDestroyed).toBe(2);
   });
 
-  it('CubeTextureAsset: allocWithOnLastRelease -> release to rc=0 -> evictCubemap fires', () => {
+  it('EquirectAsset cubemap: allocWithOnLastRelease -> release to rc=0 -> evictCubemap fires', () => {
     const { store, sharedRefs } = evictCapturingStore();
 
     let cubeIdNum = 0;
-    const cubePayload: CubeTextureAsset = {
-      kind: 'cube-texture',
+    const cubePayload: EquirectAsset = {
+      kind: 'equirect',
       width: 64,
       height: 64,
-      format: 'rgba8unorm',
-      faces: [],
+      format: 'rgba16float',
+      data: new Uint8Array(64 * 64 * 8),
+      colorSpace: 'linear',
     };
-    const cubeHandle = sharedRefs.alloc('CubeTextureAsset', cubePayload, (p: CubeTextureAsset) => {
+    const cubeHandle = sharedRefs.alloc('EquirectAsset', cubePayload, (p: EquirectAsset) => {
       void p;
       void store.evictCubemap(cubeIdNum);
     });
@@ -1074,6 +1077,7 @@ describe('event-driven recycle closed-loop (feat-20260619 M2 / w7, AC-02)', () =
     // biome-ignore lint/suspicious/noExplicitAny: access private store maps for test setup
     const storeAny = store as any;
     storeAny.cubemapGpuHandles.set(cubeIdNum, {
+      status: 'ready',
       texture: gpuTex,
       view: { __mock: 'cubemap-view' },
       faceViews: [

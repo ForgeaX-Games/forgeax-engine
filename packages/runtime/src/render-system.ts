@@ -1318,6 +1318,16 @@ export interface MeshGpuHandles {
    */
   readonly layout: '12F' | '18F';
   /**
+   * Number of UV sets the interleaved vertex buffer carries (1 = single `uv`,
+   * +1 per `uv1..uv7`). feat-20260629-multi-uv-set-support: the `layout`
+   * discriminator only encodes the 12F/18F base stride; a mesh with a real
+   * extra UV set has a wider stride (56 B for two sets). The forward record
+   * stage threads this into `getMaterialShaderPipeline` so the PSO vertex
+   * layout matches the buffer (otherwise post-first vertices land off-screen).
+   * Mirrors MeshRenderData.uvSetCount / MeshGpuEntry.uvSetCount.
+   */
+  readonly uvSetCount: number;
+  /**
    * Vertex count = `vertices.length / (layout === '18F' ? 18 : 12)`. The
    * non-indexed draw path passes this to `pass.draw(vertexCount)`.
    */
@@ -1364,6 +1374,10 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     warnedMultiLightDirectional: false,
     warnedMultiLightPoint: false,
     warnedMultiLightSpot: false,
+    // feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w19:
+    // once-warn latches for >1 Skylight / >1 SkyboxBackground (names winner).
+    warnedMultiSkylight: false,
+    warnedMultiSkybox: false,
     warnedSkyboxTonemapNone: false,
     // feat-20260520-2d-sprite-layer-mvp M-3 / w25 (AC-18 path 4): per-
     // handle warn-once anchor for the sprite-bucket missing-texture
@@ -1375,6 +1389,11 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     // renderable guard for the runtime `nineslice.scale-too-small` metric
     // counter (`runtime.metrics.increment(...)` in render-system-record.ts).
     warnedNineSliceScaleEntities: new Set<number>(),
+    // feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w18:
+    // per-handle fire-once anchor for the lazy equirect projection failure
+    // (EquirectProjectionFailedError). Set<number> keyed by raw
+    // Handle<EquirectAsset>; never cleared (per-RenderSystem lifetime upper bound).
+    firedEquirectProjectionFailedHandles: new Set<number>(),
     // feat-20260622-handle-to-id-allocator-elimination M1 / w3: per-frame
     // bind group caches as nested WeakMap chain roots. viewBindGroupCache
     // covers main and shadow variants; meshBindGroupCache keys on inner

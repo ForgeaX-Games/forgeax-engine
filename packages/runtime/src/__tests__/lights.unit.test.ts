@@ -99,20 +99,21 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(defaults.mapSize).toBe(2048);
         expect(defaults.depthBias).toBeCloseTo(0.005, 5);
         expect(defaults.normalBias).toBeCloseTo(0.05, 5);
-        expect(defaults.nearPlane).toBeCloseTo(0.1, 5);
-        expect(defaults.farPlane).toBeCloseTo(50, 5);
+        expect(defaults.shadowDistance).toBeCloseTo(200, 5);
         expect(defaults.pcfKernelSize).toBe(3);
 
-        // Merged component: 7 light + 1 castShadow + 9 shadow = 17 fields
-        expect(Object.keys(dl.schema).length).toBe(17);
+        // Merged component: 7 light + 1 castShadow + 8 shadow = 16 fields
+        // (nearPlane removed — derived from camera near; farPlane -> shadowDistance)
+        expect(Object.keys(dl.schema).length).toBe(16);
         expect('cascadeCount' in dl.schema).toBe(true);
         expect('splitLambda' in dl.schema).toBe(true);
         expect('cascadeBlend' in dl.schema).toBe(true);
         expect('mapSize' in dl.schema).toBe(true);
         expect('depthBias' in dl.schema).toBe(true);
         expect('normalBias' in dl.schema).toBe(true);
-        expect('nearPlane' in dl.schema).toBe(true);
-        expect('farPlane' in dl.schema).toBe(true);
+        expect('shadowDistance' in dl.schema).toBe(true);
+        expect('nearPlane' in dl.schema).toBe(false);
+        expect('farPlane' in dl.schema).toBe(false);
         expect('pcfKernelSize' in dl.schema).toBe(true);
         // DirectionalLightShadow is deleted; the old orthoHalfExtent field is gone
       });
@@ -139,8 +140,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(lightData.cascadeBlend).toBeCloseTo(0.2, 5);
         expect(lightData.depthBias).toBeCloseTo(0.005, 5);
         expect(lightData.normalBias).toBeCloseTo(0.05, 5);
-        expect(lightData.nearPlane).toBeCloseTo(0.1, 5);
-        expect(lightData.farPlane).toBeCloseTo(50, 5);
+        expect(lightData.shadowDistance).toBeCloseTo(200, 5);
         expect(lightData.pcfKernelSize).toBe(3);
       });
 
@@ -161,8 +161,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(light.mapSize).toBeCloseTo(2048, 5);
         expect(light.depthBias).toBeCloseTo(0.005, 5);
         expect(light.normalBias).toBeCloseTo(0.05, 5);
-        expect(light.nearPlane).toBeCloseTo(0.1, 5);
-        expect(light.farPlane).toBeCloseTo(50, 5);
+        expect(light.shadowDistance).toBeCloseTo(200, 5);
         expect(light.pcfKernelSize).toBe(3);
       });
 
@@ -178,8 +177,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
             mapSize: 512,
             depthBias: 0.01,
             normalBias: 0.1,
-            nearPlane: 1,
-            farPlane: 100,
+            shadowDistance: 100,
             pcfKernelSize: 5,
           },
         });
@@ -193,8 +191,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(light.mapSize).toBeCloseTo(512, 5);
         expect(light.depthBias).toBeCloseTo(0.01, 5);
         expect(light.normalBias).toBeCloseTo(0.1, 5);
-        expect(light.nearPlane).toBeCloseTo(1, 5);
-        expect(light.farPlane).toBeCloseTo(100, 5);
+        expect(light.shadowDistance).toBeCloseTo(100, 5);
         expect(light.pcfKernelSize).toBe(5);
       });
 
@@ -2401,7 +2398,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(view.castShadow).toBe(true);
       });
 
-      it('spawn with omitted shadow fields fills 9 merged defaults', () => {
+      it('spawn with omitted shadow fields fills 8 merged defaults', () => {
         const world = new World();
         const e = world
           .spawn({
@@ -2416,12 +2413,11 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(view.mapSize).toBe(2048);
         expect(view.depthBias).toBeCloseTo(0.005, 5);
         expect(view.normalBias).toBeCloseTo(0.05, 5);
-        expect(view.nearPlane).toBeCloseTo(0.1, 5);
-        expect(view.farPlane).toBeCloseTo(50, 5);
+        expect(view.shadowDistance).toBeCloseTo(200, 5);
         expect(view.pcfKernelSize).toBe(3);
       });
 
-      it('spawn with empty data gets all 9 shadow defaults', () => {
+      it('spawn with empty data gets all 8 shadow defaults', () => {
         const world = new World();
         const e = world.spawn({ component: DirectionalLight, data: {} }).unwrap();
         const view = world.get(e, DirectionalLight).unwrap();
@@ -2431,8 +2427,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(view.mapSize).toBe(2048);
         expect(view.depthBias).toBeCloseTo(0.005, 5);
         expect(view.normalBias).toBeCloseTo(0.05, 5);
-        expect(view.nearPlane).toBeCloseTo(0.1, 5);
-        expect(view.farPlane).toBeCloseTo(50, 5);
+        expect(view.shadowDistance).toBeCloseTo(200, 5);
         expect(view.pcfKernelSize).toBe(3);
       });
 
@@ -2451,8 +2446,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
               mapSize: 512,
               depthBias: 0.01,
               normalBias: 0.1,
-              nearPlane: 1,
-              farPlane: 100,
+              shadowDistance: 100,
               pcfKernelSize: 5,
             },
           })
@@ -2464,13 +2458,12 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(view.mapSize).toBe(512);
         expect(view.depthBias).toBeCloseTo(0.01, 5);
         expect(view.normalBias).toBeCloseTo(0.1, 5);
-        expect(view.nearPlane).toBeCloseTo(1, 5);
-        expect(view.farPlane).toBeCloseTo(100, 5);
+        expect(view.shadowDistance).toBeCloseTo(100, 5);
         expect(view.pcfKernelSize).toBe(5);
       });
 
-      it('schema has 17 fields (7 light + 1 castShadow + 9 shadow)', () => {
-        expect(Object.keys(DirectionalLight.schema).length).toBe(17);
+      it('schema has 16 fields (7 light + 1 castShadow + 8 shadow)', () => {
+        expect(Object.keys(DirectionalLight.schema).length).toBe(16);
         expect('castShadow' in DirectionalLight.schema).toBe(true);
         expect('cascadeCount' in DirectionalLight.schema).toBe(true);
         expect('splitLambda' in DirectionalLight.schema).toBe(true);
@@ -2478,8 +2471,9 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect('mapSize' in DirectionalLight.schema).toBe(true);
         expect('depthBias' in DirectionalLight.schema).toBe(true);
         expect('normalBias' in DirectionalLight.schema).toBe(true);
-        expect('nearPlane' in DirectionalLight.schema).toBe(true);
-        expect('farPlane' in DirectionalLight.schema).toBe(true);
+        expect('shadowDistance' in DirectionalLight.schema).toBe(true);
+        expect('nearPlane' in DirectionalLight.schema).toBe(false);
+        expect('farPlane' in DirectionalLight.schema).toBe(false);
         expect('pcfKernelSize' in DirectionalLight.schema).toBe(true);
       });
     });

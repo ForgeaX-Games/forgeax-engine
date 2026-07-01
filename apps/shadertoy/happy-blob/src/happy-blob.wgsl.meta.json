@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "external-asset-package",
+  "importer": "shader",
+  "source": "happy-blob.wgsl",
+  "importSettings": {
+    "materialShaderIdentifier": "shadertoy::happy-blob"
+  },
+  "subAssets": [
+    {
+      "guid": "01935b10-0002-7c4e-9f12-345678abcd01",
+      "sourceIndex": 0,
+      "kind": "material-shader"
+    }
+  ],
+  "paramSchema": [
+    { "name": "iResolution", "type": "vec2" },
+    { "name": "iTime", "type": "f32" }
+  ]
+}

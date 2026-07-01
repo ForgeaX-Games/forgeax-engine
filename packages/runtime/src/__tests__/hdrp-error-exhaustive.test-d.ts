@@ -42,8 +42,8 @@ function exhaustiveSwitchOnCode(code: RuntimeErrorCode): string {
       return 'skin-palette-overflow';
     case 'material-resolved-empty-passes':
       return 'material-resolved-empty-passes';
-    case 'skybox-cubemap-not-ready':
-      return 'skybox-cubemap-not-ready';
+    case 'equirect-projection-failed':
+      return 'equirect-projection-failed';
     case 'mesh-ssbo-capacity-exceeded':
       return 'mesh-ssbo-capacity-exceeded';
     case 'mesh-ssbo-ceiling-reached':
@@ -126,7 +126,7 @@ function narrowRuntimeError(err: RuntimeError): void {
       void err.detail.materialGuid; // string
       void err.detail.reason; // 'missing-parent' | 'no-pass-in-chain'
       break;
-    case 'skybox-cubemap-not-ready':
+    case 'equirect-projection-failed':
       void err.detail.handle; // number
       break;
     case 'mesh-ssbo-capacity-exceeded':

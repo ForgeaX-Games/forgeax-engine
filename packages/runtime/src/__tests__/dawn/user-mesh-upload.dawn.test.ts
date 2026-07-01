@@ -26,7 +26,7 @@
 import { World } from '@forgeax/engine-ecs';
 import { mat4 } from '@forgeax/engine-math';
 import { ok } from '@forgeax/engine-rhi';
-import type { CubeTextureAsset, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
+import type { EquirectAsset, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { BUILTIN_FLOATS_PER_VERTEX } from '../../builtin-asset-registry';
 import { createBoxGeometry } from '../../geometry/box';
@@ -83,7 +83,7 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w: World, pod: EquirectAsset) => ok(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 
@@ -142,7 +142,7 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w: World, pod: EquirectAsset) => ok(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 
@@ -167,7 +167,7 @@ describe('w22.5 user-registered mesh GPU upload (AC-13, dawn)', () => {
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w: World, pod: EquirectAsset) => ok(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 

@@ -1421,11 +1421,11 @@ describe('RenderSystem Skylight extract phase (AC-11)', () => {
   it('(a) extractFrame queries Skylight component and captures cubemap handle + intensity', () => {
     // When extractFrame runs, it should:
     // 1. Create a query for entities with (Skylight) component
-    // 2. Extract cubemap handle (for GPU resource lookup) and intensity
+    // 2. Extract equirect handle (for GPU resource lookup) and intensity
     // 3. Populate an ExtractedSkylight field in the ExtractedFrame
     //
     // The extracted data shape:
-    //   { cubemapHandle: Handle<CubeTextureAsset>, intensity: number }
+    //   { equirectHandle: Handle<EquirectAsset>, intensity: number }
     //
     // When t26 lands, this becomes:
     //   const frame = extractFrame(world, assets);

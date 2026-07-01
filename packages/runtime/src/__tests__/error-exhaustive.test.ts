@@ -1,4 +1,4 @@
-// error-exhaustive.test - locks the AssetErrorCode 22-member exhaustive
+// error-exhaustive.test - locks the AssetErrorCode 23-member exhaustive
 // switch with the M1 +`tileset-tile-entry-malformed` arm
 // (feat-20260608-tilemap-object-layer-rendering M1; plan-tasks m1-t3 /
 // m1-t4; plan-strategy §D-6 closed union + .detail.field 7-variant enum;
@@ -23,7 +23,7 @@ import {
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
-describe('ASSET_ERROR_HINTS runtime guard (22-member key set)', () => {
+describe('ASSET_ERROR_HINTS runtime guard (23-member key set)', () => {
   it('ASSET_ERROR_HINTS includes the tileset-tile-entry-malformed key with non-empty hint', () => {
     expect(ASSET_ERROR_HINTS).toHaveProperty('tileset-tile-entry-malformed');
     const hint: string = ASSET_ERROR_HINTS['tileset-tile-entry-malformed'];
@@ -38,9 +38,16 @@ describe('ASSET_ERROR_HINTS runtime guard (22-member key set)', () => {
     expect(hint.length).toBeGreaterThan(0);
   });
 
-  it('Object.keys(ASSET_ERROR_HINTS) length is 22 (M0 baseline 20 + M1 +1 + feat-20260621 +1)', () => {
+  it('ASSET_ERROR_HINTS includes the mesh-bin-contract-violation key with non-empty hint', () => {
+    expect(ASSET_ERROR_HINTS).toHaveProperty('mesh-bin-contract-violation');
+    const hint: string = ASSET_ERROR_HINTS['mesh-bin-contract-violation'];
+    expect(typeof hint).toBe('string');
+    expect(hint.length).toBeGreaterThan(0);
+  });
+
+  it('Object.keys(ASSET_ERROR_HINTS) length is 23 (M0 baseline 20 + M1 +1 + feat-20260621 +1 + feat-20260629 +1)', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
-    expect(keys.length).toBe(22);
+    expect(keys.length).toBe(23);
   });
 
   it('hint contains >= 3 of the 7 .detail.field tokens', () => {
@@ -59,8 +66,8 @@ describe('ASSET_ERROR_HINTS runtime guard (22-member key set)', () => {
   });
 });
 
-describe('AssetErrorCode 22-member exhaustive switch (M1 +tileset-tile-entry-malformed; feat-20260621 +asset-invalidated)', () => {
-  it('exhaustive switch over the 22 members compiles without a default branch', () => {
+describe('AssetErrorCode 23-member exhaustive switch (M1 +tileset-tile-entry-malformed; feat-20260621 +asset-invalidated; feat-20260629 +mesh-bin-contract-violation)', () => {
+  it('exhaustive switch over the 23 members compiles without a default branch', () => {
     function classify(code: AssetErrorCode): string {
       switch (code) {
         case 'asset-not-found':
@@ -107,6 +114,9 @@ describe('AssetErrorCode 22-member exhaustive switch (M1 +tileset-tile-entry-mal
           return 'tileset-tile-entry-malformed';
         case 'asset-invalidated':
           return 'asset-invalidated';
+        // === 1 new code (feat-20260629-multi-uv-set-support M2 / m2-w5) ===
+        case 'mesh-bin-contract-violation':
+          return 'mesh-bin-contract-violation';
       }
       // No default -- TS proves completeness (charter P3).
     }

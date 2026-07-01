@@ -40,7 +40,7 @@ import type {
   AnimationClip,
   Asset,
   AudioClipAsset,
-  CubeTextureAsset,
+  EquirectAsset,
   FontAsset,
   MaterialAsset,
   MeshAsset,
@@ -112,8 +112,8 @@ describe('AssetTagMap — 11-member closed map aligned with Asset.kind tags', ()
     expectTypeOf<AssetTagMap['scene']>().toEqualTypeOf<'SceneAsset'>();
   });
 
-  it('cube-texture -> CubeTextureAsset', () => {
-    expectTypeOf<AssetTagMap['cube-texture']>().toEqualTypeOf<'CubeTextureAsset'>();
+  it('equirect -> EquirectAsset', () => {
+    expectTypeOf<AssetTagMap['equirect']>().toEqualTypeOf<'EquirectAsset'>();
   });
 
   it('audio -> AudioClipAsset', () => {
@@ -162,8 +162,8 @@ describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)'
     expectTypeOf<TagOf<SceneAsset>>().toEqualTypeOf<'SceneAsset'>();
   });
 
-  it('TagOf<CubeTextureAsset> = CubeTextureAsset', () => {
-    expectTypeOf<TagOf<CubeTextureAsset>>().toEqualTypeOf<'CubeTextureAsset'>();
+  it('TagOf<EquirectAsset> = EquirectAsset', () => {
+    expectTypeOf<TagOf<EquirectAsset>>().toEqualTypeOf<'EquirectAsset'>();
   });
 
   it('TagOf<SkinAsset> = SkinAsset', () => {
@@ -198,7 +198,7 @@ describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)'
     expectTypeOf<TagOf<Asset>>().toEqualTypeOf<
       | 'MeshAsset'
       | 'TextureAsset'
-      | 'CubeTextureAsset'
+      | 'EquirectAsset'
       | 'SamplerAsset'
       | 'MaterialAsset'
       | 'SceneAsset'

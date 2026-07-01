@@ -16,7 +16,8 @@
 // (forgeax-engine-assets/learn-opengl/textures/newport_loft.hdr, GUID
 // 019e4a26-3c29-7420-af5d-20f2724a16b0). In feat-20260604-hdr-equirect-cube-
 // importer-loader M5, the smoke walks the REAL production loadByGuid path
-// (configurePackIndex -> loadByGuid -> allocSharedRef -> uploadCubemapFromEquirect)
+// (configurePackIndex -> loadByGuid<EquirectAsset> -> allocSharedRef -> Skylight
+// equirect handle; projection is internal to the engine record arm)
 // using a mock fetch that serves the pre-built pack-index + imported .bin from
 // the vite build dist directory. No decodeHdr / registerWithGuid bypass
 // (AC-07). In FALSIFY=hdr-bin-empty mode the imported .bin payload is zeroed to
@@ -249,7 +250,7 @@ export async function runIblSmoke(opts) {
   if (!guidRes.ok)
     fail(`AssetGuid.parse failed for NEWPORT_LOFT_GUID: ${guidRes.error.code}`);
 
-  // loadByGuid returns the TextureAsset PAYLOAD (M8 D-17), not a handle.
+  // loadByGuid returns the EquirectAsset PAYLOAD (D-17), not a handle.
   const hdrPodRes = await assets.loadByGuid(guidRes.value);
   if (!hdrPodRes.ok)
     fail(`loadByGuid(newport_loft.hdr) failed: ${hdrPodRes.error.code} - ${hdrPodRes.error.hint}`);
@@ -259,18 +260,16 @@ export async function runIblSmoke(opts) {
   // --- 5. Build scene (3x3 sphere matrix) ---
   const world = new World();
 
-  // Mint a user-tier source handle for the equirect pod, then pass
-  // world + handle + pod to the cubemap upload (world-first, M8).
-  const srcHandle = world.allocSharedRef('TextureAsset', equirectPod);
-  const cubemapRes = await renderer.store.uploadCubemapFromEquirect(world, srcHandle, equirectPod);
-  if (!cubemapRes.ok)
-    fail(`equirect-to-cubemap upload failed: ${cubemapRes.error.code} - ${cubemapRes.error.hint}`);
+  // Mint a user-tier handle for the equirect pod. The equirect->cubemap + IBL
+  // projection is now INTERNAL to the engine (lazy, in the render record arm) --
+  // the Skylight holds the equirect handle directly, no manual upload call.
+  const equirect = world.allocSharedRef('EquirectAsset', equirectPod);
 
-  console.log(`[${demoId}] loadByGuid + uploadCubemapFromEquirect OK (format=${equirectPod.format} ${equirectPod.width}x${equirectPod.height})`);
+  console.log(`[${demoId}] loadByGuid<EquirectAsset> OK (format=${equirectPod.format} ${equirectPod.width}x${equirectPod.height})`);
 
   world.spawn({
     component: Skylight,
-    data: { cubemap: cubemapRes.value, intensity: 1.0 },
+    data: { equirect, intensity: 1.0 },
   });
 
   const sphereRes = createSphereGeometry(1.0, 32, 16);
@@ -353,12 +352,26 @@ export async function runIblSmoke(opts) {
   if (demoKind === 'specular') {
     world.spawn({
       component: SkyboxBackground,
-      data: { cubemap: cubemapRes.value, mode: SKYBOX_MODE_CUBEMAP },
+      data: { equirect, mode: SKYBOX_MODE_CUBEMAP },
     });
-    console.log(`[${demoId}] SkyboxBackground spawned (same cubemap handle as Skylight)`);
+    console.log(`[${demoId}] SkyboxBackground spawned (same equirect handle as Skylight)`);
   }
 
   // --- 6. Draw frames ---
+  // The equirect->cubemap + IBL precompute (cubemap projection -> irradiance
+  // convolution -> prefilter mip chain -> BRDF LUT) is fire-and-forget async
+  // inside the engine record arm (feat-20260630): the Skylight binds the white
+  // fallback cube until that multi-stage projection settles, then upgrades to
+  // full IBL. In a real browser the rAF loop yields between frames so the chain
+  // completes within a window; this dawn-node loop must do the same. A tight sync
+  // for-loop would never let the microtask/timer queue drain, so the projection
+  // would never complete and the final frame would stay white -> large baseline
+  // delta. Mirror the hello/hdrp-lighting smoke: yield each frame, then a 2s
+  // settle for the full IBL precompute, then a final draw batch before readback.
+  // This is the harness matching production frame pacing, not an engine workaround.
+  const device = sharedDevice;
+  if (!device) fail('no shared device captured for readback');
+
   const frameStart = Date.now();
   let framesObserved = 0;
   for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
@@ -366,9 +379,32 @@ export async function runIblSmoke(opts) {
     const r = renderer.draw(world);
     if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
     framesObserved++;
+    // Drain the device queue + yield every few frames so the fire-and-forget IBL
+    // projection's GPU passes (cubemap render -> irradiance/prefilter -> BRDF LUT)
+    // complete and the projection promise resolves. dawn-node needs the explicit
+    // onSubmittedWorkDone to advance GPU work; a tight sync loop would leave the
+    // projection pending and the Skylight stuck on the white fallback cube.
+    if (i % 16 === 15) {
+      await device.queue.onSubmittedWorkDone();
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
   }
-  const device = sharedDevice;
-  if (!device) fail('no shared device captured for readback');
+  // Settle window: let the multi-stage IBL precompute chain fully resolve, then
+  // a final draw batch so the now-ready IBL cubemap binds for the readback frame.
+  for (let pass = 0; pass < 4; pass++) {
+    await device.queue.onSubmittedWorkDone();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  for (let i = 0; i < 32; i++) {
+    world.update();
+    const r = renderer.draw(world);
+    if (!r.ok) console.error(`[smoke] post-settle draw frame ${i} error: ${r.error.code}`);
+    framesObserved++;
+    if (i % 8 === 7) {
+      await device.queue.onSubmittedWorkDone();
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+  }
   await device.queue.onSubmittedWorkDone();
   const frameWall = Date.now() - frameStart;
   console.log(

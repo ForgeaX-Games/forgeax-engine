@@ -11,6 +11,12 @@ export default defineProject({
     setupFiles: ['./src/__tests__/setup.ts'],
     name: '@forgeax/rhi-debug-viewer',
     include: ['src/__tests__/**/*.test.{ts,tsx}'],
+    // Exclude `*.dawn.test.ts` -- owned by the root `dawn` vitest project
+    // (vitest.config.ts projects, K-3 split). Without this the jsdom unit
+    // project's include glob picks up the dawn mechanism test in jsdom env
+    // (no navigator.gpu, no dawn injection setupFiles) and it cannot run.
+    // Mirror of packages/rhi-debug/vitest.config.ts.
+    exclude: ['**/node_modules/**', '**/dist/**', '**/*.dawn.test.ts'],
     typecheck: {
       enabled: true,
       tsconfig: './tsconfig.json',

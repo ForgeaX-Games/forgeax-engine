@@ -99,7 +99,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
   });
 
   describe('pbr-mesh-array', () => {
-    it('storageBuffer=true: 1 entry with read-only-storage + dynamic offset', () => {
+    it('storageBuffer=true: 1 entry with read-only-storage + dynamic offset + VERTEX|FRAGMENT visibility', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'pbr-mesh-array',
@@ -110,7 +110,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
         entries: [
           {
             binding: 0,
-            visibility: 0x1,
+            visibility: 0x1 | 0x2,
             buffer: { type: 'read-only-storage', hasDynamicOffset: true },
           },
         ],

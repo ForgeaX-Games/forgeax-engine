@@ -45,6 +45,9 @@ const FLOATS_PER_VERTEX_12 = 12;
  * `deriveVertexBufferLayout` output.
  */
 const FLOATS_PER_VERTEX_18 = 18;
+/** Canonical base float offsets for UV1 start in interleaved (unskinned / skinned). */
+const UV1_OFFSET_UNSKINNED = FLOATS_PER_VERTEX_12;
+const UV1_OFFSET_SKINNED = FLOATS_PER_VERTEX_18;
 
 /**
  * Convert one or more parsed `GltfMeshIr` primitives sharing the same glTF
@@ -84,6 +87,9 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
   let totalIndexCount = 0;
   let hasAnySkin = false;
   let hasAnyIndices = false;
+  // feat-20260629-multi-uv-set-support m1-w3: scan for max UV set count across
+  // all primitives so the merged interleaved stride accommodates the widest one.
+  let uvSetCount = 1; // always at least texcoord0 slot
   for (const p of prims) {
     const primVc = p.positions.length / 3;
     totalVertexCount += primVc;
@@ -91,21 +97,34 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
       totalIndexCount += p.indices.length;
       hasAnyIndices = true;
     } else {
-      // mixed-bag accommodation: a non-indexed prim sharing a MeshAsset with
-      // indexed prims contributes synthesized identity indices below
-      // (one per vertex). Only counts when SOME prim is indexed; if every
-      // prim is non-indexed the indices buffer is skipped entirely.
       totalIndexCount += primVc;
     }
     if (p.joints0 !== undefined && p.weights0 !== undefined) hasAnySkin = true;
+    // Count present UV sets in this primitive.
+    for (let k = 7; k >= 1; k--) {
+      const key = `texcoord${k}` as keyof GltfMeshIr;
+      if (p[key] !== undefined) {
+        uvSetCount = Math.max(uvSetCount, k + 1);
+        break;
+      }
+    }
   }
 
-  const FLOATS_PER_VERTEX = hasAnySkin ? FLOATS_PER_VERTEX_18 : FLOATS_PER_VERTEX_12;
+  const FLOATS_PER_VERTEX_BASE = hasAnySkin ? FLOATS_PER_VERTEX_18 : FLOATS_PER_VERTEX_12;
+  const UV1_OFFSET = hasAnySkin ? UV1_OFFSET_SKINNED : UV1_OFFSET_UNSKINNED;
+  // Dynamic stride: base + (uvSetCount - 1) * 2 extra floats for uv1..uvK
+  const FLOATS_PER_VERTEX = FLOATS_PER_VERTEX_BASE + (uvSetCount - 1) * 2;
   const interleaved = new Float32Array(totalVertexCount * FLOATS_PER_VERTEX);
   const positionsCat = new Float32Array(totalVertexCount * 3);
   const normalsCat = new Float32Array(totalVertexCount * 3);
   const uvsCat = new Float32Array(totalVertexCount * 2);
   const tangentsCat = new Float32Array(totalVertexCount * 4);
+  // feat-20260629-multi-uv-set-support m1-w3: per-UV-set standalone typed arrays
+  // for MeshAsset.attributes (uv1..uvK). Allocated only when uvSetCount > 1.
+  const uvCats: Float32Array[] = [];
+  for (let k = 1; k < uvSetCount; k++) {
+    uvCats.push(new Float32Array(totalVertexCount * 2));
+  }
   // D-2 / w8: when promoted to 18-float stride, allocate parallel skinIndex
   // (Uint16Array, 4 per vertex) and skinWeight (Float32Array, 4 per vertex)
   // standalone arrays for MeshAsset.attributes. The interleaved buffer carries
@@ -235,6 +254,26 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
         // because Float32Array / Uint16Array initialize to 0 and the
         // interleaved view never touched dst+12..17 above.
       }
+      // feat-20260629-multi-uv-set-support m1-w3: write uv1..uvK after skin data.
+      // Canonical interleaved order: position/normal/uv/tangent/skinIndex/skinWeight/uv1..uv7.
+      // UV1 starts at offset UV1_OFFSET (12 for unskinned, 18 for skinned) in float slots.
+      // Each additional UV set 2F. Missing texcoordK → zero-fill (plan-strategy M1).
+      for (let k = 1; k < uvSetCount; k++) {
+        const uvKey = `texcoord${k}` as keyof GltfMeshIr;
+        const interleavedOffset = UV1_OFFSET + (k - 1) * 2;
+        const catIdx = k - 1;
+        const cat = uvCats[catIdx] as Float32Array;
+        const catDst = (vertexCursor + i) * 2;
+        const srcArr = mesh[uvKey] as Float32Array | undefined;
+        if (srcArr !== undefined) {
+          const t = i * 2;
+          interleaved[dst + interleavedOffset + 0] = srcArr[t + 0] as number;
+          interleaved[dst + interleavedOffset + 1] = srcArr[t + 1] as number;
+          cat[catDst + 0] = srcArr[t + 0] as number;
+          cat[catDst + 1] = srcArr[t + 1] as number;
+        }
+        // else: zero-fill (implicit — Float32Array defaults to 0)
+      }
     }
     // Bias each submesh's indices by the running vertex offset so they
     // reference into the merged vertex buffer rather than the per-primitive
@@ -294,6 +333,8 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
       tangent: tangentsCat,
       ...(skinIndicesCat === undefined ? {} : { skinIndex: skinIndicesCat }),
       ...(skinWeightsCat === undefined ? {} : { skinWeight: skinWeightsCat }),
+      // feat-20260629-multi-uv-set-support m1-w3: per-UV-set standalone arrays
+      ...Object.fromEntries(uvCats.map((cat, idx) => [`uv${idx + 1}`, cat])),
     },
   };
 }

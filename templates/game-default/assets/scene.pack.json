@@ -56,7 +56,7 @@
         "intensity": 3.2,
         "castShadow": true,
         "mapSize": 2048,
-        "farPlane": 60
+        "shadowDistance": 60
        }
       }
      },
@@ -507,6 +507,33 @@
         ]
        }
       }
+     },
+     {
+      "localId": 21,
+      "components": {
+       "Name": {
+        "value": "Skylight"
+       },
+       "Skylight": {
+        "equirect": 15,
+        "colorR": 1,
+        "colorG": 1,
+        "colorB": 1,
+        "intensity": 0.2
+       }
+      }
+     },
+     {
+      "localId": 22,
+      "components": {
+       "Name": {
+        "value": "Skybox"
+       },
+       "SkyboxBackground": {
+        "equirect": 15,
+        "mode": 0
+       }
+      }
      }
     ]
    },
@@ -525,7 +552,8 @@
     "a1b2c3d4-0002-5000-8000-000000000002",
     "a1b2c3d4-0003-5000-8000-000000000003",
     "c0a7e000-0001-5000-8000-0000000000c1",
-    "c0a7e000-0002-5000-8000-0000000000c2"
+    "c0a7e000-0002-5000-8000-0000000000c2",
+    "81eec382-392f-5a93-8998-0ecf11ef7990"
    ]
   },
   {

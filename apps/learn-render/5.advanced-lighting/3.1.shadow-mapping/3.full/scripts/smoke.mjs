@@ -309,7 +309,7 @@ for (const c of cubes) {
 // Directional light with shadow.
 const shadowPresent = FALSIFY !== 'force-no-shadow-pass';
 const shadowFields = shadowPresent
-  ? { castShadow: true, cascadeCount: 1, mapSize: 2048, depthBias: 0.005, nearPlane: 0.1, farPlane: 50, pcfKernelSize: 3 }
+  ? { castShadow: true, cascadeCount: 1, mapSize: 2048, depthBias: 0.005, shadowDistance: 50, pcfKernelSize: 3 }
   : { castShadow: false };
 
 if (!shadowPresent) {

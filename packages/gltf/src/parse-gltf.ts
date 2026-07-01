@@ -201,6 +201,20 @@ export interface GltfMeshIr {
   readonly positions: Float32Array;
   readonly normals?: Float32Array;
   readonly texcoord0?: Float32Array;
+  /** TEXCOORD_1 per-vertex UV set 1 (Float32Array, 2 per vertex). feat-20260629-multi-uv-set-support m1-w2. */
+  readonly texcoord1?: Float32Array;
+  /** TEXCOORD_2 per-vertex UV set 2 (Float32Array, 2 per vertex). */
+  readonly texcoord2?: Float32Array;
+  /** TEXCOORD_3 per-vertex UV set 3 (Float32Array, 2 per vertex). */
+  readonly texcoord3?: Float32Array;
+  /** TEXCOORD_4 per-vertex UV set 4 (Float32Array, 2 per vertex). */
+  readonly texcoord4?: Float32Array;
+  /** TEXCOORD_5 per-vertex UV set 5 (Float32Array, 2 per vertex). */
+  readonly texcoord5?: Float32Array;
+  /** TEXCOORD_6 per-vertex UV set 6 (Float32Array, 2 per vertex). */
+  readonly texcoord6?: Float32Array;
+  /** TEXCOORD_7 per-vertex UV set 7 (Float32Array, 2 per vertex). */
+  readonly texcoord7?: Float32Array;
   readonly tangents?: Float32Array;
   /** JOINTS_0 per-vertex joint indices (Uint16Array, 4 per vertex). UBYTE source is width-converted to U16 at parse time (D-3). */
   readonly joints0?: Uint16Array;
@@ -586,6 +600,38 @@ async function parseGltfWithBin(
         }
       }
 
+      // feat-20260629-multi-uv-set-support m1-w2: decode TEXCOORD_1..7
+      // using the same decodeAttributeAccessor→Float32Array pattern.
+      // Missing accessor → field stays undefined (no error, mirrors TEXCOORD_0).
+      // componentType non-FLOAT → decodeAttributeAccessor returns error already.
+      let texcoord1: Float32Array | undefined;
+      let texcoord2: Float32Array | undefined;
+      let texcoord3: Float32Array | undefined;
+      let texcoord4: Float32Array | undefined;
+      let texcoord5: Float32Array | undefined;
+      let texcoord6: Float32Array | undefined;
+      let texcoord7: Float32Array | undefined;
+      for (let k = 1; k <= 7; k++) {
+        const tcIdx = attrs[`TEXCOORD_${k}`];
+        if (tcIdx === undefined) continue;
+        const acc = accessors[tcIdx];
+        if (acc !== undefined) {
+          const decoded = decodeAttributeAccessor(tcIdx, acc, bufferViews, buffers);
+          if (decoded.ok) {
+            const src = decoded.value;
+            const owned = new Float32Array(src.length);
+            owned.set(src);
+            if (k === 1) texcoord1 = owned;
+            else if (k === 2) texcoord2 = owned;
+            else if (k === 3) texcoord3 = owned;
+            else if (k === 4) texcoord4 = owned;
+            else if (k === 5) texcoord5 = owned;
+            else if (k === 6) texcoord6 = owned;
+            else texcoord7 = owned;
+          }
+        }
+      }
+
       let tangents: Float32Array | undefined;
       const tanIdx = attrs.TANGENT;
       if (tanIdx !== undefined) {
@@ -753,6 +799,13 @@ async function parseGltfWithBin(
         positions,
         ...(normals === undefined ? {} : { normals }),
         ...(texcoord0 === undefined ? {} : { texcoord0 }),
+        ...(texcoord1 === undefined ? {} : { texcoord1 }),
+        ...(texcoord2 === undefined ? {} : { texcoord2 }),
+        ...(texcoord3 === undefined ? {} : { texcoord3 }),
+        ...(texcoord4 === undefined ? {} : { texcoord4 }),
+        ...(texcoord5 === undefined ? {} : { texcoord5 }),
+        ...(texcoord6 === undefined ? {} : { texcoord6 }),
+        ...(texcoord7 === undefined ? {} : { texcoord7 }),
         ...(tangents === undefined ? {} : { tangents }),
         ...(joints0 === undefined ? {} : { joints0 }),
         ...(weights0 === undefined ? {} : { weights0 }),

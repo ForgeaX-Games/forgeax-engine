@@ -134,8 +134,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
           directionY: -1,
           directionZ: 0,
           cascadeCount: 1,
-          nearPlane: 0.1,
-          farPlane: 100,
+          shadowDistance: 100,
         },
       });
       world.spawn(
@@ -196,8 +195,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
           directionY: -1,
           directionZ: 0,
           cascadeCount: 1,
-          nearPlane: 0.1,
-          farPlane: 100,
+          shadowDistance: 100,
           pcfKernelSize,
         },
       });

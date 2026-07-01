@@ -43,7 +43,7 @@
     "@forgeax/engine-rhi-wgpu": "workspace:*"
   },
   "devDependencies": {
-    "@webgpu/types": "^0.1.70",
+    "@webgpu/types": "^0.1.71",
     "webgpu": "^0.4.0"
   }
 }

@@ -228,6 +228,83 @@ describe('replayInitialData Result narrow (w18)', () => {
     expect(writeTexture).toHaveBeenCalledTimes(1);
   });
 
+  // bug #8 (batch-3 CSM): a texture recorded as bgra8unorm[-srgb] is recreated on
+  // the replay device as rgba8unorm[-srgb] (adaptReplayFormat swaps R/B in the
+  // FORMAT). The snapshot blob holds raw BGRA bytes; seeding them verbatim into
+  // the RGBA texture swaps R<->B for every texel (orange floor -> purple tint).
+  // replayInitialData must R/B-swap the seed bytes for bgra source formats so the
+  // sampled texel reads identically. Non-bgra formats keep native byte order.
+  it('bgra8unorm texture seed: R/B channels swapped before writeTexture', () => {
+    // One 1x1 texel: B=10, G=20, R=30, A=40 (BGRA source order).
+    const src = new Uint8Array([10, 20, 30, 40]);
+    const blobPool = new Map<string, ArrayBuffer>([['hashBgra', src.buffer]]);
+    const tape = makeTape(
+      [
+        {
+          kind: 'createTexture',
+          handleId: 'tex:bgra',
+          desc: { size: { width: 1, height: 1 }, format: 'bgra8unorm', usage: 0x17 },
+        } as RhiCallEvent,
+        { kind: 'initialData', handleId: 'tex:bgra', dataHash: 'hashBgra' } as RhiCallEvent,
+      ],
+      blobPool,
+    );
+    const handleMap = new Map<string, unknown>([['tex:bgra', { __texture: true }]]);
+    let capturedData: Uint8Array | undefined;
+    const writeTexture = vi.fn((_dst: unknown, data: Uint8Array) => {
+      capturedData = data.slice();
+      return rOk(undefined);
+    });
+    const queue: any = { writeBuffer: vi.fn(), writeTexture };
+
+    const res = replayInitialData(
+      { kind: 'initialData', handleId: 'tex:bgra', dataHash: 'hashBgra' },
+      tape,
+      handleMap,
+      queue,
+    );
+
+    expect(res.ok).toBe(true);
+    expect(writeTexture).toHaveBeenCalledTimes(1);
+    // After swap the bytes must be RGBA: R=30, G=20, B=10, A=40 (R<->B swapped).
+    expect(Array.from(capturedData ?? [])).toEqual([30, 20, 10, 40]);
+    // The source blob must be left intact (swap operated on a copy, not the blob).
+    expect(Array.from(src)).toEqual([10, 20, 30, 40]);
+  });
+
+  it('rgba8unorm texture seed: bytes are NOT swapped (native order preserved)', () => {
+    const src = new Uint8Array([10, 20, 30, 40]);
+    const blobPool = new Map<string, ArrayBuffer>([['hashRgba', src.buffer]]);
+    const tape = makeTape(
+      [
+        {
+          kind: 'createTexture',
+          handleId: 'tex:rgba',
+          desc: { size: { width: 1, height: 1 }, format: 'rgba8unorm', usage: 0x17 },
+        } as RhiCallEvent,
+        { kind: 'initialData', handleId: 'tex:rgba', dataHash: 'hashRgba' } as RhiCallEvent,
+      ],
+      blobPool,
+    );
+    const handleMap = new Map<string, unknown>([['tex:rgba', { __texture: true }]]);
+    let capturedData: Uint8Array | undefined;
+    const writeTexture = vi.fn((_dst: unknown, data: Uint8Array) => {
+      capturedData = data.slice();
+      return rOk(undefined);
+    });
+    const queue: any = { writeBuffer: vi.fn(), writeTexture };
+
+    const res = replayInitialData(
+      { kind: 'initialData', handleId: 'tex:rgba', dataHash: 'hashRgba' },
+      tape,
+      handleMap,
+      queue,
+    );
+
+    expect(res.ok).toBe(true);
+    expect(Array.from(capturedData ?? [])).toEqual([10, 20, 30, 40]);
+  });
+
   it('failure: handleMap miss returns seed-initial-data-failed (lookup), no write', () => {
     const blobPool = new Map<string, ArrayBuffer>([['hashA', new Uint8Array([1]).buffer]]);
     const tape = makeTape(

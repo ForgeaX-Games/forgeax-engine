@@ -156,6 +156,7 @@ import {
 } from './errors';
 import { computeInvRangeSquared, degToCos } from './light-helpers';
 import { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from './resolve-asset-handle';
+import { getActiveCamera, selectActiveCameraIndex } from './systems/active-camera';
 import { selectPasses } from './systems/pass-selector';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
 
@@ -469,37 +470,49 @@ export interface ExtractedLights {
  * SkylightSnapshot -- extract-stage view of one Skylight entity
  * (feat-20260520-skylight-ibl-cubemap M4 / t26).
  *
- * `cubemapHandle` carries the packed u32 handle for
- * `Handle<CubeTextureAsset, 'shared'>`; the record stage resolves this
- * to GPU resources via `AssetRegistry.getCubemapGpuView(...)` and related
- * helpers (t13 asset-registry cubemapGpuHandles).
+ * `equirectHandle` carries the packed u32 handle for
+ * `Handle<EquirectAsset, 'shared'>`; the record stage drives the internal
+ * lazy cubemap projection from it and resolves the projected GPU cubemap via
+ * `GpuResourceStore.getCubemapGpuView(...)` and related helpers
+ * (feat-20260630 M3 / w16-w18). The snapshot carries NO projection status
+ * field: the status truth lives in the store's CubemapGpuEntry (D-3 SSOT);
+ * record queries it once per frame.
  *
  * `intensity` defaults to 1.0 via the Skylight component token defaults
  * (plan-strategy D-6: Skylight data flows through existing extract->record
  * pipeline; no independent ECS system).
  */
 export interface SkylightSnapshot {
-  // 0 = no cubemap supplied -> solid-color ambient via the white fallback
+  // 0 = no equirect supplied -> solid-color ambient via the white fallback
   // cube (record falls to fallback resources when no IBL views are cached).
-  readonly cubemapHandle: number;
+  readonly equirectHandle: number;
   readonly color: readonly [number, number, number];
   readonly intensity: number;
+  // feat-20260630 M3 / w19: the WINNING Skylight entity's packed handle (first
+  // archetype hit). Carried so the multi-Skylight once-warn can name which
+  // entity is used and which is ignored (F-8: warn carries conflicting entity
+  // info). 0 only if the bundle had no live entity (never happens for a hit).
+  readonly entityHandle: number;
 }
 
 /**
  * SkyboxSnapshot -- extract-stage view of one SkyboxBackground entity
  * (feat-20260531-skybox-env-background M2 / w5).
  *
- * `cubemapHandle` carries the packed u32 handle for
- * `Handle<CubeTextureAsset, 'shared'>`; the record stage resolves this
- * to GPU resources via `AssetRegistry.getCubemapGpuView(...)`.
+ * `equirectHandle` carries the packed u32 handle for
+ * `Handle<EquirectAsset, 'shared'>`; the record stage resolves the projected
+ * GPU cubemap via `GpuResourceStore.getCubemapGpuView(...)`.
  *
  * `mode` carries the raw `f32` column value (`SKYBOX_MODE_CUBEMAP = 0`).
  * First hit wins per plan-strategy D-6; multi-entity once-warn in record stage.
  */
 export interface SkyboxSnapshot {
-  readonly cubemapHandle: number;
+  readonly equirectHandle: number;
   readonly mode: number;
+  // feat-20260630 M3 / w19: the WINNING SkyboxBackground entity's packed handle
+  // (first archetype hit), so the multi-SkyboxBackground once-warn can name the
+  // used entity (F-8 parity with the Skylight warn).
+  readonly entityHandle: number;
 }
 
 export interface RenderableSnapshot {
@@ -1297,21 +1310,22 @@ export interface ExtractPipelineSurface {
  *
  * Formula (plan-strategy D-8, research F1):
  *   C_i = λ·n·(f/n)^(i/m) + (1-λ)·(n + i/m·(f-n))
- *   where i = 1..m, n = nearPlane, f = farPlane, m = cascadeCount
+ *   where i = 1..m, n = near, f = far, m = cascadeCount
  *
- * Uses the DirectionalLight component's nearPlane/farPlane (not camera
- * near/far — D-8). Returns strictly monotonic view-space z depths (positive).
+ * The coverage range is [camera near, DirectionalLight.shadowDistance] — the
+ * near end derives from the active camera, the far end is the shadowDistance
+ * knob. Returns strictly monotonic view-space z depths (positive).
  *
- * When `farPlane <= nearPlane + ε` (ε=1e-6), throws ShadowInvalidConfigError
+ * When `far <= near + ε` (ε=1e-6), throws ShadowInvalidConfigError
  * (charter P3 explicit failure — research F2 guarantees formula stability
  * but degenerate configuration must be surfaced to the caller).
  *
- * @param nearPlane - near plane of the shadow casting range (component field)
- * @param farPlane - far plane of the shadow casting range (component field)
+ * @param nearPlane - near of the shadow casting range (from the camera near)
+ * @param farPlane - far of the shadow casting range (DirectionalLight.shadowDistance)
  * @param cascadeCount - number of cascades (1..4)
  * @param splitLambda - PSSM split weight (0 = pure uniform, 1 = pure log)
  * @returns Array of m split depths (view-space z); length = cascadeCount,
- *   guaranteed strictly monotonic, last element = farPlane.
+ *   guaranteed strictly monotonic, last element = far.
  *
  * @internal exported for w6/w7 testing only; production callers route through
  *   extractFrame which validates cascadeCount/splitLambda via component schema.
@@ -1398,7 +1412,7 @@ export function pssmSplit(
 ): Float32Array {
   const EPS = 1e-6;
   if (farPlane <= nearPlane + EPS) {
-    throw new ShadowInvalidConfigError('farPlane', farPlane, nearPlane + EPS);
+    throw new ShadowInvalidConfigError('shadowDistance', farPlane, nearPlane + EPS);
   }
 
   const result = new Float32Array(cascadeCount);
@@ -1524,6 +1538,10 @@ export function extractFrame(
   const worldInternal = world as WorldInternalView;
 
   const cameras: CameraSnapshot[] = [];
+  // feat-20260630-viewport M2 / w12 / plan-strategy D-2: track the entity id of
+  // each surfaced camera in query order, parallel to `cameras[]`, so the
+  // ActiveCamera resource (if any) can pick which one renders by entity id.
+  const cameraEntities: number[] = [];
   const cameraQuery = createQueryState({ with: [Camera, Transform, Entity] });
   queryRun(cameraQuery, world, (bundle) => {
     const cam = bundle.Camera;
@@ -1576,8 +1594,30 @@ export function extractFrame(
         clearB: cam.clearB[i] ?? 0,
         clearA: cam.clearA[i] ?? 1,
       });
+      cameraEntities.push(entity as number);
     }
   });
+
+  // feat-20260630-viewport M2 / w12 / plan-strategy D-2: by-entity-id active
+  // camera selection. When an `ActiveCamera` resource names one of the surfaced
+  // cameras, prune `cameras[]` to that single snapshot so the record stage
+  // renders through it (and does NOT fire `render-system-multi-camera`). When
+  // the resource is absent, or names an entity that is not a surfaced camera,
+  // `selectActiveCameraIndex` returns -1 and `cameras[]` is left intact —
+  // preserving the existing first-hit (and multi-camera diagnostic) behavior
+  // unchanged (backward compatible). The engine reads only the entity id; it
+  // has no notion of which camera is editor vs game (OOS-4 — engine neutral).
+  const activeCameraIndex = selectActiveCameraIndex(
+    cameraEntities,
+    getActiveCamera(world)?.entity,
+  );
+  if (activeCameraIndex >= 0) {
+    const selected = cameras[activeCameraIndex];
+    if (selected !== undefined) {
+      cameras.length = 0;
+      cameras.push(selected);
+    }
+  }
 
   // Three-query union (M2 / w16 / AC-03): directional has no Transform
   // dependency (sun-like infinite-source semantics); point + spot pull
@@ -1597,8 +1637,7 @@ export function extractFrame(
         mapSize: number;
         depthBias: number;
         normalBias: number;
-        nearPlane: number;
-        farPlane: number;
+        shadowDistance: number;
         pcfKernelSize: number;
       }
     | undefined;
@@ -1628,8 +1667,7 @@ export function extractFrame(
           mapSize: l.mapSize[i] ?? 2048,
           depthBias: l.depthBias[i] ?? 0.005,
           normalBias: l.normalBias[i] ?? 0.05,
-          nearPlane: l.nearPlane[i] ?? 0.1,
-          farPlane: l.farPlane[i] ?? 50,
+          shadowDistance: l.shadowDistance[i] ?? 200,
           pcfKernelSize: l.pcfKernelSize[i] ?? 3,
         };
       }
@@ -1853,13 +1891,18 @@ export function extractFrame(
       const cc = sf.cascadeCount;
       const sl = sf.splitLambda;
       const cb = sf.cascadeBlend;
-      const sNear = sf.nearPlane;
-      const sFar = sf.farPlane;
+      // Coverage range: near derives from the active camera near (no separate
+      // near knob — any value other than camera near drops near shadows or
+      // wastes cascade-0 resolution); far is the component's shadowDistance.
+      // Fallback camera near (0.1) only when no camera exists this frame; the
+      // CSM matrices below are gated on cameraData anyway.
+      const sNear = cameraData?.near ?? 0.1;
+      const sFar = sf.shadowDistance;
       shadowMapSize = mapSize;
       cascadeCount = Math.round(cc);
       cascadeBlend = cb;
 
-      // PSSM split planes (D-8: component nearPlane/farPlane, not camera).
+      // PSSM split planes: [camera near, shadowDistance], not the camera far.
       const splits = pssmSplit(sNear, sFar, cascadeCount, sl);
       splitPlanes = splits;
 
@@ -2134,12 +2177,12 @@ export function extractFrame(
   queryRun(skylightQuery, world, (bundle) => {
     const s = bundle.Skylight;
     for (let i = 0; i < bundle.Entity.self.length; i++) {
-      // cubemap is OPTIONAL: an omitted field zero-inits to handle 0, which
-      // record treats as "no cubemap" -> solid-color ambient via the white
-      // fallback cube. A Skylight WITHOUT a cubemap is still a valid snapshot
-      // (the prior `cubemapRaw !== undefined` gate dropped color-only
+      // equirect is OPTIONAL: an omitted field zero-inits to handle 0, which
+      // record treats as "no equirect" -> solid-color ambient via the white
+      // fallback cube. A Skylight WITHOUT an equirect is still a valid snapshot
+      // (the prior `equirectRaw !== undefined` gate dropped color-only
       // skylights, leaving the scene black -- the downstream gap #4).
-      const cubemapRaw = s.cubemap?.get(i);
+      const equirectRaw = s.equirect?.get(i);
       const intensity = s.intensity?.[i] ?? 1.0;
       const colorR = s.colorR?.[i] ?? 1.0;
       const colorG = s.colorG?.[i] ?? 1.0;
@@ -2147,9 +2190,11 @@ export function extractFrame(
       skylightCount += 1;
       if (skylight === undefined) {
         skylight = {
-          cubemapHandle: cubemapRaw !== undefined ? Math.round(cubemapRaw) : 0,
+          equirectHandle: equirectRaw !== undefined ? Math.round(equirectRaw) : 0,
           color: [colorR, colorG, colorB],
           intensity,
+          // w19: winning entity handle for the multi-Skylight once-warn (F-8).
+          entityHandle: bundle.Entity.self[i] ?? 0,
         };
       }
     }
@@ -2164,13 +2209,15 @@ export function extractFrame(
   queryRun(skyboxQuery, world, (bundle) => {
     const s = bundle.SkyboxBackground;
     for (let i = 0; i < bundle.Entity.self.length; i++) {
-      const cubemapRaw = s.cubemap?.get(i);
+      const equirectRaw = s.equirect?.get(i);
       const modeRaw = s.mode?.[i] ?? 0;
       skyboxCount += 1;
-      if (skybox === undefined && cubemapRaw !== undefined) {
+      if (skybox === undefined && equirectRaw !== undefined) {
         skybox = {
-          cubemapHandle: Math.round(cubemapRaw),
+          equirectHandle: Math.round(equirectRaw),
           mode: modeRaw,
+          // w19: winning entity handle for the multi-SkyboxBackground warn (F-8).
+          entityHandle: bundle.Entity.self[i] ?? 0,
         };
       }
     }
@@ -2596,7 +2643,14 @@ export function extractFrame(
           // are UBO-aligned (no `texture` / `baseColor` / `pivot` / `slices`
           // / `sliceMode` keys reaching this code path). AGENTS.md §Change
           // stance: "no shim layer, no v1/v2 dual-path".
-          const isSprite = firstPassShader === 'forgeax::sprite';
+          //
+          // feat-20260624 M1' / t6: `'forgeax::sprite-lit'` walks the same
+          // sprite-family vertex path (VsOut byte-identical, paramSchema
+          // mirror) so the SAME 2 folds apply — extending `isSprite` to
+          // cover both shader ids keeps the narrowing-point count at 1
+          // (plan-strategy §1.6 + D-1: mirror sprite, no new branch).
+          const isSprite =
+            firstPassShader === 'forgeax::sprite' || firstPassShader === 'forgeax::sprite-lit';
           const inferredShadingModel: 'unlit' | undefined =
             firstPassShader === 'forgeax::default-unlit' ? 'unlit' : undefined;
 
@@ -3079,7 +3133,14 @@ export function extractFrame(
           // axis on sprite.wgsl). Post-collapse (PR #520): sprite is no longer
           // a `shadingModel` enum member; identification is via the first-pass
           // `materialShaderId === 'forgeax::sprite'` (OOS-1 path retained).
-          if (materialSnap.materialShaderId !== 'forgeax::sprite') {
+          //
+          // feat-20260624 M1' / t6: `'forgeax::sprite-lit'` also walks the same
+          // per-instance UV region vertex path (VsOut byte-identical, paramSchema
+          // mirror); accept either shader id.
+          if (
+            materialSnap.materialShaderId !== 'forgeax::sprite' &&
+            materialSnap.materialShaderId !== 'forgeax::sprite-lit'
+          ) {
             worldInternal._routeError(
               new SpriteInstancesRequiresSpriteShaderError(
                 entity as unknown as number,

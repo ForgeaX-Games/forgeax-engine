@@ -232,4 +232,49 @@ describe('B1: getTape inFrameHandleIds backward-refs (fix 2)', () => {
     const prefixBufferCreates = tape.events.filter((e: any) => e.kind === 'createBuffer');
     expect(prefixBufferCreates.length).toBeGreaterThanOrEqual(1);
   });
+
+  // bug #8 (batch-3 CSM): a pre-arm resource reachable ONLY through an in-frame
+  // createBindGroup's backward edge -- with NO direct usage event naming it --
+  // must still be pulled into the bootstrap prefix. The test above passed for
+  // the wrong reason: its pre-arm buffer was ALSO hit by an in-frame writeBuffer,
+  // so _collectFrameReferencedHandleIds seeded it via the writeBuffer case. CSM's
+  // composite-pass bind group sampled a pre-arm TextureView that no usage event
+  // referenced directly, so the closure never seeded it and the tape deserialized
+  // as tape-handle-graph-broken. This case isolates that path: a pre-arm buffer
+  // bound by an in-frame createBindGroup with NO writeBuffer/setBindGroup usage.
+  it('pre-arm resource referenced ONLY by in-frame createBindGroup is prefixed', async () => {
+    const { debugInst, proxyDevice } = await bootstrapWithRealDevice();
+
+    // Pre-arm buffer + BGL (created before arm; NOT touched by any usage event).
+    const bufRes = proxyDevice.createBuffer({ size: 64, usage: 16 });
+    expect(bufRes.ok).toBe(true);
+    const buf = (bufRes as any).value;
+    const bglRes = proxyDevice.createBindGroupLayout({ entries: [] });
+    expect(bglRes.ok).toBe(true);
+    const bgl = (bglRes as any).value;
+
+    // Arm, then build a bind group referencing the pre-arm buffer. Crucially:
+    // NO writeBuffer, NO setBindGroup -- the only edge to `buf` is this in-frame
+    // createBindGroup's resourceHandleIds backward ref.
+    debugInst.arm(1);
+    const bgRes = proxyDevice.createBindGroup({
+      layout: bgl,
+      entries: [
+        {
+          binding: 0,
+          resource: { kind: 'buffer' as const, value: { buffer: buf, offset: 0, size: 64 } },
+        },
+      ],
+    });
+    expect(bgRes.ok).toBe(true);
+    debugInst.onFrameEnd();
+
+    const tape = debugInst.getTape() as any;
+    expect(tape).toBeDefined();
+    // Must NOT be a DebugError (tape-handle-graph-broken before the fix).
+    expect(tape).not.toHaveProperty('code');
+    // The pre-arm buffer's createBuffer must land in the prefix for self-containment.
+    const bufferCreates = tape.events.filter((e: any) => e.kind === 'createBuffer');
+    expect(bufferCreates.length).toBeGreaterThanOrEqual(1);
+  });
 });

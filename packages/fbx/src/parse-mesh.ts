@@ -16,6 +16,10 @@ export interface FbxRawDocument {
   readonly meshes?: readonly FbxRawMesh[];
 }
 
+// feat-20260629-multi-uv-set-support m1-w6: TEXCOORD key prefix for attribute
+// naming. Used by both parse-mesh (de-index path) and to-asset-pack (consumer).
+const TEXCOORD_PREFIX = 'TEXCOORD_';
+
 // FBX maps positions per control-point but normals / UVs per polygon-vertex
 // (per index corner). When an attribute's element count equals the index count
 // (and not the position count), it is corner-mapped and must be de-indexed:
@@ -37,17 +41,33 @@ export function parseMesh(raw: FbxRawMesh, sourceIndex: number): MeshPod {
   const posCount = raw.vertices.length / 3;
   const idxCount = rawIndices?.length ?? 0;
   const normal = raw.attributes.NORMAL;
-  const uv = raw.attributes.TEXCOORD_0;
-  const normalCorner = normal !== undefined && isCornerMapped(normal.length, 3, posCount, idxCount);
-  const uvCorner = uv !== undefined && isCornerMapped(uv.length, 2, posCount, idxCount);
 
-  if (rawIndices !== undefined && (normalCorner || uvCorner)) {
+  // Determine if any attribute is corner-mapped (NORMAL or any TEXCOORD_n).
+  const normalCorner = normal !== undefined && isCornerMapped(normal.length, 3, posCount, idxCount);
+  const uvCornerMap = new Map<string, boolean>();
+  for (const key of Object.keys(raw.attributes)) {
+    if (key.startsWith(TEXCOORD_PREFIX)) {
+      const arr = raw.attributes[key];
+      if (arr !== undefined && isCornerMapped(arr.length, 2, posCount, idxCount)) {
+        uvCornerMap.set(key, true);
+      }
+    }
+  }
+  const hasAnyCorner = normalCorner || uvCornerMap.size > 0;
+
+  if (rawIndices !== undefined && hasAnyCorner) {
     // De-index: one expanded vertex per corner. Position pulled through the
     // index; corner-mapped attributes copied straight; per-vertex attributes
     // gathered through the index. New index buffer is the identity sequence.
     const expandedPos = new Float32Array(idxCount * 3);
     const expandedNormal = normal !== undefined ? new Float32Array(idxCount * 3) : undefined;
-    const expandedUv = uv !== undefined ? new Float32Array(idxCount * 2) : undefined;
+    // feat-20260629-multi-uv-set-support m1-w6: expand all TEXCOORD_n sets.
+    const expandedUvs = new Map<string, Float32Array>();
+    for (const key of Object.keys(raw.attributes)) {
+      if (key.startsWith(TEXCOORD_PREFIX)) {
+        expandedUvs.set(key, new Float32Array(idxCount * 2));
+      }
+    }
     for (let corner = 0; corner < idxCount; corner++) {
       const vi = rawIndices[corner] ?? 0;
       expandedPos[corner * 3 + 0] = raw.vertices[vi * 3 + 0] ?? 0;
@@ -59,17 +79,22 @@ export function parseMesh(raw: FbxRawMesh, sourceIndex: number): MeshPod {
         expandedNormal[corner * 3 + 1] = normal[src * 3 + 1] ?? 0;
         expandedNormal[corner * 3 + 2] = normal[src * 3 + 2] ?? 0;
       }
-      if (uv !== undefined && expandedUv !== undefined) {
-        const src = uvCorner ? corner : vi;
-        expandedUv[corner * 2 + 0] = uv[src * 2 + 0] ?? 0;
-        expandedUv[corner * 2 + 1] = uv[src * 2 + 1] ?? 0;
+      for (const [key, expanded] of expandedUvs) {
+        const srcArr = raw.attributes[key];
+        if (srcArr !== undefined) {
+          const src = uvCornerMap.get(key) ? corner : vi;
+          expanded[corner * 2 + 0] = srcArr[src * 2 + 0] ?? 0;
+          expanded[corner * 2 + 1] = srcArr[src * 2 + 1] ?? 0;
+        }
       }
     }
     const identity = new Uint32Array(idxCount);
     for (let i = 0; i < idxCount; i++) identity[i] = i;
     const expandedAttrs: Record<string, Float32Array> = {};
     if (expandedNormal !== undefined) expandedAttrs.NORMAL = expandedNormal;
-    if (expandedUv !== undefined) expandedAttrs.TEXCOORD_0 = expandedUv;
+    for (const [key, val] of expandedUvs) {
+      expandedAttrs[key] = val;
+    }
     return {
       ...(raw.name !== undefined ? { name: raw.name } : {}),
       vertices: expandedPos,
@@ -93,11 +118,7 @@ export function parseMesh(raw: FbxRawMesh, sourceIndex: number): MeshPod {
 
   const attributes: Record<string, Float32Array | Uint16Array | Uint32Array> = {};
   for (const [key, arr] of Object.entries(raw.attributes)) {
-    if (key === 'NORMAL' || key === 'TEXCOORD_0') {
-      attributes[key] = new Float32Array(arr);
-    } else {
-      attributes[key] = new Float32Array(arr);
-    }
+    attributes[key] = new Float32Array(arr);
   }
 
   const indexCount = indices?.length ?? 0;

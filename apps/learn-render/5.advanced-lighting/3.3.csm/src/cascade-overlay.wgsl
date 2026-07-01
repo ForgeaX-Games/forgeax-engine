@@ -5,8 +5,8 @@
 //
 // Tints the rendered scene by which PSSM cascade band a screen-space view ray
 // falls into. The four split distances are the engine PSSM formula evaluated
-// demo-side (cascadeCount=4, splitLambda=0.75, near=0.1, far=50 -- the same
-// {cascadeCount, splitLambda, nearPlane, farPlane} spawned in main.ts), baked
+// demo-side (cascadeCount=4, splitLambda=0.75, near=camera near, far=50 -- the
+// PSSM range is [camera near, shadowDistance]; shadowDistance=50 in main.ts), baked
 // here as the SPLIT_* constants (cascade-overlay.ts asserts these match the
 // recomputed values). The view-space depth of each screen direction is
 // reconstructed by applying the inverse projection matrix to the pixel's NDC.

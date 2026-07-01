@@ -554,19 +554,32 @@ function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]): Set<
         refs.add(we.destination.textureHandleId);
         break;
       }
+      case 'createBindGroup':
+      case 'createPipelineLayout':
+      case 'createRenderPipeline':
+      case 'createComputePipeline':
+      case 'createTextureView': {
+        // An in-frame-created resource may reference a PRE-ARM resource via its
+        // backward edges (e.g. a composite/FXAA bind group built mid-frame that
+        // samples a scratch TextureView created at setup; or an in-frame
+        // createTextureView of a pre-arm texture). Those pre-arm handles are
+        // reachable ONLY through this create* event's backward refs — no usage
+        // event names them directly — so without collecting them here they never
+        // become prefix seeds and the tape deserializes as non-self-contained
+        // (tape-handle-graph-broken). Collect the edges; getTape's prefixSeedIds
+        // filter then drops any that are themselves in-frame declared, leaving
+        // only the genuinely pre-arm dependencies to seed the bootstrap closure.
+        for (const ref of _getCreateEventReferencedHandleIds(e)) refs.add(ref);
+        break;
+      }
       case 'frameMark':
       case 'createBuffer':
       case 'createTexture':
       case 'createSampler':
       case 'createBindGroupLayout':
-      case 'createBindGroup':
-      case 'createPipelineLayout':
-      case 'createRenderPipeline':
-      case 'createComputePipeline':
       case 'createShaderModule':
       case 'createCommandEncoder':
-      case 'createTextureView':
-        // Declaration events — no references to collect.
+        // Leaf declaration events — no backward references to collect.
         break;
       default: {
         // Exhaustiveness guard: if a new RhiCallEvent member is added to the

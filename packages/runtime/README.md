@@ -6,6 +6,8 @@
 > **shadingModel 选型命题（feat-20260518-pbr-direct-lighting-mvp / AC-17 + feat-20260519-light-casters-point-spot-pbr / AC-11）**——`MaterialAsset.shadingModel:'standard'` 走 GGX direct lighting (`D_GGX × V_SmithCorrelated × F_Schlick + Lambert/π`)，**0 个灯光（directional + point + spot 合计 0）时输出全黑**——此为物理正确而非渲染 bug。standard 路径需 `directional + point + spot 合计 ≥ 1`；任一种类的一盏灯即可。`shadingModel:'unlit'` 才是"不管灯光"的入口（`baseColor × baseColorTexture` 直出）。新写 demo 选 `'standard'` 必须**同步 spawn 至少一盏 DirectionalLight / PointLight / SpotLight**，否则黑屏；末尾兜底见 §Common pitfalls。
 >
 > **cone 单位 度 (deg)，不是弧度也不是 cos**——`SpotLight.innerConeDeg` / `outerConeDeg` 为半角度数（half-angle in degrees）；引擎 host 侧 `degToCos(deg)` 转换至 cos 后送 GPU（charter F1 host-side parity，feat-20260519 D-S6）。`range` 缺省 `Infinity` 表示无衰减距离上限。
+>
+> **sprite vs sprite-lit 选型（feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1'）**——`MaterialAsset.passes[0].shader` 切换是 1 字符串 1 步选型：`'forgeax::sprite'` 走 unlit 直采纹理（默认；任意灯光不影响），`'forgeax::sprite-lit'` 走 per-light forward + Half-Lambert squared diffuse + fragment-side hardcoded normal `vec3(0,0,1)` —— **需要场景至少 1 个 DirectionalLight / PointLight / SpotLight**，否则视觉全黑（与 3D `'standard'` 同理）。post-PR-#520 `MaterialSnapshot.shadingModel` 闭合 union 仍是 `'unlit' | undefined` 2 档；sprite-lit 不扩 union，走 `materialShaderId === 'forgeax::sprite-lit'` 字符串路由 mirror sprite —— 通用 schema-driven 通道，BGL JSON 与 sprite byte-identical（AC-07）。OOS-1 normal-map 跟进 `feat-future-sprite-lit-normal-map`。
 
 > [!IMPORTANT]
 > **WebGL2 legacy stub deleted** (feat-20260525-rhi-delete-webgl2-stub). `createRenderer` now exclusively uses WebGPU backends (rhi-webgpu / rhi-wgpu). All `renderer.shader` / `renderer.assets` are non-null after successful construction. `@forgeax/engine-rhi` contract (`Result<T, RhiError>` / `device.caps` / 14 opaque handles) always in effect.
@@ -182,7 +184,7 @@ Consume via `switch (err.code)` without default; TS guards exhaustiveness. Error
 
 - 非 builtin mesh / texture 走 **pull**：record 阶段首次访问该 handle 时同步 `ensureResident(handle, pod)` 建资源（早于首个 pixel readback —— `world.update` → `renderer.draw`（内部 `recordFrame` 同步录制即首访点）→ submit → readback）。texture 的一次性 mipmap-pipeline build 已前移到 `renderer.ready` 预热，故首访 `ensureResident` 是纯同步 encoder 活，不破同步 `draw` 帧契约。
 - **builtin mesh**（`HANDLE_CUBE` / `HANDLE_TRIANGLE` / `HANDLE_QUAD` / `HANDLE_SPHERE`）**不**走 `ensureResident`：`createRenderer` 在 `renderer.ready` 的 step-3 直接上传 + `pipelineState.meshes` 兜底，首帧即就绪。
-- **cubemap** 是独立 eager 路径（非 pull）：`store.uploadCubemapFromEquirect(srcHandle, srcPod)` 内调 `deriveRenderDataCubemap` 拿描述符 → 经 wire 期注入的 `registerCube` mint cube handle（CPU 编目仍归 registry）→ 建 GPU 资源 + IBL precompute。store 仍对 `AssetRegistry` 零 import。
+- **cubemap** 是引擎内部懒投影路径（非 pull、非用户 API，feat-20260630）：AI 用户声明 `Skylight{equirect}` / `SkyboxBackground{equirect}`，render-system record 臂在首次见到 equirect handle 时 fire-and-forget 触发 package-internal `store._uploadCubemapFromEquirect(world, srcHandle, srcPod)`——内调 `deriveRenderDataCubemap` 拿描述符 → 经 wire 期注入的 `registerCube` mint cube handle（CPU 编目仍归 registry）→ 建 GPU 资源 + IBL precompute。投影态由 store `CubemapGpuEntry.status`（`pending`/`ready`/`failed`）单一权威承载；投影完成前绑白 cube fallback、失败 fire `equirect-projection-failed` 且不重试。store 仍对 `AssetRegistry` 零 import。
 
 ## RenderPipeline layers（registerPipeline / RenderPipelineAsset / RenderPipelineContext）
 
@@ -778,7 +780,7 @@ import {
 | `MeshFilter` | `assetHandle: ref` (u32) | 必填；未注册 → fire onError + skip entity |
 | `MeshRenderer` | `materials: array<shared<MaterialAsset>>`（spawn payload 是 `Partial<ShapeOf<S>>`，字段可省略；feat-20260608 M2 / w7 multi-material array：positional `materials[i]` ↔ `MeshAsset.submeshes[i]`；feat-20260614 handle->shared rename） | `materials` undefined / 空数组 → `defaultMaterialSnapshot()` mid-grey unlit（D-Q7 case B，no onError）；`materials.length !== submeshes.length` → fire `AssetError 'mesh-renderer-material-count-mismatch'` + entity skip（feat-20260608 M2 / w11）；`materials[i]` 非零但未注册 → fire `RhiError 'asset-not-registered'` + entity skip（D-Q7 case C） |
 | `Camera` | `fov + aspect + near + far + clearR/G/B/A + tonemap + exposure + whitePoint + antialias + bloom* + ...`（projection + clear + tonemap + AA + bloom 字段族） | spawn 时显式给（不自动）；clear 默认 `[0, 0, 0, 1]`；详见 §Camera clear color + §Anti-Aliasing 子章节 |
-| `DirectionalLight` | `directionX/Y/Z + colorR/G/B + intensity + castShadow`（7 f32 + 1 bool gate）+ `cascadeCount + splitLambda + cascadeBlend + mapSize + depthBias + normalBias + nearPlane + farPlane + pcfKernelSize`（9 f32 shadow params，feat-20260621 merge） | 0 light = unlit fallback（合法，不 fire onError）；castShadow 默认 true，zero-config spawn 即投射 cascaded shadow maps
+| `DirectionalLight` | `directionX/Y/Z + colorR/G/B + intensity + castShadow`（7 f32 + 1 bool gate）+ `cascadeCount + splitLambda + cascadeBlend + mapSize + depthBias + normalBias + shadowDistance + pcfKernelSize`（8 f32 shadow params，feat-20260621 merge；`nearPlane`/`farPlane` 塌为 `shadowDistance`，近端取相机 near） | 0 light = unlit fallback（合法，不 fire onError）；castShadow 默认 true，zero-config spawn 即投射 cascaded shadow maps
 
 **错误分档表**（与 AGENTS.md `§ECS render bridge` 错误分档表同结构 SSOT；AI 用户 `renderer.onError(err => switch(err.code) {...})` 主消费方式 + `await renderer.ready` 主 reject 方式）：
 
@@ -933,7 +935,7 @@ world.spawn({ component: DirectionalLight, data: {
   directionX: 0.2, directionY: -0.98, directionZ: 0,
   colorR: 1, colorG: 1, colorB: 1, intensity: 1,
   cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2,
-  mapSize: 2048, nearPlane: 0.1, farPlane: 50,
+  mapSize: 2048, shadowDistance: 200,
 } }).unwrap();
 
 // 关闭阴影（castShadow: false，shadow 字段仍存但校验跳过）：
@@ -972,6 +974,82 @@ canvas.addEventListener('click', (e) => {
 - **math 层原语**（高级组装）：`ray.*`（`rayAabbIntersects(ray, box3) → {hit, tmin}`）+ `mat4.unproject` + `screenToRay(out, sx, sy, vpW, vpH, view, proj, kind)`，全 `@forgeax/engine-math` 导出、纯函数 out-param 风格。
 
 可见验收：`apps/hello/picking`（点击立方体高亮）+ structural-only dawn-node smoke（断言 `pick` 返回预期 entity + miss undefined）。
+
+## Vertex Picking（屏幕 → 最近顶点查询）
+
+> feat-20260630-vertex-snapping-picking — 逐三角形顶点查询，对标编辑器顶点吸附工作流。引擎只查询，不编辑——吸附位移计算、gizmo、拖拽交互全部留在编辑器侧。
+
+**第一跳 — 一行拿到命中顶点：**
+
+```ts
+import { pickVertexOnEntity, type VertexHit } from '@forgeax/engine-runtime';
+
+// Single-entity query (adsorption step 1: find the source vertex)
+// NOTE: throws PickError only if cameraEntity has no Camera component (see error
+// table below). If cameraEntity is guaranteed valid, call directly; otherwise wrap
+// in try-catch. A normal miss is NOT an error — it returns undefined.
+const hit = pickVertexOnEntity(world, cameraEntity, screenX, screenY, vpW, vpH, entity);
+if (hit) {
+  // hit.worldPos: world-space position of the nearest vertex (Vec3Like)
+  // hit.vertexIndex: index into the vertex position buffer
+  // hit.screenDist: screen-space pixel distance from query point (non-negative)
+  // hit.worldDist: perpendicular 3D distance from vertex to pick ray (non-negative)
+  // hit.deformed: true when mesh is skinned (rest-pose worldPos, see below)
+}
+```
+
+**第二跳 — 全场景查询 + 多候选模式：**
+
+```ts
+import { pickVertex } from '@forgeax/engine-runtime';
+
+// Full-scene query (adsorption step 2: find target vertex anywhere)
+const nearest = pickVertex(world, cameraEntity, screenX, screenY, vpW, vpH);
+if (nearest) { /* globally nearest VertexHit | undefined */ }
+
+// Multi-candidate mode: return up to N candidates sorted by screenDist ascending
+const candidates = pickVertex(world, cameraEntity, screenX, screenY, vpW, vpH, { limit: 5 });
+// candidates: VertexHit[] — empty array on miss; limit > available returns all hits
+```
+
+**第三跳 — 签名与返回：**
+
+| 函数 | 签名 | 返回 |
+|:--|:--|:--|
+| `pickVertexOnEntity` | `(world, cameraEntity, screenX, screenY, vpW, vpH, entity, options?)` | Without `options`: `VertexHit \| undefined` |
+| `pickVertexOnEntity` | `(world, cameraEntity, screenX, screenY, vpW, vpH, entity, { limit })` | `VertexHit[]` (sorted by `screenDist` asc, empty on miss) |
+| `pickVertex` | `(world, cameraEntity, screenX, screenY, vpW, vpH, options?)` | Without `options`: `VertexHit \| undefined` |
+| `pickVertex` | `(world, cameraEntity, screenX, screenY, vpW, vpH, { limit })` | `VertexHit[]` (globally sorted by `screenDist` asc, empty on miss) |
+
+`VertexHit` 字段表：
+
+| 字段 | 类型 | 语义 |
+|:--|:--|:--|
+| `entity` | `EntityHandle` | 命中实体，调用方据此 `world.get(entity, Transform)` 读取变换 |
+| `vertexIndex` | `number` | 顶点位置 buffer 索引（0-based），用于定位到具体顶点 |
+| `worldPos` | `Vec3Like` | 顶点世界空间坐标（`[x, y, z]` 或 `Float32Array` 三元组；D-7：用 `Vec3Like` 而非 branded `Vec3`，与 `PickHit.point` 同构） |
+| `screenDist` | `number` | 屏幕空间投影的像素距离（非负），到查询屏幕坐标的欧氏距离 |
+| `worldDist` | `number` | 顶点世界位置到拾取射线的最短 3D 垂直距离（非负；点到射线正交对偶——屏幕 vs 世界距离并存） |
+| `deformed` | `boolean` | `true` 当 mesh 有 skinIndex 与 skinWeight 双属性（skinned mesh）；此时 `worldPos` 是 **rest-pose** 经 `Transform.world` 变换的位置，**不反映 GPU skinning 变形**（OOS-3）。静态 mesh 为 `false` |
+
+**中段细节 — 排序语义、退化策略、propagate 前置：**
+
+- **排序语义**（AC-04/AC-05）：无 `{ limit }` 时返回 `screenDist` 最小的单个顶点。传 `{ limit }` 时返回按 `screenDist` 升序排列的 `VertexHit[]`。每条 `VertexHit` 同时携带 `screenDist`（屏幕像素距离）与 `worldDist`（点到射线 3D 垂距），形成"屏幕 / 世界"正交对偶——调用方按需择一排序或加权。**屏幕外但相机前方**的顶点（`onScreen: false, behind: false`）**纳入候选**——吸附操作可能想吸刚出屏幕边缘的顶点；behind-camera 顶点（`worldToScreen` 返回 `behind=true`）**被排除**。
+- **退化策略**（AC-09）：(1) `triangle-strip` / `line-list` / `line-strip` / `point-list` 拓扑 submesh **被跳过**不参与三角求交（不崩溃、不报错、不近似）；(2) 无 index buffer 的 mesh **锁定为非索引三角序列**处理——每连续 3 顶点构成一面，对齐 WebGPU `draw` 非索引语义；(3) `Uint16Array` 或 `undefined` 的 position 属性——该 mesh **被跳过**（照搬 `computeAABB` 三分支：`Float32Array` 直用、`ArrayBuffer` 转 `new Float32Array(buf)`、其余跳过）；(4) `NaN` / `Inf` 顶点坐标 **被排除**不污染排序；(5) 空网格（0 顶点 / 0 三角）→ 返回 `undefined` 或空数组。
+- **builtin mesh 降级**（AC-07）：builtin mesh（`CUBE` / `TRIANGLE` / `QUAD` / `SPHERE` / `NINESLICE_QUAD`）无 AABB，AABB 粗筛缺失时**降级逐顶点遍历**——不依赖 `feat-20260618` 的合入时序。
+- **`deformed` 语义声明**（AC-08）：`deformed === true` 当且仅当 mesh 的 `attributes.skinIndex` 与 `attributes.skinWeight` **双存在**（判据 SSOT：`asset-registry.ts:1417`）。此时 `worldPos` 是 rest-pose 经 `Transform.world` 变换的位置，**不反映 GPU skinning 变形**。引擎当前无 morph 数据源（gltf importer 拒绝 morph），故不会出现 morph deformed 顶点。
+- **propagateTransforms 前置契约**（D-9）：调用 `pickVertexOnEntity` / `pickVertex` 前，`propagateTransforms(world)` 必须已跑当前帧——函数内部直接读 `Transform.world` 列主序 mat4，不触发重新传布。此契约与 `pick()` **完全同构**（`pick.ts:26-32`）。
+
+**末尾兜底 — 错误 code 表：**
+
+`PickError` 从同一入口导出：`import { PickError } from '@forgeax/engine-runtime';`，按 `err.code` 穷举分支。
+
+| `PickError.code` | 触发条件 | 语义 |
+|:--|:--|:--|
+| `'camera-component-missing'` | `cameraEntity` 无 `Camera` 组件 | **不可恢复**（throw）；`.hint` 引导 AI 用户排查 Camera spawn；`.detail.cameraEntity` 标明参数 |
+| 无命中 / 空白 mesh / 顶点缺失 / 降级拓扑 | — | **可恢复**：返回 `undefined` 或空数组（与 `pick()` 一致——错误信道与 miss 物理分离，charter P3） |
+
+**零新 error code**（D-8）：`pickVertex*` 复用 `PickError` 的单成员 closed-union。唯一 throw 路径仍是 `camera-component-missing`——所有顶点缺失/空白/降级场景均是可恢复 miss，走 `undefined` / `[]` 而非 throw，让批量吸附查询循环不被单次 miss 打断。
 
 ## Transforms
 
@@ -1144,7 +1222,7 @@ palette `M_i` **已是完整世界变换**——shader 端不额外左乘 `meshe
 | `DirectionalLight` | — (世界空间方向，不依赖 entity Transform) | `directionX/Y/Z: f32` (outgoing direction，host upload 原值，shader 内部取负成 L) + `colorR/G/B: f32` + `intensity: f32` | N≤1 | feat-20260518 既有；direction 缺省 `(0, -1, 0)` |
 | `PointLight` | **必须搭配 `Transform`**（位置由 Transform 决定） | `colorR/G/B: f32` + `intensity: f32` + `range: f32` | N≤4 | `range` 缺省 `Infinity`（host 计算 `1 / range²`，`Infinity` 时为 0 → 无距离衰减）；位置取自伴生 `Transform.posX/Y/Z` |
 | `SpotLight` | **必须搭配 `Transform`**（位置 + 方向均依赖 entity Transform） | `directionX/Y/Z: f32` (本地空间方向；spawn-time fail-fast 校验) + `colorR/G/B: f32` + `intensity: f32` + `range: f32` + `innerConeDeg: f32` + `outerConeDeg: f32` | N≤4 | `innerConeDeg ≤ outerConeDeg` 且 `outerConeDeg < 90` 必须满足（spawn-time `'spawn-light-invalid-bounds'`）；`range` 缺省 `Infinity`；cone 单位 **度（deg）**，host 侧 `degToCos(deg)` 转换 |
-| `Skylight` | — (环境光照，不依赖 entity Transform) | `cubemap: handle<CubeTextureAsset>` (通过 `engine.assets.uploadCubemapFromEquirect` 上传) + `intensity: f32` | N≤1 | feat-20260520 新增；单组件激活完整 IBL pipeline（diffuse irradiance + specular prefilter + BRDF LUT）；`intensity` 缺省 `1.0`；多 Skylight 时取首个 archetype hit + warn；0-light 三条件合取中 Skylight 是合法光源 |
+| `Skylight` | — (环境光照，不依赖 entity Transform) | `equirect?: handle<EquirectAsset>`（`loadByGuid<EquirectAsset>` 得；可选，省略=纯色环境光）+ `intensity: f32` | N≤1 | feat-20260520 新增、feat-20260630 改 equirect kind；单组件激活完整 IBL pipeline（diffuse irradiance + specular prefilter + BRDF LUT）；equirect→cubemap 投影 + IBL 预计算引擎内部懒触发（用户不调上传 API）；`intensity` 缺省 `1.0`；多 Skylight 时取首个 archetype hit + warn（含 entity handle）；0-light 三条件合取中 Skylight 是合法光源 |
 
 **统一不变量**：`intensity ≥ 0`、`range > 0`（包括 `+Infinity`）、color 分量 `≥ 0`；任何越界 spawn-time 即 fail-fast（`EcsErrorCode 'spawn-light-invalid-bounds'`，详见 [`packages/ecs/src/errors.ts`](../ecs/src/errors.ts)）。
 
@@ -1211,7 +1289,7 @@ Shadow parameters live **directly on `DirectionalLight`** -- no separate compone
 | `colorR/G/B` | 1, 1, 1 | Linear-space RGB |
 | `intensity` | 1 | Light intensity multiplier |
 
-**Shadow fields** (1 bool gate + 9 f32, migrated from deleted `DirectionalLightShadow`):
+**Shadow fields** (1 bool gate + 8 f32, migrated from deleted `DirectionalLightShadow`; `nearPlane`/`farPlane` collapsed into `shadowDistance`):
 
 | Field | Default | Semantics | Range |
 |:--|:--|:--|:--|
@@ -1222,13 +1300,12 @@ Shadow parameters live **directly on `DirectionalLight`** -- no separate compone
 | `mapSize` | 2048 | Per-cascade tile resolution (NxN). Atlas is `mapSize x cascadeCount` wide x `mapSize` tall, depth32float | `>= 1`; power-of-two recommended |
 | `depthBias` | 0.005 | Constant depth-bias floor. Shader bias is `max(normalBias * (1 - N.L), depthBias)` — `depthBias` wins on faces near-perpendicular to the light; wired via the `view.depthBias` View UBO tail-pad lane | `>= 0` |
 | `normalBias` | 0.05 | Slope-scaled bias: scales the `1 - N.L` term so grazing-angle faces get more bias (reduces shadow acne). Wired via the `view.normalBias` View UBO tail-pad lane and consumed by `lighting-directional.wgsl` | `>= 0` |
-| `nearPlane` | 0.1 | Camera frustum near plane fed to PSSM split (must match `Camera.nearPlane`) | `> 0` |
-| `farPlane` | 50 | Camera frustum far plane fed to PSSM split (caps shadow visibility distance) | `> nearPlane` |
+| `shadowDistance` | 200 | How far shadows reach in front of the camera, in world units. Sole coverage knob: cascades are PSSM-split across `[camera near, shadowDistance]`; the near end derives from the active camera (no `nearPlane` knob — any value but the camera near drops near shadows or wastes cascade-0 resolution). Replaces the old `nearPlane`/`farPlane` pair | `> 0` |
 | `pcfKernelSize` | 3 | PCF kernel size (odd, 1/3/5): drives the directional shadow PCF tap kernel via the `view.pcfKernelSize` View UBO tail-pad lane. `1` = hard edge (single tap), `3` = soft (9 taps), `5` = softer (25 taps); values clamp to MAX_PCF_HALF=2 | `odd, >= 1` |
 
 **Two-level `castShadow` disambiguation**: there are TWO `castShadow`-like concepts in the engine. (1) `DirectionalLight.castShadow` -- the **light-side toggle**: does this light compute/render a shadow map at all? `false` means the shadow atlas is not populated and the shader receives `shadowFactor = 1.0` (full light, no occlusion). (2) The **material/renderer-level ShadowCaster pass** -- whether a mesh writes into the shadow atlas. A mesh using `MaterialAsset` with a `passKind='shadow-caster'` pass (auto-generated by `Materials.standard(...)`) will be drawn into the shadow depth passes. A mesh whose material lacks that pass (e.g. hand-rolled custom material) silently does NOT write the atlas -- shadows won't occlude even when `castShadow` is `true`.
 
-Per-cascade frustum-fit (D-1, replaces the legacy fixed `orthoHalfExtent`): the camera frustum is split along view-space depth using PSSM with `splitLambda`; each cascade's 8 frustum corners are AABB-fit in light-space to derive the orthographic projection bounds. The camera projection variant (perspective vs orthographic) is honoured -- orthographic cameras feed `mat4.orthographic` to corner generation, perspective feeds `mat4.perspective`.
+Per-cascade frustum-fit (D-1, replaces the legacy fixed `orthoHalfExtent`): the camera frustum is split along view-space depth using PSSM with `splitLambda` over `[camera near, shadowDistance]`; each cascade's 8 frustum corners are AABB-fit in light-space to derive the orthographic projection bounds. The camera projection variant (perspective vs orthographic) is honoured -- orthographic cameras feed `mat4.orthographic` to corner generation, perspective feeds `mat4.perspective`.
 
 Slope-scaled bias (shader, `lighting-directional.wgsl::evalDirectional()`):
 `bias = max(0.05 * (1 - dot(N, L)), 0.005)` where `L = normalize(-view.lightDir)`.
@@ -1258,7 +1335,7 @@ world.spawn({ component: DirectionalLight, data: {
   directionX: 0.2, directionY: -0.98, directionZ: 0,
   colorR: 1, colorG: 1, colorB: 1, intensity: 1,
   cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2,
-  mapSize: 2048, nearPlane: 0.1, farPlane: 50,
+  mapSize: 2048, shadowDistance: 200,
 } }).unwrap();
 
 // Opt out of shadows (still one component):
@@ -1351,7 +1428,7 @@ WGSL 引用：`packages/shader/src/pbr.wgsl` fs_main 累加 `ambient = sampleIbl
 
 material BG 工厂在 record 阶段按 `skylightCount` 选 active 或 fallback：
 
-- **Active** (`skylightCount >= 1`)：从 per-device `IblPipelineCache` 取真实 `irradianceView` / `prefilterView` / `brdfLutView`（由 `engine.assets.uploadCubemapFromEquirect(handle)` 触发 4 pass 预计算填入），`intensity` UBO 每帧写入用户 `Skylight.intensity`。
+- **Active** (`skylightCount >= 1` 且 equirect 投影 `status==='ready'`)：从 per-device `IblPipelineCache` 取真实 `irradianceView` / `prefilterView` / `brdfLutView`（由 record 臂懒触发 package-internal `store._uploadCubemapFromEquirect` 的 4 pass 预计算填入），`intensity` UBO 每帧写入用户 `Skylight.intensity`。投影 `pending`/`failed` 或省略 equirect 时走 Fallback。
 - **Fallback** (`skylightCount === 0`)：1×1 zero rgba16float cube ×2 + 1×1 zero rg16float brdfLut + `intensity=0` uniform；`sampleIblSpecular * 0 === 0` 物理收敛 ambient=0（charter F1：AI 用户写 demo 不需要 `if (hasSkylight)` 分支；charter P4：同一 pipeline layout 在 Skylight 有无两种场景都能 render）。
 
 Fallback 资源由 `createRenderer` 阶段调用 `createSkylightFallback(device, queue)` 一次性分配，挂到 `renderer.pipelineState.skylightFallback`；不再持有独立 BindGroup（D-5 round-4 取消独立 group=4 skylight bind group，全部合入 material BGL binding 7..13）。
@@ -1409,16 +1486,15 @@ engine.assets.configurePackIndex('/pack-index.json');
 const guidRes = AssetGuid.parse('019e4a26-3c29-7420-af5d-20f2724a16b0');
 if (!guidRes.ok) throw guidRes.error;
 
-// 2) 通过 GUID 拉取 HDR equirect（走 loadByGuid<TextureAsset> RGBE decode 路径）
-const equirectRes = await engine.assets.loadByGuid<TextureAsset>(guidRes.value);
+// 2) 通过 GUID 拉取 HDR equirect（走 loadByGuid<EquirectAsset> 导入 .bin 路径）
+const equirectRes = await engine.assets.loadByGuid<EquirectAsset>(guidRes.value);
 if (!equirectRes.ok) throw equirectRes.error;
+// mint user-tier source handle（loadByGuid 返回 EquirectAsset PAYLOAD）
+const equirectHandle = world.allocSharedRef('EquirectAsset', equirectRes.value);
 
-// 3) 上传 equirect 为 cubemap handle（4 pass 预计算自动触发）
-const cubeRes = await engine.assets.uploadCubemapFromEquirect(equirectRes.value);
-if (!cubeRes.ok) throw cubeRes.error;
-
-// 4) Spawn Skylight 组件（无需 Transform）
-world.spawn({ component: Skylight, data: { cubemap: cubeRes.value, intensity: 1.0 } }).unwrap();
+// 3) Spawn Skylight 组件（无需 Transform）。equirect→cubemap 投影 + 4 pass IBL
+//    预计算由 render-system record 臂内部懒触发——用户不调任何上传 API。
+world.spawn({ component: Skylight, data: { equirect: equirectHandle, intensity: 1.0 } }).unwrap();
 ```
 
 无 Skylight 时无需任何额外代码——同一份 PBR 材质 demo 既能在有 Skylight 的场景里呈现 IBL ambient，也能在没 Skylight 的场景里渲染 `ambient = 0`，渲染路径无分支。
@@ -1635,7 +1711,7 @@ world.spawn({ component: MeshFilter, data: { assetHandle: handle } }).unwrap();
 
 Payload-internal nested sub-asset refs (`MaterialAsset.parent`, `FontAsset.atlas` / `.sampler`, `material.paramValues` texture/sampler entries) store the **GUID string verbatim** (`AssetGuid`), **not** a handle — `loadByGuid` recursion has no World to mint into (D-19). The render-side material walk resolves the root from its column handle via `resolveAssetHandle`, then each `parent` GUID via `AssetRegistry.lookup`.
 
-**HDR equirect loadByGuid (feat-20260604-hdr-equirect-cube-importer-loader):** HDR equirectangular sources (`.hdr`) are imported at build-time by `@forgeax/engine-image`'s `imageImporter` HDR arm (decodeHdr -> f32ToF16Bytes -> rgba16float `.bin`). The sidecar declares `subAssets[].kind: 'cube-texture'` with `importSettings.cubeFaceSize` and `specularMipLevels`. At runtime, `loadByGuid<TextureAsset>(hdrGuid)` loads the imported `.bin` through the standard production path (`configurePackIndex` -> pack-index fetch -> textureLoader -> imported `.bin` fetch). Raw `.hdr` sources hitting runtime without import fail fast with `image-decode-failed` (charter P3). After load, the equirect TextureAsset is uploaded to a cubemap via `renderer.store.uploadCubemapFromEquirect(handle, pod)`, then bound to a `Skylight` / `SkyboxBackground`.
+**HDR equirect loadByGuid (feat-20260604-hdr-equirect-cube-importer-loader; feat-20260630 equirect kind):** HDR equirectangular sources (`.hdr`) are imported at build-time by `@forgeax/engine-image`'s `imageImporter` HDR arm (decodeHdr -> f32ToF16Bytes -> rgba16float `.bin`). The sidecar declares `subAssets[].kind: 'equirect'` (a dedicated asset kind; the prior `cube-texture` kind + its `importSettings.cubeFaceSize`/`specularMipLevels` are removed — projection params are decided internally). At runtime, `loadByGuid<EquirectAsset>(hdrGuid)` loads the imported `.bin` through the standard production path (`configurePackIndex` -> pack-index fetch -> equirectLoader -> imported `.bin` fetch). Raw `.hdr` sources hitting runtime without import fail fast with `image-decode-failed` (charter P3). The loaded `EquirectAsset` is bound declaratively to a `Skylight` / `SkyboxBackground` via its `equirect` field; the equirect->cubemap projection + IBL precompute run engine-internally in the render-system record arm (package-internal `store._uploadCubemapFromEquirect`, never a user call).
 
 **`loadByGuid` recursive post-condition (tweak-20260609 M1-M3):** `loadByGuid<T>(guid)` returns `ok(payload)` only when the asset AND every transitively referenced sub-asset (per `collectRefs(asset)` dispatch on `asset.kind`) are in the catalogue. This is a **semantic strengthening, no shape change** beyond the D-17 payload return: pre-existing consumers that pre-catalogue sub-assets via `catalog` are protected by the in-flight Map (D-5) so the recursive walk hits the catalogue on every node -- zero additional fetch. Adding a new `asset.kind` to the closed `Asset` union requires extending `collectRefs` (compiler-enforced via exhaustive `switch` with no `default` arm -- `tsc` reports `Type 'X' is not assignable to type 'never'`).
 

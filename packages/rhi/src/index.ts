@@ -926,9 +926,10 @@ export interface RhiCaps {
    *   supported but `RENDER_ATTACHMENT` with float formats is optional per spec
    *   so the cap reflects the concrete device, not the adapter feature list.
    * @hint AI users gate IBL / HDR post-processing paths on
-   *   `caps.rgba16floatRenderable`; when `false` the `uploadCubemapFromEquirect`
-   *   path returns `Result.err({ code: 'feature-not-enabled' })` with a
-   *   machine-readable `expected` field naming this cap (charter P3 structured
+   *   `caps.rgba16floatRenderable`; when `false` the internal equirect-to-cubemap
+   *   IBL projection (driven by declaring `Skylight{equirect}`) degrades to the
+   *   white-cube fallback and fires `{ code: 'equirect-projection-failed' }` with
+   *   a machine-readable `expected` field naming this cap (charter P3 structured
    *   failure).
    */
   readonly rgba16floatRenderable: boolean;

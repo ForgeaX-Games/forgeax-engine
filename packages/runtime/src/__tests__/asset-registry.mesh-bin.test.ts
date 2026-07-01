@@ -20,12 +20,15 @@
 //          plan-strategy decisions D-1 / D-2 / D-3 / D-6;
 //          plan-decisions D-6 (3-case coverage).
 //
-// Bin layout (D-1 + this test's contract):
+// Bin layout (D-1 + this test's contract, header v2):
 //   header u32 little-endian:
-//     [0..4)   vlen     -- Float32 element count
-//     [4..8)   ilen     -- index element count
-//     [8..12)  iwidth   -- 2 (Uint16) or 4 (Uint32); 0 for empty
-//     [12..16) jsonlen  -- byte length of trailing UTF-8 JSON metadata
+//     [0..4)   version      -- 2
+//     [4..8)   uvSetCount   -- 1
+//     [8..12)  floatsPerVertex -- 12
+//     [12..16) vlen         -- Float32 element count
+//     [16..20) ilen         -- index element count
+//     [20..24) iwidth       -- 2 (Uint16) or 4 (Uint32); 0 for empty
+//     [24..28) jsonlen      -- byte length of trailing UTF-8 JSON metadata
 //   then vlen*4 bytes Float32Array vertices,
 //   then ilen*iwidth bytes Uint16Array | Uint32Array indices,
 //   then jsonlen bytes UTF-8 JSON metadata { submeshes?, attributes?, aabb? }.
@@ -51,14 +54,17 @@ function packMeshBinForTest(
 ): Uint8Array {
   const iwidth = vertices.length === 0 && indices.length === 0 ? 0 : indices.BYTES_PER_ELEMENT;
   const jsonBytes = new TextEncoder().encode(metaJson);
-  const headerBytes = 16;
+  const headerBytes = 28; // header v2
   const total = headerBytes + vertices.byteLength + indices.byteLength + jsonBytes.byteLength;
   const out = new Uint8Array(total);
   const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
-  view.setUint32(0, vertices.length, true);
-  view.setUint32(4, indices.length, true);
-  view.setUint32(8, iwidth, true);
-  view.setUint32(12, jsonBytes.byteLength, true);
+  view.setUint32(0, 2, true); // version = 2
+  view.setUint32(4, 1, true); // uvSetCount = 1
+  view.setUint32(8, 12, true); // floatsPerVertex = 12
+  view.setUint32(12, vertices.length, true);
+  view.setUint32(16, indices.length, true);
+  view.setUint32(20, iwidth, true);
+  view.setUint32(24, jsonBytes.byteLength, true);
   let offset = headerBytes;
   out.set(new Uint8Array(vertices.buffer, vertices.byteOffset, vertices.byteLength), offset);
   offset += vertices.byteLength;
@@ -228,9 +234,12 @@ describe('mesh-bin loader (M2 / m2-1)', () => {
     expect(mesh.indices?.length).toBe(indicesArr.length);
   });
 
-  it('(C) empty mesh: 16-byte header (vlen=0/ilen=0/iwidth=0/jsonlen=0) decodes to 0 verts / 0 indices', async () => {
-    // Empty .bin: just the 16-byte header with all zeros.
-    const binBytes = new Uint8Array(16);
+  it('(C) empty mesh: 28-byte header (v2 zero-values) decodes to 0 verts / 0 indices', async () => {
+    // Empty .bin: 28-byte header v2 with version=2, all zero payload fields.
+    const binBytes = new Uint8Array(28);
+    new DataView(binBytes.buffer).setUint32(0, 2, true); // version=2
+    new DataView(binBytes.buffer).setUint32(4, 1, true); // uvSetCount=1
+    new DataView(binBytes.buffer).setUint32(8, 12, true); // floatsPerVertex=12
 
     const packIndexUrl = '/pack-index.json';
     const binUrl = `/assets/${MESH_EMPTY_GUID.toLowerCase()}.bin`;

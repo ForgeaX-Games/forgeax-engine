@@ -41,7 +41,7 @@ import {
   ShaderError,
   type ShaderError as ShaderErrorType,
 } from './errors.js';
-import { parseReflectionJson } from './reflection.js';
+import { parseReflection } from './reflection.js';
 
 // === Public types ===================================================================
 
@@ -91,6 +91,13 @@ export interface CompileResult {
    * AI-F2 breadcrumb; Vite plugin consumes this for HMR reverseDeps).
    */
   readonly deps: string[];
+  /**
+   * UV set count derived from vertex @location declarations (feat-20260629 M4
+   * D-3: build-time naga reflection, AC-09). 0 = no vertex entry-point, 1 = uv0
+   * only, N = uv0 + uv1..uv_{N-1}. The runtime uses this to drive
+   * deriveVertexBufferLayout for clamp-to-last alias (M3).
+   */
+  readonly uvSetCount: number;
 }
 
 // === Main API =======================================================================
@@ -224,9 +231,9 @@ export async function compileShader(
   const reflectionJson = reflectionResult.value;
 
   // Stage 5: JSON.parse + triplet assembly.
-  let bindings: readonly BindGroupLayoutDescriptor[];
+  let reflectionParsed: ReturnType<typeof parseReflection>;
   try {
-    bindings = parseReflectionJson(reflectionJson);
+    reflectionParsed = parseReflection(reflectionJson);
   } catch (e) {
     return err(
       manifestMalformed({
@@ -236,6 +243,17 @@ export async function compileShader(
       }),
     );
   }
+  const bindings = reflectionParsed.bindings;
+  const uvSetCount = reflectionParsed.uvSetCount;
+
+  // ManifestEntry.bindings is the BGL-array JSON (every consumer parses it as
+  // `BindGroupLayoutDescriptor[]`: vite-plugin-shader's superset gate, the
+  // emitted `.bindings.json` sidecar, ShaderRegistry). Since feat-20260629 m4-w2
+  // naga emit_reflection wraps the array in `{ bindings, uvSetCount }`, so the
+  // raw `reflectionJson` is an object, not an array. Serialize the unwrapped
+  // array here; uvSetCount travels separately via CompileResult.uvSetCount, so
+  // storing the wrapper string would also duplicate it (Derive violation).
+  const bindingsJson = JSON.stringify(bindings);
 
   const hash = computeHash(composed);
   const result: CompileResult = {
@@ -246,9 +264,10 @@ export async function compileShader(
       hash,
       wgsl: composed,
       glsl: undefined,
-      bindings: reflectionJson,
+      bindings: bindingsJson,
     },
     deps,
+    uvSetCount,
   };
   return ok(result);
 }

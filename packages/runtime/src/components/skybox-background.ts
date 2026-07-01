@@ -1,8 +1,14 @@
 // @forgeax/engine-runtime - SkyboxBackground (environment cubemap render background).
 //
-// Schema: 2 fields -- cubemap (Handle<CubeTextureAsset>, u32-stored handle)
+// Schema: 2 fields -- equirect (Handle<EquirectAsset>, u32-stored handle)
 // + mode (f32 enum column, discriminator). Naming convention follows the
 // single-semantic component rule: no Component suffix (AGENTS.md rule #1).
+//
+// feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w16:
+// the field is `equirect: shared<EquirectAsset>` (the retired
+// `cubemap: shared<CubeTextureAsset>` is gone). The skybox reuses the same
+// equirect handle as the Skylight; the cubemap projection is internal and
+// driven by the render-system record arm (no user upload call).
 //
 // Plan-strategy D-5: mode is a f32 enum column (ECS columns are POD, no
 // string unions in archetype storage). Consumer-facing type safety is
@@ -14,11 +20,11 @@
 // encoding.
 //
 // AI user minimum spawn (charter P4):
-//   world.spawn({ component: SkyboxBackground, data: { cubemap, mode: 0 } });
+//   world.spawn({ component: SkyboxBackground, data: { equirect, mode: 0 } });
 //
 // Single component activates the skybox render pass transparently when a
 // Skylight + tonemap active camera is present (skybox reuses the same
-// cubemap handle as Skylight).
+// equirect handle as Skylight).
 
 import { defineComponent } from '@forgeax/engine-ecs';
 
@@ -58,28 +64,31 @@ export function skyboxModeFromF32(value: number): SkyboxMode {
  * to the hdrColor render target (before the main geometry pass).
  *
  * The skybox pass is automatically activated when a SkyboxBackground
- * entity exists, a Skylight entity provides the cubemap, and the active
- * Camera has tonemap active. The skybox reuses the same cubemap handle
- * as the Skylight entity -- two independent components sharing the same
- * GPU resource.
+ * entity exists, a Skylight entity provides the equirect source, and the
+ * active Camera has tonemap active. The skybox reuses the same equirect
+ * handle as the Skylight entity -- two independent components sharing the
+ * same GPU resource (the internally-projected cubemap).
  *
- * `cubemap` is a `Handle<CubeTextureAsset>` produced by
- * `engine.store.uploadCubemapFromEquirect(equirectHandle, equirectPod)`.
+ * `equirect` is a `Handle<EquirectAsset>` resolved from a vite pack-index
+ * GUID via `engine.assets.loadByGuid<EquirectAsset>(guid)`. The cubemap
+ * projection is internal and driven by the render-system record arm; there
+ * is no user upload call.
  *
  * `mode` is a numeric discriminator column (`'f32'`). Use
- * `SKYBOX_MODE_CUBEMAP` for the cubemap path.
+ * `SKYBOX_MODE_CUBEMAP` for the cubemap render path.
  *
  * @example Minimum spawn (defaults mode=0):
- *   // cubemapHandle obtained from uploadCubemapFromEquirect (same as
- *   // the Skylight handle).
- *   world.spawn({ component: SkyboxBackground, data: { cubemap: cubemapHandle } });
+ *   // equirectHandle resolved from loadByGuid<EquirectAsset> (same handle as
+ *   // the Skylight).
+ *   world.spawn({ component: SkyboxBackground, data: { equirect: equirectHandle } });
  *
  * @example Single handle shared between Skylight (IBL) and SkyboxBackground:
- *   const cubeRes = await engine.store.uploadCubemapFromEquirect(hdrHandle, hdrPod);
- *   world.spawn({ component: Skylight,     data: { cubemap: cubeRes.value } });
- *   world.spawn({ component: SkyboxBackground, data: { cubemap: cubeRes.value } });
+ *   const hdrRes = await engine.assets.loadByGuid<EquirectAsset>(guid);
+ *   if (!hdrRes.ok) throw hdrRes.error;
+ *   world.spawn({ component: Skylight,     data: { equirect: hdrRes.value } });
+ *   world.spawn({ component: SkyboxBackground, data: { equirect: hdrRes.value } });
  */
 export const SkyboxBackground = defineComponent('SkyboxBackground', {
-  cubemap: { type: 'shared<CubeTextureAsset>' },
+  equirect: { type: 'shared<EquirectAsset>' },
   mode: { type: 'f32', default: SKYBOX_MODE_CUBEMAP },
 });

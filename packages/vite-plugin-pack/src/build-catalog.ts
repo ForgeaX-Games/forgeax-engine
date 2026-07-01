@@ -12,7 +12,7 @@
 //      PackIndexEntry per `assets[]` row (4-field, no `metadata`).
 //   - `*.meta.json`  -- `external-asset-package` arm. Reads `meta.importer`.
 //      The catalog knows how to fold four importer keys: 'image' emits a
-//      5-field row per `subAssets[]` of `kind: 'texture'` or `kind: 'cube-texture'`.
+//      5-field row per `subAssets[]` of `kind: 'texture'` or `kind: 'equirect'`.
 //      'gltf' emits a 4-field row per `subAssets[]` of kind 'mesh' / 'material' /
 //      'scene' + a 5-field row per 'texture' with ImageMetadata defaults
 //      (linear colorSpace / no mipmap -- enriched at import time, M4 AC-16).
@@ -50,7 +50,7 @@ import { deriveAssetName } from '@forgeax/engine-pack/name';
 import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
 import { scan } from '@forgeax/engine-pack/scanner';
 import { validateMeta } from '@forgeax/engine-pack/schema';
-import type { CubeTextureMetadata, ImageMetadata, PackIndexEntry } from '@forgeax/engine-types';
+import type { ImageMetadata, PackIndexEntry } from '@forgeax/engine-types';
 
 interface PackJson {
   readonly assets?: ReadonlyArray<{
@@ -88,13 +88,6 @@ interface ExternalAssetMetaJson {
   readonly importSettings: {
     readonly colorSpace?: 'srgb' | 'linear';
     readonly mipmap?: 'auto' | 'none';
-    // feat-20260520-skylight-ibl-cubemap M5 D-9: cube-texture sub-assets
-    // (HDR equirect import) ride the 'image' importer arm; the cube-side
-    // import settings are scoped under importSettings.cubeFaceSize +
-    // importSettings.specularMipLevels so the catalog builder can fold the
-    // optional CubeTextureMetadata row at scan time.
-    readonly cubeFaceSize?: number;
-    readonly specularMipLevels?: number;
   };
   readonly subAssets: ReadonlyArray<{
     readonly guid: string;
@@ -142,7 +135,7 @@ const ENGINE_BUILTIN_IMPORTER_KEYS: ReadonlySet<string> = new Set([
 // rather than silently overriding the engine kind.
 const ENGINE_BUILTIN_KINDS: ReadonlySet<string> = new Set([
   'texture',
-  'cube-texture',
+  'equirect',
   'mesh',
   'material',
   'scene',
@@ -290,50 +283,26 @@ async function processMetaSidecar(
     // does not produce a drive-prefixed backslash path (issue #191).
     const normalizedUrl = withBase(base, sourceRel);
     const metadata = buildImageMetadata(meta);
-    // feat-20260520-skylight-ibl-cubemap M5 D-12: cube-texture metadata is
-    // built lazily so non-cube image sidecars do not pay the synth cost.
-    let cubeMetadata: CubeTextureMetadata | undefined;
     for (const sub of meta.subAssets) {
-      if (sub.kind === 'cube-texture') {
-        // D-1: HDR equirect single-source (.hdr extension) folds to
-        // kind:'texture' + ImageMetadata so the runtime textureLoader
-        // (UPSTREAM_ENTRY_KINDS={'texture','font'}) can pick it up.
-        // 6-PNG cube (non-.hdr) stays kind:'cube-texture' (OOS-1 / R-4).
-        if (sourceAbsPath.toLowerCase().endsWith('.hdr')) {
-          out.push({
-            guid: sub.guid,
-            relativeUrl: normalizedUrl,
+      if (sub.kind === 'equirect') {
+        // feat-20260630: an .hdr equirect sub-asset folds to a kind:'equirect'
+        // row carrying rgba16float ImageMetadata. The runtime equirectLoader
+        // (UPSTREAM_ENTRY_KINDS, derived) fetches the build-time .bin; the
+        // cube-to-cube IBL projection is a GPU-side pass driven by the record
+        // arm (no build-time face cook, no cubeFaceSize / specularMipLevels).
+        out.push({
+          guid: sub.guid,
+          relativeUrl: normalizedUrl,
+          kind: 'equirect',
+          sourcePath: sourceRel,
+          name: subName(sub),
+          metadata: {
             kind: 'texture',
-            sourcePath: sourceRel,
-            name: subName(sub),
-            metadata: {
-              kind: 'texture',
-              format: 'rgba16float',
-              colorSpace: 'linear',
-              mipmap: false,
-            },
-          });
-        } else {
-          if (cubeMetadata === undefined) {
-            const faceSize = meta.importSettings.cubeFaceSize ?? 256;
-            cubeMetadata = {
-              kind: 'cube-texture',
-              width: faceSize,
-              height: faceSize,
-              format: 'rgba16float',
-              colorSpace: 'linear',
-              mipLevels: 1,
-            };
-          }
-          out.push({
-            guid: sub.guid,
-            relativeUrl: normalizedUrl,
-            kind: 'cube-texture',
-            sourcePath: sourceRel,
-            name: subName(sub),
-            metadata: cubeMetadata,
-          });
-        }
+            format: 'rgba16float',
+            colorSpace: 'linear',
+            mipmap: false,
+          },
+        });
       } else {
         // P1: default passthrough — sub.kind (e.g. 'texture') becomes the
         // pack-index kind. The former 'image'→'texture' hard-coded remap

@@ -35,6 +35,10 @@ export {
   type ShaderErrorDetail,
   shaderNotFound,
 } from './errors.js';
+export {
+  registerDefaultSpriteLit,
+  type SpriteLitCaps,
+} from './register-default-sprite-lit.js';
 export { registerDefaultStandardPbrSkin } from './register-default-standard-pbr-skin.js';
 export {
   FORGEAX_RESERVED_PATH_PREFIX,

@@ -283,8 +283,7 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
         mapSize: 1024,
         depthBias: 0.005,
         normalBias: 0.05,
-        nearPlane: 0.1,
-        farPlane: 50,
+        shadowDistance: 50,
         pcfKernelSize: 3,
       },
     });

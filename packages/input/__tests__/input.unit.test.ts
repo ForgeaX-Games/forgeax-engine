@@ -331,6 +331,47 @@ interface FakeListenerStore {
         expect(requestCalls.count).toBe(1);
       });
 
+      // w19 (feat-20260630-viewport): neutral PointerLock gate. The backend never
+      // learns the host's reason — it only asks the predicate. A host that owns
+      // the cursor (e.g. an editor viewport outside its play·game quadrant)
+      // supplies a predicate returning false and a click does NOT capture.
+      it('pointerLockAllowed=false suppresses requestPointerLock on click', () => {
+        const { canvas, doc, win, store, requestCalls } = buildBBFakes();
+        attachBrowserInputBackend(canvas, {
+          document: doc,
+          window: win,
+          pointerLockAllowed: () => false,
+        });
+        store.fire('canvas', 'click', {});
+        expect(requestCalls.count).toBe(0);
+      });
+
+      it('pointerLockAllowed=true allows requestPointerLock (same as default)', () => {
+        const { canvas, doc, win, store, requestCalls } = buildBBFakes();
+        attachBrowserInputBackend(canvas, {
+          document: doc,
+          window: win,
+          pointerLockAllowed: () => true,
+        });
+        store.fire('canvas', 'click', {});
+        expect(requestCalls.count).toBe(1);
+      });
+
+      it('pointerLockAllowed is read live per click (predicate re-evaluated each time)', () => {
+        const { canvas, doc, win, store, requestCalls } = buildBBFakes();
+        let allowed = false;
+        attachBrowserInputBackend(canvas, {
+          document: doc,
+          window: win,
+          pointerLockAllowed: () => allowed,
+        });
+        store.fire('canvas', 'click', {});
+        expect(requestCalls.count).toBe(0); // disallowed: no lock
+        allowed = true;
+        store.fire('canvas', 'click', {});
+        expect(requestCalls.count).toBe(1); // now allowed: locks
+      });
+
       it('detach removes every listener and is idempotent on second call', () => {
         const { canvas, doc, win, store } = buildBBFakes();
         const handle = attachBrowserInputBackend(canvas, { document: doc, window: win });

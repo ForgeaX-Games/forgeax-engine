@@ -9,7 +9,7 @@
 //   - "// 3. bootstrap"       entry point wiring (1)+(2)
 
 // 1. engine usage
-import { createApp } from '@forgeax/engine-app';
+import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera,
@@ -54,8 +54,7 @@ const SHADOW_CONFIG = {
   cascadeCount: 1,
   mapSize: 2048,
   depthBias: 0.005,
-  nearPlane: 0.1,
-  farPlane: 50,
+  shadowDistance: 50,
   pcfKernelSize: 3,
 };
 
@@ -229,8 +228,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           cascadeCount: 1,
           mapSize: 2048,
           depthBias: 0.005,
-          nearPlane: 0.1,
-          farPlane: 50,
+          shadowDistance: 50,
           pcfKernelSize: currentPcfSize,
         });
         shadowEnabled = true;
@@ -261,10 +259,34 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   console.warn(`[learn-render 5.3.1 directional shadow] backend=${renderer.backend}`);
+
+  installCaptureHook(app, world);
+}
+
+// RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
+// one update + draw + readPixels so the live canvas read is anchored to the same
+// frame the capture records. Only meaningful when the page is served with
+// FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
+function installCaptureHook(app: App, world: App['world']): void {
+  type CaptureHook = () => Promise<Uint8Array>;
+  const win = window as unknown as { __captureShadowFull?: CaptureHook };
+  const renderer = app.renderer;
+  win.__captureShadowFull = async (): Promise<Uint8Array> => {
+    world.update();
+    renderer.draw(world);
+    const r = await renderer.readPixels();
+    if (!r.ok) {
+      throw new Error(
+        `[learn-render 5.3.1 directional shadow] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+      );
+    }
+    return r.value;
+  };
 }
 
 declare global {
   interface Window {
     __learnRenderErrors?: Array<{ code: string; hint?: string }>;
+    __captureShadowFull?: () => Promise<Uint8Array>;
   }
 }

@@ -37,7 +37,7 @@
 
 // 1. engine usage
 
-import { createApp } from '@forgeax/engine-app';
+import { type App, createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import {
   Camera,
@@ -324,6 +324,29 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   console.warn(
     `[learn-render 5.9 ssao] running. SSAO=${ssaoEnabled ? 'enabled' : 'OFF'} (radius=${SSAO_CONFIG.radius}, bias=${SSAO_CONFIG.bias}, intensity=${SSAO_CONFIG.intensity}). Enclosing room + backpack.gltf model + Skylight ambient + 1 dim light (LO 5.9 SSAO scene).`,
   );
+
+  installCaptureHook(app, world);
+}
+
+// RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
+// one update + draw + readPixels so the live canvas read is anchored to the same
+// frame the capture records. Only meaningful when the page is served with
+// FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
+function installCaptureHook(app: App, world: App['world']): void {
+  type CaptureHook = () => Promise<Uint8Array>;
+  const win = window as unknown as { __captureSsao?: CaptureHook };
+  const renderer = app.renderer;
+  win.__captureSsao = async (): Promise<Uint8Array> => {
+    world.update();
+    renderer.draw(world);
+    const r = await renderer.readPixels();
+    if (!r.ok) {
+      throw new Error(
+        `[learn-render 5.9 ssao] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+      );
+    }
+    return r.value;
+  };
 }
 
 function reportAppError(err: CanvasAppError | EngineEnvironmentError): void {
@@ -339,5 +362,6 @@ function reportAppError(err: CanvasAppError | EngineEnvironmentError): void {
 declare global {
   interface Window {
     __learnRenderErrors?: Array<{ code: string; hint?: string }>;
+    __captureSsao?: () => Promise<Uint8Array>;
   }
 }

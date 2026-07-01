@@ -335,7 +335,7 @@ world.spawn(
       directionX: 0.3, directionY: -0.9, directionZ: -0.3,
       colorR: 1, colorG: 1, colorB: 1, intensity: 1,
       ...(shadowPresent
-        ? { castShadow: true, cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2, mapSize: 2048, nearPlane: 0.1, farPlane: 50 }
+        ? { castShadow: true, cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2, mapSize: 2048, shadowDistance: 50 }
         : { castShadow: false }),
     },
   },

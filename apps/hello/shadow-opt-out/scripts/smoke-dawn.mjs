@@ -193,12 +193,11 @@ world.spawn(
       intensity: 1.0,
       // feat-20260613-csm M6 / w22: matches src/main.ts (cascadeCount=1
       // AC-10 baseline). orthoHalfExtent removed (legacy field gone);
-      // farPlane tightened 60 -> 20 so the cutout 0.15-unit holes stay
+      // shadowDistance tightened 60 -> 20 so the cutout 0.15-unit holes stay
       // resolvable at mapSize=1024 under CSM AABB-fit.
       cascadeCount: 1,
       mapSize: FIXTURE_MAP_SIZE,
-      nearPlane: 0.1,
-      farPlane: 20,
+      shadowDistance: 20,
     },
   },
 );

@@ -976,6 +976,32 @@ function adaptReplayFormat(format: string | undefined): string | undefined {
 }
 
 /**
+ * True for the exact bgra8 formats `adaptReplayFormat` rewrites to rgba8 — i.e.
+ * the textures whose REPLAY storage has its R/B swapped relative to the recorded
+ * source. Their initialData seed bytes (raw BGRA) must be R/B-swapped to land
+ * correctly in the recreated RGBA texture. Only these two 4-byte formats qualify;
+ * every other snapshottable format keeps native channel order on replay.
+ */
+function isBgraSeedFormat(format: GPUTextureFormat | undefined): boolean {
+  return format === 'bgra8unorm' || format === 'bgra8unorm-srgb';
+}
+
+/**
+ * Swap the R and B channels of every RGBA8/BGRA8 texel in place (stride 4,
+ * bytes [0] <-> [2]). Trailing bytes that do not complete a 4-byte texel are
+ * left untouched (tight-packed snapshot slices are always texel-aligned). Returns
+ * the same array for call-site chaining.
+ */
+function swapRedBlueInPlace(bytes: Uint8Array): Uint8Array {
+  for (let i = 0; i + 3 < bytes.length; i += 4) {
+    const r = bytes[i] as number;
+    bytes[i] = bytes[i + 2] as number;
+    bytes[i + 2] = r;
+  }
+  return bytes;
+}
+
+/**
  * Ensure a reconstructed texture descriptor can host an srgb view. When the
  * (adapted) storage format is plain `rgba8unorm`, the replayed color view may be
  * `rgba8unorm-srgb` (see adaptReplayFormat); that view is only legal if the
@@ -1863,8 +1889,23 @@ export function replayInitialData(
       // is tight-packed in the blob at slice.byteOffset; writeTexture it back to
       // its (mipLevel, baseArrayLayer) with bytesPerRow = mipWidth * bytesPerTexel.
       const dataBytes = new Uint8Array(data);
+      // Channel-order fidelity (sibling of bug #3 on the seed path): a texture
+      // recorded as bgra8unorm[-srgb] is recreated by replayCreateTexture as
+      // rgba8unorm[-srgb] (adaptReplayFormat swaps R/B in the FORMAT, since the
+      // offline device cannot reconstruct the canvas's implicit BGRA surface).
+      // But the snapshot blob holds the source's raw BGRA bytes. Uploading them
+      // verbatim into the RGBA-format texture swaps R<->B for every texel — a
+      // pre-arm sampled bgra texture (e.g. the FXAA composite source) then tints
+      // the whole frame (orange floor -> purple). Swap R/B in the seed bytes to
+      // match the adapted format so the sampled texel reads identically.
+      const seededBytes = isBgraSeedFormat(shape.format)
+        ? swapRedBlueInPlace(dataBytes.slice())
+        : dataBytes;
       for (const slice of layout.slices) {
-        const sliceData = dataBytes.subarray(slice.byteOffset, slice.byteOffset + slice.byteLength);
+        const sliceData = seededBytes.subarray(
+          slice.byteOffset,
+          slice.byteOffset + slice.byteLength,
+        );
         queue.writeTexture(
           {
             texture: resource,

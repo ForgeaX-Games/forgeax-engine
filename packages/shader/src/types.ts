@@ -39,6 +39,12 @@ export interface MaterialShaderManifestEntry {
   readonly composedWgsl: string;
   readonly paramSchema: string;
   readonly variants: readonly MaterialShaderManifestVariant[];
+  /**
+   * feat-20260629 M4: uvSetCount from naga vertex @location reflection.
+   * Populated by vite-plugin-shader at build time from compileShader output.
+   * The runtime reads this for clamp-to-last alias in deriveVertexBufferLayout.
+   */
+  readonly uvSetCount?: number;
 }
 
 /**

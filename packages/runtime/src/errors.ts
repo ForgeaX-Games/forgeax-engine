@@ -82,7 +82,7 @@ import type { RhiError } from '@forgeax/engine-rhi';
  * | `'vertex-storage-buffer-unavailable'` | `VertexStorageBufferUnavailableError` | device.caps lacks vertex-stage storage buffer |
  * | `'skin-palette-overflow'` | `SkinPaletteOverflowError` | palette buffer exceeds device maxStorageBufferBindingSize |
  * | `'material-resolved-empty-passes'` | `MaterialResolvedEmptyPassesError` | material parent chain walk resolves to zero passes (missing-parent or no-pass-in-chain) |
- * | `'skybox-cubemap-not-ready'` | `SkyboxCubemapNotReadyError` | cubemap asset not uploaded yet when SkyboxBackground spawns (degrade to clear colour + fire structured error) |
+ * | `'equirect-projection-failed'` | `EquirectProjectionFailedError` | equirect-to-cubemap IBL projection failed (record arm fires once, stops, does NOT retry; degrade to white-cube fallback) |
  * | `'mesh-ssbo-capacity-exceeded'` | `MeshSsboCapacityExceededError` | post-grow mesh SSBO capacity still cannot accommodate the requested slot count (defensive fallback under degenerate conditions; frame renders subset) |
  * | `'mesh-ssbo-ceiling-reached'` | `MeshSsboCeilingReachedError` | the requested mesh SSBO slot count would exceed `device.limits.maxStorageBufferBindingSize`; grow refuses to allocate (frame renders subset) |
  * | `'hdrp-caps-insufficient'` | `HdrpCapsInsufficientError` | install-time: `device.caps.maxStorageBuffersPerShaderStage < 4`; HDRP cannot run on this device |
@@ -101,7 +101,11 @@ export type RuntimeErrorCode =
   | 'vertex-storage-buffer-unavailable'
   | 'skin-palette-overflow'
   | 'material-resolved-empty-passes'
-  | 'skybox-cubemap-not-ready'
+  // feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M2 / w13
+  // (D-5): replaces the retired 'skybox-cubemap-not-ready'. Fired ONCE by the
+  // record arm when the equirect-to-cubemap IBL projection fails; the arm then
+  // stops + does not retry (R-2/AC-09), degrading to the white-cube fallback.
+  | 'equirect-projection-failed'
   | 'mesh-ssbo-capacity-exceeded'
   | 'mesh-ssbo-ceiling-reached'
   | 'hdrp-caps-insufficient'
@@ -191,7 +195,7 @@ export interface ShadowInvalidConfigDetail {
  * Structured error for shadow component config validation failures.
  *
  * Emitted by `DirectionalLight.validate()` shadow-field path (mapSize / cascadeCount /
- * splitLambda / cascadeBlend / farPlane) and `PointLightShadow.validate()`
+ * splitLambda / cascadeBlend / shadowDistance) and `PointLightShadow.validate()`
  * (mapSize / farPlane > nearPlane / pcfKernelSize); both shadow component
  * types share this single error class so `switch (err.code)` on
  * `RuntimeErrorCode` only needs one branch (charter P4 — closed-union SSOT).
@@ -583,48 +587,50 @@ export class MaterialResolvedEmptyPassesError extends Error {
   }
 }
 
-// ── SkyboxCubemapNotReadyError ───────────────────────────────────────────────
+// ── EquirectProjectionFailedError ────────────────────────────────────────────
 
 /**
- * Detail for `RuntimeErrorCode 'skybox-cubemap-not-ready'`.
+ * Detail for `RuntimeErrorCode 'equirect-projection-failed'`.
  *
- * Emitted when a `SkyboxBackground` component references a cubemap handle
- * whose GPU resources have not been uploaded yet. The handle id is carried
- * so AI users can trace which asset registration failed. Degradation:
- * `skyboxActive = false` -> main pass `loadOp='clear'` -> clear colour
- * background (no skybox visible, but no black/corrupt screen either).
+ * Emitted when the equirect-to-cubemap IBL projection fails for the equirect
+ * handle referenced by a `Skylight` / `SkyboxBackground` component. The handle
+ * id is carried so AI users can trace which equirect source failed projection.
+ * Degradation: the record arm records `status:'failed'`, binds the white-cube
+ * fallback, fires this error ONCE, and does NOT retry the projection.
  *
- * plan-strategy D-8: structured error with detail carrying the handle id.
+ * feat-20260630 D-5: structured error with detail carrying the handle id.
  */
-export interface SkyboxCubemapNotReadyDetail {
+export interface EquirectProjectionFailedDetail {
   readonly handle: number;
 }
 
 /**
- * Structured error for SkyboxBackground cubemap not yet uploaded.
+ * Structured error for a failed equirect-to-cubemap IBL projection.
  *
- * Emitted by the record stage when getCubemapGpuView returns undefined for the
- * handle referenced by the SkyboxBackground ECS component. Four-field surface
- * per AGENTS.md error model:
- *   - `.code = 'skybox-cubemap-not-ready'` (closed RuntimeErrorCode)
- *   - `.expected` — cubemap asset uploaded and GPU view available
- *   - `.hint` — await `uploadCubemapFromEquirect()` or verify the handle
- *     references a registered CubeTextureAsset
- *   - `.detail = { handle }` — the numeric handle id for diagnostics
+ * Emitted by the record stage when the internal cubemap projection for an
+ * equirect handle returns a failure (or records `status:'failed'`). Four-field
+ * surface per AGENTS.md error model:
+ *   - `.code = 'equirect-projection-failed'` (closed RuntimeErrorCode)
+ *   - `.expected` — equirect-to-cubemap projection + IBL precompute succeeds
+ *   - `.hint` — declare `Skylight{equirect}` with a valid HDR equirect source;
+ *     check `device.caps.rgba16floatRenderable`. The projection is internal —
+ *     there is no user upload call to retry
+ *   - `.detail = { handle }` — the numeric equirect handle id for diagnostics
  */
-export class SkyboxCubemapNotReadyError extends Error {
-  readonly code = 'skybox-cubemap-not-ready' as const;
+export class EquirectProjectionFailedError extends Error {
+  readonly code = 'equirect-projection-failed' as const;
   readonly expected: string;
   readonly hint: string;
-  readonly detail: SkyboxCubemapNotReadyDetail;
+  readonly detail: EquirectProjectionFailedDetail;
 
   constructor(handle: number) {
-    const expected = `cubemap handle ${handle} has an uploaded GPU cubemap view`;
+    const expected = `equirect handle ${handle} projects to a GPU cubemap + IBL precompute`;
     const hint =
-      `cubemap handle ${handle} referenced by SkyboxBackground is not ready; ` +
-      `await uploadCubemapFromEquirect() before rendering, or verify the handle references an already-registered CubeTextureAsset`;
-    super(`SkyboxBackground cubemap handle ${handle} GPU view not ready`);
-    this.name = 'SkyboxCubemapNotReadyError';
+      `equirect handle ${handle} referenced by Skylight/SkyboxBackground failed projection; ` +
+      `declare Skylight{equirect} with a valid HDR equirect source and check device.caps.rgba16floatRenderable. ` +
+      `The projection is internal (no user upload call); the record arm does not retry`;
+    super(`equirect handle ${handle} cubemap projection failed`);
+    this.name = 'EquirectProjectionFailedError';
     this.expected = expected;
     this.hint = hint;
     this.detail = { handle };
@@ -1032,7 +1038,7 @@ export type RuntimeError =
   | VertexStorageBufferUnavailableError
   | SkinPaletteOverflowError
   | MaterialResolvedEmptyPassesError
-  | SkyboxCubemapNotReadyError
+  | EquirectProjectionFailedError
   | MeshSsboCapacityExceededError
   | MeshSsboCeilingReachedError
   | HdrpCapsInsufficientError

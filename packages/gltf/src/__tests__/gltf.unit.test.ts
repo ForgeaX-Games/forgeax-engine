@@ -1014,13 +1014,16 @@ import {
         // Bin must hold the original vertices + indices (the typed-array
         // bytes that used to be inlined as JSON arrays). Sanity-check the
         // header so a regression in `packMeshBin` is caught here:
-        // header[0]=vlen, header[1]=ilen, header[2]=iwidth.
+        // header v2: [0]=version(2), [4]=uvSetCount, [8]=floatsPerVertex,
+        // [12]=vlen, [16]=ilen, [20]=iwidth, [24]=jsonlen.
         if (meshBin !== undefined) {
           const view = new DataView(meshBin.buffer, meshBin.byteOffset, meshBin.byteLength);
-          expect(view.getUint32(0, true)).toBe(baselineMesh.vertices.length);
+          expect(view.getUint32(0, true)).toBe(2); // version
+          expect(view.getUint32(4, true)).toBe(1); // uvSetCount (single UV)
+          expect(view.getUint32(12, true)).toBe(baselineMesh.vertices.length); // vlen
           const baselineIdx = baselineMesh.indices ?? new Uint16Array(0);
-          expect(view.getUint32(4, true)).toBe(baselineIdx.length);
-          expect(view.getUint32(8, true)).toBe(baselineIdx.BYTES_PER_ELEMENT);
+          expect(view.getUint32(16, true)).toBe(baselineIdx.length); // ilen
+          expect(view.getUint32(20, true)).toBe(baselineIdx.BYTES_PER_ELEMENT); // iwidth
         }
 
         expect(serialize(importerMat?.payload)).toBe(serialize(baselineMat));

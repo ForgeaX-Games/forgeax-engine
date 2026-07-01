@@ -374,42 +374,29 @@ export interface TextureAsset {
 }
 
 /**
- * Cube texture asset POD shape -- 6-face cubemap (feat-20260520-skylight-ibl-cubemap M1).
+ * Equirectangular environment-map asset POD shape -- a single 2D HDR image in
+ * latitude-longitude projection (feat-20260630-equirect-kind-internalized-ibl-
+ * declarative-skyligh M1, replacing the prior `CubeTextureAsset`).
  *
- * Plan-strategy D-9: 'cube-texture' arm follows directly after the existing
- * 'texture' arm so AI users encounter the two GPU-uploadable asset kinds
- * adjacent in the discriminated union (charter F1 indexability).
+ * `kind:'equirect'` is the build-time-imported `.hdr` artefact: a single
+ * `rgba16float` 2D image whose pixels live in `data` (tight-packed, build .bin).
+ * Unlike the retired cube-texture, an equirect HAS a single 2D representation,
+ * so it folds to a build-time `.bin` like `TextureAsset` (the cube-to-cube IBL
+ * projection is a GPU-side pass driven internally by the render-system record
+ * arm; AI users declare `Skylight{equirect}` rather than calling an upload).
  *
- * `faces` is a readonly array of raw per-face pixel data buffers, one per
- * cubemap face in +X / -X / +Y / -Y / +Z / -Z order (WebGPU convention).
- * `width === height` per cubemap spec (square faces). `format` mirrors
- * `TextureAsset.format` (GPUTextureFormat).
- *
- * Cardinality contract (F-8): exactly two valid shapes, enforced by the
- * AssetRegistry register / upload paths (charter P3 explicit failure):
- *   - `faces.length === 6`: 6-PNG cubemap (vendor path, e.g. learn-opengl
- *     skybox); pixel data is the CPU SSOT and `AssetRegistry.uploadCubemap`
- *     blits each face into the GPU cubemap texture.
- *   - `faces.length === 0`: GPU-side cubemap (equirect-to-cube IBL precompute
- *     path); pixel data lives only on the GPU and is accessed via
- *     `AssetRegistry.getCubemapGpuView` / `getCubemapFaceViews`. The CPU
- *     `faces` slot stays empty because reading back 6 Uint8Arrays per cubemap
- *     would cost ~12 MB per 512px float16 cubemap with no consumer (charter F1
- *     minimal surface).
- *
- * Any other length is invalid and rejected at register time.
- *
- * Unlike TextureAsset, CubeTextureAsset carries no `colorSpace` /
- * `mipmap` / `mipLevelCount` / `sampleCount` fields; cubemap IBL upload is
- * a separate runtime path (plan-strategy D-2 independent upload path).
+ * Fields mirror the `TextureAsset` 2D-image surface (charter P4 consistent
+ * abstraction): `width` / `height` / `format` / `data` / `colorSpace`. No
+ * `mipmap` chain field -- the IBL prefilter mip chain is a GPU-side pass, not a
+ * CPU-authored level set.
  */
-export interface CubeTextureAsset {
-  readonly kind: 'cube-texture';
+export interface EquirectAsset {
+  readonly kind: 'equirect';
   readonly width: number;
   readonly height: number;
   readonly format: GPUTextureFormat;
-  /** Either 0 (GPU-only, IBL precompute path) or 6 (CPU SSOT, vendor PNG path). */
-  readonly faces: readonly Uint8Array[];
+  readonly data: Uint8Array | Uint8ClampedArray;
+  readonly colorSpace: 'srgb' | 'linear';
 }
 
 /**
@@ -1100,7 +1087,7 @@ export interface RenderPipelineAsset {
  * |:--|:--|
  * | `'mesh'` | `MeshAsset` |
  * | `'texture'` | `TextureAsset` |
- * | `'cube-texture'` | `CubeTextureAsset` |
+ * | `'equirect'` | `EquirectAsset` (single 2D HDR lat-long env map for IBL) |
  * | `'sampler'` | `SamplerAsset` |
  * | `'material'` | `MaterialAsset` (further narrows on `.passes`) |
  * | `'scene'` | `SceneAsset` (declarative SceneEntity list, no overrides) |
@@ -1112,7 +1099,7 @@ export interface RenderPipelineAsset {
 export type Asset =
   | MeshAsset
   | TextureAsset
-  | CubeTextureAsset
+  | EquirectAsset
   | SamplerAsset
   | MaterialAsset
   | SceneAsset
@@ -1736,22 +1723,28 @@ export interface SkinAsset {
 }
 
 /**
- * Vertex attribute map - 6-lowercase-key closed set (G7 / AC-15).
+ * VertexAttributeMap — 13-key closed set (feat-20260629-multi-uv-set-support D-7).
+ *
+ * Canonical interleaved order (plan-strategy F-1, must match bridge + layout layers):
+ *   position / normal / uv / tangent / skinIndex / skinWeight / uv1..uv7
+ *
+ * @location mapping per plan-strategy D-4:
+ *   position@0  normal@1  uv@2  tangent@3  skinIndex@4  skinWeight@5
+ *   uv1@6  uv2@7  uv3@8  uv4@9  uv5@10  uv6@11  uv7@12
  *
  * Keys align with Three.js r184 `BufferGeometry.attributes` naming (D-P1 +
- * plan-strategy §7.2 mental migration stance). M3 GLTF loader performs a
- * single-layer rename at ingest (`POSITION -> position` / `TEXCOORD_0 -> uv`
- * / `JOINTS_0 -> skinIndex` / `WEIGHTS_0 -> skinWeight`) so the runtime key
- * space remains lowercase.
+ * plan-strategy §7.2 mental migration stance). Importers rename at ingest
+ * (`POSITION -> position` / `TEXCOORD_0 -> uv` / `JOINTS_0 -> skinIndex` /
+ * `WEIGHTS_0 -> skinWeight`) so the runtime key space remains lowercase.
  *
- * All 6 keys are optional; a mesh with only `position` (static unlit) is
+ * All 13 keys are optional; a mesh with only `position` (static unlit) is
  * valid. Values accept the three common binary shapes:
  * `ArrayBuffer | Float32Array | Uint16Array` (extend only via minor add per
  * the closed-union evolution contract).
  *
  * AC-15 narrowing: consumer sites writing
  * `for (const [key, buffer] of Object.entries(attributes))` observe `key`
- * typed as the 6-member literal union without `as` casts; any typo (e.g.
+ * typed as the 13-member literal union without `as` casts; any typo (e.g.
  * `'POSITION'`) is a TS compile-time error.
  */
 export interface VertexAttributeMap {
@@ -1761,6 +1754,69 @@ export interface VertexAttributeMap {
   tangent?: ArrayBuffer | Float32Array | Uint16Array;
   skinIndex?: ArrayBuffer | Float32Array | Uint16Array;
   skinWeight?: ArrayBuffer | Float32Array | Uint16Array;
+  /** UV set 1 (feat-20260629-multi-uv-set-support m3-w3, pre-added by M1 for bridge typecheck). */
+  uv1?: ArrayBuffer | Float32Array | Uint16Array;
+  /** UV set 2 */
+  uv2?: ArrayBuffer | Float32Array | Uint16Array;
+  /** UV set 3 */
+  uv3?: ArrayBuffer | Float32Array | Uint16Array;
+  /** UV set 4 */
+  uv4?: ArrayBuffer | Float32Array | Uint16Array;
+  /** UV set 5 */
+  uv5?: ArrayBuffer | Float32Array | Uint16Array;
+  /** UV set 6 */
+  uv6?: ArrayBuffer | Float32Array | Uint16Array;
+  /** UV set 7 */
+  uv7?: ArrayBuffer | Float32Array | Uint16Array;
+}
+
+/**
+ * Canonical UV attribute key order (set 0 = `uv`, sets 1..7 = `uv1..uv7`),
+ * matching the VertexAttributeMap declaration + @location numbering (D-4).
+ * SSOT for "how many UV sets does this attribute map carry" so the import,
+ * gpu-resource, and layout-derivation layers count identically (no drift).
+ */
+export const UV_ATTRIBUTE_KEYS = ['uv', 'uv1', 'uv2', 'uv3', 'uv4', 'uv5', 'uv6', 'uv7'] as const;
+
+/**
+ * Structural input for the UV-set counters: any object that may carry the
+ * canonical UV attribute keys. Both the loosely-typed mesh-attribute record
+ * (`Record<string, unknown>`) and the closed `VertexAttributeMap` satisfy it,
+ * so the import / gpu-resource / layout layers all call one counter.
+ */
+export type UvAttributeSource = Partial<Record<(typeof UV_ATTRIBUTE_KEYS)[number], unknown>>;
+
+/**
+ * Total number of UV sets present in an attribute map: the highest populated
+ * `uv`/`uv1..uv7` index + 1, or 0 when none are present. A populated key is one
+ * whose value is a typed array / array buffer / number array (the binary shapes
+ * a vertex attribute can take). This is the single counter all multi-UV layers
+ * derive from (feat-20260629 F-4 DRY collapse).
+ */
+export function countUvSets(attrs: UvAttributeSource | undefined): number {
+  if (attrs === undefined) return 0;
+  for (let i = UV_ATTRIBUTE_KEYS.length - 1; i >= 0; i--) {
+    // biome-ignore lint/style/noNonNullAssertion: bounded index on const tuple
+    const v = attrs[UV_ATTRIBUTE_KEYS[i]!];
+    if (
+      v instanceof Float32Array ||
+      v instanceof Uint16Array ||
+      v instanceof ArrayBuffer ||
+      Array.isArray(v)
+    ) {
+      return i + 1;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Extra UV sets beyond set 0 (= `countUvSets - 1`, floored at 0). The
+ * gpu-resource + register layers size the dynamic vertex stride from this.
+ */
+export function countExtraUvSets(attrs: UvAttributeSource | undefined): number {
+  const total = countUvSets(attrs);
+  return total > 0 ? total - 1 : 0;
 }
 
 // === Asset error model SSOT (feat-20260511-asset-system-v1 / D-P1 / w3) =========
@@ -1784,7 +1840,7 @@ export interface VertexAttributeMap {
 //   row all reference this module)
 
 /**
- * Closed `AssetErrorCode` union — 22 members (D-P1 + feat-20260518 D-1 minor
+ * Closed `AssetErrorCode` union — 23 members (D-P1 + feat-20260518 D-1 minor
  * evolution + feat-20260520-skylight-ibl-cubemap 5 members +
  * feat-20260523 mesh-upload-fix 1 member +
  * feat-20260523-shader-template-instance-split M1-T02 1 member +
@@ -1813,7 +1869,7 @@ export interface VertexAttributeMap {
  * | `'asset-format-unsupported'` | URL content-type / magic bytes are neither PNG nor JPG (v1 scope; KTX2 / Basis / GLTF embedded textures deferred to M3+). |
  * | `'asset-fetch-failed'` | `fetch(url)` returned non-2xx, threw, or the URL was otherwise unreachable (404 / network / CORS surface). |
  * | `'asset-invalid-value'` | `register<MaterialAsset>(payload)` paramValues fails the 3-tier validator (type-mismatch / extra-key / missing-required) or `paramSchema[].type` is not in {@link MATERIAL_PARAM_TYPES} — fail-fast at register entry (feat-20260523-shader-template-instance-split M8-T01 + M1; charter P3 explicit failure structured `.code` / `.expected` / `.hint` / `.detail`). |
- * | `'cubemap-handle-missing'` | `IblPipelineCache` / cubemap upload when `Skylight.cubemap` handle is dangling; `.hint` suggests `uploadCubemapFromEquirect()`. |
+ * | `'cubemap-handle-missing'` | internal equirect-to-cubemap projection has no live cubemap for a `Skylight.equirect` handle; `.hint` points to loading an EquirectAsset + caps.rgba16floatRenderable. |
  * | `'invalid-source-format'` | image importer path when `.hdr` decode needs rgba16float / rgba32float. |
  * | `'load-failed'` | `loadByGuid` when guid entry exists in catalog but file is inaccessible. |
  * | `'device-unsupported'` | GPU capability gate: `device.caps.rgba16floatRenderable` missing. |
@@ -1854,6 +1910,12 @@ export type AssetErrorCode =
   // regions array bounds (single closed code per plan-strategy §D-6 first-error
   // ordering). 19 -> 20 baseline-restored.
   | 'tileset-region-index-out-of-range'
+  // === 1 new code (feat-20260629-multi-uv-set-support M2 / m2-w5) ===
+  // mesh-bin header v2 contract violation: version unknown, uvSetCount out of
+  // [0,8], or stride/floatsPerVertex self-consistency check failed at encode
+  // exit or decode entry (Fail Fast). Carries detail { version, uvSetCount,
+  // stride }. .hint = 're-cook the asset via importer'.
+  | 'mesh-bin-contract-violation'
   // === 1 new code (feat-20260608-tilemap-object-layer-rendering M1 schema extension) ===
   // Tile entry optional field (widthCells / heightCells / pivotX / pivotY /
   // collider) or top-level atlases / region.atlasIndex schema invariant
@@ -1940,7 +2002,7 @@ export const ASSET_ERROR_HINTS: Readonly<Record<AssetErrorCode, string>> = {
   'asset-invalid-value':
     'a register-time value failed validation; read err.hint for the case-specific fix (e.g. clamp a MaterialAsset param to [0,1], or give a strip-topology MeshAsset an index buffer) and err.detail for the offending field/value',
   'cubemap-handle-missing':
-    'await engine.assets.uploadCubemapFromEquirect(...) before spawning Skylight; cubemap handle must be resolved',
+    'the equirect-to-cubemap projection (internal to the render-system record arm) has no live cubemap for this Skylight; ensure Skylight.equirect references a loaded EquirectAsset handle and caps.rgba16floatRenderable is true',
   'invalid-source-format':
     'decode .hdr via @forgeax/engine-image first; supported formats are rgba16float and rgba32float',
   'load-failed':
@@ -1948,7 +2010,7 @@ export const ASSET_ERROR_HINTS: Readonly<Record<AssetErrorCode, string>> = {
   'device-unsupported':
     'GPU device lacks required capability; check device.caps for rgba16float renderable feature',
   'ibl-precompute-not-dispatched':
-    'check IblPipelineCache.runIblPrecompute is called inside uploadCubemapFromEquirect; counters must not increment before queue.submit (plan D-7 / N-3 AC-20 invariant)',
+    'check IblPipelineCache.runIblPrecompute is called inside the internal GpuResourceStore equirect-to-cubemap projection; counters must not increment before queue.submit (plan D-7 / N-3 AC-20 invariant)',
   'mesh-vertex-stride-mismatch':
     'use meshFromInterleaved (packages/runtime/src/geometry/box.ts) or expand vertices buffer to canonical 12F layout (position vec3 + normal vec3 + uv vec2 + tangent vec4)',
   // === 1 new hint (feat-20260523-shader-template-instance-split M1-T02) ===
@@ -1981,6 +2043,9 @@ export const ASSET_ERROR_HINTS: Readonly<Record<AssetErrorCode, string>> = {
   // === 1 new hint (feat-20260621-asset-registry-robustness-invalidate-inflight-cach M2 / w4) ===
   'asset-invalidated':
     'The asset was invalidated during load; call loadByGuid(guid) again to retry with a fresh fetch',
+  // === 1 new hint (feat-20260629-multi-uv-set-support M2 / m2-w5) ===
+  'mesh-bin-contract-violation':
+    're-cook the asset via importer; the .bin sidecar header v2 contract is violated — check err.detail for version/uvSetCount/stride mismatch',
 };
 
 // === Font error model SSOT (feat-20260531-world-space-msdf-text-rendering M2 / w6) ===
@@ -2175,6 +2240,25 @@ export interface AssetTilesetTileEntryMalformedDetail {
 }
 
 /**
+ * Detail for `mesh-bin-contract-violation` (feat-20260629-multi-uv-set-support M2 / m2-w5).
+ *
+ * Carries the three header v2 fields that failed contract validation:
+ *   - version: always 2 for valid bins, stored so consumer sees what was rejected
+ *   - uvSetCount: number of UV sets in header (1..8 valid)
+ *   - stride: floatsPerVertex from header (12..26 valid)
+ *
+ * AI users inspect `detail.version` / `detail.uvSetCount` / `detail.stride`
+ * to diagnose a corrupt .bin sidecar (charter P3 explicit failure: structured
+ * detail > string parsing).
+ */
+export interface AssetMeshBinContractViolationDetail {
+  readonly code: 'mesh-bin-contract-violation';
+  readonly version: number;
+  readonly uvSetCount: number;
+  readonly stride: number;
+}
+
+/**
  * Discriminated detail union for AssetError, narrowed per AssetErrorCode.
  *
  * Variants:
@@ -2195,6 +2279,7 @@ export type AssetErrorDetail =
   | AssetMaterialShaderRefBrokenDetail
   | AssetTilesetRegionIndexOutOfRangeDetail
   | AssetTilesetTileEntryMalformedDetail
+  | AssetMeshBinContractViolationDetail
   | { readonly field: string; readonly got: unknown }
   | { readonly field: string; readonly value: unknown; readonly reason: string }
   | { readonly expectedCount: number; readonly actualCount: number; readonly meshAssetGuid: string }
@@ -3188,7 +3273,7 @@ export type RuntimeErrorCode =
   | 'vertex-storage-buffer-unavailable'
   | 'skin-palette-overflow'
   | 'material-resolved-empty-passes'
-  | 'skybox-cubemap-not-ready'
+  | 'equirect-projection-failed'
   | 'mesh-ssbo-capacity-exceeded'
   | 'mesh-ssbo-ceiling-reached'
   | 'hdrp-caps-insufficient'
@@ -4107,32 +4192,6 @@ export interface ImageMetadata {
 }
 
 /**
- * Metadata sub-structure carried by `PackIndexEntry` rows of
- * `kind: 'cube-texture'` (plan-strategy D-12 + section 4 OQ-5).
- *
- * Fields mirror `CubeTextureAsset` POD field names: `kind` discriminates
- * from `ImageMetadata`, `width` / `height` / `format` / `colorSpace`
- * align with the same surface across catalog rows, sidecar, and POD
- * (charter P4 consistent abstraction).
- *
- * `mipLevels` is fixed at `1` per plan-strategy D-12 (cubemap faces at
- * upload-time resolution; IBL prefilter mip chain is a GPU-side pass,
- * not a catalog concern).
- *
- * `metadata` is optional for cube-texture rows per plan-strategy D-12
- * (scanner may defer metadata folding); runtime consumers narrow on
- * `entry.metadata !== undefined` before accessing fields.
- */
-export interface CubeTextureMetadata {
-  readonly kind: 'cube-texture';
-  readonly width: number;
-  readonly height: number;
-  readonly format: GPUTextureFormat;
-  readonly colorSpace: 'linear';
-  readonly mipLevels: 1;
-}
-
-/**
  * One row in the pack-index catalog (`pack-index.json` for build path,
  * `/__pack/index` JSON response for dev path).
  *
@@ -4162,7 +4221,7 @@ export interface PackIndexEntry {
   readonly sourcePath: string;
   /** Optional display name from .pack.json assets[].name or derived basename (D-6 add-only). */
   readonly name?: string;
-  readonly metadata?: ImageMetadata | CubeTextureMetadata | undefined;
+  readonly metadata?: ImageMetadata | undefined;
 }
 
 // === InspectEntry / InspectSnapshot (feat-20260618-asset-and-pack-name-fields M1 / w3) ===
@@ -4211,13 +4270,13 @@ export interface InspectSnapshot {
 // Two dispatch shapes share this one contract (the asymmetry is intentional,
 // matching the two pre-existing AssetRegistry load paths the M1 refactor
 // converges; research Finding 1 + Finding 2):
-//   (a) inline pack-payload kinds (mesh / scene / cube-texture / material /
+//   (a) inline pack-payload kinds (mesh / scene / material /
 //       skeleton / skin / animation-clip) parse synchronously and return
 //       `Asset | undefined` (`undefined` = parse rejected, the caller maps it
 //       to a structured `AssetError`).
-//   (b) upstream-branch kinds (texture / font) fetch + decode asynchronously
-//       and return a `Promise<LoaderAsyncResult>` carrying either the produced
-//       `Asset` POD or a structured error.
+//   (b) upstream-branch kinds (texture / font / equirect) fetch + decode
+//       asynchronously and return a `Promise<LoaderAsyncResult>` carrying either
+//       the produced `Asset` POD or a structured error.
 
 /**
  * Result envelope returned by the async branch of {@link Loader.load}

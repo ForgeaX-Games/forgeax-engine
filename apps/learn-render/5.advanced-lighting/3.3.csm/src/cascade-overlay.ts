@@ -24,7 +24,13 @@ import overlayShader from './cascade-overlay.wgsl';
 /** Closed roster of overlay tint modes. */
 export type CsmOverlayMode = 'off' | 'all' | 'c1' | 'c2' | 'c3' | 'c4';
 
-/** PSSM split config baked into cascade-overlay.wgsl; asserted at install. */
+/**
+ * PSSM split config baked into cascade-overlay.wgsl; asserted at install.
+ * The engine PSSM range is [camera near, DirectionalLight.shadowDistance], so
+ * CSM_NEAR must equal the demo camera near (CAMERA_NEAR=0.1) and CSM_FAR must
+ * equal the light's shadowDistance (50) for the overlay bands to match the
+ * engine's cascade selection.
+ */
 const CSM_NEAR = 0.1;
 const CSM_FAR = 50;
 const CSM_CASCADE_COUNT = 4;

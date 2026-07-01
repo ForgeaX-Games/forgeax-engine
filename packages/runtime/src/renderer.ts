@@ -191,10 +191,11 @@ export interface Renderer {
   /**
    * feat-20260601-gpu-resource-store-extraction M1: the GPU residency store.
    * `renderer.assets` keeps the CPU POD registry; `renderer.store` owns the
-   * GPU resource lifecycle. Eager GPU uploads (e.g. equirect-to-cubemap for
-   * IBL) go through `renderer.store.uploadCubemapFromEquirect(srcHandle,
-   * srcPod)`; render-path texture / mesh residency is pulled lazily via
-   * `store.ensureResident`. The store holds no AssetRegistry reference (D-2);
+   * GPU resource lifecycle. Render-path texture / mesh residency is pulled
+   * lazily via `store.ensureResident`. The equirect-to-cubemap IBL projection
+   * is engine internals (feat-20260630 D-3): AI users declare
+   * `Skylight{equirect}` and the record arm drives the projection; there is no
+   * user-facing upload call. The store holds no AssetRegistry reference (D-2);
    * callers pass the source POD fetched from `renderer.assets`.
    */
   readonly store: GpuResourceStore;

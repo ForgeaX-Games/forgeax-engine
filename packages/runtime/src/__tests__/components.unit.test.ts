@@ -257,10 +257,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(Camera.schema.autoAspect).toBe('bool');
     });
 
-    it('DirectionalLight has 17 fields: 7 light f32 + castShadow bool + 9 merged shadow f32', () => {
+    it('DirectionalLight has 16 fields: 7 light f32 + castShadow bool + 8 merged shadow f32', () => {
       // feat-20260621: DirectionalLightShadow merged into DirectionalLight via castShadow toggle.
+      // shadowDistance replaced the nearPlane/farPlane pair (near derives from camera).
       expect(DirectionalLight.name).toBe('DirectionalLight');
-      expect(Object.keys(DirectionalLight.schema).length).toBe(17);
+      expect(Object.keys(DirectionalLight.schema).length).toBe(16);
       // 7 light fields
       expect(DirectionalLight.schema.directionX).toBe('f32');
       expect(DirectionalLight.schema.directionY).toBe('f32');
@@ -269,7 +270,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(DirectionalLight.schema.colorG).toBe('f32');
       expect(DirectionalLight.schema.colorB).toBe('f32');
       expect(DirectionalLight.schema.intensity).toBe('f32');
-      // shadow gate + 9 merged shadow fields
+      // shadow gate + 8 merged shadow fields
       expect(DirectionalLight.schema.castShadow).toBe('bool');
       expect(DirectionalLight.schema.mapSize).toBe('f32');
       expect(DirectionalLight.schema.cascadeCount).toBe('f32');
@@ -277,8 +278,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(DirectionalLight.schema.cascadeBlend).toBe('f32');
       expect(DirectionalLight.schema.depthBias).toBe('f32');
       expect(DirectionalLight.schema.normalBias).toBe('f32');
-      expect(DirectionalLight.schema.nearPlane).toBe('f32');
-      expect(DirectionalLight.schema.farPlane).toBe('f32');
+      expect(DirectionalLight.schema.shadowDistance).toBe('f32');
       expect(DirectionalLight.schema.pcfKernelSize).toBe('f32');
     });
 
@@ -2586,7 +2586,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .spawn({
           component: SkyboxBackground,
           data: {
-            cubemap: 42 as unknown as never, // Handle<CubeTextureAsset> stored as u32
+            equirect: 42 as unknown as never, // Handle<EquirectAsset> stored as u32
           },
         })
         .unwrap();
@@ -2599,7 +2599,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       world.spawn({
         component: SkyboxBackground,
         data: {
-          cubemap: 7 as unknown as never,
+          equirect: 7 as unknown as never,
           mode: SKYBOX_MODE_CUBEMAP,
         },
       });
@@ -2615,17 +2615,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(total).toBe(1);
     });
 
-    it('world.get returns the cubemap handle (u32-stored)', () => {
+    it('world.get returns the equirect handle (u32-stored)', () => {
       const world = new World();
       const handle = 99;
       const e = world
         .spawn({
           component: SkyboxBackground,
-          data: { cubemap: handle as unknown as never, mode: 0 },
+          data: { equirect: handle as unknown as never, mode: 0 },
         })
         .unwrap();
       const row = world.get(e, SkyboxBackground).unwrap();
-      expect(row.cubemap).toBe(handle);
+      expect(row.equirect).toBe(handle);
     });
   });
 

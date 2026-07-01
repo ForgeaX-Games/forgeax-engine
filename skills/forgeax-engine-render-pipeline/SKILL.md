@@ -8,7 +8,7 @@ description: >-
 
 # forgeax-engine-render-pipeline
 
-> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: [`358592eb`](../../commit/358592eb) (2026-06-09)
+> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M5
 
 > **改画面的三个层次**：① 在 `Camera` 组件上拨内建后处理开关（tonemap / fxaa / msaa / bloom）；② spawn `SkyboxBackground` 加天空盒；③ 实现 `RenderPipeline` 接缝、用 7 个声明式图元（`addColorTarget` / `addScenePass` / `addShadowPass` / `addSkyboxPass` / `addBloomPasses` / `addTonemapPass` / `addFullscreenPass`）组装 per-frame 管线拓扑，经 `registerPipeline` / `installPipeline` 装上。引擎自带的 `forgeax::standard-forward` 就是走同一条公共通道 dogfood 的 worked example。聚合 `@forgeax/engine-runtime`（pipeline seam / render flow）· `@forgeax/engine-render-graph`（资源声明 + 编译 + 执行）。
 
@@ -16,7 +16,7 @@ description: >-
 
 per-frame 渲染是一张**声明式 render-graph**，graph **直接持有** GPU 纹理：通过 `graph.addColorTarget(name, desc)` 声明 RT（transient / persistent / MSAA），`graph.addColorTargetAlias(name, source)` 折叠逻辑名到物理纹理（如 bloom composite 的 `hdrComposited`），再通过 7 个**公共图元**声明 pass 拓扑与读写依赖。`graph.compile({ device, backendKind, caps })` 分配物理纹理（keyed by `{format, w, h, usage, sampleCount}` pool）、做拓扑排序 + barrier 插入；`graph.execute(ctx)` 按序跑每个 pass 的闭包。
 
-绝大多数后处理你**不用碰 graph**——它们是 `Camera` 组件上的 f32 列：`tonemap`（色调映射模式）/ `exposure` / `antialias`（`'none' | 'fxaa' | 'msaa'`）/ `bloom` + `bloomThreshold` 等，引擎据此往 per-frame graph 里增删内建图元。天空盒同理：spawn 一个 `SkyboxBackground`（cubemap handle + mode），引擎在 shadow 与 main 之间插一个 skybox pass。只有当你要**换掉整条管线拓扑**（自定义 pass 链、deferred 等）才实现 `RenderPipeline` 接缝（`buildGraph(ctx, data)` 建图 + `execute(ctx)` 跑图），用 `renderer.registerPipeline(id, impl)` 登记、`renderer.installPipeline(asset)` 装上（`asset` 是 `RenderPipelineAsset` POJO，直收，无 register round-trip）。`renderer.perFramePassNames` 让你内省当前帧实际有哪些 pass。
+绝大多数后处理你**不用碰 graph**——它们是 `Camera` 组件上的 f32 列：`tonemap`（色调映射模式）/ `exposure` / `antialias`（`'none' | 'fxaa' | 'msaa'`）/ `bloom` + `bloomThreshold` 等，引擎据此往 per-frame graph 里增删内建图元。天空盒同理：spawn 一个 `SkyboxBackground`（equirect handle + mode），引擎在 shadow 与 main 之间插一个 skybox pass。只有当你要**换掉整条管线拓扑**（自定义 pass 链、deferred 等）才实现 `RenderPipeline` 接缝（`buildGraph(ctx, data)` 建图 + `execute(ctx)` 跑图），用 `renderer.registerPipeline(id, impl)` 登记、`renderer.installPipeline(asset)` 装上（`asset` 是 `RenderPipelineAsset` POJO，直收，无 register round-trip）。`renderer.perFramePassNames` 让你内省当前帧实际有哪些 pass。
 
 自定义 fullscreen 后处理走 `addFullscreenPass`——它是 7 个图元中**唯一的扩展点**（其余 6 个是引擎内置，不接受用户 execute 闭包）。两步：① `renderer.postProcess.register('mypkg::vignette', { source, params?, reads? })` 登记 WGSL；② 在管线 `buildGraph` 里调 `addFullscreenPass(graph, 'vignette', { shader: 'mypkg::vignette', color, reads? })`。
 
@@ -49,7 +49,7 @@ per-frame 渲染是一张**声明式 render-graph**，graph **直接持有** GPU
 | `Camera.bloom` / `.bloomThreshold` / ... | runtime | f32 列 | 辉光开关 + 阈值；触发 4 个声明式 bloom pass |
 | `BLOOM_ENABLED` / `BLOOM_DISABLED` | runtime | 常量 | 写 `Camera.bloom` 的语义值 |
 | `ANTIALIAS_NONE` / `ANTIALIAS_FXAA` / `ANTIALIAS_MSAA` | runtime | 常量（0 / 1 / 2） | 写 `Camera.antialias` 的编码值 |
-| `SkyboxBackground` | runtime | 组件（cubemap handle + `SKYBOX_MODE_CUBEMAP`） | 全屏天空盒 pass |
+| `SkyboxBackground` | runtime | 组件（equirect handle + `SKYBOX_MODE_CUBEMAP`） | 全屏天空盒 pass |
 | `renderer.perFramePassNames` | runtime | `readonly string[]` | 内省当前帧 pass 名清单 |
 | `renderer.postProcess.register(id, entry)` | runtime | `(string, PostProcessShaderEntry) => void` | 登记 fullscreen 后处理 WGSL；重名 throw `PostProcessError` |
 | `RenderPipeline` | runtime | `{ buildGraph(ctx, data), execute(ctx) }` | 自定义管线接缝（即 forgeax 版 SRP） |
@@ -74,7 +74,7 @@ per-frame 渲染是一张**声明式 render-graph**，graph **直接持有** GPU
 ```mermaid
 flowchart TD
   Q{"要改什么?"} -->|后处理开关| CAM["在 Camera 组件上写 tonemap / antialias / bloom 列"]
-  Q -->|加天空盒| SKY["spawn SkyboxBackground（cubemap handle + mode）"]
+  Q -->|加天空盒| SKY["spawn SkyboxBackground（equirect handle + mode）"]
   Q -->|自定义 fullscreen 后处理| REG["renderer.postProcess.register('mypkg::xx', {source, params?, reads?})"]
   Q -->|换整条管线| PIPE["实现 RenderPipeline: buildGraph 建 RenderGraph + execute"]
   REG --> BUILD["在 buildGraph 里调 addFullscreenPass（或标准管线已链入 FXAA）"]
@@ -93,6 +93,7 @@ flowchart TD
 ```ts
 import {
   Camera, perspective, SkyboxBackground, SKYBOX_MODE_CUBEMAP,
+  EquirectAsset,
   BLOOM_ENABLED, ANTIALIAS_FXAA, ANTIALIAS_MSAA,
 } from '@forgeax/engine-runtime';
 import { TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-runtime';
@@ -111,10 +112,23 @@ world.spawn({
   },
 }).unwrap();
 
-// B) a skybox: one component, engine inserts a fullscreen cubemap pass
+// B) skybox + IBL with equirect: load the equirect, mint a shared handle, spawn
+//    one component each for Skylight (ambient) and SkyboxBackground (visual).
+//    The cubemap projection + IBL precompute (irradiance, prefilter, BRDF LUT)
+//    happen lazily inside the render-system record arm -- no upload call.
+const hdrRes = await engine.assets.loadByGuid<EquirectAsset>(guidRes.value);
+if (!hdrRes.ok) throw hdrRes.error;
+// loadByGuid returns the EquirectAsset PAYLOAD; mint a shared<EquirectAsset>
+// source handle for the component fields (same handle drives both, so the
+// projection is shared idempotently).
+const equirectHandle = world.allocSharedRef('EquirectAsset', hdrRes.value);
+world.spawn({
+  component: Skylight,
+  data: { equirect: equirectHandle, intensity: 1.0 },
+});
 world.spawn({
   component: SkyboxBackground,
-  data: { cubemap: myCubemapHandle, mode: SKYBOX_MODE_CUBEMAP },
+  data: { equirect: equirectHandle, mode: SKYBOX_MODE_CUBEMAP },
 }).unwrap();
 
 // C) inspect what the per-frame graph actually contains this frame
@@ -183,7 +197,8 @@ world.spawn(PostProcessParams({ shader: 'mypkg::vignette', data: Float32Array.of
 ## 踩坑
 
 - **画面全黑 / 后处理无效**：先确认 `Camera` 列写对了（`tonemap` / `bloom` / `antialias` 是 f32 列，用 `TONEMAP_*` / `BLOOM_*` / `ANTIALIAS_*` 常量，不是布尔）。再用 `renderer.perFramePassNames` 看 pass 链里到底有没有期望的 pass。
-- **天空盒不显示**：`SkyboxBackground.cubemap` 的 cubemap 没 ready，draw 时报 `RuntimeError skybox-cubemap-not-ready`——先 `loadByGuid` 拿到 cubemap handle（见 [`forgeax-engine-assets`](../forgeax-engine-assets/SKILL.md)）。手写自定义 skybox shader 时不要 V-flip，理由见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §天空盒 V-flip。
+- **天空盒不显示**：`SkyboxBackground.equirect` 的 equirect projection 异步未完成——引擎内部懒触发的 equirect→cubemap 投影 + IBL 预计算（irradiance/prefilter/BRDF LUT）在 render record 阶段 fire-and-forget 启动，就绪前天空盒走白 cube fallback（即时可见、不黑屏）。投影失败报 `RuntimeError equirect-projection-failed`（只触发一次、不重试；替代旧 `skybox-cubemap-not-ready`）；caps.rgba16floatRenderable 不足时引擎永久退化到白 cube（非报错路径）。手写自定义 skybox shader 时不要 V-flip，理由见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §天空盒 V-flip。
+- **Skylight + equirect = 声明式 IBL**：`Skylight` 组件 `equirect` 字段接收 `Handle<EquirectAsset>`（`loadByGuid<EquirectAsset>(guid)` 得到），引擎 render record 阶段检测 equirect handle、懒触发的 equirect→cubemap 投影 + IBL 链（irradiance 卷积 / prefilter mip chain / BRDF LUT）全部内部化——**AI 用户不再调 `uploadCubemapFromEquirect`**（已降为 `@internal` package-internal `_uploadCubemapFromEquirect`）。投影按 equirect handle 幂等共享（同 handle 多帧不重复投影）、失败 fail-fast（只报一次）、永久退化白 cube 不重试。`Skylight.equirect` **可选**：省略时退化为纯色环境光（白 cube fallback、首帧即亮、零 async）。`colorR/G/B` + `intensity` 在两种模式下都是每帧实时可调的动态刻度。
 - **自定义管线装不上**：`installPipeline` 返回 `Result`，失败带 `PipelineError`；按 `.code` 消费，别 `String(err)`。先 `registerPipeline` 再 `installPipeline`，顺序反了拿不到逻辑。
 - **自定义 fullscreen pass 不生效**：`addFullscreenPass` 引用的 shader id 必须先用 `renderer.postProcess.register` 登记；miss 时 execute 闭包内 throw `PostProcessError({ code: 'post-process-not-found' })`。同名 register 两次 throw `PostProcessError({ code: 'post-process-already-registered' })`。
 - **graph.compile 失败**：`RenderGraphErrorCode` 现已从 5 个扩为 7 个（新增 `resource-alloc-failed` / `invalid-format`）；`compile` 现在接收 `device`（用于分配 graph-owned GPU 纹理），缺少时报 `invalid-format` 或分配失败。

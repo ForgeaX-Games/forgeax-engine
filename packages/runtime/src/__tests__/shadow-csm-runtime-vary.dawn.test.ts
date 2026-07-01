@@ -113,8 +113,7 @@ function buildScene(initialCascadeCount: number, initialMapSize: number): SceneE
         component: DirectionalLight,
         data: {
           mapSize: initialMapSize,
-          nearPlane: 0.1,
-          farPlane: 50,
+          shadowDistance: 50,
           cascadeCount: initialCascadeCount,
         },
       },
@@ -144,16 +143,14 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
 
     world.set(shadowEntity, DirectionalLight, {
       mapSize: 2048,
-      nearPlane: 0.1,
-      farPlane: 50,
+      shadowDistance: 50,
       cascadeCount: 2,
     });
     expect(renderer.draw(world).ok).toBe(true);
 
     world.set(shadowEntity, DirectionalLight, {
       mapSize: 2048,
-      nearPlane: 0.1,
-      farPlane: 50,
+      shadowDistance: 50,
       cascadeCount: 4,
     });
     expect(renderer.draw(world).ok).toBe(true);
@@ -175,16 +172,14 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
 
     world.set(shadowEntity, DirectionalLight, {
       mapSize: 1024,
-      nearPlane: 0.1,
-      farPlane: 50,
+      shadowDistance: 50,
       cascadeCount: 4,
     });
     expect(renderer.draw(world).ok).toBe(true);
 
     world.set(shadowEntity, DirectionalLight, {
       mapSize: 2048,
-      nearPlane: 0.1,
-      farPlane: 50,
+      shadowDistance: 50,
       cascadeCount: 4,
     });
     expect(renderer.draw(world).ok).toBe(true);

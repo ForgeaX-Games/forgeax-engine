@@ -21,6 +21,7 @@ import { useSelection } from '../selection-context';
 import { pipelineStateAnchor } from '../selectors';
 import { useViewModel } from '../viewer-context';
 import type { CreateDescriptor, DrawEntry } from '../viewer-model';
+import { CodeMirrorShader } from './CodeMirrorShader';
 
 type SectionId =
   | 'ia'
@@ -228,9 +229,7 @@ function ShadersSection({
             {expanded.has(ps.vertexShaderModuleHandleId ?? '') ? 'Hide' : 'Show'} WGSL
           </button>
           {expanded.has(ps.vertexShaderModuleHandleId ?? '') && (
-            <pre className="mt-1 p-2 bg-muted rounded text-xs text-muted-foreground font-mono max-h-48 overflow-auto whitespace-pre-wrap">
-              {vsDesc.wgslCode}
-            </pre>
+            <CodeMirrorShader wgslCode={vsDesc.wgslCode} stage="vertex" />
           )}
         </div>
       )}
@@ -245,9 +244,7 @@ function ShadersSection({
             {expanded.has(ps.fragmentShaderModuleHandleId ?? '') ? 'Hide' : 'Show'} WGSL
           </button>
           {expanded.has(ps.fragmentShaderModuleHandleId ?? '') && (
-            <pre className="mt-1 p-2 bg-muted rounded text-xs text-muted-foreground font-mono max-h-48 overflow-auto whitespace-pre-wrap">
-              {fsDesc.wgslCode}
-            </pre>
+            <CodeMirrorShader wgslCode={fsDesc.wgslCode} stage="fragment" />
           )}
         </div>
       )}

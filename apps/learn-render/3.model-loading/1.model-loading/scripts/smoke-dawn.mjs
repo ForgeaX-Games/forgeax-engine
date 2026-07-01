@@ -285,17 +285,14 @@ if (!hdrPodRes.ok) {
   process.exit(1);
 }
 const hdrPod = hdrPodRes.value;
-const hdrSrcHandle = world.allocSharedRef('TextureAsset', hdrPod);
-
-const cubemapRes = await renderer.store.uploadCubemapFromEquirect(world, hdrSrcHandle, hdrPod);
-if (!cubemapRes.ok) {
-  console.error(`[smoke] FAIL - uploadCubemapFromEquirect: ${cubemapRes.error.code} - ${cubemapRes.error.hint ?? ''}`);
-  process.exit(1);
-}
+// loadByGuid<EquirectAsset> returns the payload; mint a user-tier handle. The
+// equirect->cubemap + IBL projection is INTERNAL to the engine (lazy, in the
+// render record arm) -- the Skylight holds the equirect handle, no manual upload.
+const equirect = world.allocSharedRef('EquirectAsset', hdrPod);
 
 world.spawn({
   component: Skylight,
-  data: { cubemap: cubemapRes.value, intensity: 1.0 },
+  data: { equirect, intensity: 1.0 },
 });
 console.log(`[smoke] HDR loadByGuid + Skylight spawn OK (format=${hdrPod.format} ${hdrPod.width}x${hdrPod.height})`);
 
@@ -309,7 +306,7 @@ world.spawn(
   { component: DirectionalLight, data: {
     directionX: d[0] * invLen, directionY: d[1] * invLen, directionZ: d[2] * invLen,
     colorR: 1.0, colorG: 0.95, colorB: 0.85, intensity: 3.0,
-    mapSize: 2048, farPlane: 36, depthBias: 0.005,
+    mapSize: 2048, shadowDistance: 36, depthBias: 0.005,
   } },
 );
 

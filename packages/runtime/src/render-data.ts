@@ -8,8 +8,9 @@
 // (AC-07). The store consumes the descriptor and does the createTexture /
 // createBuffer / writeX work.
 //
-// Coverage is exactly the three GPU-resource kinds (mesh / texture /
-// cube-texture). Asset kinds with no GPU residency are never projected -- the
+// Coverage is exactly the three GPU-resource kinds (mesh / texture / equirect,
+// the latter projected to a cubemap). Asset kinds with no GPU residency are
+// never projected -- the
 // `ensureResident` miss switch dispatches per-kind with no default, so a fourth
 // GPU-resource kind would surface as a `tsc -b` exhaustiveness error at the
 // switch rather than a silent fallthrough (AC-06).
@@ -18,6 +19,7 @@ import { err, ok, type Result } from '@forgeax/engine-rhi';
 import {
   ASSET_ERROR_HINTS,
   type AssetError,
+  countExtraUvSets,
   type MeshAsset,
   type Submesh,
   type TextureAsset,
@@ -75,6 +77,18 @@ export interface MeshRenderData {
    * geometry never sets skinIndex and stays 12F (OOS-3).
    */
   readonly layout: '12F' | '18F';
+  /**
+   * Number of UV sets the interleaved vertex buffer actually carries (set 0 =
+   * `uv` always present; +1 per `uv1..uv7` in `MeshAsset.attributes`).
+   * feat-20260629-multi-uv-set-support: the `layout` discriminator only encodes
+   * the 12F/18F base stride and cannot express the extra 8 B per UV set; a mesh
+   * with a real second UV set has a 56 B stride that the forward record stage
+   * must hand to `getMaterialShaderPipeline` so `deriveVertexBufferLayout`
+   * emits the matching @location(6+) attribute (otherwise the pipeline reads a
+   * 48 B stride against a 56 B buffer and every vertex after the first lands
+   * off-screen -- the hello-multi-uv plane rendered nothing before this field).
+   */
+  readonly uvSetCount: number;
   readonly vertexUsage: number;
   readonly indexUsage: number;
   /**
@@ -125,12 +139,16 @@ export function deriveRenderDataMesh(mesh: MeshAsset): Result<MeshRenderData, As
   // unified stride; D-6 -- attr pair check fail-fast happens upstream in
   // parse). Builtin / procedural geometry never sets skinIndex (OOS-3).
   const layout: '12F' | '18F' = mesh.attributes.skinIndex !== undefined ? '18F' : '12F';
+  // set 0 (`uv`) is always present in the canonical interleaved layout; each
+  // `uv1..uv7` in attributes adds one more set (and 8 B to the stride).
+  const uvSetCount = 1 + countExtraUvSets(mesh.attributes);
   return ok({
     vertexByteLength: mesh.vertices.byteLength,
     indexByteLength,
     indexCount: indices === undefined ? 0 : indices.length,
     indexFormat: indices instanceof Uint32Array ? 'uint32' : 'uint16',
     layout,
+    uvSetCount,
     vertexUsage: GPU_BUFFER_USAGE_VERTEX | GPU_BUFFER_USAGE_COPY_DST,
     indexUsage: GPU_BUFFER_USAGE_INDEX | GPU_BUFFER_USAGE_COPY_DST,
     submeshes: mesh.submeshes,

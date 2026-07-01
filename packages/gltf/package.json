@@ -36,7 +36,7 @@
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
-    "@webgpu/types": "^0.1.70"
+    "@webgpu/types": "^0.1.71"
   },
   "devDependencies": {
     "@forgeax/engine-import": "workspace:*",

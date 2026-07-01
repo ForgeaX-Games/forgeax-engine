@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.70",
+    "@webgpu/types": "^0.1.71",
     "vite": "8.0.10",
     "webgpu": "^0.4.0"
   },

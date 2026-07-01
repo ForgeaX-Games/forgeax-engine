@@ -24,6 +24,16 @@ export type { ShaderErrorCode };
  */
 export interface ShaderErrorDetail {
   readonly reason?: string | undefined;
+  /**
+   * Machine-consumable list of currently-registered material-shader identifiers.
+   * Populated by `materialShaderNotFound()` factory so AI users can enumerate
+   * available shaders via `err.detail.registeredShaderIds` for autocomplete /
+   * fuzzy-match recovery without parsing the human-formatted `err.expected`
+   * string (charter P3 structured failure). `err.expected` still carries the
+   * pre-formatted `"ShaderRegistry has registered identifiers: [...]"` message
+   * for human-readable log output — the two channels are complementary.
+   */
+  readonly registeredShaderIds?: readonly string[] | undefined;
 }
 
 interface ShaderErrorInit {
@@ -118,10 +128,13 @@ export function shaderNotFound(args: {
  * `registerMaterialShader(...)` API path so the caller can register the missing
  * shader at engine boot (feat-20260523-shader-template-instance-split M5 / T05).
  *
- * feat-20260528-material-shader-registration-unification M3 / w12:
- * `.expected` is now `string[]` listing every currently-registered material-shader
- * identifier. AI users consume `err.expected` to enumerate available shaders
- * for autocomplete / recovery without grepping (charter P3 structured failure).
+ * feat-20260528-material-shader-registration-unification M3 / w12 +
+ * feat-20260624-sprite-lit F-P1 fix: dual-channel exposure of the registered
+ * identifier set. `.expected` carries the pre-formatted string
+ * `"ShaderRegistry has registered identifiers: [id1, id2, ...]"` for human /
+ * log output; `.detail.registeredShaderIds` carries the raw `readonly string[]`
+ * for AI users to enumerate via property access without regex-parsing the
+ * message (charter P3 structured failure).
  */
 export function materialShaderNotFound(args: {
   readonly identifier: string;
@@ -133,7 +146,7 @@ export function materialShaderNotFound(args: {
     expected: `ShaderRegistry has registered identifiers: [${args.expected.join(', ')}]`,
     message: `ShaderRegistry: material shader identifier '${args.identifier}' not registered`,
     hint: args.hint,
-    detail: { reason: `identifier=${args.identifier}` },
+    detail: { reason: `identifier=${args.identifier}`, registeredShaderIds: args.expected },
   });
 }
 

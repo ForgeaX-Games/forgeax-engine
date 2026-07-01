@@ -1479,6 +1479,13 @@
         "apps/parity/instancing-static/scripts/smoke-dawn.mjs"
       ],
       "rationale": "feat-20260629-importer-self-declared-fold-contract M5: the host-custom-importer acceptance smoke shares the dawn-node loader + mock canvas + pixel-sampling readback tail with the instancing-static parity smoke (canonical smoke shape). Charter F1 grep-anchor: each demo smoke is self-contained alongside its src/main.ts; the custom-importer per-demo verdict (host {key,import} importer end-to-end -> pack-index kind:reel-game-blob -> loadByGuid -> scene render) stays inline."
+    },
+    {
+      "files": [
+        "packages/shader/src/sprite.wgsl.meta.json",
+        "packages/shader/src/sprite-lit.wgsl.meta.json"
+      ],
+      "rationale": "feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / AC-07: sprite-lit.wgsl.meta.json paramSchema mirrors sprite.wgsl.meta.json byte-identically by design — BGL JSON byte-identical contract is the SSOT compression axis (plan-strategy D-1: materialShaderId routing without union extension). Diverging the two would break AC-07 and waste the BGL cache."
     }
   ]
 }

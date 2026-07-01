@@ -579,6 +579,12 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
           transform.posY,
           transform.posZ,
         );
+        // CCD sweeps the collider along its per-step kinematic translation so a
+        // fast mover (player, bullet) reliably contacts dynamics instead of
+        // tunneling through them on discrete steps.
+        if (rigidBody.ccdEnabled) {
+          desc.setCcdEnabled(true);
+        }
         // biome-ignore lint/suspicious/noExplicitAny: Rapier World.createRigidBody
         body = (this.raw as any).createRigidBody(desc);
         break;

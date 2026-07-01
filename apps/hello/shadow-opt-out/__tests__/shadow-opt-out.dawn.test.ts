@@ -127,15 +127,14 @@ function buildWorld(): World {
         // (cascadeCount=1, the AC-10 degenerate baseline). Pre-CSM the test
         // pinned orthoHalfExtent=8 to match the legacy fixed-extent path;
         // that field is gone in CSM (per-cascade frustum AABB-fit replaces it).
-        // farPlane tightened from 60 to 20 -- with cascadeCount=1 the cascade
-        // covers the full [near, far] depth slab, so a 60-unit far would
-        // make the light-space AABB cover ~60 world units and the cutout
-        // pattern's 0.15-unit holes stop being resolvable at mapSize=1024.
-        // 20 is past the camera's z=8 -> z=0 cube reach with margin.
+        // shadowDistance tightened from 60 to 20 -- with cascadeCount=1 the
+        // cascade covers the full [camera near, shadowDistance] depth slab, so a
+        // 60-unit reach would make the light-space AABB cover ~60 world units and
+        // the cutout pattern's 0.15-unit holes stop being resolvable at
+        // mapSize=1024. 20 is past the camera's z=8 -> z=0 cube reach with margin.
         cascadeCount: 1,
         mapSize: FIXTURE_MAP_SIZE,
-        nearPlane: 0.1,
-        farPlane: 20,
+        shadowDistance: 20,
       },
     },
   );

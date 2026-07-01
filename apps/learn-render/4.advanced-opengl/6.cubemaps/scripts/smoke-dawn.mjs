@@ -6,8 +6,8 @@
 // Strategy (dual-state skybox-on vs skybox-off pixel diff, fxaa two-World pattern):
 //   1. Inject globalThis.navigator.gpu via `webgpu` npm package (dawn-node).
 //   2. Mock canvas + offscreen render target (bgra8unorm storage).
-//   3. Decode real newport_loft.hdr from vendor submodule, register equirect
-//      POD, upload cubemap via uploadCubemapFromEquirect.
+//   3. Decode real newport_loft.hdr from vendor submodule, build the equirect
+//      POD; the equirect->cubemap projection is internal to the engine record arm.
 //   4. Two Worlds share the same renderer/device/renderTarget:
 //        - World-A (skybox-on):  Skylight + SkyboxBackground(SKYBOX_MODE_CUBEMAP)
 //          + reflective cube (metallic=1, roughness=0) + non-reflective cube
@@ -245,14 +245,12 @@ if (!guidRes.ok) {
 }
 const floatBytes = new Uint8Array(hdr.data.buffer, hdr.data.byteOffset, hdr.data.byteLength);
 const equirectPod = {
-  kind: 'texture',
+  kind: 'equirect',
   width: hdr.width,
   height: hdr.height,
   format: 'rgba32float',
   data: floatBytes,
   colorSpace: 'linear',
-  mipmap: false,
-  mipLevelCount: 1,
 };
 // --- 6. Material descriptors (minted per-world inside spawnScene) ---
 // Handles are minted via world.allocSharedRef (M8 D-19), so each of the two
@@ -308,29 +306,22 @@ const nonReflectiveMatPayload = {
  *   - Camera at posZ=6, tonemap=REINHARD_EXTENDED
  */
 async function spawnScene(world, spawnSkybox) {
-  // Mint this world's column handles (M8 D-19): equirect source + cubemap
-  // upload + two PBR materials. uploadCubemapFromEquirect takes the world.
-  const srcHandle = world.allocSharedRef('TextureAsset', equirectPod);
-  const cubemapRes = await renderer.store.uploadCubemapFromEquirect(world, srcHandle, equirectPod);
-  if (!cubemapRes.ok) {
-    console.error(
-      `[smoke] FAIL - equirect-to-cubemap upload: ${cubemapRes.error.code} - ${cubemapRes.error.hint}`,
-    );
-    process.exit(1);
-  }
-  const cubemapHandle = cubemapRes.value;
+  // Mint this world's column handles (M8 D-19): equirect source + two PBR
+  // materials. The equirect->cubemap + IBL projection is INTERNAL to the engine
+  // (lazy, in the render record arm) -- the Skylight holds the equirect handle.
+  const equirect = world.allocSharedRef('EquirectAsset', equirectPod);
   const reflectiveMatHandle = world.allocSharedRef('MaterialAsset', reflectiveMatPayload);
   const nonReflectiveMatHandle = world.allocSharedRef('MaterialAsset', nonReflectiveMatPayload);
 
   world.spawn({
     component: Skylight,
-    data: { cubemap: cubemapHandle, intensity: 1.0 },
+    data: { equirect, intensity: 1.0 },
   });
 
   if (spawnSkybox) {
     world.spawn({
       component: SkyboxBackground,
-      data: { cubemap: cubemapHandle, mode: SKYBOX_MODE_CUBEMAP },
+      data: { equirect, mode: SKYBOX_MODE_CUBEMAP },
     });
   }
 
@@ -581,7 +572,7 @@ if (diffCount <= DIFF_THRESHOLD) {
   failures.push(
     `(e) dual-state pixel diff ${diffCount} <= threshold ${DIFF_THRESHOLD} (${diffPct}%)` +
       ' -- skybox may not be visible or pixel difference below detection threshold' +
-      ' (charter P3: check Skylight + SkyboxBackground spawn, equirect cubemap upload, camera tonemap)',
+      ' (charter P3: check Skylight + SkyboxBackground spawn, equirect handle binding, camera tonemap)',
   );
 }
 

@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { SharedRefStore } from '@forgeax/engine-ecs';
 import type { Result, RhiCaps } from '@forgeax/engine-rhi';
 import { err, ok, RhiError } from '@forgeax/engine-rhi';
-import type { CubeTextureAsset, Handle, TextureAsset } from '@forgeax/engine-types';
+import type { EquirectAsset, Handle, TextureAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
@@ -100,10 +100,10 @@ const mockCaps: RhiCaps = {
 };
 
 function makeRegisterCube(): (
-  pod: CubeTextureAsset,
-) => Result<Handle<'CubeTextureAsset', 'shared'>, never> {
+  pod: EquirectAsset,
+) => Result<Handle<'EquirectAsset', 'shared'>, never> {
   let next = 1000;
-  return () => ok(toShared<'CubeTextureAsset'>(next++));
+  return () => ok(toShared<'EquirectAsset'>(next++));
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: shader-module factory shim

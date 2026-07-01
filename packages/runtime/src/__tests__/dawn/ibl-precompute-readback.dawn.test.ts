@@ -17,7 +17,7 @@
 import { World } from '@forgeax/engine-ecs';
 import { composeShader } from '@forgeax/engine-naga';
 import { ok } from '@forgeax/engine-rhi';
-import type { CubeTextureAsset, TextureAsset, TextureFormat } from '@forgeax/engine-types';
+import type { EquirectAsset, TextureFormat } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { GpuResourceStore } from '../../gpu-resource-store';
 import { getOrCreateIblCache, setIblComposedShaders } from '../../ibl/IblPipelineCache';
@@ -42,7 +42,7 @@ const mockCaps = {
 };
 
 // feat-20260601-gpu-resource-store-extraction M1 (D-3 falsifiable anchor): a
-// single store.uploadCubemapFromEquirect(world, srcHandle, srcPod) returns the
+// single store._uploadCubemapFromEquirect(world, srcHandle, srcPod) returns the
 // cube handle, and store.getCubemapGpuTexture(cubeHandle) reads it back -- the
 // single-call contract is preserved. The cube POD register-relay is injected
 // at configureGpuDevice and mints via world.allocSharedRef (the store holds no
@@ -89,7 +89,7 @@ async function composeIblShadersForDawn(): Promise<void> {
 
 const dawnReady = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
 
-function makeWhiteEquirect(): TextureAsset {
+function makeWhiteEquirect(): EquirectAsset {
   // 4x2 rgba16float, all 1.0 (HDR white). 16-bit float 1.0 = 0x3C00 = 15360.
   const w = 4;
   const h = 2;
@@ -99,13 +99,12 @@ function makeWhiteEquirect(): TextureAsset {
     dv.setUint16(i * 2, 0x3c00, true);
   }
   return {
-    kind: 'texture',
+    kind: 'equirect',
     width: w,
     height: h,
     format: 'rgba16float' as TextureFormat,
     data,
     colorSpace: 'linear',
-    mipmap: false,
   };
 }
 
@@ -161,7 +160,7 @@ describe('t51 (M3.5) -- dawn IBL 4-pass non-zero readback', () => {
       const store = new GpuResourceStore();
       const world = new World();
       const equirect = makeWhiteEquirect();
-      const equirectHandle = world.allocSharedRef('TextureAsset', equirect);
+      const equirectHandle = world.allocSharedRef('EquirectAsset', equirect);
 
       // We pass the raw GPUDevice directly so the runtime exercises the
       // same dawn path that user-mesh-upload.dawn.test.ts uses. The cube POD
@@ -175,12 +174,19 @@ describe('t51 (M3.5) -- dawn IBL 4-pass non-zero readback', () => {
           // biome-ignore lint/suspicious/noExplicitAny: matching shim Result shape
           return { ok: true, value: mod, unwrap: () => mod, unwrapOr: () => mod } as any;
         },
-        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w: World, pod: EquirectAsset) => ok(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 
-      // Single call returns the cube handle (D-3 single-call contract).
-      const result = await store.uploadCubemapFromEquirect(world, equirectHandle, equirect);
+      // Single call returns the cube handle (D-3 single-call contract). The
+      // projection method is @internal (private) after feat-20260630 M2 / w11;
+      // the dawn test reaches it through the store internals.
+      // biome-ignore lint/suspicious/noExplicitAny: private method access for the dawn IBL readback probe
+      const result = await (store as any)._uploadCubemapFromEquirect(
+        world,
+        equirectHandle,
+        equirect,
+      );
       expect(result.ok).toBe(true);
       if (!result.ok) return;
 

@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { ImporterRegistry } from '@forgeax/engine-import';
 import type {
   DecodedImage,
+  EquirectAsset,
   ImageMeta,
   ImportContext,
   ImportSubAsset,
@@ -610,22 +611,22 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
 
   describe('image-importer-hdr.test.ts', () => {
     describe('imageImporter HDR arm', () => {
-      it('imports a .hdr source and produces a TextureAsset with rgba16float format', async () => {
+      it('imports a .hdr source and produces an EquirectAsset with rgba16float format', async () => {
         const width = 8;
         const height = 4;
         const hdr = makeHdrFixture(width, height);
         const ctx = makeHdrCtx('env.hdr', hdr, [
-          { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' },
         ]);
 
         const produced = await imageImporter.import(ctx);
         expect(produced.length).toBe(1);
         const asset = produced[0];
         expect(asset?.guid).toBe(HDR_GUID);
-        expect(asset?.kind).toBe('texture');
+        expect(asset?.kind).toBe('equirect');
 
-        const payload = asset?.payload as TextureAsset;
-        expect(payload.kind).toBe('texture');
+        const payload = asset?.payload as EquirectAsset;
+        expect(payload.kind).toBe('equirect');
         expect(payload.format).toBe('rgba16float');
         expect(payload.colorSpace).toBe('linear');
         expect(payload.width).toBe(width);
@@ -637,29 +638,18 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         const height = 4;
         const hdr = makeHdrFixture(width, height);
         const ctx = makeHdrCtx('env.hdr', hdr, [
-          { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' },
         ]);
 
         const produced = await imageImporter.import(ctx);
-        const payload = (produced[0] as { payload: TextureAsset })?.payload;
+        const payload = (produced[0] as { payload: EquirectAsset })?.payload;
         expect(payload.data.length).toBe(width * height * 4 * 2);
       });
 
-      it('mipmap is false by default (build import always produces single-level)', async () => {
+      it('a texture sub-asset with .hdr source is NOT folded (only equirect is)', async () => {
         const hdr = makeHdrFixture(8, 4);
         const ctx = makeHdrCtx('env.hdr', hdr, [
           { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
-        ]);
-
-        const produced = await imageImporter.import(ctx);
-        const payload = (produced[0] as { payload: TextureAsset })?.payload;
-        expect(payload.mipmap).toBe(false);
-      });
-
-      it('a cube-texture sub-asset with .hdr source is still not folded (rides IBL path)', async () => {
-        const hdr = makeHdrFixture(8, 4);
-        const ctx = makeHdrCtx('env.hdr', hdr, [
-          { guid: HDR_GUID, sourceIndex: 0, kind: 'cube-texture' },
         ]);
         const produced = await imageImporter.import(ctx);
         expect(produced.length).toBe(0);
@@ -668,7 +658,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
       it('throws for a corrupt .hdr source (invalid RGBE header)', async () => {
         const corrupt = new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         const ctx = makeHdrCtx('bad.hdr', corrupt, [
-          { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' },
         ]);
 
         await expect(imageImporter.import(ctx)).rejects.toThrow();
@@ -702,7 +692,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
       it('source with .hdr extension (upper case) is still recognized via toLowerCase()', async () => {
         const hdr = makeHdrFixture(8, 2);
         const ctx = makeHdrCtx('ENV.HDR', hdr, [
-          { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' },
         ]);
         const produced = await imageImporter.import(ctx);
         expect(produced.length).toBe(1);
@@ -792,10 +782,10 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         expect(payload.colorSpace).toBe('linear');
       });
 
-      it('a cube-texture sub-asset is not folded (rides the runtime IBL path)', async () => {
+      it('a non-texture sub-asset is not folded by the PNG/JPEG arm', async () => {
         const png = makePng(2, 2, [0, 0, 0, 255]);
         const ctx = makeImpCtx('env.png', png, [
-          { guid: IMP_GUID, sourceIndex: 0, kind: 'cube-texture' },
+          { guid: IMP_GUID, sourceIndex: 0, kind: 'equirect' },
         ]);
         const produced = await imageImporter.import(ctx);
         expect(produced.length).toBe(0);

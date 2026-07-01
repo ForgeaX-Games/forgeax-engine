@@ -40,6 +40,18 @@ export interface BrowserInputBackendOptions {
    * requiring the canvas itself to receive keyboard events.
    */
   readonly window?: Window;
+  /**
+   * Neutral gate for the auto PointerLock-on-click. When provided and it
+   * returns false, the click handler skips `requestPointerLock()` — the host
+   * decides whether a click should capture the cursor right now. Defaults to
+   * always-locking (returns true), so the standalone game runtime keeps its
+   * MVP behaviour unchanged. This predicate is deliberately host-opaque: the
+   * backend never learns WHY locking is (dis)allowed — it only asks. A host
+   * that mounts this canvas in a non-game context (e.g. an editor viewport
+   * that owns the cursor for orbit/pick) supplies a predicate that returns
+   * false there. The input package carries zero knowledge of those contexts.
+   */
+  readonly pointerLockAllowed?: () => boolean;
 }
 
 /**
@@ -156,6 +168,10 @@ export function attachBrowserInputBackend(
   // OOS-1 keeps any explicit "request lock" / "exit lock" surface out
   // of the snapshot itself.
   function onCanvasClick(): void {
+    // Host gate: when the host says "not now" (e.g. an editor viewport that owns
+    // the cursor outside the play·game quadrant) skip the lock entirely. Default
+    // is always-allow, so the standalone game runtime is unchanged.
+    if (options.pointerLockAllowed && !options.pointerLockAllowed()) return;
     const fn = canvas.requestPointerLock;
     if (typeof fn !== 'function') return;
     // Pointer Lock requires window focus; skip silently when unfocused

@@ -15,10 +15,19 @@
 import type { IDockviewPanelProps } from 'dockview-react';
 import { Search } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { type BufferConsumer, bufferBindingConsumers } from '../buffer-binding';
+import {
+  type BufferViewType,
+  buildBufferContentDisplay,
+  formatViewValue,
+  getBufferBlobData,
+  getBufferContentSource,
+} from '../buffer-content';
 import { useSelection } from '../selection-context';
 import { resourceInspectorAnchor, resourceRowAnchor } from '../selectors';
-import { useViewModel } from '../viewer-context';
+import { useTape, useViewModel } from '../viewer-context';
 import type { CreateDescriptor } from '../viewer-model';
+import { CodeMirrorWidget } from './CodeMirrorWidget';
 
 // ============================================================================
 // Usage flag decoding
@@ -154,12 +163,32 @@ function ResourceTable({
   filter,
   highlightedHandle,
   onHandleClick,
+  expandedWgsl,
+  onToggleWgsl,
+  expandedBuffers,
+  onToggleBuffer,
+  bufferViewType,
+  onBufferViewType,
+  contentSource,
+  blobData,
+  consumerMap,
+  onDrawClick,
 }: {
   category: ResourceCategory;
   items: readonly CreateDescriptor[];
   filter: string;
   highlightedHandle: string | null;
   onHandleClick: (handleId: string) => void;
+  expandedWgsl: Set<string>;
+  onToggleWgsl: (handleId: string) => void;
+  expandedBuffers: Set<string>;
+  onToggleBuffer: (handleId: string) => void;
+  bufferViewType: BufferViewType;
+  onBufferViewType: (handleId: string, vt: BufferViewType) => void;
+  contentSource: Map<string, string>;
+  blobData: Map<string, ArrayBuffer | null>;
+  consumerMap: Map<string, readonly BufferConsumer[]>;
+  onDrawClick: (drawIdx: number) => void;
 }) {
   const filtered = useMemo(() => {
     if (!filter) return items;
@@ -183,6 +212,16 @@ function ResourceTable({
             item={item}
             isHighlighted={highlightedHandle === item.handleId}
             onHandleClick={onHandleClick}
+            expandedWgsl={expandedWgsl}
+            onToggleWgsl={onToggleWgsl}
+            expandedBuffers={expandedBuffers}
+            onToggleBuffer={onToggleBuffer}
+            bufferViewType={bufferViewType}
+            onBufferViewType={onBufferViewType}
+            contentSourceMap={contentSource}
+            blobDataMap={blobData}
+            consumerMap={consumerMap}
+            onDrawClick={onDrawClick}
           />
         ))}
       </div>
@@ -194,10 +233,30 @@ function ResourceRow({
   item,
   isHighlighted,
   onHandleClick,
+  expandedWgsl,
+  onToggleWgsl,
+  expandedBuffers,
+  onToggleBuffer,
+  bufferViewType,
+  onBufferViewType,
+  contentSourceMap,
+  blobDataMap,
+  consumerMap,
+  onDrawClick,
 }: {
   item: CreateDescriptor;
   isHighlighted: boolean;
   onHandleClick: (handleId: string) => void;
+  expandedWgsl: Set<string>;
+  onToggleWgsl: (handleId: string) => void;
+  expandedBuffers: Set<string>;
+  onToggleBuffer: (handleId: string) => void;
+  bufferViewType: BufferViewType;
+  onBufferViewType: (handleId: string, vt: BufferViewType) => void;
+  contentSourceMap: Map<string, string>;
+  blobDataMap: Map<string, ArrayBuffer | null>;
+  consumerMap: Map<string, readonly BufferConsumer[]>;
+  onDrawClick: (drawIdx: number) => void;
 }) {
   const handleClick = useCallback(() => {
     onHandleClick(item.handleId);
@@ -210,19 +269,283 @@ function ResourceRow({
   }`;
 
   const detail = renderDetail(item);
+  const isShaderModule = item.kind === 'createShaderModule';
+  const isBuffer = item.kind === 'createBuffer';
+  const isExpandedBuffer = isBuffer && expandedBuffers.has(item.handleId);
+  const sourceLabel = isBuffer ? (contentSourceMap.get(item.handleId) ?? '') : '';
 
   return (
-    <div className={className} {...{ [resourceRowAnchor()]: item.handleId }}>
-      <button
-        type="button"
-        onClick={handleClick}
-        className="text-brand hover:text-brand font-mono shrink-0 text-left"
-      >
-        {item.handleId}
-      </button>
-      <span className="text-muted-foreground truncate">{detail}</span>
+    <div>
+      <div className={className} {...{ [resourceRowAnchor()]: item.handleId }}>
+        <button
+          type="button"
+          onClick={handleClick}
+          className="text-brand hover:text-brand font-mono shrink-0 text-left"
+        >
+          {item.handleId}
+        </button>
+        <span className="text-muted-foreground truncate flex-1 min-w-0">{detail}</span>
+        {isBuffer && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleBuffer(item.handleId);
+            }}
+            className="text-xs text-warning/80 hover:text-warning shrink-0"
+          >
+            {isExpandedBuffer ? 'Hide' : 'Show'} Content
+          </button>
+        )}
+        {isShaderModule && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleWgsl(item.handleId);
+            }}
+            className="text-xs text-warning/80 hover:text-warning shrink-0"
+          >
+            {expandedWgsl.has(item.handleId) ? 'Hide' : 'Show'} WGSL
+          </button>
+        )}
+      </div>
+      {isBuffer && isExpandedBuffer && (
+        <BufferContentPanel
+          item={item}
+          contentSource={sourceLabel}
+          blobData={blobDataMap.get(item.handleId) ?? null}
+          viewType={bufferViewType}
+          onViewTypeChange={(vt) => onBufferViewType(item.handleId, vt)}
+          consumers={consumerMap.get(item.handleId) ?? []}
+          onDrawClick={onDrawClick}
+        />
+      )}
+      {isShaderModule && expandedWgsl.has(item.handleId) && (
+        <div className="px-2 pb-1">
+          <CodeMirrorWidget wgslCode={item.wgslCode} />
+        </div>
+      )}
     </div>
   );
+}
+
+// ============================================================================
+// Buffer content readback panel (F3, AC-07)
+// ============================================================================
+
+const BUFFER_VIEW_TYPES: BufferViewType[] = ['f32', 'u32', 'i32', 'u8'];
+
+function BufferContentPanel({
+  item: _item,
+  contentSource,
+  blobData,
+  viewType,
+  onViewTypeChange,
+  consumers,
+  onDrawClick,
+}: {
+  item: CreateDescriptor & { kind: 'createBuffer' };
+  contentSource: string;
+  blobData: ArrayBuffer | null;
+  viewType: BufferViewType;
+  onViewTypeChange: (vt: BufferViewType) => void;
+  consumers: readonly BufferConsumer[];
+  onDrawClick: (drawIdx: number) => void;
+}) {
+  const isNotReadable = contentSource.startsWith('not readable');
+
+  return (
+    <div className="px-2 pb-1 text-xs">
+      <div className="text-muted-foreground mb-1">{contentSource}</div>
+
+      {isNotReadable && <div className="text-warning/80 italic">{contentSource}</div>}
+
+      {!isNotReadable && !blobData && (
+        <div className="text-muted-foreground italic">
+          (live GPU readback not available in this view — load a tape file)
+        </div>
+      )}
+
+      {blobData && (
+        <>
+          {/* View type selector */}
+          <div className="flex items-center gap-1 mb-1">
+            <span className="text-muted-foreground">View:</span>
+            {BUFFER_VIEW_TYPES.map((vt) => (
+              <button
+                key={vt}
+                type="button"
+                onClick={() => onViewTypeChange(vt)}
+                className={`px-1.5 py-0.5 rounded text-xs font-mono ${
+                  vt === viewType
+                    ? 'bg-brand/20 text-brand'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {vt}
+              </button>
+            ))}
+          </div>
+
+          {/* Decoded values */}
+          <BufferContentValues blobData={blobData} viewType={viewType} />
+        </>
+      )}
+
+      {/* Consumer list */}
+      {consumers.length > 0 && (
+        <div className="mt-1">
+          <span className="text-muted-foreground">Used by:</span>
+          {consumers.map((c) => (
+            <button
+              key={`${c.drawIdx}-${c.passIdx}-${c.role}-${c.slot ?? 'x'}-${c.groupIndex ?? 'x'}-${c.entryIndex ?? 'x'}`}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDrawClick(c.drawIdx);
+              }}
+              className="ml-1 text-brand hover:text-brand/80 font-mono"
+            >
+              draw#{c.drawIdx}
+            </button>
+          ))}
+          <div className="text-muted-foreground italic mt-0.5">
+            {consumers.map((c) => c.details).join('; ')}
+          </div>
+        </div>
+      )}
+
+      {consumers.length === 0 && (
+        <div className="text-muted-foreground italic mt-1">no draw consumers found</div>
+      )}
+    </div>
+  );
+}
+
+function BufferContentValues({
+  blobData,
+  viewType,
+}: {
+  blobData: ArrayBuffer;
+  viewType: BufferViewType;
+}) {
+  const display = useMemo(
+    () => buildBufferContentDisplay(blobData, viewType),
+    [blobData, viewType],
+  );
+
+  const formatted = display.items.map((v, i) => ({
+    index: i,
+    text: formatViewValue(v, viewType),
+  }));
+
+  return (
+    <div className="bg-muted/50 rounded p-1.5 font-mono max-h-48 overflow-y-auto">
+      <div className="whitespace-pre-wrap break-all leading-relaxed">
+        {formatted.map(({ index, text }) => (
+          <span key={`${index}-${text.slice(0, 8)}`}>
+            <span className="text-muted-foreground select-none">{index}:</span>
+            <span>{text}</span>
+            {index < formatted.length - 1 ? ' ' : ''}
+          </span>
+        ))}
+      </div>
+      {display.truncated && (
+        <div className="text-muted-foreground mt-1 italic">
+          … showing first {display.items.length} of {display.totalItems} elements (
+          {display.totalBytes} bytes total)
+        </div>
+      )}
+      {!display.truncated && display.totalItems > 0 && (
+        <div className="text-muted-foreground mt-1">
+          {display.totalItems} elements ({display.totalBytes} bytes)
+        </div>
+      )}
+      {display.totalItems === 0 && (
+        <div className="text-muted-foreground italic">
+          0 elements ({display.totalBytes} bytes — not enough for {viewType} view)
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// Sampler descriptor field expansion (F4, AC-08/09)
+// ============================================================================
+
+/** Sampler field types we know about from GPUSamplerDescriptor. */
+type SamplerField =
+  | 'addressModeU'
+  | 'addressModeV'
+  | 'addressModeW'
+  | 'magFilter'
+  | 'minFilter'
+  | 'mipmapFilter'
+  | 'lodMinClamp'
+  | 'lodMaxClamp'
+  | 'compare'
+  | 'maxAnisotropy';
+
+const SAMPLER_FIELDS: readonly SamplerField[] = [
+  'addressModeU',
+  'addressModeV',
+  'addressModeW',
+  'magFilter',
+  'minFilter',
+  'mipmapFilter',
+  'lodMinClamp',
+  'lodMaxClamp',
+  'compare',
+  'maxAnisotropy',
+];
+
+function samplerFieldLabel(field: SamplerField): string {
+  switch (field) {
+    case 'addressModeU':
+      return 'U';
+    case 'addressModeV':
+      return 'V';
+    case 'addressModeW':
+      return 'W';
+    case 'magFilter':
+      return 'mag';
+    case 'minFilter':
+      return 'min';
+    case 'mipmapFilter':
+      return 'mip';
+    case 'lodMinClamp':
+      return 'lodMin';
+    case 'lodMaxClamp':
+      return 'lodMax';
+    case 'compare':
+      return 'cmp';
+    case 'maxAnisotropy':
+      return 'aniso';
+  }
+}
+
+function formatSamplerValue(value: unknown): string {
+  if (value === undefined) return 'default';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  return String(value);
+}
+
+function renderSamplerDetail(desc: Partial<GPUSamplerDescriptor> | undefined): string {
+  if (desc === undefined) return 'not recorded';
+
+  const parts: string[] = [];
+  for (const field of SAMPLER_FIELDS) {
+    const key = field as keyof GPUSamplerDescriptor;
+    const value = desc[key];
+    const label = samplerFieldLabel(field);
+    const formatted = formatSamplerValue(value);
+    parts.push(`${label}=${formatted}`);
+  }
+
+  return parts.join(', ');
 }
 
 function renderDetail(item: CreateDescriptor): string {
@@ -232,7 +555,7 @@ function renderDetail(item: CreateDescriptor): string {
     case 'createTexture':
       return `fmt=${item.format}, ${item.size.join('x')}, ${textureDimensionLabel(item.dimension)}, usage=${decodeTextureUsage(item.usage)}`;
     case 'createSampler':
-      return 'sampler';
+      return renderSamplerDetail(item.desc);
     case 'createBindGroupLayout':
       return `${item.entries.length} entries`;
     case 'createPipelineLayout':
@@ -241,7 +564,7 @@ function renderDetail(item: CreateDescriptor): string {
       return `vs=${item.vertexShaderModuleHandleId ?? '?'}, fs=${item.fragmentShaderModuleHandleId ?? '?'}`;
     case 'createShaderModule': {
       const preview = item.wgslCode.slice(0, 60).replace(/\n/g, ' ');
-      return preview;
+      return `WGSL: ${preview}${item.wgslCode.length > 60 ? '…' : ''}`;
     }
     default:
       return '';
@@ -254,9 +577,13 @@ function renderDetail(item: CreateDescriptor): string {
 
 export function ResourceInspector(_props: IDockviewPanelProps) {
   const vm = useViewModel();
-  const { selectedDrawIdx } = useSelection();
+  const tape = useTape();
+  const { selectedDrawIdx, setSelectedDrawIdx } = useSelection();
   const [filter, setFilter] = useState('');
   const [highlightedHandle, setHighlightedHandle] = useState<string | null>(null);
+  const [expandedWgsl, setExpandedWgsl] = useState<Set<string>>(new Set());
+  const [expandedBuffers, setExpandedBuffers] = useState<Set<string>>(new Set());
+  const [bufferViewTypes, setBufferViewTypes] = useState<Map<string, BufferViewType>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
 
   const handleHandleClick = useCallback((handleId: string) => {
@@ -273,8 +600,73 @@ export function ResourceInspector(_props: IDockviewPanelProps) {
     }, 0);
   }, []);
 
+  const setExpandedWgslToggle = useCallback((handleId: string) => {
+    setExpandedWgsl((prev) => {
+      const next = new Set(prev);
+      if (next.has(handleId)) next.delete(handleId);
+      else next.add(handleId);
+      return next;
+    });
+  }, []);
+
+  const toggleBufferExpand = useCallback((handleId: string) => {
+    setExpandedBuffers((prev) => {
+      const next = new Set(prev);
+      if (next.has(handleId)) next.delete(handleId);
+      else next.add(handleId);
+      return next;
+    });
+  }, []);
+
+  const setBufferViewType = useCallback((handleId: string, vt: BufferViewType) => {
+    setBufferViewTypes((prev) => {
+      const next = new Map(prev);
+      next.set(handleId, vt);
+      return next;
+    });
+  }, []);
+
   const resources = vm?.resources;
   const categorized = useMemo(() => (resources ? categorizeResources(resources) : []), [resources]);
+
+  // Compute buffer content sources and blob data
+  const { contentSourceMap, blobDataMap, defaultViewType } = useMemo(() => {
+    const csMap = new Map<string, string>();
+    const bdMap = new Map<string, ArrayBuffer | null>();
+    const dvType: BufferViewType = 'f32';
+
+    if (tape && resources) {
+      for (const [handleId, desc] of resources) {
+        if (desc.kind !== 'createBuffer') continue;
+        const source = getBufferContentSource(tape, handleId, resources);
+        if (source.kind === 'blobPool') {
+          csMap.set(handleId, `source: blobPool (${source.hashHint.slice(0, 8)})`);
+          bdMap.set(handleId, getBufferBlobData(tape, handleId));
+        } else if (source.kind === 'liveReadback') {
+          csMap.set(handleId, 'source: live GPU readback');
+          bdMap.set(handleId, null); // null = live GPU fallback not available in offline view
+        } else {
+          csMap.set(handleId, source.reason);
+          bdMap.set(handleId, null);
+        }
+      }
+    }
+
+    return { contentSourceMap: csMap, blobDataMap: bdMap, defaultViewType: dvType };
+  }, [tape, resources]);
+
+  // Compute buffer→draw consumer map
+  const consumerMap = useMemo((): Map<string, readonly BufferConsumer[]> => {
+    if (!tape || !vm?.draws) return new Map();
+    return bufferBindingConsumers(vm.draws, tape.events);
+  }, [tape, vm?.draws]);
+
+  const onDrawClickInner = useCallback(
+    (drawIdx: number) => {
+      setSelectedDrawIdx(drawIdx);
+    },
+    [setSelectedDrawIdx],
+  );
 
   if (!vm || resources === undefined || resources.size === 0) {
     return (
@@ -317,6 +709,16 @@ export function ResourceInspector(_props: IDockviewPanelProps) {
             filter={filter}
             highlightedHandle={highlightedHandle}
             onHandleClick={handleHandleClick}
+            expandedWgsl={expandedWgsl}
+            onToggleWgsl={setExpandedWgslToggle}
+            expandedBuffers={expandedBuffers}
+            onToggleBuffer={toggleBufferExpand}
+            bufferViewType={bufferViewTypes.get(cat.items[0]?.handleId ?? '') ?? defaultViewType}
+            onBufferViewType={setBufferViewType}
+            contentSource={contentSourceMap}
+            blobData={blobDataMap}
+            consumerMap={consumerMap}
+            onDrawClick={onDrawClickInner}
           />
         ))}
       </div>

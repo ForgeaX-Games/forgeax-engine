@@ -43,8 +43,7 @@ function setupWorld(cascadeCount: number): World {
       directionY: LIGHT_DIR[1],
       directionZ: LIGHT_DIR[2],
       cascadeCount,
-      nearPlane: 0.1,
-      farPlane: 100,
+      shadowDistance: 100,
     },
   });
   world.spawn(

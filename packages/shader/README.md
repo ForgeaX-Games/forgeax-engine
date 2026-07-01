@@ -18,6 +18,7 @@ Engine-shipped `.wgsl` modules in `packages/shader/src/`. Each declares a `#defi
 | `tonemap.wgsl` | `forgeax_view::tonemap` | Reinhard tonemap post-process |
 | `unlit.wgsl` | N/A (top-level entry) | Unlit material shader (`baseColor x baseColorTexture`) |
 | `sprite.wgsl` | N/A (top-level entry) | Sprite material shader (alpha-blend, pivot-and-size) |
+| `sprite-lit.wgsl` | N/A (top-level entry) | Sprite shader with per-light forward shading (`forgeax::sprite-lit`; Half-Lambert squared, no normal map, no shadow). paramSchema mirrors `sprite.wgsl.meta.json` (5 fields, AC-07 BGL byte-identical). Switch from `forgeax::sprite` is a 1-string change on `passes[0].shader`. OOS-1 follow-up `feat-future-sprite-lit-normal-map`. |
 | `tbn.wgsl` | `forgeax_pbr::tbn` | TBN matrix derivation |
 | `lighting-directional.wgsl` | `forgeax_pbr::lighting_directional` | Directional light BRDF evaluation |
 | `lighting-punctual.wgsl` | `forgeax_pbr::lighting_punctual` | Punctual (point/spot) light BRDF evaluation |
@@ -127,6 +128,7 @@ The 5 engine-shipped shaders sidecar `paramSchema` declarations after w18-w21 (M
 | `default-standard-pbr-skin` | Same as standard-pbr (skin palette is `storage_buffer` injected separately at build time) | 7 |
 | `unlit` | UBO numeric run (`tint` color) + `mainTex` texture2d (auto-pairs sampler) | 3 |
 | `sprite` | UBO numeric run (`mainColor` color + sprite uniforms) + `mainTex` texture2d (auto-pairs sampler) | 3 |
+| `sprite-lit` | Same shape as `sprite` (paramSchema is field-set byte-identical: 4 vec4 + 1 texture2d; auto-paired sampler). AC-07: BGL JSON byte-identical to `sprite`. | 3 |
 | `shadow_caster` | empty (depth-only pass; `bglEntries=[]`, `totalBytes=0`, `userRegionBindingEnd=0`) | 0 |
 
 ## Material shader error codes

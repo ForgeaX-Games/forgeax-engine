@@ -62,7 +62,13 @@ export async function buildEngineShaderManifest(): Promise<{
   }>;
 }> {
   const eng = await loadEngineShaderEntries();
-  const entries: Array<{ hash: string; wgsl: string; glsl: undefined; bindings: string }> = [];
+  const entries: Array<{
+    hash: string;
+    wgsl: string;
+    glsl: undefined;
+    bindings: string;
+    uvSetCount: number;
+  }> = [];
   const materialShaders: Array<{
     identifier: string;
     sourcePath: string;
@@ -121,11 +127,13 @@ export async function buildEngineShaderManifest(): Promise<{
       typeof manifestEntry.bindings === 'string'
         ? manifestEntry.bindings
         : JSON.stringify(manifestEntry.bindings);
+    const engineUvSetCount = r.value.uvSetCount;
     entries.push({
       hash: manifestEntry.hash,
       wgsl: manifestEntry.wgsl,
       glsl: undefined,
       bindings: bindingsJson,
+      uvSetCount: engineUvSetCount,
     });
     if (file.reservedIdentifier !== undefined) {
       const metaPath = `${file.id}.meta.json`;
@@ -192,6 +200,7 @@ fn fullscreen_triangle(vertex_index : u32) -> FullscreenOutput {
       wgsl: composed,
       glsl: undefined,
       bindings: '[]',
+      uvSetCount: 0,
     });
   }
   return { schemaVersion: '1.0.0', entries, materialShaders };
@@ -307,6 +316,8 @@ interface ManifestEntryValue {
   readonly hash: string;
   readonly wgsl: string;
   readonly bindings: string;
+  /** feat-20260629 M4: UV set count from naga vertex @location reflection (D-3). */
+  readonly uvSetCount: number;
 }
 
 /**
@@ -336,6 +347,8 @@ interface MaterialShaderManifestEntry {
    * Empty array when the source carries no `#pragma variant_axis` directives (single-variant entry).
    */
   readonly variants: readonly MaterialShaderManifestVariant[];
+  /** feat-20260629 M4: uvSetCount from naga vertex @location reflection. */
+  readonly uvSetCount?: number;
 }
 
 interface ManifestEntries {
@@ -853,6 +866,18 @@ interface EngineShaderEntries {
   // 'sprite', + 4 IBL }.
   readonly sprite: EngineShaderFile;
   /**
+   * feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / w4:
+   * sprite-lit engine entry -- 4th parallel sprite shading model id
+   * (`forgeax::sprite-lit`). vs_main byte-identical to sprite.wgsl (AC-03);
+   * fs_main + fs_main_hdr implement Half-Lambert squared per-light forward
+   * shading for DirectionalLight / PointLight / SpotLight. Same naga_oil
+   * #import peers as sprite.wgsl (forgeax_view::common for View / Mesh /
+   * pointLightsBuffer / spotLightsBuffer). Surfaced in manifest so the
+   * runtime createRenderer registers `forgeax::sprite-lit` at engine boot
+   * via registerDefaultSpriteLit.
+   */
+  readonly spriteLit: EngineShaderFile;
+  /**
    * feat-20260531-world-space-msdf-text-rendering M5 / w20-w21: world-space
    * MSDF text material entry. Same naga_oil #import forgeax_view::common peer
    * as unlit / sprite (View struct for worldViewProj + cameraPos billboard).
@@ -1005,6 +1030,7 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
   const tonemapPath = resolve(srcDir, 'tonemap.wgsl');
   const shadowCasterPath = resolve(srcDir, 'shadow_caster.wgsl');
   const spritePath = resolve(srcDir, 'sprite.wgsl');
+  const spriteLitPath = resolve(srcDir, 'sprite-lit.wgsl');
   const msdfTextPath = resolve(srcDir, 'msdf-text.wgsl');
   const commonPath = resolve(srcDir, 'common.wgsl');
   const brdfPath = resolve(srcDir, 'brdf.wgsl');
@@ -1046,6 +1072,7 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
     tonemapSrc,
     shadowCasterSrc,
     spriteSrc,
+    spriteLitSrc,
     msdfTextSrc,
     commonSrc,
     brdfSrc,
@@ -1073,6 +1100,7 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
     readFile(tonemapPath, 'utf8'),
     readFile(shadowCasterPath, 'utf8'),
     readFile(spritePath, 'utf8'),
+    readFile(spriteLitPath, 'utf8'),
     readFile(msdfTextPath, 'utf8'),
     readFile(commonPath, 'utf8'),
     readFile(brdfPath, 'utf8'),
@@ -1113,6 +1141,11 @@ async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
       reservedIdentifier: 'forgeax::default-shadow-caster',
     },
     sprite: { id: spritePath, source: spriteSrc, reservedIdentifier: 'forgeax::sprite' },
+    spriteLit: {
+      id: spriteLitPath,
+      source: spriteLitSrc,
+      reservedIdentifier: 'forgeax::sprite-lit',
+    },
     msdfText: { id: msdfTextPath, source: msdfTextSrc, reservedIdentifier: 'forgeax::msdf-text' },
     iblEquirectToCube: { id: iblEquirectToCubePath, source: iblEquirectToCubeSrc },
     iblIrradiance: { id: iblIrradiancePath, source: iblIrradianceSrc },
@@ -1328,6 +1361,8 @@ async function compileEngineEntry(
   // bindings JSON for the default variant, so we keep a parallel string
   // array indexed alongside `variants` (same length, same order).
   const variantBindingsJson: string[] = [];
+  // feat-20260629 M4: uvSetCount from first variant compile result
+  let engineUvSetCount = 0;
   const cleanSource = stripPragmas(file.source);
   const allTransitiveImports =
     variantAxes.length > 0 ? extractTransitiveImports(cleanSource, imports) : imports;
@@ -1387,7 +1422,8 @@ async function compileEngineEntry(
     if (!r.ok) {
       throw Object.assign(new Error(r.error.message), toRollupLog(r.error));
     }
-    const { manifestEntry } = r.value;
+    const { manifestEntry, uvSetCount: variantUvSetCount } = r.value;
+    engineUvSetCount = variantUvSetCount;
     const hash = manifestEntry.hash;
     const bindingsJson =
       typeof manifestEntry.bindings === 'string'
@@ -1395,7 +1431,12 @@ async function compileEngineEntry(
         : JSON.stringify(manifestEntry.bindings);
 
     if (variantAxes.length === 0) {
-      state.entries.set(file.id, { hash, wgsl: manifestEntry.wgsl, bindings: bindingsJson });
+      state.entries.set(file.id, {
+        hash,
+        wgsl: manifestEntry.wgsl,
+        bindings: bindingsJson,
+        uvSetCount: variantUvSetCount,
+      });
       emitShaderTriplet(ctx, hash, manifestEntry.wgsl, bindingsJson, serve);
       if (isMaterialShader) {
         // feat-20260613-material-paramschema-driven-binding M4 / w8 fix-up
@@ -1436,6 +1477,7 @@ async function compileEngineEntry(
           composedWgsl: `./${hash}.composed.wgsl`,
           paramSchema: paramSchemaJson,
           variants: [],
+          uvSetCount: variantUvSetCount,
         });
       }
       return;
@@ -1465,7 +1507,12 @@ async function compileEngineEntry(
     // CLUSTER_FORWARD_AVAILABLE axis (pbr-skin, unlit) this is the all-true
     // variant — unchanged from pre-amendment behavior.
     if (definesKey === buildEntryVariantKey(variantAxes)) {
-      state.entries.set(file.id, { hash, wgsl: manifestEntry.wgsl, bindings: bindingsJson });
+      state.entries.set(file.id, {
+        hash,
+        wgsl: manifestEntry.wgsl,
+        bindings: bindingsJson,
+        uvSetCount: variantUvSetCount,
+      });
     }
     state.variantWgsl.set(`${file.id}#${definesKey}`, manifestEntry.wgsl);
     emitShaderTriplet(ctx, hash, manifestEntry.wgsl, bindingsJson, serve);
@@ -1525,6 +1572,7 @@ async function compileEngineEntry(
         composedWgsl: defaultVariant.composedWgsl,
         paramSchema: paramSchemaJson,
         variants,
+        uvSetCount: engineUvSetCount,
       });
     }
   }
@@ -1606,6 +1654,11 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       // for sprite alpha-blend pipeline; same #import peers as the other
       // three (AC-04 §2 + plan-strategy §3 SH1 + AC-19 derivation row 7).
       await compileEngineEntry(this, state, eng.sprite, eng.imports, isServeMode);
+      // feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / w4:
+      // sprite-lit engine entry compiled alongside sprite at buildStart so
+      // the runtime createRenderer picks up the composed module from
+      // manifest.materialShaders and calls registerDefaultSpriteLit at boot.
+      await compileEngineEntry(this, state, eng.spriteLit, eng.imports, isServeMode);
       // feat-20260531-world-space-msdf-text-rendering M5 / w21: world-space
       // MSDF text entry compiled at buildStart alongside the other material
       // entries; same #import forgeax_view::common peer. Runtime createRenderer
@@ -1807,7 +1860,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         throw Object.assign(new Error(r.error.message), toRollupLog(r.error));
       }
 
-      const { manifestEntry, bindings } = r.value;
+      const { manifestEntry, bindings, uvSetCount } = r.value;
       const hash = manifestEntry.hash;
       const bindingsJson =
         typeof manifestEntry.bindings === 'string'
@@ -1819,7 +1872,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       // tokenizer rejects). Engine entries already use this shape via
       // `compileEngineEntry` line 621; user-shader transform now matches
       // (charter P4 consistent abstraction across the two compile paths).
-      state.entries.set(id, { hash, wgsl: manifestEntry.wgsl, bindings: bindingsJson });
+      state.entries.set(id, { hash, wgsl: manifestEntry.wgsl, bindings: bindingsJson, uvSetCount });
 
       // T-16 / D-10: seed reverseDeps from this source's #import directives so
       // handleHotUpdate can fan out to the downstream Vite ModuleNodes when a
@@ -1876,6 +1929,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
           composedWgsl: composedWgslPath,
           paramSchema: JSON.stringify(paramSchema),
           variants: [],
+          uvSetCount,
         });
       }
 
@@ -1911,6 +1965,8 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         `// generated by @forgeax/engine-vite-plugin-shader`,
         `export default ${JSON.stringify({ hash, wgsl: manifestEntry.wgsl })};`,
         `export const reflection = ${JSON.stringify(bindings)};`,
+        `// feat-20260629 M4: uvSetCount from naga vertex @location reflection (D-3)`,
+        `export const uvSetCount = ${uvSetCount};`,
         `if (import.meta.hot) { import.meta.hot.accept(() => {}); }`,
       ].join('\n');
 

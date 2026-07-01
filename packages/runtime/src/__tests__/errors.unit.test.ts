@@ -24,11 +24,11 @@ import {
   __composeEnvErrorHintForTest,
 } from '../create-renderer-env-classify';
 import {
+  EquirectProjectionFailedError,
   MeshSsboCapacityExceededError,
   MeshSsboCeilingReachedError,
   type RuntimeError,
   type RuntimeErrorCode,
-  SkyboxCubemapNotReadyError,
 } from '../errors';
 import { PickError, type PickErrorCode } from '../pick-errors';
 import {
@@ -791,6 +791,9 @@ import { RhiErrorListenerRegistry } from '../renderer';
             // === 1 new code (feat-20260621-asset-registry-robustness-invalidate-inflight-cach M2 / w4) ===
             case 'asset-invalidated':
               return 'asset invalidated';
+            // === 1 new code (feat-20260629-multi-uv-set-support M2 / m2-w5) ===
+            case 'mesh-bin-contract-violation':
+              return 'mesh bin contract violation';
           }
         }
         expect(exhaustive('asset-not-found')).toBe('not found');
@@ -864,8 +867,8 @@ import { RhiErrorListenerRegistry } from '../renderer';
               return 'skin palette overflow';
             case 'material-resolved-empty-passes':
               return 'material resolved empty passes';
-            case 'skybox-cubemap-not-ready':
-              return 'skybox cubemap not ready';
+            case 'equirect-projection-failed':
+              return 'equirect projection failed';
             case 'mesh-ssbo-capacity-exceeded':
               return 'mesh ssbo capacity exceeded';
             case 'mesh-ssbo-ceiling-reached':
@@ -910,7 +913,7 @@ import { RhiErrorListenerRegistry } from '../renderer';
               return 'video upload unsupported';
           }
         }
-        expect(exhaustive('skybox-cubemap-not-ready')).toBe('skybox cubemap not ready');
+        expect(exhaustive('equirect-projection-failed')).toBe('equirect projection failed');
         expect(exhaustive('material-resolved-empty-passes')).toBe('material resolved empty passes');
         expect(exhaustive('shadow-invalid-config')).toBe('shadow invalid config');
         expect(exhaustive('mesh-ssbo-capacity-exceeded')).toBe('mesh ssbo capacity exceeded');
@@ -960,7 +963,7 @@ import { RhiErrorListenerRegistry } from '../renderer';
               return 'ok';
             case 'material-resolved-empty-passes':
               return 'ok';
-            case 'skybox-cubemap-not-ready':
+            case 'equirect-projection-failed':
               return 'ok';
             case 'mesh-ssbo-capacity-exceeded':
               return 'ok';
@@ -1117,20 +1120,20 @@ import { RhiErrorListenerRegistry } from '../renderer';
         expect(spy).toHaveBeenCalledTimes(1);
       });
 
-      it('(d) a RuntimeError (SkyboxCubemapNotReadyError) fans out without an as-any cast (F-1)', () => {
+      it('(d) a RuntimeError (EquirectProjectionFailedError) fans out without an as-any cast (F-1)', () => {
         const reg = new RhiErrorListenerRegistry();
         const seen: Array<{ code: string; handle: number | undefined }> = [];
         reg.add((e) => {
           // AI-user view: switch (e.code) reaches the RuntimeError arm and narrows
-          // to SkyboxCubemapNotReadyError (no cast at the fire() call site below).
-          if (e.code === 'skybox-cubemap-not-ready') {
+          // to EquirectProjectionFailedError (no cast at the fire() call site below).
+          if (e.code === 'equirect-projection-failed') {
             seen.push({ code: e.code, handle: e.detail.handle });
           } else {
             seen.push({ code: e.code, handle: undefined });
           }
         });
-        reg.fire(new SkyboxCubemapNotReadyError(42));
-        expect(seen).toEqual([{ code: 'skybox-cubemap-not-ready', handle: 42 }]);
+        reg.fire(new EquirectProjectionFailedError(42));
+        expect(seen).toEqual([{ code: 'equirect-projection-failed', handle: 42 }]);
       });
 
       // feat-20260608-mesh-ssbo-dynamic-grow-l1-lift-1024-entity-cap M4 / T-M4-01:

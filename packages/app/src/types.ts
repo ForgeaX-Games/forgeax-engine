@@ -36,7 +36,7 @@ export type { AppError, AppErrorCode };
  * Structured error union surfaced through the App `onError` fan-out + the
  * assemble-form construction Result. Mirrors the `Renderer.onError` channel
  * (`RhiError | RuntimeError`) so a runtime-layer error fanned out by the
- * renderer (e.g. `'skybox-cubemap-not-ready'`) reaches host App listeners
+ * renderer (e.g. `'equirect-projection-failed'`) reaches host App listeners
  * verbatim, plus the App-layer `AppError`. AI users `switch (err.code)` over
  * the union: the disjoint `AppErrorCode` / `RhiErrorCode` / `RuntimeErrorCode`
  * literal sets let TS narrow each arm to the concrete class
@@ -108,6 +108,16 @@ export interface CreateAppOptions {
    * canvas's GPUCanvasContext outside the RHI surface.
    */
   readonly rawDeviceForContextConfigure?: unknown | (() => unknown | undefined);
+  /**
+   * Neutral PointerLock gate forwarded verbatim to the canvas-form input
+   * attach (attachInputAuto → attachBrowserInputBackend). When it returns
+   * false, a canvas click does NOT capture the cursor. Absent => always-lock
+   * (standalone game behaviour). The engine never learns WHY locking is
+   * (dis)allowed — the host owns that decision (e.g. an editor viewport that
+   * only allows lock in its play·game quadrant). Ignored by the assemble form
+   * (host-managed input owns its own lock policy).
+   */
+  readonly pointerLockAllowed?: () => boolean;
 }
 
 /**

@@ -31,13 +31,28 @@ function makeGuidResolver(
   return (kind, sourceIndex) => byKey.get(`${kind}:${sourceIndex}`);
 }
 
-function buildMeshAsset(
+export function buildMeshAsset(
   pod: MeshPod,
   guid: string,
   influences?: readonly { jointIndices: Uint16Array; jointWeights: Float32Array }[],
 ): ImportedAsset {
   const vc = pod.vertices.length / 3;
   const n = pod.attributes.NORMAL as Float32Array | undefined;
+  // feat-20260629-multi-uv-set-support m1-w6: scan all TEXCOORD_n sets
+  // (n in [0,7]) from MeshPod.attributes. TEXCOORD_0 -> uv (set 0),
+  // TEXCOORD_n for n>=1 -> uvN attribute. >8 sets truncated per D-6.
+  // uvSetCount = max(n) + 1 (not count of keys) so sparse sets (TEXCOORD_0+TEXCOORD_2
+  // without TEXCOORD_1) still get correct interleaved stride with zero-filled gap.
+  let uvSetCount = 1; // always at least 1 (uv slot in interleaved)
+  for (const key of Object.keys(pod.attributes)) {
+    if (key.startsWith('TEXCOORD_')) {
+      const n = Number(key.slice('TEXCOORD_'.length));
+      if (Number.isFinite(n) && n >= 0 && n <= 7) {
+        uvSetCount = Math.max(uvSetCount, n + 1);
+      }
+    }
+  }
+
   const u = pod.attributes.TEXCOORD_0 as Float32Array | undefined;
 
   // Skinned meshes use the 18-float interleaved stride (mirror of gltfImporter):
@@ -46,7 +61,13 @@ function buildMeshAsset(
   // runtime deriveVertexBufferLayout expects skinIndex at byte 48, skinWeight at
   // byte 56. Unskinned meshes keep the 12-float layout.
   const skinned = influences !== undefined && influences.length === vc && vc > 0;
-  const FLOATS_PER_VERT = skinned ? 18 : 12;
+  // feat-20260629-multi-uv-set-support m1-w6: dynamic stride.
+  // Canonical interleaved order = position/normal/uv/tangent/skinIndex/skinWeight/uv1..uv7.
+  // Base stride: 12 (unskinned) / 18 (skinned). Extra UV sets add 2F each.
+  // UV1 offset: 12 (unskinned) / 18 (skinned) -- same as glTF bridge m1-w3.
+  const BASE_FLOATS = skinned ? 18 : 12;
+  const UV1_OFFSET = skinned ? 18 : 12;
+  const FLOATS_PER_VERT = BASE_FLOATS + (uvSetCount - 1) * 2;
   const ib = new Float32Array(vc * FLOATS_PER_VERT);
   const ibU16 = skinned ? new Uint16Array(ib.buffer) : undefined;
   const skinIndexAttr = skinned ? new Uint16Array(vc * 4) : undefined;
@@ -81,6 +102,39 @@ function buildMeshAsset(
         skinWeightAttr[sd + k] = jw;
       }
     }
+    // feat-20260629-multi-uv-set-support m1-w6: write uv1..uvK after skin data.
+    // Canonical interleaved order matches glTF bridge m1-w3:
+    // position/normal/uv/tangent/skinIndex/skinWeight/uv1..uv7.
+    // UV1 starts at UV1_OFFSET (12 for unskinned, 18 for skinned) in float slots.
+    // Each additional UV set 2F. Missing texcoordK -> zero-fill (implicit).
+    for (let k = 1; k < uvSetCount; k++) {
+      const srcKey = `TEXCOORD_${k}`;
+      const srcArr = pod.attributes[srcKey] as Float32Array | undefined;
+      const interleavedOffset = UV1_OFFSET + (k - 1) * 2;
+      if (srcArr !== undefined) {
+        ib[d + interleavedOffset + 0] = srcArr[t + 0] ?? 0;
+        ib[d + interleavedOffset + 1] = srcArr[t + 1] ?? 0;
+      }
+      // else: zero-fill (implicit -- Float32Array defaults to 0)
+    }
+  }
+
+  // feat-20260629-multi-uv-set-support m1-w6: per-UV-set standalone typed arrays
+  // for MeshAsset.attributes (uv1..uvK). TEXCOORD_n -> attributes.uvN.
+  // Only emitted when the corresponding TEXCOORD key is present in pod.attributes.
+  const extraUvAttrs: Record<string, Float32Array> = {};
+  for (let k = 1; k < uvSetCount; k++) {
+    const srcKey = `TEXCOORD_${k}`;
+    const srcArr = pod.attributes[srcKey] as Float32Array | undefined;
+    if (srcArr !== undefined) {
+      const cat = new Float32Array(vc * 2);
+      for (let i = 0; i < vc; i++) {
+        const t2 = i * 2;
+        cat[t2 + 0] = srcArr[t2 + 0] ?? 0;
+        cat[t2 + 1] = srcArr[t2 + 1] ?? 0;
+      }
+      extraUvAttrs[`uv${k}`] = cat;
+    }
   }
 
   const attributes: MeshAsset['attributes'] = {
@@ -90,6 +144,7 @@ function buildMeshAsset(
     tangent: new Float32Array(vc * 4).fill(0).map((_, i) => (i % 4 === 0 || i % 4 === 3 ? 1 : 0)),
     ...(skinIndexAttr ? { skinIndex: skinIndexAttr } : {}),
     ...(skinWeightAttr ? { skinWeight: skinWeightAttr } : {}),
+    ...extraUvAttrs,
   };
 
   const mesh: MeshAsset = {

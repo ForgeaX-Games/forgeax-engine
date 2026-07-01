@@ -109,8 +109,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         // The same shader code path covers N=1 and N=4; AC-03 forbids any
         // host- or shader-side fallback branch.
         cascadeCount: 1,
-        nearPlane: 0.1,
-        farPlane: 60,
+        shadowDistance: 60,
       },
     },
   );

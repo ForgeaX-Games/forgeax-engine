@@ -28,7 +28,7 @@
   "dependencies": {
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-wgpu-wasm": "workspace:*",
-    "@webgpu/types": "^0.1.70"
+    "@webgpu/types": "^0.1.71"
   },
   "forgeax": {
     "metrics": {

@@ -30,7 +30,7 @@
 import { World } from '@forgeax/engine-ecs';
 import { ok } from '@forgeax/engine-rhi';
 import { rhi } from '@forgeax/engine-rhi-webgpu';
-import type { CubeTextureAsset, DecodedImage, TextureAsset } from '@forgeax/engine-types';
+import type { DecodedImage, EquirectAsset, TextureAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { GpuResourceStore } from '../../gpu-resource-store';
@@ -164,7 +164,7 @@ describe('AC-04: uploadTexture non-256-aligned width (real GPU path)', () => {
       // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
       device as any,
       undefined,
-      (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
+      (w: World, pod: EquirectAsset) => ok(w.allocSharedRef('EquirectAsset', pod)),
       mockCaps,
     );
 

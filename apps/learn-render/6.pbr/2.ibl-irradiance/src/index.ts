@@ -5,10 +5,10 @@
 // prefilter / BRDF LUT). A Skylight component sources its equirect HDR
 // from the vendor LearnOpenGL newport_loft.hdr (CC-BY-NC carve-out in the
 // forgeax-engine-assets submodule, GUID 019e4a26-3c29-7420-af5d-20f2724a16b0),
-// loaded through the production loadByGuid -> decodeHdr ->
-// uploadCubemapFromEquirect path. A 3x3 sphere matrix varies roughness +
-// metallic across x / y axes to show how diffuse IBL interacts with the
-// PBR pipeline.
+// loaded through the production loadByGuid<EquirectAsset> + Skylight{equirect}
+// declarative path (the engine projects the cubemap + IBL internally). A 3x3
+// sphere matrix varies roughness + metallic across x / y axes to show how
+// diffuse IBL interacts with the PBR pipeline.
 //
 // AGENTS.md "Demo failures route to engine fixes, not workarounds": the
 // demo never synthesises a placeholder HDR; if loadByGuid fails or the
@@ -38,7 +38,7 @@ import {
   Skylight,
   Transform,
 } from '@forgeax/engine-runtime';
-import type { Handle, MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import type { EquirectAsset, Handle, MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
   addFirstPersonSystem,
@@ -66,7 +66,7 @@ const CAMERA_FAR = 100;
 async function setupIblSkylight(
   app: App,
   world: World,
-): Promise<Handle<'CubeTextureAsset', 'shared'> | null> {
+): Promise<Handle<'EquirectAsset', 'shared'> | null> {
   const assets = app.renderer.assets;
   assets.configurePackIndex(PACK_INDEX_URL);
 
@@ -78,7 +78,7 @@ async function setupIblSkylight(
     return null;
   }
 
-  const hdrHandleRes = await assets.loadByGuid<TextureAsset>(guidRes.value);
+  const hdrHandleRes = await assets.loadByGuid<EquirectAsset>(guidRes.value);
   if (!hdrHandleRes.ok) {
     console.error(
       `[ibl-irradiance skylight] loadByGuid(newport_loft.hdr) failed: ${hdrHandleRes.error.code} hint=${hdrHandleRes.error.hint}`,
@@ -86,23 +86,10 @@ async function setupIblSkylight(
     return null;
   }
 
-  // feat-20260601-gpu-resource-store-extraction M1: equirect-to-cubemap upload
-  // lives on renderer.store. loadByGuid returns the TextureAsset PAYLOAD (M8
-  // D-17); mint a user-tier source handle and pass world + handle + pod.
-  const srcHandle = world.allocSharedRef('TextureAsset', hdrHandleRes.value);
-  const cubemapRes = await app.renderer.store.uploadCubemapFromEquirect(
-    world,
-    srcHandle,
-    hdrHandleRes.value,
-  );
-  if (!cubemapRes.ok) {
-    console.error(
-      `[ibl-irradiance skylight] equirect-to-cubemap upload failed: ${cubemapRes.error.code} hint=${cubemapRes.error.hint}`,
-    );
-    return null;
-  }
-
-  return cubemapRes.value;
+  // loadByGuid returns the EquirectAsset PAYLOAD (D-17); mint a user-tier source
+  // handle. The equirect->cubemap + irradiance convolution is now INTERNAL to the
+  // engine (lazy, in the render record arm) -- no manual cubemap upload call.
+  return world.allocSharedRef('EquirectAsset', hdrHandleRes.value);
 }
 
 // 3. bootstrap
@@ -143,11 +130,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: e.code, hint: e.hint });
   });
 
-  const cubemapHandle = await setupIblSkylight(app, world);
-  if (cubemapHandle !== null) {
+  const equirectHandle = await setupIblSkylight(app, world);
+  if (equirectHandle !== null) {
     world.spawn({
       component: Skylight,
-      data: { cubemap: cubemapHandle, intensity: 1.0 },
+      data: { equirect: equirectHandle, intensity: 1.0 },
     });
     console.warn('[learn-render 6.pbr 2.ibl-irradiance] Skylight active: IBL diffuse irradiance');
   }

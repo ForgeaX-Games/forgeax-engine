@@ -56,6 +56,7 @@ import {
   type TextureView,
 } from '@forgeax/engine-rhi';
 import type {
+  EquirectAsset,
   Handle,
   MaterialRenderState,
   MeshAsset,
@@ -69,11 +70,11 @@ import type {
 import { derive, toShared } from '@forgeax/engine-types';
 import { bin } from './cluster-binner';
 import {
+  EquirectProjectionFailedError,
   HdrpIndexListOverflowError,
   HdrpLightBudgetExceededError,
   PointShadowAtlasBoundsViolationError,
   PointShadowAtlasUninitializedError,
-  SkyboxCubemapNotReadyError,
   VideoUploadUnsupportedError,
 } from './errors';
 import { GpuBuffer } from './gpu-resource';
@@ -151,6 +152,7 @@ import { ShadowAtlas } from './shadow-atlas';
 import { getOrCreateSsaoBuffers } from './ssao-buffers';
 import { matchPass } from './systems/pass-selector';
 import { getTransparentSortConfig } from './systems/transparent-sort-config';
+import { buildMeshAttributeMapForUvSets } from './vertex-attribute-layout';
 import { VIDEO_ELEMENT_PROVIDER_KEY, type VideoElementProvider } from './video-element-provider';
 import { probeVideoHighPerfUpload } from './video-player-system';
 
@@ -359,6 +361,14 @@ export interface RenderFrameState {
   warnedMultiLightDirectional: boolean;
   warnedMultiLightPoint: boolean;
   warnedMultiLightSpot: boolean;
+  /**
+   * feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w19:
+   * once-warn latches for >1 Skylight / >1 SkyboxBackground entity. Fire at most
+   * once per RenderSystem lifetime so the multi-entity warn (which names the
+   * winning entity handle, F-8) does not flood the console every frame.
+   */
+  warnedMultiSkylight: boolean;
+  warnedMultiSkybox: boolean;
   /** feat-20260531-skybox-env-background M3 / w20: once-warn when camera
    * tonemap is 'none' but a SkyboxBackground entity exists. Skybox needs
    * the HDR render target allocated by the tonemap path; without it the
@@ -395,6 +405,18 @@ export interface RenderFrameState {
    * EngineMetrics through `runtime.metrics.increment(...)`.
    */
   readonly warnedNineSliceScaleEntities: Set<number>;
+  /**
+   * feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w18:
+   * per-handle fire-once anchor for the lazy equirect-to-cubemap projection
+   * failure. A `Set<number>` keyed by the raw Handle<EquirectAsset> id - the
+   * record arm fires the structured `EquirectProjectionFailedError` exactly
+   * once per failed source per RenderSystem lifetime (the store records
+   * `status:'failed'` permanently and never retries, R-2 / AC-09; without this
+   * latch the record arm would re-fire the error every frame). The set lives
+   * across frames so the second frame on the same failed handle stays silent
+   * (charter P3: warn-once preserves signal / noise floor).
+   */
+  readonly firedEquirectProjectionFailedHandles: Set<number>;
   /**
    * feat-20260622-handle-to-id-allocator-elimination M1 / w3: per-frame
    * bind group caches converted to nested WeakMap chain roots (D-3).
@@ -1524,6 +1546,121 @@ export function warnMultiLightSpot(
   }
 }
 
+/**
+ * feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w19:
+ * once-warn for >1 Skylight entity (first archetype hit wins). Fires at most
+ * once per RenderSystem lifetime and names the WINNING entity handle so the
+ * scene author can tell which Skylight is used and that the rest are ignored
+ * (F-8: warn carries conflicting entity info; charter P3 explicit failure with
+ * a warn-once signal floor, no per-frame flooding).
+ */
+export function warnMultiSkylight(
+  frameState: Pick<RenderFrameState, 'warnedMultiSkylight'>,
+  skylightCount: number,
+  winningEntityHandle: number,
+): void {
+  if (!frameState.warnedMultiSkylight && skylightCount > 1) {
+    frameState.warnedMultiSkylight = true;
+    console.warn(
+      `[forgeax] Skylight: ${skylightCount} Skylight entities found; using entity ` +
+        `${winningEntityHandle} (first by archetype order) for IBL ambient. The other ` +
+        `${skylightCount - 1} Skylight ${skylightCount - 1 === 1 ? 'entity is' : 'entities are'} ignored. ` +
+        `Keep a single Skylight per scene, or reorder so the intended one is first.`,
+    );
+  }
+}
+
+/**
+ * feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w19:
+ * once-warn for >1 SkyboxBackground entity (mirrors warnMultiSkylight). Names
+ * the winning entity handle; fires once per RenderSystem lifetime.
+ */
+export function warnMultiSkybox(
+  frameState: Pick<RenderFrameState, 'warnedMultiSkybox'>,
+  skyboxCount: number,
+  winningEntityHandle: number,
+): void {
+  if (!frameState.warnedMultiSkybox && skyboxCount > 1) {
+    frameState.warnedMultiSkybox = true;
+    console.warn(
+      `[forgeax] SkyboxBackground: ${skyboxCount} SkyboxBackground entities found; using ` +
+        `entity ${winningEntityHandle} (first by archetype order). The other ` +
+        `${skyboxCount - 1} ${skyboxCount - 1 === 1 ? 'entity is' : 'entities are'} ignored. ` +
+        `Keep a single SkyboxBackground per scene.`,
+    );
+  }
+}
+
+/**
+ * feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w18:
+ * lazy equirect-to-cubemap projection trigger. Driven once per frame from
+ * `recordFrame` for the active equirect handle (Skylight's, or the
+ * SkyboxBackground's when no Skylight cubemap is present -- both reuse one
+ * handle). Implements the plan-strategy D-4 state machine:
+ *
+ *   undefined (no entry) + caps OK -> resolve POD + fire-and-forget projection
+ *                                     (the store writes status:'pending'
+ *                                     synchronously, so this launches once)
+ *   pending                        -> in flight; bind white fallback (no fire)
+ *   ready                          -> bound by recordMainPass's IBL cache check
+ *   failed                         -> fire EquirectProjectionFailedError ONCE
+ *                                     per handle (R-2/AC-09 no retry)
+ *   caps.rgba16floatRenderable
+ *     === false                    -> never project; permanent white fallback
+ *                                     (AC-06: the only IBL gate, no UA guard)
+ *
+ * Fire-and-forget: `_uploadCubemapFromEquirect` is invoked WITHOUT await so the
+ * record stay synchronous; the store mutates its own status map and (on
+ * success) the per-device IblPipelineCache, which recordMainPass reads on a
+ * later frame. The structured error from a fire-and-forget failure is reported
+ * via the explicit `status === 'failed'` arm here (read on the next frame), not
+ * by awaiting the promise (which would block record).
+ */
+export function driveLazyEquirectProjection(
+  internals: RenderSystemInternals,
+  world: World,
+  frameState: Pick<RenderFrameState, 'firedEquirectProjectionFailedHandles'>,
+  equirectHandle: number,
+): void {
+  const store = internals.gpuStore;
+  const handle = toShared<'EquirectAsset'>(equirectHandle);
+  const status = store.getCubemapStatus(handle);
+
+  if (status === 'failed') {
+    // Fire the structured error exactly once per failed source (the store
+    // records failed permanently and never retries; R-2 / AC-09).
+    if (!frameState.firedEquirectProjectionFailedHandles.has(equirectHandle)) {
+      frameState.firedEquirectProjectionFailedHandles.add(equirectHandle);
+      internals.errorRegistry.fire(new EquirectProjectionFailedError(equirectHandle));
+    }
+    return;
+  }
+
+  // 'pending' and 'ready' are both handled downstream (white fallback while
+  // pending; real IBL once ready). Only the first sight ('undefined') launches.
+  if (status !== undefined) return;
+
+  // caps gate (AC-06): rgba16float must be renderable for the HDR cubemap path.
+  // When unavailable, never launch -- the white fallback is permanent. No entry
+  // is written, so this re-checks cheaply each frame (a later device with the
+  // cap could then project). No UA guard -- caps is the only signal.
+  if (internals.device.caps.rgba16floatRenderable === false) return;
+
+  // First sight: resolve the equirect POD and fire-and-forget the projection.
+  const podRes = resolveAssetHandle<EquirectAsset>(world, handle);
+  if (!podRes.ok || podRes.value.kind !== 'equirect') {
+    // The handle does not resolve to a live equirect POD (stale / wrong kind).
+    // Launch nothing; the store stays empty and the white fallback holds. The
+    // skybox / IBL degradation paths surface the missing resource per their own
+    // gates -- this trigger only drives a valid equirect source.
+    return;
+  }
+  // Fire-and-forget: do NOT await. The store writes status:'pending'
+  // synchronously (before its first await), so a re-entry next frame
+  // short-circuits and this launches exactly once.
+  void store._uploadCubemapFromEquirect(world, handle, podRes.value);
+}
+
 export function recordFrame(
   internals: RenderSystemInternals,
   world: World,
@@ -1713,23 +1850,40 @@ export function recordFrame(
     //   AND StandardMaterial (renderables.some shadingModel === 'standard')
     // All three true -> black + warn. Any one false -> no warn.
     //
-    // Multi-Skylight warn (F-4 nit): >1 Skylight entity -> warn in dev and
-    // prod (consistent with charter P3 explicit failure). First Skylight
-    // (by archetype order) wins.
-    if (skylightCount > 1) {
-      console.warn(
-        '[forgeax] Skylight: multiple skylight entities found, using first. Only the first Skylight (by archetype order) is used for IBL ambient.',
-      );
-    }
+    // Multi-Skylight warn (F-4 nit + feat-20260630 M3 / w19): >1 Skylight
+    // entity -> warn ONCE per RenderSystem lifetime (not per frame), naming the
+    // winning entity handle so the scene author can tell which Skylight is used
+    // (F-8: warn carries conflicting entity info). First Skylight (by archetype
+    // order) wins.
+    warnMultiSkylight(frameState, skylightCount, skylight?.entityHandle ?? 0);
 
-    // feat-20260531-skybox-env-background M2 / w12: multi-SkyboxBackground
-    // once-warn (mirrors Skylight pattern above, plan-strategy D-6).
-    // First SkyboxBackground (by archetype order) wins; >1 warns in dev
-    // and prod (charter P3 explicit failure, no silent drop).
-    if (skyboxCount > 1) {
-      console.warn(
-        '[forgeax] SkyboxBackground: multiple entities detected, using the first. Consider keeping a single SkyboxBackground entity per scene.',
-      );
+    // Multi-SkyboxBackground warn (feat-20260630 M3 / w19): mirror the Skylight
+    // once-warn + winning-entity-handle pattern. First SkyboxBackground (by
+    // archetype order) wins.
+    warnMultiSkybox(frameState, skyboxCount, skybox?.entityHandle ?? 0);
+
+    // feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w18:
+    // lazy equirect-to-cubemap projection trigger (the single per-frame driver;
+    // plan-strategy D-4 + sequence diagram). The Skylight (or, when present
+    // without one, the SkyboxBackground) supplies the equirect handle; both
+    // reuse the same handle so a single projection serves IBL ambient + skybox.
+    //   - handle 0          -> no equirect (solid-color ambient); skip
+    //   - caps.rgba16float
+    //     Renderable false  -> permanent white fallback; never project (AC-06,
+    //                          the only IBL gate; no UA guard)
+    //   - status undefined  -> first sight: resolve POD + fire-and-forget launch
+    //                          (does NOT await; the store writes status:'pending'
+    //                          synchronously so this launches exactly once)
+    //   - status pending    -> projection in flight; white fallback this frame
+    //                          (normal transition, not an error -- no fire)
+    //   - status ready      -> real IBL bound by the recordMainPass cache check
+    //   - status failed     -> fire EquirectProjectionFailedError ONCE per
+    //                          handle (R-2/AC-09: store records failed
+    //                          permanently and never retries; the latch keeps
+    //                          the channel from flooding)
+    const lazyEquirectHandle = skylight?.equirectHandle ?? skybox?.equirectHandle ?? 0;
+    if (lazyEquirectHandle !== 0) {
+      driveLazyEquirectProjection(internals, world, frameState, lazyEquirectHandle);
     }
 
     // feat-20260608-cluster-lighting M5 / w21 + M6 / w23 + r2 fix-up: HDRP
@@ -2351,16 +2505,19 @@ export function recordFrame(
     // and revert to clear colour (charter P3 explicit failure, not silent).
     if (skybox !== undefined && tonemapActive) {
       // biome-ignore lint/suspicious/noExplicitAny: branded Handle cast from snapshot raw number
-      const cubemapView = internals.gpuStore.getCubemapGpuView(skybox.cubemapHandle as any);
+      const cubemapView = internals.gpuStore.getCubemapGpuView(skybox.equirectHandle as any);
       if (cubemapView === undefined) {
+        // The skybox reuses the Skylight's equirect handle; the cubemap
+        // projection is driven lazily by the single trigger in `driveLazy
+        // EquirectProjection` above (it owns the fire-and-forget launch AND the
+        // fire-once-on-failed structured error). While the projection is
+        // pending or has failed the cube view is not resident, so the skybox
+        // pass degrades to the clear-colour background for this frame
+        // (charter P3: it activates once the shared projection flips to
+        // 'ready'). No error is fired here -- 'pending' is a normal transition
+        // (firing per frame would flood the channel), and 'failed' is reported
+        // once by the lazy trigger. (feat-20260630 M3 / w18.)
         skyboxActive = false;
-        // Degrade to clear colour background (charter P3 explicit failure).
-        // The structured SkyboxCubemapNotReadyError carries the cubemap
-        // handle id so AI users can trace the unregistered asset. The onError
-        // channel accepts RhiError | RuntimeError, so this fans out with no
-        // cast — AI users reach the 'skybox-cubemap-not-ready' arm in an
-        // exhaustive switch over the union.
-        internals.errorRegistry.fire(new SkyboxCubemapNotReadyError(skybox.cubemapHandle));
       }
     }
     // feat-20260604-learn-render-4.10-anti-aliasing-msaa M2 / w9 (D-6, C-9):
@@ -2574,8 +2731,15 @@ export function recordFrame(
       // `materialShaderId === 'forgeax::sprite'` (plan-strategy D-10); slices
       // sourced from `paramSnapshot.slicesAndMode` (post-w12 UBO-aligned
       // overlay path).
+      //
+      // feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / t7:
+      // sprite-lit shares the sprite paramSchema (5 fields, t4 mirror) so
+      // the 9-slices mesh swap applies identically.
       let effectiveMeshHandles = meshHandles;
-      if (r.material.materialShaderId === 'forgeax::sprite') {
+      if (
+        r.material.materialShaderId === 'forgeax::sprite' ||
+        r.material.materialShaderId === 'forgeax::sprite-lit'
+      ) {
         const slicesArr = r.material.paramSnapshot?.slicesAndMode as readonly number[] | undefined;
         if (
           slicesArr !== undefined &&
@@ -2700,11 +2864,17 @@ export function recordFrame(
     // consumer). Sprite entities collapse to 1 slot per the materialSlotStart
     // computation below, mirroring the same rule (sprite per-submesh OOS-1;
     // post-w13 judgement key migrated to materialShaderId).
+    //
+    // feat-20260624 M1' / t7: sprite-lit treated identically to sprite
+    // for material-slot accounting (paramSchema mirror, t4).
     let neededMaterialSlots = 0;
     for (const e of validatedOrdered) {
       if (e === undefined) continue;
       neededMaterialSlots +=
-        e.source.material.materialShaderId === 'forgeax::sprite' ? 1 : e.source.materials.length;
+        e.source.material.materialShaderId === 'forgeax::sprite' ||
+        e.source.material.materialShaderId === 'forgeax::sprite-lit'
+          ? 1
+          : e.source.materials.length;
     }
     const neededSlots = Math.max(validatedOrdered.length, neededMaterialSlots);
     const meshSsboCapResult = ensureMeshSsboCapacity(internals, neededSlots);
@@ -4944,12 +5114,12 @@ export function recordSkyboxPass(c: _InternalRenderPipelineContext): void {
   // is handled by the passCtx.skyboxActive gate above -- if the
   // cubemap isn't ready, skyboxActive is already false (see w18).
   // biome-ignore lint/suspicious/noExplicitAny: branded Handle cast from raw number
-  const cubemapView = store.getCubemapGpuView(skyboxSnapshot.cubemapHandle as any);
+  const cubemapView = store.getCubemapGpuView(skyboxSnapshot.equirectHandle as any);
   if (cubemapView === undefined) return;
 
   // Rebuild skybox BindGroup every frame. Unlike tonemap (whose HDR
   // view only changes on resize), the cubemap GpuView is recreated
-  // on each uploadCubemapFromEquirect call (which may happen mid-app
+  // on each internal equirect-to-cubemap projection (which may happen mid-app
   // asynchronously). Cache invalidates when hdrColorView changes
   // (resize), but otherwise rebuild per-frame is cheap (3 entries,
   // no UBO write -- View UBO is shared with main pass).
@@ -5206,7 +5376,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
     // select active vs fallback Skylight resources by `skylightCount` from
     // the extract stage. Active path reaches into the per-device
     // `IblPipelineCache` slots (irradianceView / prefilterView / brdfLutView)
-    // populated by `uploadCubemapFromEquirect`; fallback uses the
+    // populated by the internal equirect-to-cubemap projection; fallback uses the
     // 1x1-zero identity bundle that converges ambient to 0 (D-4 physical
     // convergence -- no `if (hasSkylight)` shader branch).
     // The samplers are reused from `skylightFallback.sampler` for both
@@ -5317,8 +5487,12 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         // Sprite path stays single-slot regardless of materials.length
         // (sprite per-submesh is OOS-1; plan-strategy D-10: judgement key
         // migrated to materialShaderId post-feat-20260625 M3 / w13).
+        // feat-20260624 M1' / t7: sprite-lit shares the single-slot rule.
         const slotsForEntity =
-          e.source.material.materialShaderId === 'forgeax::sprite' ? 1 : e.source.materials.length;
+          e.source.material.materialShaderId === 'forgeax::sprite' ||
+          e.source.material.materialShaderId === 'forgeax::sprite-lit'
+            ? 1
+            : e.source.materials.length;
         cursor += slotsForEntity;
       }
     }
@@ -5363,7 +5537,10 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         // generic writer above stays shader-agnostic (plan-strategy R-H
         // gate: still no asset.get<MaterialAsset> reach-back; the override
         // reads only `mat.baseColorTexture` + the GPU view registry).
-        if (materialShaderId === 'forgeax::sprite') {
+        //
+        // feat-20260624 M1' / t7: sprite-lit shares the missing-texture
+        // fallback (paramSchema mirror — same baseColorTexture slot).
+        if (materialShaderId === 'forgeax::sprite' || materialShaderId === 'forgeax::sprite-lit') {
           const matHandleRaw = mat.baseColorTexture as Handle<'TextureAsset', 'shared'> | undefined;
           if (matHandleRaw !== undefined) {
             const view = residentTextureView(world, store, runtime, matHandleRaw);
@@ -6091,6 +6268,18 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           const variantSet = frameState.isHdrpActive
             ? ''
             : 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true';
+          // feat-20260629-multi-uv-set-support: a mesh carrying a real extra UV
+          // set (uvSetCount > 1) has a wider interleaved stride (56 B for two
+          // sets) than the default single-UV layout (48 B). Hand the material
+          // PSO a vertex layout that includes the real @location(6+) attributes
+          // so its stride matches the buffer; without this the PSO reads a 48 B
+          // stride against the 56 B buffer and every vertex after the first
+          // lands off-screen (hello-multi-uv rendered nothing). Single-UV meshes
+          // pass undefined and keep the default 4-attribute layout (zero change).
+          const meshUvAttributes =
+            entry.mesh.uvSetCount > 1
+              ? buildMeshAttributeMapForUvSets(entry.mesh.uvSetCount)
+              : undefined;
           const cachedPipeline =
             runtime.getMaterialShaderPipeline?.(
               materialShaderId,
@@ -6100,7 +6289,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
               entry.mesh.indexFormat,
               variantSet,
               undefined, // passKind — defaults to 'forward'
-              undefined, // meshAttributes — only skin path needs non-undefined
+              meshUvAttributes,
               sampleCount,
             ) ?? null;
           // feat-20260615-pipeline-spec-ssot M6-T1: cache miss resolves to
@@ -6227,6 +6416,12 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         cullMode: 'none',
         blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND,
       };
+      // feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / t7:
+      // sprite-lit walks the same LDR transparent split pass with mirror
+      // PSO request shape (only materialShaderId string differs). The
+      // sprite-lit PSO is fetched lazily per-entity below since the pass
+      // mixes sprite + sprite-lit transparent entities. PSO cache strings
+      // are isolated by `materialShaderId` (D-11), no slot collision.
       const spritePH =
         runtime.getMaterialShaderPipeline?.(
           'forgeax::sprite',
@@ -6255,6 +6450,22 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           pipelineState.format as unknown as GPUTextureFormat,
         ) ?? null;
 
+      // feat-20260624 M1' / t7: parallel sprite-lit PSO request — same
+      // arg shape, only materialShaderId differs.
+      const spriteLitPH =
+        runtime.getMaterialShaderPipeline?.(
+          'forgeax::sprite-lit',
+          /* isHdr */ false,
+          spritePremulBlend,
+          'triangle-list',
+          undefined,
+          undefined,
+          'forward',
+          undefined,
+          msaaActive ? 4 : 1,
+          pipelineState.format as unknown as GPUTextureFormat,
+        ) ?? null;
+
       for (let i = 0; i < validatedOrdered.length; i++) {
         const spriteEntry = validatedOrdered[i];
         // feat-20260625 M3 / w13: sub-pass entity filter migrated from
@@ -6271,22 +6482,30 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         // feat-20260609 M2: skip entities that don't match the pass selector.
         if (matchedIndices !== null && !matchedIndices.has(spriteEntry.renderableIndex)) continue;
 
-        if (spritePH === null) {
+        // feat-20260624 M1' / t7: select sprite vs sprite-lit PSO per
+        // entity. Both paths share the LDR sub-pass + the same UBO
+        // layout; only the shader module + fragment math differ. PSO
+        // cache strings are isolated by materialShaderId (D-11) so
+        // routing here keeps the cache slots disjoint.
+        const entityShaderId = spriteEntry.source.material.materialShaderId;
+        const activeSpritePH = entityShaderId === 'forgeax::sprite-lit' ? spriteLitPH : spritePH;
+
+        if (activeSpritePH === null) {
           runtime.errorRegistry.fire(
             new RhiError({
               code: 'shader-compile-failed',
               expected:
-                'manifest entries include sprite.wgsl + the engine triple (pbr + unlit + tonemap)',
-              hint: 'verify @forgeax/engine-vite-plugin-shader emits manifest.json with the 4 engine entries (sprite.wgsl is required when spawning sprite materials); check vite plugin engineEntries option',
+                'manifest entries include sprite.wgsl + sprite-lit.wgsl (when sprite-lit materials are used) + the engine triple (pbr + unlit + tonemap)',
+              hint: 'verify @forgeax/engine-vite-plugin-shader emits manifest.json with sprite.wgsl AND sprite-lit.wgsl entries; check vite plugin engineEntries option',
             }),
           );
           return;
         }
 
-        if (lastSpritePipelineHandle !== spritePH) {
+        if (lastSpritePipelineHandle !== activeSpritePH) {
           // biome-ignore lint/suspicious/noExplicitAny: opaque RHI pipeline handle
-          spritePass.setPipeline(spritePH as any);
-          lastSpritePipelineHandle = spritePH;
+          spritePass.setPipeline(activeSpritePH as any);
+          lastSpritePipelineHandle = activeSpritePH;
         }
 
         if (spriteEntry.mesh.vertexBuffer !== lastSpriteVertexBuffer) {

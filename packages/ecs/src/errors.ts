@@ -1571,7 +1571,11 @@ export class SpriteInstancesCountMismatchError extends Error {
  * `.code = 'sprite-instances-requires-sprite-shader'`
  * `.detail = { entityId, observedMaterialShaderId }`
  * `.hint` — instructs the AI user to bind a MaterialAsset whose first pass
- *   `shader` is `'forgeax::sprite'`.
+ *   `shader` is `'forgeax::sprite'` or `'forgeax::sprite-lit'`.
+ *
+ * feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / t6:
+ * sprite-lit walks the same per-instance UV region vertex path as sprite
+ * (VsOut byte-identical, paramSchema mirror); both shader ids are accepted.
  */
 export class SpriteInstancesRequiresSpriteShaderError extends Error {
   override readonly name = 'SpriteInstancesRequiresSpriteShaderError';
@@ -1586,10 +1590,12 @@ export class SpriteInstancesRequiresSpriteShaderError extends Error {
 
   constructor(entityId: number, observedMaterialShaderId: string) {
     const hint =
-      "bind a MaterialAsset whose first pass `shader` is 'forgeax::sprite' to this entity's " +
-      'MeshRenderer (SpriteInstances requires the sprite shader so the per-instance ' +
-      'UV region is consumed by the sprite vertex shader path).';
-    const expected = "MaterialAsset.passes[0].shader === 'forgeax::sprite'";
+      "bind a MaterialAsset whose first pass `shader` is 'forgeax::sprite' " +
+      "or 'forgeax::sprite-lit' to this entity's MeshRenderer (SpriteInstances " +
+      'requires a sprite-family shader so the per-instance UV region is consumed ' +
+      'by the sprite vertex shader path).';
+    const expected =
+      "MaterialAsset.passes[0].shader === 'forgeax::sprite' || 'forgeax::sprite-lit'";
     super(
       `SpriteInstances: entity ${entityId} requires a sprite-shaded MaterialAsset.\n` +
         `  code: sprite-instances-requires-sprite-shader\n` +

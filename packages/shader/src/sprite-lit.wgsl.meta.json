@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "external-asset-package",
+  "importer": "shader",
+  "source": "sprite-lit.wgsl",
+  "importSettings": {
+    "materialShaderIdentifier": "forgeax::sprite-lit"
+  },
+  "subAssets": [
+    {
+      "guid": "f0ec6a4b-cad1-5a3d-9b4e-6d2b0fa14d8e",
+      "sourceIndex": 0,
+      "kind": "material-shader"
+    }
+  ],
+  "paramSchema": [
+    {
+      "name": "colorTint",
+      "type": "vec4",
+      "default": [1.0, 1.0, 1.0, 1.0]
+    },
+    {
+      "name": "region",
+      "type": "vec4",
+      "default": [0.0, 0.0, 1.0, 1.0]
+    },
+    {
+      "name": "pivotAndSize",
+      "type": "vec4",
+      "default": [0.5, 0.5, 1.0, 1.0]
+    },
+    {
+      "name": "slicesAndMode",
+      "type": "vec4",
+      "default": [0.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "name": "baseColorTexture",
+      "type": "texture2d"
+    }
+  ]
+}

@@ -75,7 +75,7 @@
         "kind": {
           "type": "string",
           "minLength": 1,
-          "description": "Open sub-asset kind string (feat-20260629-importer-self-declared-fold-contract M3 / D-1 scheme A): the prior closed enum is removed — any non-empty string is accepted at the schema layer. Known engine-owned kinds: mesh, material, scene, texture, cube-texture, material-shader, skeleton, skin, animation-clip, audio, font. Host-defined importers declare their own kind values (e.g. 'reel-game-blob') and the schema layer admits them without modification. Validation of unknown kinds is deferred to the fold/import layer where the ImporterRegistry is available. The field itself (subAssets[].kind) is retained (OOS-2: no field deletion, only enum removal)."
+          "description": "Open sub-asset kind string (feat-20260629-importer-self-declared-fold-contract M3 / D-1 scheme A): the prior closed enum is removed — any non-empty string is accepted at the schema layer. Known engine-owned kinds: mesh, material, scene, texture, equirect, material-shader, skeleton, skin, animation-clip, audio, font. Host-defined importers declare their own kind values (e.g. 'reel-game-blob') and the schema layer admits them without modification. Validation of unknown kinds is deferred to the fold/import layer where the ImporterRegistry is available. The field itself (subAssets[].kind) is retained (OOS-2: no field deletion, only enum removal)."
         }
       }
     }

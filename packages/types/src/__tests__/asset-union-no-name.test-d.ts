@@ -6,7 +6,7 @@
 //     without default fallback -- TS compile-error on drift.
 // (b) Type-level: exhaustiveSwitch returns string (proves all cases present).
 // (c) grep: none of the 15 Asset union member interfaces (MeshAsset /
-//     TextureAsset / CubeTextureAsset / SamplerAsset / MaterialAsset /
+//     TextureAsset / EquirectAsset / SamplerAsset / MaterialAsset /
 //     SceneAsset / ShaderAsset / SkeletonAsset / SkinAsset / AnimationClip /
 //     AudioClipAsset / FontAsset / RenderPipelineAsset / TilesetAsset /
 //     VideoAsset) has gained a `name`
@@ -39,8 +39,8 @@ function exhaustiveAssetKindSwitch(asset: Asset): string {
       return 'MeshAsset';
     case 'texture':
       return 'TextureAsset';
-    case 'cube-texture':
-      return 'CubeTextureAsset';
+    case 'equirect':
+      return 'EquirectAsset';
     case 'sampler':
       return 'SamplerAsset';
     case 'material':
@@ -76,7 +76,7 @@ function exhaustiveAssetKindSwitch(asset: Asset): string {
 const ASSET_MEMBER_NAMES = [
   'MeshAsset',
   'TextureAsset',
-  'CubeTextureAsset',
+  'EquirectAsset',
   'SamplerAsset',
   'MaterialAsset',
   'SceneAsset',

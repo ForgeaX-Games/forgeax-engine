@@ -50,8 +50,16 @@ import { ShadowInvalidConfigError } from '../errors';
  *   mapSize        >= 1         — shadow map resolution (default 2048)
  *   depthBias                    — shadow acne bias (default 0.005)
  *   normalBias                   — shadow acne normal offset (default 0.05)
- *   nearPlane                    — shadow-camera near (default 0.1)
- *   farPlane                     — shadow-camera far (default 50)
+ *   shadowDistance > 0           — how far shadows reach in front of the camera,
+ *                                  in world units (default 200). This is the sole
+ *                                  coverage knob: the CSM cascades are PSSM-split
+ *                                  across [camera near, shadowDistance] and each
+ *                                  cascade's orthographic bounds are fit to the
+ *                                  camera frustum slice automatically. The near
+ *                                  end is derived from the active camera's near
+ *                                  plane (no separate near knob — any value other
+ *                                  than the camera near either drops near shadows
+ *                                  or wastes cascade-0 resolution).
  *   pcfKernelSize  odd >= 1     — PCF kernel width (default 3)
  *
  * @example Spawn a single directional light with default shadows:
@@ -72,7 +80,7 @@ import { ShadowInvalidConfigError } from '../errors';
  *     directionX: 0.2, directionY: -0.98, directionZ: 0,
  *     colorR: 1, colorG: 1, colorB: 1, intensity: 1,
  *     cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2,
- *     mapSize: 2048, nearPlane: 0.1, farPlane: 50,
+ *     mapSize: 2048, shadowDistance: 200,
  *   } });
  *
  * @example 0-light scene must use shadingModel:'unlit' (standard 0 light = physically correct black):
@@ -100,8 +108,11 @@ export const DirectionalLight = defineComponent(
     mapSize: { type: 'f32', default: 2048 },
     depthBias: { type: 'f32', default: 0.005 },
     normalBias: { type: 'f32', default: 0.05 },
-    nearPlane: { type: 'f32', default: 0.1 },
-    farPlane: { type: 'f32', default: 50 },
+    // Sole shadow coverage knob (feat replaces nearPlane/farPlane). The PSSM
+    // near end derives from the active camera near; shadowDistance is the far
+    // reach. Default 200 world units (matches UE-style "dynamic shadow
+    // distance"; the old farPlane default was 50).
+    shadowDistance: { type: 'f32', default: 200 },
     pcfKernelSize: { type: 'f32', default: 3 },
   },
   {
@@ -133,6 +144,10 @@ export const DirectionalLight = defineComponent(
       const pcf = data.pcfKernelSize as number | undefined;
       if (pcf !== undefined && (pcf < 1 || pcf % 2 === 0)) {
         return new ShadowInvalidConfigError('pcfKernelSize', pcf, 1);
+      }
+      const sd = data.shadowDistance as number | undefined;
+      if (sd !== undefined && sd <= 0) {
+        return new ShadowInvalidConfigError('shadowDistance', sd, 0);
       }
       return null;
     },

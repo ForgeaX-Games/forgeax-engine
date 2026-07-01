@@ -127,8 +127,7 @@ function buildFixtureWorld(): World {
       colorB: 1,
       intensity: 1,
       mapSize: FIXTURE_MAP_SIZE,
-      nearPlane: 0.1,
-      farPlane: 50,
+      shadowDistance: 50,
     },
   });
 

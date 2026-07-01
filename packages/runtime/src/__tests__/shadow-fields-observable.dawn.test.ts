@@ -189,8 +189,7 @@ function spawnScene(
       mapSize: mapSize ?? 1024,
       depthBias,
       normalBias,
-      nearPlane: 0.1,
-      farPlane: 50,
+      shadowDistance: 50,
       pcfKernelSize: pcf,
     },
   });
@@ -475,8 +474,7 @@ describe('M6 shadow fields observability', () => {
         splitLambda: 0.75,
         cascadeBlend: 0.2,
         mapSize: 2048,
-        nearPlane: 0.1,
-        farPlane: 50,
+        shadowDistance: 50,
         pcfKernelSize: 9,
       }),
     ).toBeNull();
@@ -487,8 +485,7 @@ describe('M6 shadow fields observability', () => {
         splitLambda: 0.75,
         cascadeBlend: 0.2,
         mapSize: 2048,
-        nearPlane: 0.1,
-        farPlane: 50,
+        shadowDistance: 50,
         pcfKernelSize: 2,
       })?.code,
     ).toBe('shadow-invalid-config');
@@ -499,8 +496,7 @@ describe('M6 shadow fields observability', () => {
         splitLambda: 0.75,
         cascadeBlend: 0.2,
         mapSize: 2048,
-        nearPlane: 0.1,
-        farPlane: 50,
+        shadowDistance: 50,
         pcfKernelSize: 0,
       })?.code,
     ).toBe('shadow-invalid-config');

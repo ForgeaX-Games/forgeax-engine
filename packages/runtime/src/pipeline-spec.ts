@@ -86,6 +86,14 @@ export interface PipelineSpec {
     readonly stripIndexFormat?: 'uint16' | 'uint32' | undefined;
     /** Per-vertex attribute layout (position / normal / uv / tangent / skinIndex / skinWeight). */
     readonly vertexLayout: VertexAttributeMap;
+    /**
+     * Number of UV sets declared by the shader (derived from @location reflection).
+     * Forwarded to deriveVertexBufferLayout for clamp-to-last alias (D-1 / D-4).
+     * Undefined = fallback to mesh-provided UV count (no clamping).
+     * feat-20260629-multi-uv-set-support m3-w5: plumbed placeholder.
+     * TODO(M4/m4-w3): fill from naga reflection JSON when available.
+     */
+    readonly shaderUvSetCount?: number | undefined;
   };
   /** Per-material render-state overrides (optional — engine defaults applied when absent). */
   readonly renderState: MaterialRenderState | undefined;
@@ -281,18 +289,23 @@ export function cacheKeyOf(spec: PipelineSpec): string {
   }
   const vlDigest = djb2(vlHashParts.join('|'));
 
-  return [
-    shader.id,
-    shader.passKind,
-    shader.variantSet ?? '',
-    attachments.colorFormats.join(','),
-    attachments.depthFormat ?? '',
-    String(attachments.sampleCount),
-    topoSegment,
-    stripSegment,
-    `vl:${vlDigest}`,
-    renderStateHash(renderState),
-  ].join(':');
+  const uvSetCountSegment =
+    geometry.shaderUvSetCount !== undefined ? `:uvsc${geometry.shaderUvSetCount}` : '';
+
+  return (
+    [
+      shader.id,
+      shader.passKind,
+      shader.variantSet ?? '',
+      attachments.colorFormats.join(','),
+      attachments.depthFormat ?? '',
+      String(attachments.sampleCount),
+      topoSegment,
+      stripSegment,
+      `vl:${vlDigest}`,
+      renderStateHash(renderState),
+    ].join(':') + uvSetCountSegment
+  );
 }
 
 /**
@@ -336,7 +349,12 @@ export function buildPipelineDescriptor(
   const isStrip = geometry.topology === 'line-strip' || geometry.topology === 'triangle-strip';
 
   // Derive vertex buffer layouts from the spec's vertexLayout axis (SSOT).
-  const vertexBuffers = deriveVertexBufferLayout(geometry.vertexLayout);
+  // feat-20260629-multi-uv-set-support m3-w5: thread shaderUvSetCount for clamp-to-last alias.
+  const vertexBuffers = deriveVertexBufferLayout(geometry.vertexLayout, {
+    ...(geometry.shaderUvSetCount !== undefined
+      ? { shaderUvSetCount: geometry.shaderUvSetCount }
+      : {}),
+  });
 
   const descriptor: Record<string, unknown> = {
     vertex: {
@@ -550,12 +568,21 @@ export function buildBindGroupLayoutDescriptor(
       const meshBufType: GPUBufferBindingType = caps.storageBuffer
         ? 'read-only-storage'
         : 'uniform';
+      // feat-20260624-sprite-lit-shading-model-pure-2d-lighting: sprite-lit's
+      // fs_main reads `meshes[0].worldFromLocal` to reconstruct per-fragment
+      // worldPos for point/spot light NdotL + attenuation (`spriteLitWorldPos`
+      // in sprite-lit.wgsl). Existing PBR/unlit/sprite shaders only read the
+      // mesh SSBO from vs_main, so widening to VERTEX|FRAGMENT is a permissive
+      // change for them (no perf cost — validation only) while making
+      // sprite-lit's pipeline actually buildable. WebGPU rejects
+      // createRenderPipeline when fragment-stage shader accesses a binding
+      // whose BGL visibility excludes FRAGMENT.
       return {
         label: 'pbr-mesh-array-bgl',
         entries: [
           {
             binding: 0,
-            visibility: 0x1,
+            visibility: 0x1 | 0x2,
             buffer: { type: meshBufType, hasDynamicOffset: true },
           },
         ],

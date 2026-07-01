@@ -17,9 +17,9 @@ HDR equirectangular sources (`.hdr`) are decoded at build-time by `imageImporter
 1. Detects `.hdr` sources by file extension
 2. Decodes RGBE data via `decodeHdr` -> `Float32Array`
 3. Converts f32 -> f16 bytes via `halfFloat.f32ToF16Bytes` (`@forgeax/engine-math`)
-4. Produces a `TextureAsset` POD: `format: 'rgba16float'`, `colorSpace: 'linear'`
+4. Produces an `EquirectAsset` POD: `format: 'rgba16float'`, `colorSpace: 'linear'`
 
-The sidecar (`.hdr.meta.json`) declares `subAssets[0].kind: 'cube-texture'` with `importSettings.cubeFaceSize` (equirect -> cube face size, default 256) and `specularMipLevels` (default 0). At build-catalog time, the `.hdr` extension maps to a `kind: 'texture'` catalog row with `ImageMetadata(format: 'rgba16float')`. The `vite-plugin-pack` import step hashes the f16 payload into a imported `.bin`. At runtime, `loadByGuid<TextureAsset>` loads the imported `.bin` like any other texture -- transparent to the consumer. Raw `.hdr` sources hitting runtime without import fail fast with `image-decode-failed`.
+The sidecar (`.hdr.meta.json`) declares `subAssets[0].kind: 'equirect'` (a dedicated asset kind; the prior `cube-texture` kind + its `importSettings.cubeFaceSize`/`specularMipLevels` are removed -- the equirect-to-cubemap projection params are decided internally by the render-system). At build-catalog time, the `.hdr` extension passes through as a `kind: 'equirect'` catalog row with `ImageMetadata(format: 'rgba16float')`. The `vite-plugin-pack` import step hashes the f16 payload into an imported `.bin`. At runtime, `loadByGuid<EquirectAsset>` loads the imported `.bin` via `equirectLoader` (an UPSTREAM_ENTRY loader) -- transparent to the consumer. The loaded `EquirectAsset` binds declaratively to `Skylight.equirect` / `SkyboxBackground.equirect`; the equirect-to-cubemap projection + IBL precompute run engine-internally. Raw `.hdr` sources hitting runtime without import fail fast with `image-decode-failed`.
 
 ## 4 步 recipe
 

@@ -1,0 +1,52 @@
+{
+  "name": "@forgeax/shadertoy-happy-blob",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Original raymarched SDF creature demo (no third-party shader code): a blobby character bounces with squash-and-stretch, rendered as a fullscreen-quad custom material shader driven by iResolution + iTime params.",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "preview": "vite preview",
+    "smoke": "node scripts/smoke-dawn.mjs"
+  },
+  "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/shadertoy-happy-blob smoke",
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle shape is downstream of @forgeax/engine-runtime sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "shadertoy demo; bench focus stays on engine-math / pixel-parity"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "shadertoy demo; bench focus stays on engine-math / pixel-parity"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/shadertoy-happy-blob smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; source-level SDF demo"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-shader": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-math": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "vite": "8.0.10",
+    "webgpu": "^0.4.0",
+    "@webgpu/types": "^0.1.71"
+  }
+}

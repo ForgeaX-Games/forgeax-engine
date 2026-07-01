@@ -50,10 +50,10 @@ import {
 } from '@forgeax/engine-state';
 import type {
   AnimationClip,
+  EquirectAsset,
   FontAsset,
   Handle,
   SceneAsset,
-  TextureAsset,
 } from '@forgeax/engine-types';
 import { createHUD, hideHUD, showHUD } from './hud';
 import { createGameProgress, GAME_PROGRESS_KEY, resetProgress } from './resources';
@@ -102,8 +102,9 @@ const RUN_CLIP_GUID = '019ecd87-179b-71f7-b9f8-4c8518326b65';
 
 // sky.hdr IBL source (F-05): demo-assets/template-game-default/sky.hdr (Apache-2.0,
 // commercial-compatible). pluginPack scans that directory (added to vite roots)
-// and surfaces it via /pack-index.json -> loadByGuid -> uploadCubemapFromEquirect,
-// the same native IBL path the learn-render PBR demos + templates/game-default use.
+// and surfaces it via /pack-index.json -> loadByGuid<EquirectAsset>, the same
+// declarative equirect IBL path the learn-render PBR demos + templates/game-default
+// use (Skylight/SkyboxBackground hold the equirect handle; projection is internal).
 const SKY_HDR_GUID = '81eec382-392f-5a93-8998-0ecf11ef7990';
 
 // DejaVu Sans Mono MSDF font (AC-12): pre-baked atlas + font.pack.json in
@@ -317,15 +318,18 @@ function wireStates(
   addOnEnter(GameState, 'Play', (w: World) => {
     showHUD(hud);
     const light = spawnLight(w);
-    // Environment lighting (F-05 / AC-08): solid Skylight now (frame-1 ambient),
-    // then async upgrade to sky.hdr IBL + cubemap SkyboxBackground on Chromium.
+    // Environment lighting (F-05 / AC-08): spawn a Skylight now (frame-1 white
+    // ambient via the engine fallback cube), then load the sky.hdr equirect and
+    // attach its handle + the visible SkyboxBackground once available. The engine
+    // record arm projects the equirect->cubemap + IBL lazily (caps-gated, white
+    // fallback while pending) -- no manual upload call, no WebKit UA guard.
     const skylight = spawnSkylight(w);
     // The camera is app-lifetime (spawned once in bootstrap, passed in) so it
     // survives Title<->Play replays without a camera-less draw frame. player-move
     // re-aims it at the fresh player each run via followCamera.
-    void installHdrSky(w, assets, app.renderer, skylight).then((skybox) => {
-      // The skybox spawns after the async cubemap upload; scope it for replay
-      // cleanup (best-effort -- the upload may resolve after a fast Play->Title).
+    void attachSkyEquirect(w, assets, skylight).then((skybox) => {
+      // The skybox spawns after the async equirect load; scope it for replay
+      // cleanup (best-effort -- the load may resolve after a fast Play->Title).
       if (skybox !== undefined) despawnOnExit(w, skybox, GameState, 'Play');
     });
     const levelEntities = spawnLevel(w);
@@ -530,11 +534,12 @@ function spawnCamera(world: World): EntityHandle {
 // ── IBL skylight + skybox (F-05 / AC-08) ──────────────────────────────────
 
 /**
- * Spawn the solid-color Skylight for the Play scene (sync, frame-1 ambient).
- * The forgeax PBR shader computes ambient=0 without a Skylight, so a lone
- * DirectionalLight leaves shaded faces dark; this solid Skylight is live on the
- * first frame with zero async GPU work. installHdrSky upgrades it to image-based
- * lighting once the cubemap uploads. Returned so the caller state-scopes it.
+ * Spawn the Skylight for the Play scene (sync, frame-1 ambient). The forgeax PBR
+ * shader computes ambient=0 without a Skylight, so a lone DirectionalLight leaves
+ * shaded faces dark; an equirect-less Skylight binds the engine's 1x1 white
+ * irradiance cube -- ambient is live on the FIRST frame with zero async GPU work.
+ * attachSkyEquirect attaches the sky.hdr equirect handle once it loads. Returned so
+ * the caller state-scopes it.
  */
 function spawnSkylight(world: World): EntityHandle {
   return world
@@ -546,41 +551,33 @@ function spawnSkylight(world: World): EntityHandle {
 }
 
 /**
- * Upgrade an existing solid Skylight to image-based lighting from sky.hdr +
- * spawn the visible cubemap SkyboxBackground (F-05 / AC-08). Async: returns the
- * SkyboxBackground entity (or undefined) so the caller state-scopes it.
+ * Attach the sky.hdr equirect to an existing Skylight + spawn the visible
+ * SkyboxBackground (F-05 / AC-08). Async: returns the SkyboxBackground entity
+ * (or undefined) so the caller state-scopes it.
  *
- * Gated to Chromium (negative allowlist) because uploadCubemapFromEquirect
- * poisons the WebGPU device on WebKit/WKWebView whose WebGPU lacks the
- * rgba16float render-attachment the IBL precompute needs (same guard as
- * templates/game-default). IBL prewarm (P-12): the cubemap precompute completes
- * asynchronously; visual verification (skybox-ibl-lit) waits for the device to
- * settle -- the browser smoke's 20s poll covers this.
+ * Declarative path (no manual cubemap upload, no WebKit UA guard): loadByGuid
+ * yields the EquirectAsset payload, allocSharedRef mints a user-tier handle, and
+ * the Skylight/SkyboxBackground hold that handle. The engine record arm projects
+ * the equirect->cubemap + IBL lazily, gated solely by caps.rgba16floatRenderable
+ * -- WebKit/WKWebView lacking that feature keeps the white fallback cube (solid
+ * ambient, no skybox) automatically, without poisoning the device.
  */
-async function installHdrSky(
+async function attachSkyEquirect(
   world: World,
   assets: import('@forgeax/engine-runtime').AssetRegistry,
-  renderer: import('@forgeax/engine-app').App['renderer'],
   skylight: EntityHandle,
 ): Promise<EntityHandle | undefined> {
-  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-  if (!/Chrome|Chromium|Edg/.test(ua)) return undefined;
-  const store = renderer.store;
-  if (store === undefined || typeof store.uploadCubemapFromEquirect !== 'function')
-    return undefined;
-
   const guidRes = AssetGuid.parse(SKY_HDR_GUID);
   if (!guidRes.ok) return undefined;
-  const podRes = await assets.loadByGuid<TextureAsset>(guidRes.value);
+  const podRes = await assets.loadByGuid<EquirectAsset>(guidRes.value);
   if (!podRes.ok) return undefined;
-  const srcHandle = world.allocSharedRef('TextureAsset', podRes.value);
-  const cubemapRes = await store.uploadCubemapFromEquirect(world, srcHandle, podRes.value);
-  if (!cubemapRes.ok) return undefined;
+  const equirect = world.allocSharedRef('EquirectAsset', podRes.value);
 
-  // Skylight upgraded to image-based lighting (neutral tint lets the HDR drive
-  // the color); the same cubemap handle feeds the visible SkyboxBackground (F-05).
+  // Attach the equirect to the Skylight for image-based lighting (neutral tint
+  // lets the HDR drive the color); the same handle feeds the visible
+  // SkyboxBackground (F-05). Projection happens lazily inside the renderer.
   world.set(skylight, Skylight, {
-    cubemap: cubemapRes.value,
+    equirect,
     colorR: 1,
     colorG: 1,
     colorB: 1,
@@ -589,7 +586,7 @@ async function installHdrSky(
   return world
     .spawn({
       component: SkyboxBackground,
-      data: { cubemap: cubemapRes.value, mode: SKYBOX_MODE_CUBEMAP },
+      data: { equirect, mode: SKYBOX_MODE_CUBEMAP },
     })
     .unwrap();
 }

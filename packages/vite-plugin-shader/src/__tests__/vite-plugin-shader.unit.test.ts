@@ -920,8 +920,8 @@ import { toRollupLog } from '../wrap.js';
       // engine identifier needed now that shadow_caster is a material shader).
       expect(
         manifest.materialShaders.length,
-        'materialShaders[] must contain exactly 6 engine material-shader entries',
-      ).toBe(6);
+        'materialShaders[] must contain exactly 7 engine material-shader entries',
+      ).toBe(7);
 
       const ids = manifest.materialShaders.map((ms) => ms.identifier).sort();
       expect(ids).toEqual([
@@ -931,6 +931,7 @@ import { toRollupLog } from '../wrap.js';
         'forgeax::msdf-text',
         'forgeax::pbr-skin',
         'forgeax::sprite',
+        'forgeax::sprite-lit',
       ]);
 
       // Each entry must have a paramSchema array; shadow-caster legitimately empty
@@ -958,6 +959,7 @@ import { toRollupLog } from '../wrap.js';
         'forgeax::pbr-skin': 13,
         'forgeax::default-unlit': 2,
         'forgeax::sprite': 5,
+        'forgeax::sprite-lit': 5,
         'forgeax::msdf-text': 3,
         'forgeax::default-shadow-caster': 0,
       };
@@ -1043,7 +1045,7 @@ import { toRollupLog } from '../wrap.js';
       // The entries[] array should still contain all compiled shaders (utility + material)
       expect(manifest.entries.length).toBeGreaterThanOrEqual(4);
 
-      // Verify the exact identifiers in materialShaders[] (6 engine entries)
+      // Verify the exact identifiers in materialShaders[] (7 engine entries)
       const ids = manifest.materialShaders.map((ms) => ms.identifier).sort();
       expect(ids).toEqual([
         'forgeax::default-shadow-caster',
@@ -1052,6 +1054,7 @@ import { toRollupLog } from '../wrap.js';
         'forgeax::msdf-text',
         'forgeax::pbr-skin',
         'forgeax::sprite',
+        'forgeax::sprite-lit',
       ]);
     });
 

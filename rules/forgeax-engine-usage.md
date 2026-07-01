@@ -11,7 +11,7 @@
 |:--|:--|
 | 引导 app / 跑游戏循环 / 读输入快照 | `forgeax-engine-app` |
 | 定义组件 / 写查询与系统 / 关系 / 反射 | `forgeax-engine-ecs` |
-| 让东西可见：MeshFilter + MeshRenderer + Material + 灯光 | `forgeax-engine-material` |
+| 让东西可见：MeshFilter + MeshRenderer + Material + 灯光（含 `forgeax::sprite-lit` per-light forward） | `forgeax-engine-material` |
 | 写自定义 WGSL + registerMaterialShader | `forgeax-engine-shader` |
 | 加 pass / 后处理 / tonemap / bloom / fxaa / skybox | `forgeax-engine-render-pipeline` |
 | Vec/Mat/Quat/Color / 从 mat4 读 pose / screenToRay | `forgeax-engine-math` |

@@ -61,7 +61,7 @@
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@types/node": "^25.8.0",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -75,7 +75,22 @@
         "@forgeax/engine-rhi-wgpu": "workspace:*",
       },
       "devDependencies": {
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/hello-multi-uv": {
+      "name": "@forgeax/hello-multi-uv",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
     },
@@ -90,7 +105,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -108,7 +123,7 @@
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@types/node": "^25.8.0",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -129,7 +144,7 @@
       "devDependencies": {
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "typescript": "~5.8.3",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
@@ -147,7 +162,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -164,7 +179,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -185,7 +200,7 @@
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -200,7 +215,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -218,7 +233,7 @@
       "devDependencies": {
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -234,7 +249,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -252,7 +267,7 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -274,7 +289,7 @@
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@types/node": "^25.8.0",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -296,7 +311,7 @@
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@types/node": "^25.8.0",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -313,7 +328,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -333,7 +348,7 @@
         "@forgeax/engine-shader": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@types/node": "^25.8.0",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -352,7 +367,7 @@
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@types/node": "^25.8.0",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -368,7 +383,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -386,7 +401,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -402,7 +417,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -419,7 +434,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -434,7 +449,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -452,7 +467,7 @@
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -470,7 +485,7 @@
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -485,7 +500,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -507,7 +522,7 @@
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@types/node": "^25.8.0",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -526,7 +541,7 @@
       "devDependencies": {
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -544,7 +559,24 @@
       "devDependencies": {
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/hello/sprite-lit": {
+      "name": "@forgeax/hello-sprite-lit",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-rhi": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -561,7 +593,7 @@
       "devDependencies": {
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -577,7 +609,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -593,7 +625,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -608,7 +640,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -624,7 +656,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -639,7 +671,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -657,7 +689,7 @@
       "devDependencies": {
         "@forgeax/engine-shader-compiler": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "1.56.1",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
@@ -674,7 +706,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -692,7 +724,7 @@
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.55.0",
         "pngjs": "^7.0.0",
         "vite": "8.0.10",
@@ -709,7 +741,7 @@
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
       },
     },
@@ -723,7 +755,7 @@
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
       },
     },
@@ -738,7 +770,7 @@
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
       },
     },
@@ -757,7 +789,7 @@
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@types/node": "^25.8.0",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -779,7 +811,7 @@
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
       },
     },
@@ -800,7 +832,7 @@
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
       },
     },
@@ -822,7 +854,7 @@
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -846,7 +878,7 @@
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
@@ -871,7 +903,7 @@
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
@@ -892,7 +924,7 @@
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -918,7 +950,7 @@
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
@@ -945,7 +977,7 @@
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
@@ -972,7 +1004,7 @@
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
@@ -998,7 +1030,7 @@
         "@forgeax/engine-image": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -1021,7 +1053,7 @@
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
@@ -1044,7 +1076,7 @@
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
@@ -1066,7 +1098,7 @@
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
@@ -1085,7 +1117,7 @@
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
       },
     },
@@ -1107,7 +1139,7 @@
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
@@ -1131,7 +1163,7 @@
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
@@ -1154,7 +1186,7 @@
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
@@ -1177,7 +1209,7 @@
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
@@ -1198,7 +1230,7 @@
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
       },
     },
@@ -1210,14 +1242,20 @@
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-rhi-debug": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
     },
@@ -1230,14 +1268,19 @@
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
     },
@@ -1248,14 +1291,19 @@
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
     },
@@ -1265,13 +1313,18 @@
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-rhi-debug": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
     },
@@ -1283,14 +1336,19 @@
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
     },
@@ -1302,13 +1360,19 @@
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-rhi-debug": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
     },
@@ -1320,15 +1384,20 @@
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@types/node": "^25.8.0",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
     },
@@ -1341,14 +1410,19 @@
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
     },
@@ -1361,14 +1435,19 @@
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
     },
@@ -1378,13 +1457,18 @@
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-rhi-debug": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
     },
@@ -1398,13 +1482,18 @@
         "@forgeax/engine-gltf": "workspace:*",
         "@forgeax/engine-image": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-rhi-webgpu": "workspace:*",
+        "@forgeax/engine-rhi-wgpu": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
+        "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
+        "playwright": "^1.50.0",
         "vite": "8.0.10",
       },
     },
@@ -1430,7 +1519,7 @@
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "jpeg-js": "^0.4.4",
         "playwright": "^1.50.0",
         "upng-js": "^2.1.0",
@@ -1460,7 +1549,7 @@
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "jpeg-js": "^0.4.4",
         "playwright": "^1.50.0",
         "upng-js": "^2.1.0",
@@ -1480,7 +1569,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "pixelmatch": "^7.0.0",
         "vite": "8.0.10",
       },
@@ -1497,7 +1586,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.69",
+        "@webgpu/types": "^0.1.71",
         "playwright": "1.56.1",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
@@ -1516,7 +1605,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
       },
     },
@@ -1532,7 +1621,7 @@
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -1551,7 +1640,7 @@
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
       },
     },
@@ -1559,10 +1648,16 @@
       "name": "@forgeax/rhi-debug-viewer",
       "version": "0.0.0",
       "dependencies": {
+        "@codemirror/language": "^6.12.4",
+        "@codemirror/lint": "^6.9.7",
+        "@codemirror/state": "^6.7.0",
+        "@codemirror/view": "^6.43.4",
+        "@forgeax/engine-naga": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
+        "@lezer/highlight": "^1.2.3",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "dockview-react": "^7.0.2",
@@ -1578,13 +1673,45 @@
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
         "@vitejs/plugin-react": "^4.3.0",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "autoprefixer": "^10.4.21",
         "jsdom": "^26.0.0",
         "postcss": "^8.5.14",
         "tailwindcss": "^3.4.19",
         "typescript": "^5.7.0",
         "vite": "8.0.10",
+      },
+    },
+    "apps/shadertoy/fractal-pyramid": {
+      "name": "@forgeax/shadertoy-fractal-pyramid",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-shader": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/shadertoy/happy-blob": {
+      "name": "@forgeax/shadertoy-happy-blob",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-shader": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
       },
     },
     "apps/shared": {
@@ -1618,7 +1745,7 @@
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
       },
     },
@@ -1645,7 +1772,7 @@
         "@forgeax/engine-rhi-debug": "workspace:*",
         "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-rhi-wgpu": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
     },
     "packages/audio": {
@@ -1726,7 +1853,7 @@
       "name": "@forgeax/engine-font",
       "version": "0.0.0",
       "bin": {
-        "forgeax-engine-console-font": "./dist/cli-font.mjs",
+        "forgeax-engine-remote-font": "./dist/cli-font.mjs",
       },
       "dependencies": {
         "@forgeax/engine-pack": "workspace:*",
@@ -1749,7 +1876,7 @@
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
       "devDependencies": {
         "@forgeax/engine-import": "workspace:*",
@@ -1799,7 +1926,7 @@
       "dependencies": {
         "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-wgpu-wasm": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
     },
     "packages/pack": {
@@ -1896,7 +2023,7 @@
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
     },
     "packages/rhi": {
@@ -1904,7 +2031,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-types": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
     },
     "packages/rhi-debug": {
@@ -1921,7 +2048,7 @@
       "devDependencies": {
         "@types/node": "^20.14.0",
         "@types/pngjs": "^6.0.5",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
         "webgpu": "^0.4.0",
       },
       "peerDependencies": {
@@ -1935,7 +2062,7 @@
       "dependencies": {
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
     },
     "packages/rhi-webgpu": {
@@ -1944,7 +2071,7 @@
       "dependencies": {
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
     },
     "packages/rhi-wgpu": {
@@ -1954,7 +2081,7 @@
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@forgeax/engine-wgpu-wasm": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
     },
     "packages/runtime": {
@@ -1987,7 +2114,7 @@
       "dependencies": {
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
     },
     "packages/shader-compiler": {
@@ -1996,7 +2123,7 @@
       "dependencies": {
         "@forgeax/engine-naga": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
     },
     "packages/state": {
@@ -2015,7 +2142,7 @@
       "name": "@forgeax/engine-types",
       "version": "0.0.0",
       "dependencies": {
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
       "devDependencies": {
         "@types/ws": "^8.5.10",
@@ -2068,7 +2195,7 @@
         "@forgeax/engine-shader": "workspace:*",
         "@forgeax/engine-shader-compiler": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
       "devDependencies": {
         "@types/node": "^20.14.0",
@@ -2093,7 +2220,7 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
-        "@webgpu/types": "^0.1.70",
+        "@webgpu/types": "^0.1.71",
       },
     },
   },
@@ -2235,6 +2362,14 @@
     "@changesets/types": ["@changesets/types@6.1.0", "", {}, "sha512-rKQcJ+o1nKNgeoYRHKOS07tAMNd3YSN0uHaJOZYjBAgxfV7TUE7JE+z4BzZdQwb5hKaYbayKN5KrYV7ODb2rAA=="],
 
     "@changesets/write": ["@changesets/write@0.4.0", "", { "dependencies": { "@changesets/types": "^6.1.0", "fs-extra": "^7.0.1", "human-id": "^4.1.1", "prettier": "^2.7.1" } }, "sha512-CdTLvIOPiCNuH71pyDu3rA+Q0n65cmAbXnwWH84rKGiFumFzkmHNT8KHTMEchcxN+Kl8I54xGUhJ7l3E7X396Q=="],
+
+    "@codemirror/language": ["@codemirror/language@6.12.4", "", { "dependencies": { "@codemirror/state": "^6.0.0", "@codemirror/view": "^6.23.0", "@lezer/common": "^1.5.0", "@lezer/highlight": "^1.0.0", "@lezer/lr": "^1.0.0", "style-mod": "^4.0.0" } }, "sha512-1q4PaT+o6PbgpkJt4Q8Fv5XJxTy4FUZ4MWETtyiDw3J0Pyr9E2vqcKL+k9wcvjNTIsauxvE7OfmWj3FRPHQ76A=="],
+
+    "@codemirror/lint": ["@codemirror/lint@6.9.7", "", { "dependencies": { "@codemirror/state": "^6.0.0", "@codemirror/view": "^6.42.0", "crelt": "^1.0.5" } }, "sha512-28/+iWLYxKxsvGYhSYL7zaCZqLz5+FFFDq9tVsvGv9kv8RY4fFAchJ5WX9M3YrrRlTIsECjsXPqeNgnSmNP2dg=="],
+
+    "@codemirror/state": ["@codemirror/state@6.7.0", "", { "dependencies": { "@marijn/find-cluster-break": "^1.0.0" } }, "sha512-Zbl9NyscLMZkfXPQnNAIIAFftidrA1UbcJEIMp24C0Bukc2I5T8wJS0wsXYsnDOqCFJUeJ1BITGNs5CqPDSmSg=="],
+
+    "@codemirror/view": ["@codemirror/view@6.43.4", "", { "dependencies": { "@codemirror/state": "^6.7.0", "crelt": "^1.0.6", "style-mod": "^4.1.0", "w3c-keyname": "^2.2.4" } }, "sha512-YImu23iyKfncJzT7sRy+rEqEhSc8RhOHqDxwy4WzXRKJwYm6iwf/9OJk5ctCAdZ6yi2ZqaGEvmf55fSVqMDrgg=="],
 
     "@colors/colors": ["@colors/colors@1.5.0", "", {}, "sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ=="],
 
@@ -2500,6 +2635,8 @@
 
     "@forgeax/hello-multi-material": ["@forgeax/hello-multi-material@workspace:apps/hello/multi-material"],
 
+    "@forgeax/hello-multi-uv": ["@forgeax/hello-multi-uv@workspace:apps/hello-multi-uv"],
+
     "@forgeax/hello-physics": ["@forgeax/hello-physics@workspace:apps/hello/physics"],
 
     "@forgeax/hello-picking": ["@forgeax/hello-picking@workspace:apps/hello/picking"],
@@ -2515,6 +2652,8 @@
     "@forgeax/hello-sprite": ["@forgeax/hello-sprite@workspace:apps/hello/sprite"],
 
     "@forgeax/hello-sprite-atlas": ["@forgeax/hello-sprite-atlas@workspace:apps/hello/sprite-atlas"],
+
+    "@forgeax/hello-sprite-lit": ["@forgeax/hello-sprite-lit@workspace:apps/hello/sprite-lit"],
 
     "@forgeax/hello-text": ["@forgeax/hello-text@workspace:apps/hello/text"],
 
@@ -2543,6 +2682,10 @@
     "@forgeax/remote-demo": ["@forgeax/remote-demo@workspace:apps/remote-demo"],
 
     "@forgeax/rhi-debug-viewer": ["@forgeax/rhi-debug-viewer@workspace:apps/rhi-debug-viewer"],
+
+    "@forgeax/shadertoy-fractal-pyramid": ["@forgeax/shadertoy-fractal-pyramid@workspace:apps/shadertoy/fractal-pyramid"],
+
+    "@forgeax/shadertoy-happy-blob": ["@forgeax/shadertoy-happy-blob@workspace:apps/shadertoy/happy-blob"],
 
     "@forgeax/template-game-default": ["@forgeax/template-game-default@workspace:templates/game-default"],
 
@@ -2574,9 +2717,17 @@
 
     "@jscpd/tokenizer": ["@jscpd/tokenizer@4.2.3", "", { "dependencies": { "@jscpd/core": "4.2.3", "spark-md5": "^3.0.2" } }, "sha512-RvjD7/hwqtcQC9MWOl31odTti6kGCFxZ77DKEhwyMn+r6oVEUFbXgcGvzn0GC/wuTl7f3j5MF9JNMeTneOFwYA=="],
 
+    "@lezer/common": ["@lezer/common@1.5.2", "", {}, "sha512-sxQE460fPZyU3sdc8lafxiPwJHBzZRy/udNFynGQky1SePYBdhkBl1kOagA9uT3pxR8K09bOrmTUqA9wb/PjSQ=="],
+
+    "@lezer/highlight": ["@lezer/highlight@1.2.3", "", { "dependencies": { "@lezer/common": "^1.3.0" } }, "sha512-qXdH7UqTvGfdVBINrgKhDsVTJTxactNNxLk7+UMwZhU13lMHaOBlJe9Vqp907ya56Y3+ed2tlqzys7jDkTmW0g=="],
+
+    "@lezer/lr": ["@lezer/lr@1.4.10", "", { "dependencies": { "@lezer/common": "^1.0.0" } }, "sha512-rnCpTIBafOx4mRp43xOxDJbFipJm/c0cia/V5TiGlhmMa+wsSdoGmUN3w5Bqrks/09Q/D4tNAmWaT8p6NRi77A=="],
+
     "@manypkg/find-root": ["@manypkg/find-root@1.1.0", "", { "dependencies": { "@babel/runtime": "^7.5.5", "@types/node": "^12.7.1", "find-up": "^4.1.0", "fs-extra": "^8.1.0" } }, "sha512-mki5uBvhHzO8kYYix/WRy2WX8S3B5wdVSc9D6KcU5lQNglP2yt58/VfLuAK49glRXChosY8ap2oJ1qgma3GUVA=="],
 
     "@manypkg/get-packages": ["@manypkg/get-packages@1.1.3", "", { "dependencies": { "@babel/runtime": "^7.5.5", "@changesets/types": "^4.0.1", "@manypkg/find-root": "^1.1.0", "fs-extra": "^8.1.0", "globby": "^11.0.0", "read-yaml-file": "^1.1.0" } }, "sha512-fo+QhuU3qE/2TQMQmbVMqaQ6EWbMhi4ABWP+O4AM1NqPBuy0OrApV5LO6BrrgnhtAHS2NH6RrVk9OL181tTi8A=="],
+
+    "@marijn/find-cluster-break": ["@marijn/find-cluster-break@1.0.3", "", {}, "sha512-FY+MKLBoTsLNJF/eLWaOsXGdz6uh3Iu1axjPf6TUq92IYumcTcXWHoS747JARLkcdlJ/Waiaxc5wQfFO8jC6NA=="],
 
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.1.4", "", { "dependencies": { "@tybys/wasm-util": "^0.10.1" }, "peerDependencies": { "@emnapi/core": "^1.7.1", "@emnapi/runtime": "^1.7.1" } }, "sha512-3NQNNgA1YSlJb/kMH1ildASP9HW7/7kYnRI2szWJaofaS1hWmbGI4H+d3+22aGzXXN9IJ+n+GiFVcGipJP18ow=="],
 
@@ -2740,7 +2891,7 @@
 
     "@vitest/utils": ["@vitest/utils@4.1.5", "", { "dependencies": { "@vitest/pretty-format": "4.1.5", "convert-source-map": "^2.0.0", "tinyrainbow": "^3.1.0" } }, "sha512-76wdkrmfXfqGjueGgnb45ITPyUi1ycZ4IHgC2bhPDUfWHklY/q3MdLOAB+TF1e6xfl8NxNY0ZYaPCFNWSsw3Ug=="],
 
-    "@webgpu/types": ["@webgpu/types@0.1.70", "", {}, "sha512-LFiNHHKMvmAEvwVew3JLJmTdShhbdwRFSImUshGhE2mGE8ybQzIo63l5uRp+YKnNx+8Qno8Kf6gN+DKMreIJCA=="],
+    "@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
 
     "@zappar/msdf-generator": ["@zappar/msdf-generator@1.2.4", "", { "dependencies": { "comlink": "^4.4.2" } }, "sha512-6S/MCk0Ky0ipewZJw4xFEzH/2aYfWmPXEkTdBtNyDDfkbicrNwgJgtxZ4SnTDyNe9XHMqDA4sL9srRsgDLRMqA=="],
 
@@ -2857,6 +3008,8 @@
     "constantinople": ["constantinople@4.0.1", "", { "dependencies": { "@babel/parser": "^7.6.0", "@babel/types": "^7.6.1" } }, "sha512-vCrqcSIq4//Gx74TXXCGnHpulY1dskqLTFGDmhrGxzeXL8lF8kvXv6mpNWlJj1uD4DW23D4ljAqbY4RRaaUZIw=="],
 
     "convert-source-map": ["convert-source-map@2.0.0", "", {}, "sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg=="],
+
+    "crelt": ["crelt@1.0.7", "", {}, "sha512-aK6BbWfhf4U/wCcLHKPJl/xa6VkVstRaPywWtMKGwuOLc/wZTyQYuoxgvZnNsBvv7Kg3YTBQYYBCggcviQczuA=="],
 
     "cross-spawn": ["cross-spawn@7.0.6", "", { "dependencies": { "path-key": "^3.1.0", "shebang-command": "^2.0.0", "which": "^2.0.1" } }, "sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA=="],
 
@@ -3378,6 +3531,8 @@
 
     "strip-final-newline": ["strip-final-newline@2.0.0", "", {}, "sha512-BrpvfNAE3dcvq7ll3xVumzjKjZQ5tI1sEUIKr3Uoks0XUl45St3FlatVqef9prk4jRDzhW6WZg+3bk93y6pLjA=="],
 
+    "style-mod": ["style-mod@4.1.3", "", {}, "sha512-i/n8VsZydrugj3Iuzll8+x/00GH2vnYsk1eomD8QiRrSAeW6ItbCQDtfXCeJHd0iwiNagqjQkvpvREEPtW3IoQ=="],
+
     "sucrase": ["sucrase@3.35.1", "", { "dependencies": { "@jridgewell/gen-mapping": "^0.3.2", "commander": "^4.0.0", "lines-and-columns": "^1.1.6", "mz": "^2.7.0", "pirates": "^4.0.1", "tinyglobby": "^0.2.11", "ts-interface-checker": "^0.1.9" }, "bin": { "sucrase": "bin/sucrase", "sucrase-node": "bin/sucrase-node" } }, "sha512-DhuTmvZWux4H1UOnWMB3sk0sbaCVOoQZjv8u1rDoTV0HTdGem9hkAZtl4JZy8P2z4Bg0nT+YMeOFyVr4zcG5Tw=="],
 
     "supports-color": ["supports-color@7.2.0", "", { "dependencies": { "has-flag": "^4.0.0" } }, "sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw=="],
@@ -3457,6 +3612,8 @@
     "vitest": ["vitest@4.1.5", "", { "dependencies": { "@vitest/expect": "4.1.5", "@vitest/mocker": "4.1.5", "@vitest/pretty-format": "4.1.5", "@vitest/runner": "4.1.5", "@vitest/snapshot": "4.1.5", "@vitest/spy": "4.1.5", "@vitest/utils": "4.1.5", "es-module-lexer": "^2.0.0", "expect-type": "^1.3.0", "magic-string": "^0.30.21", "obug": "^2.1.1", "pathe": "^2.0.3", "picomatch": "^4.0.3", "std-env": "^4.0.0-rc.1", "tinybench": "^2.9.0", "tinyexec": "^1.0.2", "tinyglobby": "^0.2.15", "tinyrainbow": "^3.1.0", "vite": "^6.0.0 || ^7.0.0 || ^8.0.0", "why-is-node-running": "^2.3.0" }, "peerDependencies": { "@edge-runtime/vm": "*", "@opentelemetry/api": "^1.9.0", "@types/node": "^20.0.0 || ^22.0.0 || >=24.0.0", "@vitest/browser-playwright": "4.1.5", "@vitest/browser-preview": "4.1.5", "@vitest/browser-webdriverio": "4.1.5", "@vitest/coverage-istanbul": "4.1.5", "@vitest/coverage-v8": "4.1.5", "@vitest/ui": "4.1.5", "happy-dom": "*", "jsdom": "*" }, "optionalPeers": ["@edge-runtime/vm", "@opentelemetry/api", "@types/node", "@vitest/browser-playwright", "@vitest/browser-preview", "@vitest/browser-webdriverio", "@vitest/coverage-istanbul", "@vitest/coverage-v8", "@vitest/ui", "happy-dom", "jsdom"], "bin": { "vitest": "vitest.mjs" } }, "sha512-9Xx1v3/ih3m9hN+SbfkUyy0JAs72ap3r7joc87XL6jwF0jGg6mFBvQ1SrwaX+h8BlkX6Hz9shdd1uo6AF+ZGpg=="],
 
     "void-elements": ["void-elements@3.1.0", "", {}, "sha512-Dhxzh5HZuiHQhbvTW9AMetFfBHDMYpo23Uo9btPXgdYP+3T5S+p+jgNy7spra+veYhBP2dCSgxR/i2Y02h5/6w=="],
+
+    "w3c-keyname": ["w3c-keyname@2.2.8", "", {}, "sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ=="],
 
     "w3c-xmlserializer": ["w3c-xmlserializer@5.0.0", "", { "dependencies": { "xml-name-validator": "^5.0.0" } }, "sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA=="],
 
@@ -3601,6 +3758,8 @@
     "vite/fsevents": ["fsevents@2.3.3", "", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
 
     "vitest/tinyexec": ["tinyexec@1.1.2", "", {}, "sha512-dAqSqE/RabpBKI8+h26GfLq6Vb3JVXs30XYQjdMjaj/c2tS8IYYMbIzP599KtRj7c57/wYApb3QjgRgXmrCukA=="],
+
+    "webgpu/@webgpu/types": ["@webgpu/types@0.1.70", "", {}, "sha512-LFiNHHKMvmAEvwVew3JLJmTdShhbdwRFSImUshGhE2mGE8ybQzIo63l5uRp+YKnNx+8Qno8Kf6gN+DKMreIJCA=="],
 
     "whatwg-encoding/iconv-lite": ["iconv-lite@0.6.3", "", { "dependencies": { "safer-buffer": ">= 2.1.2 < 3.0.0" } }, "sha512-4fCk79wshMdzMp2rH06qWrJE4iolqLhCUH+OiuIgU++RB0+94NlDL81atO7GX55uUKueo0txHNtvEyI6D7WdMw=="],
 

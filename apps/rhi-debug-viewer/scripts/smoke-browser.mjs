@@ -415,6 +415,149 @@ if (!hasGpu) {
 }
 
 // ============================================================================
+// Assertion 5b (AC-02/AC-03, M3/F2): edit -> apply -> preview change + reset
+// ============================================================================
+// Only meaningful when WebGPU is available (apply recompiles + renders on the
+// replay device). Walks the PipelineState shader editor: Show WGSL -> Edit ->
+// apply a valid edit (preview canvas non-zero) -> apply a broken edit (inline
+// diagnostic surfaces, viewer does not crash) -> Reset.
+if (!FALSIFY_MODE) {
+  const hasGpuF2 = await page.evaluate(() => !!navigator.gpu);
+  if (!hasGpuF2) {
+    console.log('[smoke-browser] AC-02/03 SKIP: WebGPU not available — F2 apply/reset skipped');
+  } else {
+    try {
+      // The Pipeline State panel is an inactive dockview tab on load; its DOM
+      // (the editable CodeMirrorShader) is not mounted until activated. dockview
+      // tabs respond to real pointer events, so use a Playwright click (a
+      // synthetic .click() in page.evaluate does not activate the tab).
+      await page.getByText('Pipeline State', { exact: false }).first().click();
+      await sleep(400);
+
+      // Expand every "Show WGSL" control. Both PipelineState (editable
+      // CodeMirrorShader, carries data-forgeax-shader-editor) and ResourceInspector
+      // (read-only CodeMirrorWidget) expose "Show WGSL"; clicking all of them
+      // guarantees the editable one mounts regardless of button order.
+      const shown = await page.evaluate(() => {
+        const btns = [...document.querySelectorAll('button')].filter((b) =>
+          (b.textContent ?? '').includes('Show WGSL'),
+        );
+        btns.forEach((b) => b.click());
+        return btns.length > 0;
+      });
+      if (!shown) {
+        console.log('[smoke-browser] AC-02/03 SKIP: no Show WGSL control (no shader in fixture)');
+      } else {
+        await page.waitForSelector('[data-forgeax-shader-editor]', { timeout: 5000 });
+        // Scope every interaction to the first editable shader editor (a draw can
+        // expose both a vertex and a fragment editor; either is a valid target).
+        const editor = page.locator('[data-forgeax-shader-editor]').first();
+
+        // Enter edit mode.
+        await editor.locator('[data-forgeax-edit-toggle="off"]').click();
+        await editor.locator('[data-forgeax-edit-toggle="on"]').waitFor({ timeout: 5000 });
+        await editor.locator('[data-forgeax-edit-banner]').waitFor({ timeout: 5000 });
+        console.log('[smoke-browser] AC-02 GREEN: edit mode entered (banner + toggle on)');
+
+        // Apply the unedited (valid) WGSL — preview must render non-zero pixels.
+        await editor.locator('[data-forgeax-shader-apply]').click();
+        const applyOk = await page.evaluate(async () => {
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          for (let i = 0; i < 60; i++) {
+            const statusEl = document.querySelector('[data-forgeax-shader-apply-status]');
+            const status = statusEl?.getAttribute('data-forgeax-shader-apply-status');
+            if (status === 'ok') {
+              const c = document.querySelector('canvas[data-forgeax-shader-preview-canvas]');
+              if (c) {
+                const ctx = c.getContext('2d');
+                if (ctx && c.width > 0 && c.height > 0) {
+                  const d = ctx.getImageData(0, 0, Math.min(c.width, 64), Math.min(c.height, 64));
+                  for (let j = 0; j < d.data.length; j++) {
+                    if (d.data[j] !== 0) return 'non-zero';
+                  }
+                }
+              }
+              return 'all-zero';
+            }
+            if (status === 'error') return 'error';
+            await sleep(50);
+          }
+          return 'timeout';
+        });
+        if (applyOk !== 'non-zero') {
+          console.error(`[smoke-browser] AC-02 RED: apply preview not non-zero (${applyOk})`);
+          await browser.close();
+          viteProc.kill('SIGTERM');
+          process.exit(1);
+        }
+        console.log('[smoke-browser] AC-02 GREEN: apply -> preview canvas non-zero');
+
+        // Apply a broken edit — inline diagnostic must surface, no crash.
+        const broke = await page.evaluate(async () => {
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const cm = document.querySelector('[data-forgeax-shader-editor] .cm-content');
+          if (!cm) return 'no-editor';
+          cm.focus();
+          // Prepend a garbage token that fails WGSL parse.
+          document.execCommand('insertText', false, '@@@bad ');
+          await sleep(50);
+          return 'typed';
+        });
+        if (broke === 'typed') {
+          await editor.locator('[data-forgeax-shader-apply]').click();
+          const diag = await page.evaluate(async () => {
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+            for (let i = 0; i < 60; i++) {
+              const status = document
+                .querySelector('[data-forgeax-shader-apply-status]')
+                ?.getAttribute('data-forgeax-shader-apply-status');
+              const hasError = document.querySelector('[data-forgeax-shader-error]');
+              const hasLint = document.querySelector('.cm-lintRange, .cm-lint-marker');
+              if (status === 'error' && (hasError || hasLint)) return 'diagnostic-shown';
+              await sleep(50);
+            }
+            return 'no-diagnostic';
+          });
+          if (diag !== 'diagnostic-shown') {
+            console.error(`[smoke-browser] AC-03 RED: broken apply showed no diagnostic (${diag})`);
+            await browser.close();
+            viteProc.kill('SIGTERM');
+            process.exit(1);
+          }
+          console.log('[smoke-browser] AC-03 GREEN: broken apply -> inline diagnostic, no crash');
+        }
+
+        // Reset restores the original source + idle status.
+        await editor.locator('[data-forgeax-shader-reset]').click();
+        const resetOk = await page.evaluate(async () => {
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          for (let i = 0; i < 40; i++) {
+            const status = document
+              .querySelector('[data-forgeax-shader-apply-status]')
+              ?.getAttribute('data-forgeax-shader-apply-status');
+            if (status === 'idle') return 'idle';
+            await sleep(50);
+          }
+          return 'not-idle';
+        });
+        if (resetOk !== 'idle') {
+          console.error(`[smoke-browser] AC-02 RED: reset did not return to idle (${resetOk})`);
+          await browser.close();
+          viteProc.kill('SIGTERM');
+          process.exit(1);
+        }
+        console.log('[smoke-browser] AC-02 GREEN: reset -> idle (original source restored)');
+      }
+    } catch (e) {
+      console.error(`[smoke-browser] AC-02/03 RED: F2 apply/reset check threw: ${e.message}`);
+      await browser.close();
+      viteProc.kill('SIGTERM');
+      process.exit(1);
+    }
+  }
+}
+
+// ============================================================================
 // Assertion 6 (AC-13): verify all selectors used are data-forgeax-* or text
 // ============================================================================
 // This is a static check on this script itself — no tailwind/shadcn class

@@ -22,6 +22,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import type {
+  EquirectAsset,
   ImageMetadata,
   ImportContext,
   PackIndexEntry,
@@ -77,11 +78,11 @@ export async function importTextureEntry(
   opts: ImportTextureOptions,
 ): Promise<ImportTextureResult> {
   if (
-    entry.kind !== 'texture' ||
+    (entry.kind !== 'texture' && entry.kind !== 'equirect') ||
     entry.metadata === undefined ||
     entry.metadata.kind !== 'texture'
   ) {
-    return { skipped: 'non-texture or missing texture metadata', real: false };
+    return { skipped: 'non-importable kind or missing texture metadata', real: false };
   }
   const meta = entry.metadata;
   const sourceAbs = resolve(opts.cwd, entry.sourcePath);
@@ -149,7 +150,10 @@ export async function importTextureEntry(
         'decodeImage seam unwired in vite-plugin-pack import-texture (bare-source path); reach the gltfImporter codepath through buildCatalog instead',
       );
     },
-    subAssets: [{ guid: entry.guid, sourceIndex: 0, kind: 'texture' }],
+    // The synthesised sub-asset kind mirrors the catalog row kind so the
+    // imageImporter folds the right arm: 'texture' (PNG/JPEG/HDR 2D) or
+    // 'equirect' (HDR lat-long env map). feat-20260630 w7.
+    subAssets: [{ guid: entry.guid, sourceIndex: 0, kind: entry.kind }],
     importSettings,
   };
   let produced: readonly { guid: string; payload: unknown }[];
@@ -163,14 +167,17 @@ export async function importTextureEntry(
       real: true,
     };
   }
-  const imported = produced.find((a) => a.guid === entry.guid)?.payload as TextureAsset | undefined;
+  const imported = produced.find((a) => a.guid === entry.guid)?.payload as
+    | TextureAsset
+    | EquirectAsset
+    | undefined;
   if (imported === undefined) {
     return {
       skipped: `imageImporter produced no asset for ${entry.sourcePath} (guid ${entry.guid})`,
       real: true,
     };
   }
-  // The imported texel bytes ride in TextureAsset.data (Uint8Array |
+  // The imported texel bytes ride in the POD's `data` field (Uint8Array |
   // Uint8ClampedArray); normalise to a Uint8Array view.
   const bytes =
     imported.data instanceof Uint8Array

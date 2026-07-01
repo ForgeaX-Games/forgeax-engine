@@ -130,9 +130,9 @@ struct VsOut {
   @location(2) uv : vec2<f32>,
   @location(3) worldTangent : vec4<f32>,
   @location(4) @interpolate(flat) instanceIdx : u32,
-  // feat-20260613-csm-cascaded-shadow-maps M5 / w19: the prior
-  // light-space-position varying is replaced by viewZ -- evalDirectional
-  // now picks the cascade matrix per fragment from viewZ + worldPos.
+  // feat-20260629-multi-uv-set-support (user decision): built-in PBR (skin
+  // included) consumes a single UV set only. Multi-UV is a custom-material
+  // concern. @location(6) free for non-skin parity.
   @location(7) viewZ : f32,
 };
 

@@ -94,6 +94,9 @@ describe('AssetErrorCode closed union - 22 members (feat-20260608 M0 +tileset-re
         // === 1 new code (feat-20260621-asset-registry-robustness-invalidate-inflight-cach M2 / w4) ===
         case 'asset-invalidated':
           return 'asset-invalidated';
+        // === 1 new code (feat-20260629-multi-uv-set-support M2 / m2-w5) ===
+        case 'mesh-bin-contract-violation':
+          return 'mesh-bin-contract-violation';
       }
       // No default - TS guards union drift at compile time.
     }

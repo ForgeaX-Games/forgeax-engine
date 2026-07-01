@@ -39,7 +39,9 @@
 // is portable across WebGPU + GLES.
 //
 // Exports:
-//   - evalDirectional(...) -> vec3<f32>
+//   - evalDirectional(...) -> vec3<f32>  (Cook-Torrance + CSM shadow mod)
+//   - evalDirectionalNoShadow(...) -> vec3<f32>  (Cook-Torrance, no shadow;
+//     sprite-lit M1' / w3 D-1; also the inner brdf body of evalDirectional)
 
 #import forgeax_view::common::{view, shadowMap, shadowSampler}
 #import forgeax_pbr::brdf::{f_schlick, v_smith, d_ggx}
@@ -180,20 +182,33 @@ fn _sampleShadowForCascade(
   return 1.0 - blocked / tapCount;
 }
 
-// `evalDirectional` evaluates the GGX direct-lighting term for the single
-// directional light carried in `view.lightDir / view.lightColor`. CSM
-// pathway: pick cascade layer from viewZ + splitPlanes, sample the atlas
-// tile via the matching lightViewProj, optionally blend with the next
-// cascade across a `cascadeBlend`-wide boundary band.
-fn evalDirectional(
+// `evalDirectionalNoShadow` evaluates the GGX direct-lighting term for the
+// single directional light carried in `view.lightDir / view.lightColor`
+// WITHOUT applying any shadow factor — pure Cook-Torrance (D_GGX + V_Smith
+// + F_Schlick) microfacet specular + Lambertian diffuse, returned scaled
+// by `lightColor * nDotL`.
+//
+// feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / w3 (D-1):
+// extracted from evalDirectional so the brdf body matches the
+// `evalPoint` / `evalSpot` pattern (no shadow tap inside the brdf
+// function — caller multiplies the shadow factor afterwards). Industry
+// alignment: Bevy / glTF Sample Renderer / Three.js all keep their
+// directional brdf shadow-free; forgeax was the outlier with
+// `_sampleShadowForCascade` hard-coded inside the body. Sprite-lit and
+// future per-light variants get a clean shadow-free reuse target while
+// mesh PBR keeps calling the wrapping `evalDirectional` (mathematically
+// equivalent — see plan-strategy R-3D-mesh-PBR-output-shift).
+//
+// @internal — exported for sprite-lit re-use inside the engine; external
+// material shaders should keep calling `evalDirectional` for backward
+// compat with the cascaded-shadow pipeline.
+fn evalDirectionalNoShadow(
   normal     : vec3<f32>,
   viewDir    : vec3<f32>,
   baseColor  : vec3<f32>,
   metallic   : f32,
   alphaSq    : f32,
   F0         : vec3<f32>,
-  worldPos   : vec3<f32>,
-  viewZ      : f32,
 ) -> vec3<f32> {
   let l = normalize(-view.lightDir);
   let h = normalize(viewDir + l);
@@ -205,6 +220,35 @@ fn evalDirectional(
   let specular = d_ggx(nDotH, alphaSq) * v_smith(nDotV, nDotL, alphaSq) * f;
   let kd = (vec3<f32>(1.0) - f) * (1.0 - metallic);
   let diffuse = kd * baseColor / 3.14159265;
+  return (diffuse + specular) * view.lightColor * nDotL;
+}
+
+// `evalDirectional` evaluates the GGX direct-lighting term for the single
+// directional light carried in `view.lightDir / view.lightColor`. CSM
+// pathway: pick cascade layer from viewZ + splitPlanes, sample the atlas
+// tile via the matching lightViewProj, optionally blend with the next
+// cascade across a `cascadeBlend`-wide boundary band.
+//
+// feat-20260624 M1' / w3 (D-1): body now delegates the brdf math to
+// `evalDirectionalNoShadow` and multiplies the cascade shadow factor at
+// the call site (mirrors `evalPoint` / `evalSpot` shape). Output is
+// mathematically equivalent to the pre-refactor inline form — mesh PBR
+// pixel-parity bench is the regression guard (w8).
+fn evalDirectional(
+  normal     : vec3<f32>,
+  viewDir    : vec3<f32>,
+  baseColor  : vec3<f32>,
+  metallic   : f32,
+  alphaSq    : f32,
+  F0         : vec3<f32>,
+  worldPos   : vec3<f32>,
+  viewZ      : f32,
+) -> vec3<f32> {
+  // No-shadow brdf body (factored out — same expression as the prior
+  // inline form, multiplied by shadow factor below). Reuse keeps the
+  // mesh PBR output byte-equivalent and gives sprite-lit a shared
+  // shadow-free entry point.
+  let lit = evalDirectionalNoShadow(normal, viewDir, baseColor, metallic, alphaSq, F0);
 
   // Cascade selection + atlas sampling (AC-03 / AC-05 / AC-06 / AC-10).
   // feat-20260613-csm-cascaded-shadow-maps M5 / w18: uses inline 9-tap PCF
@@ -214,6 +258,7 @@ fn evalDirectional(
   // entry shape doesn't fit (it expects pre-projected light-space coords;
   // CSM derives them per-cascade after dispatch). F-J-1 future-tracks the
   // dedup once `forgeax_view::cascade` lands as its own module (post-#387).
+  let l = normalize(-view.lightDir);
   let count = u32(max(view.cascadeCount, 1.0));
   // viewZ is negative in front of the camera; splitPlanes are positive
   // view-space depths. Convert once so cascade selection + blend math are
@@ -242,5 +287,5 @@ fn evalDirectional(
     }
   }
 
-  return (diffuse + specular) * view.lightColor * nDotL * shadow;
+  return lit * shadow;
 }

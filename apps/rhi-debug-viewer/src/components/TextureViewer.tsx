@@ -47,7 +47,8 @@ import {
   textureViewerAnchor,
   textureZoomAnchor,
 } from '../selectors';
-import { decodeToRgba8 } from '../texel-decode';
+import { canvasToTexel } from '../texel-coord';
+import { decodeTexelRaw, decodeToRgba8 } from '../texel-decode';
 import {
   isDepthFormat,
   readbackDepthAuto,
@@ -300,6 +301,51 @@ export function TextureViewer(_props: IDockviewPanelProps) {
   // to its texture dimensions (`dims`, set when a preview paints).
   const [zoom, setZoom] = useState<Zoom>('fit');
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  // texel picker: texel coordinate under cursor + raw RGBA (float, no clamp per D-4).
+  const [texelInfo, setTexelInfo] = useState<{
+    x: number;
+    y: number;
+    r: number;
+    g: number;
+    b: number;
+    a: number;
+  } | null>(null);
+  // Cached raw readback bytes for the current preview, used by D-4 raw byte bypass.
+  const rawPixelsRef = useRef<{ bytes: Uint8Array; format: string } | null>(null);
+
+  /** Handle canvas mousemove: map to texel -> decode raw RGBA via D-4 bypass. */
+  function handleCanvasMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current;
+    if (!canvas || !selected || !dims) return;
+
+    // Depth/stencil textures: no per-pixel RGBA (single channel scalars, AC-11 limited to color).
+    if (selected.kind === 'depth' || selected.kind === 'stencil') return;
+
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const coord = canvasToTexel(mouseX, mouseY, rect.width, rect.height, dims.w, dims.h, zoom);
+    if (!coord) {
+      setTexelInfo(null);
+      return;
+    }
+
+    const raw = rawPixelsRef.current;
+    if (!raw) {
+      // No cached raw bytes yet — show coordinate only.
+      setTexelInfo({ x: coord.x, y: coord.y, r: 0, g: 0, b: 0, a: 0 });
+      return;
+    }
+
+    const rgba = decodeTexelRaw(raw.bytes, raw.format, dims.w, dims.h, coord.x, coord.y);
+    if (!rgba) {
+      setTexelInfo({ x: coord.x, y: coord.y, r: 0, g: 0, b: 0, a: 0 });
+      return;
+    }
+
+    setTexelInfo({ x: coord.x, y: coord.y, r: rgba[0], g: rgba[1], b: rgba[2], a: rgba[3] });
+  }
 
   const noDraw = !vm || selectedDrawIdx < 0 || selectedDrawIdx >= vm.draws.length;
   const draw = noDraw ? undefined : (vm as ViewModel).draws[selectedDrawIdx];
@@ -333,8 +379,11 @@ export function TextureViewer(_props: IDockviewPanelProps) {
     // Seed the optimistic status synchronously so the data-forgeax-rt-status
     // anchor is meaningful before the async replay resolves (the real paint is
     // confirmed by polling canvas pixels). Cleared message until render decides.
+    // Reset texel picker when the selected texture changes.
     setStatus(deriveInitialStatus(selected));
     setMessage(null);
+    setTexelInfo(null);
+    rawPixelsRef.current = null;
 
     async function render() {
       if (!tape || !draw || !selected) {
@@ -465,6 +514,8 @@ export function TextureViewer(_props: IDockviewPanelProps) {
               { baseArrayLayer: layer, bytesPerTexel: bytesPerTexel(desc.format as never) ?? 4 },
             );
             if (cancelled) return;
+            // Cache raw readback bytes for D-4 texel picker (raw byte bypass).
+            rawPixelsRef.current = { bytes: pixels, format: desc.format };
             const painted = paintColorPixels(canvas, pixels, desc.width, desc.height, desc.format);
             if (painted) markDims(desc.width, desc.height);
             setStatus(painted ? 'ok' : 'error');
@@ -630,6 +681,17 @@ export function TextureViewer(_props: IDockviewPanelProps) {
             <div className="px-3 py-2 border-b border-border shrink-0 flex items-center gap-2">
               <span className="text-xs text-foreground">{selected.label}</span>
               <span className="text-xs text-muted-foreground">format: {selected.format}</span>
+              {dims && (
+                <span className="text-xs text-muted-foreground">
+                  {dims.w}&times;{dims.h}
+                </span>
+              )}
+              {texelInfo && (
+                <span className="text-xs text-foreground font-mono">
+                  ({texelInfo.x},{texelInfo.y}) R:{texelInfo.r.toFixed(3)} G:
+                  {texelInfo.g.toFixed(3)} B:{texelInfo.b.toFixed(3)} A:{texelInfo.a.toFixed(3)}
+                </span>
+              )}
               <span
                 className={`inline-block px-1 py-0.5 rounded text-[10px] ${statusColor(status)}`}
               >
@@ -724,6 +786,7 @@ export function TextureViewer(_props: IDockviewPanelProps) {
                   "canvas not mounted" race when status flips); hidden unless ok. */}
               <canvas
                 ref={canvasRef}
+                onMouseMove={handleCanvasMouseMove}
                 {...{ [rtCanvasAnchor()]: '' }}
                 className={
                   zoom === 'fit'

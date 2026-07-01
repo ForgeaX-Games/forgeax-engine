@@ -50,6 +50,7 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { ok, ok as rhiOk } from '@forgeax/engine-rhi';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import type {
+  EquirectAsset,
   Handle,
   MaterialAsset,
   MaterialPassDescriptor,
@@ -62,7 +63,6 @@ import * as assetRegistryModule from '../asset-registry';
 import {
   AssetRegistry,
   animationClipLoader,
-  cubeTextureLoader,
   fontLoader,
   HANDLE_CUBE,
   HANDLE_QUAD,
@@ -428,11 +428,10 @@ function makeStubGPU(): unknown {
   }
 
   describe('inline pack-payload loaders (w4)', () => {
-    it('INLINE_PACK_LOADERS covers the 7 inline kinds in order', () => {
+    it('INLINE_PACK_LOADERS covers the 6 inline kinds in order', () => {
       expect(INLINE_PACK_LOADERS.map((l) => l.kind)).toEqual([
         'mesh',
         'scene',
-        'cube-texture',
         'material',
         'skeleton',
         'skin',
@@ -609,10 +608,6 @@ function makeStubGPU(): unknown {
         0, 0.5, 1,
       ]);
     });
-
-    it('cubeTextureLoader returns undefined for an empty payload', () => {
-      expect(cubeTextureLoader.load({}, undefined, mockCtx())).toBeUndefined();
-    });
   });
 
   function sceneLoaderLoad(payload: Record<string, unknown>, refs: string[] | undefined) {
@@ -620,8 +615,8 @@ function makeStubGPU(): unknown {
   }
 
   describe('upstream-branch loaders (w6)', () => {
-    it('UPSTREAM_ENTRY_LOADERS is texture + font', () => {
-      expect(UPSTREAM_ENTRY_LOADERS.map((l) => l.kind)).toEqual(['texture', 'font']);
+    it('UPSTREAM_ENTRY_LOADERS is texture + font + equirect', () => {
+      expect(UPSTREAM_ENTRY_LOADERS.map((l) => l.kind)).toEqual(['texture', 'font', 'equirect']);
     });
 
     it('textureLoader import sub-branch builds a TextureAsset POD from .bin bytes', async () => {
@@ -712,13 +707,13 @@ function makeStubGPU(): unknown {
   const REGISTERED_KINDS = [
     'mesh',
     'scene',
-    'cube-texture',
     'material',
     'skeleton',
     'skin',
     'animation-clip',
     'texture',
     'font',
+    'equirect',
     'audio',
     'video',
   ] as const;
@@ -2925,60 +2920,40 @@ function makeStubGPU(): unknown {
 }
 
 {
-  // --- from cube-texture-narrowing.test.ts ---
-  describe('t1 - AC-01 CubeTextureAsset POD shape', () => {
-    it('kind is literal "cube-texture"', () => {
-      expectTypeOf<CubeTextureAsset['kind']>().toEqualTypeOf<'cube-texture'>();
+  // --- equirect-narrowing (feat-20260630, replacing cube-texture-narrowing) ---
+  describe('AC-01 EquirectAsset POD shape', () => {
+    it('kind is literal "equirect"', () => {
+      expectTypeOf<EquirectAsset['kind']>().toEqualTypeOf<'equirect'>();
     });
 
     it('width and height are number', () => {
-      expectTypeOf<CubeTextureAsset['width']>().toEqualTypeOf<number>();
-      expectTypeOf<CubeTextureAsset['height']>().toEqualTypeOf<number>();
+      expectTypeOf<EquirectAsset['width']>().toEqualTypeOf<number>();
+      expectTypeOf<EquirectAsset['height']>().toEqualTypeOf<number>();
     });
 
     it('format is GPUTextureFormat', () => {
-      // format aligns with TextureAsset.format -- both use GPUTextureFormat
-      const _f: CubeTextureAsset['format'] = 'rgba16float';
+      const _f: EquirectAsset['format'] = 'rgba16float';
       expect(_f).toBe('rgba16float');
     });
 
-    it('faces is a readonly array of 6 Uint8Array entries', () => {
-      // AC-01 requires faces[6] field
-      const asset: CubeTextureAsset = {
-        kind: 'cube-texture',
-        width: 512,
-        height: 512,
+    it('data is a Uint8Array | Uint8ClampedArray (single 2D image, no faces[])', () => {
+      const asset: EquirectAsset = {
+        kind: 'equirect',
+        width: 4,
+        height: 2,
         format: 'rgba16float',
-        faces: [
-          new Uint8Array([0]),
-          new Uint8Array([1]),
-          new Uint8Array([2]),
-          new Uint8Array([3]),
-          new Uint8Array([4]),
-          new Uint8Array([5]),
-        ],
+        data: new Uint8Array(4 * 2 * 4 * 2),
+        colorSpace: 'linear',
       };
-      expect(asset.faces.length).toBe(6);
-      expect(asset.faces[0]?.byteLength).toBe(1);
+      expect(asset.data.byteLength).toBe(4 * 2 * 4 * 2);
     });
   });
 
-  describe('t1 - AC-16(a) parseAssetPayload narrowing', () => {
-    it('Asset.kind includes "cube-texture" literal (6th arm)', () => {
-      // When CubeTextureAsset joins AssetUnion, 'cube-texture' becomes a
-      // valid Asset['kind'] literal. Until then, TS error.
-      const kind: Asset['kind'] = 'cube-texture';
-      expect(kind).toBe('cube-texture');
+  describe('AC-16(a) parseAssetPayload narrowing', () => {
+    it('Asset.kind includes "equirect" literal', () => {
+      const kind: Asset['kind'] = 'equirect';
+      expect(kind).toBe('equirect');
     });
-  });
-
-  describe('t1 - AC-16(b) loadByGuid<CubeTextureAsset> narrowing', () => {
-    // TODO (feat-20260608-ci-time-cut): the prior `expect(true)` was a
-    // placeholder for "loadByGuid<CubeTextureAsset> narrows without `as`" --- the
-    // contract it documented is enforced by the cube-texture-narrowing
-    // typecheck-only probes earlier in this file. Restore as a real `it()` once
-    // the loadByGuid generic gains a runtime-observable narrowing seam.
-    it.todo('CubeTextureAsset is a valid type argument for loadByGuid generic (typecheck-only)');
   });
 }
 
@@ -3048,20 +3023,19 @@ function makeStubGPU(): unknown {
     float32Filterable: false,
   };
 
-  function makeEquirect(): TextureAsset {
+  function makeEquirect(): EquirectAsset {
     return {
-      kind: 'texture',
+      kind: 'equirect',
       width: 4,
       height: 2,
       format: 'rgba16float' as TextureFormat,
       data: new Uint8Array(4 * 2 * 8),
       colorSpace: 'linear',
-      mipmap: false,
     };
   }
 
-  describe('t10 -- uploadCubemapFromEquirect public contract', () => {
-    it('(a) returns Handle<CubeTextureAsset> for valid equirect TextureAsset', async () => {
+  describe('t10 -- equirect-to-cubemap projection contract (internal)', () => {
+    it('(a) returns Handle<EquirectAsset> cube handle for a valid EquirectAsset source', async () => {
       const probe: SubmitProbe = { submitCalls: 0 };
       const device = makeMockDevice(probe);
       const world = new World();
@@ -3069,16 +3043,17 @@ function makeStubGPU(): unknown {
       const equirect = makeEquirect();
       // feat-20260614 M8: column handles are minted by the World, not the
       // registry. The cube register-relay also mints via world.allocSharedRef.
-      const sourceHandle = world.allocSharedRef('TextureAsset', equirect);
+      const sourceHandle = world.allocSharedRef('EquirectAsset', equirect);
       store.configureGpuDevice(
         device,
         async (_d, desc) =>
           // biome-ignore lint/suspicious/noExplicitAny: shader factory shim
           rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (w, pod: CubeTextureAsset) => rhiOk(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w, pod: EquirectAsset) => rhiOk(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
-      const result = await store.uploadCubemapFromEquirect(world, sourceHandle, equirect);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
+      const result = await (store as any)._uploadCubemapFromEquirect(world, sourceHandle, equirect);
       expect(result.ok).toBe(true);
     });
 
@@ -3087,23 +3062,23 @@ function makeStubGPU(): unknown {
       const device = makeMockDevice(probe);
       const world = new World();
       const store = new GpuResourceStore();
-      const ldr: TextureAsset = {
-        kind: 'texture',
+      const ldr: EquirectAsset = {
+        kind: 'equirect',
         width: 64,
         height: 64,
         format: 'rgba8unorm' as TextureFormat,
         data: new Uint8Array(64 * 64 * 4),
         colorSpace: 'srgb',
-        mipmap: false,
       };
-      const sourceHandle = world.allocSharedRef('TextureAsset', ldr);
+      const sourceHandle = world.allocSharedRef('EquirectAsset', ldr);
       store.configureGpuDevice(
         device,
         undefined,
-        (w, pod: CubeTextureAsset) => rhiOk(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w, pod: EquirectAsset) => rhiOk(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
-      const result = await store.uploadCubemapFromEquirect(world, sourceHandle, ldr);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
+      const result = await (store as any)._uploadCubemapFromEquirect(world, sourceHandle, ldr);
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('invalid-source-format');
@@ -3130,21 +3105,23 @@ function makeStubGPU(): unknown {
       const world = new World();
       const store = new GpuResourceStore();
       const equirect = makeEquirect();
-      const sourceHandle = world.allocSharedRef('TextureAsset', equirect);
+      const sourceHandle = world.allocSharedRef('EquirectAsset', equirect);
       store.configureGpuDevice(
         device,
         async (_d, desc) =>
           // biome-ignore lint/suspicious/noExplicitAny: shader factory shim
           rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (w, pod: CubeTextureAsset) => rhiOk(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w, pod: EquirectAsset) => rhiOk(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 
-      const r1 = await store.uploadCubemapFromEquirect(world, sourceHandle, equirect);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
+      const r1 = await (store as any)._uploadCubemapFromEquirect(world, sourceHandle, equirect);
       const firstSubmits = probe.submitCalls;
       expect(firstSubmits).toBeGreaterThanOrEqual(1);
 
-      const r2 = await store.uploadCubemapFromEquirect(world, sourceHandle, equirect);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
+      const r2 = await (store as any)._uploadCubemapFromEquirect(world, sourceHandle, equirect);
       // Second call returns the cached handle without dispatching again.
       expect(probe.submitCalls).toBe(firstSubmits);
 

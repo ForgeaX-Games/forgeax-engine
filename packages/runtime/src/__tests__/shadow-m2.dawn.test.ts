@@ -193,15 +193,14 @@ function buildFixtureWorld(): World {
       // expects all geometry to land in cascade 0 (the test reads
       // debug.center, which always samples the cascade-0 tile -- see
       // debugReadbackShadowDepth in createRenderer.ts). With cascadeCount=4
-      // (CSM default), PSSM splits between [nearPlane=0.1,
-      // farPlane=50] place cascade 0 in view-space z [0.1, 3.5];
+      // (CSM default), PSSM splits between [camera near,
+      // shadowDistance=50] place cascade 0 in view-space z [~0.1, 3.5];
       // the fixture's geometry sits at world z=0 (camera at z=10), which
       // is in view-space z=10 -> cascade 2/3, leaving cascade 0 empty.
       // Pinning cascadeCount=1 keeps the AC-12 single-shadow contract.
       cascadeCount: 1,
       mapSize: FIXTURE_MAP_SIZE,
-      nearPlane: 0.1,
-      farPlane: 50,
+      shadowDistance: 50,
     },
   });
 

@@ -39,6 +39,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { parseImage } from '@forgeax/engine-image/parse-image';
 import type { PackIndexEntry } from '@forgeax/engine-types';
 import { build as viteBuild } from 'vite';
@@ -350,13 +351,12 @@ describe('w10 - build-time import emit integration (vite build end-to-end)', () 
     expect(entries).toHaveLength(7);
   });
 
-  // fix(fbx) regression: an `.hdr` equirect `cube-texture` sidecar produces no
-  // build-time assets (imageImporter folds only `kind:'texture'`; the faces ride
-  // the runtime IBL cook). generateBundle's fail-fast must treat this as a
-  // legitimate skip, not throw `import-produced-no-assets` -- else any demo
-  // shipping an .hdr skylight (learn-render-3, 6.pbr, template-game-default)
-  // fails the build. The catalog still folds the row to kind:'texture'.
-  it('(f) .hdr equirect cube-texture rides runtime IBL cook: build succeeds, texture row kept', async () => {
+  // feat-20260630: an `.hdr` equirect sidecar IS imported at build time (a
+  // single 2D rgba16float image with a disk identity, unlike the retired
+  // cube-texture). generateBundle emits a hashed .bin and the pack-index row is
+  // kind:'equirect' with relativeUrl rewritten to the .bin. This is the e2e
+  // proof that index.ts no longer takes the old cube-texture skip branch (w8).
+  it('(f) .hdr equirect imports to a build .bin: build succeeds, kind:"equirect" row', async () => {
     const HDR_GUID = '019ee3e0-4be6-7f22-88f2-653ebbc5a207';
     const hdrBytes = await readFile(
       join(WORKTREE_ROOT, 'forgeax-engine-assets', 'learn-opengl', 'textures', 'newport_loft.hdr'),
@@ -374,14 +374,12 @@ describe('w10 - build-time import emit integration (vite build end-to-end)', () 
           mipmap: 'auto',
           addressMode: 'clamp-to-edge',
           filterMode: 'linear',
-          cubeFaceSize: 512,
-          specularMipLevels: 5,
         },
-        subAssets: [{ guid: HDR_GUID, sourceIndex: 0, kind: 'cube-texture' }],
+        subAssets: [{ guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' }],
       }),
     );
 
-    // Must NOT throw (the pre-import skip clause handles the HDR-cook case).
+    // Must NOT throw: the equirect arm produces a build .bin.
     await viteBuild({
       root: tmpRoot,
       logLevel: 'silent',
@@ -392,16 +390,15 @@ describe('w10 - build-time import emit integration (vite build end-to-end)', () 
         write: true,
         rollupOptions: { input: { main: 'main.js' } },
       },
-      plugins: [pluginPack({ roots: [assetsDir] })],
+      plugins: [pluginPack({ roots: [assetsDir], importers: [imageImporter] })],
     });
 
     const entries = await readPackIndex();
-    // build-catalog D-1 folds the .hdr cube-texture to a kind:'texture' row
-    // pointing at the .hdr source (runtime textureLoader picks it up).
     const hdrRow = entries.find((e) => e.guid.toLowerCase() === HDR_GUID);
     expect(hdrRow).toBeDefined();
-    expect(hdrRow?.kind).toBe('texture');
-    expect(hdrRow?.sourcePath.toLowerCase().endsWith('.hdr')).toBe(true);
+    expect(hdrRow?.kind).toBe('equirect');
+    expect(hdrRow?.relativeUrl.endsWith('.bin')).toBe(true);
+    expect(hdrRow?.relativeUrl.endsWith('.hdr')).toBe(false);
   });
 
   // feat-20260629 M4 / w9: a host-declared importer key (not an engine

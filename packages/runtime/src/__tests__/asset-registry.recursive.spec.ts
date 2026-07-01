@@ -809,11 +809,12 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
 
 // ── M3: leaf coverage (AC-05) ──────────────────────────────────────────────
 //
-// All 10 leaf kinds in the closed Asset union carry no sub-asset edges; the
-// importer fills envelope.refs = [] for them. The 6 spec-enumerated leaves
-// (mesh / texture / cube-texture / animation-clip / audio / font) plus 4 extras
+// The inline-payload leaf kinds in the closed Asset union carry no sub-asset
+// edges; the importer fills envelope.refs = [] for them. The spec-enumerated
+// leaves (mesh / texture / animation-clip / audio / font) plus extras
 // (sampler / shader / skeleton / render-pipeline) -- tested together for union
-// completeness.
+// completeness. (equirect rides the upstream-entry .bin path, covered by
+// asset-registry-hdr-equirect.test.ts, not the inline-payload roundtrip here.)
 //
 // AC-05 per-leaf assertions:
 //   loadByGuid (fast-path) returns the catalogued payload
@@ -823,7 +824,6 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
 const LEAF_TEST_GUIDS: Record<string, string> = {
   mesh: 'f0000000-0000-4000-f000-000000000001',
   texture: 'f0000000-0000-4000-f000-000000000002',
-  'cube-texture': 'f0000000-0000-4000-f000-000000000003',
   sampler: 'f0000000-0000-4000-f000-000000000004',
   shader: 'f0000000-0000-4000-f000-000000000005',
   skeleton: 'f0000000-0000-4000-f000-000000000006',
@@ -864,24 +864,6 @@ const LEAF_FIXTURES: readonly LeafFixture[] = [
       data: new Uint8Array(64),
       colorSpace: 'srgb' as const,
       mipmap: false,
-    }),
-  },
-  {
-    label: 'cube-texture',
-    kind: 'cube-texture',
-    makeAsset: () => ({
-      kind: 'cube-texture' as const,
-      width: 4,
-      height: 4,
-      format: 'rgba8unorm' as const,
-      faces: [
-        new Uint8Array(64),
-        new Uint8Array(64),
-        new Uint8Array(64),
-        new Uint8Array(64),
-        new Uint8Array(64),
-        new Uint8Array(64),
-      ],
     }),
   },
   {

@@ -710,18 +710,34 @@ static std::string MeshToJson(FbxMesh* mesh, int sourceIndex) {
     }
   }
 
-  // TEXCOORD_0 (UV layer 0)
-  if (mesh->GetElementUVCount() > 0) {
-    if (hasAttr) json << ",";
-    FbxGeometryElementUV* uvElem = mesh->GetElementUV(0);
-    if (uvElem->GetMappingMode() == FbxGeometryElement::eByControlPoint) {
+  // feat-20260629-multi-uv-set-support m1-w5: multi-layer UV loop.
+  // Iterate all UV layers (GetElementUVCount) and emit TEXCOORD_n JSON keys.
+  // eByControlPoint / eByPolygonVertex paths reuse existing helpers that already
+  // accept layerIndex (ExtractPerControlPointUV / ExtractPerPolygonVertexUVs).
+  // eByPolygon / eByEdge modes are silently skipped (OOS-3 — no warn).
+  bool firstUvLayer = true;
+  for (int uvLayer = 0; uvLayer < mesh->GetElementUVCount(); ++uvLayer) {
+    FbxGeometryElementUV* uvElem = mesh->GetElementUV(uvLayer);
+    auto mode = uvElem->GetMappingMode();
+    if (mode != FbxGeometryElement::eByControlPoint &&
+        mode != FbxGeometryElement::eByPolygonVertex) {
+      continue; // eByPolygon / eByEdge — silently skip (OOS-3)
+    }
+    if (firstUvLayer) {
+      if (hasAttr) json << ",";
+      firstUvLayer = false;
+    } else {
+      json << ",";
+    }
+    std::string key = "TEXCOORD_" + std::to_string(uvLayer);
+    if (mode == FbxGeometryElement::eByControlPoint) {
       auto uvs = ExtractPerControlPointUV(uvElem, cpCount);
-      WriteDouble2Array(json, "TEXCOORD_0", uvs);
+      WriteDouble2Array(json, key.c_str(), uvs);
     } else {
       // eByPolygonVertex: expand to per-index UVs
       int totalIdx = CountIndices(mesh);
-      auto uvs = ExtractPerPolygonVertexUVs(mesh, totalIdx, 0);
-      WriteDouble2Array(json, "TEXCOORD_0", uvs);
+      auto uvs = ExtractPerPolygonVertexUVs(mesh, totalIdx, uvLayer);
+      WriteDouble2Array(json, key.c_str(), uvs);
     }
   }
 

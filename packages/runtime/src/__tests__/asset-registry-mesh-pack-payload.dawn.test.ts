@@ -32,7 +32,7 @@
 import type { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { ok } from '@forgeax/engine-rhi';
-import type { CubeTextureAsset, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
+import type { EquirectAsset, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import { GpuResourceStore } from '../gpu-resource-store';
@@ -97,7 +97,7 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (world: World, pod: CubeTextureAsset) => ok(world.allocSharedRef('CubeTextureAsset', pod)),
+        (world: World, pod: EquirectAsset) => ok(world.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 
@@ -187,7 +187,7 @@ describe('t9 - pack deserialization non-12F mesh gate trigger (dawn)', () => {
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (world: World, pod: CubeTextureAsset) => ok(world.allocSharedRef('CubeTextureAsset', pod)),
+        (world: World, pod: EquirectAsset) => ok(world.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 

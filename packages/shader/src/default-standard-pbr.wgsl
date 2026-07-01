@@ -178,12 +178,11 @@ struct VsOut {
   @location(2) uv : vec2<f32>,
   @location(3) worldTangent : vec4<f32>,
   @location(4) @interpolate(flat) instanceIdx : u32,
-  // feat-20260613-csm-cascaded-shadow-maps M5 / w19: the per-fragment
-  // light-space position varying is gone -- evalDirectional picks the
-  // cascade matrix per fragment from viewZ + worldPos and projects
-  // worldPos through that matrix in the fragment stage. @location(5) is
-  // intentionally vacant to keep @location(6)/(7) byte-stable with the
-  // prior layout.
+  // feat-20260629-multi-uv-set-support (user decision): built-in PBR consumes
+  // a single UV set only -- the engine still feeds extra UV sets to custom
+  // material shaders that declare @location(6+), but the built-in PBR does not
+  // declare/consume them. @location(5) stays intentionally vacant to keep
+  // @location(6)/(7) byte-stable with the prior layout (CSM M5/w19).
   @location(6) ndc : vec3<f32>,  // NDC for HDRP cluster lookup (w10)
   // feat-20260609-hdrp-cluster-fragment-ggx M4.5-followup: view-space z is
   // needed by ndc_position_to_cluster (slice index uses log-z mapping that
@@ -267,6 +266,14 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let baseSample = textureSample(baseColorTexture, baseColorSampler, in.uv);
   let albedo = material.baseColor.rgb * baseSample.rgb;
+
+  // feat-20260629-multi-uv-set-support (user decision): the built-in PBR
+  // shader samples a single UV set (`in.uv`) only. Multi-UV consumption is a
+  // custom-material concern -- a shader that wants a second UV set declares
+  // @location(6) uv1 itself (see apps/hello-multi-uv multi-uv-demo.wgsl); the
+  // engine feeds the extra sets via deriveVertexBufferLayout's reflection-driven
+  // attribute emission. The built-in PBR opting out keeps every existing
+  // single-UV material byte-identical (AC-11/AC-12 zero regression).
 
   // Metallic-roughness texture sampling with per-field channel selectors
   // (D-8): glTF 2.0 default layout B=metallic, G=roughness, R=occlusion is

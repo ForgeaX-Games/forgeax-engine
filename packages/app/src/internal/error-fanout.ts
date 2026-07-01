@@ -43,7 +43,7 @@ import type { AppDispatchError } from '../types';
  * deliberately excludes raw `Error` (charter P3 explicit failure: AI users
  * walk `.code` not message strings). `RuntimeError` is included so a
  * runtime-layer error fanned out by `Renderer.onError` (e.g.
- * `'skybox-cubemap-not-ready'`) reaches host App listeners verbatim
+ * `'equirect-projection-failed'`) reaches host App listeners verbatim
  * (feat-20260531-skybox-env-background F-1). `EngineEnvironmentError` does not
  * appear here because construction-time failure flows through
  * `Promise<Result<App, ...>>` of `createApp(canvas)` before the App handle

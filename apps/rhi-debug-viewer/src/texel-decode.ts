@@ -197,3 +197,59 @@ export function decodeToRgba8(
   }
   return out;
 }
+
+/**
+ * Decode a single texel from tight raw GPU bytes into raw float RGBA values
+ * without the display clamp (D-4: raw byte bypass for HDR fidelity).
+ *
+ * Unlike `decodeToRgba8` which clamps float/ufloat to [0,1] for display, this
+ * returns the decoded per-channel values as-is: float formats keep true values
+ * (2.5 stays 2.5, negative stays negative), unorm/snorm stay in their native
+ * ranges, uint/sint stay as integers cast to number.
+ *
+ * Channels: 1ch grayscale (R=G=B, A=1), 2ch (RG, B=0, A=1), 3/4ch (RGBA or
+ * BGRA→swizzled). Returns null when the format has no {@link formatInfo} entry.
+ *
+ * @param bytes - Tight readback bytes, length = width*height*bytesPerTexel.
+ * @param format - The texture's real format string.
+ * @param width - Texture width in pixels.
+ * @param height - Texture height in pixels.
+ * @param texelX - 0-based column of the target texel.
+ * @param texelY - 0-based row of the target texel.
+ */
+export function decodeTexelRaw(
+  bytes: Uint8Array,
+  format: string,
+  width: number,
+  height: number,
+  texelX: number,
+  texelY: number,
+): [number, number, number, number] | null {
+  if (texelX < 0 || texelX >= width || texelY < 0 || texelY >= height) return null;
+
+  const info = formatInfo(format);
+  const texBytes = bytesPerTexel(format as never);
+  if (!info || texBytes === undefined) return null;
+
+  const texelIdx = texelY * width + texelX;
+  const byteOffset = texelIdx * texBytes;
+
+  // Guard: the buffer must be large enough for this texel.
+  if (byteOffset + texBytes > bytes.byteLength) return null;
+
+  const channelBytes = info.packed ? texBytes : texBytes / info.channels;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const channels = readTexel(view, byteOffset, info, channelBytes);
+
+  if (info.channels === 1) {
+    return [channels[0], channels[0], channels[0], 1];
+  }
+  if (info.channels === 2) {
+    return [channels[0], channels[1], 0, 1];
+  }
+  // 3 or 4 channels. BGRA swizzle B<->R.
+  const r = info.bgra ? channels[2] : channels[0];
+  const b = info.bgra ? channels[0] : channels[2];
+  const a = info.channels === 4 ? channels[3] : 1;
+  return [r, channels[1], b, a];
+}

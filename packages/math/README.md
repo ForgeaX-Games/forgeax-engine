@@ -81,6 +81,40 @@ if (frustum.intersectsBox(f, sceneBox)) {
 }
 ```
 
+## ray (screen/ray/AABB/triangle intersection primitives)
+
+Pure-function ray primitives for screen-ray unprojection, ray-AABB slab intersection, ray-triangle Moller-Trumbore intersection, and world-to-screen projection. Import via `ray` namespace from `@forgeax/engine-math`.
+
+| Function | Signature | Purpose | Notes |
+|:--|:--|:--|:--|
+| `ray.create(out?, origin?, direction?)` | `(out?, origin?, direction?) => Ray` | Allocate a Ray (6 floats: rx,ry,rz,dx,dy,dz) | Direction auto-normalized; zero-length dir falls back to `(0,0,0)` |
+| `ray.screenToRay(out, sx, sy, vpW, vpH, view, proj, kind)` | `(Ray, number, number, number, number, Mat4Like, Mat4Like, 'perspective' \| 'orthographic') => Ray` | Unproject a screen coordinate into a world-space ray | Two-point unproject (ndc near=0, far=1); y-flip: DOM y-down to NDC y-up; NaN/Inf input falls back to centre ray |
+| `ray.worldToScreen(out, worldPos, viewProj, canvasW, canvasH)` | `(Vec2, Vec3Like, Mat4Like, number, number) => WorldToScreenResult` | Project a world-space point to screen-space pixel coordinates | Returns `{ onScreen, behind }` flags; `behind=true` means the point is behind the camera and `out` is meaningless; degenerate viewport returns `{ onScreen: false, behind: false }` |
+| `ray.rayAabbIntersects(r, aabb)` | `(RayLike, Box3Like) => RayAabbResult` | Slab-method ray-AABB intersection | Returns `{ hit, tmin }`; six degenerate cases handled per research Finding 2; NaN-safe edge/corner via `Number.isNaN` guard |
+| `ray.rayTriangleIntersects(r, a, b, c)` | `(RayLike, Vec3Like, Vec3Like, Vec3Like) => RayTriResult` | Moller-Trumbore ray-triangle intersection | Returns `{ hit, t, u, v }` (t=ray parameter, u/v=barycentric); double-sided (`abs(det) < epsilon`); degenerate/collinear triangles return `hit=false` to prevent NaN propagation; `t <= 0` rejected (behind ray origin); NaN guard on all inputs |
+
+```ts
+import { ray } from '@forgeax/engine-math';
+import { mat4 } from '@forgeax/engine-math';
+
+// Screen coordinate to world-space ray (for picking)
+const r = ray.create();
+ray.screenToRay(r, mouseX, mouseY, canvasW, canvasH, view, proj, 'perspective');
+
+// Ray-AABB intersection (coarse entity culling)
+const hit = ray.rayAabbIntersects(r, entityWorldAabb);
+if (hit.hit) { /* entity may contain a vertex hit */ }
+
+// Ray-triangle intersection (per-vertex precision)
+const tri = ray.rayTriangleIntersects(r,
+  [ax, ay, az], [bx, by, bz], [cx, cy, cz]);
+if (tri.hit) { /* intersection at origin + tri.t * dir */ }
+
+// World-space point to screen pixel (for vertex distance sorting)
+const res = ray.worldToScreen(pixelOut, worldPos, viewProj, canvasW, canvasH);
+if (!res.behind) { /* pixelOut holds screen-space (x,y) */ }
+```
+
 ### 跨类型 transform 4 函数（M1 落地，K-1/K-2 撕毁 Three.js 风承诺后由 mat4 / quat 反向 surface 提供）
 
 | 函数 | 签名 | 语义 | 退化 |

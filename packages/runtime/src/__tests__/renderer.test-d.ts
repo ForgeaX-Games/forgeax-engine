@@ -18,7 +18,7 @@ import type {
   StartConsoleOptions as _StartConsoleOptionsRemoved,
 } from '@forgeax/engine-runtime';
 import { describe, expectTypeOf, it } from 'vitest';
-import type { RuntimeError, SkyboxCubemapNotReadyError } from '../errors';
+import type { EquirectProjectionFailedError, RuntimeError } from '../errors';
 import type { PostProcessError } from '../post-process-errors';
 import type { Renderer, RendererErrorListener } from '../renderer';
 
@@ -44,7 +44,7 @@ describe('w5td runtime surface - Renderer.startConsole literally absent (AC-11)'
 describe('onError channel widened to RhiError | RuntimeError | PostProcessError (Round-2 [F-3])', () => {
   it('RendererErrorListener parameter is the RhiError | RuntimeError | PostProcessError union', () => {
     // The listener parameter must accept all three error families so the
-    // 'skybox-cubemap-not-ready' RuntimeError + 'ssao-storage-buffer-unavailable'
+    // 'equirect-projection-failed' RuntimeError + 'ssao-storage-buffer-unavailable'
     // PostProcessError fan out with no `as any` cast.
     expectTypeOf<RendererErrorListener>()
       .parameter(0)
@@ -53,17 +53,17 @@ describe('onError channel widened to RhiError | RuntimeError | PostProcessError 
 
   it('exhaustive switch narrows RuntimeError arms to the concrete class', () => {
     // AI-user view: switch (e.code) over the union narrows the runtime arms.
-    const probe = (e: RhiError | RuntimeError): SkyboxCubemapNotReadyError | undefined => {
+    const probe = (e: RhiError | RuntimeError): EquirectProjectionFailedError | undefined => {
       switch (e.code) {
-        case 'skybox-cubemap-not-ready':
-          // e narrows to SkyboxCubemapNotReadyError; .detail.handle is a number.
+        case 'equirect-projection-failed':
+          // e narrows to EquirectProjectionFailedError; .detail.handle is a number.
           expectTypeOf(e.detail.handle).toEqualTypeOf<number>();
           return e;
         default:
           return undefined;
       }
     };
-    expectTypeOf(probe).returns.toEqualTypeOf<SkyboxCubemapNotReadyError | undefined>();
+    expectTypeOf(probe).returns.toEqualTypeOf<EquirectProjectionFailedError | undefined>();
   });
 
   it('RhiError arms remain reachable in the same switch (no regression)', () => {

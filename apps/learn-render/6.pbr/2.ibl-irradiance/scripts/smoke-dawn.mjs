@@ -3,8 +3,9 @@
 //
 // Thin shim over apps/learn-render/6.pbr/_shared/ibl-smoke-shared.mjs.
 // Verdict (300 frame + reference PNG mean abs delta <= 0.05; AC-12 + AC-18):
-// the shared driver loads real newport_loft.hdr (CC BY-NC carve-out) via
-// decodeHdr + uploadCubemapFromEquirect, runs SMOKE_MIN_FRAMES draw calls,
+// the shared driver loads real newport_loft.hdr (CC BY-NC carve-out) via the
+// declarative loadByGuid<EquirectAsset> + Skylight{equirect} path (the engine
+// projects the cubemap + IBL internally), runs SMOKE_MIN_FRAMES draw calls,
 // reads the final frame, and diffs against skylight-irradiance.ref.png.
 // Bake the reference once via `pnpm bake:ibl-reference`.
 

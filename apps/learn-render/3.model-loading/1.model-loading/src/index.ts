@@ -36,7 +36,7 @@ import {
   Skylight,
   Transform,
 } from '@forgeax/engine-runtime';
-import type { SceneAsset, TextureAsset } from '@forgeax/engine-types';
+import type { EquirectAsset, SceneAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -197,7 +197,7 @@ function spawnLights(world: World): void {
         cascadeBlend: 0.2,
         // Scaled by 0.008 to match Sponza root scale (was cm-space
         // 4500/2200; world-space after gltf root transform applies).
-        farPlane: 36,
+        shadowDistance: 36,
         depthBias: 0.005,
       },
     },
@@ -251,7 +251,7 @@ async function spawnSkylight(app: App): Promise<void> {
     return;
   }
 
-  const hdrHandleRes = await assets.loadByGuid<TextureAsset>(guidRes.value);
+  const hdrHandleRes = await assets.loadByGuid<EquirectAsset>(guidRes.value);
   if (!hdrHandleRes.ok) {
     console.error(
       `[learn-render 3.1] loadByGuid(newport_loft.hdr) failed: ${hdrHandleRes.error.code}`,
@@ -267,25 +267,15 @@ async function spawnSkylight(app: App): Promise<void> {
     return;
   }
 
-  // feat-20260601-gpu-resource-store-extraction M1: equirect-to-cubemap upload
-  // lives on renderer.store. loadByGuid returns the TextureAsset PAYLOAD (M8
-  // D-17); mint a user-tier source handle and pass world + handle + pod.
-  const srcHandle = app.world.allocSharedRef('TextureAsset', hdrHandleRes.value);
-  const cubemapRes = await app.renderer.store.uploadCubemapFromEquirect(
-    app.world,
-    srcHandle,
-    hdrHandleRes.value,
-  );
-  if (!cubemapRes.ok) {
-    console.error(
-      `[learn-render 3.1] equirect-to-cubemap upload failed: ${cubemapRes.error.code}`,
-    );
-    return;
-  }
+  // loadByGuid returns the EquirectAsset PAYLOAD (D-17); mint a user-tier source
+  // handle. The equirect->cubemap + IBL (diffuse + specular split-sum) is now
+  // INTERNAL to the engine (lazy, in the render record arm) -- no manual
+  // cubemap upload call; the Skylight holds the equirect handle.
+  const equirect = app.world.allocSharedRef('EquirectAsset', hdrHandleRes.value);
 
   app.world.spawn({
     component: Skylight,
-    data: { cubemap: cubemapRes.value, intensity: 1.0 },
+    data: { equirect, intensity: 1.0 },
   });
   console.warn('[learn-render 3.1] Skylight active: IBL diffuse + specular split-sum');
 }

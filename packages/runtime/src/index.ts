@@ -29,6 +29,7 @@ export { acquireCanvasContext } from '@forgeax/engine-rhi-webgpu';
 export type { BundlerOptions } from './createRenderer';
 export { createRenderer } from './createRenderer';
 export type {
+  EquirectProjectionFailedDetail,
   MaterialResolvedEmptyPassesDetail,
   MaterialSkinAttrMissingDetail,
   // feat-20260621-renderer-health-recover-skeleton verify minor-edit:
@@ -39,10 +40,10 @@ export type {
   RuntimeErrorCode,
   ShadowInvalidConfigDetail,
   SkinMaterialMismatchDetail,
-  SkyboxCubemapNotReadyDetail,
 } from './errors';
 export {
   EngineEnvironmentError,
+  EquirectProjectionFailedError,
   // feat-20260612-skin-palette-per-frame-upload M2 / m2-5: SkinExtractErrorCode
   // subset union (3 new extract-stage classes) + M2 fixup post-spawn fail-fast.
   // Re-exported so AI users can `instanceof JointCountMismatchError` etc. per
@@ -61,7 +62,6 @@ export {
   SkeletonResolveFailedError,
   SkinMaterialMismatchError,
   SkinPaletteOverflowError,
-  SkyboxCubemapNotReadyError,
   // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability
   // double-miss error class (instanceof + .code/.hint property access).
   VideoUploadUnsupportedError,
@@ -149,7 +149,7 @@ export type {
  *
  * The `Renderer.onError` channel fans out **both** error families —
  * `RhiError` (RHI layer) and `RuntimeError` (runtime layer, e.g.
- * `'skybox-cubemap-not-ready'`) — so the listener parameter is the
+ * `'equirect-projection-failed'`) — so the listener parameter is the
  * `RhiError | RuntimeError` union (feat-20260531-skybox-env-background:
  * widened from `RhiError` only, dropping the prior `as any` fan-out cast).
  * The disjoint `RhiErrorCode` / `RuntimeErrorCode` literal sets let
@@ -158,7 +158,7 @@ export type {
  * @example
  *   import {
  *     RhiError, type RhiErrorCode, type LimitExceededDetail,
- *     type RuntimeError, type SkyboxCubemapNotReadyDetail,
+ *     type RuntimeError, type EquirectProjectionFailedDetail,
  *   } from '@forgeax/engine-runtime';
  *   renderer.onError((e: RhiError | RuntimeError) => {
  *     switch (e.code) {
@@ -167,10 +167,10 @@ export type {
  *         // detail.maxStorageBufferBindingSize vs detail.requestedBytes
  *         break;
  *       }
- *       case 'skybox-cubemap-not-ready': {
- *         // RuntimeError arm — e narrows to SkyboxCubemapNotReadyError
- *         const detail: SkyboxCubemapNotReadyDetail = e.detail;
- *         // detail.handle — the cubemap handle that was not yet uploaded
+ *       case 'equirect-projection-failed': {
+ *         // RuntimeError arm — e narrows to EquirectProjectionFailedError
+ *         const detail: EquirectProjectionFailedDetail = e.detail;
+ *         // detail.handle — the equirect handle whose projection failed
  *         break;
  *       }
  *     }
@@ -539,6 +539,15 @@ export type { SpriteParamValues } from './sprite-param-values';
  *   ] } });
  */
 export { spriteAnimationTickSystem } from './systems/sprite-animation-tick';
+// feat-20260630-viewport-2x2-run-x-display-redesign M2 / w12 / plan-strategy D-2:
+// engine-neutral by-entity-id active camera selection (no editor concept).
+export {
+  ACTIVE_CAMERA_KEY,
+  type ActiveCamera,
+  getActiveCamera,
+  selectActiveCameraIndex,
+  setActiveCamera,
+} from './systems/active-camera';
 export {
   getTransparentSortConfig,
   setTransparentSortConfig,
@@ -697,6 +706,24 @@ export type { PickHit } from './pick';
 export { pick } from './pick';
 export type { PickErrorCode } from './pick-errors';
 export { PickError } from './pick-errors';
+/**
+ * `pickVertexOnEntity(world, cameraEntity, screenX, screenY, vpW, vpH, entity, options?)`
+ * returns the nearest vertex on a single mesh entity.
+ *
+ * Three-state return (static dispatch via overload):
+ *   - No options → `VertexHit | undefined` (nearest, or undefined on miss).
+ *   - `{ limit: N }` → `VertexHit[]` sorted by `screenDist` ascending.
+ *
+ * `VertexHit` fields: `{ entity, vertexIndex, worldPos: Vec3Like, screenDist, worldDist, deformed }`.
+ * Caller must `propagateTransforms(world)` before calling.
+ *
+ * @example
+ *   import { pickVertexOnEntity, type VertexHit } from '@forgeax/engine-runtime';
+ *   const hit = pickVertexOnEntity(world, cam, x, y, w, h, entity);
+ *   if (hit) console.log(hit.worldPos, hit.vertexIndex);
+ */
+export type { VertexHit } from './pick-vertex';
+export { pickVertex, pickVertexOnEntity } from './pick-vertex';
 export type {
   PipelineErrorCode,
   PipelineErrorDetail,

@@ -626,9 +626,8 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
   // ─── from build-catalog-hdr-equirect.test.ts ───
 
   const HDR_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d45d';
-  const CUBE_GUID = '01900000-0000-7000-8000-aaaaaaaaaaaa';
 
-  function hdrCubeMeta(): string {
+  function hdrEquirectMeta(): string {
     return JSON.stringify({
       schemaVersion: '1.0.0',
       kind: 'external-asset-package',
@@ -637,35 +636,12 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       importSettings: {
         colorSpace: 'linear',
         mipmap: 'none',
-        cubeFaceSize: 512,
-        specularMipLevels: 5,
       },
       subAssets: [
         {
           guid: HDR_GUID,
           sourceIndex: 0,
-          kind: 'cube-texture',
-        },
-      ],
-    });
-  }
-
-  function pngCubeMeta(): string {
-    return JSON.stringify({
-      schemaVersion: '1.0.0',
-      kind: 'external-asset-package',
-      importer: 'image',
-      source: 'skybox-front.png',
-      importSettings: {
-        colorSpace: 'srgb',
-        mipmap: 'none',
-        cubeFaceSize: 256,
-      },
-      subAssets: [
-        {
-          guid: CUBE_GUID,
-          sourceIndex: 0,
-          kind: 'cube-texture',
+          kind: 'equirect',
         },
       ],
     });
@@ -688,8 +664,8 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       await rm(tmpRoot, { recursive: true, force: true });
     });
 
-    it('(a) .hdr cube-texture subAsset -> kind:"texture" + ImageMetadata(rgba16float)', async () => {
-      await writeFile(join(tmpRoot, 'newport_loft.hdr.meta.json'), hdrCubeMeta());
+    it('(a) .hdr equirect subAsset -> kind:"equirect" + ImageMetadata(rgba16float)', async () => {
+      await writeFile(join(tmpRoot, 'newport_loft.hdr.meta.json'), hdrEquirectMeta());
       await writeFile(join(tmpRoot, 'newport_loft.hdr'), ONE_BYTE_HDR_FILE);
 
       const entries = await buildCatalog([tmpRoot]);
@@ -700,7 +676,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(row).toBeDefined();
       if (!row) return;
 
-      expect(row.kind).toBe('texture');
+      expect(row.kind).toBe('equirect');
 
       const meta = row.metadata;
       expect(meta).toBeDefined();
@@ -711,35 +687,17 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(meta.mipmap).toBe(false);
     });
 
-    it('(b) .png cube-texture subAsset -> still kind:"cube-texture" + CubeTextureMetadata', async () => {
-      await writeFile(join(tmpRoot, 'skybox-front.png.meta.json'), pngCubeMeta());
-      await writeFile(join(tmpRoot, 'skybox-front.png'), ONE_BYTE_HDR_FILE);
-
-      const entries = await buildCatalog([tmpRoot]);
-      const cubeRows = entries.filter((e) => e.kind === 'cube-texture');
-
-      expect(cubeRows.length).toBeGreaterThanOrEqual(1);
-
-      const ourRow = cubeRows.find((r) => r.guid.toLowerCase() === CUBE_GUID);
-      expect(ourRow).toBeDefined();
-      if (!ourRow) return;
-      const meta = ourRow.metadata;
-      expect(meta).toBeDefined();
-      expect(meta?.kind).toBe('cube-texture');
-    });
-
     // Regression for the runtime "sky.hdr equirect->cubemap upload failed:
     // invalid-source-format" the templates/game-default game emits at start.
     // The submodule sidecar at forgeax-engine-assets/demo-assets/
     // template-game-default/sky.hdr.meta.json must declare its single
-    // subAsset as `kind:'cube-texture'` (not `'image'`) so the build catalog
-    // routes the .hdr to the rgba16float / linear arm — anything else lands
-    // in `colorSpaceToFormat('linear')` → `'rgba8unorm'`, which
-    // `deriveRenderDataCubemap` rejects with `invalid-source-format`. The
-    // fixture is the literal sidecar checked into the assets submodule, so
-    // this catches drift the moment a future sidecar edit re-introduces the
-    // mistake.
-    it('(c) [regression] template-game-default sky.hdr sidecar produces rgba16float texture row', async () => {
+    // subAsset as `kind:'equirect'` so the build catalog routes the .hdr to
+    // the rgba16float / linear arm — anything else lands in
+    // `colorSpaceToFormat('linear')` -> `'rgba8unorm'`, which the runtime
+    // equirect projection rejects. The fixture is the literal sidecar checked
+    // into the assets submodule (migrated to kind:'equirect' in w9), so this
+    // catches drift the moment a future sidecar edit re-introduces the mistake.
+    it('(c) [regression] template-game-default sky.hdr sidecar produces rgba16float equirect row', async () => {
       const fixtureDir = join(
         WORKTREE_ROOT,
         'forgeax-engine-assets',
@@ -755,14 +713,12 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(skyRows).toHaveLength(1);
       const row = skyRows[0];
       if (!row) return;
-      // The HDR must NOT land as `kind:'cube-texture'` (that path needs the
-      // 6-PNG cube layout) and must NOT land as a plain srgb image. Only the
-      // single-source HDR equirect arm folds it as kind:'texture' +
-      // rgba16float, the format the runtime store consumes.
-      expect(row.kind).toBe('texture');
+      // The HDR must land as `kind:'equirect'` + rgba16float, the format the
+      // runtime store consumes for the cube-to-cube IBL projection.
+      expect(row.kind).toBe('equirect');
       const meta = row.metadata;
       if (meta === undefined || meta.kind !== 'texture') {
-        throw new Error('sky.hdr sidecar produced no texture metadata');
+        throw new Error('sky.hdr sidecar produced no equirect metadata');
       }
       expect(meta.format).toBe('rgba16float');
       expect(meta.colorSpace).toBe('linear');
@@ -978,7 +934,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
     return total;
   }
 
-  function impHdrCubeMeta(hdrFilename: string): string {
+  function impHdrEquirectMeta(hdrFilename: string): string {
     return JSON.stringify({
       schemaVersion: '1.0.0',
       kind: 'external-asset-package',
@@ -987,14 +943,12 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       importSettings: {
         colorSpace: 'linear',
         mipmap: 'none',
-        cubeFaceSize: 512,
-        specularMipLevels: 5,
       },
       subAssets: [
         {
           guid: IMP_HDR_GUID,
           sourceIndex: 0,
-          kind: 'cube-texture',
+          kind: 'equirect',
         },
       ],
     });
@@ -1021,7 +975,7 @@ console.log('import-hdr-test entry');
       await writeFile(join(tmpRoot, 'main.js'), MAIN_JS);
       await mkdir(assetsDir, { recursive: true });
       await writeFile(join(assetsDir, 'env.hdr'), hdrData);
-      await writeFile(join(assetsDir, 'env.hdr.meta.json'), impHdrCubeMeta('env.hdr'));
+      await writeFile(join(assetsDir, 'env.hdr.meta.json'), impHdrEquirectMeta('env.hdr'));
     });
 
     afterEach(async () => {
@@ -1077,7 +1031,7 @@ console.log('import-hdr-test entry');
       const entries = await readPackIndex();
       const hdrRow = entries.find((e) => e.guid.toLowerCase() === IMP_HDR_GUID);
       expect(hdrRow).toBeDefined();
-      expect(hdrRow?.kind).toBe('texture');
+      expect(hdrRow?.kind).toBe('equirect');
 
       const relUrl = hdrRow?.relativeUrl ?? '';
       expect(relUrl.endsWith('.bin')).toBe(true);
@@ -1223,7 +1177,7 @@ console.log('import-hdr-test entry');
       expect(hdrRow?.relativeUrl.endsWith('.bin')).toBe(true);
     });
 
-    it('(g) M3 / AC-09: build pre-import for the HDR cube-only meta stays a graceful skip', async () => {
+    it('(g) build pre-import for the HDR equirect meta emits a .bin (not a .pack.json)', async () => {
       await viteBuild({
         root: tmpRoot,
         logLevel: 'silent',
@@ -1917,49 +1871,46 @@ console.log('import-hdr-test entry');
       expect(conflict?.message).toContain('texture');
     });
 
-    it('(e) R-5: cube-texture sidecar still takes the existing .hdr special arm, not default passthrough', async () => {
-      // A cube-texture sub.kind under the image importer must keep its
-      // dedicated arm output (cube-texture / texture), NOT be passed through
-      // as a literal 'cube-texture' row by the default-passthrough path.
-      const CUBE_GUID = '019e4000-0c86-79da-aa76-b0984c860a05';
+    it('(e) feat-20260630: an .hdr equirect sidecar folds to kind:"equirect" + rgba16float', async () => {
+      // The retired cube-texture special arm is gone; the .hdr single-source
+      // equirect arm folds to a kind:'equirect' row the runtime equirectLoader
+      // consumes. (6-PNG cube folding was deleted with the cube-texture kind.)
+      const EQUIRECT_GUID = '019e4000-0c86-79da-aa76-b0984c860a05';
       await writeFile(
-        join(tmpRoot, 'sky.png.meta.json'),
+        join(tmpRoot, 'sky.hdr.meta.json'),
         JSON.stringify({
           schemaVersion: '1.0.0',
           kind: 'external-asset-package',
           importer: 'image',
-          source: 'sky.png',
-          importSettings: { cubeFaceSize: 256 },
-          subAssets: [{ guid: CUBE_GUID, sourceIndex: 0, kind: 'cube-texture' }],
+          source: 'sky.hdr',
+          importSettings: { colorSpace: 'linear', mipmap: 'none' },
+          subAssets: [{ guid: EQUIRECT_GUID, sourceIndex: 0, kind: 'equirect' }],
         }),
       );
-      await writeFile(join(tmpRoot, 'sky.png'), ONE_BYTE);
+      await writeFile(join(tmpRoot, 'sky.hdr'), ONE_BYTE);
 
       const result = await buildCatalogStrict([tmpRoot], '/', new Set());
 
       expect(result.errors).toHaveLength(0);
       expect(result.catalog).toHaveLength(1);
       const row = result.catalog[0];
-      // The existing image arm folds a non-.hdr cube to kind:'cube-texture'
-      // WITH a CubeTextureMetadata block (faceSize-derived) -- this is the
-      // dedicated arm, distinguishable from a bare passthrough row which
-      // would carry the image ImageMetadata block instead.
-      expect(row?.kind).toBe('cube-texture');
-      expect(row?.metadata?.kind).toBe('cube-texture');
+      expect(row?.kind).toBe('equirect');
+      expect(row?.metadata?.kind).toBe('texture');
+      if (row?.metadata?.kind === 'texture') {
+        expect(row.metadata.format).toBe('rgba16float');
+      }
     });
   });
 }
 
 {
-  // ─── P2: .hdr / cube-texture zero-regression (feat-20260629 M4 / w14) ───
+  // ─── .hdr equirect zero-regression (feat-20260630 M1 / w6) ───
   //
-  // The image arm's .hdr / cube-texture special path (build-catalog.ts D-1)
-  // must survive the P2 default-passthrough change untouched (R-5 / OOS-6):
-  //   - a `.hdr` cube-texture sidecar folds to kind:'texture' + rgba16float
-  //   - a 6-PNG cube folds to kind:'cube-texture' + CubeTextureMetadata(faceSize)
-  //   - NO cube-texture sidecar is swallowed by the new host default-passthrough
-  // The three real submodule .hdr sidecars (newport_loft x2, sky) are folded
-  // here to lock their post-P2 output against the pre-P2 baseline.
+  // The image arm's .hdr equirect path must survive the host default-passthrough
+  // path untouched: a `.hdr` equirect sidecar folds to kind:'equirect' +
+  // rgba16float regardless of registered host importers. The three real
+  // submodule .hdr sidecars (newport_loft x2, sky) are folded here to lock
+  // their post-migration output (kind:'equirect') against drift.
 
   const REAL_HDR_SIDECARS = [
     {
@@ -1979,9 +1930,9 @@ console.log('import-hdr-test entry');
     },
   ] as const;
 
-  function realHdrCubeMeta(guid: string, source: string): string {
-    // Byte-shape mirror of the shipped submodule sidecars (all three share the
-    // same importSettings shape; only guid / source differ).
+  function realHdrEquirectMeta(guid: string, source: string): string {
+    // Byte-shape mirror of the migrated submodule sidecars (w9): kind:'equirect',
+    // no cubeFaceSize / specularMipLevels (D-6 dropped the projection hyperparams).
     return JSON.stringify({
       kind: 'external-asset-package',
       importer: 'image',
@@ -1992,22 +1943,20 @@ console.log('import-hdr-test entry');
         mipmap: 'auto',
         addressMode: 'clamp-to-edge',
         filterMode: 'linear',
-        cubeFaceSize: 512,
-        specularMipLevels: 5,
       },
-      subAssets: [{ guid, sourceIndex: 0, kind: 'cube-texture' }],
+      subAssets: [{ guid, sourceIndex: 0, kind: 'equirect' }],
     });
   }
 
-  const W14_ONE_BYTE = new Uint8Array([0xff]);
+  const W6_ONE_BYTE = new Uint8Array([0xff]);
 
-  describe('build-catalog-hdr-zero-regression.test.ts (w14)', () => {
+  describe('build-catalog-hdr-equirect-zero-regression.test.ts (w6)', () => {
     let originalCwd: string;
     let tmpRoot: string;
 
     beforeEach(async () => {
       originalCwd = process.cwd();
-      tmpRoot = await mkdtemp(join(tmpdir(), 'forgeax-vpp-w14-hdr-'));
+      tmpRoot = await mkdtemp(join(tmpdir(), 'forgeax-vpp-w6-hdr-'));
       process.chdir(tmpRoot);
     });
 
@@ -2016,25 +1965,23 @@ console.log('import-hdr-test entry');
       await rm(tmpRoot, { recursive: true, force: true });
     });
 
-    it('(a) the 3 real .hdr cube-texture sidecars fold to kind:"texture" + rgba16float (unchanged by P2)', async () => {
+    it('(a) the 3 real .hdr equirect sidecars fold to kind:"equirect" + rgba16float (host importer present)', async () => {
       // Even with a host importer registered, the engine image arm owns 'image'
-      // and the .hdr path must be unaffected.
+      // and the .hdr equirect path must be unaffected.
       const registered = new Set(['reel-game']);
       for (const sc of REAL_HDR_SIDECARS) {
         await writeFile(
           join(tmpRoot, `${sc.source}.meta.json`),
-          realHdrCubeMeta(sc.guid, sc.source),
+          realHdrEquirectMeta(sc.guid, sc.source),
         );
-        await writeFile(join(tmpRoot, sc.source), W14_ONE_BYTE);
+        await writeFile(join(tmpRoot, sc.source), W6_ONE_BYTE);
 
         const result = await buildCatalogStrict([tmpRoot], '/', registered);
         expect(result.errors).toHaveLength(0);
         expect(result.catalog).toHaveLength(1);
         const row = result.catalog[0];
         expect(row?.guid.toLowerCase()).toBe(sc.guid);
-        // D-1: .hdr cube-texture -> kind:'texture' (runtime textureLoader picks
-        // it up), NOT a literal 'cube-texture' passthrough row.
-        expect(row?.kind).toBe('texture');
+        expect(row?.kind).toBe('equirect');
         expect(row?.metadata?.kind).toBe('texture');
         if (row?.metadata?.kind === 'texture') {
           expect(row.metadata.format).toBe('rgba16float');
@@ -2046,63 +1993,18 @@ console.log('import-hdr-test entry');
       }
     });
 
-    it('(b) a 6-PNG (non-.hdr) cube-texture sidecar still folds to kind:"cube-texture" + faceSize metadata', async () => {
-      const CUBE_GUID = '019e4a26-3c29-7420-af5d-20f2724a1601';
+    it('(b) no pack-index row carries kind:"cube-texture" anymore', async () => {
+      const sc = REAL_HDR_SIDECARS[0];
       await writeFile(
-        join(tmpRoot, 'skybox.png.meta.json'),
-        JSON.stringify({
-          kind: 'external-asset-package',
-          importer: 'image',
-          schemaVersion: '1.0.0',
-          source: 'skybox.png',
-          importSettings: { cubeFaceSize: 256 },
-          subAssets: [{ guid: CUBE_GUID, sourceIndex: 0, kind: 'cube-texture' }],
-        }),
+        join(tmpRoot, `${sc.source}.meta.json`),
+        realHdrEquirectMeta(sc.guid, sc.source),
       );
-      await writeFile(join(tmpRoot, 'skybox.png'), W14_ONE_BYTE);
+      await writeFile(join(tmpRoot, sc.source), W6_ONE_BYTE);
 
       const result = await buildCatalogStrict([tmpRoot], '/', new Set());
       expect(result.errors).toHaveLength(0);
-      expect(result.catalog).toHaveLength(1);
-      const row = result.catalog[0];
-      expect(row?.kind).toBe('cube-texture');
-      expect(row?.metadata?.kind).toBe('cube-texture');
-      if (row?.metadata?.kind === 'cube-texture') {
-        expect(row.metadata.width).toBe(256);
-        expect(row.metadata.height).toBe(256);
-        expect(row.metadata.format).toBe('rgba16float');
-      }
-    });
-
-    it('(c) no cube-texture sidecar is swallowed by the host default-passthrough (still goes through the image arm)', async () => {
-      // Regression guard: a cube-texture sidecar under importer:'image' must
-      // NOT produce a literal kind:'cube-texture' passthrough row carrying the
-      // image ImageMetadata block (that would be the default-passthrough arm
-      // wrongly catching it). The dedicated cube arm carries
-      // CubeTextureMetadata (rgba16float + mipLevels), distinguishing it.
-      const CUBE_GUID = '019e4a26-3c29-7420-af5d-20f2724a1602';
-      await writeFile(
-        join(tmpRoot, 'env.png.meta.json'),
-        JSON.stringify({
-          kind: 'external-asset-package',
-          importer: 'image',
-          schemaVersion: '1.0.0',
-          source: 'env.png',
-          importSettings: { colorSpace: 'srgb', mipmap: 'auto', cubeFaceSize: 128 },
-          subAssets: [{ guid: CUBE_GUID, sourceIndex: 0, kind: 'cube-texture' }],
-        }),
-      );
-      await writeFile(join(tmpRoot, 'env.png'), W14_ONE_BYTE);
-
-      const result = await buildCatalogStrict([tmpRoot], '/', new Set());
-      expect(result.errors).toHaveLength(0);
-      const row = result.catalog[0];
-      expect(row?.metadata?.kind).toBe('cube-texture');
-      // The image default-passthrough remap would have used the image
-      // ImageMetadata (colorSpace srgb -> rgba8unorm-srgb); the cube arm uses
-      // rgba16float. Assert the cube arm won.
-      if (row?.metadata?.kind === 'cube-texture') {
-        expect(row.metadata.format).toBe('rgba16float');
+      for (const row of result.catalog) {
+        expect(row.kind).not.toBe('cube-texture');
       }
     });
   });

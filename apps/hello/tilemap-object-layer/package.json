@@ -48,6 +48,6 @@
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "vite": "8.0.10",
     "webgpu": "^0.4.0",
-    "@webgpu/types": "^0.1.70"
+    "@webgpu/types": "^0.1.71"
   }
 }

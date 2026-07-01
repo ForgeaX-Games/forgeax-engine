@@ -8,9 +8,9 @@
 Sponza is the canonical large-model stress test for a real-time PBR pipeline. This demo shows:
 
 1. **glTF Tier-C import** -- `parseGltf` reads 103 primitives into per-primitive `MeshIr` entries with POSITION + NORMAL + TEXCOORD_0 + TANGENT vertex attributes, loads 69 textures (63 JPG + 4 PNG) through `externalLoader`, and bridges 25 `pbrMetallicRoughness` materials into `MaterialAsset { shadingModel: 'standard' }` with `baseColorTexture` / `metallicRoughnessTexture` / `normalTexture` slots.
-2. **DirectionalLight with castShadow** -- 1 warm-sun directional light casts PCF shadows across the atrium (`mapSize=2048`, `farPlane=4500`, `depthBias=0.005`).
+2. **DirectionalLight with castShadow** -- 1 warm-sun directional light casts PCF shadows across the atrium (`mapSize=2048`, `shadowDistance=36`, `depthBias=0.005`).
 3. **4 PointLight cap** -- 4 point lights (warm yellow, cyan, magenta, neutral white) placed in the atrium demonstrate the forgeax 4-point-light rendering cap (charter F4: demo failures route to engine fixes).
-4. **Skylight IBL** -- HDR equirectangular newport_loft.hdr is loaded as irradiance + specular cubemap through `renderer.uploadCubemapFromEquirect`, feeding the PBR indirect diffuse + specular terms.
+4. **Skylight IBL** -- HDR equirectangular newport_loft.hdr is loaded as an `EquirectAsset` via `loadByGuid<EquirectAsset>` and handed to `Skylight{ equirect }`; the engine projects the irradiance + specular cubemap internally (lazy, in the render record arm) to feed the PBR indirect diffuse + specular terms. No manual cubemap upload call.
 5. **4-step recipe** -- `configurePackIndex` -> `loadByGuid<SceneAsset>` -> `assets.instantiate` -> `app.start()`, identical to hello-gltf (charter P4 consistent abstraction).
 
 ## Asset provenance
@@ -49,7 +49,7 @@ Measured from `Sponza.gltf` by `jq` (research section G-2; 167 KB JSON, fetch fr
 | Color (warm sun) | (1.0, 0.95, 0.85) |
 | Intensity | 3.0 |
 | `mapSize` | 2048 |
-| `farPlane` | 4500 |
+| `shadowDistance` | 36 |
 | `depthBias` | 0.005 |
 
 ### 4 PointLight

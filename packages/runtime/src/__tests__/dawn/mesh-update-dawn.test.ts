@@ -13,7 +13,7 @@
 import { World } from '@forgeax/engine-ecs';
 import { mat4 } from '@forgeax/engine-math';
 import { ok } from '@forgeax/engine-rhi';
-import type { CubeTextureAsset, MeshAsset } from '@forgeax/engine-types';
+import type { EquirectAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { BUILTIN_FLOATS_PER_VERTEX } from '../../builtin-asset-registry';
 import { GpuResourceStore } from '../../gpu-resource-store';
@@ -100,7 +100,7 @@ describe('w12 - updateMesh dawn-tier (AC-08)', () => {
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w: World, pod: EquirectAsset) => ok(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 
@@ -147,7 +147,7 @@ describe('w12 - updateMesh dawn-tier (AC-08)', () => {
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w: World, pod: EquirectAsset) => ok(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 
@@ -203,7 +203,7 @@ describe('w12 - updateMesh dawn-tier (AC-08)', () => {
         // biome-ignore lint/suspicious/noExplicitAny: structural rhi device shim
         device as any,
         undefined,
-        (w: World, pod: CubeTextureAsset) => ok(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w: World, pod: EquirectAsset) => ok(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 

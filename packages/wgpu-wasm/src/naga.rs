@@ -22,8 +22,8 @@
 
 use naga::valid::{Capabilities, GlobalUse, ModuleInfo, ValidationFlags, Validator};
 use naga::{
-    AddressSpace, Expression, Handle, ImageClass, ImageDimension, Module, SampleLevel, ScalarKind,
-    ShaderStage, StorageAccess, StorageFormat, TypeInner,
+    AddressSpace, Binding, Expression, Handle, ImageClass, ImageDimension, Module, SampleLevel,
+    Scalar, ScalarKind, ShaderStage, StorageAccess, StorageFormat, TypeInner, VectorSize,
 };
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -104,7 +104,12 @@ pub fn emit_reflection(validated: &ValidatedModule, options_json: &str) -> Resul
     let options: ReflectionOptions = serde_json::from_str(options_json)
         .unwrap_or(ReflectionOptions { dynamic_offsets: Vec::new() });
     let bgls = derive_bgls(&validated.module, &validated.info, &options);
-    serde_json::to_string(&bgls)
+    let uv_set_count = derive_uv_set_count(&validated.module);
+    let output = ReflectionOutput {
+        bindings: bgls,
+        uv_set_count,
+    };
+    serde_json::to_string(&output)
         .map_err(|e| JsError::new(&format!("reflection serialize failed: {e}")))
 }
 
@@ -173,6 +178,95 @@ struct StorageTextureBinding {
     access: &'static str,
     format: &'static str,
     view_dimension: &'static str,
+}
+
+// === Reflection output shape (m4-w2: wraps BGLs + uvSetCount) =====================
+
+#[derive(Serialize)]
+struct ReflectionOutput {
+    bindings: Vec<Bgl>,
+    #[serde(rename = "uvSetCount")]
+    uv_set_count: u32,
+}
+
+// === uvSetCount derivation from vertex @location (D-4 convention) ==================
+
+/// Derive uvSetCount from vertex entry-point @location declarations.
+///
+/// D-4 convention (plan-strategy):
+/// - location 2 is uv0 (always present if any UV)
+/// - locations >= 6 are extra UV sets (uv1..uv7 map to location 6..12)
+/// - Only vec2<f32> args at locations >= 6 are counted as extra UV
+/// - Skip robustness: uvSetCount = 1 + max(location>=6) - 5;
+///   jump from 6→8 implies presence of uv1(loc6), uv2(loc7), uv3(loc8) = 4 sets
+/// - If no vertex entry-point or no @location(2): uvSetCount = 0
+fn derive_uv_set_count(module: &Module) -> u32 {
+    let mut max_uv_location: i32 = -1;
+
+    for ep in &module.entry_points {
+        if ep.stage != ShaderStage::Vertex {
+            continue;
+        }
+        for arg in &ep.function.arguments {
+            // arg.binding is None when a struct type wraps vertex inputs
+            // (WGSL `fn vs(in: VsIn)`). In that case naga keeps @location
+            // on the struct members. We must recurse into the struct.
+            if let Some(Binding::Location { location, .. }) = &arg.binding {
+                visit_location(*location, &module.types[arg.ty], &mut max_uv_location);
+                continue;
+            }
+            // No binding on the arg itself — check if `arg.ty` is a struct
+            // whose members carry @location (the WGSL `struct VsIn { ... }`
+            // pattern).
+            let ty = &module.types[arg.ty];
+            if let TypeInner::Struct { ref members, .. } = ty.inner {
+                for member in members {
+                    if let Some(Binding::Location { location, .. }) = &member.binding {
+                        let member_ty = &module.types[member.ty];
+                        visit_location(*location, member_ty, &mut max_uv_location);
+                    }
+                }
+            }
+        }
+    }
+
+    if max_uv_location < 0 {
+        return 0; // no vertex entry-point → no UV at all
+    }
+
+    if max_uv_location <= 2 {
+        return 1; // only location 2 (uv0) present → 1 set
+    }
+
+    // D-4 skip robustness: max(location >= 6) - 5 extra sets
+    // e.g. max=6 → 6-5=1 extra → 2 total; max=8 → 8-5=3 extra → 4 total
+    1 + (max_uv_location as u32 - 5)
+}
+
+/// Visit a single @location with its type. Only vec2<f32> at locations
+/// >= 6 count as extra UV. location 2 (uv0) is always counted.
+fn visit_location(location: u32, ty: &naga::Type, max_uv_location: &mut i32) {
+    if location == 2 {
+        if *max_uv_location < 2 {
+            *max_uv_location = 2;
+        }
+        return;
+    }
+
+    // locations >= 6: only vec2<f32> count as UV (filter pos/normal/tangent/skin)
+    if location >= 6 {
+        if matches!(
+            ty.inner,
+            TypeInner::Vector {
+                size: VectorSize::Bi,
+                scalar: Scalar { kind: ScalarKind::Float, width: 4, .. }
+            }
+        ) {
+            if (location as i32) > *max_uv_location {
+                *max_uv_location = location as i32;
+            }
+        }
+    }
 }
 
 // === Reflection derivation main flow ===============================================

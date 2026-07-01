@@ -71,7 +71,7 @@ import type { BindGroupEntry, Buffer, Sampler, Texture, TextureView } from '@for
 import { ok as rhiOk } from '@forgeax/engine-rhi';
 import { TONEMAP_LUMINANCE_EPSILON } from '@forgeax/engine-shader';
 import type {
-  CubeTextureAsset,
+  EquirectAsset,
   Handle,
   MaterialAsset,
   MeshAsset,
@@ -1360,22 +1360,20 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   function makeEquirect(): {
-    kind: 'texture';
+    kind: 'equirect';
     width: number;
     height: number;
     format: GPUTextureFormat;
     data: Uint8Array;
     colorSpace: 'linear';
-    mipmap: false;
   } {
     return {
-      kind: 'texture',
+      kind: 'equirect',
       width: 4,
       height: 2,
       format: 'rgba16float' as TextureFormat,
       data: new Uint8Array(4 * 2 * 8),
       colorSpace: 'linear',
-      mipmap: false,
     };
   }
 
@@ -1391,18 +1389,23 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const equirect = makeEquirect();
       const store = new GpuResourceStore();
       const world = new World();
-      const equirectHandle = world.allocSharedRef('TextureAsset', equirect);
+      const equirectHandle = world.allocSharedRef('EquirectAsset', equirect);
 
       store.configureGpuDevice(
         device,
         async (_d, desc) =>
           // biome-ignore lint/suspicious/noExplicitAny: mock shader module
           rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (w: World, pod: CubeTextureAsset) => rhiOk(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w: World, pod: EquirectAsset) => rhiOk(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 
-      const result = await store.uploadCubemapFromEquirect(world, equirectHandle, equirect);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal method reached via store cast
+      const result = await (store as any)._uploadCubemapFromEquirect(
+        world,
+        equirectHandle,
+        equirect,
+      );
       expect(result.ok).toBe(true);
       expect(probe.submitCalls).toBeGreaterThanOrEqual(1);
     });
@@ -1418,18 +1421,19 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const equirect = makeEquirect();
       const store = new GpuResourceStore();
       const world = new World();
-      const equirectHandle = world.allocSharedRef('TextureAsset', equirect);
+      const equirectHandle = world.allocSharedRef('EquirectAsset', equirect);
 
       store.configureGpuDevice(
         device,
         async (_d, desc) =>
           // biome-ignore lint/suspicious/noExplicitAny: mock shader module
           rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (w: World, pod: CubeTextureAsset) => rhiOk(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w: World, pod: EquirectAsset) => rhiOk(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 
-      await store.uploadCubemapFromEquirect(world, equirectHandle, equirect);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal method reached via store cast
+      await (store as any)._uploadCubemapFromEquirect(world, equirectHandle, equirect);
 
       const totalBeginPass = probe.encoders.reduce((s, e) => s + e.beginRenderPassCount, 0);
       // 4 distinct pass families; each cube-face family unfolds to 6 sub-passes
@@ -1461,18 +1465,23 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const equirect = makeEquirect();
       const store = new GpuResourceStore();
       const world = new World();
-      const equirectHandle = world.allocSharedRef('TextureAsset', equirect);
+      const equirectHandle = world.allocSharedRef('EquirectAsset', equirect);
 
       store.configureGpuDevice(
         device,
         async (_d, desc) =>
           // biome-ignore lint/suspicious/noExplicitAny: mock shader module
           rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as any,
-        (w: World, pod: CubeTextureAsset) => rhiOk(w.allocSharedRef('CubeTextureAsset', pod)),
+        (w: World, pod: EquirectAsset) => rhiOk(w.allocSharedRef('EquirectAsset', pod)),
         mockCaps,
       );
 
-      const result = await store.uploadCubemapFromEquirect(world, equirectHandle, equirect);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal method reached via store cast
+      const result = await (store as any)._uploadCubemapFromEquirect(
+        world,
+        equirectHandle,
+        equirect,
+      );
 
       // Whether result.ok is true or false depends on impl error propagation;
       // the critical assertion is the counter invariant -- counters must NOT
@@ -2114,8 +2123,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
             return 'palette-overflow';
           case 'material-resolved-empty-passes':
             return 'material-empty-passes';
-          case 'skybox-cubemap-not-ready':
-            return 'skybox-not-ready';
+          case 'equirect-projection-failed':
+            return 'equirect-projection-failed';
           case 'mesh-ssbo-capacity-exceeded':
             return 'mesh-ssbo-capacity';
           case 'mesh-ssbo-ceiling-reached':
@@ -2205,83 +2214,67 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 }
 
 {
-  // --- from skybox-error.test.ts ---
+  // --- equirect-projection-failed error class shape ---
+  // feat-20260630 M2 / w13: replaces the retired skybox-cubemap-not-ready.
 
-  describe('skybox-cubemap-not-ready error class shape (AC-08)', () => {
-    it('has .code === skybox-cubemap-not-ready', async () => {
-      // Dynamic import so typecheck passes even if the class does not exist yet
-      // (TDD red stage). After w18 implements the class, this test turns green.
-      const { SkyboxCubemapNotReadyError } = await import('../errors');
-      const err = new SkyboxCubemapNotReadyError(42);
-      expect(err.code).toBe('skybox-cubemap-not-ready');
+  describe('equirect-projection-failed error class shape', () => {
+    it('has .code === equirect-projection-failed', async () => {
+      const { EquirectProjectionFailedError } = await import('../errors');
+      const err = new EquirectProjectionFailedError(42);
+      expect(err.code).toBe('equirect-projection-failed');
     });
 
     it('exposes .detail.handle === the constructor argument', async () => {
-      const { SkyboxCubemapNotReadyError } = await import('../errors');
-      const err = new SkyboxCubemapNotReadyError(42);
+      const { EquirectProjectionFailedError } = await import('../errors');
+      const err = new EquirectProjectionFailedError(42);
       expect(err.detail).toBeDefined();
       expect(err.detail.handle).toBe(42);
     });
 
     it('exposes non-empty .hint with actionable guidance', async () => {
-      const { SkyboxCubemapNotReadyError } = await import('../errors');
-      const err = new SkyboxCubemapNotReadyError(42);
+      const { EquirectProjectionFailedError } = await import('../errors');
+      const err = new EquirectProjectionFailedError(42);
       expect(err.hint).toBeDefined();
       expect(typeof err.hint).toBe('string');
       expect(err.hint.length).toBeGreaterThan(0);
     });
 
     it('exposes .expected describing expected state', async () => {
-      const { SkyboxCubemapNotReadyError } = await import('../errors');
-      const err = new SkyboxCubemapNotReadyError(42);
+      const { EquirectProjectionFailedError } = await import('../errors');
+      const err = new EquirectProjectionFailedError(42);
       expect(err.expected).toBeDefined();
       expect(typeof err.expected).toBe('string');
       expect(err.expected.length).toBeGreaterThan(0);
     });
 
     it('extends Error so it can be thrown and caught', async () => {
-      const { SkyboxCubemapNotReadyError } = await import('../errors');
-      const err = new SkyboxCubemapNotReadyError(42);
+      const { EquirectProjectionFailedError } = await import('../errors');
+      const err = new EquirectProjectionFailedError(42);
       expect(err).toBeInstanceOf(Error);
-      expect(err.name).toBe('SkyboxCubemapNotReadyError');
+      expect(err.name).toBe('EquirectProjectionFailedError');
     });
   });
 
-  describe('RuntimeErrorCode union 9 -> 10 (AC-08)', () => {
-    it('RuntimeErrorCode union has exactly 10 members after w18', async () => {
-      // We cannot enumerate TS union members at runtime directly. Instead we
-      // validate by constructing a switch that TypeScript will error on if the
-      // union shape changes. This test verifies skybox-cubemap-not-ready is a
-      // valid member by using it as a literal.
-      const code: string = 'skybox-cubemap-not-ready';
-      expect(code).toBeDefined();
-
-      // Verify the union count by checking the JSDoc comment table which
-      // lists all 10 members (this is a grep-gate). The actual TS union is
-      // verified by typecheck: if 'skybox-cubemap-not-ready' is not in
-      // RuntimeErrorCode, no expression can assign this literal to a
-      // RuntimeErrorCode-typed variable.
-      const { SkyboxCubemapNotReadyError } = await import('../errors');
-      const err = new SkyboxCubemapNotReadyError(42);
-      // If typecheck passes, err.code IS in the RuntimeErrorCode union.
-      expect(err.code).toBe('skybox-cubemap-not-ready');
+  describe('RuntimeErrorCode union carries equirect-projection-failed', () => {
+    it('equirect-projection-failed is a valid RuntimeErrorCode literal', async () => {
+      // The actual TS union membership is verified by typecheck: if
+      // 'equirect-projection-failed' is not in RuntimeErrorCode, no expression
+      // can assign err.code to a RuntimeErrorCode-typed variable.
+      const { EquirectProjectionFailedError } = await import('../errors');
+      const err = new EquirectProjectionFailedError(42);
+      expect(err.code).toBe('equirect-projection-failed');
     });
   });
 
-  describe('degradation path: loadOp=clear when cubemap not ready (AC-08)', () => {
-    it('skybox-cubemap-not-ready is emitted when getCubemapGpuView returns undefined', async () => {
-      // In the degradation path, when SkyboxBackground component is present
-      // but getCubemapGpuView(handle) returns undefined (cubemap not uploaded
-      // yet), skyboxActive is set to false and the structured error is fired.
-      // This test verifies the error class contracts are correct -- the actual
-      // record-stage integration is covered by the runtime smoke gate.
-      const { SkyboxCubemapNotReadyError } = await import('../errors');
-      const err = new SkyboxCubemapNotReadyError(42);
-
-      // The error code is used at record-stage to fire via errorRegistry.fire().
-      // When skyboxActive=false due to cubemap-not-ready, main pass loadOp
-      // returns to 'clear' (w8/w18).
-      expect(err.code).toBe('skybox-cubemap-not-ready');
+  describe('degradation path: white-cube fallback when projection fails', () => {
+    it('equirect-projection-failed carries the failing equirect handle', async () => {
+      // In the degradation path, when the record arm sees status:'failed' for
+      // the equirect handle, it binds the white-cube fallback and fires this
+      // structured error ONCE (it does not retry; R-2/AC-09). The record-stage
+      // integration is covered by the M3 lazy-projection tests + smoke gate.
+      const { EquirectProjectionFailedError } = await import('../errors');
+      const err = new EquirectProjectionFailedError(42);
+      expect(err.code).toBe('equirect-projection-failed');
       expect(err.detail.handle).toBe(42);
     });
   });
@@ -2682,12 +2675,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(SKYLIGHT_COMPONENT_NAME).toBe('Skylight');
     });
 
-    it('Skylight schema shape: { cubemap: handle<CubeTextureAsset>, intensity: f32 }', () => {
+    it('Skylight schema shape: { equirect: handle<EquirectAsset>, intensity: f32 }', () => {
       // Verify the expected schema field names.
       // When t25 lands, the real component must have exactly these fields.
-      const expectedFields = ['cubemap', 'intensity'];
+      const expectedFields = ['equirect', 'intensity'];
       // Both fields are present; no extra.
-      expect(expectedFields).toContain('cubemap');
+      expect(expectedFields).toContain('equirect');
       expect(expectedFields).toContain('intensity');
       expect(expectedFields.length).toBe(2);
     });
@@ -5652,7 +5645,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(slice.byteOffset).toBe(0);
     });
 
-    it('consecutive allocations stack offsets correctly', () => {
+    it('consecutive allocations stack offsets rounded up to 256-byte alignment', () => {
       const { device } = mockDevice();
       const alloc = createSkinPaletteAllocator(device, MAX_BINDING);
       const s1 = alloc.allocateSlice(3);
@@ -5660,7 +5653,31 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(s1.byteOffset).toBe(0);
       const s2 = alloc.allocateSlice(2);
       expect(s2.jointCount).toBe(2);
-      expect(s2.byteOffset).toBe(3 * 64); // 3 joints * 64 bytes = 192
+      // 3 joints * 64 = 192, rounded up to the 256-byte dynamic-offset
+      // alignment (WebGPU minStorageBufferOffsetAlignment) -> 256, NOT 192.
+      expect(s2.byteOffset).toBe(256);
+    });
+
+    // Regression for the hellforge crash: a skinned char with 33 joints made
+    // the 1st slice's tight footprint 33*64 = 2112, which is not a multiple of
+    // 256 (2112 = 256 * 8.25). The 2nd slice then bound at dynOffset 2112 and
+    // tripped `Dynamic Offset[1] (2112) is not 256 byte aligned` at draw time.
+    // Every slice's byteOffset must be 256-aligned regardless of joint count.
+    it('every slice byteOffset stays 256-aligned even for non-aligned joint counts', () => {
+      const { device } = mockDevice();
+      const alloc = createSkinPaletteAllocator(device, 262144);
+      // Joint counts whose *64 footprint is NOT a multiple of 256:
+      // 33*64=2112, 17*64=1088, 5*64=320 — all misaligned pre-fix.
+      const offsets = [33, 17, 5, 40].map((jc) => alloc.allocateSlice(jc).byteOffset);
+      expect(offsets[0]).toBe(0);
+      for (const off of offsets) {
+        expect(off % 256).toBe(0);
+      }
+      // Offsets must also be strictly increasing (no overlap after rounding).
+      for (let i = 1; i < offsets.length; i++) {
+        // biome-ignore lint/style/noNonNullAssertion: fixed-length map above
+        expect(offsets[i]!).toBeGreaterThan(offsets[i - 1]!);
+      }
     });
 
     it('resetForFrame rewinds cursor', () => {
@@ -5942,7 +5959,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
    * declarations must evolve together.
    */
   interface SkyboxSnapshotShape {
-    readonly cubemapHandle: number;
+    readonly equirectHandle: number;
     readonly mode: number;
   }
 
@@ -5952,7 +5969,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       world.spawn({
         component: SkyboxBackground,
         data: {
-          cubemap: 42 as unknown as never, // Handle<CubeTextureAsset> stored as u32
+          equirect: 42 as unknown as never, // Handle<EquirectAsset> stored as u32
           mode: 0,
         },
       });
@@ -5964,12 +5981,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       queryRun(state, world, (bundle) => {
         const s = bundle.SkyboxBackground;
         for (let i = 0; i < bundle.Entity.self.length; i++) {
-          const cubemapRaw = s.cubemap?.get(i);
+          const equirectRaw = s.equirect?.get(i);
           const modeRaw = s.mode?.[i] ?? 0;
           skyboxCount += 1;
-          if (snapshot === undefined && cubemapRaw !== undefined) {
+          if (snapshot === undefined && equirectRaw !== undefined) {
             snapshot = {
-              cubemapHandle: Math.round(cubemapRaw),
+              equirectHandle: Math.round(equirectRaw),
               mode: modeRaw,
             };
           }
@@ -5977,7 +5994,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       });
 
       expect(snapshot).toBeDefined();
-      expect(snapshot?.cubemapHandle).toBe(42);
+      expect(snapshot?.equirectHandle).toBe(42);
       expect(snapshot?.mode).toBe(0);
       expect(skyboxCount).toBe(1);
     });
@@ -6001,14 +6018,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       world.spawn({
         component: SkyboxBackground,
         data: {
-          cubemap: 10 as unknown as never,
+          equirect: 10 as unknown as never,
           mode: 0,
         },
       });
       world.spawn({
         component: SkyboxBackground,
         data: {
-          cubemap: 20 as unknown as never,
+          equirect: 20 as unknown as never,
           mode: 0,
         },
       });
@@ -6020,11 +6037,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       queryRun(state, world, (bundle) => {
         const s = bundle.SkyboxBackground;
         for (let i = 0; i < bundle.Entity.self.length; i++) {
-          const cubemapRaw = s.cubemap?.get(i);
+          const equirectRaw = s.equirect?.get(i);
           skyboxCount += 1;
-          if (snapshot === undefined && cubemapRaw !== undefined) {
+          if (snapshot === undefined && equirectRaw !== undefined) {
             snapshot = {
-              cubemapHandle: Math.round(cubemapRaw),
+              equirectHandle: Math.round(equirectRaw),
               mode: 0,
             };
           }
@@ -6033,7 +6050,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       expect(snapshot).toBeDefined();
       // First entity spawned (handle 10) wins
-      expect(snapshot?.cubemapHandle).toBe(10);
+      expect(snapshot?.equirectHandle).toBe(10);
       expect(skyboxCount).toBe(2);
     });
   });
@@ -9019,18 +9036,18 @@ type ExtractFrameWithPipeline = (
 // color-only skylights, leaving such scenes black.
 {
   describe('Skylight solid-color ambient extract (downstream #4)', () => {
-    it('Skylight with no cubemap still yields a snapshot (handle 0) with white default color', () => {
+    it('Skylight with no equirect still yields a snapshot (handle 0) with white default color', () => {
       const world = new World();
       world.spawn({ component: Skylight, data: {} });
 
       const frame = extractFrame(world, null as unknown as never) as unknown as {
-        skylight?: { cubemapHandle: number; color: readonly number[]; intensity: number };
+        skylight?: { equirectHandle: number; color: readonly number[]; intensity: number };
         skylightCount: number;
       };
 
       expect(frame.skylightCount).toBe(1);
       expect(frame.skylight).toBeDefined();
-      expect(frame.skylight?.cubemapHandle).toBe(0);
+      expect(frame.skylight?.equirectHandle).toBe(0);
       expect(frame.skylight?.intensity).toBe(1);
       expect(Array.from(frame.skylight?.color ?? [])).toEqual([1, 1, 1]);
     });
@@ -9043,10 +9060,10 @@ type ExtractFrameWithPipeline = (
       });
 
       const frame = extractFrame(world, null as unknown as never) as unknown as {
-        skylight?: { cubemapHandle: number; color: readonly number[]; intensity: number };
+        skylight?: { equirectHandle: number; color: readonly number[]; intensity: number };
       };
 
-      expect(frame.skylight?.cubemapHandle).toBe(0);
+      expect(frame.skylight?.equirectHandle).toBe(0);
       expect(frame.skylight?.intensity).toBeCloseTo(0.5, 5);
       const c = Array.from(frame.skylight?.color ?? []);
       expect(c[0]).toBeCloseTo(0.2, 5);

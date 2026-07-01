@@ -31,7 +31,7 @@ import {
   TONEMAP_REINHARD_EXTENDED,
   Transform,
 } from '@forgeax/engine-runtime';
-import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
+import type { EquirectAsset, MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
 
@@ -86,8 +86,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // Load HDR equirect texture through GUID asset pipeline.
-  const hdrHandleRes = await assets.loadByGuid<TextureAsset>(guidRes.value);
+  // Load HDR equirect through the GUID asset pipeline. loadByGuid returns the
+  // EquirectAsset PAYLOAD (D-17); mint a user-tier column handle for it. The
+  // equirect->cubemap + IBL projection is now INTERNAL to the engine (lazy, in
+  // the render record arm) -- no manual cubemap upload call. LO 4.6's 6-PNG
+  // cubemap loader is replaced by this single equirect HDR source.
+  const hdrHandleRes = await assets.loadByGuid<EquirectAsset>(guidRes.value);
   if (!hdrHandleRes.ok) {
     console.error(
       `[learn-render 4.6 cubemaps] loadByGuid(newport_loft.hdr) failed: ${hdrHandleRes.error.code}`,
@@ -96,34 +100,20 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     if (bus !== undefined) bus.push({ code: hdrHandleRes.error.code, hint: hdrHandleRes.error.hint });
     return;
   }
-
-  // loadByGuid returns the TextureAsset PAYLOAD (M8 D-17); mint a user-tier
-  // column handle for the equirect source, then upload the cubemap via
-  // renderer.store (the store holds no registry reference).
-  const srcHandle = world.allocSharedRef('TextureAsset', hdrHandleRes.value);
-  const cubemapRes = await renderer.store.uploadCubemapFromEquirect(
-    world,
-    srcHandle,
-    hdrHandleRes.value,
-  );
-  if (!cubemapRes.ok) {
-    console.error(
-      `[learn-render 4.6 cubemaps] equirect-to-cubemap upload failed: ${cubemapRes.error.code} hint=${cubemapRes.error.hint}`,
-    );
-    return;
-  }
-  const cubemapHandle = cubemapRes.value;
+  const equirect = world.allocSharedRef('EquirectAsset', hdrHandleRes.value);
 
   // Skylight provides PBR IBL diffuse+specular illumination for the whole scene.
+  // It holds the equirect handle directly; the engine projects the cubemap lazily.
   world.spawn({
     component: Skylight,
-    data: { cubemap: cubemapHandle, intensity: 1.0 },
+    data: { equirect, intensity: 1.0 },
   });
 
-  // SkyboxBackground renders the cubemap as the visible background (AC-01).
+  // SkyboxBackground renders the same equirect (as the internally-projected
+  // cubemap) as the visible background (AC-01).
   world.spawn({
     component: SkyboxBackground,
-    data: { cubemap: cubemapHandle, mode: SKYBOX_MODE_CUBEMAP },
+    data: { equirect, mode: SKYBOX_MODE_CUBEMAP },
   });
   console.warn('[learn-render 4.6 cubemaps] Skylight + SkyboxBackground active: equirect HDR skybox visible, PBR IBL reflections active');
 

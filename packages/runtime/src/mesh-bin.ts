@@ -1,15 +1,19 @@
 // mesh-bin.ts -- bug-20260610-pack-mesh-binarize-fetchpackfile-cache (Fix A)
+// feat-20260629-multi-uv-set-support m2-w4: header v2 decode + entry validation
 //
 // Decode a `<guid>.bin` sidecar produced by `packMeshBin` (in
 // `@forgeax/engine-import`) back into the typed arrays + metadata the
 // runtime mesh loader expects. Mirror of the build-time encoder; both
-// halves must agree on the 16-byte header layout.
+// halves must agree on the 28-byte header v2 layout.
 //
-// Bin layout (little-endian, 16-byte header):
-//   u32 vlen     -- Float32Array element count
-//   u32 ilen     -- index element count
-//   u32 iwidth   -- 2 (Uint16) | 4 (Uint32) | 0 (no indices)
-//   u32 jsonlen  -- byte length of trailing UTF-8 JSON metadata
+// Bin layout (little-endian, 28-byte header v2):
+//   u32 version        -- must be 2
+//   u32 uvSetCount     -- number of UV sets (1..8)
+//   u32 floatsPerVertex -- explicit stride (12..26)
+//   u32 vlen           -- Float32Array element count
+//   u32 ilen           -- index element count
+//   u32 iwidth         -- 2 (Uint16) | 4 (Uint32) | 0 (no indices)
+//   u32 jsonlen        -- byte length of trailing UTF-8 JSON metadata
 // then vertices, indices, JSON tail (submeshes / aabb / optional skin lens),
 // then optional skinIndex (Uint16) bytes, then optional skinWeight (Float32) bytes.
 //
@@ -19,7 +23,7 @@
 // keys and the file ends at the JSON tail (legacy layout, byte-identical
 // to pre-feat output).
 
-const HEADER_BYTES = 16;
+const HEADER_V2_BYTES = 28;
 
 export interface UnpackedMeshBin {
   vertices: Float32Array;
@@ -28,24 +32,46 @@ export interface UnpackedMeshBin {
   aabb?: Float32Array;
   skinIndex?: Uint16Array;
   skinWeight?: Float32Array;
+  /** feat-20260629-multi-uv-set-support: number of UV sets (1..8) from header v2 */
+  uvSetCount?: number;
+  /** feat-20260629-multi-uv-set-support: explicit stride from header v2 */
+  floatsPerVertex?: number;
 }
 
 export function unpackMeshBin(bytes: Uint8Array): UnpackedMeshBin | undefined {
-  if (bytes.byteLength < HEADER_BYTES) return undefined;
+  if (bytes.byteLength < HEADER_V2_BYTES) return undefined;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const vlen = view.getUint32(0, true);
-  const ilen = view.getUint32(4, true);
-  const iwidth = view.getUint32(8, true);
-  const jsonlen = view.getUint32(12, true);
+  const version = view.getUint32(0, true);
+  const uvSetCount = view.getUint32(4, true);
+  const floatsPerVertex = view.getUint32(8, true);
+
+  // Fail Fast: decode entry contract validation (architecture-principles #5)
+  if (version !== 2) return undefined; // unknown version
+  if (uvSetCount < 1 || uvSetCount > 8) return undefined; // uvSetCount out of range
+
+  const vlen = view.getUint32(12, true);
+  const ilen = view.getUint32(16, true);
+  const iwidth = view.getUint32(20, true);
+  const jsonlen = view.getUint32(24, true);
+
+  // Self-consistency: vlen must be divisible by floatsPerVertex
+  if (floatsPerVertex > 0 && vlen % floatsPerVertex !== 0) return undefined;
+  // Self-consistency: floatsPerVertex must be in valid range for given uvSetCount.
+  // Allow floatsPerVertex=0 only when vlen=0 (empty mesh, no vertex payload to validate).
+  const expectedFpvNoSkin = 12 + (uvSetCount - 1) * 2;
+  const expectedFpvSkin = 18 + (uvSetCount - 1) * 2;
+  if (vlen > 0) {
+    if (floatsPerVertex !== expectedFpvNoSkin && floatsPerVertex !== expectedFpvSkin) {
+      return undefined;
+    }
+  }
 
   const vBytes = vlen * 4;
   const iBytes = ilen * iwidth;
-  const minExpected = HEADER_BYTES + vBytes + iBytes + jsonlen;
+  const minExpected = HEADER_V2_BYTES + vBytes + iBytes + jsonlen;
   if (bytes.byteLength < minExpected) return undefined;
 
-  let offset = HEADER_BYTES;
-  // Float32Array view requires 4-byte alignment; copy into a fresh buffer to
-  // avoid relying on the source ArrayBuffer being aligned at offset.
+  let offset = HEADER_V2_BYTES;
   const vertices = new Float32Array(vlen);
   if (vlen > 0) {
     new Uint8Array(vertices.buffer, vertices.byteOffset, vertices.byteLength).set(
@@ -100,9 +126,6 @@ export function unpackMeshBin(bytes: Uint8Array): UnpackedMeshBin | undefined {
     offset += jsonlen;
   }
 
-  // feat-20260611 (w17-b): trailing optional skin streams. Each is copied
-  // into a fresh buffer (alignment + ownership: keeps the unpacked typed
-  // array independent of the source `Uint8Array`'s ArrayBuffer lifetime).
   let skinIndex: Uint16Array | undefined;
   let skinWeight: Float32Array | undefined;
   const skinIndexBytes = skinIndexLen * 2;
@@ -133,5 +156,7 @@ export function unpackMeshBin(bytes: Uint8Array): UnpackedMeshBin | undefined {
     ...(aabb !== undefined ? { aabb } : {}),
     ...(skinIndex !== undefined ? { skinIndex } : {}),
     ...(skinWeight !== undefined ? { skinWeight } : {}),
+    uvSetCount,
+    floatsPerVertex,
   };
 }

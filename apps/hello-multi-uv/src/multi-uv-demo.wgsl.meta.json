@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "external-asset-package",
+  "importer": "shader",
+  "source": "multi-uv-demo.wgsl",
+  "importSettings": {
+    "materialShaderIdentifier": "hello-multi-uv::multi-uv-demo"
+  },
+  "subAssets": [
+    {
+      "guid": "01935b00-7d8c-7c4e-9f12-345678abcd02",
+      "sourceIndex": 0,
+      "kind": "material-shader"
+    }
+  ],
+  "paramSchema": [{ "name": "baseColor", "type": "color" }]
+}

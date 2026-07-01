@@ -8,7 +8,7 @@ description: >-
 
 # forgeax-engine-shader
 
-> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: [`358592eb`](../../commit/358592eb) (2026-06-09)
+> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: feat-20260629-multi-uv-set-support M7（多套 UV @location 声明 + build-time naga 反射 + VsOut 独立空间）
 
 > **自定义 WGSL 走"编译 → 注册 → 被 MaterialAsset 引用"三步**。build-time 把 `.wgsl` 编译 / 组合（`compileShader`，naga_oil `#import`），runtime 把它登记成一个 `MaterialShader` 标识符（`registerMaterialShader`），然后 [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md) 里 `MaterialAsset` 的 pass 用 `shader: '<标识符>'` 引用它。聚合 `@forgeax/engine-shader`（runtime registry）· `@forgeax/engine-shader-compiler`（build-time）· `@forgeax/engine-vite-plugin-shader`（vite 钩子）· `@forgeax/engine-naga`（WGSL 工具，**禁止**出现在 runtime）。
 
@@ -45,6 +45,86 @@ description: >-
 > **naga filtering 反射坑**：只用 `textureSampleLevel`（显式 LOD）采样的贴图会被 naga 反射成 `unfilterable-float` + `non-filtering`，与 `derive` 期望的 `filtering` 不符，build 时 binding 校验报 `material-shader-binding-mismatch`。修法：让该贴图至少有一次 `textureSample`（隐式 LOD，须在 uniform control flow 内）使其反射为 `filtering`。
 
 > **自定义 fullscreen post-process WGSL 的 binding 约定**（feat-20260621，与材质 shader 不同）：post-process fragment shader 在 `@group(1)` 上声明——`@binding(0)` 输入纹理 `texture_2d<f32>`、`@binding(1)` `sampler`、`@binding(2)` `var<uniform> params`（当 `postProcess.register` 声明了 `params` 时；无 params 则只有 binding 0/1 的 2-entry BGL）。`@group(0)` 是预留的空 view-BGL。内建 `tonemap.wgsl` 即按此布局（`@group(1) @binding(2) var<uniform> params : TonemapParams`）。注册 + 数据驱动每帧更新（`PostProcessParams` 组件）见 [`forgeax-engine-render-pipeline`](../forgeax-engine-render-pipeline/SKILL.md) §自定义 fullscreen 后处理。
+
+## 多套 UV -- `@location(6+)` 声明即生效（build-time 反射 + runtime 自动绑定）
+
+> [!IMPORTANT]
+> **一句话价值：** AI 用户在 vertex shader 写 `@location(6) uv1: vec2<f32>`，引擎 build-time 通过 naga 反射推导所需 UV 套数、runtime 自动绑定——**无需手动声明 UV 套数、零额外配置字段**。
+
+### @location 编号规则（AC-12：0..5 不变）
+
+| @location | 属性 | 格式 | 备注 |
+|:--|:--|:--|:--|
+| 0 | pos | float32x3 | 位置 |
+| 1 | normal | float32x3 | 法线 |
+| 2 | uv (套 0) | float32x2 | 第一套 UV（编号不变） |
+| 3 | tangent | float32x4 | 切线 |
+| 4 | skinIndex | uint16x4 | 蒙皮骨骼索引 |
+| 5 | skinWeight | float32x4 | 蒙皮权重 |
+| 6+K | uvK (套 K) | float32x2 | 第 K+1 套 UV（K=1..7，位置 6..12） |
+
+> **`@location(0..5)` 零变化**。全部内置 shader（PBR / unlit / sprite / skin / shadow_caster）现有编号不变；现存自定义 shader 无需改 VsIn。多套 UV 从 `@location(6)` 起连续递增。总 ≤13/16（8 套 UV + 5 非 UV 属性），`maxVertexAttributes`(16) 余量 3。
+
+### 反射机制：build-time naga → reflection JSON uvSetCount
+
+引擎**不在 runtime 调 naga**（`@forgeax/engine-naga` 物理隔离于 `@forgeax/engine-shader`，3 个 grep gate 守护）。UV 套数推导完全在 build-time：
+
+```
+WGSL 源码 @location 声明
+  → vite-plugin-shader transform hook
+    → naga emit_reflection（遍历 vertex entry-point function.arguments → Binding::Location）
+      → reflection JSON { "uvSetCount": N }
+```
+
+`uvSetCount` 写入 reflection JSON（与 bindings 同级，不污染 manifest 顶层/索引字段）。runtime 从 reflection JSON 读取 uvSetCount → 传给 `deriveVertexBufferLayout({ shaderUvSetCount })` → 驱动 clamp-to-last 绑定。**AI 用户全程不填任何 UV-count 字段**——`MaterialShaderEntry` / `paramSchema` / `MaterialAsset` 均无新增字段。
+
+### 反射推导规则（D-3/D-4）
+
+- 遍历 vertex entry-point 的 function arguments → match `Binding::Location { location }`
+- `location=2` 恒为 uv0（第一套 UV）；`location>=6` 且 `type=vec2<f32>` 计为额外 UV 套
+- `location(0) pos / 1 normal / 3 tangent / 4 skinIndex / 5 skinWeight` 不参与 UV 计数
+- 跳号鲁棒：`uvSetCount = max(location>=6) - 5`（与非连续编号兼容）
+- struct 封装（`fn vs(in: VsIn)`）→ 递归展开 struct member 的 `@location`
+- 无 vertex entry-point → `uvSetCount=0`
+
+### VsOut 也吃 location（独立空间）
+
+VsIn 与 VsOut 是**两处独立的 location 空间**——VsIn `@location(6)` 吃 vertex buffer 数据，VsOut `@location(N)` 插值传 fragment。自定义 shader 消费第二套 UV 时，需在 VsIn 声明 `@location(6) uv1`，并在 VsOut 自行分配一个空闲 location 把 `uv1` 插值传给 fragment（VsOut 编号独立于 VsIn 预算，按需分配）。注意：内置 PBR 是单 UV，其 VsIn/VsOut 不含 `uv1`——多套 UV 的 VsIn+VsOut 通路由自定义材质自己声明。
+
+### 多 UV 使用示例
+
+```wgsl
+// 自定义 vertex shader：声明第二套 UV（零额外配置）
+struct VsIn {
+  @location(0) pos    : vec3<f32>,
+  @location(1) normal : vec3<f32>,
+  @location(2) uv     : vec2<f32>,  // 套 0
+  @location(6) uv1    : vec2<f32>,  // 套 1（从 6 起）
+};
+struct VsOut {
+  @builtin(position) pos  : vec4<f32>,
+  @location(0)       uv   : vec2<f32>,
+  @location(1)       uv1  : vec2<f32>,  // VsOut 独立空间
+};
+@vertex
+fn vs_main(in: VsIn) -> VsOut {
+  var out: VsOut;
+  out.pos = /* MVP transform */;
+  out.uv  = in.uv;
+  out.uv1 = in.uv1;
+  return out;
+}
+
+// fragment: 贴图用哪套 UV 由源码写死
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+  let baseColor = textureSample(baseTex, baseSamp, in.uv);    // 套 0
+  let detail    = textureSample(detailTex, detailSamp, in.uv1); // 套 1
+  return baseColor * detail;
+}
+```
+
+> **内置 PBR 是单 UV**（`default-standard-pbr.wgsl` + skin 变体只声明 `@location(0..3)`，不含 `uv1`）。多套 UV 的 copy-paste 起点是 `apps/hello-multi-uv/src/multi-uv-demo.wgsl`——一个声明 `@location(6) uv1`、在 VsOut 传插值并在 fragment 用 `uv1` 驱动可辨识图案的自定义材质示例。
 
 ## 核心 API 速查
 
@@ -115,6 +195,22 @@ const mat = assets.register<MaterialAsset>({
 - **vite build 缺 sidecar 报错**：自定义 `.wgsl` 走 vite 生产构建必须配一份同名 `*.wgsl.meta.json`（`assetType: 'shader'` + `subAssets[].kind: 'material-shader'` + `paramSchema`）——它是 vite-plugin-shader transform 读 `paramSchema` 的 SSOT；缺了报 "missing required .wgsl.meta.json sidecar"。dawn-node smoke 走内联 compose 不读 sidecar，会掩盖这个构建缺口。
 - **贴图槽纯白方块**：`paramValues` 里贴图传了 GUID 字符串而非解析后的 `Handle`。见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §贴图纯白。
 - **同名注册 throw**：`registerMaterialShader` 同标识符二次注册 fail-fast 不覆盖（AGENTS.md explicit registration）；一个标识符只登记一次。
+
+## 引擎自带 shader id
+
+引擎在 `renderer.shader` 上预注册一组标识符，sprite 系列（unlit vs lit）按字符串 1:1 选型——`MaterialAsset.passes[0].shader` 切换是 1 字符串 1 步换轴：
+
+| identifier | 用途 |
+|:--|:--|
+| `forgeax::default-standard-pbr` | 3D mesh standard 路径（GGX direct + IBL） |
+| `forgeax::default-standard-pbr-skin` | 同上 + skin palette |
+| `forgeax::unlit` | 3D mesh unlit（`baseColor x baseColorTexture`） |
+| `forgeax::sprite` | 2D sprite unlit（alpha-blend；`paramSchema` 与 `forgeax::sprite-lit` field-set byte-identical） |
+| `forgeax::sprite-lit` | 2D sprite per-light forward（Half-Lambert squared，fragment 端 hardcoded normal `vec3(0,0,1)`，需 `>=1` DirectionalLight/PointLight/SpotLight 否则全黑；feat-20260624 M1'） |
+| `forgeax::shadow_caster` | depth-only pass（`bglEntries=[]`） |
+
+`MaterialSnapshot.shadingModel` 闭合 union 仍是 `'unlit' | undefined` 两档（post-PR-#520）；sprite-lit 走 `materialShaderId === 'forgeax::sprite-lit'` 字符串路由 mirror sprite，不扩 union（plan-strategy D-1）。OOS-1 normal-map 跟进 `feat-future-sprite-lit-normal-map`。全表 SSOT 见 `packages/shader/README.md` §Engine-shipped shader modules。
+
 
 ## 深入
 

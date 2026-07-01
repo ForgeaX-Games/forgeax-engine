@@ -12,6 +12,7 @@
 //
 // Related: requirements AC-14; plan-strategy D-5; charter P1 (progressive disclosure).
 
+import type { RhiCallEvent } from '@forgeax/engine-rhi-debug';
 import type { IDockviewPanelProps } from 'dockview-react';
 import {
   ChevronDown,
@@ -27,7 +28,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { useSelection } from '../selection-context';
 import { commandRowAnchor, drawAnchor, eventBrowserAnchor, selectedAnchor } from '../selectors';
-import { useViewModel } from '../viewer-context';
+import { useTape, useViewModel } from '../viewer-context';
 import type { CommandEntry } from '../viewer-model';
 
 type FilterMode = 'draws-only' | 'all-commands';
@@ -113,14 +114,44 @@ function nonDrawIcon(kind: string): string {
   }
 }
 
+/** Format command parameters compact. Switches on event.kind -- TS narrows automatically (AC-12). */
+function formatCommandParam(event: RhiCallEvent): string | null {
+  switch (event.kind) {
+    case 'setPipeline':
+      return `pipe=${event.pipelineHandleId}`;
+    case 'setVertexBuffer':
+      return `slot=${event.slot} buf=${event.bufferHandleId}`;
+    case 'setIndexBuffer':
+      return `fmt=${event.format} buf=${event.bufferHandleId}`;
+    case 'setBindGroup':
+      return `index=${event.index} bg=${event.bindGroupHandleId}`;
+    case 'draw':
+      return `vc=${event.vertexCount} ic=${event.instanceCount}`;
+    case 'drawIndexed':
+      return `idx=${event.indexCount} ic=${event.instanceCount}`;
+    case 'copyBufferToBuffer':
+      return `size=${event.size}`;
+    case 'setViewport':
+      return `${event.x},${event.y} ${event.w}x${event.h}`;
+    case 'setScissorRect':
+      return `${event.x},${event.y} ${event.w}x${event.h}`;
+    default:
+      return null;
+  }
+}
+
 function CommandRow({
   command,
   onSelect,
+  events,
 }: {
   command: CommandEntry;
   onSelect: (cmd: CommandEntry) => void;
+  events: readonly RhiCallEvent[] | undefined;
 }) {
   const isDraw = command.isDraw;
+  const event = events?.[command.eventIdx];
+  const paramText = !isDraw && event !== undefined ? (formatCommandParam(event) ?? null) : null;
 
   return (
     <button
@@ -141,6 +172,7 @@ function CommandRow({
         <Minus size={10} className="shrink-0 text-muted-foreground" />
       )}
       <span className="truncate">{isDraw ? drawKindLabel(command.kind) : command.kind}</span>
+      {paramText && <span className="text-muted-foreground/60 truncate">{paramText}</span>}
       {command.markerLabel && (
         <span className="text-warning/80 truncate">&quot;{command.markerLabel}&quot;</span>
       )}
@@ -152,31 +184,35 @@ function TreeNode({
   item,
   depth,
   onSelect,
+  events,
 }: {
   item: CommandTreeItem;
   depth: number;
   onSelect: (cmd: CommandEntry) => void;
+  events: readonly RhiCallEvent[] | undefined;
 }) {
   if (item.type === 'command') {
     return (
       <div style={{ paddingLeft: depth * 12 }}>
-        <CommandRow command={item.command} onSelect={onSelect} />
+        <CommandRow command={item.command} onSelect={onSelect} events={events} />
       </div>
     );
   }
 
   // GroupSegment — collapsible debug group
-  return <GroupNode group={item} depth={depth} onSelect={onSelect} />;
+  return <GroupNode group={item} depth={depth} onSelect={onSelect} events={events} />;
 }
 
 function GroupNode({
   group,
   depth,
   onSelect,
+  events,
 }: {
   group: GroupSegment;
   depth: number;
   onSelect: (cmd: CommandEntry) => void;
+  events: readonly RhiCallEvent[] | undefined;
 }) {
   const [open, setOpen] = useState(true);
 
@@ -195,7 +231,9 @@ function GroupNode({
           {group.children.map((child, idx) => {
             const childKey =
               child.type === 'command' ? `cmd-${child.command.eventIdx}` : `group-${idx}`;
-            return <TreeNode key={childKey} item={child} depth={1} onSelect={onSelect} />;
+            return (
+              <TreeNode key={childKey} item={child} depth={1} onSelect={onSelect} events={events} />
+            );
           })}
         </div>
       )}
@@ -205,12 +243,14 @@ function GroupNode({
 
 export function EventBrowser(_props: IDockviewPanelProps) {
   const vm = useViewModel();
+  const tape = useTape();
   const { selectedDrawIdx, setSelectedDrawIdx, setSelectedCommandIdx } = useSelection();
   const [filterMode, setFilterMode] = useState<FilterMode>('draws-only');
   const [collapsedPasses, setCollapsedPasses] = useState<Set<number>>(new Set());
 
   const tree = vm?.tree ?? [];
   const commands = vm?.commands ?? [];
+  const events = tape?.events;
 
   // Auto-select the first draw once a tape loads so the other panels (pipeline
   // state, texture preview) show data immediately — there is no separate tree
@@ -338,6 +378,7 @@ export function EventBrowser(_props: IDockviewPanelProps) {
                             item={item}
                             depth={0}
                             onSelect={handleCommandSelect}
+                            events={events}
                           />
                         );
                       })

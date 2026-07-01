@@ -20,7 +20,7 @@
 //   - "// 3. bootstrap"       entry point wiring (1)+(2)
 
 // 1. engine usage
-import { createApp } from '@forgeax/engine-app';
+import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   AssetRegistry,
@@ -78,8 +78,9 @@ const SHADOW_CONFIG = {
   splitLambda: 0.75,
   cascadeBlend: 0.2,
   mapSize: 2048,
-  nearPlane: 0.1,
-  farPlane: 50,
+  // Coverage: [camera near, shadowDistance]. Cubes span 0-40m depth, so 50m
+  // reach covers the scene while keeping cascade-0 resolution tight.
+  shadowDistance: 50,
 };
 
 // 10 cubes spanning 0-40m depth at varied positions + heights. `tex` selects
@@ -285,6 +286,29 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   void computeCsmSplits;
 
   console.warn(`[learn-render 5.3.3 csm] backend=${renderer.backend}`);
+
+  installCaptureHook(app, world);
+}
+
+// RHI-debug live-pixel hook for the capture smoke harness (pixel mode). Drives
+// one update + draw + readPixels so the live canvas read is anchored to the same
+// frame the capture records. Only meaningful when the page is served with
+// FORGEAX_ENGINE_RHI_DEBUG=1; harmless otherwise.
+function installCaptureHook(app: App, world: App['world']): void {
+  type CaptureHook = () => Promise<Uint8Array>;
+  const win = window as unknown as { __captureCsm?: CaptureHook };
+  const renderer = app.renderer;
+  win.__captureCsm = async (): Promise<Uint8Array> => {
+    world.update();
+    renderer.draw(world);
+    const r = await renderer.readPixels();
+    if (!r.ok) {
+      throw new Error(
+        `[learn-render 5.3.3 csm] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`,
+      );
+    }
+    return r.value;
+  };
 }
 
 async function loadTextureByGuid(
@@ -341,5 +365,6 @@ function cubeMaterial(
 declare global {
   interface Window {
     __learnRenderErrors?: Array<{ code: string; hint?: string | undefined }>;
+    __captureCsm?: () => Promise<Uint8Array>;
   }
 }

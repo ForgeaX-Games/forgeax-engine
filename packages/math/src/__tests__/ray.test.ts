@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import * as mat4 from '../mat4';
-import { worldToScreen } from '../ray';
+import { rayTriangleIntersects, worldToScreen } from '../ray';
 import type { Mat4 } from '../types';
 import * as vec2 from '../vec2';
 
@@ -266,6 +266,273 @@ describe('ray.worldToScreen — return type', () => {
     expect(typeof result.behind).toBe('boolean');
     // Verify no extra keys
     expect(Object.keys(result).sort()).toEqual(['behind', 'onScreen']);
+  });
+});
+
+// ============================================================
+// rayTriangleIntersects (feat-20260630-vertex-snapping-picking M1 w1)
+// ============================================================
+// TDD RED phase: these tests are RED until w2 implements Moller-Trumbore.
+//
+// AC-06 coverage:
+//   - correct t/u/v for known triangle + ray
+//   - degenerate (collinear/zero-area) → hit=false, no NaN propagation
+//   - t <= 0 rejection (behind ray origin)
+//   - parallel ray → miss
+//   - NaN guard on all inputs
+//   - barycentric boundary: u<0, v<0, u+v>1 → miss
+//   - double-sided: both front and back faces hit
+//   - edge/vertex grazing cases (u=0, v=0, u+v=1 boundaries)
+
+describe('ray.rayTriangleIntersects — normal hit', () => {
+  // A standard triangle in the XY plane at z=-5: right-triangle with vertices
+  // (0,0,-5), (2,0,-5), (0,2,-5)
+  const A = [0, 0, -5];
+  const B = [2, 0, -5];
+  const C = [0, 2, -5];
+
+  it('ray through centre of triangle → hit with correct t,u,v', () => {
+    // Ray from (0.5, 0.5, 0) looking down -z: should hit at centre
+    const r = [0.5, 0.5, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(true);
+    // t: distance from origin (0.5,0.5,0) to plane z=-5 → t=5
+    expect(result.t).toBeCloseTo(5, 5);
+    // Barycentric: point (0.5, 0.5) in triangle (0,0)-(2,0)-(0,2)
+    // u=(B-A) component, v=(C-A) component
+    // P = (1-u-v)*A + u*B + v*C = (2u, 2v)
+    // So u=0.25, v=0.25 for (0.5, 0.5)
+    expect(result.u).toBeCloseTo(0.25, 5);
+    expect(result.v).toBeCloseTo(0.25, 5);
+  });
+
+  it('ray hits vertex A exactly → u=0, v=0', () => {
+    const r = [0, 0, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(true);
+    expect(result.u).toBeCloseTo(0, 5);
+    expect(result.v).toBeCloseTo(0, 5);
+    expect(result.t).toBeCloseTo(5, 5);
+  });
+
+  it('ray hits vertex B exactly → u=1, v=0', () => {
+    const r = [2, 0, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(true);
+    expect(result.u).toBeCloseTo(1, 5);
+    expect(result.v).toBeCloseTo(0, 5);
+  });
+
+  it('ray hits vertex C exactly → u=0, v=1', () => {
+    const r = [0, 2, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(true);
+    expect(result.u).toBeCloseTo(0, 5);
+    expect(result.v).toBeCloseTo(1, 5);
+  });
+
+  it('ray hits edge AB midpoint → v=0, u=0.5', () => {
+    const r = [1, 0, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(true);
+    expect(result.v).toBeCloseTo(0, 5);
+    expect(result.u).toBeCloseTo(0.5, 5);
+  });
+
+  it('ray hits edge AC midpoint → u=0, v=0.5', () => {
+    const r = [0, 1, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(true);
+    expect(result.u).toBeCloseTo(0, 5);
+    expect(result.v).toBeCloseTo(0.5, 5);
+  });
+
+  it('double-sided: ray from behind (-z → +z) also hits', () => {
+    // Triangle at z=-5, ray from z=-10 looking +z
+    const r = [0.5, 0.5, -10, 0, 0, 1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(true);
+    expect(result.t).toBeCloseTo(5, 5);
+  });
+});
+
+describe('ray.rayTriangleIntersects — miss (outside triangle)', () => {
+  const A = [0, 0, -5];
+  const B = [2, 0, -5];
+  const C = [0, 2, -5];
+
+  it('u < 0 → miss', () => {
+    // Ray at x=-0.5 (left of triangle)
+    const r = [-0.5, 0.5, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(false);
+  });
+
+  it('v < 0 → miss', () => {
+    // Ray at y=-0.5 (below triangle)
+    const r = [0.5, -0.5, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(false);
+  });
+
+  it('u + v > 1 → miss', () => {
+    // Ray at (1.5, 1.5) which is outside hypotenuse
+    const r = [1.5, 1.5, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(false);
+  });
+});
+
+describe('ray.rayTriangleIntersects — degenerate triangles', () => {
+  it('collinear three points → hit=false', () => {
+    const A = [0, 0, 0];
+    const B = [1, 1, 1];
+    const C = [2, 2, 2]; // all on a line
+    const r = [0, 0, -1, 0, 0, 1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(false);
+    // Verify no NaN propagation
+    expect(Number.isNaN(result.t)).toBe(false);
+    expect(Number.isNaN(result.u)).toBe(false);
+    expect(Number.isNaN(result.v)).toBe(false);
+  });
+
+  it('zero-area triangle (all same point) → hit=false', () => {
+    const A = [0, 0, 0];
+    const B = [0, 0, 0];
+    const C = [0, 0, 0];
+    const r = [0, 0, -1, 0, 0, 1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(false);
+    expect(Number.isNaN(result.t)).toBe(false);
+    expect(Number.isNaN(result.u)).toBe(false);
+    expect(Number.isNaN(result.v)).toBe(false);
+  });
+
+  it('two identical vertices (zero-area) → hit=false', () => {
+    const A = [0, 0, 0];
+    const B = [1, 0, 0];
+    const C = [1, 0, 0]; // B == C
+    const r = [0.3, 0, -1, 0, 0, 1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(false);
+    expect(Number.isNaN(result.t)).toBe(false);
+  });
+});
+
+describe('ray.rayTriangleIntersects — t <= 0 rejection', () => {
+  it('t < 0 → miss (ray origin behind triangle)', () => {
+    const A = [0, 0, 5]; // triangle at z=5
+    const B = [2, 0, 5];
+    const C = [0, 2, 5];
+    // Ray from origin looking -z: triangle is behind the ray
+    const r = [0.5, 0.5, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(false);
+  });
+
+  it('t === 0 → miss (ray origin on triangle)', () => {
+    const A = [0, 0, 0];
+    const B = [2, 0, 0];
+    const C = [0, 2, 0];
+    // Ray origin at (0.5, 0.5, 0) — on the triangle plane, inside bounds
+    const r = [0.5, 0.5, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    // t=0 should be rejected per t <= 0 rule
+    expect(result.hit).toBe(false);
+  });
+});
+
+describe('ray.rayTriangleIntersects — parallel ray', () => {
+  it('ray parallel to triangle plane → miss', () => {
+    const A = [0, 0, -5];
+    const B = [2, 0, -5];
+    const C = [0, 2, -5];
+    // Ray in XY plane (parallel to triangle at z=-5)
+    const r = [0.5, 0.5, 0, 1, 0, 0] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(false);
+  });
+
+  it('ray nearly parallel (extremely shallow angle) → still hits', () => {
+    // Large triangle at z=-5, shallow-angle ray from origin
+    const A = [0, 0, -5];
+    const B = [400, 0, -5];
+    const C = [0, 400, -5];
+    // Ray from (100,100,0) with dx=0.999, dz=-0.0447 (shallow, ~2.6 deg from XY)
+    const r = [100, 100, 0, 0.999, 0, -0.0447] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(true);
+    expect(result.t).toBeGreaterThan(0);
+  });
+});
+
+describe('ray.rayTriangleIntersects — NaN guard', () => {
+  const A = [0, 0, -5];
+  const B = [2, 0, -5];
+  const C = [0, 2, -5];
+  const R = [0.5, 0.5, 0, 0, 0, -1] as const;
+
+  it('NaN in ray origin → hit=false', () => {
+    const r = [NaN, 0.5, 0, 0, 0, -1];
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(false);
+  });
+
+  it('NaN in ray direction → hit=false', () => {
+    const r = [0.5, 0.5, 0, NaN, 0, -1];
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(false);
+  });
+
+  it('NaN in triangle vertex → hit=false', () => {
+    const badA = [NaN, 0, -5];
+    const result = rayTriangleIntersects(R, badA, B, C);
+    expect(result.hit).toBe(false);
+  });
+
+  it('NaN in multiple triangle vertices → hit=false', () => {
+    const badB = [NaN, NaN, NaN];
+    const result = rayTriangleIntersects(R, A, badB, C);
+    expect(result.hit).toBe(false);
+  });
+});
+
+describe('ray.rayTriangleIntersects — non-axis-aligned triangle', () => {
+  it('arbitrary 3D triangle → correct intersection', () => {
+    // Triangle at arbitrary positions
+    const A = [1, 2, -5];
+    const B = [3, 1, -4];
+    const C = [1, 3, -6];
+    // Ray from (2, 2, 0) along -z, should hit near centre
+    const r = [2, 2, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(true);
+    expect(result.t).toBeGreaterThan(0);
+    expect(result.u).toBeGreaterThanOrEqual(0);
+    expect(result.v).toBeGreaterThanOrEqual(0);
+    expect(result.u + result.v).toBeLessThanOrEqual(1 + 1e-9);
+  });
+
+  it('ray hits triangle from oblique angle', () => {
+    const A = [0, 0, -10];
+    const B = [2, 0, -10];
+    const C = [0, 2, -10];
+    // Oblique ray
+    const r = [0, 0, 0, 0.1, 0.1, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(true);
+    expect(result.t).toBeGreaterThan(0);
+  });
+
+  it('ray misses non-axis-aligned triangle (near miss)', () => {
+    const A = [1, 2, -5];
+    const B = [3, 1, -4];
+    const C = [1, 3, -6];
+    // Ray misses above
+    const r = [4, 4, 0, 0, 0, -1] as const;
+    const result = rayTriangleIntersects(r, A, B, C);
+    expect(result.hit).toBe(false);
   });
 });
 

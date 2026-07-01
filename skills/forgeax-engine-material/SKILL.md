@@ -8,7 +8,7 @@ description: >-
 
 # forgeax-engine-material
 
-> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: feat-20260623-world-space-video-asset M6（VideoPlayer 组件 + video GUID 进 paramValues 贴图槽）
+> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M5
 
 > **material = 让东西可见的三件套**。一个实体要被画出来，缺一不可：几何（MeshFilter）+ 材质绑定（MeshRenderer）+ 材质资源（MaterialAsset），standard 材质还需要场景里有灯。聚合 `@forgeax/engine-runtime`（material / mesh / lights / shadow）。
 
@@ -26,7 +26,7 @@ description: >-
 | `Materials.standard({ baseColor, metallic?, roughness? })` | `=> MaterialAsset` | PBR；`metallic` 默认 0，`roughness` 默认 0.5 |
 | `assets.register(materialAsset)` | `=> Result<Handle, AssetError>` | 注册材质拿 handle |
 | `DirectionalLight` / `PointLight` / `SpotLight` | 组件 | 直接光源；standard 材质要靠它 |
-| `Skylight` | 组件 `{ cubemap?, colorR/G/B, intensity }` | 环境光（ambient）。`cubemap` **可选**：省略 → 即时纯色环境光（白 fallback cube，无 async），给 cubemap → 完整 IBL。`color`×`intensity` 都是每帧实时调的 |
+| `Skylight` | 组件 `{ equirect?, colorR/G/B, intensity }` | 环境光（ambient）。`equirect` **可选**：省略 → 即时纯色环境光（白 fallback cube，无 async），给 equirect → 完整 IBL（引擎内部懒触发 equirect→cubemap 投影 + irradiance/prefilter/BRDF LUT，**用户不调 `uploadCubemapFromEquirect`**）。`color`×`intensity` 都是每帧实时调的 |
 | `VideoPlayer` | 组件 `{ clip, playing, loop, currentTime }` | 视频播放控制组件；`clip: Handle<'VideoAsset','shared'>` 指向 VideoAsset，对齐 AudioSource.clip |
 | `VideoElementProvider` | interface + Resource key | host 实现的桥接接口；`world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, provider)` 注册后引擎的**每帧 record 阶段**直接取 element 上传（无需注册任何额外系统）|
 | `HANDLE_CUBE / QUAD / TRIANGLE / SPHERE` | 内建 `Handle<MeshAsset>` | 喂给 `MeshFilter.assetHandle` |
@@ -104,7 +104,7 @@ tilemap terrain 透明形态：AI 用户只用 `Tilemap + TileLayer { sortScope:
 ## 踩坑
 
 - **standard 材质全黑**：场景里没灯。`unlit` 自发光不需要灯，`standard` 没有 `DirectionalLight/PointLight/SpotLight`/`Skylight` 任意一种就一团黑——先 spawn 一盏灯。
-- **冷启动 / 无 IBL 时全黑几秒**：只挂 `DirectionalLight` 而环境光指望异步 IBL cubemap（`uploadCubemapFromEquirect` 要 GPU 预计算几秒）时，cubemap 就绪前场景接近黑。要即时环境光就 spawn **无 cubemap 的 Skylight**：`world.spawn({ component: Skylight, data: {} })` 给纯白环境光（首帧即亮，零 async），或 `data: { colorR, colorG, colorB, intensity }` 调色调强。给了 cubemap 才升级到完整 IBL。**别用高处补一盏常亮 PointLight 当 crutch**——那是绕过引擎缺口，现在引擎已直接支持纯色环境光。
+- **冷启动 / 无 IBL 时全黑几秒**：只挂 `DirectionalLight` 而环境光指望异步 IBL 时，equirect 投影就绪前场景接近黑。要即时环境光就 spawn **无 equirect 的 Skylight**：`world.spawn({ component: Skylight, data: {} })` 给纯白环境光（首帧即亮，零 async），或 `data: { colorR, colorG, colorB, intensity }` 调色调强。给了 equirect 才升级到完整 IBL——引擎 render record 阶段懒触发 equirect→cubemap 投影 + irradiance/prefilter/BRDF LUT（fire-and-forget，幂等，失败永久退化白 cube 不重试）。**别用高处补一盏常亮 PointLight 当 crutch**——那是绕过引擎缺口，现在引擎已直接支持纯色环境光。
 - **贴图槽纯白方块**：`paramValues` 里贴图传了 GUID 字符串而非解析后的 `Handle`（extract 阶段只认 `number`）。详细判定 + 修法见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §贴图纯白。
 - **材质注册失败走黑/白回退**：`.pack.json` 里 `passes[].shader` 标识符改名残留 → `register failed: shader 'X' not registered`。见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §shader 标识符残留。
 - **物体不在该在的位置**：`Transform` 写的是 local TRS，引擎每帧派生 world mat4；要读世界坐标见 [`forgeax-engine-math`](../forgeax-engine-math/SKILL.md)。
@@ -119,14 +119,14 @@ tilemap terrain 透明形态：AI 用户只用 `Tilemap + TileLayer { sortScope:
 - `SpotLight` 阴影（默认投射，zero-config，feat-20260625）：见下 §SpotLight 阴影
 - `Materials` 工厂 + `MaterialAsset` pass 结构：源码 SSOT `packages/runtime/src/materials.ts` + `packages/runtime/src/asset-registry.ts`
 - 组件字段定义：源码 `packages/runtime/src/components/{mesh-filter,mesh-renderer,directional-light,point-light,spot-light,skylight}.ts`
-- Skylight 环境光（可选 cubemap 纯色 fallback + color/intensity）：源码 SSOT `packages/runtime/src/components/skylight.ts` + `packages/runtime/src/ibl/skylight-bind-group.ts`（白 fallback irradiance cube）+ IBL 完整链路见 `packages/runtime/README.md` §Skylight / IBL
+- Skylight 环境光（可选 equirect 纯色 fallback + color/intensity）：源码 SSOT `packages/runtime/src/components/skylight.ts` + `packages/runtime/src/ibl/skylight-bind-group.ts`（白 fallback irradiance cube）+ IBL 完整链路见 `packages/runtime/README.md` §Skylight / IBL。`equirect` 字段接收 `Handle<EquirectAsset>`（`loadByGuid<EquirectAsset>(guid)` 得到），`CubeTextureAsset` 已删除
 - `RuntimeErrorCode` 全集（勿抄）：`packages/runtime/src/errors.ts`
 - 非三角形绘制（线框 / 点云 / debug-line）：`MeshAsset.submeshes[]`（必填非空）每项 `Submesh` 自带 `topology`（全 5 种：`'point-list' | 'line-list' | 'line-strip' | 'triangle-list' | 'triangle-strip'`，缺省 `'triangle-list'`）；vertex-only 的 line-list/point-list 可省 indices 走非索引 draw。用法见 `apps/hello/topology` demo + 源码 SSOT `packages/types/src/index.ts` `Submesh` JSDoc
 
 ### SpotLight 阴影（默认投射，zero-config）
 
 > [!IMPORTANT]
-> **一句话价值：** `SpotLight.castShadow` 默认为 `true`——spawn 即投 hard PCF 阴影，零配置。字段命名与调参语义对齐 `DirectionalLight`（同一套 `castShadow/mapSize/depthBias/normalBias/nearPlane/farPlane/pcfKernelSize`），从方向光迁移认知零成本。
+> **一句话价值：** `SpotLight.castShadow` 默认为 `true`——spawn 即投 hard PCF 阴影，零配置。字段命名与调参语义大体对齐 `DirectionalLight`（共享 `castShadow/mapSize/depthBias/normalBias/pcfKernelSize`），从方向光迁移认知低成本。**近远平面的差异**：SpotLight 是透视灯锥，`nearPlane`/`farPlane` 定义灯锥深度范围（保留）；DirectionalLight 是正交 CSM，覆盖范围由单一 `shadowDistance` 控制，近端从相机 near 自动推导（不再有 `nearPlane`/`farPlane`）。
 
 **阴影字段速查（全部嵌入 `SpotLight`，无独立阴影组件）：**
 
@@ -256,6 +256,120 @@ const spriteMat: MaterialAsset = {
 ```
 
 漏写 `renderState.blend` → 走 opaque pass（hard-edged 非 blended quad）。SSOT 与 preset 速查表（additive / multiply / straight-alpha / opaque overlay 字面量）见 `packages/runtime/README.md` §Sprite materials。
+
+### Sprite-lit material：1 字符串切 per-light forward（feat-20260624 M1'）
+
+sprite material 的灯光选型是 `passes[0].shader` 字符串切换，不扩 `MaterialSnapshot.shadingModel` 闭合 union（post-PR-#520 仍是 `'unlit' | undefined` 两档）：`'forgeax::sprite'` 走 unlit 直采纹理（默认；任意灯光不影响），`'forgeax::sprite-lit'` 走 per-light forward + Half-Lambert squared diffuse + fragment-side hardcoded normal `vec3(0,0,1)`——**需场景至少 1 个 DirectionalLight / PointLight / SpotLight**，否则视觉全黑（与 3D `'standard'` 同理）。`paramSchema` 与 `forgeax::sprite` 字段集合 byte-identical（4 vec4 + 1 texture2d；BGL JSON byte-identical，AC-07）。OOS-1 normal-map 跟进 `feat-future-sprite-lit-normal-map`。
+
+```ts
+// 从 forgeax::sprite 切到 forgeax::sprite-lit：仅改 1 字符串
+const spriteLitMat: MaterialAsset = {
+  kind: 'material',
+  passes: [{
+    name: 'Forward',
+    shader: 'forgeax::sprite-lit',                      // <-- 1 字符串切换轴
+    renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
+  }],
+  paramValues: {
+    colorTint: [1, 1, 1, 1],
+    baseColorTexture: spriteTextureGuid,
+    sampler: spriteSamplerGuid,
+  },
+};
+// 同帧场景须存在至少 1 盏灯，否则中心像素 R/G/B = 0：
+spawn(world, [Transform.identity(), DirectionalLight({ color: [1, 1, 1], intensity: 1 })]);
+```
+
+
+## 多套 UV -- `@location` 声明即 UV 套数 SSOT（clamp-to-last 埋名）
+
+> [!IMPORTANT]
+> **一句话价值：** AI 用户在 WGSL 里写 `@location(6) uv1: vec2<f32>`，引擎就自动把 mesh 的对应 UV 套数据喂进来——**无需理解 interleaved 字节布局、无需手动管 vertex buffer、零额外配置字段**。引擎 build-time 反射推导所需套数、runtime 按 clamp-to-last 规则自动绑定。**每个 `@location` 声明即 UV 套数 SSOT**。
+
+### 心智模型
+
+mesh 可以有 0..8 套 UV（对标 UE `MAX_TEXCOORDS=8`）；shader 声明 m 套 UV（通过 `@location` 反射推导）。两者在 `deriveVertexBufferLayout` 处会合——引擎自动把 mesh 实有数据喂进 shader，缺套的静默 clamp-to-last（多余的套读最后一套数据）。**不引入 MaterialAsset 层的 texture→uv-index 配置字段**（OOS-1，贴图用哪套 UV 由 WGSL 源码写死）。
+
+### clamp-to-last 绑定规则表
+
+| mesh UV 套数 n | shader 声明 m 套 | 绑定行为 |
+|:--|:--|:--|
+| n > 0, m <= n | 一一绑定 | shader index `0..m-1` 各绑实际数据 |
+| n > 0, m > n | clamp-to-last | index `0..n-1` 绑实际数据；`[n,m)` 全部别名到第 `n-1` 套 |
+| n = 0 | 全 0 buffer | 所有 UV 输入绑到全 0 的默认 buffer，shader 读到 `(0,0)` |
+
+> **全部静默，无 warn / 无 error**（用户拍板对齐 UE 语义，区别于业界 Unity/UE 的 zero-fill——forgeax 是 clamp-to-last 自定义语义）。
+
+### 边界情况
+
+| 场景 | 行为 |
+|:--|:--|
+| mesh 有 2 套 UV、shader 只声明 `@location(2) uv` | 只消费第一套；第二套不喂入该 PSO（节省 vertex layout 槽位）|
+| mesh 有 2 套 UV、shader 声明 5 套（`uv/uv1/uv2/uv3/uv4`） | uv=套0、uv1=套1、uv2/uv3/uv4 全部 alias 到套1 |
+| mesh 无 UV、shader 声明 3 套 UV | 全部绑 8 字节 `[0,0,0,0]` buffer → shader 读到 `(0,0)`；不崩溃 |
+| mesh 有 3 套 UV、shader 声明 3 套 | 一一对应，正常渲染 |
+| > 8 套 UV（导入阶段截断） | 静默丢弃 TEXCOORD_8+，v2 实有最多 8 套 |
+| mesh-bin 契约违反 | **唯一报错路径**：version != 2 / uvSetCount 越界 / stride 不自洽 → `mesh-bin-contract-violation`（结构化 `.code`/`.expected`/`.hint`/`.detail`，`.hint` = 're-cook the asset via importer'） |
+
+### @location 编号规则
+
+| @location | 属性 | 格式 | 说明 |
+|:--|:--|:--|:--|
+| 0 | pos | float32x3 | 位置 |
+| 1 | normal | float32x3 | 法线 |
+| 2 | uv (套 0) | float32x2 | 第一套 UV（不动现有编号，AC-12）|
+| 3 | tangent | float32x4 | 切线 |
+| 4 | skinIndex | uint16x4 | 蒙皮骨骼索引 |
+| 5 | skinWeight | float32x4 | 蒙皮权重 |
+| 6 | uv1 (套 1) | float32x2 | 第二套 UV |
+| 7 | uv2 (套 2) | float32x2 | 第三套 UV |
+| ... | ... | ... | |
+| 12 | uv7 (套 7) | float32x2 | 第八套 UV |
+
+> **`@location(0..5)` 零变化**（AC-12）。全部内置 shader 现有编号不变；现存自定义 shader 无需改 VsIn。多套 UV 从 `@location(6)` 起连续递增——`uv` 是一一可外推（`uv1` 概念最近）。
+
+### 多 UV 使用示例
+
+```wgsl
+// 自定义 shader：声明第二套 UV（零额外配置）
+struct VsIn {
+  @location(0) pos    : vec3<f32>,
+  @location(1) normal : vec3<f32>,
+  @location(2) uv     : vec2<f32>,   // 套 0（不动现有编号）
+  @location(6) uv1    : vec2<f32>,   // 套 1（从 6 起）
+};
+struct VsOut {
+  @builtin(position) pos : vec4<f32>,
+  @location(0)       uv  : vec2<f32>,
+  @location(1)       uv1 : vec2<f32>,  // VsOut 独立 location 空间
+};
+```
+
+```wgsl
+// fragment：贴图用哪套 UV 由源码写死（OOS-1 零配置字段）
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+  // 套 0：baseColor 采样
+  let albedo = textureSample(baseColorTex, baseColorSampler, in.uv);
+  // 套 1：detail map 采样（只用声明 @location(6) uv1 即自动生效）
+  let detail = textureSample(detailTex, detailSampler, in.uv1);
+  return albedo * detail;
+}
+```
+
+**内置 PBR 是单 UV**：`default-standard-pbr.wgsl`（及 skin 变体）的 VsIn 只声明 `@location(0..3)`（pos/normal/uv/tangent，单套 `uv`），fragment 只采样第一套 UV——不消费 `uv1`。**多套 UV 由自定义材质消费**：要用第二套及以上 UV，写一个自定义 `.wgsl` 材质（在 VsIn 声明 `@location(6) uv1: vec2<f32>` 并在 fragment 采样它），引擎按 `@location` 反射推导套数并自动绑定。copy-paste 起点见 `apps/hello-multi-uv/src/multi-uv-demo.wgsl`（用 `uv1` 驱动可辨识图案的最小示例）。
+
+### 常见路径：第二套 UV 从导入到渲染
+
+```mermaid
+flowchart LR
+  IMP["glTF/FBX 导入<br/>保留 TEXCOORD_0..7"] --> MB["mesh-bin v2<br/>28B header 含 uvSetCount"]
+  MB --> LAYOUT["deriveVertexBufferLayout<br/>@location(6) uv1 + clamp-to-last"]
+  LAYOUT --> PSO["PSO 构建<br/>真实 vertex binding"]
+  PSO --> FRAG["fragment<br/>textureSample(tex, s, in.uv1)"]
+```
+
+AI 用户视角：**导入 → 声明 @location(6) → fragment 采样——三步串联，零手动管理**。引擎 build-time shader 编译时反射 `@location` 推导 uvSetCount、runtime 自动绑定——全部透明。
 
 ## 世界空间视频纹理 -- VideoPlayer + paramValues video GUID
 

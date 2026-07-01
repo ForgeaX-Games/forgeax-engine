@@ -44,6 +44,6 @@
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
-    "@webgpu/types": "^0.1.70"
+    "@webgpu/types": "^0.1.71"
   }
 }

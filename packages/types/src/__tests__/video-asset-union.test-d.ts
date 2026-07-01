@@ -34,8 +34,8 @@ describe('VideoAsset POD shape (M1 baseline)', () => {
           return 'mesh';
         case 'texture':
           return 'texture';
-        case 'cube-texture':
-          return 'cube-texture';
+        case 'equirect':
+          return 'equirect';
         case 'sampler':
           return 'sampler';
         case 'material':

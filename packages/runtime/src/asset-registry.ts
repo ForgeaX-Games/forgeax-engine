@@ -50,9 +50,9 @@ import {
   type AssetErrorCode,
   type AssetErrorDetail,
   type AssetRef,
-  type CubeTextureAsset,
-  type CubeTextureMetadata,
+  countExtraUvSets,
   derive,
+  type EquirectAsset,
   type FontAsset,
   type Handle,
   handleSlot,
@@ -78,7 +78,6 @@ import {
   type SkeletonAsset,
   type TagOf,
   type TextureAsset,
-  type TextureFormat,
   type TilesetAsset,
   type MeshAsset as TypesMeshAsset,
   toShared,
@@ -325,29 +324,6 @@ interface MutablePackage {
 // ─── Schema-driven material parse result (feat-20260523 M4-T01) ──────────
 // ─── AssetRegistry class ────────────────────────────────────────────────────
 
-// Reconstruct a CubeTextureAsset POD from a serialised pack payload
-// (feat-20260520-skylight-ibl-cubemap M1). The payload arrives as a pack
-// file asset entry; this helper validates the structural fields and
-// reconstructs the CubeTextureAsset POD shape.
-function parseCubeTexturePayload(payload: Record<string, unknown>): CubeTextureAsset | undefined {
-  const rawFaces = payload.faces;
-  if (!Array.isArray(rawFaces) || rawFaces.length !== 6) return undefined;
-  for (const f of rawFaces) {
-    if (!(f instanceof Uint8Array)) return undefined;
-  }
-  const width = payload.width;
-  const height = payload.height;
-  if (typeof width !== 'number' || typeof height !== 'number') return undefined;
-  if (typeof payload.format !== 'string') return undefined;
-  return {
-    kind: 'cube-texture',
-    width: width as number,
-    height: height as number,
-    format: payload.format as TextureFormat,
-    faces: rawFaces as readonly Uint8Array[],
-  };
-}
-
 /**
  * Field names known to carry handle<> schema-vocab references (plan-strategy
  * D-4).  parseScenePayload uses this allowlist to replace integer values
@@ -362,7 +338,12 @@ const HANDLE_FIELD_NAMES: ReadonlySet<string> = new Set([
   'material',
   'skeleton',
   'clip',
-  'cubemap',
+  // feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M3 / w27:
+  // Skylight.equirect + SkyboxBackground.equirect (shared<EquirectAsset>). The
+  // generic extractSceneEntityHandleGuids path already covers shared< fields by
+  // schema; this allowlist is the second scene-parse path (parseScenePayload),
+  // so the new handle field name is registered here too (R-1).
+  'equirect',
 ]);
 
 /**
@@ -712,14 +693,6 @@ export const sceneLoader: Loader = {
   },
 };
 
-/** cube-texture loader — delegates to parseCubeTexturePayload. */
-export const cubeTextureLoader: Loader = {
-  kind: 'cube-texture',
-  load(payload) {
-    return parseCubeTexturePayload(payload);
-  },
-};
-
 /**
  * feat-20260613-material-paramschema-driven-binding M4 / w22 (D-5 graceful):
  * the legacy hardcoded texture-field allowlist Set has been removed
@@ -948,14 +921,13 @@ export const animationClipLoader: Loader = {
 };
 
 /**
- * The seven inline pack-payload loaders, in the historical `if`-chain order.
- * `wireDefaultLoaders` (w5) registers these plus the texture / font loaders
- * (w6) and the audio placeholder (w8).
+ * The six inline pack-payload loaders, in the historical `if`-chain order.
+ * `wireDefaultLoaders` (w5) registers these plus the texture / font / equirect
+ * loaders (w6) and the audio placeholder (w8).
  */
 export const INLINE_PACK_LOADERS: readonly Loader[] = [
   meshLoader,
   sceneLoader,
-  cubeTextureLoader,
   materialLoader,
   skeletonLoader,
   skinLoader,
@@ -989,7 +961,7 @@ interface LoaderEntry {
   readonly guidKey: string;
   readonly relativeUrl: string;
   readonly kind: string;
-  readonly metadata?: ImageMetadata | CubeTextureMetadata | undefined;
+  readonly metadata?: ImageMetadata | undefined;
 }
 
 /** texture loader — fetch bytes -> hdr / import / dev decode -> TextureAsset POD. */
@@ -1055,6 +1027,64 @@ async function loadTextureAsset(entry: LoaderEntry, ctx: LoadContext): Promise<L
     mipLevelCount: levels,
   };
   return { ok: true, value: texAsset };
+}
+
+/**
+ * equirect loader (feat-20260630 M1 / w4) -- fetch the build-time-imported
+ * rgba16float `.bin` and assemble an EquirectAsset POD. An equirect `.hdr`
+ * folds to a single 2D image with a disk identity (unlike the retired
+ * cube-texture), so it rides the same upstream-entry `.bin` path as
+ * textureLoader. D-2: independent async body, no shared `.bin` parser helper
+ * (the inline assembly is the whole body; abstraction would add a concept).
+ */
+export const equirectLoader: Loader = {
+  kind: 'equirect',
+  load(payload, _refs, ctx): Promise<LoaderAsyncResult> {
+    const entry = payload as unknown as LoaderEntry;
+    return loadEquirectAsset(entry, ctx);
+  },
+};
+
+async function loadEquirectAsset(entry: LoaderEntry, ctx: LoadContext): Promise<LoaderAsyncResult> {
+  // The `.bin` suffix is the single import-state judgement (mirrors
+  // loadTextureAsset): an unimported equirect row fails fast with the
+  // dedicated sentinel rather than reaching fetchBinary on a raw `.hdr`.
+  if (!entry.relativeUrl.endsWith('.bin')) {
+    return {
+      ok: false,
+      error: new AssetError({
+        code: 'texture-source-not-imported',
+        expected: `a build-time-imported rgba16float .bin for equirect ${entry.relativeUrl}`,
+        hint: ASSET_ERROR_HINTS['texture-source-not-imported'],
+        detail: { sourcePath: entry.relativeUrl },
+      }),
+    };
+  }
+
+  const meta = entry.metadata;
+  if (meta === undefined || meta.kind !== 'texture') {
+    return {
+      ok: false,
+      error: makeImageError({
+        code: 'image-meta-missing',
+        sourcePath: entry.relativeUrl,
+        expectedSidecarPath: `${entry.relativeUrl}.meta.json`,
+      }),
+    };
+  }
+
+  const fetched = await ctx.fetchBinary(entry.relativeUrl);
+  if (!fetched.ok) return { ok: false, error: fetched.error };
+
+  const equirectAsset: EquirectAsset = {
+    kind: 'equirect',
+    width: meta.width ?? 0,
+    height: meta.height ?? 0,
+    format: meta.format,
+    data: fetched.value,
+    colorSpace: meta.colorSpace,
+  };
+  return { ok: true, value: equirectAsset };
 }
 
 /** font loader — fetch pack JSON -> resolve atlas/sampler refs -> FontAsset POD. */
@@ -1277,7 +1307,11 @@ function parseFontNotdef(notdefRaw: unknown): FontAsset['notdef'] | undefined {
  * ...)` chain (AC-01); it is derived from the loader objects so the kind
  * strings have one source.
  */
-export const UPSTREAM_ENTRY_LOADERS: readonly Loader[] = [textureLoader, fontLoader];
+export const UPSTREAM_ENTRY_LOADERS: readonly Loader[] = [
+  textureLoader,
+  fontLoader,
+  equirectLoader,
+];
 const UPSTREAM_ENTRY_KINDS: ReadonlySet<string> = new Set(
   UPSTREAM_ENTRY_LOADERS.map((l) => l.kind),
 );
@@ -1409,13 +1443,14 @@ function validateMeshPayload(asset: Asset): AssetError | null {
   // Skin-aware stride: when MeshAsset.attributes carries skinIndex + skinWeight,
   // the bridge promotes the interleaved buffer to 18 floats/vertex (12 base +
   // 4 uint16x4 packed via aliased Uint16 view at slots 12-13 + 4 float weights
-  // at slots 14-17). Charter-aligned: the validator must mirror the same shape
-  // the bridge produces, otherwise indexed skinned meshes (every Mixamo / most
-  // glTF exports) fail with a stride that is structurally correct.
+  // at slots 14-17).
+  // feat-20260629 multi-uv: extra UV sets (uv1..uv7) add 2 floats each to the
+  // interleaved stride, pushed after skin data (canonical order).
   const attrs = (asset as TypesMeshAsset).attributes;
   const isSkinned =
     attrs !== undefined && attrs.skinIndex !== undefined && attrs.skinWeight !== undefined;
-  const floatsPerVertex = isSkinned ? 18 : 12;
+  const extraUvSets = countExtraUvSets(attrs);
+  const floatsPerVertex = (isSkinned ? 18 : 12) + extraUvSets * 2;
 
   if (asset.vertices.length % floatsPerVertex !== 0) {
     return new AssetError({
@@ -2002,7 +2037,7 @@ export class AssetRegistry {
           relativeUrl: string;
           kind: string;
           name?: string;
-          metadata?: ImageMetadata | CubeTextureMetadata | undefined;
+          metadata?: ImageMetadata | undefined;
         }
       >
     | undefined = undefined;
@@ -2861,7 +2896,7 @@ export class AssetRegistry {
    *
    * feat-20260526 M4: `shadingModel` field is retired in favour of
    * pass-based MaterialAsset. This generic surface covers the full
-   * `Asset` closed union (mesh / texture / sampler / scene / cube-texture
+   * `Asset` closed union (mesh / texture / sampler / scene / equirect
    * / material).
    */
   /**
@@ -3368,7 +3403,7 @@ export class AssetRegistry {
       relativeUrl: string;
       kind: string;
       name?: string;
-      metadata?: ImageMetadata | CubeTextureMetadata | undefined;
+      metadata?: ImageMetadata | undefined;
     },
   ): Promise<Result<T, AssetError | ImageError | RhiError>> {
     const loader = this.loaders.get(entry.kind);
@@ -3466,7 +3501,7 @@ export class AssetRegistry {
         relativeUrl: string;
         kind: string;
         name?: string;
-        metadata?: ImageMetadata | CubeTextureMetadata | undefined;
+        metadata?: ImageMetadata | undefined;
       }
     | undefined
   > {
@@ -3538,7 +3573,7 @@ export class AssetRegistry {
       relativeUrl: string;
       kind: string;
       name?: string;
-      metadata?: ImageMetadata | CubeTextureMetadata | undefined;
+      metadata?: ImageMetadata | undefined;
     },
     parentContext?: {
       sceneEntityId?: number;
@@ -4178,7 +4213,7 @@ export class AssetRegistry {
           relativeUrl: string;
           kind: string;
           name?: string;
-          metadata?: ImageMetadata | CubeTextureMetadata | undefined;
+          metadata?: ImageMetadata | undefined;
         }
       >,
       AssetError
@@ -4223,7 +4258,7 @@ export class AssetRegistry {
         relativeUrl: string;
         kind: string;
         name?: string;
-        metadata?: ImageMetadata | CubeTextureMetadata | undefined;
+        metadata?: ImageMetadata | undefined;
       }
     >();
     for (const item of raw as Array<{
@@ -4252,11 +4287,11 @@ export class AssetRegistry {
           relativeUrl: string;
           kind: string;
           name?: string;
-          metadata?: ImageMetadata | CubeTextureMetadata | undefined;
+          metadata?: ImageMetadata | undefined;
         } = {
           relativeUrl: item.relativeUrl,
           kind: item.kind,
-          metadata: item.metadata as ImageMetadata | CubeTextureMetadata | undefined,
+          metadata: item.metadata as ImageMetadata | undefined,
         };
         if (typeof item.name === 'string') row.name = item.name;
         catalog.set(item.guid.toLowerCase(), row);

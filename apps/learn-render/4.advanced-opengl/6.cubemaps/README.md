@@ -3,13 +3,13 @@
 > [!NOTE]
 > **LO original chapter**: [LearnOpenGL 4.6 Cubemaps](https://learnopengl.com/Advanced-OpenGL/Cubemaps)
 >
-> **Engine surface**: `createApp` + `loadByGuid<TextureAsset>` + `uploadCubemapFromEquirect` + `Skylight` + `SkyboxBackground(SKYBOX_MODE_CUBEMAP)` + `Materials.standard({ metallic, roughness })` + PBR IBL reflection.
+> **Engine surface**: `createApp` + `loadByGuid<EquirectAsset>` + `Skylight{ equirect }` + `SkyboxBackground(SKYBOX_MODE_CUBEMAP)` + `Materials.standard({ metallic, roughness })` + PBR IBL reflection.
 
 ## Hit-rate index (AI user fast-locate)
 
 | LO sub-example | Hit? | forgeax equivalent | grep anchor |
 |:--|:--|:--|:--|
-| 6-PNG cubemap face loading | **offset** | equirect HDR routing via `uploadCubemapFromEquirect` (OOS-3: 6-PNG loader deferred) | `uploadCubemapFromEquirect` |
+| 6-PNG cubemap face loading | **offset** | equirect HDR routing via `loadByGuid<EquirectAsset>` (OOS-3: 6-PNG loader deferred) | `EquirectAsset` |
 | Cube-mapped skybox rendering | **hit** | `SkyboxBackground(SKYBOX_MODE_CUBEMAP)` renders the cubemap as visible background | `SkyboxBackground` |
 | Reflection environment mapping | **hit** | PBR `standard` material with `metallic=1, roughness=0` + IBL `Skylight` | `Materials.standard` |
 | Cubemap sampler in shader | N/A | Engine handles `textureCube` sampling internally via `Skylight`; user sees one `SkyboxBackground` spawn | `SKYBOX_MODE_CUBEMAP` |
@@ -20,11 +20,11 @@ LO 4.6 teaches cubemaps: loading 6 cube-face PNG images, creating a cubemap text
 
 In forgeax, this example demonstrates the same teaching concept through forgeax-first primitives:
 
-1. **Equirect-to-cubemap conversion**: forgeax takes an equirectangular HDR image (`newport_loft.hdr`, GUID `019e4a26-3c29-7420-af5d-20f2724a16b0` from the `forgeax-engine-assets` vendor submodule, CC BY-NC 4.0) and converts it to a cubemap via `renderer.store.uploadCubemapFromEquirect()`. This is the forgeax equivalent of LO's 6-PNG cubemap face loading -- a single HDR input replaces 6 PNG faces (OOS-3: 6-PNG cubemap loader is deferred in the engine).
+1. **Equirect HDR as an asset kind**: forgeax loads an equirectangular HDR image (`newport_loft.hdr`, GUID `019e4a26-3c29-7420-af5d-20f2724a16b0` from the `forgeax-engine-assets` vendor submodule, CC BY-NC 4.0) as an `EquirectAsset` via `loadByGuid<EquirectAsset>`. This is the forgeax equivalent of LO's 6-PNG cubemap face loading -- a single HDR input replaces 6 PNG faces (OOS-3: 6-PNG cubemap loader is deferred in the engine). The equirect-to-cubemap conversion + IBL precompute happen **internally** inside the render record arm; the demo never calls an upload API.
 
-2. **Skylight + SkyboxBackground**: Two components consume the same cubemap handle:
+2. **Skylight + SkyboxBackground**: Two components hold the same equirect handle (`Skylight{ equirect }`, `SkyboxBackground{ equirect }`):
    - `Skylight` provides PBR IBL (image-based lighting) -- diffuse irradiance and specular prefiltered mip chain for the PBR standard material.
-   - `SkyboxBackground(SKYBOX_MODE_CUBEMAP)` renders the cubemap as the visible background, matching LO's skybox render.
+   - `SkyboxBackground(SKYBOX_MODE_CUBEMAP)` renders the internally-projected cubemap as the visible background, matching LO's skybox render.
 
 3. **Reflection contrast**: Two cubes sit side-by-side:
    - **Reflective cube** (left): `Materials.standard({ metallic: 1, roughness: 0 })` -- full metallic PBR surface mirrors the IBL cubemap environment with sharp specular reflections.
@@ -38,11 +38,11 @@ In forgeax, this example demonstrates the same teaching concept through forgeax-
 
 ```
 newport_loft.hdr (disk, 3.8 MB equirect HDR)
-  |-- loadByGuid<TextureAsset>(guid)                     -- GUID asset pipeline
-  |-- assets.get<TextureAsset>(handle)                    -- fetch source POD (rgba32float)
-  |-- renderer.store.uploadCubemapFromEquirect(h, pod)    -- equirect->cubemap convert + upload
-  |-- spawn Skylight{ cubemap: handle }                   -- PBR IBL diffuse+specular
-  |-- spawn SkyboxBackground{ cubemap: handle }           -- visible cubemap background
+  |-- loadByGuid<EquirectAsset>(guid)                    -- GUID asset pipeline (EquirectAsset POD)
+  |-- allocSharedRef('EquirectAsset', pod)               -- mint a user-tier equirect handle
+  |-- spawn Skylight{ equirect: handle }                 -- PBR IBL diffuse+specular
+  |-- spawn SkyboxBackground{ equirect: handle }         -- visible cubemap background
+  |   (engine record arm lazily projects equirect->cubemap + IBL internally)
   +-- spawn reflective cube (metallic=1, roughness=0)     -- shows IBL environment mirror
   +-- spawn non-reflective cube (metallic=0, roughness=0.5) -- shows matte IBL-lit surface
 ```
@@ -79,11 +79,11 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-6-cubemaps" typecheck
 
 | LO concept | LO C++ / OpenGL | forgeax equivalent |
 |:--|:--|:--|
-| Cube-map face images | 6 PNG files (right/left/top/bottom/front/back) | Single HDR equirect image (`newport_loft.hdr`) via `uploadCubemapFromEquirect` |
-| Cubemap texture creation | `glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, ...)` for each face | Engine handles cubemap creation internally; user calls one `uploadCubemapFromEquirect` |
+| Cube-map face images | 6 PNG files (right/left/top/bottom/front/back) | Single HDR equirect image (`newport_loft.hdr`) loaded as `EquirectAsset` |
+| Cubemap texture creation | `glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, ...)` for each face | Engine projects the cubemap internally from the equirect handle; user calls no upload API |
 | Skybox rendering | Manual skybox cube with depth-trick (`glDepthFunc(GL_LEQUAL)`) | `SkyboxBackground(SKYBOX_MODE_CUBEMAP)` component -- engine handles depth + render pass ordering |
 | Reflection mapping | `glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_REFLECTION_MAP)` | PBR `Materials.standard({ metallic: 1, roughness: 0 })` + IBL `Skylight` -- engine resolves reflection via split-sum approximation |
-| Environment mapping | Fragment shader samples `skybox` via `reflect(viewDir, normal)` | Engine handles it in PBR BRDF shader; user provides `Skylight` cubemap + sets `metallic`/`roughness` on material |
+| Environment mapping | Fragment shader samples `skybox` via `reflect(viewDir, normal)` | Engine handles it in PBR BRDF shader; user provides `Skylight{ equirect }` + sets `metallic`/`roughness` on material |
 | Shader uniform for cubemap | `glUniform1i(glGetUniformLocation(shader, "skybox"), 0)` | `Skylight` component data drives engine's internal IBL binding |
 | Window + loop | `glfwCreateWindow` + `while(!glfwWindowShouldClose)` | `createApp(canvas, opts)` from `@forgeax/engine-app` |
 | Keyboard camera | `glfwGetKey(window, GLFW_KEY_W)` etc. | `addFirstPersonSystem` from `apps/shared/src/learn-render-first-person.ts` |
@@ -104,7 +104,7 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-6-cubemaps" typecheck
 
 | File | Lines | Role |
 |:--|--:|:--|
-| `src/index.ts` | ~190 | Three-section bootstrap -- loads newport_loft.hdr via GUID, equirect-to-cubemap upload, spawns Skylight + SkyboxBackground + 2 contrast cubes, camera with HDR tonemap |
+| `src/index.ts` | ~190 | Three-section bootstrap -- loads newport_loft.hdr via `loadByGuid<EquirectAsset>`, spawns Skylight + SkyboxBackground (both hold the equirect handle) + 2 contrast cubes, camera with HDR tonemap |
 | `scripts/smoke-dawn.mjs` | ~480 | Dawn-node dual-state pixel-diff smoke: skybox-on vs skybox-off two-World diff, FALSIFY=skybox-reuse-buffer sensitivity check |
 | `package.json` | ~55 | Workspace metadata + dependencies |
 

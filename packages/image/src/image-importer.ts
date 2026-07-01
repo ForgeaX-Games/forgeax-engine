@@ -27,13 +27,13 @@
 // the pack-index row.
 //
 // GUID import-stable iron law: every produced `ImportedAsset.guid` comes from
-// `ctx.subAssets[]`, never minted here. A sub-asset of `kind: 'cube-texture'`
-// (HDR equirect IBL) is NOT folded by this importer today (its multi-face
-// cook lives on the runtime IBL path); a declared cube GUID with no produced
-// POD is surfaced by the runner's `import-produced-no-assets` check rather
-// than silently dropped.
+// `ctx.subAssets[]`, never minted here. A sub-asset of `kind: 'equirect'`
+// (HDR lat-long env map) IS folded by the .hdr arm into an EquirectAsset POD
+// (a single 2D rgba16float image); the cube-to-cube IBL projection is a runtime
+// GPU pass, not a build-time fold (feat-20260630).
 
 import type {
+  EquirectAsset,
   ImageColorSpace,
   ImportContext,
   ImportedAsset,
@@ -84,19 +84,21 @@ async function importImage(ctx: ImportContext): Promise<readonly ImportedAsset[]
 
     const out: ImportedAsset[] = [];
     for (const sub of ctx.subAssets) {
-      // Only flat 2D image sub-assets are folded here; cube-texture sub-assets
-      // ride the runtime IBL multi-face cook and are intentionally not produced.
-      if (sub.kind !== 'texture') continue;
-      const payload: TextureAsset = {
-        kind: 'texture',
+      // The .hdr arm folds equirect sub-assets only: a single 2D rgba16float
+      // image (the lat-long env map) with a disk identity. The cube-to-cube IBL
+      // projection is a GPU-side pass driven by the runtime record arm, not a
+      // build-time fold (feat-20260630 w5; orchestrator adjudication: equirect
+      // produces a build .bin, unlike the retired cube-texture).
+      if (sub.kind !== 'equirect') continue;
+      const payload: EquirectAsset = {
+        kind: 'equirect',
         width: dec.width,
         height: dec.height,
         format: 'rgba16float',
         data: f16Bytes,
         colorSpace: 'linear',
-        mipmap: false,
       };
-      out.push({ guid: sub.guid, kind: 'texture', payload, refs: [] });
+      out.push({ guid: sub.guid, kind: 'equirect', payload, refs: [] });
     }
     return out;
   }

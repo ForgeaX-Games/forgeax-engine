@@ -112,7 +112,7 @@ export type SharedHandle<T extends string> = Handle<T, 'shared'>;
 export interface AssetTagMap {
   mesh: 'MeshAsset';
   texture: 'TextureAsset';
-  'cube-texture': 'CubeTextureAsset';
+  equirect: 'EquirectAsset';
   sampler: 'SamplerAsset';
   material: 'MaterialAsset';
   scene: 'SceneAsset';

@@ -119,8 +119,9 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     expectTypeOf<Data['autoAspect']>().toEqualTypeOf<boolean>();
   });
 
-  it('DirectionalLight data shape: 7 light fields + castShadow bool + 9 merged shadow fields', () => {
+  it('DirectionalLight data shape: 7 light fields + castShadow bool + 8 merged shadow fields', () => {
     // feat-20260621: DirectionalLightShadow merged into DirectionalLight via castShadow toggle.
+    // shadowDistance replaced the nearPlane/farPlane pair (near derives from camera).
     type Data = ShapeOf<typeof DirectionalLight.schema>;
     expectTypeOf<keyof Data>().toEqualTypeOf<
       | 'directionX'
@@ -137,8 +138,7 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
       | 'cascadeBlend'
       | 'depthBias'
       | 'normalBias'
-      | 'nearPlane'
-      | 'farPlane'
+      | 'shadowDistance'
       | 'pcfKernelSize'
     >();
     expectTypeOf<Data['intensity']>().toEqualTypeOf<number>();

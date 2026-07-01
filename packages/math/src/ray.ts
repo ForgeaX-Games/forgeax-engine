@@ -24,6 +24,17 @@ import * as mat4 from './mat4';
 import type { Mat4Like, Vec2, Vec3, Vec3Like } from './types';
 
 /**
+ * Result of a ray-triangle intersection test (Moller-Trumbore).
+ * `t` = ray parameter, `u`/`v` = barycentric coordinates.
+ */
+export interface RayTriResult {
+  hit: boolean;
+  t: number;
+  u: number;
+  v: number;
+}
+
+/**
  * Ray storage: Float32Array length 6 [ox, oy, oz, dx, dy, dz], direction normalized.
  * Local brand (not part of the seven-piece SSOT; same rationale as Box3).
  */
@@ -442,4 +453,123 @@ export function worldToScreen(
   const onScreen = ndcX >= -1 && ndcX <= 1 && ndcY >= -1 && ndcY <= 1 && ndcZ >= 0 && ndcZ <= 1;
 
   return { onScreen, behind: false };
+}
+
+// ============================================================
+// rayTriangleIntersects (feat-20260630-vertex-snapping-picking M1)
+// ============================================================
+//
+// Moller-Trumbore algorithm. Returns RayTriResult { hit, t, u, v }.
+// Double-sided: uses abs(det) < epsilon (no backface culling).
+// Degenerate (collinear/zero-area/parallel) triangles return hit=false to avoid NaN propagation.
+// t <= 0 rejected (behind ray origin).
+// Barycentric boundary: u >= 0, v >= 0, u + v <= 1.
+// NaN guard on all inputs.
+//
+// Related: requirements AC-06; plan-strategy D-1;
+//          KB 2026-06-30-scratchapixel-moller-trumbore.md;
+//          plan-tasks.json w2 acceptanceCheck.
+
+const RAY_TRI_EPSILON = 1e-8;
+
+/**
+ * Test whether a ray intersects a triangle using the Moller-Trumbore algorithm.
+ *
+ * Double-sided: both front and back faces are checked (abs(det) < epsilon).
+ * Degenerate triangles (collinear / zero-area) return hit=false.
+ * Ray origin behind the triangle (t <= 0) is rejected.
+ * NaN inputs are guarded against — any NaN input returns hit=false.
+ *
+ * @param r Ray (RayLike, 6 floats: ox,oy,oz,dx,dy,dz with normalized direction).
+ * @param a Triangle vertex A (Vec3Like, 3 floats).
+ * @param b Triangle vertex B (Vec3Like, 3 floats).
+ * @param c Triangle vertex C (Vec3Like, 3 floats).
+ * @returns RayTriResult with hit flag, t (ray parameter), and u/v (barycentric coordinates).
+ */
+export function rayTriangleIntersects(
+  r: RayLike,
+  a: Vec3Like,
+  b: Vec3Like,
+  c: Vec3Like,
+): RayTriResult {
+  // NaN guard: any NaN input → miss (prevents NaN propagation through the algorithm)
+  if (
+    Number.isNaN(r[0] as number) ||
+    Number.isNaN(r[1] as number) ||
+    Number.isNaN(r[2] as number) ||
+    Number.isNaN(r[3] as number) ||
+    Number.isNaN(r[4] as number) ||
+    Number.isNaN(r[5] as number) ||
+    Number.isNaN(a[0] as number) ||
+    Number.isNaN(a[1] as number) ||
+    Number.isNaN(a[2] as number) ||
+    Number.isNaN(b[0] as number) ||
+    Number.isNaN(b[1] as number) ||
+    Number.isNaN(b[2] as number) ||
+    Number.isNaN(c[0] as number) ||
+    Number.isNaN(c[1] as number) ||
+    Number.isNaN(c[2] as number)
+  ) {
+    return { hit: false, t: 0, u: 0, v: 0 };
+  }
+
+  const ox = r[0] as number;
+  const oy = r[1] as number;
+  const oz = r[2] as number;
+  const dx = r[3] as number;
+  const dy = r[4] as number;
+  const dz = r[5] as number;
+
+  // E1 = B - A, E2 = C - A
+  const e1x = (b[0] as number) - (a[0] as number);
+  const e1y = (b[1] as number) - (a[1] as number);
+  const e1z = (b[2] as number) - (a[2] as number);
+  const e2x = (c[0] as number) - (a[0] as number);
+  const e2y = (c[1] as number) - (a[1] as number);
+  const e2z = (c[2] as number) - (a[2] as number);
+
+  // P = D x E2
+  const px = dy * e2z - dz * e2y;
+  const py = dz * e2x - dx * e2z;
+  const pz = dx * e2y - dy * e2x;
+
+  // det = E1 . P
+  const det = e1x * px + e1y * py + e1z * pz;
+
+  // Double-sided: abs(det) < epsilon → parallel / degenerate → miss
+  if (Math.abs(det) < RAY_TRI_EPSILON) {
+    return { hit: false, t: 0, u: 0, v: 0 };
+  }
+
+  const invDet = 1 / det;
+
+  // T = O - A
+  const tx = ox - (a[0] as number);
+  const ty = oy - (a[1] as number);
+  const tz = oz - (a[2] as number);
+
+  // u = (T . P) * invDet
+  const u = (tx * px + ty * py + tz * pz) * invDet;
+  if (u < 0 || u > 1) {
+    return { hit: false, t: 0, u, v: 0 };
+  }
+
+  // Q = T x E1
+  const qx = ty * e1z - tz * e1y;
+  const qy = tz * e1x - tx * e1z;
+  const qz = tx * e1y - ty * e1x;
+
+  // v = (D . Q) * invDet
+  const v = (dx * qx + dy * qy + dz * qz) * invDet;
+  if (v < 0 || u + v > 1) {
+    return { hit: false, t: 0, u, v };
+  }
+
+  // t = (E2 . Q) * invDet
+  const t = (e2x * qx + e2y * qy + e2z * qz) * invDet;
+  if (t <= 0) {
+    return { hit: false, t, u, v };
+  }
+
+  return { hit: true, t, u, v };
 }

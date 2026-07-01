@@ -469,7 +469,11 @@ async function createAppFromCanvas(
   // to stop / device-lost in the app layer (the plugin cannot own DOM
   // lifetime). M3 (w15): input:false opt-out deleted — canvas form always
   // attaches input; hosts that want to opt out use assemble form (D-6).
-  const inputHandle = attachInputAuto(canvas, world);
+  const inputHandle = attachInputAuto(
+    canvas,
+    world,
+    opts?.pointerLockAllowed ? { pointerLockAllowed: opts.pointerLockAllowed } : {},
+  );
 
   // Audio backend (D-4): auto-create the WebAudioBackend when the user listed
   // audioPlugin() in plugins[]. This preserves the M2 contract (audioPlugin
@@ -882,7 +886,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       // error verbatim through the fanout dispatch below.
       //
       // feat-20260531-skybox-env-background F-1: the renderer onError channel
-      // now fans out RhiError | RuntimeError (e.g. 'skybox-cubemap-not-ready');
+      // now fans out RhiError | RuntimeError (e.g. 'equirect-projection-failed');
       // only the RhiError 'device-lost' arm triggers the cleanup funnel, every
       // other code (RHI or runtime) flows through to the host fan-out.
       //

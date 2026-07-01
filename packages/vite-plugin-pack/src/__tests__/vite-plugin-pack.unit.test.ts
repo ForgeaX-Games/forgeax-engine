@@ -572,7 +572,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
     return total;
   }
 
-  function dihHdrCubeMeta(hdrFilename: string): string {
+  function dihHdrEquirectMeta(hdrFilename: string): string {
     return JSON.stringify({
       schemaVersion: '1.0.0',
       kind: 'external-asset-package',
@@ -581,10 +581,8 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       importSettings: {
         colorSpace: 'linear',
         mipmap: 'none',
-        cubeFaceSize: 512,
-        specularMipLevels: 5,
       },
-      subAssets: [{ guid: DIH_HDR_GUID, sourceIndex: 0, kind: 'cube-texture' }],
+      subAssets: [{ guid: DIH_HDR_GUID, sourceIndex: 0, kind: 'equirect' }],
     });
   }
 
@@ -646,7 +644,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       process.chdir(tmpRoot);
       await mkdir(assetsDir, { recursive: true });
       await writeFile(join(assetsDir, 'env.hdr'), dihMakeMinimalHdr(DIH_HDR_WIDTH, DIH_HDR_HEIGHT));
-      await writeFile(join(assetsDir, 'env.hdr.meta.json'), dihHdrCubeMeta('env.hdr'));
+      await writeFile(join(assetsDir, 'env.hdr.meta.json'), dihHdrEquirectMeta('env.hdr'));
     });
 
     afterEach(async () => {
@@ -654,7 +652,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       await rm(tmpRoot, { recursive: true, force: true });
     });
 
-    it('(a) HDR cube-only meta imports to an rgba16float .bin row, not a 422', async () => {
+    it('(a) HDR equirect meta imports to an rgba16float .bin row, not a 422', async () => {
       const cap = makeDihServer();
       const plugin = pluginPack({ roots: [assetsDir], importers: [imageImporter] });
       plugin.configureServer(cap.server as never);
@@ -667,7 +665,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(res.statusCode).toBe(200);
       const returned = JSON.parse(res.body) as PackIndexEntry[];
       const row = returned.find(
-        (e) => e.guid.toLowerCase() === DIH_HDR_GUID && e.kind === 'texture',
+        (e) => e.guid.toLowerCase() === DIH_HDR_GUID && e.kind === 'equirect',
       );
       expect(row).toBeDefined();
       expect(row?.relativeUrl.endsWith('.bin')).toBe(true);
@@ -1050,7 +1048,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       const entry: PackIndexEntry = {
         guid: IT_HDR_GUID,
         relativeUrl: `/${sourceRel}`,
-        kind: 'texture',
+        kind: 'equirect',
         sourcePath: sourceRel,
         metadata: {
           kind: 'texture',

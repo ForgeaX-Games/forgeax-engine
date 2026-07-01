@@ -8,7 +8,7 @@ description: >-
 
 # forgeax-engine-rhi
 
-> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: feat-20260623-world-space-video-asset M6（video capability 探测 + 通用/高性能双路径 + 结构化降级失败）
+> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: feat-20260629-multi-uv-set-support M7（vertex layout 别名机制 + clamp-to-last 绑定 + deriveVertexBufferLayout 派生规则）
 
 > **RHI 是引擎与 GPU 之间的纯接口腰线，大多数 AI 用户不直接碰它**——可见性走 [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md)，pass / 后处理走 [`forgeax-engine-render-pipeline`](../forgeax-engine-render-pipeline/SKILL.md)。本 skill 面向**贡献者 / 进阶**：理解后端如何被抽象、能力如何门控、多实现如何共存。`@forgeax/engine-rhi` 是 spec-aligned 纯接口（无运行时值）；浏览器侧 `rhi-webgpu` 薄 shim 包 WebGPU，非浏览器侧 `rhi-wgpu` 是 TS 薄壳套 `wgpu-wasm`（唯一 wasm 制品 SSOT，~1.17 MB gzip，wgpu 29 + naga 29 + naga_oil Composer）。`createRenderer(canvas)` 经 `navigator.gpu` 在两者间自动选。第 3 个后端 `rhi-null`（headless no-op，`feat-20260623-dummy-null-rhi-headless-backend`）不进自动选——通过 Channel 1 escape hatch 手动注入 `createRenderer(canvas, { rhi: rhiNull })`，供 `test:unit` 做命令流结构断言。
 
@@ -109,6 +109,59 @@ console.log(device.totalBindGroupCount);      // bind-group assembly count
 - **per-renderer 实例独立** —— 每次 `createRenderer({ rhi })` 创建独立 `RhiNullDevice` + `Bookkeeper`，互不污染。
 
 完整 API 层、caps 表、bookkeeping 行为、与 vitest mock 的区分见 `packages/rhi-null/README.md`。
+
+## Vertex layout 别名机制 -- 多套 UV clamp-to-last 的 RHI 层基石（feat-20260629）
+
+> [!IMPORTANT]
+> **一句话价值：** WebGPU spec 允许 vertex buffer layout 的多个 `attribute` 共享同一 buffer offset（同 offset、异 `shaderLocation`）——这是 forgeax 实现 clamp-to-last 的 **RHI 层基石**。引擎在真实 draw 路径产出别名 layout：mesh 有 n 套 UV、shader 声明 m>n 套时，超界 location `[n,m)` 所有 attribute 全部指向第 `n-1` 套 UV 的 buffer offset。
+
+### WebGPU spec 行为
+
+`ValidateVertexAttribute`（Dawn specification）对 vertex attribute 无 byte-range overlap check——多 attribute 共享 offset 是合法且「有意为之」的规范设计。唯一硬约束是别名 attribute 须异 `shaderLocation`（与 clamp-to-last「每套 UV 独立 @location」天然吻合）。`setBindGroup` 有 overlap check，但 vertex attribute 路径无此约束——这是 forgeax D-1 决策的 spec 层面依据。
+
+```ts
+// 合法：2 个 vertex attribute 共享同一 buffer offset
+{
+  arrayStride: 80,
+  attributes: [
+    { shaderLocation: 6, offset: 72, format: 'float32x2' },  // uv1（真实数据）
+    { shaderLocation: 7, offset: 72, format: 'float32x2' },  // uv2（别名到 uv1，同 offset）
+    { shaderLocation: 8, offset: 72, format: 'float32x2' },  // uv3（别名到 uv1，同 offset）
+  ]
+}
+```
+
+> **单流兼容**：现有路径全部走 `setVertexBuffer(0, ...)` 单流 interleaved——别名 attribute 全在 buffer 0，无 multi-slot 兼容张力。
+
+### clamp-to-last 绑定表（`deriveVertexBufferLayout` 产出）
+
+| mesh UV 套数 n | shader 声明 m | 绑定行为 |
+|:--|:--|:--|
+| n > 0, m <= n | 一一绑定 | shader index `0..m-1` 各绑实际 offset |
+| n > 0, m > n | clamp-to-last | `0..n-1` 绑实际 offset；`[n,m)` 全部 shaderLocation 指向第 `n-1` 套的 offset（**同 offset、异 shaderLocation**） |
+| n = 0 | 全 0 buffer | 分配 8 字节 `[0,0,0,0]` 全 0 默认 buffer，所有 UV location 均指向 offset=0 |
+
+> **全部静默，无 warn / 无 error**（用户拍板对齐 UE 语义）。PSO 构建走全组合路径（mesh n∈{0..8} × shader m∈{1..8}）全部成功——`unsupported-vertex-layout` 不触发。
+
+### deriveVertexBufferLayout 派生规则
+
+`deriveVertexBufferLayout(map, { shaderUvSetCount? })` 是 vertex layout 的**唯一派生入口**（SSOT）：
+
+1. **Canonical keys 顺序**：`position / normal / uv / tangent / skinIndex / skinWeight / uv1 / uv2 / uv3 / uv4 / uv5 / uv6 / uv7` —— offset 累加沿此固定顺序
+2. **Per-key 路径复用**：每个 key 经 `ATTRIBUTE_FORMAT_MAP`（format）+ `ATTRIBUTE_BYTE_STRIDE`（byte size）确定 format + byte len；`CANONICAL_KEYS.indexOf(key)` 得 `shaderLocation`
+3. **UV 计数**：`countMeshUvSets(map)` 从 `UV_KEYS` 数组反向扫描，遇 undefined 即停——mesh 实有套数 n = 最后一个非 undefined UV key 的 index+1
+4. **Alias 生成**：当 `shaderUvSetCount > meshUvSetCount` 时，`emitAliasEntries` 对 `[n, m)` 范围内的每个 UV key 推一条 entry：`shaderLocation = CANONICAL_KEYS.indexOf(uvKey)`、`offset = aliasOffset`（第 n-1 套的已有 offset）、format 与 UV 一致
+5. **n=0 特殊**：当 `fromIndex=0`（mesh 无任何 UV），追加 8 字节 stride + location(0) 的空 UV entry（buffer 内容为全 0 `vec2f`）
+
+> **`@location(0..5)` offset 零变化**：`position=0 / normal=12 / uv=24 / tangent=32 / skinIndex=48 / skinWeight=56` —— uv1..uv7 在 skinWeight 之后 `72/80/...`。与 glTF bridge、FBX to-asset-pack 的 interleaved 写入顺序（canonical interleaved = pos/normal/uv/tangent/skinIndex/skinWeight/uv1..uv7）三处统一。
+
+### PSO cache key 复用（零新增变体轴）
+
+`cacheKeyOf` 已含 vertexLayout 形状哈希（sorted keys + byteLength）——多套 UV 体现为 `VertexAttributeMap` 新增 key（`uv1..uv7`），自然进 sorted-keys 哈希区分不同 UV 套数 layout 的 PSO。**不新建变体轴、不引入显式 uvSetCount 字段进 cache key**（D-5）。
+
+### 与 RhiNull 的协作
+
+RhiNull 后端（headless no-op）对 vertex buffer layout 不做真 GPU 绑定——`setVertexBuffer` 仅记账 buffer brand，不验证 stride / attribute 合法性。`deriveVertexBufferLayout` 的别名 entry 在 RhiNull 路径下照常产出，结构断言可利用 `RhiNullDevice` 的 command ledger 验证 layout 形状。
 
 ## Video capability -- 通用 / 高性能双路径
 

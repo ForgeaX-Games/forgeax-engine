@@ -7,9 +7,12 @@
 // build them. The store is engine-agnostic by default (no @webgpu/types
 // imports) and holds ZERO reference to AssetRegistry (D-2): every upload
 // primitive receives its source POD from the caller, never reaches back into
-// a registry. The cubemap path mints its CubeTextureAsset POD handle through
+// a registry. The cubemap path mints its EquirectAsset POD handle through
 // a wire-injected `registerCube` callback (D-3) so CPU cataloguing stays the
-// registry's job while the store keeps the single-call upload contract.
+// registry's job while the store keeps the single-call upload contract. The
+// cubemap projection (`_uploadCubemapFromEquirect`) is internal (@internal,
+// feat-20260630): AI users declare `Skylight{equirect}` and the render-system
+// record arm drives the projection; the method is never reached from user code.
 //
 // Residency model (D-2 pull): consumers call `ensureResident(handle, pod)`
 // at first draw-time access; the store builds the GPU resource on a miss and
@@ -41,8 +44,9 @@ import {
 import {
   ASSET_ERROR_HINTS,
   type AssetError,
-  type CubeTextureAsset,
+  countExtraUvSets,
   type DecodedImage,
+  type EquirectAsset,
   type Handle,
   handleSlot,
   IMAGE_ERROR_HINTS,
@@ -157,8 +161,8 @@ type MipmapBlitDeviceWithBuffer = MipmapBlitDevice & {
 /** Cube-POD register-relay injected by the wire layer (D-3). */
 type RegisterCube = (
   world: World,
-  pod: CubeTextureAsset,
-) => Result<Handle<'CubeTextureAsset', 'shared'>, AssetError>;
+  pod: EquirectAsset,
+) => Result<Handle<'EquirectAsset', 'shared'>, AssetError>;
 
 // feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M-3 / w11:
 // the three handle map value types now hold GpuTexture / GpuBuffer wrappers
@@ -172,12 +176,27 @@ interface TextureGpuEntry {
   readonly view: any;
 }
 
+// feat-20260630-equirect-kind-internalized-ibl-declarative-skyligh M2 / w11
+// (D-3): the projection-status truth lives here (the store's cubemap map is the
+// single authority — the SkylightSnapshot carries no status, D-3). `status`:
+//   - 'pending' — projection launched (fire-and-forget) but not complete; the
+//     record arm binds the white-cube fallback for this frame.
+//   - 'ready'   — texture + cube view + 6 face views are live; bind the real
+//     IBL cube.
+//   - 'failed'  — projection errored; recorded EXPLICITLY so the record arm
+//     stops and does NOT retry every frame (R-2 / AC-09). A failed entry has
+//     no GPU resources (texture/view are placeholders never bound).
+// `texture`/`view`/`faceViews` are non-readonly so a 'pending' entry can be
+// promoted to 'ready' in place (rebuilds the same slot). A 'failed' entry holds
+// no GPU resources (`texture:null` / `view:undefined`): it exists only to mark
+// the source as terminally failed so the record arm stops retrying (R-2).
 interface CubemapGpuEntry {
-  readonly texture: GpuTexture;
+  status: 'pending' | 'ready' | 'failed';
+  texture: GpuTexture | null;
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU cubemap view (not a GpuResource)
-  readonly view: any;
+  view: any;
   // biome-ignore lint/suspicious/noExplicitAny: per-face 2D views (6 faces; not GpuResources)
-  readonly faceViews: readonly any[];
+  faceViews: readonly any[];
 }
 
 interface MeshGpuEntry {
@@ -208,6 +227,14 @@ interface MeshGpuEntry {
    * fields are the same union and move together.
    */
   readonly layout: '12F' | '18F';
+  /**
+   * Number of UV sets the interleaved buffer carries (1 = single `uv`, +1 per
+   * `uv1..uv7`). feat-20260629-multi-uv-set-support: threaded to the record
+   * stage so the forward PSO's vertex layout stride matches the buffer for
+   * meshes with a real extra UV set. Mirrors MeshRenderData.uvSetCount /
+   * MeshGpuHandles.uvSetCount.
+   */
+  readonly uvSetCount: number;
   /** Vertex count = `vertices.length / (layout === '18F' ? 18 : 12)`. Mirrors MeshGpuHandles. */
   readonly vertexCount: number;
   /** True when `MeshAsset.indices` is present (indexed draw path). */
@@ -239,22 +266,14 @@ export class GpuResourceStore {
   // fire structured errors through this channel (feat-20260619 D-1/D-6).
   private errorRegistry: RhiErrorListenerRegistry | undefined = undefined;
   // Hardware-probe caps injected at `configureGpuDevice`; guards the HDR cubemap
-  // path (uploadCubemapFromEquirect) when `rgba16floatRenderable` is false.
+  // path (_uploadCubemapFromEquirect) when `rgba16floatRenderable` is false.
   private caps: RhiCaps | undefined = undefined;
 
   private readonly textureGpuHandles: Map<number, TextureGpuEntry> = new Map();
   private readonly cubemapGpuHandles: Map<number, CubemapGpuEntry> = new Map();
-  // Maps source TextureAsset handle id -> CubeTextureAsset handle so the same
-  // equirect source always resolves to the same cubemap (idempotent).
-  private readonly cubemapIdempotentMap: Map<number, Handle<'CubeTextureAsset', 'shared'>> =
-    new Map();
-  // Pending equirect-cubemap uploads queued before the device was wired. The
-  // field is retained for the device-not-wired arm of uploadCubemapFromEquirect
-  // (mints a placeholder cube handle); there is NO global replay loop (D-3 /
-  // user ruling: the pull model has no global replay).
-  private readonly pendingCubemapUploads: Array<{
-    handle: Handle<'TextureAsset', 'shared'>;
-  }> = [];
+  // Maps source EquirectAsset handle id -> minted cubemap handle so the same
+  // equirect source always resolves to the same cubemap (idempotent, A2).
+  private readonly cubemapIdempotentMap: Map<number, Handle<'EquirectAsset', 'shared'>> = new Map();
   private readonly meshGpuHandles: Map<number, MeshGpuEntry> = new Map();
 
   /**
@@ -331,7 +350,7 @@ export class GpuResourceStore {
     this.textureGpuHandles.clear();
 
     for (const entry of this.cubemapGpuHandles.values()) {
-      destroyTex(entry.texture);
+      if (entry.texture !== null) destroyTex(entry.texture);
     }
     this.cubemapGpuHandles.clear();
     this.cubemapIdempotentMap.clear();
@@ -419,7 +438,8 @@ export class GpuResourceStore {
     // cubemap wrapper shared-dedup (D-1): sourceId and cubeId may share one
     // GpuTexture wrapper. The isDestroyed gate ensures the underlying RHI
     // texture is destroyed at most once, even when both entries are evicted.
-    if (!entry.texture.isDestroyed) {
+    // A 'failed' entry holds no GPU texture (texture:null) — nothing to free.
+    if (entry.texture !== null && !entry.texture.isDestroyed) {
       const r = entry.texture.destroy();
       if (r.ok) {
         freed = 1;
@@ -468,7 +488,8 @@ export class GpuResourceStore {
       if (!liveSet.has(key)) {
         const entry = this.cubemapGpuHandles.get(key);
         if (entry !== undefined) {
-          if (!entry.texture.isDestroyed) {
+          // A 'failed' entry holds no GPU texture (texture:null) — nothing to free.
+          if (entry.texture !== null && !entry.texture.isDestroyed) {
             const r = entry.texture.destroy();
             if (r.ok) {
               freed += 1;
@@ -576,20 +597,37 @@ export class GpuResourceStore {
    * `device.createTextureView` arguments) read `.handle` on the wrapper;
    * `.destroy()` routes through the destroy chain (M-3 / w11).
    */
-  getCubemapGpuTexture(handle: Handle<'CubeTextureAsset', 'shared'>): GpuTexture | undefined {
-    return this.cubemapGpuHandles.get(handleSlot(handle))?.texture;
+  getCubemapGpuTexture(handle: Handle<'EquirectAsset', 'shared'>): GpuTexture | undefined {
+    // A 'failed' entry has texture:null; normalise to undefined (not resident).
+    return this.cubemapGpuHandles.get(handleSlot(handle))?.texture ?? undefined;
   }
 
   /** Return the full-cube texture view, or `undefined` if not uploaded yet. */
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture view
-  getCubemapGpuView(handle: Handle<'CubeTextureAsset', 'shared'>): any | undefined {
+  getCubemapGpuView(handle: Handle<'EquirectAsset', 'shared'>): any | undefined {
     return this.cubemapGpuHandles.get(handleSlot(handle))?.view;
   }
 
   /** Return per-face 2D views (6 faces), or `undefined` if not uploaded yet. */
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture views
-  getCubemapFaceViews(handle: Handle<'CubeTextureAsset', 'shared'>): readonly any[] | undefined {
+  getCubemapFaceViews(handle: Handle<'EquirectAsset', 'shared'>): readonly any[] | undefined {
     return this.cubemapGpuHandles.get(handleSlot(handle))?.faceViews;
+  }
+
+  /**
+   * Query the projection status for an equirect source handle (D-3 SSOT: the
+   * store's CubemapGpuEntry is the single authority). Returns `undefined` when
+   * no projection has been launched for this source yet (the record arm reads
+   * this to decide whether to fire the lazy projection; feat-20260630 M3 / w18):
+   *   - undefined -> no entry: caller may launch projection (fire-and-forget)
+   *   - 'pending' -> projection launched, not complete: bind white-cube fallback
+   *   - 'ready'   -> projected cube + IBL views live: bind real IBL
+   *   - 'failed'  -> projection errored: bind white fallback, do NOT retry (R-2)
+   */
+  getCubemapStatus(
+    handle: Handle<'EquirectAsset', 'shared'>,
+  ): 'pending' | 'ready' | 'failed' | undefined {
+    return this.cubemapGpuHandles.get(handleSlot(handle))?.status;
   }
 
   /**
@@ -612,7 +650,7 @@ export class GpuResourceStore {
    *   an un-prewarmed format returns a structured RhiError (never awaits).
    *
    * Cubemap is NOT routed here -- it is an eager user call
-   * (`uploadCubemapFromEquirect`). Builtin meshes are NOT routed here either
+   * (`_uploadCubemapFromEquirect`). Builtin meshes are NOT routed here either
    * (createRenderer step-3 owns them; D-1).
    */
   ensureResident(
@@ -626,7 +664,7 @@ export class GpuResourceStore {
     // default: only the two GPU-resource kinds reachable here (mesh / texture)
     // have arms, so a third reachable kind would surface as a `tsc -b`
     // exhaustiveness error at the switch rather than a silent fallthrough
-    // (AC-06; the cube-texture kind is the eager `uploadCubemapFromEquirect`
+    // (AC-06; the cube-texture kind is the eager `_uploadCubemapFromEquirect`
     // path, not routed here).
     switch (pod.kind) {
       case 'mesh': {
@@ -834,18 +872,30 @@ export class GpuResourceStore {
   }
 
   /**
-   * Upload an equirectangular HDR TextureAsset as a cubemap (eager user
-   * call, NOT part of the `ensureResident` pull path).
+   * Project an equirectangular HDR `EquirectAsset` into a GPU cubemap + IBL
+   * precompute. NOT part of the `ensureResident` pull path.
    *
-   * Idempotent: calling twice with the same source handle returns the same
-   * cubemap handle. The CubeTextureAsset POD is catalogued via the injected
-   * `registerCube` relay (D-3); the store never imports AssetRegistry.
+   * @internal — feat-20260630 D-3 / F-9: the cubemap projection is engine
+   * internals, not a user surface. AI users declare `Skylight{equirect}` and
+   * the render-system record arm (same package) drives this method per-frame;
+   * the `_` prefix + `@internal` mark it package-internal (lint:internal gate)
+   * so it never appears as a user-facing call. (A cross-file `private` is not
+   * reachable by the record arm; package-internal is the correct visibility.)
+   *
+   * Idempotent: a second call with the same source handle returns the cached
+   * cubemap handle (no second GPU texture). The minted cubemap handle is an
+   * `EquirectAsset` shared ref catalogued via the injected `registerCube` relay
+   * (D-3); the store never imports AssetRegistry.
+   *
+   * Status (D-3): every entry written carries `status`. A failed projection
+   * records `status:'failed'` EXPLICITLY (R-2 / AC-09) so the caller never
+   * retries by inferring "no entry => try again".
    */
-  async uploadCubemapFromEquirect(
+  async _uploadCubemapFromEquirect(
     world: World,
-    sourceHandle: Handle<'TextureAsset', 'shared'>,
-    sourcePod: TextureAsset,
-  ): Promise<Result<Handle<'CubeTextureAsset', 'shared'>, AssetError | RhiError>> {
+    sourceHandle: Handle<'EquirectAsset', 'shared'>,
+    sourcePod: EquirectAsset,
+  ): Promise<Result<Handle<'EquirectAsset', 'shared'>, AssetError | RhiError>> {
     const sourceId = handleSlot(sourceHandle);
 
     const existing = this.cubemapIdempotentMap.get(sourceId);
@@ -853,19 +903,56 @@ export class GpuResourceStore {
       return ok(existing);
     }
 
+    // R-2 / AC-09: a previously-failed projection is recorded EXPLICITLY as a
+    // 'failed' entry. Short-circuit here so the record arm never retries the
+    // upload every frame (the missing-key inference would loop forever).
+    if (this.cubemapGpuHandles.get(sourceId)?.status === 'failed') {
+      return err(
+        new RhiError({
+          code: 'feature-not-enabled',
+          expected: 'a prior cubemap projection for this equirect source did not fail',
+          hint: 'this equirect source already failed projection; the record arm must not retry (R-2). Inspect the original failure on the error channel',
+        }),
+      );
+    }
+
+    // feat-20260630 M3 / w18: a projection already in flight is marked
+    // 'pending' synchronously below (before the first await). A re-entry while
+    // pending short-circuits so the fire-and-forget record arm launches the
+    // async projection exactly once per source (D-4 idempotent; the record arm
+    // calls this every frame until status flips to ready/failed). The pending
+    // entry holds no live GPU resources yet; the record arm binds the white
+    // fallback while pending.
+    if (this.cubemapGpuHandles.get(sourceId)?.status === 'pending') {
+      return ok(sourceHandle);
+    }
+
+    // Record a failed projection explicitly so a re-query short-circuits and the
+    // record arm never retries every frame (R-2 / AC-09). The placeholder
+    // texture wrapper is never bound (a 'failed' entry has no live GPU view).
+    const recordFailed = <E>(error: E): Result<never, E> => {
+      this.cubemapGpuHandles.set(sourceId, {
+        status: 'failed',
+        texture: null,
+        view: undefined,
+        faceViews: [],
+      });
+      return err(error);
+    };
+
     const registerCube = this.registerCube;
     if (registerCube === undefined) {
-      return err(
+      return recordFailed(
         makeAssetError({
           code: 'asset-not-found',
           expected: 'GpuResourceStore.configureGpuDevice wired with registerCube',
-          hint: 'call gpuStore.configureGpuDevice(device, factory, registerCube) before uploadCubemapFromEquirect',
+          hint: 'call gpuStore.configureGpuDevice(device, factory, registerCube) before _uploadCubemapFromEquirect',
         }),
       );
     }
 
     if (this.caps !== undefined && this.caps.rgba16floatRenderable === false) {
-      return err(
+      return recordFailed(
         new RhiError({
           code: 'feature-not-enabled',
           expected: 'caps.rgba16floatRenderable === true',
@@ -874,16 +961,47 @@ export class GpuResourceStore {
       );
     }
 
-    if (sourcePod.kind !== 'texture') {
-      return err(
+    if (sourcePod.kind !== 'equirect') {
+      return recordFailed(
         makeAssetError({
           code: 'asset-not-found',
-          expected: `source POD for handle id ${sourceId} is a TextureAsset`,
+          expected: `source POD for handle id ${sourceId} is an EquirectAsset`,
           hint: ASSET_ERROR_HINTS['asset-not-found'],
         }),
       );
     }
-    const sourceTex = sourcePod;
+
+    // feat-20260630 M3 / w18: mark the source 'pending' SYNCHRONOUSLY (this runs
+    // before the first `await` below, so the fire-and-forget record arm that
+    // never awaits still observes the pending entry on the next frame's
+    // getCubemapStatus). All sync fail-fast gates (idempotent / failed / pending
+    // / registerCube / caps / kind) have passed, so the projection is committed;
+    // a re-entry while async work is in flight short-circuits on the 'pending'
+    // guard above. The entry holds no live GPU resources yet (record binds the
+    // white fallback while pending); the texture/views are filled in below when
+    // the projection completes (status flips to 'ready'), or replaced by a
+    // 'failed' entry via recordFailed if any later step errors.
+    this.cubemapGpuHandles.set(sourceId, {
+      status: 'pending',
+      texture: null,
+      view: undefined,
+      faceViews: [],
+    });
+
+    // The cubemap projection + IBL precompute consume a 2D-image view of the
+    // source. EquirectAsset mirrors the TextureAsset 2D surface (width / height
+    // / format / data / colorSpace) but has no CPU mip chain, so the derived
+    // texture view declares `mipmap:false` (the IBL prefilter mip chain is a
+    // GPU-side pass, not a CPU-authored level set).
+    const sourceTex: TextureAsset = {
+      kind: 'texture',
+      width: sourcePod.width,
+      height: sourcePod.height,
+      format: sourcePod.format,
+      data: sourcePod.data,
+      colorSpace: sourcePod.colorSpace,
+      mipmap: false,
+    };
 
     // Project the equirect source POD into the cubemap descriptor (D-5): the
     // asset-semantic decisions (format / colorSpace validation, square cube
@@ -895,7 +1013,7 @@ export class GpuResourceStore {
       return p.ok ? p.value : undefined;
     })();
     if (projected === undefined) {
-      return err(
+      return recordFailed(
         makeAssetError({
           code: 'invalid-source-format',
           expected: "format 'rgba16float' or 'rgba32float' with colorSpace 'linear'",
@@ -920,29 +1038,24 @@ export class GpuResourceStore {
               : sourceTex.data,
           ),
           colorSpace: 'linear',
-          mipmap: sourceTex.mipmap,
-          ...(sourceTex.mipLevelCount !== undefined
-            ? { mipLevelCount: sourceTex.mipLevelCount }
-            : {}),
+          mipmap: false,
         }
       : sourceTex;
 
     const cubeFaceSize = projected.cubeFaceSize;
 
+    // Lazy projection runs from the record arm, where the device is always
+    // wired (research R-5). The device-not-wired queue + placeholder cube path
+    // is removed (D-7); a missing device here is a fail-fast, not a queue.
     const device = this.gpuDevice;
     if (device === undefined) {
-      this.pendingCubemapUploads.push({ handle: sourceHandle });
-      const cubeAsset: CubeTextureAsset = {
-        kind: 'cube-texture',
-        width: cubeFaceSize,
-        height: cubeFaceSize,
-        format: tex.format,
-        faces: [],
-      };
-      const cubeHandle = registerCube(world, cubeAsset);
-      if (!cubeHandle.ok) return cubeHandle;
-      this.cubemapIdempotentMap.set(sourceId, cubeHandle.value);
-      return ok(cubeHandle.value);
+      return recordFailed(
+        new RhiError({
+          code: 'rhi-not-available',
+          expected: 'GpuResourceStore.configureGpuDevice wired before cubemap projection',
+          hint: 'a cubemap projection ran before the GPU device was wired; the record arm projects only after the device is configured',
+        }),
+      );
     }
 
     // Usage flags for the small equirect helper texture (sampled source for the
@@ -984,7 +1097,7 @@ export class GpuResourceStore {
     });
     const gpuTexture = unwrap(gpuTextureRet);
     if (gpuTexture === undefined) {
-      return err(
+      return recordFailed(
         makeAssetError({
           code: 'ibl-precompute-not-dispatched',
           expected: `device.createTexture cubemap-${sourceId} to return a valid texture`,
@@ -999,7 +1112,7 @@ export class GpuResourceStore {
       arrayLayerCount: 6,
     });
     if (cubeView === undefined) {
-      return err(
+      return recordFailed(
         makeAssetError({
           code: 'ibl-precompute-not-dispatched',
           expected: `device.createTextureView cubemap-view-${sourceId} to return a valid view`,
@@ -1018,7 +1131,7 @@ export class GpuResourceStore {
         arrayLayerCount: 1,
       });
       if (fv === undefined) {
-        return err(
+        return recordFailed(
           makeAssetError({
             code: 'ibl-precompute-not-dispatched',
             expected: `device.createTextureView cubemap-face-${sourceId}-${face} to return a valid view`,
@@ -1038,24 +1151,31 @@ export class GpuResourceStore {
     const gpuTextureWrapper = this.wrapTex(gpuTexture);
 
     this.cubemapGpuHandles.set(sourceId, {
+      status: 'ready',
       texture: gpuTextureWrapper,
       view: cubeView,
       faceViews,
     });
 
-    const cubeAsset: CubeTextureAsset = {
-      kind: 'cube-texture',
+    // The minted cubemap handle is a synthetic shared ref (identity token for
+    // the GPU cube residency); its POD is an EquirectAsset placeholder matching
+    // the projected dimensions/format (D-3: the retired cube-texture asset kind
+    // is gone; the relay mints an EquirectAsset shared ref instead).
+    const cubeAsset: EquirectAsset = {
+      kind: 'equirect',
       width: cubeFaceSize,
       height: cubeFaceSize,
       format: tex.format,
-      faces: [],
+      data: tex.data,
+      colorSpace: 'linear',
     };
     const regResult = registerCube(world, cubeAsset);
-    if (!regResult.ok) return regResult;
+    if (!regResult.ok) return recordFailed(regResult.error);
     const cubeHandle = regResult.value;
     const cubeId = handleSlot(cubeHandle);
 
     this.cubemapGpuHandles.set(cubeId, {
+      status: 'ready',
       texture: gpuTextureWrapper,
       view: cubeView,
       faceViews,
@@ -1136,7 +1256,7 @@ export class GpuResourceStore {
             cubeVertexBuffer: cubeVertex,
           });
           if (!runRes.ok) {
-            return err(
+            return recordFailed(
               makeAssetError({
                 code: 'ibl-precompute-not-dispatched',
                 expected: runRes.error.expected,
@@ -1256,9 +1376,13 @@ export class GpuResourceStore {
     // feat-20260611: per-layout vertexCount divisor. '18F' (skinned glTF
     // path) carries 18 floats per vertex (12F + skinIndex(uint16x4 packed
     // as 2 floats) + skinWeight(float32x4)); '12F' is the legacy stride.
+    // feat-20260629 multi-uv: extra UV sets add 2 floats each per vertex
+    // in the interleaved buffer (canonical order). Count them from attributes.
     // Closed-union switch -- a third layout addition would surface as a
     // tsc exhaustiveness error here, mirroring the discriminator union.
-    const floatsPerVertex = renderData.layout === '18F' ? 18 : 12;
+    const baseFloatsPerVertex = renderData.layout === '18F' ? 18 : 12;
+    const extraUvSets = countExtraUvSets(mesh.attributes);
+    const floatsPerVertex = baseFloatsPerVertex + extraUvSets * 2;
     const entry: MeshGpuEntry = {
       vertexBuffer: this.wrapBuf(vbo as Buffer),
       indexBuffer: ibo === null ? null : this.wrapBuf(ibo as Buffer),
@@ -1267,6 +1391,7 @@ export class GpuResourceStore {
       indexCount: renderData.indexCount,
       indexFormat: renderData.indexFormat,
       layout: renderData.layout,
+      uvSetCount: 1 + extraUvSets,
       vertexCount: mesh.vertices.length / floatsPerVertex,
       indexed: indices !== undefined,
       topology: renderData.submeshes[0]?.topology ?? 'triangle-list',
@@ -1333,6 +1458,7 @@ export class GpuResourceStore {
         indexCount: newIndices.length,
         indexFormat: 'uint16',
         layout: '12F',
+        uvSetCount: entry.uvSetCount,
         vertexCount: newVertices.length / 12,
         indexed: true,
         topology: entry.topology,
@@ -1374,6 +1500,7 @@ export class GpuResourceStore {
       indexCount: newIndices.length,
       indexFormat: 'uint16',
       layout: '12F',
+      uvSetCount: entry.uvSetCount,
       vertexCount: newVertices.length / 12,
       indexed: true,
       topology: entry.topology,

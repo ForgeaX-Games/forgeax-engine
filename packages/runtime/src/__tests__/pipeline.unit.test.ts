@@ -68,7 +68,7 @@ import {
 import { findVariantByKey, type MaterialShaderEntry } from '@forgeax/engine-shader';
 import {
   type AssetError,
-  type CubeTextureAsset,
+  type EquirectAsset,
   type Handle,
   type MaterialRenderState,
   type MeshAsset,
@@ -1564,25 +1564,24 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     rhiOk({ __mock: 'shader', label: desc.label ?? '' }) as never;
 
   function makeRegisterCube(): (
-    pod: CubeTextureAsset,
-  ) => Result<Handle<'CubeTextureAsset', 'shared'>, AssetError> {
+    pod: EquirectAsset,
+  ) => Result<Handle<'EquirectAsset', 'shared'>, AssetError> {
     let next = 2000;
-    return () => rhiOk(toShared<'CubeTextureAsset'>(next++));
+    return () => rhiOk(toShared<'EquirectAsset'>(next++));
   }
 
-  function makeEquirectSource(): TextureAsset {
+  function makeEquirectSource(): EquirectAsset {
     return {
-      kind: 'texture',
+      kind: 'equirect',
       width: 4,
       height: 2,
       format: 'rgba16float',
       data: new Uint8Array(4 * 2 * 8),
       colorSpace: 'linear',
-      mipmap: false,
     };
   }
 
-  describe('uploadCubemapFromEquirect caps guard (M2)', () => {
+  describe('equirect-to-cubemap projection caps guard (M2)', () => {
     it('1. caps=false guard: returns feature-not-enabled with expected + hint', async () => {
       const store = new GpuResourceStore();
       store.configureGpuDevice(
@@ -1592,8 +1591,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         capsCubemapDisabled,
       );
 
-      const srcHandle = toShared<'TextureAsset'>(4096);
-      const result = await store.uploadCubemapFromEquirect(
+      const srcHandle = toShared<'EquirectAsset'>(4096);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
+      const result = await (store as any)._uploadCubemapFromEquirect(
         new World(),
         srcHandle,
         makeEquirectSource(),
@@ -1613,8 +1613,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       const store = new GpuResourceStore();
       store.configureGpuDevice(makeMockDevice(), shaderFactory, makeRegisterCube(), capsTrue);
 
-      const srcHandle = toShared<'TextureAsset'>(4096);
-      const result = await store.uploadCubemapFromEquirect(
+      const srcHandle = toShared<'EquirectAsset'>(4096);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
+      const result = await (store as any)._uploadCubemapFromEquirect(
         new World(),
         srcHandle,
         makeEquirectSource(),
@@ -1628,8 +1629,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       const store = new GpuResourceStore();
       store.configureGpuDevice(makeMockDevice(), shaderFactory, makeRegisterCube(), capsTrue);
 
-      const srcHandle = toShared<'TextureAsset'>(4096);
-      const first = await store.uploadCubemapFromEquirect(
+      const srcHandle = toShared<'EquirectAsset'>(4096);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
+      const first = await (store as any)._uploadCubemapFromEquirect(
         new World(),
         srcHandle,
         makeEquirectSource(),
@@ -1657,7 +1659,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         capsTrue,
       );
 
-      const first2 = await store2.uploadCubemapFromEquirect(
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
+      const first2 = await (store2 as any)._uploadCubemapFromEquirect(
         new World(),
         srcHandle,
         makeEquirectSource(),
@@ -1665,7 +1668,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       const submitsAfterFirst = submitProbe.count;
       expect(submitsAfterFirst).toBeGreaterThanOrEqual(1);
 
-      const second2 = await store2.uploadCubemapFromEquirect(
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
+      const second2 = await (store2 as any)._uploadCubemapFromEquirect(
         new World(),
         srcHandle,
         makeEquirectSource(),
@@ -1700,8 +1704,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       // at line ~555) and NOT feature-not-enabled (caps guard at ~565).
       const store = new GpuResourceStore();
       // Store is never configured — both registerCube and caps are undefined.
-      const srcHandle = toShared<'TextureAsset'>(4096);
-      const result = await store.uploadCubemapFromEquirect(
+      const srcHandle = toShared<'EquirectAsset'>(4096);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
+      const result = await (store as any)._uploadCubemapFromEquirect(
         new World(),
         srcHandle,
         makeEquirectSource(),
@@ -5403,10 +5408,10 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   // A registerCube relay that mints sequential cube handles without a registry.
   function makeRegisterCube(): (
-    pod: CubeTextureAsset,
-  ) => Result<Handle<'CubeTextureAsset', 'shared'>, AssetError> {
+    pod: EquirectAsset,
+  ) => Result<Handle<'EquirectAsset', 'shared'>, AssetError> {
     let next = 1000;
-    return () => rhiOk(toShared<'CubeTextureAsset'>(next++));
+    return () => rhiOk(toShared<'EquirectAsset'>(next++));
   }
 
   function meshPod(verts = 4): MeshAsset {
@@ -5492,9 +5497,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       // Miss before residency.
       expect(store.getMeshGpuHandles(meshHandle)).toBeUndefined();
       expect(store.getTextureGpuView(texHandle)).toBeUndefined();
-      expect(store.getCubemapGpuView(toShared<'CubeTextureAsset'>(9))).toBeUndefined();
-      expect(store.getCubemapGpuTexture(toShared<'CubeTextureAsset'>(9))).toBeUndefined();
-      expect(store.getCubemapFaceViews(toShared<'CubeTextureAsset'>(9))).toBeUndefined();
+      expect(store.getCubemapGpuView(toShared<'EquirectAsset'>(9))).toBeUndefined();
+      expect(store.getCubemapGpuTexture(toShared<'EquirectAsset'>(9))).toBeUndefined();
+      expect(store.getCubemapFaceViews(toShared<'EquirectAsset'>(9))).toBeUndefined();
 
       store.ensureResident(meshHandle, meshPod());
       store.ensureResident(texHandle, texturePod(false));
@@ -5505,11 +5510,20 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     it('(5) cubemapIdempotentMap: same source handle returns the same cube handle', async () => {
       const probe = freshProbe();
       const store = configured(probe);
-      const srcHandle = toShared<'TextureAsset'>(2048);
-      const srcPod = texturePod(false, 'rgba16float');
+      const srcHandle = toShared<'EquirectAsset'>(2048);
+      const srcPod: EquirectAsset = {
+        kind: 'equirect',
+        width: 8,
+        height: 4,
+        format: 'rgba16float',
+        data: new Uint8Array(8 * 4 * 8),
+        colorSpace: 'linear',
+      };
 
-      const r1 = await store.uploadCubemapFromEquirect(new World(), srcHandle, srcPod);
-      const r2 = await store.uploadCubemapFromEquirect(new World(), srcHandle, srcPod);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
+      const r1 = await (store as any)._uploadCubemapFromEquirect(new World(), srcHandle, srcPod);
+      // biome-ignore lint/suspicious/noExplicitAny: package-internal projection reached via store cast
+      const r2 = await (store as any)._uploadCubemapFromEquirect(new World(), srcHandle, srcPod);
       expect(r1.ok && r2.ok).toBe(true);
       if (r1.ok && r2.ok) {
         // Second call is the idempotent cache hit -> identical cube handle.

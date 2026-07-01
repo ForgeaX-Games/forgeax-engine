@@ -57,6 +57,14 @@ const MAT4_BYTES = 64; // 16 f32 * 4 bytes
 // 16320 B buffer.
 const MAX_JOINTS = 255;
 const BINDING_WINDOW_BYTES = MAX_JOINTS * MAT4_BYTES; // 16320
+// WebGPU `minStorageBufferOffsetAlignment` default (spec floor) — every
+// dynamic offset passed to setBindGroup must be a multiple of this. The shared
+// storage path packs many entities back-to-back, so each slice's start must be
+// rounded up to this boundary; otherwise a slice whose predecessor's joint
+// footprint (jointCount * 64) is not a multiple of 256 (e.g. 33 joints -> 2112)
+// lands on an unaligned offset and trips `Dynamic Offset[1] is not 256 byte
+// aligned` at draw time.
+const PALETTE_OFFSET_ALIGN = 256;
 
 // STORAGE = 0x80, UNIFORM = 0x40, COPY_DST = 0x08 (WebGPU spec).
 const STORAGE_USAGE = 0x80 | 0x08;
@@ -183,11 +191,13 @@ export function createSkinPaletteAllocator(
       ensureStorageCapacity(needed);
       // biome-ignore lint/style/noNonNullAssertion: ensureStorageCapacity throws if buffer cannot be created
       const buffer = storageBuffer!;
-      // Cursor advances by the actual joint footprint -- subsequent slices
-      // pack tightly. Only the last slice's window may overhang into
-      // uninitialized buffer space, which is benign (shader reads only
-      // `jointCount` matrices).
-      storageCursor = offset + jointCount * MAT4_BYTES;
+      // Cursor advances by the actual joint footprint, then rounds up to
+      // PALETTE_OFFSET_ALIGN so the NEXT slice's byteOffset stays a valid
+      // dynamic offset (WebGPU requires 256-byte alignment). Slices still pack
+      // near-tightly (at most 255 B slack between them). Only the last slice's
+      // window may overhang into uninitialized buffer space, which is benign
+      // (shader reads only `jointCount` matrices).
+      storageCursor = (offset + jointCount * MAT4_BYTES + (PALETTE_OFFSET_ALIGN - 1)) & ~(PALETTE_OFFSET_ALIGN - 1);
       return { jointCount, byteOffset: offset, buffer };
     }
     // Uniform fallback: each slice gets its own 16320 B UBO.

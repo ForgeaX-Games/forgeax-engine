@@ -653,6 +653,40 @@ import {
       expect(r2.error.expected).toContain('my-game::pulse-material');
       expect(r2.error.expected).toContain('my-game::wave-material');
     });
+
+    // feat-20260624-sprite-lit F-P1 fix (Pure charter P3 finding):
+    // err.detail.registeredShaderIds carries the raw string[] so AI users can
+    // enumerate registered ids by property access instead of regex-parsing the
+    // human-formatted err.expected string.
+    it('(d) err.detail.registeredShaderIds exposes raw string[] for property-access enumeration', () => {
+      const registry = makeRegistry();
+      const ids = [
+        `${FORGEAX_RESERVED_PATH_PREFIX}default-standard-pbr`,
+        'my-game::pulse-material',
+        'my-game::wave-material',
+      ] as const;
+      for (const id of ids) {
+        registry.registerMaterialShader(id, makeUserEntry());
+      }
+      const r = registry.lookupMaterialShader('forgeax::no-such-shader');
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.error.code).toBe('material-shader-not-found');
+      const registered = r.error.detail?.registeredShaderIds;
+      expect(Array.isArray(registered)).toBe(true);
+      expect(registered).toEqual(ids);
+      expect(registered).toContain('my-game::pulse-material');
+    });
+
+    it('(e) empty-registry miss -> err.detail.registeredShaderIds is empty array (not undefined)', () => {
+      const registry = makeRegistry();
+      const r = registry.lookupMaterialShader('forgeax::no-such-shader');
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      const registered = r.error.detail?.registeredShaderIds;
+      expect(Array.isArray(registered)).toBe(true);
+      expect(registered).toEqual([]);
+    });
   });
 
   // feat-20260604-instances-per-instance-transform-shader-group3-bin M1 / w1:

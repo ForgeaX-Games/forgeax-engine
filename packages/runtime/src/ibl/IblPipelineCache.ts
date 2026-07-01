@@ -666,10 +666,10 @@ export async function createIblPipelines(
 // ─── M3.5 t53: runIblPrecompute (4-pass dispatch + queue.submit) ─────────────
 
 /**
- * Options consumed by runIblPrecompute. The caller (AssetRegistry
- * .uploadCubemapFromEquirect) provides the equirect input + cubemap target
- * GPU resources; the face-uniform / prefilter-uniform buffers come from
- * the t55 helpers.
+ * Options consumed by runIblPrecompute. The caller (the internal
+ * GpuResourceStore equirect-to-cubemap projection) provides the equirect input
+ * + cubemap target GPU resources; the face-uniform / prefilter-uniform buffers
+ * come from the t55 helpers.
  */
 export interface RunIblPrecomputeOptions {
   readonly device: IblPipelineDevice;
@@ -799,7 +799,7 @@ export function runIblPrecompute(
       error: {
         code: 'ibl-precompute-not-dispatched',
         expected: 'device.queue.submit callable',
-        hint: 'check IblPipelineCache.runIblPrecompute is called inside uploadCubemapFromEquirect; counters must not increment before queue.submit',
+        hint: 'check IblPipelineCache.runIblPrecompute is called inside the GpuResourceStore equirect-to-cubemap projection; counters must not increment before queue.submit',
       },
     };
   }

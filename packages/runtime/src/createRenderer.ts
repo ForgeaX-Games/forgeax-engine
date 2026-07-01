@@ -1047,6 +1047,11 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // machine-readable signals over a per-frame console.warn flood). Each
   // Renderer instance owns its own counter Map (D-5 candidate 1 isolation).
   const metrics = createEngineMetrics();
+  // feat-20260629 M4: per-material-shader UV set count from naga vertex
+  // @location reflection. Populated during prepareMaterialShaders from
+  // MaterialShaderManifestEntry.uvSetCount. Read by getMaterialShaderPipeline
+  // to auto-fill shaderUvSetCount for clamp-to-last alias.
+  const materialShaderUvSetCounts = new Map<string, number>();
   // feat-20260527-sprite-nineslice M4 / w18 prep (D-9): hand the same
   // EngineMetrics instance to AssetRegistry so register-time soft-warns
   // (sliceMode=1 + sampler.addressMode !== 'repeat') bump
@@ -1058,7 +1063,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // engine-shipped material shaders (cap gate + manifest load + registration)
   // so they are available in ShaderRegistry before `register<MaterialAsset>`.
   // Failures throw structured RhiError / ShaderError through `createRenderer`.
-  await prepareMaterialShaders(internals.device, getShader, assets);
+  await prepareMaterialShaders(internals.device, getShader, assets, materialShaderUvSetCounts);
   // M5 wiring (feat-20260517-vite-plugin-image-build-time-cook w14b): hand
   // the RhiDevice to the AssetRegistry so `loadByGuid<TextureAsset>` ->
   // `loadTextureFromEntry` -> `uploadTexture` actually runs the GPU
@@ -1091,17 +1096,18 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // feat-20260601-gpu-resource-store-extraction M1 (D-3 / D-8): device +
   // shader-module factory + cube-POD register relay are wired onto the store
   // together. feat-20260614 M8 (D-15 / D-17): `registerCube` is the wire-layer
-  // closure `(world, pod) => world.allocSharedRef('CubeTextureAsset', pod)` --
+  // closure `(world, pod) => world.allocSharedRef('EquirectAsset', pod)` --
   // the runtime-minted cube POD lands in the draw-time world's user-tier
-  // SharedRefStore (the AssetRegistry owns no handles). The store passes the
-  // draw-time world through at `uploadCubemapFromEquirect` time.
+  // SharedRefStore (the AssetRegistry owns no handles). feat-20260630 M2 / w11:
+  // the retired cube-texture asset kind is gone; the relay mints an EquirectAsset
+  // shared ref as the cubemap GPU residency's identity token.
   gpuStore.configureGpuDevice(
     // biome-ignore lint/suspicious/noExplicitAny: MipmapBlitDevice descriptors are typed `any`; RhiDevice satisfies the shape
     internals.device as any,
     packShaderFactory as unknown as MipmapShaderModuleFactory | undefined,
     (world, pod) => {
-      let handle: Handle<'CubeTextureAsset', 'shared'>;
-      handle = world.allocSharedRef('CubeTextureAsset', pod, () => {
+      let handle: Handle<'EquirectAsset', 'shared'>;
+      handle = world.allocSharedRef('EquirectAsset', pod, () => {
         gpuStore.evictCubemap(handleSlot(handle));
       });
       return ok(handle);
@@ -1346,6 +1352,31 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // layoutKinds keep the hardcoded 4-attribute / 48-byte layout for
     // backward-compat (`undefined` / `'pbr'` / `'hdrp-pbr'` -- the URP/HDRP
     // path has no skin attributes, AC-04 zero-regression).
+    // feat-20260629-multi-uv-set-support m5-fixup: restore the non-skin PBR
+    // hardcoded 4-attribute / 48-byte layout (pos@0/normal@1/uv@2/tangent@3) as
+    // the zero-regression DEFAULT (AC-04). A prior m5-fixup collapsed this
+    // branch unconditionally onto deriveVertexBufferLayout for "SSOT purity",
+    // but git-bisect confirmed that collapse is the hello-room multi-mesh smoke
+    // regression source: derive produced a layout inconsistent with the
+    // built-in PBR shader (@location 0..3). Per the user decision the built-in
+    // PBR consumes a single UV set, so the URP/HDRP fallback path (no per-mesh
+    // attributes forwarded, meshAttributes === undefined) needs no multi-UV
+    // layout -- it stays on the original hardcoded 48-byte layout.
+    //
+    // The derive path is taken in exactly the two cases where it is required:
+    //   1. meshAttributes !== undefined -- a real per-mesh VertexAttributeMap
+    //      was forwarded (the record stage hands one through whenever a mesh
+    //      carries extra UV sets, e.g. uv1; honouring its key set is what emits
+    //      the @location(6+) attributes a custom multi-UV shader samples). A
+    //      custom shader registered via registerMaterialShader is absent from
+    //      the naga-reflection map, so resolvedUvSetCount is undefined here --
+    //      the layout must come from the mesh keys, not the (missing) count.
+    //   2. resolvedUvSetCount > 1 -- a manifest-reflected custom shader declares
+    //      multiple UV sets, so clamp-to-last aliases the missing mesh sets.
+    // Built-in PBR (meshAttributes undefined + reflected count 1/absent) keeps
+    // the hardcoded zero-regression path. The pbr-skin branch is unchanged.
+    const resolvedUvSetCount =
+      materialShaderId !== undefined ? materialShaderUvSetCounts.get(materialShaderId) : undefined;
     const vertexBuffers: readonly GPUVertexBufferLayout[] =
       layoutKind === 'pbr-skin'
         ? (deriveVertexBufferLayout(
@@ -1358,18 +1389,27 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
                 skinIndex: PBR_SKIN_SENTINEL_ATTR_BUFFER,
                 skinWeight: PBR_SKIN_SENTINEL_ATTR_BUFFER,
               } satisfies VertexAttributeMap),
+            resolvedUvSetCount !== undefined ? { shaderUvSetCount: resolvedUvSetCount } : undefined,
           ) as unknown as readonly GPUVertexBufferLayout[])
-        : ([
-            {
-              arrayStride: 12 * 4,
-              attributes: [
-                { shaderLocation: 0, offset: 0, format: 'float32x3' as const },
-                { shaderLocation: 1, offset: 3 * 4, format: 'float32x3' as const },
-                { shaderLocation: 2, offset: 6 * 4, format: 'float32x2' as const },
-                { shaderLocation: 3, offset: 8 * 4, format: 'float32x4' as const },
-              ],
-            },
-          ] as unknown as readonly GPUVertexBufferLayout[]);
+        : meshAttributes !== undefined ||
+            (resolvedUvSetCount !== undefined && resolvedUvSetCount > 1)
+          ? (deriveVertexBufferLayout(
+              meshAttributes ?? DEFAULT_VERTEX_ATTRS,
+              resolvedUvSetCount !== undefined && resolvedUvSetCount > 1
+                ? { shaderUvSetCount: resolvedUvSetCount }
+                : undefined,
+            ) as unknown as readonly GPUVertexBufferLayout[])
+          : ([
+              {
+                arrayStride: 12 * 4,
+                attributes: [
+                  { shaderLocation: 0, offset: 0, format: 'float32x3' as const },
+                  { shaderLocation: 1, offset: 3 * 4, format: 'float32x3' as const },
+                  { shaderLocation: 2, offset: 6 * 4, format: 'float32x2' as const },
+                  { shaderLocation: 3, offset: 8 * 4, format: 'float32x4' as const },
+                ],
+              },
+            ] as unknown as readonly GPUVertexBufferLayout[]);
     return {
       device: internals.device,
       shaderModuleFactory: getShaderModuleAdapter(),
@@ -1522,7 +1562,15 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // for `isHdr=true` (HDR sub-pass uses rgba16float) and
     // `passKind='shadow-caster'` (depth-only, no color attachment).
     colorFormatOverride?: GPUTextureFormat,
+    // feat-20260629-multi-uv-set-support m3-w5: shader-declared UV set count,
+    // forwarded to PipelineSpec.geometry.shaderUvSetCount for clamp-to-last
+    // alias. Undefined = fallback to mesh-provided count (no clamping).
+    // m4-w3: auto-filled from naga reflection when caller passes undefined.
+    shaderUvSetCount?: number,
   ): RenderPipeline | null => {
+    // feat-20260629 M4: auto-fill shaderUvSetCount from naga reflection
+    // (stored in materialShaderUvSetCounts during prepareMaterialShaders).
+    const resolvedUvSetCount = shaderUvSetCount ?? materialShaderUvSetCounts.get(materialShaderId);
     // feat-20260615-pipeline-spec-ssot M2-T2: cache key derived from PipelineSpec
     // 4-axis SSOT via cacheKeyOf(spec). The spec carries all 4 axes (shader /
     // attachments / geometry / renderState), replacing the legacy 8-segment string
@@ -1559,6 +1607,17 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         topology: topology ?? 'triangle-list',
         stripIndexFormat: indexFormat,
         vertexLayout: meshAttributes ?? DEFAULT_VERTEX_ATTRS,
+        // feat-20260629-multi-uv-set-support m5-fixup: only thread
+        // shaderUvSetCount when a custom material shader truly declares >1 UV
+        // set. Built-in PBR reflects count=1 (single UV per the user decision),
+        // and threading `1` here perturbs the PipelineSpec cache key + layout
+        // derivation versus the origin/main zero-regression path (git-bisect
+        // confirmed the hello-room multi-mesh collapse). Leaving it undefined
+        // for count<=1 keeps the canonical 48-byte 4-attribute layout, so
+        // clamp-to-last only kicks in for real multi-UV custom materials.
+        ...(resolvedUvSetCount !== undefined && resolvedUvSetCount > 1
+          ? { shaderUvSetCount: resolvedUvSetCount }
+          : {}),
       },
       renderState,
     };
@@ -2186,8 +2245,8 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         internals.device as any,
         internals.pack.createShaderModule as unknown as MipmapShaderModuleFactory | undefined,
         (world, pod) => {
-          let handle: Handle<'CubeTextureAsset', 'shared'>;
-          handle = world.allocSharedRef('CubeTextureAsset', pod, () => {
+          let handle: Handle<'EquirectAsset', 'shared'>;
+          handle = world.allocSharedRef('EquirectAsset', pod, () => {
             gpuStore.evictCubemap(handleSlot(handle));
           });
           return ok(handle);
@@ -2195,7 +2254,12 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         internals.device.caps,
       );
       try {
-        await prepareMaterialShaders(internals.device, getShader, assets);
+        await prepareMaterialShaders(
+          internals.device,
+          getShader,
+          assets,
+          materialShaderUvSetCounts,
+        );
         pipelineState = await buildPipeline();
       } catch {
         // Pipeline rebuild failed against the new device. Treat as a device
@@ -3152,7 +3216,7 @@ const HDR_COLOR_ATTACHMENT_FORMAT: GPUTextureFormat = 'rgba16float';
 // `mipmap:true` 2D texture format the smoke set uploads: `rgba8unorm-srgb`
 // (sRGB color / sprite / wood) + `rgba8unorm` (linear normal / metallic-rough /
 // occlusion maps). HDR equirect (`rgba16float` / `rgba32float`) is uploaded via
-// the eager `uploadCubemapFromEquirect` cubemap path, NOT the sync texture arm,
+// the internal equirect-to-cubemap projection path, NOT the sync texture arm,
 // so it is intentionally absent here. A `mipmap:true` texture in an
 // un-prewarmed format surfaces a structured RhiError at record (never an
 // async stall) -- the falsifiable anchor for an incomplete prewarm list.
@@ -3486,6 +3550,10 @@ async function prepareMaterialShaders(
   rhiDevice: RhiDevice,
   getShader: () => ShaderRegistry,
   assets: AssetRegistry,
+  // feat-20260629 M4: populated with uvSetCount from naga reflection JSON
+  // keyed by materialShaderId; consumed by getMaterialShaderPipeline for
+  // auto-fill of shaderUvSetCount clamp-to-last alias parameter.
+  materialShaderUvSetCounts: Map<string, number>,
 ): Promise<void> {
   // feat-20260528-material-shader-registration-unification M3 / w15:
   // pre-computed UUIDv5 GUIDs for engine-shipped material shaders.
@@ -3494,6 +3562,10 @@ async function prepareMaterialShaders(
   const pbrGuidRes = AssetGuid.parse('94d85ce4-650c-54b1-a86a-eaf22696ecbc');
   const unlitGuidRes = AssetGuid.parse('37f593ea-0c79-528c-b7f7-23d17045d776');
   const spriteGuidRes = AssetGuid.parse('658234f6-a605-5fff-957d-7149b48fd0f4');
+  // feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / t7: stable
+  // UUID for sprite-lit material shader (matches sprite-lit.wgsl.meta.json
+  // subAssets[0].guid; shader-id catalog SSOT).
+  const spriteLitGuidRes = AssetGuid.parse('f0ec6a4b-cad1-5a3d-9b4e-6d2b0fa14d8e');
   const pbrSkinGuidRes = AssetGuid.parse('5ad0833e-2f17-56e5-a3d2-dab543afae65');
   // feat-20260531-world-space-msdf-text-rendering M5 / w21: stable UUIDv5 for
   // the world-space MSDF text material shader (deriveBuiltin('forgeax::msdf-text')
@@ -3510,6 +3582,9 @@ async function prepareMaterialShaders(
   const spriteGuid = spriteGuidRes.ok
     ? spriteGuidRes.value
     : (new Uint8Array(16) as unknown as AssetGuidType);
+  const spriteLitGuid = spriteLitGuidRes.ok
+    ? spriteLitGuidRes.value
+    : (new Uint8Array(16) as unknown as AssetGuidType);
   const pbrSkinGuid = pbrSkinGuidRes.ok
     ? pbrSkinGuidRes.value
     : (new Uint8Array(16) as unknown as AssetGuidType);
@@ -3523,6 +3598,7 @@ async function prepareMaterialShaders(
     ['forgeax::default-standard-pbr', pbrGuid],
     ['forgeax::default-unlit', unlitGuid],
     ['forgeax::sprite', spriteGuid],
+    ['forgeax::sprite-lit', spriteLitGuid],
     ['forgeax::default-standard-pbr-skin', pbrSkinGuid],
     ['forgeax::msdf-text', msdfTextGuid],
     ['forgeax::default-shadow-caster', shadowCasterGuid],
@@ -3592,6 +3668,11 @@ async function prepareMaterialShaders(
         source: wgsl,
         paramSchema,
       });
+      // feat-20260629 M4: store uvSetCount from naga reflection for
+      // auto-fill in getMaterialShaderPipeline clamp-to-last alias.
+      if (msEntry.uvSetCount !== undefined) {
+        materialShaderUvSetCounts.set(msEntry.identifier, msEntry.uvSetCount);
+      }
       // Sanity check the schema parses through derive — a malformed sidecar
       // schema (e.g. unknown type literal) should fail loud at register time
       // (charter P3 explicit failure). The derived output is discarded; the
@@ -3786,6 +3867,7 @@ async function buildReadyWebGPU(
   let pbrModule: ShaderModule | null = null;
   let unlitModule: ShaderModule | null = null;
   let spriteModule: ShaderModule | null = null;
+  let spriteLitModule: ShaderModule | null = null;
   let fxaaModule: ShaderModule | null = null;
   let skyboxModule: ShaderModule | null = null;
   let bloomBrightModule: ShaderModule | null = null;
@@ -3819,6 +3901,13 @@ async function buildReadyWebGPU(
     let unlitEntry: ManifestEntry | undefined;
     let tonemapEntry: ManifestEntry | undefined;
     let spriteEntry: ManifestEntry | undefined;
+    // feat-20260624 M1' / t7: sprite-lit identification marker is the
+    // distinguishing `halfLambertSquared` helper (defined in
+    // sprite-lit.wgsl line 160, absent from sprite.wgsl). Identified
+    // BEFORE sprite so the `pivotAndSize` marker (shared between
+    // sprite + sprite-lit since paramSchema mirror, t4 + t5) does not
+    // mis-classify sprite-lit as sprite.
+    let spriteLitEntry: ManifestEntry | undefined;
     let iblEquirectEntry: ManifestEntry | undefined;
     let iblIrradianceEntry: ManifestEntry | undefined;
     let iblPrefilterEntry: ManifestEntry | undefined;
@@ -3842,6 +3931,13 @@ async function buildReadyWebGPU(
     for (const entry of manifestEntries) {
       if (entry.wgsl.includes('TonemapParams')) {
         tonemapEntry ??= entry;
+        continue;
+      }
+      if (entry.wgsl.includes('halfLambertSquared')) {
+        // sprite-lit identification — must precede the `pivotAndSize`
+        // marker since sprite-lit also carries that field (paramSchema
+        // mirror from t4/t5).
+        spriteLitEntry ??= entry;
         continue;
       }
       if (entry.wgsl.includes('pivotAndSize')) {
@@ -3999,10 +4095,13 @@ async function buildReadyWebGPU(
       if (spriteEntry !== undefined) {
         spriteEntry = patch(spriteEntry, 'forgeax::sprite');
       }
+      if (spriteLitEntry !== undefined) {
+        spriteLitEntry = patch(spriteLitEntry, 'forgeax::sprite-lit');
+      }
     }
     // Wire composed IBL shaders into IblPipelineCache before the cache's
-    // createIblPipelines runs (called downstream by
-    // AssetRegistry.uploadCubemapFromEquirect during the first Skylight
+    // createIblPipelines runs (called downstream by the internal
+    // GpuResourceStore equirect-to-cubemap projection during the first Skylight
     // dispatch). When all 4 are present, register them; otherwise leave
     // the cache untouched (charter F1: tests / non-IBL hosts that ship
     // empty / 3-entry manifests still boot, and the IBL pipeline cache's
@@ -4152,6 +4251,32 @@ async function buildReadyWebGPU(
       // shares the generic per-MaterialShader lazy build path, which now
       // needs the explicit seed to preserve frame-1 readiness.
       seedShaderModule('module-forgeax::sprite', spriteShaderResult.value);
+    }
+
+    // feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / t7:
+    // sprite-lit shader module — mirrors sprite registration shape (same
+    // lazy-build seed under `module-forgeax::sprite-lit`). Optional in the
+    // manifest (back-compat for apps locked to a pre-sprite-lit manifest URL).
+    if (spriteLitEntry !== undefined) {
+      const spriteLitEntryConst = spriteLitEntry;
+      const spriteLitShaderResult = await runShimStep(
+        () =>
+          asyncCreateShaderModule
+            ? asyncCreateShaderModule(rhiDevice, {
+                code: spriteLitEntryConst.wgsl,
+                label: 'sprite-lit',
+              })
+            : invokeDeviceCreateShaderModule(rhiDevice, {
+                code: spriteLitEntryConst.wgsl,
+                label: 'sprite-lit',
+              }),
+        'shader-compile-failed',
+        'sprite-lit shader module compiled',
+        'inspect manifest sprite-lit entry composed wgsl; check device.features',
+      );
+      if (!spriteLitShaderResult.ok) throw spriteLitShaderResult.error;
+      spriteLitModule = spriteLitShaderResult.value;
+      seedShaderModule('module-forgeax::sprite-lit', spriteLitShaderResult.value);
     }
 
     // feat-20260528-fxaa-post-processing: fxaa shader module is optional
@@ -4589,6 +4714,8 @@ async function buildReadyWebGPU(
       // (position + normal + uv + tangent), so the fallback literal mirrors
       // every other mesh upload site.
       layout: '12F',
+      // BUILTIN_CUBE / BUILTIN_TRIANGLE are single-UV (set 0 only).
+      uvSetCount: 1,
       vertexCount: asset.vertices.length / 12,
       indexed: meshIndices !== undefined,
       topology: asset.submeshes[0]?.topology ?? 'triangle-list',
@@ -5255,6 +5382,14 @@ async function buildReadyWebGPU(
       vertex: spriteModule,
       fragment: spriteModule,
     });
+  // feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / t7:
+  // sprite-lit shader registers under canonical `forgeax::sprite-lit` —
+  // mirror sprite, parallel cache slot (D-11 string isolation).
+  if (spriteLitModule !== null)
+    shaderModuleMap.set('forgeax::sprite-lit', {
+      vertex: spriteLitModule,
+      fragment: spriteLitModule,
+    });
   // M2-T4: fullscreen-post shader modules (tonemap + skybox) are registered
   // in their respective blocks after pipeline layout creation — layout is
   // required for the boot-time SPEC_CONST pre-warm to succeed. The entries
@@ -5297,6 +5432,14 @@ async function buildReadyWebGPU(
 
         if (fragModule === spriteModule) {
           label = isHdr ? 'sprite-pipeline-hdr' : 'sprite-pipeline';
+          if (isHdr) {
+            f.entryPoint = 'fs_main_hdr';
+          }
+        } else if (fragModule === spriteLitModule) {
+          // feat-20260624 M1' / t7: sprite-lit mirrors sprite's HDR
+          // entry swap — `fs_main` (LDR clamped) vs `fs_main_hdr`
+          // (HDR pass-through). Labels keep the same shape.
+          label = isHdr ? 'sprite-lit-pipeline-hdr' : 'sprite-lit-pipeline';
           if (isHdr) {
             f.entryPoint = 'fs_main_hdr';
           }
@@ -5347,7 +5490,12 @@ async function buildReadyWebGPU(
   // compiled. Entries referencing a missing module are silently skipped
   // (the empty-manifest path — D-3). Any build failure for an available
   // module throws PipelineSpecError (fail-fast, charter P3).
-  if (unlitModule !== null || pbrModule !== null || spriteModule !== null) {
+  if (
+    unlitModule !== null ||
+    pbrModule !== null ||
+    spriteModule !== null ||
+    spriteLitModule !== null
+  ) {
     for (const spec of runtimeSpecConstTable) {
       const modules = shaderModuleMap.get(spec.shader.id);
       if (modules === undefined) {

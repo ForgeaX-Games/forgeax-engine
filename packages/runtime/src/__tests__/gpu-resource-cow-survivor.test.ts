@@ -13,7 +13,7 @@
 
 import type { Result, RhiCaps, RhiError } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-rhi';
-import type { CubeTextureAsset, Handle, MeshAsset, TextureAsset } from '@forgeax/engine-types';
+import type { EquirectAsset, Handle, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { toShared, unwrapHandle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { GpuResourceStore } from '../gpu-resource-store';
@@ -114,10 +114,10 @@ const mockCaps: RhiCaps = {
 };
 
 function makeRegisterCube(): (
-  pod: CubeTextureAsset,
-) => Result<Handle<'CubeTextureAsset', 'shared'>, never> {
+  pod: EquirectAsset,
+) => Result<Handle<'EquirectAsset', 'shared'>, never> {
   let next = 1000;
-  return () => ok(toShared<'CubeTextureAsset'>(next++));
+  return () => ok(toShared<'EquirectAsset'>(next++));
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: shader-module factory shim

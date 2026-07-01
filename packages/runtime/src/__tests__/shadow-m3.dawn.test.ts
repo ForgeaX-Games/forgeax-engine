@@ -176,8 +176,7 @@ function buildShadowScene(world: World, pcfKernelSize: number): void {
         // samples (same migration the prior M2/M3 fixtures relied on).
         cascadeCount: 1,
         mapSize: 1024,
-        nearPlane: 0.1,
-        farPlane: 50,
+        shadowDistance: 50,
         pcfKernelSize,
       },
     })

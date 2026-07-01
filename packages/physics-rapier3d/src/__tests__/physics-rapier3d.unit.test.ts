@@ -287,6 +287,45 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         expect(posAfter.x).toBeCloseTo(10, 0);
       });
 
+      it('kinematic body honors ccdEnabled through the ECS bridge', async () => {
+        // Regression: the kinematic arm of ensureBody omitted setCcdEnabled, so
+        // a fast kinematic mover (bullet) tunneled through dynamics. A kinematic
+        // body spawned with ccdEnabled:true must carry CCD on the Rapier body.
+        const RAPIER = await loadRapier3D();
+        if ('code' in RAPIER) {
+          expect(RAPIER.code).toBe('wasm-load-failed');
+          return;
+        }
+
+        const world = new World();
+        const pw = createRapier3DPhysicsWorld(RAPIER);
+        world.insertResource('PhysicsWorld', pw);
+
+        world
+          .spawn(
+            { component: Transform as never, data: { posX: 0, posY: 1, posZ: 0 } },
+            {
+              component: RigidBody as never,
+              data: { type: RigidBodyTypeValue.kinematic, ccdEnabled: true },
+            },
+            {
+              component: Collider as never,
+              data: { shape: ColliderShapeValue.sphere, radius: 0.2 },
+            },
+          )
+          .unwrap();
+
+        registerPhysicsSystems(world);
+        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
+        world.update();
+
+        let ccdBodies = 0;
+        pw.raw.forEachRigidBody((b: { isCcdEnabled(): boolean }) => {
+          if (b.isCcdEnabled()) ccdBodies++;
+        });
+        expect(ccdBodies).toBe(1);
+      });
+
       it('despawn: removeEntity reduces body count', async () => {
         const RAPIER = await loadRapier3D();
         if ('code' in RAPIER) {
