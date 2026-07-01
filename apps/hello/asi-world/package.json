@@ -14,6 +14,13 @@
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-asi-world smoke",
+    "publicAssetOverrides": {
+      "world/terrain.json": "../../../forgeax-engine-assets/demo-assets/hello-asi-world/terrain.json",
+      "world/terrain_atlas.png": "../../../forgeax-engine-assets/demo-assets/hello-asi-world/terrain_atlas.png",
+      "world/object_atlas.png": "../../../forgeax-engine-assets/demo-assets/hello-asi-world/object_atlas.png",
+      "character/idle.png": "../../../forgeax-engine-assets/demo-assets/hello-asi-world/idle.png",
+      "character/move.png": "../../../forgeax-engine-assets/demo-assets/hello-asi-world/move.png"
+    },
     "metrics": {
       "bundle-size": { "enabled": false, "reason": "downstream demo, not size-tracked" },
       "fps": {

@@ -75,12 +75,19 @@ import { urpPipeline } from './urp-pipeline';
  * `queue === RenderQueue.Transparent` segment of the dispatch list;
  * all other queue segments keep their relative order.
  *
- * | mode | primary key | secondary key |
- * |:--:|:--|:--|
- * | 0 (LAYER_Z)   | `layer` ASC | `posZ` ASC |
- * | 1 (LAYER_Y)   | `layer` ASC | `-(posY - pivotY * sizeY)` ASC |
- * | 2 (LAYER_YZ)  | `layer` ASC | `(posY - pivotY * sizeY) + yzAlpha * posZ` ASC |
- * | 3 (DISTANCE)  | `-(dist² from camera)` ASC (back-to-front, layer ignored) |
+ * | mode | primary key | secondary key | tertiary key |
+ * |:--:|:--|:--|:--|
+ * | 0 (LAYER_Z)   | `layer` ASC | `posZ` ASC | `materialHandle` ASC |
+ * | 1 (LAYER_Y)   | `layer` ASC | `-(posY - pivotY * sizeY)` ASC | `materialHandle` ASC |
+ * | 2 (LAYER_YZ)  | `layer` ASC | `(posY - pivotY * sizeY) + yzAlpha * posZ` ASC | `materialHandle` ASC |
+ * | 3 (DISTANCE)  | `-(dist² from camera)` ASC (back-to-front, layer ignored) | — |
+ *
+ * The `materialHandle` tertiary key for modes 0/1/2 groups same-material
+ * entries together whenever the primary+secondary sort values are equal
+ * (e.g. tilemap tiles in the same row/layer share `posY` in LAYER_Y mode).
+ * Consecutive same-material groups then collapse into fold buckets in the
+ * record-stage fold operator, significantly reducing draw call count for
+ * tilemap-heavy scenes.
  *
  * `posX/Y/Z` = translation column of the entity's world mat4 (indices 12/13/14).
  * `pivotY` = `RenderableSnapshot.material.paramSnapshot.pivotAndSize[1]` (default 0.5).
@@ -166,7 +173,12 @@ function sortTransparentDispatch(
       const vb = sortVal(db);
       if (va < vb) return -1;
       if (va > vb) return 1;
-      return 0;
+      // Tertiary tiebreaker: group same-materialHandle entries together so
+      // fold-eligible consecutive runs form. Entries at equal (layer,
+      // sortVal) — e.g. tilemap tiles in the same row under LAYER_Y — are
+      // depth-equivalent; reordering them by material does not change the
+      // visual result but maximises fold-bucket width.
+      return da.materialHandle - db.materialHandle;
     });
   }
 
@@ -239,9 +251,9 @@ export const STANDARD_PBR_UBO_SIZE = derive(STANDARD_PBR_SIDECAR_SCHEMA).uboLayo
  * per-draw counts, not stale cross-frame totals).
  *
  * bug-20260519: BUILTIN cube migrated to 12F so the legacy `unlitBuiltin`
- * counter is gone; the surface collapses to `unlit` (every entity carrying
- * `MaterialAsset { shadingModel: 'unlit' }`) + `standard` (every entity
- * carrying `shadingModel: 'standard'`).
+ * counter is gone; the surface collapses to `unlit` (every entity whose
+ * shader identity is `forgeax::default-unlit`) + `standard` (every entity
+ * whose shader identity is `forgeax::default-standard-pbr`).
  */
 export interface RenderSystem {
   draw(world: World): void;
@@ -700,15 +712,15 @@ export interface PipelineState {
   // (which hard-coded uv = (0,0) for BUILTIN cubes) are deleted.
   //
   //   - `unlitPipeline` : unlit module + 12F vertex stride.
-  //                                  Routed to every entity carrying a
-  //                                  `MaterialAsset { shadingModel: 'unlit' }`.
+  //                                  Routed to every entity whose
+  //                                  shader identity is `forgeax::default-unlit`.
   //   - `standardPipeline`        : pbr module + 12F vertex stride.
   //                                  Routed to every entity carrying a
   //                                  standard / GGX-PBR material.
   //
   // Both pipelines share the same 4-BindGroupLayout chain (view + material +
   // mesh-array + instances). The record stage selects between them on
-  // `mat.shadingModel` only (D-2 BUILTIN-vs-procedural distinction retired).
+  // `mat.materialShaderId` only (D-2 BUILTIN-vs-procedural distinction retired).
   // bug-20260519 D-3: nullable when manifest carries zero entries (Camera-
   // only / clear-pass-only path; D-1 + D-2 + plan-strategy section 1
   // mermaid). The render-time access point in `render-system-record.ts`

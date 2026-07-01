@@ -1,19 +1,19 @@
 // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w3 — mode-gate (D-5).
 //
 // Drives the pure fold helper for the four transparent-sort modes:
-//   mode 0 (LAYER_Z)   -> fold enabled; equal-key runs collapse to 1 bucket.
-//   mode 1 (LAYER_Y)   -> bypass per-entity (per-cell footY differs structurally).
-//   mode 2 (LAYER_YZ)  -> bypass per-entity (composite per-entity key).
+//   mode 0 (LAYER_Z)   -> fold on posZ (world[14]); equal-key runs collapse.
+//   mode 1 (LAYER_Y)   -> fold on posY (world[13]); same-row tiles collapse.
+//   mode 2 (LAYER_YZ)  -> bypass per-entity (composite foot-Y key).
 //   mode 3 (DISTANCE)  -> bypass per-entity (per-entity camera distance).
 //
-// Bypass semantics: each DispatchEntry produces its own singleton bucket
-// (bucketSize=1). The fold dispatcher (record-stage) treats singleton
-// buckets identically to today's per-entity drawIndexed path; mode 1/2/3
-// therefore produce N draws for N entries, identical to current behavior
-// (charter P3 silent fallback — no error, no warning).
+// Bypass semantics (modes 2/3): each DispatchEntry produces its own
+// singleton bucket (bucketSize=1). The fold dispatcher (record-stage)
+// treats singleton buckets identically to per-entity drawIndexed (charter
+// P3 silent fallback — no error, no warning).
 //
-// Constraints from plan-strategy D-5: mode 0 is the only fold-enabled
-// mode; this is the only place that gate is exercised at unit-test scope.
+// Mode 1 (LAYER_Y) folds using posY as the sort-axis bucket key: tiles in
+// the same row share posY and consecutive same-material runs collapse into
+// one instanced draw call (D-5 extension).
 
 import { RenderQueue } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -48,7 +48,10 @@ function mockEntry(opts: {
   };
 }
 
-function mockRenderable(tz: number): {
+function mockRenderable(
+  tz: number,
+  ty = 0,
+): {
   transform: { world: Float32Array };
   material: { transparent?: true | undefined };
 } {
@@ -57,18 +60,18 @@ function mockRenderable(tz: number): {
   world[5] = 1;
   world[10] = 1;
   world[15] = 1;
+  world[13] = ty;
   world[14] = tz;
   // PR #502 fix + feat-20260625 R2 fix-up: `transparent: true` preserves the
-  // fold-eligible behavior these mode-gate tests exercise (mode-0 should
-  // fold, mode-1/2/3 should bypass per-entity); see render-system-fold.ts
-  // transparent-pass-only gate (the sprite discriminator was removed in
-  // M3 / w15 and replaced with the generic `transparent` flag).
+  // fold-eligible behavior these mode-gate tests exercise; see
+  // render-system-fold.ts transparent-pass-only gate (the sprite
+  // discriminator was removed in M3 / w15 and replaced with `transparent`).
   return { transform: { world }, material: { transparent: true } };
 }
 
 describe('foldDispatchBuckets — mode-gate (D-5, w3)', () => {
-  // 5 entries all sharing (layer=0, posZ=0, materialHandle=1).
-  // Under mode 0 they collapse to 1 bucket. Under mode 1/2/3 they each
+  // 5 entries all sharing (layer=0, posZ=0, posY=0, materialHandle=1).
+  // Under mode 0 and 1 they collapse to 1 bucket. Under mode 2/3 they each
   // get their own singleton bucket (bypass).
   function makeUniformInputs(N: number): {
     entries: DispatchEntry[];
@@ -78,7 +81,7 @@ describe('foldDispatchBuckets — mode-gate (D-5, w3)', () => {
     const renderables: ReturnType<typeof mockRenderable>[] = [];
     for (let i = 0; i < N; i++) {
       entries.push(mockEntry({ renderableIndex: i, materialHandle: 1, layer: 0 }));
-      renderables.push(mockRenderable(0));
+      renderables.push(mockRenderable(0, 0));
     }
     return { entries, renderables };
   }
@@ -93,11 +96,46 @@ describe('foldDispatchBuckets — mode-gate (D-5, w3)', () => {
     expect(b.bucketSize).toBe(5);
   });
 
-  it('mode 1 (LAYER_Y) — N entries bypass to N singleton buckets (no fold)', () => {
+  it('mode 1 (LAYER_Y) — N equal-posY entries collapse to 1 bucket', () => {
     const { entries, renderables } = makeUniformInputs(5);
     const buckets = foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Y, renderables);
-    expect(buckets).toHaveLength(5);
+    expect(buckets).toHaveLength(1);
+    const b = buckets[0];
+    expect(b).toBeDefined();
+    if (b === undefined) return;
+    expect(b.bucketSize).toBe(5);
+  });
+
+  it('mode 1 (LAYER_Y) — distinct posY per entry -> N singleton buckets', () => {
+    // Each tile is in a different row (different posY); no consecutive run
+    // can form, so each entry becomes its own bucket.
+    const N = 4;
+    const entries: DispatchEntry[] = [];
+    const renderables: ReturnType<typeof mockRenderable>[] = [];
+    for (let i = 0; i < N; i++) {
+      entries.push(mockEntry({ renderableIndex: i, materialHandle: 1, layer: 0 }));
+      renderables.push(mockRenderable(0, i * 16)); // posY = 0, 16, 32, 48
+    }
+    const buckets = foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Y, renderables);
+    expect(buckets).toHaveLength(N);
     for (const b of buckets) expect(b.bucketSize).toBe(1);
+  });
+
+  it('mode 1 (LAYER_Y) — sortKey carries posY (world[13])', () => {
+    // Single bucket from N entries at posY=3.0; sortKey must equal 3.0.
+    const N = 3;
+    const entries: DispatchEntry[] = [];
+    const renderables: ReturnType<typeof mockRenderable>[] = [];
+    for (let i = 0; i < N; i++) {
+      entries.push(mockEntry({ renderableIndex: i, materialHandle: 1, layer: 0 }));
+      renderables.push(mockRenderable(0, 3.0));
+    }
+    const buckets = foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Y, renderables);
+    expect(buckets).toHaveLength(1);
+    const b = buckets[0];
+    expect(b).toBeDefined();
+    if (b === undefined) return;
+    expect(b.sortKey).toBeCloseTo(3.0);
   });
 
   it('mode 2 (LAYER_YZ) — N entries bypass to N singleton buckets (no fold)', () => {
@@ -114,13 +152,10 @@ describe('foldDispatchBuckets — mode-gate (D-5, w3)', () => {
     for (const b of buckets) expect(b.bucketSize).toBe(1);
   });
 
-  it('mode-gate is silent: bypass modes do not throw or fire errors', () => {
+  it('mode-gate is silent: bypass modes 2/3 do not throw or fire errors', () => {
     const { entries, renderables } = makeUniformInputs(3);
     // The pure helper does not have access to errorRegistry; "silent"
     // here means no thrown exception. Negative-space assertion.
-    expect(() =>
-      foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Y, renderables),
-    ).not.toThrow();
     expect(() =>
       foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_YZ, renderables),
     ).not.toThrow();

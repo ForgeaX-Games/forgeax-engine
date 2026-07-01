@@ -2882,7 +2882,7 @@ function makeRhiNotAvailableError(): RhiError {
 // triple-pipeline contract (M5 / w22.10 + w22.11) hands distinct
 // `unlitBuiltinPipeline.module === unlitPipeline.module !==
 // standardPipeline.module` GPU handles back to `RenderSystem` per-frame
-// dispatch (D-P4 + AGENTS.md `MeshRenderer` shadingModel discriminant).
+// dispatch (D-P4 + AGENTS.md `MeshRenderer` shader-identity discriminant).
 
 const GPU_BUFFER_USAGE_MAP_READ = 0x01;
 const GPU_BUFFER_USAGE_VERTEX = 0x20;
@@ -6762,11 +6762,11 @@ async function buildReadyWebGPU(
     // chain so material BG entries built once compose for any of the three
     // pipelines (charter P5 consistent abstraction). The legacy `pipeline`
     // alias field has been retired; consumers select per
-    // (mat.shadingModel, mesh.layout) tuple via the record-stage three-way
+    // (mat.materialShaderId, mesh.layout) tuple via the record-stage three-way
     // setPipeline branch (w22.11).
     // bug-20260519: BUILTIN cube migrated to 12F so the legacy
     // `unlitBuiltinPipeline` (+ its zero-stride `unlitBuiltinDummyAttrBuffer`)
-    // is gone; consumers pick per `mat.shadingModel` only via the record-stage
+    // is gone; consumers pick per `mat.materialShaderId` only via the record-stage
     // 2-way `setPipeline` branch.
     // feat-20260615-pipeline-spec-ssot M2-T4: standard material PSOs are
     // pre-warmed in SPEC_CONST_TABLE and cached in pipelineCache. Cache

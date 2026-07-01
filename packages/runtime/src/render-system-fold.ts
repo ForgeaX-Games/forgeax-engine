@@ -4,11 +4,11 @@
 // feat-20260622-chunk-gpu-instancing-sprite-tilemap M2 / w11 — uniform-cap
 // fallback decision helper (`evaluateFoldBucketUniformCap`).
 //
-// Plan-strategy D-1 (record-stage transparent fold) + D-5 (mode-gate, only
-// LAYER_Z folds) + D-7 (bucket key reuses transparent-sort equivalence
-// class — no new BinKey type). The helper takes a transparent-sort-ordered
-// DispatchEntry[] and groups consecutive entries with equal three-tuple
-// (Layer.value, posZ, materialHandle) into FoldBucket descriptors.
+// Plan-strategy D-1 (record-stage transparent fold) + D-5 (mode-gate) +
+// D-7 (bucket key reuses transparent-sort equivalence class — no new BinKey
+// type). The helper takes a transparent-sort-ordered DispatchEntry[] and
+// groups consecutive entries with equal three-tuple
+// (Layer.value, sortKey, materialHandle) into FoldBucket descriptors.
 //
 // The bucket carries an assembled Float32Array of per-instance world mat4s
 // (stride=16, column-major), suitable for upload to a GPU instance buffer
@@ -17,14 +17,16 @@
 // the consumer's responsibility — this file is pure data shaping, no GPU
 // dependencies, fully unit-testable.
 //
-// Mode-gate (D-5):
-//   - mode 0 (LAYER_Z): runs collapse — chunk-level GPU instancing.
-//   - mode 1 (LAYER_Y) / 2 (LAYER_YZ) / 3 (DISTANCE): bypass per-entity —
-//     each entry becomes a singleton bucket (bucketSize=1). The dispatch
-//     consumer treats singleton buckets identically to today's per-entity
-//     drawIndexed, so the bypass is byte-for-byte the current behavior
-//     (charter P3 silent fallback — no error fired, AC-04 zero-difference
-//     for sortScope modes preserved).
+// Mode-gate (D-5, extended for LAYER_Y):
+//   - mode 0 (LAYER_Z): folds on posZ (world[14]) — horizontal side-scroller.
+//   - mode 1 (LAYER_Y): folds on posY (world[13]) — same-row tiles share posY
+//     so consecutive equal-(layer, posY, materialHandle) runs collapse.
+//   - mode 2 (LAYER_YZ) / 3 (DISTANCE): bypass per-entity — sort key is a
+//     composite foot-Y formula or per-entity camera distance, neither
+//     reducible to a single world-mat4 read without the full sort state.
+//     Each entry becomes a singleton bucket (bucketSize=1); the dispatch
+//     consumer treats singletons identically to per-entity drawIndexed
+//     (charter P3 silent fallback — no error fired).
 //
 // Uniform-cap fallback (M2 / D-2 + D-9):
 //   - When `caps.storageBuffer === false` (WebGL2 path) AND a fold bucket
@@ -46,6 +48,7 @@
 import { RhiError } from '@forgeax/engine-rhi';
 import type { DispatchEntry } from './render-system-extract';
 import {
+  TRANSPARENT_SORT_MODE_LAYER_Y,
   TRANSPARENT_SORT_MODE_LAYER_Z,
   type TransparentSortConfig,
 } from './systems/transparent-sort-config';
@@ -54,8 +57,8 @@ import {
  * Per-bucket descriptor produced by {@link foldDispatchBuckets}.
  *
  * One bucket = one fold-eligible run of consecutive DispatchEntry whose
- * `(layer, posZ, materialHandle)` triple is equal. Singleton buckets
- * (bucketSize=1) appear when the mode bypasses fold (D-5 mode != 0) or
+ * `(layer, sortKey, materialHandle)` triple is equal. Singleton buckets
+ * (bucketSize=1) appear when the mode bypasses fold (D-5 mode 2/3) or
  * when consecutive entries differ in any of the three keys.
  *
  * Fields:
@@ -69,9 +72,10 @@ import {
  *   - `transforms` — assembled Float32Array of bucketSize world mat4s,
  *     stride=16 floats per instance, column-major. Suitable for direct
  *     `device.queue.writeBuffer` into an instance buffer used at @group(3).
- *   - `materialHandle` / `layer` / `posZ` — the three-tuple key for this
- *     bucket; consumed by the dispatch loop for bind-group selection /
- *     sort-stability invariants.
+ *   - `materialHandle` / `layer` / `sortKey` — the three-tuple key for this
+ *     bucket. `sortKey` is mode-dependent: posZ (world[14]) for mode 0
+ *     (LAYER_Z), posY (world[13]) for mode 1 (LAYER_Y). Consumed by the
+ *     dispatch loop for bind-group selection / sort-stability invariants.
  */
 export interface FoldBucket {
   readonly entries: readonly DispatchEntry[];
@@ -79,7 +83,7 @@ export interface FoldBucket {
   readonly transforms: Float32Array;
   readonly materialHandle: number;
   readonly layer: number;
-  readonly posZ: number;
+  readonly sortKey: number;
 }
 
 /**
@@ -122,16 +126,16 @@ export interface FoldRenderableLike {
  *
  * @param orderedEntries — DispatchEntry[] in transparent-sort order. Empty
  *   array yields zero buckets (defensive empty-bucket suppression).
- * @param mode — current `TransparentSortConfig.mode`. Only mode 0
- *   (LAYER_Z) enables fold; other modes produce singleton buckets per
- *   entry (D-5).
+ * @param mode — current `TransparentSortConfig.mode`. Modes 0 (LAYER_Z)
+ *   and 1 (LAYER_Y) enable fold using the appropriate sort-axis coordinate
+ *   (posZ / posY respectively). Modes 2 and 3 produce singleton buckets
+ *   per entry (D-5 bypass).
  * @param renderables — parallel snapshot array indexed by
  *   `DispatchEntry.renderableIndex`. The helper reads `transform.world`
- *   to (a) extract `posZ` (index 14 of the world mat4) for the bucket
- *   key, and (b) copy 16 floats per entry into the assembled transforms
- *   buffer. Out-of-range / missing renderables defensively contribute a
- *   zero mat4 slot (consumer-visible, but never generated by the
- *   production extract path).
+ *   to (a) extract the sort-axis coordinate for the bucket key (posZ
+ *   world[14] for mode 0, posY world[13] for mode 1), and (b) copy 16
+ *   floats per entry into the assembled transforms buffer. Out-of-range /
+ *   missing renderables defensively contribute a zero mat4 slot.
  * @returns Array of FoldBucket descriptors in input order.
  */
 export function foldDispatchBuckets(
@@ -141,22 +145,28 @@ export function foldDispatchBuckets(
 ): readonly FoldBucket[] {
   if (orderedEntries.length === 0) return [];
 
-  // Bypass branch (D-5): mode != 0 cannot fold structurally, each entry
-  // produces its own singleton bucket. The dispatch consumer treats
-  // bucketSize=1 identically to today's per-entity drawIndexed — byte-
-  // identical behavior, no error fired (charter P3 silent fallback).
-  if (mode !== TRANSPARENT_SORT_MODE_LAYER_Z) {
+  // Bypass branch (D-5): modes 2 (LAYER_YZ) and 3 (DISTANCE) cannot fold
+  // — their sort keys are composite foot-Y formulas or per-entity camera
+  // distances, not reducible to a single world-mat4 coordinate read.
+  // Each entry produces its own singleton bucket; the dispatch consumer
+  // treats bucketSize=1 identically to per-entity drawIndexed (charter P3
+  // silent fallback — no error fired).
+  //
+  // Mode 1 (LAYER_Y) falls through to the fold branch below and uses posY
+  // (world[13]) as the sort-axis bucket key.
+  if (mode !== TRANSPARENT_SORT_MODE_LAYER_Z && mode !== TRANSPARENT_SORT_MODE_LAYER_Y) {
     const out: FoldBucket[] = [];
     for (let i = 0; i < orderedEntries.length; i++) {
       const e = orderedEntries[i];
       if (e === undefined) continue;
-      out.push(makeSingletonBucket(e, renderables));
+      out.push(makeSingletonBucket(e, renderables, mode));
     }
     return out;
   }
 
-  // Fold branch (mode 0 = LAYER_Z): linear scan, collect runs with equal
-  // (layer, posZ, materialHandle).
+  // Fold branch (mode 0 = LAYER_Z, mode 1 = LAYER_Y): linear scan, collect
+  // runs with equal (layer, sortKey, materialHandle). sortKey is posZ for
+  // mode 0, posY for mode 1 — see readSortKey().
   //
   // Transparent-pass-only gate (PR #502 fix + feat-20260625 R2 fix-up):
   // the only dispatch site that consumes `headBuckets` to emit one
@@ -207,11 +217,11 @@ export function foldDispatchBuckets(
     // see `MaterialSnapshot.transparent`).
     const headTransparent = renderables[head.renderableIndex]?.material.transparent;
     if (headTransparent !== true) {
-      buckets.push(makeSingletonBucket(head, renderables));
+      buckets.push(makeSingletonBucket(head, renderables, mode));
       runStart += 1;
       continue;
     }
-    const headPosZ = readPosZ(head.renderableIndex, renderables);
+    const headSortKey = readSortKey(mode, head.renderableIndex, renderables);
     let runEnd = runStart + 1;
     while (runEnd < orderedEntries.length) {
       const cand = orderedEntries[runEnd];
@@ -224,8 +234,8 @@ export function foldDispatchBuckets(
       // makes the bucket invariant locally readable.
       const candTransparent = renderables[cand.renderableIndex]?.material.transparent;
       if (candTransparent !== true) break;
-      const candPosZ = readPosZ(cand.renderableIndex, renderables);
-      if (candPosZ !== headPosZ) break;
+      const candSortKey = readSortKey(mode, cand.renderableIndex, renderables);
+      if (candSortKey !== headSortKey) break;
       runEnd += 1;
     }
 
@@ -237,7 +247,7 @@ export function foldDispatchBuckets(
       transforms,
       materialHandle: head.materialHandle,
       layer: head.layer,
-      posZ: headPosZ,
+      sortKey: headSortKey,
     });
     runStart = runEnd;
   }
@@ -247,18 +257,19 @@ export function foldDispatchBuckets(
 function makeSingletonBucket(
   entry: DispatchEntry,
   renderables: readonly FoldRenderableLike[],
+  mode: TransparentSortConfig['mode'],
 ): FoldBucket {
   const transforms = new Float32Array(16);
   const w = renderables[entry.renderableIndex]?.transform.world;
   if (w !== undefined) transforms.set(w);
-  const posZ = (w?.[14] ?? 0) as number;
+  const sortKey = readSortKey(mode, entry.renderableIndex, renderables);
   return {
     entries: [entry],
     bucketSize: 1,
     transforms,
     materialHandle: entry.materialHandle,
     layer: entry.layer,
-    posZ,
+    sortKey,
   };
 }
 
@@ -276,10 +287,16 @@ function assembleTransforms(
   return out;
 }
 
-function readPosZ(renderableIndex: number, renderables: readonly FoldRenderableLike[]): number {
+function readSortKey(
+  mode: TransparentSortConfig['mode'],
+  renderableIndex: number,
+  renderables: readonly FoldRenderableLike[],
+): number {
   const w = renderables[renderableIndex]?.transform.world;
   if (w === undefined) return 0;
-  return (w[14] ?? 0) as number;
+  // mode 0 (LAYER_Z): sort-axis is Z, column 3 row 2 = world[14].
+  // mode 1 (LAYER_Y): sort-axis is Y, column 3 row 1 = world[13].
+  return ((mode === TRANSPARENT_SORT_MODE_LAYER_Z ? w[14] : w[13]) ?? 0) as number;
 }
 
 /**

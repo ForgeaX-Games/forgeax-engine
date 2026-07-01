@@ -2,16 +2,19 @@
 //
 // feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / t2.
 //
-// Red-stage tests for the AC-02 (D-9 remap) extract branch:
-// when the first pass shader id is 'forgeax::sprite-lit' the snapshot
-// must carry `materialShaderId === 'forgeax::sprite-lit'`,
-// `shadingModel === undefined`, and `transparent === true` (derived from
-// renderState.blend presence). The branch mirrors `'forgeax::sprite'`
-// without expanding the closed `shadingModel` union.
+// Tests for the AC-02 (D-9 remap) extract branch: when the first pass
+// shader id is 'forgeax::sprite-lit' the snapshot must carry
+// `materialShaderId === 'forgeax::sprite-lit'` and `transparent === true`
+// (derived from renderState.blend presence). The branch mirrors
+// `'forgeax::sprite'` without adding any material-kind discriminant.
 //
-// post-PR-#520 + transparent SSOT collapse reality:
-//   - MaterialSnapshot.shadingModel is `'unlit' | undefined` (2 members)
-//   - sprite carries `shadingModel: undefined` + materialShaderId
+// tweak-20260701-remove-vestigial-shadingmodel-concept M1 reality:
+//   - MaterialSnapshot no longer carries a `shadingModel` field at all —
+//     the surface-response discriminant responsibility was fully absorbed
+//     by shader identity (`materialShaderId`). This is the strongest form
+//     of the original D-10 invariant: sprite-lit cannot be added to a
+//     shadingModel union because there is no such union.
+//   - sprite carries `materialShaderId` only
 //   - transparent derives from `renderState.blend !== undefined`
 //   - sprite-lit walks the SAME schema-driven path as sprite
 //
@@ -19,58 +22,35 @@
 //   - plan-strategy D-1 (materialShaderId string routing mirror sprite)
 //   - plan-strategy D-9 (AC-02 remap: no 'sprite-lit' inferredShadingModel case)
 //   - plan-strategy D-10 (AC-01 remap: no new narrowing type guard)
-//   - render-system-extract.ts MaterialSnapshot (closed union 2 members)
+//   - render-system-extract.ts MaterialSnapshot (no shadingModel field)
 //   - requirements AC-01 / AC-02 (post-rewrite)
 
 import { describe, expect, it } from 'vitest';
 import type { MaterialSnapshot } from '../render-system-extract';
 
-/**
- * D-10 narrowing-point gate: MaterialSnapshot.shadingModel is the
- * 2-member closed union `'unlit' | undefined`. Adding a third member
- * (`'sprite-lit'`) would be a reverse SSOT — the type-level assertion
- * below guards the contract.
- *
- * TS type-level fact: shadingModel must NOT include 'sprite-lit'.
- */
-type ShadingModelMembers = MaterialSnapshot['shadingModel'];
-
-/**
- * Compile-time gate: `'sprite-lit'` must not be assignable to
- * `MaterialSnapshot['shadingModel']`. If a future commit silently
- * widens the union the assignment below will type-check and bypass the
- * AC-01 invariant, so the runtime test below pins this on values too.
- */
-const SPRITE_LIT_NOT_IN_UNION = (value: ShadingModelMembers): boolean => {
-  // Acceptable narrow forms are 'unlit' and undefined (no 'sprite' since
-  // feat-20260625-refactor-sprite-as-transparent-mesh M3 / D-3 retired it).
-  if (value === undefined) return true;
-  if (value === 'unlit') return true;
-  return false;
-};
-
 describe('sprite-lit extract branch (D-9 remap, AC-02 + AC-01)', () => {
-  describe('MaterialSnapshot.shadingModel closed union narrowing-point (AC-01 D-10 remap)', () => {
-    it('shadingModel union is 2-member: `unlit` | `undefined`', () => {
-      // Runtime gate mirroring the TS-level assertion above. Any
-      // production narrowing that branches on a third 'sprite-lit' arm
-      // would either fail to type-check or violate this gate.
-      expect(SPRITE_LIT_NOT_IN_UNION(undefined)).toBe(true);
-      expect(SPRITE_LIT_NOT_IN_UNION('unlit')).toBe(true);
+  describe('sprite-lit routes via materialShaderId (AC-01 D-10 remap)', () => {
+    it('MaterialSnapshot carries no shadingModel field (union retired)', () => {
+      // tweak-20260701 M1: the shadingModel discriminant is gone entirely.
+      // A snapshot's material kind is derived solely from materialShaderId.
+      const snapshot = {
+        baseColor: [1, 1, 1],
+        metallic: 0,
+        roughness: 1,
+        materialShaderId: 'forgeax::sprite-lit',
+      } as unknown as MaterialSnapshot;
+      expect('shadingModel' in snapshot).toBe(false);
     });
 
-    it('sprite-lit shading is recognised via materialShaderId string routing, not shadingModel', () => {
+    it('sprite-lit shading is recognised via materialShaderId string routing', () => {
       // Mirror sprite's pattern (post-PR-#520 D-3): the consumer reads
       // `material.materialShaderId === 'forgeax::sprite-lit'` for any
-      // sprite-lit-specific routing, while `shadingModel` stays
-      // `undefined` (same as `forgeax::sprite`).
+      // sprite-lit-specific routing.
       const snapshot = {
-        shadingModel: undefined as MaterialSnapshot['shadingModel'],
         materialShaderId: 'forgeax::sprite-lit',
         transparent: true,
       } as const;
       expect(snapshot.materialShaderId === 'forgeax::sprite-lit').toBe(true);
-      expect(snapshot.shadingModel).toBeUndefined();
       expect(snapshot.transparent).toBe(true);
     });
   });
@@ -87,11 +67,9 @@ describe('sprite-lit extract branch (D-9 remap, AC-02 + AC-01)', () => {
         renderState: { blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } } },
       } as const;
       const snapshot = {
-        shadingModel: undefined as MaterialSnapshot['shadingModel'],
         materialShaderId: fakeFirstPass.shader,
         transparent: fakeFirstPass.renderState.blend !== undefined,
       };
-      expect(snapshot.shadingModel).toBeUndefined();
       expect(snapshot.materialShaderId).toBe('forgeax::sprite-lit');
       expect(snapshot.transparent).toBe(true);
     });
@@ -100,12 +78,10 @@ describe('sprite-lit extract branch (D-9 remap, AC-02 + AC-01)', () => {
       // D-1: sprite-lit walks the EXACT SAME schema-driven generic path
       // as sprite. The only field that differs is materialShaderId.
       const spriteSnap = {
-        shadingModel: undefined as MaterialSnapshot['shadingModel'],
         materialShaderId: 'forgeax::sprite' as string,
         transparent: true as const,
       };
       const spriteLitSnap = {
-        shadingModel: undefined as MaterialSnapshot['shadingModel'],
         materialShaderId: 'forgeax::sprite-lit' as string,
         transparent: true as const,
       };
@@ -114,7 +90,6 @@ describe('sprite-lit extract branch (D-9 remap, AC-02 + AC-01)', () => {
       const keysSpriteLit = Object.keys(spriteLitSnap).sort();
       expect(keysSpriteLit).toEqual(keysSprite);
       // Only `materialShaderId` differs in value.
-      expect(spriteSnap.shadingModel).toBe(spriteLitSnap.shadingModel);
       expect(spriteSnap.transparent).toBe(spriteLitSnap.transparent);
       expect(spriteSnap.materialShaderId === spriteLitSnap.materialShaderId).toBe(false);
     });
@@ -125,7 +100,9 @@ describe('sprite-lit extract branch (D-9 remap, AC-02 + AC-01)', () => {
       // Dynamic node:fs / node:module pattern reused from sibling shader
       // tests. The extract-stage source must NOT carry a literal
       // `'sprite-lit'` arm under `shadingModel === ...` — sprite-lit
-      // identifies via materialShaderId string only.
+      // identifies via materialShaderId string only. (Post tweak-20260701
+      // M1 the shadingModel field is gone, so this is trivially true, but
+      // the guard stays to catch a reintroduction.)
       const fsId = 'node:fs';
       const moduleId = 'node:module';
       const fs = (await import(fsId)) as { readFileSync(p: string, e: string): string };

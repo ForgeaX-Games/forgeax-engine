@@ -497,6 +497,15 @@ export type { RenderSystem } from './render-system';
 // instead of switching between BuiltinAssetRegistry.resolve and assets.get.
 export { resolveAssetHandle } from './resolve-asset-handle';
 export type { SpriteParamValues } from './sprite-param-values';
+// feat-20260630-viewport-2x2-run-x-display-redesign M2 / w12 / plan-strategy D-2:
+// engine-neutral by-entity-id active camera selection (no editor concept).
+export {
+  ACTIVE_CAMERA_KEY,
+  type ActiveCamera,
+  getActiveCamera,
+  selectActiveCameraIndex,
+  setActiveCamera,
+} from './systems/active-camera';
 /**
  * Transparent-bucket sort configuration (feat-20260520-2d-sprite-layer-mvp
  * M-2 w14). The POD interface + 3 named mode constants + `get/set`
@@ -539,15 +548,6 @@ export type { SpriteParamValues } from './sprite-param-values';
  *   ] } });
  */
 export { spriteAnimationTickSystem } from './systems/sprite-animation-tick';
-// feat-20260630-viewport-2x2-run-x-display-redesign M2 / w12 / plan-strategy D-2:
-// engine-neutral by-entity-id active camera selection (no editor concept).
-export {
-  ACTIVE_CAMERA_KEY,
-  type ActiveCamera,
-  getActiveCamera,
-  selectActiveCameraIndex,
-  setActiveCamera,
-} from './systems/active-camera';
 export {
   getTransparentSortConfig,
   setTransparentSortConfig,

@@ -1009,7 +1009,6 @@ import { extractFrame } from '../render-system-extract';
       // queue=RenderQueue.Transparent for the record-stage distance sort.
       const matAsset = {
         kind: 'material',
-        shadingModel: 'standard',
         baseColor: [1, 1, 1, 1],
         passes: [
           {
@@ -1158,7 +1157,6 @@ import { extractFrame } from '../render-system-extract';
       // Register a MaterialAsset with Geometry-queue pass.
       const matAsset = {
         kind: 'material',
-        shadingModel: 'standard',
         baseColor: [1, 1, 1, 1],
         passes: [
           {
@@ -1257,7 +1255,6 @@ import { extractFrame } from '../render-system-extract';
       // stage to consume via setStencilReference.
       const matAsset = {
         kind: 'material',
-        shadingModel: 'standard',
         baseColor: [1, 1, 1, 1],
         passes: [
           {

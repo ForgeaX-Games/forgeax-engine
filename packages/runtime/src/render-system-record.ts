@@ -102,7 +102,10 @@ import {
   SPOT_LIGHT_STD430_BYTES,
 } from './light-buffer-layout';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
-import { SKIN_MATERIAL_SHADER_ID } from './pbr-pipeline';
+import {
+  SKIN_MATERIAL_SHADER_ID,
+  SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET,
+} from './pbr-pipeline';
 import { buildBeginRenderPassDescriptor } from './pipeline-spec';
 import type { RenderPipeline as RenderPipelineDef } from './render-pipeline';
 import type {
@@ -133,7 +136,7 @@ import type {
 } from './render-system-extract';
 // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4 (D-1 record-stage
 // fold operator). Pure linear-scan helper that groups transparent-dispatch
-// entries with equal (Layer.value, posZ, materialHandle) into FoldBucket
+// entries with equal (Layer.value, sortKey, materialHandle) into FoldBucket
 // descriptors. The drawIndexed swap (1 instanced draw per bucket vs N
 // per-entity draws) hooks into the sprite-pass dispatch loop below
 // (w4-record-swap), using {@link buildFoldDispatchPlan} to translate
@@ -554,6 +557,15 @@ export interface RenderFrameState {
 const MESH_PER_ENTITY_STRIDE = 256;
 
 /**
+ * Module-scoped reusable scratch for batched mesh-SSBO uploads (O2).
+ * Grows monotonically; never shrinks. One allocation per render session
+ * instead of one per entity per frame.
+ *
+ * @internal
+ */
+let _meshSsboScratch = new Uint8Array(0);
+
+/**
  * feat-20260612-skin-palette-per-frame-upload M3 / m3-2: pure helper that
  * builds the `setBindGroup(2, ...)` dynamic-offset tuple at the skin /
  * non-skin draw site.
@@ -876,8 +888,8 @@ export function isMeshSsboDevMode(): boolean {
  * feat-20260518-pbr-direct-lighting-mvp M5 / w22.11 (D-2 + D-10 + AC-06):
  * mutable per-frame dispatch counter object owned by `createRenderSystem`
  * and bumped here at the actual `pass.setPipeline(...)` call site (the
- * only point with both `mat.shadingModel` and `mesh.layout` in scope).
- * Three-way split mirrors the three render pipelines on PipelineState.
+ * only point with both `mat.materialShaderId` and `mesh.layout` in scope).
+ * Unlit / custom shader pipeline dispatch tracked here.
  */
 export interface DispatchCounts {
   unlit: number;
@@ -947,7 +959,7 @@ export interface ValidatedRenderable {
 
 /**
  * feat-20260604-learn-render-4.10-anti-aliasing-msaa M2 / w9: pick the static
- * geometry pipeline handle for a (shadingModel x tonemapActive x msaaActive)
+ * unlit geometry pipeline handle for a (tonemapActive x msaaActive)
  * combination. The four mode axes (LDR/HDR x single/MSAA) map to the 14 static
  * pipeline handles built in createRenderer (7 base + 7 count=4 variants). A
  * pipeline's `multisample.count` must match the colour-attachment sampleCount,
@@ -969,17 +981,9 @@ export interface ValidatedRenderable {
 
 function selectGeometryPipeline(
   pipelineState: PipelineState,
-  shading: 'unlit' | 'standard',
   tonemapActive: boolean,
   msaaActive: boolean,
 ): RenderPipeline | null {
-  if (shading === 'standard') {
-    if (tonemapActive) {
-      return msaaActive ? pipelineState.standardPipelineHdrMsaa : pipelineState.standardPipelineHdr;
-    }
-    return msaaActive ? pipelineState.standardPipelineMsaa : pipelineState.standardPipeline;
-  }
-  // unlit
   if (tonemapActive) {
     return msaaActive ? pipelineState.unlitPipelineHdrMsaa : pipelineState.unlitPipelineHdr;
   }
@@ -997,7 +1001,7 @@ function selectGeometryPipeline(
 //   - plan-strategy section 2 D-3 (MaterialSnapshot.transparent drives split
 //     + blend; charter P3 explicit failure on cache miss)
 //   - plan-strategy section 5.6 gate R-H (helpers only read MaterialSnapshot
-//     paramSnapshot / transparent / shadingModel fields; they MUST NOT touch
+//     paramSnapshot / transparent fields; they MUST NOT touch
 //     the MaterialAsset registry directly or cast over firstMaterial)
 
 /**
@@ -1661,6 +1665,25 @@ export function driveLazyEquirectProjection(
   void store._uploadCubemapFromEquirect(world, handle, podRes.value);
 }
 
+/**
+ * Returns true when a MaterialSnapshot represents a lit (non-unlit) material
+ * that will render black with zero lights — i.e. the material has a
+ * materialShaderId set and it is NOT the builtin unlit shader.
+ *
+ * The default mid-grey fallback (materialShaderId === undefined) is excluded
+ * — it routes through defaultMaterialSnapshot and never triggers the
+ * zero-light warning.
+ *
+ * @internal — exported so AC-02 zero-light-warning test can anchor to
+ * the production implementation rather than a test-local copy.
+ */
+export function isLitMaterialSnapshot(material: MaterialSnapshot): boolean {
+  return (
+    material.materialShaderId !== undefined &&
+    material.materialShaderId !== 'forgeax::default-unlit'
+  );
+}
+
 export function recordFrame(
   internals: RenderSystemInternals,
   world: World,
@@ -1719,10 +1742,10 @@ export function recordFrame(
 
     // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4 + w5 (D-1, D-5):
     // record-stage fold operator linear scan. Groups transparent-sort-ordered
-    // dispatch entries with equal (Layer.value, posZ, materialHandle) into
-    // fold buckets. Mode-gate (D-5): only mode 0 (LAYER_Z) folds; mode 1/2/3
-    // bypass per-entity (each entry becomes a singleton bucket, current
-    // behavior preserved byte-identically — AC-04 y-sort interleave intact).
+    // dispatch entries with equal (Layer.value, sortKey, materialHandle) into
+    // fold buckets. Mode-gate (D-5 extended): modes 0 (LAYER_Z) and 1
+    // (LAYER_Y) fold using posZ/posY respectively; modes 2/3 bypass per-entity
+    // (each entry becomes a singleton bucket — AC-04 interleave intact).
     // The scan output drives the drawIndexed swap (w4-record-swap: 1 instanced
     // draw per non-singleton bucket on the sprite pass) and the AC-06 metric
     // (M3 / w13: `render.instancing.foldedDraws`). For singleton buckets
@@ -1847,7 +1870,7 @@ export function recordFrame(
     // 0-light three-condition conjunction (plan-strategy D-5):
     //   no Skylight (skylight === undefined)
     //   AND 0 direct light (totalLightCount === 0)
-    //   AND StandardMaterial (renderables.some shadingModel === 'standard')
+    //   AND StandardMaterial (renderables.some materialShaderId !== 'forgeax::default-unlit')
     // All three true -> black + warn. Any one false -> no warn.
     //
     // Multi-Skylight warn (F-4 nit + feat-20260630 M3 / w19): >1 Skylight
@@ -2103,14 +2126,12 @@ export function recordFrame(
       void binResult;
     }
 
-    // An unlit material also carries a materialShaderId (extract sets both
-    // shadingModel='unlit' and materialShaderId for the renderState-aware
-    // pipeline route), so the standard-material test must additionally exclude
-    // shadingModel==='unlit' — only true standard (lit) materials render
-    // black with 0 lights.
-    const hasStandardMaterial = renderables.some(
-      (r) => r.material.materialShaderId !== undefined && r.material.shadingModel === undefined,
-    );
+    // A lit (PBR / standard / custom) material carries a materialShaderId
+    // that is NOT 'forgeax::default-unlit'; the default mid-grey unlit
+    // fallback (defaultMaterialSnapshot) has no materialShaderId. The
+    // conjunction excludes both unlit and default materials — only truly
+    // lit materials (standard / PBR) render black with 0 lights.
+    const hasStandardMaterial = renderables.some((r) => isLitMaterialSnapshot(r.material));
     if (
       skylight === undefined &&
       totalLightCount === 0 &&
@@ -2121,7 +2142,7 @@ export function recordFrame(
       const env = (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process;
       if (env?.env?.NODE_ENV !== 'production') {
         console.warn(
-          '[forgeax] standard material renders black with 0 lights of any type (no Skylight, and directional + point + spot all empty); spawn at least one light (Skylight, DirectionalLight, PointLight, or SpotLight) or switch material to shadingModel:"unlit". See AGENTS.md section Breaking changes 2026-05-19.',
+          '[forgeax] standard material renders black with 0 lights of any type (no Skylight, and directional + point + spot all empty); spawn at least one light (Skylight, DirectionalLight, PointLight, or SpotLight) or switch material to an unlit shader (Materials.unlit(...)). See AGENTS.md section Breaking changes 2026-05-19.',
         );
       }
     }
@@ -3188,77 +3209,75 @@ export function recordFrame(
         if (!writeRes.ok) throw writeRes.error;
       }
 
-      // Per-renderable entity_world upload: one mat4 written to slot
-      // `i * MESH_PER_ENTITY_STRIDE` in the shared meshStorageBuffer.
-      // feat-20260518 M3 / w14 (AC-08): each slot ALSO carries a 48-byte
-      // mat3 normalMatrix at offset 64 (3 vec4 columns; pads each column
-      // to 16 B per std140). The mat3 = transpose(invert(mat3(worldFromLocal)))
-      // lets the fragment shader transform normals correctly under
-      // non-uniform scale. The host computes once per renderable per
-      // frame using `mat3.normalMatrix` (math package SSOT helper).
+      // Per-renderable entity_world upload (batched): all N mat4+normalMatrix
+      // slots assembled into a single contiguous scratch buffer, then flushed
+      // as one writeBuffer call instead of N individual calls.
+      //
+      // feat-20260518 M3 / w14 (AC-08): each 256-byte slot carries a 16-float
+      // mat4 at [0..64B) and a 48-byte mat3 normalMatrix at [64..112B) (3 vec4
+      // columns; padding at indices 19/23/27 stays 0). The mat3 =
+      // transpose(invert(mat3(worldFromLocal))) for correct normal transform
+      // under non-uniform scale.
       //
       // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4-record-swap
-      // (D-1): when index `i` is a fold-bucket head, write **identity** into
-      // the mesh slot instead of the entity's world matrix. The fold path
+      // (D-1): fold-bucket heads write identity into their slot; the fold path
       // assembles per-instance world matrices into the @group(3) instances
-      // buffer (each member's absolute world); the sprite/unlit shader then
-      // computes `world = identity * instance_world * pos = instance_world *
-      // pos` which is per-instance correct. Non-head fold members and
-      // non-fold entries follow the existing per-entity world write
-      // unchanged. Normal matrix becomes identity for fold heads (sprite +
-      // tilemap unlit shaders ignore normals; AC-01 sprite + AC-02 tilemap
-      // are normal-free workloads — verify-time PNG covers AC-07 visual
-      // equivalence).
-      for (let i = 0; i < validatedOrdered.length; i++) {
-        const entry = validatedOrdered[i];
-        if (entry === undefined) continue;
-        const isFoldHead = foldDispatchPlan?.headBuckets.has(i) === true;
-        // feat-20260601 D-3: the world mat4 is the resolved `Transform.world`
-        // view (propagateTransforms output) carried verbatim on the snapshot;
-        // copy the 16 floats straight into the SSBO slot with zero `mat4.compose`
-        // (AC-07). The normal matrix is derived from the same world mat4.
-        // For fold heads the slot is overwritten to identity (16 floats: [0,5,
-        // 10,15] = 1) so the shader computes per-instance world from @group(3).
-        const slot = new Float32Array(28);
-        if (isFoldHead) {
-          slot[0] = 1;
-          slot[5] = 1;
-          slot[10] = 1;
-          slot[15] = 1;
-          // identity mat3 normal
-          slot[16] = 1;
-          slot[20] = 1;
-          slot[24] = 1;
+      // buffer instead (sprite/unlit shaders ignore normals; AC-01/AC-02).
+      {
+        const slotCount = validatedOrdered.length;
+        const neededBytes = slotCount * MESH_PER_ENTITY_STRIDE;
+        // Grow the module-scoped scratch monotonically; zero the used range.
+        if (_meshSsboScratch.length < neededBytes) {
+          _meshSsboScratch = new Uint8Array(neededBytes);
         } else {
-          const worldFromLocal = entry.source.transform.world;
-          // Build a 28-float (112 byte) slot: [0..16) mat4 + [16..28) mat3
-          // padded as 3 vec4 (12 floats; columns 0/1/2 at slot offsets
-          // 16/20/24; padding at indices 19/23/27 stays 0).
-          for (let k = 0; k < 16; k++) slot[k] = worldFromLocal[k] ?? 0;
-          const normal = mat3.normalMatrix(
-            mat3.create(),
-            worldFromLocal as unknown as Parameters<typeof mat3.normalMatrix>[1],
-          );
-          // mat3 column 0 -> slot[16..19]
-          slot[16] = normal[0] ?? 0;
-          slot[17] = normal[1] ?? 0;
-          slot[18] = normal[2] ?? 0;
-          // mat3 column 1 -> slot[20..23]
-          slot[20] = normal[3] ?? 0;
-          slot[21] = normal[4] ?? 0;
-          slot[22] = normal[5] ?? 0;
-          // mat3 column 2 -> slot[24..27]
-          slot[24] = normal[6] ?? 0;
-          slot[25] = normal[7] ?? 0;
-          slot[26] = normal[8] ?? 0;
+          _meshSsboScratch.fill(0, 0, neededBytes);
         }
-
-        const meshUpload = internals.device.queue.writeBuffer(
-          pipelineState.meshStorageBuffer.buffer,
-          i * MESH_PER_ENTITY_STRIDE,
-          slot,
-        );
-        if (!meshUpload.ok) throw meshUpload.error;
+        for (let i = 0; i < slotCount; i++) {
+          const entry = validatedOrdered[i];
+          if (entry === undefined) continue;
+          // Float32Array view into this entity's 256-byte slot (28 floats used,
+          // rest remains 0 from the fill above). Byte offset i*256 is always
+          // 4-byte aligned since MESH_PER_ENTITY_STRIDE=256 is divisible by 4.
+          const slot = new Float32Array(_meshSsboScratch.buffer, i * MESH_PER_ENTITY_STRIDE, 28);
+          const isFoldHead = foldDispatchPlan?.headBuckets.has(i) === true;
+          if (isFoldHead) {
+            // identity mat4
+            slot[0] = 1;
+            slot[5] = 1;
+            slot[10] = 1;
+            slot[15] = 1;
+            // identity mat3 normal (cols at slot offsets 16/20/24)
+            slot[16] = 1;
+            slot[20] = 1;
+            slot[24] = 1;
+          } else {
+            const worldFromLocal = entry.source.transform.world;
+            for (let k = 0; k < 16; k++) slot[k] = worldFromLocal[k] ?? 0;
+            const normal = mat3.normalMatrix(
+              mat3.create(),
+              worldFromLocal as unknown as Parameters<typeof mat3.normalMatrix>[1],
+            );
+            slot[16] = normal[0] ?? 0;
+            slot[17] = normal[1] ?? 0;
+            slot[18] = normal[2] ?? 0;
+            slot[20] = normal[3] ?? 0;
+            slot[21] = normal[4] ?? 0;
+            slot[22] = normal[5] ?? 0;
+            slot[24] = normal[6] ?? 0;
+            slot[25] = normal[7] ?? 0;
+            slot[26] = normal[8] ?? 0;
+          }
+        }
+        if (neededBytes > 0) {
+          const meshUpload = internals.device.queue.writeBuffer(
+            pipelineState.meshStorageBuffer.buffer,
+            0,
+            _meshSsboScratch,
+            0,
+            neededBytes,
+          );
+          if (!meshUpload.ok) throw meshUpload.error;
+        }
       }
     }
 
@@ -5637,11 +5656,9 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
       // mirrored on `computeSplitLdrSprite`.
       if (splitLdrSprite && entry.source.material.transparent === true) continue;
 
-      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13: pipeline
-      // tag closure narrowed from 3-way ('unlit' | 'sprite') to 1-way
-      // ('unlit' carrier) — sprite materials flow through the same generic
+      // tweak-20260701 M1: MaterialSnapshot.shadingModel deleted. Pipeline
+      // tag is always 'unlit' -- sprite materials flow through the same
       // materialShaderId pipeline cache PBR / unlit use (plan-strategy D-7).
-      const shading = entry.source.material.shadingModel;
       const materialShaderId =
         entry.source.skin !== undefined
           ? SKIN_MATERIAL_SHADER_ID
@@ -6232,7 +6249,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         const smTopology = sm.topology;
         let smPipelineHandle: typeof pipelineState.unlitPipeline;
         const nonDefaultTopology = smTopology !== 'triangle-list';
-        if (shading === 'unlit') {
+        if (materialShaderId === undefined || materialShaderId === 'forgeax::default-unlit') {
           const unlitRsp =
             (entry.renderState !== undefined || nonDefaultTopology) &&
             materialShaderId !== undefined
@@ -6249,7 +6266,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
                 )
               : undefined;
           smPipelineHandle =
-            unlitRsp ?? selectGeometryPipeline(pipelineState, 'unlit', tonemapActive, msaaActive);
+            unlitRsp ?? selectGeometryPipeline(pipelineState, tonemapActive, msaaActive);
         } else if (materialShaderId !== undefined) {
           // feat-20260609 M4.5 / w38 (D-11): the variantSet handed to
           // getMaterialShaderPipeline MUST mirror the boot-time
@@ -6307,12 +6324,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           // fires on per-submesh topology variance miss.
           smPipelineHandle = cachedPipeline ?? null;
         } else {
-          smPipelineHandle = selectGeometryPipeline(
-            pipelineState,
-            'unlit',
-            tonemapActive,
-            msaaActive,
-          );
+          smPipelineHandle = selectGeometryPipeline(pipelineState, tonemapActive, msaaActive);
         }
 
         if (smPipelineHandle === null) {
@@ -6416,6 +6428,20 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         cullMode: 'none',
         blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND,
       };
+      // bug-20260629: PR #526 added PER_INSTANCE_REGION as a second variant
+      // axis on sprite.wgsl. Build BOTH variants here; the per-entity loop
+      // picks the right one based on whether the entity carries a
+      // SpriteInstances snapshot:
+      //   - spritePH (PER_INSTANCE_REGION=false): regular per-entity sprites
+      //     + fold-bucket instanced draws (64-byte mat4 only instance buf);
+      //     UV region comes from the material UBO `region` slot.
+      //   - spritePH_withRegion (PER_INSTANCE_REGION=true): SpriteInstances
+      //     entities with 80-byte interleaved (mat4 64B + region 16B) per
+      //     instance; UV region comes from `instances[idx].region`.
+      //
+      // Without spritePH_withRegion the SpriteInstances data was uploaded
+      // but the shader read bytes 64-79 as region=0 → black quads.
+      //
       // feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / t7:
       // sprite-lit walks the same LDR transparent split pass with mirror
       // PSO request shape (only materialShaderId string differs). The
@@ -6449,6 +6475,36 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           // sprite-pipeline-bgra8unorm-srgb-not-blendable parity).
           pipelineState.format as unknown as GPUTextureFormat,
         ) ?? null;
+      const spritePH_withRegion =
+        runtime.getMaterialShaderPipeline?.(
+          'forgeax::sprite',
+          /* isHdr */ false,
+          spritePremulBlend,
+          'triangle-list',
+          undefined,
+          SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET,
+          'forward',
+          undefined,
+          msaaActive ? 4 : 1,
+          pipelineState.format as unknown as GPUTextureFormat,
+        ) ?? null;
+
+      // bug-20260629: spritePH===null check moved OUTSIDE the entity loop so the
+      // sprite pass is properly ended before returning. Inside the loop the early
+      // `return` left spritePass open → render-pass-not-ended error every frame
+      // where the pipeline is still being compiled (frame 0 on first load).
+      if (spritePH === null) {
+        runtime.errorRegistry.fire(
+          new RhiError({
+            code: 'shader-compile-failed',
+            expected:
+              'manifest entries include sprite.wgsl + the engine triple (pbr + unlit + tonemap)',
+            hint: 'verify @forgeax/engine-vite-plugin-shader emits manifest.json with the 4 engine entries (sprite.wgsl is required when spawning sprite materials); check vite plugin engineEntries option',
+          }),
+        );
+        spritePass.end();
+        return;
+      }
 
       // feat-20260624 M1' / t7: parallel sprite-lit PSO request — same
       // arg shape, only materialShaderId differs.
@@ -6487,21 +6543,44 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         // layout; only the shader module + fragment math differ. PSO
         // cache strings are isolated by materialShaderId (D-11) so
         // routing here keeps the cache slots disjoint.
+        //
+        // bug-20260629: SpriteInstances entities additionally need the
+        // PER_INSTANCE_REGION=true variant so the shader reads UV region
+        // from the 80B-per-instance interleaved buffer rather than from
+        // the material UBO. Only the base sprite path has the per-instance
+        // region variant compiled; sprite-lit + non-instances entities
+        // keep the PER_INSTANCE_REGION=false variant.
         const entityShaderId = spriteEntry.source.material.materialShaderId;
-        const activeSpritePH = entityShaderId === 'forgeax::sprite-lit' ? spriteLitPH : spritePH;
-
+        const useRegionVariant =
+          entityShaderId !== 'forgeax::sprite-lit' &&
+          spriteEntry.source.spriteInstances !== undefined;
+        const activeSpritePH =
+          entityShaderId === 'forgeax::sprite-lit'
+            ? spriteLitPH
+            : useRegionVariant
+              ? spritePH_withRegion
+              : spritePH;
         if (activeSpritePH === null) {
-          runtime.errorRegistry.fire(
-            new RhiError({
-              code: 'shader-compile-failed',
-              expected:
-                'manifest entries include sprite.wgsl + sprite-lit.wgsl (when sprite-lit materials are used) + the engine triple (pbr + unlit + tonemap)',
-              hint: 'verify @forgeax/engine-vite-plugin-shader emits manifest.json with sprite.wgsl AND sprite-lit.wgsl entries; check vite plugin engineEntries option',
-            }),
-          );
-          return;
+          // Variant not yet compiled — for PER_INSTANCE_REGION=true the
+          // variant cache fill is async on first use (mirrors the
+          // spritePH===null guard above); falling back to the non-region
+          // variant would render black quads (region read returns 0).
+          // For sprite-lit the manifest may lack sprite-lit.wgsl; either
+          // way fail-safe-skip is the closest the renderer can get to
+          // "show nothing visibly wrong" without ending the sprite pass
+          // (which would drop remaining sprite entities for the frame).
+          if (entityShaderId === 'forgeax::sprite-lit') {
+            runtime.errorRegistry.fire(
+              new RhiError({
+                code: 'shader-compile-failed',
+                expected:
+                  'manifest entries include sprite.wgsl + sprite-lit.wgsl (when sprite-lit materials are used) + the engine triple (pbr + unlit + tonemap)',
+                hint: 'verify @forgeax/engine-vite-plugin-shader emits manifest.json with sprite.wgsl AND sprite-lit.wgsl entries; check vite plugin engineEntries option',
+              }),
+            );
+          }
+          continue;
         }
-
         if (lastSpritePipelineHandle !== activeSpritePH) {
           // biome-ignore lint/suspicious/noExplicitAny: opaque RHI pipeline handle
           spritePass.setPipeline(activeSpritePH as any);
@@ -6882,13 +6961,16 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           spritePassEmissiveAo,
         );
 
-        // M3 / w12: LDR sprite split-pass per-entity material BG cache.
-        // Per-entity: outerKey = entityKey, chain = merged-entry handles (D-5).
+        // Sprite-pass material BG cache: keyed on shader id (shared across all
+        // sprite entities) so entities using the same atlas texture share one
+        // BindGroup instead of creating one per entity (O5 fix — inner WeakMap
+        // chain naturally deduplicates by GPU resource object identity, so two
+        // entities with different atlases still get distinct BGs).
         const spritePassBg: BindGroup = getOrCreatePerEntity(
-          frameState.materialBgPerEntity,
-          spriteEntry.source.entityKey,
+          frameState.materialBgShared,
+          'forgeax::sprite',
           spritePassMergedEntries.map((e) => extractEntryResourceHandle(e)),
-          'material',
+          'sprite-pass-material',
           () => {
             const result = runtime.device.createBindGroup({
               label: 'sprite-pass-material-bg',
