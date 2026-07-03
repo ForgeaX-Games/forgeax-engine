@@ -197,9 +197,7 @@ export function createSkinPaletteAllocator(
       // near-tightly (at most 255 B slack between them). Only the last slice's
       // window may overhang into uninitialized buffer space, which is benign
       // (shader reads only `jointCount` matrices).
-      storageCursor =
-        (offset + jointCount * MAT4_BYTES + (PALETTE_OFFSET_ALIGN - 1)) &
-        ~(PALETTE_OFFSET_ALIGN - 1);
+      storageCursor = (offset + jointCount * MAT4_BYTES + (PALETTE_OFFSET_ALIGN - 1)) & ~(PALETTE_OFFSET_ALIGN - 1);
       return { jointCount, byteOffset: offset, buffer };
     }
     // Uniform fallback: each slice gets its own 16320 B UBO.

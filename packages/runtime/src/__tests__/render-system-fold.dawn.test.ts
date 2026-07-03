@@ -19,15 +19,9 @@
 // AC-10 boundary (multi-material in one chunk): two materials in the same
 // (Layer.value, posZ) run -> 2 fold buckets (no cross-material cell merge).
 //
-// mode-bypass boundary (D-5): modes 2/3 (LAYER_YZ / DISTANCE) yield N
-// singleton buckets for N entries (no fold). plan.headBuckets is empty;
-// plan.skipIndices is empty; dispatch loop falls through per-entity
-// byte-identically.
-//
-// LAYER_Y fold boundary (feat-20260630 D-2 / AC-05): mode 1 (LAYER_Y) was
-// extended from a bypass mode into a fold mode that keys on posY (world[13]).
-// 50 single-material entries at the same posY collapse into 1 fold bucket
-// of size 50 — mirroring the AC-01 LAYER_Z invariant but on the Y axis.
+// mode-bypass boundary (D-5): mode 1/2/3 yield N singleton buckets for N
+// entries (no fold). plan.headBuckets is empty; plan.skipIndices is empty;
+// dispatch loop falls through per-entity byte-identically.
 //
 // This test is intentionally device-agnostic at the helper layer (the helper
 // is pure, no GPU dependencies) but lives under the dawn project (.dawn.
@@ -216,11 +210,7 @@ describe('fold operator dawn integration (w7) — drawIndexed count drops to buc
     expect(plan.skipIndices.size).toBe(CHUNKS * (CELLS_PER_CHUNK - 1));
   });
 
-  it('mode-bypass D-5: mode 2/3 (LAYER_YZ / DISTANCE) + 50 single-material entries -> 50 singleton buckets, 0 folded, all drawIndexed per-entity', () => {
-    // feat-20260630 D-2 / AC-05: LAYER_Y was removed from the bypass set
-    // because it now folds on posY (world[13]). Only LAYER_YZ (composite
-    // foot-Y key) and DISTANCE (per-entity camera distance) remain as
-    // bypass modes whose sort keys cannot fold runs.
+  it('mode-bypass D-5: mode 1/2/3 + 50 single-material entries -> 50 singleton buckets, 0 folded, all drawIndexed per-entity', () => {
     const N = 50;
     const entries: DispatchEntry[] = [];
     const renderables: FoldRenderableLike[] = [];
@@ -231,7 +221,11 @@ describe('fold operator dawn integration (w7) — drawIndexed count drops to buc
     const renderableToValidated = new Map<number, number>();
     for (let i = 0; i < N; i++) renderableToValidated.set(i, i);
 
-    for (const mode of [TRANSPARENT_SORT_MODE_LAYER_YZ, TRANSPARENT_SORT_MODE_DISTANCE] as const) {
+    for (const mode of [
+      TRANSPARENT_SORT_MODE_LAYER_Y,
+      TRANSPARENT_SORT_MODE_LAYER_YZ,
+      TRANSPARENT_SORT_MODE_DISTANCE,
+    ] as const) {
       const buckets = foldDispatchBuckets(entries, mode, renderables);
       // Mode bypass: each entry is its own singleton bucket.
       expect(buckets).toHaveLength(N);
@@ -243,36 +237,6 @@ describe('fold operator dawn integration (w7) — drawIndexed count drops to buc
       expect(plan.foldedBucketCount).toBe(0);
       expect(plan.headBuckets.size).toBe(0);
       expect(plan.skipIndices.size).toBe(0);
-    }
-  });
-
-  it('AC-05 (LAYER_Y fold): mode 1 + 50 single-material entries at same posY -> 1 fold bucket of size 50', () => {
-    // feat-20260630 D-2 / AC-05: LAYER_Y is a fold mode keyed on posY
-    // (world[13]). 50 same-row tiles sharing one material collapse into a
-    // single instanced draw — the AC-01 LAYER_Z invariant mirrored on Y.
-    const N = 50;
-    const entries: DispatchEntry[] = [];
-    const renderables: FoldRenderableLike[] = [];
-    for (let i = 0; i < N; i++) {
-      entries.push(mockDispatchEntry({ renderableIndex: i, materialHandle: 5, layer: 0 }));
-      // posY=0 across all entries; posZ varies (irrelevant for LAYER_Y key).
-      renderables.push(mockRenderable(0.1));
-    }
-    const renderableToValidated = new Map<number, number>();
-    for (let i = 0; i < N; i++) renderableToValidated.set(i, i);
-
-    const buckets = foldDispatchBuckets(entries, TRANSPARENT_SORT_MODE_LAYER_Y, renderables);
-    expect(buckets).toHaveLength(1);
-    const [bucket] = buckets;
-    expect(bucket?.bucketSize).toBe(N);
-
-    const plan = buildFoldDispatchPlan(buckets, renderableToValidated);
-    expect(plan.foldedBucketCount).toBe(1);
-    expect(plan.headBuckets.size).toBe(1);
-    expect(plan.headBuckets.has(0)).toBe(true);
-    expect(plan.skipIndices.size).toBe(N - 1);
-    for (let i = 1; i < N; i++) {
-      expect(plan.skipIndices.has(i)).toBe(true);
     }
   });
 

@@ -688,13 +688,16 @@ export interface TransformSnapshot {
  * MaterialSnapshot: extract-stage view of one entity's material asset (M2 / w6
  * of feat-20260517-merge-mesh-renderer-material-renderer; plan-strategy section 2.3).
  *
- * Adds optional `baseColorTexture` + `sampler` slots (consumed by the record
- * stage's textured-material code path; M3 / w10 dropped the cast-over-firstMaterial
+ * Five-field minimal set (vs the 3-field pre-w6 shape): adds `shadingModel` so
+ * the record stage can route the entity to unlit.wgsl vs pbr.wgsl without
+ * re-resolving via `MaterialDispatchSnapshot`, and adds the optional
+ * `baseColorTexture` + `sampler` slots (consumed by the record stage's
+ * textured-material code path; M3 / w10 dropped the cast-over-firstMaterial
  * pattern in favour of direct snapshot field reads).
  *
  * feat-20260522-learn-render-3-1-sponza-model-loading-with-multi-l M4 extends
- * the snapshot with `metallicRoughnessTexture` and `normalTexture`
- * so the record stage can wire PBR texture bindings 4 and 6
+ * the snapshot with `metallicRoughnessTexture` and `normalTexture` (standard
+ * shadingModel only) so the record stage can wire PBR texture bindings 4 and 6
  * from real GPU views instead of placeholder 1x1 white / flat-normal views.
  *
  * Bounded scope: the snapshot tracks only what the record stage actually
@@ -702,14 +705,30 @@ export interface TransformSnapshot {
  * future-proof field bloat). Future MaterialAsset extensions (emissive / etc)
  * drive snapshot extensions when the record stage starts consuming them, not
  * vice-versa.
- *
- * tweak-20260701 M1: `shadingModel` field removed — shader identity via
- * {@link materialShaderId} is the single source of truth for material dispatch.
  */
 export interface MaterialSnapshot {
   readonly baseColor: Vec3;
   readonly metallic: number;
   readonly roughness: number;
+  /**
+   * Discriminator into the record-stage pipeline pick. Closed union
+   * `'unlit' | undefined`:
+   *
+   * - `'unlit'` — engine-shipped unlit material (default-unlit shader);
+   *   shadow-caster default-material variant also tags this.
+   * - `undefined` — every other shaderId (PBR / sprite / user shaders);
+   *   record routes via {@link materialShaderId} + paramSnapshot.
+   *
+   * feat-20260625-refactor-sprite-as-transparent-mesh M3 / w15 (D-3 / AC-01):
+   * the `'sprite'` member is gone — sprite materials carry
+   * `shadingModel: undefined` + `materialShaderId === 'forgeax::sprite'`
+   * (Δ-concept-count: closed union members 3 -> 2).
+   *
+   * feat-20260523-shader-template-instance-split M4-T05: 'standard' was
+   * already removed (standard materials carry materialShaderId +
+   * paramSnapshot instead).
+   */
+  readonly shadingModel: 'unlit' | undefined;
   /**
    * Schema-driven material shader identifier (feat-20260523 M4-T05).
    * Populated when the material asset uses the schema-driven path
@@ -763,9 +782,8 @@ export interface MaterialSnapshot {
   readonly baseColorTexture?: Handle<'TextureAsset', 'shared'> | undefined;
   readonly sampler?: Handle<'SamplerAsset', 'shared'> | undefined;
   /**
-   * PBR metallic-roughness texture handle (present for PBR/sprite/skin
-   * shaders). Undefined for the default-unlit shader
-   * (materialShaderId === 'forgeax::default-unlit'). The record stage reads
+   * PBR metallic-roughness texture handle (standard shadingModel only).
+   * Undefined for `'unlit'` shading models. The record stage reads
    * this to write GPU view at material bind-group binding 4, falling
    * back to a 1x1 white placeholder when undefined.
    *
@@ -776,9 +794,8 @@ export interface MaterialSnapshot {
    */
   readonly metallicRoughnessTexture?: Handle<'TextureAsset', 'shared'> | undefined;
   /**
-   * PBR tangent-space normal texture handle (present for PBR/sprite/skin
-   * shaders). Undefined for the default-unlit shader
-   * (materialShaderId === 'forgeax::default-unlit'). The record stage reads
+   * PBR tangent-space normal texture handle (standard shadingModel only).
+   * Undefined for `'unlit'` shading models. The record stage reads
    * this to write GPU view at material bind-group binding 6, falling
    * back to a (0.5,0.5,1.0) flat-normal placeholder when undefined.
    *
@@ -802,8 +819,7 @@ export interface MaterialSnapshot {
    * The record stage reads this to drive both the LDR split-pass
    * decision and the premultiplied-alpha blend resolution on the
    * generic materialShaderId pipeline path — shader-agnostic, decoupled
-   * from the legacy `shadingModel` discriminant (feat-20260625 M2 D-3,
-   * finalised in w15; `shadingModel` field removed in tweak-20260701 M1).
+   * from `shadingModel` (feat-20260625 M2 D-3, finalised in w15).
    *
    * Extract derives this from the first pass's `renderState.blend !==
    * undefined` (post-feat-20260626-collapse: blend presence is the
@@ -1197,6 +1213,8 @@ function resolveMaterialSnapshot(
   }
   const allPasses = resolved.passes;
   const firstPassShader = allPasses.length > 0 ? allPasses[0]?.shader : undefined;
+  const inferredShadingModel: 'unlit' | undefined =
+    firstPassShader === 'forgeax::default-unlit' ? 'unlit' : undefined;
   // feat-20260614 M8 (D-19): texture / sampler paramValues are embedded GUIDs
   // (dash-form strings) after loadByGuid. Resolve each to a user-tier column
   // handle by looking up the catalogued payload and minting via
@@ -1249,6 +1267,7 @@ function resolveMaterialSnapshot(
     baseColor,
     metallic: metallicPv,
     roughness: roughnessPv,
+    shadingModel: inferredShadingModel,
     materialShaderId: firstPassShader,
     paramSnapshot: paramSnap,
     ...(textureHandles.size > 0 && { textureHandles }),
@@ -1588,7 +1607,10 @@ export function extractFrame(
   // preserving the existing first-hit (and multi-camera diagnostic) behavior
   // unchanged (backward compatible). The engine reads only the entity id; it
   // has no notion of which camera is editor vs game (OOS-4 — engine neutral).
-  const activeCameraIndex = selectActiveCameraIndex(cameraEntities, getActiveCamera(world)?.entity);
+  const activeCameraIndex = selectActiveCameraIndex(
+    cameraEntities,
+    getActiveCamera(world)?.entity,
+  );
   if (activeCameraIndex >= 0) {
     const selected = cameras[activeCameraIndex];
     if (selected !== undefined) {
@@ -2321,7 +2343,7 @@ export function extractFrame(
     //   - 'sprite-instances-mutually-exclusive-with-instances'
     //       (hasInstances && hasSpriteInstances) — Instances + SpriteInstances peers.
     //   - 'sprite-instances-requires-sprite-shading-model'
-    //       (materialSnap.materialShaderId !== 'forgeax::sprite') — non-sprite material.
+    //       (materialSnap.shadingModel !== 'sprite') — non-sprite material.
     //   - 'sprite-instances-count-mismatch'
     //       (transforms.length / 16 !== regions.length / 4) — stride pair desync.
     const hasSpriteInstances = bundle.SpriteInstances !== undefined;
@@ -2629,6 +2651,8 @@ export function extractFrame(
           // (plan-strategy §1.6 + D-1: mirror sprite, no new branch).
           const isSprite =
             firstPassShader === 'forgeax::sprite' || firstPassShader === 'forgeax::sprite-lit';
+          const inferredShadingModel: 'unlit' | undefined =
+            firstPassShader === 'forgeax::default-unlit' ? 'unlit' : undefined;
 
           // feat-20260613-material-paramschema-driven-binding M4 / w23
           // (D-5 graceful): paramSchema-driven texture-field validation.
@@ -2804,15 +2828,6 @@ export function extractFrame(
               regionW = -regionW;
             }
             paramSnap.region = [regionX, regionY, regionZ, regionW] as unknown as number[];
-            // Guard: slicesAndMode must be present and zero for non-9-slice
-            // sprites so the record-stage UBO writer (applyParamSnapshotToUbo)
-            // writes [0,0,0,0] at offset 48 instead of leaving the
-            // buildPbrMaterialUboPayload PBR baseline (e.g. occlusionStrength=1
-            // at that slot). A non-zero slicesAndMode trips `useSlices=true`
-            // in sprite.wgsl, which degenerates HANDLE_QUAD geometry → invisible.
-            if (!('slicesAndMode' in paramSnap)) {
-              (paramSnap as Record<string, unknown>).slicesAndMode = [0, 0, 0, 0];
-            }
           }
 
           // Generic materialShaderId snapshot --- sprite included now flows
@@ -2824,6 +2839,7 @@ export function extractFrame(
             baseColor,
             metallic: metallicPv,
             roughness: roughnessPv,
+            shadingModel: inferredShadingModel,
             materialShaderId: firstPassShader,
             paramSnapshot: paramSnap,
             ...(textureHandles.size > 0 && { textureHandles }),
@@ -2906,11 +2922,7 @@ export function extractFrame(
       // implement-review R1): thread default materials through the
       // Materials factory so this block can call into the shared
       // passes[] producer.
-      // tweak-20260701 M1: `materialSnap.shadingModel === 'unlit'` removed —
-      // for handleRaw===0, defaultMaterialSnapshot() was always unlit
-      // (the shadingModel check was a tautology); the isRenderable &&
-      // handleRaw===0 guard alone preserves the exact same dispatch shape.
-      if (isRenderable && handleRaw === 0) {
+      if (isRenderable && handleRaw === 0 && materialSnap.shadingModel === 'unlit') {
         const shadowCasterTags: Record<string, string> = { LightMode: 'ShadowCaster' };
         const nextRenderableIndex = renderables.length;
         dispatch.push({
@@ -3364,13 +3376,15 @@ export function defaultTransformSnapshot(): TransformSnapshot {
 }
 
 export function defaultMaterialSnapshot(): MaterialSnapshot {
-  // Mid-grey unlit fallback (D-Q7 case B + extract-stage missing-spec),
-  // matching the pre-w6 visual outcome where the record stage's force-cast
-  // read of `firstMaterial.baseColorTexture` returned undefined and the
-  // unlit fallback shader was selected.
+  // Mid-grey unlit fallback (D-Q7 case B + extract-stage missing-spec). The
+  // shadingModel='unlit' default routes the entity to the unlit pipeline tag
+  // (no PBR lighting calculation), matching the pre-w6 visual outcome where
+  // the record stage's force-cast read of `firstMaterial.baseColorTexture`
+  // returned undefined and the unlit fallback shader was selected.
   return {
     baseColor: vec3.create(0.5, 0.5, 0.5),
     metallic: 0,
     roughness: 1,
+    shadingModel: 'unlit',
   };
 }

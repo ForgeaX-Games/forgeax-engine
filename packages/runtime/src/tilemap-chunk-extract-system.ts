@@ -53,94 +53,39 @@ import {
   queryRun,
   type World,
 } from '@forgeax/engine-ecs';
-import { type box3, frustum, mat4 } from '@forgeax/engine-math';
 import {
   type Handle,
   type MaterialAsset,
   type TilesetAsset,
-  type TilesetRegion,
-  type TilesetTileEntry,
   unwrapHandle,
 } from '@forgeax/engine-types';
 import { HANDLE_QUAD } from './asset-registry';
 import {
-  CAMERA_PROJECTION_ORTHOGRAPHIC,
-  Camera,
   ChildOf,
   decodeSortScope,
   Layer,
   MeshFilter,
   MeshRenderer,
   type SortScope,
-  SpriteInstances,
   TileLayer,
   Tilemap,
   Transform,
 } from './components';
-import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
 import { resolveAssetHandle } from './resolve-asset-handle';
 import { decodeTileBits } from './tile-bits';
 
 // Module-scoped caches (charter P5 — engine-side memoisation; AI users
 // never reach in). Test harness can flush them via the reset helpers.
-//
-// Two material caches coexist because the extract system produces two
-// kinds of derived entities, each with a different material-key granularity:
-//
-//   1. `atlasMaterialCache` — key `${atlasId}|${regionIndex}` → per-region
-//      material with the UV rectangle baked into `paramValues.region`.
-//      Used by the per-cell entity path (sortScope='per-cell' object
-//      layers). Each tile graphic gets a distinct MaterialAsset.
-//
-//   2. `atlasOnlyMaterialCache` — key `${atlasId}` → per-atlas material
-//      with `paramValues.region: [0,0,1,1]` placeholder. Used by the
-//      SpriteInstances batched path (sortScope='layer' terrain layers).
-//      The shader's PER_INSTANCE_REGION=true variant reads per-instance
-//      UV from the instance buffer, not from the material UBO, so the
-//      placeholder is ignored at draw time.
 const atlasMaterialCache = new Map<string, number>();
-const atlasOnlyMaterialCache = new Map<string, number>();
-// Terrain (sortScope='layer') layers: one entry per layer, all entities.
 const layerDerivedEntities = new Map<number, number[]>();
 const layerEverBuilt = new Set<number>();
 
-// ─── Chunk-streaming state for sortScope='per-cell' (object) layers ───────
-//
-// Object layers stream per-chunk: only chunks whose world AABB intersects the
-// camera frustum have per-cell entities alive in the ECS world. This keeps
-// extractFrame's entity count proportional to visible tile count rather than
-// total map tile count (charter P5: engine-side memoisation / streaming).
-//
-// Design:
-//   layerStreamCache : layerKey → pre-bucketed specs by chunkIndex (built once
-//                      from bucketTileLayer, rebuilt on dirty). Avoids re-reading
-//                      the full tileset and re-materialising every frame.
-//   layerChunkStreamEntities : "${layerKey}:${chunkIdx}" → spawned entity ids
-//                      for that chunk (purged when chunk leaves frustum).
-//   layerChunkActive : layerKey → Set<chunkIdx> currently spawned.
-interface StreamLayerCache {
-  readonly byChunk: ReadonlyMap<number, readonly DerivedSpawnSpec[]>;
-  readonly tilemap: {
-    readonly cols: number;
-    readonly rows: number;
-    readonly tileSizeX: number;
-    readonly tileSizeY: number;
-    readonly chunkSize: number;
-  };
-  readonly layerOrder: number;
-  readonly sortScope: SortScope;
-}
-const layerStreamCache = new Map<number, StreamLayerCache>();
-const layerChunkStreamEntities = new Map<string, number[]>();
-const layerChunkActive = new Map<number, Set<number>>();
-
 /**
- * Flush both material caches. Useful in test harnesses + after a
- * TilesetAsset reload.
+ * Flush the (atlasHandle, regionIndex) material cache. Useful in test
+ * harnesses + after a TilesetAsset reload.
  */
 export function resetTilemapChunkExtractCache(): void {
   atlasMaterialCache.clear();
-  atlasOnlyMaterialCache.clear();
 }
 
 /**
@@ -150,9 +95,6 @@ export function resetTilemapChunkExtractCache(): void {
 export function resetTilemapDerivedEntityTracker(): void {
   layerDerivedEntities.clear();
   layerEverBuilt.clear();
-  layerStreamCache.clear();
-  layerChunkStreamEntities.clear();
-  layerChunkActive.clear();
 }
 
 /**
@@ -247,19 +189,21 @@ function resolveTilesetMaterial(world: World, tileset: TilesetAsset, regionIndex
     kind: 'material',
     passes: [
       {
-        name: 'Forward',
+        name: 'sprite',
         shader: 'forgeax::sprite',
         tags: { LightMode: 'Forward' },
         queue: 3000,
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
       },
     ],
     paramValues: {
-      colorTint: [1.0, 1.0, 1.0, 1.0],
-      baseColorTexture: atlasHandle,
+      baseColor: [1.0, 1.0, 1.0, 1.0],
+      texture: atlasId,
       region: [u, v, w, h],
-      pivotAndSize: [0.5, 0.5, 1.0, 1.0],
+      pivot: [0.5, 0.5],
+      flipX: 0.0,
       flipY: 1.0,
+      slices: [0.0, 0.0, 0.0, 0.0],
+      sliceMode: 0.0,
     },
   };
   const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
@@ -269,89 +213,6 @@ function resolveTilesetMaterial(world: World, tileset: TilesetAsset, regionIndex
   const id = unwrapHandle(matHandle);
   atlasMaterialCache.set(cacheKey, id);
   return id;
-}
-
-/**
- * Resolve an atlas-only sprite material (no baked-in UV region). One
- * material per atlas — used by the SpriteInstances batched draw path
- * (sortScope='layer'). The per-instance UV region rectangle lives in the
- * `SpriteInstances.regions` buffer instead of in the material UBO.
- *
- * `paramValues.region` is a `[0, 0, 1, 1]` placeholder. The sprite shader's
- * `PER_INSTANCE_REGION=true` variant reads region from
- * `instances[idx].region` and ignores the material slot; selecting that
- * variant is the record stage's responsibility (see
- * `render-system-record.ts` sprite pass pipeline selection).
- *
- * Returns the registered MaterialAsset slot id (unwrapped Handle u32) or
- * 0 if the atlas slot is empty (charter P3 fail-safe; mirrors
- * `resolveTilesetMaterial`).
- */
-function resolveAtlasOnlyMaterial(world: World, tileset: TilesetAsset, atlasIndex: number): number {
-  const atlasHandle = tileset.atlases[atlasIndex];
-  if (atlasHandle === undefined) return 0;
-  const atlasId = unwrapHandle(atlasHandle as unknown as Handle<'TextureAsset', 'shared'>);
-  const cacheKey = String(atlasId);
-  const cached = atlasOnlyMaterialCache.get(cacheKey);
-  if (cached !== undefined) return cached;
-
-  const matPayload: MaterialAsset = {
-    kind: 'material',
-    passes: [
-      {
-        name: 'Forward',
-        shader: 'forgeax::sprite',
-        tags: { LightMode: 'Forward' },
-        queue: 3000,
-        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
-      },
-    ],
-    paramValues: {
-      colorTint: [1.0, 1.0, 1.0, 1.0],
-      baseColorTexture: atlasHandle,
-      region: [0.0, 0.0, 1.0, 1.0],
-      pivotAndSize: [0.5, 0.5, 1.0, 1.0],
-      flipY: 1.0,
-    },
-  };
-  const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
-    'MaterialAsset',
-    matPayload,
-  );
-  const id = unwrapHandle(matHandle);
-  atlasOnlyMaterialCache.set(cacheKey, id);
-  return id;
-}
-
-/**
- * Compute the half-texel-inset normalised UV rectangle for a TilesetRegion
- * (atlas-space pixels → atlas-normalised [u, v, w, h]). Mirrors the inset
- * computation inside `resolveTilesetMaterial` so the per-instance region
- * data fed into `SpriteInstances.regions` produces pixel-identical sampling
- * to the per-region material path (charter P4 consistent abstraction).
- */
-function computeRegionUv(
-  tileset: TilesetAsset,
-  region: TilesetRegion,
-  atlasIndex: number,
-): [u: number, v: number, w: number, h: number] {
-  const atlasSize = tileset.atlasSizes?.[atlasIndex];
-  const atlasWidth = Math.max(
-    1,
-    atlasSize !== undefined ? atlasSize.pixelWidth : tileset.columns * tileset.tileWidth,
-  );
-  const atlasHeight = Math.max(
-    1,
-    atlasSize !== undefined ? atlasSize.pixelHeight : tileset.rows * tileset.tileHeight,
-  );
-  const halfTexelU = 0.5 / atlasWidth;
-  const halfTexelV = 0.5 / atlasHeight;
-  return [
-    region.x / atlasWidth + halfTexelU,
-    region.y / atlasHeight + halfTexelV,
-    region.width / atlasWidth - 2 * halfTexelU,
-    region.height / atlasHeight - 2 * halfTexelV,
-  ];
 }
 
 interface DerivedSpawnSpec {
@@ -366,11 +227,6 @@ interface DerivedSpawnSpec {
   readonly heightCells: number;
   readonly pivotX: number;
   readonly pivotY: number;
-  // Atlas + region indices retained so the SpriteInstances (sortScope=
-  // 'layer') path can group cells by atlas and look up per-instance UV
-  // without re-walking the 3-hop chain `tileId → regions → atlasIndex`.
-  readonly atlasIndex: number;
-  readonly regionIndex: number;
 }
 
 const SQRT1_2 = Math.SQRT1_2;
@@ -412,8 +268,12 @@ function specFor(
   cellIndex: number,
   packedTile: number,
   materialHandle: number,
-  entry: TilesetTileEntry,
-  atlasIndex: number,
+  entry: {
+    widthCells?: number;
+    heightCells?: number;
+    pivotX?: number;
+    pivotY?: number;
+  },
 ): DerivedSpawnSpec {
   const cellX = cellIndex % layerCols;
   const cellY = Math.floor(cellIndex / layerCols);
@@ -433,13 +293,11 @@ function specFor(
     heightCells: entry.heightCells ?? 1,
     pivotX: entry.pivotX ?? 0.5,
     pivotY: entry.pivotY ?? 0.5,
-    atlasIndex,
-    regionIndex: entry.regionIndex,
   };
 }
 
 /**
- * Compute the post-flip TRS components for one tile cell. The plan-strategy
+ * Spawn a single derived per-cell render entity. Applies the plan-strategy
  * §D-2 multi-cell + flip x pivot composite formula (first-line form):
  *
  *   basePivotForX = D ? pivotY : pivotX
@@ -455,50 +313,9 @@ function specFor(
  *   quatZ  = D ? Math.SQRT1_2 : 0
  *   quatW  = D ? Math.SQRT1_2 : 1
  *
- * Single SSOT consumed by both the per-cell entity spawn path and the
- * SpriteInstances batched path so the two routes produce pixel-identical
- * world transforms (charter P4 consistent abstraction).
- */
-function computeTileTrs(
-  tilemap: { tileSizeX: number; tileSizeY: number },
-  spec: DerivedSpawnSpec,
-  packedTile: number,
-): {
-  posX: number;
-  posY: number;
-  scaleX: number;
-  scaleY: number;
-  quatZ: number;
-  quatW: number;
-} {
-  const { flipH, flipV, flipDiagonal } = decodeTileBits(packedTile);
-  const basePivotForX = flipDiagonal ? spec.pivotY : spec.pivotX;
-  const effectivePivotX = flipH ? 1 - basePivotForX : basePivotForX;
-  const effectivePivotY = effectivePivotYForTilemapFlip(
-    spec.pivotY,
-    spec.pivotX,
-    flipV,
-    flipDiagonal,
-  );
-  return {
-    posX:
-      (spec.cellX + effectivePivotX + (0.5 - effectivePivotX) * spec.widthCells) *
-      tilemap.tileSizeX,
-    posY:
-      (spec.cellY + effectivePivotY + (0.5 - effectivePivotY) * spec.heightCells) *
-      tilemap.tileSizeY,
-    scaleX: (flipH ? -1 : 1) * spec.widthCells * tilemap.tileSizeX,
-    scaleY: (flipV ? -1 : 1) * spec.heightCells * tilemap.tileSizeY,
-    quatZ: flipDiagonal ? SQRT1_2 : 0,
-    quatW: flipDiagonal ? SQRT1_2 : 1,
-  };
-}
-
-/**
- * Spawn a single derived per-cell render entity. Used by the per-cell
- * sortScope path (`sortScope='per-cell'`, object layers) where each cell
- * needs an independent Y-sort position to interleave with sprite entities
- * (e.g. player) at arbitrary Y positions.
+ * The first-line `posX = pivot_world_X + (0.5 - pivotX) * widthCells *
+ * tileSizeX` is preserved through the algebraic expansion so the 32-case
+ * matrix in tilemap-spawn-flip-pivot.test.ts catches any regression.
  */
 function spawnDerivedRenderEntities(
   world: World,
@@ -508,7 +325,28 @@ function spawnDerivedRenderEntities(
   packedTile: number,
   sortScope: SortScope = 'layer',
 ): EntityHandle {
-  const { posX, posY, scaleX, scaleY, quatZ, quatW } = computeTileTrs(tilemap, spec, packedTile);
+  const { flipH, flipV, flipDiagonal } = decodeTileBits(packedTile);
+  // D-2 first-line: D swaps the X/Y pivot pair so the 90deg rotation
+  // moves the anchor to the correct atlas axis; H/V then mirror within
+  // their respective slot. The Y branch is also exported as
+  // `effectivePivotYForTilemapFlip` so the render-system-extract sort
+  // key path (m3-t5) sees the same value (charter P4 single SSOT).
+  const basePivotForX = flipDiagonal ? spec.pivotY : spec.pivotX;
+  const effectivePivotX = flipH ? 1 - basePivotForX : basePivotForX;
+  const effectivePivotY = effectivePivotYForTilemapFlip(
+    spec.pivotY,
+    spec.pivotX,
+    flipV,
+    flipDiagonal,
+  );
+  const posX =
+    (spec.cellX + effectivePivotX + (0.5 - effectivePivotX) * spec.widthCells) * tilemap.tileSizeX;
+  const posY =
+    (spec.cellY + effectivePivotY + (0.5 - effectivePivotY) * spec.heightCells) * tilemap.tileSizeY;
+  const scaleX = (flipH ? -1 : 1) * spec.widthCells * tilemap.tileSizeX;
+  const scaleY = (flipV ? -1 : 1) * spec.heightCells * tilemap.tileSizeY;
+  const quatZ = flipDiagonal ? SQRT1_2 : 0;
+  const quatW = flipDiagonal ? SQRT1_2 : 1;
   const layerValue = encodeTilemapLayerValue(layerOrder, spec.chunkIndex, sortScope);
   return world
     .spawn(
@@ -540,164 +378,6 @@ function spawnDerivedRenderEntities(
 }
 
 /**
- * Spawn one batched SpriteInstances entity per (TileLayer, chunk, atlas)
- * group. Used by the `sortScope='layer'` path (terrain layers): every
- * cell in the group becomes one instance in the same drawIndexed call.
- *
- * The chunk grid is the unit declared by `Tilemap.chunkSize` (default
- * 16x16). One SpriteInstances entity per (chunk, atlas) pair keeps each
- * GPU instance buffer small (256 cells x 80B = 20KB worst case) and lets
- * downstream frustum culling / incremental rebuild operate at chunk
- * granularity (industry standard: Godot quadrant_size, Bevy ChunkSize,
- * Tiled TMX chunks).
- *
- * Layout:
- *   - Transform: identity (the per-instance mat4 carries world-space TRS).
- *   - MeshFilter: HANDLE_QUAD.
- *   - MeshRenderer: atlas-only sprite material (region placeholder; shader
- *     reads per-instance UV from SpriteInstances.regions under the
- *     PER_INSTANCE_REGION=true variant — selected at record stage).
- *   - SpriteInstances: { transforms: Float32Array(N*16),
- *                        regions:    Float32Array(N*4) }.
- *   - Layer: encodeTilemapLayerValue(layerOrder, chunkIndex, 'layer').
- *     chunkIndex distinguishes adjacent chunks of the same layer in the
- *     transparent-sort key so the back-to-front ordering between chunks
- *     remains stable (chunks within a layer don't visually overlap in
- *     normal tilemap scenes; the chunkIndex tiebreaker is byte-exact
- *     with the per-cell path's encoding).
- *
- * Returns the spawned EntityHandle. Empty groups (zero cells) short-circuit
- * and return `undefined`.
- */
-function spawnSpriteInstancesGroup(
-  world: World,
-  tilemap: { cols: number; tileSizeX: number; tileSizeY: number; chunkSize: number },
-  tileset: TilesetAsset,
-  layerOrder: number,
-  chunkIndex: number,
-  atlasIndex: number,
-  materialHandle: number,
-  cellSpecs: readonly DerivedSpawnSpec[],
-): EntityHandle | undefined {
-  if (cellSpecs.length === 0) return undefined;
-  const N = cellSpecs.length;
-  const transforms = new Float32Array(N * 16);
-  const regions = new Float32Array(N * 4);
-  const tmpMat = new Float32Array(16) as unknown as Parameters<typeof mat4.compose>[0];
-  const tmpF = tmpMat as unknown as Float32Array;
-  const tmpT: [number, number, number] = [0, 0, 0];
-  const tmpR: [number, number, number, number] = [0, 0, 0, 1];
-  const tmpS: [number, number, number] = [1, 1, 1];
-
-  // Per-chunk frustum cull: entity Transform = chunk world center + chunk
-  // extents (scaleX/Y). The frustum culler reads the entity AABB (HANDLE_QUAD
-  // local [-0.5, 0.5]² expanded by entity scale/pos) → world AABB exactly
-  // covers the chunk footprint.
-  //
-  // Per-instance transforms become chunk-local: inv_chunk * world_tile.
-  // inv_chunk is a pure TRS-inverse (no rotation), so for each column c of
-  // the world mat W:
-  //   local[c*4+0] = (W[c*4+0] - chunkCenterX * W[c*4+3]) * invSX
-  //   local[c*4+1] = (W[c*4+1] - chunkCenterY * W[c*4+3]) * invSY
-  //   local[c*4+2] = W[c*4+2]
-  //   local[c*4+3] = W[c*4+3]
-  // The sprite shader then produces:
-  //   world = chunk_TRS * local_tile * pos_local
-  //         = chunk_TRS * (inv_chunk * world_tile) * pos_local
-  //         = world_tile * pos_local  ✓ (pixel-identical to identity path)
-  //
-  // Tiles whose widthCells/heightCells straddle a chunk boundary will have
-  // instance transforms that exceed the chunk AABB; the entity is still drawn
-  // (conservative cull only skips when the chunk AABB is fully outside).
-  const chunksPerRow = Math.max(1, Math.ceil(tilemap.cols / tilemap.chunkSize));
-  const chunkX = chunkIndex % chunksPerRow;
-  const chunkY = Math.floor(chunkIndex / chunksPerRow);
-  const chunkScaleX = tilemap.chunkSize * tilemap.tileSizeX;
-  const chunkScaleY = tilemap.chunkSize * tilemap.tileSizeY;
-  const chunkCenterX = (chunkX + 0.5) * chunkScaleX;
-  const chunkCenterY = (chunkY + 0.5) * chunkScaleY;
-  const invSX = chunkScaleX > 0 ? 1 / chunkScaleX : 1;
-  const invSY = chunkScaleY > 0 ? 1 / chunkScaleY : 1;
-
-  for (let i = 0; i < N; i++) {
-    const spec = cellSpecs[i] as DerivedSpawnSpec;
-    const { posX, posY, scaleX, scaleY, quatZ, quatW } = computeTileTrs(
-      tilemap,
-      spec,
-      spec.packedTile,
-    );
-    tmpT[0] = posX;
-    tmpT[1] = posY;
-    tmpT[2] = 0;
-    tmpR[0] = 0;
-    tmpR[1] = 0;
-    tmpR[2] = quatZ;
-    tmpR[3] = quatW;
-    tmpS[0] = scaleX;
-    tmpS[1] = scaleY;
-    tmpS[2] = 1;
-    mat4.compose(tmpMat, tmpT, tmpR, tmpS);
-
-    // Write chunk-local transform: inv_chunk * world_tile (see formula above).
-    const dst = i * 16;
-    for (let c = 0; c < 4; c++) {
-      const base = c * 4;
-      const w3 = tmpF[base + 3] as number;
-      transforms[dst + base + 0] = ((tmpF[base + 0] as number) - chunkCenterX * w3) * invSX;
-      transforms[dst + base + 1] = ((tmpF[base + 1] as number) - chunkCenterY * w3) * invSY;
-      transforms[dst + base + 2] = tmpF[base + 2] as number;
-      transforms[dst + base + 3] = w3;
-    }
-
-    const region = tileset.regions[spec.regionIndex];
-    if (region !== undefined) {
-      const [u, v, w, h] = computeRegionUv(tileset, region, atlasIndex);
-      regions[i * 4 + 0] = u;
-      regions[i * 4 + 1] = v;
-      regions[i * 4 + 2] = w;
-      regions[i * 4 + 3] = h;
-    }
-  }
-
-  const layerValue = encodeTilemapLayerValue(layerOrder, chunkIndex, 'layer');
-  // plan-strategy D-2: the SpriteInstances entity's Transform.posY is set
-  // to `chunkCenterY` (becomes `world[13]` in the entity's local-to-world
-  // matrix). This is the LAYER_Y fold sort key — terrain rows share a
-  // chunk Y, so per-chunk Y resolution is exactly the granularity the
-  // fold pass needs. Per-tile world[13] (instance-level) is intentionally
-  // _not_ used; instances live in the chunk-local space anchored at
-  // chunkCenterY (see line 601-647 above). This is intentional, not a bug.
-  return world
-    .spawn(
-      {
-        component: Transform,
-        data: {
-          posX: chunkCenterX,
-          posY: chunkCenterY,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: chunkScaleX,
-          scaleY: chunkScaleY,
-          scaleZ: 1,
-        },
-      },
-      { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
-      {
-        component: MeshRenderer,
-        data: {
-          materials: [materialHandle as unknown as Handle<'MaterialAsset', 'shared'>],
-        },
-      },
-      { component: SpriteInstances, data: { transforms, regions } },
-      { component: Layer, data: { value: layerValue } },
-    )
-    .unwrap();
-}
-
-/**
  * Bucket a single layer's tiles into per-non-zero-cell spawn specs.
  * Returns the parent Tilemap metadata + the resolved spawn specs.
  */
@@ -716,7 +396,6 @@ function bucketTileLayer(
       };
       readonly layerOrder: number;
       readonly sortScope: SortScope;
-      readonly tileset: TilesetAsset;
       readonly specs: readonly DerivedSpawnSpec[];
     }
   | undefined {
@@ -734,15 +413,6 @@ function bucketTileLayer(
   if (!layerRes.ok) return undefined;
   const layer = layerRes.value;
   const tiles = layer.tiles as Uint32Array;
-  const sortScope = decodeSortScope(layer.sortScope);
-
-  // sortScope='layer' (terrain) uses the SpriteInstances batched path which
-  // groups cells by atlas under an atlas-only material; sortScope='per-cell'
-  // (object) keeps the per-cell entity path with per-region materials so
-  // each cell can interleave with sprites by foot-Y. The material resolver
-  // selection here keeps the spec's `materialHandle` in the correct
-  // granularity for whichever spawn path consumes it downstream.
-  const useSpriteInstances = sortScope === 'layer';
 
   const specs: DerivedSpawnSpec[] = [];
   for (let i = 0; i < tiles.length; i++) {
@@ -752,131 +422,16 @@ function bucketTileLayer(
     if (tileId === 0) continue;
     const entry = tileset.tiles[tileId - 1];
     if (entry === undefined) continue;
-    const region = tileset.regions[entry.regionIndex];
-    if (region === undefined) continue;
-    const atlasIndex = region.atlasIndex ?? 0;
-    const materialHandle = useSpriteInstances
-      ? resolveAtlasOnlyMaterial(world, tileset, atlasIndex)
-      : resolveTilesetMaterial(world, tileset, entry.regionIndex);
-    const spec = specFor(
-      tilemap.cols,
-      tilemap.chunkSize,
-      i,
-      packed,
-      materialHandle,
-      entry,
-      atlasIndex,
-    );
+    const materialHandle = resolveTilesetMaterial(world, tileset, entry.regionIndex);
+    const spec = specFor(tilemap.cols, tilemap.chunkSize, i, packed, materialHandle, entry);
     specs.push(spec);
   }
   return {
     tilemap,
     layerOrder: layer.layerOrder,
-    sortScope,
-    tileset,
+    sortScope: decodeSortScope(layer.sortScope),
     specs,
   };
-}
-
-/**
- * Compute the camera frustum planes for the first Camera + Transform entity
- * found in the world. Returns null when no camera exists or the projection
- * parameters are degenerate (callers treat null as always-visible).
- *
- * Mirrors the frustum-plane computation in render-system-extract so both
- * cull paths use byte-identical planes (charter P4 consistent abstraction).
- */
-function buildCameraFrustumPlanes(world: World): frustum.Frustum | null {
-  const q = createQueryState({ with: [Camera, Transform, Entity] });
-  let result: frustum.Frustum | null = null;
-  queryRun(q, world, (bundle) => {
-    if (result !== null) return;
-    const entitySelf = bundle.Entity.self as unknown as Uint32Array;
-    if (entitySelf.length === 0) return;
-    const camEntity = entitySelf[0] as EntityHandle;
-
-    const camRes = world.get(camEntity, Camera);
-    const trRes = world.get(camEntity, Transform);
-    if (!camRes.ok || !trRes.ok) return;
-
-    const cam = camRes.value as unknown as {
-      near: number;
-      far: number;
-      projection: number;
-      left: number;
-      right: number;
-      bottom: number;
-      top: number;
-      fov: number;
-      aspect: number;
-    };
-    const tr = trRes.value as unknown as { world: Float32Array };
-
-    const { near, far } = cam;
-    if (near >= far) return;
-
-    const proj = mat4.create();
-    if (cam.projection === CAMERA_PROJECTION_ORTHOGRAPHIC) {
-      mat4.orthographic(
-        proj as Parameters<typeof mat4.orthographic>[0],
-        cam.left,
-        cam.right,
-        cam.bottom,
-        cam.top,
-        near,
-        far,
-      );
-    } else {
-      mat4.perspective(
-        proj as Parameters<typeof mat4.perspective>[0],
-        cam.fov,
-        cam.aspect,
-        near,
-        far,
-      );
-    }
-    const view = mat4.create();
-    mat4.invert(
-      view as Parameters<typeof mat4.invert>[0],
-      tr.world as Parameters<typeof mat4.invert>[1],
-    );
-    const vp = mat4.create();
-    mat4.multiply(
-      vp as Parameters<typeof mat4.multiply>[0],
-      proj as Parameters<typeof mat4.multiply>[1],
-      view as Parameters<typeof mat4.multiply>[2],
-    );
-    const f = frustum.create();
-    frustum.fromViewProjection(f, vp as Parameters<typeof frustum.fromViewProjection>[1]);
-    result = f;
-  });
-  return result;
-}
-
-/**
- * World-space AABB [minX, minY, minZ, maxX, maxY, maxZ] for a chunk.
- * Z is expanded to ±1 so flat tile geometry (z=0) is never degenerate.
- */
-function chunkWorldAabb(
-  chunkIndex: number,
-  cols: number,
-  chunkSize: number,
-  tileSizeX: number,
-  tileSizeY: number,
-): box3.Box3Like {
-  const chunksPerRow = Math.max(1, Math.ceil(cols / chunkSize));
-  const cx = chunkIndex % chunksPerRow;
-  const cy = Math.floor(chunkIndex / chunksPerRow);
-  const x0 = cx * chunkSize * tileSizeX;
-  const y0 = cy * chunkSize * tileSizeY;
-  return [
-    x0,
-    y0,
-    -1,
-    x0 + chunkSize * tileSizeX,
-    y0 + chunkSize * tileSizeY,
-    1,
-  ] as unknown as box3.Box3Like;
 }
 
 function purgeDerivedEntities(world: World, layerEntity: EntityHandle): void {
@@ -891,30 +446,15 @@ function purgeDerivedEntities(world: World, layerEntity: EntityHandle): void {
 
 /**
  * Walk every TileLayer ChildOf-ing a Tilemap, extract its non-zero cells
- * into derived render entities. Called per-frame from `createRenderer.draw`
- * before the render system reads the world.
- *
- * Two paths based on `TileLayer.sortScope`:
- *
- *   `'layer'` (terrain, default):
- *     Batched SpriteInstances path — spawned once, reused until dirty. Each
- *     (chunk, atlas) pair becomes one SpriteInstances entity whose Transform
- *     covers the chunk footprint, so the frustum culler rejects off-screen
- *     chunks at entity granularity.
- *
- *   `'per-cell'` (object layers):
- *     Chunk-streaming path — specs are bucketed by chunkIndex once (rebuilt
- *     on dirty) and the live entity set is updated every frame to match the
- *     camera frustum. Only chunks whose world AABB intersects the frustum
- *     have ECS entities alive, keeping `extractFrame` iteration proportional
- *     to visible tile count rather than total map tile count.
+ * into derived per-cell render entities, and store the spawn list so the
+ * next dirty pass can purge cleanly. Called per-frame from
+ * `createRenderer.draw` before the render system reads the world.
  */
 export function tilemapChunkExtractSystem(world: World): void {
   type LayerWork = {
     readonly layerEntity: EntityHandle;
     readonly parentEntity: EntityHandle;
     readonly dirty: number;
-    readonly sortScopeRaw: number;
   };
   const work: LayerWork[] = [];
   const tileLayerQuery = createQueryState({ with: [TileLayer, ChildOf, Entity] });
@@ -929,165 +469,42 @@ export function tilemapChunkExtractSystem(world: World): void {
         layerEntity: e,
         parentEntity: parent,
         dirty: layerBundle.dirty[i] ?? 0,
-        sortScopeRaw: layerBundle.sortScope?.[i] ?? 0,
       });
     }
   });
 
-  // Compute the camera frustum once per frame — only needed when at least
-  // one streaming (per-cell) layer exists. Null = always-visible fallback.
-  let frustumPlanes: frustum.Frustum | null | undefined;
-
   for (const w of work) {
     const layerKey = unwrapHandle(w.layerEntity as unknown as Handle<string, 'shared'>);
-    // AC-04: decode via the canonical SortScope union; avoid relying on the
-    // raw encoding (0='layer', 1='per-cell') leaking through this call site.
-    // `decodeSortScope` is the SSOT used throughout `bucketTileLayer` (see
-    // line 730); this main-loop branch is the last remaining numeric check.
-    const isStreaming = decodeSortScope(w.sortScopeRaw) === 'per-cell';
+    const everBuilt = layerEverBuilt.has(layerKey);
+    if (everBuilt && w.dirty === 0) continue;
 
-    if (!isStreaming) {
-      // ── Terrain batched path (sortScope='layer') ──────────────────────
-      // Spawn once per dirty; entity AABB covers the chunk footprint for
-      // entity-level frustum culling in render-system-extract.
-      const everBuilt = layerEverBuilt.has(layerKey);
-      if (everBuilt && w.dirty === 0) continue;
+    // Re-build: purge old then spawn new.
+    purgeDerivedEntities(world, w.layerEntity);
 
-      purgeDerivedEntities(world, w.layerEntity);
-
-      const bucket = bucketTileLayer(world, w.layerEntity, w.parentEntity);
-      if (bucket === undefined) {
-        layerEverBuilt.add(layerKey);
-        continue;
-      }
-
-      const spawned: number[] = [];
-      const byChunkAtlas = new Map<number, DerivedSpawnSpec[]>();
-      for (const spec of bucket.specs) {
-        const key = ((spec.chunkIndex & 0xfffff) << 16) | (spec.atlasIndex & 0xffff);
-        const list = byChunkAtlas.get(key);
-        if (list === undefined) {
-          byChunkAtlas.set(key, [spec]);
-        } else {
-          list.push(spec);
-        }
-      }
-      for (const groupSpecs of byChunkAtlas.values()) {
-        const first = groupSpecs[0];
-        if (first === undefined) continue;
-        const e = spawnSpriteInstancesGroup(
-          world,
-          bucket.tilemap,
-          bucket.tileset,
-          bucket.layerOrder,
-          first.chunkIndex,
-          first.atlasIndex,
-          first.materialHandle,
-          groupSpecs,
-        );
-        if (e !== undefined) {
-          spawned.push(unwrapHandle(e as unknown as Handle<string, 'shared'>));
-        }
-      }
-      layerDerivedEntities.set(layerKey, spawned);
+    const bucket = bucketTileLayer(world, w.layerEntity, w.parentEntity);
+    if (bucket === undefined) {
       layerEverBuilt.add(layerKey);
-      if (w.dirty !== 0) {
-        world.set(w.layerEntity, TileLayer, { dirty: 0 }).unwrap();
-      }
       continue;
     }
 
-    // ── Object streaming path (sortScope='per-cell') ───────────────────
-    // Step 1: rebuild specs cache when dirty or first time.
-    if (w.dirty !== 0 || !layerStreamCache.has(layerKey)) {
-      // Despawn all currently-active chunks for this layer.
-      const activeSet = layerChunkActive.get(layerKey);
-      if (activeSet !== undefined) {
-        for (const chunkIdx of activeSet) {
-          const key = `${layerKey}:${chunkIdx}`;
-          const entities = layerChunkStreamEntities.get(key);
-          if (entities !== undefined) {
-            for (const e of entities) world.despawn(e as EntityHandle);
-            layerChunkStreamEntities.delete(key);
-          }
-        }
-        activeSet.clear();
-      }
-      layerStreamCache.delete(layerKey);
-
-      const bucket = bucketTileLayer(world, w.layerEntity, w.parentEntity);
-      if (bucket !== undefined) {
-        const byChunk = new Map<number, DerivedSpawnSpec[]>();
-        for (const spec of bucket.specs) {
-          const list = byChunk.get(spec.chunkIndex);
-          if (list === undefined) {
-            byChunk.set(spec.chunkIndex, [spec]);
-          } else {
-            list.push(spec);
-          }
-        }
-        layerStreamCache.set(layerKey, {
-          byChunk,
-          tilemap: bucket.tilemap,
-          layerOrder: bucket.layerOrder,
-          sortScope: bucket.sortScope,
-        });
-      }
-      if (w.dirty !== 0) {
-        world.set(w.layerEntity, TileLayer, { dirty: 0 }).unwrap();
-      }
-    }
-
-    const cache = layerStreamCache.get(layerKey);
-    if (cache === undefined) continue;
-
-    // Step 2: lazy-compute camera frustum on first streaming layer.
-    if (frustumPlanes === undefined) {
-      frustumPlanes = buildCameraFrustumPlanes(world);
-    }
-
-    // Step 3: diff visible chunks against active set.
-    const activeSet = layerChunkActive.get(layerKey) ?? new Set<number>();
-    layerChunkActive.set(layerKey, activeSet);
-    const { tilemap } = cache;
-
-    for (const [chunkIdx, specs] of cache.byChunk) {
-      const aabb = chunkWorldAabb(
-        chunkIdx,
-        tilemap.cols,
-        tilemap.chunkSize,
-        tilemap.tileSizeX,
-        tilemap.tileSizeY,
+    const spawned: number[] = [];
+    for (const spec of bucket.specs) {
+      const e = spawnDerivedRenderEntities(
+        world,
+        bucket.tilemap,
+        bucket.layerOrder,
+        spec,
+        spec.packedTile,
+        bucket.sortScope,
       );
-      const visible = frustumPlanes === null || frustum.intersectsBox(frustumPlanes, aabb);
-      const wasActive = activeSet.has(chunkIdx);
+      spawned.push(unwrapHandle(e as unknown as Handle<string, 'shared'>));
+    }
+    layerDerivedEntities.set(layerKey, spawned);
+    layerEverBuilt.add(layerKey);
 
-      if (visible && !wasActive) {
-        // Spawn per-cell entities for this newly-visible chunk.
-        const spawned: number[] = [];
-        for (const spec of specs) {
-          const e = spawnDerivedRenderEntities(
-            world,
-            tilemap,
-            cache.layerOrder,
-            spec,
-            spec.packedTile,
-            cache.sortScope,
-          );
-          spawned.push(unwrapHandle(e as unknown as Handle<string, 'shared'>));
-        }
-        layerChunkStreamEntities.set(`${layerKey}:${chunkIdx}`, spawned);
-        activeSet.add(chunkIdx);
-      } else if (!visible && wasActive) {
-        // Despawn per-cell entities for this newly-invisible chunk.
-        const key = `${layerKey}:${chunkIdx}`;
-        const entities = layerChunkStreamEntities.get(key);
-        if (entities !== undefined) {
-          for (const e of entities) world.despawn(e as EntityHandle);
-          layerChunkStreamEntities.delete(key);
-        }
-        activeSet.delete(chunkIdx);
-      }
+    // Clear the dirty flag on the source layer so the next pass skips it.
+    if (w.dirty !== 0) {
+      world.set(w.layerEntity, TileLayer, { dirty: 0 }).unwrap();
     }
   }
 }

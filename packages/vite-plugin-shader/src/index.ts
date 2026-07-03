@@ -807,7 +807,7 @@ export function forgeaxBundlerAdapter() {
 // feat-20260518-pbr-direct-lighting-mvp M5 / w22.8 (plan-strategy §2 D-3 + D-4
 // + AC-05 PBR_FALLBACK_WGSL grep 0): the engine ships pbr.wgsl + unlit.wgsl
 // inside `@forgeax/engine-shader/src/`, but apps do not import them
-// directly (RenderSystem dispatches via materialShaderId inside the
+// directly (RenderSystem dispatches via material.shadingModel inside the
 // engine — pipeline isolation, AGENTS.md). To keep the runtime
 // `ShaderRegistry` manifest path the single SSOT (charter P4 consistent
 // abstraction), the plugin eagerly compiles these two entry shaders at

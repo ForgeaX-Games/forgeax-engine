@@ -26,7 +26,7 @@ import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../materials';
 import type { DispatchEntry } from '../render-system-extract';
 import { extractFrame, type MaterialSnapshot } from '../render-system-extract';
 import * as recordModule from '../render-system-record';
-import { detectNineSliceScaleTooSmall, isLitMaterialSnapshot } from '../render-system-record';
+import { detectNineSliceScaleTooSmall } from '../render-system-record';
 import { propagateTransforms } from '../systems/propagate-transforms';
 
 // ─── from render-system-record-pbr-ubo-stable.test.ts ───
@@ -80,6 +80,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       baseColor: opts.baseColor ?? [0.5, 0.6, 0.7, 1],
       metallic: opts.metallic ?? 0.1,
       roughness: opts.roughness ?? 0.4,
+      shadingModel: undefined,
       materialShaderId: 'forgeax::default-standard-pbr',
       paramSnapshot: undefined,
       ...(opts.emissive !== undefined && { emissive: opts.emissive }),
@@ -1057,6 +1058,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         baseColor,
         metallic,
         roughness,
+        shadingModel: undefined,
         materialShaderId: 'forgeax::default-standard-pbr',
         paramSnapshot: undefined,
         emissive,
@@ -1178,6 +1180,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       baseColor: [1, 1, 1, 1] as const,
       metallic: 0,
       roughness: 1,
+      shadingModel: undefined,
       materialShaderId: opts.materialShaderId ?? 'forgeax::unlit-test',
       paramSnapshot: {},
       ...(opts.transparent === true && { transparent: true }),
@@ -1246,20 +1249,21 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(split).toBe(false);
     });
 
-    it('M3 / w13: legacy sprite material without transparent:true does NOT trigger split (union arm deleted)', () => {
+    it('M3 / w13: legacy sprite shadingModel without transparent:true does NOT trigger split (union arm deleted)', () => {
       if (typeof mod.computeSplitLdrSprite !== 'function') {
         throw new Error('computeSplitLdrSprite helper not exported yet (red phase)');
       }
       // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13 (D-3):
       // the M2 union (`transparent || shadingModel === 'sprite'`) is gone
-      // — transparent is the single SSOT. A legacy snapshot carrying
-      // `materialShaderId: 'forgeax::sprite'` but no `transparent: true`
-      // declaration MUST NOT trigger the LDR split (forces explicit
-      // transparent attribution on the asset side; AC-04 / AC-05).
+      // — transparent is the single SSOT. A legacy snapshot still carrying
+      // `shadingModel: 'sprite'` but no `transparent: true` declaration
+      // MUST NOT trigger the LDR split (forces explicit transparent
+      // attribution on the asset side; AC-04 / AC-05).
       const legacySpriteNoTransparent = {
         baseColor: [1, 1, 1, 1] as const,
         metallic: 0,
         roughness: 1,
+        shadingModel: 'sprite',
         materialShaderId: 'forgeax::sprite',
         paramSnapshot: {},
       } as unknown as MaterialSnapshot;
@@ -1612,54 +1616,6 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       ];
       const sorted = transparentSortEntries(entries, world);
       expect(sorted.map((e) => e.entityIndex)).toEqual([7, 8, 9]);
-    });
-  });
-}
-
-// --- tweak-20260701 M2 AC-02: zero-light warning polarity (shadingModel -> materialShaderId) ---
-{
-  // AC-02: the zero-light black-screen warning must still fire for
-  // PBR/standard materials and remain silent for unlit / default
-  // materials. The pre-tweak condition was:
-  //   materialShaderId !== undefined && shadingModel === undefined
-  // Post-M1 shadingModel is deleted; the equivalent rewrite is:
-  //   materialShaderId !== undefined && materialShaderId !== 'forgeax::default-unlit'
-  //
-  // The test imports `isLitMaterialSnapshot` from the production
-  // render-system-record module — the same function that recordFrame's
-  // zero-light warning gate (line ~2122) calls to compute
-  // hasStandardMaterial. A test-local copy would not anchor to the
-  // production path.
-
-  function makeSnap(materialShaderId: string | undefined): MaterialSnapshot {
-    return {
-      baseColor: [1, 1, 1, 1] as const,
-      metallic: 0,
-      roughness: 1,
-      materialShaderId,
-      paramSnapshot: undefined,
-    } as unknown as MaterialSnapshot;
-  }
-
-  describe('AC-02: zero-light warning polarity (shadingModel -> materialShaderId)', () => {
-    it('standard / PBR material (materialShaderId !== undefined, !== default-unlit) -> lit', () => {
-      const snap = makeSnap('forgeax::default-standard-pbr');
-      expect(isLitMaterialSnapshot(snap)).toBe(true);
-    });
-
-    it('custom shader material (materialShaderId !== undefined, !== default-unlit) -> lit', () => {
-      const snap = makeSnap('my-custom-shader');
-      expect(isLitMaterialSnapshot(snap)).toBe(true);
-    });
-
-    it('unlit material (materialShaderId === forgeax::default-unlit) -> not lit (no warn)', () => {
-      const snap = makeSnap('forgeax::default-unlit');
-      expect(isLitMaterialSnapshot(snap)).toBe(false);
-    });
-
-    it('default material (materialShaderId === undefined) -> not lit (no warn)', () => {
-      const snap = makeSnap(undefined);
-      expect(isLitMaterialSnapshot(snap)).toBe(false);
     });
   });
 }

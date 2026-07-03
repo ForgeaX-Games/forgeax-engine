@@ -65,7 +65,7 @@ function mockBucket(count: number, materialHandle = 7, layer = 0): FoldBucket {
   for (let i = 0; i < count; i++) {
     entries.push(mockEntry(i, materialHandle, layer));
   }
-  return { entries, bucketSize: count, transforms, materialHandle, layer, sortKey: 0 };
+  return { entries, bucketSize: count, transforms, materialHandle, layer, posZ: 0 };
 }
 
 function planFromBuckets(headBuckets: ReadonlyMap<number, FoldBucket>): FoldDispatchPlan {

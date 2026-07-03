@@ -2507,6 +2507,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       const matHandle = world.allocSharedRef('MaterialAsset', {
         kind: 'material',
+        shadingModel: 'unlit',
         baseColor: [1, 0, 0, 1],
       } as never);
 
@@ -2525,10 +2526,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       const m0 = world.allocSharedRef('MaterialAsset', {
         kind: 'material',
+        shadingModel: 'unlit',
         baseColor: [1, 0, 0, 1],
       } as never);
       const m1 = world.allocSharedRef('MaterialAsset', {
         kind: 'material',
+        shadingModel: 'unlit',
         baseColor: [0, 1, 0, 1],
       } as never);
 
@@ -3124,6 +3127,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       const matHandle = world.allocSharedRef('MaterialAsset', {
         kind: 'material',
+        shadingModel: 'unlit',
         baseColor: [1, 0, 0, 1],
       } as never);
 
@@ -3204,6 +3208,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       const matHandle = world.allocSharedRef('MaterialAsset', {
         kind: 'material',
+        shadingModel: 'unlit',
         baseColor: [1, 0, 0, 1],
       } as never);
 

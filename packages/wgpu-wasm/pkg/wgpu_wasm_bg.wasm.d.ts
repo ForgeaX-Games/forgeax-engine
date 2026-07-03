@@ -85,6 +85,7 @@ export const rhiwgpurenderpass_setScissorRect: (a: number, b: number, c: number,
 export const rhiwgpurenderpass_setStencilReference: (a: number, b: number) => void;
 export const rhiwgpurenderpass_setVertexBuffer: (a: number, b: number, c: number, d: bigint, e: number, f: bigint) => void;
 export const rhiwgpurenderpass_setViewport: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+export const rhiwgpusampler_forgeaxResourceKind: (a: number) => [number, number];
 export const rhiwgpusampler_forgeaxToken: (a: number) => number;
 export const rhiwgpushadermodule_forgeaxToken: (a: number) => number;
 export const rhiwgpusurface_configure: (a: number, b: any) => [number, number];
@@ -96,6 +97,7 @@ export const rhiwgputexture_depthOrArrayLayers: (a: number) => number;
 export const rhiwgputexture_destroy: (a: number) => void;
 export const rhiwgputexture_height: (a: number) => number;
 export const rhiwgputexture_width: (a: number) => number;
+export const rhiwgputextureview_forgeaxResourceKind: (a: number) => [number, number];
 export const rhiwgputextureview_forgeaxToken: (a: number) => number;
 export const start: () => void;
 export const validate: (a: number) => [number, number, number];

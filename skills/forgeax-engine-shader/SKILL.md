@@ -209,24 +209,8 @@ const mat = assets.register<MaterialAsset>({
 | `forgeax::sprite-lit` | 2D sprite per-light forward（Half-Lambert squared，fragment 端 hardcoded normal `vec3(0,0,1)`，需 `>=1` DirectionalLight/PointLight/SpotLight 否则全黑；feat-20260624 M1'） |
 | `forgeax::shadow_caster` | depth-only pass（`bglEntries=[]`） |
 
-材质分派的唯一判别式是 shader identity（`materialShaderId` / `passes[0].shader`）；`MaterialSnapshot.shadingModel` 字段已于 tweak-20260701 删除。sprite-lit 走 `materialShaderId === 'forgeax::sprite-lit'` 字符串路由 mirror sprite（plan-strategy D-1）。OOS-1 normal-map 跟进 `feat-future-sprite-lit-normal-map`。全表 SSOT 见 `packages/shader/README.md` §Engine-shipped shader modules。
+`MaterialSnapshot.shadingModel` 闭合 union 仍是 `'unlit' | undefined` 两档（post-PR-#520）；sprite-lit 走 `materialShaderId === 'forgeax::sprite-lit'` 字符串路由 mirror sprite，不扩 union（plan-strategy D-1）。OOS-1 normal-map 跟进 `feat-future-sprite-lit-normal-map`。全表 SSOT 见 `packages/shader/README.md` §Engine-shipped shader modules。
 
-## shader variants
-
-变体（variant）是同一 shader 模块按 `#define` 编译期 flag 切的多份 GPU pipeline。AI 用户只需在材质 / 实体侧给出正确 marker（如 `SpriteInstances` 组件），engine 自动选对应 variant；**手写 variant 选择只发生在你 `registerMaterialShader` 自定义 shader 时**。
-
-### `PER_INSTANCE_REGION`（feat-20260630 SpriteInstances 批绘）
-
-`forgeax::sprite` shader 提供 `PER_INSTANCE_REGION=true` 变体——开启后 fragment 端的 atlas region UV 从**实例缓冲**采（per-instance `region: vec4<f32> = [uMin, vMin, uW, vH]`，紧跟 per-instance mat4 后 16B），而非材质 UBO 的 `paramValues.region`。这是 tilemap terrain 批绘路径的关键：一个 SpriteInstances entity 内 N 个 tile 引用同一 atlas 的不同 UV 矩形，单一材质 UBO 不可能装下 N 套 region。
-
-| 变体 | UV 来源 | 用途 |
-|:--|:--|:--|
-| `PER_INSTANCE_REGION=false`（默认） | `paramValues.region` 材质 UBO | 单一精灵 / 整 chunk 共享同一 region |
-| `PER_INSTANCE_REGION=true` | `SpriteInstances.regions[i]` per-instance | tilemap terrain 批绘（每 tile UV 不同）、atlas 动画批绘 |
-
-引擎内部：`SpriteInstances` 组件存在的实体 extract 路径自动选 `PER_INSTANCE_REGION=true` variant；普通 sprite 实体走 `false` variant。材质 `paramValues.region` 在 `=true` 变体下被占位为 `[0,0,1,1]` 并被 shader 忽略（与 runtime extract `atlasOnlyMaterialCache` 配套，见 [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md) §terrain 批绘路径细节）。
-
-**AI 用户何时需要显式声明 `PER_INSTANCE_REGION`**：仅当你 `registerMaterialShader` 自定义 sprite shader 并希望接入 SpriteInstances 批绘路径时——在 `.wgsl.meta.json` 的 `defines` 中声明 `PER_INSTANCE_REGION: { type: 'bool', default: false }`，并在 WGSL 中按 `#ifdef PER_INSTANCE_REGION` 选 UV 来源。否则使用内置 `forgeax::sprite` 即可，引擎自动选变体，AI 用户层零接触。
 
 ## 深入
 

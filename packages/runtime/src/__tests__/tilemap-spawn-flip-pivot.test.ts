@@ -36,7 +36,7 @@
 import { Entity, World } from '@forgeax/engine-ecs';
 import { type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { ChildOf, encodeSortScope, TileLayer, Tilemap, Transform } from '../components';
+import { ChildOf, TileLayer, Tilemap, Transform } from '../components';
 import { encodeTileBits } from '../tile-bits';
 import {
   resetTilemapChunkExtractCache,
@@ -170,10 +170,7 @@ function runOneCase(s: Setup): {
   const tiles = new Uint32Array(cols * rows);
   tiles[s.cellY * cols + s.cellX] = encodeTileBits(1, s.flipH, s.flipV, s.flipDiagonal, false);
   world.spawn(
-    {
-      component: TileLayer,
-      data: { tiles, layerOrder: 0, dirty: 1, sortScope: encodeSortScope('per-cell') },
-    },
+    { component: TileLayer, data: { tiles, layerOrder: 0, dirty: 1 } },
     { component: ChildOf, data: { parent: tilemap } },
   );
   resetTilemapChunkExtractCache();

@@ -787,7 +787,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   describe('render-system-extract sprite paramSnapshot slicesAndMode (M3 / w9)', () => {
-    it('(1) no slicesAndMode in paramValues -> paramSnapshot.slicesAndMode absent', () => {
+    it('(1) no slicesAndMode in paramValues -> paramSnapshot.slicesAndMode absent, shadingModel=undefined', () => {
       const { world, assets } = spawnSpriteScene({});
       const frame = extractFrame(world, assets);
       // Renderable filter: post-ablation sprite carries forgeax::sprite
@@ -797,14 +797,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         (r) => r.material.materialShaderId === 'forgeax::sprite',
       );
       expect(renderable).toBeDefined();
+      expect(renderable?.material.shadingModel).toBeUndefined();
       const snap = renderable?.material.paramSnapshot;
       expect(snap).toBeDefined();
-      // w0a SSOT-collapse fix: extract stage now explicitly seeds the
-      // slicesAndMode slot with [0,0,0,0] when absent from paramValues so
-      // the record-stage UBO writer overrides the PBR baseline (which would
-      // otherwise leave occlusionStrength=1 at offset 48 -> trips
-      // useSlices=true in sprite.wgsl -> degenerate quad).
-      expect(snap?.slicesAndMode).toEqual([0, 0, 0, 0]);
+      // Post-fix-up F-1: no legacy `slices`+`sliceMode` fold; absence on the
+      // input means absence on the snapshot (record stage fills the UBO slot
+      // with std140 zero default via derive(uboLayout)).
+      expect(snap?.slicesAndMode).toBeUndefined();
     });
 
     it('(2) stretch slicesAndMode [0.25,0.25,0.25,0.25] -> paramSnapshot.slicesAndMode verbatim', () => {
@@ -816,6 +815,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         (r) => r.material.materialShaderId === 'forgeax::sprite',
       );
       expect(renderable).toBeDefined();
+      expect(renderable?.material.shadingModel).toBeUndefined();
       const snap = renderable?.material.paramSnapshot;
       expect(snap?.slicesAndMode).toEqual([0.25, 0.25, 0.25, 0.25]);
     });
@@ -832,6 +832,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         (r) => r.material.materialShaderId === 'forgeax::sprite',
       );
       expect(renderable).toBeDefined();
+      expect(renderable?.material.shadingModel).toBeUndefined();
       const snap = renderable?.material.paramSnapshot;
       const slicesAndMode = snap?.slicesAndMode as readonly number[] | undefined;
       expect(slicesAndMode?.[0]).toBe(0.25);

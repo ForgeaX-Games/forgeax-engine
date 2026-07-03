@@ -15,14 +15,7 @@
 import { World } from '@forgeax/engine-ecs';
 import { type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import {
-  ChildOf,
-  encodeSortScope,
-  markTileLayerDirty,
-  TileLayer,
-  Tilemap,
-  Transform,
-} from '../components';
+import { ChildOf, markTileLayerDirty, TileLayer, Tilemap, Transform } from '../components';
 import {
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
@@ -52,10 +45,7 @@ function setup() {
   const tiles = new Uint32Array([1, 0, 0, 1]);
   const layer = world
     .spawn(
-      {
-        component: TileLayer,
-        data: { tiles, layerOrder: 0, dirty: 0, sortScope: encodeSortScope('per-cell') },
-      },
+      { component: TileLayer, data: { tiles, layerOrder: 0, dirty: 0 } },
       { component: ChildOf, data: { parent: tilemap } },
     )
     .unwrap();

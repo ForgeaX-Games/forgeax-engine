@@ -64,7 +64,7 @@ function mockBucket(count: number, materialHandle = 7, layer = 0): FoldBucket {
     transforms,
     materialHandle,
     layer,
-    sortKey: 0,
+    posZ: 0,
   };
 }
 

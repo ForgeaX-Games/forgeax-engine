@@ -83,11 +83,11 @@ import { ShadowInvalidConfigError } from '../errors';
  *     mapSize: 2048, shadowDistance: 200,
  *   } });
  *
- * @example 0-light scene must use an unlit shader (standard 0 light = physically correct black):
+ * @example 0-light scene must use shadingModel:'unlit' (standard 0 light = physically correct black):
  *   const world = new World();
  *   // ... spawn cube + camera, no light ...
  *   await renderer.ready;
- *   renderer.draw(world); // standard material renders black; switch to an unlit shader (Materials.unlit(...)) for an unlit display
+ *   renderer.draw(world); // standard material renders black; switch to shadingModel:'unlit' for an unlit display
  */
 export const DirectionalLight = defineComponent(
   'DirectionalLight',

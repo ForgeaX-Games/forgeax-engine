@@ -97,31 +97,9 @@ world.spawn(
 
 **materials[0] 首 pass shader 必须是 `'forgeax::sprite'`**（否则 extract 入口 fire `sprite-instances-requires-sprite-shader`）。**不可与 `Instances` 同实体共存**（fire `sprite-instances-mutually-exclusive-with-instances`）。**`transforms.length / 16` 必须等于 `regions.length / 4`**（fire `sprite-instances-count-mismatch`）。三条错误码均收敛于 `EcsErrorCode` 闭合联合，AI 用户通过 `switch (err.code)` 在 `world.onError` 消费（charter P3 显式失败）。
 
-tilemap terrain 透明形态：AI 用户只用 `Tilemap + TileLayer { sortScope: 'layer' | 'per-cell' }`，engine 内部 extract system 自动把 `'layer'` 路径折叠为 `SpriteInstances` 桶（每 `(layer, chunk, atlas)` 一个），无需手挂 SpriteInstances。`'per-cell'` 路径保留 per-cell 派生 entity（Y-sort interleave 语义）。`world.spawn` 时 `sortScope` 字段须经 `encodeSortScope('per-cell')` 转 u8（ECS storage 形态），不要直接传字符串字面量；详 [`forgeax-engine-ecs`](../forgeax-engine-ecs/SKILL.md) `SortScope` union。
+tilemap terrain 透明形态：AI 用户只用 `Tilemap + TileLayer { sortScope: 'layer' | 'per-cell' }`，engine 内部 extract system 自动把 `'layer'` 路径折叠为 `SpriteInstances` 桶（每 `(layer, chunk, atlas)` 一个），无需手挂 SpriteInstances。`'per-cell'` 路径保留 per-cell 派生 entity（Y-sort interleave 语义）。
 
 详见 [`forgeax-engine-ecs` §SpriteInstances / TileLayer.sortScope](../forgeax-engine-ecs/SKILL.md#spriteinstances--tilelayersortscope-feat-20260625)（schema + 3 EcsErrorCode 详表）。
-
-### terrain 批绘路径细节（feat-20260630 SpriteInstances 静态批 + atlas fail-safe）
-
-`sortScope='layer'`（地形层）触发 SpriteInstances **批绘路径**——每 `(TileLayer, chunk, atlas)` 一个 SpriteInstances 实体，一帧一 drawcall 画完整个 chunk 的 N 个 tile。区别于 `'per-cell'`（每 tile 一个 ECS 实体，逐格 Y-sort）：
-
-| 维度 | `'layer'`（terrain 批绘） | `'per-cell'`（object Y-sort） |
-|:--|:--|:--|
-| 派生实体粒度 | 1 SpriteInstances entity per (chunk, atlas) | 1 entity per non-zero cell |
-| 材质缓存 | `atlasOnlyMaterialCache`（key=atlasId） | `atlasMaterialCache`（key=atlasId\|regionIndex） |
-| 材质 `paramValues.region` | 占位 `[0,0,1,1]`，draw 时被 shader `PER_INSTANCE_REGION=true` 变体忽略 | 烘焙真实 UV 矩形 |
-| 排序参与度 | 整 chunk 单一 LAYER_Y 键，render-system-fold 折叠到 layer 桶 | 每实体 posY 参与 transparent Y-sort |
-| 帧成本 | `O(visible chunks)` | `O(visible cells)` |
-
-**`atlasOnlyMaterialCache` 语义**：per-atlas 材质缓存——SpriteInstances 批绘共享同一 atlas 时复用同一 MaterialAsset handle，规避重复 register 开销。AI 用户**不直接接触**此 cache（charter P5 引擎侧 memoisation，AI 用户不可达）；测试通过模块导出的 reset helper 清缓存。
-
-**atlas 槽为空 fail-safe（P3 显式失败而非崩溃）**：若 `(layer, chunk)` 引用的 atlas GUID 未解析（资产未加载 / 拼写错 / handle 未就绪），extract system 给出 `materialHandle=0` 跳过该 SpriteInstances 的 draw call，**不**触发 panic / RHI 报错。AI 用户的可执行检查路径：
-
-1. Inspector（JSON-RPC WS:5732）→ `assets` root → 列出 TilesetAsset 节点 → 找未加载 atlas 的 GUID
-2. 或代码侧：`world.onError` 消费 `asset-handle-unresolved` 等错误码（`AssetErrorCode` 闭合 union）
-3. 修法：补 `.meta.json` 资产入口 + 等 handle 就绪后再 spawn Tilemap
-
-`PER_INSTANCE_REGION=true` shader 变体说明详见 [`forgeax-engine-shader`](../forgeax-engine-shader/SKILL.md) §PER_INSTANCE_REGION。
 
 ## 踩坑
 
@@ -281,7 +259,7 @@ const spriteMat: MaterialAsset = {
 
 ### Sprite-lit material：1 字符串切 per-light forward（feat-20260624 M1'）
 
-sprite material 的灯光选型是 `passes[0].shader` 字符串切换（材质分派的唯一判别式是 shader identity；`MaterialSnapshot.shadingModel` 字段已于 tweak-20260701 删除，不存在需要扩的 union）：`'forgeax::sprite'` 走 unlit 直采纹理（默认；任意灯光不影响），`'forgeax::sprite-lit'` 走 per-light forward + Half-Lambert squared diffuse + fragment-side hardcoded normal `vec3(0,0,1)`——**需场景至少 1 个 DirectionalLight / PointLight / SpotLight**，否则视觉全黑（与 3D `'standard'` 同理）。`paramSchema` 与 `forgeax::sprite` 字段集合 byte-identical（4 vec4 + 1 texture2d；BGL JSON byte-identical，AC-07）。OOS-1 normal-map 跟进 `feat-future-sprite-lit-normal-map`。
+sprite material 的灯光选型是 `passes[0].shader` 字符串切换，不扩 `MaterialSnapshot.shadingModel` 闭合 union（post-PR-#520 仍是 `'unlit' | undefined` 两档）：`'forgeax::sprite'` 走 unlit 直采纹理（默认；任意灯光不影响），`'forgeax::sprite-lit'` 走 per-light forward + Half-Lambert squared diffuse + fragment-side hardcoded normal `vec3(0,0,1)`——**需场景至少 1 个 DirectionalLight / PointLight / SpotLight**，否则视觉全黑（与 3D `'standard'` 同理）。`paramSchema` 与 `forgeax::sprite` 字段集合 byte-identical（4 vec4 + 1 texture2d；BGL JSON byte-identical，AC-07）。OOS-1 normal-map 跟进 `feat-future-sprite-lit-normal-map`。
 
 ```ts
 // 从 forgeax::sprite 切到 forgeax::sprite-lit：仅改 1 字符串
@@ -301,6 +279,7 @@ const spriteLitMat: MaterialAsset = {
 // 同帧场景须存在至少 1 盏灯，否则中心像素 R/G/B = 0：
 spawn(world, [Transform.identity(), DirectionalLight({ color: [1, 1, 1], intensity: 1 })]);
 ```
+
 
 ## 多套 UV -- `@location` 声明即 UV 套数 SSOT（clamp-to-last 埋名）
 

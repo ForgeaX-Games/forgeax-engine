@@ -77,7 +77,7 @@ const banned = [
   {
     code: 'AC-07-FIRSTMATERIAL-CAST',
     re: /firstMaterial\s+as\s+\{/,
-    hint: 'record must not cast `firstMaterial` to a structural type to access fields. The MaterialSnapshot type already declares `baseColorTexture?` / `sampler?` / `materialShaderId`; access them directly.',
+    hint: 'record must not cast `firstMaterial` to a structural type to access fields. The MaterialSnapshot type already declares `baseColorTexture?` / `sampler?` / `shadingModel` (M2 / w6); access them directly.',
   },
   {
     code: 'AC-07-BASECOLORHANDLE-LOCAL',

@@ -3936,7 +3936,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // not crash" — is preserved; the detection point has moved upstream.
   // Original test expected `shader-compile-failed` from the record stage.
   // After D-3, the material registered below has `kind:'material'` +
-  // `baseColor` but zero passes — the extract stage
+  // `shadingModel:'unlit'` + `baseColor` but zero passes — the extract stage
   // walks the parent chain (no parent), finds zero passes, and fires
   // `material-resolved-empty-passes` with `.detail.reason === 'no-pass-in-chain'`.
   describe('Renderer.draw(world) bug-20260519 zero-manifest mesh path (AC-03)', () => {
@@ -3997,6 +3997,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       // `material-resolved-empty-passes` reason='no-pass-in-chain'.
       const matHandle = world.allocSharedRef('MaterialAsset', {
         kind: 'material',
+        shadingModel: 'unlit',
         baseColor: [1, 0, 0, 1],
       });
       // feat-20260529 D-3: extract-stage errors (material-resolved-empty-passes)

@@ -105,9 +105,3 @@ packages/*/.forgeax-debug/
 
 # Template-local forgeax workspace prefs (layouts etc.) — per-project user state
 templates/game-default/.forgeax/
-
-# hello-asi-world terrain.json migrated to forgeax-engine-assets submodule as of
-# feat-20260630 (see apps/hello/asi-world/package.json#forgeax.publicAssetOverrides
-# and the inline publicAssetOverridesPlugin() in vite.config.ts). Prevents an
-# accidental re-add of the 14 MB copy into the engine repo.
-apps/hello/asi-world/public/world/terrain.json

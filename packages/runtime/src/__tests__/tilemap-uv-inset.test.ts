@@ -28,14 +28,7 @@
 import { Entity, World } from '@forgeax/engine-ecs';
 import { type MaterialAsset, type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import {
-  ChildOf,
-  encodeSortScope,
-  MeshRenderer,
-  TileLayer,
-  Tilemap,
-  Transform,
-} from '../components';
+import { ChildOf, MeshRenderer, TileLayer, Tilemap, Transform } from '../components';
 import { resolveAssetHandle } from '../resolve-asset-handle';
 import {
   resetTilemapChunkExtractCache,
@@ -88,10 +81,7 @@ function spawnAndExtract(
     )
     .unwrap();
   world.spawn(
-    {
-      component: TileLayer,
-      data: { tiles: layerTiles, layerOrder: 0, dirty: 1, sortScope: encodeSortScope('per-cell') },
-    },
+    { component: TileLayer, data: { tiles: layerTiles, layerOrder: 0, dirty: 1 } },
     { component: ChildOf, data: { parent: tilemap } },
   );
   resetTilemapChunkExtractCache();

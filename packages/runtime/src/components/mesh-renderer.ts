@@ -22,9 +22,8 @@
 // the asset discriminant, NOT on the component name).
 //
 // RenderSystem consumption: `render-system-extract.ts` runs ONE archetype
-// query (`world.query(MeshRenderer)`) and routes per entity by
-// `mat.materialShaderId` (shader identity) to the unlit.wgsl or pbr.wgsl
-// pipeline tag.
+// query (`world.query(MeshRenderer)`) and switches on `mat.shadingModel`
+// per entity to route to the unlit.wgsl or pbr.wgsl pipeline tag.
 
 import { defineComponent } from '@forgeax/engine-ecs';
 
@@ -32,9 +31,9 @@ import { defineComponent } from '@forgeax/engine-ecs';
  * Mesh renderer (ECS component, multi-material array).
  *
  * Stores `materials: readonly Handle<'MaterialAsset','shared'>[]`
- * (u32-stored array, indexed by submesh). The asset's `passes[].shader`
- * identity is the SSOT for which pipeline RenderSystem routes the entity
- * to (record stage dispatches on `materialShaderId`).
+ * (u32-stored array, indexed by submesh). The asset's `shadingModel`
+ * (`'unlit'` | `'standard'`) is the SSOT for which pipeline RenderSystem
+ * routes the entity to.
  *
  * Defaults map carries `materials: []` — this routes through the D-Q7
  * case B path (extract reads empty materials array -> defaultMaterialSnapshot
@@ -44,17 +43,18 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   world.spawn({ component: MeshRenderer, data: {} });
  *
  * @example Spawn an unlit-targeted entity:
- *   import { MeshRenderer, Materials } from '@forgeax/engine-runtime';
- *   const matPayload = engine.assets.catalog(matGuid, Materials.unlit([1, 0, 0, 1])).value;
- *   const matHandle = world.allocSharedRef('MaterialAsset', matPayload);
- *   world.spawn({ component: MeshRenderer, data: { materials: [matHandle] } });
+ *   import { AssetRegistry, MeshRenderer } from '@forgeax/engine-runtime';
+ *   const albedo = registry.register({
+ *     kind: 'material', shadingModel: 'unlit', baseColor: [1, 0, 0, 1],
+ *   }).unwrap();
+ *   world.spawn({ component: MeshRenderer, data: { materials: [albedo] } });
  *
  * @example Spawn a standard (PBR) entity:
- *   const matPayload = engine.assets.catalog(matGuid, Materials.standard({
- *     baseColor: [0.5, 0.5, 0.5, 1], metallic: 0, roughness: 0.4,
- *   })).value;
- *   const matHandle = world.allocSharedRef('MaterialAsset', matPayload);
- *   world.spawn({ component: MeshRenderer, data: { materials: [matHandle] } });
+ *   const rock = registry.register({
+ *     kind: 'material', shadingModel: 'standard', baseColor: [0.5, 0.5, 0.5, 1],
+ *     metallic: 0, roughness: 0.4,
+ *   }).unwrap();
+ *   world.spawn({ component: MeshRenderer, data: { materials: [rock] } });
  */
 export const MeshRenderer = defineComponent('MeshRenderer', {
   materials: { type: 'array<shared<MaterialAsset>>', default: [] },
