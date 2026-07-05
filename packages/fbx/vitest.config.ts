@@ -1,19 +1,8 @@
-import { defineProject } from 'vitest/config';
+import { defineConfig } from 'vitest/config';
 
-export default defineProject({
+export default defineConfig({
   test: {
+    include: ['src/**/*.test.ts', 'test/**/*.test.ts'],
     environment: 'node',
-    name: '@forgeax/engine-fbx',
-    typecheck: {
-      enabled: true,
-      tsconfig: './tsconfig.json',
-    },
-    include: [
-      'test/**/*.test.ts',
-      'test/**/*.test-d.ts',
-      'src/**/__tests__/**/*.test.ts',
-      'src/**/__tests__/**/*.test-d.ts',
-    ],
-    exclude: ['**/dist/**', '**/node_modules/**'],
   },
 });

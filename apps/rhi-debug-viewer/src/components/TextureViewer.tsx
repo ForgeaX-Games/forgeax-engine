@@ -28,13 +28,14 @@ import type { RhiCallEvent } from '@forgeax/engine-rhi-debug';
 import {
   bytesPerTexel,
   formatInfo,
+  readbackDrawRt,
   readbackTexturePixels,
   resolveTextureDescriptor,
 } from '@forgeax/engine-rhi-debug';
 import { renderRtToCanvas } from '@forgeax/engine-rhi-debug/rt-to-canvas';
 import { createShaderModule } from '@forgeax/engine-rhi-webgpu';
 import type { IDockviewPanelProps } from 'dockview-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { normalizeDepth } from '../depth-normalize';
 import { ensureReplaySession } from '../replay-session';
 import { useSelection } from '../selection-context';
@@ -42,6 +43,7 @@ import type { RtStatus } from '../selectors';
 import {
   rtCanvasAnchor,
   rtStatusAnchor,
+  texelInfoAnchor,
   textureSliceAnchor,
   textureThumbnailAnchor,
   textureViewerAnchor,
@@ -49,6 +51,7 @@ import {
 } from '../selectors';
 import { canvasToTexel } from '../texel-coord';
 import { decodeTexelRaw, decodeToRgba8 } from '../texel-decode';
+import { sampleScalar } from '../texel-scalar';
 import {
   isDepthFormat,
   readbackDepthAuto,
@@ -77,6 +80,11 @@ interface ThumbnailEntry {
 function hasStencil(format: string): boolean {
   return format.includes('stencil8');
 }
+
+// Stable empty singletons so useMemo dependencies don't churn when a tape / draw
+// is absent (a fresh [] each render would defeat the memoization).
+const EMPTY_EVENTS: readonly RhiCallEvent[] = [];
+const EMPTY_THUMBS: readonly ThumbnailEntry[] = [];
 
 // Array-sliceable dimensions: each slice is an independent 2D image selected via
 // baseArrayLayer. '3d' is excluded (its depth slices are not array layers and the
@@ -113,7 +121,39 @@ function isBoundPreviewable(dimension: string, format: string): boolean {
   return formatInfo(format) !== undefined || isDepthFormat(format);
 }
 
-function collectThumbnails(
+/**
+ * Stable, collision-free React key for a thumbnail button. `handleId` alone is
+ * NOT unique: a depth24plus-stencil8 attachment yields a Depth and a Stencil
+ * entry sharing the depthStencilViewHandleId, and across draws the same view
+ * handle can be a bound texture in one draw and the depth attachment in another
+ * (the CSM capture aliases textureView:1467 this way). Folding `kind` + list
+ * index keeps every entry distinct so React never reuses the wrong DOM node when
+ * the selected draw changes (bug #3: phantom depth thumbnail).
+ */
+export function thumbnailKey(thumb: ThumbnailEntry, index: number): string {
+  return `${thumb.kind}:${thumb.handleId}:${index}`;
+}
+
+/**
+ * Map the previously-selected thumbnail to the equivalent one in a new draw's
+ * thumbnail list, so stepping between draws KEEPS the texture kind the user was
+ * inspecting (bug #7: viewing Depth then stepping a draw used to snap back to
+ * Color RT, making depth look like it never updated per draw). Matches on kind +
+ * label (label disambiguates Depth vs Stencil and per-slot bound textures);
+ * falls back to 0 when the kind is absent in the new draw.
+ */
+export function preserveThumbIndex(
+  prev: readonly ThumbnailEntry[],
+  next: readonly ThumbnailEntry[],
+  prevIndex: number,
+): number {
+  const was = prev[prevIndex];
+  if (!was) return 0;
+  const found = next.findIndex((t) => t.kind === was.kind && t.label === was.label);
+  return found >= 0 ? found : 0;
+}
+
+export function collectThumbnails(
   draw: DrawEntry,
   events: readonly RhiCallEvent[],
 ): readonly ThumbnailEntry[] {
@@ -301,25 +341,37 @@ export function TextureViewer(_props: IDockviewPanelProps) {
   // to its texture dimensions (`dims`, set when a preview paints).
   const [zoom, setZoom] = useState<Zoom>('fit');
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
-  // texel picker: texel coordinate under cursor + raw RGBA (float, no clamp per D-4).
+  // texel picker: texel coordinate under cursor + the value there. Color textures
+  // carry raw RGBA (float, no clamp per D-4); depth/stencil carry a single scalar.
   const [texelInfo, setTexelInfo] = useState<{
     x: number;
     y: number;
-    r: number;
-    g: number;
-    b: number;
-    a: number;
+    rgba?: readonly [number, number, number, number];
+    scalar?: number;
+    scalarLabel?: 'depth' | 'stencil';
   } | null>(null);
-  // Cached raw readback bytes for the current preview, used by D-4 raw byte bypass.
+  // Cached raw readback bytes for the current color preview (D-4 raw byte bypass).
   const rawPixelsRef = useRef<{ bytes: Uint8Array; format: string } | null>(null);
+  // Cached tight scalar array for the current depth/stencil preview (bug #4 readout).
+  const rawScalarRef = useRef<{
+    data: Float32Array;
+    w: number;
+    h: number;
+    label: 'depth' | 'stencil';
+  } | null>(null);
+  // Auto-normalize window of the current depth/stencil preview. Surfaced in the
+  // header so the per-draw depth change is legible even though the grayscale is
+  // re-stretched to [0,1] each readback (bug #7).
+  const [scalarStats, setScalarStats] = useState<{
+    min: number;
+    max: number;
+    label: 'depth' | 'stencil';
+  } | null>(null);
 
-  /** Handle canvas mousemove: map to texel -> decode raw RGBA via D-4 bypass. */
+  /** Handle canvas mousemove: map to texel -> raw color RGBA or depth/stencil scalar. */
   function handleCanvasMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
     const canvas = canvasRef.current;
     if (!canvas || !selected || !dims) return;
-
-    // Depth/stencil textures: no per-pixel RGBA (single channel scalars, AC-11 limited to color).
-    if (selected.kind === 'depth' || selected.kind === 'stencil') return;
 
     const rect = canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
@@ -331,34 +383,65 @@ export function TextureViewer(_props: IDockviewPanelProps) {
       return;
     }
 
+    // Depth / Stencil: single-channel scalar readout (bug #4). Report the raw
+    // value from the tight scalar array, not the normalized grayscale.
+    if (selected.kind === 'depth' || selected.kind === 'stencil') {
+      const s = rawScalarRef.current;
+      const value = s ? sampleScalar(s.data, s.w, s.h, coord.x, coord.y) : null;
+      setTexelInfo(
+        value === null
+          ? { x: coord.x, y: coord.y }
+          : {
+              x: coord.x,
+              y: coord.y,
+              scalar: value,
+              scalarLabel: s?.label ?? 'depth',
+            },
+      );
+      return;
+    }
+
     const raw = rawPixelsRef.current;
     if (!raw) {
       // No cached raw bytes yet — show coordinate only.
-      setTexelInfo({ x: coord.x, y: coord.y, r: 0, g: 0, b: 0, a: 0 });
+      setTexelInfo({ x: coord.x, y: coord.y });
       return;
     }
 
     const rgba = decodeTexelRaw(raw.bytes, raw.format, dims.w, dims.h, coord.x, coord.y);
-    if (!rgba) {
-      setTexelInfo({ x: coord.x, y: coord.y, r: 0, g: 0, b: 0, a: 0 });
-      return;
-    }
-
-    setTexelInfo({ x: coord.x, y: coord.y, r: rgba[0], g: rgba[1], b: rgba[2], a: rgba[3] });
+    setTexelInfo(rgba ? { x: coord.x, y: coord.y, rgba } : { x: coord.x, y: coord.y });
   }
 
   const noDraw = !vm || selectedDrawIdx < 0 || selectedDrawIdx >= vm.draws.length;
   const draw = noDraw ? undefined : (vm as ViewModel).draws[selectedDrawIdx];
-  const thumbnails = draw ? collectThumbnails(draw, tape?.events ?? []) : [];
+  // Memoize so `thumbnails` (and thus `selected`) keep a STABLE identity across
+  // re-renders. Without this, collectThumbnails returned fresh objects every
+  // render, so the preview effect (which depends on `selected`) re-fired on every
+  // setTexelInfo -> it wiped texelInfo one frame later and re-ran the GPU replay
+  // per mouse move (bug #1: pixel info flashed once then vanished). `draw` comes
+  // from the FrameModel and only changes when the selection/tape changes.
+  const events = tape?.events ?? EMPTY_EVENTS;
+  const thumbnails = useMemo(
+    () => (draw ? collectThumbnails(draw, events) : EMPTY_THUMBS),
+    [draw, events],
+  );
   const selected = thumbnails[selectedThumb];
   const slices = selected ? sliceCount(selected.dimension ?? '2d', selected.arrayLayers ?? 1) : 1;
 
-  // Reset thumbnail selection when the draw changes so we don't index past the
-  // new draw's thumbnail count.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on draw change only
+  // When the draw changes, remap the selection to the SAME texture kind in the new
+  // draw (bug #7): stepping draws while inspecting Depth used to snap back to Color
+  // RT, so depth looked like it never updated per draw. prevThumbsRef holds the
+  // list the current selectedThumb indexes into; on a draw change we reconcile.
+  const prevThumbsRef = useRef<readonly ThumbnailEntry[]>(thumbnails);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reconcile only on draw change; thumbnails read via ref
   useEffect(() => {
-    setSelectedThumb(0);
+    setSelectedThumb((idx) => preserveThumbIndex(prevThumbsRef.current, thumbnails, idx));
+    // eslint react-hooks: thumbnails intentionally excluded (see comment)
   }, [selectedDrawIdx]);
+  // Keep the ref current for the NEXT draw-change reconciliation.
+  useEffect(() => {
+    prevThumbsRef.current = thumbnails;
+  }, [thumbnails]);
 
   // Reset the slice selector when the selected thumbnail changes (a different
   // texture has a different slice count).
@@ -376,6 +459,21 @@ export function TextureViewer(_props: IDockviewPanelProps) {
     const markDims = (w: number, h: number) =>
       setDims((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
 
+    // Cache a depth/stencil preview's tight scalar array + its auto-normalize
+    // window so the picker reports the raw value (bug #4) and the header shows the
+    // per-draw range (bug #7). The readback buffer is tight (stride = width).
+    const cacheScalar = (
+      data: Float32Array,
+      w: number,
+      h: number,
+      label: 'depth' | 'stencil',
+      min: number,
+      max: number,
+    ) => {
+      rawScalarRef.current = { data, w, h, label };
+      setScalarStats({ min, max, label });
+    };
+
     // Seed the optimistic status synchronously so the data-forgeax-rt-status
     // anchor is meaningful before the async replay resolves (the real paint is
     // confirmed by polling canvas pixels). Cleared message until render decides.
@@ -383,7 +481,9 @@ export function TextureViewer(_props: IDockviewPanelProps) {
     setStatus(deriveInitialStatus(selected));
     setMessage(null);
     setTexelInfo(null);
+    setScalarStats(null);
     rawPixelsRef.current = null;
+    rawScalarRef.current = null;
 
     async function render() {
       if (!tape || !draw || !selected) {
@@ -460,6 +560,22 @@ export function TextureViewer(_props: IDockviewPanelProps) {
         }
         // renderRtToCanvas resizes the canvas drawing buffer to the RT dims.
         if (canvas.width > 0 && canvas.height > 0) markDims(canvas.width, canvas.height);
+        // Cache raw RT bytes for the texel picker (bug #2: the color-RT path used to
+        // discard pixels, so hover always read 0). readbackDrawRt is the SSOT readback
+        // renderRtToCanvas already runs; the RT format is the REAL attachment format
+        // (bgra8unorm on this platform), not the thumbnail's hard-coded 'rgba8unorm'.
+        const rtDesc =
+          draw.colorAttachmentHandleId !== undefined
+            ? resolveTextureDescriptor(tape.events, draw.colorAttachmentHandleId)
+            : null;
+        const rtReadback = await readbackDrawRt(replay, selectedDrawIdx, device);
+        if (cancelled) return;
+        if (rtReadback.ok) {
+          rawPixelsRef.current = {
+            bytes: rtReadback.value.pixels,
+            format: rtDesc?.format ?? 'rgba8unorm',
+          };
+        }
         setStatus('ok');
         setMessage(null);
         return;
@@ -498,7 +614,13 @@ export function TextureViewer(_props: IDockviewPanelProps) {
               layer,
             );
             if (cancelled) return;
-            const { data } = normalizeDepth(depth.buffer, desc.width, desc.height, desc.width * 4);
+            const { data, min, max } = normalizeDepth(
+              depth.buffer,
+              desc.width,
+              desc.height,
+              desc.width * 4,
+            );
+            cacheScalar(new Float32Array(depth.buffer), desc.width, desc.height, 'depth', min, max);
             const painted = paintDepthGrayscale(canvas, data, desc.width, desc.height);
             if (painted) markDims(desc.width, desc.height);
             setStatus(painted ? 'ok' : 'error');
@@ -562,7 +684,13 @@ export function TextureViewer(_props: IDockviewPanelProps) {
           // Widen u8 -> f32 so normalizeDepth (min/max stretch) applies uniformly.
           const f = new Float32Array(stencil.length);
           for (let i = 0; i < stencil.length; i++) f[i] = stencil[i] ?? 0;
-          const { data } = normalizeDepth(f.buffer, desc.width, desc.height, desc.width * 4);
+          const { data, min, max } = normalizeDepth(
+            f.buffer,
+            desc.width,
+            desc.height,
+            desc.width * 4,
+          );
+          cacheScalar(f, desc.width, desc.height, 'stencil', min, max);
           const painted = paintDepthGrayscale(canvas, data, desc.width, desc.height);
           if (painted) markDims(desc.width, desc.height);
           setStatus(painted ? 'ok' : 'error');
@@ -589,7 +717,13 @@ export function TextureViewer(_props: IDockviewPanelProps) {
         );
         if (cancelled) return;
         // Both paths return a tight Float32Array (stride = width) -> width*4 bytes.
-        const { data } = normalizeDepth(depth.buffer, desc.width, desc.height, desc.width * 4);
+        const { data, min, max } = normalizeDepth(
+          depth.buffer,
+          desc.width,
+          desc.height,
+          desc.width * 4,
+        );
+        cacheScalar(new Float32Array(depth.buffer), desc.width, desc.height, 'depth', min, max);
         const painted = paintDepthGrayscale(canvas, data, desc.width, desc.height);
         if (painted) markDims(desc.width, desc.height);
         setStatus(painted ? 'ok' : 'error');
@@ -605,6 +739,9 @@ export function TextureViewer(_props: IDockviewPanelProps) {
     return () => {
       cancelled = true;
     };
+    // `selected` / `draw` now have STABLE identity (thumbnails is useMemo'd), so
+    // depending on them no longer re-fires per mouse move (bug #1). selectedSlice
+    // covers the cube/array layer selector.
   }, [tape, draw, selected, selectedDrawIdx, selectedSlice]);
 
   // Reset zoom to fit when the selected texture changes (different size, fresh view).
@@ -638,7 +775,7 @@ export function TextureViewer(_props: IDockviewPanelProps) {
         ) : (
           thumbnails.map((t, i) => (
             <button
-              key={t.handleId}
+              key={thumbnailKey(t, i)}
               type="button"
               onClick={() => setSelectedThumb(i)}
               className={`w-full text-left p-1 rounded text-xs border transition-colors ${
@@ -686,10 +823,26 @@ export function TextureViewer(_props: IDockviewPanelProps) {
                   {dims.w}&times;{dims.h}
                 </span>
               )}
+              {/* Auto-normalize window for depth/stencil so the per-draw depth change
+                  is legible even though the grayscale is re-stretched each readback
+                  (bug #7): the range shifts across draws even when the image looks static. */}
+              {scalarStats && (
+                <span className="text-xs text-muted-foreground font-mono">
+                  {scalarStats.label} range [{scalarStats.min.toFixed(4)},{' '}
+                  {scalarStats.max.toFixed(4)}]
+                </span>
+              )}
               {texelInfo && (
-                <span className="text-xs text-foreground font-mono">
-                  ({texelInfo.x},{texelInfo.y}) R:{texelInfo.r.toFixed(3)} G:
-                  {texelInfo.g.toFixed(3)} B:{texelInfo.b.toFixed(3)} A:{texelInfo.a.toFixed(3)}
+                <span
+                  className="text-xs text-foreground font-mono"
+                  {...{ [texelInfoAnchor()]: '' }}
+                >
+                  ({texelInfo.x},{texelInfo.y}){' '}
+                  {texelInfo.rgba
+                    ? `R:${texelInfo.rgba[0].toFixed(3)} G:${texelInfo.rgba[1].toFixed(3)} B:${texelInfo.rgba[2].toFixed(3)} A:${texelInfo.rgba[3].toFixed(3)}`
+                    : texelInfo.scalar !== undefined
+                      ? `${texelInfo.scalarLabel}:${texelInfo.scalar.toFixed(6)}`
+                      : ''}
                 </span>
               )}
               <span

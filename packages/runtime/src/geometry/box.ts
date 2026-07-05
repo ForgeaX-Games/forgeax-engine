@@ -153,8 +153,7 @@ export function meshFromInterleaved(
     // Procedural meshes carry their own local-space AABB: after feat-20260614
     // (D-15) `allocSharedRef` stores the payload verbatim -- there is no
     // `withMeshAabb` pass like the old `register`/`catalog` path -- so the cull
-    // + pick path can only read an AABB the POD already holds. (Builtin meshes
-    // strip this back out at construction; see builtin-asset-registry.)
+    // + pick path can only read an AABB the POD already holds.
     aabb: aabbFromPositions(positions),
   };
 }

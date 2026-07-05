@@ -696,18 +696,59 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
   }
 
   const shader = ctx?.skinned === true ? 'forgeax::pbr-skin' : 'forgeax::default-standard-pbr';
-  const passes: readonly MaterialPassDescriptor[] = [
-    {
-      name: 'Forward',
-      shader,
-      tags: { LightMode: 'Forward' },
-      queue: 2000 as RenderQueue,
+
+  // UV-set tiling: glTF `baseColorTexture.texCoord` selects which vertex UV set
+  // the material's textures sample. The built-in PBR now declares a second UV
+  // set (@location(6) uv1) and honors a per-material `uvSet` selector in the
+  // material UBO (feat-city-glb multi-UV tiling). We emit the selector when the
+  // material samples a non-zero set (default 0 -> set 0, byte-identical to the
+  // prior single-UV path). A single per-material selector suffices: within a
+  // glTF material every textured slot shares one texCoord in practice (verified
+  // on the UE5 city_Sample asset -- 433/452 materials at texCoord=1, zero with
+  // slots split across sets); glTF's theoretical per-slot texCoord divergence is
+  // a future extension. Sets >=2 clamp to set 1 (the shader forwards uv0/uv1).
+  if (mat.baseColorTexCoord !== undefined && mat.baseColorTexCoord > 0) {
+    paramValues.uvSet = mat.baseColorTexCoord;
+  }
+
+  // feat: map glTF alphaMode to render state. BLEND -> straight (non-
+  // premultiplied) alpha blend + Transparent queue (glTF BLEND is straight
+  // alpha; the PBR fs outputs baseColor.a * sample.a un-premultiplied). The
+  // presence of renderState.blend is the runtime's SSOT for transparent
+  // routing (back-to-front sort + composite). OPAQUE / MASK stay in the
+  // opaque Geometry queue. (MASK alpha-testing needs a shader discard the
+  // built-in PBR does not yet implement; routed opaque for now.)
+  const isBlend = mat.alphaMode === 'BLEND';
+  const straightAlphaBlend = {
+    color: {
+      srcFactor: 'src-alpha' as const,
+      dstFactor: 'one-minus-src-alpha' as const,
+      operation: 'add' as const,
     },
-  ];
+    alpha: {
+      srcFactor: 'one' as const,
+      dstFactor: 'one-minus-src-alpha' as const,
+      operation: 'add' as const,
+    },
+  };
+
+  // feat-city-glb Bug 5: transparent (BLEND) materials read but do NOT write
+  // depth (`depthWriteEnabled: false`), matching the engine's own transparent
+  // convention (learn-render 4.3 blending window material). glTF decals are
+  // frequently coplanar with the opaque surface they overlay (e.g. a crosswalk
+  // decal on the road); writing depth would z-fight / self-occlude. Back-to-
+  // front ordering is handled by the Transparent queue + transparent sort.
+  const pass: MaterialPassDescriptor = {
+    name: 'Forward',
+    shader,
+    tags: { LightMode: 'Forward' },
+    queue: (isBlend ? 3000 : 2000) as RenderQueue,
+    ...(isBlend ? { renderState: { blend: straightAlphaBlend, depthWriteEnabled: false } } : {}),
+  };
 
   return {
     kind: 'material',
-    passes,
+    passes: [pass],
     paramValues,
   };
 }

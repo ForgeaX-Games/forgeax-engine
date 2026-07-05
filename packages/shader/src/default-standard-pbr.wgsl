@@ -98,10 +98,17 @@ struct Material {
   aoChannel          : f32,
   extraChannel       : f32,
   // vec3 align=16 inserts 8 implicit padding bytes after extraChannel
-  // (offsets 40..48) so emissive lands at offset 48; total UBO = 80 B.
+  // (offsets 40..48) so emissive lands at offset 48.
   emissive           : vec3<f32>,
   emissiveIntensity  : f32,
   occlusionStrength  : f32,
+  // feat-city-glb multi-UV tiling: per-material UV-set selector. glTF
+  // `baseColorTexture.texCoord` (and the sibling MR/normal slots, which share
+  // it per material in practice) chooses which vertex UV set the textures
+  // sample. 0.0 -> set 0 (in.uv), >=0.5 -> set 1 (in.uv1). Lands at offset 68;
+  // the struct still rounds to 80 B (alignUp(72,16)=80), so the material UBO /
+  // BGL minBindingSize is byte-stable versus the pre-selector layout.
+  uvSet              : f32,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -170,6 +177,12 @@ struct VsIn  {
   @location(1) normal  : vec3<f32>,
   @location(2) uv      : vec2<f32>,
   @location(3) tangent : vec4<f32>,
+  // feat-city-glb multi-UV tiling: second UV set at location 6 (canonical
+  // D-4 numbering, set 0 stays at location 2). Declaring it flips naga's
+  // @location reflection to uvSetCount=2, which drives deriveVertexBufferLayout
+  // to bind set 1 (clamp-to-last aliases uv1 onto uv0 for single-UV meshes, so
+  // the interleaved stride stays 48 B and single-UV content is byte-identical).
+  @location(6) uv1     : vec2<f32>,
 };
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
@@ -178,11 +191,10 @@ struct VsOut {
   @location(2) uv : vec2<f32>,
   @location(3) worldTangent : vec4<f32>,
   @location(4) @interpolate(flat) instanceIdx : u32,
-  // feat-20260629-multi-uv-set-support (user decision): built-in PBR consumes
-  // a single UV set only -- the engine still feeds extra UV sets to custom
-  // material shaders that declare @location(6+), but the built-in PBR does not
-  // declare/consume them. @location(5) stays intentionally vacant to keep
-  // @location(6)/(7) byte-stable with the prior layout (CSM M5/w19).
+  // feat-city-glb multi-UV tiling: second UV set inter-stage varying. Uses the
+  // previously-vacant @location(5) so @location(6)/(7) stay byte-stable with
+  // the prior layout (CSM M5/w19).
+  @location(5) uv1 : vec2<f32>,
   @location(6) ndc : vec3<f32>,  // NDC for HDRP cluster lookup (w10)
   // feat-20260609-hdrp-cluster-fragment-ggx M4.5-followup: view-space z is
   // needed by ndc_position_to_cluster (slice index uses log-z mapping that
@@ -245,6 +257,7 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   let worldTangentXyz = normalize((entityWorld * instanceLocal * vec4<f32>(in.tangent.xyz, 0.0)).xyz);
   out.worldTangent = vec4<f32>(worldTangentXyz, in.tangent.w);
   out.uv = in.uv;
+  out.uv1 = in.uv1;
   out.instanceIdx = idx;
   // feat-20260613-csm-cascaded-shadow-maps M5 / w19: the per-fragment
   // light-space position varying is gone; evalDirectional computes
@@ -262,25 +275,31 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   return out;
 }
 
+// feat-city-glb multi-UV tiling: pick the vertex UV set the material's textures
+// sample. `material.uvSet` is a per-material selector (glTF baseColorTexture
+// .texCoord). 0 -> set 0, >=0.5 -> set 1. For single-UV meshes deriveVertex
+// BufferLayout aliases uv1 onto uv0, so in.uv1 == in.uv and the default
+// selector (0) is byte-identical to the pre-selector path. All texture slots
+// share the selected set: within a glTF material every textured slot uses the
+// same texCoord in practice (verified on the UE5 city_Sample asset), so a
+// single selector is sufficient. Per-slot texCoord divergence is a future
+// extension.
+fn selectUv(in : VsOut) -> vec2<f32> {
+  return select(in.uv, in.uv1, material.uvSet >= 0.5);
+}
+
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let baseSample = textureSample(baseColorTexture, baseColorSampler, in.uv);
+  let uv = selectUv(in);
+  let baseSample = textureSample(baseColorTexture, baseColorSampler, uv);
   let albedo = material.baseColor.rgb * baseSample.rgb;
-
-  // feat-20260629-multi-uv-set-support (user decision): the built-in PBR
-  // shader samples a single UV set (`in.uv`) only. Multi-UV consumption is a
-  // custom-material concern -- a shader that wants a second UV set declares
-  // @location(6) uv1 itself (see apps/hello-multi-uv multi-uv-demo.wgsl); the
-  // engine feeds the extra sets via deriveVertexBufferLayout's reflection-driven
-  // attribute emission. The built-in PBR opting out keeps every existing
-  // single-UV material byte-identical (AC-11/AC-12 zero regression).
 
   // Metallic-roughness texture sampling with per-field channel selectors
   // (D-8): glTF 2.0 default layout B=metallic, G=roughness, R=occlusion is
   // encoded by the host as 4 independent f32 selectors in the merged UBO
   // (metallicChannel/roughnessChannel/aoChannel/extraChannel). Cast to u32
   // at the pick_channel call site; values stay in {0,1,2,3}.
-  let mrSample = textureSample(metallicRoughnessTexture, metallicRoughnessSampler, in.uv);
+  let mrSample = textureSample(metallicRoughnessTexture, metallicRoughnessSampler, uv);
   let metallic = material.metallic * pick_channel(mrSample, u32(material.metallicChannel));
   let roughnessTex = pick_channel(mrSample, u32(material.roughnessChannel));
 
@@ -298,7 +317,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // TBN basis composed via forgeax_pbr::tbn helpers; default fallback
   // (defaultNormalTextureView) RG=(128,128) -> tangent (0,0,1) -> world n
   // unchanged.
-  let normSampleRg = textureSample(normalTexture, normalSampler, in.uv).rg;
+  let normSampleRg = textureSample(normalTexture, normalSampler, uv).rg;
   let normTangent = decodeTangentSpaceNormalRg(normSampleRg);
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 
@@ -341,7 +360,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     n, v, iblRoughness, f0,
     prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
   );
-  let aoSample = textureSample(occlusionTexture, occlusionSampler, in.uv);
+  let aoSample = textureSample(occlusionTexture, occlusionSampler, uv);
   let ao = mix(1.0, aoSample.r, material.occlusionStrength);
   // feat-20260612-hdrp-ssao M7 round-2: `var` (mutable) so the
   // CLUSTER_FORWARD_AVAILABLE branch below can `ambient *=` the SSAO
@@ -431,7 +450,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     }
   }
 #endif // CLUSTER_FORWARD_AVAILABLE
-  let emissiveSample = textureSample(emissiveTexture, emissiveSampler, in.uv).rgb;
+  let emissiveSample = textureSample(emissiveTexture, emissiveSampler, uv).rgb;
   color = color + material.emissive * material.emissiveIntensity * emissiveSample;
   return vec4<f32>(color, material.baseColor.a * baseSample.a);
 }
@@ -464,24 +483,25 @@ struct GBufferOutput {
 /// multi-entry support (passKind='deferred' selects `fs_gbuffer`).
 @fragment
 fn fs_gbuffer(in : VsOut) -> GBufferOutput {
-  let baseSample = textureSample(baseColorTexture, baseColorSampler, in.uv);
+  let uv = selectUv(in);
+  let baseSample = textureSample(baseColorTexture, baseColorSampler, uv);
   let albedo = material.baseColor.rgb * baseSample.rgb;
 
-  let mrSample = textureSample(metallicRoughnessTexture, metallicRoughnessSampler, in.uv);
+  let mrSample = textureSample(metallicRoughnessTexture, metallicRoughnessSampler, uv);
   let metallic = material.metallic * pick_channel(mrSample, u32(material.metallicChannel));
   let roughnessTex = pick_channel(mrSample, u32(material.roughnessChannel));
 
   var a = max(material.roughness, 0.04);
   a = a * roughnessTex;
 
-  let normSampleRg = textureSample(normalTexture, normalSampler, in.uv).rg;
+  let normSampleRg = textureSample(normalTexture, normalSampler, uv).rg;
   let normTangent = decodeTangentSpaceNormalRg(normSampleRg);
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 
-  let emissiveSample = textureSample(emissiveTexture, emissiveSampler, in.uv).rgb;
+  let emissiveSample = textureSample(emissiveTexture, emissiveSampler, uv).rgb;
   let emissive = material.emissive * material.emissiveIntensity * emissiveSample;
 
-  let aoSample = textureSample(occlusionTexture, occlusionSampler, in.uv);
+  let aoSample = textureSample(occlusionTexture, occlusionSampler, uv);
   let ao = mix(1.0, aoSample.r, material.occlusionStrength);
 
   var out : GBufferOutput;

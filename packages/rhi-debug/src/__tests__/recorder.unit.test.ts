@@ -710,7 +710,7 @@ describe('finalize golden byte comparison (w4)', () => {
     }
   });
 
-  it('report.json compact format -- no newlines', async () => {
+  it('report.json is pretty-printed -- human-readable multi-line', async () => {
     const { debugInst } = await bootstrap();
     const adapter = await getAdapter(debugInst);
     const device = await getDevice(adapter);
@@ -723,7 +723,9 @@ describe('finalize golden byte comparison (w4)', () => {
     if (res.ok) {
       const fs = await import('node:fs');
       const reportRaw = fs.readFileSync(res.value.reportPath, 'utf-8');
-      expect(reportRaw).not.toContain('\n');
+      // Pretty-printed for humans debugging captures; must still parse back.
+      expect(reportRaw).toContain('\n');
+      expect(() => JSON.parse(reportRaw)).not.toThrow();
 
       const path = await import('node:path');
       const dir = path.dirname(res.value.tapePath);

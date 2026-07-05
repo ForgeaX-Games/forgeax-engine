@@ -9,11 +9,6 @@ import type { MeshPod } from '@forgeax/engine-types';
 import { parseMesh } from '../src/parse-mesh.js';
 import type { FbxRawMesh } from '../src/parse-mesh.js';
 
-const CUBE_FBX_PATH = new URL(
-  '../../../forgeax-engine-assets/vendor/fbx-test/cube.fbx',
-  import.meta.url,
-).pathname;
-
 /** Mock bridge input: a single FbxRawMesh + sourceIndex=0. */
 const MOCK_CUBE_RAW: FbxRawMesh = {
   name: 'Cube',
@@ -42,25 +37,6 @@ const MOCK_CUBE_RAW: FbxRawMesh = {
   sourceIndex: 0,
   materialIndex: -1,
 };
-
-describe.runIf(!!process.env.FBX_BINDING_BUILT)('parseMesh real binding', () => {
-  it('cube.fbx -> MeshPod via binding + bridge', () => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
-    const binding = require('../build/Release/fbx_binding.node');
-    const json = JSON.parse(binding.parseFbx(CUBE_FBX_PATH) as string) as {
-      meshes: FbxRawMesh[];
-    };
-    const pods = (json.meshes ?? []).map((raw, i) => parseMesh(raw, i));
-    expect(pods.length).toBe(1);
-    const pod = pods[0]!;
-    expect(pod.submeshes.length).toBe(1);
-    expect(pod.submeshes[0]!.topology).toBe('triangle-list');
-    // cube.fbx has 8 control points, 24 floats.
-    expect(pod.vertices.length).toBe(24);
-    expect(pod.indices).toBeDefined();
-    expect((pod.indices as Uint16Array).length).toBeGreaterThan(0);
-  });
-});
 
 describe('parseMesh mock path', () => {
   it('parses mock cube FbxRawMesh to MeshPod', () => {

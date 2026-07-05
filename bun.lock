@@ -1,6 +1,6 @@
 {
   "lockfileVersion": 1,
-  "configVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "forgeax-engine",
@@ -1035,6 +1035,31 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/learn-render/3.model-loading/2.city-glb": {
+      "name": "@forgeax/app-learn-render-3-model-loading-2-city-glb",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-gltf": "workspace:*",
+        "@forgeax/engine-input": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-remote": "workspace:*",
+        "@forgeax/engine-rhi-debug": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-image": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/learn-render/4.advanced-opengl/1.depth-testing": {
       "name": "@forgeax/app-learn-render-4-advanced-opengl-1-depth-testing",
       "version": "0.0.0",
@@ -1843,7 +1868,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-types": "workspace:*",
-        "node-addon-api": "^8.0.0",
       },
       "devDependencies": {
         "@types/node": "^20.14.0",
@@ -2478,6 +2502,8 @@
     "@forgeax/app-learn-render-2-lighting-6-multiple-lights": ["@forgeax/app-learn-render-2-lighting-6-multiple-lights@workspace:apps/learn-render/2.lighting/6.multiple-lights"],
 
     "@forgeax/app-learn-render-3-model-loading-1-model-loading": ["@forgeax/app-learn-render-3-model-loading-1-model-loading@workspace:apps/learn-render/3.model-loading/1.model-loading"],
+
+    "@forgeax/app-learn-render-3-model-loading-2-city-glb": ["@forgeax/app-learn-render-3-model-loading-2-city-glb@workspace:apps/learn-render/3.model-loading/2.city-glb"],
 
     "@forgeax/app-learn-render-4-advanced-opengl-1-depth-testing": ["@forgeax/app-learn-render-4-advanced-opengl-1-depth-testing@workspace:apps/learn-render/4.advanced-opengl/1.depth-testing"],
 
@@ -3318,8 +3344,6 @@
     "nanoid": ["nanoid@3.3.12", "", { "bin": { "nanoid": "bin/nanoid.cjs" } }, "sha512-ZB9RH/39qpq5Vu6Y+NmUaFhQR6pp+M2Xt76XBnEwDaGcVAqhlvxrl3B2bKS5D3NH3QR76v3aSrKaF/Kiy7lEtQ=="],
 
     "neo-async": ["neo-async@2.6.2", "", {}, "sha512-Yd3UES5mWCSqR+qNT93S3UoYUkqAZ9lLg8a7g9rimsWmYGK8cVToA4/sF3RrshdyV3sAGMXVUmpMYOw+dLpOuw=="],
-
-    "node-addon-api": ["node-addon-api@8.8.0", "", {}, "sha512-c5Ko1fZJIJmzhFIkhRN76WTq+fC6tWnGy9CXA0fA+XygsWZmEwG8vmbkNqxMyoaa0Tin4djul49NzdVcJJcjeA=="],
 
     "node-releases": ["node-releases@2.0.44", "", {}, "sha512-5WUyunoPMsvvEhS8AxHtRzP+oA8UCkJ7YRxatWKjngndhDGLiqEVAQKWjFAiAiuL8zMRGzGSJxFnLetoa43qGQ=="],
 

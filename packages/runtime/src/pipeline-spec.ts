@@ -469,7 +469,8 @@ export type BglKind =
   | 'unlit-material'
   | 'hdrp-7-slot'
   | 'fullscreen-post'
-  | 'fullscreen-post-with-params';
+  | 'fullscreen-post-with-params'
+  | 'fullscreen-post-with-scene-depth';
 
 /**
  * Output shape of {@link buildBindGroupLayoutDescriptor}: matches the RHI
@@ -493,7 +494,7 @@ const GPU_SHADER_STAGE_FRAGMENT = 0x2;
 
 /**
  * Build a `GPUBindGroupLayoutDescriptor` from a PipelineSpec, dispatching on
- * `options.kind` to one of 8 closed BGL shapes (D-13 round-2).
+ * `options.kind` to one of 9 closed BGL shapes (D-13 round-2).
  *
  * Shader-derived kinds (`'pbr-material-merged'` / `'unlit-material'` /
  * `'hdrp-7-slot'`) require `options.registry` to look up the shader entry
@@ -694,6 +695,35 @@ export function buildBindGroupLayoutDescriptor(
             binding: 2,
             visibility: GPU_SHADER_STAGE_FRAGMENT,
             buffer: { type: 'uniform' },
+          },
+        ],
+      };
+    }
+    case 'fullscreen-post-with-scene-depth': {
+      // plan-strategy D-3: 5-entry BGL for post-process passes that read the
+      // camera scene depth. color@0 + sampler@1 reuse buildFullscreenPostInputEntries
+      // (float+filtering for color). depthTex@3 uses `sampleType: 'depth'` and
+      // `dimension: '2d'`; depthSampler@4 uses `type: 'non-filtering'` (nearest
+      // + clamp-to-edge, D-2 — NOT comparison). params@2 is always present
+      // (uniform) to avoid a 2x2 kind explosion per D-3.
+      return {
+        label: 'fullscreen-post-with-scene-depth-bgl',
+        entries: [
+          ...buildFullscreenPostInputEntries(spec),
+          {
+            binding: 2,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            buffer: { type: 'uniform' },
+          },
+          {
+            binding: 3,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            texture: { sampleType: 'depth', viewDimension: '2d' },
+          },
+          {
+            binding: 4,
+            visibility: GPU_SHADER_STAGE_FRAGMENT,
+            sampler: { type: 'non-filtering' },
           },
         ],
       };
@@ -1261,6 +1291,24 @@ const TRI_GEOMETRY = {
   vertexLayout: PROCEDURAL_ATTR_LAYOUT,
 };
 
+// feat-city-glb multi-UV tiling: the built-in standard PBR shader now declares
+// a second UV set (@location(6) uv1), so naga reflects uvSetCount=2 for it and
+// the URP record path threads `shaderUvSetCount: 2` into every standard-pbr
+// spec (createRenderer.ts buildPipelineContext / getMaterialShaderPipeline).
+// The boot-time prewarm must match on BOTH axes or it is useless: (1) the PSO
+// vertex layout must include @location(6) or CreateRenderPipeline rejects the
+// standard-pbr module (slot 6 absent from VertexState); (2) the cacheKey must
+// carry `:uvsc2` or the record-path lookup misses the prewarmed entry. For
+// single-UV meshes deriveVertexBufferLayout clamp-to-last aliases uv1 onto uv0
+// (48-byte stride unchanged), so this is byte-stable for existing geometry.
+// unlit stays on TRI_GEOMETRY (its shader declares only @location(0..3)).
+const TRI_GEOMETRY_PBR = {
+  topology: 'triangle-list' as PrimitiveTopology,
+  stripIndexFormat: undefined,
+  vertexLayout: PROCEDURAL_ATTR_LAYOUT,
+  shaderUvSetCount: 2,
+};
+
 // M6 fix-up: URP-variant key string for the standard PBR shader. Mirrors the
 // boot-time variantSet computed at createRenderer.ts step 1b when
 // `isHdrpActive=false` and `storageBufferCapable=true` (the URP default
@@ -1385,28 +1433,28 @@ export function buildSpecConstTable(
     {
       shader: { id: 'forgeax::default-standard-pbr', passKind: 'forward', variantSet: undefined },
       attachments: TRI_ATTACHMENTS_LDR_S1,
-      geometry: TRI_GEOMETRY,
+      geometry: TRI_GEOMETRY_PBR,
       renderState: undefined,
     },
     // standard LDR S4
     {
       shader: { id: 'forgeax::default-standard-pbr', passKind: 'forward', variantSet: undefined },
       attachments: TRI_ATTACHMENTS_LDR_S4,
-      geometry: TRI_GEOMETRY,
+      geometry: TRI_GEOMETRY_PBR,
       renderState: undefined,
     },
     // standard HDR S1
     {
       shader: { id: 'forgeax::default-standard-pbr', passKind: 'forward', variantSet: undefined },
       attachments: TRI_ATTACHMENTS_HDR_S1,
-      geometry: TRI_GEOMETRY,
+      geometry: TRI_GEOMETRY_PBR,
       renderState: undefined,
     },
     // standard HDR S4
     {
       shader: { id: 'forgeax::default-standard-pbr', passKind: 'forward', variantSet: undefined },
       attachments: TRI_ATTACHMENTS_HDR_S4,
-      geometry: TRI_GEOMETRY,
+      geometry: TRI_GEOMETRY_PBR,
       renderState: undefined,
     },
 
@@ -1426,7 +1474,7 @@ export function buildSpecConstTable(
         variantSet: URP_PBR_VARIANT_SET,
       },
       attachments: TRI_ATTACHMENTS_LDR_S1,
-      geometry: TRI_GEOMETRY,
+      geometry: TRI_GEOMETRY_PBR,
       renderState: undefined,
     },
     // standard PBR URP LDR S4
@@ -1437,7 +1485,7 @@ export function buildSpecConstTable(
         variantSet: URP_PBR_VARIANT_SET,
       },
       attachments: TRI_ATTACHMENTS_LDR_S4,
-      geometry: TRI_GEOMETRY,
+      geometry: TRI_GEOMETRY_PBR,
       renderState: undefined,
     },
     // standard PBR URP HDR S1
@@ -1448,7 +1496,7 @@ export function buildSpecConstTable(
         variantSet: URP_PBR_VARIANT_SET,
       },
       attachments: TRI_ATTACHMENTS_HDR_S1,
-      geometry: TRI_GEOMETRY,
+      geometry: TRI_GEOMETRY_PBR,
       renderState: undefined,
     },
     // standard PBR URP HDR S4
@@ -1459,7 +1507,7 @@ export function buildSpecConstTable(
         variantSet: URP_PBR_VARIANT_SET,
       },
       attachments: TRI_ATTACHMENTS_HDR_S4,
-      geometry: TRI_GEOMETRY,
+      geometry: TRI_GEOMETRY_PBR,
       renderState: undefined,
     },
 

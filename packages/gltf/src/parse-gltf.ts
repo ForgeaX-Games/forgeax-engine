@@ -273,6 +273,18 @@ export interface GltfMaterialIr {
   readonly roughnessFactor: number;
   readonly metallicRoughnessTexture?: number;
   readonly normalTexture?: number;
+  /**
+   * glTF `alphaMode` (`'OPAQUE'` | `'MASK'` | `'BLEND'`). Absent -> `'OPAQUE'`
+   * (glTF spec default). Drives the bridge's transparent / alpha-test routing.
+   */
+  readonly alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND';
+  /** glTF `alphaCutoff` (MASK-mode threshold; glTF spec default 0.5). */
+  readonly alphaCutoff?: number;
+  /**
+   * baseColorTexture UV-set index (glTF `baseColorTexture.texCoord`). Absent
+   * -> 0. Selects which interleaved UV set the base-color sampler reads.
+   */
+  readonly baseColorTexCoord?: number;
 }
 
 export interface NodeInstancingIr {
@@ -371,12 +383,14 @@ interface RootGltfJson extends GltfExtensionsJson {
     readonly name?: string;
     readonly pbrMetallicRoughness?: {
       readonly baseColorFactor?: readonly number[];
-      readonly baseColorTexture?: { readonly index: number };
+      readonly baseColorTexture?: { readonly index: number; readonly texCoord?: number };
       readonly metallicFactor?: number;
       readonly roughnessFactor?: number;
       readonly metallicRoughnessTexture?: { readonly index: number };
     };
     readonly normalTexture?: { readonly index: number };
+    readonly alphaMode?: string;
+    readonly alphaCutoff?: number;
   }>;
   readonly textures?: ReadonlyArray<{
     readonly sampler?: number;
@@ -883,6 +897,9 @@ async function parseGltfWithBin(
       baseColor[3] ?? 1,
     ];
 
+    const alphaMode =
+      matJson.alphaMode === 'MASK' || matJson.alphaMode === 'BLEND' ? matJson.alphaMode : undefined;
+    const baseColorTexCoord = pbr?.baseColorTexture?.texCoord;
     materials.push({
       ...(matJson.name === undefined ? {} : { name: matJson.name }),
       baseColorFactor: baseColor4,
@@ -897,6 +914,9 @@ async function parseGltfWithBin(
       ...(matJson.normalTexture === undefined
         ? {}
         : { normalTexture: matJson.normalTexture.index }),
+      ...(alphaMode === undefined ? {} : { alphaMode }),
+      ...(matJson.alphaCutoff === undefined ? {} : { alphaCutoff: matJson.alphaCutoff }),
+      ...(baseColorTexCoord === undefined || baseColorTexCoord === 0 ? {} : { baseColorTexCoord }),
     });
   }
 

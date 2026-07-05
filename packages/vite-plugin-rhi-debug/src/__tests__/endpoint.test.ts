@@ -121,8 +121,9 @@ describe('POST /__forgeax-debug/tape legal body (w10)', () => {
     const { runId, json, blob, passOffsets, valid } = fm.value;
 
     // Golden = exactly what the Node finalize() fs tail would write for this
-    // in-memory finalize result (assembleReport single-writer + compact stringify).
-    const goldenReport = JSON.stringify(assembleReport({ json, passOffsets, valid }));
+    // in-memory finalize result (assembleReport single-writer + pretty stringify,
+    // 2-space indent so a human can read the captured event stream).
+    const goldenReport = JSON.stringify(assembleReport({ json, passOffsets, valid }), null, 2);
     const goldenTape = blob;
 
     const handler = mountHandler();

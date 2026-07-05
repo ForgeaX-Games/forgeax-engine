@@ -1142,7 +1142,9 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     const reportPath = path.join(outDir, 'frame-0.report.json');
 
     try {
-      fs.writeFileSync(reportPath, JSON.stringify(report));
+      // Pretty-print so a human debugging the capture can read the event stream;
+      // 2-space indent keeps it diffable (the tape blob stays binary alongside).
+      fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
     } catch {
       return makeErr(
         new DebugError({

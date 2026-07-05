@@ -153,7 +153,9 @@ function writeTape(body: TapeBody): { tapePath: string; reportPath: string } {
   const tapePath = join(outDir, 'frame-0.tape.bin');
   const reportPath = join(outDir, 'frame-0.report.json');
   writeFileSync(tapePath, blob);
-  writeFileSync(reportPath, JSON.stringify(report));
+  // Pretty-print: the report is read by humans debugging captures; a single-line
+  // dump of hundreds of events is unreadable. 2-space indent keeps it diffable.
+  writeFileSync(reportPath, JSON.stringify(report, null, 2));
   return { tapePath, reportPath };
 }
 

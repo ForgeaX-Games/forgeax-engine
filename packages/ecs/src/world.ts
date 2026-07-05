@@ -3430,9 +3430,10 @@ export class World {
    * Wired by the runtime sugar (see `@forgeax/engine-runtime` AssetRegistry)
    * during `Engine.create`. Unit tests can wire one directly.
    *
-   * The arg shape is `(sourceIndex, parentHandle)` so the resolver can scope
-   * the lookup to the parent's local refs[] (a single source index has no
-   * meaning without the parent).
+   * The arg shape is `(source, parentHandle)` so the resolver can scope
+   * the lookup to the parent; for `number` sources (at-rest refs[] index)
+   * the resolver maps through parent.refs[]; for `string` sources (post-parse
+   * / post-collect GUID) the resolver does identity lookup.
    *
    * Encapsulated by `private` keyword (no underscore prefix per
    * lint-naming.md: only package-internal `_xxx` needs `@internal`; `private`
@@ -3444,7 +3445,7 @@ export class World {
    */
   private sceneAssetResolver:
     | ((
-        sourceIndex: number,
+        source: number | string,
         parentHandle: Handle<'SceneAsset', 'shared'>,
       ) => Result<Handle<'SceneAsset', 'shared'>, unknown>)
     | null = null;
@@ -3460,7 +3461,7 @@ export class World {
    */
   _setSceneAssetResolver(
     resolver: (
-      sourceIndex: number,
+      source: number | string,
       parentHandle: Handle<'SceneAsset', 'shared'>,
     ) => Result<Handle<'SceneAsset', 'shared'>, unknown>,
   ): void {
@@ -4106,7 +4107,7 @@ export class World {
 
   /** @internal Resolve mount.source through the wired SceneAssetResolver. */
   _resolveMountSource(
-    sourceIndex: number,
+    source: number | string,
     parentHandle: Handle<'SceneAsset', 'shared'>,
   ): Result<Handle<'SceneAsset', 'shared'>, EcsError> {
     if (this.sceneAssetResolver === null) {
@@ -4119,7 +4120,7 @@ export class World {
         detail: { entity: 0, slot: 0, generation: 0 },
       } as unknown as EcsError);
     }
-    const r = this.sceneAssetResolver(sourceIndex, parentHandle);
+    const r = this.sceneAssetResolver(source, parentHandle);
     if (!r.ok) {
       // Resolver carries `unknown` err (loose contract — engine-runtime may
       // wire any shape); narrow back to EcsError here at the boundary.

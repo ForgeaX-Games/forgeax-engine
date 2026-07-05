@@ -33,6 +33,7 @@ import { type CompileError, compileAndRenderShader, type EditStage } from '../co
 import { ensureReplaySession } from '../replay-session';
 import { useSelection } from '../selection-context';
 import { useTape } from '../viewer-context';
+import { findWgslEntryPoints } from './wgsl-entrypoints';
 import { wgslHighlighting, wgslLanguage } from './wgsl-language';
 
 // ============================================================================
@@ -136,13 +137,20 @@ export interface CodeMirrorShaderProps {
   wgslCode: string;
   /** Which pipeline stage this editor targets (decides the module swap on apply). */
   stage: EditStage;
+  /**
+   * The entry-point function this draw actually runs (e.g. 'fs_main'). A module
+   * can bundle several entries (fs_main forward + fs_gbuffer deferred); the banner
+   * marks the active one so the unused entry in the shown source is not mistaken
+   * for what this draw executes.
+   */
+  entryPoint?: string | undefined;
 }
 
 // ============================================================================
 // Component
 // ============================================================================
 
-export function CodeMirrorShader({ wgslCode, stage }: CodeMirrorShaderProps) {
+export function CodeMirrorShader({ wgslCode, stage, entryPoint }: CodeMirrorShaderProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -283,8 +291,29 @@ export function CodeMirrorShader({ wgslCode, stage }: CodeMirrorShaderProps) {
     );
   }
 
+  // A module may bundle several entry points; the source shown below is the WHOLE
+  // module. List the OTHER entries of THIS stage so the active one (entryPoint) is
+  // unambiguous — otherwise an unused fs_gbuffer reads as if this draw output a
+  // gbuffer. Filter by stage so the fragment panel does not list vertex entries.
+  const otherEntries = entryPoint
+    ? findWgslEntryPoints(wgslCode)
+        .filter((e) => e.stage === stage && e.name !== entryPoint)
+        .map((e) => e.name)
+    : [];
+
   return (
     <div className="mt-1" data-forgeax-shader-editor data-forgeax-edit-mode={editMode}>
+      {entryPoint && (
+        <div
+          className="mb-1 text-[10px] font-mono text-muted-foreground"
+          data-forgeax-shader-entrypoint={entryPoint}
+        >
+          Active entry: <span className="text-foreground">{entryPoint}()</span>
+          {otherEntries.length > 0 && (
+            <span> — module also defines: {otherEntries.map((n) => `${n}()`).join(', ')}</span>
+          )}
+        </div>
+      )}
       <div className="flex items-center justify-between mb-1">
         {editMode ? (
           <span
@@ -350,6 +379,18 @@ export function CodeMirrorShader({ wgslCode, stage }: CodeMirrorShaderProps) {
               {statusMessage}
             </div>
           )}
+          {/* This preview is an isolated re-render of the edited shader on the
+              selected draw. It deliberately does NOT touch the Texture Viewer's
+              RT (the faithful tape replay stays untouched, OOS-1) — that is why
+              the result shows here, below the editor, rather than changing the
+              Texture Viewer image. */}
+          <div
+            className="mt-1 text-[10px] text-muted-foreground"
+            data-forgeax-shader-preview-caption
+          >
+            Edited preview{selectedDrawIdx >= 0 ? ` — draw #${selectedDrawIdx}` : ''}, not written
+            to tape (Texture Viewer keeps the original)
+          </div>
           <canvas
             ref={previewCanvasRef}
             className="mt-1 w-full max-h-64 object-contain border border-border rounded bg-black"

@@ -426,6 +426,58 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         expect(baseColor).toHaveLength(3);
         expect(baseColor).toEqual([0.8, 0.2, 0.1]);
       });
+
+      // feat-city-glb multi-UV tiling: baseColorTexture.texCoord -> uvSet param.
+      it('emits no uvSet param when texCoord is absent (default set 0)', () => {
+        const asset = toMaterialAsset(STANDARD_MATERIAL, {
+          textureHandles: new Map(),
+          samplerHandles: new Map(),
+        });
+        expect(asset.paramValues?.uvSet).toBeUndefined();
+      });
+
+      it('emits no uvSet param when texCoord is 0 (byte-identical to prior path)', () => {
+        const mat: GltfMaterialIr = { ...STANDARD_MATERIAL, baseColorTexCoord: 0 };
+        const asset = toMaterialAsset(mat, {
+          textureHandles: new Map(),
+          samplerHandles: new Map(),
+        });
+        expect(asset.paramValues?.uvSet).toBeUndefined();
+      });
+
+      it('emits uvSet=1 when baseColorTexture.texCoord is 1 (UE5 city_Sample case)', () => {
+        const mat: GltfMaterialIr = { ...STANDARD_MATERIAL, baseColorTexCoord: 1 };
+        const asset = toMaterialAsset(mat, {
+          textureHandles: new Map(),
+          samplerHandles: new Map(),
+        });
+        expect(asset.paramValues?.uvSet).toBe(1);
+      });
+
+      // feat-city-glb Bug 5: alphaMode BLEND -> renderState.blend + Transparent
+      // queue + depthWriteEnabled=false (transparent decals read but do not
+      // write depth so coplanar decals do not z-fight the surface they overlay).
+      it('OPAQUE material has no renderState.blend and stays in the Geometry queue', () => {
+        const asset = toMaterialAsset(STANDARD_MATERIAL, {
+          textureHandles: new Map(),
+          samplerHandles: new Map(),
+        });
+        const pass = asset.passes?.[0];
+        expect(pass?.renderState?.blend).toBeUndefined();
+        expect(pass?.queue).toBe(2000);
+      });
+
+      it('BLEND material sets renderState.blend, Transparent queue, depthWriteEnabled=false', () => {
+        const mat: GltfMaterialIr = { ...STANDARD_MATERIAL, alphaMode: 'BLEND' };
+        const asset = toMaterialAsset(mat, {
+          textureHandles: new Map(),
+          samplerHandles: new Map(),
+        });
+        const pass = asset.passes?.[0];
+        expect(pass?.renderState?.blend).toBeDefined();
+        expect(pass?.renderState?.depthWriteEnabled).toBe(false);
+        expect(pass?.queue).toBe(3000);
+      });
     });
   });
 }

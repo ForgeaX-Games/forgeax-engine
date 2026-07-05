@@ -23,7 +23,7 @@ import type {
   Sampler,
   TextureView,
 } from '@forgeax/engine-rhi';
-
+import type { BglKind } from './pipeline-spec';
 import { buildBindGroupLayoutDescriptor, type PipelineSpec } from './pipeline-spec';
 
 // Default fullscreen-post spec stub. The dispatcher's 'fullscreen-post' arm
@@ -42,6 +42,20 @@ const FULLSCREEN_DEFAULT_SPEC: PipelineSpec = Object.freeze({
   renderState: undefined,
 }) as PipelineSpec;
 
+// ─── Post-process read sample type union ─────────────────────────────────
+
+/**
+ * Declared sample type for a post-process read entry.
+ *
+ * Closed union (plan-strategy D-7): only `'depth'` is an explicit sampleType
+ * discriminant; color inputs are the default (bare `string` or un-suffixed
+ * `{ key }`).  Future texture types (`r32float`, etc.) are add-only.
+ *
+ * AI-user affordance: IDE autocomplete exposes `'depth'` at the register call
+ * site; misspellings are caught by the type system (AC-08).
+ */
+export type PostProcessReadSampleType = 'depth';
+
 // ─── Post-process shader entry (registered via postProcess.register) ──────
 
 /**
@@ -56,6 +70,11 @@ const FULLSCREEN_DEFAULT_SPEC: PipelineSpec = Object.freeze({
  *
  * `reads` declares graph resource keys this pass samples as input texture(s).
  * If omitted, the pass samples the swap-chain color attachment (default path).
+ *
+ * Structured reads (plan-strategy D-1): each entry can be a bare string
+ * (backward-compatible color input) or an object `{ key, sampleType? }`.
+ * When `sampleType` is `'depth'`, the dispatcher resolves a depth-only view
+ * and binds it at depthTex@3 / depthSampler@4 in the fullscreen bind group.
  */
 export interface PostProcessShaderEntry {
   /** Composed WGSL source for the fragment stage (post-naga_oil). */
@@ -74,8 +93,26 @@ export interface PostProcessShaderEntry {
    * @binding(0) (the sampler is @group(1) @binding(1); group 0 is reserved for a
    * future view bind group — dispatchFullscreenPass calls setBindGroup(1, ...)).
    * When empty or omitted, the pass reads the swap-chain directly.
+   *
+   * Each entry is either a bare string (backward-compatible color input) or an
+   * object `{ key: string; sampleType?: PostProcessReadSampleType }` for typed
+   * reads (e.g. `{ key: 'depth', sampleType: 'depth' }` for depth sampling).
+   * Bare strings and `{ key }` without `sampleType` are equivalent — both
+   * represent a color input (plan-strategy D-1 / D-7).
    */
-  readonly reads?: readonly string[] | undefined;
+  readonly reads?: readonly (string | PostProcessReadEntry)[] | undefined;
+}
+
+/**
+ * Structured read entry for a post-process shader.
+ *
+ * `key` is the graph resource key (matching a graph color target).
+ * `sampleType` is an optional type discriminant (D-1 SSOT); when omitted
+ * the entry is treated as a color input (same as a bare string).
+ */
+export interface PostProcessReadEntry {
+  readonly key: string;
+  readonly sampleType?: PostProcessReadSampleType | undefined;
 }
 
 /**
@@ -162,6 +199,43 @@ function createFullscreenSampler(device: RhiDevice): Sampler | null {
   return res.value;
 }
 
+/**
+ * Create a non-filtering depth sampler for post-process passes that read the
+ * camera scene depth (plan-strategy D-2: nearest + clamp-to-edge).
+ * Aligns with the SSAO depth sampler shape (render-graph-primitives.ts:634-647)
+ * — NOT a comparison sampler (D-2 rejects comparison because the post-process
+ * shader reads raw depth values via `textureSampleLevel`, not PCF shadow lookup).
+ */
+function createDepthSampler(device: RhiDevice): Sampler | null {
+  const res = device.createSampler({
+    magFilter: 'nearest',
+    minFilter: 'nearest',
+    addressModeU: 'clamp-to-edge',
+    addressModeV: 'clamp-to-edge',
+  });
+  if (!res.ok) return null;
+  return res.value;
+}
+
+/**
+ * Check whether the entry's {@link PostProcessShaderEntry.reads} declares a read
+ * with `sampleType: 'depth'`. Used by {@link buildFullscreenPostProcessPass} to
+ * select between the depth BGL variant and the existing color-only kinds.
+ */
+export function entryHasDepthRead(entry: PostProcessShaderEntry): boolean {
+  if (!entry.reads) return false;
+  return entry.reads.some((r) => typeof r !== 'string' && r.sampleType === 'depth');
+}
+
+/**
+ * Byte size of the minimal params UBO auto-allocated for a depth-reading entry
+ * that declares no `params`. The `'fullscreen-post-with-scene-depth'` BGL always
+ * declares `params@2`, so a bound UBO must exist even when the shader has no
+ * user params (plan D-3: param-less depth effect gets a minimal 16B UBO). 16 B
+ * is WebGPU's minimum uniform-buffer binding size.
+ */
+export const DEPTH_MIN_PARAMS_BYTE_SIZE = 16;
+
 // ─── Public: register / build a fullscreen post-process pass ─────────────
 
 /**
@@ -199,6 +273,7 @@ export function buildFullscreenPostProcessPass(
 ): {
   bindGroupLayout: BindGroupLayout;
   sampler: Sampler | null;
+  depthSampler: Sampler | null;
   createHandle: (
     name: string,
     pipeline: unknown,
@@ -207,16 +282,26 @@ export function buildFullscreenPostProcessPass(
 } | null {
   const { device } = ctx;
 
-  // Step 1: BGL (input texture + sampler [+ params buffer]).
+  // Step 1: BGL (input texture + sampler [+ params buffer] [+ depth]).
   // D-13 round-2: route through dispatcher; sampleType derives from
   // spec.attachments (R3 fix). Default spec yields the historical 'float'
   // / 'filtering' shape for color inputs.
   // feat-20260621 D-2: when entry.params is present the BGL is the 3-entry
   // 'fullscreen-post-with-params' kind (adds buffer@2 uniform); otherwise the
   // 2-entry 'fullscreen-post' kind (param-less zero-regression, R-A7).
+  // plan-strategy D-3: when entry.reads declares sampleType:'depth', use the
+  // 5-entry 'fullscreen-post-with-scene-depth' kind (color@0 + sampler@1 +
+  // params@2 + depthTex@3 + depthSampler@4). params@2 is always present to
+  // avoid 2x2 kind explosion.
+  const hasDepth = entryHasDepthRead(entry);
+  const bglKind: BglKind = hasDepth
+    ? 'fullscreen-post-with-scene-depth'
+    : entry.params !== undefined
+      ? 'fullscreen-post-with-params'
+      : 'fullscreen-post';
   const bglRes = device.createBindGroupLayout(
     buildBindGroupLayoutDescriptor(FULLSCREEN_DEFAULT_SPEC, {
-      kind: entry.params !== undefined ? 'fullscreen-post-with-params' : 'fullscreen-post',
+      kind: bglKind,
     }),
   );
   if (!bglRes.ok) {
@@ -224,12 +309,14 @@ export function buildFullscreenPostProcessPass(
     return null;
   }
 
-  // Step 2: Sampler.
+  // Step 2: Samplers.
   const sampler = createFullscreenSampler(device);
+  const depthSampler = hasDepth ? createDepthSampler(device) : null;
 
   return {
     bindGroupLayout: bglRes.value,
     sampler,
+    depthSampler,
     createHandle: (name, pipeline, paramsBuffer) => ({
       name,
       paramsBuffer,
@@ -252,6 +339,12 @@ export function buildFullscreenPostProcessPass(
  * appends the per-frame params UBO at binding 2 (uniform), matching the 3-entry
  * `'fullscreen-post-with-params'` BGL. Omitting it yields the 2-entry shape
  * param-less consumers degrade to (R-A7).
+ *
+ * When `depthTexView` + `depthSampler` are supplied (plan-strategy D-3:
+ * depth reads present), appends the depth texture view at binding 3 and the
+ * non-filtering depth sampler at binding 4, matching the 5-entry
+ * `'fullscreen-post-with-scene-depth'` BGL. Both must be supplied together
+ * (or both omitted for existing color-only consumers — AC-03 zero-regression).
  */
 export function createFullscreenBindGroup(
   device: RhiDevice,
@@ -259,6 +352,8 @@ export function createFullscreenBindGroup(
   inputView: TextureView,
   sampler: Sampler | null,
   paramsBuffer?: Buffer | null,
+  depthTexView?: TextureView | null,
+  depthSampler?: Sampler | null,
 ): BindGroup | null {
   const entries: { binding: number; resource: { kind: string; value: unknown } }[] = [
     { binding: 0, resource: { kind: 'textureView', value: inputView } },
@@ -273,6 +368,10 @@ export function createFullscreenBindGroup(
     // handle as `value` makes dawn reject createBindGroup ("no overload matched
     // ... member 'resource' for array element 2").
     entries.push({ binding: 2, resource: { kind: 'buffer', value: { buffer: paramsBuffer } } });
+  }
+  if (depthTexView && depthSampler) {
+    entries.push({ binding: 3, resource: { kind: 'textureView', value: depthTexView } });
+    entries.push({ binding: 4, resource: { kind: 'sampler', value: depthSampler } });
   }
   const res = device.createBindGroup({
     label: 'fullscreen-post-process-bg',

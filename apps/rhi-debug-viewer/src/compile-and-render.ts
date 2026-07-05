@@ -38,6 +38,7 @@ import type {
   RhiRenderPassEncoder,
 } from '@forgeax/engine-rhi';
 import type { HandleId, Replay, RhiCallEvent } from '@forgeax/engine-rhi-debug';
+import { adaptReplayFormat } from '@forgeax/engine-rhi-debug';
 import { renderRtToCanvas } from '@forgeax/engine-rhi-debug/rt-to-canvas';
 import { createShaderModule } from '@forgeax/engine-rhi-webgpu';
 import type { Result } from '@forgeax/engine-types';
@@ -280,9 +281,22 @@ function rebuildPipeline(
   }
   if (desc.fragment !== undefined) {
     const fMod = stage === 'fragment' ? newModule : fId !== undefined ? resolve(fId) : undefined;
-    if (fMod !== undefined) {
-      desc.fragment = { ...(desc.fragment as Record<string, unknown>), module: fMod };
+    const frag = { ...(desc.fragment as Record<string, unknown>) };
+    if (fMod !== undefined) frag.module = fMod;
+    // Adapt color-target formats the SAME way replayCreateTexture/View did: a
+    // browser tape records a bgra8unorm-srgb swapchain target, but replay recreates
+    // the color attachment as rgba8unorm-srgb (adaptReplayFormat). Reusing the raw
+    // recorded target here leaves the pipeline expecting bgra8unorm-srgb while the
+    // live attachment view is rgba8unorm-srgb -> "attachment state not compatible"
+    // -> invalid command buffer -> black preview (the F2 Apply-does-nothing bug).
+    if (Array.isArray(frag.targets)) {
+      frag.targets = frag.targets.map((t) => {
+        if (!t || typeof t !== 'object' || !('format' in t)) return t;
+        const target = t as Record<string, unknown>;
+        return { ...target, format: adaptReplayFormat(target.format as string | undefined) };
+      });
     }
+    desc.fragment = frag;
   }
 
   // biome-ignore lint/suspicious/noExplicitAny: recorded desc is a structural mirror of RenderPipelineDescriptor

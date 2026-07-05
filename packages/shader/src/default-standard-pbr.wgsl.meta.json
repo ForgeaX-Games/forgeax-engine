@@ -65,6 +65,11 @@
       "default": 1.0
     },
     {
+      "name": "uvSet",
+      "type": "f32",
+      "default": 0.0
+    },
+    {
       "name": "baseColorTexture",
       "type": "texture2d"
     },

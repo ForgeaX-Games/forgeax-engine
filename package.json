@@ -78,7 +78,6 @@
     "sync": "node scripts/sync.mjs",
     "sync:check": "node scripts/check-workspaces-equivalence.mjs",
     "harness:sync": "node scripts/sync-harness.mjs",
-    "fbx:setup": "node scripts/setup-fbx-sdk.mjs",
     "postinstall": "node scripts/sync-harness.mjs",
     "changeset": "changeset",
     "changeset:status": "changeset status",

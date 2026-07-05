@@ -90,6 +90,7 @@ import type { PassSelector } from '@forgeax/engine-types';
 import {
   buildFullscreenPostProcessPass,
   createFullscreenBindGroup,
+  entryHasDepthRead,
 } from './fullscreen-post-process-pass';
 import { getOrCreateSsaoFallbackTexture } from './hdrp-buffers';
 import { buildBeginRenderPassDescriptor } from './pipeline-spec';
@@ -560,22 +561,29 @@ export function addSsaoPasses(
  * runtime.errorRegistry; the caller then skips the pass.
  */
 /**
- * Resolve a depth-only view of the graph's hdrDepth texture. The SSAO BGL
- * binding 5 declares `sampleType: 'depth'`; on dawn the BindGroup
- * validation rejects a default-view (aspect=all on a depth+stencil texture)
- * with "Multiple aspects (Depth|Stencil) selected". A separate
- * createTextureView({aspect:'depth-only'}) is required.
+ * Resolve a depth-only view of a graph color target by key.
+ *
+ * On dawn the BindGroup validation rejects a default-view (aspect=all on a
+ * depth+stencil texture) with "Multiple aspects (Depth|Stencil) selected".
+ * A separate createTextureView({aspect:'depth-only'}) is required.
+ *
+ * @param internals - internal render pipeline context
+ * @param key - graph color-target key to resolve depth from
+ * @param label - debug label for the depth-only TextureView
+ * @returns a depth-only TextureView, or null if the graph / texture is absent
+ *   or creation fires a structured error
  */
-function resolveHdrDepthDepthOnlyView(
+export function resolveDepthOnlyView(
   internals: _InternalRenderPipelineContext,
-  hdrDepthKey: string,
+  key: string,
+  label: string,
 ): TextureView | null {
   const graph = internals.frameState.perFrameGraph;
   if (graph === null) return null;
-  const hdrDepthTex = graph.getColorTargetTexture(hdrDepthKey);
-  if (hdrDepthTex === undefined) return null;
-  const res = internals.runtime.device.createTextureView(hdrDepthTex as never, {
-    label: 'ssao-hdr-depth-only-view',
+  const tex = graph.getColorTargetTexture(key);
+  if (tex === undefined) return null;
+  const res = internals.runtime.device.createTextureView(tex as never, {
+    label,
     dimension: '2d',
     aspect: 'depth-only',
     baseMipLevel: 0,
@@ -588,6 +596,21 @@ function resolveHdrDepthDepthOnlyView(
     return null;
   }
   return res.value;
+}
+
+/**
+ * Resolve a depth-only view of the graph's hdrDepth texture.
+ *
+ * Thin delegate to {@link resolveDepthOnlyView} (plan-strategy D-5: extract
+ * the shared depth-only view helper, SSAO delegates). Behaviour is byte-identical
+ * to the pre-extraction inline version. The SSAO BGL / bindings / sampler are
+ * untouched (OOS-4).
+ */
+function resolveHdrDepthDepthOnlyView(
+  internals: _InternalRenderPipelineContext,
+  hdrDepthKey: string,
+): TextureView | null {
+  return resolveDepthOnlyView(internals, hdrDepthKey, 'ssao-hdr-depth-only-view');
 }
 
 function ensureSsaoRecordCompanions(internals: _InternalRenderPipelineContext): {
@@ -1171,6 +1194,47 @@ function dispatchFullscreenPass(
   }
   if (inputView === null) return;
 
+  // ── BGL/Pipeline build (before depth resolution so built.depthSampler is
+  //    available for the depth threading block below) ────────────────────────
+  const built = buildFullscreenPostProcessPass(
+    { device: ctx.runtime.device, errorRegistry: ctx.runtime.errorRegistry },
+    entry,
+  );
+  if (built === null) return;
+
+  // ── plan-strategy D-6: depth read resolution (pipeline-agnostic, AC-02) ────
+  // Iterate entry.reads looking for sampleType:'depth' entries. For each depth
+  // entry, resolve a depth-only TextureView from the graph via
+  // resolveDepthOnlyView, fail-fast on unresolvable keys. The depth sampler
+  // is produced by buildFullscreenPostProcessPass (via createDepthSampler,
+  // plan-strategy D-2: non-filtering nearest+clamp-to-edge).
+  //
+  // Both composite and non-composite branches handle depth symmetrically —
+  // the depth resolution block is branch-agnostic (AC-02: no URP/HDRP
+  // discrimination). Color input logic is unchanged (AC-03 zero-regression).
+  let depthTexView: TextureView | null = null;
+  let depthSampler: Sampler | null = null;
+  if (entry.reads && entry.reads.length > 0) {
+    const internals = ctx as unknown as _InternalRenderPipelineContext;
+    for (const read of entry.reads) {
+      if (typeof read !== 'string' && read.sampleType === 'depth') {
+        const depthKey = read.key;
+        depthTexView = resolveDepthOnlyView(
+          internals,
+          depthKey,
+          'post-process-scene-depth-only-view',
+        );
+        if (depthTexView === null) {
+          throw new PostProcessError({
+            code: 'fullscreen-input-not-found',
+            detail: { readsKey: depthKey, passName: name },
+          });
+        }
+        depthSampler = built.depthSampler;
+      }
+    }
+  }
+
   // feat-20260621 M4' composite-over-swap-chain write target: the swap-chain's
   // NON-srgb storage view (R-COLORSPACE — the scratch holds an already-sRGB-
   // encoded copy, so writing through the srgb view would double-encode; mirrors
@@ -1190,12 +1254,6 @@ function dispatchFullscreenPass(
     writeView = (resolveCtx?.resolve(color) as TextureView | undefined) ?? ctx.view;
   }
   if (writeView === null || writeView === undefined) return;
-
-  const built = buildFullscreenPostProcessPass(
-    { device: ctx.runtime.device, errorRegistry: ctx.runtime.errorRegistry },
-    entry,
-  );
-  if (built === null) return;
 
   // feat-20260621 M-A2 / w8: per-frame data-driven params channel. When the
   // entry declares params, look up the per-id eager-created UBO + the per-frame
@@ -1220,6 +1278,11 @@ function dispatchFullscreenPass(
       }
       paramsBuffer = ubo;
     }
+  } else if (entryHasDepthRead(entry)) {
+    // D-3: a param-less depth entry still binds the minimal UBO auto-allocated
+    // at register (the 'fullscreen-post-with-scene-depth' BGL always declares
+    // params@2). No per-frame write -- the buffer stays zero-filled.
+    paramsBuffer = ctx.runtime.getPostProcessParamsBuffer?.(shader) ?? null;
   }
 
   const bindGroup = createFullscreenBindGroup(
@@ -1228,6 +1291,8 @@ function dispatchFullscreenPass(
     inputView,
     built.sampler,
     paramsBuffer,
+    depthTexView,
+    depthSampler,
   );
   if (bindGroup === null) return;
 

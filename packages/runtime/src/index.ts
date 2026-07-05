@@ -38,6 +38,10 @@ export type {
   RecoverErrorCode,
   RuntimeError,
   RuntimeErrorCode,
+  // feat-20260701-rootstosceneasset verify minor-edit (F1): scene-collect
+  // error detail types re-exported so AI users narrow `.detail` per `.code`.
+  SceneCollectAssetGuidUnresolvedDetail,
+  SceneCollectEntityRefOutOfClosureDetail,
   ShadowInvalidConfigDetail,
   SkinMaterialMismatchDetail,
 } from './errors';
@@ -58,6 +62,11 @@ export {
   // RecoverError class re-exported so AI users `instanceof RecoverError` the
   // recover() failure (peer convention to SkinMaterialMismatchError etc.).
   RecoverError,
+  // feat-20260701-rootstosceneasset verify minor-edit (F1): scene-collect
+  // fail-fast error classes re-exported so AI users `instanceof` them when
+  // rootsToSceneAsset / serializeSceneAssetToPack return err.
+  SceneCollectAssetGuidUnresolvedError,
+  SceneCollectEntityRefOutOfClosureError,
   ShadowInvalidConfigError,
   SkeletonResolveFailedError,
   SkinMaterialMismatchError,
@@ -234,6 +243,7 @@ export type { Asset, MeshAsset } from './asset-registry';
 export {
   AssetRegistry,
   HANDLE_CUBE,
+  HANDLE_CYLINDER,
   HANDLE_NINESLICE_QUAD,
   HANDLE_QUAD,
   HANDLE_SPHERE,
@@ -245,6 +255,7 @@ export {
 export {
   BUILTIN_BASE,
   BUILTIN_CUBE,
+  BUILTIN_CYLINDER,
   BUILTIN_FLOATS_PER_VERTEX,
   BUILTIN_NINESLICE_QUAD,
   BUILTIN_QUAD,
@@ -497,6 +508,15 @@ export type { RenderSystem } from './render-system';
 // instead of switching between BuiltinAssetRegistry.resolve and assets.get.
 export { resolveAssetHandle } from './resolve-asset-handle';
 export type { SpriteParamValues } from './sprite-param-values';
+// feat-20260630-viewport-2x2-run-x-display-redesign M2 / w12 / plan-strategy D-2:
+// engine-neutral by-entity-id active camera selection (no editor concept).
+export {
+  ACTIVE_CAMERA_KEY,
+  type ActiveCamera,
+  getActiveCamera,
+  selectActiveCameraIndex,
+  setActiveCamera,
+} from './systems/active-camera';
 /**
  * Transparent-bucket sort configuration (feat-20260520-2d-sprite-layer-mvp
  * M-2 w14). The POD interface + 3 named mode constants + `get/set`
@@ -539,15 +559,6 @@ export type { SpriteParamValues } from './sprite-param-values';
  *   ] } });
  */
 export { spriteAnimationTickSystem } from './systems/sprite-animation-tick';
-// feat-20260630-viewport-2x2-run-x-display-redesign M2 / w12 / plan-strategy D-2:
-// engine-neutral by-entity-id active camera selection (no editor concept).
-export {
-  ACTIVE_CAMERA_KEY,
-  type ActiveCamera,
-  getActiveCamera,
-  selectActiveCameraIndex,
-  setActiveCamera,
-} from './systems/active-camera';
 export {
   getTransparentSortConfig,
   setTransparentSortConfig,
@@ -654,15 +665,13 @@ export { animationPlugin, timePlugin, transformPlugin } from './plugin-factories
 // ─── Screen-to-entity picking (feat-20260529-picking-raycasting-screen-to-entity M3 / w14) ──
 
 // feat-20260623-editor-openproject M2 w11+w12: SceneInstance→SceneAsset writeback
-// chain (plan-strategy D-1: pure-data collection + pack serialization;
-// handle→GUID reverse lookup via caller-supplied Map built from
-// AssetRegistry.inspect()).
+// chain (plan-strategy D-1: pure-data collection + pack serialization).
 //
-// collectSceneAsset reads live component values from a materialised
-// SceneInstance back into a SceneAsset POD. serializeSceneAssetToPack
-// serializes the POD into a valid internal-text-package JSON object
-// suitable for disk write via forge.json / file system writer.
-export { collectSceneAsset, serializeSceneAssetToPack } from './collect-scene-asset';
+// feat-20260701-rootstosceneasset-forest-collect-schema-derived-ha M3:
+// collectSceneAsset removed — replaced by rootsToSceneAsset (forest entry,
+// schema-derived field dispatch, engine-self-contained GUID resolution).
+// serializeSceneAssetToPack now uses schema-derived refs[] index (D-1/D-2).
+export { rootsToSceneAsset, serializeSceneAssetToPack } from './collect-scene-asset';
 // feat-20260626 M6 / m6-4: debug-draw auto-attach glue is re-exported from the
 // main barrel (was a separate tsup entry). The separate entry produced a SECOND
 // module copy of the mutable `registeredDebugDraw` registry: createApp set it on
@@ -820,5 +829,9 @@ export type { RenderPipeline, RenderPipelineData } from './render-pipeline';
 // custom-pipeline buildGraph / execute closures can `import type` the clean,
 // post-narrowing public ctx face from `@forgeax/engine-runtime` directly.
 export type { RenderPipelineContext } from './render-pipeline-context';
+// feat-20260701-rootstosceneasset verify minor-edit (F2): collectSubtree is a
+// reusable "BFS a subtree along Children" primitive (the forgeax-engine-ecs
+// skill documents importing it from the barrel) — re-export so that claim holds.
+export { collectSubtree } from './scene-utils/collect-subtree';
 export { URP_PIPELINE_ID, urpPipeline } from './urp-pipeline';
 // cache-bust-marker for feat-20260615-fbx-importer-via-sdk PR-CI run on bf1d383f / 05a331cd (post-rebase tsbuildinfo restore-keys staleness)

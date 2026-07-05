@@ -19,10 +19,11 @@
 import { Entity, World } from '@forgeax/engine-ecs';
 import { type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { ChildOf, TileLayer, Tilemap, Transform } from '../components';
+import { ChildOf, encodeSortScope, TileLayer, Tilemap, Transform } from '../components';
 import { encodeTileBits } from '../tile-bits';
 import {
   resetTilemapChunkExtractCache,
+  resetTilemapDerivedEntityTracker,
   tilemapChunkExtractSystem,
 } from '../tilemap-chunk-extract-system';
 
@@ -63,10 +64,14 @@ function setup(opts: {
     )
     .unwrap();
   world.spawn(
-    { component: TileLayer, data: { tiles: opts.tiles, layerOrder: 0, dirty: 1 } },
+    {
+      component: TileLayer,
+      data: { tiles: opts.tiles, layerOrder: 0, dirty: 1, sortScope: encodeSortScope('per-cell') },
+    },
     { component: ChildOf, data: { parent: tilemap } },
   );
   resetTilemapChunkExtractCache();
+  resetTilemapDerivedEntityTracker();
   return { world };
 }
 

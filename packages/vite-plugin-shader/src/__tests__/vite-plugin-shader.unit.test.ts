@@ -955,8 +955,11 @@ import { toRollupLog } from '../wrap.js';
       // + baseColorTexture) so the generic std140 writer derives byte-stable
       // offsets straight from `derive(paramSchema).uboLayout`.
       const expectedFieldCounts: Record<string, number> = {
-        'forgeax::default-standard-pbr': 13,
-        'forgeax::pbr-skin': 13,
+        // feat-city-glb Bug 4 (multi-UV tiling): built-in PBR + skin gained a
+        // `uvSet` param (13 -> 14) so the fragment selects the glTF
+        // `baseColorTexture.texCoord` UV set. UBO stays 80 B (offset 68).
+        'forgeax::default-standard-pbr': 14,
+        'forgeax::pbr-skin': 14,
         'forgeax::default-unlit': 2,
         'forgeax::sprite': 5,
         'forgeax::sprite-lit': 5,

@@ -57,7 +57,7 @@
  * |:--|:--|:--|
  * | `'post-process-already-registered'` | throw | a second `postProcess.register(id, entry)` under an already-registered `id` |
  * | `'post-process-not-found'` | throw / `Result.err` | `addFullscreenPass({shader: id})` where `id` resolves to no registered post-process |
- * | `'fullscreen-input-not-found'` | throw | `addFullscreenPass({reads: [key]})` where `key` is not a graph-declared color target |
+ * | `'fullscreen-input-not-found'` | throw | `addFullscreenPass({reads: [key]})` where `key` is not a graph-declared color target, or a depth key missing TEXTURE_BINDING (D-4) |
  * | `'ssao-radius-non-positive'` | throw | SSAO `radius <= 0` |
  * | `'ssao-bias-negative'` | throw | SSAO `bias < 0` |
  * | `'ssao-storage-buffer-unavailable'` | throw | device lacks storage-buffer support for the SSAO pass |
@@ -200,7 +200,8 @@ export type PostProcessErrorDetail =
 const POST_PROCESS_EXPECTED: { readonly [C in PostProcessErrorCode]: string } = {
   'post-process-already-registered': 'each post-process id is registered at most once',
   'post-process-not-found': 'addFullscreenPass references a registered post-process id',
-  'fullscreen-input-not-found': 'reads[0] must be a graph-declared colorTarget name',
+  'fullscreen-input-not-found':
+    'reads key must be a graph-declared colorTarget with TEXTURE_BINDING',
   'ssao-radius-non-positive': 'SSAO radius must be > 0',
   'ssao-bias-negative': 'SSAO bias must be >= 0',
   'ssao-storage-buffer-unavailable': 'device supports storage buffers',
@@ -225,9 +226,12 @@ function postProcessHint(code: PostProcessErrorCode, detail: PostProcessErrorDet
     case 'fullscreen-input-not-found': {
       const d = detail as FullscreenInputNotFoundDetail;
       return (
-        `fullscreen pass '${d.passName}' references reads[0]='${d.readsKey}' but that key is not ` +
-        `declared as a graph color target. First call graph.addColorTarget('${d.readsKey}', {format, size}) ` +
-        `(or check spelling) before addFullscreenPass(g, '${d.passName}', { shader, color, reads: ['${d.readsKey}'] }).`
+        `fullscreen pass '${d.passName}' references reads key '${d.readsKey}' but that key is not ` +
+        `declared as a graph color target, or the target is not sampleable as a texture. ` +
+        `First call graph.addColorTarget('${d.readsKey}', {format, size}) ` +
+        `(or check spelling) before addFullscreenPass(g, '${d.passName}', { shader, color, reads: ['${d.readsKey}'] }). ` +
+        `If '${d.readsKey}' is a depth target, ensure it has TEXTURE_BINDING usage (0x04) ` +
+        `and is declared via graph.addColorTarget. Consider switching pipeline if your pipeline does not expose a sampleable depth target.`
       );
     }
     case 'ssao-radius-non-positive': {

@@ -236,10 +236,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     return;
   }
 
-  // Install the cascade-overlay debug-viz. The overlay's render-graph + scene
-  // pass + addFullscreenPass cascade tint live in ./cascade-overlay.ts; this
-  // call registers all variants and installs the default 'all-bands' tint.
-  const splits = installCsmOverlay(renderer);
+  // Install the cascade-overlay debug-viz. The overlay is now a single
+  // shader registered once with structured reads + uniform params; mode
+  // changes write the PostProcessParams component UBO (D-8). The call passes
+  // `world` so cascade-overlay.ts can spawn the params entity.
+  const splits = installCsmOverlay(renderer, world);
   if (splits === null) {
     console.error('[learn-render 5.3.3 csm] installCsmOverlay failed');
   } else {

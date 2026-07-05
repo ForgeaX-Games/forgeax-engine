@@ -113,6 +113,10 @@ describe('buildFrameModel — pipeline-bearing tape', () => {
     expect(ps?.depthStencil.depthWriteEnabled).toBe(true);
     expect(ps?.multisample.count).toBe(4);
     expect(ps?.shaders.vertexShaderModuleHandleId).toBe('shader:vs');
+    // Active entry points are surfaced so a multi-entrypoint module (e.g. fs_main
+    // vs fs_gbuffer) is disambiguated in the pipeline panel.
+    expect(ps?.shaders.vertexEntryPoint).toBe('main');
+    expect(ps?.shaders.fragmentEntryPoint).toBe('main');
     expect(ps?.blend.colorTargets[0]?.format).toBe('bgra8unorm');
   });
 

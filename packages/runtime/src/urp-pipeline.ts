@@ -113,7 +113,7 @@ export const urpPipeline: RenderPipeline = {
       format: 'depth24plus-stencil8',
       size: 'swapchain',
       sample: 1,
-      usage: 0x10, // RENDER_ATTACHMENT
+      usage: 0x10 | 0x04, // RENDER_ATTACHMENT | TEXTURE_BINDING (plan-strategy D-6)
     });
 
     // Shadow depth atlas target. ECS-driven size (DirectionalLight.mapSize
@@ -391,10 +391,25 @@ export const urpPipeline: RenderPipeline = {
         sample: 1,
         usage: 0x04 | 0x02, // TEXTURE_BINDING | COPY_DST
       });
+      const passReads: string[] = [];
+      // plan-strategy D-6: when the post-effect entry declares a depth read,
+      // add a 'depth' topology edge so the graph orders the main pass (which
+      // writes depth) before the overlay (which samples it). This is a graph
+      // dependency edge, not the content-level sampleType wiring (that stays
+      // in dispatchFullscreenPass, pipeline-agnostic per AC-02).
+      const entry = ctx.runtime.lookupPostProcess?.(effectId);
+      if (entry?.reads) {
+        for (const read of entry.reads) {
+          if (typeof read !== 'string' && read.sampleType === 'depth') {
+            passReads.push(read.key);
+          }
+        }
+      }
       addFullscreenPass(graph, `post-effect-${i}`, {
         shader: effectId,
         color: scratchKey,
         compositeOverSwapchain: true,
+        ...(passReads.length > 0 ? { reads: passReads } : {}),
       });
     }
 

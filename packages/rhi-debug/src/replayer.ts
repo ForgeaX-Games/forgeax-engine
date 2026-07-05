@@ -596,13 +596,16 @@ async function commitThroughDrawImpl(
   );
   if (!fwd.ok) return fwd;
 
-  if (!hasColor) {
-    return ok({ committed: false });
-  }
-
   // Synthetic commit of the (still-open) target pass, derived from beginEv's
   // recorded handles — mirrors replayEndRenderPass + replayFinish + replaySubmit
   // but stops at the target draw instead of replaying the recorded pass tail.
+  //
+  // This runs for depth-only passes too (shadow / depth pre-pass, no color
+  // attachment): without it the target draw's depth writes were never flushed, so
+  // every draw in the pass read back the SAME final depth and the depth preview
+  // only changed at the next pass boundary. `committed` still reflects hasColor —
+  // it means "a color RT was committed" (the depth path reads the texture directly
+  // via _resolveHandle, not through this flag).
   const pass = passEncoderMap.get(beginEv.passHandleId);
   if (pass === undefined) {
     return err(
@@ -639,7 +642,7 @@ async function commitThroughDrawImpl(
   queue.submit([finishRes.value as unknown as never] as unknown as readonly never[]);
   await queue.onSubmittedWorkDone();
 
-  return ok({ committed: true });
+  return ok({ committed: hasColor });
 }
 
 /**
@@ -969,7 +972,7 @@ async function replayEvent(
  * This adaptation is replay-layer-generic (every browser-captured tape replayed
  * offline needs it), which is why it lives here rather than in any per-demo script.
  */
-function adaptReplayFormat(format: string | undefined): string | undefined {
+export function adaptReplayFormat(format: string | undefined): string | undefined {
   if (format === 'bgra8unorm-srgb') return 'rgba8unorm-srgb';
   if (format === 'bgra8unorm') return 'rgba8unorm';
   return format;

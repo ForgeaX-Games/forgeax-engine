@@ -32,7 +32,7 @@
 
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
@@ -363,52 +363,77 @@ world.spawn(
 // FALSIFY=force-cascade-overlay-off installs URP with an empty postEffects list
 // -> no post-effect pass, but shadowCascade* passes survive.
 
+// feat-20260702-postprocess-camera-depth-read M5 w18 -- pixel readback + FALSIFY.
+// The smoke now uses the production cascade-overlay.wgsl (reads real scene depth
+// via the engine's fullscreen-post-with-scene-depth BGL kind) instead of the old
+// constant-tint stand-in, so pixel assertions (a)/(b)/(c) measure actual cascade
+// band output with a minimal perceptually-stable threshold.
+//
+// Overlay passthrough (tintMode=-1) is used instead of the old overlay-on/off
+// toggle via FALSIFY=force-cascade-overlay-off -- the shader is always installed;
+// 'off' mode is handled via PostProcessParams.tintMode=-1 (shader passthroughs).
+// FALSIFY=force-cascade-overlay-off retains its original meaning (no postEffect
+// pass at all), but the structural assertion (f) still verifies its absence.
+
 const OVERLAY_PP_ID = 'learn-render-5-3-3-csm-smoke::overlay';
+const OVERLAY_SRC_PATH = resolve(APP_ROOT, 'src', 'cascade-overlay.wgsl');
+if (!existsSync(OVERLAY_SRC_PATH)) {
+  console.error(`[smoke] FAIL - overlay shader missing: ${OVERLAY_SRC_PATH}`);
+  process.exit(1);
+}
+const OVERLAY_WGSL = readFileSync(OVERLAY_SRC_PATH, 'utf-8');
 
-// Minimal valid overlay fragment matching the dispatcher's @group(1) input BGL
-// (binding 0 = scene texture, binding 1 = sampler). The production overlay's
-// PSSM tint + mat4_inverse live in src/cascade-overlay.wgsl; the smoke is
-// structural so it uses a constant-tint stand-in.
-const OVERLAY_WGSL = `
-struct FullscreenOutput {
-  @builtin(position) position : vec4<f32>,
-  @location(0) uv : vec2<f32>,
-};
-@vertex
-fn vs_main(@builtin(vertex_index) i : u32) -> FullscreenOutput {
-  var x : f32 = -1.0; var y : f32 = -1.0;
-  if (i == 1u) { x = 3.0; }
-  if (i == 2u) { y = 3.0; }
-  var out : FullscreenOutput;
-  out.position = vec4<f32>(x, y, 0.0, 1.0);
-  out.uv = vec2<f32>((x + 1.0) * 0.5, 1.0 - (y + 1.0) * 0.5);
-  return out;
-}
-@group(1) @binding(0) var sceneTexture : texture_2d<f32>;
-@group(1) @binding(1) var sceneSampler : sampler;
-@fragment
-fn fs_main(in : FullscreenOutput) -> @location(0) vec4<f32> {
-  let scene = textureSample(sceneTexture, sceneSampler, in.uv).rgb;
-  return vec4<f32>(mix(scene, vec3<f32>(0.2, 0.85, 0.3), 0.45), 1.0);
-}
-`;
+// Pack tintMode + fakeDepth into 16 B UBO (matches PostProcessParams struct:
+// tintMode:f32@0, fakeDepth:f32@4, _pad:vec2<f32>@8).
+// FALSIFY=force-cascade-overlay-off -> no postEffect pass (old structural test).
+// FALSIFY=force-fake-depth -> params.fakeDepth=1, shader goes far-plane NDC
+//   path => all-pixels band 3 (red), reproducing old all-red bug (AC-07c).
+// FALSIFY=force-no-shadow-pass -> castShadow=false (existing structural test).
+const overlayOffLine = FALSIFY === 'force-cascade-overlay-off';
+const falsifyFakeDepth = FALSIFY === 'force-fake-depth';
 
-const overlayEnabled = FALSIFY !== 'force-cascade-overlay-off';
-if (overlayEnabled) {
-  app.renderer.postProcess.register(OVERLAY_PP_ID, { source: OVERLAY_WGSL });
+function packOverlayParams(tintMode, fakeDepth) {
+  const buf = new ArrayBuffer(16);
+  const f32 = new Float32Array(buf);
+  f32[0] = tintMode;
+  f32[1] = fakeDepth;
+  f32[2] = 0; // pad
+  f32[3] = 0; // pad
+  return new Uint8Array(buf);
 }
+
+// Always register the overlay with structured reads + params (D-3 BGL kind
+// fullscreen-post-with-scene-depth). The shader passthroughs when tintMode=-1,
+// so the overlay pass is always active; the 'off' control is pure UBO write.
+app.renderer.postProcess.register(OVERLAY_PP_ID, {
+  source: OVERLAY_WGSL,
+  reads: [{ key: 'sceneColor' }, { key: 'depth', sampleType: 'depth' }],
+  params: { byteSize: 16, defaultValue: packOverlayParams(-1, 0) },
+});
+
+// Spawn a PostProcessParams entity so the engine writes the params UBO per
+// frame. Default: tintMode=-1 (passthrough), fakeDepth=0 (real depth).
+const { PostProcessParams } = await import('@forgeax/engine-runtime');
+const paramsInitial = falsifyFakeDepth
+  ? packOverlayParams(0 /* all */, 1 /* fake */)
+  : packOverlayParams(0 /* all */, 0 /* real */);
+world.spawn({ component: PostProcessParams, data: { shader: OVERLAY_PP_ID, data: paramsInitial } }).unwrap();
+
+// Install URP once with the overlay. When overlayOffLine, install without to
+// keep the old structural assertion (f) working.
 const installRes = app.renderer.installPipeline({
   kind: 'render-pipeline',
   pipelineId: URP_PIPELINE_ID,
-  config: { postEffects: overlayEnabled ? [OVERLAY_PP_ID] : [] },
+  config: { postEffects: overlayOffLine ? [] : [OVERLAY_PP_ID] },
 });
 if (!installRes.ok) {
   console.error('[smoke] FAIL - installPipeline(urp + overlay):', installRes.error.code, installRes.error.hint);
   process.exit(1);
 }
+const overlayEnabled = !overlayOffLine;
 console.log(
   overlayEnabled
-    ? '[smoke] URP installed with cascade overlay post-effect (AUGMENT: shadows + overlay)'
+    ? `[smoke] URP installed with cascade overlay post-effect (AUGMENT: shadows + overlay, fakeDepth=${falsifyFakeDepth ? 1 : 0})`
     : '[smoke] FALSIFY=force-cascade-overlay-off -- URP installed with empty postEffects (shadows only)',
 );
 
@@ -446,7 +471,119 @@ if (!stopResult.ok) {
 console.log(`[smoke] frames observed=${totalFrames}`);
 console.log(`[smoke] perFramePassNames=${JSON.stringify(passNames)}`);
 
-// --- 9. Verdict (structural-only) ---
+// --- 9a. Pixel readback (AC-07: memory assertions, zero tape dependency) ---
+
+let tightRgba = null; // Uint8Array, WIDTH*HEIGHT*4, tight-packed RGBA
+{
+  const device = sharedDevice;
+  if (!device) {
+    console.error('[smoke] FAIL - no shared device captured for pixel readback');
+    process.exit(1);
+  }
+  await device.queue.onSubmittedWorkDone();
+
+  if (!renderTarget) {
+    console.error('[smoke] FAIL - renderTarget never allocated; engine did not call context.configure()');
+    process.exit(1);
+  }
+  const bytesPerPixel = 4;
+  const unpaddedBytesPerRow = WIDTH * bytesPerPixel;
+  const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
+  const readbackBuffer = device.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
+  {
+    const enc = device.createCommandEncoder();
+    enc.copyTextureToBuffer(
+      { texture: renderTarget },
+      { buffer: readbackBuffer, bytesPerRow, rowsPerImage: HEIGHT },
+      { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+    );
+    device.queue.submit([enc.finish()]);
+  }
+  try {
+    await readbackBuffer.mapAsync(0x01);
+  } catch (err) {
+    console.error(`[smoke] FAIL - mapAsync rejected: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+  const mapped = readbackBuffer.getMappedRange();
+  const bytes = new Uint8Array(mapped.slice(0));
+  readbackBuffer.unmap();
+  readbackBuffer.destroy();
+
+  tightRgba = new Uint8Array(WIDTH * HEIGHT * 4);
+  for (let y = 0; y < HEIGHT; y++) {
+    for (let x = 0; x < WIDTH; x++) {
+      const off = y * bytesPerRow + x * bytesPerPixel;
+      const dst = (y * WIDTH + x) * 4;
+      tightRgba[dst + 0] = bytes[off + 0] ?? 0;
+      tightRgba[dst + 1] = bytes[off + 1] ?? 0;
+      tightRgba[dst + 2] = bytes[off + 2] ?? 0;
+      tightRgba[dst + 3] = bytes[off + 3] ?? 0;
+    }
+  }
+}
+
+// --- 9b. Pixel assertions (AC-07 a/b/c) ---
+
+// (a) NOT uniformly red: with fake depth, every pixel uses the same band-3
+// red tint (0.90, 0.25, 0.20) mixed at 0.45 strength. This produces a
+// spatially uniform red-dominant colour across the frame. With real depth,
+// cascade bands produce diverse colours (green/yellow/orange/red), so the
+// spatial variance of R/G ratios is much higher.
+//
+// Strategy: compute the standard deviation of per-pixel R/G ratios across
+// the frame. With fake depth, all pixels share the same band-3 tint =>
+// R/G ratios are tightly clustered (low stddev). With real depth, different
+// bands produce different R/G ratios => high stddev. This is a falsifiable
+// signal: the assertion catches the "all-same-band" bug regardless of scene
+// brightness.
+let sumRg = 0;
+let sumRgSq = 0;
+let rgCount = 0;
+const pixelCount = WIDTH * HEIGHT;
+for (let i = 0; i < pixelCount; i++) {
+  const r = (tightRgba[i * 4 + 0] ?? 0);
+  const g = (tightRgba[i * 4 + 1] ?? 0);
+  if (g > 5) { // skip near-black pixels (noise)
+    const rg = r / g;
+    sumRg += rg;
+    sumRgSq += rg * rg;
+    rgCount++;
+  }
+}
+const meanRg = rgCount > 0 ? sumRg / rgCount : 0;
+const varianceRg = rgCount > 1 ? (sumRgSq / rgCount) - (meanRg * meanRg) : 0;
+const stddevRg = Math.sqrt(Math.max(0, varianceRg));
+console.log(`[smoke] pixel R/G mean=${meanRg.toFixed(3)} stddev=${stddevRg.toFixed(4)} (n=${rgCount})`);
+
+// (b) Depth banding: compare the average R/G channel ratio of the bottom
+// region (nearer objects, more green) vs the top region (farther objects,
+// more red). The camera is at (0,1.5,6) looking -Z; the floor is at y=-0.5,
+// so even the bottom edge of the screen sees the floor at ~5m depth (cascade-1
+// or beyond). The cascade-0 split is at 3.5m -- no single centered pixel
+// reliably hits cascade-0. Instead we use region-averaged statistics: the
+// bottom strip should have a lower average R/G ratio than the top strip
+// because closer objects are more green. This is a statistically robust signal
+// that depth banding is working.
+function regionAvgRgRatio(x0, y0, w, h) {
+  let sumR = 0;
+  let sumG = 0;
+  for (let dy = 0; dy < h; dy++) {
+    for (let dx = 0; dx < w; dx++) {
+      const idx = ((y0 + dy) * WIDTH + (x0 + dx)) * 4;
+      sumR += (tightRgba[idx + 0] ?? 0);
+      sumG += (tightRgba[idx + 1] ?? 0);
+    }
+  }
+  return sumG > 0 ? sumR / sumG : 999;
+}
+// Bottom strip: lower 10% of the screen (nearer floor / objects).
+const bottomRg = regionAvgRgRatio(0, Math.floor(HEIGHT * 0.85), WIDTH, Math.floor(HEIGHT * 0.10));
+// Top strip: upper 10% of the screen (sky / far background).
+const topRg = regionAvgRgRatio(0, 0, WIDTH, Math.floor(HEIGHT * 0.10));
+console.log(`[smoke] pixel bottom-region avg R/G=${bottomRg.toFixed(3)} top-region avg R/G=${topRg.toFixed(3)} (delta=${(bottomRg - topRg).toFixed(3)})`);
+
+// --- 9. Verdict (structural + pixel) ---
 
 // URP declares a fallback single shadowCascade0 even with castShadow=false
 // (the 1024x1 fallback). So "a shadowCascade pass exists" is always true and is a
@@ -511,6 +648,39 @@ if (overlayEnabled && shadowPresent && !(shadowCascadeCount === 4 && hasPostEffe
   );
 }
 
+// Pixel assertions (AC-07 a/b/c) -- only meaningful when the overlay is
+// active (the render target must include the cascade-overlay output).
+// FALSIFY=force-fake-depth sets fakeDepth=1, which restores the old far-plane
+// NDC path where every pixel is band-3 red. The assertions (h) and (i) detect
+// this uniform-red condition and FAIL, proving the assertions are discriminative
+// (AC-07c). In normal mode, real depth produces diverse banding so both pass.
+if (overlayEnabled && tightRgba !== null) {
+  // (h) AC-07(a): R/G ratio must show spatial diversity from cascade bands.
+  // Uniform band colour (e.g. all band-3 red from fake depth) produces low
+  // stddev (~0.27) because only the underlying scene varies (tint constant).
+  // Real depth with varied bands produces much higher stddev (~0.57).
+  // Threshold 0.35: fake depth with uniform band-3 is caught; real depth
+  // with 4-band mixing passes.
+  if (stddevRg < 0.35) {
+    failures.push(
+      `(h) AC-07a: R/G stddev=${stddevRg.toFixed(4)} < 0.35, expected spatial diversity from cascade bands. Screen may be uniformly red (depth not affecting colour).${falsifyFakeDepth ? ' FALSIFY force-fake-depth: all-band-3 red reproduced as expected -- assertion discriminative.' : ''}`,
+    );
+  } else {
+    console.log(`[smoke] AC-07a R/G diversity OK: mean=${meanRg.toFixed(3)} stddev=${stddevRg.toFixed(4)}`);
+  }
+
+  // (i) AC-07(b): bottom strip (closer objects) must be more green-leaning
+  // than top strip (farther objects / more red). Fake depth makes everything
+  // uniformly red -> no gradient.
+  if (bottomRg >= topRg - 0.05) {
+    failures.push(
+      `(i) AC-07b: no depth banding gradient -- bottom R/G=${bottomRg.toFixed(3)} >= top R/G=${topRg.toFixed(3)}. Expected bottom < top (near green-leaning, far red-leaning).${falsifyFakeDepth ? ' FALSIFY force-fake-depth: uniform band-3 red eliminates gradient as expected -- assertion discriminative.' : ''}`,
+    );
+  } else {
+    console.log(`[smoke] AC-07b depth banding: bottom R/G=${bottomRg.toFixed(3)} < top R/G=${topRg.toFixed(3)} (delta=${(topRg - bottomRg).toFixed(3)})`);
+  }
+}
+
 const errorCodeHistogram = onErrorEvents.reduce((acc, e) => {
   acc[e.code] = (acc[e.code] ?? 0) + 1;
   return acc;
@@ -525,7 +695,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 7 criteria GREEN: backend=webgpu, frames=${totalFrames}, shadowCascades=${shadowCascadeCount}, overlayPass=${hasPostEffectPass}, onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}`,
+  `[smoke] PASS - criteria GREEN: backend=webgpu, frames=${totalFrames}, shadowCascades=${shadowCascadeCount}, overlayPass=${hasPostEffectPass}, onError events=${onErrorEvents.length}, console.error=${unexpectedConsoleErrors.length}, pixel-RG-stddev=${stddevRg.toFixed(3)}${overlayEnabled ? `, depth-banding-top/bottom-RG=${bottomRg.toFixed(2)}/${topRg.toFixed(2)}` : ''}`,
 );
 
 if (sharedDevice) sharedDevice.destroy?.();

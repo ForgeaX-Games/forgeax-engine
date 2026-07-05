@@ -633,6 +633,10 @@ export interface DrawPipelineState {
   readonly shaders: {
     readonly vertexShaderModuleHandleId: HandleId | undefined;
     readonly fragmentShaderModuleHandleId: HandleId | undefined;
+    /** Active vertex entry point (a module may bundle several; this is the one this draw runs). */
+    readonly vertexEntryPoint: string | undefined;
+    /** Active fragment entry point — disambiguates a multi-entrypoint module (e.g. fs_main vs fs_gbuffer). */
+    readonly fragmentEntryPoint: string | undefined;
   };
   readonly rasterizer: {
     readonly cullMode: GPUCullMode;

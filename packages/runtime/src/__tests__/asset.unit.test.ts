@@ -65,6 +65,7 @@ import {
   animationClipLoader,
   fontLoader,
   HANDLE_CUBE,
+  HANDLE_CYLINDER,
   HANDLE_QUAD,
   HANDLE_SPHERE,
   HANDLE_TRIANGLE,
@@ -2633,6 +2634,10 @@ function makeStubGPU(): unknown {
     { name: 'HANDLE_TRIANGLE', handle: HANDLE_TRIANGLE },
     { name: 'HANDLE_QUAD', handle: HANDLE_QUAD },
     { name: 'HANDLE_SPHERE', handle: HANDLE_SPHERE },
+    // feat-20260701-editor-world-container-doc-ecs-collapse M0 / AC-16:
+    // cylinder builtin handle=6, GUID = deriveBuiltin('HANDLE_CYLINDER') UUIDv5
+    // (plan-strategy §5.6 builtin-guid-ssot gate)
+    { name: 'HANDLE_CYLINDER', handle: HANDLE_CYLINDER },
   ] as const;
 
   describe('builtin GUID -> payload SSOT (Tier 0 guard)', () => {

@@ -3,9 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "sideEffects": false,
-  "description": "FBX importer via Autodesk FBX SDK 2020.3.7 native addon. Converts .fbx files to 7 sub-asset POD types consumed by the engine asset pipeline.",
+  "description": "FBX importer for the forgeax engine via ufbx compiled to WebAssembly. Single parser for both browser and Node; no Autodesk FBX SDK or native addon. Emits the engine FBX POD schema (meshes, nodes, materials, skeletons, skins, clips).",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -17,19 +17,20 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "pkg",
     "src",
     "scripts",
-    "binding.gyp",
     "README.md"
   ],
   "scripts": {
-    "install": "node scripts/postinstall.mjs",
+    "build:wasm": "node scripts/fetch-ufbx.mjs && node scripts/build-wasm.mjs",
+    "fetch-ufbx": "node scripts/fetch-ufbx.mjs",
+    "fetch-wasm": "node scripts/fetch-wasm.mjs",
     "build": "tsup",
     "test": "vitest run"
   },
   "dependencies": {
-    "@forgeax/engine-types": "workspace:*",
-    "node-addon-api": "^8.0.0"
+    "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.14.0"
@@ -37,16 +38,18 @@
   "forgeax": {
     "metrics": {
       "bundle-size": {
-        "enabled": false,
-        "reason": "build-time importer with native addon; bundle size not meaningful for C++ native modules"
+        "enabled": true,
+        "path": "pkg/fbx-wasm.wasm",
+        "compression": "gzip",
+        "expected": 147043
       },
       "fps": {
         "enabled": false,
-        "reason": "build-time one-shot import; no runtime fps measured by this package"
+        "reason": "parser package: no render loop; FPS is reported by the apps that consume imported FBX assets"
       },
       "bench": {
         "enabled": false,
-        "reason": "import wall-time baseline tracked in M0 spike-m0.md; no per-package bench suite needed"
+        "reason": "no hot-path bench at the FBX parse boundary yet; import cost is one-shot cook, not a per-frame path"
       },
       "gate": {
         "enabled": true,
@@ -54,7 +57,7 @@
       },
       "spike-report": {
         "enabled": false,
-        "reason": "M0 spike report lives in .forgeax-harness/forgeax-loop/feat-20260615-fbx-importer-via-sdk/spike-m0.md (loop-state SSOT); not a per-package metric"
+        "reason": "not a spike package; productionised browser FBX parser sized by the bundle-size MetricKind above"
       }
     }
   }

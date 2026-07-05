@@ -91,8 +91,8 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   // (loadByGuid is recursive over scene refs[] per
   // tweak-20260609-asset-registry-instantiate-scene-by-guid).
   world._setSceneAssetResolver(
-    (sourceIndex: number, _parentHandle: Handle<'SceneAsset', 'shared'>) => {
-      void sourceIndex;
+    (source: number | string, _parentHandle: Handle<'SceneAsset', 'shared'>) => {
+      void source;
       return ok(innerSceneHandle);
     },
   );

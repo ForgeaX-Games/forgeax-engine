@@ -33,6 +33,9 @@ const defaultStandardPbrParamSchema: readonly ParamSchemaEntry[] = [
   { name: 'emissive', type: 'vec3', default: [0.0, 0.0, 0.0] },
   { name: 'emissiveIntensity', type: 'f32', default: 0.0 },
   { name: 'occlusionStrength', type: 'f32', default: 1.0 },
+  // feat-city-glb multi-UV tiling: per-material UV-set selector (offset 68,
+  // UBO byte-stable at 80). Mirrors default-standard-pbr.wgsl.meta.json SSOT.
+  { name: 'uvSet', type: 'f32', default: 0.0 },
   { name: 'baseColorTexture', type: 'texture2d' },
   { name: 'metallicRoughnessTexture', type: 'texture2d' },
   { name: 'normalTexture', type: 'texture2d' },

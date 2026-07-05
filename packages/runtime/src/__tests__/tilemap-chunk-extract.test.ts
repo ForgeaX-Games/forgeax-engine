@@ -16,10 +16,11 @@ import { Entity, World } from '@forgeax/engine-ecs';
 import { type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { HANDLE_QUAD } from '../asset-registry';
-import { ChildOf, MeshFilter, TileLayer, Tilemap, Transform } from '../components';
+import { ChildOf, encodeSortScope, MeshFilter, TileLayer, Tilemap, Transform } from '../components';
 import { encodeTileBits } from '../tile-bits';
 import {
   resetTilemapChunkExtractCache,
+  resetTilemapDerivedEntityTracker,
   tilemapChunkExtractSystem,
 } from '../tilemap-chunk-extract-system';
 
@@ -64,11 +65,20 @@ function makeSetup(opts: {
     .unwrap();
   const layer = world
     .spawn(
-      { component: TileLayer, data: { tiles: opts.tiles, layerOrder: 0, dirty: 1 } },
+      {
+        component: TileLayer,
+        data: {
+          tiles: opts.tiles,
+          layerOrder: 0,
+          dirty: 1,
+          sortScope: encodeSortScope('per-cell'),
+        },
+      },
       { component: ChildOf, data: { parent: tilemap } },
     )
     .unwrap();
   resetTilemapChunkExtractCache();
+  resetTilemapDerivedEntityTracker();
   return { world, tilemap, layer };
 }
 
@@ -246,5 +256,41 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
       }
     }
     expect(count).toBe(2);
+  });
+
+  // AC-07 (requirements C-4 frozen): when no Camera entity exists in the
+  // World, `buildCameraFrustumPlanes` returns null and the per-cell
+  // streaming path falls through to "all chunks visible". Every non-empty
+  // cell across every chunk must spawn a derived entity. The path must
+  // not throw, and must not silently degrade to "zero chunks active".
+  //
+  // Anchors: requirements AC-07 (null frustum -> all chunks spawned);
+  // plan-strategy §5.3 (AC-07: null frustum -> full spawn fallback);
+  // plan-strategy §4 R-4 (charter-insufficient — no diagnostic signal
+  // emitted from this path; requirement C-4 froze the warn intentionally).
+  it('null frustum (no Camera entity) -> all chunks spawn derived entities', () => {
+    // 8x8 grid with chunkSize=4 = 4 chunks, every cell non-empty.
+    const cols = 8;
+    const rows = 8;
+    const tiles = new Uint32Array(cols * rows);
+    for (let i = 0; i < tiles.length; i++) tiles[i] = 1;
+    const { world } = makeSetup({ cols, rows, chunkSize: 4, tiles });
+    expect(() => tilemapChunkExtractSystem(world)).not.toThrow();
+    // Without a Camera entity, all 64 cells must have spawned derived
+    // entities (per-cell sortScope path under null frustum -> all chunks
+    // visible -> every non-empty cell yields one derived entity).
+    let derivedCount = 0;
+    for (const arch of world.inspect().archetypes) {
+      if (
+        arch.componentNames.includes('MeshFilter') &&
+        arch.componentNames.includes('MeshRenderer') &&
+        arch.componentNames.includes('Layer') &&
+        !arch.componentNames.includes('Instances') &&
+        !arch.componentNames.includes('SpriteInstances')
+      ) {
+        derivedCount += arch.entityCount;
+      }
+    }
+    expect(derivedCount).toBe(64);
   });
 });

@@ -1810,6 +1810,128 @@ describe.skipIf(SKIP_DAWN)('e2e dawn -- cross-device pixel epsilon AC-14 (m5b-3)
   }, 60_000);
 
   // ---------------------------------------------------------------
+  // commitThroughDraw: depth-only pass commits per-draw (shadow-map pass)
+  // ---------------------------------------------------------------
+  // A shadow / depth pre-pass has NO color attachment. commitThroughDrawImpl used
+  // to early-return before the synthetic end()+finish()+submit() for such passes,
+  // so the depth writes of the target draw were never flushed — every draw in the
+  // pass read back the SAME (final) depth, and the depth preview only appeared to
+  // change at the next pass boundary (the CSM viewer bug). This locks per-draw
+  // depth: two fullscreen draws write frag_depth 0.3 then 0.7 (depthCompare
+  // 'always' so draw 1 overwrites); commitThroughDraw(0) must read ~0.3 and
+  // commitThroughDraw(1) ~0.7. Before the fix both read ~0.7.
+  it('commitThroughDraw: depth-only pass reads per-draw depth (not the final frame)', async () => {
+    const pack = await loadDawnRhi();
+    if (!pack) return;
+
+    const { debugInst, wrappedCreateShader, wrappedDevice, rawDevice } = await makeWrappedCtx(pack);
+    debugInst.arm(1);
+
+    const depthTexRes = wrappedDevice.createTexture({
+      size: { width: RT_WIDTH, height: RT_HEIGHT, depthOrArrayLayers: 1 },
+      format: 'depth32float' as GPUTextureFormat,
+      usage: 0x11, // COPY_SRC | RENDER_ATTACHMENT
+    });
+    if (!depthTexRes.ok) throw new Error(`depthTex: ${depthTexRes.error.code}`);
+    const dsViewRes = wrappedDevice.createTextureView(depthTexRes.value, {} as any);
+    if (!dsViewRes.ok) throw new Error(`ds view: ${dsViewRes.error.code}`);
+
+    const vs = await wrappedCreateShader(rawDevice, { code: FULLSCREEN_TRI_VS });
+    if (!vs.ok) throw new Error(`vs:${(vs.error as any).code}`);
+    const fragDepthFs = (d: number) => `
+@fragment
+fn main() -> @builtin(frag_depth) f32 { return ${d.toFixed(3)}; }`;
+    const fsNear = await wrappedCreateShader(rawDevice, { code: fragDepthFs(0.3) });
+    if (!fsNear.ok) throw new Error(`fsNear:${(fsNear.error as any).code}`);
+    const fsFar = await wrappedCreateShader(rawDevice, { code: fragDepthFs(0.7) });
+    if (!fsFar.ok) throw new Error(`fsFar:${(fsFar.error as any).code}`);
+
+    const bglRes = wrappedDevice.createBindGroupLayout({ entries: [] });
+    if (!bglRes.ok) throw new Error(`bgl`);
+    const plRes = wrappedDevice.createPipelineLayout({ bindGroupLayouts: [bglRes.value] });
+    if (!plRes.ok) throw new Error(`pl`);
+    // Depth-only pipeline: no fragment targets, depthCompare 'always' so the later
+    // draw always overwrites the earlier one.
+    const mkPipe = (fsMod: unknown) =>
+      wrappedDevice.createRenderPipeline({
+        layout: plRes.value,
+        vertex: { module: vs.value, entryPoint: 'main', buffers: [] },
+        fragment: { module: fsMod, entryPoint: 'main', targets: [] },
+        primitive: { topology: 'triangle-list' },
+        depthStencil: {
+          format: 'depth32float',
+          depthWriteEnabled: true,
+          depthCompare: 'always',
+        },
+      } as any);
+    const pipeNear = mkPipe(fsNear.value);
+    if (!pipeNear.ok) throw new Error(`pipeNear`);
+    const pipeFar = mkPipe(fsFar.value);
+    if (!pipeFar.ok) throw new Error(`pipeFar`);
+
+    const encRes = wrappedDevice.createCommandEncoder({});
+    if (!encRes.ok) throw new Error(`enc`);
+    const enc = encRes.value;
+    const pass = enc.beginRenderPass({
+      colorAttachments: [],
+      depthStencilAttachment: {
+        view: dsViewRes.value as any,
+        depthClearValue: 1.0,
+        depthLoadOp: 'clear',
+        depthStoreOp: 'store',
+      },
+    } as any);
+    pass.setPipeline(pipeNear.value as any);
+    pass.draw(3, 1, 0, 0); // draw 0: writes depth 0.3
+    pass.setPipeline(pipeFar.value as any);
+    pass.draw(3, 1, 0, 0); // draw 1: overwrites depth 0.7
+    pass.end();
+    const fin = enc.finish();
+    if (!fin.ok) throw new Error(`finish`);
+    wrappedDevice.queue.submit([fin.value] as unknown as readonly never[]);
+    await wrappedDevice.queue.onSubmittedWorkDone();
+
+    debugInst.onFrameEnd();
+    const tape = debugInst.getTape() as any;
+    if (!tape) throw new Error('tape');
+    const { json, blob } = serializeTape(tape);
+    const rt = deserializeTape(json, blob);
+    if (!rt.ok) throw new Error(`deserialize`);
+    const clean = rt.value;
+
+    const depthCreate = clean.events.find(
+      (e: any) => e.kind === 'createTexture' && e.desc?.format === 'depth32float',
+    ) as any;
+    if (!depthCreate) throw new Error('depth createTexture not in tape');
+
+    const { rawDev2 } = await makeFreshReplayDevice(pack);
+    teardownDevices.push(rawDev2);
+    const replayRes = createReplay(clean, rawDev2, pack.createShaderModule);
+    if (!replayRes.ok) throw new Error(`createReplay`);
+    const replay = replayRes.value;
+
+    const readDepthAfter = async (drawIdx: number) => {
+      replay.reset();
+      const c = await replay.commitThroughDraw(drawIdx);
+      if (!c.ok) throw new Error(`commitThroughDraw(${drawIdx}): ${c.error.code}`);
+      const live = replay._resolveHandle(depthCreate.handleId);
+      const bytes = await readbackTexturePixels(rawDev2, live, RT_WIDTH, RT_HEIGHT, {
+        bytesPerTexel: 4,
+      });
+      const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.length / 4);
+      return f[0] ?? -1;
+    };
+
+    const d0 = await readDepthAfter(0);
+    const d1 = await readDepthAfter(1);
+    // Per-draw depth: draw 0 wrote 0.3, draw 1 overwrote 0.7. Before the fix the
+    // depth-only pass never committed per-draw, so d0 === d1 === 0.7.
+    expect(d0).toBeCloseTo(0.3, 2);
+    expect(d1).toBeCloseTo(0.7, 2);
+    expect(Math.abs(d1 - d0)).toBeGreaterThan(0.1);
+  }, 60_000);
+
+  // ---------------------------------------------------------------
   // bound-texture readback: COPY_SRC promotion on replay
   // ---------------------------------------------------------------
   // The TextureViewer previews bound input textures (material albedo / skybox /

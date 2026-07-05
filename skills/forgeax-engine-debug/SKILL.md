@@ -10,7 +10,7 @@ description: >-
 
 > 渲染 / 测试 / CI 排查的症状索引。每条都是踩实过的真坑，给出**判定信号**与**修法落点**，不复述引擎设计（设计见各 package README + AGENTS.md）。
 >
-> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: studio game-template integration (2026-06-17, CSM viewZ 符号 + Skylight 纯色环境光)
+> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: feat-20260704 M5（FBX ufbx WASM 收敛，debug 条目 SDK→ufbx 时代改写）
 
 > [!IMPORTANT]
 > **Demo 渲染错 = 引擎暴露了真实 gap，修引擎不修 demo**（AGENTS.md §Change stance）。在 demo 里塞 1×1 占位 / 手动 rAF / ad-hoc fetch 只会冻结 gap 并误导下一个读样例的 AI。先沿调用链回溯到引擎层，再决定修法。
@@ -35,7 +35,10 @@ description: >-
 | **skin browser 全黑而 dawn smoke 全绿**（`cube-vbo size=768` 不是 1152；slot 5 missing） | parse-gltf → bridge → mesh-loader → render-data → buildPipelineContext → extract 6 环节有断点 | [§skin-vertex-attribute-chain](#skin-vertex-attribute-chain) |
 | **`pnpm -F @forgeax/hello-skin dev` Fox 黑屏**，console `loadByGuid<SceneAsset> failed: AssetError code=asset-not-imported`，但 `smoke` (dawn) 全绿 | fresh worktree 漏 `pnpm build` / 端口被 sibling 占用 / submodule 未 init —— 99% 是环境，先证伪三连 | [§fox-demo-dev-加载报-asset-not-imported](#fox-demo-dev-加载报-asset-not-imported) |
 | **skin entity 静止不动**：hasSkin + AnimationPlayer 已挂，但 Fox 维持 bind-pose 静态；clip 时间轴在推、`Transform.world` 在变，画面就是不动 | palette UBO 没接 allocator / record dyn-offset 写死 0 / extract T-21 placeholder 没兑付 / **`MAX_JOINTS` off-by-one 256 vs 16320 BGL cap** / **browser-async pack-fetch 路径 SkinAsset 还没 register 就 instantiate**（`Skin.joints.length=0` + `JointCountMismatchError` 每帧；M2 fixup `e5e68b35` SceneAsset.skinGuids cross-edge 修；旧 silent-skip 改为 `'skin-asset-unresolved'` Result.err fail-fast） | [§skin-entity-静止不动](#skin-entity-静止不动) |
-| **FBX 骨骼动画整体扭曲 / 上下颠倒 / 动作乱抽**（bind-pose 关掉 AnimationPlayer 是完美直立人形，一开动画就崩） | FBX 动画提取链 bug：`WriteAnimationData` 直接读 `LclRotation` 原始**欧拉度数**当四元数（runtime slerp 它），且 `GetDstPropertyCount()=1` 只读 X 轴 Y/Z 恒 0；修法是每帧 `EvaluateLocalTransform(t).GetQ()`（需先 `SetCurrentAnimationStack`）—— 与 bind-pose 的 `WalkNode` 同一权威路径 | [§fbx-skin-动画扭曲](#fbx-skin-动画扭曲) |
+| **FBX 骨骼动画整体扭曲 / 上下颠倒 / 动作乱抽**（SDK 时代，已修复；ufbx WASM 下走 `bridge.c`，历史参考） | SDK `binding.cc` 将欧拉度数当四元数 + 单轴读取（已删除）；ufbx `bridge.c` 使用 `ufbx_evaluate_transform` 同一权威路径 | [§fbx-skin-动画扭曲](#fbx-skin-动画扭曲) |
+| **FBX parity snapshot diff 红**（`parity-snapshot.test.ts` 失败，快照 JSON 与 bridge.c 输出不一致） | `bridge.c` 语义漂移（轴转换 / 材质判别 / 节点过滤 / 动画提取四类路径任一改动） | [§fbx-parity-snapshot-diff-红](#fbx-parity-snapshot-diff-红) |
+| **FBX pkg/ 缺失**（`initFbxWasm()` ENOENT，WASM 文件不存在） | `pkg/` 不进 git（零二进制约定）；首次 checkout 无 WASM | [§fbx-wasm-缺失-pkg-empty-or-missing](#fbx-wasm-缺失-pkg-empty-or-missing) |
+| **FBX Node WASM 初始化失败**（Node 下 `initFbxWasm()` 抛 RuntimeError，浏览器正常） | `ENVIRONMENT` 编译标志不匹配 Node 运行时，或 Node 版本过旧 | [§fbx-node-wasm-初始化失败](#fbx-node-wasm-初始化失败) |
 | `'webgpu-runtime-error'` 300 frame，`detail.error.name=SkinPaletteOverflowError needs=16384 cap=16320` 首帧即报 | `MAX_JOINTS=256 × 64 = 16384 B` 超过 PR #361 立的 `pbr-skin` BGL `@group(2)@binding(1)` 16320 B 容量 | [§skinpaletteoverflowerror-needs-16384-b-exceeds-16320-b](#skinpaletteoverflowerror-needs-16384-b-exceeds-16320-b) |
 | Edge 浏览器报 `EngineEnvironmentError: webgpu inner=adapter-unavailable`，全屏黑 | 浏览器配置整体禁了硬件 GL 栈，**不是引擎可修** | [§edge-webgpu-disabled](#edge-webgpu-disabled) |
 | wgpu-wasm WebGL2 fallback 路径 `wgpu error: Validation Error` panic（`pbr-pipeline-standard` storage/uniform mismatch · `msaaColor` `DownlevelFlags(VIEW_FORMATS)` · 类似形态） | 引擎在 fallback 路径上漏了 device-cap gate（写死单 axis variant key、graph 层 viewFormats 没按 cap 过滤、texture view-format reinterpret 没 gate） | [§wgpu-wasm-webgl2-fallback-cap-gates](#wgpu-wasm-webgl2-fallback-cap-gates) |
@@ -455,37 +458,97 @@ pnpm -F @forgeax/hello-skin smoke 2>&1 | grep -E "paletteWrites|distinctFullHash
 
 ---
 
-## fbx-skin 动画扭曲
+## fbx-skin 动画扭曲（SDK 时代，已修复）
 
-**信号**：`apps/hello/fbx-skin`（humanoid.fbx，80 joints，clips run/punch/shot）能渲染但**整体扭曲、上下颠倒、动作乱抽**。无 onError，dawn smoke 全绿。
+> [!NOTE]
+> This entry describes a bug that existed in the **removed Autodesk FBX SDK
+> native addon** era (`packages/fbx` pre-feat-20260704). With the migration to
+> the ufbx WASM parser, animation extraction runs through `bridge.c` (not
+> `binding.cc`), and the quad-correctness checks from M1 cover the equivalent
+> paths. This entry is retained for historical reference; new animation
+> regressions go through the parity snapshot gate (see §parity snapshot diff).
 
-**先分层证伪 —— bind pose vs 动画**（交接文档 §逐层闸门协议，charter F2 image-untrustworthy）：临时关掉 `AnimationPlayer`（demo 里 `if (clip && !DEBUG)`），截图。
-- **bind pose = 完美直立人形** → 骨架 / IBM / 蒙皮权重 / 坐标转换 / palette / shader 全对，缺陷 100% 在**动画提取链**（本症状）。
-- bind pose 也扭 → 是 IBM / 列序 / 单位 / `M_i = jointWorld × IBM` 顺序，走 [§skin-vertex-attribute-chain] / hello-skin 家族。
+**信号**：`apps/hello/fbx-skin`（humanoid.fbx，80 joints，clips run/punch/shot）能渲染但**整体扭曲、上下颠倒、动作乱抽**。
 
-**根因（FBX 动画提取链两个叠加 bug，皆在 `@forgeax/engine-fbx`）**：
-1. **欧拉度数当四元数**：`binding.cc::WriteAnimationData` 读 `LclRotation` 曲线原始值（**欧拉角度数**），bridge 打包成 `[x,y,z,1]`，runtime `sampleChannel` 见 `elementCount===4` 当四元数 slerp。实时数据特征：rotation output `[62.93, 0, 0, 1]`（单位四元数分量不可能 >1）。
-2. **只读 X 轴**：`GetDstPropertyCount()` 对这些 curve node 返回 1，Y/Z 曲线永不读 → 全 channel 的 Y/Z 槽位恒 0。
+**根因（已修复）**：SDK 时代的 `binding.cc::WriteAnimationData` 将欧拉角度数直接当四元数使用，且只读 X 轴曲线。在 ufbx WASM 的 `bridge.c` 中，动画提取走 `ufbx_evaluate_transform` + `ufbx_evaluate_quat` —— 与 bind-pose 同一条权威路径，输出真四元数。
 
-**判定**（绕开 vite，直接打 native addon）：
+**判定（ufbx 时代）**：若怀疑动画数据异常，跑 parity snapshot 测试：
 ```bash
-cd packages/fbx
-node -e "const b=require('./build/Release/fbx_binding.node');const d=JSON.parse(b.parseFbx('<abs>/forgeax-engine-assets/vendor/fbx-test/humanoid.fbx'));
-const c=d.clips[0];for(const ch of c.channels){if(ch.property==='rotation'&&ch.targetNode.endsWith('Hips')){console.log(ch.keyValues.slice(0,8));}}"
-# 坏：[62.93, 0, 0, 1, ...]（欧拉度数）  好：[0.2, 0.031, -0.022, 0.979, ...]（单位四元数）
+pnpm --filter @forgeax/engine-fbx test -- parity-snapshot
+```
+快照 JSON 冻结了 cube + humanoid 的完整动画数据基线。diff 红 → bridge.c 语义漂移（见 §parity snapshot diff）。
+
+**dist 陈旧陷阱（仍适用）**：`@forgeax/engine-fbx` 解析到 `dist/index.mjs`，改 `bridge.c` 后**必须 `pnpm --filter @forgeax/engine-fbx build:wasm && pnpm --filter @forgeax/engine-fbx build`**，否则 Node 拿旧 WASM 二进制。
+
+## FBX parity snapshot diff 红
+
+**信号**：`pnpm --filter @forgeax/engine-fbx test` 中 `parity-snapshot.test.ts` 失败。快照 JSON（`test/__snapshots__/cube-snapshot.json` + `humanoid-snapshot.json`）与当前 bridge.c 输出不一致。
+
+**根因**：`bridge.c` 语义漂移 —— 轴转换、材质判别、节点过滤、动画提取四类路径的任一一处改动改变了 POD JSON 输出。快照是 M1 人工签署冻结的基线。
+
+**判定**：
+```bash
+# 跑 parity diff 脚本看具体差异字段
+node packages/fbx/scripts/parity-diff.mjs
+# 检查 bridge.c 改动
+git log --oneline -- packages/fbx/src/native/bridge.c
 ```
 
-**修法**：`WriteAnimationData` 改成每个 key time 采样 `node->EvaluateLocalTransform(t)` 再 `GetT/GetQ/GetS` 分解 —— 与 bind-pose 的 `WalkNode` **同一条权威路径**，输出真四元数（SDK 自己处理旋转顺序 / pre-post-rotation / pivot）。
-- **必须先 `scene->SetCurrentAnimationStack(animStack)`** —— 否则 `EvaluateLocalTransform(t)` 无视时间，永远返回 rest pose（数据全 identity/zero 就是漏了这句）。`WalkNode` 侥幸不需要是因为 rest pose == bind pose；二者顺序安全：`SceneToJson`（含 WalkNode）在 `WriteAnimationData` 之前跑完。
-- IR schema 顺势从 per-axis `keyTimesX/Y/Z` 收成扁平 `keyTimes` + 交错 `keyValues`（stride 3 T/S，4 rotation quat）—— SSOT，结构上消灭单轴 bug。bridge 重采样 + 四元数 nlerp 归一化；符号跨相邻 key 规范化保短弧连续。
+**修法**：如果 bridge.c 改动是刻意的（如新增 feature 必然改变输出），必须：
+1. 双跑新旧 bridge 输出逐字段 diff
+2. 更新快照 JSON
+3. 更新 `parity-snapshot.test.ts` 期望值
+4. **人工签署**（architecture-principles #8）—— 记录到 `human-inputs.jsonl`
 
-**坑（验证时极易踩）**：
-- **native 改完必须 `node-gyp rebuild`**：`FBX_SDK_ROOT=$HOME/.local/fbxsdk/current npx node-gyp rebuild`（SDK 在则可重建；否则 postinstall graceful-skip）。
-- **dist 陈旧陷阱**：`@forgeax/engine-fbx` 解析到 `dist/index.mjs`，改 `parse-animation-clip.ts` 后**必须 `pnpm --filter @forgeax/engine-fbx build`**，否则浏览器拿旧 schema 读不到 `keyValues` → 全 identity，看着像没改对。
-- **vite 全程缓存 import 结果**：`SetCurrentAnimationStack` 这类 native 改完后要 **kill vite + `rm -rf node_modules/.vite node_modules/.cache`** 再重启，否则 `/__forgeax-ddc/*.pack.json` 还是旧 body（`metaPackBodies` 是进程内 Map）。
-- CPU 侧蒙皮 AABB 自检（`palette[j]=jointWorld_j × IBM_j`，对每顶点 4-influence 加权变换求包围盒）是判定"数据对不对"的离线闸门：bind vs anim-f0 高度应都 ~160，塌成小 blob 说明数据仍坏。
+如果是无意漂移（重构时顺手改），回退 bridge.c 到语义等价态。
 
-**Don't**：在 demo 里手动转 quat / 改 camera 绕过 —— 这是引擎 importer 的 bug，必须修 native（charter "Demo failures route to engine fixes"）。`fbx_binding.node` 是构建产物；CI `smoke-fbx-macos-arm64` 是 label-gated（标签从不存在 → 从没跑过），故此修目前仅本地 native 验证。
+## FBX WASM 缺失（pkg/ empty or missing）
+
+**信号**：`initFbxWasm()` 抛错 `ENOENT: no such file or directory .../pkg/fbx-wasm.wasm` 或 `pkg/fbx-wasm.mjs` 找不到。
+
+**根因**：`pkg/` 不在 git 中（零二进制约定）。首次 checkout 后缺少 WASM 产物。
+
+**判定**：
+```bash
+ls -la packages/fbx/pkg/
+# 期望：fbx-wasm.wasm + fbx-wasm.mjs 都存在
+```
+
+**修法（两路径二选一）**：
+```bash
+# 路径 1：拉取预构建 WASM（推荐，无需 emsdk）
+pnpm -F @forgeax/engine-fbx fetch-wasm
+
+# 路径 2：本地编译（需 emsdk）
+pnpm -F @forgeax/engine-fbx build:wasm
+```
+
+`fetch-wasm` 对公开仓库匿名工作，私有仓库需设 `GITHUB_TOKEN`。`build:wasm` 依赖 emsdk 环境（`emcc` 在 PATH 中）。两条路径的详细错误码（E1-E5）见 `packages/fbx/README.md` §Contributor toolchain。
+
+## FBX Node WASM 初始化失败
+
+**信号**：`initFbxWasm()` 在 Node.js 下抛类似 `RuntimeError: Aborted(Module.instantiateWasm)` 或 `TypeError: WebAssembly.instantiate is not a function` 的异常。浏览器环境下正常。
+
+**根因**：Emscripten 胶水文件的 `ENVIRONMENT` 编译标志与运行时环境不匹配。ufbx WASM 编译时使用 `ENVIRONMENT=web,node`（`scripts/build-wasm.mjs`），胶水自动检测环境。若看到 `ENVIRONMENT=web` 残留，Node 下的 `fs` 加载路径被跳过，`locateFile` 逻辑失效。
+
+**判定**：
+```bash
+# 检查胶水文件的环境检测头
+head -20 packages/fbx/pkg/fbx-wasm.mjs | grep ENVIRONMENT
+# 应含 'web,node' 或类似的 Node+web 双环境逻辑
+grep "ENVIRONMENT_IS_NODE\|ENVIRONMENT_IS_WEB" packages/fbx/pkg/fbx-wasm.mjs | head -5
+```
+
+**修法**：
+```bash
+# 重新编译（确保 build-wasm.mjs 使用正确的 ENVIRONMENT 标志）
+pnpm -F @forgeax/engine-fbx build:wasm
+
+# 如果本地 Node 版本过旧（<18），升级到 Node 18+ (WebAssembly 稳定)
+node --version  # 应 >= 18
+```
+
+若仍失败，检查 `index.ts` 中 `initFbxWasm` 的 `locateFile` 是否正确指向 `pkg/` 目录（相对 import.meta.url）。`scripts/build-wasm.mjs` 中的 `ENVIRONMENT=web,node` 是 SSOT —— 不要手动改胶水文件。
 
 ---
 

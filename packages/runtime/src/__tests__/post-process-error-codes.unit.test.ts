@@ -111,3 +111,54 @@ describe('M-A4 w17: params-update-size-mismatch (write-time fail-fast)', () => {
     expect(err.expected.length).toBeGreaterThan(0);
   });
 });
+
+// ── feat-20260702-postprocess-camera-depth-read M3 / w9 (TDD RED) ──────────
+// Assert that `fullscreen-input-not-found` hint covers depth-key scenarios
+// (D-4: reuse existing code, expand hint; no new PostProcessErrorCode member).
+// RED phase: the current hint does NOT mention depth / TEXTURE_BINDING / pipeline
+// switch guidance. After w14 impl (expand hint), these assertions pass.
+
+describe('feat-20260702 M3 w9: fullscreen-input-not-found hint covers depth reads (RED)', () => {
+  it('hint for fullscreen-input-not-found mentions TEXTURE_BINDING guidance', () => {
+    const err = new PostProcessError({
+      code: 'fullscreen-input-not-found',
+      detail: { readsKey: 'depth', passName: 'post-dof' },
+    });
+    expect(err.code).toBe('fullscreen-input-not-found');
+    expect(err.detail.readsKey).toBe('depth');
+    expect(err.detail.passName).toBe('post-dof');
+    // RED: current hint only says "reads[0] must be a graph-declared colorTarget"
+    // and the generated hint only mentions addColorTarget + spelling check.
+    // After w14, this contains depth-specific guidance:
+    // TEXTURE_BINDING + switch pipeline + sampleable depth target.
+    expect(err.hint).toContain('TEXTURE_BINDING');
+    expect(err.hint).toContain('sampleable');
+  });
+
+  it('exhaustive switch still covers all 8 codes (no new member added)', () => {
+    // classify() above already guards exhaustiveness at compile time — if a
+    // new code is added, TS fails.  We also confirm the expected count here.
+    const all: PostProcessErrorCode[] = [
+      'post-process-already-registered',
+      'post-process-not-found',
+      'fullscreen-input-not-found',
+      'ssao-radius-non-positive',
+      'ssao-bias-negative',
+      'ssao-storage-buffer-unavailable',
+      'params-size-mismatch',
+      'params-update-size-mismatch',
+    ];
+    expect(all.length).toBe(8);
+    // classify covers all (compile-time check from above).
+    expect(all.map(classify)).toEqual([
+      'registered',
+      'not-found',
+      'input-not-found',
+      'ssao-radius',
+      'ssao-bias',
+      'ssao-storage',
+      'params-size',
+      'params-update',
+    ]);
+  });
+});

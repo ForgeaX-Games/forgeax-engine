@@ -1499,9 +1499,10 @@ export interface MountOverride {
  * One mount instance authored on a parent SceneAsset
  * (feat-20260608-scene-nesting-ecs-fication M1 / w7; AC-01).
  *
- * A mount embeds another SceneAsset (referenced by `source`, an integer
- * index into the parent .pack.json's `refs[]`) into the parent's
- * namespace. The mount reserves a contiguous LocalEntityId window
+ * A mount embeds another SceneAsset (referenced by `source`, a dual-carrier:
+ * `number` = at-rest refs[] index; `string` = post-parse / post-collect GUID
+ * string) into the parent's namespace. The mount reserves a contiguous
+ * LocalEntityId window
  * `[memberFirst, memberFirst + memberCount)` for the embedded scene's
  * member entities so the parent SceneAsset's namespace invariant
  * `totalSlots = entities.length + mounts.length + sum(memberCount)`
@@ -1524,7 +1525,7 @@ export interface MountOverride {
  */
 export interface SceneInstanceMount {
   readonly localId: LocalEntityId;
-  readonly source: number;
+  readonly source: number | string;
   readonly memberFirst: LocalEntityId;
   readonly memberCount: number;
   readonly parent?: LocalEntityId;

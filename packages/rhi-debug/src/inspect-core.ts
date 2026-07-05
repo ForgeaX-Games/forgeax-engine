@@ -261,6 +261,8 @@ export function makePipelineState(
     shaders: {
       vertexShaderModuleHandleId: rpDesc?.vertexShaderModuleHandleId,
       fragmentShaderModuleHandleId: rpDesc?.fragmentShaderModuleHandleId,
+      vertexEntryPoint: rpDesc?.vertex?.entryPoint,
+      fragmentEntryPoint: rpDesc?.fragment?.entryPoint,
     },
     rasterizer: {
       cullMode: rpDesc?.primitive?.cullMode ?? 'none',

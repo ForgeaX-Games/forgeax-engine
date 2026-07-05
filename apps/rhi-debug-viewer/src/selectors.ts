@@ -180,6 +180,16 @@ export function textureZoomAnchor(): string {
 }
 
 /**
+ * Attribute name for data-forgeax-texel-info. Marks the texel picker readout span
+ * (coordinate + raw RGBA for color, or depth/stencil scalar) so smoke/e2e can
+ * assert the hover value appears, persists across re-render, and is non-zero.
+ * Smoke CSS selector: `[data-forgeax-texel-info]`.
+ */
+export function texelInfoAnchor(): string {
+  return 'data-forgeax-texel-info';
+}
+
+/**
  * Attribute name for data-forgeax-resource-inspector. Value is 'loaded' or 'empty'.
  *
  * SSOT anchor consumed by ResourceInspector panel to mark its container.

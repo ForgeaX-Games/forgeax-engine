@@ -8,14 +8,8 @@
     "moduleResolution": "Bundler",
     "outDir": "./dist",
     "rootDir": "./src",
-    "tsBuildInfoFile": "./dist/.tsbuildinfo",
-    "types": ["node"]
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*"],
-  "references": [
-    { "path": "../types" },
-    { "path": "../gltf" },
-    { "path": "../pack" },
-    { "path": "../import" }
-  ]
+  "references": [{ "path": "../types" }]
 }

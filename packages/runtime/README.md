@@ -3,11 +3,11 @@
 > **本包是 forgeax-engine 的 Renderer + Backend 异步工厂入口**——对齐 K-4 公共 surface（`createRenderer(canvas, options?)` / `Renderer` / `EngineEnvironmentError`），约束 backend 内部模块通过 `package.json#exports` 锁定（`./internal/*: null`）；不暴露 ECS / 资源管理 / 渲染图等上层 surface（M3 范围）。
 
 > [!CAUTION]
-> **shadingModel 选型命题（feat-20260518-pbr-direct-lighting-mvp / AC-17 + feat-20260519-light-casters-point-spot-pbr / AC-11）**——`MaterialAsset.shadingModel:'standard'` 走 GGX direct lighting (`D_GGX × V_SmithCorrelated × F_Schlick + Lambert/π`)，**0 个灯光（directional + point + spot 合计 0）时输出全黑**——此为物理正确而非渲染 bug。standard 路径需 `directional + point + spot 合计 ≥ 1`；任一种类的一盏灯即可。`shadingModel:'unlit'` 才是"不管灯光"的入口（`baseColor × baseColorTexture` 直出）。新写 demo 选 `'standard'` 必须**同步 spawn 至少一盏 DirectionalLight / PointLight / SpotLight**，否则黑屏；末尾兜底见 §Common pitfalls。
+> **shader 选型命题（feat-20260518-pbr-direct-lighting-mvp / AC-17 + feat-20260519-light-casters-point-spot-pbr / AC-11）**——用 `Materials.standard(...)`（shader `forgeax::default-standard-pbr`）走 GGX direct lighting (`D_GGX × V_SmithCorrelated × F_Schlick + Lambert/π`)，**0 个灯光（directional + point + spot 合计 0）时输出全黑**——此为物理正确而非渲染 bug。standard-pbr 路径需 `directional + point + spot 合计 ≥ 1`；任一种类的一盏灯即可。`Materials.unlit(...)`（shader `forgeax::default-unlit`）才是"不管灯光"的入口（`baseColor × baseColorTexture` 直出）。新写 demo 选 standard-pbr shader 必须**同步 spawn 至少一盏 DirectionalLight / PointLight / SpotLight**，否则黑屏；末尾兜底见 §Common pitfalls。
 >
 > **cone 单位 度 (deg)，不是弧度也不是 cos**——`SpotLight.innerConeDeg` / `outerConeDeg` 为半角度数（half-angle in degrees）；引擎 host 侧 `degToCos(deg)` 转换至 cos 后送 GPU（charter F1 host-side parity，feat-20260519 D-S6）。`range` 缺省 `Infinity` 表示无衰减距离上限。
 >
-> **sprite vs sprite-lit 选型（feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1'）**——`MaterialAsset.passes[0].shader` 切换是 1 字符串 1 步选型：`'forgeax::sprite'` 走 unlit 直采纹理（默认；任意灯光不影响），`'forgeax::sprite-lit'` 走 per-light forward + Half-Lambert squared diffuse + fragment-side hardcoded normal `vec3(0,0,1)` —— **需要场景至少 1 个 DirectionalLight / PointLight / SpotLight**，否则视觉全黑（与 3D `'standard'` 同理）。post-PR-#520 `MaterialSnapshot.shadingModel` 闭合 union 仍是 `'unlit' | undefined` 2 档；sprite-lit 不扩 union，走 `materialShaderId === 'forgeax::sprite-lit'` 字符串路由 mirror sprite —— 通用 schema-driven 通道，BGL JSON 与 sprite byte-identical（AC-07）。OOS-1 normal-map 跟进 `feat-future-sprite-lit-normal-map`。
+> **sprite vs sprite-lit 选型（feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1'）**——`MaterialAsset.passes[0].shader` 切换是 1 字符串 1 步选型：`'forgeax::sprite'` 走 unlit 直采纹理（默认；任意灯光不影响），`'forgeax::sprite-lit'` 走 per-light forward + Half-Lambert squared diffuse + fragment-side hardcoded normal `vec3(0,0,1)` —— **需要场景至少 1 个 DirectionalLight / PointLight / SpotLight**，否则视觉全黑（与 3D standard-pbr 同理）。材质分派的唯一判别式是 shader identity（`materialShaderId` / `passes[0].shader`）；`MaterialSnapshot.shadingModel` 字段已于 tweak-20260701 删除，sprite-lit 走 `materialShaderId === 'forgeax::sprite-lit'` 字符串路由 mirror sprite —— 通用 schema-driven 通道，BGL JSON 与 sprite byte-identical（AC-07）。OOS-1 normal-map 跟进 `feat-future-sprite-lit-normal-map`。
 
 > [!IMPORTANT]
 > **WebGL2 legacy stub deleted** (feat-20260525-rhi-delete-webgl2-stub). `createRenderer` now exclusively uses WebGPU backends (rhi-webgpu / rhi-wgpu). All `renderer.shader` / `renderer.assets` are non-null after successful construction. `@forgeax/engine-rhi` contract (`Result<T, RhiError>` / `device.caps` / 14 opaque handles) always in effect.
@@ -206,7 +206,7 @@ Consume via `switch (err.code)` without default; TS guards exhaustiveness. Error
 | `addColorTarget` / `addColorTargetAlias` | substrate | `RenderGraph` 上的资源声明 API（`@forgeax/engine-render-graph`）。`addColorTarget(name, {format, size, sample, usage, viewFormats})` 声明 graph-owned transient/RT/MSAA 多采样目标；`size` 三态枚举 `'swapchain' / 'half-swapchain' / {w,h}`。`addColorTargetAlias(name, source)` 把逻辑名（如 `hdrComposited`）折叠到现有物理纹理（KB-1） |
 | `addScenePass(g, name, {color, depth, reads, filter})` | 逻辑 | runtime 导出公开原语；把 ECS 场景画进 graph-owned 颜色 + 深度目标。逐实体 material UBO 打包 / 4-BGL 链装配作 **runtime-private** 实现细节（D-5 纯度边界）——render-graph 包不见这层逻辑 |
 | `addShadowPass` / `addSkyboxPass` / `addBloomPasses` / `addTonemapPass` | 逻辑 | 同源公开原语（runtime 导出，`packages/runtime/src/render-graph-primitives.ts`）；自定义管线挑选子集 / 重排即可 |
-| `addFullscreenPass(g, name, {shader, color, reads, compositeOverSwapchain})` | 逻辑 / **extension point** | 通用全屏后处理原语——**这是 AI 用户扩展引擎渲染管线的唯一公开通道**。两步 idiom：(1) `renderer.postProcess.register(id, {source, params, reads})` 注册 `PostProcessShaderEntry`（注册冲突 throw `PostProcessError{code:'post-process-already-registered'}`，programmer-error fail-fast）；(2) `addFullscreenPass(g, 'pp', {shader: id, color: 'rt'})` 在 graph 拓扑里引用该 id。dispatcher 帧内 lookup 走 `runtime.lookupPostProcess`：命中 → `buildFullscreenPostProcessPass` + `createFullscreenBindGroup` 装配 BGL/sampler/bindgroup；miss → **throw** `PostProcessError{code:'post-process-not-found'}`（charter P3 结构化失败，AI 用户经 `err.code` 属性访问分流，**非** `Result.err`——dispatcher 是 throw 通道，与 pipeline-errors.ts 模板对齐）。`'fxaa'` id 是 dispatcher 内置硬连分支（delegate `recordFxaaPass`，保 R-COLORSPACE 字节等价）；其它 id 都走 AI 用户路径。**`compositeOverSwapchain: true`（feat-20260621 M4′）**：pass 先把当前 swap-chain copy 进 `color` scratch（effect 因此采样**已合成的最终像素**：阴影+tonemap+fxaa 之后），再经 swap-chain 的 **non-srgb storage view** 写回（R-COLORSPACE，同 `recordFxaaPass`，避免双重 sRGB 编码）。这是把内建 FXAA copy idiom 泛化成 AI-user effect 的机制——让内建管线在**不替换自身**（即不丢弃 shadow/tonemap pass）的前提下叠加注册 effect；`color` 须 `addColorTarget` 声明为 swap-chain 存储格式 + `COPY_DST | TEXTURE_BINDING` usage，`reads` 留空。**仅 WebGPU 后端**：帧中读 swap-chain（copy + non-srgb storage-view 写回）WebGL2 fallback swap-chain 不支持（无 COPY_SRC / 无 non-srgb 复用 view），与内建 FXAA 同限制 |
+| `addFullscreenPass(g, name, {shader, color, reads, compositeOverSwapchain})` | 逻辑 / **extension point** | 通用全屏后处理原语——**这是 AI 用户扩展引擎渲染管线的唯一公开通道**。两步 idiom：(1) `renderer.postProcess.register(id, {source, params, reads})` 注册 `PostProcessShaderEntry`（注册冲突 throw `PostProcessError{code:'post-process-already-registered'}`，programmer-error fail-fast）；(2) `addFullscreenPass(g, 'pp', {shader: id, color: 'rt'})` 在 graph 拓扑里引用该 id。dispatcher 帧内 lookup 走 `runtime.lookupPostProcess`：命中 → `buildFullscreenPostProcessPass` + `createFullscreenBindGroup` 装配 BGL/sampler/bindgroup；miss → **throw** `PostProcessError{code:'post-process-not-found'}`（charter P3 结构化失败，AI 用户经 `err.code` 属性访问分流，**非** `Result.err`——dispatcher 是 throw 通道，与 pipeline-errors.ts 模板对齐）。`'fxaa'` id 是 dispatcher 内置硬连分支（delegate `recordFxaaPass`，保 R-COLORSPACE 字节等价）；其它 id 都走 AI 用户路径。**结构化 reads（feat-20260702 M4）**：`reads` 现支持 `{ key, sampleType }` 对象数组（向后兼容 `string[]`）。`sampleType:'depth'` 时，引擎透明 resolve 深度独占视图 (`aspect:'depth-only'`)、确保目标有 `TEXTURE_BINDING` usage、绑定 non-filtering sampler（nearest+clamp-to-edge，非 comparison），BGL 自动升为 5-entry `'fullscreen-post-with-scene-depth'`（color@0+sampler@1+params@2+depthTex@3+depthSampler@4）。WGSL 侧深度纹理声明 `texture_depth_2d`，用 `textureSample` 读原始深度值（`textureSampleLevel` 同样合法，见 `packages/shader/src/hdrp-ssao.wgsl`；勿用 `textureSampleCompare`——那需 comparison sampler、做 PCF 比较而非读值）。深度 key 缺少 `TEXTURE_BINDING` 或未声明 → throw `PostProcessError{code:'fullscreen-input-not-found'}`（fail-fast）。`compositeOverSwapchain` 与深度读正交兼容。**`compositeOverSwapchain: true`（feat-20260621 M4′）**：pass 先把当前 swap-chain copy 进 `color` scratch（effect 因此采样**已合成的最终像素**：阴影+tonemap+fxaa 之后），再经 swap-chain 的 **non-srgb storage view** 写回（R-COLORSPACE，同 `recordFxaaPass`，避免双重 sRGB 编码）。这是把内建 FXAA copy idiom 泛化成 AI-user effect 的机制——让内建管线在**不替换自身**（即不丢弃 shadow/tonemap pass）的前提下叠加注册 effect；`color` 须 `addColorTarget` 声明为 swap-chain 存储格式 + `COPY_DST | TEXTURE_BINDING` usage，`reads` 留空。**仅 WebGPU 后端**：帧中读 swap-chain（copy + non-srgb storage-view 写回）WebGL2 fallback swap-chain 不支持（无 COPY_SRC / 无 non-srgb 复用 view），与内建 FXAA 同限制 |
 | `forgeax::urp` | 逻辑（dogfood worked example） | 引擎自带的标准前向管线（`packages/runtime/src/urp-pipeline.ts`）：9-pass 链 shadow / skybox / main / 4×bloom / tonemap / fxaa。**经同一公开 `addColorTarget` / `addScenePass` / `addShadowPass` / `addSkyboxPass` / `addBloomPasses` / `addTonemapPass` / `addFullscreenPass` 词汇**写出（feat-20260604 M3 / w21 重写：source 不再 import 任何私有 `record*Pass`，AC-12 grep 0）——要写自定义管线照它抄。**`config.postEffects: string[]`（feat-20260621 M4′）**：安装时传入的注册 post-process id 列表，URP 在 fxaa 之后、debug-overlay 之前按序 `addFullscreenPass(..., {compositeOverSwapchain:true})` 逐个叠加（AUGMENT，非 REPLACE）——内建 9-pass 链不变，effect 叠在最终图像上。这是「在 URP 之上加后处理且**保留阴影**」的正道：`installPipeline({pipelineId:'forgeax::urp', config:{postEffects:[id]}})`。对比之下，安装一条全自定义管线会**整体替换** URP（连带丢弃其 shadow pass）——shadow demo 切忌。**仅 WebGPU 后端**（mid-frame swap-chain 读，同 `compositeOverSwapchain` 限制）；非 WebGPU 设备留空 |
 
 **dogfood / hot-swap 时序（末尾论证）：**
@@ -484,12 +484,19 @@ renderer.installPipeline(hdrpAsset).unwrap();   // D-17: POD directly, no regist
 | `ssao-storage-buffer-unavailable` | `{ missingCap: 'storageBuffer' }` | `Device.caps.storageBuffer === false` |
 | `params-size-mismatch` | `{ byteSize, actualLength }` | `postProcess.register({params})` 时 `byteSize < 16`（`.hint` 含最小 16 B 指引）或 `defaultValue.length !== byteSize`——register 阶段 fail-fast（feat-20260621 D-4） |
 | `params-update-size-mismatch` | `{ byteSize, actualLength }` | 数据驱动每帧写入时 `PostProcessParams.data` 的 byteLength !== 注册 `params.byteSize`——`dispatchFullscreenPass` 写入前 fail-fast（feat-20260621 D-4） |
+| `fullscreen-input-not-found` | `{ readsKey, passName }` | `reads` 中 key（彩色或深度）在 graph 中未声明为 color target，或声明了但缺 `TEXTURE_BINDING` usage（深度 key）。`.hint` 含 `TEXTURE_BINDING` 指引 + pipeline 切换建议——AI 用户经 `detail.readsKey` 定位未解析的 key、`detail.passName` 定位失败 pass（feat-20260702 M4） |
 
-（其余 3 个成员 `post-process-already-registered` / `post-process-not-found` / `fullscreen-input-not-found` 见 §`addFullscreenPass` 行。）
+（其余 2 个成员 `post-process-already-registered` / `post-process-not-found` 见 §`addFullscreenPass` 行。）
 
 ### 自定义 post-process params（数据驱动活字段）
 
-`PostProcessShaderEntry.params` 是**活字段**（feat-20260621）：声明 `{ byteSize, defaultValue }` 后，引擎在 `postProcess.register(id, {source, params, reads})` 时 eager-create 一个 per-id params UBO（`byteSize >= 16`，初值 `defaultValue`），并把 BGL 升为 3-entry `@group(1)`：`texture@0 + sampler@1 + buffer@2`。`entry.params === undefined` 时退化 2-entry（texture@0 + sampler@1），所有无 params 的 consumer（FXAA / gamma / framebuffers）零回归。
+`PostProcessShaderEntry.params` 是**活字段**（feat-20260621）：声明 `{ byteSize, defaultValue }` 后，引擎在 `postProcess.register(id, {source, params, reads})` 时 eager-create 一个 per-id params UBO（`byteSize >= 16`，初值 `defaultValue`），BGL 形态由 `reads` 内容决定：
+
+- `entry.params === undefined` + 无结构化 reads → 2-entry `'fullscreen-post'`（texture@0 + sampler@1）
+- `entry.params !== undefined` + 无深度 reads → 3-entry `'fullscreen-post-with-params'`（texture@0 + sampler@1 + buffer@2）
+- `entry.params !== undefined` + `reads` 含 `{ key, sampleType:'depth' }` → 5-entry `'fullscreen-post-with-scene-depth'`（texture@0 + sampler@1 + buffer@2 + depthTex@3 + depthSampler@4，feat-20260702 M4）。params@2 始终存在（避免 2x2 kind 爆炸）。
+
+`entry.params === undefined` 且无深度 reads 时退化 2-entry（texture@0 + sampler@1），所有无 params 的 consumer（FXAA / gamma / framebuffers）零回归。
 
 每帧更新走**数据驱动**，非命令式 setter：在实体上挂 `PostProcessParams { shader: id, data }` 组件，每帧改 `data`（`AllowSharedBufferSource`）——extract 阶段收集成 `Map<shaderId, bytes>` snapshot，`dispatchFullscreenPass` 查表 → byteLength 复检（不符抛 `params-update-size-mismatch`）→ `queue.writeBuffer` 到该 UBO。心智模型与 `Camera.exposure` / `Transform` / lights「改组件 → 每帧生效」完全同构。
 
@@ -497,7 +504,7 @@ renderer.installPipeline(hdrpAsset).unwrap();   // D-17: POD directly, no regist
 renderer.postProcess.register('mypkg::vignette', {
   source: vignetteWgsl,           // WGSL 在 @group(1) @binding(2) 声明 var<uniform> params
   params: { byteSize: 16, defaultValue: new Uint8Array(16) },
-  reads: ['offscreenColor'],
+  reads: ['offscreenColor'],      // 或 [{ key: 'depth', sampleType: 'depth' }, { key: 'offscreenColor' }]
 })
 world.spawn({
   component: PostProcessParams,
@@ -913,7 +920,7 @@ renderer.onError((e: RhiError) => {
 | 单语义裸名 | drop `Component` suffix；命名直接表达单一语义 | `Transform` / `Camera` / `DirectionalLight`（含 shadow 字段，见下方 spawn 示例）/ `PointLight` / `SpotLight` / `Skylight` |
 | Unity 槽位 | `Filter` 槽位（资源选择）+ `Renderer` 槽位（材质 / 视觉绑定）后缀作 idiom 保留 | `MeshFilter` / `MeshRenderer` |
 | 关系组件持有者视角 | 名字 = 持有者对父的 verb / role；字段名与组件名互呼 | `ChildOf { parent: Entity }`（schema-vocab `'entity'`，relationship `mirror: 'Children'`，feat-20260514 M5/w18）/ `Children { entities: 'array<entity>' }`（feat-20260514-ecs-children-instances-managed-buffer-array：变长 `array<entity>` 取代 v1 OOS-04 的 `count: 'u32'` 计数 + 旧 `'entity[]'` 占位） |
-| 已合并复合 | category discriminant 下沉到 asset；单 component 持 `readonly Handle<Asset>[]`（feat-20260608 multi-material array：`materials[i]` ↔ `MeshAsset.submeshes[i]`） | `MeshRenderer { materials: readonly Handle<MaterialAsset>[] }`（`MaterialAsset.shadingModel` 路由 unlit / standard） |
+| 已合并复合 | category discriminant 下沉到 asset；单 component 持 `readonly Handle<Asset>[]`（feat-20260608 multi-material array：`materials[i]` ↔ `MeshAsset.submeshes[i]`） | `MeshRenderer { materials: readonly Handle<MaterialAsset>[] }`（`MaterialAsset.passes[].shader` 路由 unlit / standard-pbr） |
 | 逐实体标志 | bool-ish `u8` 字段，默认为 1（opt-in culling），设为 0 禁用 | `MeshRenderer.frustumCulled`（`u8`）— per-entity opt-out of frustum culling |
 | 2D 同位组件 | 与 `Instances` 同位的 2D 批绘原语；per-instance 带 mat4 + UV region 双 `array<f32>` 列（stride 16 + 4）；3 条新 `EcsErrorCode` 在 RenderSystem extract entry 防御性 fire | `SpriteInstances { transforms: 'array<f32>', regions: 'array<f32>' }`（feat-20260625；`'sprite-instances-count-mismatch'` / `'sprite-instances-requires-sprite-shader'` / `'sprite-instances-mutually-exclusive-with-instances'`） |
 | 字面量联合 sort 域 | 离散字符串字面量取代 0/1 整数标志；TS exhaustive switch 守门 | `TileLayer.sortScope: 'layer' \| 'per-cell'`（feat-20260625 取代 `ySort: 0 \| 1`） |
@@ -1215,7 +1222,7 @@ palette `M_i` **已是完整世界变换**——shader 端不额外左乘 `meshe
 
 ## Lights
 
-> feat-20260519-light-casters-point-spot-pbr M1-M5 — runtime 暴露三种 `Light` component（`DirectionalLight` / `PointLight` / `SpotLight`），每一种是单语义裸名 component（AGENTS.md §Component naming 规则 1）。`shadingModel:'standard'` 路径上三种灯由 host 侧 `extractFrame` 三-query union 收集后在 GPU 端按 helper-based 1+N+N 累加（pbr.wgsl `evalDirectional` + `evalPunctual`）；`unlit` 路径不消费灯光。
+> feat-20260519-light-casters-point-spot-pbr M1-M5 — runtime 暴露三种 `Light` component（`DirectionalLight` / `PointLight` / `SpotLight`），每一种是单语义裸名 component（AGENTS.md §Component naming 规则 1）。standard-pbr 路径（shader `forgeax::default-standard-pbr`，如 `Materials.standard(...)`）上三种灯由 host 侧 `extractFrame` 三-query union 收集后在 GPU 端按 helper-based 1+N+N 累加（pbr.wgsl `evalDirectional` + `evalPunctual`）；unlit shader（`forgeax::default-unlit`，如 `Materials.unlit(...)`）路径不消费灯光。
 
 | Component | 强制依赖 | schema fields | first-slice cap | 备注 |
 |:--|:--|:--|:--|:--|
@@ -1666,6 +1673,125 @@ ECS-native writes via `world.set`, prefab-diff via `setSceneOverride`.
 | Mount window | the LocalEntityId range `[memberFirst, memberFirst + memberCount)` reserved in the parent namespace for the child SceneAsset's slots |
 | Layer 0 / 1 / 2 / 3 | the four-stage default-value fallback; layer 0 = setSceneOverride or mount.overrides, layers 1-3 = scene / component / TS type |
 
+### Collect uplink (mount-collapse)
+
+> feat-20260703-collect-nested-sceneinstance-to-mount-roundtrip -- the
+> uplink is the inverse of the downlink: `rootsToSceneAsset(registry, world, roots)`
+> folds entities carrying `SceneInstance` back into `mounts[]` entries,
+> symmetric to `instantiateScene` which expands `mounts[]` into live entities.
+> Instantiate and collect form a round-trip: the collect output can be serialized,
+> reloaded, and re-instantiated to produce a structurally equivalent live subtree.
+
+**Quickstart** (1 line, AC-01):
+
+```ts
+// roots can be instantiateScene synthetic roots with SceneInstance -- no pre-stripping needed.
+const assetRes = rootsToSceneAsset(engine.assets, world, [root]);
+// assetRes.unwrap().mounts[] => each nested SceneInstance folded back to a mount entry.
+```
+
+**Full round-trip chain** (collect -> serialize -> reload -> instantiate):
+
+```ts
+const scene = rootsToSceneAsset(engine.assets, world, [root]).unwrap();
+const pack = serializeSceneAssetToPack(scene, guid).unwrap();  // mounts[] survive serialization
+engine.assets.catalog(guid, scene);                            // or write pack JSON to disk
+const reloaded = await engine.assets.loadByGuid(AssetGuid.parse(guid).unwrap());
+const revived = engine.assets.instantiate(
+  world.allocSharedRef('SceneAsset', reloaded.unwrap()),
+  world,
+);
+// revived is structurally equivalent to the original `root` subtree (AC-04).
+```
+
+#### mount-collapse semantics
+
+`rootsToSceneAsset` walks the full subtree via BFS (`collectSubtree` unchanged).
+When it encounters an entity carrying `SceneInstance` (the anchor), it classifies
+the subtree under that anchor into three categories:
+
+| Category | Entities | Outcome |
+|:--|:--|:--|
+| **Member** | entities in the instance's `mapping` (the child scene's slots) | folded into a mount window `[memberFirst, memberFirst + memberCount)`; **not** emitted as owned entities |
+| **Anchor** | the entity carrying `SceneInstance` itself | its `SceneInstance` component row is **not** serialized; the anchor entity itself is **not** emitted as owned (it is represented by the mount entry) |
+| **Graft** | entities parented under members but **not** in the instance's `mapping` | preserved as owned entities; any `entity`-typed field pointing to a member entity is remapped to the window's `LocalEntityId` |
+
+Two anchor forms (D-2):
+
+| Form | Anchor | `mount.parent` | Behavior |
+|:--|:--|:--|:--|
+| **Form 2** (root = instance) | one of the `roots` carries `SceneInstance` | `undefined` | entire tree collapses to a single mount in a new wrapping SceneAsset; the root's owned entities are preserved |
+| **Form 1** (deep anchor) | a non-root entity carries `SceneInstance` | `LocalEntityId` of the anchor's `ChildOf` parent in the new namespace | the anchor's subtree collapses to a mount; ancestor entities remain owned |
+
+#### Window accounting (totalSlots invariant)
+
+Each mount reserves a contiguous `LocalEntityId` window equal to the child
+instance's `totalSlots` (not the number of *surviving* members). The
+renumbered namespace invariant is:
+
+```
+totalSlots = ownedEntities.length + mounts.length + sum(mounts[i].memberCount)
+```
+
+Windows are allocated after owned entities in BFS discovery order. Windows
+never overlap with each other or with owned entity `localId` slots. Sparse
+localId namespaces (e.g. members despawned at high localId slots) do **not**
+shrink the window -- the full `totalSlots` range is reserved to prevent the
+high-localId-silent-loss regression (#495).
+
+#### Round-trip closure
+
+The round-trip `instantiate -> collect -> serialize -> reload -> instantiate`
+(the **round-trip save** path, as opposed to the unimplemented **flatten save** --
+see Glossary) produces a structurally equivalent live subtree (AC-04):
+
+```mermaid
+flowchart LR
+    A["SceneAsset (mounts)"] -->|"instantiateScene"| B["live subtree (SceneInstance)"]
+    B -->|"rootsToSceneAsset"| C["SceneAsset' (mounts)"]
+    C -->|"serializeSceneAssetToPack"| D["pack JSON"]
+    D -->|"loadByGuid + instantiate"| E["live subtree"]
+    E -.->|"structurally equivalent"| B
+```
+
+The equivalence benchmark is a **second collect** (fixed-point): after the
+first reload, collect again and assert the output is identical to the first
+collect output (D-9 normalization converges after one cycle).
+
+#### Error codes
+
+| Code | Trigger | `.hint` |
+|:--|:--|:--|
+| `scene-collect-asset-guid-unresolved` | `_guidForAsset` returns `undefined` for a `SceneInstance.source` (the scene asset was never catalogued) | `source SceneAsset is not catalogued: call registry.catalog(guid, payload) first, or load through loadByGuid() which auto-catalogs GUID-scoped assets` |
+| `scene-collect-asset-guid-unresolved` | shared asset reference GUID cannot be resolved during serialize | same hint |
+| `scene-collect-entity-ref-out-of-closure` | an `entity`-typed field points to an entity outside the collect closure (not in visited set) | check that the entity reference target is within the collected subtree |
+
+The two `scene-collect-asset-guid-unresolved` rows share one code; disambiguate
+via `.detail` -- `.handle` present means the collect-side lookup failed, `.guid`
+present means the serialize-side reference failed. All errors are fail-fast --
+no silent skip, no silent fallback to flatten.
+
+#### Known limitations
+
+- **OOS-1 -- overrides not preserved**: `mount.overrides[]` (Layer-0 diffs applied
+  via `setSceneOverride`) are not folded back during collect. The output mount
+  carries the baseline child SceneAsset reference; editor-authored overrides
+  are deferred to a follow-up milestone.
+- **D-9 -- Form 1 mount entity absorption**: when a Form 1 anchor's `ChildOf`
+  parent cannot be proven to be a mount entity (because the outer instance has
+  no accounting record), the anchor entity is preserved as owned and
+  `mount.components` is set to `undefined`. The first reload materializes a
+  mount entity layer -- this is a one-time structural normalization; the second
+  collect onward is a fixed point.
+
+#### Glossary additions
+
+| Term | Meaning |
+|:--|:--|
+| mount-collapse | the collect-time operation that folds a `SceneInstance`-bearing subtree into a `SceneInstanceMount` entry; symmetric to instantiate-time mount expansion |
+| round-trip save | `instantiate -> edit -> collect -> serialize -> reload -> instantiate` -- preserves nested structure and mount references |
+| flatten save | (not implemented; OOS-3) would strip all `SceneInstance` and inline all member entities as owned -- loses structural information |
+
 ## Assets
 
 > feat-20260511-asset-system-v1 / M4 / D-P3 — initial 5-entry SDK. **feat-20260614 M8 (D-15 / D-17 / D-19) rewrote the surface**: `AssetRegistry` is now a **GUID -> payload catalogue with NO handle concept**. It owns no World, so it cannot mint a column handle. The handle-keyed map narrative below is gone.
@@ -1755,26 +1881,28 @@ Legacy 4-field rows (non-texture / future arms) stay valid; `metadata === undefi
 
 ## Materials
 
-> feat-20260511-asset-system-v1 / M5 / D-P4 + feat-20260513-component-naming-bevy-align M3 / D-2 + feat-20260517-merge-mesh-renderer-material-renderer / decision §2.1-§2.5 — `MaterialAsset` discriminated union + 单 `MeshRenderer` component + archetype dispatch via `switch (mat.shadingModel)`。
+> feat-20260511-asset-system-v1 / M5 / D-P4 + feat-20260513-component-naming-bevy-align M3 / D-2 + feat-20260517-merge-mesh-renderer-material-renderer / decision §2.1-§2.5 + feat-20260526-material-asset-multipass-renderstate / D-1 — `MaterialAsset` single pass-based interface + 单 `MeshRenderer` component + per-pass shader-identity dispatch（`passes[].shader` 标识符即 discriminant）。
 
 > [!IMPORTANT]
 > **`paramSchema` 是单一 SSOT；BGL / UBO / loader 三件套均由 `derive(paramSchema)` 派生**（feat-20260613-material-paramschema-driven-binding M3 / w12-w16）。`MaterialShaderEntry.bindingLayout` 字段已删；`MATERIAL_UBO_BYTES = 80` 常量已删；`MATERIAL_PARAM_TEXTURE_FIELDS` Set 常量已删。registerMaterialShader / render-system-record / material-loader 三处都调 `derive(schema)` 拿 `{ bglEntries, uboLayout, textureFieldNames, samplerForTexture, userRegionBindingEnd }` 五元组。详见 [`@forgeax/engine-shader` README §paramSchema v2](../shader/README.md)。
 
-- **`MaterialAsset`** — union `UnlitMaterialAsset | StandardMaterialAsset`；discriminator `shadingModel: 'unlit' | 'standard'`；消费站点 `switch (mat.shadingModel)` 无 default（TS 穷尽）。
-- **`MeshRenderer`** — 单 ECS component，shape `MeshRenderer { materials: readonly Handle<'MaterialAsset', 'shared'>[] }`；schema 仅 `{ materials: 'array<shared<MaterialAsset>>' }`（feat-20260608 M2 / w7：旧单字段 `material: 'handle<MaterialAsset>'` 升级为 multi-material array，feat-20260614 vocab `handle<T>` -> `shared<T>` 物理删除；列存是 u32 句柄数组，brand 在 FieldValueType 层从 schema 字符串里 infer；`materials[i]` 索引位对位 `MeshAsset.submeshes[i]`，count mismatch fail-fast 抛 `mesh-renderer-material-count-mismatch`）；`world.spawn` 的 `data` 是 `Partial<ShapeOf<S>>`，字段可省略 → spawn 缺省走 case B fallback（详见上面 §ECS render bridge 错误分档表 D-Q7 三档子表）。shading model 分类只在 asset 上，不重复体现在 component 名（K-1 单一 SSOT 立场）。
-- **archetype dispatch** — `RenderSystem` 单 query（`world.query(MeshRenderer)`，case A archetype 缺位天然 skip）→ extract 阶段按 `material === undefined` (case B) / `resolveAssetHandle(world, handle) === err` (case C) / `mat.shadingModel` 三层路由到 `defaultMaterialSnapshot()` / fire onError / unlit + standard pipeline；`unlit.wgsl` vs `pbr.wgsl` 两 WGSL 源在 `@forgeax/engine-shader`。
-- **`MaterialSnapshot` 7 字段全集**（feat-20260517 / w6 + feat-20260522 expand 2 fields）— `{ shadingModel, baseColor, metallic, roughness, baseColorTexture, metallicRoughnessTexture, normalTexture }`；`shadingModel === 'unlit'` 时 `metallic / roughness` 为 0 占位，PBR 纹理 slot 为 undefined。PBR 三纹理 slot 对应 GPU pipeline binding 索引：`baseColorTexture` -> `@group(1) @binding(3)`、`metallicRoughnessTexture` -> `@group(1) @binding(4)`、`normalTexture` -> `@group(1) @binding(6)`。slot 为 `undefined` 时 record 阶段注入 per-device fallback placeholder view（default white for binding 4、default normal for binding 6）；`baseColorTexture` undefined 时 sampler 仍绑定但读取全白纹理（feat-20260518 baseColor path）。`StandardMaterialAsset` POD 字段 `metallicRoughnessTexture` / `normalTexture` 由 `@forgeax/engine-types` 声明（L226-227），extract 阶段从 `asset` 直读写入 snapshot，record 阶段按 snapshot 字段选择真 handle 或 fallback。AI 用户设置 PBR 纹理 slot 的三步：(a) 用 `engine.assets.uploadTexture` 或 `loadByGuid<TextureAsset>` 获取 `Handle<TextureAsset>`；(b) 构造 `MaterialAsset { shadingModel: 'standard', baseColorTexture: handle, metallicRoughnessTexture: handle2, normalTexture: handle3 }`；(c) `MeshRenderer { materials: [matHandle] }`。三 slot 全可选——未填时引擎自动注入 fallback 不报错。
+- **`MaterialAsset`** — single interface `{ kind: 'material', passes?: MaterialPassDescriptor[], parent?: AssetGuid, paramValues?: Record<string,unknown> }`（feat-20260526 / D-1：旧 union `UnlitMaterialAsset | StandardMaterialAsset` + discriminator `shadingModel` 已 collapse 为 pass-based 单 interface）；分类现在靠 `passes[].shader` 标识符 — AI 用户通过 `Materials.unlit(...)`（产 `passes[0].shader = 'forgeax::default-unlit'`）或 `Materials.standard(...)`（产 `passes[0].shader = 'forgeax::default-standard-pbr'`）工厂构造，不必手工写 shader id 字符串。
+- **`MeshRenderer`** — 单 ECS component，shape `MeshRenderer { materials: readonly Handle<'MaterialAsset', 'shared'>[] }`；schema 仅 `{ materials: 'array<shared<MaterialAsset>>' }`（feat-20260608 M2 / w7：旧单字段 `material: 'handle<MaterialAsset>'` 升级为 multi-material array，feat-20260614 vocab `handle<T>` -> `shared<T>` 物理删除；列存是 u32 句柄数组，brand 在 FieldValueType 层从 schema 字符串里 infer；`materials[i]` 索引位对位 `MeshAsset.submeshes[i]`，count mismatch fail-fast 抛 `mesh-renderer-material-count-mismatch`）；`world.spawn` 的 `data` 是 `Partial<ShapeOf<S>>`，字段可省略 → spawn 缺省走 case B fallback（详见上面 §ECS render bridge 错误分档表 D-Q7 三档子表）。shader 分类只在 asset 上，不重复体现在 component 名（K-1 单一 SSOT 立场）。
+- **archetype dispatch** — `RenderSystem` 单 query（`world.query(MeshRenderer)`，case A archetype 缺位天然 skip）→ extract 阶段按 `material === undefined` (case B) / `resolveAssetHandle(world, handle) === err` (case C) / shader identity 三层路由到 `defaultMaterialSnapshot()` / fire onError / unlit + standard-pbr pipeline；`unlit.wgsl` vs `pbr.wgsl` 两 WGSL 源在 `@forgeax/engine-shader`。
+- **`MaterialSnapshot`**（feat-20260517 / w6 + feat-20260522 expand + tweak-20260701 M1 drop `shadingModel` 字段）— 当前字段 `{ baseColor, metallic, roughness, materialShaderId?, paramSnapshot?, textureHandles?, ... }`；`materialShaderId` 为 `'forgeax::default-unlit'` 时 `metallic / roughness` 为 0 占位、PBR 纹理 slot 为空。PBR 三纹理 slot 对应 GPU pipeline binding 索引：`baseColorTexture` -> `@group(1) @binding(3)`、`metallicRoughnessTexture` -> `@group(1) @binding(4)`、`normalTexture` -> `@group(1) @binding(6)`。slot 为 `undefined` 时 record 阶段注入 per-device fallback placeholder view（default white for binding 4、default normal for binding 6）；`baseColorTexture` undefined 时 sampler 仍绑定但读取全白纹理（feat-20260518 baseColor path）。AI 用户设置 PBR 纹理 slot 的三步：(a) 用 `engine.assets.uploadTexture` 或 `loadByGuid<TextureAsset>` 获取 `Handle<TextureAsset>`；(b) 构造 `Materials.standard({ baseColor, baseColorTexture: handle, metallicRoughnessTexture: handle2, normalTexture: handle3 })` 返回 pass-based `MaterialAsset`；(c) `MeshRenderer { materials: [matHandle] }`。三 slot 全可选——未填时引擎自动注入 fallback 不报错。
 - **v1 不做变体** — shader variant / texture hot-reload 走 `feat-future-shader-variant` / `feat-future-asset-hot-reload`。
 
 ```ts
 import {
   MeshRenderer, MeshFilter, Transform, HANDLE_CUBE,
-  type MaterialAsset,
+  Materials, type MaterialAsset,
 } from '@forgeax/engine-runtime';
 // D-17: catalogue the payload by GUID, then mint a column handle at the use site.
-const matPayload = engine.assets.catalog(matGuid, {
-  kind: 'material', shadingModel: 'standard', baseColor: [0.8, 0.4, 0.2], metallic: 0, roughness: 0.5,
-} as MaterialAsset).value;
+const matPayload = engine.assets.catalog(matGuid, Materials.standard({
+  baseColor: [0.8, 0.4, 0.2, 1],
+  metallic: 0,
+  roughness: 0.5,
+})).value;
 const matHandle = world.allocSharedRef('MaterialAsset', matPayload);
 world.spawn(
   { component: Transform, data: { /* ... */ } },
@@ -2415,14 +2543,14 @@ discriminating pixel readback（带 FALSIFY 模式）：
 
 > 末尾兜底（charter F1 上下文有限——顶部命题 + 末尾兜底两端覆盖）；首次写 demo 或 review 黑屏 / 异常输出时优先查这一节。
 
-### `shadingModel:'standard'` 黑屏 = 1+N+N=0（AC-11 / 演进自 AC-17）
+### standard-pbr shader 黑屏 = 1+N+N=0（AC-11 / 演进自 AC-17）
 
 > feat-20260519-light-casters-point-spot-pbr M5 / w23 / w25：once-warn 条件从 `directionalCount === 0` 演进至 `directionalCount + pointCount + spotCount === 0`。任一种类一盏灯即可消除 warn。
 
 | 现象 | 根因 | 修复 |
 |:--|:--|:--|
-| 一个 `MeshRenderer { material }`（`shadingModel:'standard'`）的 entity 在屏幕上完全黑（NDC 中心采样全 0），但 frames>=300 / RhiError=0 | `'standard'` shader = direct lighting 在三类灯（directional + point + spot）上累加；三类灯的实体计数合计为 0 时，每一项贡献都乘 0 → 全黑（物理正确） | (a) `world.spawn({ component: DirectionalLight \| PointLight \| SpotLight, data: {...} })` 加任意一盏灯（任一种类即可）；或 (b) 把 material 改 `shadingModel:'unlit'` |
-| RenderSystem 首帧 console 出 `'[forgeax] standard material renders black with 0 lights of any type (directional + point + spot all empty); spawn at least one light or switch material to shadingModel:"unlit". See AGENTS.md section Breaking changes 2026-05-19.'` | RenderSystem first-frame warn-once（`render-system-record.ts` `warnedZeroLightStandard` latch）— 显式失败信道（charter P3） | 按 warn 文本两条建议二选一；warn 仅在首帧 fire 一次 / 渲染器生命期内 |
+| 一个 `MeshRenderer { material }`（standard-pbr shader，如 `Materials.standard(...)`）的 entity 在屏幕上完全黑（NDC 中心采样全 0），但 frames>=300 / RhiError=0 | standard-pbr shader（`forgeax::default-standard-pbr`）= direct lighting 在三类灯（directional + point + spot）上累加；三类灯的实体计数合计为 0 时，每一项贡献都乘 0 → 全黑（物理正确） | (a) `world.spawn({ component: DirectionalLight \| PointLight \| SpotLight, data: {...} })` 加任意一盏灯（任一种类即可）；或 (b) 把 material 改用 unlit shader（`Materials.unlit(...)` / `forgeax::default-unlit`） |
+| RenderSystem 首帧 console 出 `'[forgeax] standard material renders black with 0 lights of any type (no Skylight, and directional + point + spot all empty); spawn at least one light (Skylight, DirectionalLight, PointLight, or SpotLight) or switch material to an unlit shader (Materials.unlit(...)). See AGENTS.md section Breaking changes 2026-05-19.'` | RenderSystem first-frame warn-once（`render-system-record.ts` `warnedZeroLightStandard` latch）— 显式失败信道（charter P3） | 按 warn 文本两条建议二选一；warn 仅在首帧 fire 一次 / 渲染器生命期内 |
 
 **Inspector 验证通路**（feat-20260519 AC-11 b）：连 console，分别调用三个 bucket 方法 `runtime.lights.directionalCount` / `runtime.lights.pointCount` / `runtime.lights.spotCount`（旧的单一 `runtime.lights.count` alias 已 one-cut 删除，charter "optimal > compatible"），返回 `{ count: number }`；三者合计 == 0 即为本节所述场景。详见 [AGENTS.md §Breaking changes](../../AGENTS.md#breaking-changes) 2026-05-19 行 + [`packages/runtime/src/components/directional-light.ts`](src/components/directional-light.ts) / [`point-light.ts`](src/components/point-light.ts) / [`spot-light.ts`](src/components/spot-light.ts) JSDoc。
 
@@ -2441,13 +2569,13 @@ discriminating pixel readback（带 FALSIFY 模式）：
 | spot 锥外侧未黑边、或锥内侧未饱和；innerConeDeg / outerConeDeg 写 `0.5` 时整个屏幕暗 / 写 `Math.PI/4` 时几乎不见聚光 | 字段名 `*Deg` 显式声明单位是**度（deg）**，不是弧度，也不是 cos；引擎 host 侧 `degToCos(deg)` 转换至 `cos(half-angle)` 后送 GPU std430 storage buffer | innerConeDeg / outerConeDeg 写**度**（如 inner=10 / outer=30）；inner ≤ outer 必须满足，否则 spawn-time fail-fast `'spawn-light-invalid-bounds'` |
 | spot 完全无光 / 完全亮 | inner > outer（违反 invariant），或 outer ≥ 90（半角超 90 度物理不合理） | 调整使 inner ≤ outer 且 outer < 90 |
 
-### shadingModel 路由速查
+### shader 路由速查
 
-| 选 `'unlit'` | 选 `'standard'` |
+| 选 unlit | 选 standard-pbr |
 |:--|:--|
 | 学习入门 / 几何原语展示 / debug overlay / 不管灯光的 baseColor 直出 | 旗舰场景 / 真实质感 / 需要灯光交互 / 多 DirectionalLight + PointLight + SpotLight 累加（feat-20260519 D-S1 三类灯 helper-based 累加） |
 | `hello-cube` / `hello-triangle` / `learn-render` 1.4-textures + 1.7-camera 等基础 demo | `hello-room`（旗舰 standard demo）+ 后续 PBR / shadow 路径 demo |
-| **不需要** spawn 任何灯；默认跑 `unlit-pipeline` | **必须**搭配 `directional + point + spot 合计 ≥ 1`；否则按上表黑屏 |
+| **不需要** spawn 任何灯；`Materials.unlit(...)` → shader `forgeax::default-unlit` | **必须**搭配 `directional + point + spot 合计 ≥ 1`；否则按上表黑屏；`Materials.standard(...)` → shader `forgeax::default-standard-pbr` |
 
 > [!NOTE]
-> **unlit 也尊重 per-material `renderState`**（`frontFace` / `cullMode` / depth / stencil / blend）。当 unlit 材质带 `renderState` 时，record 阶段把它路由到与 `standard` 同一条 renderState-aware per-MaterialShader pipeline cache（`getMaterialShaderPipeline`），而非静态 `unlit-pipeline`（后者硬编码 `frontFace='ccw'+cullMode='back'`）。不带 `renderState` 的 unlit 仍走静态 pipeline（零行为变化）。示例：`learn-render` 4.4 face-culling 用 `default-unlit` + `frontFace:'cw'` 实现 camera-inside 剔除（feat-20260529-learn-render-4-advanced-opengl-1-4）。
+> **unlit 也尊重 per-material `renderState`**（`frontFace` / `cullMode` / depth / stencil / blend）。当 unlit 材质带 `renderState` 时，record 阶段把它路由到与 standard-pbr 同一条 renderState-aware per-MaterialShader pipeline cache（`getMaterialShaderPipeline`），而非静态 `unlit-pipeline`（后者硬编码 `frontFace='ccw'+cullMode='back'`）。不带 `renderState` 的 unlit 仍走静态 pipeline（零行为变化）。示例：`learn-render` 4.4 face-culling 用 `default-unlit` + `frontFace:'cw'` 实现 camera-inside 剔除（feat-20260529-learn-render-4-advanced-opengl-1-4）。

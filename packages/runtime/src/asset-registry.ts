@@ -69,6 +69,7 @@ import {
   type LocalEntityId,
   type MaterialAsset,
   type MaterialPassDescriptor,
+  PACK_ERROR_HINTS,
   type Package,
   type ParamSchemaEntry,
   type ParseErrorDetail,
@@ -85,6 +86,7 @@ import {
 } from '@forgeax/engine-types';
 import {
   BUILTIN_CUBE,
+  BUILTIN_CYLINDER,
   BUILTIN_FLOATS_PER_VERTEX,
   BUILTIN_NINESLICE_QUAD,
   BUILTIN_QUAD,
@@ -231,6 +233,24 @@ export const HANDLE_QUAD: Handle<'MeshAsset', 'shared'> = toShared<'MeshAsset'>(
 export const HANDLE_SPHERE: Handle<'MeshAsset', 'shared'> = toShared<'MeshAsset'>(4);
 
 /**
+ * Builtin cylinder mesh handle — procedural open cylinder (unit-height,
+ * radius=0.5, 16 radial segments, no caps). Pair with `MeshFilter`.
+ *
+ * @derives Same-shape sibling of {@link HANDLE_SPHERE}: synthesised from
+ *   `createCylinderGeometry(0.5, 0.5, 1, 16, 1)` through the same
+ *   `meshFromInterleaved` path as BUILTIN_SPHERE, so the runtime
+ *   12-float stride is byte-identical to all other built-in meshes —
+ *   zero new layout discriminator (charter P4 consistent abstraction).
+ *
+ * @remarks Id=6 follows {@link HANDLE_NINESLICE_QUAD}=5 in the builtin slot
+ *   sequence (FIRST_USER_HANDLE=1024 untouched).
+ *   feat-20260701-editor-world-container-doc-ecs-collapse M0 / AC-16:
+ *   GUID = deriveBuiltin('HANDLE_CYLINDER') UUIDv5
+ *   (plan-strategy §2 D-6 + §5.6 builtin-guid-ssot gate)
+ */
+export const HANDLE_CYLINDER: Handle<'MeshAsset', 'shared'> = toShared<'MeshAsset'>(6);
+
+/**
  * Builtin 9-slice quad mesh handle — 4×4 grid (16 vertices, 9 sub-quads,
  * 54 indices) on the XY plane facing +Z. Pair with `MeshFilter` and a
  * `MaterialAsset` whose first pass shader is `'forgeax::sprite'` and whose
@@ -281,6 +301,10 @@ const BUILTIN_MESH_GUIDS: ReadonlyArray<readonly [Handle<'MeshAsset', 'shared'>,
   [HANDLE_QUAD, '339338aa-a338-581c-9fc5-744267ef8a51'],
   [HANDLE_SPHERE, '95730fd2-9846-5f84-8658-0b3c971eb263'],
   [HANDLE_NINESLICE_QUAD, '692d38b4-8cac-5fb2-9dcf-f389e076d6bf'],
+  // feat-20260701-editor-world-container-doc-ecs-collapse M0 / AC-16:
+  // cylinder builtin handle=6, GUID = deriveBuiltin('HANDLE_CYLINDER') UUIDv5
+  // (plan-strategy §5.6 builtin-guid-ssot gate)
+  [HANDLE_CYLINDER, 'ab20af21-0764-55be-a7f2-b80ab3d46a0a'],
 ];
 
 // D-15: the five BUILTIN_* mesh payloads + BUILTIN_FLOATS_PER_VERTEX moved to
@@ -2086,6 +2110,15 @@ export class AssetRegistry {
   // structured fail-fast branches still fire; only the metric is dropped).
   private metrics: EngineMetrics | null = null;
 
+  // feat-20260703-collect-nested-sceneinstance-to-mount-roundtrip M1 (D-1):
+  // origin reverse-index: resolved SceneAsset copy -> original catalog GUID.
+  // WeakMap so entries auto-GC when the world despawns and the copy is
+  // no longer held by sharedRefs. Only the instantiate path writes here;
+  // _guidForAsset consults it after the catalog identity scan MISSes.
+  // SSOT for the copy provenance fact (architecture-principles #1).
+  /** @internal */
+  _originIndex: WeakMap<SceneAsset, string> = new WeakMap();
+
   /**
    * Construct a fresh registry pre-populated with the builtin cube + triangle
    * mesh handles (`HANDLE_CUBE` / `HANDLE_TRIANGLE`).
@@ -2133,6 +2166,7 @@ export class AssetRegistry {
       [handleSlot(HANDLE_QUAD), BUILTIN_QUAD],
       [handleSlot(HANDLE_SPHERE), BUILTIN_SPHERE],
       [handleSlot(HANDLE_NINESLICE_QUAD), BUILTIN_NINESLICE_QUAD],
+      [handleSlot(HANDLE_CYLINDER), BUILTIN_CYLINDER],
     ]);
     for (const [handle, guidStr] of BUILTIN_MESH_GUIDS) {
       const parsed = AssetGuid.parse(guidStr);
@@ -2177,6 +2211,29 @@ export class AssetRegistry {
    */
   _getMetrics(): EngineMetrics | null {
     return this.metrics;
+  }
+
+  /**
+   * @internal — reverse-lookup: find the GUID key for a catalogued asset
+   * payload by identity comparison (===). Returns the GUID string if found,
+   * `undefined` otherwise. This is the SSOT for the inline identity scan
+   * idiom that previously existed in two places (instantiate sceneGuidKey
+   * lookup and resolveSkinAsset skeleton match).
+   *
+   * Linear scan of the assetCatalog (Map<string, AssetEnvelope>). The O(n)
+   * cost is acceptable for save-path frequencies (OOS-2).
+   */
+  _guidForAsset(asset: Asset): string | undefined {
+    for (const [key, envelope] of this.assetCatalog) {
+      if (envelope.payload === asset) {
+        return key;
+      }
+    }
+    // feat-20260703 M1 (D-1): fallback to the origin reverse-index.
+    // _resolveSceneGuids produces a deep copy — identity (===) will never
+    // match the catalogued original — so after the catalog scan MISSes
+    // we check the WeakMap that the instantiate path populates.
+    return this._originIndex.get(asset as SceneAsset);
   }
 
   /**
@@ -2327,21 +2384,40 @@ export class AssetRegistry {
     if (sceneAsset !== undefined && sceneAsset.kind === 'scene') {
       // feat-20260622 M3 / w8: find the scene's GUID key in the catalog
       // so _resolveSceneGuids can reverse-decode from envelope.refs edges.
-      let sceneGuidKey: string | undefined;
-      for (const [key, envelope] of this.assetCatalog) {
-        if (envelope.kind === 'scene' && envelope.payload === sceneAsset) {
-          sceneGuidKey = key;
-          break;
-        }
-      }
+      const sceneGuidKey = this._guidForAsset(sceneAsset);
       const sceneRes = this._resolveSceneGuids(sceneAsset, world, sceneGuidKey);
       if (!sceneRes.ok) return sceneRes;
+
+      // feat-20260703 M1 (D-1): register the resolved copy -> original
+      // catalog GUID in the origin reverse-index so _guidForAsset can
+      // find it even after the local sceneGuidKey variable is discarded.
+      if (sceneGuidKey !== undefined) {
+        this._originIndex.set(sceneRes.value, sceneGuidKey);
+      }
 
       // Register the GUID-resolved SceneAsset as a shared ref so
       // world._resolveSceneAsset can resolve it transparently. The shared
       // ref alloc-grant rc=1 stays held by the alloc; the SceneInstance spawn
       // retains to rc=2 and the despawn path releases back to rc=1.
       const sharedHandle = world.allocSharedRef('SceneAsset', sceneRes.value);
+
+      // m3-i3: wire identity resolver so mount.source already resolved
+      // to a live handle number by _resolveMountsRec passes through.
+      // world._resolveMountSource will call this resolver during
+      // _instantiateSceneRec; when source is a number (live handle),
+      // return it as-is; when source is a string (unresolved GUID),
+      // fail (should not happen after resolution, but fail-safe).
+      world._setSceneAssetResolver((source, _parentHandle) => {
+        if (typeof source === 'number') {
+          return ok(source as unknown as Handle<'SceneAsset', 'shared'>);
+        }
+        return err({
+          code: 'asset-not-found' as const,
+          expected: `mount source GUID ${source} resolved before instantiate`,
+          hint: PACK_ERROR_HINTS['pack-cyclic-reference'],
+        });
+      });
+
       // C-R2 (feat-20260622-s5 M6): instantiateScene now returns
       // `{ root, diagnostics }` on success. This runtime API keeps its
       // `Result<EntityHandle>` contract; unwrap to `root`. (Surfacing scene
@@ -2377,13 +2453,14 @@ export class AssetRegistry {
           );
           if (!skelRes.ok) return undefined;
           const skeletonPayload = skelRes.value as Asset;
+          const skeletonGuid = self._guidForAsset(skeletonPayload);
+          if (skeletonGuid === undefined) return undefined;
           for (const [, envelope] of self.assetCatalog) {
             const asset = envelope.payload;
             if (asset.kind !== 'skin') continue;
             const skinSkeletonGuid = asset.skeletonGuid;
             if (skinSkeletonGuid === undefined) continue;
-            const catalogued = self.assetCatalog.get(skinSkeletonGuid.toLowerCase());
-            if (catalogued !== undefined && catalogued.payload === skeletonPayload) {
+            if (skinSkeletonGuid.toLowerCase() === skeletonGuid) {
               return asset;
             }
           }
@@ -2425,6 +2502,7 @@ export class AssetRegistry {
     scene: SceneAsset,
     world: World,
     sceneGuidKey?: string,
+    _visitedMountGuids?: Set<string>,
   ): Result<SceneAsset, AssetError> {
     // feat-20260622 M3 / w8: reverse-decode from envelope.refs edges when
     // sceneGuidKey is provided and the catalog holds an envelope for this
@@ -2594,7 +2672,138 @@ export class AssetRegistry {
         components: resolvedComponents,
       });
     }
+
+    // ── m3-i2 / m3-i3: Resolve mounts recursively (breakpoint B fix) ──
+    // For each mount.source (GUID string), look up the child scene in
+    // assetCatalog, recursively resolve its GUIDs, allocSharedRef the
+    // resolved child copy, register it in originIndex (D-7), and produce
+    // a resolved mount with source as the live handle number.
+    // Cycle detection via visited GUID set (R-9): re-entry =>
+    // pack-cyclic-reference / mount-asset, cast through the return type
+    // as world.ts does for its PackError exits.
+    const mountVisited = _visitedMountGuids ?? new Set<string>();
+    if (sceneGuidKey !== undefined) mountVisited.add(sceneGuidKey.toLowerCase());
+    if (scene.mounts !== undefined && scene.mounts.length > 0) {
+      const resolvedMounts = this.resolveMountsRec(scene.mounts, world, mountVisited);
+      if (sceneGuidKey !== undefined) mountVisited.delete(sceneGuidKey.toLowerCase());
+      if (!resolvedMounts.ok) {
+        // Cycle or child-resolution error: cast through as AssetError
+        // (same pattern as world.ts PackError-as-EcsError casts).
+        return resolvedMounts as unknown as Result<SceneAsset, AssetError>;
+      }
+      return ok({
+        kind: 'scene',
+        entities: resolvedNodes,
+        mounts: resolvedMounts.value,
+      } as SceneAsset);
+    }
+    if (sceneGuidKey !== undefined) mountVisited.delete(sceneGuidKey.toLowerCase());
     return ok({ kind: 'scene', entities: resolvedNodes });
+  }
+
+  /**
+   * m3-i2: Recursively resolve mounts[].source GUID strings.
+   * Returns a PackError-shaped object on cycle (R-9) or AssetError
+   * on child resolution failure.
+   */
+  private resolveMountsRec(
+    mounts: readonly SceneInstanceMount[],
+    world: World,
+    visited: Set<string>,
+  ): Result<
+    SceneInstanceMount[],
+    | AssetError
+    | {
+        readonly code: 'pack-cyclic-reference';
+        readonly expected: string;
+        readonly hint: string;
+        readonly detail: {
+          readonly code: 'pack-cyclic-reference';
+          readonly kind: 'mount-asset';
+          readonly cycle: readonly string[];
+        };
+      }
+  > {
+    const out: SceneInstanceMount[] = [];
+    for (const m of mounts) {
+      const src = m.source;
+      // m3-i3: if source is already a number (live handle from a prior
+      // resolution pass), pass through unchanged.
+      if (typeof src === 'number') {
+        out.push({ ...m });
+        continue;
+      }
+
+      // source is a GUID string — resolve it.
+      const guidKey = src.toLowerCase();
+
+      // Cycle detection.
+      if (visited.has(guidKey)) {
+        return err({
+          code: 'pack-cyclic-reference' as const,
+          expected: 'no circular mount.source GUID references',
+          hint: PACK_ERROR_HINTS['pack-cyclic-reference'],
+          detail: {
+            code: 'pack-cyclic-reference' as const,
+            kind: 'mount-asset' as const,
+            cycle: [...visited, guidKey],
+          },
+        });
+      }
+
+      // Look up child scene.
+      const childEnv = this.assetCatalog.get(guidKey);
+      if (childEnv === undefined) {
+        // Not catalogued — pass through as-is.
+        out.push({ ...m });
+        continue;
+      }
+      const childPayload = childEnv.payload;
+      if (
+        typeof childPayload !== 'object' ||
+        childPayload === null ||
+        (childPayload as Asset).kind !== 'scene'
+      ) {
+        out.push({ ...m });
+        continue;
+      }
+
+      // Resolve mounts recursively.
+      const childVisited = new Set(visited);
+      // Don't add guidKey to visited here — _resolveSceneGuids will do it
+      // via its own _visitedMountGuids parameter.
+      const childRes = this._resolveSceneGuids(
+        childPayload as SceneAsset,
+        world,
+        guidKey,
+        childVisited,
+      );
+
+      if (!childRes.ok) {
+        // Propagate child resolution error.
+        return childRes as unknown as Result<SceneInstanceMount[], AssetError>;
+      }
+
+      // Build resolved child with its own mounts.
+      const resolvedChild: SceneAsset = {
+        kind: 'scene',
+        entities: childRes.value.entities,
+        ...(childRes.value.mounts !== undefined && childRes.value.mounts.length > 0
+          ? { mounts: childRes.value.mounts }
+          : {}),
+      } as SceneAsset;
+
+      // allocSharedRef + register in originIndex (D-7).
+      const chRaw = unwrapHandle(world.allocSharedRef('SceneAsset', resolvedChild));
+      this._originIndex.set(resolvedChild, guidKey);
+
+      // Replace source with live handle number (D-5: source is number|string).
+      out.push({
+        ...m,
+        source: chRaw,
+      } as SceneInstanceMount);
+    }
+    return ok(out);
   }
 
   /**
@@ -3655,6 +3864,39 @@ export class AssetRegistry {
       const synthAttributes: Record<string, unknown> = {};
       if (unpacked.skinIndex !== undefined) synthAttributes.skinIndex = unpacked.skinIndex;
       if (unpacked.skinWeight !== undefined) synthAttributes.skinWeight = unpacked.skinWeight;
+      // feat-20260629 multi-uv regression fix: the extra UV sets (uv1..uvK)
+      // ride inside the interleaved `vertices` buffer, but the .bin format
+      // stores only the header's `uvSetCount` / `floatsPerVertex` -- not the
+      // per-set standalone arrays. Downstream (register stride validator +
+      // gpu-resource-store stride + deriveVertexBufferLayout) derives the UV
+      // set count from `attributes` via countUvSets, so a decode that omits
+      // uv1..uvK makes the wide interleaved buffer disagree with attributes
+      // (14-float stride vs. attributes-implied 12) -> every multi-UV mesh
+      // fails register with `mesh-vertex-stride-mismatch`. Reconstruct the
+      // standalone uv1..uvK Float32Arrays from the interleaved buffer so the
+      // attribute set faithfully reflects the packed geometry. UV values are
+      // still uploaded from `vertices` (interleaved) -- these arrays only
+      // carry the count + let writeback / custom shaders read per-set UVs.
+      const uvSetCount = unpacked.uvSetCount ?? 1;
+      const floatsPerVertex = unpacked.floatsPerVertex ?? 0;
+      if (uvSetCount > 1 && floatsPerVertex > 0 && unpacked.vertices.length > 0) {
+        const extraUvSets = uvSetCount - 1;
+        // UV1 starts right after the base region (canonical interleaved order:
+        // position/normal/uv/tangent[/skinIndex/skinWeight]/uv1..uvK), so the
+        // base width is the total stride minus the extra-UV floats.
+        const uv1Offset = floatsPerVertex - extraUvSets * 2;
+        const vertexCount = unpacked.vertices.length / floatsPerVertex;
+        for (let k = 1; k <= extraUvSets; k++) {
+          const cat = new Float32Array(vertexCount * 2);
+          const interleavedOffset = uv1Offset + (k - 1) * 2;
+          for (let v = 0; v < vertexCount; v++) {
+            const src = v * floatsPerVertex + interleavedOffset;
+            cat[v * 2 + 0] = unpacked.vertices[src + 0] as number;
+            cat[v * 2 + 1] = unpacked.vertices[src + 1] as number;
+          }
+          synthAttributes[`uv${k}`] = cat;
+        }
+      }
       const synthPayload: Record<string, unknown> = {
         vertices: unpacked.vertices,
         ...(synthIndices !== undefined ? { indices: synthIndices } : {}),
@@ -4697,5 +4939,61 @@ export class AssetRegistry {
       });
     }
     return { assets };
+  }
+
+  /**
+   * Return a readonly snapshot of all catalogued assets (inlined + pack-index)
+   * for enumeration by asset panels (AC-03 single source of truth).
+   *
+   * Merges entries from the private `packIndexCache` (prod path, carries
+   * `relativeUrl`) and `assetCatalog` (inlined / dev path, no URL). Each
+   * GUID appears exactly once. Returns a fresh array on every call — the
+   * internal Maps are never exposed (charter P4 consistent abstraction).
+   *
+   * plan-strategy section 2 D1; requirements AC-03; research Finding 5.
+   *
+   * @example
+   * ```ts
+   * for (const e of registry.listCatalog()) {
+   *   console.log(e.guid, e.kind, e.name, e.relativeUrl);
+   * }
+   * ```
+   */
+  listCatalog(): readonly {
+    guid: string;
+    kind: string;
+    name?: string;
+    relativeUrl: string;
+  }[] {
+    const seen = new Set<string>();
+    const result: { guid: string; kind: string; name?: string; relativeUrl: string }[] = [];
+
+    // Prod entries: packIndexCache carries relativeUrl + optional name.
+    if (this.packIndexCache) {
+      for (const [guidKey, entry] of this.packIndexCache) {
+        seen.add(guidKey);
+        result.push({
+          guid: guidKey,
+          kind: entry.kind,
+          name: entry.name ?? '',
+          relativeUrl: entry.relativeUrl,
+        });
+      }
+    }
+
+    // Inlined / dev-path entries: assetCatalog, no pack-index URL.
+    for (const [guidKey, envelope] of this.assetCatalog) {
+      if (!seen.has(guidKey)) {
+        const name = envelope.name ?? this.resolveName(guidKey);
+        result.push({
+          guid: guidKey,
+          kind: envelope.payload.kind,
+          name,
+          relativeUrl: '',
+        });
+      }
+    }
+
+    return result;
   }
 }

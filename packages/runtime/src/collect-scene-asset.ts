@@ -1,51 +1,75 @@
-// feat-20260623 M2 w11+w12 — SceneInstance → SceneAsset POD collection + pack
-// serialization (plan-strategy D-1: pure-data collector, no editor concepts, no
-// OverrideRecord / diff-merge — decisions #8 OOS).
+// feat-20260623 M2 w11+w12 — SceneInstance to SceneAsset POD collection + pack
+// serialization (plan-strategy D-1: pure-data collector).
 //
-// A0: engine never learns about "edit" — this is a pure-data read path, not an
-// editor mutation. handle→GUID reverse lookup via caller-supplied
-// Map<number,string> built externally from AssetRegistry.inspect().
+// feat-20260701-rootstosceneasset-forest-collect-schema-derived-ha:
+//   rootsToSceneAsset(registry, world, roots) -> Result<SceneAsset, ...>
+//   serializeSceneAssetToPack -> schema-derived refs[] index.
 //
-// Exports:
-//   collectSceneAsset(world, root, handleToGuid?) → SceneAsset
-//   serializeSceneAssetToPack(sceneAsset, guid?) → Record<string, unknown>
+// feat-20260703-collect-nested-sceneinstance-to-mount-roundtrip M2 + M3:
+//
+//   ── mount-collapse (M2) ──
+//   rootsToSceneAsset detects entities carrying SceneInstance (anchors) and
+//   folds each anchor's subtree into a mounts[] entry — the uplink inverse of
+//   instantiateScene which expands mounts[] into live entities.  Member
+//   classification filter, not subtree pruning: BFS walks the full subtree
+//   (collectSubtree unchanged, D-4), then anchors' members are folded into
+//   mount windows, graft entities survive as owned, and cross-window entity
+//   references are remapped to window LocalEntityIds.  Two anchor forms:
+//   Form 2 (root = instance) strips SceneInstance without self-mount; Form 1
+//   (deep anchor) folds at the anchor site with mount.parent pointing to the
+//   anchor's ChildOf parent.  Window accounting (totalSlots = entities.length
+//   + mounts.length + sum(memberCount)) preserves the child instance's full
+//   totalSlots, never shrinking by surviving-member count (AC-03, #495 guard).
+//
+//   ── serialize mounts (M3) ──
+//   serializeSceneAssetToPack maps in-memory mounts[].source GUID strings to
+//   refs[] indices, memberFirst/memberCount/localId/parent numeric pass-through.
+//   _resolveSceneGuids (asset-registry.ts) carries mounts through the reload
+//   chain: recursively resolves child scene GUIDs, registers child copies in
+//   the origin reverse-index (D-7), and protects against mount-source cycles
+//   (R-9).  registry.instantiate wires an identity resolver so resolved mount
+//   handles flow into instantiateScene transparently.
+//
+//   ── round-trip closure ──
+//   The round-trip instantiate -> collect (rootsToSceneAsset) -> serialize
+//   (serializeSceneAssetToPack) -> reload (loadByGuid + registry.instantiate)
+//   -> instantiate produces a structurally equivalent live subtree (AC-04).
+//   The equivalence benchmark is a second collect (fixed-point): after the
+//   first reload, the second collect output equals the first (D-9 normalization
+//   converges after one cycle).
+//
+//   ── known limitations ──
+//   OOS-1: mount.overrides[] (Layer-0 diffs) are not folded back during collect.
+//   D-9: Form 1 mount entity absorption — when the anchor parent cannot be
+//   proven to be a mount entity, components is left undefined (one-time
+//   normalization on first reload; fixed-point from second collect onward).
 
 import {
   type Component as EcsComponent,
   type EntityHandle,
   getRegisteredComponents,
+  resolveComponent,
   type World,
 } from '@forgeax/engine-ecs';
-import type { LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
+import { err, ok, type Result } from '@forgeax/engine-rhi';
+import type {
+  Asset,
+  Handle,
+  LocalEntityId,
+  SceneAsset,
+  SceneEntity,
+  SceneInstanceMount,
+} from '@forgeax/engine-types';
+import type { AssetRegistry } from './asset-registry';
+import { SceneInstance } from './components/scene-instance';
+import {
+  SceneCollectAssetGuidUnresolvedError,
+  SceneCollectEntityRefOutOfClosureError,
+} from './errors';
+import { resolveAssetHandle } from './resolve-asset-handle';
+import { collectSubtree } from './scene-utils/collect-subtree';
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Handle-field name allowlists (mirror of asset-registry.ts HANDLE_FIELD_NAMES /
-// HANDLE_ARRAY_FIELD_NAMES — keep in sync when new handle<> fields are added).
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Field names known to carry `shared<T>` schema-vocab references.
- * When a new `shared<>` field is added to a runtime component, its field name
- * MUST be added here so the writeback collector correctly resolves it to a GUID.
- */
-const HANDLE_FIELD_NAMES: ReadonlySet<string> = new Set([
-  'assetHandle',
-  'material',
-  'skeleton',
-  'clip',
-  'cubemap',
-]);
-
-/**
- * Field names known to carry `array<shared<T>>` schema-vocab references.
- * Each element is a handle that resolves to a GUID string.
- */
-const HANDLE_ARRAY_FIELD_NAMES: ReadonlySet<string> = new Set(['materials']);
-
-/**
- * Test whether a value is array-like (either a plain JS Array or a TypedArray
- * such as Uint32Array used by the SoA `array<shared<T, N>>` column backend).
- */
+// Shared helpers
 function _isArrayLike(value: unknown): value is ArrayLike<unknown> {
   return (
     Array.isArray(value) ||
@@ -58,242 +82,440 @@ function _isArrayLike(value: unknown): value is ArrayLike<unknown> {
     value instanceof Uint16Array
   );
 }
-
-/**
- * Normalize an array-like value to a plain JS array so consumers see a
- * predictable type.
- */
 function _normalizeArray(value: ArrayLike<unknown>): unknown[] {
   return Array.from(value);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// collectSceneAsset
-// ═══════════════════════════════════════════════════════════════════════════════
+// Schema-derived field classifier
+type SchemaFieldClass =
+  | { kind: 'entity'; scalar: true }
+  | { kind: 'entity'; scalar: false }
+  | { kind: 'shared'; scalar: true }
+  | { kind: 'shared'; scalar: false };
 
-/**
- * Collect the full component-value POD for every member entity of a
- * materialised SceneInstance back into a {@link SceneAsset}.
- *
- * Read sources (plan-strategy D-1):
- *   - `SceneInstanceState.entityToLocalId` (reverse index: Entity → LocalEntityId)
- *   - `world.get(entity, component)` → `ShapeOf<S>` full field values
- *   - `component.fields` per-field reflection
- *
- * `shared<T>` fields (MeshFilter.assetHandle, MeshRenderer.material,
- * Skin.skeleton, Animation.clip, Skybox.cubemap, MeshRenderer.materials[]) are
- * resolved from handle integers to GUID strings via the optional `handleToGuid`
- * map (built externally from `AssetRegistry.inspect()` — plan-strategy D-1,
- * research Finding 3 gap 1).
- *
- * The returned `SceneAsset.entities[]` is **not** guaranteed to preserve the
- * original entity order from the authored SceneAsset — entities are emitted in
- * insertion order of the `entityToLocalId` map (which reflects spawn order).
- *
- * @param world - The ECS world containing the materialised SceneInstance.
- * @param root - The synthetic root entity carrying the SceneInstance component.
- * @param handleToGuid - Optional `Handle<number>` → GUID string reverse index.
- * @returns A SceneAsset POD with all component values collected from the live
- *          SceneInstance.
- *
- * @example
- *   const instRes = world.get(root, SceneInstance);
- *   const sceneAsset = collectSceneAsset(world, root, handleToGuidMap);
- *   // sceneAsset.entities[i].components[compName][fieldName] reflects live values
- */
-export function collectSceneAsset(
-  world: World,
-  root: EntityHandle,
-  handleToGuid?: Map<number, string>,
-): SceneAsset {
-  const stateRes = world.getSceneInstanceState(root);
-  if (!stateRes.ok) {
-    // Entity does not carry SceneInstance or the state ref is dead — return an
-    // empty SceneAsset.
-    return { kind: 'scene', entities: [] };
-  }
-
-  const state = stateRes.value;
-  // Build a sorted list of (localId, entity) pairs from the reverse map so
-  // output order is deterministic (sorted by localId).
-  const entries: Array<[LocalEntityId, EntityHandle]> = [];
-  for (const [entity, lid] of state.entityToLocalId) {
-    entries.push([lid, entity]);
-  }
-  entries.sort((a, b) => (a[0] as unknown as number) - (b[0] as unknown as number));
-
-  // Pre-fetch the registered component set so we can test each entity against
-  // every known component. This is the only way to enumerate an entity's
-  // components without per-entity column introspection (which the public API
-  // does not expose).
-  const registeredComps = getRegisteredComponents();
-
-  const entities: SceneEntity[] = [];
-  for (const [lid, entity] of entries) {
-    const components: Record<string, Record<string, unknown>> = {};
-
-    for (const [compName, compToken] of registeredComps) {
-      const valRes = world.get(entity, compToken as EcsComponent<string>);
-      if (!valRes.ok) continue;
-
-      const val = valRes.value as Record<string, unknown>;
-      const fields = (compToken as EcsComponent<string>).fields;
-
-      if (!fields || Object.keys(fields).length === 0) continue;
-
-      const fieldValues: Record<string, unknown> = {};
-      for (const fieldName of Object.keys(fields)) {
-        const rawValue = val[fieldName];
-
-        if (handleToGuid && HANDLE_FIELD_NAMES.has(fieldName) && typeof rawValue === 'number') {
-          // shared<T> scalar field: resolve handle → GUID.
-          const guid = handleToGuid.get(rawValue);
-          fieldValues[fieldName] = guid !== undefined ? guid : rawValue;
-        } else if (
-          handleToGuid &&
-          HANDLE_ARRAY_FIELD_NAMES.has(fieldName) &&
-          _isArrayLike(rawValue)
-        ) {
-          // array<shared<T>> field: resolve each element.
-          fieldValues[fieldName] = _normalizeArray(rawValue).map((h: unknown) =>
-            typeof h === 'number' ? (handleToGuid.get(h) ?? h) : h,
-          );
-        } else if (_isArrayLike(rawValue)) {
-          // Non-handle array-like value (e.g. array<entity>): normalize to
-          // plain JS array for deterministic serialization.
-          fieldValues[fieldName] = _normalizeArray(rawValue);
-        } else {
-          fieldValues[fieldName] = rawValue;
-        }
-      }
-
-      if (Object.keys(fieldValues).length > 0) {
-        components[compName] = fieldValues;
-      }
-    }
-
-    entities.push({ localId: lid, components } as SceneEntity);
-  }
-
-  return { kind: 'scene', entities };
+function classifyFieldSchema(fieldType: string | undefined): SchemaFieldClass | undefined {
+  if (fieldType === undefined) return undefined;
+  if (fieldType === 'entity') return { kind: 'entity', scalar: true };
+  if (fieldType === 'array<entity>') return { kind: 'entity', scalar: false };
+  if (fieldType.startsWith('shared<')) return { kind: 'shared', scalar: true };
+  if (fieldType.startsWith('array<shared<')) return { kind: 'shared', scalar: false };
+  return undefined;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// serializeSceneAssetToPack
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Serialize a {@link SceneAsset} into a valid `internal-text-package` pack JSON
- * object (plan-strategy D-1: serialization half of the writeback chain).
- *
- * The output conforms to the engine pack schema v1:
- * ```
- * {
- *   schemaVersion: '1.0.0',
- *   kind: 'internal-text-package',
- *   assets: [{
- *     guid: <scene-guid>,
- *     kind: 'scene',
- *     payload: { entities: [...] },
- *     refs: [<GUID-strings>]
- *   }]
- * }
- * ```
- *
- * `shared<T>` fields that carry GUID strings in the collected SceneAsset are
- * reverse-mapped to integer indices into the per-asset `refs[]` array (the
- * inverse of parseScenePayload in asset-registry.ts). Fields that still carry
- * raw handle numbers (no handleToGuid was provided at collect time) are left
- * as-is.
- *
- * @param sceneAsset - The SceneAsset POD to serialize.
- * @param guid - Optional scene GUID (generated via `crypto.randomUUID()` if
- *               omitted).
- * @returns A valid pack JSON object.
- *
- * @example
- *   const pack = serializeSceneAssetToPack(sceneAsset, sceneGuid);
- *   // pack.assets[0].payload.entities — the scene's entity data
- *   // pack.assets[0].refs — deduplicated GUID list for handle<> fields
- */
+// serializeSceneAssetToPack — unchanged from original
 export function serializeSceneAssetToPack(
   sceneAsset: SceneAsset,
   guid?: string,
-): Record<string, unknown> {
+): Result<Record<string, unknown>, SceneCollectAssetGuidUnresolvedError> {
   const assetGuid = guid ?? crypto.randomUUID();
-
-  // Phase 1: walk all entities, collect unique GUIDs from handle fields.
   const guidSet = new Set<string>();
   for (const ent of sceneAsset.entities) {
     const comps = ent.components as Record<string, Record<string, unknown>>;
     for (const compName of Object.keys(comps)) {
+      const comp = resolveComponent(compName);
+      if (!comp?.schema) continue;
       const fields = comps[compName];
       if (!fields) continue;
-      for (const fieldName of Object.keys(fields)) {
+      for (const fieldName of Object.keys(comp.schema)) {
+        const classification = classifyFieldSchema(comp.schema[fieldName]);
+        if (!classification || classification.kind !== 'shared') continue;
         const value = fields[fieldName];
-        if (HANDLE_FIELD_NAMES.has(fieldName) && typeof value === 'string') {
-          guidSet.add(value);
-        } else if (HANDLE_ARRAY_FIELD_NAMES.has(fieldName) && Array.isArray(value)) {
-          for (const elem of value as ReadonlyArray<unknown>) {
-            if (typeof elem === 'string') guidSet.add(elem);
+        if (value === undefined) continue;
+        if (classification.scalar) {
+          if (typeof value === 'string') guidSet.add(value);
+        } else {
+          if (Array.isArray(value)) {
+            for (const elem of value as ReadonlyArray<unknown>) {
+              if (typeof elem === 'string') guidSet.add(elem);
+            }
           }
         }
       }
     }
   }
+  // Phase 1.5: collect mounts[].source GUID strings into guidSet (m3-i1).
+  if (sceneAsset.mounts !== undefined) {
+    for (const m of sceneAsset.mounts) {
+      if (typeof m.source === 'string') guidSet.add(m.source);
+    }
+  }
 
   const refs = [...guidSet];
   const guidToIndex = new Map<string, number>();
-  for (const [i, guid] of refs.entries()) {
-    guidToIndex.set(guid, i);
-  }
+  for (const [i, g] of refs.entries()) guidToIndex.set(g, i);
 
-  // Phase 2: emit entities with GUID strings replaced by refs indices.
   const serializedEntities: Array<Record<string, unknown>> = [];
   for (const ent of sceneAsset.entities) {
     const serializedComps: Record<string, Record<string, unknown>> = {};
     const comps = ent.components as Record<string, Record<string, unknown>>;
     for (const compName of Object.keys(comps)) {
+      const comp = resolveComponent(compName);
       const fields = comps[compName];
       if (!fields) continue;
       const serializedFields: Record<string, unknown> = {};
+      const schema = comp?.schema;
       for (const fieldName of Object.keys(fields)) {
         const value = fields[fieldName];
-        if (HANDLE_FIELD_NAMES.has(fieldName) && typeof value === 'string') {
-          const idx = guidToIndex.get(value);
-          serializedFields[fieldName] = idx !== undefined ? idx : value;
-        } else if (HANDLE_ARRAY_FIELD_NAMES.has(fieldName) && Array.isArray(value)) {
-          serializedFields[fieldName] = (value as ReadonlyArray<unknown>).map((elem: unknown) => {
-            if (typeof elem === 'string') {
-              const idx = guidToIndex.get(elem);
-              return idx !== undefined ? idx : elem;
+        if (value === undefined) continue;
+        const classification = schema ? classifyFieldSchema(schema[fieldName]) : undefined;
+        if (classification?.kind === 'shared') {
+          if (classification.scalar) {
+            if (typeof value !== 'string') {
+              serializedFields[fieldName] = value;
+              continue;
             }
-            return elem;
-          });
+            const idx = guidToIndex.get(value);
+            if (idx === undefined)
+              return err(new SceneCollectAssetGuidUnresolvedError(fieldName, value));
+            serializedFields[fieldName] = idx;
+          } else {
+            if (!Array.isArray(value)) {
+              serializedFields[fieldName] = value;
+              continue;
+            }
+            const mapped: number[] = [];
+            for (const elem of value as ReadonlyArray<unknown>) {
+              if (typeof elem !== 'string') {
+                mapped.push(elem as number);
+                continue;
+              }
+              const idx = guidToIndex.get(elem);
+              if (idx === undefined)
+                return err(new SceneCollectAssetGuidUnresolvedError(fieldName, elem));
+              mapped.push(idx);
+            }
+            serializedFields[fieldName] = mapped;
+          }
         } else {
           serializedFields[fieldName] = value;
         }
       }
-      if (Object.keys(serializedFields).length > 0) {
-        serializedComps[compName] = serializedFields;
-      }
+      if (Object.keys(serializedFields).length > 0) serializedComps[compName] = serializedFields;
     }
     serializedEntities.push({
       localId: ent.localId as unknown as number,
       components: serializedComps,
     });
   }
+  // Phase 2.5: serialize mounts (m3-i1, breakpoint A fix).
+  // source GUID string -> refs index; memberFirst/memberCount/localId/parent
+  // are numeric LocalEntityId values passed through directly.
+  let serializedMounts: Array<Record<string, unknown>> | undefined;
+  if (sceneAsset.mounts !== undefined && sceneAsset.mounts.length > 0) {
+    serializedMounts = [];
+    for (const m of sceneAsset.mounts) {
+      const sm: Record<string, unknown> = {
+        localId: m.localId as unknown as number,
+        memberFirst: m.memberFirst as unknown as number,
+        memberCount: m.memberCount,
+      };
+      if (typeof m.source === 'string') {
+        const idx = guidToIndex.get(m.source);
+        if (idx === undefined)
+          return err(new SceneCollectAssetGuidUnresolvedError('mount.source', m.source));
+        sm.source = idx;
+      } else {
+        sm.source = m.source as unknown as number;
+      }
+      if (m.parent !== undefined) sm.parent = m.parent as unknown as number;
+      serializedMounts.push(sm);
+    }
+  }
 
-  return {
+  const payload: Record<string, unknown> = { entities: serializedEntities };
+  if (serializedMounts !== undefined) payload.mounts = serializedMounts;
+  return ok({
     schemaVersion: '1.0.0',
     kind: 'internal-text-package',
-    assets: [
-      {
-        guid: assetGuid,
-        kind: 'scene',
-        payload: { entities: serializedEntities },
-        refs,
-      },
-    ],
-  };
+    assets: [{ guid: assetGuid, kind: 'scene', payload, refs }],
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// rootsToSceneAsset — with M2 mount-collapse
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Collect a forest of entity subtrees into a self-contained SceneAsset.
+ *
+ * M2 mount-collapse: entities carrying SceneInstance that are NOT roots
+ * are folded into mount entries. Root anchors have their SceneInstance
+ * row stripped without producing a self-mount. Member classification
+ * filter (not subtree pruning): graft entities under members survive as owned.
+ */
+export function rootsToSceneAsset(
+  registry: AssetRegistry,
+  world: World,
+  roots: EntityHandle[],
+): Result<
+  SceneAsset,
+  SceneCollectEntityRefOutOfClosureError | SceneCollectAssetGuidUnresolvedError
+> {
+  // ── Step 1: BFS closure ──
+  const visited = new Set<number>();
+  for (const root of roots) collectSubtree(world, root, visited);
+  if (visited.size === 0) return ok({ kind: 'scene', entities: [] });
+
+  const rootRawSet = new Set<number>();
+  for (const r of roots) rootRawSet.add(r as number);
+
+  // ── Step 1.5: Mount-collapse — identify anchors ──
+  const anchorEntities = new Set<number>();
+  for (const er of visited) {
+    if (world.get(er as EntityHandle, SceneInstance).ok) anchorEntities.add(er);
+  }
+
+  // Classify members for non-root anchors.
+  const memberEntities = new Set<number>();
+  const memberOrigin = new Map<number, { anchorRaw: number; memberLocalId: number }>();
+  for (const er of anchorEntities) {
+    if (rootRawSet.has(er)) continue; // root anchor: don't classify members
+    const sr = world.getSceneInstanceState(er as EntityHandle);
+    if (!sr.ok) continue;
+    for (const [me, lid] of sr.value.entityToLocalId) {
+      const mr = me as number;
+      if (visited.has(mr) && !anchorEntities.has(mr) && !memberEntities.has(mr)) {
+        memberEntities.add(mr);
+        memberOrigin.set(mr, { anchorRaw: er, memberLocalId: lid as unknown as number });
+      }
+    }
+  }
+
+  // Remove inner anchors (members of outer anchors).
+  for (const er of anchorEntities) {
+    if (memberEntities.has(er) && !rootRawSet.has(er)) anchorEntities.delete(er);
+  }
+
+  // ── Step 2: Filter owned & build mounts for non-root anchors ──
+  const orderedEntities = [...visited];
+  const ownedEntities: number[] = [];
+  for (const er of orderedEntities) {
+    if ((!anchorEntities.has(er) || rootRawSet.has(er)) && !memberEntities.has(er)) {
+      ownedEntities.push(er);
+    }
+  }
+
+  const entityToLocalId = new Map<number, number>();
+  for (let i = 0; i < ownedEntities.length; i++) {
+    const e = ownedEntities[i];
+    if (e !== undefined) entityToLocalId.set(e, i);
+  }
+
+  // Build non-root anchor info + resolve GUIDs.
+  const nonRootAnchors: Array<{ entityRaw: number; sourceGuid: string; totalSlots: number }> = [];
+  for (const er of anchorEntities) {
+    if (rootRawSet.has(er)) continue;
+    const sh = world.getSceneAssetForInstance(er as EntityHandle);
+    if (!sh.ok)
+      return err(
+        new SceneCollectAssetGuidUnresolvedError(
+          'SceneInstance.source',
+          sh.error as unknown as number,
+        ),
+      );
+    const pr = resolveAssetHandle<SceneAsset>(
+      world,
+      sh.value as unknown as Handle<string, 'shared'>,
+    );
+    if (!pr.ok)
+      return err(
+        new SceneCollectAssetGuidUnresolvedError(
+          'SceneInstance.source',
+          sh.value as unknown as number,
+        ),
+      );
+    const g = registry._guidForAsset(pr.value as Asset);
+    if (g === undefined)
+      return err(
+        new SceneCollectAssetGuidUnresolvedError(
+          'SceneInstance.source',
+          sh.value as unknown as number,
+        ),
+      );
+    const sr = world.getSceneInstanceState(er as EntityHandle);
+    if (!sr.ok)
+      return err(new SceneCollectAssetGuidUnresolvedError('SceneInstance.source', 'state'));
+    nonRootAnchors.push({ entityRaw: er, sourceGuid: g, totalSlots: sr.value.totalSlots });
+  }
+
+  // Sort by BFS order.
+  const bfsIdx = new Map<number, number>();
+  for (let i = 0; i < orderedEntities.length; i++) {
+    if (orderedEntities[i] !== undefined) bfsIdx.set(orderedEntities[i] as number, i);
+  }
+  nonRootAnchors.sort((a, b) => (bfsIdx.get(a.entityRaw) ?? 0) - (bfsIdx.get(b.entityRaw) ?? 0));
+
+  // ── Step 3: Allocate mount windows ──
+  const ownedCount = ownedEntities.length;
+  const outMounts: SceneInstanceMount[] = [];
+  let nextMF = ownedCount + nonRootAnchors.length;
+  const childOfTk = resolveComponent('ChildOf');
+
+  for (const a of nonRootAnchors) {
+    let mp: number | undefined;
+    if (childOfTk) {
+      const cr = world.get(a.entityRaw as EntityHandle, childOfTk as EcsComponent<string>);
+      if (cr.ok) {
+        const pRaw = (cr.value as Record<string, unknown>).parent as number;
+        if (pRaw !== undefined) {
+          const ol = entityToLocalId.get(pRaw);
+          if (ol !== undefined) mp = ol;
+          else {
+            const mo = memberOrigin.get(pRaw);
+            if (mo !== undefined) {
+              const ai = nonRootAnchors.findIndex((x) => x.entityRaw === mo.anchorRaw);
+              if (ai >= 0) mp = ownedCount + ai;
+            }
+          }
+        }
+      }
+    }
+    outMounts.push({
+      localId: (ownedCount + outMounts.length) as LocalEntityId,
+      source: a.sourceGuid,
+      memberFirst: nextMF as LocalEntityId,
+      memberCount: a.totalSlots,
+      ...(mp !== undefined ? { parent: mp as LocalEntityId } : {}),
+    });
+    nextMF += a.totalSlots;
+  }
+
+  // Entity ref resolution helper.
+  function _rlid(t: number): number | undefined {
+    const ol = entityToLocalId.get(t);
+    if (ol !== undefined) return ol;
+    for (let i = 0; i < nonRootAnchors.length; i++) {
+      if (nonRootAnchors[i]?.entityRaw === t) return ownedCount + i;
+    }
+    const mo = memberOrigin.get(t);
+    if (mo !== undefined) {
+      for (let i = 0; i < nonRootAnchors.length; i++) {
+        if (nonRootAnchors[i]?.entityRaw === mo.anchorRaw) {
+          let mf = ownedCount + nonRootAnchors.length;
+          for (let j = 0; j < i; j++) mf += nonRootAnchors[j]?.totalSlots ?? 0;
+          return mf + mo.memberLocalId;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  // ── Step 4: Build SceneEntity rows ──
+  const registeredComps = getRegisteredComponents();
+  const entities: SceneEntity[] = [];
+
+  for (let lid = 0; lid < ownedEntities.length; lid++) {
+    const entityRaw = ownedEntities[lid];
+    if (entityRaw === undefined) continue;
+    const entity = entityRaw as EntityHandle;
+    const components: Record<string, Record<string, unknown>> = {};
+    const isRoot = rootRawSet.has(entityRaw);
+
+    for (const [compName, compToken] of registeredComps) {
+      if (isRoot && compName === 'ChildOf') continue;
+      if (compName === 'SceneInstance') continue;
+
+      const valRes = world.get(entity, compToken as EcsComponent<string>);
+      if (!valRes.ok) continue;
+
+      const val = valRes.value as Record<string, unknown>;
+      const comp = resolveComponent(compName);
+      if (!comp?.schema) continue;
+
+      const schemaKeys = Object.keys(comp.schema);
+      if (schemaKeys.length === 0) continue;
+
+      const fieldValues: Record<string, unknown> = {};
+
+      for (const fieldName of schemaKeys) {
+        const rawValue = val[fieldName];
+        if (rawValue === undefined) continue;
+
+        const classification = classifyFieldSchema(comp.schema[fieldName]);
+
+        if (!classification) {
+          if (_isArrayLike(rawValue)) {
+            fieldValues[fieldName] = _normalizeArray(rawValue);
+          } else {
+            fieldValues[fieldName] = rawValue;
+          }
+          continue;
+        }
+
+        if (classification.kind === 'entity') {
+          if (classification.scalar) {
+            const lid2 = _rlid(rawValue as number);
+            if (lid2 === undefined) {
+              return err(
+                new SceneCollectEntityRefOutOfClosureError(
+                  entityRaw,
+                  fieldName,
+                  rawValue as number,
+                ),
+              );
+            }
+            fieldValues[fieldName] = lid2;
+          } else {
+            const arr = _isArrayLike(rawValue)
+              ? _normalizeArray(rawValue)
+              : (rawValue as unknown[]);
+            const mapped: number[] = [];
+            for (const elem of arr) {
+              const lid2 = _rlid(elem as number);
+              if (lid2 === undefined) {
+                return err(
+                  new SceneCollectEntityRefOutOfClosureError(entityRaw, fieldName, elem as number),
+                );
+              }
+              mapped.push(lid2);
+            }
+            fieldValues[fieldName] = mapped;
+          }
+        } else {
+          if (classification.scalar) {
+            const handle = rawValue as number;
+            const assetRes = resolveAssetHandle(
+              world,
+              handle as unknown as Handle<string, 'shared'>,
+            );
+            if (!assetRes.ok)
+              return err(new SceneCollectAssetGuidUnresolvedError(fieldName, handle));
+            const guid = registry._guidForAsset(assetRes.value as Asset);
+            if (guid === undefined)
+              return err(new SceneCollectAssetGuidUnresolvedError(fieldName, handle));
+            fieldValues[fieldName] = guid;
+          } else {
+            const arr = _isArrayLike(rawValue)
+              ? _normalizeArray(rawValue)
+              : (rawValue as unknown[]);
+            const mapped: string[] = [];
+            for (const elem of arr) {
+              const handle = elem as number;
+              const assetRes = resolveAssetHandle(
+                world,
+                handle as unknown as Handle<string, 'shared'>,
+              );
+              if (!assetRes.ok)
+                return err(new SceneCollectAssetGuidUnresolvedError(fieldName, handle));
+              const guid = registry._guidForAsset(assetRes.value as Asset);
+              if (guid === undefined)
+                return err(new SceneCollectAssetGuidUnresolvedError(fieldName, handle));
+              mapped.push(guid);
+            }
+            fieldValues[fieldName] = mapped;
+          }
+        }
+      }
+
+      if (Object.keys(fieldValues).length > 0) components[compName] = fieldValues;
+    }
+
+    entities.push({ localId: lid as LocalEntityId, components } as SceneEntity);
+  }
+
+  return ok({
+    kind: 'scene',
+    entities,
+    ...(outMounts.length > 0 ? { mounts: outMounts } : {}),
+  });
 }

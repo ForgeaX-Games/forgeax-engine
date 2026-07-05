@@ -1064,6 +1064,18 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // so they are available in ShaderRegistry before `register<MaterialAsset>`.
   // Failures throw structured RhiError / ShaderError through `createRenderer`.
   await prepareMaterialShaders(internals.device, getShader, assets, materialShaderUvSetCounts);
+  // feat-city-glb multi-UV tiling: the built-in standard PBR + skin shaders now
+  // UNCONDITIONALLY declare a second UV set (@location(6) uv1) so they can honor
+  // per-material `uvSet` selection. Their vertex layout must therefore always
+  // carry slot 6 or CreateRenderPipeline rejects the module ("slot 6 not present
+  // in VertexState"). `materialShaderUvSetCounts` is the SSOT both PSO paths read
+  // (buildPipelineContext + getMaterialShaderPipeline) to drive the clamp-to-last
+  // alias; naga @location reflection reports 0 for engine shaders in this build,
+  // so we assert the count explicitly. For single-UV meshes clamp-to-last aliases
+  // uv1 onto uv0 (48-byte stride unchanged), so this is byte-stable for existing
+  // geometry while emitting the required slot-6 attribute.
+  materialShaderUvSetCounts.set('forgeax::default-standard-pbr', 2);
+  materialShaderUvSetCounts.set(SKIN_MATERIAL_SHADER_ID, 2);
   // M5 wiring (feat-20260517-vite-plugin-image-build-time-cook w14b): hand
   // the RhiDevice to the AssetRegistry so `loadByGuid<TextureAsset>` ->
   // `loadTextureFromEntry` -> `uploadTexture` actually runs the GPU
@@ -1659,7 +1671,21 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         // a missing skin shader registration should not silently pick the
         // wrong BGL chain. With LayoutKind='pbr-skin' the selector returns
         // null when pbrSkinPipelineLayout is null (charter P3 explicit fail).
-        materialShaderId,
+        //
+        // feat-city-glb multi-UV tiling: this branch always compiles the
+        // built-in PBR module (`pbrEntry.wgsl` / 'module-fallback-pbr'), whose
+        // vertex stage now declares @location(6) uv1. The vertex-buffer LAYOUT
+        // therefore has to be the PBR layout (uvSetCount=2 -> slot 6 present),
+        // not the caller shader's -- e.g. a transparent sprite / sprite-lit
+        // material lands here with meshAttributes carrying only uv0, so the
+        // sprite id would resolve a 48-byte 4-attribute layout and the PBR
+        // module would reject "slot 6 not present in VertexState". Pass the
+        // built-in PBR id for layout resolution so buildPipelineContext derives
+        // the slot-6 layout that matches the compiled module. Skin keeps its
+        // own id so the pbr-skin fail-fast (null layout) is preserved.
+        materialShaderId === SKIN_MATERIAL_SHADER_ID
+          ? materialShaderId
+          : 'forgeax::default-standard-pbr',
         // feat-20260611-fox-skinning-vertex-attribute-chain M4 / w16 (D-4):
         // forward meshAttributes through the fallback path so the pbr-skin
         // layout chain reads from the deriveVertexBufferLayout SSOT here too.
@@ -2882,7 +2908,7 @@ function makeRhiNotAvailableError(): RhiError {
 // triple-pipeline contract (M5 / w22.10 + w22.11) hands distinct
 // `unlitBuiltinPipeline.module === unlitPipeline.module !==
 // standardPipeline.module` GPU handles back to `RenderSystem` per-frame
-// dispatch (D-P4 + AGENTS.md `MeshRenderer` shadingModel discriminant).
+// dispatch (D-P4 + AGENTS.md `MeshRenderer` shader-identity discriminant).
 
 const GPU_BUFFER_USAGE_MAP_READ = 0x01;
 const GPU_BUFFER_USAGE_VERTEX = 0x20;
@@ -4896,7 +4922,20 @@ async function buildReadyWebGPU(
   // bug-20260610: WebGL2 fallback uses uniform-buffer for instances
   // (the shader's `STORAGE_BUFFER_AVAILABLE=false` variant declares
   // `var<uniform> instances : array<InstanceData, 128>`).
-  const IDENTITY_INSTANCE_BYTES = storageBufferCapable ? 64 : 64 * 128; // uniform array<InstanceData, 128> is full-sized
+  //
+  // fix: the shared identity instance buffer is bound at @group(3) for EVERY
+  // pipeline variant that lacks per-entity Instances, including the sprite
+  // `PER_INSTANCE_REGION=true` variant whose InstanceData is 80 bytes
+  // (mat4 64B + region vec4 16B) rather than the base PBR 64B (mat4 only).
+  // The transparent split pass reaches that 80B-min-binding pipeline as soon
+  // as any transparent geometry exists (e.g. a glTF alphaMode=BLEND material),
+  // and a 64B buffer fails WebGPU's min-binding-size validation
+  // ("requires a buffer binding which is at least 80 bytes"), invalidating the
+  // frame's command buffer. Size the shared identity buffer to the largest
+  // InstanceData variant (80B) so it satisfies both the 64B PBR and 80B
+  // sprite-region layouts; the extra 16 region bytes stay zeroed (a valid
+  // empty UV region) and the PBR shader never reads past its mat4.
+  const IDENTITY_INSTANCE_BYTES = storageBufferCapable ? 80 : 80 * 128; // uniform array<InstanceData, 128> is full-sized
   const identityInstanceResult = runShimSyncStep(
     () =>
       rhiDevice.createBuffer({
@@ -6762,11 +6801,11 @@ async function buildReadyWebGPU(
     // chain so material BG entries built once compose for any of the three
     // pipelines (charter P5 consistent abstraction). The legacy `pipeline`
     // alias field has been retired; consumers select per
-    // (mat.shadingModel, mesh.layout) tuple via the record-stage three-way
+    // (mat.materialShaderId, mesh.layout) tuple via the record-stage three-way
     // setPipeline branch (w22.11).
     // bug-20260519: BUILTIN cube migrated to 12F so the legacy
     // `unlitBuiltinPipeline` (+ its zero-stride `unlitBuiltinDummyAttrBuffer`)
-    // is gone; consumers pick per `mat.shadingModel` only via the record-stage
+    // is gone; consumers pick per `mat.materialShaderId` only via the record-stage
     // 2-way `setPipeline` branch.
     // feat-20260615-pipeline-spec-ssot M2-T4: standard material PSOs are
     // pre-warmed in SPEC_CONST_TABLE and cached in pipelineCache. Cache

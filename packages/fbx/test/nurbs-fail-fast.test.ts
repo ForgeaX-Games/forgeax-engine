@@ -1,16 +1,17 @@
-// nurbs-fail-fast.test.ts — M5 t55: NURBS fail-fast unit test.
+// nurbs-fail-fast.test.ts — NURBS fail-fast unit test.
 //
-// TDD: Written BEFORE t46 binding.cc implements NURBS detection.
-// Mocks the error JSON that t46 will emit when a NURBS/patch mesh is found,
-// then asserts the TS bridge produces Result.Err(FbxError({code:'fbx-mesh-type-unsupported'})).
-// describe.runIf: skips when FBX_BINDING_BUILT is not set.
+// The ufbx WASM parser emits an error JSON envelope when a NURBS/patch
+// surface is encountered; the TS bridge maps it to
+// Result.Err(FbxError({code:'fbx-mesh-type-unsupported'})). This test pins
+// that envelope shape and the fbxErr factory contract against a mock JSON
+// payload (no native addon exists post-ufbx collapse).
 
 import { describe, expect, it } from 'vitest';
 import type { FbxError } from '../src/errors.js';
 
 /**
- * Mock JSON returned by binding.cc when NURBS mesh is detected
- * (t46 will produce this instead of a valid mesh document).
+ * Mock JSON returned by the ufbx WASM parser when a NURBS mesh is detected
+ * (produced instead of a valid mesh document).
  */
 function makeNurbsErrorJson(kind: string): string {
   return JSON.stringify({
@@ -21,22 +22,6 @@ function makeNurbsErrorJson(kind: string): string {
     },
   });
 }
-
-describe.runIf(!!process.env.FBX_BINDING_BUILT)('NURBS fail-fast real binding', () => {
-  it('NURBS mesh produces error through binding', () => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const binding = require('../build/Release/fbx_binding.node') as {
-      parseFbx: (filename: string) => string;
-    };
-
-    // Build a minimal valid .fbx file path that the binding can load.
-    // We expect the error to propagate as a thrown error from the binding
-    // when NURBS is detected, OR as a JSON error envelope.
-    // For now test that binding doesn't crash on a NURBS-bearing file.
-    // The real fixture validation requires a NURBS FBX sample.
-    expect(typeof binding.parseFbx).toBe('function');
-  });
-});
 
 describe('NURBS fail-fast mock path', () => {
   it('detects fbx-mesh-type-unsupported from error JSON', () => {
@@ -75,13 +60,10 @@ describe('NURBS fail-fast mock path', () => {
     expect(typeof err.expected).toBe('string');
     expect(err.expected.length).toBeGreaterThan(0);
 
-    // Exhaustive switch: FbxErrorCode is a closed union
+    // Exhaustive switch: FbxErrorCode is a closed single-member union
     const _check: FbxError = err;
     void _check;
     switch (err.code) {
-      case 'fbx-binding-not-built':
-        expect(err.detail.sdkRoot).toBeDefined();
-        break;
       case 'fbx-mesh-type-unsupported':
         expect(err.detail.meshType).toBeDefined();
         break;

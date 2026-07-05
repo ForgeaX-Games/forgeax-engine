@@ -52,6 +52,8 @@ function mockViewModel(): ViewModel {
           shaders: {
             vertexShaderModuleHandleId: 'vs-1',
             fragmentShaderModuleHandleId: 'fs-1',
+            vertexEntryPoint: 'vs_main',
+            fragmentEntryPoint: 'fs_main',
           },
           rasterizer: { cullMode: 'none' as const, frontFace: 'ccw' as const },
           depthStencil: {

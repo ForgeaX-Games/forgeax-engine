@@ -62,6 +62,8 @@ function mockViewModel(): ViewModel {
           shaders: {
             vertexShaderModuleHandleId: 'vs-1',
             fragmentShaderModuleHandleId: 'fs-1',
+            vertexEntryPoint: 'vs_main',
+            fragmentEntryPoint: 'fs_main',
           },
           rasterizer: { cullMode: 'none' as const, frontFace: 'ccw' as const },
           depthStencil: {
@@ -124,7 +126,11 @@ function mockViewModel(): ViewModel {
         {
           kind: 'createShaderModule' as const,
           handleId: 'fs-1',
-          wgslCode: '@fragment fn main() -> @location(0) vec4f { return vec4f(1.0); }',
+          // Bundles two fragment entries (forward + deferred) — the pipeline runs
+          // fs_main; the banner must mark it and list fs_gbuffer as "also defines".
+          wgslCode:
+            '@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1.0); }\n' +
+            '@fragment fn fs_gbuffer() -> @location(0) vec4f { return vec4f(0.0); }',
         },
       ],
     ]),
@@ -201,6 +207,21 @@ describe('AC-15: Shaders WGSL expand/collapse', () => {
     expect(showBtns.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('shows the active entry point next to each shader handle (bug #5)', () => {
+    // A module can bundle several entrypoints (e.g. fs_main forward + fs_gbuffer
+    // deferred); the row must name the ACTIVE one so it is unambiguous which fn runs.
+    const vm = mockViewModel();
+    const { container } = render(
+      <ViewModelContext.Provider value={vm}>
+        <SelectionContext.Provider value={makeSelection({ selectedDrawIdx: 0 }) as never}>
+          <PipelineState {...mockProps} />
+        </SelectionContext.Provider>
+      </ViewModelContext.Provider>,
+    );
+    expect(container.textContent).toContain('vs_main()');
+    expect(container.textContent).toContain('fs_main()');
+  });
+
   it('clicking Show WGSL reveals WGSL code', () => {
     const vm = mockViewModel();
 
@@ -244,6 +265,48 @@ describe('AC-15: Shaders WGSL expand/collapse', () => {
     // After collapse, the button should go back to Show
     const showAgain = findByTextAll(container, 'Show WGSL');
     expect(showAgain.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('expanding the vertex WGSL does NOT also expand the fragment (shared module)', () => {
+    // Regression: vertex + fragment share shaderModule:1, so keying the expand
+    // state on the module handle toggled both editors at once. State must key on
+    // the stage, not the handle.
+    const vm = mockViewModel();
+    const { container } = render(
+      <ViewModelContext.Provider value={vm}>
+        <SelectionContext.Provider value={makeSelection({ selectedDrawIdx: 0 }) as never}>
+          <PipelineState {...mockProps} />
+        </SelectionContext.Provider>
+      </ViewModelContext.Provider>,
+    );
+    const showBtns = findByTextAll(container, 'Show WGSL');
+    expect(showBtns.length).toBe(2); // one per stage
+    if (showBtns[0]) fireEvent.click(showBtns[0]); // expand vertex only
+    // Exactly one editor mounted, and exactly one button flipped to Hide.
+    expect(container.querySelectorAll('[data-forgeax-shader-editor]').length).toBe(1);
+    expect(findByTextAll(container, 'Hide WGSL').length).toBe(1);
+    expect(findByTextAll(container, 'Show WGSL').length).toBe(1);
+  });
+
+  it('the expanded WGSL banner marks the active entry and lists the others', () => {
+    // fs-1 bundles fs_main + fs_gbuffer; the fragment pipeline runs fs_main. The
+    // banner must name fs_main as active and list fs_gbuffer as "also defines" so
+    // the unused gbuffer entry in the shown source is not mistaken for the output.
+    const vm = mockViewModel();
+    const { container } = render(
+      <ViewModelContext.Provider value={vm}>
+        <SelectionContext.Provider value={makeSelection({ selectedDrawIdx: 0 }) as never}>
+          <PipelineState {...mockProps} />
+        </SelectionContext.Provider>
+      </ViewModelContext.Provider>,
+    );
+    // Expand the fragment editor (second Show WGSL button).
+    const showBtns = findByTextAll(container, 'Show WGSL');
+    if (showBtns[1]) fireEvent.click(showBtns[1]);
+    const banner = container.querySelector('[data-forgeax-shader-entrypoint="fs_main"]');
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain('fs_main()');
+    expect(banner?.textContent).toContain('fs_gbuffer()');
   });
 });
 

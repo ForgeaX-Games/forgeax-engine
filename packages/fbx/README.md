@@ -1,77 +1,62 @@
 # @forgeax/engine-fbx
 
-Import FBX assets via Autodesk FBX SDK 2020.3.7 native addon.
-Same `loadByGuid<SceneAsset>()` interface as the glTF importer —
-register once, load any `.fbx` file.
+FBX importer for the forgeax engine. A single **ufbx**-based parser compiled to
+WebAssembly via Emscripten -- works in both the browser and Node.js, no
+Autodesk FBX SDK, no native addon. Emits the engine FBX POD JSON schema
+(meshes, nodes, materials, skeletons, skins, clips), consumed by the shared
+`parse-*.ts` / `to-asset-pack.ts` bridge layer.
 
-## Quick start
+```
+FBX bytes -> ufbx (wasm) -> JSON POD -> parse-*.ts -> meta.json
+```
+
+## AI user consumption path
+
+The importer key `'fbx'` is unchanged from the SDK era -- zero migration for
+existing `.fbx.meta.json` sidecars. The engine resolves the importer
+automatically via `loadByGuid`:
+
+```ts
+// 1) Point the asset registry at the pack index
+assets.configurePackIndex('/pack-index.json');
+
+// 2) loadByGuid dispatches on meta.importer: 'fbx' automatically
+const res = await assets.loadByGuid<SceneAsset>(guid);
+if (!res.ok) {
+  console.error(res.error.code, res.error.hint);
+  return;
+}
+const scene = res.value; // SceneAsset -- ready for instantiate()
+```
+
+Under the hood, `vite-plugin-pack` calls `fbxImporter.import(ctx)` which
+initializes the ufbx WASM module on first use, parses the FBX bytes, and
+returns `ImportedAsset[]` (mesh, material, scene, skeleton, skin,
+animation-clip, texture). The importer registration is a one-liner if you
+need it explicitly:
 
 ```ts
 import { fbxImporter } from '@forgeax/engine-fbx';
 import { importers } from '@forgeax/engine-import';
-
-importers.register(fbxImporter);
-// Then import via vite-plugin-pack with a *.fbx.meta.json sidecar
-// (CLI subcommand `forgeax-engine-remote-fbx` is a stub; deferred to follow-up feat).
-// or via vite-plugin-pack with a *.fbx.meta.json sidecar.
-```
-
-## 7 sub-asset POD types (SSOT in `@forgeax/engine-types`)
-
-| POD | Description | FBX source |
-|:--|:--|:--|
-| `MeshPod` | vertices, indices, attributes, submeshes | `FbxMesh` control points |
-| `MaterialPod` | PBR parameters (StingrayPbs / Phong fallback) | `FbxSurfaceMaterial` |
-| `ScenePod` | entity hierarchy + mounts | `FbxNode` tree |
-| `TexturePod` | external file path | `FbxFileTexture` |
-| `SkeletonPod` | jointCount + inverse bind matrices | `FbxSkin` deformer |
-| `SkinPod` | skeletonGuid + jointPaths | `FbxSkin` clusters |
-| `AnimationClipPod` | duration + channels + samplers (30 fps fixed, merge-keys from per-axis X/Y/Z, linear resample) | `FbxAnimStack` curves |
-
-## Importer registration
-
-```ts
-import { fbxImporter } from '@forgeax/engine-fbx';
-import { importers } from '@forgeax/engine-import';
-
 importers.register(fbxImporter);
 ```
 
-The import runner dispatches on `meta.importer: 'fbx'`.
+## 7 sub-asset POD types
 
-## Error codes
+The FBX importer produces 7 sub-asset kinds. Types are defined in
+`@forgeax/engine-types` (SSOT) -- see the `Asset` union and the per-kind POD
+interfaces. This section is a discovery index; do not copy-paste member lists
+from here.
 
-Errors are structured (charter P3): every error object carries `.code`,
-`.expected`, `.hint`, and `.detail`. AI users switch on `.code` for
-exhaustive handling — no string parsing required.
-
-### FbxErrorCode (this package, closed union)
-
-| Code | Detail | Hint |
+| POD type | Description | Source anchor |
 |:--|:--|:--|
-| `fbx-binding-not-built` | `{ sdkRoot, binding }` | Set `FBX_SDK_ROOT` then `pnpm rebuild @forgeax/engine-fbx` |
-| `fbx-mesh-type-unsupported` | `{ meshType: 'nurbs'\|'patch', meshName }` | Convert NURBS/patch surface to polygon mesh before export |
-
-> **Note on error surfacing via import-runner.** The `Importer.import` contract
-> returns `Promise<readonly ImportedAsset[]>` (no `Result` envelope), so `fbxImporter`
-> throws a plain `Error` whose `.message` contains the `FbxErrorCode` string.
-> The import-runner catches it as `import-internal-error`; the code string appears
-> in `detail.reason`. AI users grepping for `'fbx-binding-not-built'` will find it
-> there.
-> A future plan-layer feat (OOS-*) may introduce `ResultImporter` for structural
-> error surfacing.
-
-### ImportErrorCode (in `@forgeax/engine-types`, 5 members)
-
-Runtime dispatch errors: `importer-not-registered`, `source-read-failed`,
-`import-produced-no-assets`, `guid-mismatch`, `import-internal-error`.
-
-### GltfErrorCode (in `@forgeax/engine-gltf`)
-
-The glTF importer's 15 error codes were migrated from `@forgeax/engine-types`
-to `@forgeax/engine-gltf` during feat-20260615 (DIP: types does not know
-any importer-specific error code). Import from `@forgeax/engine-gltf` when
-handling glTF-specific failures.
+| `MeshPod` | Vertices, indices, attributes, submeshes | `@forgeax/engine-types` `MeshPod` |
+| `MaterialPod` | PBR parameters (StingrayPBS / Phong / Lambert / fallback) | `@forgeax/engine-types` `MaterialPod` |
+| `ScenePod` | Entity hierarchy + mounts | `@forgeax/engine-types` `ScenePod` |
+| `TexturePod` | External file path | `@forgeax/engine-types` `TexturePod` |
+| `SkeletonPod` | Joint count + inverse bind matrices | `@forgeax/engine-types` `SkeletonPod` |
+| `SkinPod` | Skeleton GUID + joint paths | `@forgeax/engine-types` `SkinPod` |
+| `AnimationClipPod` | Duration + channels + samplers | `@forgeax/engine-types` `AnimationClipPod` |
 
 ## Material mapping
 
@@ -80,47 +65,106 @@ Priority: StingrayPBS > Phong > Lambert > fallback.
 
 | Branch | Detection | Mapping |
 |:--|:--|:--|
-| **StingrayPBS** | `FbxImplementation::GetName() === 'StingrayPBS'` | Channels copied directly: `baseColor`, `metallic`, `roughness`, `normal`, `occlusion` |
-| **Phong / Lambert** | `FbxSurfacePhong` or `FbxSurfaceLambert` | `baseColor = diffuse`, `metallic = 0`, `roughness = 1 - sqrt(shininess / 100)` |
-| **Default fallback** | No recognizable material type | `baseColor = #808080` (grey), `metallic = 0`, `roughness = 0.5` |
+| **StingrayPBS** | `kind === 'stingray-pbs'` in the bridge JSON POD | Channels copied directly: `baseColor`, `metallic`, `roughness`, `normal`, `occlusion` |
+| **Phong** | `kind === 'phong'` | `baseColor = diffuse`, `metallic = 0`, `roughness = 1 - sqrt(shininess / 100)` (Family A) |
+| **Lambert** | `kind === 'lambert'` | `baseColor = diffuse`, `metallic = 0`, `roughness = 0.5` (no specular) |
+| **Fallback** | No recognized material type | `baseColor = [0.5, 0.5, 0.5]` (grey), `metallic = 0`, `roughness = 0.5` |
 
-The Phong-to-PBR roughness formula (`roughness = 1 - sqrt(shininess / 100)`)
-maps the Phong `shininess` exponent (range ~0-100) to the PBR `roughness` factor
-(range 0-1), assuming `max_specular_power = 100` in the source tool.
+The Phong-to-PBR roughness formula is **Family A**: `roughness = 1 - sqrt(shininess / maxGloss)`
+with `maxGloss = 100`. Implementation SSOT: `src/parse-material.ts` lines
+32-35 (`phongRoughness` function). Industry survey (5 engines/tools) and
+formula rationale: KB `2026-06-15-fbx-phong-roughness-conversion.md` (Family A
+vs Family B comparison, max_gloss convention).
 
-## CLI
+## Error codes
+
+Errors are structured: every error object carries `.code`, `.expected`,
+`.hint`, and `.detail`. AI users switch on `.code` for exhaustive handling.
+
+**FbxErrorCode** (this package, closed union): single member
+`'fbx-mesh-type-unsupported'` (NURBS/patch surfaces). The SDK-era
+`'fbx-binding-not-built'` code retired with the native addon removal.
+Source SSOT: `src/errors.ts` -- do not copy-paste the member list; the
+source is the authoritative closed union.
+
+**ImportErrorCode** (in `@forgeax/engine-types`, 5 members): runtime
+dispatch errors -- `importer-not-registered`, `source-read-failed`,
+`import-produced-no-assets`, `guid-mismatch`, `import-internal-error`.
+
+## Contributor toolchain
+
+<details>
+<summary>Getting pre-built WASM (fetch-wasm)</summary>
+
+The `pkg/` directory is **not committed to git** (zero-binary invariant). On a
+fresh checkout you can fetch a pre-built WASM binary from GitHub Releases
+instead of compiling locally:
 
 ```bash
-forgeax-engine-remote-fbx import <file>.fbx
+pnpm -F @forgeax/engine-fbx fetch-wasm
 ```
 
-The `cli-fbx.ts` entrypoint is an export-only stub; full CLI subcommand
-registration in `@forgeax/engine-remote` is deferred to a follow-up feat.
+This runs `scripts/fetch-wasm.mjs`, which:
+1. Resolves the GitHub repo from `git remote get-url origin` (SSH or HTTPS).
+2. Computes the **content key** = `SHA256(bridge.c)` truncated to 8 hex chars.
+3. Looks for a matching asset `fbx-wasm-v0.23.0-{sha8}.wasm` under the
+   `wasm-artifacts` release tag.
+4. Downloads it to `pkg/fbx-wasm.wasm` (stable name -- the runtime
+   `new URL('../pkg/fbx-wasm.wasm', import.meta.url)` does not see the hash).
 
-## Toolchain
+The content key guarantees you get the binary that matches your exact
+`bridge.c` source -- no accidental mismatch.
 
-Requires FBX SDK 2020.3.7. See [CONTRIBUTING.md](../../CONTRIBUTING.md) for
-platform-specific installation instructions.
+If the asset is not found (e.g. modified `bridge.c` that was never published),
+the script prints a structured error with a hint to compile locally. If the
+repo is private, set `GITHUB_TOKEN` so the request carries authentication;
+public repos work anonymously (no token needed).
 
-Set `FBX_SDK_ROOT` to the SDK install root, then:
+</details>
+
+<details>
+<summary>Compiling from source (emcc fallback)</summary>
+
+When no pre-built release is available, compile locally with Emscripten:
 
 ```bash
-pnpm rebuild @forgeax/engine-fbx
+# Prerequisite: install emsdk and activate it
+# https://emscripten.org/docs/getting_started/downloads.html
+
+pnpm -F @forgeax/engine-fbx build:wasm
 ```
 
-### CI job
+`build:wasm` runs two scripts in order:
+1. `scripts/fetch-ufbx.mjs` -- downloads `ufbx.c` + `ufbx.h` (v0.23.0) from
+   the official ufbx repo. Idempotent: skips if already present.
+2. `scripts/build-wasm.mjs` -- invokes `emcc` to compile `ufbx.c` + `bridge.c`
+   into `pkg/fbx-wasm.mjs` + `pkg/fbx-wasm.wasm`.
 
-An optional `smoke-fbx-macos-arm64` job runs on `macos-latest` with FBX SDK
-installed. It is `continue-on-error: true` — failure does not block PR merge.
+Both `ufbx.c`/`.h` and `pkg/` are in `.gitignore`; CI provides emsdk via
+`emscripten-core/setup-emsdk` and rebuilds from a bare checkout on every run.
 
-## OOS (out of scope)
+</details>
 
-- NURBS / patch surfaces (fail-fast with `fbx-mesh-type-unsupported`)
-- Embedded media textures (warn + skip)
-- Multiple animation takes (first take only)
-- Hermite weighted tangent (linear resample only)
-- Runtime FBX import (build-time only)
+### Fetch-wasm error codes
+
+| Code | Meaning | Self-help |
+|:--|:--|:--|
+| `E1_NETWORK` | Network unavailable or unexpected HTTP error | `pnpm -F @forgeax/engine-fbx build:wasm` (local emcc) |
+| `E2_ASSET_NOT_FOUND` | Release tag or asset not found | `pnpm -F @forgeax/engine-fbx build:wasm`, or push to main to trigger CI release |
+| `E3_ORIGIN_UNSUPPORTED_HOST` | `git remote get-url origin` returned a non-GitHub host | Check `git remote -v`; set origin to a GitHub remote |
+| `E3_ORIGIN_PARSE_FAILED` | Cannot parse the origin URL into owner/repo | Expected `git@github.com:OWNER/REPO.git` or `https://github.com/OWNER/REPO.git` |
+| `E3_NO_ORIGIN` | No `origin` remote configured | `git remote add origin <url>` or `build:wasm` |
+| `E4_HASH_MISMATCH` | `bridge.c` SHA does not match any published asset | `pnpm -F @forgeax/engine-fbx build:wasm` |
+| `E5_AUTH_FAILED` | Private repo requires authentication (401/403) | Set `GITHUB_TOKEN` environment variable, or `build:wasm` |
+
+### Content-keyed idempotency
+
+The CI `main-push` release step publishes `fbx-wasm-v0.23.0-{sha8}.wasm` under
+the `wasm-artifacts` release tag. The publish step checks for an existing asset
+with the same name before uploading -- identical `bridge.c` content never
+produces a duplicate release. The hash is computed from the `bridge.c` content
+at build time (Derive, Don't Duplicate -- no stored hash file).
 
 ## License
 
-Apache-2.0. FBX SDK is distributed under the Autodesk FBX SDK license.
+MIT

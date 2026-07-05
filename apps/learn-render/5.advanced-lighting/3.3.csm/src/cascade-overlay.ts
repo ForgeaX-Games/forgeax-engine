@@ -1,28 +1,28 @@
 // apps/learn-render/5.advanced-lighting/3.3.csm/src/cascade-overlay.ts
 // LearnOpenGL section 5.3 cascaded shadow maps -- demo-local cascade overlay
-// debug-viz (requirements OOS-4: heuristic, NOT a true shadow atlas tile
-// readback). This is debug-viz layered ON TOP of the engine's URP image, NOT a
-// replacement render pipeline.
+// debug-viz post-process.
 //
-// The overlay is wired through the engine M4' post-URP post-process hook
-// (`RenderPipelineAsset.config.postEffects`): URP renders the full lit scene
-// (shadow cascades + tonemap + bloom + fxaa) into the swap-chain, then
-// composites the registered cascade-tint effect over the final image. Because
-// URP's 9-pass chain is untouched, the shadows the demo exists to show survive
-// -- unlike the prior installPipeline-replacement approach, which dropped every
-// URP shadow pass and rendered a shadow demo with no shadows.
+// feat-20260702-postprocess-camera-depth-read M4 w17: rewrite from 5-variant
+// regex-swap + re-installPipeline to single shader with structured reads
+// ({key, sampleType:'depth'}) + uniform params (PostProcessParams ECS
+// component). Mode switching goes from "re-install whole URP" to "write 16 B
+// UBO" (D-8: params@2, always present for fullscreen-post-with-scene-depth).
 //
-// Per-mode the only difference is the TINT_MODE constant baked into the overlay
-// fragment (regex-swapped from the compiled cascade-overlay.wgsl source); keys
-// 1..4 highlight a single cascade, key 0 turns the overlay OFF (URP installed
-// with an empty postEffects list -> zero extra passes -> bare lit scene).
+// The overlay is wired through the engine M4' post-URP post-process hook:
+// URP renders the full lit scene (shadow cascades + tonemap + bloom + fxaa)
+// into the swap-chain, then composites the cascade-tint effect over the final
+// image. The overlay pass is always active (installed once); 'off' mode
+// writes tintMode=-1 to params, which the shader detects and passthroughs.
 
-import { URP_PIPELINE_ID } from '@forgeax/engine-runtime';
+import { PostProcessParams, URP_PIPELINE_ID } from '@forgeax/engine-runtime';
 import type { RenderPipelineAsset } from '@forgeax/engine-types';
 import overlayShader from './cascade-overlay.wgsl';
 
 /** Closed roster of overlay tint modes. */
 export type CsmOverlayMode = 'off' | 'all' | 'c1' | 'c2' | 'c3' | 'c4';
+
+const POSTPROCESS_ID = 'learn-render-5-3-3-csm::overlay';
+const PARAMS_BYTE_SIZE = 16;
 
 /**
  * PSSM split config baked into cascade-overlay.wgsl; asserted at install.
@@ -35,8 +35,6 @@ const CSM_NEAR = 0.1;
 const CSM_FAR = 50;
 const CSM_CASCADE_COUNT = 4;
 const CSM_SPLIT_LAMBDA = 0.75;
-
-const POSTPROCESS_ID_PREFIX = 'learn-render-5-3-3-csm::overlay';
 
 /** TINT_MODE numeric value baked per mode (matches cascade-overlay.wgsl doc). */
 const TINT_MODE_BY_MODE: Readonly<Record<CsmOverlayMode, number>> = {
@@ -83,73 +81,100 @@ export function computeCsmSplits(): Float32Array {
 }
 
 /**
- * Build the per-mode overlay WGSL by regex-swapping the single TINT_MODE
- * constant in the compiled cascade-overlay.wgsl source. The compiled source
- * preserves the `const TINT_MODE : f32 = <n>;` declaration verbatim.
+ * Pack a CsmOverlayMode into 16 B of UBO data for the PostProcessParams struct
+ * (tintMode: f32 @ offset 0, fakeDepth: f32 @ offset 4, _pad: vec2<f32> @ offset 8).
  */
-function overlaySourceForMode(mode: CsmOverlayMode): string {
-  const tint = TINT_MODE_BY_MODE[mode];
-  const literal = `${tint.toFixed(1)}`;
-  return overlayShader.wgsl.replace(
-    /const TINT_MODE : f32 = -?\d+(?:\.\d+)?;/,
-    `const TINT_MODE : f32 = ${literal};`,
-  );
-}
-
-function postProcessId(mode: CsmOverlayMode): string {
-  return `${POSTPROCESS_ID_PREFIX}-${mode}`;
+function packModeBytes(mode: CsmOverlayMode): Uint8Array {
+  const buf = new ArrayBuffer(PARAMS_BYTE_SIZE);
+  const f32 = new Float32Array(buf);
+  f32[0] = TINT_MODE_BY_MODE[mode];
+  f32[1] = 0; // fakeDepth: 0 = real depth from engine channel
+  f32[2] = 0; // pad
+  f32[3] = 0; // pad
+  return new Uint8Array(buf);
 }
 
 /**
- * Minimal renderer surface the overlay needs: register a post-process shader id
- * + (re)install the built-in URP with a `config.postEffects` list.
+ * Minimal renderer surface the overlay needs: register a post-process shader
+ * id with structured reads + params, and install the URP pipeline with the
+ * overlay post-effect.
  */
 export interface CsmOverlayRenderer {
   postProcess: {
-    register(id: string, entry: { source: string; reads?: readonly string[] }): void;
+    register(
+      id: string,
+      entry: {
+        source: string;
+        reads?: readonly ({ key: string; sampleType?: 'depth' } | string)[];
+        params?: { byteSize: number; defaultValue: Uint8Array };
+      },
+    ): void;
   };
   installPipeline(
     asset: RenderPipelineAsset,
   ): { ok: true } | { ok: false; error: { code: string; hint?: string } };
 }
 
-const TINTED_MODES: readonly CsmOverlayMode[] = ['all', 'c1', 'c2', 'c3', 'c4'];
+type WorldLike = {
+  spawn: (...args: any[]) => { unwrap(): any };
+  set: (...args: any[]) => void;
+};
 
-let activeRenderer: CsmOverlayRenderer | null = null;
+let activeWorld: WorldLike | null = null;
+let activeParamsEntity: unknown = null;
 
 /**
- * Register the five tinted overlay variants and install URP with the default
- * ('all' bands tinted) overlay composited on top. Call once after app.start()
- * resolves. Returns the recomputed PSSM splits (for logging / smoke assertion);
- * returns null on install error. The 'off' mode needs no registered shader --
- * it installs URP with an empty postEffects list.
+ * Register the single cascade-overlay shader with structured reads + params,
+ * spawn a PostProcessParams entity for per-frame mode switching, and install
+ * URP once with the overlay as a permanent post-effect. Call once after
+ * app.start() resolves. Returns the recomputed PSSM splits (for logging /
+ * smoke assertion); returns null on install error.
  */
-export function installCsmOverlay(renderer: CsmOverlayRenderer): Float32Array | null {
-  for (const mode of TINTED_MODES) {
-    renderer.postProcess.register(postProcessId(mode), {
-      source: overlaySourceForMode(mode),
-    });
+export function installCsmOverlay(
+  renderer: CsmOverlayRenderer,
+  world: WorldLike,
+): Float32Array | null {
+  // Register one shader with depth-channel read (D-3 BGL kind
+  // fullscreen-post-with-scene-depth) + uniform params.
+  renderer.postProcess.register(POSTPROCESS_ID, {
+    source: overlayShader.wgsl,
+    reads: [{ key: 'sceneColor' }, { key: 'depth', sampleType: 'depth' }],
+    params: { byteSize: PARAMS_BYTE_SIZE, defaultValue: packModeBytes('all') },
+  });
+
+  // Spawn PostProcessParams entity so the engine writes params UBO per-frame.
+  // tintMode changes via world.set() in setCsmOverlayMode (D-8: UBO write
+  // replaces re-installPipeline).
+  activeParamsEntity = world.spawn({
+    component: PostProcessParams,
+    data: { shader: POSTPROCESS_ID, data: packModeBytes('all') },
+  }).unwrap();
+
+  // Install URP once with the overlay (always active pass; 'off' mode
+  // handled via tintMode=-1 in params -- shader passthroughs).
+  const res = renderer.installPipeline({
+    kind: 'render-pipeline',
+    pipelineId: URP_PIPELINE_ID,
+    config: { postEffects: [POSTPROCESS_ID] },
+  });
+  if (!res.ok) {
+    console.error(
+      '[learn-render 5.3.3 csm] installPipeline(urp+overlay) failed:',
+      res.error.code,
+    );
+    return null;
   }
-  activeRenderer = renderer;
-  if (!setCsmOverlayMode('all')) return null;
+
+  activeWorld = world;
   return computeCsmSplits();
 }
 
 /**
- * Hot-swap the active overlay by re-installing URP with the matching
- * `config.postEffects`. 'off' installs URP with an empty list (bare lit scene).
+ * Hot-swap the overlay tint mode by writing to the PostProcessParams UBO.
+ * No pipeline re-install -- the shader pass is always active (D-8).
  */
 export function setCsmOverlayMode(mode: CsmOverlayMode): boolean {
-  if (activeRenderer === null) return false;
-  const postEffects = mode === 'off' ? [] : [postProcessId(mode)];
-  const res = activeRenderer.installPipeline({
-    kind: 'render-pipeline',
-    pipelineId: URP_PIPELINE_ID,
-    config: { postEffects },
-  });
-  if (!res.ok) {
-    console.error('[learn-render 5.3.3 csm] installPipeline(urp+overlay) failed:', res.error.code);
-    return false;
-  }
+  if (activeWorld === null || activeParamsEntity === null) return false;
+  activeWorld.set(activeParamsEntity, PostProcessParams, { data: packModeBytes(mode) });
   return true;
 }

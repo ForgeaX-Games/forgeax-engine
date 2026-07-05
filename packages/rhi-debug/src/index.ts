@@ -11,6 +11,7 @@ export {
 export { pixelDeltaAbsMean } from './pixel-diff';
 export {
   type ResolvedTextureDescriptor,
+  readbackDrawRt,
   readbackTexturePixels,
   resolveAttachmentSize,
   resolveTextureDescriptor,
@@ -37,7 +38,7 @@ export {
 // pngjs (Node.js dep) into downstream bundles (e.g., the app package).
 // Import from '@forgeax/engine-rhi-debug/inspector' for inspector APIs.
 export type { Replay } from './replayer';
-export { createReplay, replayInitialData } from './replayer';
+export { adaptReplayFormat, createReplay, replayInitialData } from './replayer';
 // w10: DebugRhiAdapter type inlined here (was in rpc-bridge.ts, which is deleted).
 // wireDebugRhiInspector deleted alongside routing layer removal.
 

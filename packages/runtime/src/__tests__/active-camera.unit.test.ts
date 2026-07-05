@@ -25,9 +25,9 @@
 //   plan-strategy D-2: engine renderer gains neutral by-entity-ID active
 //     camera capability; resource absent -> first-hit fallback (backward compat)
 
-import { describe, expect, it } from 'vitest';
 import { World } from '@forgeax/engine-ecs';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
+import { describe, expect, it } from 'vitest';
 
 import { AssetRegistry } from '../asset-registry';
 import { Camera, Transform } from '../components';
@@ -147,9 +147,9 @@ describe('w7 — getActiveCamera / setActiveCamera', () => {
     const world = new World();
     setActiveCamera(world, 77);
     expect(getActiveCamera(world)).toEqual({ entity: 77 });
-    expect((world as unknown as { hasResource(k: string): boolean }).hasResource(
-      ACTIVE_CAMERA_KEY,
-    )).toBe(true);
+    expect(
+      (world as unknown as { hasResource(k: string): boolean }).hasResource(ACTIVE_CAMERA_KEY),
+    ).toBe(true);
   });
 
   it('setActiveCamera overwrites previous (idempotent last-write-wins)', () => {

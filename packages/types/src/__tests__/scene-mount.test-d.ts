@@ -28,7 +28,7 @@ import type { LocalEntityId, MountOverride, SceneAsset, SceneInstanceMount } fro
 describe('SceneInstanceMount POD shape (AC-01)', () => {
   it('declares the required scalar fields with correct types', () => {
     expectTypeOf<SceneInstanceMount['localId']>().toEqualTypeOf<LocalEntityId>();
-    expectTypeOf<SceneInstanceMount['source']>().toEqualTypeOf<number>();
+    expectTypeOf<SceneInstanceMount['source']>().toEqualTypeOf<number | string>();
     expectTypeOf<SceneInstanceMount['memberFirst']>().toEqualTypeOf<LocalEntityId>();
     expectTypeOf<SceneInstanceMount['memberCount']>().toEqualTypeOf<number>();
   });

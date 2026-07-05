@@ -53,6 +53,23 @@ export interface GameContext {
    * (plan-strategy D-2).
    */
   readonly registerUpdate: (fn: (dt: number) => void) => void;
+  /**
+   * Controlled UI container for this run. Games must mount their DOM UI here
+   * (`(ctx.uiRoot ?? document.body).appendChild(el)`) instead of appending
+   * directly to `document.body`. In the embedded editor viewport the host
+   * removes this whole container on ■ Stop — a single disposable boundary that
+   * makes UI-remnant-after-stop structurally impossible (the ECS-surgical undo
+   * in run-lifecycle cannot reach DOM). Absent → fall back to `document.body`.
+   */
+  readonly uiRoot?: HTMLElement;
+  /**
+   * Register a teardown callback for non-DOM side effects that outlive the ECS
+   * world (`removeEventListener` / `AudioContext.close` / `clearTimeout` /
+   * `cancelAnimationFrame`). The host flushes these on ■ Stop, in reverse
+   * registration order. Absent → the host does not support teardown (e.g. a
+   * reload-on-stop host); games should still register defensively.
+   */
+  readonly registerCleanup?: (fn: () => void) => void;
 }
 
 /**
@@ -81,6 +98,23 @@ export interface BootstrapContext {
    * author-side entity list with Name components. Absent when the game has
    * no defaultScene. */
   readonly defaultScene?: SceneAsset;
+  /**
+   * Controlled UI container for this run. Games must mount their DOM UI here
+   * (`(ctx.uiRoot ?? document.body).appendChild(el)`) instead of appending
+   * directly to `document.body`. In the embedded editor viewport the host
+   * removes this whole container on ■ Stop — a single disposable boundary that
+   * makes UI-remnant-after-stop structurally impossible (the ECS-surgical undo
+   * in run-lifecycle cannot reach DOM). Absent → fall back to `document.body`.
+   */
+  readonly uiRoot?: HTMLElement;
+  /**
+   * Register a teardown callback for non-DOM side effects that outlive the ECS
+   * world (`removeEventListener` / `AudioContext.close` / `clearTimeout` /
+   * `cancelAnimationFrame`). The host flushes these on ■ Stop, in reverse
+   * registration order. Absent → the host does not support teardown (e.g. a
+   * reload-on-stop host); games should still register defensively.
+   */
+  readonly registerCleanup?: (fn: () => void) => void;
 }
 
 /**

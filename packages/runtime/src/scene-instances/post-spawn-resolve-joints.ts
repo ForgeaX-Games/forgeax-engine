@@ -34,9 +34,9 @@
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { Entity as EntityComponent } from '@forgeax/engine-ecs';
 import type { SkinAsset } from '@forgeax/engine-types';
-import { Children } from '../components/children';
 import { Name } from '../components/name';
 import { Skin } from '../components/skin';
+import { collectSubtree } from '../scene-utils/collect-subtree';
 
 // Internal archetype graph shape (not public-barelled in engine-ecs).
 // Same pattern used by render-system-extract.ts and propagate-transforms.ts.
@@ -105,31 +105,6 @@ function readEntityAt(
     | Uint32Array
     | undefined;
   return (selfCol?.[row] ?? 0) as EntityHandle;
-}
-
-/**
- * Walk `Children.entities` recursively from `spawnRoot` to collect all
- * descendant entities (incl. spawnRoot itself). Order is BFS; visited set
- * blocks pathological cycles. Entities without a `Children` component
- * surface as leaves (BFS pop without push).
- */
-function collectSubtree(world: World, spawnRoot: EntityHandle): Set<number> {
-  const visited = new Set<number>();
-  const queue: number[] = [spawnRoot as number];
-  visited.add(spawnRoot as number);
-  while (queue.length > 0) {
-    const cur = queue.shift() as number;
-    const childrenData = world.get(cur as EntityHandle, Children);
-    if (!childrenData.ok) continue;
-    const list = childrenData.value.entities as ArrayLike<number>;
-    for (let i = 0; i < list.length; i++) {
-      const child = list[i] as number;
-      if (visited.has(child)) continue;
-      visited.add(child);
-      queue.push(child);
-    }
-  }
-  return visited;
 }
 
 export function postSpawnResolveJoints(

@@ -133,6 +133,11 @@ export type RuntimeErrorCode =
   // the engine surfaces this structured failure on the error channel instead of
   // silently rendering a stale/garbage texture (charter P3, plan-strategy D-6).
   | 'video-upload-unsupported'
+  // feat-20260701-rootstosceneasset-forest-collect-schema-derived-ha M1 / w3 (D-5):
+  // entity reference outside forest closure.
+  | 'scene-collect-entity-ref-out-of-closure'
+  // GUID reverse-lookup failed: shared handle resolved to asset not in catalog.
+  | 'scene-collect-asset-guid-unresolved'
   // feat-20260612-skin-palette-per-frame-upload M2 / m2-5: SkinExtractErrorCode
   // subset union covering the three new fail-fast checks at extractFrame
   // hasSkin time (skeleton handle resolution / SkinAsset.joints.length vs
@@ -372,6 +377,93 @@ export class SkinJointPathUnresolvedError extends Error {
     this.expected = expected;
     this.hint = hint;
     this.detail = { skinEntity, path, failedAtIndex };
+  }
+}
+
+// ── SceneCollectEntityRefOutOfClosureError ──────────────────────────
+
+/**
+ * Detail for `RuntimeErrorCode 'scene-collect-entity-ref-out-of-closure'`.
+ *
+ * Emitted during rootsToSceneAsset when an entity field references a target
+ * outside the collected forest closure.
+ */
+export interface SceneCollectEntityRefOutOfClosureDetail {
+  readonly entity: number;
+  readonly field: string;
+  readonly target: number;
+}
+
+/**
+ * Structured error for entity ref pointing outside the forest closure.
+ *
+ * Emitted during rootsToSceneAsset collect; fail-fast per charter P3.
+ *   - `.code = 'scene-collect-entity-ref-out-of-closure'`
+ *   - `.expected` — all entity refs resolve within the closure
+ *   - `.hint` — Expand roots to include the target entity, or remove the reference.
+ *   - `.detail = { entity, field, target }`
+ */
+export class SceneCollectEntityRefOutOfClosureError extends Error {
+  readonly code = 'scene-collect-entity-ref-out-of-closure' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: SceneCollectEntityRefOutOfClosureDetail;
+
+  constructor(entity: number, field: string, target: number) {
+    const expected = `entity ${entity}.${field} references entity ${target} which is inside the forest closure`;
+    const hint = 'Expand roots to include the target entity, or remove the reference.';
+    super(`${expected} — ${hint}`);
+    this.name = 'SceneCollectEntityRefOutOfClosureError';
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = { entity, field, target };
+  }
+}
+
+// ── SceneCollectAssetGuidUnresolvedError ────────────────────────────
+
+/**
+ * Detail for `RuntimeErrorCode 'scene-collect-asset-guid-unresolved'`.
+ *
+ * Emitted at two points with different context on hand:
+ *   - collect (handle→GUID): the shared handle is known → `.handle` is set.
+ *   - serialize (GUID→refs): the GUID string is known but absent from the
+ *     refs index → `.guid` is set. (`.handle` is meaningless there.)
+ * Exactly one of `handle` / `guid` is present per instance.
+ */
+export interface SceneCollectAssetGuidUnresolvedDetail {
+  readonly field: string;
+  readonly handle?: number;
+  readonly guid?: string;
+}
+
+/**
+ * Structured error for a shared asset reference whose GUID cannot be resolved.
+ *
+ * Emitted during rootsToSceneAsset collect (handle) or
+ * serializeSceneAssetToPack (guid); fail-fast per charter P3.
+ *   - `.code = 'scene-collect-asset-guid-unresolved'`
+ *   - `.expected` — every shared asset reference has a catalogued GUID
+ *   - `.hint` — Register the asset in AssetRegistry before collecting.
+ *   - `.detail = { field, handle }` (collect) or `{ field, guid }` (serialize)
+ */
+export class SceneCollectAssetGuidUnresolvedError extends Error {
+  readonly code = 'scene-collect-asset-guid-unresolved' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: SceneCollectAssetGuidUnresolvedDetail;
+
+  constructor(field: string, ref: number | string) {
+    const where = typeof ref === 'number' ? `handle ${ref}` : `guid '${ref}'`;
+    const expected = `shared field '${field}' (${where}) resolves to an asset whose GUID is catalogued`;
+    const hint =
+      'source SceneAsset is not catalogued: call registry.catalog(guid, payload) first, ' +
+      'or load through loadByGuid() which auto-catalogs GUID-scoped assets';
+    super(`${expected} — ${hint}`);
+    this.name = 'SceneCollectAssetGuidUnresolvedError';
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = typeof ref === 'number' ? { field, handle: ref } : { field, guid: ref };
   }
 }
 
@@ -1059,7 +1151,10 @@ export type RuntimeError =
   | PointShadowAtlasUninitializedError
   | PointShadowAtlasBoundsViolationError
   // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability double-miss.
-  | VideoUploadUnsupportedError;
+  | VideoUploadUnsupportedError
+  // feat-20260701-rootstosceneasset-forest-collect-schema-derived-ha M1 / w3 (D-5):
+  | SceneCollectEntityRefOutOfClosureError
+  | SceneCollectAssetGuidUnresolvedError;
 
 /**
  * Structured signal carrier for the `EngineEnvironmentError.detail` field.

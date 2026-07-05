@@ -42,7 +42,12 @@ function stubDraw(
     pipelineState: {
       inputAssembly: { topology: 'triangle-list' as const, stripIndexFormat: undefined },
       vertexInput: { buffers: [] },
-      shaders: { vertexShaderModuleHandleId: 'sm:vs', fragmentShaderModuleHandleId: 'sm:fs' },
+      shaders: {
+        vertexShaderModuleHandleId: 'sm:vs',
+        fragmentShaderModuleHandleId: 'sm:fs',
+        vertexEntryPoint: 'vs_main',
+        fragmentEntryPoint: 'fs_main',
+      },
       rasterizer: { cullMode: 'back' as const, frontFace: 'ccw' as const },
       depthStencil: {
         format: 'depth32float' as const,

@@ -282,7 +282,7 @@ describe('assembleReport (w2)', () => {
     expect(rFalse.valid).toBe(false);
   });
 
-  it('JSON.stringify(report) uses compact format (no spacing)', async () => {
+  it('report round-trips through pretty-printed JSON (writers use 2-space indent)', async () => {
     const core = await importCore();
     if (!core) {
       expect(true).toBe(false);
@@ -292,8 +292,10 @@ describe('assembleReport (w2)', () => {
 
     const json = JSON.stringify({ header: { version: 1 }, events: [{ kind: 'draw' }] });
     const report = assembleReport({ json, passOffsets: [], valid: true });
-    const serialized = JSON.stringify(report);
-    expect(serialized).not.toContain('\n');
+    // Writers pretty-print (recorder.finalize / vite-plugin writeTape) so the
+    // on-disk report is human-readable; it must still parse back to the same shape.
+    const serialized = JSON.stringify(report, null, 2);
+    expect(serialized).toContain('\n');
     const parsed = JSON.parse(serialized);
     expect(parsed.header.version).toBe(1);
     expect(parsed.valid).toBe(true);

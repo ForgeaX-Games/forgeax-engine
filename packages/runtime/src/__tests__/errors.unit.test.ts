@@ -29,6 +29,8 @@ import {
   MeshSsboCeilingReachedError,
   type RuntimeError,
   type RuntimeErrorCode,
+  SceneCollectAssetGuidUnresolvedError,
+  SceneCollectEntityRefOutOfClosureError,
 } from '../errors';
 import { PickError, type PickErrorCode } from '../pick-errors';
 import {
@@ -911,6 +913,12 @@ import { RhiErrorListenerRegistry } from '../renderer';
             // double-miss code (add-only minor).
             case 'video-upload-unsupported':
               return 'video upload unsupported';
+            // feat-20260701-rootstosceneasset-forest-collect-schema-derived-ha
+            // M1 / w3 (D-5): new scene-collect error codes.
+            case 'scene-collect-entity-ref-out-of-closure':
+              return 'scene collect entity ref out of closure';
+            case 'scene-collect-asset-guid-unresolved':
+              return 'scene collect asset guid unresolved';
           }
         }
         expect(exhaustive('equirect-projection-failed')).toBe('equirect projection failed');
@@ -996,6 +1004,10 @@ import { RhiErrorListenerRegistry } from '../renderer';
             case 'point-shadow-atlas-bounds-violation':
               return 'ok';
             case 'video-upload-unsupported':
+              return 'ok';
+            case 'scene-collect-entity-ref-out-of-closure':
+              return 'ok';
+            case 'scene-collect-asset-guid-unresolved':
               return 'ok';
           }
         }
@@ -1769,6 +1781,50 @@ import { RhiErrorListenerRegistry } from '../renderer';
         // When t27 wires this, becomes expect(console.warn).not.toHaveBeenCalled()
         const directLightNoWarn = true;
         expect(directLightNoWarn).toBe(true);
+      });
+    });
+  });
+}
+
+{
+  // ─── from errors.unit.test.ts (M1 new error codes) ───
+  describe('errors.unit.test.ts', () => {
+    describe('SceneCollectEntityRefOutOfClosureError — AC-11', () => {
+      it('has readonly code / expected / hint / detail fields with correct types', () => {
+        const err = new SceneCollectEntityRefOutOfClosureError(42, 'parent', 99);
+        expect(err.code).toBe('scene-collect-entity-ref-out-of-closure');
+        expect(typeof err.expected).toBe('string');
+        expect(err.expected).toContain('42');
+        expect(typeof err.hint).toBe('string');
+        expect(err.hint).toBe(
+          'Expand roots to include the target entity, or remove the reference.',
+        );
+        expect(err.detail).toEqual({ entity: 42, field: 'parent', target: 99 });
+      });
+
+      it('code is a valid RuntimeErrorCode literal', () => {
+        const code: RuntimeErrorCode = 'scene-collect-entity-ref-out-of-closure';
+        expect(code).toBe('scene-collect-entity-ref-out-of-closure');
+      });
+    });
+
+    describe('SceneCollectAssetGuidUnresolvedError — AC-12', () => {
+      it('has readonly code / expected / hint / detail fields with correct types', () => {
+        const err = new SceneCollectAssetGuidUnresolvedError('skeleton', 7);
+        expect(err.code).toBe('scene-collect-asset-guid-unresolved');
+        expect(typeof err.expected).toBe('string');
+        expect(err.expected).toContain('skeleton');
+        expect(typeof err.hint).toBe('string');
+        expect(err.hint).toBe(
+          'source SceneAsset is not catalogued: call registry.catalog(guid, payload) first, ' +
+            'or load through loadByGuid() which auto-catalogs GUID-scoped assets',
+        );
+        expect(err.detail).toEqual({ field: 'skeleton', handle: 7 });
+      });
+
+      it('code is a valid RuntimeErrorCode literal', () => {
+        const code: RuntimeErrorCode = 'scene-collect-asset-guid-unresolved';
+        expect(code).toBe('scene-collect-asset-guid-unresolved');
       });
     });
   });

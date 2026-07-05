@@ -77,6 +77,20 @@ const EXEMPT_DEMOS = [
     reason:
       'onerror-gate browser test requires vite dev server for POST /__import; covered by sibling smoke-dawn.mjs (Sponza 300-frame end-to-end)',
   },
+  {
+    // feat-city-glb: same exemption rationale as the sibling Sponza demo above.
+    // The city-glb scratch/diagnosis app loads a UE5 city_Sample glb via
+    // loadByGuid<SceneAsset> + createDevImportTransport (POST /__import), which
+    // the vitest browser project cannot serve (no dev server) — it fails fast
+    // with a dev-only AssetError. The sibling scripts/visual.mjs (playwright +
+    // dawn/swiftshader screenshot through the same dev-server import path)
+    // covers the surface. It is a scratch demo (all forgeax.metrics disabled,
+    // not in any CI gate).
+    demoDir: 'apps/learn-render/3.model-loading/2.city-glb',
+    siblingSmoke: 'scripts/visual.mjs',
+    reason:
+      'onerror-gate browser test requires vite dev server for POST /__import; covered by sibling visual.mjs (city_Sample glb load screenshot)',
+  },
 ];
 
 const learnRenderDir = join(repoRoot, 'apps', 'learn-render');

@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DebugError } from '../errors';
 import { pixelDeltaAbsMean } from '../pixel-diff';
 import type { Replay } from '../replayer';
-import { createReplay } from '../replayer';
+import { adaptReplayFormat, createReplay } from '../replayer';
 import type { RhiCallEvent, RhiCallEventCreateBuffer, RhiCapsRecorded, Tape } from '../types';
 
 // ============================================================================
@@ -583,6 +583,25 @@ function makeColorPassTape(drawCount: number, withColor = true): Tape {
   return makeTape({}, events);
 }
 
+describe('adaptReplayFormat', () => {
+  // Canvas-only BGRA swapchain formats are remapped to their RGBA byte-siblings on
+  // offline replay (a plain texture cannot carry a bgra-srgb view). srgb-ness is
+  // preserved. Consumers that rebuild a pipeline (F2 edit-apply) must remap the
+  // fragment target the SAME way, or the pipeline target (bgra8unorm-srgb) will
+  // not match the replayed color-attachment view (rgba8unorm-srgb).
+  it('remaps bgra8unorm and bgra8unorm-srgb to their rgba siblings', () => {
+    expect(adaptReplayFormat('bgra8unorm')).toBe('rgba8unorm');
+    expect(adaptReplayFormat('bgra8unorm-srgb')).toBe('rgba8unorm-srgb');
+  });
+
+  it('passes other formats through unchanged', () => {
+    expect(adaptReplayFormat('rgba8unorm')).toBe('rgba8unorm');
+    expect(adaptReplayFormat('rgba8unorm-srgb')).toBe('rgba8unorm-srgb');
+    expect(adaptReplayFormat('depth24plus-stencil8')).toBe('depth24plus-stencil8');
+    expect(adaptReplayFormat(undefined)).toBeUndefined();
+  });
+});
+
 describe('commitThroughDraw', () => {
   it('synthesizes end + finish + submit through the target draw, skipping the recorded tail', async () => {
     const { device, pass, finishSpy, submitSpy } = makeSpyDevice();
@@ -615,7 +634,12 @@ describe('commitThroughDraw', () => {
     expect(pass.end).toHaveBeenCalledTimes(1);
   });
 
-  it('returns committed:false for a depth-only pass and does not synthesize end', async () => {
+  it('depth-only pass still synthesizes end+finish+submit (flushes depth) but reports committed:false', async () => {
+    // A shadow / depth pre-pass has no color attachment. It MUST still commit the
+    // partial pass so the target draw's depth writes are flushed and readable per
+    // draw (bug: depth preview only changed at the next pass boundary otherwise).
+    // committed:false only means "no color RT was committed" — the depth path reads
+    // the texture directly via _resolveHandle.
     const { device, pass, finishSpy, submitSpy } = makeSpyDevice();
     const tape = makeColorPassTape(2, /*withColor*/ false);
     const r = createReplay(tape, device);
@@ -623,9 +647,12 @@ describe('commitThroughDraw', () => {
     const res = await r.value.commitThroughDraw(0);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.value.committed).toBe(false);
-    expect(pass.end).not.toHaveBeenCalled();
-    expect(finishSpy).not.toHaveBeenCalled();
-    expect(submitSpy).not.toHaveBeenCalled();
+    // The synthetic commit now runs for depth-only passes too.
+    expect(pass.end).toHaveBeenCalledTimes(1);
+    expect(finishSpy).toHaveBeenCalledTimes(1);
+    expect(submitSpy).toHaveBeenCalledTimes(1);
+    // only draw 0 executed (draw 1 is past the target).
+    expect(pass.drawIndexed).toHaveBeenCalledTimes(1);
   });
 
   it('rejects an out-of-range drawIdx', async () => {

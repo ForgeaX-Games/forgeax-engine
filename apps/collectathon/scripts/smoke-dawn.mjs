@@ -194,7 +194,10 @@ let fbxResults;
 try {
   fbxResults = await fbxImporter.import({
     source: HUMANOID_FBX,
-    readSource: async () => ({ ok: true, value: new Uint8Array(0) }),
+    // ufbx parses ctx.readSource() bytes in-memory (the old SDK importer read
+    // the source path from disk itself, so the M2 smoke passed an empty
+    // Uint8Array; that path no longer works). Read the real .fbx bytes here.
+    readSource: async () => ({ ok: true, value: new Uint8Array(readFileSync(HUMANOID_FBX)) }),
     readSibling: async () => ({ ok: false, error: { code: 'source-read-failed' } }),
     decodeImage: async () => ({ ok: false, error: { code: 'image-decode-failed' } }),
     subAssets: HUMANOID_META.subAssets,

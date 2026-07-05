@@ -21,6 +21,7 @@
 import type { Handle, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { BUILTIN_BASE, handleSlot } from '@forgeax/engine-types';
 import { createBoxGeometry, meshFromInterleaved } from './geometry/box';
+import { createCylinderGeometry } from './geometry/cylinder';
 import { createPlaneGeometry } from './geometry/plane';
 import { createSphereGeometry } from './geometry/sphere';
 
@@ -113,6 +114,24 @@ if (!builtinSphereRes.ok) {
 }
 export const BUILTIN_SPHERE: TypesMeshAsset = Object.freeze(withoutAabb(builtinSphereRes.value));
 
+// BUILTIN_CYLINDER: procedural cylinder synthesised from createCylinderGeometry(0.5, 0.5, 1, 16, 1).
+// Radius-top=radius-bottom=0.5, height=1, 16 radial segments, 1 height segment — a
+// unit-height open cylinder (no caps). meshFromInterleaved expands the 8-floats
+// interleaved input (pos + normal + uv) to the runtime 12-floats stride (adds
+// tangent vec4 per geometry/tangent.ts path A).
+// feat-20260701-editor-world-container-doc-ecs-collapse M0 / AC-16:
+// handle=6, GUID = deriveBuiltin('HANDLE_CYLINDER') UUIDv5
+// (plan-strategy §2 D-6 + §5.6 builtin-guid-ssot gate)
+const builtinCylinderRes = createCylinderGeometry(0.5, 0.5, 1, 16, 1);
+if (!builtinCylinderRes.ok) {
+  throw new Error(
+    `[builtin-asset-registry] createCylinderGeometry(0.5,0.5,1,16,1) failed: ${builtinCylinderRes.error.code}`,
+  );
+}
+export const BUILTIN_CYLINDER: TypesMeshAsset = Object.freeze(
+  withoutAabb(builtinCylinderRes.value),
+);
+
 // BUILTIN_NINESLICE_QUAD: 4×4 grid plane synthesised from
 // createPlaneGeometry(1, 1, 3, 3) — 16 vertices, 9 sub-quads × 6 indices = 54.
 // Reuses the unit-quad vertex layout (12F: pos + normal + uv + tangent) so
@@ -138,6 +157,7 @@ const BUILTIN_BY_SLOT: ReadonlyMap<number, TypesMeshAsset> = new Map([
   [3, BUILTIN_QUAD],
   [4, BUILTIN_SPHERE],
   [5, BUILTIN_NINESLICE_QUAD],
+  [6, BUILTIN_CYLINDER],
 ]);
 
 /**

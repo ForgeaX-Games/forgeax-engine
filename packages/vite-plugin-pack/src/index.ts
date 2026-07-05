@@ -485,8 +485,8 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     // Fail-fast (architecture-principles §5): a failed import must not collapse
     // to an empty result that the route can only report as a generic
     // `import-failed`. Throw the structured ImportError so the dev route can
-    // surface `.code` + `detail.reason` (e.g. `fbx-binding-not-built` -> "set
-    // FBX_SDK_ROOT") in the 422 body and the browser console, instead of the
+    // surface `.code` + `detail.reason` (e.g. `fbx-mesh-type-unsupported` ->
+    // "convert NURBS to polygon mesh") in the 422 body and the browser console, instead of the
     // opaque `asset-not-imported` the runtime otherwise reports.
     if (!runResult.ok) throw runResult.error;
     if ('skipped' in runResult.value) return [];
@@ -913,7 +913,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         // (fail-fast): per-meta via `startMetaImport`'s `throw runResult.error`,
         // per-asset via `importOneTexture`'s `throw new ImportError`. One shared
         // catch surfaces `.code` + `detail.reason` so AI/human users see the
-        // actual cause (e.g. `fbx-binding-not-built`, or a decode-failure
+        // actual cause (e.g. `fbx-mesh-type-unsupported`, or a decode-failure
         // reason) instead of a generic `import-failed`.
         try {
           if (metaPath !== undefined && isMultiAssetMeta) {
@@ -1202,7 +1202,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           continue;
         }
         // Any other failure means a WIRED importer failed to convert the source
-        // (e.g. fbx-binding-not-built surfacing as import-internal-error). The
+        // (e.g. fbx-mesh-type-unsupported surfacing as import-internal-error). The
         // .pack.json DDC never overlays the catalog, so the build would emit a
         // pack-index pointing at the raw source and ship a guaranteed
         // blank-screen demo with only a stderr warning. Fail-fast

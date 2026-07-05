@@ -43,7 +43,7 @@ export function createDevImportTransport(): ImportTransport {
           // The ImportTransport contract has no error channel (returns only
           // ok:false), so the runtime would otherwise report a generic
           // `asset-not-imported`. Surface the dev server's structured failure
-          // body (e.g. `code: fbx-binding-not-built`, reason, hint) to the
+          // body (e.g. `code: fbx-mesh-type-unsupported`, reason, hint) to the
           // console so the actual cause is visible to AI/human users.
           try {
             const fail = (await response.json()) as {

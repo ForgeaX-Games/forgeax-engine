@@ -29,16 +29,33 @@ const HUD_ID = 'forgeax-game-hud';
  * Mount the HUD overlay over the engine canvas. Returns handles to update the
  * score / current mode. Idempotent: a previous overlay (e.g. after HMR) is
  * removed first so HUDs never stack.
+ *
+ * `host` is the element the HUD attaches to and positions against. It MUST be the
+ * canvas's own offset parent so the HUD's coordinate space matches the
+ * canvas-local CSS pixels floatScore() receives, and so the HUD is clipped to the
+ * canvas rect (not the whole window). Standalone play-runtime passes the canvas
+ * parent (== the full window); the in-process editor passes the viewport panel
+ * container, keeping score/popups inside the viewport instead of escaping to the
+ * browser window. Defaults to document.body for callers that don't thread it.
  */
-export function installHud(opts: { initialMode: ViewMode; onToggle: () => void }): HudHandle {
+export function installHud(opts: { initialMode: ViewMode; onToggle: () => void; host?: HTMLElement }): HudHandle {
   document.getElementById(HUD_ID)?.remove();
+  const host = opts.host ?? document.body;
+  // The HUD is `position:absolute; inset:0` so it fills `host` and its children's
+  // (left,top) pixels are host-local — identical to the canvas-local coords
+  // floatScore receives. This requires host to be a positioned ancestor of the
+  // canvas; the editor's viewport root is position:relative + overflow:hidden, so
+  // the HUD both aligns and clips there. (Old iframe arch used position:fixed on
+  // body, where window == canvas == iframe; single-realm broke that identity.)
+  const rootAbsolute = host !== document.body;
 
   const root = document.createElement('div');
   root.id = HUD_ID;
   Object.assign(root.style, {
-    position: 'fixed', inset: '0', zIndex: '50', pointerEvents: 'none',
+    position: rootAbsolute ? 'absolute' : 'fixed', inset: '0', zIndex: '50', pointerEvents: 'none',
     font: "600 14px ui-sans-serif, system-ui, sans-serif", color: '#fff',
     userSelect: 'none',
+    overflow: 'hidden',
   } as CSSStyleDeclaration);
 
   // Score (top-left)
@@ -114,7 +131,7 @@ export function installHud(opts: { initialMode: ViewMode; onToggle: () => void }
   }
 
   root.append(score, btn, cross, hint, lockStatus, popups);
-  document.body.appendChild(root);
+  host.appendChild(root);
 
   const applyMode = (mode: ViewMode) => {
     btn.textContent = mode === 'fps' ? '视角: 第一人称 ▸ 切顶视角' : '视角: 顶视角 ▸ 切第一人称';

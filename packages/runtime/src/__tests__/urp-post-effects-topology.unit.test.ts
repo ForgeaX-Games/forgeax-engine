@@ -154,3 +154,68 @@ describe('feat-20260621 M4′: URP config.postEffects topology (AUGMENT, not REP
     expect(resourceKeys).toContain('postEffectScratch1');
   });
 });
+
+// ── feat-20260702-postprocess-camera-depth-read M3 / w10 (TDD RED) ────────
+// Verifies that when a registered post-effect entry declares a depth read,
+// urpPipeline.buildGraph appends `reads:['depth']` to the post-effect pass
+// so the graph can resolve the depth key before the overlay runs (D-6).
+// RED phase: urp-pipeline currently does NOT inspect entry.reads for depth;
+// it always emits compositeOverSwapchain with no reads.  After w13 impl,
+// the post-effect pass reads includes 'depth'.
+
+describe('feat-20260702 M3 w10: URP post-effects topology depth dependency edge (RED)', () => {
+  it('post-effect with depth reads -> pass reads includes depth key', () => {
+    // Mock runtime where lookupPostProcess returns an entry with depth reads.
+    const mockLookup = vi.fn((_id: string) => ({
+      source: 'fn vs_main(){} fn fs_main(){}',
+      reads: [{ key: 'depth', sampleType: 'depth' as const }],
+      params: { byteSize: 16, defaultValue: new Uint8Array(16) },
+    }));
+    const runtime = {
+      ...mockRuntime(),
+      lookupPostProcess: mockLookup,
+    } as unknown as RenderSystemRuntime;
+
+    const graph = urpPipeline.buildGraph(
+      mockCtx(runtime),
+      mockData({ postEffects: ['pkg::depth-fx'] }),
+    );
+    expect(graph).not.toBeNull();
+    if (!graph) return;
+
+    const passes = graph.listPasses();
+    const postPass = passes.find((p) => p.name === 'post-effect-0');
+    expect(postPass).toBeDefined();
+    if (!postPass) return;
+
+    // RED: urp-pipeline currently does not inspect entry.reads, so the pass
+    // has NO reads key 'depth'. After w13, it appends reads:['depth'].
+    expect(postPass.reads).toContain('depth');
+  });
+
+  it('post-effect without depth reads -> pass reads unchanged (no false dependency)', () => {
+    const mockLookup = vi.fn((_id: string) => ({
+      source: 'fn vs_main(){} fn fs_main(){}',
+      // no reads -> color-only
+    }));
+    const runtime = {
+      ...mockRuntime(),
+      lookupPostProcess: mockLookup,
+    } as unknown as RenderSystemRuntime;
+
+    const graph = urpPipeline.buildGraph(
+      mockCtx(runtime),
+      mockData({ postEffects: ['pkg::plain'] }),
+    );
+    expect(graph).not.toBeNull();
+    if (!graph) return;
+
+    const passes = graph.listPasses();
+    const postPass = passes.find((p) => p.name === 'post-effect-0');
+    expect(postPass).toBeDefined();
+    if (!postPass) return;
+
+    // No depth read declared -> pass does NOT gain a spurious depth dependency.
+    expect(postPass.reads).not.toContain('depth');
+  });
+});

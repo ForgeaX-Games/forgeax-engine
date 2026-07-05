@@ -86,6 +86,11 @@ function exhaustiveSwitchOnCode(code: RuntimeErrorCode): string {
     // double-miss code (add-only minor).
     case 'video-upload-unsupported':
       return 'video-upload-unsupported';
+    // feat-20260701-rootstosceneasset-forest-collect-schema-derived-ha M1 / w3 (D-5):
+    case 'scene-collect-entity-ref-out-of-closure':
+      return 'scene-collect-entity-ref-out-of-closure';
+    case 'scene-collect-asset-guid-unresolved':
+      return 'scene-collect-asset-guid-unresolved';
   }
 }
 

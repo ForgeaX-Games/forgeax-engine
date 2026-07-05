@@ -102,7 +102,10 @@ import {
   SPOT_LIGHT_STD430_BYTES,
 } from './light-buffer-layout';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
-import { SKIN_MATERIAL_SHADER_ID } from './pbr-pipeline';
+import {
+  SKIN_MATERIAL_SHADER_ID,
+  SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET,
+} from './pbr-pipeline';
 import { buildBeginRenderPassDescriptor } from './pipeline-spec';
 import type { RenderPipeline as RenderPipelineDef } from './render-pipeline';
 import type {
@@ -133,7 +136,7 @@ import type {
 } from './render-system-extract';
 // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4 (D-1 record-stage
 // fold operator). Pure linear-scan helper that groups transparent-dispatch
-// entries with equal (Layer.value, posZ, materialHandle) into FoldBucket
+// entries with equal (Layer.value, sortKey, materialHandle) into FoldBucket
 // descriptors. The drawIndexed swap (1 instanced draw per bucket vs N
 // per-entity draws) hooks into the sprite-pass dispatch loop below
 // (w4-record-swap), using {@link buildFoldDispatchPlan} to translate
@@ -554,6 +557,15 @@ export interface RenderFrameState {
 const MESH_PER_ENTITY_STRIDE = 256;
 
 /**
+ * Module-scoped reusable scratch for batched mesh-SSBO uploads (O2).
+ * Grows monotonically; never shrinks. One allocation per render session
+ * instead of one per entity per frame.
+ *
+ * @internal
+ */
+let _meshSsboScratch = new Uint8Array(0);
+
+/**
  * feat-20260612-skin-palette-per-frame-upload M3 / m3-2: pure helper that
  * builds the `setBindGroup(2, ...)` dynamic-offset tuple at the skin /
  * non-skin draw site.
@@ -876,8 +888,8 @@ export function isMeshSsboDevMode(): boolean {
  * feat-20260518-pbr-direct-lighting-mvp M5 / w22.11 (D-2 + D-10 + AC-06):
  * mutable per-frame dispatch counter object owned by `createRenderSystem`
  * and bumped here at the actual `pass.setPipeline(...)` call site (the
- * only point with both `mat.shadingModel` and `mesh.layout` in scope).
- * Three-way split mirrors the three render pipelines on PipelineState.
+ * only point with both `mat.materialShaderId` and `mesh.layout` in scope).
+ * Unlit / custom shader pipeline dispatch tracked here.
  */
 export interface DispatchCounts {
   unlit: number;
@@ -947,7 +959,7 @@ export interface ValidatedRenderable {
 
 /**
  * feat-20260604-learn-render-4.10-anti-aliasing-msaa M2 / w9: pick the static
- * geometry pipeline handle for a (shadingModel x tonemapActive x msaaActive)
+ * unlit geometry pipeline handle for a (tonemapActive x msaaActive)
  * combination. The four mode axes (LDR/HDR x single/MSAA) map to the 14 static
  * pipeline handles built in createRenderer (7 base + 7 count=4 variants). A
  * pipeline's `multisample.count` must match the colour-attachment sampleCount,
@@ -969,17 +981,9 @@ export interface ValidatedRenderable {
 
 function selectGeometryPipeline(
   pipelineState: PipelineState,
-  shading: 'unlit' | 'standard',
   tonemapActive: boolean,
   msaaActive: boolean,
 ): RenderPipeline | null {
-  if (shading === 'standard') {
-    if (tonemapActive) {
-      return msaaActive ? pipelineState.standardPipelineHdrMsaa : pipelineState.standardPipelineHdr;
-    }
-    return msaaActive ? pipelineState.standardPipelineMsaa : pipelineState.standardPipeline;
-  }
-  // unlit
   if (tonemapActive) {
     return msaaActive ? pipelineState.unlitPipelineHdrMsaa : pipelineState.unlitPipelineHdr;
   }
@@ -997,7 +1001,7 @@ function selectGeometryPipeline(
 //   - plan-strategy section 2 D-3 (MaterialSnapshot.transparent drives split
 //     + blend; charter P3 explicit failure on cache miss)
 //   - plan-strategy section 5.6 gate R-H (helpers only read MaterialSnapshot
-//     paramSnapshot / transparent / shadingModel fields; they MUST NOT touch
+//     paramSnapshot / transparent fields; they MUST NOT touch
 //     the MaterialAsset registry directly or cast over firstMaterial)
 
 /**
@@ -1018,7 +1022,12 @@ function selectGeometryPipeline(
  */
 export function computeSplitLdrSprite(
   validatedOrdered: readonly (
-    | { readonly source: { readonly material: MaterialSnapshot } }
+    | {
+        readonly source: {
+          readonly material: MaterialSnapshot;
+          readonly materials?: readonly MaterialSnapshot[];
+        };
+      }
     | undefined
   )[],
   tonemapActive: boolean,
@@ -1027,8 +1036,66 @@ export function computeSplitLdrSprite(
   for (let i = 0; i < validatedOrdered.length; i++) {
     const v = validatedOrdered[i];
     if (v === undefined) continue;
-    const m = v.source.material;
-    if (m.transparent === true) return true;
+    // feat-city-glb Bug 5 (per-submesh transparency): trip the split when ANY
+    // submesh material is transparent, not just the entity-level material[0].
+    // A multi-material mesh (e.g. opaque road + BLEND crosswalk decal submesh)
+    // has an opaque material[0] but a transparent submesh that must route to
+    // the blend sub-pass. Fall back to `material` when `materials` is absent
+    // (single-material entities / test fixtures) — identical to the old check.
+    const mats = v.source.materials;
+    if (mats !== undefined) {
+      for (let j = 0; j < mats.length; j++) {
+        if (mats[j]?.transparent === true) return true;
+      }
+    } else if (v.source.material.transparent === true) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * feat-city-glb Bug 5 (per-submesh transparency): true when EVERY submesh
+ * material of the entity is transparent (blend). Used by the geometry pass to
+ * decide whether to skip the whole entity (fully transparent → deferred to the
+ * blend sub-pass) vs. draw its opaque submeshes and skip only the transparent
+ * ones per-submesh.
+ *
+ * Falls back to the entity-level `material.transparent` when `materials` is
+ * absent (single-material entities / test fixtures), byte-identical to the
+ * pre-fix whole-entity gate.
+ *
+ * @internal
+ */
+export function isEntityFullyTransparent(source: {
+  readonly material: MaterialSnapshot;
+  readonly materials?: readonly MaterialSnapshot[];
+}): boolean {
+  const mats = source.materials;
+  if (mats === undefined || mats.length === 0) return source.material.transparent === true;
+  for (let j = 0; j < mats.length; j++) {
+    if (mats[j]?.transparent !== true) return false;
+  }
+  return true;
+}
+
+/**
+ * feat-city-glb Bug 5: true when the entity has at least one transparent AND at
+ * least one opaque submesh — i.e. it must be drawn in BOTH the geometry pass
+ * (opaque submeshes) and the blend sub-pass (transparent submeshes). A pure-
+ * opaque or pure-transparent entity returns false (handled by the whole-entity
+ * fast paths).
+ *
+ * @internal
+ */
+export function entityHasTransparentSubmesh(source: {
+  readonly material: MaterialSnapshot;
+  readonly materials?: readonly MaterialSnapshot[];
+}): boolean {
+  const mats = source.materials;
+  if (mats === undefined) return source.material.transparent === true;
+  for (let j = 0; j < mats.length; j++) {
+    if (mats[j]?.transparent === true) return true;
   }
   return false;
 }
@@ -1661,6 +1728,25 @@ export function driveLazyEquirectProjection(
   void store._uploadCubemapFromEquirect(world, handle, podRes.value);
 }
 
+/**
+ * Returns true when a MaterialSnapshot represents a lit (non-unlit) material
+ * that will render black with zero lights — i.e. the material has a
+ * materialShaderId set and it is NOT the builtin unlit shader.
+ *
+ * The default mid-grey fallback (materialShaderId === undefined) is excluded
+ * — it routes through defaultMaterialSnapshot and never triggers the
+ * zero-light warning.
+ *
+ * @internal — exported so AC-02 zero-light-warning test can anchor to
+ * the production implementation rather than a test-local copy.
+ */
+export function isLitMaterialSnapshot(material: MaterialSnapshot): boolean {
+  return (
+    material.materialShaderId !== undefined &&
+    material.materialShaderId !== 'forgeax::default-unlit'
+  );
+}
+
 export function recordFrame(
   internals: RenderSystemInternals,
   world: World,
@@ -1719,10 +1805,10 @@ export function recordFrame(
 
     // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4 + w5 (D-1, D-5):
     // record-stage fold operator linear scan. Groups transparent-sort-ordered
-    // dispatch entries with equal (Layer.value, posZ, materialHandle) into
-    // fold buckets. Mode-gate (D-5): only mode 0 (LAYER_Z) folds; mode 1/2/3
-    // bypass per-entity (each entry becomes a singleton bucket, current
-    // behavior preserved byte-identically — AC-04 y-sort interleave intact).
+    // dispatch entries with equal (Layer.value, sortKey, materialHandle) into
+    // fold buckets. Mode-gate (D-5 extended): modes 0 (LAYER_Z) and 1
+    // (LAYER_Y) fold using posZ/posY respectively; modes 2/3 bypass per-entity
+    // (each entry becomes a singleton bucket — AC-04 interleave intact).
     // The scan output drives the drawIndexed swap (w4-record-swap: 1 instanced
     // draw per non-singleton bucket on the sprite pass) and the AC-06 metric
     // (M3 / w13: `render.instancing.foldedDraws`). For singleton buckets
@@ -1847,7 +1933,7 @@ export function recordFrame(
     // 0-light three-condition conjunction (plan-strategy D-5):
     //   no Skylight (skylight === undefined)
     //   AND 0 direct light (totalLightCount === 0)
-    //   AND StandardMaterial (renderables.some shadingModel === 'standard')
+    //   AND StandardMaterial (renderables.some materialShaderId !== 'forgeax::default-unlit')
     // All three true -> black + warn. Any one false -> no warn.
     //
     // Multi-Skylight warn (F-4 nit + feat-20260630 M3 / w19): >1 Skylight
@@ -2103,14 +2189,12 @@ export function recordFrame(
       void binResult;
     }
 
-    // An unlit material also carries a materialShaderId (extract sets both
-    // shadingModel='unlit' and materialShaderId for the renderState-aware
-    // pipeline route), so the standard-material test must additionally exclude
-    // shadingModel==='unlit' — only true standard (lit) materials render
-    // black with 0 lights.
-    const hasStandardMaterial = renderables.some(
-      (r) => r.material.materialShaderId !== undefined && r.material.shadingModel === undefined,
-    );
+    // A lit (PBR / standard / custom) material carries a materialShaderId
+    // that is NOT 'forgeax::default-unlit'; the default mid-grey unlit
+    // fallback (defaultMaterialSnapshot) has no materialShaderId. The
+    // conjunction excludes both unlit and default materials — only truly
+    // lit materials (standard / PBR) render black with 0 lights.
+    const hasStandardMaterial = renderables.some((r) => isLitMaterialSnapshot(r.material));
     if (
       skylight === undefined &&
       totalLightCount === 0 &&
@@ -2121,7 +2205,7 @@ export function recordFrame(
       const env = (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process;
       if (env?.env?.NODE_ENV !== 'production') {
         console.warn(
-          '[forgeax] standard material renders black with 0 lights of any type (no Skylight, and directional + point + spot all empty); spawn at least one light (Skylight, DirectionalLight, PointLight, or SpotLight) or switch material to shadingModel:"unlit". See AGENTS.md section Breaking changes 2026-05-19.',
+          '[forgeax] standard material renders black with 0 lights of any type (no Skylight, and directional + point + spot all empty); spawn at least one light (Skylight, DirectionalLight, PointLight, or SpotLight) or switch material to an unlit shader (Materials.unlit(...)). See AGENTS.md section Breaking changes 2026-05-19.',
         );
       }
     }
@@ -3188,77 +3272,75 @@ export function recordFrame(
         if (!writeRes.ok) throw writeRes.error;
       }
 
-      // Per-renderable entity_world upload: one mat4 written to slot
-      // `i * MESH_PER_ENTITY_STRIDE` in the shared meshStorageBuffer.
-      // feat-20260518 M3 / w14 (AC-08): each slot ALSO carries a 48-byte
-      // mat3 normalMatrix at offset 64 (3 vec4 columns; pads each column
-      // to 16 B per std140). The mat3 = transpose(invert(mat3(worldFromLocal)))
-      // lets the fragment shader transform normals correctly under
-      // non-uniform scale. The host computes once per renderable per
-      // frame using `mat3.normalMatrix` (math package SSOT helper).
+      // Per-renderable entity_world upload (batched): all N mat4+normalMatrix
+      // slots assembled into a single contiguous scratch buffer, then flushed
+      // as one writeBuffer call instead of N individual calls.
+      //
+      // feat-20260518 M3 / w14 (AC-08): each 256-byte slot carries a 16-float
+      // mat4 at [0..64B) and a 48-byte mat3 normalMatrix at [64..112B) (3 vec4
+      // columns; padding at indices 19/23/27 stays 0). The mat3 =
+      // transpose(invert(mat3(worldFromLocal))) for correct normal transform
+      // under non-uniform scale.
       //
       // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4-record-swap
-      // (D-1): when index `i` is a fold-bucket head, write **identity** into
-      // the mesh slot instead of the entity's world matrix. The fold path
+      // (D-1): fold-bucket heads write identity into their slot; the fold path
       // assembles per-instance world matrices into the @group(3) instances
-      // buffer (each member's absolute world); the sprite/unlit shader then
-      // computes `world = identity * instance_world * pos = instance_world *
-      // pos` which is per-instance correct. Non-head fold members and
-      // non-fold entries follow the existing per-entity world write
-      // unchanged. Normal matrix becomes identity for fold heads (sprite +
-      // tilemap unlit shaders ignore normals; AC-01 sprite + AC-02 tilemap
-      // are normal-free workloads — verify-time PNG covers AC-07 visual
-      // equivalence).
-      for (let i = 0; i < validatedOrdered.length; i++) {
-        const entry = validatedOrdered[i];
-        if (entry === undefined) continue;
-        const isFoldHead = foldDispatchPlan?.headBuckets.has(i) === true;
-        // feat-20260601 D-3: the world mat4 is the resolved `Transform.world`
-        // view (propagateTransforms output) carried verbatim on the snapshot;
-        // copy the 16 floats straight into the SSBO slot with zero `mat4.compose`
-        // (AC-07). The normal matrix is derived from the same world mat4.
-        // For fold heads the slot is overwritten to identity (16 floats: [0,5,
-        // 10,15] = 1) so the shader computes per-instance world from @group(3).
-        const slot = new Float32Array(28);
-        if (isFoldHead) {
-          slot[0] = 1;
-          slot[5] = 1;
-          slot[10] = 1;
-          slot[15] = 1;
-          // identity mat3 normal
-          slot[16] = 1;
-          slot[20] = 1;
-          slot[24] = 1;
+      // buffer instead (sprite/unlit shaders ignore normals; AC-01/AC-02).
+      {
+        const slotCount = validatedOrdered.length;
+        const neededBytes = slotCount * MESH_PER_ENTITY_STRIDE;
+        // Grow the module-scoped scratch monotonically; zero the used range.
+        if (_meshSsboScratch.length < neededBytes) {
+          _meshSsboScratch = new Uint8Array(neededBytes);
         } else {
-          const worldFromLocal = entry.source.transform.world;
-          // Build a 28-float (112 byte) slot: [0..16) mat4 + [16..28) mat3
-          // padded as 3 vec4 (12 floats; columns 0/1/2 at slot offsets
-          // 16/20/24; padding at indices 19/23/27 stays 0).
-          for (let k = 0; k < 16; k++) slot[k] = worldFromLocal[k] ?? 0;
-          const normal = mat3.normalMatrix(
-            mat3.create(),
-            worldFromLocal as unknown as Parameters<typeof mat3.normalMatrix>[1],
-          );
-          // mat3 column 0 -> slot[16..19]
-          slot[16] = normal[0] ?? 0;
-          slot[17] = normal[1] ?? 0;
-          slot[18] = normal[2] ?? 0;
-          // mat3 column 1 -> slot[20..23]
-          slot[20] = normal[3] ?? 0;
-          slot[21] = normal[4] ?? 0;
-          slot[22] = normal[5] ?? 0;
-          // mat3 column 2 -> slot[24..27]
-          slot[24] = normal[6] ?? 0;
-          slot[25] = normal[7] ?? 0;
-          slot[26] = normal[8] ?? 0;
+          _meshSsboScratch.fill(0, 0, neededBytes);
         }
-
-        const meshUpload = internals.device.queue.writeBuffer(
-          pipelineState.meshStorageBuffer.buffer,
-          i * MESH_PER_ENTITY_STRIDE,
-          slot,
-        );
-        if (!meshUpload.ok) throw meshUpload.error;
+        for (let i = 0; i < slotCount; i++) {
+          const entry = validatedOrdered[i];
+          if (entry === undefined) continue;
+          // Float32Array view into this entity's 256-byte slot (28 floats used,
+          // rest remains 0 from the fill above). Byte offset i*256 is always
+          // 4-byte aligned since MESH_PER_ENTITY_STRIDE=256 is divisible by 4.
+          const slot = new Float32Array(_meshSsboScratch.buffer, i * MESH_PER_ENTITY_STRIDE, 28);
+          const isFoldHead = foldDispatchPlan?.headBuckets.has(i) === true;
+          if (isFoldHead) {
+            // identity mat4
+            slot[0] = 1;
+            slot[5] = 1;
+            slot[10] = 1;
+            slot[15] = 1;
+            // identity mat3 normal (cols at slot offsets 16/20/24)
+            slot[16] = 1;
+            slot[20] = 1;
+            slot[24] = 1;
+          } else {
+            const worldFromLocal = entry.source.transform.world;
+            for (let k = 0; k < 16; k++) slot[k] = worldFromLocal[k] ?? 0;
+            const normal = mat3.normalMatrix(
+              mat3.create(),
+              worldFromLocal as unknown as Parameters<typeof mat3.normalMatrix>[1],
+            );
+            slot[16] = normal[0] ?? 0;
+            slot[17] = normal[1] ?? 0;
+            slot[18] = normal[2] ?? 0;
+            slot[20] = normal[3] ?? 0;
+            slot[21] = normal[4] ?? 0;
+            slot[22] = normal[5] ?? 0;
+            slot[24] = normal[6] ?? 0;
+            slot[25] = normal[7] ?? 0;
+            slot[26] = normal[8] ?? 0;
+          }
+        }
+        if (neededBytes > 0) {
+          const meshUpload = internals.device.queue.writeBuffer(
+            pipelineState.meshStorageBuffer.buffer,
+            0,
+            _meshSsboScratch,
+            0,
+            neededBytes,
+          );
+          if (!meshUpload.ok) throw meshUpload.error;
+        }
       }
     }
 
@@ -5496,6 +5578,120 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         cursor += slotsForEntity;
       }
     }
+    // feat-city-glb Bug 5 (per-submesh transparency): shared per-submesh
+    // material bind-group assembly, called by BOTH the geometry pass and the
+    // LDR blend sub-pass so a transparent PBR submesh binds the identical
+    // metallic/roughness/normal/emissive/occlusion + uvSet + Skylight layout
+    // the geometry pass uses (the sub-pass previously bound a sprite-only BG,
+    // which cannot render a PBR decal). Captures only frame-stable closure
+    // state; the caller passes the per-submesh material snapshot + entityKey
+    // (for video texture routing) and sets the dynamic UBO offset itself.
+    const buildPerSubmeshMaterialBg = (
+      submeshMaterial: MaterialSnapshot,
+      entityKey: number,
+    ): BindGroup => {
+      const smShaderId = submeshMaterial.materialShaderId;
+      const smPerShaderBgl =
+        smShaderId !== undefined ? runtime.getMaterialBindGroupLayout?.(smShaderId) : undefined;
+      const smSchema = smShaderId !== undefined ? runtime.getParamSchema?.(smShaderId) : undefined;
+      const smUserRegionFields = userRegionTextureFieldOrder(smSchema);
+      const smBaseEntries: BindGroupEntry[] = [
+        {
+          binding: 0,
+          resource: {
+            kind: 'buffer' as const,
+            value: {
+              buffer: pipelineState.materialUniformBuffer.buffer,
+              offset: 0,
+              size: MATERIAL_SLICE,
+            },
+          },
+        },
+      ];
+      const smBglPairCount =
+        smPerShaderBgl !== undefined
+          ? smUserRegionFields.length
+          : BUILTIN_USER_REGION_TEXTURE_FIELDS.length;
+      for (let fi = 0; fi < smBglPairCount; fi++) {
+        const field = smUserRegionFields[fi];
+        const samplerBinding = 1 + fi * 2;
+        const textureBinding = samplerBinding + 1;
+        let smView: unknown =
+          field !== undefined
+            ? defaultViewForUserRegionField(field, pipelineState)
+            : pipelineState.defaultWhiteTextureView;
+        const smVideoClip =
+          field !== undefined ? submeshMaterial.videoTextureFields?.get(field) : undefined;
+        if (smVideoClip !== undefined) {
+          const view = videoTextureView(
+            world,
+            runtime.dynamicTextureStore,
+            runtime,
+            entityKey,
+            smVideoClip,
+            videoHighPerfAvailable,
+          );
+          if (view !== undefined) smView = view;
+        } else {
+          const smHandle =
+            field !== undefined ? submeshMaterial.textureHandles?.get(field) : undefined;
+          if (smHandle !== undefined) {
+            const view = residentTextureView(world, store, runtime, smHandle);
+            if (view !== undefined) smView = view;
+          }
+        }
+        smBaseEntries.push(
+          {
+            binding: samplerBinding,
+            resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
+          },
+          {
+            binding: textureBinding,
+            resource: { kind: 'textureView' as const, value: smView as never },
+          },
+        );
+      }
+      let smEmissiveView: unknown = pipelineState.defaultWhiteTextureView;
+      const smEmissiveHandle = submeshMaterial.emissiveTexture;
+      if (smEmissiveHandle !== undefined) {
+        const view = residentTextureView(world, store, runtime, smEmissiveHandle);
+        if (view !== undefined) smEmissiveView = view;
+      }
+      let smOcclusionView: unknown = pipelineState.defaultWhiteTextureView;
+      const smOcclusionHandle = submeshMaterial.occlusionTexture;
+      if (smOcclusionHandle !== undefined) {
+        const view = residentTextureView(world, store, runtime, smOcclusionHandle);
+        if (view !== undefined) smOcclusionView = view;
+      }
+      const smEmissiveAo: EmissiveAoBindGroupResources = {
+        emissiveSampler: pipelineState.defaultSampler,
+        emissiveView: smEmissiveView as never,
+        occlusionSampler: pipelineState.defaultSampler,
+        occlusionView: smOcclusionView as never,
+      };
+      const smMergedEntries = assembleMaterialWithSkylightEntries(
+        smBaseEntries,
+        skylightResources,
+        smEmissiveAo,
+      );
+      const smMaterialBgl = smPerShaderBgl ?? pipelineState.materialBindGroupLayout;
+      return getOrCreatePerEntity(
+        frameState.materialBgShared,
+        smShaderId ?? '',
+        smMergedEntries.map((e) => extractEntryResourceHandle(e)),
+        'material-shared',
+        () => {
+          const result = runtime.device.createBindGroup({
+            label: 'pbr-material-skylight-bg',
+            layout: smMaterialBgl,
+            entries: smMergedEntries,
+          });
+          if (!result.ok) throw result.error;
+          return result.value;
+        },
+        bindGroupCounts,
+      );
+    };
     for (let i = 0; i < validatedOrdered.length; i++) {
       const entry = validatedOrdered[i];
       if (entry === undefined) continue;
@@ -5635,13 +5831,19 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
       // splitLdrSprite=false and this guard is a no-op. Post-w13 the
       // legacy shadingModel arm is gone; transparent is the single SSOT
       // mirrored on `computeSplitLdrSprite`.
-      if (splitLdrSprite && entry.source.material.transparent === true) continue;
+      //
+      // feat-city-glb Bug 5 (per-submesh transparency): only skip the WHOLE
+      // entity here when EVERY submesh is transparent (the sprite / fully-
+      // transparent-mesh fast path, byte-identical to the pre-fix behavior for
+      // single-material entities). A mixed mesh (opaque road submesh + BLEND
+      // decal submesh) is NOT skipped at the entity level; its opaque submeshes
+      // draw here and the per-submesh loop below skips the transparent ones
+      // (they are drawn in the blend sub-pass instead).
+      if (splitLdrSprite && isEntityFullyTransparent(entry.source)) continue;
 
-      // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13: pipeline
-      // tag closure narrowed from 3-way ('unlit' | 'sprite') to 1-way
-      // ('unlit' carrier) — sprite materials flow through the same generic
+      // tweak-20260701 M1: MaterialSnapshot.shadingModel deleted. Pipeline
+      // tag is always 'unlit' -- sprite materials flow through the same
       // materialShaderId pipeline cache PBR / unlit use (plan-strategy D-7).
-      const shading = entry.source.material.shadingModel;
       const materialShaderId =
         entry.source.skin !== undefined
           ? SKIN_MATERIAL_SHADER_ID
@@ -6050,6 +6252,17 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
       for (let smIdx = 0; smIdx < entry.mesh.submeshes.length; smIdx++) {
         const sm = entry.mesh.submeshes[smIdx];
         if (sm === undefined) continue;
+        // feat-city-glb Bug 5 (per-submesh transparency): in the LDR split, a
+        // transparent submesh is drawn in the blend sub-pass (non-sRGB view),
+        // NOT here in the sRGB geometry pass. Skip it. Opaque submeshes of the
+        // same (mixed) mesh still draw here. Single-material / fully-opaque
+        // meshes are unaffected (their submesh materials are not transparent).
+        if (
+          splitLdrSprite &&
+          matsForRebind[smIdx < matsForRebind.length ? smIdx : 0]?.transparent === true
+        ) {
+          continue;
+        }
         {
           // bug-20260610 layer 7d: per-submesh BG construction. Texture
           // views resolve from `matsForRebind[smIdx]` so the j-th submesh
@@ -6073,158 +6286,13 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           // bindings via fallback textures for the 4 unused slots).
           const matSlotIdx = smIdx < matsForRebind.length ? smIdx : 0;
           const submeshMaterial = matsForRebind[matSlotIdx] ?? entry.source.material;
-          // feat-20260621-learn-render-5-5-parallax M2 / w8 (D-3): assemble the
-          // user-region bind group by iterating the shader's
-          // derive(paramSchema).textureFieldNames SSOT (sampler-first pairing,
-          // matching derive().bglEntries ordering), instead of hardcoding
-          // baseColor/MR/normal at binding 2/4/6. Any Nth texture (e.g. parallax
-          // heightTexture) flows through here without a coupled edit. Each field
-          // reads its handle from MaterialSnapshot.textureHandles; a missing
-          // handle falls back to the per-field default view (charter P3:
-          // graceful — texture params are optional at register time).
-          const smShaderId = submeshMaterial.materialShaderId;
-          // Field NAMES come from the shader's own schema so the handle lookup
-          // resolves the shader's declared textures (e.g. parallax's
-          // diffuse/normal/depth, which differ from the built-in
-          // baseColor/MR/normal even though both derive a 3-pair user-region).
-          // The COUNT/order must match the BGL bound below: w6 hands out a
-          // per-shader BGL whenever the derived user-region shape differs from
-          // the shared built-in (getMaterialBindGroupLayout); a same-shape
-          // shader (3 texture2d pairs) reuses the shared BGL and its own 3
-          // fields produce the identical 3-pair shape.
-          const smPerShaderBgl =
-            smShaderId !== undefined ? runtime.getMaterialBindGroupLayout?.(smShaderId) : undefined;
-          const smSchema =
-            smShaderId !== undefined ? runtime.getParamSchema?.(smShaderId) : undefined;
-          const smUserRegionFields = userRegionTextureFieldOrder(smSchema);
-          const smBaseEntries: BindGroupEntry[] = [
-            {
-              binding: 0,
-              resource: {
-                kind: 'buffer' as const,
-                value: {
-                  buffer: pipelineState.materialUniformBuffer.buffer,
-                  offset: 0,
-                  size: MATERIAL_SLICE,
-                },
-              },
-            },
-          ];
-          // The bind group MUST emit exactly as many texture pairs as the bound
-          // BGL's user-region declares (mismatch => dawn "Binding entry not
-          // set"). The shared built-in BGL has a fixed 3-pair user-region; a
-          // per-shader BGL (w6) has one pair per shader-declared texture. Fill
-          // each slot positionally from the shader's own fields (so parallax's
-          // diffuse/normal/depth resolve) and pad any remaining shared-BGL
-          // slots with default views (so a 1-texture material like unlit still
-          // satisfies all 3 shared slots).
-          const smBglPairCount =
-            smPerShaderBgl !== undefined
-              ? smUserRegionFields.length
-              : BUILTIN_USER_REGION_TEXTURE_FIELDS.length;
-          // Sampler-first pairs at binding 1+2i (sampler) / 2+2i (texture),
-          // matching derive(paramSchema).bglEntries (sampler emitted first).
-          for (let fi = 0; fi < smBglPairCount; fi++) {
-            const field = smUserRegionFields[fi];
-            const samplerBinding = 1 + fi * 2;
-            const textureBinding = samplerBinding + 1;
-            let smView: unknown =
-              field !== undefined
-                ? defaultViewForUserRegionField(field, pipelineState)
-                : pipelineState.defaultWhiteTextureView;
-            // feat-20260623-world-space-video-asset M4 / w16 (D-3/D-5): a
-            // video-sourced field routes to the transient DynamicTextureStore
-            // (per-frame copyExternalImageToTexture), NOT residentTextureView
-            // (whose ensureResident has no `video` arm; AC-08). The video GUID
-            // occupies the same texture2d slot a static texture would (D-5), so
-            // the binding shape is identical — only the view source differs.
-            const smVideoClip =
-              field !== undefined ? submeshMaterial.videoTextureFields?.get(field) : undefined;
-            if (smVideoClip !== undefined) {
-              const view = videoTextureView(
-                world,
-                runtime.dynamicTextureStore,
-                runtime,
-                entry.source.entityKey,
-                smVideoClip,
-                videoHighPerfAvailable,
-              );
-              if (view !== undefined) smView = view;
-            } else {
-              const smHandle =
-                field !== undefined ? submeshMaterial.textureHandles?.get(field) : undefined;
-              if (smHandle !== undefined) {
-                const view = residentTextureView(world, store, runtime, smHandle);
-                if (view !== undefined) smView = view;
-              }
-            }
-            smBaseEntries.push(
-              {
-                binding: samplerBinding,
-                resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
-              },
-              {
-                binding: textureBinding,
-                resource: { kind: 'textureView' as const, value: smView as never },
-              },
-            );
-          }
-          // emissive / occlusion live in the engine-injection lightmap region,
-          // assembled after the user-region by assembleMaterialWithSkylightEntries.
-          let smEmissiveView: unknown = pipelineState.defaultWhiteTextureView;
-          const smEmissiveHandle = submeshMaterial.emissiveTexture;
-          if (smEmissiveHandle !== undefined) {
-            const view = residentTextureView(world, store, runtime, smEmissiveHandle);
-            if (view !== undefined) smEmissiveView = view;
-          }
-          let smOcclusionView: unknown = pipelineState.defaultWhiteTextureView;
-          const smOcclusionHandle = submeshMaterial.occlusionTexture;
-          if (smOcclusionHandle !== undefined) {
-            const view = residentTextureView(world, store, runtime, smOcclusionHandle);
-            if (view !== undefined) smOcclusionView = view;
-          }
-          const smEmissiveAo: EmissiveAoBindGroupResources = {
-            emissiveSampler: pipelineState.defaultSampler,
-            emissiveView: smEmissiveView as never,
-            occlusionSampler: pipelineState.defaultSampler,
-            occlusionView: smOcclusionView as never,
-          };
-          const smMergedEntries = assembleMaterialWithSkylightEntries(
-            smBaseEntries,
-            skylightResources,
-            smEmissiveAo,
-          );
-          // bug-20260610 layer 7d: this BG drops the per-entity entityKey so
-          // identical-material submeshes/entities dedup globally (OQ-1 / PD1).
-          // It lives in the dedicated cross-entity `materialBgShared` cache:
-          // outerKey = shaderId string (the natural dedup dimension), chain =
-          // the merged-entry handle objects. No entityKey, so cleanPerEntityCache
-          // never touches it — the old `Number.isNaN('shared')` sentinel hack
-          // (D-6) is gone.
-          // feat-20260621-learn-render-5-5-parallax M2 / w8: a custom shader
-          // with >3 textures owns a per-shader material BGL (w6); the bind
-          // group must be created against THAT layout so the entry count
-          // (e.g. 20 for a 4-texture shader) matches. Built-in / 3-texture
-          // shaders resolve to the shared 18-entry BGL. The shaderId outerKey
-          // keeps two shaders with a coincidentally-identical handle set from
-          // colliding on layout.
-          const smMaterialBgl = smPerShaderBgl ?? pipelineState.materialBindGroupLayout;
-          perSubmeshBg = getOrCreatePerEntity(
-            frameState.materialBgShared,
-            smShaderId ?? '',
-            smMergedEntries.map((e) => extractEntryResourceHandle(e)),
-            'material-shared',
-            () => {
-              const result = runtime.device.createBindGroup({
-                label: 'pbr-material-skylight-bg',
-                layout: smMaterialBgl,
-                entries: smMergedEntries,
-              });
-              if (!result.ok) throw result.error;
-              return result.value;
-            },
-            bindGroupCounts,
-          );
+          // feat-city-glb Bug 5: per-submesh material BG assembly extracted to
+          // the shared `buildPerSubmeshMaterialBg` closure (also called by the
+          // LDR blend sub-pass). Resolves the shader's user-region textures
+          // (baseColor/MR/normal + any custom Nth texture), emissive/occlusion
+          // injection, and Skylight merge; deduped cross-entity via the
+          // shaderId-outer `materialBgShared` cache.
+          perSubmeshBg = buildPerSubmeshMaterialBg(submeshMaterial, entry.source.entityKey);
           pass.setBindGroup(1, perSubmeshBg, [
             entityMatBaseOffset + matSlotIdx * MATERIAL_PER_ENTITY_STRIDE,
           ]);
@@ -6232,7 +6300,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         const smTopology = sm.topology;
         let smPipelineHandle: typeof pipelineState.unlitPipeline;
         const nonDefaultTopology = smTopology !== 'triangle-list';
-        if (shading === 'unlit') {
+        if (materialShaderId === undefined || materialShaderId === 'forgeax::default-unlit') {
           const unlitRsp =
             (entry.renderState !== undefined || nonDefaultTopology) &&
             materialShaderId !== undefined
@@ -6249,7 +6317,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
                 )
               : undefined;
           smPipelineHandle =
-            unlitRsp ?? selectGeometryPipeline(pipelineState, 'unlit', tonemapActive, msaaActive);
+            unlitRsp ?? selectGeometryPipeline(pipelineState, tonemapActive, msaaActive);
         } else if (materialShaderId !== undefined) {
           // feat-20260609 M4.5 / w38 (D-11): the variantSet handed to
           // getMaterialShaderPipeline MUST mirror the boot-time
@@ -6307,12 +6375,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           // fires on per-submesh topology variance miss.
           smPipelineHandle = cachedPipeline ?? null;
         } else {
-          smPipelineHandle = selectGeometryPipeline(
-            pipelineState,
-            'unlit',
-            tonemapActive,
-            msaaActive,
-          );
+          smPipelineHandle = selectGeometryPipeline(pipelineState, tonemapActive, msaaActive);
         }
 
         if (smPipelineHandle === null) {
@@ -6416,6 +6479,20 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         cullMode: 'none',
         blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND,
       };
+      // bug-20260629: PR #526 added PER_INSTANCE_REGION as a second variant
+      // axis on sprite.wgsl. Build BOTH variants here; the per-entity loop
+      // picks the right one based on whether the entity carries a
+      // SpriteInstances snapshot:
+      //   - spritePH (PER_INSTANCE_REGION=false): regular per-entity sprites
+      //     + fold-bucket instanced draws (64-byte mat4 only instance buf);
+      //     UV region comes from the material UBO `region` slot.
+      //   - spritePH_withRegion (PER_INSTANCE_REGION=true): SpriteInstances
+      //     entities with 80-byte interleaved (mat4 64B + region 16B) per
+      //     instance; UV region comes from `instances[idx].region`.
+      //
+      // Without spritePH_withRegion the SpriteInstances data was uploaded
+      // but the shader read bytes 64-79 as region=0 → black quads.
+      //
       // feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / t7:
       // sprite-lit walks the same LDR transparent split pass with mirror
       // PSO request shape (only materialShaderId string differs). The
@@ -6449,6 +6526,46 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           // sprite-pipeline-bgra8unorm-srgb-not-blendable parity).
           pipelineState.format as unknown as GPUTextureFormat,
         ) ?? null;
+      const spritePH_withRegion =
+        runtime.getMaterialShaderPipeline?.(
+          'forgeax::sprite',
+          /* isHdr */ false,
+          spritePremulBlend,
+          'triangle-list',
+          undefined,
+          SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET,
+          'forward',
+          undefined,
+          msaaActive ? 4 : 1,
+          pipelineState.format as unknown as GPUTextureFormat,
+        ) ?? null;
+
+      // bug-20260629: spritePH===null check moved OUTSIDE the entity loop so the
+      // sprite pass is properly ended before returning. Inside the loop the early
+      // `return` left spritePass open → render-pass-not-ended error every frame
+      // where the pipeline is still being compiled (frame 0 on first load).
+      //
+      // feat-city-glb Bug 5: a missing sprite PSO must NOT abort the whole
+      // sub-pass — the generic per-submesh PBR transparent loop below does not
+      // depend on the sprite shader. Only skip the sprite ENTITIES when spritePH
+      // is null (fire the diagnostic once, iff a sprite entity is actually
+      // present), then fall through to the PBR loop. A PBR-only transparent
+      // scene (e.g. a glTF BLEND decal, no sprites) renders regardless of
+      // whether sprite.wgsl is in the manifest.
+      const spriteUnavailable = spritePH === null;
+      let spriteUnavailableReported = false;
+      const reportSpriteUnavailable = (): void => {
+        if (spriteUnavailableReported) return;
+        spriteUnavailableReported = true;
+        runtime.errorRegistry.fire(
+          new RhiError({
+            code: 'shader-compile-failed',
+            expected:
+              'manifest entries include sprite.wgsl + the engine triple (pbr + unlit + tonemap)',
+            hint: 'verify @forgeax/engine-vite-plugin-shader emits manifest.json with the 4 engine entries (sprite.wgsl is required when spawning sprite materials); check vite plugin engineEntries option',
+          }),
+        );
+      };
 
       // feat-20260624 M1' / t7: parallel sprite-lit PSO request — same
       // arg shape, only materialShaderId differs.
@@ -6472,6 +6589,25 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         // `shadingModel === 'sprite'` to `transparent === true` — the
         // shadingModel arm is gone post-feat (plan-strategy D-3).
         if (spriteEntry === undefined || spriteEntry.source.material.transparent !== true) continue;
+        // feat-city-glb Bug 5 (per-submesh transparency): this loop is the
+        // SPRITE path (whole-mesh sprite / sprite-lit PSO). Non-sprite
+        // transparent materials (built-in PBR, incl. glTF alphaMode=BLEND) are
+        // drawn per-submesh with their real shader in the dedicated PBR loop
+        // below — so skip them here. Previously the 4.3-blending window (a PBR
+        // material) was drawn through here with the sprite shader; it now flows
+        // through the PBR loop, which is both correct and multi-submesh-capable.
+        {
+          const sid = spriteEntry.source.material.materialShaderId;
+          const isSpriteShader = sid === 'forgeax::sprite' || sid === 'forgeax::sprite-lit';
+          if (!isSpriteShader) continue;
+        }
+        // Sprite PSO unavailable (sprite.wgsl absent / still compiling): skip
+        // sprite entities and report once, but do NOT abort the sub-pass — the
+        // PBR transparent loop below is independent of the sprite shader.
+        if (spriteUnavailable) {
+          reportSpriteUnavailable();
+          continue;
+        }
 
         // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4-record-swap
         // (D-1): fold-bucket non-head member — skip; the bucket head emits one
@@ -6487,21 +6623,44 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         // layout; only the shader module + fragment math differ. PSO
         // cache strings are isolated by materialShaderId (D-11) so
         // routing here keeps the cache slots disjoint.
+        //
+        // bug-20260629: SpriteInstances entities additionally need the
+        // PER_INSTANCE_REGION=true variant so the shader reads UV region
+        // from the 80B-per-instance interleaved buffer rather than from
+        // the material UBO. Only the base sprite path has the per-instance
+        // region variant compiled; sprite-lit + non-instances entities
+        // keep the PER_INSTANCE_REGION=false variant.
         const entityShaderId = spriteEntry.source.material.materialShaderId;
-        const activeSpritePH = entityShaderId === 'forgeax::sprite-lit' ? spriteLitPH : spritePH;
-
+        const useRegionVariant =
+          entityShaderId !== 'forgeax::sprite-lit' &&
+          spriteEntry.source.spriteInstances !== undefined;
+        const activeSpritePH =
+          entityShaderId === 'forgeax::sprite-lit'
+            ? spriteLitPH
+            : useRegionVariant
+              ? spritePH_withRegion
+              : spritePH;
         if (activeSpritePH === null) {
-          runtime.errorRegistry.fire(
-            new RhiError({
-              code: 'shader-compile-failed',
-              expected:
-                'manifest entries include sprite.wgsl + sprite-lit.wgsl (when sprite-lit materials are used) + the engine triple (pbr + unlit + tonemap)',
-              hint: 'verify @forgeax/engine-vite-plugin-shader emits manifest.json with sprite.wgsl AND sprite-lit.wgsl entries; check vite plugin engineEntries option',
-            }),
-          );
-          return;
+          // Variant not yet compiled — for PER_INSTANCE_REGION=true the
+          // variant cache fill is async on first use (mirrors the
+          // spritePH===null guard above); falling back to the non-region
+          // variant would render black quads (region read returns 0).
+          // For sprite-lit the manifest may lack sprite-lit.wgsl; either
+          // way fail-safe-skip is the closest the renderer can get to
+          // "show nothing visibly wrong" without ending the sprite pass
+          // (which would drop remaining sprite entities for the frame).
+          if (entityShaderId === 'forgeax::sprite-lit') {
+            runtime.errorRegistry.fire(
+              new RhiError({
+                code: 'shader-compile-failed',
+                expected:
+                  'manifest entries include sprite.wgsl + sprite-lit.wgsl (when sprite-lit materials are used) + the engine triple (pbr + unlit + tonemap)',
+                hint: 'verify @forgeax/engine-vite-plugin-shader emits manifest.json with sprite.wgsl AND sprite-lit.wgsl entries; check vite plugin engineEntries option',
+              }),
+            );
+          }
+          continue;
         }
-
         if (lastSpritePipelineHandle !== activeSpritePH) {
           // biome-ignore lint/suspicious/noExplicitAny: opaque RHI pipeline handle
           spritePass.setPipeline(activeSpritePH as any);
@@ -6882,13 +7041,16 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           spritePassEmissiveAo,
         );
 
-        // M3 / w12: LDR sprite split-pass per-entity material BG cache.
-        // Per-entity: outerKey = entityKey, chain = merged-entry handles (D-5).
+        // Sprite-pass material BG cache: keyed on shader id (shared across all
+        // sprite entities) so entities using the same atlas texture share one
+        // BindGroup instead of creating one per entity (O5 fix — inner WeakMap
+        // chain naturally deduplicates by GPU resource object identity, so two
+        // entities with different atlases still get distinct BGs).
         const spritePassBg: BindGroup = getOrCreatePerEntity(
-          frameState.materialBgPerEntity,
-          spriteEntry.source.entityKey,
+          frameState.materialBgShared,
+          'forgeax::sprite',
           spritePassMergedEntries.map((e) => extractEntryResourceHandle(e)),
-          'material',
+          'sprite-pass-material',
           () => {
             const result = runtime.device.createBindGroup({
               label: 'sprite-pass-material-bg',
@@ -6904,6 +7066,138 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         spritePass.setBindGroup(1, spritePassBg, [i * MATERIAL_PER_ENTITY_STRIDE]);
         spritePass.setBindGroup(3, spriteInstancesBg);
         spritePass.drawIndexed(spriteEntry.mesh.indexCount, spriteInstanceCount, 0, 0, 0);
+      }
+
+      // feat-city-glb Bug 5 (per-submesh transparency): generic per-submesh PBR
+      // draws in the LDR blend sub-pass. The sprite loop above handles only true
+      // sprite / sprite-lit entities (whole-mesh sprite PSO). EVERY non-sprite
+      // transparent material — built-in PBR, single- or multi-submesh, incl.
+      // glTF alphaMode=BLEND (the crosswalk decal submesh AND the 4.3-blending
+      // window quad) — is drawn here with its real shader + per-submesh
+      // geometry, reusing the geometry pass's PBR machinery but rendering into
+      // the non-sRGB blend view (colorFormatOverride = pipelineState.format).
+      // Opaque submeshes of a mixed mesh were already drawn in the geometry pass
+      // (per-submesh skip there).
+      //
+      // Non-skinned, non-instanced (glTF static meshes): group 2 = the shared
+      // frame meshBindGroup with the per-entity dynamic offset; group 3 = the
+      // identity instance BG (drawIndexed instanceCount=1). Skinned / instanced
+      // transparent submeshes are OOS here (no such content) and fall through.
+      let lastPbrSubPipelineHandle: typeof pipelineState.unlitPipeline = null;
+      let lastPbrSubVertexBuffer: GpuBuffer | null = null;
+      let lastPbrSubIndexBuffer: GpuBuffer | null = null;
+      for (let i = 0; i < validatedOrdered.length; i++) {
+        const entry = validatedOrdered[i];
+        if (entry === undefined) continue;
+        if (matchedIndices !== null && !matchedIndices.has(entry.renderableIndex)) continue;
+        // Sprites are handled by the sprite loop above; skip them here.
+        const entShaderId = entry.source.material.materialShaderId;
+        const entIsSprite =
+          entShaderId === 'forgeax::sprite' || entShaderId === 'forgeax::sprite-lit';
+        if (entIsSprite) continue;
+        // Only entities that carry at least one transparent submesh reach a draw
+        // (single-submesh transparent PBR and mixed opaque+transparent meshes).
+        if (!entityHasTransparentSubmesh(entry.source)) continue;
+        // Skinned / instanced transparent submeshes are not supported in this
+        // sub-pass path (no such content today); skip to avoid mis-binding.
+        if (entry.source.skin !== undefined || entry.source.instances !== undefined) continue;
+
+        const matsForRebind = entry.source.materials;
+        const entityMatBaseOffset = (materialSlotStart[i] ?? 0) * MATERIAL_PER_ENTITY_STRIDE;
+        if (entry.mesh.vertexBuffer !== lastPbrSubVertexBuffer) {
+          spritePass.setVertexBuffer(0, entry.mesh.vertexBuffer.handle);
+          lastPbrSubVertexBuffer = entry.mesh.vertexBuffer;
+        }
+        if (
+          entry.mesh.indexed &&
+          entry.mesh.indexBuffer !== null &&
+          entry.mesh.indexBuffer !== lastPbrSubIndexBuffer
+        ) {
+          spritePass.setIndexBuffer(entry.mesh.indexBuffer.handle, entry.mesh.indexFormat);
+          lastPbrSubIndexBuffer = entry.mesh.indexBuffer;
+        }
+        spritePass.setBindGroup(2, meshBindGroup as BindGroup, [i * MESH_PER_ENTITY_STRIDE]);
+        // Identity instance BG (instanceCount=1); reuse the per-entity cache.
+        const identityInstBg: BindGroup = getOrCreatePerEntity(
+          frameState.instancesBgPerEntity,
+          entry.source.entityKey,
+          [pipelineState.identityInstanceBuffer],
+          'instances',
+          () => {
+            const result = runtime.device.createBindGroup({
+              label: 'pbr-transparent-sub-instances-bg',
+              layout: pipelineState.instancesBindGroupLayout,
+              entries: [
+                {
+                  binding: 0,
+                  resource: {
+                    kind: 'buffer',
+                    value: { buffer: pipelineState.identityInstanceBuffer },
+                  },
+                },
+              ],
+            });
+            if (!result.ok) throw result.error;
+            return result.value;
+          },
+          bindGroupCounts,
+        );
+        spritePass.setBindGroup(3, identityInstBg);
+
+        const subVariantSet = frameState.isHdrpActive
+          ? ''
+          : 'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true';
+        const subMeshUvAttributes =
+          entry.mesh.uvSetCount > 1
+            ? buildMeshAttributeMapForUvSets(entry.mesh.uvSetCount)
+            : undefined;
+
+        for (let smIdx = 0; smIdx < entry.mesh.submeshes.length; smIdx++) {
+          const sm = entry.mesh.submeshes[smIdx];
+          if (sm === undefined) continue;
+          const matSlotIdx = smIdx < matsForRebind.length ? smIdx : 0;
+          const submeshMaterial = matsForRebind[matSlotIdx] ?? entry.source.material;
+          // Only transparent submeshes belong in this blend sub-pass; opaque
+          // submeshes were drawn in the geometry pass.
+          if (submeshMaterial.transparent !== true) continue;
+          const smShaderId = submeshMaterial.materialShaderId;
+          if (smShaderId === undefined) continue;
+
+          // Bind the per-submesh material BG first (mirrors the geometry pass
+          // order), then resolve the PSO; a first-frame async-compile miss skips
+          // only the draw, not the BG (one transient frame, PSO flows in next).
+          const subBg = buildPerSubmeshMaterialBg(submeshMaterial, entry.source.entityKey);
+          spritePass.setBindGroup(1, subBg, [
+            entityMatBaseOffset + matSlotIdx * MATERIAL_PER_ENTITY_STRIDE,
+          ]);
+
+          const subPipeline =
+            runtime.getMaterialShaderPipeline?.(
+              smShaderId,
+              /* isHdr */ false,
+              entry.renderState,
+              sm.topology,
+              entry.mesh.indexFormat,
+              subVariantSet,
+              'forward',
+              subMeshUvAttributes,
+              sampleCount,
+              // Non-sRGB blend view (same override the sprite path uses).
+              pipelineState.format as unknown as GPUTextureFormat,
+            ) ?? null;
+          if (subPipeline === null) continue;
+
+          if (lastPbrSubPipelineHandle !== subPipeline) {
+            // biome-ignore lint/suspicious/noExplicitAny: opaque RHI pipeline handle
+            spritePass.setPipeline(subPipeline as any);
+            lastPbrSubPipelineHandle = subPipeline;
+          }
+          if (entry.mesh.indexed) {
+            spritePass.drawIndexed(sm.indexCount, 1, sm.indexOffset, 0, 0);
+          } else {
+            spritePass.draw(sm.vertexCount, 1, 0, 0);
+          }
+        }
       }
 
       spritePass.end();

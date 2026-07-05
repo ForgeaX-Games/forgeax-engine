@@ -14,7 +14,12 @@
 import type { RhiCallEvent, Tape } from '@forgeax/engine-rhi-debug';
 import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { TextureViewer } from '../components/TextureViewer';
+import {
+  collectThumbnails,
+  preserveThumbIndex,
+  TextureViewer,
+  thumbnailKey,
+} from '../components/TextureViewer';
 import { SelectionContext } from '../selection-context';
 import { TapeContext, ViewModelContext } from '../viewer-context';
 import type { ViewModel } from '../viewer-model';
@@ -62,6 +67,8 @@ function mockViewModel(): ViewModel {
           shaders: {
             vertexShaderModuleHandleId: undefined,
             fragmentShaderModuleHandleId: undefined,
+            vertexEntryPoint: undefined,
+            fragmentEntryPoint: undefined,
           },
           rasterizer: { cullMode: 'none' as const, frontFace: 'ccw' as const },
           depthStencil: {
@@ -540,6 +547,67 @@ describe('depth-stencil split: Depth + Stencil thumbnails', () => {
     const stencil = thumbs.find((el) => el.textContent?.includes('Stencil'));
     expect(depth?.textContent).not.toMatch(/error/);
     expect(stencil?.textContent).not.toMatch(/error/);
+  });
+});
+
+// --------------- bug #3: stable, collision-free thumbnail React keys ---------------
+
+describe('bug #3: thumbnailKey produces collision-free keys', () => {
+  it('Depth + Stencil sharing the ds handle get distinct keys (kind disambiguates)', () => {
+    // A depth24plus-stencil8 attachment yields a Depth and a Stencil thumbnail
+    // that share the same depthStencilViewHandleId. key={t.handleId} collides;
+    // the composite key must keep them distinct so React does not reuse the wrong
+    // DOM node when the draw switches.
+    const vm = mockViewModelWithDepthFormat('depth24plus-stencil8');
+    const draw = vm.draws[0];
+    if (!draw) throw new Error('mock has no draw');
+    const thumbs = collectThumbnails(draw, []);
+    const keys = thumbs.map((t, i) => thumbnailKey(t, i));
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('a bound-texture handle equal to a later depth attachment handle does not share a key', () => {
+    // Cross-draw aliasing (the real CSM capture reuses textureView:1467 as a
+    // bound texture in one draw and the depth attachment in another). thumbnailKey
+    // must fold `kind` so the two are never the same key.
+    const boundKey = thumbnailKey({ handleId: 'view-x', kind: 'bound-texture' } as never, 3);
+    const depthKey = thumbnailKey({ handleId: 'view-x', kind: 'depth' } as never, 1);
+    expect(boundKey).not.toBe(depthKey);
+  });
+});
+
+// --------------- bug #7: preserve thumbnail kind across draw switches ---------------
+
+describe('bug #7: preserveThumbIndex keeps the same texture kind across draws', () => {
+  const color = { kind: 'color-rt', handleId: 'rt', label: 'Color RT 0' } as never;
+  const depth = { kind: 'depth', handleId: 'ds', label: 'Depth' } as never;
+  const stencil = { kind: 'stencil', handleId: 'ds', label: 'Stencil' } as never;
+
+  it('keeps Depth selected when stepping to a draw that also has Depth', () => {
+    // The user is inspecting Depth (index 1) and steps to the next draw. Without
+    // preservation selectedThumb reset to 0 (Color RT), so they could not watch
+    // depth evolve across draws — it looked like depth never updated (bug #7).
+    const prev = [color, depth];
+    const next = [color, depth];
+    expect(preserveThumbIndex(prev, next, 1)).toBe(1);
+  });
+
+  it('re-locates the kind when the thumbnail order differs between draws', () => {
+    // Depth may sit at a different index in the next draw (different bound-texture
+    // count). Preservation must track the KIND, not the raw index.
+    const prev = [color, depth];
+    const next = [color, stencil, depth]; // depth now at index 2
+    expect(preserveThumbIndex(prev, next, 1)).toBe(2);
+  });
+
+  it('falls back to 0 when the previous kind is absent in the new draw', () => {
+    const prev = [color, depth];
+    const next = [color]; // no depth in this draw
+    expect(preserveThumbIndex(prev, next, 1)).toBe(0);
+  });
+
+  it('falls back to 0 for an out-of-range previous index', () => {
+    expect(preserveThumbIndex([], [color], 3)).toBe(0);
   });
 });
 

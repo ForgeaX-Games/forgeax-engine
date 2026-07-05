@@ -402,6 +402,60 @@ if (!hasGpu) {
         process.exit(1);
       }
       console.log('[smoke-browser] AC-FIT GREEN: Fit fills the viewport (upscales small textures)');
+
+      // Texel picker (bugs #1/#2): hovering the RT canvas must (a) show the picker
+      // readout, (b) report a NON-zero value for a painted pixel (bug #2: the
+      // color-RT path used to discard pixels so hover always read 0), and (c) the
+      // readout must PERSIST across a follow-up re-render (bug #1: it used to flash
+      // once then vanish because the preview effect re-fired on every setState).
+      const pickerResult = await page.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const canvas = document.querySelector('canvas[data-forgeax-rt-canvas]');
+        if (!canvas) return 'no-canvas';
+        const rect = canvas.getBoundingClientRect();
+        // Hover the center (a painted pixel for the hello-cube fixture).
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const fire = () =>
+          canvas.dispatchEvent(
+            new MouseEvent('mousemove', { clientX: cx, clientY: cy, bubbles: true }),
+          );
+        fire();
+        let info = null;
+        for (let i = 0; i < 20; i++) {
+          await sleep(50);
+          info = document.querySelector('[data-forgeax-texel-info]');
+          if (info?.textContent) break;
+        }
+        if (!info?.textContent) return 'no-readout';
+        const firstText = info.textContent;
+        // (b) non-zero: at least one channel component is not .000/0.000.
+        const nums = (firstText.match(/[0-9]+\.[0-9]+/g) ?? []).map(Number);
+        const anyNonZero = nums.some((n) => n > 0);
+        if (!anyNonZero) return `all-zero:${firstText}`;
+        // (c) persistence: trigger an unrelated re-render (toggle zoom) and confirm
+        // the readout is still present (it must not be wiped by the effect).
+        const zoom = document.querySelector('[data-forgeax-texture-zoom]');
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          'value',
+        )?.set;
+        setter?.call(zoom, '150');
+        zoom?.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(200);
+        const still = document.querySelector('[data-forgeax-texel-info]');
+        if (!still?.textContent) return 'wiped-after-rerender';
+        return 'ok';
+      });
+      if (pickerResult !== 'ok') {
+        console.error(`[smoke-browser] AC-PICKER RED: texel picker check failed (${pickerResult})`);
+        await browser.close();
+        viteProc.kill('SIGTERM');
+        process.exit(1);
+      }
+      console.log(
+        '[smoke-browser] AC-PICKER GREEN: hover reads a non-zero pixel and it persists across re-render',
+      );
     } else if (rtStatus === 'no-rt') {
       console.log('[smoke-browser] AC-06 SKIP: RT status is no-rt (fixture may lack color attachment info)');
     } else if (rtStatus === 'no-webgpu') {

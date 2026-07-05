@@ -195,14 +195,17 @@ function ShadersSection({
   draw: DrawEntry;
   resources: ReadonlyMap<string, CreateDescriptor>;
 }) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Keyed by STAGE ('vertex' | 'fragment'), NOT the module handle: vertex and
+  // fragment can share one module (e.g. shaderModule:1 holds vs_main + fs_main),
+  // so a handle key would toggle both editors at once.
+  const [expanded, setExpanded] = useState<Set<'vertex' | 'fragment'>>(new Set());
   const ps = draw.pipelineState.shaders;
 
-  const toggleWgsl = (handleId: string) => {
+  const toggleWgsl = (stageKey: 'vertex' | 'fragment') => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(handleId)) next.delete(handleId);
-      else next.add(handleId);
+      if (next.has(stageKey)) next.delete(stageKey);
+      else next.add(stageKey);
       return next;
     });
   };
@@ -216,35 +219,57 @@ function ShadersSection({
       ? resources.get(ps.fragmentShaderModuleHandleId)
       : undefined;
 
+  // Append the ACTIVE entry point so a module bundling several entrypoints (e.g.
+  // fs_main forward vs fs_gbuffer deferred) is unambiguous: the row shows which
+  // function this draw actually runs, not just the module handle.
+  const shaderValue = (handleId: string | undefined, entryPoint: string | undefined): string => {
+    if (handleId === undefined) return '(none)';
+    return entryPoint !== undefined ? `${handleId}  ·  ${entryPoint}()` : handleId;
+  };
+
   return (
     <div className="space-y-1">
-      <KvRow label="Vertex Shader" value={ps.vertexShaderModuleHandleId ?? '(none)'} />
+      <KvRow
+        label="Vertex Shader"
+        value={shaderValue(ps.vertexShaderModuleHandleId, ps.vertexEntryPoint)}
+      />
       {vsDesc?.kind === 'createShaderModule' && (
         <div className="ml-2">
           <button
             type="button"
-            onClick={() => toggleWgsl(ps.vertexShaderModuleHandleId ?? '')}
+            onClick={() => toggleWgsl('vertex')}
             className="text-xs text-warning/80 hover:text-warning"
           >
-            {expanded.has(ps.vertexShaderModuleHandleId ?? '') ? 'Hide' : 'Show'} WGSL
+            {expanded.has('vertex') ? 'Hide' : 'Show'} WGSL
           </button>
-          {expanded.has(ps.vertexShaderModuleHandleId ?? '') && (
-            <CodeMirrorShader wgslCode={vsDesc.wgslCode} stage="vertex" />
+          {expanded.has('vertex') && (
+            <CodeMirrorShader
+              wgslCode={vsDesc.wgslCode}
+              stage="vertex"
+              entryPoint={ps.vertexEntryPoint}
+            />
           )}
         </div>
       )}
-      <KvRow label="Fragment Shader" value={ps.fragmentShaderModuleHandleId ?? '(none)'} />
+      <KvRow
+        label="Fragment Shader"
+        value={shaderValue(ps.fragmentShaderModuleHandleId, ps.fragmentEntryPoint)}
+      />
       {fsDesc?.kind === 'createShaderModule' && (
         <div className="ml-2">
           <button
             type="button"
-            onClick={() => toggleWgsl(ps.fragmentShaderModuleHandleId ?? '')}
+            onClick={() => toggleWgsl('fragment')}
             className="text-xs text-warning/80 hover:text-warning"
           >
-            {expanded.has(ps.fragmentShaderModuleHandleId ?? '') ? 'Hide' : 'Show'} WGSL
+            {expanded.has('fragment') ? 'Hide' : 'Show'} WGSL
           </button>
-          {expanded.has(ps.fragmentShaderModuleHandleId ?? '') && (
-            <CodeMirrorShader wgslCode={fsDesc.wgslCode} stage="fragment" />
+          {expanded.has('fragment') && (
+            <CodeMirrorShader
+              wgslCode={fsDesc.wgslCode}
+              stage="fragment"
+              entryPoint={ps.fragmentEntryPoint}
+            />
           )}
         </div>
       )}

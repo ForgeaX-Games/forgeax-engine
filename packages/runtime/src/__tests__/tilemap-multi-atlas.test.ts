@@ -25,7 +25,14 @@ import {
   toShared,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { ChildOf, MeshRenderer, TileLayer, Tilemap, Transform } from '../components';
+import {
+  ChildOf,
+  encodeSortScope,
+  MeshRenderer,
+  TileLayer,
+  Tilemap,
+  Transform,
+} from '../components';
 import { resolveAssetHandle } from '../resolve-asset-handle';
 import {
   resetTilemapChunkExtractCache,
@@ -82,7 +89,10 @@ function spawnTilemap(
     )
     .unwrap();
   world.spawn(
-    { component: TileLayer, data: { tiles, layerOrder: 0, dirty: 1 } },
+    {
+      component: TileLayer,
+      data: { tiles, layerOrder: 0, dirty: 1, sortScope: encodeSortScope('per-cell') },
+    },
     { component: ChildOf, data: { parent: tilemap } },
   );
 }
@@ -94,7 +104,7 @@ function readMaterialTextureHandle(world: World, materialHandle: number): number
   const asset = res.value;
   if (asset.kind !== 'material') return 0;
   const pv = asset.paramValues as Readonly<Record<string, number | number[] | string | undefined>>;
-  const tex = pv.texture;
+  const tex = pv.baseColorTexture;
   return typeof tex === 'number' ? tex : 0;
 }
 

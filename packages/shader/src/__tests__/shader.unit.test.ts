@@ -899,6 +899,8 @@ import {
     'emissive',
     'emissiveIntensity',
     'occlusionStrength',
+    // feat-city-glb multi-UV tiling: per-material UV-set selector.
+    'uvSet',
     'baseColorTexture',
     'metallicRoughnessTexture',
     'normalTexture',
@@ -956,11 +958,11 @@ import {
   });
 
   describe('T-31 (c) — paramSchema reuses default-standard-pbr schema (R-10)', () => {
-    it('paramSchema length matches expected 13 params (post-D-8 split)', () => {
+    it('paramSchema length matches expected 14 params (D-8 split + uvSet)', () => {
       const registry = makeMockRegistry();
       registerDefaultStandardPbrSkin(registry, STUB_WGSL, STORAGE_CAPS);
       const entry = lookup(registry);
-      expect(entry.paramSchema).toHaveLength(13);
+      expect(entry.paramSchema).toHaveLength(14);
     });
 
     it('paramSchema names match default-standard-pbr schema field-for-field', () => {
@@ -988,6 +990,8 @@ import {
         // emissive vec3 + emissiveIntensity + occlusionStrength.
         'vec3',
         'f32',
+        'f32',
+        // uvSet selector (feat-city-glb multi-UV tiling).
         'f32',
         'texture2d',
         'texture2d',

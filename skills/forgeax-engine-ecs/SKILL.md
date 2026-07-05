@@ -198,6 +198,8 @@ if (r.ok) {
 
 `SceneAsset` 不再走单独的 container，而是 ECS 化：`world.instantiateScene(handle)` 返回 `{ root, diagnostics }` 信封——`root` 是合成根 Entity（挂 `SceneInstance{source, mapping, state}` + 单位 `Transform`），`diagnostics` 是未知字段的结构化诊断数组（`readonly SceneInstantiateDiagnostic[]`）。diagnostics 属性访问消费（`d.component` / `d.field` / `d.localId`），非 NODE_ENV-gated——生产环境同样可观测。`SceneAsset.mounts[]` 让一个 SceneAsset 嵌入另一个；mount entity 也自动挂 Transform（R2/B-1）。
 
+上行（collect）与下行（instantiate）对称：`rootsToSceneAsset(registry, world, roots)` 是下行 `instantiateScene` 的逆操作——遇带 `SceneInstance` 的实体子树折叠回 `mounts[]`（**mount-collapse**），成员实体不产出、`SceneInstance` 组件行不落盘、非 member 的 graft 实体保留为 owned。collect 产物经 `serializeSceneAssetToPack` 落盘后可重新 `loadByGuid → instantiateScene` 恢复等价 live 子树（round-trip 闭环，详见下节 §Entity 森林 → SceneAsset 序列化）。
+
 ### 8 个 World 方法（全在 `world.<TAB>` 自动补全）
 
 | 方法 | 作用 |
@@ -250,6 +252,80 @@ if (r.ok) {
 ### 踩坑
 
 - **resolver 挂错地方**：`engine.assets.instantiate(...)` 自动 wire 内部 SceneAsset resolver；只有 unit test 才走 `world._setSceneAssetResolver`（`@internal`，前缀 `_`）。demo 不要写 `if (world.setSceneAssetResolver)` 防御逻辑——这教坏下个 AI。
+
+## Entity 森林 → SceneAsset 序列化（存回）
+
+活 entity 森林可通过 `rootsToSceneAsset(registry, world, roots)` 序列化为 `SceneAsset`——这是 asset perspective 的入口（签名与错误码详见 [`forgeax-engine-assets`](../forgeax-engine-assets/SKILL.md) §Scene save / writeback）。`rootsToSceneAsset` 是 `instantiateScene` 的逆操作——上行/下行对称构成 round-trip 闭环。从 ECS 视角，只需理解以下概念：
+
+**基础语义**：
+
+- **任意 entity 可作 root**：不要求 SceneInstance 守卫——裸 spawn 的 entity、某子树分支节点，都可传入 `roots`。
+- **沿 Children BFS 收子树**：内部用共享 `collectSubtree` util（见下节），跨 root 共享 visited 去重。
+- **字段从 schema 派生**：entity/array<entity>→localId、shared<>/array<shared<>>→GUID——读 `comp.schema[fieldName]` 判定字段类型，无需手维白名单。
+- **root ChildOf 剥离**：作为 root 传入的 entity 若有 ChildOf（指向选区外父），产出 SceneEntity 不含 ChildOf 组件——新 scene 里它就是顶层。**不改动活 entity 状态**（纯读操作）。
+- **localId BFS 重编号**：森林内 entity 按 BFS 遍历序从 0 连续重编号，不复用原 localId/raw handle。
+
+**mount-collapse（嵌套场景折叠）**：
+
+当 BFS 遍历遇到携带 `SceneInstance` 的实体（锚点），`rootsToSceneAsset` 将其子树**折叠**回一条 `mounts[]` 条目——而非将其当作普通 owned entity 序列化。折叠是三分类过滤，非子树剪枝（BFS 仍走完整子树）：
+
+| 类别 | 实体 | 产物 |
+|:--|:--|:--|
+| **Member** | 子实例 mapping 内的实体 | 叠进 mount 窗口 `[memberFirst, memberFirst + memberCount)`，不产出为 owned entity |
+| **Anchor** | 携带 SceneInstance 的实体自身 | SceneInstance 组件行不落盘；锚点自身不产出为 owned（由 mount 条目表示） |
+| **Graft** | 挂到 member 下但不在 mapping 内的实体 | 保留为 owned entity；指向 member 的 entity 引用重映射为窗口内 LocalEntityId |
+
+两种锚点形态：
+
+- **形态 2**（root 自身即实例）——`roots` 中某 entity 携带 `SceneInstance`：整树折叠为单条 mount 的全新包裹 SceneAsset，`mount.parent=undefined`。
+- **形态 1**（深层锚点）——非 root entity 携带 `SceneInstance`：锚点子树折叠为一条 mount，`mount.parent` 指向锚点 ChildOf 父的新 localId；祖先实体照常产出为 owned。
+
+**窗口记账**（totalSlots 不变量）：mount 窗口覆盖子实例完整 `totalSlots`（不按存活成员数收缩），互不重叠，与 owned entity localId 不冲突。`totalSlots = entities.length + mounts.length + sum(memberCount)`。
+
+**round-trip 闭环**：`instantiateScene → rootsToSceneAsset → serializeSceneAssetToPack → loadByGuid → registry.instantiate → instantiateScene` 产出结构等价的 live 子树。等价基准是**二次 collect 不动点**（第二次 collect 产物与第一次结构等价）。
+
+**已知限制**：
+- **OOS-1**：`mount.overrides[]`（Layer-0 diff）在 collect 时不折叠——留后续 feat。
+- **D-9 形态 1 吸收**：mount 实体吸收仅在能证明时执行；无法证明时保留为 owned + `mount.components=undefined`，首次 reload 做一次性归一化。
+
+### collectSubtree：可复用的层级遍历原语
+
+`collectSubtree` 是沿 `Children` 组件 BFS 收子树的共享 util——AI 用户可直接 import 复用，无需手写 BFS。
+
+```ts
+import { collectSubtree } from '@forgeax/engine-runtime'; // barrel re-export 自 packages/runtime/src/scene-utils/collect-subtree.ts
+
+function collectSubtree(
+  world: World,
+  spawnRoot: EntityHandle,
+  visited?: Set<number>,  // 可选：传入外部 visited 支持跨 root 去重；不传时内部 new Set
+): Set<number>;
+```
+
+| 参数 | 语义 |
+|:--|:--|
+| `world` | World 实例 |
+| `spawnRoot` | 子树根 entity（自身被收入 visited） |
+| `visited`（可选） | 外部 Set<number>——跨 root 共享去重：祖先-后代重叠 root 时后代静默去重不报错。省略时内部 `new Set()`（单 root 退化情形） |
+
+**使用场景**：
+
+```ts
+// 单 root：不收外部 visited（如 postSpawnResolveJoints）
+const subtree = collectSubtree(world, rootEntity);
+subtree.forEach(eid => { /* eid 是 entity 整数 id */ });
+
+// 多 root 森林：共享 visited 去重
+const visited = new Set<number>();
+for (const root of roots) {
+  collectSubtree(world, root, visited); // 共享去重
+}
+// visited 含所有 root 子树闭包（无重复）
+```
+
+- entity 无 `Children` 组件 → 视为叶子，BFS 在该分支终止。
+- 返回值 `Set<number>` 含 root 自身。
+- 文件路径：`packages/runtime/src/scene-utils/collect-subtree.ts`，经 runtime barrel 导出。
 
 ## SpriteInstances / TileLayer.sortScope (feat-20260625)
 

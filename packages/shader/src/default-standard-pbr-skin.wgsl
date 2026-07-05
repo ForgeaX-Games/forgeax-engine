@@ -78,6 +78,10 @@ struct Material {
   emissive           : vec3<f32>,
   emissiveIntensity  : f32,
   occlusionStrength  : f32,
+  // feat-city-glb multi-UV tiling: per-material UV-set selector (mirrors
+  // default-standard-pbr.wgsl SSOT). 0.0 -> set 0 (in.uv), >=0.5 -> set 1
+  // (in.uv1). Offset 68; struct still rounds to 80 B.
+  uvSet              : f32,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -122,6 +126,10 @@ struct VsIn  {
   @location(3) tangent : vec4<f32>,
   @location(4) skinIndex  : vec4<u32>,
   @location(5) skinWeight : vec4<f32>,
+  // feat-city-glb multi-UV tiling: second UV set at canonical location 6
+  // (drives naga uvSetCount=2 reflection; clamp-to-last aliases onto uv0 for
+  // single-UV meshes). Mirrors default-standard-pbr.wgsl.
+  @location(6) uv1     : vec2<f32>,
 };
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
@@ -130,9 +138,9 @@ struct VsOut {
   @location(2) uv : vec2<f32>,
   @location(3) worldTangent : vec4<f32>,
   @location(4) @interpolate(flat) instanceIdx : u32,
-  // feat-20260629-multi-uv-set-support (user decision): built-in PBR (skin
-  // included) consumes a single UV set only. Multi-UV is a custom-material
-  // concern. @location(6) free for non-skin parity.
+  // feat-city-glb multi-UV tiling: second UV set varying at location 5
+  // (parity with default-standard-pbr.wgsl).
+  @location(5) uv1 : vec2<f32>,
   @location(7) viewZ : f32,
 };
 
@@ -204,6 +212,7 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   let worldTangentXyz = normalize(skinNormal3x3 * in.tangent.xyz);
   out.worldTangent = vec4<f32>(worldTangentXyz, in.tangent.w);
   out.uv = in.uv;
+  out.uv1 = in.uv1;
   out.instanceIdx = idx;
   // feat-20260613-csm-cascaded-shadow-maps M5 / w19: viewZ replaces the
   // prior light-space-position varying; evalDirectional picks the cascade
@@ -212,12 +221,18 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   return out;
 }
 
+// feat-city-glb multi-UV tiling: mirror of default-standard-pbr.wgsl selectUv.
+fn selectUv(in : VsOut) -> vec2<f32> {
+  return select(in.uv, in.uv1, material.uvSet >= 0.5);
+}
+
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let baseSample = textureSample(baseColorTexture, baseColorSampler, in.uv);
+  let uv = selectUv(in);
+  let baseSample = textureSample(baseColorTexture, baseColorSampler, uv);
   let albedo = material.baseColor.rgb * baseSample.rgb;
 
-  let mrSample = textureSample(metallicRoughnessTexture, metallicRoughnessSampler, in.uv);
+  let mrSample = textureSample(metallicRoughnessTexture, metallicRoughnessSampler, uv);
   let metallic = material.metallic * pick_channel(mrSample, u32(material.metallicChannel));
   let roughnessTex = pick_channel(mrSample, u32(material.roughnessChannel));
 
@@ -225,7 +240,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   a = a * roughnessTex;
   a = a * a;
 
-  let normSampleRg = textureSample(normalTexture, normalSampler, in.uv).rg;
+  let normSampleRg = textureSample(normalTexture, normalSampler, uv).rg;
   let normTangent = decodeTangentSpaceNormalRg(normSampleRg);
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 

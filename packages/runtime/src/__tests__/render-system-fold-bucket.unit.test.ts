@@ -97,7 +97,7 @@ describe('foldDispatchBuckets — mode 0 basic paths (w1)', () => {
     expect(bucket.bucketSize).toBe(N);
     expect(bucket.materialHandle).toBe(42);
     expect(bucket.layer).toBe(7);
-    expect(bucket.posZ).toBeCloseTo(1.5);
+    expect(bucket.sortKey).toBeCloseTo(1.5);
     expect(bucket.entries).toHaveLength(N);
   });
 

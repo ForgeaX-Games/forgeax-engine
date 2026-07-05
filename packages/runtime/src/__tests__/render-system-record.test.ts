@@ -26,7 +26,7 @@ import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../materials';
 import type { DispatchEntry } from '../render-system-extract';
 import { extractFrame, type MaterialSnapshot } from '../render-system-extract';
 import * as recordModule from '../render-system-record';
-import { detectNineSliceScaleTooSmall } from '../render-system-record';
+import { detectNineSliceScaleTooSmall, isLitMaterialSnapshot } from '../render-system-record';
 import { propagateTransforms } from '../systems/propagate-transforms';
 
 // ─── from render-system-record-pbr-ubo-stable.test.ts ───
@@ -80,7 +80,6 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       baseColor: opts.baseColor ?? [0.5, 0.6, 0.7, 1],
       metallic: opts.metallic ?? 0.1,
       roughness: opts.roughness ?? 0.4,
-      shadingModel: undefined,
       materialShaderId: 'forgeax::default-standard-pbr',
       paramSnapshot: undefined,
       ...(opts.emissive !== undefined && { emissive: opts.emissive }),
@@ -1058,7 +1057,6 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         baseColor,
         metallic,
         roughness,
-        shadingModel: undefined,
         materialShaderId: 'forgeax::default-standard-pbr',
         paramSnapshot: undefined,
         emissive,
@@ -1170,6 +1168,14 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       validatedOrdered: readonly (DispatchEntryLike | undefined)[],
       tonemapActive: boolean,
     ) => boolean;
+    isEntityFullyTransparent?: (source: {
+      material: MaterialSnapshot;
+      materials?: readonly MaterialSnapshot[];
+    }) => boolean;
+    entityHasTransparentSubmesh?: (source: {
+      material: MaterialSnapshot;
+      materials?: readonly MaterialSnapshot[];
+    }) => boolean;
   };
 
   function makeTransparentSnap(opts: {
@@ -1180,7 +1186,6 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       baseColor: [1, 1, 1, 1] as const,
       metallic: 0,
       roughness: 1,
-      shadingModel: undefined,
       materialShaderId: opts.materialShaderId ?? 'forgeax::unlit-test',
       paramSnapshot: {},
       ...(opts.transparent === true && { transparent: true }),
@@ -1249,21 +1254,20 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(split).toBe(false);
     });
 
-    it('M3 / w13: legacy sprite shadingModel without transparent:true does NOT trigger split (union arm deleted)', () => {
+    it('M3 / w13: legacy sprite material without transparent:true does NOT trigger split (union arm deleted)', () => {
       if (typeof mod.computeSplitLdrSprite !== 'function') {
         throw new Error('computeSplitLdrSprite helper not exported yet (red phase)');
       }
       // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w13 (D-3):
       // the M2 union (`transparent || shadingModel === 'sprite'`) is gone
-      // — transparent is the single SSOT. A legacy snapshot still carrying
-      // `shadingModel: 'sprite'` but no `transparent: true` declaration
-      // MUST NOT trigger the LDR split (forces explicit transparent
-      // attribution on the asset side; AC-04 / AC-05).
+      // — transparent is the single SSOT. A legacy snapshot carrying
+      // `materialShaderId: 'forgeax::sprite'` but no `transparent: true`
+      // declaration MUST NOT trigger the LDR split (forces explicit
+      // transparent attribution on the asset side; AC-04 / AC-05).
       const legacySpriteNoTransparent = {
         baseColor: [1, 1, 1, 1] as const,
         metallic: 0,
         roughness: 1,
-        shadingModel: 'sprite',
         materialShaderId: 'forgeax::sprite',
         paramSnapshot: {},
       } as unknown as MaterialSnapshot;
@@ -1299,6 +1303,71 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(SPRITE_PREMULTIPLIED_ALPHA_BLEND.color.dstFactor).toBe('one-minus-src-alpha');
       expect(SPRITE_PREMULTIPLIED_ALPHA_BLEND.alpha.srcFactor).toBe('one');
       expect(SPRITE_PREMULTIPLIED_ALPHA_BLEND.alpha.dstFactor).toBe('one-minus-src-alpha');
+    });
+
+    // feat-city-glb Bug 5 (per-submesh transparency): the split must trip when
+    // a NON-zero submesh material is transparent even though the entity-level
+    // material[0] is opaque (the crosswalk case: opaque road submesh[0] +
+    // BLEND decal submesh[1] on one multi-material mesh).
+    it('per-submesh: split trips when only a non-zero submesh is transparent', () => {
+      if (typeof mod.computeSplitLdrSprite !== 'function') {
+        throw new Error('computeSplitLdrSprite helper not exported yet');
+      }
+      const opaque0 = makeTransparentSnap({
+        transparent: false,
+        materialShaderId: 'forgeax::default-standard-pbr',
+      });
+      const transparent1 = makeTransparentSnap({
+        transparent: true,
+        materialShaderId: 'forgeax::default-standard-pbr',
+      });
+      // Entity-level material (=materials[0]) is opaque; materials[1] transparent.
+      const mixedEntry: DispatchEntryLike = {
+        source: { material: opaque0, materials: [opaque0, transparent1] },
+      };
+      expect(mod.computeSplitLdrSprite([mixedEntry], false)).toBe(true);
+    });
+
+    it('per-submesh: split stays false when every submesh material is opaque', () => {
+      if (typeof mod.computeSplitLdrSprite !== 'function') {
+        throw new Error('computeSplitLdrSprite helper not exported yet');
+      }
+      const opaque0 = makeTransparentSnap({
+        transparent: false,
+        materialShaderId: 'forgeax::default-standard-pbr',
+      });
+      const opaque1 = makeTransparentSnap({
+        transparent: false,
+        materialShaderId: 'forgeax::default-standard-pbr',
+      });
+      const opaqueMixed: DispatchEntryLike = {
+        source: { material: opaque0, materials: [opaque0, opaque1] },
+      };
+      expect(mod.computeSplitLdrSprite([opaqueMixed], false)).toBe(false);
+    });
+
+    it('isEntityFullyTransparent / entityHasTransparentSubmesh classify mixed meshes', () => {
+      if (
+        typeof mod.isEntityFullyTransparent !== 'function' ||
+        typeof mod.entityHasTransparentSubmesh !== 'function'
+      ) {
+        throw new Error('per-submesh transparency helpers not exported yet');
+      }
+      const opaque = makeTransparentSnap({ transparent: false });
+      const transp = makeTransparentSnap({ transparent: true });
+      // Mixed: opaque[0] + transparent[1] -> has a transparent submesh but not
+      // fully transparent (must draw in BOTH geometry pass and blend sub-pass).
+      const mixed = { material: opaque, materials: [opaque, transp] };
+      expect(mod.entityHasTransparentSubmesh(mixed)).toBe(true);
+      expect(mod.isEntityFullyTransparent(mixed)).toBe(false);
+      // Fully transparent (e.g. a sprite / 4.3 window quad).
+      const full = { material: transp, materials: [transp] };
+      expect(mod.entityHasTransparentSubmesh(full)).toBe(true);
+      expect(mod.isEntityFullyTransparent(full)).toBe(true);
+      // Fully opaque.
+      const none = { material: opaque, materials: [opaque, opaque] };
+      expect(mod.entityHasTransparentSubmesh(none)).toBe(false);
+      expect(mod.isEntityFullyTransparent(none)).toBe(false);
     });
   });
 }
@@ -1616,6 +1685,54 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       ];
       const sorted = transparentSortEntries(entries, world);
       expect(sorted.map((e) => e.entityIndex)).toEqual([7, 8, 9]);
+    });
+  });
+}
+
+// --- tweak-20260701 M2 AC-02: zero-light warning polarity (shadingModel -> materialShaderId) ---
+{
+  // AC-02: the zero-light black-screen warning must still fire for
+  // PBR/standard materials and remain silent for unlit / default
+  // materials. The pre-tweak condition was:
+  //   materialShaderId !== undefined && shadingModel === undefined
+  // Post-M1 shadingModel is deleted; the equivalent rewrite is:
+  //   materialShaderId !== undefined && materialShaderId !== 'forgeax::default-unlit'
+  //
+  // The test imports `isLitMaterialSnapshot` from the production
+  // render-system-record module — the same function that recordFrame's
+  // zero-light warning gate (line ~2122) calls to compute
+  // hasStandardMaterial. A test-local copy would not anchor to the
+  // production path.
+
+  function makeSnap(materialShaderId: string | undefined): MaterialSnapshot {
+    return {
+      baseColor: [1, 1, 1, 1] as const,
+      metallic: 0,
+      roughness: 1,
+      materialShaderId,
+      paramSnapshot: undefined,
+    } as unknown as MaterialSnapshot;
+  }
+
+  describe('AC-02: zero-light warning polarity (shadingModel -> materialShaderId)', () => {
+    it('standard / PBR material (materialShaderId !== undefined, !== default-unlit) -> lit', () => {
+      const snap = makeSnap('forgeax::default-standard-pbr');
+      expect(isLitMaterialSnapshot(snap)).toBe(true);
+    });
+
+    it('custom shader material (materialShaderId !== undefined, !== default-unlit) -> lit', () => {
+      const snap = makeSnap('my-custom-shader');
+      expect(isLitMaterialSnapshot(snap)).toBe(true);
+    });
+
+    it('unlit material (materialShaderId === forgeax::default-unlit) -> not lit (no warn)', () => {
+      const snap = makeSnap('forgeax::default-unlit');
+      expect(isLitMaterialSnapshot(snap)).toBe(false);
+    });
+
+    it('default material (materialShaderId === undefined) -> not lit (no warn)', () => {
+      const snap = makeSnap(undefined);
+      expect(isLitMaterialSnapshot(snap)).toBe(false);
     });
   });
 }
