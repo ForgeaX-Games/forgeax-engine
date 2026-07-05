@@ -571,3 +571,29 @@ world.spawn(
 | target 格式 | swap-chain `bgra8unorm-srgb` | HDR `rgba16float` → tonemap → swap-chain |
 | 复杂度 | O(P × L) | O(P × L_cluster)，L_cluster 是单 cluster 平均覆盖灯数 |
 | Tonemap | optional | **必需**（不接 ACES = 全白 burn） |
+
+## 程序化几何工厂
+
+6 几何工厂（box / sphere / cylinder / plane / cone / torus）已独立为 `@forgeax/engine-geometry` leaf 包，**不再从 `@forgeax/engine-runtime` import**。它们是纯函数——spawn 阶段直接调用，无 GPU 依赖，返回 `Result<MeshAsset, AssetError>`。
+
+```ts
+import { createBoxGeometry } from '@forgeax/engine-geometry';
+
+const meshRes = createBoxGeometry(1, 1, 1);
+if (!meshRes.ok) return; // degenerate param -> AssetError
+// Register and spawn:
+const handle = renderer.assets.register(meshRes.value).unwrap();
+world.spawn(
+  { component: Transform, data: {} },
+  { component: MeshFilter, data: { assetHandle: handle } },
+  { component: MeshRenderer, data: { materials: [matHandle] } },
+).unwrap();
+```
+
+全部 6 工厂 + tangent 工具 + vertex-attribute-layout SSOT 的签名与使用见
+[`packages/geometry/README.md`](../../packages/geometry/README.md)（API SSOT，渐进式
+披露：命题→示例→API 表→深入锚点）。
+
+> [!NOTE]
+> 从 `@forgeax/engine-runtime` import 几何工厂会触发 tsc
+> `has no exported member`——迁移只需改 import 源路径，工厂签名逐字节不变。

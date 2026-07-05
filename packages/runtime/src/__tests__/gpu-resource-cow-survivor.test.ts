@@ -17,7 +17,7 @@ import type { EquirectAsset, Handle, MeshAsset, TextureAsset } from '@forgeax/en
 import { toShared, unwrapHandle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { GpuResourceStore } from '../gpu-resource-store';
-import { cleanPerEntityCache } from '../render-system-record';
+import { cleanPerEntityCache } from '../record';
 
 // ── Mock device (same shape as gpu-resource.test.ts makeStoreMockDevice) ──
 

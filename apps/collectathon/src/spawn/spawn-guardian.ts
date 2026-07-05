@@ -23,6 +23,7 @@
 // the Portal path) and marks both entities state-scoped (despawnOnExit Play).
 
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { createCylinderGeometry } from '@forgeax/engine-geometry';
 import {
   CharacterController,
   Collider,
@@ -30,14 +31,7 @@ import {
   RigidBody,
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
-import {
-  ChildOf,
-  createCylinderGeometry,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { ChildOf, Materials, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 
 import { GUARDIAN_BODY_GROUPS, GUARDIAN_GROUPS } from '../collision-groups';

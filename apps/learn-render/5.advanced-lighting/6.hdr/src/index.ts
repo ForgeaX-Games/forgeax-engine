@@ -31,10 +31,10 @@ import {
   PostProcessParams,
   TONEMAP_REINHARD_EXTENDED,
   Transform,
-  createBoxGeometry,
   createDevImportTransport,
   perspective,
 } from '@forgeax/engine-runtime';
+import { createBoxGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, MeshAsset, RenderPipelineAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';

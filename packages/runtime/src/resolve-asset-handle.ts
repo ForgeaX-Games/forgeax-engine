@@ -26,7 +26,7 @@ import type {
 } from '@forgeax/engine-types';
 import { ASSET_ERROR_HINTS, AssetError, BUILTIN_BASE, handleSlot } from '@forgeax/engine-types';
 import { BuiltinAssetRegistry } from './builtin-asset-registry';
-import { MaterialResolvedEmptyPassesError } from './errors';
+import { MaterialResolvedEmptyPassesError } from './errors/asset';
 
 /**
  * Resolve a handle to its asset payload with two-tier slot-range dispatch.

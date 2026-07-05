@@ -144,8 +144,16 @@ export function parseFbx(fbxBytes: Uint8Array): string {
     throw new Error('fbx-wasm: parseFbxWasm returned empty result');
   }
 
-  const json = mod.UTF8ToString(resultPtr, resultLen);
+  // Decode via a fresh sliced copy, NOT mod.UTF8ToString. Under
+  // ALLOW_MEMORY_GROWTH=1 the emcc glue backs HEAPU8 with a *resizable*
+  // ArrayBuffer (wasmMemory.toResizableBuffer()); glue's UTF8ArrayToString then
+  // calls TextDecoder.decode(HEAPU8.subarray(...)), which modern Chromium
+  // rejects ("The provided ArrayBuffer value must not be resizable"). HEAPU8
+  // .slice() returns a copy backed by a plain, non-resizable ArrayBuffer, so the
+  // decode is accepted in every environment (browser/Vite, Node, vitest).
+  const bytes = mod.HEAPU8.slice(resultPtr, resultPtr + resultLen);
   mod._freeResult();
+  const json = new TextDecoder().decode(bytes);
 
   const firstChars = json.substring(0, 30);
   if (firstChars.includes('"error"')) {

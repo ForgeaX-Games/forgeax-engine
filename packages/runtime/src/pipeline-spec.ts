@@ -17,6 +17,7 @@
 //   P3: explicit failure — closed PipelineSpecError union, no silent routes
 //   P4: consistent abstraction — 4-axis aligns with wgpu/Bevy/Three.js
 
+import { deriveVertexBufferLayout } from '@forgeax/engine-geometry';
 import type { MaterialShaderEntry, ShaderRegistry } from '@forgeax/engine-shader';
 import {
   type BindGroupLayoutEntry,
@@ -34,7 +35,6 @@ import {
   buildPbrViewBglEntries,
   type PbrCaps,
 } from './pbr-pipeline';
-import { deriveVertexBufferLayout } from './vertex-attribute-layout';
 
 // Re-export KNOWN_PASS_KINDS from @forgeax/engine-types for single-file discoverability (charter F1).
 export { KNOWN_PASS_KINDS };

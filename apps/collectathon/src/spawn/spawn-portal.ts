@@ -15,19 +15,14 @@
 // body, and the Portal does not fall or get pushed).
 
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { createCylinderGeometry } from '@forgeax/engine-geometry';
 import {
   Collider,
   ColliderShapeValue,
   RigidBody,
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
-import {
-  createCylinderGeometry,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Materials, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 
 import { PORTAL_GROUPS } from '../collision-groups';

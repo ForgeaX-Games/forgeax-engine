@@ -46,7 +46,7 @@
 import type { Mat4 } from '@forgeax/engine-math';
 import { mat4 } from '@forgeax/engine-math';
 import type { Buffer, RhiDevice } from '@forgeax/engine-rhi';
-import { SkinPaletteOverflowError } from '../errors';
+import { SkinPaletteOverflowError } from '../errors/skin';
 import type { SkinPaletteSlice } from '../render-system-extract';
 
 const MAT4_BYTES = 64; // 16 f32 * 4 bytes

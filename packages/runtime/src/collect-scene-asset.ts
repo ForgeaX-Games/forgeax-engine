@@ -65,7 +65,7 @@ import { SceneInstance } from './components/scene-instance';
 import {
   SceneCollectAssetGuidUnresolvedError,
   SceneCollectEntityRefOutOfClosureError,
-} from './errors';
+} from './errors/asset';
 import { resolveAssetHandle } from './resolve-asset-handle';
 import { collectSubtree } from './scene-utils/collect-subtree';
 

@@ -20,12 +20,12 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera,
   createDevImportTransport,
-  createPlaneGeometry,
   MeshFilter,
   MeshRenderer,
   perspective,
   Transform,
 } from '@forgeax/engine-runtime';
+import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';

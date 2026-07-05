@@ -149,6 +149,7 @@ const mockCanvas = {
 
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
+const geometryPkg = await import('@forgeax/engine-geometry');
 const {
   Camera,
   createRenderer,
@@ -211,7 +212,7 @@ if (!ready.ok) {
 // asset registry. The built-in HANDLE_CUBE uses engine-internal handle
 // values; using a custom mesh ensures the AABB lookup path works on the
 // dawn-node mock canvas path.
-const { createBoxGeometry } = enginePkg;
+const { createBoxGeometry } = geometryPkg;
 const boxResult = createBoxGeometry(1, 1, 1, 1, 1, 1);
 if (!boxResult.ok) {
   console.error(`[smoke] FAIL - createBoxGeometry failed: ${boxResult.error.code}`);

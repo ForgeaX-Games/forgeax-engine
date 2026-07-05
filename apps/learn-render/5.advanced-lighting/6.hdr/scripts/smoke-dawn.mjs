@@ -266,11 +266,11 @@ if (!existsSync(WOOD_SRC_PATH)) {
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const enginePkg = await import('@forgeax/engine-runtime');
+const { createBoxGeometry } = await import('@forgeax/engine-geometry');
 const {
   addFullscreenPass,
   addScenePass,
   Camera,
-  createBoxGeometry,
   createRenderer,
   HANDLE_CUBE,
   MeshFilter,

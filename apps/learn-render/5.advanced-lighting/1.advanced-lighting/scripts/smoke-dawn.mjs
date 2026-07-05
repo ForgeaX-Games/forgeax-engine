@@ -145,14 +145,8 @@ if (!existsSync(WOOD_SRC_PATH)) {
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  createPlaneGeometry,
-  createRenderer,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} = enginePkg;
+const { createPlaneGeometry } = await import('@forgeax/engine-geometry');
+const { Camera, createRenderer, MeshFilter, MeshRenderer, Transform } = enginePkg;
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 

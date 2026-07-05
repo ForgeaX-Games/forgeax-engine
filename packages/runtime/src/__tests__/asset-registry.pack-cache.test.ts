@@ -453,6 +453,76 @@ describe('transportOrFail packIndexCache concurrent patch (F20 / AC-08) [w14]', 
   });
 });
 
+// -- transportOrFail patch preserves the transport's derived display name --
+// Regression: the incremental patch loop copied relativeUrl/kind/metadata but
+// dropped `name`, so a GLB imported at runtime (studio Content Browser) showed
+// its 1000+ sub-assets as blank rows. buildCatalog already derives the name
+// (basename of the source), the transport carries it, and listCatalog reads it
+// back via `entry.name` -- so the patch must persist it.
+
+describe('transportOrFail packIndexCache patch preserves entry.name', () => {
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('carries the transport entry name into the cache row and listCatalog', async () => {
+    const GUID = 'f0000000-0000-4000-f000-000000000020';
+    const PACK = '/packs/city.glb';
+    const NAME = 'city_Sample_512.glb';
+
+    const importTransport = {
+      fetchPack: vi.fn().mockResolvedValue({
+        ok: true,
+        entries: [{ guid: GUID, relativeUrl: PACK, kind: 'scene', name: NAME }],
+      }),
+    } as unknown as { fetchPack: ReturnType<typeof vi.fn> };
+
+    const reg = new AssetRegistry(
+      makeMockShaderRegistry(),
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      importTransport as any,
+    );
+    reg.configurePackIndex('/pack-index.json');
+
+    // pack-index is empty -> the GUID falls through to transportOrFail. The pack
+    // body fetch fails (404) after the patch lands, so loadByGuid rejects -- but
+    // the packIndexCache patch (the unit under test) has already run by then.
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      await reg.loadByGuid(parseGuid(GUID)).catch(() => undefined);
+
+      const internal = reg as unknown as {
+        packIndexCache: Map<string, { name?: string }> | undefined;
+      };
+      expect(internal.packIndexCache?.get(GUID.toLowerCase())?.name).toBe(NAME);
+
+      const row = reg.listCatalog().find((e) => e.guid === GUID.toLowerCase());
+      expect(row?.name).toBe(NAME);
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+});
+
 // -- M4 / F20: integration - two-GUID concurrent transportOrFail (AC-07) [w18] --
 
 describe('integration: concurrent transportOrFail dual GUID (F20 / AC-07) [w18]', () => {
@@ -581,5 +651,66 @@ describe('integration: concurrent transportOrFail dual GUID (F20 / AC-07) [w18]'
       // biome-ignore lint/suspicious/noExplicitAny: test teardown
       delete (globalThis as any).fetch;
     }
+  });
+});
+
+// ── refreshCatalog: re-fetch pack-index NOW so listCatalog reflects new assets ──
+// Regression: after an import writes a new pack-index on disk, the registry kept
+// its boot-time cache; listCatalog stayed stale until a page reload. refreshCatalog
+// re-fetches immediately so the Content Browser + Add-to-Scene see the new asset.
+
+describe('refreshCatalog re-fetches the pack-index immediately', () => {
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch !== undefined) globalThis.fetch = originalFetch;
+    // biome-ignore lint/suspicious/noExplicitAny: test teardown
+    else delete (globalThis as any).fetch;
+  });
+
+  it('surfaces a newly-added entry in listCatalog without any loadByGuid', async () => {
+    const reg = makeRegistry();
+    reg.configurePackIndex('/pack-index.json');
+
+    const NEW_GUID = 'f0000000-0000-4000-f000-0000000000a1';
+    // First served index is empty; the second (post-"import") carries one row.
+    let served: Array<{ guid: string; relativeUrl: string; kind: string; name?: string }> = [];
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === '/pack-index.json') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(served) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    }) as typeof globalThis.fetch;
+
+    try {
+      // Prime the cache with the empty index — the new GUID is absent.
+      const first = await reg.refreshCatalog();
+      expect(first).toBe(true);
+      expect(reg.listCatalog().find((e) => e.guid === NEW_GUID.toLowerCase())).toBeUndefined();
+
+      // Simulate an import writing a fresh pack-index, then refresh.
+      served = [
+        { guid: NEW_GUID, relativeUrl: '/preview/new.glb', kind: 'scene', name: 'new.glb' },
+      ];
+      const second = await reg.refreshCatalog();
+      expect(second).toBe(true);
+
+      const row = reg.listCatalog().find((e) => e.guid === NEW_GUID.toLowerCase());
+      expect(row).toBeDefined();
+      expect(row?.kind).toBe('scene');
+      expect(row?.name).toBe('new.glb');
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('returns false (keeps stale cache) when no pack-index URL is configured', async () => {
+    const reg = makeRegistry();
+    expect(await reg.refreshCatalog()).toBe(false);
   });
 });

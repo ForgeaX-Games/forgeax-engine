@@ -122,10 +122,10 @@ const {
   MeshRenderer,
   Transform,
   createRenderer,
-  createCylinderGeometry,
-  createPlaneGeometry,
-  createSphereGeometry,
 } = await import('@forgeax/engine-runtime');
+const { createCylinderGeometry, createPlaneGeometry, createSphereGeometry } = await import(
+  '@forgeax/engine-geometry'
+);
 const {
   CharacterController,
   Collider,

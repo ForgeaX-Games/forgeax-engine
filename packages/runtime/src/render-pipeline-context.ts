@@ -28,6 +28,12 @@ import type { BindGroup, RhiCommandEncoder, Texture, TextureView } from '@forgea
 import type { RenderPipelineAsset } from '@forgeax/engine-types';
 import type { AssetRegistry } from './asset-registry';
 import type { GpuResourceStore } from './gpu-resource-store';
+import type {
+  BindGroupCounts,
+  DispatchCounts,
+  RenderFrameState,
+  ValidatedRenderable,
+} from './record';
 import type { PipelineState, RenderSystemRuntime } from './render-system';
 import type {
   CameraSnapshot,
@@ -35,12 +41,6 @@ import type {
   SkyboxSnapshot,
   SkylightSnapshot,
 } from './render-system-extract';
-import type {
-  BindGroupCounts,
-  DispatchCounts,
-  RenderFrameState,
-  ValidatedRenderable,
-} from './render-system-record';
 
 /**
  * Narrow runtime-services carrier handed to pipeline pass closures (UE `FRDGBuilder`

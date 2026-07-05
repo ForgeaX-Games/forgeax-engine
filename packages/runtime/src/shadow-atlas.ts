@@ -41,7 +41,10 @@ import {
   type TextureView,
 } from '@forgeax/engine-rhi';
 
-import { PointShadowAtlasBoundsViolationError, PointShadowAtlasUninitializedError } from './errors';
+import {
+  PointShadowAtlasBoundsViolationError,
+  PointShadowAtlasUninitializedError,
+} from './errors/render';
 
 /**
  * WebGPU texture usage flags duplicated as numeric literals so the runtime

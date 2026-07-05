@@ -7,7 +7,6 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera,
   createDevImportTransport,
-  createPlaneGeometry,
   DirectionalLight,
   EngineEnvironmentError,
   HANDLE_CUBE,
@@ -19,6 +18,7 @@ import {
   SpotLight,
   Transform,
 } from '@forgeax/engine-runtime';
+import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type {
   MaterialAsset,
   MeshAsset,

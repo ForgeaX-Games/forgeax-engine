@@ -22,13 +22,13 @@
 // before spawn.
 
 import { World } from '@forgeax/engine-ecs';
+import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { LocalEntityId, MeshAsset, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { BUILTIN_BASE } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
 import { MeshFilter, SceneInstance } from '../components';
-import { createBoxGeometry } from '../geometry/box';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function localId(n: number): LocalEntityId {

@@ -23,15 +23,28 @@ import {
   __classifyEnvErrorReasonForTest,
   __composeEnvErrorHintForTest,
 } from '../create-renderer-env-classify';
+import type { AssetRuntimeError, AssetRuntimeErrorCode } from '../errors/asset';
 import {
-  EquirectProjectionFailedError,
   MeshSsboCapacityExceededError,
   MeshSsboCeilingReachedError,
-  type RuntimeError,
-  type RuntimeErrorCode,
   SceneCollectAssetGuidUnresolvedError,
   SceneCollectEntityRefOutOfClosureError,
-} from '../errors';
+} from '../errors/asset';
+import type { RenderError, RenderErrorCode } from '../errors/render';
+import { EquirectProjectionFailedError } from '../errors/render';
+import type { SkinError, SkinErrorCode } from '../errors/skin';
+
+// feat-20260704-runtime-tier1-decomposition M2 / w12: the eliminated top-level
+// RuntimeError / RuntimeErrorCode aggregate unions (D-3) are reconstituted here
+// as test-local aliases so the whole-runtime-surface exhaustive-switch bodies
+// below stay byte-identical (AC-09). These are test scaffolding, not a
+// production cross-cluster SSOT -- w13's per-cluster *.test-d.ts files are the
+// real regression guard. Equal to the fanned-out render + asset + skin
+// clusters (27 codes / 27 classes); recover + environment excluded, as the
+// original unions were.
+type RuntimeLayerErrorCode = RenderErrorCode | AssetRuntimeErrorCode | SkinErrorCode;
+type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
+
 import { PickError, type PickErrorCode } from '../pick-errors';
 import {
   PipelineError,
@@ -851,7 +864,7 @@ import { RhiErrorListenerRegistry } from '../renderer';
   describe('errors.test.ts', () => {
     describe('AC-11 RuntimeErrorCode exhaustive switch (11 members, no default)', () => {
       it('exhaustive switch covers all members without a default branch', () => {
-        function exhaustive(code: RuntimeErrorCode): string {
+        function exhaustive(code: RuntimeLayerErrorCode): string {
           switch (code) {
             case 'shadow-invalid-config':
               return 'shadow invalid config';
@@ -938,22 +951,22 @@ import { RhiErrorListenerRegistry } from '../renderer';
      */
     describe('RuntimeErrorCode +3 new members (w3)', () => {
       it('hdrp-deferred-caps-insufficient is a valid RuntimeErrorCode', () => {
-        const code: RuntimeErrorCode = 'hdrp-deferred-caps-insufficient';
+        const code: RuntimeLayerErrorCode = 'hdrp-deferred-caps-insufficient';
         expect(code).toBe('hdrp-deferred-caps-insufficient');
       });
 
       it('gbuffer-rt-alloc-failed is a valid RuntimeErrorCode', () => {
-        const code: RuntimeErrorCode = 'gbuffer-rt-alloc-failed';
+        const code: RuntimeLayerErrorCode = 'gbuffer-rt-alloc-failed';
         expect(code).toBe('gbuffer-rt-alloc-failed');
       });
 
       it('gbuffer-attachment-count-mismatch is a valid RuntimeErrorCode', () => {
-        const code: RuntimeErrorCode = 'gbuffer-attachment-count-mismatch';
+        const code: RuntimeLayerErrorCode = 'gbuffer-attachment-count-mismatch';
         expect(code).toBe('gbuffer-attachment-count-mismatch');
       });
 
       it('exhaustive switch covers all 3 new members alongside existing members', () => {
-        function exhaustive(code: RuntimeErrorCode): string {
+        function exhaustive(code: RuntimeLayerErrorCode): string {
           switch (code) {
             case 'shadow-invalid-config':
               return 'ok';
@@ -1032,7 +1045,7 @@ import { RhiErrorListenerRegistry } from '../renderer';
           handled: boolean;
         } = { requested: null, capacity: null, ceiling: null, handled: false };
 
-        const onError = (err: RuntimeError): void => {
+        const onError = (err: RuntimeLayerError): void => {
           switch (err.code) {
             case 'mesh-ssbo-capacity-exceeded': {
               // err narrows to MeshSsboCapacityExceededError; detail is the
@@ -1803,7 +1816,7 @@ import { RhiErrorListenerRegistry } from '../renderer';
       });
 
       it('code is a valid RuntimeErrorCode literal', () => {
-        const code: RuntimeErrorCode = 'scene-collect-entity-ref-out-of-closure';
+        const code: RuntimeLayerErrorCode = 'scene-collect-entity-ref-out-of-closure';
         expect(code).toBe('scene-collect-entity-ref-out-of-closure');
       });
     });
@@ -1823,7 +1836,7 @@ import { RhiErrorListenerRegistry } from '../renderer';
       });
 
       it('code is a valid RuntimeErrorCode literal', () => {
-        const code: RuntimeErrorCode = 'scene-collect-asset-guid-unresolved';
+        const code: RuntimeLayerErrorCode = 'scene-collect-asset-guid-unresolved';
         expect(code).toBe('scene-collect-asset-guid-unresolved');
       });
     });

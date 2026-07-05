@@ -59,7 +59,6 @@ import { World } from '@forgeax/engine-ecs';
 import {
   Camera,
   createRenderer,
-  createSphereGeometry,
   DirectionalLight,
   EngineEnvironmentError,
   Materials,
@@ -69,6 +68,7 @@ import {
   TONEMAP_REINHARD_EXTENDED,
   Transform,
 } from '@forgeax/engine-runtime';
+import { createSphereGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 

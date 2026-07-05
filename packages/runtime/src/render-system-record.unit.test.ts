@@ -42,7 +42,7 @@ import {
   interleaveSpriteInstanceBuffer,
   type SpriteInstancesSnapshot,
   spriteInstancesCacheHit,
-} from './render-system-record';
+} from './record';
 
 const SPEC_BASE: PipelineSpec = {
   shader: { id: 'forgeax::default-standard-pbr', passKind: 'forward', variantSet: undefined },
@@ -67,7 +67,7 @@ const SPEC_MSAA: PipelineSpec = {
 
 describe('render-system-record M6-T1 silent fallback removal', () => {
   it('selectStandardFallbackPipeline export is gone (grep gate)', async () => {
-    const mod = await import('./render-system-record');
+    const mod = await import('./record');
     expect((mod as Record<string, unknown>).selectStandardFallbackPipeline).toBeUndefined();
   });
 

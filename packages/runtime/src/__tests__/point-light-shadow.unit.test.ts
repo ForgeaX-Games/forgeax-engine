@@ -16,7 +16,7 @@ import { World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
 import { describe, expect, it } from 'vitest';
 import { PointLightShadow } from '../components/point-light-shadow';
-import { ShadowInvalidConfigError } from '../errors';
+import { ShadowInvalidConfigError } from '../errors/render';
 import { buildPointShadowMatrices } from '../render-system-extract';
 
 {

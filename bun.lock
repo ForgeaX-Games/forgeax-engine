@@ -45,6 +45,7 @@
         "@forgeax/engine-debug-draw": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-font": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-physics": "workspace:*",
@@ -210,6 +211,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
       },
@@ -243,6 +245,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
@@ -444,6 +447,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
       },
@@ -635,6 +639,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
@@ -962,6 +967,7 @@
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-image": "workspace:*",
         "@forgeax/engine-input": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
@@ -1265,6 +1271,7 @@
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-rhi-webgpu": "workspace:*",
@@ -1315,6 +1322,7 @@
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-rhi-webgpu": "workspace:*",
         "@forgeax/engine-rhi-wgpu": "workspace:*",
@@ -1359,6 +1367,7 @@
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",
         "@forgeax/engine-rhi-webgpu": "workspace:*",
@@ -1432,6 +1441,7 @@
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-render-graph": "workspace:*",
@@ -1528,6 +1538,7 @@
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-input": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
@@ -1558,6 +1569,7 @@
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-input": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
@@ -1712,6 +1724,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
@@ -1728,6 +1741,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
@@ -1888,6 +1902,14 @@
         "@forgeax/engine-import": "workspace:*",
         "@forgeax/engine-remote": "workspace:*",
         "@types/node": "^20.14.0",
+      },
+    },
+    "packages/geometry": {
+      "name": "@forgeax/engine-geometry",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
       },
     },
     "packages/gltf": {
@@ -2114,6 +2136,7 @@
       "dependencies": {
         "@forgeax/engine-debug-draw": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-input": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:^",
@@ -2238,6 +2261,7 @@
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-physics": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
@@ -2568,6 +2592,8 @@
     "@forgeax/engine-fbx": ["@forgeax/engine-fbx@workspace:packages/fbx"],
 
     "@forgeax/engine-font": ["@forgeax/engine-font@workspace:packages/font"],
+
+    "@forgeax/engine-geometry": ["@forgeax/engine-geometry@workspace:packages/geometry"],
 
     "@forgeax/engine-gltf": ["@forgeax/engine-gltf@workspace:packages/gltf"],
 

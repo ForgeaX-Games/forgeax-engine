@@ -16,12 +16,7 @@ import type { InputBackend } from '@forgeax/engine-input';
 import type { PhysicsWorld, PhysicsWorld2D } from '@forgeax/engine-physics';
 import type { Plugin, PluginError } from '@forgeax/engine-plugin';
 import type { RhiError, RhiInstance } from '@forgeax/engine-rhi';
-import type {
-  EngineEnvironmentError,
-  PostProcessError,
-  Renderer,
-  RuntimeError,
-} from '@forgeax/engine-runtime';
+import type { EngineEnvironmentError, Renderer, RendererError } from '@forgeax/engine-runtime';
 import type { ImportTransport } from '@forgeax/engine-types';
 
 import type { AppError, AppErrorCode } from './errors';
@@ -34,16 +29,19 @@ export type { AppError, AppErrorCode };
 
 /**
  * Structured error union surfaced through the App `onError` fan-out + the
- * assemble-form construction Result. Mirrors the `Renderer.onError` channel
- * (`RhiError | RuntimeError`) so a runtime-layer error fanned out by the
- * renderer (e.g. `'equirect-projection-failed'`) reaches host App listeners
- * verbatim, plus the App-layer `AppError`. AI users `switch (err.code)` over
- * the union: the disjoint `AppErrorCode` / `RhiErrorCode` / `RuntimeErrorCode`
- * literal sets let TS narrow each arm to the concrete class
- * (feat-20260531-skybox-env-background F-1: `RuntimeError` added alongside the
- * pre-existing `AppError | RhiError` pair).
+ * assemble-form construction Result. Derived from the `Renderer.onError`
+ * channel contract `RendererError` (feat-20260704-runtime-tier1-decomposition
+ * M2 / w14 / D-4) so a runtime-layer error fanned out by the renderer (e.g.
+ * `'equirect-projection-failed'`) reaches host App listeners verbatim, plus the
+ * App-layer `AppError`. `RendererError` = `RhiError | RenderError |
+ * AssetRuntimeError | SkinError | PostProcessError`, so this equals the
+ * pre-decomposition `AppError | RhiError | RuntimeError | PostProcessError`
+ * exactly (RuntimeError was RenderError | AssetRuntimeError | SkinError). AI
+ * users `switch (err.code)` over the union: the disjoint `AppErrorCode` /
+ * `RhiErrorCode` / per-cluster `*ErrorCode` / `PostProcessErrorCode` literal
+ * sets let TS narrow each arm to the concrete class.
  */
-export type AppDispatchError = AppError | RhiError | RuntimeError | PostProcessError;
+export type AppDispatchError = AppError | RendererError;
 
 /**
  * Options for the assemble-form entry createApp({ renderer, world, ... }).

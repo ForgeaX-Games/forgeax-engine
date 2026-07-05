@@ -42,7 +42,7 @@ import {
 import { type AssetRegistry, HANDLE_CUBE, HANDLE_TRIANGLE } from './asset-registry';
 
 import type { EngineMetrics } from './engine-metrics';
-import { HdrpCapsInsufficientError } from './errors';
+import { HdrpCapsInsufficientError } from './errors/render';
 import {
   DEPTH_MIN_PARAMS_BYTE_SIZE,
   entryHasDepthRead,
@@ -54,13 +54,13 @@ import { validateClusterGrid } from './hdrp-pipeline';
 import { disposeInstanceBuffers } from './instance-buffer-cache';
 import { PipelineError } from './pipeline-errors';
 import { PostProcessError } from './post-process-errors';
+import { type RenderFrameState, recordFrame } from './record';
 // The forgeax-concept RenderPipeline (registrable / installable unit) - aliased to avoid
 // the name collision with the RHI opaque `RenderPipeline` handle imported above. The RHI
 // handle stays internal (requirements line 155); this concept type is the public surface.
 import type { RenderPipeline as RenderPipelineDef } from './render-pipeline';
 import type { CameraSnapshot, DispatchEntry, RenderableSnapshot } from './render-system-extract';
 import { extractFrame } from './render-system-extract';
-import { type RenderFrameState, recordFrame } from './render-system-record';
 import type { RhiErrorListenerRegistry } from './renderer';
 import { propagateTransforms } from './systems/propagate-transforms';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';

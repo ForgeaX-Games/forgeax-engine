@@ -54,7 +54,12 @@ const GATE_A_ALLOW = new Set([
 ]);
 
 const GATE_B_ALLOW = new Set([
-  'packages/runtime/src/render-system-record.ts',
+  // feat-20260704 M3/w24: the record-stage monolith split into the
+  // packages/runtime/src/record/ cluster; the beginRenderPass owners are the
+  // three pass-recording files (plan-strategy D-2 no-root-shim).
+  'packages/runtime/src/record/main-pass.ts',
+  'packages/runtime/src/record/shadow-pass.ts',
+  'packages/runtime/src/record/skybox-post-pass.ts',
   'packages/runtime/src/mipmap-generator.ts',
   'packages/runtime/src/ibl/IblPipelineCache.ts',
 ]);

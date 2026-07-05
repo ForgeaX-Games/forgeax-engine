@@ -48,6 +48,15 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import {
+  createBoxGeometry,
+  createConeGeometry,
+  createCylinderGeometry,
+  createPlaneGeometry,
+  createSphereGeometry,
+  createTorusGeometry,
+  PROCEDURAL_FLOATS_PER_VERTEX,
+} from '@forgeax/engine-geometry';
+import {
   createInputSnapshot,
   INPUT_SNAPSHOT_RESOURCE_KEY,
   type InputSnapshot,
@@ -93,15 +102,6 @@ import {
 } from '../cluster-binner';
 import { Camera, ChildOf, MeshFilter, MeshRenderer, Transform } from '../components';
 import { createEngineMetrics } from '../engine-metrics';
-import {
-  createBoxGeometry,
-  createConeGeometry,
-  createCylinderGeometry,
-  createPlaneGeometry,
-  createSphereGeometry,
-  createTorusGeometry,
-} from '../geometry';
-import { PROCEDURAL_FLOATS_PER_VERTEX } from '../geometry/box';
 import { GpuResourceStore } from '../gpu-resource-store';
 import { createHdrpBindGroupLayoutDescriptor } from '../hdrp-buffers';
 import { HdrpInstallError, validateClusterGrid } from '../hdrp-pipeline';
@@ -151,7 +151,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 {
   // --- from create-renderer-fallback.test.ts ---
   const ENGINE = '../createRenderer';
-  const ERRORS = '../errors';
+  const ERRORS = '../errors/environment';
 
   // ─── RhiError shape ──────────────────────────────────────────────────────────
 
@@ -1013,7 +1013,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 {
   // --- from createRenderer.test.ts ---
   const ENGINE = '../createRenderer';
-  const ERRORS = '../errors';
+  const ERRORS = '../errors/environment';
 
   // Default mock: Channel 3 (rhi-wgpu) dynamic import fails so existing
   // "throws" tests continue to see EngineEnvironmentError. Overridden
@@ -5897,13 +5897,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // --- from hdrp-caps-gate.test.ts ---
   describe('HdrpCapsInsufficientError class shape (AC-17/AC-18/AC-20)', () => {
     it('has .code === hdrp-caps-insufficient', async () => {
-      const { HdrpCapsInsufficientError } = await import('../errors');
+      const { HdrpCapsInsufficientError } = await import('../errors/render');
       const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
       expect(err.code).toBe('hdrp-caps-insufficient');
     });
 
     it('.detail carries { capName, actual, required }', async () => {
-      const { HdrpCapsInsufficientError } = await import('../errors');
+      const { HdrpCapsInsufficientError } = await import('../errors/render');
       const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
       expect(err.detail).toBeDefined();
       expect(err.detail.capName).toBe('maxStorageBuffersPerShaderStage');
@@ -5912,7 +5912,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('.hint contains fall-back-to-URP substring (AC-18)', async () => {
-      const { HdrpCapsInsufficientError } = await import('../errors');
+      const { HdrpCapsInsufficientError } = await import('../errors/render');
       const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
       expect(err.hint).toBeDefined();
       expect(typeof err.hint).toBe('string');
@@ -5921,7 +5921,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('.expected describes the capacity requirement', async () => {
-      const { HdrpCapsInsufficientError } = await import('../errors');
+      const { HdrpCapsInsufficientError } = await import('../errors/render');
       const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
       expect(err.expected).toBeDefined();
       expect(typeof err.expected).toBe('string');
@@ -5929,7 +5929,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('extends Error', async () => {
-      const { HdrpCapsInsufficientError } = await import('../errors');
+      const { HdrpCapsInsufficientError } = await import('../errors/render');
       const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('HdrpCapsInsufficientError');
@@ -5940,13 +5940,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   describe('HdrpLightBudgetExceededError class shape (AC-07/AC-20)', () => {
     it('has .code === hdrp-light-budget-exceeded', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors');
+      const { HdrpLightBudgetExceededError } = await import('../errors/render');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.code).toBe('hdrp-light-budget-exceeded');
     });
 
     it('.detail carries { actual, budget }', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors');
+      const { HdrpLightBudgetExceededError } = await import('../errors/render');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.detail).toBeDefined();
       expect(err.detail.actual).toBe(257);
@@ -5954,7 +5954,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('.hint is a non-empty actionable string', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors');
+      const { HdrpLightBudgetExceededError } = await import('../errors/render');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.hint).toBeDefined();
       expect(typeof err.hint).toBe('string');
@@ -5962,7 +5962,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('extends Error', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors');
+      const { HdrpLightBudgetExceededError } = await import('../errors/render');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('HdrpLightBudgetExceededError');
@@ -5973,13 +5973,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   describe('HdrpIndexListOverflowError class shape (AC-24)', () => {
     it('has .code === hdrp-index-list-overflow', async () => {
-      const { HdrpIndexListOverflowError } = await import('../errors');
+      const { HdrpIndexListOverflowError } = await import('../errors/render');
       const err = new HdrpIndexListOverflowError(65537, 65536);
       expect(err.code).toBe('hdrp-index-list-overflow');
     });
 
     it('.detail carries { actual, capacity }', async () => {
-      const { HdrpIndexListOverflowError } = await import('../errors');
+      const { HdrpIndexListOverflowError } = await import('../errors/render');
       const err = new HdrpIndexListOverflowError(65537, 65536);
       expect(err.detail).toBeDefined();
       expect(err.detail.actual).toBe(65537);
@@ -5987,7 +5987,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('.hint is a non-empty actionable string', async () => {
-      const { HdrpIndexListOverflowError } = await import('../errors');
+      const { HdrpIndexListOverflowError } = await import('../errors/render');
       const err = new HdrpIndexListOverflowError(65537, 65536);
       expect(err.hint).toBeDefined();
       expect(typeof err.hint).toBe('string');
@@ -5995,7 +5995,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('extends Error', async () => {
-      const { HdrpIndexListOverflowError } = await import('../errors');
+      const { HdrpIndexListOverflowError } = await import('../errors/render');
       const err = new HdrpIndexListOverflowError(65537, 65536);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('HdrpIndexListOverflowError');
@@ -6051,7 +6051,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   describe('RuntimeErrorCode union 12 -> 15 (D-4)', () => {
     it('HdrpCapsInsufficientError .code is recognized as RuntimeErrorCode literal', async () => {
-      const { HdrpCapsInsufficientError } = await import('../errors');
+      const { HdrpCapsInsufficientError } = await import('../errors/render');
       const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
       const code: string = err.code;
       // If hdrp-caps-insufficient is not in the RuntimeErrorCode union,
@@ -6061,14 +6061,14 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('HdrpLightBudgetExceededError .code is recognized as RuntimeErrorCode literal', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors');
+      const { HdrpLightBudgetExceededError } = await import('../errors/render');
       const err = new HdrpLightBudgetExceededError(257, 256);
       const code: string = err.code;
       expect(code).toMatch(/^hdrp-/);
     });
 
     it('HdrpIndexListOverflowError .code is recognized as RuntimeErrorCode literal', async () => {
-      const { HdrpIndexListOverflowError } = await import('../errors');
+      const { HdrpIndexListOverflowError } = await import('../errors/render');
       const err = new HdrpIndexListOverflowError(65537, 65536);
       const code: string = err.code;
       expect(code).toMatch(/^hdrp-/);
@@ -6223,7 +6223,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   describe('hdrp-index-list-overflow RuntimeError class shape (AC-24)', () => {
     it('HdrpIndexListOverflowError has the expected shape', async () => {
-      const { HdrpIndexListOverflowError } = await import('../errors');
+      const { HdrpIndexListOverflowError } = await import('../errors/render');
       const err = new HdrpIndexListOverflowError(70000, 65536);
       expect(err.code).toBe('hdrp-index-list-overflow');
       expect(err.detail.actual).toBe(70000);
@@ -6261,33 +6261,33 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // --- from hdrp-light-budget.test.ts ---
   describe('HdrpLightBudgetExceededError class shape (AC-07)', () => {
     it('has .code === hdrp-light-budget-exceeded', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors');
+      const { HdrpLightBudgetExceededError } = await import('../errors/render');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.code).toBe('hdrp-light-budget-exceeded');
     });
 
     it('.detail carries { actual, budget } with correct values', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors');
+      const { HdrpLightBudgetExceededError } = await import('../errors/render');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.detail.actual).toBe(257);
       expect(err.detail.budget).toBe(256);
     });
 
     it('.detail budget is 256 (the D-scope limit)', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors');
+      const { HdrpLightBudgetExceededError } = await import('../errors/render');
       const err = new HdrpLightBudgetExceededError(300, 256);
       expect(err.detail.budget).toBe(256);
     });
 
     it('.expected describes the budget constraint', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors');
+      const { HdrpLightBudgetExceededError } = await import('../errors/render');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.expected.length).toBeGreaterThan(0);
       expect(err.expected).toMatch(/256/);
     });
 
     it('.hint is a non-empty actionable string', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors');
+      const { HdrpLightBudgetExceededError } = await import('../errors/render');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.hint.length).toBeGreaterThan(0);
     });

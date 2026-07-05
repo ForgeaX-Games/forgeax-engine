@@ -30,14 +30,18 @@
 //   node scripts/forgeax/check-render-record-no-material-asset-get.mjs
 //   node scripts/forgeax/check-render-record-no-material-asset-get.mjs --help
 
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..', '..');
-const TARGET = resolve(REPO_ROOT, 'packages/runtime/src/render-system-record.ts');
+// feat-20260704 M3/w24: the record-stage monolith split into the
+// packages/runtime/src/record/ cluster. The gate scans every .ts in that
+// directory so a banned MaterialAsset-read pattern cannot regrow in any
+// sibling file (plan-strategy D-2 no-root-shim + section 5.6 no empty-pass).
+const RECORD_DIR = resolve(REPO_ROOT, 'packages/runtime/src/record');
 
 const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {
@@ -48,7 +52,7 @@ if (args.includes('--help') || args.includes('-h')) {
       'Usage:',
       '  node scripts/forgeax/check-render-record-no-material-asset-get.mjs',
       '',
-      'Asserts that packages/runtime/src/render-system-record.ts does NOT',
+      'Asserts that no file under packages/runtime/src/record/ does NOT',
       'reach `internals.assets.get<MaterialAsset>` directly, does NOT cast',
       '`firstMaterial` to read texture handles, and does NOT name the',
       '`baseColorHandle` local that the cast pattern produced. The mesh',
@@ -63,8 +67,20 @@ if (args.includes('--help') || args.includes('-h')) {
   process.exit(0);
 }
 
-const text = readFileSync(TARGET, 'utf8');
-const lines = text.split('\n');
+let targetFiles;
+try {
+  targetFiles = readdirSync(RECORD_DIR)
+    .filter((name) => name.endsWith('.ts'))
+    .map((name) => join(RECORD_DIR, name))
+    .sort();
+} catch {
+  process.stderr.write(`error: cannot read record cluster dir ${RECORD_DIR}\n`);
+  process.exit(2);
+}
+if (targetFiles.length === 0) {
+  process.stderr.write(`error: no .ts files found under ${RECORD_DIR}\n`);
+  process.exit(2);
+}
 
 const failures = [];
 
@@ -86,16 +102,21 @@ const banned = [
   },
 ];
 
-for (const rule of banned) {
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (rule.re.test(line)) {
-      failures.push({
-        code: rule.code,
-        line: i + 1,
-        snippet: line.slice(0, 160).trim(),
-        hint: rule.hint,
-      });
+for (const file of targetFiles) {
+  const lines = readFileSync(file, 'utf8').split('\n');
+  const rel = file.slice(REPO_ROOT.length + 1);
+  for (const rule of banned) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (rule.re.test(line)) {
+        failures.push({
+          code: rule.code,
+          file: rel,
+          line: i + 1,
+          snippet: line.slice(0, 160).trim(),
+          hint: rule.hint,
+        });
+      }
     }
   }
 }
@@ -103,7 +124,7 @@ for (const rule of banned) {
 if (failures.length > 0) {
   process.stderr.write('AC-07 record reverse-grep gate FAIL:\n');
   for (const f of failures) {
-    process.stderr.write(`  [${f.code}] line ${f.line}: ${f.snippet}\n`);
+    process.stderr.write(`  [${f.code}] ${f.file}:${f.line}: ${f.snippet}\n`);
     process.stderr.write(`    hint: ${f.hint}\n`);
   }
   process.exit(1);

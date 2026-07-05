@@ -27,11 +27,7 @@ import type { EquirectAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GpuResourceStore } from '../gpu-resource-store';
-import {
-  driveLazyEquirectProjection,
-  warnMultiSkybox,
-  warnMultiSkylight,
-} from '../render-system-record';
+import { driveLazyEquirectProjection, warnMultiSkybox, warnMultiSkylight } from '../record';
 import { RhiErrorListenerRegistry } from '../renderer';
 
 // ── caps probes ──────────────────────────────────────────────────────────────

@@ -20,7 +20,6 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera,
   createDevImportTransport,
-  createSphereGeometry,
   EngineEnvironmentError,
   Materials,
   MeshFilter,
@@ -32,6 +31,7 @@ import {
   TONEMAP_REINHARD_EXTENDED,
   Transform,
 } from '@forgeax/engine-runtime';
+import { createSphereGeometry } from '@forgeax/engine-geometry';
 import type { EquirectAsset, Handle, MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {

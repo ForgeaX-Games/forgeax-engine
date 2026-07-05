@@ -18,9 +18,18 @@ import type {
   StartConsoleOptions as _StartConsoleOptionsRemoved,
 } from '@forgeax/engine-runtime';
 import { describe, expectTypeOf, it } from 'vitest';
-import type { EquirectProjectionFailedError, RuntimeError } from '../errors';
+import type { AssetRuntimeError } from '../errors/asset';
+import type { EquirectProjectionFailedError, RenderError } from '../errors/render';
+import type { SkinError } from '../errors/skin';
 import type { PostProcessError } from '../post-process-errors';
 import type { Renderer, RendererErrorListener } from '../renderer';
+
+// feat-20260704-runtime-tier1-decomposition M2 / w12: the eliminated top-level
+// RuntimeError aggregate union (D-3) reconstituted as a test-local alias so the
+// onError-channel type assertions below stay byte-identical (AC-09). Equal to
+// RenderError | AssetRuntimeError | SkinError (the 27-class fanned-out set); it
+// doubles as a check that RendererError equals the pre-decomposition union.
+type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
 
 // Reference the imported aliases so TS does not strip them before reaching
 // the @ts-expect-error attached to each import specifier.
@@ -48,12 +57,12 @@ describe('onError channel widened to RhiError | RuntimeError | PostProcessError 
     // PostProcessError fan out with no `as any` cast.
     expectTypeOf<RendererErrorListener>()
       .parameter(0)
-      .toEqualTypeOf<RhiError | RuntimeError | PostProcessError>();
+      .toEqualTypeOf<RhiError | RuntimeLayerError | PostProcessError>();
   });
 
   it('exhaustive switch narrows RuntimeError arms to the concrete class', () => {
     // AI-user view: switch (e.code) over the union narrows the runtime arms.
-    const probe = (e: RhiError | RuntimeError): EquirectProjectionFailedError | undefined => {
+    const probe = (e: RhiError | RuntimeLayerError): EquirectProjectionFailedError | undefined => {
       switch (e.code) {
         case 'equirect-projection-failed':
           // e narrows to EquirectProjectionFailedError; .detail.handle is a number.
@@ -67,7 +76,7 @@ describe('onError channel widened to RhiError | RuntimeError | PostProcessError 
   });
 
   it('RhiError arms remain reachable in the same switch (no regression)', () => {
-    const probe = (e: RhiError | RuntimeError): string => {
+    const probe = (e: RhiError | RuntimeLayerError): string => {
       switch (e.code) {
         case 'limit-exceeded':
           // e narrows to RhiError; .code is a RhiErrorCode literal.

@@ -11,10 +11,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
     },
-    "./geometry": {
-      "types": "./dist/geometry/index.d.ts",
-      "import": "./dist/geometry/index.mjs"
-    },
     "./internal/*": null,
     "./package.json": "./package.json"
   },
@@ -37,6 +33,7 @@
   "dependencies": {
     "@forgeax/engine-debug-draw": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:^",

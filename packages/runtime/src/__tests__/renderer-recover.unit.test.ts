@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Result } from '@forgeax/engine-rhi';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RecoverError, type RecoverErrorCode } from '../errors';
+import { RecoverError, type RecoverErrorCode } from '../errors/recover';
 import type { HealthSnapshot } from '../renderer';
 
 // ── Controllable mock state (module-level so vi.mock factories can read) ──────
@@ -526,7 +526,10 @@ describe('recover() single idempotent rebuild (M3)', () => {
 
 describe('RecoverErrorCode closed union (A-AC-09)', () => {
   it('errors.ts RecoverErrorCode definition line declares exactly 4 literal members', () => {
-    const src = readFileSync(fileURLToPath(new URL('../errors.ts', import.meta.url)), 'utf8');
+    const src = readFileSync(
+      fileURLToPath(new URL('../errors/recover.ts', import.meta.url)),
+      'utf8',
+    );
     const defLine = src.split('\n').find((l) => l.includes('export type RecoverErrorCode'));
     expect(defLine).toBeDefined();
     const literals = (defLine as string).match(/recover-[a-z-]+/g) ?? [];

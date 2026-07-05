@@ -9,7 +9,7 @@
 import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { DirectionalLight } from '../components/directional-light';
-import { ShadowInvalidConfigError } from '../errors';
+import { ShadowInvalidConfigError } from '../errors/render';
 
 // ── AC-01: new field defaults ────────────────────────────────────────────
 

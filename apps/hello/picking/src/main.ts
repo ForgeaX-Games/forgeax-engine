@@ -23,7 +23,6 @@ import { World } from '@forgeax/engine-ecs';
 import {
   acquireCanvasContext,
   Camera,
-  createBoxGeometry,
   createRenderer,
   DirectionalLight,
   EngineEnvironmentError,
@@ -36,6 +35,7 @@ import {
   pick,
   Transform,
 } from '@forgeax/engine-runtime';
+import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const world = new World();

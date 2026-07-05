@@ -66,7 +66,6 @@
 import { World } from '@forgeax/engine-ecs';
 import {
   Camera,
-  createBoxGeometry,
   acquireCanvasContext,
   createRenderer,
   DirectionalLight,
@@ -77,6 +76,7 @@ import {
   perspective,
   Transform,
 } from '@forgeax/engine-runtime';
+import { createBoxGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset } from '@forgeax/engine-runtime';  // feat-20260527 M1: register<MaterialAsset>
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 

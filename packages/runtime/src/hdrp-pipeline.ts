@@ -44,15 +44,15 @@ import { mat4 } from '@forgeax/engine-math';
 import { RenderGraph, type ResolveContext } from '@forgeax/engine-render-graph';
 import { err, ok, type Result, RhiError, type TextureView } from '@forgeax/engine-rhi';
 import { attachDebugOverlayPass } from './debug-draw-glue';
-import { HdrpDeferredCapsInsufficientError } from './errors';
+import { HdrpDeferredCapsInsufficientError } from './errors/render';
 import { getOrCreateHdrpBuffers } from './hdrp-buffers';
+import { recordMainPass } from './record';
 import { addPointShadowPass, addSsaoPasses, addTonemapPass } from './render-graph-primitives';
 import type { RenderPipeline, RenderPipelineData } from './render-pipeline';
 import type {
   _InternalRenderPipelineContext,
   RenderPipelineContext,
 } from './render-pipeline-context';
-import { recordMainPass } from './render-system-record';
 
 /** Reserved engine pipeline id for the HDRP (cluster-forward pipeline). */
 export const HDRP_PIPELINE_ID = 'forgeax::hdrp';

@@ -25,7 +25,7 @@
 | 渲染 / 测试 / CI 出错 — 症状→根因→修法 | `forgeax-engine-debug` |
 | RHI 录帧 / replay / 离线 per-draw inspect (capture→inspect→dispose) — 查 bindings+drawCall+RT PNG 定位渲染症状 | `forgeax-engine-rhi-debug` |
 
-聚合非 1:1 对包：`input` 折进 `app`,`pack` 折进 `assets`。包名册全表：`AGENTS.md §Packages`。
+聚合非 1:1 对包：`input` 折进 `app`,`pack` 折进 `assets`,`geometry` 折进 `material`。包名册全表：`AGENTS.md §Packages`。
 
 API 签名 / error 码 / capability 全表 SSOT 在 `packages/<pkg>/src/` 与 `packages/<pkg>/README.md`,skill 正文不复述,顺其"深入"锚点跳。
 

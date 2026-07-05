@@ -19,19 +19,14 @@
 // core-spin does -- so the sensor follows the bobbing/spinning visual.
 
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { createSphereGeometry } from '@forgeax/engine-geometry';
 import {
   Collider,
   ColliderShapeValue,
   RigidBody,
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
-import {
-  createSphereGeometry,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Materials, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 
 import { CORE_GROUPS } from '../collision-groups';

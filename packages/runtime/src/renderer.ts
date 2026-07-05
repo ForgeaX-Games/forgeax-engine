@@ -18,7 +18,10 @@ import type { ShaderRegistry } from '@forgeax/engine-shader';
 import type { RenderPipelineAsset } from '@forgeax/engine-types';
 import type { AssetRegistry } from './asset-registry';
 import type { EngineMetrics } from './engine-metrics';
-import type { RecoverError, RuntimeError } from './errors';
+import type { AssetRuntimeError } from './errors/asset';
+import type { RecoverError } from './errors/recover';
+import type { RenderError } from './errors/render';
+import type { SkinError } from './errors/skin';
 import type { GpuResourceStore } from './gpu-resource-store';
 import type { PipelineError } from './pipeline-errors';
 import type { PostProcessError } from './post-process-errors';
@@ -39,23 +42,51 @@ export interface RendererLostInfo {
 export type RendererLostListener = (info: RendererLostInfo) => void;
 
 /**
- * Listener registered through `Renderer.onError` (fix-f2).
+ * Composite error type reachable through the `Renderer.onError` fan-out channel
+ * (D-4). This is the fan-out channel's *wire contract* — it does NOT define any
+ * error; it only references the cluster unions whose members can arrive here.
+ * As such it is an external wire alias (AGENTS.md Change stance add-only wire
+ * exception), NOT the eliminated cross-cluster `RuntimeError` SSOT (D-3).
  *
- * Trigger scenarios span two error families fanned out through the same
- * channel:
- *   - `RhiError` — RHI-layer failures (shader / pipeline / buffer creation,
- *     device-lost, queue-submit, etc.); `.code` is a `RhiErrorCode`.
- *   - `RuntimeError` — runtime-layer failures surfaced during draw (shadow
- *     config, skin extract, material resolve, skybox cubemap not ready);
- *     `.code` is a `RuntimeErrorCode`.
+ * Composition = `RhiError | RenderError | AssetRuntimeError | SkinError |
+ * PostProcessError`. This equals the pre-decomposition
+ * `RhiError | RuntimeError | PostProcessError` exactly: `RuntimeError` was
+ * `RenderError | AssetRuntimeError | SkinError` (27 classes). `RecoverError`
+ * and `EngineEnvironmentError` are intentionally excluded — neither is ever
+ * fired through `onError` (`RecoverError` returns from `recover()`,
+ * `EngineEnvironmentError` throws at construction), matching the original
+ * `RuntimeError` union which excluded both (OOS-3 behavior equivalence).
  *
- * Both error families share the structured `.code` / `.expected` / `.hint`
- * surface. AI consumers do `switch (err.code)` over the union: the disjoint
- * `RhiErrorCode` / `RuntimeErrorCode` literal sets let TS narrow each arm to
- * the concrete class (charter P3 union discoverability — every fan-out member
- * is reachable in an exhaustive switch, no `as any` escape).
+ * AI consumers do `switch (err.code)` over the union: the disjoint
+ * `RhiErrorCode` / `RenderErrorCode` / `AssetRuntimeErrorCode` / `SkinErrorCode`
+ * / `PostProcessErrorCode` literal sets let TS narrow each arm to the concrete
+ * class (charter P3 union discoverability — every fan-out member is reachable
+ * in an exhaustive switch, no `as any` escape). Example:
+ *
+ * ```ts
+ * renderer.onError((err) => {
+ *   switch (err.code) {
+ *     case 'asset-not-registered': // AssetRuntimeError arm, err narrowed here
+ *       return report(err.hint);
+ *     // ...one arm per RhiErrorCode | RenderErrorCode | AssetRuntimeErrorCode
+ *     //    | SkinErrorCode | PostProcessErrorCode member; no default needed,
+ *     //    TS flags any unhandled code at compile time.
+ *   }
+ * });
+ * ```
  */
-export type RendererErrorListener = (error: RhiError | RuntimeError | PostProcessError) => void;
+export type RendererError =
+  | RhiError
+  | RenderError
+  | AssetRuntimeError
+  | SkinError
+  | PostProcessError;
+
+/**
+ * Listener registered through `Renderer.onError` (fix-f2). Receives any
+ * {@link RendererError} fanned out through the channel.
+ */
+export type RendererErrorListener = (error: RendererError) => void;
 
 /** First-version options bag (intentionally empty; reserved for v0.1). */
 export interface RendererOptions {
@@ -610,8 +641,8 @@ export class LostListenerRegistry {
  * delivers the charter proposition 4 explicit-failure red line).
  *
  * Difference from `LostListenerRegistry`: this registry fans out structured
- * error objects from two families — `RhiError` (RHI layer) and `RuntimeError`
- * (runtime layer) — both carrying the `.code` closed-union discriminant + the
+ * structured error objects from the fan-out families composed in
+ * `RendererError` — both carrying the `.code` closed-union discriminant + the
  * three fields `.expected` / `.hint` + optional `.detail`. Late-attach replay
  * behavior is identical — errors that fired before dispose are immediately
  * replayed to any subsequent `add`.
@@ -619,7 +650,7 @@ export class LostListenerRegistry {
 export class RhiErrorListenerRegistry {
   private readonly listeners: RendererErrorListener[] = [];
   private fired = false;
-  private lastError: RhiError | RuntimeError | PostProcessError | null = null;
+  private lastError: RendererError | null = null;
 
   add(listener: RendererErrorListener): () => void {
     this.listeners.push(listener);
@@ -650,7 +681,7 @@ export class RhiErrorListenerRegistry {
    *       is emitted via console.error so the runtime is still observable
    *       (charter proposition 4 explicit failure baseline; no silent skip).
    */
-  fire(error: RhiError | RuntimeError | PostProcessError): void {
+  fire(error: RendererError): void {
     this.fired = true;
     this.lastError = error;
     if (this.listeners.length === 0) {

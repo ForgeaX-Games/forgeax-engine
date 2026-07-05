@@ -109,14 +109,23 @@ import { SkyboxBackground } from '../components/skybox-background';
 import { Skylight } from '../components/skylight';
 import { Transform } from '../components/transform';
 import { selectSwapChainFormat } from '../createRenderer';
+import type { AssetRuntimeErrorCode } from '../errors/asset';
+import type { RenderErrorCode } from '../errors/render';
+import { VertexStorageBufferUnavailableError } from '../errors/render';
+import type { SkinErrorCode } from '../errors/skin';
 import {
   SkinInstancesCoexistForbiddenError,
   SkinJointCountExceededError,
   SkinJointDespawnedError,
   SkinJointPathUnresolvedError,
   SkinPaletteOverflowError,
-  VertexStorageBufferUnavailableError,
-} from '../errors';
+} from '../errors/skin';
+
+// feat-20260704-runtime-tier1-decomposition M2 / w12: reconstitute the
+// eliminated top-level RuntimeErrorCode aggregate union (D-3) as a test-local
+// alias so the exhaustive-switch bodies below stay byte-identical (AC-09).
+type RuntimeLayerErrorCode = RenderErrorCode | AssetRuntimeErrorCode | SkinErrorCode;
+
 import { GpuResourceStore } from '../gpu-resource-store';
 import { getOrCreateIblCache, hasIblCache } from '../ibl/IblPipelineCache';
 import {
@@ -128,14 +137,14 @@ import {
 } from '../ibl/skylight-bind-group';
 import type { InstanceBufferCacheEntry } from '../instance-buffer-cache';
 import { buildPbrPipelineLayouts, buildUnlitMaterialBgl } from '../pbr-pipeline';
-import type { CameraSnapshot, ExtractedLights } from '../render-system-extract';
-import { extractFrame } from '../render-system-extract';
 import {
   warnMultiLightDirectional,
   warnMultiLightPoint,
   warnMultiLightSpot,
   ZERO_CAMERA_CLEAR_FALLBACK,
-} from '../render-system-record';
+} from '../record';
+import type { CameraSnapshot, ExtractedLights } from '../render-system-extract';
+import { extractFrame } from '../render-system-extract';
 import { advanceAnimationPlayer } from '../systems/advance-animation-player';
 import { propagateTransforms } from '../systems/propagate-transforms';
 import { createSkinPaletteAllocator } from '../systems/skin-palette-allocator';
@@ -822,7 +831,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { internals } = makeRecorderInternals(log);
       const ps = makePipelineState(false);
       (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
-      const { recordFrame } = await import('../render-system-record');
+      const { recordFrame } = await import('../record');
       recordFrame(
         internals as never,
         new World() as never,
@@ -874,7 +883,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { internals } = makeRecorderInternals(log);
       const ps = makePipelineState(false);
       (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
-      const { recordFrame } = await import('../render-system-record');
+      const { recordFrame } = await import('../record');
       recordFrame(
         internals as never,
         new World() as never,
@@ -2075,37 +2084,37 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('T-20 — RuntimeErrorCode +6 skin-animation kebab-case consistency (AC-29)', () => {
     it('skin-joint-count-exceeded is valid kebab-case', () => {
-      const code: RuntimeErrorCode = 'skin-joint-count-exceeded';
+      const code: RuntimeLayerErrorCode = 'skin-joint-count-exceeded';
       expect(code).toMatch(KEBAB_REGEX);
     });
 
     it('skin-joint-despawned is valid kebab-case', () => {
-      const code: RuntimeErrorCode = 'skin-joint-despawned';
+      const code: RuntimeLayerErrorCode = 'skin-joint-despawned';
       expect(code).toMatch(KEBAB_REGEX);
     });
 
     it('skin-joint-path-unresolved is valid kebab-case', () => {
-      const code: RuntimeErrorCode = 'skin-joint-path-unresolved';
+      const code: RuntimeLayerErrorCode = 'skin-joint-path-unresolved';
       expect(code).toMatch(KEBAB_REGEX);
     });
 
     it('skin-instances-coexist-forbidden is valid kebab-case', () => {
-      const code: RuntimeErrorCode = 'skin-instances-coexist-forbidden';
+      const code: RuntimeLayerErrorCode = 'skin-instances-coexist-forbidden';
       expect(code).toMatch(KEBAB_REGEX);
     });
 
     it('vertex-storage-buffer-unavailable is valid kebab-case', () => {
-      const code: RuntimeErrorCode = 'vertex-storage-buffer-unavailable';
+      const code: RuntimeLayerErrorCode = 'vertex-storage-buffer-unavailable';
       expect(code).toMatch(KEBAB_REGEX);
     });
 
     it('skin-palette-overflow is valid kebab-case', () => {
-      const code: RuntimeErrorCode = 'skin-palette-overflow';
+      const code: RuntimeLayerErrorCode = 'skin-palette-overflow';
       expect(code).toMatch(KEBAB_REGEX);
     });
 
     it('exhaustive switch over RuntimeErrorCode 7 members compiles without default', () => {
-      function exhaustive(code: RuntimeErrorCode): string {
+      function exhaustive(code: RuntimeLayerErrorCode): string {
         switch (code) {
           case 'shadow-invalid-config':
             return 'shadow';
@@ -2195,7 +2204,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('all 6 skin-animation error codes are in the RuntimeErrorCode union (type-level)', () => {
-      const codes: RuntimeErrorCode[] = [
+      const codes: RuntimeLayerErrorCode[] = [
         'skin-joint-count-exceeded',
         'skin-joint-despawned',
         'skin-joint-path-unresolved',
@@ -2219,20 +2228,20 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('equirect-projection-failed error class shape', () => {
     it('has .code === equirect-projection-failed', async () => {
-      const { EquirectProjectionFailedError } = await import('../errors');
+      const { EquirectProjectionFailedError } = await import('../errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err.code).toBe('equirect-projection-failed');
     });
 
     it('exposes .detail.handle === the constructor argument', async () => {
-      const { EquirectProjectionFailedError } = await import('../errors');
+      const { EquirectProjectionFailedError } = await import('../errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err.detail).toBeDefined();
       expect(err.detail.handle).toBe(42);
     });
 
     it('exposes non-empty .hint with actionable guidance', async () => {
-      const { EquirectProjectionFailedError } = await import('../errors');
+      const { EquirectProjectionFailedError } = await import('../errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err.hint).toBeDefined();
       expect(typeof err.hint).toBe('string');
@@ -2240,7 +2249,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('exposes .expected describing expected state', async () => {
-      const { EquirectProjectionFailedError } = await import('../errors');
+      const { EquirectProjectionFailedError } = await import('../errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err.expected).toBeDefined();
       expect(typeof err.expected).toBe('string');
@@ -2248,7 +2257,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('extends Error so it can be thrown and caught', async () => {
-      const { EquirectProjectionFailedError } = await import('../errors');
+      const { EquirectProjectionFailedError } = await import('../errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('EquirectProjectionFailedError');
@@ -2260,7 +2269,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // The actual TS union membership is verified by typecheck: if
       // 'equirect-projection-failed' is not in RuntimeErrorCode, no expression
       // can assign err.code to a RuntimeErrorCode-typed variable.
-      const { EquirectProjectionFailedError } = await import('../errors');
+      const { EquirectProjectionFailedError } = await import('../errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err.code).toBe('equirect-projection-failed');
     });
@@ -2272,7 +2281,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // the equirect handle, it binds the white-cube fallback and fires this
       // structured error ONCE (it does not retry; R-2/AC-09). The record-stage
       // integration is covered by the M3 lazy-projection tests + smoke gate.
-      const { EquirectProjectionFailedError } = await import('../errors');
+      const { EquirectProjectionFailedError } = await import('../errors/render');
       const err = new EquirectProjectionFailedError(42);
       expect(err.code).toBe('equirect-projection-failed');
       expect(err.detail.handle).toBe(42);
@@ -2817,8 +2826,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         fileURLToPath: (u: string) => string;
       };
       const here = url.fileURLToPath(import.meta.url);
-      const filePath = pathMod.resolve(pathMod.dirname(here), '..', 'render-system-record.ts');
-      const source = fs.readFileSync(filePath, 'utf8');
+      // feat-20260704 M5/w31: main-pass draw code split across main-pass.ts +
+      // main-pass-geometry.ts + main-pass-sprite-draws.ts; scan the set.
+      const recordDir = pathMod.resolve(pathMod.dirname(here), '..', 'record');
+      const source = ['main-pass.ts', 'main-pass-geometry.ts', 'main-pass-sprite-draws.ts']
+        .map((name) => fs.readFileSync(pathMod.resolve(recordDir, name), 'utf8'))
+        .join('\n');
       // Match either `setBindGroup(4, ...)` or `setBindGroup( 4 ,`.
       const matches = source.match(/setBindGroup\s*\(\s*4\b/g);
       expect(matches).toBeNull();
@@ -2839,8 +2852,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         fileURLToPath: (u: string) => string;
       };
       const here = url.fileURLToPath(import.meta.url);
-      const filePath = pathMod.resolve(pathMod.dirname(here), '..', 'render-system-record.ts');
-      const source = fs.readFileSync(filePath, 'utf8');
+      // feat-20260704 M5/w31: main-pass draw code split across main-pass.ts +
+      // main-pass-geometry.ts + main-pass-sprite-draws.ts; scan the set.
+      const recordDir = pathMod.resolve(pathMod.dirname(here), '..', 'record');
+      const source = ['main-pass.ts', 'main-pass-geometry.ts', 'main-pass-sprite-draws.ts']
+        .map((name) => fs.readFileSync(pathMod.resolve(recordDir, name), 'utf8'))
+        .join('\n');
       // Confirm the PBR drawCall binds material BG at slot 1. Post
       // bug-20260522, the variable name changed from `materialBindGroup`
       // to `perSubmeshBg` (rename anticipates M4 per-submesh BG construction;
@@ -3686,7 +3703,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const internals = makeRecorderInternals(log);
       const ps = makePipelineState(internals as never, false);
       (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
-      const { recordFrame } = await import('../render-system-record');
+      const { recordFrame } = await import('../record');
       const cameras = [makeCamera('none')];
       recordFrame(
         internals as never,
@@ -3787,7 +3804,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     }
 
     it('despawned key (not in validated set): recordFrame destroys GpuBuffer + deletes Map entry', async () => {
-      const { recordFrame } = await import('../render-system-record');
+      const { recordFrame } = await import('../record');
       const { GpuBuffer } = await import('../gpu-resource');
       const { err: rhiErrFn, RhiError: RhiErrorCtor } = await import('@forgeax/engine-rhi');
       const { device: bufDev, destroyedHandles } = makeBufRecorderDevice(
@@ -3859,7 +3876,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('isDestroyed dedup: a pre-destroyed orphan is not double-destroyed (still removed)', async () => {
-      const { recordFrame } = await import('../render-system-record');
+      const { recordFrame } = await import('../record');
       const { GpuBuffer } = await import('../gpu-resource');
       const { err: rhiErrFn, RhiError: RhiErrorCtor } = await import('@forgeax/engine-rhi');
       const { device: bufDev, destroyedHandles } = makeBufRecorderDevice(
@@ -8926,7 +8943,7 @@ type ExtractFrameWithPipeline = (
 {
   describe('feat-20260612 M3 / m3-1: record dynOffset[1] real value + skin BG cache stats', () => {
     it('_computeSkinGroup2DynOffsets returns group2DynamicOffsets[1] === byteOffset for skin entries; length 1 otherwise (m3-1a)', async () => {
-      const recordModule = (await import('../render-system-record')) as {
+      const recordModule = (await import('../record')) as {
         _computeSkinGroup2DynOffsets?: (
           meshSlotIdx: number,
           skinByteOffset: number | undefined,
@@ -8973,7 +8990,7 @@ type ExtractFrameWithPipeline = (
     });
 
     it('skin BG cache dedups by buffer identity: N=3 lookups -> miss=1 + hit=2 (m3-1b)', async () => {
-      const recordModule = (await import('../render-system-record')) as {
+      const recordModule = (await import('../record')) as {
         getOrCreateFromChain: (
           root: WeakMap<object, unknown>,
           handles: readonly object[],

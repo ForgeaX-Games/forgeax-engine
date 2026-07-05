@@ -28,53 +28,85 @@ import { createRenderer as _createRendererForEngineAlias } from './createRendere
 export { acquireCanvasContext } from '@forgeax/engine-rhi-webgpu';
 export type { BundlerOptions } from './createRenderer';
 export { createRenderer } from './createRenderer';
+
+// feat-20260704-runtime-tier1-decomposition M2 / w10 (D-3 / D-9): the top-level
+// RuntimeError / RuntimeErrorCode cross-cluster aggregates are ELIMINATED. Each
+// error cluster's closed *ErrorCode + *Error union is re-exported so external
+// consumers `import type` the cluster union and write exhaustive `switch
+// (err.code)` (AC-07 a/b). Every re-export sources directly from
+// ./errors/<cluster> (NOT the transitional errors.ts barrel, deleted in w15;
+// NOT the @forgeax/engine-types zombie RuntimeErrorCode -- D-9).
+
+// -- asset cluster --
 export type {
-  EquirectProjectionFailedDetail,
+  AssetRuntimeError,
+  AssetRuntimeErrorCode,
   MaterialResolvedEmptyPassesDetail,
-  MaterialSkinAttrMissingDetail,
-  // feat-20260621-renderer-health-recover-skeleton verify minor-edit:
-  // closed RecoverErrorCode union re-exported so AI users `switch (err.code)`
-  // exhaustively on the recover() failure result (peer to RuntimeErrorCode).
-  RecoverErrorCode,
-  RuntimeError,
-  RuntimeErrorCode,
   // feat-20260701-rootstosceneasset verify minor-edit (F1): scene-collect
   // error detail types re-exported so AI users narrow `.detail` per `.code`.
   SceneCollectAssetGuidUnresolvedDetail,
   SceneCollectEntityRefOutOfClosureDetail,
-  ShadowInvalidConfigDetail,
-  SkinMaterialMismatchDetail,
-} from './errors';
+} from './errors/asset';
 export {
-  EngineEnvironmentError,
+  MaterialResolvedEmptyPassesError,
+  // feat-20260701-rootstosceneasset verify minor-edit (F1): scene-collect
+  // fail-fast error classes re-exported so AI users `instanceof` them when
+  // rootsToSceneAsset / serializeSceneAssetToPack return err.
+  SceneCollectAssetGuidUnresolvedError,
+  SceneCollectEntityRefOutOfClosureError,
+} from './errors/asset';
+// -- environment cluster --
+export { EngineEnvironmentError } from './errors/environment';
+// -- recover cluster --
+export type {
+  // feat-20260621-renderer-health-recover-skeleton verify minor-edit:
+  // closed RecoverErrorCode union re-exported so AI users `switch (err.code)`
+  // exhaustively on the recover() failure result.
+  RecoverErrorCode,
+} from './errors/recover';
+export {
+  // RecoverError class re-exported so AI users `instanceof RecoverError` the
+  // recover() failure (peer convention to SkinMaterialMismatchError etc.).
+  RecoverError,
+} from './errors/recover';
+// -- render cluster --
+export type {
+  EquirectProjectionFailedDetail,
+  RenderError,
+  RenderErrorCode,
+  ShadowInvalidConfigDetail,
+} from './errors/render';
+export {
   EquirectProjectionFailedError,
+  HdrpCapsInsufficientError,
+  HdrpIndexListOverflowError,
+  HdrpLightBudgetExceededError,
+  PointShadowAtlasBoundsViolationError,
+  PointShadowAtlasUninitializedError,
+  ShadowInvalidConfigError,
+  // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability
+  // double-miss error class (instanceof + .code/.hint property access).
+  VideoUploadUnsupportedError,
+} from './errors/render';
+// -- skin cluster --
+export type {
+  MaterialSkinAttrMissingDetail,
+  SkinError,
+  SkinErrorCode,
+  SkinMaterialMismatchDetail,
+} from './errors/skin';
+export {
   // feat-20260612-skin-palette-per-frame-upload M2 / m2-5: SkinExtractErrorCode
   // subset union (3 new extract-stage classes) + M2 fixup post-spawn fail-fast.
   // Re-exported so AI users can `instanceof JointCountMismatchError` etc. per
   // the convention established by SkinMaterialMismatchError / MaterialSkinAttrMissingError.
   JointCountMismatchError,
   JointEntityDanglingError,
-  MaterialResolvedEmptyPassesError,
   MaterialSkinAttrMissingError,
-  PointShadowAtlasBoundsViolationError,
-  PointShadowAtlasUninitializedError,
-  // feat-20260621-renderer-health-recover-skeleton verify minor-edit:
-  // RecoverError class re-exported so AI users `instanceof RecoverError` the
-  // recover() failure (peer convention to SkinMaterialMismatchError etc.).
-  RecoverError,
-  // feat-20260701-rootstosceneasset verify minor-edit (F1): scene-collect
-  // fail-fast error classes re-exported so AI users `instanceof` them when
-  // rootsToSceneAsset / serializeSceneAssetToPack return err.
-  SceneCollectAssetGuidUnresolvedError,
-  SceneCollectEntityRefOutOfClosureError,
-  ShadowInvalidConfigError,
   SkeletonResolveFailedError,
   SkinMaterialMismatchError,
   SkinPaletteOverflowError,
-  // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability
-  // double-miss error class (instanceof + .code/.hint property access).
-  VideoUploadUnsupportedError,
-} from './errors';
+} from './errors/skin';
 
 /**
  * `Engine` namespace alias for `createRenderer` (w55 round 2 fix-up F-3
@@ -126,6 +158,10 @@ export type {
   HealthSnapshot,
   Renderer,
   RendererBackend,
+  // feat-20260704-runtime-tier1-decomposition M2 / w11 (D-4): the onError
+  // fan-out channel wire contract, composed from the cluster unions. External
+  // consumers import this to type their onError listener + derive AppDispatchError.
+  RendererError,
   RendererLostInfo,
   RendererLostListener,
   RendererOptions,
@@ -395,36 +431,6 @@ export { createDevImportTransport } from './dev-import-transport';
  */
 export type { EngineMetrics } from './engine-metrics';
 export { createEngineMetrics } from './engine-metrics';
-/**
- * Procedural geometry factories (M3 / D-P5 / w8).
- *
- * Six Three.js-r184-aligned factories (`createBoxGeometry` /
- * `createSphereGeometry` / `createPlaneGeometry` / `createCylinderGeometry` /
- * `createConeGeometry` / `createTorusGeometry`), each returning
- * `Result<MeshAsset, AssetError>` with `asset-parse-failed` for degenerate
- * inputs (charter proposition 1 progressive disclosure + proposition 4
- * explicit failure).
- *
- * README §M3 + requirements §AC-06 / §AC-14 / §AC-15 / §AC-16 + plan-strategy
- * §7.4 promise a single-line import from the top-level barrel:
- *
- * @example
- *   import { createBoxGeometry, AssetRegistry } from '@forgeax/engine-runtime';
- *   const meshRes = createBoxGeometry(1, 1, 1, 2, 2, 2);
- *
- * The SSOT lives in `./geometry/*.ts`; this is a thin re-export. A parallel
- * subpath entry `@forgeax/engine-runtime/geometry` is also exposed via
- * `package.json#exports` for AI users that want the namespace form.
- */
-export {
-  createBoxGeometry,
-  createConeGeometry,
-  createCylinderGeometry,
-  createPlaneGeometry,
-  createSphereGeometry,
-  createTorusGeometry,
-  meshFromInterleaved,
-} from './geometry';
 export {
   FloatsPerGlyphVertex,
   FONT_CONCURRENCY_LIMIT,
@@ -681,11 +687,11 @@ export { rootsToSceneAsset, serializeSceneAssetToPack } from './collect-scene-as
 // never rendered). One barrel entry => one module copy => one registry shared by
 // createDebugDrawOnReady (the writer) and attachDebugOverlayPass (the reader).
 export { attachDebugOverlayPass, createDebugDrawOnReady } from './debug-draw-glue';
-export {
-  HdrpCapsInsufficientError,
-  HdrpIndexListOverflowError,
-  HdrpLightBudgetExceededError,
-} from './errors';
+// feat-20260704-runtime-tier1-decomposition M2 / w10 (D-3): the third error
+// re-export block (HdrpCapsInsufficientError / HdrpIndexListOverflowError /
+// HdrpLightBudgetExceededError) is folded into the render-cluster class
+// re-export block above -- they are render-cluster members sourced from
+// ./errors/render.
 // feat-20260608-cluster-lighting M2 / w10 + verify F-1/F-2: HDRP cluster-forward
 // pipeline exports — full barrel surface (4 error classes + 4 sizing constants
 // + pipeline + grid validator).

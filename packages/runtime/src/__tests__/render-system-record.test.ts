@@ -23,10 +23,10 @@ import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
 import { SpriteRegionOverride } from '../components/sprite-region-override';
 import { createEngineMetrics } from '../engine-metrics';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../materials';
+import * as recordModule from '../record';
+import { detectNineSliceScaleTooSmall, isLitMaterialSnapshot } from '../record';
 import type { DispatchEntry } from '../render-system-extract';
 import { extractFrame, type MaterialSnapshot } from '../render-system-extract';
-import * as recordModule from '../render-system-record';
-import { detectNineSliceScaleTooSmall, isLitMaterialSnapshot } from '../render-system-record';
 import { propagateTransforms } from '../systems/propagate-transforms';
 
 // ─── from render-system-record-pbr-ubo-stable.test.ts ───

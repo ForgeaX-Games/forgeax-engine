@@ -95,10 +95,6 @@ import {
 import { getOrCreateSsaoFallbackTexture } from './hdrp-buffers';
 import { buildBeginRenderPassDescriptor } from './pipeline-spec';
 import { PostProcessError } from './post-process-errors';
-import type {
-  _InternalRenderPipelineContext,
-  RenderPipelineContext,
-} from './render-pipeline-context';
 import {
   computeProjectionMatrix,
   computeViewMatrix,
@@ -112,7 +108,11 @@ import {
   recordShadowPass,
   recordSkyboxPass,
   recordSpotShadowPass,
-} from './render-system-record';
+} from './record';
+import type {
+  _InternalRenderPipelineContext,
+  RenderPipelineContext,
+} from './render-pipeline-context';
 import { getOrCreateSsaoBuffers } from './ssao-buffers';
 
 /**

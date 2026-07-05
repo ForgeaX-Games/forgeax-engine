@@ -16,7 +16,6 @@ import { World } from '@forgeax/engine-ecs';
 import {
   acquireCanvasContext,
   Camera,
-  createPlaneGeometry,
   createRenderer,
   EngineEnvironmentError,
   MeshFilter,
@@ -25,6 +24,7 @@ import {
   perspective,
   Transform,
 } from '@forgeax/engine-runtime';
+import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 

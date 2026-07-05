@@ -144,16 +144,16 @@ import {
   tonemapFromF32,
   tonemapToU32,
 } from './components/camera';
+import { MaterialResolvedEmptyPassesError } from './errors/asset';
+import { ShadowInvalidConfigError } from './errors/render';
 import {
   JointCountMismatchError,
   JointEntityDanglingError,
-  MaterialResolvedEmptyPassesError,
   MaterialSkinAttrMissingError,
-  ShadowInvalidConfigError,
   SkeletonResolveFailedError,
   SkinInstancesCoexistForbiddenError,
   SkinMaterialMismatchError,
-} from './errors';
+} from './errors/skin';
 import { computeInvRangeSquared, degToCos } from './light-helpers';
 import { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from './resolve-asset-handle';
 import { getActiveCamera, selectActiveCameraIndex } from './systems/active-camera';

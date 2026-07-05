@@ -14,7 +14,7 @@
 // surface as the shadow fields merged into DirectionalLight (feat-20260621 M1).
 
 import { defineComponent } from '@forgeax/engine-ecs';
-import { ShadowInvalidConfigError } from '../errors';
+import { ShadowInvalidConfigError } from '../errors/render';
 
 /**
  * Omnidirectional point-light shadow mapping parameters.

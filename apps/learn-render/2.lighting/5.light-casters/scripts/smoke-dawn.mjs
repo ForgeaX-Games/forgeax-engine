@@ -231,9 +231,9 @@ const mockCanvas = {
 
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
+const { createPlaneGeometry } = await import('@forgeax/engine-geometry');
 const {
   Camera,
-  createPlaneGeometry,
   createRenderer,
   DirectionalLight,
   HANDLE_CUBE,

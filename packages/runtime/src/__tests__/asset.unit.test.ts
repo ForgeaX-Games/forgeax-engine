@@ -46,6 +46,11 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineComponent, World } from '@forgeax/engine-ecs';
+import {
+  createBoxGeometry,
+  createPlaneGeometry,
+  meshFromInterleaved,
+} from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { ok, ok as rhiOk } from '@forgeax/engine-rhi';
 import { ShaderRegistry } from '@forgeax/engine-shader';
@@ -81,8 +86,6 @@ import {
 import { BUILTIN_FLOATS_PER_VERTEX } from '../builtin-asset-registry';
 import { createDevImportTransport, type ImportTransport } from '../dev-import-transport';
 import { createEngineMetrics } from '../engine-metrics';
-import { createBoxGeometry, meshFromInterleaved } from '../geometry/box';
-import { createPlaneGeometry } from '../geometry/plane';
 import { GpuResourceStore } from '../gpu-resource-store';
 import { LoaderRegistry } from '../loader-registry';
 import { getOrCreateMipmapPipeline, mipmapCacheSize, numMipLevels } from '../mipmap-generator';
@@ -2287,7 +2290,7 @@ function makeStubGPU(): unknown {
       spies.rhiWgpuEnsureReadyShould = 'reject-load-failed';
 
       const { createRenderer } = await import('../createRenderer');
-      const { EngineEnvironmentError } = await import('../errors');
+      const { EngineEnvironmentError } = await import('../errors/environment');
 
       await expect(createRenderer(canvas)).rejects.toBeInstanceOf(EngineEnvironmentError);
     });
@@ -2514,7 +2517,7 @@ function makeStubGPU(): unknown {
       vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeStubGPU() });
       const canvas = makeMockCanvas({ webgpu: 'null', webgl2: 'null' }); // canvas.getContext('webgpu') returns null
       const { createRenderer } = await import('../createRenderer');
-      const { EngineEnvironmentError } = await import('../errors');
+      const { EngineEnvironmentError } = await import('../errors/environment');
 
       try {
         await createRenderer(canvas);
@@ -2548,7 +2551,7 @@ function makeStubGPU(): unknown {
       const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'null' });
 
       const { createRenderer } = await import('../createRenderer');
-      const { EngineEnvironmentError } = await import('../errors');
+      const { EngineEnvironmentError } = await import('../errors/environment');
 
       await expect(createRenderer(canvas)).rejects.toBeInstanceOf(EngineEnvironmentError);
 
@@ -7185,7 +7188,7 @@ function makeStubGPU(): unknown {
       const canvas = makeMockCanvas({ webgl2: 'null' });
 
       const { createRenderer } = await import('../createRenderer');
-      const { EngineEnvironmentError } = await import('../errors');
+      const { EngineEnvironmentError } = await import('../errors/environment');
 
       let caught: unknown;
       try {
@@ -7206,7 +7209,7 @@ function makeStubGPU(): unknown {
     });
 
     it('EngineEnvironmentError.detail is always present (even when webgpuError is undefined)', async () => {
-      const { EngineEnvironmentError } = await import('../errors');
+      const { EngineEnvironmentError } = await import('../errors/environment');
       const e = new EngineEnvironmentError('test reason');
       expect(e.detail).toBeDefined();
       expect(e.detail.webgpuError).toBeUndefined();

@@ -14,7 +14,7 @@
 
 import type { Result } from '@forgeax/engine-rhi';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RecoverError, type RecoverErrorCode } from '../errors';
+import { RecoverError, type RecoverErrorCode } from '../errors/recover';
 import {
   deriveRecoverable,
   type HealthChangeListener,

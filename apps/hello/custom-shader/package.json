@@ -42,6 +42,7 @@
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-math": "workspace:*"
   },
   "devDependencies": {

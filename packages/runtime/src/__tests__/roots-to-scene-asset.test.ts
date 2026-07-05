@@ -19,7 +19,7 @@ import { Children } from '../components/children';
 import {
   SceneCollectAssetGuidUnresolvedError,
   SceneCollectEntityRefOutOfClosureError,
-} from '../errors';
+} from '../errors/asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ═══════════════════════════════════════════════════════════════════════════════

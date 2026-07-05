@@ -35,7 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const EXTRACT_SRC = fileURLToPath(new URL('../render-system-extract.ts', import.meta.url));
-const RECORD_SRC = fileURLToPath(new URL('../render-system-record.ts', import.meta.url));
+const RECORD_SRC = fileURLToPath(new URL('../record/main-pass-material.ts', import.meta.url));
 
 const USER_REGION_FIELDS = [
   'baseColorTexture',

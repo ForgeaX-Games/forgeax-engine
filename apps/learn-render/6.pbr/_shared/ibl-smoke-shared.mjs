@@ -157,10 +157,10 @@ export async function runIblSmoke(opts) {
 
   // --- 3. Engine + manifest ---
   const { World } = await import('@forgeax/engine-ecs');
+  const { createSphereGeometry } = await import('@forgeax/engine-geometry');
   const {
     Camera,
     createRenderer,
-    createSphereGeometry,
     MeshFilter,
     MeshRenderer,
     SKYBOX_MODE_CUBEMAP,

@@ -34,7 +34,7 @@
 // pre-multiplication).
 
 import { defineComponent, SpawnLightInvalidBoundsError } from '@forgeax/engine-ecs';
-import { ShadowInvalidConfigError } from '../errors';
+import { ShadowInvalidConfigError } from '../errors/render';
 
 /**
  * Cone-restricted spot light (KHR_lights_punctual `spot` type).  Casts shadows

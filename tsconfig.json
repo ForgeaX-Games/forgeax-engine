@@ -12,6 +12,9 @@
       "path": "./packages/ecs"
     },
     {
+      "path": "./packages/geometry"
+    },
+    {
       "path": "./packages/input"
     },
     {

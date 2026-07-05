@@ -24,12 +24,12 @@
 // + GPU-resource accounting that feeds the record stage.
 
 import { World } from '@forgeax/engine-ecs';
+import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { mat4 } from '@forgeax/engine-math';
 import { ok } from '@forgeax/engine-rhi';
 import type { EquirectAsset, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { BUILTIN_FLOATS_PER_VERTEX } from '../../builtin-asset-registry';
-import { createBoxGeometry } from '../../geometry/box';
 import { GpuResourceStore } from '../../gpu-resource-store';
 
 const mockCaps = {

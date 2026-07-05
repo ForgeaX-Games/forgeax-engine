@@ -10,9 +10,9 @@
 //
 // RED at this commit: deriveVertexBufferLayout has no uv1..uv7 keys.
 
+import { deriveVertexBufferLayout } from '@forgeax/engine-geometry';
 import type { VertexAttributeMap } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { deriveVertexBufferLayout } from '../vertex-attribute-layout';
 
 function makeBuffer(len: number): Float32Array {
   return new Float32Array(len);

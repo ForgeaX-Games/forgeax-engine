@@ -60,10 +60,9 @@ import {
   createDebugDrawOnReady,
   createRenderer,
   EngineEnvironmentError,
-  type PostProcessError,
   PROPAGATE_TRANSFORMS_SYSTEM,
   type Renderer,
-  type RuntimeError,
+  type RendererError,
   Transform,
   timePlugin,
   transformPlugin,
@@ -880,7 +879,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     if (rendererUnsubscribe !== undefined) {
       return;
     }
-    rendererUnsubscribe = renderer.onError((e: RhiError | RuntimeError | PostProcessError) => {
+    rendererUnsubscribe = renderer.onError((e: RendererError) => {
       // D-3: device-lost stays in RhiError 18-member union; AppError does
       // NOT add 'app-device-lost'. The host onError listener receives the
       // error verbatim through the fanout dispatch below.

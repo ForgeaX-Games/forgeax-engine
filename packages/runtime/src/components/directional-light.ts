@@ -27,7 +27,7 @@
 // component and its cardinality bound are deleted in m1-t6.
 
 import { defineComponent } from '@forgeax/engine-ecs';
-import { ShadowInvalidConfigError } from '../errors';
+import { ShadowInvalidConfigError } from '../errors/render';
 
 /**
  * Directional light (sun-like infinite light source) with merged shadow

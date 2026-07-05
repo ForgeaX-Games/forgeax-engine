@@ -7,7 +7,8 @@
 //     forbidden elsewhere in packages/runtime/src/
 //
 //   Gate B (beginRenderPass\b allowlist):
-//     allowed in: render-system-record.ts (helper), mipmap-generator.ts,
+//     allowed in: record/main-pass.ts, record/shadow-pass.ts,
+//                 record/skybox-post-pass.ts, mipmap-generator.ts,
 //                 ibl/IblPipelineCache.ts
 //     forbidden elsewhere in packages/runtime/src/
 //

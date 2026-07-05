@@ -25,6 +25,7 @@
 // `navigator` directly; it never touches `window` or `document`.
 
 import type { World } from '@forgeax/engine-ecs';
+import { deriveVertexBufferLayout } from '@forgeax/engine-geometry';
 import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type {
@@ -80,12 +81,9 @@ import { BuiltinAssetRegistry } from './builtin-asset-registry';
 import { classifyEnvErrorReason, composeEnvErrorHint } from './create-renderer-env-classify';
 import { DynamicTextureStore } from './dynamic-texture-store';
 import { createEngineMetrics } from './engine-metrics';
-import {
-  EngineEnvironmentError,
-  MeshSsboCapacityExceededError,
-  MeshSsboCeilingReachedError,
-  RecoverError,
-} from './errors';
+import { MeshSsboCapacityExceededError, MeshSsboCeilingReachedError } from './errors/asset';
+import { EngineEnvironmentError } from './errors/environment';
+import { RecoverError } from './errors/recover';
 import type { PostProcessShaderEntry } from './fullscreen-post-process-pass';
 import { glyphTextLayoutSystem } from './glyph-text-layout-system';
 import { GpuBuffer } from './gpu-resource';
@@ -160,7 +158,6 @@ import {
 // hand-driving the system (charter F1 progressive disclosure).
 import { tilemapChunkExtractSystem } from './tilemap-chunk-extract-system';
 import { URP_PIPELINE_ID, urpPipeline } from './urp-pipeline';
-import { deriveVertexBufferLayout } from './vertex-attribute-layout';
 
 // Re-export registerAdvanceAnimationPlayer so consumers can wire it.
 // Re-export registerPropagateTransforms so consumers can wire the

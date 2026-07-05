@@ -2,6 +2,17 @@
 
 > **本包是 forgeax-engine 的 Renderer + Backend 异步工厂入口**——对齐 K-4 公共 surface（`createRenderer(canvas, options?)` / `Renderer` / `EngineEnvironmentError`），约束 backend 内部模块通过 `package.json#exports` 锁定（`./internal/*: null`）；不暴露 ECS / 资源管理 / 渲染图等上层 surface（M3 范围）。
 
+> [!NOTE]
+> **Source layout (feat-20260704-runtime-tier1-decomposition M1-M3)**:
+> - **geometry** -- moved to `@forgeax/engine-geometry` leaf package; no longer under `packages/runtime/src/geometry/`
+> - **errors** -- split into 5 per-cluster files under `src/errors/`:
+>   `render.ts` (RenderError / RenderErrorCode, 12 error classes) |
+>   `asset.ts` (AssetRuntimeError / AssetRuntimeErrorCode, 5) |
+>   `skin.ts` (SkinError / SkinErrorCode + SkinExtractErrorCode, 10) |
+>   `recover.ts` (RecoverError / RecoverErrorCode, 1 class) |
+>   `environment.ts` (EngineEnvironmentError, constructor-time throw). The old top-level `RuntimeErrorCode` / `RuntimeError` aggregates are eliminated. See error class source SSOT for exhaustive `switch`.
+> - **record** -- split from the monolithic `render-system-record.ts` into `src/record/` (16 files: `frame.ts`, `frame-lighting.ts`, `frame-targets.ts`, `frame-snapshot.ts`, `view-ubo.ts`, `main-pass.ts`, `main-pass-geometry.ts`, `main-pass-material.ts`, `main-pass-sprite.ts`, `main-pass-sprite-draws.ts`, `main-pass-skin.ts`, `shadow-pass.ts`, `skybox-post-pass.ts`, `mesh-ssbo.ts`, `helpers.ts`, `index.ts` barrel — every function <=500 lines, every file <=1500). Use the barrel `import { recordFrame } from './record'` for the public surface; test files import specific helpers from `./record/helpers` etc.
+
 > [!CAUTION]
 > **shader 选型命题（feat-20260518-pbr-direct-lighting-mvp / AC-17 + feat-20260519-light-casters-point-spot-pbr / AC-11）**——用 `Materials.standard(...)`（shader `forgeax::default-standard-pbr`）走 GGX direct lighting (`D_GGX × V_SmithCorrelated × F_Schlick + Lambert/π`)，**0 个灯光（directional + point + spot 合计 0）时输出全黑**——此为物理正确而非渲染 bug。standard-pbr 路径需 `directional + point + spot 合计 ≥ 1`；任一种类的一盏灯即可。`Materials.unlit(...)`（shader `forgeax::default-unlit`）才是"不管灯光"的入口（`baseColor × baseColorTexture` 直出）。新写 demo 选 standard-pbr shader 必须**同步 spawn 至少一盏 DirectionalLight / PointLight / SpotLight**，否则黑屏；末尾兜底见 §Common pitfalls。
 >
@@ -46,7 +57,7 @@ const right = mat4.getRight(vec3.create(), worldMat);     // +X basis
 | `Renderer.readPixels()` | `() => Promise<Result<Uint8Array, RhiError>>` | Canvas pixel readback as top-left RGBA `Uint8Array` (length = `canvas.width * canvas.height * 4`); browser path uses `createImageBitmap -> OffscreenCanvas 2D drawImage -> getImageData` (WebGPU `GPUTexture` does not expose `getImageData`; 2D bounce is the browser lowest-common-denominator path); OffscreenCanvas / 2D ctx unavailable / `createImageBitmap` throws returns `'webgpu-runtime-error'` + `detail.error: RhiError | { code: unknown, message: string }`; dawn-node smoke path uses raw RHI (`device.queue.copyTextureToBuffer + mapAsync`) |
 | `Renderer.dispose()` | `() => void` | **@placeholder M2/M3**: unbinds lost / error listeners + flips disposed flag; GPU resources reclaimed by `device.lost` / browser GC (explicit `device.destroy()` path in a follow-up); idempotent |
 | `Renderer.onLost(cb)` | `(RendererLostListener) => () => void` | device-lost notify (R-2, engine does not auto-recover) |
-| `Renderer.onError(cb)` | `(RhiErrorListener) => () => void` | RHI construction / operation error fan-out (F2 + K-9 silent skip fix reuse): backend RhiError + runtime catch (`'webgpu-runtime-error'`) reach AI users via listener; access `.code` / `.expected` / `.hint` / `.detail.compilerMessages`. See error-handling 6-member table + listener pattern. |
+| `Renderer.onError(cb)` | `(RendererErrorListener) => () => void` | RHI construction / operation error fan-out (F2 + K-9 silent skip fix reuse): backend RhiError + runtime catch (`'webgpu-runtime-error'`) reach AI users via listener; access `.code` / `.expected` / `.hint` / `.detail.compilerMessages`. See error-handling 6-member table + listener pattern. |
 | `Renderer.health()` | `() => HealthSnapshot` | Pull current health snapshot — `reason` (discriminant), `detail?` (per-reason narrowed), `recoverable` (derived boolean). Data SSOT from `HealthListenerRegistry.getLastSnapshot()`. |
 | `Renderer.recover()` | `() => Promise<Result<void, RecoverError>>` | Imperative single-shot device rebuild. In `'device-lost'` state: destroys all GPU resources, clears pendingDestroy, rebuilds device, re-wires listeners, rebuilds shader/pipeline, reconfigures canvas context. Returns `Result.ok` + fires `'alive'` on success; returns `Result.err` with discriminable `.code` on failure (adapter/device two-path). Async because `requestAdapter`/`requestDevice` is async. Call in `'alive'` state returns `'recover-not-needed'` (safe no-op). |
 | `Renderer.onHealthChange(cb)` | `(HealthChangeListener) => () => void` | Push-style health subscription; returns unsubscribe. Late-attach replay fires cb immediately if a snapshot has already been emitted (AC-07). |
@@ -342,7 +353,7 @@ pnpm bench:pixel-parity                                  # AC-13 HDRP cluster fo
 | Gate | 限定 token | Allowlist |
 |:--|:--|:--|
 | A | `createRenderPipeline\b` | `pipeline-spec.ts` · `mipmap-generator.ts` · `ibl/IblPipelineCache.ts` |
-| B | `beginRenderPass\b` | `render-system-record.ts` · `mipmap-generator.ts` · `ibl/IblPipelineCache.ts` |
+| B | `beginRenderPass\b` | `record/main-pass.ts` · `mipmap-generator.ts` · `ibl/IblPipelineCache.ts` |
 | C | `materialShaderPipelineCacheKey` | 无（M2-T2 supersedes via `cacheKeyOf`） |
 
 > [!NOTE]
@@ -424,7 +435,7 @@ g-buffer = 3 color RT + hardware depth：
 
 `PassKind` 是 4 值 closed union（`'forward' | 'deferred' | 'lighting' | 'shadow-caster'`），在 `ShaderPass.passKind` 字段消费。`Materials.standard(...)` 自动产出 3 条 `ShaderPass`（deferred / forward / shadow-caster），AI 用户无需手动声明 pass。手写 `MaterialAsset` 字面量时如仅声明 `passKind='forward'` 单 pass，opaque 几何在 forward pass 渲染（不走 g-buffer）-- 视觉等价但路径不同。显式补 `passKind='deferred'` pass 可让该 material 参与 g-buffer 写入。
 
-**错误码兜底**：HDRP 安装时检查 `Device.caps.maxColorAttachments < 4` ⇒ throw `RuntimeErrorCode='hdrp-deferred-caps-insufficient'`（charter P3 显式失败，不做隐式降级）。`.hint` 含升级指引。
+**错误码兜底**：HDRP 安装时检查 `Device.caps.maxColorAttachments < 4` ⇒ throw `RenderError` with code `'hdrp-deferred-caps-insufficient'`（charter P3 显式失败，不做隐式降级）。`.hint` 含升级指引。
 
 ### SSAO (Screen-Space Ambient Occlusion)
 
@@ -1180,7 +1191,7 @@ flowchart LR
     REC --> WGSL["pbr-skin.wgsl<br/>palette[skinIndex] * weight"]
 ```
 
-**SSOT**：`packages/runtime/src/systems/skin-palette-allocator.ts`（API）；`packages/runtime/src/render-system-extract.ts` `hasSkin` 段（per-entity allocate + writeJointPalette）；`packages/runtime/src/render-system-record.ts` `group2DynamicOffsets[1]` 写法。引 PR #TBD（finalize 后 backfill）。
+**SSOT**：`packages/runtime/src/systems/skin-palette-allocator.ts`（API）；`packages/runtime/src/render-system-extract.ts` `hasSkin` 段（per-entity allocate + writeJointPalette）；`packages/runtime/src/record/` cluster `group2DynamicOffsets[1]` 写法。引 PR #TBD（finalize 后 backfill）。
 
 ### Skin 实体 Transform 契约 (post-bug-20260615)
 
@@ -1371,7 +1382,7 @@ See [.forgeax-harness/knowledge-base/wiki/learnopengl-as-evolution-roadmap.md](.
 | `farPlane` | 25 | Cube perspective far plane | `> nearPlane` (validate fails otherwise) |
 | `pcfKernelSize` | 3 | PCF kernel size (odd >= 1). Note: point shadows use hardware 2x2 PCF, so this field does not affect the point-light tap count (the dynamic kernel lands on directional shadows only) | `odd, >= 1` |
 
-`PointLightShadow.validate()` emits `ShadowInvalidConfigError` (`RuntimeErrorCode 'shadow-invalid-config'`, shared with `DirectionalLight.validate()`) on `mapSize < 1` or `farPlane <= nearPlane`. The closed `RuntimeErrorCode` union is unchanged -- point shadows reuse the directional surface (charter P4 closed-union SSOT).
+`PointLightShadow.validate()` emits `ShadowInvalidConfigError` (code `'shadow-invalid-config'`, shared with `DirectionalLight.validate()`) on `mapSize < 1` or `farPlane <= nearPlane`. The error is in the `render` errors cluster (`RenderErrorCode` closed union).
 
 #### URP vs HDRP atlas binding contract
 
@@ -1884,7 +1895,7 @@ Legacy 4-field rows (non-texture / future arms) stay valid; `metadata === undefi
 > feat-20260511-asset-system-v1 / M5 / D-P4 + feat-20260513-component-naming-bevy-align M3 / D-2 + feat-20260517-merge-mesh-renderer-material-renderer / decision §2.1-§2.5 + feat-20260526-material-asset-multipass-renderstate / D-1 — `MaterialAsset` single pass-based interface + 单 `MeshRenderer` component + per-pass shader-identity dispatch（`passes[].shader` 标识符即 discriminant）。
 
 > [!IMPORTANT]
-> **`paramSchema` 是单一 SSOT；BGL / UBO / loader 三件套均由 `derive(paramSchema)` 派生**（feat-20260613-material-paramschema-driven-binding M3 / w12-w16）。`MaterialShaderEntry.bindingLayout` 字段已删；`MATERIAL_UBO_BYTES = 80` 常量已删；`MATERIAL_PARAM_TEXTURE_FIELDS` Set 常量已删。registerMaterialShader / render-system-record / material-loader 三处都调 `derive(schema)` 拿 `{ bglEntries, uboLayout, textureFieldNames, samplerForTexture, userRegionBindingEnd }` 五元组。详见 [`@forgeax/engine-shader` README §paramSchema v2](../shader/README.md)。
+> **`paramSchema` 是单一 SSOT；BGL / UBO / loader 三件套均由 `derive(paramSchema)` 派生**（feat-20260613-material-paramschema-driven-binding M3 / w12-w16）。`MaterialShaderEntry.bindingLayout` 字段已删；`MATERIAL_UBO_BYTES = 80` 常量已删；`MATERIAL_PARAM_TEXTURE_FIELDS` Set 常量已删。registerMaterialShader / record cluster / material-loader 三处都调 `derive(schema)` 拿 `{ bglEntries, uboLayout, textureFieldNames, samplerForTexture, userRegionBindingEnd }` 五元组。详见 [`@forgeax/engine-shader` README §paramSchema v2](../shader/README.md)。
 
 - **`MaterialAsset`** — single interface `{ kind: 'material', passes?: MaterialPassDescriptor[], parent?: AssetGuid, paramValues?: Record<string,unknown> }`（feat-20260526 / D-1：旧 union `UnlitMaterialAsset | StandardMaterialAsset` + discriminator `shadingModel` 已 collapse 为 pass-based 单 interface）；分类现在靠 `passes[].shader` 标识符 — AI 用户通过 `Materials.unlit(...)`（产 `passes[0].shader = 'forgeax::default-unlit'`）或 `Materials.standard(...)`（产 `passes[0].shader = 'forgeax::default-standard-pbr'`）工厂构造，不必手工写 shader id 字符串。
 - **`MeshRenderer`** — 单 ECS component，shape `MeshRenderer { materials: readonly Handle<'MaterialAsset', 'shared'>[] }`；schema 仅 `{ materials: 'array<shared<MaterialAsset>>' }`（feat-20260608 M2 / w7：旧单字段 `material: 'handle<MaterialAsset>'` 升级为 multi-material array，feat-20260614 vocab `handle<T>` -> `shared<T>` 物理删除；列存是 u32 句柄数组，brand 在 FieldValueType 层从 schema 字符串里 infer；`materials[i]` 索引位对位 `MeshAsset.submeshes[i]`，count mismatch fail-fast 抛 `mesh-renderer-material-count-mismatch`）；`world.spawn` 的 `data` 是 `Partial<ShapeOf<S>>`，字段可省略 → spawn 缺省走 case B fallback（详见上面 §ECS render bridge 错误分档表 D-Q7 三档子表）。shader 分类只在 asset 上，不重复体现在 component 名（K-1 单一 SSOT 立场）。
@@ -2057,7 +2068,7 @@ Counter key namespace is dot-delimited (mirrors `forgeax.metrics.*` build-time M
 
 | Counter key | Producer site | Trigger |
 |:--|:--|:--|
-| `nineslice.scale-too-small` | `render-system-record.ts` 9-slice branch | `Transform.scale[xy]` smaller than the 4-corner combined size; corners shrink uniformly per CSS border-image semantics (no fail-fast, no console.warn). |
+| `nineslice.scale-too-small` | `record/` cluster 9-slice branch | `Transform.scale[xy]` smaller than the 4-corner combined size; corners shrink uniformly per CSS border-image semantics (no fail-fast, no console.warn). |
 | `nineslice.tile-needs-repeat-sampler` | `AssetRegistry.catalog` D-9 soft-warn branch | Material with `slicesAndMode.w < 0` (tile sentinel) binds a sampler whose `addressModeU` or `addressModeV` is not `'repeat'`. |
 | `package.xor-invariant-violated` | `AssetRegistry.registerPackage` 1->N promotion branch (feat-20260618 / D-4) | A single-asset package whose lone asset already carries a stored name is promoted to multi-asset (the abnormal single-asset-with-name XOR state). The pre-existing name is preserved, not overwritten; this is a soft-warn, not a fail-fast. Read the counter -- `resolveName` never throws. |
 
@@ -2426,18 +2437,17 @@ This constraint is inherited from the engine's choice to keep the per-instance t
 
 ## Geometry
 
-> feat-20260511-asset-system-v1 / M3 / D-P5 — 6 procedural factory 返 `Result<MeshAsset, AssetError>`；Three.js r184 BoxGeometry 参数顺序对齐（charter 命题 2 心智迁移）。
+> Procedural geometry factories moved to `@forgeax/engine-geometry` (feat-20260704-runtime-tier1-decomposition M1). The 6 factories and vertex-attribute-layout SSOT are a pure-function leaf package, no longer re-exported from `@forgeax/engine-runtime`.
 
-- **6 factory** — `createBoxGeometry(width, height, depth, widthSegments?, heightSegments?, depthSegments?)` / `createSphereGeometry(...)` / `createPlaneGeometry(...)` / `createCylinderGeometry(...)` / `createConeGeometry(...)` / `createTorusGeometry(...)`；单 import 入口 `@forgeax/engine-runtime/geometry` barrel。
-- **退化参数 fail-fast** — `width <= 0` / `segments < 1` 等返 `Result.err(AssetError({ code: 'asset-parse-failed' }))`，不静默返空 MeshAsset（charter 命题 4）。
-- **Three.js 心智对齐** — 参数顺序 + 字段名（`attributes.position` / `attributes.uv` lowercase）byte-for-byte 沿用 r184 `BufferGeometry` 约定；AI 用户从 Three.js 迁移零阻力。
-- **`VertexAttributeMap` 闭集** — `'position' | 'normal' | 'uv' | 'tangent' | 'skinIndex' | 'skinWeight'` 6 lowercase key（glTF 2.0 + Three.js SkinnedMesh spec 对齐）。
+- **6 factory** — `createBoxGeometry` / `createCylinderGeometry` / `createConeGeometry` / `createPlaneGeometry` / `createSphereGeometry` / `createTorusGeometry`, each returning `Result<MeshAsset, AssetError>`.
+- **Import** — `import { createBoxGeometry } from '@forgeax/engine-geometry'` (single entry).
+- **Full API SSOT** — [`packages/geometry/README.md`](../geometry/README.md) (progressive disclosure: proposition -> import example -> API table -> deep-link anchors).
 
 ```ts
-import { createBoxGeometry, AssetRegistry } from '@forgeax/engine-runtime';
+import { createBoxGeometry } from '@forgeax/engine-geometry';
 const meshRes = createBoxGeometry(1, 1, 1, 2, 2, 2);
 if (!meshRes.ok) console.error(meshRes.error.code);
-else { const handle = world.allocSharedRef('MeshAsset', meshRes.value); /* mint column handle at use site */ }
+else { const handle = renderer.assets.register(meshRes.value).unwrap(); /* ... */ }
 ```
 
 ## Frustum Culling (feat-20260528-frustum-culling)
@@ -2479,7 +2489,7 @@ if (!frustum.intersectsBox(f, entityAabb)) {
 | Cap-violation behaviour | silent overflow / out-of-bounds dynamic offset (no structured signal) | fail-fast `RhiError({ code: 'limit-exceeded', expected: 'renderables.length ≤ MAX_RENDERABLES', hint, detail: { renderableCount, limit } })` fired via `Renderer.onError` (per-frame dedup engine-side); 17-member `RhiErrorCode` union unchanged (this is a minor extension of `RhiError.detail` for an existing code, not a new union member) |
 | AI-user-visible API | unchanged — still `await createRenderer(canvas)` + `renderer.draw(world)` (charter 命题 5 一致抽象保持) | identical surface; storage-vs-uniform / instanced-vs-looped is engine-internal, not consumer-visible |
 
-For the constant itself plus full JSDoc on the `64 B * MAX_RENDERABLES` storage-buffer sizing rationale, see [`packages/runtime/src/createRenderer.ts`](src/createRenderer.ts) around the `MAX_RENDERABLES = 1024` declaration site and the sibling [`packages/runtime/src/render-system-record.ts`](src/render-system-record.ts) cap-check + `drawIndexed` call site.
+For the constant itself plus full JSDoc on the `64 B * MAX_RENDERABLES` storage-buffer sizing rationale, see [`packages/runtime/src/createRenderer.ts`](src/createRenderer.ts) around the `MAX_RENDERABLES = 1024` declaration site and the sibling [`packages/runtime/src/record/`](src/record/) cluster cap-check + `drawIndexed` call site.
 
 **Why this row exists**: AI users tracing rendering-path changes between `13e6dc9` and head will see (a) per-frame submission count dropped from N to 1, (b) a new `'limit-exceeded'` signal flowing through `Renderer.onError` when `renderables.length > MAX_RENDERABLES`, (c) `MAX_RENDERABLES` keeps the same name but its semantic mapping to backing-buffer bytes changed. Grepping `2026-05-11` lands here and on the matching `packages/ecs/README.md` row; the table above is the contract diff. Decision rationale, OQ branches, and AI-user charter mapping live in the harness loop anchor above — not duplicated here.
 
@@ -2550,7 +2560,7 @@ discriminating pixel readback（带 FALSIFY 模式）：
 | 现象 | 根因 | 修复 |
 |:--|:--|:--|
 | 一个 `MeshRenderer { material }`（standard-pbr shader，如 `Materials.standard(...)`）的 entity 在屏幕上完全黑（NDC 中心采样全 0），但 frames>=300 / RhiError=0 | standard-pbr shader（`forgeax::default-standard-pbr`）= direct lighting 在三类灯（directional + point + spot）上累加；三类灯的实体计数合计为 0 时，每一项贡献都乘 0 → 全黑（物理正确） | (a) `world.spawn({ component: DirectionalLight \| PointLight \| SpotLight, data: {...} })` 加任意一盏灯（任一种类即可）；或 (b) 把 material 改用 unlit shader（`Materials.unlit(...)` / `forgeax::default-unlit`） |
-| RenderSystem 首帧 console 出 `'[forgeax] standard material renders black with 0 lights of any type (no Skylight, and directional + point + spot all empty); spawn at least one light (Skylight, DirectionalLight, PointLight, or SpotLight) or switch material to an unlit shader (Materials.unlit(...)). See AGENTS.md section Breaking changes 2026-05-19.'` | RenderSystem first-frame warn-once（`render-system-record.ts` `warnedZeroLightStandard` latch）— 显式失败信道（charter P3） | 按 warn 文本两条建议二选一；warn 仅在首帧 fire 一次 / 渲染器生命期内 |
+| RenderSystem 首帧 console 出 `'[forgeax] standard material renders black with 0 lights of any type...'` | RenderSystem first-frame warn-once（`record/` cluster `warnedZeroLightStandard` latch）— 显式失败信道（charter P3） | 按 warn 文本两条建议二选一；warn 仅在首帧 fire 一次 / 渲染器生命期内 |
 
 **Inspector 验证通路**（feat-20260519 AC-11 b）：连 console，分别调用三个 bucket 方法 `runtime.lights.directionalCount` / `runtime.lights.pointCount` / `runtime.lights.spotCount`（旧的单一 `runtime.lights.count` alias 已 one-cut 删除，charter "optimal > compatible"），返回 `{ count: number }`；三者合计 == 0 即为本节所述场景。详见 [AGENTS.md §Breaking changes](../../AGENTS.md#breaking-changes) 2026-05-19 行 + [`packages/runtime/src/components/directional-light.ts`](src/components/directional-light.ts) / [`point-light.ts`](src/components/point-light.ts) / [`spot-light.ts`](src/components/spot-light.ts) JSDoc。
 

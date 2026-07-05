@@ -15,6 +15,7 @@
     { "path": "../debug-draw" },
     { "path": "../math" },
     { "path": "../ecs" },
+    { "path": "../geometry" },
     { "path": "../types" },
     { "path": "../rhi" },
     { "path": "../rhi-debug" },

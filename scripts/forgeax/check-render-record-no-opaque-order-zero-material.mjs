@@ -22,14 +22,18 @@
 //   node scripts/forgeax/check-render-record-no-opaque-order-zero-material.mjs
 //   node scripts/forgeax/check-render-record-no-opaque-order-zero-material.mjs --help
 
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..', '..');
-const TARGET = resolve(REPO_ROOT, 'packages/runtime/src/render-system-record.ts');
+// feat-20260704 M3/w24: the record-stage monolith split into the
+// packages/runtime/src/record/ cluster. The gate now scans every .ts in
+// that directory so a banned pattern cannot regrow in any sibling file
+// (plan-strategy D-2 no-root-shim + section 5.6 no empty-pass).
+const RECORD_DIR = resolve(REPO_ROOT, 'packages/runtime/src/record');
 
 const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {
@@ -40,7 +44,7 @@ if (args.includes('--help') || args.includes('-h')) {
       'Usage:',
       '  node scripts/forgeax/check-render-record-no-opaque-order-zero-material.mjs',
       '',
-      'Asserts that packages/runtime/src/render-system-record.ts does NOT',
+      'Asserts that no file under packages/runtime/src/record/ does NOT',
       'resolve material textureView globally from validatedOrdered[0]?.source',
       '.material and does NOT export a shared `materialBindGroup` variable',
       'created outside the per-entity draw loop.',
@@ -53,14 +57,20 @@ if (args.includes('--help') || args.includes('-h')) {
   process.exit(0);
 }
 
-let text;
+let targetFiles;
 try {
-  text = readFileSync(TARGET, 'utf8');
+  targetFiles = readdirSync(RECORD_DIR)
+    .filter((name) => name.endsWith('.ts'))
+    .map((name) => join(RECORD_DIR, name))
+    .sort();
 } catch {
-  process.stderr.write(`error: cannot read target file ${TARGET}\n`);
+  process.stderr.write(`error: cannot read record cluster dir ${RECORD_DIR}\n`);
   process.exit(2);
 }
-const lines = text.split('\n');
+if (targetFiles.length === 0) {
+  process.stderr.write(`error: no .ts files found under ${RECORD_DIR}\n`);
+  process.exit(2);
+}
 
 const failures = [];
 
@@ -77,22 +87,27 @@ const banned = [
   },
 ];
 
-for (const rule of banned) {
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trimStart();
-    // Skip comment-only lines (// or /* block comments). The gate
-    // enforces banned patterns in executable code, not in historical
-    // comments that describe the pre-fix state (plan-strategy D-3
-    // R-5 grep gate precision).
-    if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) continue;
-    if (rule.re.test(line)) {
-      failures.push({
-        code: rule.code,
-        line: i + 1,
-        snippet: line.slice(0, 160).trim(),
-        hint: rule.hint,
-      });
+for (const file of targetFiles) {
+  const lines = readFileSync(file, 'utf8').split('\n');
+  const rel = file.slice(REPO_ROOT.length + 1);
+  for (const rule of banned) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trimStart();
+      // Skip comment-only lines (// or /* block comments). The gate
+      // enforces banned patterns in executable code, not in historical
+      // comments that describe the pre-fix state (plan-strategy D-3
+      // R-5 grep gate precision).
+      if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) continue;
+      if (rule.re.test(line)) {
+        failures.push({
+          code: rule.code,
+          file: rel,
+          line: i + 1,
+          snippet: line.slice(0, 160).trim(),
+          hint: rule.hint,
+        });
+      }
     }
   }
 }
@@ -100,7 +115,7 @@ for (const rule of banned) {
 if (failures.length > 0) {
   process.stderr.write('AC-06 record reverse-grep gate FAIL:\n');
   for (const f of failures) {
-    process.stderr.write(`  [${f.code}] line ${f.line}: ${f.snippet}\n`);
+    process.stderr.write(`  [${f.code}] ${f.file}:${f.line}: ${f.snippet}\n`);
     process.stderr.write(`    hint: ${f.hint}\n`);
   }
   process.exit(1);

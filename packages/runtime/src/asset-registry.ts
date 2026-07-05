@@ -36,6 +36,7 @@
 // SSOT at the consumer site.
 
 import type { EcsError, EntityHandle, World } from '@forgeax/engine-ecs';
+import { meshFromInterleaved } from '@forgeax/engine-geometry';
 import type { PackError } from '@forgeax/engine-pack/errors';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { deriveAssetName } from '@forgeax/engine-pack/name';
@@ -98,7 +99,6 @@ import {
   TileLayer as runtimeTileLayer,
   Tilemap as runtimeTilemap,
 } from './components';
-import { meshFromInterleaved } from './geometry/box';
 import type { LoaderRegistry } from './loader-registry';
 import { resolveAssetHandle } from './resolve-asset-handle';
 import { postSpawnResolveJoints } from './scene-instances/post-spawn-resolve-joints';
@@ -2330,6 +2330,28 @@ export class AssetRegistry {
   }
 
   /**
+   * Force a re-fetch of the configured pack-index NOW and repopulate the cache,
+   * so a synchronous `listCatalog()` immediately reflects assets added on disk
+   * since boot (a freshly imported GLB's sub-assets). `loadByGuid`'s lazy
+   * re-fetch only fires on a per-GUID miss and `invalidateAll()` merely clears
+   * the cache (leaving `listCatalog()` empty until the next load), so neither
+   * makes a Content Browser or `loadByGuid`-driven "Add to Scene" see a new
+   * asset without a page reload. This does.
+   *
+   * No-op (returns false) when no pack-index URL is configured (dev inline
+   * catalogue path) or the fetch fails — callers keep the stale cache rather
+   * than blanking it. Returns true when the cache was repopulated.
+   */
+  async refreshCatalog(): Promise<boolean> {
+    if (this.packIndexUrl === undefined) return false;
+    const result = await this.fetchPackIndex();
+    if (!result.ok) return false;
+    this.packIndexCache = result.value;
+    this.registerPackagesFromIndex(this.packIndexCache);
+    return true;
+  }
+
+  /**
    * Materialise a `SceneAsset` into an existing `World` and return the
    * synthetic root `Entity` (feat-20260514 w31 sugar wrapper; AC-03 +
    * requirements §IN-3; M3: returns Entity not SceneInstanceId).
@@ -4393,6 +4415,14 @@ export class AssetRegistry {
           this.packIndexCache.set(e.guid.toLowerCase(), {
             relativeUrl: e.relativeUrl,
             kind: e.kind,
+            // Carry the transport's derived display name into the cache row.
+            // buildCatalog already resolves it (deriveAssetName: basename of the
+            // source for single-/no-storedName sub-assets), so a freshly imported
+            // GLB's 1000+ sub-assets show as "<file>.glb" in the Content Browser
+            // instead of blank. Dropping it here made listCatalog fall back to
+            // `entry.name ?? ''` — the whole-index re-read path (else branch) kept
+            // names, so only the incremental patch path was blank.
+            ...(e.name !== undefined ? { name: e.name } : {}),
             ...(e.metadata !== undefined ? { metadata: e.metadata } : {}),
           });
         }

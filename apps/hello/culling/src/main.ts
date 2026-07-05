@@ -29,13 +29,13 @@ import {
   Camera,
   DirectionalLight,
   acquireCanvasContext,
-  createBoxGeometry,
   createRenderer,
   EngineEnvironmentError,
   MeshFilter,
   MeshRenderer,
   Transform,
 } from '@forgeax/engine-runtime';
+import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const GRID_SIZE = 46;

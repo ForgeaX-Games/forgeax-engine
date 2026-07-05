@@ -14,7 +14,7 @@ import {
   cleanPerEntityCache,
   getOrCreateFromChain,
   getOrCreatePerEntity,
-} from '../render-system-record';
+} from '../record';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 

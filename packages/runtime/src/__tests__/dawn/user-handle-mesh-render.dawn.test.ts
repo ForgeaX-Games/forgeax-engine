@@ -41,6 +41,7 @@
 // apps/learn-render/.../4.textures/src/__tests__/textures-pixel.dawn.test.ts.
 
 import { World } from '@forgeax/engine-ecs';
+import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   AssetRegistry,
@@ -50,7 +51,6 @@ import {
   MeshRenderer,
   Transform,
 } from '@forgeax/engine-runtime';
-import { createBoxGeometry } from '@forgeax/engine-runtime/geometry';
 import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';

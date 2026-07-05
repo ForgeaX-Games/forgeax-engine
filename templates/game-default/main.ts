@@ -22,12 +22,13 @@
 
 import {
   Transform, Camera, perspective, quat, Materials, MeshFilter, MeshRenderer,
-  HANDLE_CUBE, HANDLE_SPHERE, createSphereGeometry, ChildOf,
+  HANDLE_CUBE, HANDLE_SPHERE, ChildOf,
   SceneInstance,
   TONEMAP_REINHARD_EXTENDED,
   BLOOM_ENABLED, ANTIALIAS_FXAA, PointLight, pick,
   type MaterialAsset, type Handle,
 } from '@forgeax/engine-runtime';
+import { createSphereGeometry } from '@forgeax/engine-geometry';
 
 type MatHandle = Handle<'MaterialAsset', 'shared'>;
 import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
@@ -430,9 +431,10 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // are fresh). FOV / near match the Camera spawn above. Returns negative
   // coords for off-screen / behind-camera; floatScore tolerates that by just
   // rendering off-canvas (clipped). HUD sx/sy are in canvas-local CSS pixels;
-  // since the HUD root is `position: fixed; inset: 0` matching the iframe
-  // viewport that the canvas fills, canvas.clientWidth/Height is the right
-  // basis without an additional canvas getBoundingClientRect() lookup.
+  // since the HUD root fills the same rect as the canvas (mounted into ctx.uiRoot
+  // with `inset: 0`, or `position: fixed; inset: 0` in the document.body fallback),
+  // canvas.clientWidth/Height is the right basis without an additional canvas
+  // getBoundingClientRect() lookup.
   const FOV = Math.PI / 3;
   const spawnPopup = (text: string, wx: number, wy: number, wz: number): void => {
     const camTr = world.get(camera, Transform);

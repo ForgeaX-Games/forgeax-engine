@@ -230,7 +230,7 @@ describe('View UBO std140 layout (w14)', () => {
 // land; the slot was previously a zero tail-pad float (no record write existed).
 describe('pcfKernelSize tail-pad slot wiring (M0, AC-14)', () => {
   const recordSrc = readFileSync(
-    fileURLToPath(new URL('../render-system-record.ts', import.meta.url)),
+    fileURLToPath(new URL('../record/view-ubo.ts', import.meta.url)),
     'utf8',
   );
   const wgslSrc = readFileSync(

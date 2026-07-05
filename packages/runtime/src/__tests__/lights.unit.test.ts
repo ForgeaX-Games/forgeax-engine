@@ -24,7 +24,7 @@ import { vec3 } from '@forgeax/engine-math';
 import type { Handle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Camera, DirectionalLight, PointLight, SpotLight, Transform } from '../components';
-import type { ShadowInvalidConfigError } from '../errors';
+import type { ShadowInvalidConfigError } from '../errors/render';
 import { packLightArrayHeader, packPointLight, packSpotLight } from '../light-buffer-layout';
 import { computeInvRangeSquared, degToCos } from '../light-helpers';
 import { buildPbrViewBglEntries } from '../pbr-pipeline';

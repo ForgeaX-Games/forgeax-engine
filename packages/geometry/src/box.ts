@@ -25,8 +25,8 @@ import {
   type MeshAsset,
   type VertexAttributeMap,
 } from '@forgeax/engine-types';
-import { deriveVertexBufferLayout } from '../vertex-attribute-layout';
 import { computeTangentVec4 } from './tangent';
+import { deriveVertexBufferLayout } from './vertex-attribute-layout';
 
 /**
  * Floats per vertex for the procedural-geometry interleaved buffer that the

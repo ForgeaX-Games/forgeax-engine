@@ -20,7 +20,7 @@ import { describe, expect, it } from 'vitest';
 import '../components/scene-instance';
 import { type Asset, AssetRegistry } from '../asset-registry';
 import { rootsToSceneAsset } from '../collect-scene-asset';
-import { SceneCollectAssetGuidUnresolvedError } from '../errors';
+import { SceneCollectAssetGuidUnresolvedError } from '../errors/asset';
 import { resolveAssetHandle } from '../resolve-asset-handle';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 

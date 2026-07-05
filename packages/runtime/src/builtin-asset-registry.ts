@@ -18,12 +18,15 @@
 // slots >= BUILTIN_BASE. AssetRegistry.get(handle) dispatches by slot range:
 // slot < BUILTIN_BASE -> BuiltinAssetRegistry.resolve, else world.sharedRefs.
 
+import {
+  createBoxGeometry,
+  createCylinderGeometry,
+  createPlaneGeometry,
+  createSphereGeometry,
+  meshFromInterleaved,
+} from '@forgeax/engine-geometry';
 import type { Handle, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { BUILTIN_BASE, handleSlot } from '@forgeax/engine-types';
-import { createBoxGeometry, meshFromInterleaved } from './geometry/box';
-import { createCylinderGeometry } from './geometry/cylinder';
-import { createPlaneGeometry } from './geometry/plane';
-import { createSphereGeometry } from './geometry/sphere';
 
 // D-16: BUILTIN_BASE is the slot boundary [1, BUILTIN_BASE) builtin /
 // [BUILTIN_BASE, +inf) user-tier. It lives in @forgeax/engine-types (the

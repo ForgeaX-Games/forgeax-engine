@@ -18,6 +18,7 @@
 // binding; browser path is covered by the browser test tier (M2 regressions).
 
 import { World } from '@forgeax/engine-ecs';
+import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera,
@@ -27,7 +28,6 @@ import {
   MeshRenderer,
   Transform,
 } from '@forgeax/engine-runtime';
-import { createBoxGeometry } from '@forgeax/engine-runtime/geometry';
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
