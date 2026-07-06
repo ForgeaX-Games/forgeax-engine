@@ -286,10 +286,79 @@ export function rootsToSceneAsset(
     if (memberEntities.has(er) && !rootRawSet.has(er)) anchorEntities.delete(er);
   }
 
+  // ── Step 1.75: Mount-carrier absorption ──
+  //
+  // world.instantiateScene materialises each mounts[] entry as a plain "mount
+  // entity" (`_spawnMountEntity` output: mount.components + a default Transform,
+  // but NO SceneInstance) whose child is the mounted scene's synthetic root (the
+  // real anchor, which DOES carry SceneInstance). So a `mounts[{parent: W}]`
+  // whose parent W is an OWNED entity comes back on reload as the live chain
+  //     W (owned) -> carrier (plain mount entity) -> anchor (SceneInstance).
+  // The carrier IS the re-materialised mount slot. If collect keeps it as an
+  // owned entity (it has no SceneInstance, so Step 2 would), the next serialize→
+  // reload inserts ANOTHER carrier under it, growing one nameless ghost node per
+  // save→reload cycle — unbounded (the editor "Add to Scene → save → reopen →
+  // #N" regression). Existing pure-mount round-trips don't hit this because they
+  // use `mount.parent === undefined` (mount attaches to the synthetic root,
+  // which is stripped, so no owned carrier survives).
+  //
+  // Fix: recognise a carrier and fold it back into its mount. A carrier is the
+  // ChildOf-parent P of a non-root anchor A where P is a pure mount slot: not a
+  // root, not itself an anchor/member, carries no authored identity (only the
+  // structural Transform/Children/ChildOf/Entity that _spawnMountEntity leaves),
+  // and its sole visited child is A. The mount for A then takes P's slot:
+  // mount.parent = P's ChildOf parent, and any ref to P resolves to the mount.
+  const childOfTk0 = resolveComponent('ChildOf');
+  const childrenTk0 = resolveComponent('Children');
+  const carrierAllowed = new Set(['Transform', 'Children', 'ChildOf', 'Entity']);
+  const carrierForAnchor = new Map<number, number>(); // anchorRaw -> carrierRaw
+  const carrierToAnchor = new Map<number, number>(); // carrierRaw -> anchorRaw
+  const isMountCarrier = (p: number, anchorRaw: number): boolean => {
+    if (rootRawSet.has(p)) return false;
+    if (anchorEntities.has(p) || memberEntities.has(p)) return false;
+    if (!visited.has(p)) return false;
+    for (const [compName, compToken] of getRegisteredComponents()) {
+      if (carrierAllowed.has(compName)) continue;
+      if (world.get(p as EntityHandle, compToken as EcsComponent<string>).ok) return false;
+    }
+    if (childrenTk0) {
+      const cr = world.get(p as EntityHandle, childrenTk0 as EcsComponent<string>);
+      if (cr.ok) {
+        const kids = (cr.value as { entities?: ArrayLike<number> }).entities;
+        if (kids) {
+          let visitedKidCount = 0;
+          let sawAnchor = false;
+          for (let i = 0; i < kids.length; i++) {
+            const k = kids[i] as number;
+            if (!visited.has(k)) continue;
+            visitedKidCount += 1;
+            if (k === anchorRaw) sawAnchor = true;
+          }
+          if (!sawAnchor || visitedKidCount !== 1) return false;
+        }
+      }
+    }
+    return true;
+  };
+  if (childOfTk0) {
+    for (const anchorRaw of anchorEntities) {
+      if (rootRawSet.has(anchorRaw)) continue;
+      const cr = world.get(anchorRaw as EntityHandle, childOfTk0 as EcsComponent<string>);
+      if (!cr.ok) continue;
+      const pRaw = (cr.value as Record<string, unknown>).parent as number | undefined;
+      if (pRaw === undefined) continue;
+      if (!carrierToAnchor.has(pRaw) && isMountCarrier(pRaw, anchorRaw)) {
+        carrierForAnchor.set(anchorRaw, pRaw);
+        carrierToAnchor.set(pRaw, anchorRaw);
+      }
+    }
+  }
+
   // ── Step 2: Filter owned & build mounts for non-root anchors ──
   const orderedEntities = [...visited];
   const ownedEntities: number[] = [];
   for (const er of orderedEntities) {
+    if (carrierToAnchor.has(er)) continue; // absorbed into its mount
     if ((!anchorEntities.has(er) || rootRawSet.has(er)) && !memberEntities.has(er)) {
       ownedEntities.push(er);
     }
@@ -351,10 +420,17 @@ export function rootsToSceneAsset(
   let nextMF = ownedCount + nonRootAnchors.length;
   const childOfTk = resolveComponent('ChildOf');
 
+  const transformTk = resolveComponent('Transform');
   for (const a of nonRootAnchors) {
+    // When a mount carrier was absorbed (Step 1.75), the mount takes the
+    // carrier's slot: resolve the ChildOf parent from the CARRIER (the anchor's
+    // own parent IS the carrier, which no longer exists as an owned entity), and
+    // carry the carrier's Transform as mount.components so placement round-trips.
+    const carrierRaw = carrierForAnchor.get(a.entityRaw);
+    const parentSourceRaw = carrierRaw ?? a.entityRaw;
     let mp: number | undefined;
     if (childOfTk) {
-      const cr = world.get(a.entityRaw as EntityHandle, childOfTk as EcsComponent<string>);
+      const cr = world.get(parentSourceRaw as EntityHandle, childOfTk as EcsComponent<string>);
       if (cr.ok) {
         const pRaw = (cr.value as Record<string, unknown>).parent as number;
         if (pRaw !== undefined) {
@@ -370,13 +446,24 @@ export function rootsToSceneAsset(
         }
       }
     }
-    outMounts.push({
+    let mountComponents: SceneInstanceMount['components'] | undefined;
+    if (carrierRaw !== undefined && transformTk) {
+      const tr = world.get(carrierRaw as EntityHandle, transformTk as EcsComponent<string>);
+      if (tr.ok) {
+        mountComponents = {
+          Transform: { ...(tr.value as Record<string, unknown>) },
+        } as SceneInstanceMount['components'];
+      }
+    }
+    const mount: SceneInstanceMount = {
       localId: (ownedCount + outMounts.length) as LocalEntityId,
       source: a.sourceGuid,
       memberFirst: nextMF as LocalEntityId,
       memberCount: a.totalSlots,
       ...(mp !== undefined ? { parent: mp as LocalEntityId } : {}),
-    });
+      ...(mountComponents !== undefined ? { components: mountComponents } : {}),
+    };
+    outMounts.push(mount);
     nextMF += a.totalSlots;
   }
 
@@ -384,6 +471,15 @@ export function rootsToSceneAsset(
   function _rlid(t: number): number | undefined {
     const ol = entityToLocalId.get(t);
     if (ol !== undefined) return ol;
+    // An absorbed mount carrier resolves to its mount's localId (the mount took
+    // the carrier's slot in Step 1.75), so refs to the carrier — e.g. the
+    // wrapper's Children list — point at the mount rather than dangle.
+    const absorbedAnchor = carrierToAnchor.get(t);
+    if (absorbedAnchor !== undefined) {
+      for (let i = 0; i < nonRootAnchors.length; i++) {
+        if (nonRootAnchors[i]?.entityRaw === absorbedAnchor) return ownedCount + i;
+      }
+    }
     for (let i = 0; i < nonRootAnchors.length; i++) {
       if (nonRootAnchors[i]?.entityRaw === t) return ownedCount + i;
     }
