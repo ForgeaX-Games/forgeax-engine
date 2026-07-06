@@ -557,6 +557,10 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             : raw.metadata !== undefined
               ? { metadata: raw.metadata }
               : {}),
+          // Carry the DDC's outgoing dependency edges into the catalog row so
+          // the Content Browser dependency graph sees them without re-fetching
+          // the .pack.json body (feat: listCatalog refs).
+          ...(importedAsset?.refs !== undefined ? { refs: importedAsset.refs } : {}),
         };
         importedRows.set(guidLower, importedRow);
         const idx = catalog.findIndex((e) => e.guid.toLowerCase() === guidLower);
@@ -571,6 +575,10 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         // generateBundle:~1000-1024). Keeping `raw` here was the
         // bug-20260610 root cause — runtime fetched the raw `.gltf` JSON,
         // found no `assets[]`, returned `asset-not-found`.
+        // Carry the DDC's outgoing dependency edges (e.g. material -> texture,
+        // scene -> mesh) into the catalog row so the Content Browser dependency
+        // graph sees them without re-fetching the .pack.json body.
+        const nonBinAsset = pack.assets.find((a) => a.guid.toLowerCase() === guidLower);
         const importedRow: PackIndexEntry =
           packUrl !== undefined
             ? {
@@ -579,8 +587,11 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
                 kind: raw.kind,
                 sourcePath: raw.sourcePath,
                 ...(raw.metadata !== undefined ? { metadata: raw.metadata } : {}),
+                ...(nonBinAsset?.refs !== undefined ? { refs: nonBinAsset.refs } : {}),
               }
-            : raw;
+            : nonBinAsset?.refs !== undefined
+              ? { ...raw, refs: nonBinAsset.refs }
+              : raw;
         importedRows.set(guidLower, importedRow);
         const idx = catalog.findIndex((e) => e.guid.toLowerCase() === guidLower);
         if (idx >= 0) catalog[idx] = importedRow;
@@ -1242,9 +1253,16 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           if (idx >= 0 && importedEntries[idx] !== undefined) {
             const existing = importedEntries[idx];
             if (existing !== undefined) {
+              // Carry the DDC's outgoing dependency edges into the shipped
+              // pack-index row so the prod Content Browser dependency graph
+              // sees them without re-fetching the .pack.json body.
+              const ddcAsset = pack.assets.find(
+                (a) => a.guid.toLowerCase() === sub.guid.toLowerCase(),
+              );
               importedEntries[idx] = {
                 ...existing,
                 relativeUrl: `${basePrefix}/${hashedPackPath}`,
+                ...(ddcAsset?.refs !== undefined ? { refs: ddcAsset.refs } : {}),
               };
             }
           }

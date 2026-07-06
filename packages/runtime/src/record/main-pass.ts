@@ -393,42 +393,53 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
           materialShaderId !== undefined ? runtime.getParamSchema?.(materialShaderId) : undefined;
         applyParamSnapshotToUbo(slotPayload, schema, mat.paramSnapshot);
 
-        // Sprite missing-texture detection: structural debug-pink fallback
-        // overrides the colorTint slot when the bound baseColorTexture
-        // handle resolves to no GPU view. Keyed on materialShaderId so the
-        // generic writer above stays shader-agnostic (plan-strategy R-H
-        // gate: still no asset.get<MaterialAsset> reach-back; the override
-        // reads only `mat.baseColorTexture` + the GPU view registry).
+        // Missing-texture detection: structural debug-pink fallback overrides
+        // the baseColor/colorTint slot when a bound baseColorTexture handle
+        // resolves to no GPU view. Runs for every textured material path
+        // (sprite / sprite-lit / standard-pbr / pbr-skin / unlit) — the bound
+        // texture would otherwise silently fall back to the 1x1 white view in
+        // the per-submesh BG (main-pass-material.ts), rendering flat with no
+        // warn / RhiError. Mirroring the telemetry here makes a missing/failed
+        // GLB texture immediately diagnosable instead of a silent flat render
+        // (feat-future-pbr-missing-texture-fallback-explicit; feedback
+        // 2026-07-04-glb-pbr-textures-not-applied-flat-render).
         //
-        // feat-20260624 M1' / t7: sprite-lit shares the missing-texture
-        // fallback (paramSchema mirror — same baseColorTexture slot).
-        if (materialShaderId === 'forgeax::sprite' || materialShaderId === 'forgeax::sprite-lit') {
+        // Reads only `mat.baseColorTexture` + the GPU view registry (plan R-H
+        // gate: no asset.get<MaterialAsset> reach-back). The debug-pink write
+        // lands on f32[0..2], which is baseColor.rgb for the PBR/skin UBO and
+        // colorTint.rgb for the sprite UBO — same offset, so one override
+        // covers both.
+        {
           const matHandleRaw = mat.baseColorTexture as Handle<'TextureAsset', 'shared'> | undefined;
           if (matHandleRaw !== undefined) {
             const view = residentTextureView(world, store, runtime, matHandleRaw);
             if (view === undefined) {
               const rawId = matHandleRaw as unknown as number;
-              if (!frameState.warnedMissingSpriteTextureHandles.has(rawId)) {
-                frameState.warnedMissingSpriteTextureHandles.add(rawId);
+              if (!frameState.warnedMissingBaseColorTextureHandles.has(rawId)) {
+                frameState.warnedMissingBaseColorTextureHandles.add(rawId);
                 console.warn(
-                  `[forgeax] sprite texture ${rawId} missing GPU view, rendering debug pink (entityIndex=${entry.renderableIndex})`,
+                  `[forgeax] baseColor texture ${rawId} missing GPU view, rendering debug pink (shader=${materialShaderId ?? '<none>'} entityIndex=${entry.renderableIndex})`,
                 );
               }
               runtime.errorRegistry.fire(
                 new RhiError({
                   code: 'asset-not-registered',
-                  expected: 'sprite material baseColor TextureAsset uploaded to GPU',
-                  hint: 'register + uploadTexture the sprite texture before draw(world); rendering falls back to debug pink quad until then',
+                  expected: 'material baseColor TextureAsset uploaded to GPU',
+                  hint: 'register + uploadTexture the baseColor texture before draw(world); rendering falls back to debug pink until then',
                   detail: { assetHandle: rawId },
                 }),
               );
-              // Debug pink override on slot 0 colorTint.rgb (alpha preserved).
+              // Debug pink override on slot 0 baseColor/colorTint.rgb (alpha preserved).
               const payloadF32 = new Float32Array(slotPayload);
               payloadF32[0] = 1.0;
               payloadF32[1] = 0.4;
               payloadF32[2] = 0.7;
             }
           }
+        }
+
+        // Sprite-only paramSnapshot-derived detection (9-slice geometry).
+        if (materialShaderId === 'forgeax::sprite' || materialShaderId === 'forgeax::sprite-lit') {
           // 9-slice scale-too-small detection: anchors sourced from the
           // post-w12 paramSnapshot.slicesAndMode vec4 entry.
           const slicesAndMode = mat.paramSnapshot?.slicesAndMode as readonly number[] | undefined;

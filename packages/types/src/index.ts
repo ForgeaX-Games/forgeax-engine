@@ -1902,6 +1902,14 @@ export type AssetErrorCode =
   | 'asset-not-imported'
   // === 1 new code (feat-20260604-hdr-equirect-cube-importer-loader M2 / w4) ===
   | 'texture-source-not-imported'
+  // === 1 new code (perf-20260706-raw-container-failfast) ===
+  // A mesh/material/scene/skeleton/skin/animation-clip catalog row whose
+  // relativeUrl is still a raw source container (.glb/.gltf/.fbx), not an
+  // importer-produced artifact (.bin/.pack.json). Like texture-source-not-imported
+  // this is transport-eligible: the studio form lazily imports via the injected
+  // ImportTransport; the shipped form fails fast. Distinct from the generic
+  // asset-not-imported so it never masks the parent-missing breadcrumb.
+  | 'source-not-imported'
   // === 3 new codes (feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 / w2) ===
   | 'mesh-renderer-material-count-mismatch'
   | 'mesh-asset-submeshes-empty'
@@ -2028,6 +2036,9 @@ export const ASSET_ERROR_HINTS: Readonly<Record<AssetErrorCode, string>> = {
   // === 1 new hint (feat-20260604-hdr-equirect-cube-importer-loader M2 / w4) ===
   'texture-source-not-imported':
     'texture source not imported yet; wire createDevImportTransport() in the studio form for dev lazy-import, or pre-import via the build-time pipeline',
+  // === 1 new hint (perf-20260706-raw-container-failfast) ===
+  'source-not-imported':
+    'this mesh/material/scene sub-asset row still points at the raw source container (.glb/.gltf/.fbx); wire createDevImportTransport() for dev lazy-import (POST /__import), or pre-import via the build-time pipeline. The runtime does not parse raw containers at load time.',
   // === 3 new hints (feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 / w2) ===
   'mesh-renderer-material-count-mismatch':
     'materials.length must equal submeshes.length; got materials=N, submeshes=M, meshAssetGuid=...; ensure MeshRenderer.materials arrays are equal-length to MeshAsset.submeshes arrays',
@@ -4223,6 +4234,15 @@ export interface PackIndexEntry {
   /** Optional display name from .pack.json assets[].name or derived basename (D-6 add-only). */
   readonly name?: string;
   readonly metadata?: ImageMetadata | undefined;
+  /**
+   * Outgoing dependency edges -- the GUIDs this asset cross-references
+   * (`pack.json` `assets[].refs`). Add-only field surfacing the pack's
+   * first-hand reference graph through the catalog so editors can build
+   * dependency / referencer views without re-fetching every `.pack.json`.
+   * `undefined` for legacy rows / kinds with no refs; each element is a
+   * 36-char dash-form UUID.
+   */
+  readonly refs?: readonly string[];
 }
 
 // === InspectEntry / InspectSnapshot (feat-20260618-asset-and-pack-name-fields M1 / w3) ===

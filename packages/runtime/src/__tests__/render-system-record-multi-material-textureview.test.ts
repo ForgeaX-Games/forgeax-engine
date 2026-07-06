@@ -478,3 +478,142 @@ describe('record: per-submesh PBR material BG textureView (bug-20260610 D2 regre
     expect(errors).toEqual([]);
   });
 });
+
+// feat-future-pbr-missing-texture-fallback-explicit (feedback
+// 2026-07-04-glb-pbr-textures-not-applied-flat-render): a PBR/skin material
+// whose baseColorTexture handle resolves to NO GPU view previously fell back
+// to the 1x1 white view silently -- rendering flat with no warn / RhiError,
+// which is exactly what made the "GLB renders flat" symptom undiagnosable.
+// The record path now mirrors the sprite telemetry: warn-once console.warn +
+// per-frame RhiError('asset-not-registered') + debug-pink baseColor override.
+async function spawnPbrMissingTextureScene(): Promise<unknown> {
+  const { World } = await importEcs();
+  const C = await importComponents();
+  const world = new World();
+
+  // Single-submesh mesh so materials.length (1) matches submeshes.length (1)
+  // and the entity passes the material-count-mismatch gate to reach the
+  // per-submesh material BG path where the missing-texture telemetry lives.
+  const oneSubmeshMesh: MeshAsset = {
+    kind: 'mesh',
+    vertices: new Float32Array(3 * 12),
+    indices: new Uint16Array([0, 1, 2]),
+    attributes: {},
+    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+  };
+  const meshHandle = world.allocSharedRef('MeshAsset', oneSubmeshMesh) as unknown as Handle<
+    'MeshAsset',
+    'shared'
+  >;
+
+  // A baseColorTexture handle that IS a registered TextureAsset (so it survives
+  // extract's kind==='texture' check and is carried onto the snapshot) but whose
+  // GPU view can never become resident: the srgb-format/linear-colorSpace
+  // mismatch makes deriveRenderDataTexture -> ensureResident fail, so
+  // residentTextureView returns undefined. This is the exact "handle present,
+  // GPU view missing" condition the record-stage telemetry guards -- previously
+  // a silent white-fallback (flat render), now warn-once + RhiError + debug pink.
+  const unresidentTexture = {
+    kind: 'texture',
+    width: 2,
+    height: 2,
+    format: 'rgba8unorm-srgb',
+    data: new Uint8Array(2 * 2 * 4),
+    colorSpace: 'linear',
+    mipmap: false,
+  } as unknown as TextureAsset;
+  const badTexHandle = world.allocSharedRef('TextureAsset', unresidentTexture) as unknown as Handle<
+    'TextureAsset',
+    'shared'
+  >;
+  const badTexHandleId = badTexHandle as unknown as number;
+  const matHandle = world.allocSharedRef('MaterialAsset', {
+    kind: 'material',
+    passes: [
+      {
+        name: 'Forward',
+        shader: 'forgeax::default-standard-pbr',
+        tags: { LightMode: 'Forward' },
+        queue: 2000,
+      },
+    ],
+    paramValues: {
+      baseColor: [1, 1, 1],
+      metallic: 0,
+      roughness: 0.5,
+      baseColorTexture: badTexHandleId,
+    },
+  } as unknown as MaterialAsset) as unknown as Handle<'MaterialAsset', 'shared'>;
+
+  world.spawn(
+    {
+      component: C.Camera,
+      data: {
+        fov: Math.PI / 4,
+        aspect: 16 / 9,
+        near: 0.1,
+        far: 100,
+        projection: 0,
+        left: -1,
+        right: 1,
+        bottom: -1,
+        top: 1,
+      },
+    },
+    { component: C.Transform, data: cameraTransform() },
+  );
+  world.spawn(
+    { component: C.DirectionalLight, data: {} },
+    { component: C.Transform, data: cameraTransform() },
+  );
+  world.spawn(
+    { component: C.MeshRenderer, data: { materials: [matHandle] } },
+    { component: C.MeshFilter, data: { assetHandle: meshHandle } },
+    { component: C.Transform, data: originTransform() },
+  );
+  return { world, badTexHandleId };
+}
+
+describe('record: PBR missing baseColorTexture telemetry (feat-future-pbr-missing-texture-fallback-explicit)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('navigator', baseNavigator);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('PBR material with unresolvable baseColorTexture fires asset-not-registered + warn-once (not silent flat)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const spies = makeSpies();
+      const { renderer } = await setupRenderer(spies);
+      const errors: Array<{ code: string; detail?: unknown }> = [];
+      renderer.onError((e) => errors.push(e as { code: string; detail?: unknown }));
+
+      const { world, badTexHandleId } = (await spawnPbrMissingTextureScene()) as {
+        world: unknown;
+        badTexHandleId: number;
+      };
+
+      // Two frames: the RhiError fires per-frame (machine-readable signal), but
+      // the console.warn fires exactly once (warn-once across RenderSystem
+      // lifetime -- signal/noise floor, charter P3).
+      renderer.draw(world);
+      renderer.draw(world);
+
+      const missing = errors.filter((e) => e.code === 'asset-not-registered');
+      expect(missing.length).toBeGreaterThanOrEqual(1);
+      expect((missing[0]?.detail as { assetHandle?: number } | undefined)?.assetHandle).toBe(
+        badTexHandleId,
+      );
+
+      const baseColorWarns = warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes('baseColor texture'),
+      );
+      expect(baseColorWarns.length).toBe(1);
+      expect(String(baseColorWarns[0]?.[0])).toContain('debug pink');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});

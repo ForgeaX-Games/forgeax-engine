@@ -78,6 +78,8 @@ describe('AssetErrorCode closed union - 22 members (feat-20260608 M0 +tileset-re
         // === 1 new code (feat-20260604-hdr-equirect-cube-importer-loader M2 / w4) ===
         case 'texture-source-not-imported':
           return 'texture-source-not-imported';
+        case 'source-not-imported':
+          return 'source-not-imported';
         // === 3 new codes (feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 / w2) ===
         case 'mesh-renderer-material-count-mismatch':
           return 'mesh-renderer-material-count-mismatch';

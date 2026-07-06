@@ -146,15 +146,18 @@ export interface RenderFrameState {
    * skybox pass is skipped (plan-strategy D-2 NOTE). */
   warnedSkyboxTonemapNone: boolean;
   /**
-   * Per-handle warn-once anchor for the sprite-bucket missing-texture
-   * fallback (feat-20260520-2d-sprite-layer-mvp M-3 / w25; @fallback +
-   * AC-18 path (4)). A `Set<number>` keyed by the raw Handle<TextureAsset>
-   * id - the sprite bucket fires `console.warn` exactly once per missing
-   * texture handle per RenderSystem lifetime so AI users see a single
-   * actionable message without per-frame log flooding. The set lives
-   * across frames so the second frame on the same missing handle stays
-   * silent (charter P3 explicit failure: warn-once preserves signal /
-   * noise floor while structured RhiError below stays per-frame fire).
+   * Per-handle warn-once anchor for the missing baseColor-texture fallback,
+   * shared by every textured material path (sprite / sprite-lit / standard-pbr
+   * / pbr-skin / unlit — feat-20260520-2d-sprite-layer-mvp M-3 / w25 seeded it
+   * for sprites; feat-future-pbr-missing-texture-fallback-explicit generalised
+   * it to PBR/skin so GLB textures that fail to reach the GPU no longer render
+   * silently flat). A `Set<number>` keyed by the raw Handle<TextureAsset> id -
+   * the writer fires `console.warn` exactly once per missing texture handle per
+   * RenderSystem lifetime so AI users see a single actionable message without
+   * per-frame log flooding. The set lives across frames so the second frame on
+   * the same missing handle stays silent (charter P3 explicit failure:
+   * warn-once preserves signal / noise floor while structured RhiError below
+   * stays per-frame fire).
    *
    * Note on the WeakSet/Set choice: plan-strategy mentions WeakSet but
    * Handle values are numeric brand u32s (not object references), so
@@ -163,7 +166,7 @@ export interface RenderFrameState {
    * minimal surface; the per-RenderSystem lifetime cap is the upper
    * bound).
    */
-  readonly warnedMissingSpriteTextureHandles: Set<number>;
+  readonly warnedMissingBaseColorTextureHandles: Set<number>;
   /**
    * feat-20260527-sprite-nineslice M2 / w11 + M4 / w16 (AC-16): once-per-
    * renderable guard for the `nineslice.scale-too-small` metric increment.

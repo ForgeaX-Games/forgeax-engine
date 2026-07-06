@@ -1400,7 +1400,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     // fallback. Set<number> keyed by raw Handle<TextureAsset>; never
     // cleared (charter F1 minimal surface — the per-RenderSystem lifetime
     // is the natural upper bound).
-    warnedMissingSpriteTextureHandles: new Set<number>(),
+    warnedMissingBaseColorTextureHandles: new Set<number>(),
     // feat-20260527-sprite-nineslice M2 / w11 + M4 / w16 (AC-16): once-per-
     // renderable guard for the runtime `nineslice.scale-too-small` metric
     // counter (`runtime.metrics.increment(...)` in render-system-record.ts).

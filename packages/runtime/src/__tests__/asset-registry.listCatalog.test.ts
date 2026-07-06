@@ -63,6 +63,30 @@ describe('D-1 listCatalog() (TDD: red before w2 impl)', () => {
     expect(list.length).toBe(0);
   });
 
+  it('surfaces dev-path refs as flattened GUID edges (Content Browser dependency graph)', () => {
+    const reg = makeReg();
+    const guid = AssetGuid.format(AssetGuid.random());
+    const dep1 = AssetGuid.format(AssetGuid.random());
+    const dep2 = AssetGuid.format(AssetGuid.random());
+    const mesh = makeMeshFixture();
+    // catalog(guid, asset, refs) stores the rich AssetRef[] on the envelope;
+    // listCatalog must flatten it to plain GUID strings.
+    reg.catalog(guid, mesh, [{ guid: dep1, sourceField: { fieldName: 'a' } }, { guid: dep2 }]);
+
+    const found = reg.listCatalog().find((e) => e.guid === guid.toLowerCase());
+    expect(found?.refs).toEqual([dep1, dep2]);
+  });
+
+  it('omits refs when an asset has no outgoing edges (add-only, undefined not [])', () => {
+    const reg = makeReg();
+    const guid = AssetGuid.format(AssetGuid.random());
+    reg.catalog(guid, makeMeshFixture());
+
+    const found = reg.listCatalog().find((e) => e.guid === guid.toLowerCase());
+    expect(found).toBeDefined();
+    expect(found?.refs).toBeUndefined();
+  });
+
   it('returns a snapshot — two calls return distinct array objects (no internal Map leak, charter P4)', () => {
     const reg = makeReg();
     const guid = AssetGuid.format(AssetGuid.random());

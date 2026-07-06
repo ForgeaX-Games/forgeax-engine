@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { GLTF_ERROR_HINTS } from './errors.js';
 import { parseGlb, parseGltf, toAssetPack } from './parse-gltf.js';
+import { serializeMetaJson } from './serialize-meta.js';
 
 interface AssetCtx {
   readonly stdoutWrite: (line: string) => void;
@@ -219,23 +220,6 @@ async function runCheck(target: string, ctx: AssetCtx): Promise<number> {
     }
   }
   return 0;
-}
-
-function sortKeysDeep(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeysDeep);
-  if (value !== null && typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const sorted: Record<string, unknown> = {};
-    for (const key of Object.keys(obj).sort()) {
-      sorted[key] = sortKeysDeep(obj[key]);
-    }
-    return sorted;
-  }
-  return value;
-}
-
-function serializeMetaJson(meta: unknown): string {
-  return `${JSON.stringify(sortKeysDeep(meta), null, 2)}\n`;
 }
 
 async function runWrite(target: string, ctx: AssetCtx): Promise<number> {

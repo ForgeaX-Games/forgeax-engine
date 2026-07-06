@@ -185,7 +185,7 @@ function makeFrameState(): MockObj {
     warnedMultiLightPoint: false,
     warnedMultiLightSpot: false,
     warnedSkyboxTonemapNone: false,
-    warnedMissingSpriteTextureHandles: new Set<number>(),
+    warnedMissingBaseColorTextureHandles: new Set<number>(),
     warnedNineSliceScaleEntities: new Set<number>(),
     viewBindGroupCache: new Map(),
     meshBindGroupCache: new Map(),

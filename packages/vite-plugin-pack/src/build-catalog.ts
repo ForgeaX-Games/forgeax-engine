@@ -58,6 +58,8 @@ interface PackJson {
     readonly kind: string;
     /** Optional display name (D-6 add-only). */
     readonly name?: string;
+    /** Outgoing dependency GUIDs (pack.schema.json assets[].refs). */
+    readonly refs?: readonly string[];
   }>;
 }
 
@@ -590,6 +592,7 @@ async function foldPaths(
           kind: asset.kind,
           sourcePath: rel,
           name: deriveAssetName(packagePath, assetCount, asset.name),
+          ...(asset.refs !== undefined ? { refs: asset.refs } : {}),
         });
       }
     } catch (e) {

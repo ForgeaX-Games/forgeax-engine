@@ -45,9 +45,9 @@ describe('ASSET_ERROR_HINTS runtime guard (23-member key set)', () => {
     expect(hint.length).toBeGreaterThan(0);
   });
 
-  it('Object.keys(ASSET_ERROR_HINTS) length is 23 (M0 baseline 20 + M1 +1 + feat-20260621 +1 + feat-20260629 +1)', () => {
+  it('Object.keys(ASSET_ERROR_HINTS) length is 24 (M0 baseline 20 + M1 +1 + feat-20260621 +1 + feat-20260629 +1 + perf-20260706 +1 source-not-imported)', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
-    expect(keys.length).toBe(23);
+    expect(keys.length).toBe(24);
   });
 
   it('hint contains >= 3 of the 7 .detail.field tokens', () => {
@@ -102,6 +102,8 @@ describe('AssetErrorCode 23-member exhaustive switch (M1 +tileset-tile-entry-mal
           return 'asset-not-imported';
         case 'texture-source-not-imported':
           return 'texture-source-not-imported';
+        case 'source-not-imported':
+          return 'source-not-imported';
         case 'mesh-renderer-material-count-mismatch':
           return 'mesh-renderer-material-count-mismatch';
         case 'mesh-asset-submeshes-empty':

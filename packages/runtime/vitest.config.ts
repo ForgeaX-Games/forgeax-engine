@@ -1,5 +1,15 @@
 import { defineProject } from 'vitest/config';
 
+// Pin NODE_ENV so this run is hermetic. `import.meta.env.DEV` is constant-folded
+// from NODE_ENV when vitest resolves the Vite config (DEV === NODE_ENV !==
+// 'production'), which happens after this module evaluates -- so setting it here
+// wins. Without it, a developer shell that exports NODE_ENV=production silently
+// freezes DEV=false, dead-stripping the dev-only console.info/warn branches this
+// suite asserts (mesh-ssbo capacity info, multi-light cap warn, animation
+// throttle warn): 18 tests then fail locally while CI (no NODE_ENV) stays green,
+// with errors (spy expected 1, got 0) that do not point at the cause.
+process.env.NODE_ENV = 'test';
+
 export default defineProject({
   test: {
     environment: 'node',

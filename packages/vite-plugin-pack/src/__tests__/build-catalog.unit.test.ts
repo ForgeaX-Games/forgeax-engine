@@ -78,6 +78,52 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(entries[0]?.relativeUrl.startsWith('/custom/')).toBe(true);
     });
   });
+
+  // ─── refs pass-through (feat: listCatalog refs) ───
+
+  describe('build-catalog-refs.test.ts', () => {
+    let root: string;
+    afterEach(async () => {
+      await rm(root, { recursive: true, force: true });
+    });
+
+    it('carries .pack.json assets[].refs into the catalog row', async () => {
+      root = await mkdtemp(join(tmpdir(), 'forgeax-vpp-refs-'));
+      const dep = '01890000-0000-7000-8000-bbbbbbbbbbbb';
+      const pack = {
+        schemaVersion: '1.0.0',
+        kind: 'internal-text-package',
+        assets: [
+          {
+            guid: '01890000-0000-7000-8000-aaaaaaaaaaaa',
+            kind: 'material',
+            payload: {},
+            refs: [dep],
+          },
+        ],
+      };
+      await writeFile(join(root, 'mat.pack.json'), JSON.stringify(pack), 'utf-8');
+      const entries = await buildCatalog([root]);
+      expect(entries.length).toBe(1);
+      expect(entries[0]?.refs).toEqual([dep]);
+    });
+
+    it('omits refs when the pack row has an empty refs[]', async () => {
+      root = await mkdtemp(join(tmpdir(), 'forgeax-vpp-refs-empty-'));
+      const pack = {
+        schemaVersion: '1.0.0',
+        kind: 'internal-text-package',
+        assets: [
+          { guid: '01890000-0000-7000-8000-aaaaaaaaaaaa', kind: 'material', payload: {}, refs: [] },
+        ],
+      };
+      await writeFile(join(root, 'mat.pack.json'), JSON.stringify(pack), 'utf-8');
+      const entries = await buildCatalog([root]);
+      // Empty refs[] still flows through as [] (present-but-empty), distinct
+      // from a legacy row that never had a refs field.
+      expect(entries[0]?.refs).toEqual([]);
+    });
+  });
 }
 
 {

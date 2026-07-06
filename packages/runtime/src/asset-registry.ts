@@ -1340,6 +1340,23 @@ const UPSTREAM_ENTRY_KINDS: ReadonlySet<string> = new Set(
   UPSTREAM_ENTRY_LOADERS.map((l) => l.kind),
 );
 
+// perf-20260706: raw source-container extensions. A pack-index row whose
+// relativeUrl still ends in one of these has NOT been import-cooked yet -- the
+// vite-plugin-pack gltf/fbx catalog arm emits thin mesh/material/scene rows
+// pointing at the source container, and only the ImportTransport (dev
+// `POST /__import/:guid`) rewrites each to an importer artifact (`.<guid>.bin`).
+// ddcLoad fails such rows fast (asset-not-imported) so they route to the
+// transport instead of fetch+parse-failing the whole (possibly 62 MB) binary
+// container once per sub-asset. Extension check only -- the importer's output
+// suffix is always `.bin` / `.pack.json`, never these.
+const RAW_ASSET_CONTAINER_EXTS: readonly string[] = ['.glb', '.gltf', '.fbx'];
+
+function isRawAssetContainerUrl(relativeUrl: string): boolean {
+  const q = relativeUrl.indexOf('?');
+  const path = (q === -1 ? relativeUrl : relativeUrl.slice(0, q)).toLowerCase();
+  return RAW_ASSET_CONTAINER_EXTS.some((ext) => path.endsWith(ext));
+}
+
 /**
  * Asset registry (instance-per-engine; `engine.assets: AssetRegistry | null`).
  *
@@ -2062,6 +2079,7 @@ export class AssetRegistry {
           kind: string;
           name?: string;
           metadata?: ImageMetadata | undefined;
+          refs?: readonly string[];
         }
       >
     | undefined = undefined;
@@ -3711,7 +3729,14 @@ export class AssetRegistry {
         ddcError instanceof AssetError &&
         (ddcError.code === 'asset-not-found' ||
           ddcError.code === 'asset-fetch-failed' ||
-          ddcError.code === 'texture-source-not-imported');
+          ddcError.code === 'texture-source-not-imported' ||
+          // perf-20260706: the raw-container fail-fast (mesh/material/scene whose
+          // relativeUrl is still a .glb/.gltf/.fbx) surfaces source-not-imported;
+          // it is transport-eligible so the import runs once and rewrites the row
+          // to .bin/.pack.json (the shipped form, with no transport, fails fast).
+          // Distinct from the generic asset-not-imported, which must stay
+          // NON-eligible so the parent-missing breadcrumb is never masked.
+          ddcError.code === 'source-not-imported');
       if (transportEligible) {
         return this.transportOrFail<T>(guid, guidKey, ddcError.code);
       }
@@ -3820,6 +3845,34 @@ export class AssetRegistry {
     // (D-2).
     if (UPSTREAM_ENTRY_KINDS.has(entry.kind)) {
       return this.loadFromUpstreamEntry<T>(guidKey, entry);
+    }
+
+    // perf-20260706: fail-fast for a DDC sub-asset whose relativeUrl still
+    // points at a RAW container (`.glb` / `.gltf` / `.fbx`) rather than an
+    // importer-produced artifact (`.bin` / `.pack.json`). The gltf/fbx catalog
+    // arm (vite-plugin-pack build-catalog) emits thin rows for mesh / material /
+    // scene / skeleton / skin / animation-clip whose relativeUrl is the source
+    // container; the per-sub-asset body only exists AFTER the ImportTransport
+    // (dev `POST /__import/:guid`) parses the container once and rewrites each
+    // row to `.<guid>.bin`. Without this guard, every such sub-asset first
+    // fetch+parse-FAILS the whole container (e.g. `res.json()` on a 62 MB binary
+    // GLB) before falling through to the transport -- so a 1028-sub-asset GLB
+    // re-downloaded the 62 MB file ~707x (once per mesh/material/scene) at
+    // ~5 min add-to-scene. Returning `asset-not-imported` here routes straight
+    // to `transportOrFail` (loadByGuidProd), which imports the container ONCE
+    // and patches the rows to `.bin`; the re-entry then no longer trips this
+    // guard (no loop). This mirrors the texture path, which already fails fast
+    // on its `!relativeUrl.endsWith('.bin')` check in loadTextureAsset.
+    if (isRawAssetContainerUrl(entry.relativeUrl)) {
+      return err(
+        new AssetError({
+          code: 'source-not-imported',
+          expected:
+            `an imported artifact URL (.bin / .pack.json) for ${entry.kind} ` +
+            `GUID ${guidKey}; got the raw container ${entry.relativeUrl}`,
+          hint: ASSET_ERROR_HINTS['source-not-imported'],
+        }),
+      );
     }
 
     // bug-20260610 / feat-20260614 M8 (D-19): when the asset is a material, its
@@ -4424,6 +4477,10 @@ export class AssetRegistry {
             // names, so only the incremental patch path was blank.
             ...(e.name !== undefined ? { name: e.name } : {}),
             ...(e.metadata !== undefined ? { metadata: e.metadata } : {}),
+            // Carry refs on the incremental patch path too, else an asset
+            // imported via POST /__import shows missing dependency edges until
+            // the next full pack-index refresh (feat: listCatalog refs).
+            ...(e.refs !== undefined ? { refs: e.refs } : {}),
           });
         }
       });
@@ -4486,6 +4543,7 @@ export class AssetRegistry {
           kind: string;
           name?: string;
           metadata?: ImageMetadata | undefined;
+          refs?: readonly string[];
         }
       >,
       AssetError
@@ -4531,6 +4589,7 @@ export class AssetRegistry {
         kind: string;
         name?: string;
         metadata?: ImageMetadata | undefined;
+        refs?: readonly string[];
       }
     >();
     for (const item of raw as Array<{
@@ -4539,6 +4598,7 @@ export class AssetRegistry {
       kind?: unknown;
       name?: unknown;
       metadata?: unknown;
+      refs?: unknown;
     }>) {
       if (
         typeof item.guid === 'string' &&
@@ -4560,12 +4620,19 @@ export class AssetRegistry {
           kind: string;
           name?: string;
           metadata?: ImageMetadata | undefined;
+          refs?: readonly string[];
         } = {
           relativeUrl: item.relativeUrl,
           kind: item.kind,
           metadata: item.metadata as ImageMetadata | undefined,
         };
         if (typeof item.name === 'string') row.name = item.name;
+        // refs is the optional dependency-edge field (feat: listCatalog refs);
+        // narrow to a string[] so a malformed pack-index row cannot inject
+        // non-string edges into the catalog.
+        if (Array.isArray(item.refs) && item.refs.every((r) => typeof r === 'string')) {
+          row.refs = item.refs as readonly string[];
+        }
         catalog.set(item.guid.toLowerCase(), row);
       }
     }
@@ -4994,11 +5061,18 @@ export class AssetRegistry {
     kind: string;
     name?: string;
     relativeUrl: string;
+    refs?: readonly string[];
   }[] {
     const seen = new Set<string>();
-    const result: { guid: string; kind: string; name?: string; relativeUrl: string }[] = [];
+    const result: {
+      guid: string;
+      kind: string;
+      name?: string;
+      relativeUrl: string;
+      refs?: readonly string[];
+    }[] = [];
 
-    // Prod entries: packIndexCache carries relativeUrl + optional name.
+    // Prod entries: packIndexCache carries relativeUrl + optional name + refs.
     if (this.packIndexCache) {
       for (const [guidKey, entry] of this.packIndexCache) {
         seen.add(guidKey);
@@ -5007,11 +5081,14 @@ export class AssetRegistry {
           kind: entry.kind,
           name: entry.name ?? '',
           relativeUrl: entry.relativeUrl,
+          ...(entry.refs !== undefined ? { refs: entry.refs } : {}),
         });
       }
     }
 
-    // Inlined / dev-path entries: assetCatalog, no pack-index URL.
+    // Inlined / dev-path entries: assetCatalog, no pack-index URL. The envelope
+    // holds the authoritative AssetRef[] graph; flatten it to plain GUID edges
+    // so both catalog paths expose the same refs: readonly string[] shape.
     for (const [guidKey, envelope] of this.assetCatalog) {
       if (!seen.has(guidKey)) {
         const name = envelope.name ?? this.resolveName(guidKey);
@@ -5020,6 +5097,7 @@ export class AssetRegistry {
           kind: envelope.payload.kind,
           name,
           relativeUrl: '',
+          ...(envelope.refs.length > 0 ? { refs: envelope.refs.map((r) => r.guid) } : {}),
         });
       }
     }

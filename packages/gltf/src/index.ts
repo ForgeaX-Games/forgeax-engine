@@ -118,6 +118,8 @@ export {
   reimportReuseMeta,
   subAssetKey,
 } from './reimport-reuse-meta.js';
+// Byte-stable meta JSON serialization (D-3; AC-04).
+export { serializeMetaJson } from './serialize-meta.js';
 export type {
   DecomposedTransform,
   NodeTransformJson,
