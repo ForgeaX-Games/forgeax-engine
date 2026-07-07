@@ -149,7 +149,7 @@ describe('AssetErrorCode closed union - 5 members', () => {
     void _bogus;
   });
 
-  it('type-level: exhaustive switch with no default compiles for all 24 members', () => {
+  it('type-level: exhaustive switch with no default compiles for all 23 members', () => {
     function describe(code: AssetErrorCode): string {
       switch (code) {
         case 'asset-not-found':
@@ -207,9 +207,6 @@ describe('AssetErrorCode closed union - 5 members', () => {
         // === 1 new code (feat-20260629-multi-uv-set-support M2 / m2-w5) ===
         case 'mesh-bin-contract-violation':
           return 'mesh-bin-contract-violation';
-        // === 1 new code (perf-20260706 raw-container fail-fast, #620) ===
-        case 'source-not-imported':
-          return 'source-not-imported';
       }
       // No default - TS guards union drift at compile time.
     }
@@ -862,12 +859,6 @@ describe('AssetErrorCode - 1 new member (M1-T02)', () => {
         // === 1 new code (feat-20260621-asset-registry-robustness M2 / w4) ===
         case 'asset-invalidated':
           return 'asset-invalidated';
-        // === 1 new code (feat-20260629-multi-uv-set-support M2 / m2-w5) ===
-        case 'mesh-bin-contract-violation':
-          return 'mesh-bin-contract-violation';
-        // === 1 new code (perf-20260706 raw-container fail-fast, #620) ===
-        case 'source-not-imported':
-          return 'source-not-imported';
       }
     }
     expect(describe('material-shader-ref-broken')).toBe('ref-broken');
@@ -1938,16 +1929,16 @@ describe('Submesh interface', () => {
   });
 });
 
-describe('AssetErrorCode — 24 members', () => {
-  it('ASSET_ERROR_HINTS has exactly 24 keys (runtime guard, not hardcoded)', () => {
+describe('AssetErrorCode — 23 members', () => {
+  it('ASSET_ERROR_HINTS has exactly 23 keys (runtime guard, not hardcoded)', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
-    expect(keys).toHaveLength(24);
+    expect(keys).toHaveLength(23);
   });
 
-  it('all 24 codes are distinct', () => {
+  it('all 23 codes are distinct', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
     const set = new Set(keys);
-    expect(set.size).toBe(24);
+    expect(set.size).toBe(23);
   });
 
   it('three new codes (feat-20260608 M1 w2) are present with hint strings', () => {
@@ -1974,12 +1965,7 @@ describe('AssetErrorCode — 24 members', () => {
     expect(ASSET_ERROR_HINTS['asset-invalidated'].length).toBeGreaterThan(0);
   });
 
-  it('new code source-not-imported has a hint string', () => {
-    expect(ASSET_ERROR_HINTS['source-not-imported']).toBeDefined();
-    expect(ASSET_ERROR_HINTS['source-not-imported'].length).toBeGreaterThan(0);
-  });
-
-  it('all 24 codes have non-empty hint strings', () => {
+  it('all 23 codes have non-empty hint strings', () => {
     for (const [code, hint] of Object.entries(ASSET_ERROR_HINTS)) {
       expect(hint.length, `hint for ${code} must be non-empty`).toBeGreaterThan(0);
     }
@@ -1988,7 +1974,7 @@ describe('AssetErrorCode — 24 members', () => {
   // Type-level: verify exhaustive switch on 22-member AssetErrorCode compiles
   // without default case. TS compiler validates union completeness at compile
   // time — this function exists solely for tsc type-checking.
-  it('switch on AssetErrorCode with all 24 cases compiles without default', () => {
+  it('switch on AssetErrorCode with all 23 cases compiles without default', () => {
     function describe(code: AssetErrorCode): string {
       switch (code) {
         case 'asset-not-found':
@@ -2037,8 +2023,6 @@ describe('AssetErrorCode — 24 members', () => {
           return 'invalidated';
         case 'mesh-bin-contract-violation':
           return 'mesh bin contract violation';
-        case 'source-not-imported':
-          return 'source not imported';
       }
     }
     // Runtime: verify function returns for each code
