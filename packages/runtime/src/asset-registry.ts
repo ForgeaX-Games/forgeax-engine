@@ -46,6 +46,7 @@ import {
   type AnimationChannel,
   ASSET_ERROR_HINTS,
   type Asset,
+  type AssetCompression,
   type AssetEnvelope,
   AssetError,
   type AssetErrorCode,
@@ -986,6 +987,8 @@ interface LoaderEntry {
   readonly relativeUrl: string;
   readonly kind: string;
   readonly metadata?: ImageMetadata | undefined;
+  /** Build-time compression strategy for this artefact. `undefined` = legacy uncompressed. */
+  readonly compression?: AssetCompression;
 }
 
 /** texture loader — fetch bytes -> hdr / import / dev decode -> TextureAsset POD. */
@@ -1009,12 +1012,14 @@ async function loadTextureAsset(entry: LoaderEntry, ctx: LoadContext): Promise<L
   // import-on-demand route was never reached.) `image-decode-failed` stays
   // reserved for a genuinely corrupt imported `.bin` and is never
   // transport-eligible, so a real decode failure is never silently lazy-imported.
-  if (!entry.relativeUrl.endsWith('.bin')) {
+  // `.ktx2` is also an import-state suffix (KTX2 container dispatched by magic
+  // byte check downstream, D-5).
+  if (!entry.relativeUrl.endsWith('.bin') && !entry.relativeUrl.endsWith('.ktx2')) {
     return {
       ok: false,
       error: new AssetError({
         code: 'texture-source-not-imported',
-        expected: `a build-time-imported RGBA .bin for texture ${entry.relativeUrl}`,
+        expected: `a build-time-imported RGBA .bin or KTX2 .ktx2 for texture ${entry.relativeUrl}`,
         hint: ASSET_ERROR_HINTS['texture-source-not-imported'],
         detail: { sourcePath: entry.relativeUrl },
       }),
@@ -1033,9 +1038,72 @@ async function loadTextureAsset(entry: LoaderEntry, ctx: LoadContext): Promise<L
     };
   }
 
-  const fetched = await ctx.fetchBinary(entry.relativeUrl);
+  const fetched = await ctx.fetchBinary(
+    entry.relativeUrl,
+    entry.compression ? { compression: entry.compression } : undefined,
+  );
   if (!fetched.ok) return { ok: false, error: fetched.error };
   const bytes = fetched.value;
+
+  // KTX2 magic dispatch (D-5): cheap first-byte sniff (0xAB) keeps non-KTX2
+  // texture loads from importing the codec, then verify the full 12-byte
+  // identifier against the codec's SSOT constant so runtime and codec cannot
+  // drift on the magic bytes.
+  if (bytes.length >= 12 && bytes[0] === 0xab) {
+    const { KTX2_IDENTIFIER, ktx2LevelsToRGBA, parseKtx2 } = await import('@forgeax/engine-codec');
+    if (KTX2_IDENTIFIER.every((m, i) => bytes[i] === m)) {
+      try {
+        const parsed = await parseKtx2(bytes);
+        if (!parsed.ok) {
+          return {
+            ok: false,
+            error: new AssetError({
+              code: 'asset-fetch-failed',
+              expected: 'valid KTX2 texture container',
+              hint: `KTX2 parse failed (${parsed.error.code}): ${(parsed.error.detail as { reason: string }).reason}. ${parsed.error.hint}`,
+              detail: { sourcePath: entry.relativeUrl },
+            }),
+          };
+        }
+
+        const rgba = await ktx2LevelsToRGBA(parsed.value, 0);
+        if (!rgba.ok) {
+          return {
+            ok: false,
+            error: new AssetError({
+              code: 'asset-fetch-failed',
+              expected: 'decompressable KTX2 level data',
+              hint: `KTX2 level decode failed (${rgba.error.code}): ${JSON.stringify(rgba.error.detail)}. ${rgba.error.hint}`,
+              detail: { sourcePath: entry.relativeUrl },
+            }),
+          };
+        }
+
+        const texAsset: TextureAsset = {
+          kind: 'texture',
+          width: parsed.value.header.pixelWidth,
+          height: parsed.value.header.pixelHeight,
+          format: 'rgba8unorm',
+          data: rgba.value,
+          colorSpace: meta.colorSpace,
+          mipmap: meta.mipmap,
+          mipLevelCount: Math.max(1, parsed.value.header.levelCount),
+        };
+        return { ok: true, value: texAsset };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          ok: false,
+          error: new AssetError({
+            code: 'asset-fetch-failed',
+            expected: 'loadable KTX2 texture',
+            hint: `KTX2 codec dynamic import or parse failed: ${message}. Check that @forgeax/engine-codec is installed.`,
+            detail: { sourcePath: entry.relativeUrl },
+          }),
+        };
+      }
+    }
+  }
 
   const width = meta.width ?? 0;
   const height = meta.height ?? 0;
@@ -1097,7 +1165,10 @@ async function loadEquirectAsset(entry: LoaderEntry, ctx: LoadContext): Promise<
     };
   }
 
-  const fetched = await ctx.fetchBinary(entry.relativeUrl);
+  const fetched = await ctx.fetchBinary(
+    entry.relativeUrl,
+    entry.compression ? { compression: entry.compression } : undefined,
+  );
   if (!fetched.ok) return { ok: false, error: fetched.error };
 
   const equirectAsset: EquirectAsset = {
@@ -1121,7 +1192,10 @@ export const fontLoader: Loader = {
 };
 
 async function loadFontAsset(entry: LoaderEntry, ctx: LoadContext): Promise<LoaderAsyncResult> {
-  const fetched = await ctx.fetchBinary(entry.relativeUrl);
+  const fetched = await ctx.fetchBinary(
+    entry.relativeUrl,
+    entry.compression ? { compression: entry.compression } : undefined,
+  );
   if (!fetched.ok) return { ok: false, error: fetched.error };
   let raw: unknown;
   try {
@@ -2080,6 +2154,7 @@ export class AssetRegistry {
           name?: string;
           metadata?: ImageMetadata | undefined;
           refs?: readonly string[];
+          compression?: AssetCompression;
         }
       >
     | undefined = undefined;
@@ -3758,6 +3833,7 @@ export class AssetRegistry {
         kind: string;
         name?: string;
         metadata?: ImageMetadata | undefined;
+        compression?: AssetCompression;
       }
     | undefined
   > {
@@ -3830,6 +3906,7 @@ export class AssetRegistry {
       kind: string;
       name?: string;
       metadata?: ImageMetadata | undefined;
+      compression?: AssetCompression;
     },
     parentContext?: {
       sceneEntityId?: number;
@@ -3902,7 +3979,10 @@ export class AssetRegistry {
       // points at a `.pack.json` carrying number-array vertices (older
       // fixtures and direct-register tests).
       const ctx = this.makeLoadContext();
-      const binFetch = await ctx.fetchBinary(entry.relativeUrl);
+      const binFetch = await ctx.fetchBinary(
+        entry.relativeUrl,
+        entry.compression ? { compression: entry.compression } : undefined,
+      );
       if (!binFetch.ok) {
         return err(binFetch.error) as Result<T, AssetError>;
       }
@@ -4481,6 +4561,7 @@ export class AssetRegistry {
             // imported via POST /__import shows missing dependency edges until
             // the next full pack-index refresh (feat: listCatalog refs).
             ...(e.refs !== undefined ? { refs: e.refs } : {}),
+            ...(e.compression !== undefined ? { compression: e.compression } : {}),
           });
         }
       });
@@ -4544,6 +4625,7 @@ export class AssetRegistry {
           name?: string;
           metadata?: ImageMetadata | undefined;
           refs?: readonly string[];
+          compression?: AssetCompression;
         }
       >,
       AssetError
@@ -4590,6 +4672,7 @@ export class AssetRegistry {
         name?: string;
         metadata?: ImageMetadata | undefined;
         refs?: readonly string[];
+        compression?: AssetCompression;
       }
     >();
     for (const item of raw as Array<{
@@ -4599,6 +4682,7 @@ export class AssetRegistry {
       name?: unknown;
       metadata?: unknown;
       refs?: unknown;
+      compression?: unknown;
     }>) {
       if (
         typeof item.guid === 'string' &&
@@ -4621,6 +4705,7 @@ export class AssetRegistry {
           name?: string;
           metadata?: ImageMetadata | undefined;
           refs?: readonly string[];
+          compression?: AssetCompression;
         } = {
           relativeUrl: item.relativeUrl,
           kind: item.kind,
@@ -4632,6 +4717,11 @@ export class AssetRegistry {
         // non-string edges into the catalog.
         if (Array.isArray(item.refs) && item.refs.every((r) => typeof r === 'string')) {
           row.refs = item.refs as readonly string[];
+        }
+        // compression is the optional compression strategy field (Loop 1).
+        // Narrow to literal union values to reject malformed rows.
+        if (item.compression === 'none' || item.compression === 'zstd') {
+          row.compression = item.compression;
         }
         catalog.set(item.guid.toLowerCase(), row);
       }
@@ -4957,7 +5047,14 @@ export class AssetRegistry {
    */
   private makeLoadContext(): LoadContext {
     return {
-      fetchBinary: async (url: string) => {
+      /**
+       * feat-20260706 M3 / w19: fetchBinary signature extended per D-2.
+       * `opts?.compression` triggers the single decompression gate (AC-02).
+       * 'zstd' → lazy-init codec decompressZstd · 'none' / undefined → pass-through.
+       * On decompression failure, the codec error is nested in asset-fetch-failed
+       * detail (D-8: runtime error union NOT extended).
+       */
+      fetchBinary: async (url: string, opts?: { readonly compression?: AssetCompression }) => {
         try {
           const res = await globalThis.fetch(url);
           if (!res.ok) {
@@ -4971,7 +5068,32 @@ export class AssetRegistry {
             };
           }
           const buf = await res.arrayBuffer();
-          return { ok: true as const, value: new Uint8Array(buf) };
+          let bytes: Uint8Array = new Uint8Array(buf);
+
+          // --- Decompression gate (AC-02: single gate inside fetchBinary) ---
+          if (opts?.compression === 'zstd') {
+            const { decompressZstd } = await import('@forgeax/engine-codec');
+            const decRes = await decompressZstd(bytes);
+            if (!decRes.ok) {
+              return {
+                ok: false as const,
+                error: new AssetError({
+                  code: 'asset-parse-failed',
+                  expected: `zstd decompression for ${url}`,
+                  hint: `[${decRes.error.code}] ${decRes.error.hint}`,
+                  detail: { sourcePath: url },
+                }),
+              };
+            }
+            bytes = new Uint8Array(
+              decRes.value.buffer,
+              decRes.value.byteOffset,
+              decRes.value.byteLength,
+            );
+          }
+          // compression === 'none' / undefined → E1 pass-through
+
+          return { ok: true as const, value: bytes };
         } catch {
           return {
             ok: false as const,
@@ -5062,6 +5184,8 @@ export class AssetRegistry {
     name?: string;
     relativeUrl: string;
     refs?: readonly string[];
+    /** Build-time compression strategy. `undefined` for legacy / uncompressed rows. */
+    compression?: AssetCompression;
   }[] {
     const seen = new Set<string>();
     const result: {
@@ -5070,6 +5194,7 @@ export class AssetRegistry {
       name?: string;
       relativeUrl: string;
       refs?: readonly string[];
+      compression?: AssetCompression;
     }[] = [];
 
     // Prod entries: packIndexCache carries relativeUrl + optional name + refs.
@@ -5082,6 +5207,7 @@ export class AssetRegistry {
           name: entry.name ?? '',
           relativeUrl: entry.relativeUrl,
           ...(entry.refs !== undefined ? { refs: entry.refs } : {}),
+          ...(entry.compression !== undefined ? { compression: entry.compression } : {}),
         });
       }
     }

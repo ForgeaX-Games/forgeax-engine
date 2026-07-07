@@ -9,7 +9,7 @@ description: >-
 
 # forgeax-engine-app
 
-> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: [`358592eb`](../../commit/358592eb) (2026-06-09)
+> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: [`a7de53330`](../../commit/a7de53330) (2026-07-06)
 
 > 把"一块 canvas"变成"一个在跑的游戏"。引导 + 主循环 + 输入 + 动画/物理接线，四件事一个 skill。聚合 `@forgeax/engine-app` · `@forgeax/engine-input` · `@forgeax/engine-runtime`（引导面）。
 
@@ -23,6 +23,8 @@ description: >-
 | `createRenderer(canvas, opts?, bundler?)` | `Renderer`——只渲染 | 你自己拿 rAF 调 `draw(world)` |
 
 绝大多数游戏从 `createApp` 起步。`App` 是状态机：`start → (pause ⇄ resume) → stop`。输入不轮询——引擎在**帧起始**冻结成只读 `InputSnapshot` 资源，系统在 `world` 里读它。
+
+gamepad 采集是「每帧轮询式」（`navigator.getGamepads()` 在 `sample()` 内调用——无 `gamepadconnected` 事件监听），touch 相位转换是「事件流」（pointerdown/pointermove/pointerup 在帧内积入队列），但 `InputSnapshot` 读写面完全一样：`snap.gamepad(0).button(b)` / `snap.pointer(id).x` / `snap.virtualAxis('move')`——charter P4 将采集差异隐藏在后端内部，AI 用户不需感知"轮询 vs 事件流"的区别。
 
 参数面分两层：`canvas`（必选）/ `opts?: CreateAppOptions`（app 行为：`plugins` / `maxDt`）/ `bundler?: BundlerOptions`（构建层：`shaderManifestUrl` + `importTransport`）。`clearColor` 不在参数里——已搬到 `Camera.clearR/G/B/A`：渲染表现归 `Camera`，构建通道归 `bundler`，app 行为归 `opts`，三关注面分离。
 
@@ -130,7 +132,7 @@ const app = await createApp({ renderer, world, plugins: [
 | `Engine.create(canvas, opts?, bundler?)` | `createRenderer` 的命名空间别名 | 与 `createRenderer` 同一函数，喜欢 `Engine.create({...})` 写法时用 |
 | `forgeaxBundlerAdapter()` | `() => BundlerOptions` | 由 `virtual:forgeax/bundler` 虚拟模块导出，标准第三参数——聚合 `shaderManifestUrl` + `importTransport` |
 | `App.start() / stop() / pause() / resume()` | `() => Result<void, AppError>` | 主循环状态机；返回结构化 `Result` |
-| `world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)` | `=> InputSnapshot` | 在系统里取帧起始输入快照（推荐 import 常量 `INPUT_SNAPSHOT_RESOURCE_KEY` 而非裸字符串 `'InputSnapshot'`） |
+| `world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)` | `=> InputSnapshot` | 在系统里取帧起始输入快照（推荐 import 常量 `INPUT_SNAPSHOT_RESOURCE_KEY` 而非裸字符串 `'InputSnapshot'`）。读点面：keyboard（down/up）/ mouse（movementDelta/button(0\|1\|2)/wheelDelta）/ gamepad（gamepad(i).button(b)/buttonValue/justPressed/justReleased/axis(a)/connected/standardMapping）/ pointer（pointer(id) → {active,x,y,pressure,pointerType,delta}）/ virtualAxis（virtualAxis(name) → {x,y}）/ capabilities（frozen {gamepad,pointer}）/ pointerEvents（本帧相位队列） |
 | `world.insertResource(INPUT_BACKEND_KEY, backend)` | 资源注入 | 插入 `InputBackend` 实例到 World（由 `createApp` 自动完成）；系统 token `InputFrameStartScan` 经 `resources: [INPUT_BACKEND_KEY]` 声明依赖，ParamValidation 校验缺失 |
 | `world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, resolver)` | 资源注入 | 插入 `AnimationAssetResolver` 到 World（由 `createApp` 自动完成）；系统 token `AdvanceAnimationPlayer` 经 `resources: [ANIMATION_ASSET_RESOLVER_KEY]` 声明依赖 |
 | `world.addSystem(InputFrameStartScan)` | 注册 token | 激活帧起始输入扫描系统（替代已删除的 `createFrameStartScanSystem` 工厂） |
@@ -188,10 +190,21 @@ const MovePlayer = defineSystem({
   queries: [{ with: [Transform] }],
   fn: (world, queryResults) => {
     const input = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
+    // keyboard + mouse (classic 4-method surface)
     const dx = (input.keyboard.down('d') ? 1 : 0) - (input.keyboard.down('a') ? 1 : 0);
+    // gamepad: left stick X-axis (0.x) + button A (0) for jump
+    const gpx = input.gamepad(0).axis(0);
+    const jump = input.gamepad(0).justPressed(0); // one-frame edge
+    // pointer: touch position (pointerId 0)
+    const touch = input.pointer(0);
+    const tx = touch.active ? touch.x : 0;
+    // virtual joystick (named 'move')
+    const joy = input.virtualAxis('move');
+    // capability probe (one-shot at attach)
+    const hasGamepad = input.capabilities.gamepad;
     for (const bundle of queryResults[0]) {
       const xs = bundle.Transform.posX;
-      for (let i = 0; i < bundle.entityCount; i++) xs[i] = (xs[i] ?? 0) + dx;
+      for (let i = 0; i < bundle.entityCount; i++) xs[i] = (xs[i] ?? 0) + dx + gpx;
     }
   },
 });
@@ -201,7 +214,19 @@ app.start();   // arms the rAF loop
 // app.pause(); app.resume(); app.stop();
 ```
 
-`InputSnapshot` 表面（4 方法）：`keyboard.down(key)` / `keyboard.up(key)`（上一帧释放的 up-edge）/ `mouse.button(0|1|2)` / `mouse.movementDelta` + `mouse.wheelDelta`。未按下的键返回 `false`，不 throw（charter P3：空信号即信号）。
+`InputSnapshot` 多设备读点面——全部在同一 `world.getResource<InputSnapshot>(...)` 对象上，无需任何互斥 / mode 开关：
+
+| 集群 | 读点 | 类型 |
+|:--|:--|:--|
+| keyboard | `.down(key)` / `.up(key)` | `boolean` per key（key 匹配 `KeyboardEvent.key`） |
+| mouse | `.movementDelta`（`{x,y}`）/ `.button(0\|1\|2)`（`boolean`）/ `.wheelDelta`（`number`） | PointerLock 累加 + W3C button 槽 + sign-discrete 滚轮 notches |
+| gamepad | `.gamepad(i).button(b)` / `.buttonValue(b)` / `.justPressed(b)` / `.justReleased(b)` / `.axis(a)` / `.connected` / `.standardMapping` | slot `i` 不收窄（运行时断连 / 越界回空信号）；`b: 0\|1\|...\|16` / `a: 0\|1\|2\|3`——越界字面量 TS 编译报错 |
+| pointer | `.pointer(id)` — 返回 `{ active, x, y, pressure, pointerType, delta }` | per-pointerId reader；不存在 → `active=false`（空信号） |
+| virtualAxis | `.virtualAxis(name)` — 返回 `{ x, y }` | named joystick 读点；不存在 → 零向量（空信号） |
+| capabilities | `.capabilities` — 返回 `{ gamepad: boolean, pointer: boolean }` | 后端 attach 时冻结的一次性探针 |
+| pointerEvents | `.pointerEvents` — 返回 `readonly PointerPhaseEvent[]` | 本帧相位事件队列（down / move / up / cancel，一帧寿命） |
+
+未按下的键 / 断连 slot / 不对齐 pointerId / 不存在的 virtualAxis name 全部返回 `false` / `0` / 零向量——空信号即信号（charter P3）。超出字面量范围的 gamepad button/axis 索引触发 TS 编译错误（literal union 收紧）。
 
 ### Sprite bootstrap：`renderState.blend` 是 transparent 的 SSOT
 
@@ -226,7 +251,7 @@ const spriteMat: MaterialAsset = {
 ## 踩坑
 
 - **canvas 起飞失败别吞**：`createApp` 失败回 `Result`，`res.error` 带结构化 `.code` / `.hint`；按属性消费，别 `String(err)` 解析。后端拿不到时是 `createRenderer` throw `EngineEnvironmentError`，不是 `Result`。
-- **预启动读 InputSnapshot 全 false 是预期**：`app.start()` 之前 / headless 下，held-key 与 edge 都报 `false` / `0`，不是 bug——空信号本身是信号。
+- **预启动读 InputSnapshot 全 false 是预期**：`app.start()` 之前 / headless 下，held-key 与 edge 都报 `false` / `0`，不是 bug——空信号本身是信号。同样：gamepad 断连 slot / non-existent pointerId / unconfigured virtualAxis name 全部返回 `false` / `0` / 零向量——不 throw。
 - **`clearColor` 不在 `createApp` 参数里**：已搬到 `Camera` 组件的 `clearR/G/B/A` 字段（`packages/runtime/README.md` §Camera clear color）。零 Camera 场景 fallback 为 `[0,0,0,1]`。
 - **`shaderManifestUrl` 不在 `opts` 里**：已搬到第三参数 `BundlerOptions`。零配置场景省略第三参数即可（引擎 fallback `'/shaders/manifest.json'`）；显式注入用 `forgeaxBundlerAdapter()`（`virtual:forgeax/bundler`）。
 - **内置网格不需要 `registerWithGuid`**：`cube` / `triangle` / `quad` / `sphere` 四种内置网格的 GUID→handle 映射已在 `AssetRegistry` 构造时预注册（Tier 0, feat-20260604）。手动再 `registerWithGuid` 会抛 GUID 碰撞错误。自定义资产仍需显式注册。
@@ -419,7 +444,7 @@ if (snap.reason !== 'alive') {
 
 - 引导 / 主循环状态机 / AppError 5 成员 / onError fan-out / 资源化接线：见 `packages/app/README.md` §One-screen takeoff · §AppError 5-member closed union · §onError multi-listener；源码 SSOT `packages/app/src/create-app.ts` + `packages/app/src/errors.ts`
 - 低层渲染器 / `Renderer.draw` / `Renderer.ready` 屏障：见 `packages/runtime/README.md` §API 索引；源码 `packages/runtime/src/createRenderer.ts`
-- 输入 4 步 recipe / 形态铁律 / PointerLock 后端 / `InputFrameStartScan` token + `INPUT_BACKEND_KEY` 资源化接线：见 `packages/input/README.md` §4 步 recipe · §4 方法表面；源码 `packages/input/src/input-snapshot.ts` + `packages/input/src/frame-start-scan-system.ts`
+- 输入 4 步 recipe / 形态铁律 / 多设备表面（keyboard + mouse + gamepad + pointer + virtualAxis）/ `InputFrameStartScan` token + `INPUT_BACKEND_KEY` 资源化接线：见 `packages/input/README.md` §4 步 recipe · §多设备表面；源码 `packages/input/src/input-snapshot.ts` + `packages/input/src/frame-start-scan-system.ts`
 - 蒙皮 / 动画 4 步 recipe（`createApp` + `configurePackIndex` + `loadByGuid<SceneAsset>` + 多实例 instantiate + 每实例独立 `AnimationPlayer`）+ `AdvanceAnimationPlayer` token + `ANIMATION_ASSET_RESOLVER_KEY` 资源化接线：参考 `apps/hello/skin/src/main.ts`；底层 SkinAsset / SkeletonAsset / AnimationClip POD 由 gltfImporter 自动 emit，bridge 自动挂 `Skin` 组件；多实例关节隔离由 postSpawnResolveJoints 子树作用域兜底；源码 `packages/runtime/src/systems/advance-animation-player.ts`
 - 物理 3D/2D 接线（`registerPhysicsSystems(world)` / `registerPhysicsSystems2D(world)`，第二参已删除）：源码 `packages/physics-rapier3d/src/rapier-physics-world-3d.ts` + `packages/physics-rapier2d/src/rapier-physics-world-2d.ts`
 - **完整游戏集成范例**：`apps/collectathon/` —— 单关卡 3D 第三人称 collectathon，把 11 项能力组合在一个 app（third-person `CharacterController`+KCC 移动、`AnimationPlayer` weights[] crossfade、`defineState` 四态机+state-scoped 实体、sensor `CollidingEntities` 拾取/命中、bloom+tonemap+fxaa 后处理 + emissive Core 驱动 bloom glow、sky.hdr IBL `Skylight`+`SkyboxBackground`、3D 空间音频双 bus、HUD DOM overlay 单向派生）。grep 关键词 `third-person` / `core-collect` / `guardian-ai` / `hud-sync` / `audio-cue` 直达对应子系统单文件；单入口能力索引 `apps/collectathon/README.md`

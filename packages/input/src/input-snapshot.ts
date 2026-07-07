@@ -1,26 +1,117 @@
-// input-snapshot.ts -- frozen frame-start input snapshot Resource (5-method
-// surface) for forgeax-engine.
-//
-// AC-07 / AC-08 + plan-strategy D-5 / D-7 lock the surface to:
-//   keyboard.down(key)  -> boolean   (held this frame)
-//   keyboard.up(key)    -> boolean   (up-edge that landed in the prior frame)
-//   mouse.movementDelta -> { x, y }  (PointerLock movementX/Y accumulator)
-//   mouse.button(i)     -> boolean   (W3C MouseEvent.button: 0 / 1 / 2)
-//   mouse.wheelDelta    -> number    (sign-discrete notches per frame)
+// input-snapshot.ts -- frozen frame-start input snapshot Resource for
+// forgeax-engine. Multi-device surface (keyboard + mouse + gamepad + pointer +
+// virtualAxis) — each cluster is a frozen reader on the per-frame Sample.
 //
 // charter awareness:
-//   F2 minimal surface -- 4 methods, nothing else
+//   F1 single-entry indexability -- barrel exports all types; IDE autocomplete
+//     reaches the full surface from one import
+//   F2 minimal surface -- each device cluster exposes only its natural
+//     readpoints; no phantom methods or modal parameters
 //   P3 explicit failure -- no thrown errors from accessor methods; absent
-//     keys / pre-start state report `false` / `0` (the empty signal IS
-//     the signal). `mouse.button(i)` parameter is the literal union
-//     `0 | 1 | 2`, so an out-of-range index is a TS compile error rather
-//     than a runtime bounds-clamp.
+//     keys / pre-start state / disconnected slots / unsupported devices
+//     all report `false` / `0` / zero-vector (the empty signal IS the
+//     signal). `mouse.button(i)` / `gamepad.button(b)` parameters are
+//     literal unions so out-of-range indices are TS compile errors rather
+//     than runtime bounds-clamps.
 //   P4 consistent abstraction -- the snapshot hides the producer
-//     (browser PointerLock + key listeners) entirely; consumers read via
-//     the `InputSnapshot` Resource regardless of backend
+//     (browser listener wiring + gamepad polling) entirely; consumers read
+//     via the `InputSnapshot` Resource regardless of backend
 //   P5 producer/consumer split -- the InputBackend protocol decouples
 //     the producer from the snapshot; `frame-start-scan-system.ts` is the
 //     bridge that calls `backend.sample()` and writes the Resource
+
+/** Standard-layout gamepad button index (0-16 per W3C Gamepad spec). */
+export type GamepadButtonIndex =
+  | 0
+  | 1
+  | 2
+  | 3
+  | 4
+  | 5
+  | 6
+  | 7
+  | 8
+  | 9
+  | 10
+  | 11
+  | 12
+  | 13
+  | 14
+  | 15
+  | 16;
+
+/** Standard-layout gamepad axis index (0-3 per W3C Gamepad spec). */
+export type GamepadAxisIndex = 0 | 1 | 2 | 3;
+
+/** Per-slot gamepad frame data produced by `sample()`. */
+export interface GamepadSlotSample {
+  readonly index: number;
+  readonly standardMapping: boolean;
+  readonly pressed: ReadonlySet<number>;
+  readonly justPressed: ReadonlySet<number>;
+  readonly justReleased: ReadonlySet<number>;
+  readonly buttonValues: ReadonlyMap<number, number>;
+  readonly axes: readonly [number, number, number, number];
+}
+
+/** Per-pointer live state (active contacts tracked by pointerId). */
+export interface PointerSample {
+  readonly pointerId: number;
+  readonly x: number;
+  readonly y: number;
+  readonly pressure: number;
+  readonly pointerType: string;
+  readonly active: boolean;
+  readonly delta: { readonly x: number; readonly y: number };
+}
+
+/** Per-frame phase event (down/move/up/cancel queue, one-frame lifecycle). */
+export interface PointerPhaseEvent {
+  readonly pointerId: number;
+  readonly phase: 'down' | 'move' | 'up' | 'cancel';
+  readonly x: number;
+  readonly y: number;
+  readonly pressure: number;
+  readonly pointerType: string;
+}
+
+/** Per-frame virtual axis output (named joystick derived from pointer input). */
+export interface VirtualAxisSample {
+  readonly name: string;
+  readonly x: number;
+  readonly y: number;
+}
+
+/**
+ * Configuration for an on-screen virtual joystick (M3). Consumed by
+ * attachBrowserInputBackend and passed through to deriveVirtualAxes.
+ *
+ * Fixed mode: origin is config.anchor (or region center if anchor omitted).
+ * Floating mode: origin is the first pointerdown position within the region.
+ */
+export interface VirtualJoystickConfig {
+  readonly name: string;
+  readonly mode: 'fixed' | 'floating';
+  /** Canvas-pixel region where touches are eligible to bind this joystick. */
+  readonly region: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  /** Fixed-mode origin anchor. Defaults to region center when omitted. */
+  readonly anchor?: { readonly x: number; readonly y: number } | undefined;
+  /** Max drag radius in canvas pixels. Vector is clamped then normalized to radius. */
+  readonly radius: number;
+  /** Normalized deadzone (0..1). |vec| < deadzone → zero vector output. */
+  readonly deadzone: number;
+}
+
+/** Capability snapshot (frozen at backend attach time). */
+export interface Capabilities {
+  readonly gamepad: boolean;
+  readonly pointer: boolean;
+}
 
 /**
  * Frozen value-shape view exposed to user systems via the `InputSnapshot`
@@ -86,6 +177,49 @@ export interface InputSnapshot {
      */
     readonly wheelDelta: number;
   };
+  /**
+   * Per-slot gamepad reader. Returns a reader object for the gamepad at
+   * slot `i` regardless of connection state: disconnected or out-of-range
+   * slots report `connected=false`, all button/axis readpoints return
+   * `false`/`0` (charter P3 empty signal). The slot index is intentionally
+   * not narrowed — platform slot counts vary, and bounds handling is a
+   * runtime concern.
+   */
+  gamepad(i: number): {
+    readonly connected: boolean;
+    readonly standardMapping: boolean;
+    button(b: GamepadButtonIndex): boolean;
+    buttonValue(b: GamepadButtonIndex): number;
+    justPressed(b: GamepadButtonIndex): boolean;
+    justReleased(b: GamepadButtonIndex): boolean;
+    axis(a: GamepadAxisIndex): number;
+  };
+  /**
+   * Frozen capabilities snapshot, determined once at backend attach time.
+   * Consumers use this to decide whether gamepad/pointer readpoints will
+   * ever carry live data, without probing per-frame.
+   */
+  readonly capabilities: Capabilities;
+  /**
+   * Per-pointerId reader. Returns `{ active: true/false, x, y, pressure,
+   * pointerType, delta }` for the given pointerId. Unknown pointerIds
+   * return `{ active: false, ... }` without throwing.
+   */
+  pointer(
+    id: number,
+  ): PointerSample & { readonly delta: { readonly x: number; readonly y: number } };
+  /**
+   * Named virtual axis reader (joystick-derived). Returns `{ x, y }` for
+   * the given joystick config name. Unknown names return the zero-vector
+   * `{ x: 0, y: 0 }` without throwing.
+   */
+  virtualAxis(name: string): { readonly x: number; readonly y: number };
+  /**
+   * Per-frame phase event queue (down/move/up/cancel). One-frame
+   * lifecycle; drained by `sample()` at frame end. Empty array when no
+   * pointer events occurred this frame.
+   */
+  readonly pointerEvents: readonly PointerPhaseEvent[];
 }
 
 /**
@@ -129,6 +263,16 @@ export interface InputBackendSample {
    */
   readonly wheelDelta: number;
   readonly focused: boolean;
+  /** M1+ gamepad per-slot frame data (optional — absent when backend lacks gamepad support). */
+  readonly gamepads?: readonly GamepadSlotSample[];
+  /** M1+ frozen capability snapshot (optional — absent for pre-M1 backends). */
+  readonly capabilities?: Capabilities;
+  /** M2+ active pointer contacts (optional — absent for keyboard-only backends). */
+  readonly pointers?: readonly PointerSample[];
+  /** M2+ per-frame phase event queue (optional — absent when no pointer events occurred). */
+  readonly pointerEvents?: readonly PointerPhaseEvent[];
+  /** M3+ virtual joystick axis outputs (optional — absent when no virtual joysticks configured). */
+  readonly virtualAxes?: readonly VirtualAxisSample[];
 }
 
 /**
@@ -136,6 +280,66 @@ export interface InputBackendSample {
  * frozen on construction: `down/up/button` are bound to the closed-over
  * sets, and `movementDelta` is a frozen literal. Subsequent backend
  * activity does not bleed into the snapshot.
+ */
+function emptyGamepadReader(): ReturnType<InputSnapshot['gamepad']> {
+  return Object.freeze({
+    connected: false,
+    standardMapping: false,
+    button(_b: GamepadButtonIndex): boolean {
+      return false;
+    },
+    buttonValue(_b: GamepadButtonIndex): number {
+      return 0;
+    },
+    justPressed(_b: GamepadButtonIndex): boolean {
+      return false;
+    },
+    justReleased(_b: GamepadButtonIndex): boolean {
+      return false;
+    },
+    axis(_a: GamepadAxisIndex): number {
+      return 0;
+    },
+  });
+}
+
+function buildGamepadReader(slot: GamepadSlotSample): ReturnType<InputSnapshot['gamepad']> {
+  if (!slot.standardMapping) {
+    // AC-04: non-standard layout reports connected=true +
+    // standardMapping=false + all readpoints empty signal.
+    return Object.freeze({
+      connected: true,
+      standardMapping: false,
+      button: emptyGamepadReader().button,
+      buttonValue: emptyGamepadReader().buttonValue,
+      justPressed: emptyGamepadReader().justPressed,
+      justReleased: emptyGamepadReader().justReleased,
+      axis: emptyGamepadReader().axis,
+    });
+  }
+  return Object.freeze({
+    connected: true,
+    standardMapping: true,
+    button(b: GamepadButtonIndex): boolean {
+      return slot.pressed.has(b);
+    },
+    buttonValue(b: GamepadButtonIndex): number {
+      return slot.buttonValues.get(b) ?? 0;
+    },
+    justPressed(b: GamepadButtonIndex): boolean {
+      return slot.justPressed.has(b);
+    },
+    justReleased(b: GamepadButtonIndex): boolean {
+      return slot.justReleased.has(b);
+    },
+    axis(a: GamepadAxisIndex): number {
+      return slot.axes[a];
+    },
+  });
+}
+
+/**
+ * Build an `InputSnapshot` from a backend sample.
  */
 export function snapshotFromSample(sample: InputBackendSample): InputSnapshot {
   // structuralCopy: copying into local sets isolates the snapshot from
@@ -151,6 +355,29 @@ export function snapshotFromSample(sample: InputBackendSample): InputSnapshot {
   ];
   const movementDelta = Object.freeze({ x: sample.movementX, y: sample.movementY });
   const wheelDelta = sample.wheelDelta;
+
+  // D-9: use `??` empty-signal defaults for all new optional fields.
+  const gamepadSlots: readonly GamepadSlotSample[] = sample.gamepads ?? [];
+  const caps: Capabilities =
+    sample.capabilities ?? Object.freeze({ gamepad: false, pointer: false });
+  const pointerEvts: readonly PointerPhaseEvent[] = sample.pointerEvents ?? [];
+  // virtualAxes: consumed by M3 virtualAxis reader; stored as local for
+  // the snapshot closure below.
+  const _virtualAxes: readonly VirtualAxisSample[] = sample.virtualAxes ?? [];
+
+  const virtualAxesMap = new Map<string, VirtualAxisSample>();
+  for (const va of _virtualAxes) {
+    virtualAxesMap.set(va.name, va);
+  }
+
+  // Build index→slot map so gamepad(i) looks up by slot.index, not array position.
+  // The browser getGamepads() returns null-padded arrays where position IS the
+  // index, but the diffGamepadFrame output is a sparse list keyed by .index.
+  const gamepadSlotMap = new Map<number, GamepadSlotSample>();
+  for (const slot of gamepadSlots) {
+    gamepadSlotMap.set(slot.index, slot);
+  }
+
   const snapshot: InputSnapshot = {
     keyboard: {
       down(key) {
@@ -171,17 +398,48 @@ export function snapshotFromSample(sample: InputBackendSample): InputSnapshot {
       },
       wheelDelta,
     },
+    gamepad(i) {
+      const slot = gamepadSlotMap.get(i);
+      if (!slot) return emptyGamepadReader();
+      return buildGamepadReader(slot);
+    },
+    capabilities: caps,
+    pointer(id) {
+      const entry = (sample.pointers ?? []).find((p) => p.pointerId === id);
+      if (!entry) {
+        return Object.freeze({
+          active: false,
+          pointerId: -1,
+          x: 0,
+          y: 0,
+          pressure: 0,
+          pointerType: '',
+          delta: Object.freeze({ x: 0, y: 0 }),
+        });
+      }
+      return Object.freeze({
+        ...entry,
+        delta: Object.freeze({ x: entry.delta.x, y: entry.delta.y }),
+      });
+    },
+    virtualAxis(name) {
+      const va = virtualAxesMap.get(name);
+      if (!va) return Object.freeze({ x: 0, y: 0 });
+      return Object.freeze({ x: va.x, y: va.y });
+    },
+    pointerEvents: pointerEvts,
   };
   return Object.freeze(snapshot);
 }
 
 /**
  * Construct an empty snapshot for the pre-start window
- * (`engine.run()` has not yet attached a backend). Returns the same
- * 4-method shape as `snapshotFromSample`, with every accessor returning
- * `false` / `{ x: 0, y: 0 }`. AI users can put this into the Resource
- * store to satisfy `world.getResource('InputSnapshot')` calls in
- * fixtures or unit tests (charter P3: empty signal is the signal).
+ * (`engine.run()` has not yet attached a backend). Returns the full
+ * multi-device shape as `snapshotFromSample`, with every accessor
+ * returning `false` / `0` / zero-vector. AI users can put this into the
+ * Resource store to satisfy `world.getResource('InputSnapshot')` calls
+ * in fixtures or unit tests (charter P3: empty signal is the signal).
+ * The underlying 7-field POD sample contract is unchanged (D-9).
  */
 export function createInputSnapshot(): InputSnapshot {
   return snapshotFromSample({

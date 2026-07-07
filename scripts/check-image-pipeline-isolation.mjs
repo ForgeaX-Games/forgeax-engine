@@ -58,6 +58,14 @@
 //     textures only via the loadByGuid recipe (charter P4 consistent
 //     abstraction).
 //
+//   Path (d) -- packages/runtime/src/ must NOT statically import from
+//     `@forgeax/engine-codec/encode` (the build-time encoding subpath).
+//     Runtime MAY import from `@forgeax/engine-codec` (the runtime-safe
+//     main entry with decompressZstd / parseKtx2). The subpath-level
+//     separation (D-1) lets the gate distinguish encode vs decode via a
+//     static import string literal — encode is build-time only and must
+//     not be bundled into the runtime.
+//
 // Production CI invocation: `node scripts/check-image-pipeline-isolation.mjs`
 // (no flags, defaults `--root` to process.cwd()). The `--root <dir>` flag
 // is for self-test fixtures; see scripts/__tests__/check-image-pipeline-
@@ -254,11 +262,43 @@ if (!existsSync(texturesEntry)) {
   }
 }
 
+// -- Path (d): packages/runtime/src/ -- must not import from @forgeax/engine-codec/encode --
+// The codec package uses subpath-level separation (D-1): `@forgeax/engine-codec`
+// is the runtime-safe main entry (decompressZstd / parseKtx2); `@forgeax/engine-codec/encode`
+// is the build-time encoding subpath (compressZstd). Runtime must use only the main entry.
+const codecEncodeImportRe =
+  /^\s*import\b[\s\S]*?from\s+['"]@forgeax\/engine-codec\/encode['"]\s*;?/gm;
+const pathDFailures = [];
+
+walk(runtimeSrc, (p, content) => {
+  const importLines = content.match(codecEncodeImportRe) ?? [];
+  for (const line of importLines) {
+    pathDFailures.push(
+      `runtime static import of @forgeax/engine-codec/encode: ${p} (\`${line.trim()}\`) -- build-time only; use @forgeax/engine-codec main entry for runtime-safe decode`,
+    );
+  }
+});
+
+if (pathDFailures.length > 0) {
+  process.stderr.write(`AC-15 (d) FAIL: packages/runtime/src has encode subpath imports\n`);
+  for (const f of pathDFailures) process.stderr.write(`  - ${f}\n`);
+  process.stderr.write(
+    '[hint] @forgeax/engine-codec/encode contains build-time zstd compression. ' +
+      'Runtime code must import from @forgeax/engine-codec (main entry) instead, ' +
+      'which exports runtime-safe decompressZstd / parseKtx2 / errors.\n',
+  );
+  totalFailures += 1;
+} else {
+  process.stdout.write(
+    `AC-15 (d) OK: packages/runtime/src clean (no @forgeax/engine-codec/encode import)\n`,
+  );
+}
+
 if (totalFailures > 0) {
   process.stderr.write(`\nAC-15 image pipeline isolation gate: ${totalFailures} failure(s)\n`);
   process.exit(1);
 }
-process.stdout.write('\nAC-15 image pipeline isolation gate: PASS (3 paths)\n');
+process.stdout.write('\nAC-15 image pipeline isolation gate: PASS (4 paths)\n');
 
 function walk(dir, cb) {
   let entries;

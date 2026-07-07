@@ -1945,3 +1945,174 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
     });
   });
 }
+
+{
+  // ─── watcher debounce + dedup + no listener leak
+  //     (feedback 2026-07-06-vite-plugin-pack-watcher-debounce-dedup-listener-leak) ───
+
+  interface WatchRecordedSend {
+    readonly type: string;
+  }
+
+  interface WatchMockServer {
+    readonly middlewares: { use(handler: unknown): void };
+    readonly watcher: {
+      on(event: string, cb: (...args: unknown[]) => void): void;
+      readonly onCalls: string[];
+    };
+    readonly ws: {
+      send(payload: { type: string } & Record<string, unknown>): void;
+      readonly calls: WatchRecordedSend[];
+    };
+  }
+
+  function makeWatchMockServer(): WatchMockServer {
+    const calls: WatchRecordedSend[] = [];
+    const onCalls: string[] = [];
+    return {
+      middlewares: { use: () => {} },
+      watcher: {
+        on(event) {
+          onCalls.push(event);
+        },
+        onCalls,
+      },
+      ws: {
+        send(payload) {
+          calls.push({ type: payload.type });
+        },
+        calls,
+      },
+    };
+  }
+
+  async function watchWaitFor(
+    predicate: () => boolean,
+    options: { timeoutMs?: number; intervalMs?: number } = {},
+  ): Promise<void> {
+    const timeoutMs = options.timeoutMs ?? 1500;
+    const intervalMs = options.intervalMs ?? 20;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return;
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  }
+
+  function countReloads(server: WatchMockServer): number {
+    return server.ws.calls.filter((c) => c.type === 'full-reload').length;
+  }
+
+  const WATCH_WOOD_GUID = '019e2cc6-0c86-79da-aa76-b0984c86d45c';
+  function watchWoodImageMeta(): string {
+    return JSON.stringify({
+      schemaVersion: '1.0.0',
+      kind: 'external-asset-package',
+      importer: 'image',
+      source: 'wood-container.jpg',
+      importSettings: { colorSpace: 'srgb', mipmap: 'auto' },
+      subAssets: [{ guid: WATCH_WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
+    });
+  }
+  const WATCH_ONE_BYTE_JPG = new Uint8Array([0xff]);
+
+  describe('watcher-debounce-dedup.test.ts', () => {
+    let originalCwd: string;
+    let tmpRoot: string;
+    let assetsDir: string;
+
+    beforeEach(async () => {
+      originalCwd = process.cwd();
+      tmpRoot = await mkdtemp(join(tmpdir(), 'forgeax-vpp-watch-'));
+      assetsDir = join(tmpRoot, 'assets');
+      process.chdir(tmpRoot);
+      await mkdir(assetsDir, { recursive: true });
+      await writeFile(join(assetsDir, 'wood-container.jpg'), WATCH_ONE_BYTE_JPG);
+      await writeFile(join(assetsDir, 'wood-container.meta.json'), watchWoodImageMeta());
+    });
+
+    afterEach(async () => {
+      process.chdir(originalCwd);
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('(a) never registers a `change` listener on server.watcher (no leak)', async () => {
+      const server = makeWatchMockServer();
+      const plugin = pluginPack({ roots: [assetsDir] });
+      plugin.configureServer(server as never);
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Trigger several sidecar rebuilds; the old code accumulated one no-op
+      // `server.watcher.on('change', ...)` per rebuild (MaxListenersExceeded).
+      for (let i = 0; i < 4; i++) {
+        await writeFile(join(assetsDir, 'wood-container.meta.json'), watchWoodImageMeta());
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      await watchWaitFor(() => countReloads(server) > 0);
+
+      expect(server.watcher.onCalls.filter((e) => e === 'change')).toHaveLength(0);
+    });
+
+    it('(b) a burst of rapid writes coalesces into a single full-reload', async () => {
+      const server = makeWatchMockServer();
+      const plugin = pluginPack({ roots: [assetsDir] });
+      plugin.configureServer(server as never);
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Fan a single logical edit into many fs.watch events inside one debounce
+      // window (mimics Windows event amplification). All must collapse to ONE
+      // catalog rebuild + ONE reload.
+      for (let i = 0; i < 8; i++) {
+        await writeFile(join(assetsDir, 'wood-container.meta.json'), watchWoodImageMeta());
+      }
+      await watchWaitFor(() => countReloads(server) > 0);
+      // Give any straggler flush a chance to (wrongly) fire.
+      await new Promise((r) => setTimeout(r, 300));
+
+      expect(countReloads(server)).toBe(1);
+    });
+
+    it('(c) a byte-identical sidecar rewrite after the first reload is deduped', async () => {
+      const server = makeWatchMockServer();
+      const plugin = pluginPack({ roots: [assetsDir] });
+      plugin.configureServer(server as never);
+      await new Promise((r) => setTimeout(r, 50));
+
+      // First change: cache is empty, so this flushes + reloads (count -> 1) and
+      // records the content signature.
+      await writeFile(join(assetsDir, 'wood-container.meta.json'), watchWoodImageMeta());
+      await watchWaitFor(() => countReloads(server) >= 1);
+      const afterFirst = countReloads(server);
+      expect(afterFirst).toBe(1);
+
+      // Second change with identical bytes: content dedup drops it, no reload.
+      await writeFile(join(assetsDir, 'wood-container.meta.json'), watchWoodImageMeta());
+      await new Promise((r) => setTimeout(r, 300));
+      expect(countReloads(server)).toBe(afterFirst);
+    });
+
+    it('(d) a genuine content change after a deduped write still reloads', async () => {
+      const server = makeWatchMockServer();
+      const plugin = pluginPack({ roots: [assetsDir] });
+      plugin.configureServer(server as never);
+      await new Promise((r) => setTimeout(r, 50));
+
+      await writeFile(join(assetsDir, 'wood-container.meta.json'), watchWoodImageMeta());
+      await watchWaitFor(() => countReloads(server) >= 1);
+      expect(countReloads(server)).toBe(1);
+
+      // Change the sidecar bytes (mipmap none): dedup must NOT swallow it.
+      const changed = JSON.stringify({
+        schemaVersion: '1.0.0',
+        kind: 'external-asset-package',
+        importer: 'image',
+        source: 'wood-container.jpg',
+        importSettings: { colorSpace: 'srgb', mipmap: 'none' },
+        subAssets: [{ guid: WATCH_WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
+      });
+      await writeFile(join(assetsDir, 'wood-container.meta.json'), changed);
+      await watchWaitFor(() => countReloads(server) >= 2);
+      expect(countReloads(server)).toBe(2);
+    });
+  });
+}

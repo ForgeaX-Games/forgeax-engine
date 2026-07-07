@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "forgeax": {

@@ -308,6 +308,68 @@ describe('m2-t3: shared<> / array<shared<>> -> GUID', () => {
     expect(sources[1]).toBe(AssetGuid.format(guidB.value));
   });
 
+  it('EMPTY array<shared<>> collects WITHOUT throwing (default-material fallback)', () => {
+    // Regression: the editor used to auto-mint a synthetic default MaterialAsset
+    // (allocSharedRef WITHOUT catalog) for MeshFilter-only entities, so on save
+    // this collect path hit `_guidForAsset === undefined` and threw
+    // SceneCollectAssetGuidUnresolvedError -> the whole save aborted. The fix
+    // attaches an EMPTY `materials: []` instead (engine's own default-material
+    // fallback paints it grey). An empty shared-array must serialize to `[]` with
+    // ZERO _guidForAsset calls -> no throw, save succeeds.
+    const reg = makeRegistry();
+    const world = new World();
+
+    const Test_HasSharedArray = defineComponent('Test_EmptyMaterials', {
+      sources: { type: 'array<shared<TestAsset>>' },
+      // biome-ignore lint/suspicious/noExplicitAny: defineComponent constraint is too strict for array<shared<>>
+    } as any);
+
+    // Empty array -- exactly what MeshRenderer{materials:[]} produces.
+    const r0 = s(world, Test_HasSharedArray, {
+      sources: [],
+      // biome-ignore lint/suspicious/noExplicitAny: test helper adapter for component spawn
+    } as any);
+
+    const result = rootsToSceneAsset(reg, world, [r0 as EntityHandle]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ent0 = result.value.entities[0];
+    if (!ent0) throw new Error('entity 0 missing');
+    const comps = (ent0.components as Record<string, Record<string, unknown>>).Test_EmptyMaterials;
+    // An empty shared array serializes to [] (or the component is omitted when it
+    // has no other populated fields) -- either way, no unresolved-GUID throw.
+    if (comps !== undefined) {
+      expect(comps.sources as unknown[]).toEqual([]);
+    }
+  });
+
+  it('anti-vacuous: a NON-cataloged handle in the shared array DOES throw', () => {
+    // Guards the test above from passing vacuously: a shared-array element whose
+    // handle resolves to an UNcataloged asset (the old synthetic-mint situation)
+    // must still fail-fast with SceneCollectAssetGuidUnresolvedError.
+    const reg = makeRegistry();
+    const world = new World();
+    const uncataloged = makePayload('material');
+    // allocSharedRef WITHOUT reg.catalog(...) -- the exact old bug shape.
+    const h = world.allocSharedRef('', uncataloged);
+
+    const Test_HasSharedArray = defineComponent('Test_UncatMaterials', {
+      sources: { type: 'array<shared<TestAsset>>' },
+      // biome-ignore lint/suspicious/noExplicitAny: defineComponent constraint is too strict for array<shared<>>
+    } as any);
+    const r0 = s(world, Test_HasSharedArray, {
+      // biome-ignore lint/suspicious/noExplicitAny: Handle<> branded types require casting
+      sources: [h as any],
+      // biome-ignore lint/suspicious/noExplicitAny: test helper adapter for component spawn
+    } as any);
+
+    const result = rootsToSceneAsset(reg, world, [r0 as EntityHandle]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(SceneCollectAssetGuidUnresolvedError);
+    }
+  });
+
   it('fixed-size array<shared<T>,N> schema variant matches startsWith classifier', () => {
     // Verify that classifyFieldSchema startsWith('array<shared<')
     // covers fixed-size 'array<shared<T>,N>' variants (R-1 / D-2).

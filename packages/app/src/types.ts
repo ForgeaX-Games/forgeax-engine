@@ -12,7 +12,7 @@
 import type { AudioBackend } from '@forgeax/engine-audio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
 import type { Result, World } from '@forgeax/engine-ecs';
-import type { InputBackend } from '@forgeax/engine-input';
+import type { InputBackend, VirtualJoystickConfig } from '@forgeax/engine-input';
 import type { PhysicsWorld, PhysicsWorld2D } from '@forgeax/engine-physics';
 import type { Plugin, PluginError } from '@forgeax/engine-plugin';
 import type { RhiError, RhiInstance } from '@forgeax/engine-rhi';
@@ -116,6 +116,16 @@ export interface CreateAppOptions {
    * (host-managed input owns its own lock policy).
    */
   readonly pointerLockAllowed?: () => boolean;
+  /**
+   * Virtual joystick configs forwarded verbatim to the canvas-form input
+   * attach (attachInputAuto -> attachBrowserInputBackend). Each config derives
+   * a normalized 2D axis readable via `snap.virtualAxis(name)`. Absent => no
+   * virtual joysticks. Ignored by the assemble form (host-managed input wires
+   * its own backend). Mirrors `pointerLockAllowed`: the canvas-form entry must
+   * expose every backend option the standard recipe needs, or the config path
+   * dead-ends before reaching the backend that already supports it.
+   */
+  readonly virtualJoysticks?: readonly VirtualJoystickConfig[];
 }
 
 /**

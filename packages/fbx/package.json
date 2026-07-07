@@ -30,9 +30,12 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-import": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
     "@types/node": "^20.14.0"
   },
   "forgeax": {

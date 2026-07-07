@@ -60,6 +60,9 @@
       "path": "./packages/app"
     },
     {
+      "path": "./packages/codec"
+    },
+    {
       "path": "./packages/audio"
     },
     {

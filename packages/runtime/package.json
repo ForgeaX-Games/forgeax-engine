@@ -31,6 +31,7 @@
     "bench:nineslice": "node ../../scripts/bench/bench-nineslice-100panel.mjs"
   },
   "dependencies": {
+    "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-debug-draw": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
@@ -40,9 +41,9 @@
     "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-render-graph": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-rhi-null": "workspace:*",
     "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-rhi-wgpu": "workspace:*",
-    "@forgeax/engine-rhi-null": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },

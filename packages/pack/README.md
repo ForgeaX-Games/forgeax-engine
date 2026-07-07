@@ -35,9 +35,21 @@ Two sidecar JSON files live next to each source file in an asset directory:
   "source": "<source-filename>",
   "importSettings": {},
   "subAssets": [
-    { "guid": "<UUIDv7-or-UUIDv5>", "sourceIndex": 0, "kind": "mesh" }
+    { "guid": "<UUIDv7-or-UUIDv5>", "sourceIndex": 0, "kind": "mesh", "compression": "zstd" }
   ]
 }
+
+> [!NOTE]
+> `compression?: 'none' | 'zstd'` on `PackIndexEntry` (and `subAssets[].compression`)
+> indicates whether the asset's `.bin` is zstd-compressed. See
+> `@forgeax/engine-codec` README for the full codec API and error codes.
+> Runtime `fetchBinary` transparently decompresses when this field is `'zstd'`.
+>
+> **Declaring compression intent (AC-01):** set `importSettings.compression`
+> (`'none' | 'zstd'`) to override the build-time default strategy for this asset
+> (default: mesh -> `zstd`, texture -> `none`; `.pack.json` never compressed).
+> The importer honors the override and writes the resulting `compression` onto
+> the output catalog row. Omit it to accept the kind-keyed default.
 ```
 
 ### `.pack.json` -- internal-text-package

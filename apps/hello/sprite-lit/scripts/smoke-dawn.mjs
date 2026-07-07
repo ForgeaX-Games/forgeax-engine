@@ -263,12 +263,17 @@ async function buildWorld({ includePoint, includeSpot }) {
             queue: 3000,
           },
         ],
+        // paramValues field names align with sprite-lit.wgsl.meta.json
+        // paramSchema (colorTint / region / pivotAndSize / baseColorTexture;
+        // post-#520 SSOT). The pre-tweak-20260701 M2 script used the legacy
+        // baseColor / texture / pivot names which silently defaulted the
+        // UBO fields to schema defaults instead of the intended tint / atlas.
         paramValues: {
-          baseColor: slot.tint,
-          texture: textureHandle,
+          colorTint: slot.tint,
+          baseColorTexture: textureHandle,
           sampler: samplerHandle,
           region: [0, 0, 1, 1],
-          pivot: [0.5, 0.5],
+          pivotAndSize: [0.5, 0.5, 1, 1],
         },
       }),
     );
@@ -488,11 +493,15 @@ async function renderCase({ includePoint, includeSpot, label }) {
   if (!Number.isFinite(totalSum)) {
     return { ok: false, error: `${label}: NaN/Inf detected in readback (sum=${totalSum})` };
   }
-  // Center pixel of the sprite row: world y=0, world x=0; in the
-  // orthographic camera (-1.6..1.6 x, -1.0..1.0 y) this maps to
-  // approximately the framebuffer center.
-  const cx = (WIDTH >> 1);
-  const cy = (HEIGHT >> 1);
+  // Sample point: sprite-lit slot 1 center at world (-0.3, 0). Framebuffer
+  // maps world x to (x + 1.6) / 3.2 * WIDTH (ortho left=-1.6, right=1.6),
+  // so world x=-0.3 -> pixel column 325 -- well inside the sprite footprint
+  // (slot 1 spans world x=[-0.525, -0.075] at scaleX=0.45). The prior sample
+  // at framebuffer center (world (0, 0)) fell in the inter-sprite gap and
+  // read only the clear color, so the three-lights vs directional-only
+  // delta was structurally zero under the flat sprite-lit shading model.
+  const cx = 325;
+  const cy = HEIGHT >> 1;
   const off = (cy * WIDTH + cx) * 4;
   const r = tight[off + 0] ?? 0;
   const g = tight[off + 1] ?? 0;

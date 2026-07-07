@@ -152,11 +152,6 @@ import {
   createSkinPaletteAllocator,
   type SkinPaletteAllocator,
 } from './systems/skin-palette-allocator';
-// feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild — auto-wire
-// the per-cell entity extract pass into the per-frame draw chain so AI users
-// who spawn a Tilemap + TileLayer pair get derived render entities without
-// hand-driving the system (charter F1 progressive disclosure).
-import { tilemapChunkExtractSystem } from './tilemap-chunk-extract-system';
 import { URP_PIPELINE_ID, urpPipeline } from './urp-pipeline';
 
 // Re-export registerAdvanceAnimationPlayer so consumers can wire it.
@@ -2026,7 +2021,6 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         // TextError is a structured author-facing signal (distinct domain from
         // RhiError); it does not abort the frame -- healthy labels still render.
         glyphTextLayoutSystem(world, assets, gpuStore);
-        tilemapChunkExtractSystem(world);
         renderSystem.draw(world);
         // m3-2: fire onFrameEnd listeners after the frame render completes,
         // before returning the synchronous result. Recorder subscribes via
@@ -3924,12 +3918,13 @@ async function buildReadyWebGPU(
     let unlitEntry: ManifestEntry | undefined;
     let tonemapEntry: ManifestEntry | undefined;
     let spriteEntry: ManifestEntry | undefined;
-    // feat-20260624 M1' / t7: sprite-lit identification marker is the
-    // distinguishing `halfLambertSquared` helper (defined in
-    // sprite-lit.wgsl line 160, absent from sprite.wgsl). Identified
-    // BEFORE sprite so the `pivotAndSize` marker (shared between
-    // sprite + sprite-lit since paramSchema mirror, t4 + t5) does not
-    // mis-classify sprite-lit as sprite.
+    // sprite-lit identification marker is the `spriteLitShadeAccum`
+    // helper (defined in sprite-lit.wgsl, absent from sprite.wgsl). The
+    // outer shading accumulator name is stable across shading-formula
+    // changes and unique to sprite-lit. Identified BEFORE sprite so the
+    // `pivotAndSize` marker (shared between sprite + sprite-lit since
+    // their paramSchema mirror) does not mis-classify sprite-lit as
+    // sprite.
     let spriteLitEntry: ManifestEntry | undefined;
     let iblEquirectEntry: ManifestEntry | undefined;
     let iblIrradianceEntry: ManifestEntry | undefined;
@@ -3956,10 +3951,10 @@ async function buildReadyWebGPU(
         tonemapEntry ??= entry;
         continue;
       }
-      if (entry.wgsl.includes('halfLambertSquared')) {
+      if (entry.wgsl.includes('spriteLitShadeAccum')) {
         // sprite-lit identification — must precede the `pivotAndSize`
         // marker since sprite-lit also carries that field (paramSchema
-        // mirror from t4/t5).
+        // mirror with sprite.wgsl).
         spriteLitEntry ??= entry;
         continue;
       }

@@ -279,9 +279,12 @@ const spriteMat: MaterialAsset = {
 
 漏写 `renderState.blend` → 走 opaque pass（hard-edged 非 blended quad）。SSOT 与 preset 速查表（additive / multiply / straight-alpha / opaque overlay 字面量）见 `packages/runtime/README.md` §Sprite materials。
 
-### Sprite-lit material：1 字符串切 per-light forward（feat-20260624 M1'）
+### Sprite-lit material：flat 2D per-light forward（1 字符串切）
 
-sprite material 的灯光选型是 `passes[0].shader` 字符串切换（材质分派的唯一判别式是 shader identity；`MaterialSnapshot.shadingModel` 字段已于 tweak-20260701 删除，不存在需要扩的 union）：`'forgeax::sprite'` 走 unlit 直采纹理（默认；任意灯光不影响），`'forgeax::sprite-lit'` 走 per-light forward + Half-Lambert squared diffuse + fragment-side hardcoded normal `vec3(0,0,1)`——**需场景至少 1 个 DirectionalLight / PointLight / SpotLight**，否则视觉全黑（与 3D `'standard'` 同理）。`paramSchema` 与 `forgeax::sprite` 字段集合 byte-identical（4 vec4 + 1 texture2d；BGL JSON byte-identical，AC-07）。OOS-1 normal-map 跟进 `feat-future-sprite-lit-normal-map`。
+sprite material 的灯光选型是 `passes[0].shader` 字符串切换（材质分派的唯一判别式是 shader identity；`MaterialSnapshot.shadingModel` 字段已于 tweak-20260701 删除，不存在需要扩的 union）：`'forgeax::sprite'` 走 unlit 直采纹理（默认；任意灯光不影响），`'forgeax::sprite-lit'` 走 **flat 2D per-light forward**——每盏灯贡献 = `attenuation × cone × colorTimesIntensity × albedo`（Directional 无 `attenuation`；SpotLight 的 `cone` 是 `smoothstep(cosOuter, cosInner, dot(L, -direction))`），**无表面法线依赖、无 normal map、无 shadow**——light direction 只喂 SpotLight cone 衰减，不参与任何 diffuse 点积。**需场景至少 1 个 DirectionalLight / PointLight / SpotLight**，否则视觉全黑（与 3D `'standard'` 同理）。`paramSchema` 与 `forgeax::sprite` 字段集合 byte-identical（4 vec4 + 1 texture2d；BGL JSON byte-identical，AC-07）。OOS-1 normal-map 跟进 `feat-future-sprite-lit-normal-map`（引入 normal map 时才把 directional diffuse 项加回来）。
+
+> [!IMPORTANT]
+> **摆位直觉对齐 Godot Light2D / Unity URP 2D**：灯任意位置 / 任意方向皆有效——`posZ=0` 或 `directionZ=0` 都能画出可见的衰减亮斑与聚光楔形，不需要把灯抬到 `posZ>0` 再朝 `-Z` 打。这条与 3D standard PBR 的方向依赖不同，是 flat 2D 光照的显著语义差；shader 内部 `VsOut.@location(1) worldPos` 从 vertex 阶段直传，避免了旧路径 fragment 反演 worldPos 的 9-slice 不精确与多实例 identity collapse 问题。
 
 ```ts
 // 从 forgeax::sprite 切到 forgeax::sprite-lit：仅改 1 字符串
@@ -298,8 +301,23 @@ const spriteLitMat: MaterialAsset = {
     sampler: spriteSamplerGuid,
   },
 };
-// 同帧场景须存在至少 1 盏灯，否则中心像素 R/G/B = 0：
-spawn(world, [Transform.identity(), DirectionalLight({ color: [1, 1, 1], intensity: 1 })]);
+
+// flat 2D 光照允许灯完全落在 sprite 平面内摆位。示例：SpotLight 从原点朝 +X 横扫，
+// 楔形亮带落在 sprite 平面 x∈[1,3] 上——posZ=0 + directionZ=0 全部生效。
+world.spawn(
+  { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: SpotLight, data: {
+      directionX: 1, directionY: 0, directionZ: 0,      // 平面横扫，无需 z 分量
+      innerConeDeg: 15, outerConeDeg: 30,
+      intensity: 5, range: 10,
+  } },
+);
+
+// PointLight 平面圆斑：posZ≈0（贴着 sprite 平面）也能画出正常衰减
+world.spawn(
+  { component: Transform, data: { posX: 0, posY: 0, posZ: 0.01, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: PointLight, data: { range: 1, intensity: 2 } },
+);
 ```
 
 ## 多套 UV -- `@location` 声明即 UV 套数 SSOT（clamp-to-last 埋名）

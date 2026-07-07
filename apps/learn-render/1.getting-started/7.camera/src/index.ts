@@ -376,6 +376,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     fn: (world, queryResults) => {
       const snap = renderer.input.snapshot(world);
       if (snap === undefined) return;
+      // AC-13 type-narrowing probes: verify GamepadButtonIndex (0|1|...|16)
+      // and GamepadAxisIndex (0|1|2|3) literal unions narrow correctly at the
+      // full-typed InputSnapshot consumer boundary (D-7: probes live inside
+      // a real world.addSystem fn, not a standalone .test-d.ts file).
+      void snap.gamepad(0).button(0);
+      void snap.gamepad(0).axis(2);
+      void snap.gamepad(0).buttonValue(6);
+      void snap.capabilities.gamepad;
+      // @ts-expect-error: 17 is not assignable to GamepadButtonIndex
+      void snap.gamepad(0).button(17);
+      // @ts-expect-error: 4 is not assignable to GamepadAxisIndex
+      void snap.gamepad(0).axis(4);
       const time = world.getResource<{ readonly dt: number }>('Time');
       const dt = time?.dt ?? 0;
       const dx = snap.mouse.movementDelta.x;

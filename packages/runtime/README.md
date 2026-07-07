@@ -154,7 +154,7 @@ Consume via `switch (err.code)` without default; TS guards exhaustiveness. Error
 
 **三层职责命题（顶层）：**
 
-- **`AssetRegistry`** — 编目 CPU asset POD（`catalog` / `loadByGuid` / `lookup`，纯 CPU，无 GPU 副作用，**无 handle 概念**；D-17 后 `loadByGuid` 返回 payload 而非 handle）。
+- **`AssetRegistry`** — 编目 CPU asset POD（`catalog` / `loadByGuid` / `lookup`，纯 CPU，无 GPU 副作用，**无 handle 概念**；D-17 后 `loadByGuid` 返回 payload 而非 handle）。`PackIndexEntry.compression?: 'none' | 'zstd'` (see `@forgeax/engine-codec` README) controls automatic `fetchBinary` decompression -- transparent to `loadByGuid` callers.
 - **`deriveRenderData*`** — 投影层（`packages/runtime/src/render-data.ts`）：把 asset POD **纯派生**为 GPU 描述符（`deriveRenderDataMesh` / `deriveRenderDataTexture` / `deriveRenderDataCubemap`）；认识 asset `kind`，**不碰 device**。
 - **`GpuResourceStore`** — 管 device 上 GPU 资源生死（`packages/runtime/src/gpu-resource-store.ts`）：per-handle texture / cubemap / mesh-buffer 缓存 + 建造它们的 upload 原语；不认识 `kind`，对 `AssetRegistry` 零反依赖（POD 由调用方传入）。
 

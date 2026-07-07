@@ -21,7 +21,7 @@
 //   also acceptable as a fallback.
 
 import { watch as fsWatch } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import {
   IMPORT_ERROR_HINTS,
@@ -36,6 +36,7 @@ import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
 import { scan } from '@forgeax/engine-pack/scanner';
 import type { ImageMetadata, Importer, PackIndexEntry } from '@forgeax/engine-types';
 import { buildCatalog } from './build-catalog.js';
+import { compressArtifact } from './compress-artifact.js';
 import { importTextureEntry } from './import-texture.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -219,6 +220,35 @@ function mimeFromPath(path: string): 'image/jpeg' | 'image/png' | undefined {
 // build arm's `dist/assets/<guid>-<hash>.bin` Rollup namespace.
 function ddcPath(cwd: string, guidLower: string): string {
   return resolve(cwd, 'node_modules/.cache/forgeax-ddc', `${guidLower}.bin`);
+}
+
+/**
+ * AC-01: read an explicit per-asset compression override from a meta sidecar's
+ * `importSettings.compression`. Returns the narrowed union value, or undefined
+ * when absent / malformed (falls back to the kind-keyed default table).
+ */
+function readCompressionOverride(importSettings: unknown): 'none' | 'zstd' | undefined {
+  if (importSettings === null || typeof importSettings !== 'object') return undefined;
+  const c = (importSettings as { compression?: unknown }).compression;
+  return c === 'none' || c === 'zstd' ? c : undefined;
+}
+
+/**
+ * AC-01: read the explicit compression override from a meta sidecar path (used
+ * by the texture arms, which reach compression via `importTextureEntry` and do
+ * not otherwise parse the meta). Returns undefined when the path is unknown /
+ * unreadable / has no override.
+ */
+async function readOverrideFromMeta(
+  metaPath: string | undefined,
+): Promise<'none' | 'zstd' | undefined> {
+  if (metaPath === undefined) return undefined;
+  try {
+    const meta = JSON.parse(await readFile(metaPath, 'utf-8')) as { importSettings?: unknown };
+    return readCompressionOverride(meta.importSettings);
+  } catch {
+    return undefined;
+  }
 }
 
 function buildUrlToAbs(entries: PackIndexEntry[]): Map<string, string> {
@@ -410,7 +440,17 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     const suffix = `.${guidLower}.bin`;
     const binAbs = ddcPath(process.cwd(), guidLower);
     await mkdir(dirname(binAbs), { recursive: true });
-    await writeFile(binAbs, imported.bytes);
+    // (A) Texture arm dev: compress after importTextureEntry, before writeFile (D-3).
+    // M2 default 'none' → pass-through; M3 flips to 'zstd' in STRATEGY_TABLE.
+    // AC-01: honor an explicit importSettings.compression override from the meta.
+    const texOverride = await readOverrideFromMeta(guidToMeta.get(guidLower));
+    const compressed = await compressArtifact({
+      bytes: imported.bytes,
+      kind: 'texture',
+      isPackJson: false,
+      ...(texOverride !== undefined ? { override: texOverride } : {}),
+    });
+    await writeFile(binAbs, compressed.compressed);
     const importedRow: PackIndexEntry = {
       guid: raw.guid,
       relativeUrl: `${raw.relativeUrl}${suffix}`,
@@ -428,6 +468,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       // `.bin` relativeUrl.
       sourcePath: raw.sourcePath,
       metadata: imported.metadata,
+      compression: compressed.compression,
     };
     importedRows.set(guidLower, importedRow);
     const idx = catalog.findIndex((e) => e.guid.toLowerCase() === guidLower);
@@ -460,6 +501,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       importSettings?: unknown;
       subAssets: ReadonlyArray<{ guid: string; sourceIndex: number; kind: string }>;
     };
+
+    // AC-01: explicit per-asset compression override declared in importSettings.
+    const metaOverride = readCompressionOverride(meta.importSettings);
 
     const sourceResult = resolveAssetSource(metaPath, meta.source, paths);
     if (!sourceResult.ok) {
@@ -520,7 +564,15 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       if (bytes !== undefined) {
         const binAbs = ddcPath(cwd, guidLower);
         await mkdir(dirname(binAbs), { recursive: true });
-        await writeFile(binAbs, bytes);
+        // (C) Mesh bins arm dev: compress after bins.get, before writeFile (D-3).
+        const compressKind = raw.kind === 'mesh' ? 'mesh' : 'texture';
+        const compressedBin = await compressArtifact({
+          bytes,
+          kind: compressKind,
+          isPackJson: false,
+          ...(metaOverride !== undefined ? { override: metaOverride } : {}),
+        });
+        await writeFile(binAbs, compressedBin.compressed);
         const suffix = `.${guidLower}.bin`;
         // round-2 finding 4: overlay metadata.colorSpace / format / mipmap
         // from the imported TextureAsset payload so dev pack-index reflects
@@ -561,6 +613,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           // the Content Browser dependency graph sees them without re-fetching
           // the .pack.json body (feat: listCatalog refs).
           ...(importedAsset?.refs !== undefined ? { refs: importedAsset.refs } : {}),
+          compression: compressedBin.compression,
         };
         importedRows.set(guidLower, importedRow);
         const idx = catalog.findIndex((e) => e.guid.toLowerCase() === guidLower);
@@ -734,6 +787,111 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         // source changes skip the catalog rebuild (catalog rows are
         // produced from sidecars, not from source bytes) and only emit
         // `full-reload` so the browser fetches the new bytes.
+        //
+        // Debounce + dedup (feedback 2026-07-06): a single file write on
+        // Windows fans out into N `fs.watch` events; each one previously
+        // rebuilt the catalog and broadcast `full-reload`, spamming the log
+        // and interrupting continuous editor interactions (drag/resize).
+        // We coalesce all events in a WATCH_DEBOUNCE_MS window into ONE
+        // catalog rebuild + ONE `full-reload` + one consolidated log, and
+        // drop events whose file content (sidecar) or mtime:size signature
+        // (image source) is unchanged since the last flush -- byte-identical
+        // rewrites and `touch`es no longer reload the page.
+        const pendingSidecars = new Map<string, { filename: string; eventType: string }>();
+        const pendingImages = new Map<string, { filename: string; eventType: string }>();
+        const lastSidecarContent = new Map<string, string>();
+        const lastImageSig = new Map<string, string>();
+        let flushTimer: ReturnType<typeof setTimeout> | undefined;
+
+        const flush = async (): Promise<void> => {
+          const sidecars = [...pendingSidecars.entries()];
+          const images = [...pendingImages.entries()];
+          pendingSidecars.clear();
+          pendingImages.clear();
+
+          // Content dedup for sidecars: skip a rewrite whose bytes match the
+          // last-seen content. A read failure (the file was deleted) clears the
+          // cache and still counts as a change so the catalog rebuild drops the
+          // stale rows.
+          const changedSidecars: Array<{ filename: string; eventType: string }> = [];
+          for (const [abs, info] of sidecars) {
+            let content: string | undefined;
+            try {
+              content = await readFile(abs, 'utf-8');
+            } catch {
+              lastSidecarContent.delete(abs);
+              changedSidecars.push(info);
+              continue;
+            }
+            if (lastSidecarContent.get(abs) === content) continue;
+            lastSidecarContent.set(abs, content);
+            changedSidecars.push(info);
+          }
+
+          // mtime:size dedup for image / glTF sources: catalog rows are produced
+          // from sidecars, not source bytes, so we only need to know whether the
+          // bytes actually changed before asking the browser to re-fetch them.
+          const changedImages: Array<{ filename: string; eventType: string }> = [];
+          for (const [abs, info] of images) {
+            let sig: string | undefined;
+            try {
+              const s = await stat(abs);
+              sig = `${s.mtimeMs}:${s.size}`;
+            } catch {
+              lastImageSig.delete(abs);
+              changedImages.push(info);
+              continue;
+            }
+            if (lastImageSig.get(abs) === sig) continue;
+            lastImageSig.set(abs, sig);
+            changedImages.push(info);
+          }
+
+          if (changedSidecars.length === 0 && changedImages.length === 0) return;
+
+          // Rebuild the catalog once (only when a sidecar actually changed) so
+          // the browser's first post-reload fetch lands on the new state.
+          if (changedSidecars.length > 0) {
+            try {
+              const [rawEntries2, g2m2] = await Promise.all([
+                buildCatalog(roots, opts.base, registeredImporterKeys),
+                buildGuidToMetaMap(roots),
+              ]);
+              catalog = applyImportedRows(rawEntries2);
+              guidToMeta = g2m2;
+              urlToAbs = buildUrlToAbs(catalog);
+            } catch (err: unknown) {
+              console.warn('[forgeax-pack] rebuild catalog error:', err);
+            }
+          }
+
+          // One full-reload for the whole batch, then one structured event per
+          // changed file (the editor Content Browser re-queries `/__pack/index`
+          // only for `sidecar` events).
+          server.ws?.send({ type: 'full-reload' });
+          for (const info of changedSidecars) {
+            emitAssetChanged(server, info.filename, info.eventType, 'sidecar');
+          }
+          for (const info of changedImages) {
+            emitAssetChanged(server, info.filename, info.eventType, 'source');
+          }
+
+          const parts: string[] = [];
+          if (changedSidecars.length > 0) parts.push(`${changedSidecars.length} sidecar`);
+          if (changedImages.length > 0) parts.push(`${changedImages.length} source`);
+          console.warn(`[forgeax-pack] assets changed: ${parts.join(', ')} (reloaded)`);
+        };
+
+        const WATCH_DEBOUNCE_MS = 150;
+        const scheduleFlush = (): void => {
+          if (flushTimer !== undefined) clearTimeout(flushTimer);
+          flushTimer = setTimeout(() => {
+            flushTimer = undefined;
+            void flush();
+          }, WATCH_DEBOUNCE_MS);
+          flushTimer.unref();
+        };
+
         for (const root of roots) {
           try {
             const watcher = fsWatch(root, { recursive: true }, (eventType, filename) => {
@@ -746,30 +904,10 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
                 filename.endsWith('.gltf');
               if (!isSidecar && !isImage) return;
 
-              if (isSidecar) {
-                // Rebuild catalog on next tick before broadcasting full-reload
-                // so the browser's first fetch lands on the new state.
-                Promise.all([
-                  buildCatalog(roots, opts.base, registeredImporterKeys),
-                  buildGuidToMetaMap(roots),
-                ])
-                  .then(([rawEntries2, g2m2]) => {
-                    catalog = applyImportedRows(rawEntries2);
-                    guidToMeta = g2m2;
-                    urlToAbs = buildUrlToAbs(catalog);
-                    server.watcher?.on('change', () => {});
-                    server.ws?.send({ type: 'full-reload' });
-                    emitAssetChanged(server, filename, eventType, 'sidecar');
-                    console.warn(`[forgeax-pack] pack file changed: ${filename} (${eventType})`);
-                  })
-                  .catch((err: unknown) => {
-                    console.warn('[forgeax-pack] rebuild catalog error:', err);
-                  });
-                return;
-              }
-              server.ws?.send({ type: 'full-reload' });
-              emitAssetChanged(server, filename, eventType, 'source');
-              console.warn(`[forgeax-pack] image content changed: ${filename} (${eventType})`);
+              const abs = resolve(root, filename);
+              if (isSidecar) pendingSidecars.set(abs, { filename, eventType });
+              else pendingImages.set(abs, { filename, eventType });
+              scheduleFlush();
             });
             watcher.unref();
             watcher.on('error', () => {});
@@ -1073,6 +1211,10 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     // other unknown extensions (no standard mime / no .hdr discriminant)
     // are passed through with the raw relativeUrl so the catalog is not
     // silently dropped.
+    // AC-01: guid -> meta path so the texture arm can honor an explicit
+    // importSettings.compression override (built once, reused by the mesh arm
+    // below as allGuidToMeta).
+    const guidToMetaBuild = await buildGuidToMetaMap(roots);
     const importedEntries: PackIndexEntry[] = [];
     for (const entry of entries) {
       // gap-3 (w5): the pure import logic now lives in the shared
@@ -1097,11 +1239,22 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       // Rollup's automatic addWatchFile hook (research F1). The imported bytes
       // (rgba8 / rgba16float) come from the shared import fn; the relativeUrl
       // rewrite (emitFile + getFileName) stays here, the build arm owning it.
+      // (B) Texture arm build: compress after importTextureEntry, before emitFile (D-3).
+      // AC-01: honor an explicit importSettings.compression override from the meta.
+      const texBuildOverride = await readOverrideFromMeta(
+        guidToMetaBuild.get(entry.guid.toLowerCase()),
+      );
+      const compressedTex = await compressArtifact({
+        bytes: imported.bytes,
+        kind: 'texture',
+        isPackJson: false,
+        ...(texBuildOverride !== undefined ? { override: texBuildOverride } : {}),
+      });
       const refId = this.emitFile({
         type: 'asset',
         name: `${entry.guid.toLowerCase()}.bin`,
         originalFileName: resolve(cwd, entry.sourcePath),
-        source: imported.bytes,
+        source: compressedTex.compressed,
       });
       // getFileName surfaces 'assets/<guid>-<hash>.bin' once Rollup has
       // finished hash resolution (always available inside generateBundle).
@@ -1112,6 +1265,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         kind: entry.kind,
         sourcePath: entry.sourcePath,
         metadata: imported.metadata,
+        compression: compressedTex.compression,
       });
     }
 
@@ -1127,15 +1281,14 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     // import-stable iron law produces the same output). The runner also
     // validates the GUID set; `importer: 'shader'` is skipped.
     //
-    // Build the guidToMeta index inline so we know which meta declares each
-    // entry's GUID. Then group entries by their declaring meta so we call
+    // guidToMetaBuild (built above the texture arm) tells us which meta declares
+    // each entry's GUID. Group entries by their declaring meta so we call
     // `runImport` once per meta (one pass produces all sub-assets).
-    const allGuidToMeta = await buildGuidToMetaMap(roots);
     const guidSeen = new Set<string>();
 
     for (const entry of importedEntries) {
       if (guidSeen.has(entry.guid.toLowerCase())) continue;
-      const metaPath = allGuidToMeta.get(entry.guid.toLowerCase());
+      const metaPath = guidToMetaBuild.get(entry.guid.toLowerCase());
       if (metaPath === undefined) {
         // Legacy pack entries (pre-existing .pack.json or non-meta rows).
         guidSeen.add(entry.guid.toLowerCase());
@@ -1285,11 +1438,26 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       // contradiction with the TextureAsset POD the runtime registers.
       if (bins !== undefined && bins.size > 0) {
         for (const [guidLower, bytes] of bins.entries()) {
+          // (D) Mesh bins arm build: compress after packMeshBin, before emitFile (D-3).
+          // Determine artifact kind from the matching imported entry.
+          const binEntry = importedEntries.find(
+            (e) =>
+              e.guid.toLowerCase() === guidLower && (e.kind === 'texture' || e.kind === 'mesh'),
+          );
+          const compressKind: 'mesh' | 'texture' = binEntry?.kind === 'mesh' ? 'mesh' : 'texture';
+          // AC-01: explicit per-asset compression override from importSettings.
+          const meshOverride = readCompressionOverride(meta.importSettings);
+          const compressedBin = await compressArtifact({
+            bytes,
+            kind: compressKind,
+            isPackJson: false,
+            ...(meshOverride !== undefined ? { override: meshOverride } : {}),
+          });
           const refId = this.emitFile({
             type: 'asset',
             name: `${guidLower}.bin`,
             originalFileName: metaPath,
-            source: bytes,
+            source: compressedBin.compressed,
           });
           const hashedBinPath = this.getFileName(refId);
 
@@ -1344,6 +1512,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
                   : existing.metadata !== undefined
                     ? { metadata: existing.metadata }
                     : {}),
+                compression: compressedBin.compression,
               };
             }
           }

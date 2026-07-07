@@ -468,11 +468,10 @@ async function createAppFromCanvas(
   // to stop / device-lost in the app layer (the plugin cannot own DOM
   // lifetime). M3 (w15): input:false opt-out deleted — canvas form always
   // attaches input; hosts that want to opt out use assemble form (D-6).
-  const inputHandle = attachInputAuto(
-    canvas,
-    world,
-    opts?.pointerLockAllowed ? { pointerLockAllowed: opts.pointerLockAllowed } : {},
-  );
+  const inputHandle = attachInputAuto(canvas, world, {
+    ...(opts?.pointerLockAllowed ? { pointerLockAllowed: opts.pointerLockAllowed } : {}),
+    ...(opts?.virtualJoysticks ? { virtualJoysticks: opts.virtualJoysticks } : {}),
+  });
 
   // Audio backend (D-4): auto-create the WebAudioBackend when the user listed
   // audioPlugin() in plugins[]. This preserves the M2 contract (audioPlugin

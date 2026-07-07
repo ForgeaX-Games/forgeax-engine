@@ -20,7 +20,7 @@
 // (B6) camera detection via GltfNodeIr.camera field (not legacy nodes[1] heuristic)
 
 import type { Mat4 } from '@forgeax/engine-math';
-import { mat4, quat, vec3 } from '@forgeax/engine-math';
+import { box3, mat4, quat, vec3 } from '@forgeax/engine-math';
 import type {
   Handle,
   LocalEntityId,
@@ -326,6 +326,7 @@ export function meshIrToMeshAsset(prims: readonly GltfMeshIr[]): MeshAsset {
     vertices: interleaved,
     ...(indices === undefined ? {} : { indices }),
     submeshes,
+    aabb: box3.fromPositions(box3.create(), positionsCat),
     attributes: {
       position: positionsCat,
       normal: normalsCat,

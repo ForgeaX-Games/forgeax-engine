@@ -1,21 +1,17 @@
 // @forgeax/engine-shader / __tests__ / sprite-lit-shader.test.ts
 //
-// feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / w2.
+// tweak-20260701-sprite-lit-flat-default-drop-ndotl-for-2d M1 / m1-1.
 //
-// Red-stage tests for the sprite-lit shader (AC-04 grep gates, AC-05
-// Half-Lambert 4-angle fixture, AC-09 LDR/HDR clamp boundary, AC-10
-// STORAGE_BUFFER_AVAILABLE variant axis declaration).
+// Grep gates + fixture tests for the sprite-lit shader after the flat 2D
+// lighting fold: NdotL and Half-Lambert are removed, worldPos is emitted
+// from the vertex stage via VsOut interpolant.
 //
 // SSOTs:
-//   - research.md F-3 (Half-Lambert math table; 4-angle theoretical values)
-//   - research.md F-4 (R6 mitigation: LDR clamp / HDR pass-through)
-//   - research.md F-5 (sprite vs_main byte-identical, normal hardcoded in fs)
-//   - plan-strategy D-3 (Half-Lambert squared single-formula lock)
-//   - plan-strategy D-5 (#pragma variant_axis on line 1)
-//
-// These tests run before w4 lands sprite-lit.wgsl, so the file-read tests
-// are guarded by an `await stat` that returns absent for unscaffolded
-// runs; once the file exists they exercise grep + line-1 + entry-points.
+//   - plan-strategy D-P1 (VsOut carries `@location(1) worldPos`)
+//   - plan-strategy D-P2 (light functions drop normal parameter; flat SSOT)
+//   - requirements AC-05 (LoC net-down), AC-06 (no halfLambert/nDotL residue),
+//     AC-07 (typecheck + test:unit green)
+//   - research.md F-4 (LDR clamp / HDR pass-through)
 
 import { describe, expect, it } from 'vitest';
 
@@ -88,95 +84,38 @@ async function spriteLitMetaExists(): Promise<boolean> {
   return fs.existsSync(`${srcDir}/sprite-lit.wgsl.meta.json`);
 }
 
-/**
- * TS port of the Half-Lambert squared formula (research F-3, plan-strategy D-3).
- *
- *   h(NdotL) = NdotL * 0.5 + 0.5
- *   diffuse(NdotL) = h(NdotL)^2
- *
- * The WGSL implementation in sprite-lit.wgsl must stay byte-equivalent;
- * drift is caught by the 4-angle fixture below.
- */
-function halfLambertSquared(nDotL: number): number {
-  const h = nDotL * 0.5 + 0.5;
-  return h * h;
-}
-
-describe('sprite-lit shader (red gates, w2 -> w4 closes)', () => {
-  describe('Half-Lambert squared TS-equivalence (AC-05 SSOT)', () => {
-    // research §F-3 table: NdotL ∈ {-1, 0, 0.707, 1} -> {0, 0.25, 0.728, 1}.
-    // ε ≤ 1e-5 (plan-strategy R-AC-05-fixture acceptance threshold).
-    const EPSILON = 1e-5;
-
-    it('NdotL = -1 (back-facing, 180 deg) -> 0.0', () => {
-      expect(halfLambertSquared(-1.0)).toBeCloseTo(0.0, 5);
-    });
-
-    it('NdotL = 0 (terminator, 90 deg) -> 0.25', () => {
-      expect(halfLambertSquared(0.0)).toBeCloseTo(0.25, 5);
-    });
-
-    it('NdotL = sqrt(0.5) (45 deg standard lighting angle) -> ~0.728', () => {
-      // Use Math.SQRT1_2 (= 1/sqrt(2) = sqrt(0.5)) instead of the magic
-      // 0.707 literal to silence biome `noApproximativeNumericConstant`
-      // (verify Round 1 finding) — same physical 45° angle.
-      const out = halfLambertSquared(Math.SQRT1_2);
-      expect(Math.abs(out - 0.728) < 1e-3).toBe(true);
-      // Sharper bound: explicit formula evaluation, ε ≤ 1e-5.
-      const h = Math.SQRT1_2 * 0.5 + 0.5;
-      expect(out).toBeCloseTo(h * h, 5);
-    });
-
-    it('NdotL = 1 (direct face-light, 0 deg) -> 1.0', () => {
-      expect(halfLambertSquared(1.0)).toBeCloseTo(1.0, 5);
-    });
-
-    it('formula has no max(NdotL, 0) clamp (back-light is shaded, not zero)', () => {
-      // Physical Lambert would output 0 at NdotL = -0.5; Half-Lambert squared
-      // outputs 0.0625. Drift to Lambert would fail this assertion.
-      expect(halfLambertSquared(-0.5)).toBeCloseTo(0.0625, 5);
-    });
-
-    void EPSILON;
-  });
-
-  describe('sprite-lit.wgsl source artefact (AC-03 / AC-04 / AC-10 grep gates)', () => {
+describe('sprite-lit shader (flat 2D lighting, tweak-20260701 M1)', () => {
+  describe('sprite-lit.wgsl source artefact', () => {
     it('file exists', async () => {
       expect(await spriteLitWgslExists()).toBe(true);
     });
 
-    it('first line is `#pragma variant_axis STORAGE_BUFFER_AVAILABLE` (AC-10 SSOT)', async () => {
+    it('first line is `#pragma variant_axis STORAGE_BUFFER_AVAILABLE`', async () => {
       const src = await readSpriteLitSource();
       const firstLine = src.split('\n')[0];
       expect(firstLine).toBe('#pragma variant_axis STORAGE_BUFFER_AVAILABLE');
     });
 
-    it('declares vs_main + fs_main + fs_main_hdr three entry points (AC-03)', async () => {
+    it('declares vs_main + fs_main + fs_main_hdr three entry points', async () => {
       const src = await readSpriteLitSource();
       expect(/@vertex[\s\S]*?fn vs_main\b/.test(src)).toBe(true);
       expect(/@fragment[\s\S]*?fn fs_main\b/.test(src)).toBe(true);
       expect(/@fragment[\s\S]*?fn fs_main_hdr\b/.test(src)).toBe(true);
     });
 
-    it('fragment hardcodes normal = vec3(0,0,1) (AC-04 normal hardcoded)', async () => {
-      const src = await readSpriteLitSource();
-      const NORMAL_RE = /vec3<f32>\(\s*0\.0?\s*,\s*0\.0?\s*,\s*1\.0?\s*\)/;
-      expect(NORMAL_RE.test(src)).toBe(true);
-    });
-
-    it('does NOT reference normalTexture / normalSampler in fragment lighting code (AC-04 no normal map)', async () => {
+    it('does NOT reference normalTexture / normalSampler in fragment lighting code', async () => {
       const src = await readSpriteLitSource();
       expect(/textureSample\s*\(\s*normalTexture\b/.test(src)).toBe(false);
       expect(/textureLoad\s*\(\s*normalTexture\b/.test(src)).toBe(false);
     });
 
-    it('does NOT take a vertex normal attribute as a lighting input (AC-04)', async () => {
+    it('does NOT take a vertex normal attribute as a lighting input', async () => {
       const src = await readSpriteLitSource();
       expect(/dot\s*\(\s*in\.normal\b/.test(src)).toBe(false);
       expect(/normalize\s*\(\s*in\.normal\b/.test(src)).toBe(false);
     });
 
-    it('fs_main applies LDR clamp; fs_main_hdr does NOT clamp the output (AC-09 SSOT)', async () => {
+    it('fs_main applies LDR clamp; fs_main_hdr does NOT clamp the output', async () => {
       const src = await readSpriteLitSource();
       const ldrIdx = src.indexOf('fn fs_main(');
       const hdrIdx = src.indexOf('fn fs_main_hdr(');
@@ -195,9 +134,95 @@ describe('sprite-lit shader (red gates, w2 -> w4 closes)', () => {
       expect(hdrVecBoundClamp).toBe(false);
     });
 
-    it('imports lighting helpers via forgeax_pbr (evalDirectionalNoShadow from w3)', async () => {
+    it('imports lighting helpers via forgeax_pbr (no cascade shadow sampling)', async () => {
       const src = await readSpriteLitSource();
       expect(src.includes('_sampleShadowForCascade')).toBe(false);
+    });
+  });
+
+  describe('flat 2D lighting fold (AC-06 grep gate: no NdotL / Half-Lambert residue)', () => {
+    it('no `halfLambert` identifier anywhere in the shader', async () => {
+      const src = await readSpriteLitSource();
+      // Match the camelCase identifier only; documentation strings containing
+      // hyphenated "Half-Lambert" or unrelated words are not the target.
+      expect(/halfLambert/.test(src)).toBe(false);
+    });
+
+    it('no `nDotL` identifier anywhere in the shader', async () => {
+      const src = await readSpriteLitSource();
+      // Match the camelCase identifier only; hyphenated feature-id strings
+      // like "sprite-lit-...-ndotl-for-2d" or comments spelling "NdotL" are
+      // not the target -- only the WGSL variable name `nDotL`.
+      expect(/\bnDotL\b/.test(src)).toBe(false);
+    });
+
+    it('no `spriteLitNormal` function (flat shading has no hardcoded normal)', async () => {
+      const src = await readSpriteLitSource();
+      expect(src.includes('spriteLitNormal')).toBe(false);
+    });
+
+    it('no `spriteLitWorldPos` function (worldPos now comes from VsOut interpolant)', async () => {
+      const src = await readSpriteLitSource();
+      expect(src.includes('spriteLitWorldPos')).toBe(false);
+    });
+
+    it('no `dot(N` or `dot(normal` lighting term in the shader body', async () => {
+      const src = await readSpriteLitSource();
+      // Directional / point / spot lighting must not project onto any surface
+      // normal — flat shading treats the sprite as omnidirectional.
+      expect(/dot\s*\(\s*N\s*,/.test(src)).toBe(false);
+      expect(/dot\s*\(\s*normal\s*,/.test(src)).toBe(false);
+    });
+  });
+
+  describe('VsOut carries per-fragment worldPos (D-P1)', () => {
+    it('VsOut declares `@location(1) worldPos: vec3<f32>` interpolant', async () => {
+      const src = await readSpriteLitSource();
+      // Match the WGSL declaration inside the VsOut struct. Whitespace-tolerant.
+      const re = /@location\(\s*1\s*\)\s+worldPos\s*:\s*vec3<f32>/;
+      expect(re.test(src)).toBe(true);
+    });
+
+    it('vs_main writes `out.worldPos = world.xyz`', async () => {
+      const src = await readSpriteLitSource();
+      const re = /out\.worldPos\s*=\s*world\.xyz\s*;/;
+      expect(re.test(src)).toBe(true);
+    });
+
+    it('fs_main / fs_main_hdr consume `in.worldPos` (not a reconstructed local)', async () => {
+      const src = await readSpriteLitSource();
+      const consumers = src.match(/in\.worldPos/g) ?? [];
+      // At minimum: one consumer in each of fs_main and fs_main_hdr.
+      expect(consumers.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe('flat light functions drop normal parameter (D-P2)', () => {
+    it('spriteLitDirectional signature is `(albedo)` only', async () => {
+      const src = await readSpriteLitSource();
+      const re = /fn\s+spriteLitDirectional\s*\(\s*albedo\s*:\s*vec3<f32>\s*\)/;
+      expect(re.test(src)).toBe(true);
+    });
+
+    it('spriteLitPoint signature is `(p, worldPos, albedo)` — no normal', async () => {
+      const src = await readSpriteLitSource();
+      const re =
+        /fn\s+spriteLitPoint\s*\(\s*p\s*:\s*PointLight\s*,\s*worldPos\s*:\s*vec3<f32>\s*,\s*albedo\s*:\s*vec3<f32>\s*\)/;
+      expect(re.test(src)).toBe(true);
+    });
+
+    it('spriteLitSpot signature is `(s, worldPos, albedo)` — no normal', async () => {
+      const src = await readSpriteLitSource();
+      const re =
+        /fn\s+spriteLitSpot\s*\(\s*s\s*:\s*SpotLight\s*,\s*worldPos\s*:\s*vec3<f32>\s*,\s*albedo\s*:\s*vec3<f32>\s*\)/;
+      expect(re.test(src)).toBe(true);
+    });
+
+    it('spriteLitShadeAccum signature is `(albedo, worldPos)` — no normal', async () => {
+      const src = await readSpriteLitSource();
+      const re =
+        /fn\s+spriteLitShadeAccum\s*\(\s*albedo\s*:\s*vec3<f32>\s*,\s*worldPos\s*:\s*vec3<f32>\s*\)/;
+      expect(re.test(src)).toBe(true);
     });
   });
 
@@ -208,15 +233,15 @@ describe('sprite-lit shader (red gates, w2 -> w4 closes)', () => {
       expect(meta.importSettings.materialShaderIdentifier).toBe('forgeax::sprite-lit');
     });
 
-    it('paramSchema mirrors sprite.wgsl.meta.json (5 fields byte-identical, no normalTexture / normalStrength OOS-1)', async () => {
+    it('paramSchema mirrors sprite.wgsl.meta.json (5 fields byte-identical, no normalTexture / normalStrength)', async () => {
       const meta = await readSpriteLitMeta();
       const names = meta.paramSchema.map((p) => p.name);
-      // OOS-1 negative gate: no normal map fields.
+      // Negative gate: no normal map fields.
       expect(names.includes('normalTexture')).toBe(false);
       expect(names.includes('normalStrength')).toBe(false);
-      // D-7 positive gate: 5 fields strictly aligned with sprite.wgsl.meta.json
+      // Positive gate: 5 fields strictly aligned with sprite.wgsl.meta.json
       // (colorTint / region / pivotAndSize / slicesAndMode / baseColorTexture).
-      // Field-set congruence drives BGL byte-identical (AC-07).
+      // Field-set congruence drives BGL byte-identical.
       expect(names).toEqual([
         'colorTint',
         'region',
@@ -227,11 +252,11 @@ describe('sprite-lit shader (red gates, w2 -> w4 closes)', () => {
     });
   });
 
-  describe('LDR / HDR clamp boundary fixture (AC-09 numeric SSOT)', () => {
-    // Fixture: lightColor.intensity = 5.0 + base texel = 1.0 + colorTint = 1.
+  describe('LDR / HDR clamp boundary fixture (numeric SSOT)', () => {
+    // Fixture: total lit accumulator = 5.0 across all lights.
     // Expected LDR output (clamped) = 1.0; expected HDR output > 1.0.
     // The TS port mirrors what the WGSL must do.
-    const fixtureLitAccumulated = 5.0; // half-lambert * (5.0) summed across one strong light
+    const fixtureLitAccumulated = 5.0;
     const ldrOut = Math.min(1.0, fixtureLitAccumulated);
     const hdrOut = fixtureLitAccumulated;
 

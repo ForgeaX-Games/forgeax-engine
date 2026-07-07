@@ -33,7 +33,19 @@ export {
   INPUT_BACKEND_KEY,
   InputFrameStartScan,
 } from './frame-start-scan-system';
-export type { InputBackend, InputBackendSample, InputSnapshot } from './input-snapshot';
+export type {
+  Capabilities,
+  GamepadAxisIndex,
+  GamepadButtonIndex,
+  GamepadSlotSample,
+  InputBackend,
+  InputBackendSample,
+  InputSnapshot,
+  PointerPhaseEvent,
+  PointerSample,
+  VirtualAxisSample,
+  VirtualJoystickConfig,
+} from './input-snapshot';
 export {
   createInputSnapshot,
   INPUT_SNAPSHOT_RESOURCE_KEY,

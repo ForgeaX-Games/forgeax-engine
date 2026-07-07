@@ -213,6 +213,37 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
 
+  apps/hello/2d-flashlight:
+    dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../../../packages/ecs
+      '@forgeax/engine-rhi':
+        specifier: workspace:*
+        version: link:../../../packages/rhi
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../../../packages/types
+    devDependencies:
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-shader
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
+
   apps/hello/app:
     dependencies:
       '@forgeax/engine-app':
@@ -3724,6 +3755,19 @@ importers:
         specifier: workspace:*
         version: link:../import
 
+  packages/codec:
+    dependencies:
+      '@bokuweb/zstd-wasm':
+        specifier: 0.0.27
+        version: 0.0.27
+      fzstd:
+        specifier: ^0.1.1
+        version: 0.1.1
+    devDependencies:
+      '@types/node':
+        specifier: ^20.19.40
+        version: 20.19.40
+
   packages/debug-draw:
     dependencies:
       '@forgeax/engine-math':
@@ -3772,10 +3816,19 @@ importers:
 
   packages/fbx:
     dependencies:
+      '@forgeax/engine-math':
+        specifier: workspace:*
+        version: link:../math
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../types
     devDependencies:
+      '@forgeax/engine-import':
+        specifier: workspace:*
+        version: link:../import
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@types/node':
         specifier: ^20.14.0
         version: 20.19.40
@@ -3807,6 +3860,9 @@ importers:
       '@forgeax/engine-ecs':
         specifier: workspace:*
         version: link:../ecs
+      '@forgeax/engine-math':
+        specifier: workspace:*
+        version: link:../math
       '@forgeax/engine-types':
         specifier: workspace:*
         version: link:../types
@@ -4115,6 +4171,9 @@ importers:
 
   packages/runtime:
     dependencies:
+      '@forgeax/engine-codec':
+        specifier: workspace:*
+        version: link:../codec
       '@forgeax/engine-debug-draw':
         specifier: workspace:*
         version: link:../debug-draw
@@ -4219,6 +4278,9 @@ importers:
 
   packages/vite-plugin-pack:
     dependencies:
+      '@forgeax/engine-codec':
+        specifier: workspace:*
+        version: link:../codec
       '@forgeax/engine-image':
         specifier: workspace:*
         version: link:../image
@@ -4636,6 +4698,9 @@ packages:
 
   '@blazediff/core@1.9.1':
     resolution: {integrity: sha512-ehg3jIkYKulZh+8om/O25vkvSsXXwC+skXmyA87FFx6A/45eqOkZsBltMw/TVteb0mloiGT8oGRTcjRAz66zaA==}
+
+  '@bokuweb/zstd-wasm@0.0.27':
+    resolution: {integrity: sha512-GDm2uOTK3ESjnYmSeLQifJnBsRCWajKLvN32D2ZcQaaCIJI/Hse9s74f7APXjHit95S10UImsRGkTsbwHmrtmg==}
 
   '@changesets/apply-release-plan@7.1.1':
     resolution: {integrity: sha512-9qPCm/rLx/xoOFXIHGB229+4GOL76S4MC+7tyOuTsR6+1jYlfFDQORdvwR5hDA6y4FL2BPt3qpbcQIS+dW85LA==}
@@ -5876,6 +5941,9 @@ packages:
 
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
+
+  fzstd@0.1.1:
+    resolution: {integrity: sha512-dkuVSOKKwh3eas5VkJy1AW1vFpet8TA/fGmVA5krThl8YcOVE/8ZIoEA1+U1vEn5ckxxhLirSdY837azmbaNHA==}
 
   gensync@1.0.0-beta.2:
     resolution: {integrity: sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==}
@@ -7494,6 +7562,8 @@ snapshots:
 
   '@blazediff/core@1.9.1': {}
 
+  '@bokuweb/zstd-wasm@0.0.27': {}
+
   '@changesets/apply-release-plan@7.1.1':
     dependencies:
       '@changesets/config': 3.1.4
@@ -8746,6 +8816,8 @@ snapshots:
     optional: true
 
   function-bind@1.1.2: {}
+
+  fzstd@0.1.1: {}
 
   gensync@1.0.0-beta.2: {}
 

@@ -46,6 +46,7 @@ import {
   FRAME_START_SCAN_SYSTEM_NAME,
   INPUT_BACKEND_KEY,
   type InputBackend,
+  type VirtualJoystickConfig,
 } from '@forgeax/engine-input';
 
 import { AppError } from '../errors';
@@ -103,6 +104,8 @@ function makeAppError(
  */
 export interface InputAttachOptions {
   readonly pointerLockAllowed?: () => boolean;
+  /** M3: virtual joystick configurations passed through to browser backend. */
+  readonly virtualJoysticks?: readonly VirtualJoystickConfig[];
 }
 
 export function attachInputAuto(
@@ -110,12 +113,12 @@ export function attachInputAuto(
   world: World,
   options: InputAttachOptions = {},
 ): InputAttachHandle {
-  const detach = attachBrowserInputBackend(
-    canvas,
-    options.pointerLockAllowed
-      ? ({ pointerLockAllowed: options.pointerLockAllowed } satisfies BrowserInputBackendOptions)
-      : ({} satisfies BrowserInputBackendOptions),
+  const backendOpts = Object.assign(
+    {} as BrowserInputBackendOptions,
+    options.pointerLockAllowed ? { pointerLockAllowed: options.pointerLockAllowed } : {},
+    options.virtualJoysticks ? { virtualJoysticks: options.virtualJoysticks } : {},
   );
+  const detach = attachBrowserInputBackend(canvas, backendOpts);
   const backend = detach.backend;
   world.insertResource(INPUT_BACKEND_KEY, backend);
 

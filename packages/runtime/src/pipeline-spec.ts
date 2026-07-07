@@ -569,15 +569,14 @@ export function buildBindGroupLayoutDescriptor(
       const meshBufType: GPUBufferBindingType = caps.storageBuffer
         ? 'read-only-storage'
         : 'uniform';
-      // feat-20260624-sprite-lit-shading-model-pure-2d-lighting: sprite-lit's
-      // fs_main reads `meshes[0].worldFromLocal` to reconstruct per-fragment
-      // worldPos for point/spot light NdotL + attenuation (`spriteLitWorldPos`
-      // in sprite-lit.wgsl). Existing PBR/unlit/sprite shaders only read the
-      // mesh SSBO from vs_main, so widening to VERTEX|FRAGMENT is a permissive
-      // change for them (no perf cost — validation only) while making
-      // sprite-lit's pipeline actually buildable. WebGPU rejects
-      // createRenderPipeline when fragment-stage shader accesses a binding
-      // whose BGL visibility excludes FRAGMENT.
+      // sprite-lit's fragment stage does not read the mesh SSBO -- worldPos
+      // is carried through the VsOut interpolant. Visibility is kept widened
+      // to VERTEX|FRAGMENT because the BGL JSON is compared byte-identically
+      // across the sprite / sprite-lit / PBR pipelines that share this
+      // descriptor; narrowing here would change every sibling pipeline's
+      // BGL fingerprint. WebGPU rejects createRenderPipeline when a fragment
+      // stage accesses a binding whose BGL visibility excludes FRAGMENT --
+      // widening is permissive (validation-only, no perf cost).
       return {
         label: 'pbr-mesh-array-bgl',
         entries: [

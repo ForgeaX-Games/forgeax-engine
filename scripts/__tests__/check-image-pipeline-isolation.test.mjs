@@ -96,3 +96,41 @@ describe('check-image-pipeline-isolation Path (a) -- forbidden symbols + decoder
     expect(r.stderr).toMatch(/image-decoders\.d\.ts/);
   });
 });
+
+// w27-w28 (feat-20260706-asset-compression-base-zstd-and-ktx2-container-uni M5):
+// Path (d) isolates @forgeax/engine-codec/encode (build-time encoding subpath)
+// from runtime. Runtime may import the main @forgeax/engine-codec entry
+// (decompressZstd / parseKtx2 / errors) but must not import the encode subpath.
+describe('check-image-pipeline-isolation Path (d) -- runtime codec encode isolation', () => {
+  it('(d-neg) runtime imports @forgeax/engine-codec/encode -> exit 1 + path d violation marker', () => {
+    const fixtureRoot = resolve(fixturesDir, 'runtime-static-imports-codec-encode');
+    const r = run(fixtureRoot);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/AC-15 \(d\) FAIL/);
+    expect(r.stderr).toMatch(/runtime static import of @forgeax\/engine-codec\/encode/);
+  });
+
+  it('(d-pos) runtime imports @forgeax/engine-codec main entry -> exit 0', () => {
+    const fixtureRoot = resolve(fixturesDir, 'runtime-imports-codec-main');
+    const r = run(fixtureRoot);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/AC-15 \(d\) OK/);
+    expect(r.stdout).toMatch(/no @forgeax\/engine-codec\/encode import/);
+  });
+
+  it('(d-bound) runtime imports @forgeax/engine-codec/other-subpath -> exit 0 (not blocked)', () => {
+    const fixtureRoot = resolve(fixturesDir, 'runtime-imports-codec-other-subpath');
+    const r = run(fixtureRoot);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toMatch(/AC-15 \(d\) OK/);
+  });
+
+  it('(d-regress) existing path a still catches runtime engine-image import after path d addition', () => {
+    const fixtureRoot = resolve(fixturesDir, 'runtime-static-imports-decoder');
+    const r = run(fixtureRoot);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/AC-15 \(a\) FAIL/);
+    expect(r.stderr).toMatch(/decoder-strip requirement/);
+    expect(r.stderr).toMatch(/runtime static import of @forgeax\/engine-image/);
+  });
+});

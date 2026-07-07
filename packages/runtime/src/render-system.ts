@@ -71,6 +71,7 @@ import {
   TRANSPARENT_SORT_MODE_LAYER_YZ,
   TRANSPARENT_SORT_MODE_LAYER_Z,
 } from './systems/transparent-sort-config';
+import { tilemapChunkExtractSystem } from './tilemap-chunk-extract-system';
 import { urpPipeline } from './urp-pipeline';
 
 /**
@@ -1572,6 +1573,19 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
             },
           );
         }
+        // bug-20260703 M1 / D-1 revision 2026-07-06: tilemapChunkExtractSystem
+        // lives here (sibling of extractFrame) so both extract stages share
+        // the propagate-fresh guarantee. Placement rationale: propagate must
+        // run before ANY consumer that reads Transform.world (D-3 above), and
+        // the chunk-streaming frustum test reads camera Transform.world to
+        // decide which chunks materialize as ECS entities. Keeping the two
+        // extract systems at the same layer (rather than externalising the
+        // tilemap-chunk stage to createRenderer.draw) collapses the frame
+        // graph to a single seam and removes the previous double-propagate
+        // hack. See feat-20260601 D-3 (propagate guarantee) and
+        // plan-strategy §D-1 revision 2026-07-06 (user checkpoint 3
+        // architectural feedback) for the placement rationale.
+        tilemapChunkExtractSystem(world);
         const {
           cameras,
           lights,

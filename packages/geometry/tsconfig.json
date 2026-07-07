@@ -11,6 +11,7 @@
   "include": ["src/**/*"],
   "references": [
     { "path": "../ecs" },
+    { "path": "../math" },
     { "path": "../types" }
   ]
 }

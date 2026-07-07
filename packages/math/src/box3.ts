@@ -127,6 +127,54 @@ export function fromPoints(out: Box3, points: readonly Vec3Like[]): Box3 {
 }
 
 /**
+ * Build the tightest AABB enclosing flattened xyz `positions` (tight-packed,
+ * 3 floats per vertex). Writes to `out` in place and returns it.
+ *
+ * `positions` must have at least 3 elements to produce a non-empty box.
+ * Fewer than 3 elements leaves `out` as the inverted-infinity empty box
+ * (identical to `create()` default).
+ *
+ * Trailing elements beyond the last complete triplet are read verbatim
+ * (undefined → NaN), matching the legacy `aabbFromPositions` behaviour
+ * this function replaces.
+ *
+ * Related: `fromPoints` for `Vec3Like[]` input.
+ */
+export function fromPositions(out: Box3, positions: ArrayLike<number>): Box3 {
+  out[0] = Number.POSITIVE_INFINITY;
+  out[1] = Number.POSITIVE_INFINITY;
+  out[2] = Number.POSITIVE_INFINITY;
+  out[3] = Number.NEGATIVE_INFINITY;
+  out[4] = Number.NEGATIVE_INFINITY;
+  out[5] = Number.NEGATIVE_INFINITY;
+  if (positions.length < 3) return out;
+  let minX = positions[0] as number;
+  let minY = positions[1] as number;
+  let minZ = positions[2] as number;
+  let maxX = minX;
+  let maxY = minY;
+  let maxZ = minZ;
+  for (let i = 3; i < positions.length; i += 3) {
+    const x = positions[i] as number;
+    const y = positions[i + 1] as number;
+    const z = positions[i + 2] as number;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    if (z > maxZ) maxZ = z;
+  }
+  out[0] = minX;
+  out[1] = minY;
+  out[2] = minZ;
+  out[3] = maxX;
+  out[4] = maxY;
+  out[5] = maxZ;
+  return out;
+}
+
+/**
  * Transform an AABB by a 4x4 matrix using the conservative 8-corner method.
  *
  * Each of the 8 corners (all min/max combinations) is transformed by `m` as a

@@ -118,8 +118,22 @@ const layerEverBuilt = new Set<number>();
 //   layerChunkStreamEntities : "${layerKey}:${chunkIdx}" → spawned entity ids
 //                      for that chunk (purged when chunk leaves frustum).
 //   layerChunkActive : layerKey → Set<chunkIdx> currently spawned.
+//
+// bug-20260703-tilemap-chunk-stale-frustum-and-cull-overhang (D2): each entry
+// stores the ACTUAL world-space bounding box (union of every tile's post-TRS
+// footprint from `computeTileTrs`) rather than a tile-aligned grid box.
+// Multi-cell tiles (`widthCells` / `heightCells > 1`) and non-central pivots
+// let a tile extend beyond its anchor chunk's grid; the grid box would
+// despawn the anchor chunk while overhanging tiles were still on screen,
+// causing edge-of-chunk flicker as the camera pans. Bounds are computed once
+// per (dirty | first-time) rebuild, so the per-frame visibility test stays a
+// single `frustum.intersectsBox` call (plan-strategy §2 D-3).
+interface ChunkStreamEntry {
+  readonly specs: readonly DerivedSpawnSpec[];
+  readonly bounds: box3.Box3Like;
+}
 interface StreamLayerCache {
-  readonly byChunk: ReadonlyMap<number, readonly DerivedSpawnSpec[]>;
+  readonly byChunk: ReadonlyMap<number, ChunkStreamEntry>;
   readonly tilemap: {
     readonly cols: number;
     readonly rows: number;
@@ -854,29 +868,58 @@ function buildCameraFrustumPlanes(world: World): frustum.Frustum | null {
 }
 
 /**
- * World-space AABB [minX, minY, minZ, maxX, maxY, maxZ] for a chunk.
- * Z is expanded to ±1 so flat tile geometry (z=0) is never degenerate.
+ * bug-20260703-tilemap-chunk-stale-frustum-and-cull-overhang (D2): compute
+ * the world-space AABB that tightly encloses every tile inside a chunk
+ * after post-TRS placement (`computeTileTrs` applied per spec, SSOT shared
+ * with the per-cell spawn path and SpriteInstances batched path). This is
+ * the SSOT the streaming visibility test uses to decide whether a chunk's
+ * tiles could still be visible; using it instead of the tile-aligned grid
+ * box makes multi-cell / non-central-pivot overhang round-trip correctly,
+ * so an overhanging tile no longer disappears when its anchor chunk goes
+ * off-screen (plan-strategy §2 D-2).
+ *
+ * Empty spec list -> inverted `Number.MAX_VALUE` sentinel (plan-strategy
+ * §2 D-4). `bucketTileLayer` filters empty cells before the byChunk map
+ * is built, so this branch should never trigger in production; the
+ * sentinel is an explicit "no visible pixels" value that
+ * `frustum.intersectsBox` rejects immediately, avoiding any silent NaN
+ * propagation path (charter P3 explicit failure).
+ *
+ * Note: `frustum.intersectsBox` picks a p-vertex per plane and computes
+ * `dot(normal, p) + d`. When normal has a zero component, multiplying by
+ * `Infinity` yields `NaN` (`NaN < 0 === false` -> false positive
+ * intersection). The sentinel uses finite `Number.MAX_VALUE` on the axes
+ * we want inverted so `0 * MAX_VALUE === 0` and the non-zero-normal axis
+ * dominates, driving `dot` to `-Infinity` and correctly rejecting.
+ *
+ * Z is expanded to +/- 1 so flat sprite geometry (`pos_local.z === 0`) is
+ * never degenerate against the frustum's near/far planes.
+ *
+ * @internal exported for M2 overhang / empty-chunk sentinel unit tests
+ * (plan-strategy §5.3); not part of the AI user surface.
  */
-function chunkWorldAabb(
-  chunkIndex: number,
-  cols: number,
-  chunkSize: number,
-  tileSizeX: number,
-  tileSizeY: number,
+export function computeChunkStreamBounds(
+  tilemap: { tileSizeX: number; tileSizeY: number },
+  specs: readonly DerivedSpawnSpec[],
 ): box3.Box3Like {
-  const chunksPerRow = Math.max(1, Math.ceil(cols / chunkSize));
-  const cx = chunkIndex % chunksPerRow;
-  const cy = Math.floor(chunkIndex / chunksPerRow);
-  const x0 = cx * chunkSize * tileSizeX;
-  const y0 = cy * chunkSize * tileSizeY;
-  return [
-    x0,
-    y0,
-    -1,
-    x0 + chunkSize * tileSizeX,
-    y0 + chunkSize * tileSizeY,
-    1,
-  ] as unknown as box3.Box3Like;
+  let minX = Number.MAX_VALUE;
+  let minY = Number.MAX_VALUE;
+  let maxX = -Number.MAX_VALUE;
+  let maxY = -Number.MAX_VALUE;
+  for (const spec of specs) {
+    const { posX, posY, scaleX, scaleY } = computeTileTrs(tilemap, spec, spec.packedTile);
+    const halfW = Math.abs(scaleX) * 0.5;
+    const halfH = Math.abs(scaleY) * 0.5;
+    const x0 = posX - halfW;
+    const x1 = posX + halfW;
+    const y0 = posY - halfH;
+    const y1 = posY + halfH;
+    if (x0 < minX) minX = x0;
+    if (y0 < minY) minY = y0;
+    if (x1 > maxX) maxX = x1;
+    if (y1 > maxY) maxY = y1;
+  }
+  return [minX, minY, -1, maxX, maxY, 1] as unknown as box3.Box3Like;
 }
 
 function purgeDerivedEntities(world: World, layerEntity: EntityHandle): void {
@@ -1017,14 +1060,27 @@ export function tilemapChunkExtractSystem(world: World): void {
 
       const bucket = bucketTileLayer(world, w.layerEntity, w.parentEntity);
       if (bucket !== undefined) {
-        const byChunk = new Map<number, DerivedSpawnSpec[]>();
+        const byChunkSpecs = new Map<number, DerivedSpawnSpec[]>();
         for (const spec of bucket.specs) {
-          const list = byChunk.get(spec.chunkIndex);
+          const list = byChunkSpecs.get(spec.chunkIndex);
           if (list === undefined) {
-            byChunk.set(spec.chunkIndex, [spec]);
+            byChunkSpecs.set(spec.chunkIndex, [spec]);
           } else {
             list.push(spec);
           }
+        }
+        // bug-20260703 D2: promote each chunk's bucket to a ChunkStreamEntry
+        // carrying the world-space bounds that enclose every tile's actual
+        // footprint (not the tile-aligned grid box). The visibility test
+        // then rejects the chunk only when its TRUE pixels are all
+        // off-screen, so multi-cell / off-pivot tiles no longer flicker at
+        // chunk-boundary crossings (plan-strategy §2 D-2 / D-3).
+        const byChunk = new Map<number, ChunkStreamEntry>();
+        for (const [chunkIdx, specs] of byChunkSpecs) {
+          byChunk.set(chunkIdx, {
+            specs,
+            bounds: computeChunkStreamBounds(bucket.tilemap, specs),
+          });
         }
         layerStreamCache.set(layerKey, {
           byChunk,
@@ -1051,15 +1107,9 @@ export function tilemapChunkExtractSystem(world: World): void {
     layerChunkActive.set(layerKey, activeSet);
     const { tilemap } = cache;
 
-    for (const [chunkIdx, specs] of cache.byChunk) {
-      const aabb = chunkWorldAabb(
-        chunkIdx,
-        tilemap.cols,
-        tilemap.chunkSize,
-        tilemap.tileSizeX,
-        tilemap.tileSizeY,
-      );
-      const visible = frustumPlanes === null || frustum.intersectsBox(frustumPlanes, aabb);
+    for (const [chunkIdx, entry] of cache.byChunk) {
+      const { specs, bounds } = entry;
+      const visible = frustumPlanes === null || frustum.intersectsBox(frustumPlanes, bounds);
       const wasActive = activeSet.has(chunkIdx);
 
       if (visible && !wasActive) {

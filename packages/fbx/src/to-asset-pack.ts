@@ -6,6 +6,7 @@
 // the produced set stays a subset of the declared set (mirrors gltfImporter).
 // The import-runner then validates produced == declared and rejects mismatches.
 
+import { box3 } from '@forgeax/engine-math';
 import type {
   AnimationClipPod,
   ImportedAsset,
@@ -151,6 +152,7 @@ export function buildMeshAsset(
     kind: 'mesh',
     vertices: ib,
     ...(pod.indices ? { indices: pod.indices } : {}),
+    aabb: box3.fromPositions(box3.create(), pod.vertices),
     attributes,
     submeshes: pod.submeshes.map((sm) => ({
       indexOffset: sm.indexOffset,

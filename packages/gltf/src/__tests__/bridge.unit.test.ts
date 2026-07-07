@@ -15,7 +15,7 @@
 import { AssetRegistry } from '@forgeax/engine-runtime';
 import type { Handle, MaterialAsset, ParamSchemaEntry, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { gltfDocToSceneAsset, toMaterialAsset } from '../bridge.js';
+import { gltfDocToSceneAsset, meshIrToMeshAsset, toMaterialAsset } from '../bridge.js';
 import type { GltfDoc, GltfMaterialIr, GltfMeshIr } from '../parse-gltf.js';
 
 function fakeMeshHandle(id: number): Handle<'MeshAsset', 'shared'> {
@@ -1015,6 +1015,107 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
 
         const boxNode = scene.entities.find((n) => n.components.Name?.value === 'BoxNode');
         expect(boxNode?.components.Camera).toBeUndefined();
+      });
+    });
+  });
+}
+
+{
+  // ─── from bridge-mesh-aabb.test.ts (RED) ───
+  //
+  // TDD fail-first for bug-20260706-import-path-meshasset-aabb-undefined-blocks-pick M3.
+  // M4 (gltf producer emit aabb) will turn these assertions green.
+  //
+  // Assertions assume M4 will compute aabb via box3.fromPositions on the
+  // concatenated positionsCat, which merges all primitives' positions in
+  // vertex-buffer order.
+
+  describe('bridge-mesh-aabb.test.ts (RED)', () => {
+    describe('meshIrToMeshAsset aabb (TDD fail-first, M4 turns green)', () => {
+      it('single primitive: aabb equals position component min/max', () => {
+        const prim: GltfMeshIr = {
+          positions: new Float32Array([1, 2, 3, 4, 5, 6, -1, -2, -3]),
+          indices: new Uint16Array([0, 1, 2]),
+          materialIndex: 0,
+          meshIndex: 0,
+        };
+        const asset = meshIrToMeshAsset([prim]);
+        expect(asset.aabb).toBeInstanceOf(Float32Array);
+        expect(asset.aabb).toHaveLength(6);
+        // min=(-1,-2,-3)  max=(4,5,6)
+        expect(asset.aabb?.[0]).toBe(-1);
+        expect(asset.aabb?.[1]).toBe(-2);
+        expect(asset.aabb?.[2]).toBe(-3);
+        expect(asset.aabb?.[3]).toBe(4);
+        expect(asset.aabb?.[4]).toBe(5);
+        expect(asset.aabb?.[5]).toBe(6);
+      });
+
+      it('multi-primitive: merged AABB with offset prims so merged != any single box', () => {
+        // Prim 0: box near origin, min=(0,0,-2), max=(3,3,0)
+        const prim0: GltfMeshIr = {
+          positions: new Float32Array([0, 0, -2, 3, 0, -2, 0, 3, 0]),
+          indices: new Uint16Array([0, 1, 2]),
+          materialIndex: 0,
+          meshIndex: 0,
+        };
+        // Prim 1: box offset far away, min=(10,-1,10), max=(12,2,15)
+        const prim1: GltfMeshIr = {
+          positions: new Float32Array([10, -1, 10, 12, -1, 10, 10, 2, 15]),
+          indices: new Uint16Array([0, 1, 2]),
+          materialIndex: 1,
+          meshIndex: 0,
+        };
+        const asset = meshIrToMeshAsset([prim0, prim1]);
+        expect(asset.aabb).toBeInstanceOf(Float32Array);
+        expect(asset.aabb).toHaveLength(6);
+        // Merged: min=(0,-1,-2), max=(12,3,15)
+        // Neither prim alone covers x=0..12 or y=-1..3 or z=-2..15.
+        expect(asset.aabb?.[0]).toBe(0);
+        expect(asset.aabb?.[1]).toBe(-1);
+        expect(asset.aabb?.[2]).toBe(-2);
+        expect(asset.aabb?.[3]).toBe(12);
+        expect(asset.aabb?.[4]).toBe(3);
+        expect(asset.aabb?.[5]).toBe(15);
+      });
+
+      it('skinned input (18-float stride): aabb computed from position attribute only', () => {
+        const prim: GltfMeshIr = {
+          positions: new Float32Array([5, 1, 8, 2, 9, 4, 7, 3, 0]),
+          indices: new Uint16Array([0, 1, 2]),
+          joints0: new Uint16Array([0, 1, 2, 3, 0, 0, 0, 0, 1, 0, 0, 0]),
+          weights0: new Float32Array([1, 0, 0, 0, 0.5, 0.5, 0, 0, 0, 1, 0, 0]),
+          materialIndex: 0,
+          meshIndex: 0,
+        };
+        const asset = meshIrToMeshAsset([prim]);
+        expect(asset.aabb).toBeInstanceOf(Float32Array);
+        expect(asset.aabb).toHaveLength(6);
+        // min=(2,1,0)  max=(7,9,8) — from positions, ignoring skin/joint data
+        expect(asset.aabb?.[0]).toBe(2);
+        expect(asset.aabb?.[1]).toBe(1);
+        expect(asset.aabb?.[2]).toBe(0);
+        expect(asset.aabb?.[3]).toBe(7);
+        expect(asset.aabb?.[4]).toBe(9);
+        expect(asset.aabb?.[5]).toBe(8);
+      });
+
+      it('empty input (0 vertices): inverted-empty box', () => {
+        const prim: GltfMeshIr = {
+          positions: new Float32Array(0),
+          materialIndex: 0,
+          meshIndex: 0,
+        };
+        const asset = meshIrToMeshAsset([prim]);
+        expect(asset.aabb).toBeInstanceOf(Float32Array);
+        expect(asset.aabb).toHaveLength(6);
+        // Inverted-empty: min=(+Inf,+Inf,+Inf), max=(-Inf,-Inf,-Inf)
+        expect(asset.aabb?.[0]).toBe(Number.POSITIVE_INFINITY);
+        expect(asset.aabb?.[1]).toBe(Number.POSITIVE_INFINITY);
+        expect(asset.aabb?.[2]).toBe(Number.POSITIVE_INFINITY);
+        expect(asset.aabb?.[3]).toBe(Number.NEGATIVE_INFINITY);
+        expect(asset.aabb?.[4]).toBe(Number.NEGATIVE_INFINITY);
+        expect(asset.aabb?.[5]).toBe(Number.NEGATIVE_INFINITY);
       });
     });
   });

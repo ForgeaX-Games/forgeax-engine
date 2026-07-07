@@ -286,12 +286,24 @@ export interface MeshAsset {
   /**
    * Axis-aligned bounding box in local space: 6 floats [minX, minY, minZ, maxX, maxY, maxZ].
    *
-   * Computed by AssetRegistry.register / registerWithGuid from the position attribute
-   * after mesh validation passes. When no position attribute or empty vertices, the
-   * AABB is an inverted-infinity empty box (the consumer interprets this as
-   * always-visible -- no culling). The bare Float32Array keeps engine-types math-free
-   * (no Box3 branded type dependency). Consumers narrow to the math-layer Box3 via
-   * `as Box3Like` (plan-strategy D-1).
+   * Producer obligation: every MeshAsset MUST carry a computed `aabb` from its
+   * position attribute. Built-in producers (glTF, FBX, geometry factories)
+   * fill it automatically via `box3.fromPositions` -- the single
+   * authoritative implementation in @forgeax/engine-math.
+   *
+   * When `aabb` is `undefined`, the pick() broad-phase and frustum culling
+   * silently skip the mesh -- pick() returns `undefined` for every ray query
+   * against it with no diagnostic signal. AI users hand-writing MeshAsset
+   * must self-check that `aabb` is populated.
+   *
+   * Empty / degenerate position input (0 vertices) produces an
+   * inverted-infinity empty box (min = +Infinity, max = -Infinity).
+   * Consumers reject this for picking (min.x > max.x) and may skip it
+   * for culling.
+   *
+   * The bare Float32Array keeps engine-types math-free (no Box3 branded
+   * type dependency). Consumers narrow to the math-layer Box3 via
+   * `as Box3Like`.
    */
   readonly aabb?: Float32Array;
   /**
@@ -4193,7 +4205,21 @@ interface MetricErrorBase {
  * `importSettings` always carries them (D-5: `'auto'` / `'none'` string
  * tokens are mapped to `true` / `false` at the catalog builder; runtime never
  * sees the string form).
+ *
+ * `compression` is the build-time compression level this image artefact
+ * was stored with. Loop 1 supports `'none'` (passthrough) and `'zstd'`.
+ * Loop 2 may add members like `'basis-uastc'`. Absent for legacy rows.
  */
+
+/**
+ * Asset compression strategy — closed literal union.
+ *
+ * Single SSOT (D-9). Loop 1 supports `'none'` (pass-through) and `'zstd'`.
+ * Loop 2 may add members (add-only-minor). A missing / `undefined` field
+ * means legacy uncompressed artefact (E1 backward-compat).
+ */
+export type AssetCompression = 'none' | 'zstd';
+
 export interface ImageMetadata {
   readonly kind: 'texture';
   readonly width?: number;
@@ -4201,6 +4227,8 @@ export interface ImageMetadata {
   readonly format: GPUTextureFormat;
   readonly colorSpace: 'srgb' | 'linear';
   readonly mipmap: boolean;
+  /** Build-time compression strategy used for this image artefact. `undefined` for legacy assets. */
+  readonly compression?: AssetCompression;
 }
 
 /**
@@ -4243,6 +4271,12 @@ export interface PackIndexEntry {
    * 36-char dash-form UUID.
    */
   readonly refs?: readonly string[];
+  /**
+   * Build-time compression strategy used for this artefact.
+   * Loop 1: `'none'` (pass-through) | `'zstd'`. Loop 2 may add members.
+   * `undefined` for legacy rows — treat as uncompressed (E1 backward-compat).
+   */
+  readonly compression?: AssetCompression;
 }
 
 // === InspectEntry / InspectSnapshot (feat-20260618-asset-and-pack-name-fields M1 / w3) ===
@@ -4353,8 +4387,17 @@ export interface ParseErrorDetail {
 }
 
 export interface LoadContext {
+  /**
+   * Fetch raw bytes for an asset artefact, with optional decompression.
+   *
+   * feat-20260706 M3 / w19: extended signature per D-2 — a `compression`
+   * opt triggers the decompression gate inside the closure
+   * (`@forgeax/engine-codec` lazy-init). `undefined` / `'none'` = E1
+   * pass-through (backward-compat for legacy catalog rows).
+   */
   fetchBinary(
     url: string,
+    opts?: { readonly compression?: AssetCompression },
   ): Promise<
     | { readonly ok: true; readonly value: Uint8Array }
     | { readonly ok: false; readonly error: unknown }

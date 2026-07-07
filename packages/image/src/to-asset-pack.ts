@@ -1,4 +1,4 @@
-import type { DecodedImage, ImageMeta } from '@forgeax/engine-types';
+import type { AssetCompression, DecodedImage, ImageMeta } from '@forgeax/engine-types';
 
 /**
  * External-asset-package envelope shape mirroring the
@@ -28,6 +28,13 @@ export interface ImageImportSettings extends Readonly<Record<string, unknown>> {
   readonly mipmap: ImageMeta['mipmap'];
   readonly addressMode: ImageMeta['addressMode'];
   readonly filterMode: ImageMeta['filterMode'];
+  /**
+   * Explicit per-asset compression override (AC-01: importSettings carries
+   * compression intent). When omitted, the build-time compression strategy
+   * table decides by artifact kind (mesh -> zstd, texture -> none). When set,
+   * this value wins over the default table for this asset.
+   */
+  readonly compression?: AssetCompression;
 }
 
 export interface ExternalSubAsset {

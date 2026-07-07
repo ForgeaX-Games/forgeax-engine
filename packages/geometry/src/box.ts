@@ -19,6 +19,7 @@
 //          research Finding 4 (Three.js r184 BufferGeometry mental migration).
 
 import { err, ok, type Result } from '@forgeax/engine-ecs';
+import { box3 } from '@forgeax/engine-math';
 import {
   ASSET_ERROR_HINTS,
   AssetError,
@@ -154,40 +155,8 @@ export function meshFromInterleaved(
     // (D-15) `allocSharedRef` stores the payload verbatim -- there is no
     // `withMeshAabb` pass like the old `register`/`catalog` path -- so the cull
     // + pick path can only read an AABB the POD already holds.
-    aabb: aabbFromPositions(positions),
+    aabb: box3.fromPositions(box3.create(), positions),
   };
-}
-
-/** Local-space AABB [minX,minY,minZ,maxX,maxY,maxZ] from tight-packed xyz. */
-export function aabbFromPositions(positions: Float32Array): Float32Array {
-  if (positions.length < 3) {
-    return Float32Array.of(
-      Number.POSITIVE_INFINITY,
-      Number.POSITIVE_INFINITY,
-      Number.POSITIVE_INFINITY,
-      Number.NEGATIVE_INFINITY,
-      Number.NEGATIVE_INFINITY,
-      Number.NEGATIVE_INFINITY,
-    );
-  }
-  let minX = positions[0] as number;
-  let minY = positions[1] as number;
-  let minZ = positions[2] as number;
-  let maxX = minX;
-  let maxY = minY;
-  let maxZ = minZ;
-  for (let i = 3; i < positions.length; i += 3) {
-    const x = positions[i] as number;
-    const y = positions[i + 1] as number;
-    const z = positions[i + 2] as number;
-    if (x < minX) minX = x;
-    if (y < minY) minY = y;
-    if (z < minZ) minZ = z;
-    if (x > maxX) maxX = x;
-    if (y > maxY) maxY = y;
-    if (z > maxZ) maxZ = z;
-  }
-  return Float32Array.of(minX, minY, minZ, maxX, maxY, maxZ);
 }
 
 /** Shared helper: AssetError for degenerate geometry parameters. */
