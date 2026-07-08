@@ -797,7 +797,23 @@ async function tryCreateWebGPURenderer(
     return { kind: 'rhi-err', error: adapterResult.error };
   }
   const adapter = adapterResult.value;
-  const result = await adapter.requestDevice();
+  // M4 w28: filter compression features from adapter.features (AC-07).
+  // D-7: RequestDeviceOptions already has requiredFeatures (Pick<
+  // GPUDeviceDescriptor, 'label' | 'requiredFeatures' | 'requiredLimits'>).
+  // Only request features the adapter actually supports — no blind request.
+  // Typed as GPUFeatureName[] so `adapter.features.has(f)` needs no cast:
+  // RhiAdapter.features is ReadonlySet<GPUFeatureName> and requiredFeatures folds
+  // straight into RequestDeviceOptions.requiredFeatures. A single-step `as
+  // GPUFeatureName` / `as GPUFeatureName[]` cast is forbidden by the RHI-surface
+  // gate (ac-08 gate (j)) -- it would leak shim internals past the RHI surface.
+  const COMPRESSION_FEATURES: GPUFeatureName[] = [
+    'texture-compression-bc',
+    'texture-compression-etc2',
+    'texture-compression-astc',
+  ];
+  const requiredFeatures = COMPRESSION_FEATURES.filter((f) => adapter.features.has(f));
+  const deviceOpts = requiredFeatures.length > 0 ? { requiredFeatures } : undefined;
+  const result = await adapter.requestDevice(deviceOpts);
   if (!result.ok) {
     return { kind: 'rhi-err', error: result.error };
   }
@@ -1050,6 +1066,16 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // 'nineslice.tile-needs-repeat-sampler' on the SAME counter the runtime
   // reads.
   assets.setMetrics(metrics);
+  // feat-20260707 M5 / w33 (D-11 + D-8): project the RhiCaps three-way
+  // compression triple into the codec-facing `TranscodeCaps` and wire it into
+  // the registry so the texture / equirect Basis arms can pick a transcode
+  // target. One-line projection; the loader stays a pure consumer of the
+  // declared ctx input (Pipeline Isolation).
+  assets.setTranscodeCaps({
+    bc: internals.device.caps.textureCompressionBc,
+    etc2: internals.device.caps.textureCompressionEtc2,
+    astc: internals.device.caps.textureCompressionAstc,
+  });
 
   // M1 (bug-20260601-hello-tonemap-material-register D-1/D-2): prepare
   // engine-shipped material shaders (cap gate + manifest load + registration)

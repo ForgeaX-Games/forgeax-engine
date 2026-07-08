@@ -172,8 +172,12 @@ export interface SceneInstanceState {
  *   // inst.state holds entityToLocalId / detachedLocalIds / overrides /
  *   // rootEntities / totalSlots / mountTimeOverrides.
  */
-export const SceneInstance = defineComponent('SceneInstance', {
-  source: { type: 'shared<SceneAsset>' },
-  mapping: { type: 'array<entity>' },
-  state: { type: 'unique<SceneInstanceState>' },
-});
+export const SceneInstance = defineComponent(
+  'SceneInstance',
+  {
+    source: { type: 'shared<SceneAsset>' },
+    mapping: { type: 'array<entity>' },
+    state: { type: 'unique<SceneInstanceState>' },
+  },
+  { transient: true },
+);

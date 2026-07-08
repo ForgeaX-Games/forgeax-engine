@@ -49,12 +49,14 @@ describe('AC-28: ViewModel extended field type inference', () => {
     expectTypeOf(panelBody).returns.toEqualTypeOf<GPUColor | undefined>();
   });
 
-  it('vm.vertexBuffers.get() inferred as string | undefined', () => {
+  it('vm.vertexBuffers.get() inferred as {handleId, offset, size} record | undefined', () => {
     function panelBody(vm: ViewModel) {
       const vb = vm.draws[0]?.vertexBuffers.get(0);
       return vb;
     }
-    expectTypeOf(panelBody).returns.toEqualTypeOf<string | undefined>();
+    expectTypeOf(panelBody).returns.toEqualTypeOf<
+      { readonly handleId: string; readonly offset: number; readonly size: number } | undefined
+    >();
   });
 
   it('vm.pipelineState.blend.colorTargets inferred as readonly array', () => {

@@ -45,9 +45,11 @@
 //   normalization on first reload; fixed-point from second collect onward).
 
 import {
+  checkRelationshipMirrorsTransient,
   type Component as EcsComponent,
   type EntityHandle,
   getRegisteredComponents,
+  RELATIONSHIP_COMPONENTS,
   resolveComponent,
   type World,
 } from '@forgeax/engine-ecs';
@@ -251,6 +253,35 @@ export function rootsToSceneAsset(
   SceneAsset,
   SceneCollectEntityRefOutOfClosureError | SceneCollectAssetGuidUnresolvedError
 > {
+  // ── D-2 dev-gate: check that every relationship mirror target declares
+  // transient: true.  Dev-only (production silently skips); the check is a
+  // programmer-bug invariant, not an expected user failure — throw, don't
+  // return Result.
+  const nodeEnv = (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process?.env
+    ?.NODE_ENV;
+  if (typeof nodeEnv === 'string' && nodeEnv !== 'production') {
+    const violations = checkRelationshipMirrorsTransient(
+      RELATIONSHIP_COMPONENTS,
+      resolveComponent as (name: string) => EcsComponent<string> | undefined,
+    );
+    if (violations.length > 0) {
+      const lines = violations.map((mirrorName) => {
+        // Best-effort holder lookup for the error message.
+        let holderName = '<unknown>';
+        for (const h of RELATIONSHIP_COMPONENTS) {
+          if (h.relationship?.mirror === mirrorName) {
+            holderName = h.name;
+            break;
+          }
+        }
+        return `  holder "${holderName}" -> mirror "${mirrorName}" (add { transient: true } to the mirror component's defineComponent call)`;
+      });
+      throw new Error(
+        `RELATIONSHIP_COMPONENTS mirror components missing transient: true:\n${lines.join('\n')}`,
+      );
+    }
+  }
+
   // ── Step 1: BFS closure ──
   const visited = new Set<number>();
   for (const root of roots) collectSubtree(world, root, visited);
@@ -265,10 +296,19 @@ export function rootsToSceneAsset(
     if (world.get(er as EntityHandle, SceneInstance).ok) anchorEntities.add(er);
   }
 
+  // D-7 (feat-20260707) ordering robustness: the first-wins loops below
+  // (memberEntities claim + carrier absorption) resolve ties by iteration
+  // order. Iterating the anchorEntities Set directly ties the outcome to BFS
+  // insertion order — deterministic within one run but fragile to Node/VM
+  // changes. Sort by raw handle so "which anchor claims a shared member / a
+  // shared carrier" is a deterministic function of the SceneAsset (§3.2
+  // fixed-point premise: collect output must be a pure function of the graph).
+  const anchorsSorted = [...anchorEntities].sort((a, b) => a - b);
+
   // Classify members for non-root anchors.
   const memberEntities = new Set<number>();
   const memberOrigin = new Map<number, { anchorRaw: number; memberLocalId: number }>();
-  for (const er of anchorEntities) {
+  for (const er of anchorsSorted) {
     if (rootRawSet.has(er)) continue; // root anchor: don't classify members
     const sr = world.getSceneInstanceState(er as EntityHandle);
     if (!sr.ok) continue;
@@ -341,7 +381,10 @@ export function rootsToSceneAsset(
     return true;
   };
   if (childOfTk0) {
-    for (const anchorRaw of anchorEntities) {
+    // Deterministic order (D-7): a carrier shared by two anchors is claimed by
+    // the lowest-handle anchor regardless of Set iteration order.
+    for (const anchorRaw of anchorsSorted) {
+      if (!anchorEntities.has(anchorRaw)) continue; // pruned inner anchor
       if (rootRawSet.has(anchorRaw)) continue;
       const cr = world.get(anchorRaw as EntityHandle, childOfTk0 as EcsComponent<string>);
       if (!cr.ok) continue;
@@ -508,8 +551,8 @@ export function rootsToSceneAsset(
     const isRoot = rootRawSet.has(entityRaw);
 
     for (const [compName, compToken] of registeredComps) {
+      if (compToken.transient) continue;
       if (isRoot && compName === 'ChildOf') continue;
-      if (compName === 'SceneInstance') continue;
 
       const valRes = world.get(entity, compToken as EcsComponent<string>);
       if (!valRes.ok) continue;

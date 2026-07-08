@@ -9,10 +9,13 @@
 # - --release is the wasm-pack default; the [profile.release] in Cargo.toml
 #   (opt-level=z + lto=fat + codegen-units=1 + strip=debuginfo + wasm-opt -Oz
 #   override) is the size-budget knob honoured here.
-# - pkg/ output is committed to git (continues the precedent of the two
-#   legacy wasm-pack crates that this package replaces — both archived in
-#   feat-20260511-naga-rhi-wgpu-merge M5) so the @forgeax/engine-wgpu-wasm workspace
-#   dep tree resolves without requiring every consumer to run a Rust toolchain.
+# - pkg/ output is NOT committed to git (ufbx-style release; see .gitignore).
+#   wasm-bindgen emits pkg/ as an inseparable .wasm + .js glue + .d.ts set, so
+#   committing "just the text" reintroduced .d.ts-vs-rhi.rs drift. Instead the
+#   whole pkg/ is published to the `wasm-artifacts` GitHub Release (content-keyed,
+#   see scripts/content-key.mjs) by the publish-wgpu-wasm-release CI job, and
+#   no-Rust consumers hydrate pkg/ via `pnpm -F @forgeax/engine-wgpu-wasm
+#   fetch-wasm` (scripts/fetch-wasm.mjs; also run non-fatally by root postinstall).
 #
 # Outputs to ./pkg/ (.wasm + .d.ts + .js glue + package.json).
 #

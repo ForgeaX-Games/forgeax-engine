@@ -41,10 +41,12 @@
 
 import type { World } from '@forgeax/engine-ecs';
 import {
+  type ActionConfig,
   attachBrowserInputBackend,
   type BrowserInputBackendOptions,
   FRAME_START_SCAN_SYSTEM_NAME,
   INPUT_BACKEND_KEY,
+  INPUT_MAP_KEY,
   type InputBackend,
   type VirtualJoystickConfig,
 } from '@forgeax/engine-input';
@@ -106,6 +108,12 @@ export interface InputAttachOptions {
   readonly pointerLockAllowed?: () => boolean;
   /** M3: virtual joystick configurations passed through to browser backend. */
   readonly virtualJoysticks?: readonly VirtualJoystickConfig[];
+  /**
+   * M1: action mapping config. Normalized (last-wins dedup, D-8) then inserted as
+   * a frozen readonly Resource under INPUT_MAP_KEY. Canvas-form only; assemble-form
+   * hosts insert INPUT_MAP_KEY directly.
+   */
+  readonly inputMap?: readonly ActionConfig[] | undefined;
 }
 
 export function attachInputAuto(
@@ -121,6 +129,21 @@ export function attachInputAuto(
   const detach = attachBrowserInputBackend(canvas, backendOpts);
   const backend = detach.backend;
   world.insertResource(INPUT_BACKEND_KEY, backend);
+
+  // M1: normalize inputMap + insert as frozen Resource.
+  // D-8: last-wins dedup — later duplicate action names overwrite earlier.
+  if (options.inputMap && options.inputMap.length > 0) {
+    const deduped = new Map<string, ActionConfig>();
+    for (const config of options.inputMap) {
+      // Validate: action name must be non-empty.
+      if (config.action.length === 0) {
+        continue; // skip empty-name configs silently (P3: empty signal)
+      }
+      deduped.set(config.action, config);
+    }
+    const frozenInputMap: readonly ActionConfig[] = Object.freeze([...deduped.values()]);
+    world.insertResource(INPUT_MAP_KEY, frozenInputMap);
+  }
 
   let cleanedUp = false;
 

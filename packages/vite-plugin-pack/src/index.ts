@@ -449,6 +449,13 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       kind: 'texture',
       isPackJson: false,
       ...(texOverride !== undefined ? { override: texOverride } : {}),
+      // Carry the importer's resolved delivery encoding so a Basis KTX2 row
+      // records its basis-* discriminant (loader transcode dispatch) instead of
+      // the STRATEGY_TABLE 'none' default (which fell through to a scheme=1 KTX2
+      // reject). Dev path parity with the build arm.
+      ...(imported.metadata.compression !== undefined
+        ? { alreadyCompressed: imported.metadata.compression }
+        : {}),
     });
     await writeFile(binAbs, compressed.compressed);
     const importedRow: PackIndexEntry = {
@@ -1249,6 +1256,13 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         kind: 'texture',
         isPackJson: false,
         ...(texBuildOverride !== undefined ? { override: texBuildOverride } : {}),
+        // Carry the importer's resolved delivery encoding so a Basis KTX2 row
+        // records its basis-* discriminant (loader transcode dispatch) instead
+        // of the STRATEGY_TABLE 'none' default (which fell through to a scheme=1
+        // KTX2 reject). Build path SSOT with the dev arm.
+        ...(imported.metadata.compression !== undefined
+          ? { alreadyCompressed: imported.metadata.compression }
+          : {}),
       });
       const refId = this.emitFile({
         type: 'asset',

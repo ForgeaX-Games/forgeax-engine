@@ -16,7 +16,7 @@ import type { Result } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import { DebugError } from './errors';
 import { readbackDrawRt } from './readback';
-import { computePassOffsets } from './tape-format';
+import { computePassOffsets, DRAW_KINDS } from './tape-format';
 import type {
   CreateDescriptor,
   DrawPipelineState,
@@ -167,7 +167,15 @@ export function buildResources(
 export interface PassState {
   handleId: HandleId;
   pipelineHandleId: HandleId | undefined;
-  vertexBuffers: Map<number, HandleId>;
+  /**
+   * Bound vertex buffers keyed by slot. Each entry carries the raw
+   * `setVertexBuffer` triple (`handleId`, `offset`, `size`) verbatim: offset
+   * defaults to 0 when the event omits it; size 0 preserves the WebGPU spec
+   * intent ("bind from offset to end of buffer") — we do not normalise.
+   */
+  vertexBuffers: Map<number, { handleId: HandleId; offset: number; size: number }>;
+  /** Bound index buffer for the pass (mirrors `setIndexBuffer` event). Undefined until set. */
+  indexBuffer: { handleId: HandleId; format: GPUIndexFormat; offset: number } | undefined;
   blendConstant: GPUColor | undefined;
   stencilReference: number;
   depthStencilViewHandleId: HandleId | undefined;
@@ -185,6 +193,7 @@ export function scanPassStates(events: readonly RhiCallEvent[]): PassState[] {
         handleId: event.passHandleId,
         pipelineHandleId: undefined,
         vertexBuffers: new Map(),
+        indexBuffer: undefined,
         blendConstant: undefined,
         stencilReference: 0,
         depthStencilViewHandleId: event.depthStencilViewHandleId,
@@ -196,6 +205,7 @@ export function scanPassStates(events: readonly RhiCallEvent[]): PassState[] {
         handleId: event.passHandleId,
         pipelineHandleId: undefined,
         vertexBuffers: new Map(),
+        indexBuffer: undefined,
         blendConstant: undefined,
         stencilReference: 0,
         depthStencilViewHandleId: undefined,
@@ -205,7 +215,17 @@ export function scanPassStates(events: readonly RhiCallEvent[]): PassState[] {
     } else if (current !== null && event.kind === 'setPipeline') {
       current.pipelineHandleId = event.pipelineHandleId;
     } else if (current !== null && event.kind === 'setVertexBuffer') {
-      current.vertexBuffers.set(event.slot, event.bufferHandleId);
+      current.vertexBuffers.set(event.slot, {
+        handleId: event.bufferHandleId,
+        offset: event.offset ?? 0,
+        size: event.size ?? 0,
+      });
+    } else if (current !== null && event.kind === 'setIndexBuffer') {
+      current.indexBuffer = {
+        handleId: event.bufferHandleId,
+        format: event.format,
+        offset: event.offset ?? 0,
+      };
     } else if (current !== null && event.kind === 'setBlendConstant') {
       current.blendConstant = event.color;
     } else if (current !== null && event.kind === 'setStencilReference') {
@@ -412,11 +432,7 @@ export function extractDrawInfo(events: readonly RhiCallEvent[], targetDrawIdx: 
     }
 
     // Check for draw calls
-    if (
-      event.kind === 'draw' ||
-      event.kind === 'drawIndexed' ||
-      event.kind === 'dispatchWorkgroups'
-    ) {
+    if (DRAW_KINDS.has(event.kind)) {
       if (currentGlobalDrawIdx === targetDrawIdx) {
         foundDraw = true;
         drawPassHandleId = currentPassHandleId;
@@ -438,6 +454,8 @@ export function extractDrawInfo(events: readonly RhiCallEvent[], targetDrawIdx: 
             pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
             vertexCount: event.vertexCount,
             instanceCount: event.instanceCount,
+            firstVertex: event.firstVertex,
+            firstInstance: event.firstInstance,
           };
         } else if (event.kind === 'drawIndexed') {
           drawCall = {
@@ -445,14 +463,30 @@ export function extractDrawInfo(events: readonly RhiCallEvent[], targetDrawIdx: 
             pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
             indexCount: event.indexCount,
             instanceCount: event.instanceCount,
+            firstIndex: event.firstIndex,
+            baseVertex: event.baseVertex,
+            firstInstance: event.firstInstance,
           };
-        } else {
+        } else if (event.kind === 'drawIndirect' || event.kind === 'drawIndexedIndirect') {
+          drawCall = {
+            pipelineKind: pipelineInfo?.pipelineKind ?? 'render',
+            pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
+            indirectBufferHandleId: event.indirectBufferHandleId,
+            indirectOffset: event.indirectOffset,
+          };
+        } else if (event.kind === 'dispatchWorkgroups') {
           drawCall = {
             pipelineKind: pipelineInfo?.pipelineKind ?? 'compute',
             pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
             dispatchX: event.x,
             dispatchY: event.y,
             dispatchZ: event.z,
+          };
+        } else {
+          // DRAW_KINDS is closed — this branch is unreachable, defensive fallback.
+          drawCall = {
+            pipelineKind: pipelineInfo?.pipelineKind ?? 'render',
+            pipelineHandleId: pipelineInfo?.pipelineHandleId ?? 'unknown',
           };
         }
         break;
@@ -512,11 +546,7 @@ export function findPassIdx(events: readonly RhiCallEvent[], drawIdx: number): n
 function countDraws(events: readonly RhiCallEvent[]): number {
   let count = 0;
   for (const event of events) {
-    if (
-      event.kind === 'draw' ||
-      event.kind === 'drawIndexed' ||
-      event.kind === 'dispatchWorkgroups'
-    ) {
+    if (DRAW_KINDS.has(event.kind)) {
       count++;
     }
   }
@@ -536,7 +566,7 @@ export function findEventIdxForDraw(events: readonly RhiCallEvent[], drawIdx: nu
   for (let i = 0; i < events.length; i++) {
     const ev = events[i];
     if (ev === undefined) continue;
-    if (ev.kind === 'draw' || ev.kind === 'drawIndexed' || ev.kind === 'dispatchWorkgroups') {
+    if (DRAW_KINDS.has(ev.kind)) {
       if (count === drawIdx) return i;
       count++;
     }

@@ -513,7 +513,12 @@ export type TypedArrayFor<T extends SchemaFieldType> = T extends 'f32'
  *
  * - `mirror` — the mirror component's string NAME (not a type reference, so
  *   `engine-ecs` never imports the mirror component type; AC-29). Resolved at
- *   `defineComponent` time via the global `resolveComponent` index.
+ *   `defineComponent` time via the global `resolveComponent` index. The mirror
+ *   component is a derived runtime view rebuilt by the hooks below, so it MUST
+ *   declare `transient: true` — otherwise scene collect serializes it and
+ *   `instantiateScene` double-writes (serialized copy + hook rebuild). The dev
+ *   assertion {@link checkRelationshipMirrorsTransient} catches an omitted
+ *   `transient` at collect time (feat-20260707).
  * - `field` — the `array<entity>` field on the mirror component that holds the
  *   reverse list. Validated to be exactly `'array<entity>'` at `defineComponent` time.
  * - `exclusive` — when `true`, re-adding the holder component with a new target
@@ -618,6 +623,48 @@ const _relationshipSet = new Set<Component>();
  */
 export const RELATIONSHIP_COMPONENTS: ReadonlySet<Component> = _relationshipSet;
 
+/**
+ * Dev assertion: checks that every relationship component's mirror target
+ * declares `transient: true`. Returns an array of mirror component names that
+ * are missing the transient declaration.
+ *
+ * Pure function with injectable dependencies (D-2): `holders` and
+ * `resolveComponent` are parameters, enabling testing with mock tokens
+ * without polluting the global `RELATIONSHIP_COMPONENTS` Set.
+ *
+ * @param holders - Iterable of relationship-holder `Component` tokens (e.g.
+ *   `RELATIONSHIP_COMPONENTS` at runtime). Only tokens with `relationship.mirror`
+ *   are inspected; non-relationship tokens in the iterable are skipped.
+ * @param resolveComponent - Injected resolver (same signature as the module-level
+ *   `resolveComponent`). Mirror name -> token, or `undefined` if not yet registered
+ *   (ESM ordering edge case — skipped gracefully).
+ * @returns Array of mirror component names whose token has `transient !== true`.
+ *   Empty array = all mirrors correctly declare `transient: true` (or no
+ *   relationship components exist).
+ *
+ * @remarks The holder token's own `transient` field is NOT checked — only the
+ *   resolved **mirror target** token is inspected. The `RELATIONSHIP_COMPONENTS`
+ *   Set stores holders (e.g. `ChildOf`), not mirrors (e.g. `Children`), per
+ *   the defineComponent registration in `component.ts:609-619`. The function
+ *   traverses `holder.relationship.mirror` -> resolve -> inspect.
+ */
+export function checkRelationshipMirrorsTransient(
+  holders: Iterable<Component>,
+  resolveComponent: (name: string) => Component | undefined,
+): string[] {
+  const violations: string[] = [];
+  for (const holder of holders) {
+    const mirrorName = holder.relationship?.mirror;
+    if (mirrorName === undefined) continue; // not a relationship component
+    const mirrorToken = resolveComponent(mirrorName);
+    if (mirrorToken === undefined) continue; // not registered yet (ESM ordering)
+    if (mirrorToken.transient !== true) {
+      violations.push(mirrorName);
+    }
+  }
+  return violations;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Token
 // ────────────────────────────────────────────────────────────────────────────
@@ -717,6 +764,14 @@ export interface Component<N extends string = string, S extends ComponentSchema 
    * trigger sites (bidirectional mirror maintenance). See {@link RelationshipMeta}.
    */
   readonly relationship?: RelationshipMeta;
+  /**
+   * True = derived runtime state, skipped by scene collect (rootsToSceneAsset),
+   * still present at runtime. Mirror targets of relationship components should
+   * declare this.
+   *
+   * Default: `false` (component participates in serialization).
+   */
+  readonly transient: boolean;
   /**
    * Component-level open namespace (feat-20260602 M1 / D-A3, AC-01 layer 1).
    * A frozen `Record<string, unknown>` map aggregating every field-level `meta`
@@ -1085,6 +1140,16 @@ export interface DefineComponentOptions<S extends ComponentSchema = ComponentSch
    * See {@link RelationshipMeta}.
    */
   readonly relationship?: RelationshipMeta;
+  /**
+   * When `true`, the component is skipped by scene collect
+   * (rootsToSceneAsset). The component stays in archetype columns and
+   * participates normally in queries / world.get at runtime.
+   *
+   * Default: `false`. Mirror targets of relationship components should
+   * declare `transient: true` so they are not serialized (their state is
+   * rebuilt by the mirror hook after instantiateScene).
+   */
+  readonly transient?: boolean;
 }
 
 /**
@@ -1252,6 +1317,7 @@ export function defineComponent<const N extends string, const S extends FieldsIn
     defaults: frozenDefaults,
     validate: options?.validate,
     cardinality: options?.cardinality,
+    transient: options?.transient ?? false,
     onInsert: options?.onInsert,
     onRemove: options?.onRemove,
     relationship,

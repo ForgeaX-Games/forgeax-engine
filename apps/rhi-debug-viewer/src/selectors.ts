@@ -209,3 +209,35 @@ export function resourceInspectorAnchor(): string {
 export function resourceRowAnchor(): string {
   return 'data-forgeax-resource-row';
 }
+
+// ============================================================================
+// M4: Instance Data section anchors (AC-12 SSOT: all data-forgeax-instance-*
+// literals only here — grep gate enforced by PipelineState.test.tsx AC-12).
+// ============================================================================
+
+/**
+ * Attribute name for data-forgeax-instance-data-section. Marks the `<table>`
+ * that renders decoded group-3 binding-0 InstanceData rows in PipelineState.
+ * Absent when the selected draw yields kind !== 'ok' (none / no-blob /
+ * unexpected-stride / buffer-truncated).
+ *
+ * SSOT anchor consumed by PipelineState.InstanceDataSection.
+ * Callers write: `<table {...{ [instanceDataSectionAnchor()]: '' }}>`.
+ * Smoke CSS selector: `[data-forgeax-instance-data-section]`.
+ */
+export function instanceDataSectionAnchor(): string {
+  return 'data-forgeax-instance-data-section';
+}
+
+/**
+ * Attribute name for data-forgeax-instance-row. Value is the integer row index
+ * (0 .. min(instanceCount, 256) - 1).
+ *
+ * SSOT anchor consumed by PipelineState.InstanceDataSection to mark each
+ * decoded instance <tr>.
+ * Callers write: `<tr {...{ [instanceRowAnchor()]: String(idx) }}>`.
+ * Smoke CSS selector: `[data-forgeax-instance-row="N"]`.
+ */
+export function instanceRowAnchor(): string {
+  return 'data-forgeax-instance-row';
+}

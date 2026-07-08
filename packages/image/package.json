@@ -36,6 +36,13 @@
       },
       "default": null
     },
+    "./ktx2-encode": {
+      "types": "./dist/ktx2-encode.d.ts",
+      "node": {
+        "import": "./dist/ktx2-encode.mjs"
+      },
+      "default": null
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",
@@ -52,6 +59,7 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
+    "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-types": "workspace:*",

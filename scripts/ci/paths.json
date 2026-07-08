@@ -4,6 +4,8 @@
   "scripts/**",
   "templates/**",
   ".github/**",
+  "forgeax-engine-assets",
+  ".gitmodules",
   "AGENTS.md",
   "*.json",
   "*.yaml",

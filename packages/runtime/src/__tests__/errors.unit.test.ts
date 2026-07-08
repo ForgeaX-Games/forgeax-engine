@@ -811,6 +811,9 @@ import { RhiErrorListenerRegistry } from '../renderer';
             // === 1 new code (feat-20260629-multi-uv-set-support M2 / m2-w5) ===
             case 'mesh-bin-contract-violation':
               return 'mesh bin contract violation';
+            // === 1 new code (feat-20260707-texture-block-compression M5 / w35) ===
+            case 'mipgen-unsupported-compressed-format':
+              return 'mipgen unsupported compressed format';
           }
         }
         expect(exhaustive('asset-not-found')).toBe('not found');

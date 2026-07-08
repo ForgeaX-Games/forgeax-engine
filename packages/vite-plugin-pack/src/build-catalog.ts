@@ -90,6 +90,11 @@ interface ExternalAssetMetaJson {
   readonly importSettings: {
     readonly colorSpace?: 'srgb' | 'linear';
     readonly mipmap?: 'auto' | 'none';
+    // feat-20260707 M5 / w38: the per-slot block-compression mode. Carried
+    // through into ImageMetadata so importTextureEntry can honour an explicit
+    // sidecar opt-out (`'none'`, the R-9 per-fixture escape hatch) or the
+    // 'auto' default flip. Absent -> importTextureEntry defaults to 'auto'.
+    readonly compressionMode?: 'auto' | 'etc1s' | 'uastc' | 'none';
   };
   readonly subAssets: ReadonlyArray<{
     readonly guid: string;
@@ -166,11 +171,16 @@ function colorSpaceToFormat(colorSpace: 'srgb' | 'linear' | undefined): GPUTextu
 
 function buildImageMetadata(meta: ExternalAssetMetaJson): ImageMetadata {
   const colorSpace: 'srgb' | 'linear' = meta.importSettings.colorSpace ?? 'linear';
+  const compressionMode = meta.importSettings.compressionMode;
   return {
     kind: 'texture',
     format: colorSpaceToFormat(colorSpace),
     colorSpace,
     mipmap: mipmapTokenToBoolean(meta.importSettings.mipmap),
+    // feat-20260707 M5 / w38: pass the sidecar compressionMode through so the
+    // importer's default flip ('auto') and the R-9 per-fixture 'none' opt-out
+    // both take effect. Omitted when absent (importTextureEntry defaults 'auto').
+    ...(compressionMode !== undefined ? { compressionMode } : {}),
   };
 }
 

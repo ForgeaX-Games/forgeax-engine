@@ -30,6 +30,20 @@ export interface CompressArtifactOpts {
    * compressed regardless (HTTP transport layer handles it).
    */
   readonly override?: AssetCompression;
+  /**
+   * The resolved delivery encoding already baked into `bytes` by the importer
+   * (feat-20260707 M6). When this is a `basis-*` member the bytes are a
+   * self-supercompressed Basis KTX2: it carries its own supercompression and
+   * MUST NOT stack an outer `'zstd'` layer (D-3 mutual exclusion). The row must
+   * then record that `basis-*` discriminant so the runtime loader dispatches on
+   * the transcode arm rather than the raw-KTX2 path. `'none'` / `'zstd'` /
+   * `undefined` leave the STRATEGY_TABLE + override logic below untouched.
+   */
+  readonly alreadyCompressed?: AssetCompression;
+}
+
+function isBasisCompression(c: AssetCompression | undefined): boolean {
+  return c === 'basis-etc1s' || c === 'basis-uastc' || c === 'basis-uastc-hdr';
 }
 
 /** Return value: compressed bytes + the compression strategy actually used. */
@@ -60,6 +74,20 @@ const STRATEGY_TABLE: Record<ArtifactKind, AssetCompression> = {
 export async function compressArtifact(
   opts: CompressArtifactOpts,
 ): Promise<CompressArtifactResult> {
+  // The importer already produced a self-supercompressed Basis KTX2: pass the
+  // bytes through untouched and record the resolved basis-* discriminant on the
+  // row so the runtime loader takes the transcode arm (D-3: no outer zstd layer
+  // stacks on a Basis container; the row compression must be the basis-* member,
+  // never the STRATEGY_TABLE 'none'/'zstd' default). Without this the row landed
+  // on 'none', the loader missed its transcode dispatch, and the scheme=1 KTX2
+  // hit ktx2LevelsToRGBA which rejects BasisLZ.
+  if (isBasisCompression(opts.alreadyCompressed)) {
+    return {
+      compressed: new Uint8Array(opts.bytes),
+      compression: opts.alreadyCompressed as AssetCompression,
+    };
+  }
+
   // Explicit per-asset override (AC-01) wins over the kind-keyed default table.
   const strategy: AssetCompression = opts.override ?? STRATEGY_TABLE[opts.kind];
 

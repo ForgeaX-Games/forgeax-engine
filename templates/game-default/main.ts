@@ -35,6 +35,13 @@ import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@fo
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from '@forgeax/engine-app';
+import {
+  createInputSnapshot,
+  INPUT_MAP_KEY,
+  INPUT_SNAPSHOT_RESOURCE_KEY,
+  type ActionConfig,
+  type InputSnapshot,
+} from '@forgeax/engine-input';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { installHud, type ViewMode } from './src/hud';
 
@@ -246,7 +253,24 @@ function setupPlayerRoot(
 }
 
 export async function bootstrap(world: World, ctx?: BootstrapContext) {
-  const { registerUpdate } = ctx ?? {};
+  const { registerUpdate, registerCleanup } = ctx ?? {};
+
+  // Route EVERY DOM listener through registerCleanup so the host tears them all
+  // down on ■ Stop. A bare canvas/window/document listener outlives the ECS
+  // world: its closure keeps play-time entity handles (camera, world) alive
+  // after Stop despawns them, so a post-Stop canvas click fires pick() against
+  // a despawned camera entity -> Uncaught PickError. registerCleanup detaches
+  // in reverse order on ■ (see BootstrapContext); when the host omits it (reload-
+  // on-stop host) the listeners die with the page reload anyway.
+  const listen = <E extends Event>(
+    target: Window | Document | HTMLElement,
+    type: string,
+    handler: (ev: E) => void,
+    options?: AddEventListenerOptions,
+  ): void => {
+    target.addEventListener(type, handler as EventListener, options);
+    registerCleanup?.(() => target.removeEventListener(type, handler as EventListener, options));
+  };
 
   const canvas = document.querySelector<HTMLCanvasElement>('#app')!;
   const dpr = window.devicePixelRatio || 1;
@@ -254,13 +278,43 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
   const aspect = canvas.width / canvas.height || 1;
 
-  // ── load the authored scene (the SAME native asset ✎ Edit writes) — the
-  //    canonical loadByGuid<SceneAsset> -> instantiate path. ────────────────────
+  // ── load the authored scene (the SAME native asset ✎ Edit writes) ────────────
   let loaded: { mapping: ReadonlyMap<number, EntityHandle>; nodes: PackNode[] } | null = null;
-  try {
-    loaded = await loadScene({ world, assets: ctx?.assets });
-  } catch (err) {
-    console.warn('[game] scene asset unavailable:', err);
+
+  // Asset-first host (preview + editor ▶ Play): the host resolves + instantiates
+  // forge.json.defaultScene BEFORE bootstrap runs and hands us the synthetic root
+  // via ctx.defaultSceneRoot (+ the loaded SceneAsset via ctx.defaultScene). ADOPT
+  // that instance — re-instantiating here would load the scene TWICE (host copy +
+  // our copy). Recover the { mapping, nodes } the Player / physics wiring below
+  // reads: mapping from the SceneInstance component on the host root (localId->
+  // Entity), nodes from the author-side entity list (carries Name components).
+  const hostRoot = ctx?.defaultSceneRoot;
+  if (hostRoot !== undefined && ctx?.defaultScene !== undefined) {
+    const sceneInst = world.get(hostRoot, SceneInstance);
+    if (!sceneInst.ok) {
+      console.error('[game] SceneInstance lookup on host root failed:', sceneInst.error);
+    } else {
+      // mapping is a Uint32Array sized maxLocalId+1, indexed by localId; skip
+      // unspawned slots (ENTITY_NULL_RAW = 0xffffffff) and 0.
+      const mappingArr = sceneInst.value.mapping as unknown as { length: number; [i: number]: number };
+      const mapping = new Map<number, EntityHandle>();
+      for (let localId = 0; localId < mappingArr.length; localId++) {
+        const e = mappingArr[localId];
+        if (e !== undefined && e !== 0xffffffff && e !== 0) mapping.set(localId, e as EntityHandle);
+      }
+      loaded = { mapping, nodes: ctx.defaultScene.entities as unknown as PackNode[] };
+    }
+  }
+
+  // Fallback: no host-instantiated scene (standalone game module, or the host has
+  // no defaultScene) — load it ourselves the canonical loadByGuid<SceneAsset> ->
+  // instantiate path.
+  if (!loaded) {
+    try {
+      loaded = await loadScene({ world, assets: ctx?.assets });
+    } catch (err) {
+      console.warn('[game] scene asset unavailable:', err);
+    }
   }
   if (!loaded) spawnFallbackScene({ world });
 
@@ -469,8 +523,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     canvas.style.cursor = v ? 'none' : (mode === 'fps' ? 'crosshair' : '');
     hud.setLockStatus(v ? '🎮 已锁定 · 鼠标转视角 · ESC 释放' : '🖱️ 点击画面锁定鼠标');
   };
-  document.addEventListener('pointerlockchange', () => setLocked(document.pointerLockElement === canvas));
-  document.addEventListener('pointerlockerror', () => {
+  listen(document, 'pointerlockchange', () => setLocked(document.pointerLockElement === canvas));
+  listen(document, 'pointerlockerror', () => {
     // Web API rejected. ONLY fall back to Tauri-native cursor grab when in FPS:
     // engine-input's onCanvasClick (browser-backend.ts) auto-calls
     // canvas.requestPointerLock() on EVERY canvas click — in top-down mode that
@@ -485,7 +539,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // since the web API was never engaged). Web path: ESC releases automatically
   // and pointerlockchange fires; this listener also fires but `setLocked(false)`
   // is idempotent. postCapture(false) tells Tauri to release the OS cursor grab.
-  window.addEventListener('keydown', (e) => {
+  listen(window, 'keydown', (e: KeyboardEvent) => {
     if (e.key === 'Escape' && locked) {
       postCapture(false);
       try { document.exitPointerLock?.(); } catch { /* ignore */ }
@@ -493,13 +547,41 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     }
   });
 
-  // ── input: keyboard (WASD/Space/F) + mouse (FPS look; click = pick / shoot) ──
-  const keys: Record<string, boolean> = {};
-  window.addEventListener('keydown', (e) => {
-    keys[e.code] = true;
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
-  });
-  window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+  // ── input: keyboard via the engine InputSnapshot (WASD/Space/F + arrows) ─────
+  // The host (apps/preview) createApp attaches the browser input backend and
+  // runs InputFrameStartScan each frame; the template only DECLARES an action
+  // map and READS the frozen snapshot. No hand-rolled key listeners.
+  //
+  // NOTE the backend records `KeyboardEvent.key` (case-sensitive, layout-
+  // dependent) NOT `.code`, so letters bind BOTH cases (shift / caps-lock) and
+  // the space bar binds ' '. Arrows keep their raw `key` names.
+  const KEY = (key: string) => ({ type: 'key', key } as const);
+  const INPUT_MAP: readonly ActionConfig[] = [
+    { action: 'moveForward', bindings: [KEY('w'), KEY('W')] },
+    { action: 'moveBack', bindings: [KEY('s'), KEY('S')] },
+    { action: 'moveLeft', bindings: [KEY('a'), KEY('A')] },
+    { action: 'moveRight', bindings: [KEY('d'), KEY('D')] },
+    { action: 'jump', bindings: [KEY(' ')] },
+    { action: 'shoot', bindings: [KEY('f'), KEY('F')] },
+    // Arrows: context-dependent (top-down move vs FPS look), so declared as
+    // their own actions and read individually below (snap.action('arrowUp')
+    // etc.) — their meaning stays with the per-mode logic, not the InputMap.
+    { action: 'arrowUp', bindings: [KEY('ArrowUp')] },
+    { action: 'arrowDown', bindings: [KEY('ArrowDown')] },
+    { action: 'arrowLeft', bindings: [KEY('ArrowLeft')] },
+    { action: 'arrowRight', bindings: [KEY('ArrowRight')] },
+  ];
+  world.insertResource(INPUT_MAP_KEY, INPUT_MAP);
+  // Frame-1 fallback: the scan system only writes the snapshot inside the first
+  // world.update(), which runs AFTER this frame's registerUpdate callbacks, so
+  // the resource is absent on the very first tick. createInputSnapshot() is the
+  // empty snapshot (all readpoints false / zero) — read it until the real one
+  // lands (charter P3: empty signal is the signal).
+  const EMPTY_SNAP = createInputSnapshot();
+  const readInput = (): InputSnapshot =>
+    world.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY)
+      ? world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)
+      : EMPTY_SNAP;
 
   // FPS mouse-look: STANDARD POINTER-LOCK pattern — click locks the cursor
   // (hidden), then mousemove movementX/Y rotates the view (infinite turn). ESC
@@ -513,7 +595,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // the movement block overwrites faceX/faceZ on the same frame).
   let shotDir: { x: number; z: number } | null = null;
   const clampPitch = (p: number) => Math.max(-1.2, Math.min(1.2, p));
-  window.addEventListener('mousemove', (e) => {
+  listen(window, 'mousemove', (e: MouseEvent) => {
     if (mode !== 'fps' || !locked) return;          // ONLY look while locked → cursor never "flies"
     lookYaw -= e.movementX * LOOK_SENS;
     lookPitch = clampPitch(lookPitch - e.movementY * LOOK_SENS);
@@ -526,7 +608,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
 
   // FPS-only: mousedown grabs the pointer-lock (the canvas is the user-gesture
   // target). Top-down's click is handled in the click listener below.
-  canvas.addEventListener('mousedown', () => {
+  listen(canvas, 'mousedown', () => {
     if (mode !== 'fps' || locked) return;
     if (isTauri) {
       // Tauri WKWebView: jump straight to the native cursor grab — web pointer-lock
@@ -554,7 +636,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   //                     in `shotDir` so a moving player still shoots toward the
   //                     click (the movement block doesn't override it for the
   //                     fire frame).
-  canvas.addEventListener('click', (e) => {
+  listen(canvas, 'click', (e: MouseEvent) => {
     if (mode === 'fps') {
       if (locked) wantShoot = true;
       return;
@@ -613,7 +695,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
 
   let px = initX, pz = initZ;
   let faceX = 0, faceZ = -1;          // facing unit vector (default: into the scene)
-  let jumpY = PLAYER_Y, vy = 0, grounded = true, prevSpace = false;
+  let jumpY = PLAYER_Y, vy = 0, grounded = true;
   let shootCd = 0;
   // Bullets fly THROUGH props rather than despawning on contact. Why: rapier's
   // kinematic-vs-dynamic push is velocity-driven (delta of setNextKinematicTranslation
@@ -631,22 +713,32 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   if (player !== undefined) {
     const root = player;
     registerUpdate((dt: number) => {
+      const snap = readInput();
+      const arrowUp = snap.action('arrowUp').isPressed();
+      const arrowDown = snap.action('arrowDown').isPressed();
+      const arrowLeft = snap.action('arrowLeft').isPressed();
+      const arrowRight = snap.action('arrowRight').isPressed();
+
       // — FPS look via arrow keys (keyboard fallback: mouse-look needs pointer
       //   lock, which the embedded preview iframe disallows). —
       if (mode === 'fps') {
         const TURN = 2.4;
-        if (keys['ArrowLeft']) lookYaw += TURN * dt;
-        if (keys['ArrowRight']) lookYaw -= TURN * dt;
-        if (keys['ArrowUp']) lookPitch = Math.min(1.2, lookPitch + TURN * 0.6 * dt);
-        if (keys['ArrowDown']) lookPitch = Math.max(-1.2, lookPitch - TURN * 0.6 * dt);
+        if (arrowLeft) lookYaw += TURN * dt;
+        if (arrowRight) lookYaw -= TURN * dt;
+        if (arrowUp) lookPitch = Math.min(1.2, lookPitch + TURN * 0.6 * dt);
+        if (arrowDown) lookPitch = Math.max(-1.2, lookPitch - TURN * 0.6 * dt);
       }
 
       // — movement + facing, per view mode —
-      // intent axes: f = forward(+)/back(−), s = strafe right(+)/left(−). Arrows
-      // alias WASD only in top-down; in FPS they steer the view (above).
+      // intent axes: f = forward(+)/back(−), s = strafe right(+)/left(−). WASD
+      // come from the InputMap getVector (radial deadzone; diagonal magnitude 1).
+      // Arrows alias WASD only in top-down; in FPS they steer the view (above).
       const am = mode !== 'fps';   // arrows-move (top-down only)
-      const f = ((keys['KeyW'] || (am && keys['ArrowUp'])) ? 1 : 0) - ((keys['KeyS'] || (am && keys['ArrowDown'])) ? 1 : 0);
-      const s = ((keys['KeyD'] || (am && keys['ArrowRight'])) ? 1 : 0) - ((keys['KeyA'] || (am && keys['ArrowLeft'])) ? 1 : 0);
+      const move = snap.getVector('moveLeft', 'moveRight', 'moveBack', 'moveForward');
+      // getVector's Y is (posY=moveForward) − (negY=moveBack); forward intent f
+      // is +forward, so f = move.y. s = strafe right(+)/left(−) = move.x.
+      const f = move.y + (am ? ((arrowUp ? 1 : 0) - (arrowDown ? 1 : 0)) : 0);
+      const s = move.x + (am ? ((arrowRight ? 1 : 0) - (arrowLeft ? 1 : 0)) : 0);
       let mvx = 0, mvz = 0;
       if (mode === 'fps') {
         // look-relative; facing = look forward (front = local −Z; yaw 0 → (0,−1))
@@ -680,9 +772,9 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       }
 
       // — jump (Space, edge-triggered; manual parabolic arc since kinematic) —
-      const space = !!keys['Space'];
-      if (space && !prevSpace && grounded) { vy = JUMP_V; grounded = false; }
-      prevSpace = space;
+      // snap.action('jump').justPressed() is the rising edge (aggregatedPressed
+      // && !prevFramePressed), replacing the manual prevSpace edge tracking.
+      if (snap.action('jump').justPressed() && grounded) { vy = JUMP_V; grounded = false; }
       if (!grounded) {
         vy -= GRAV * dt;
         jumpY += vy * dt;
@@ -696,7 +788,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
 
       // — shoot (F, or left-click in FPS): kinematic bullet flies along `face` —
       shootCd -= dt;
-      const fire = (keys['KeyF'] || wantShoot) && shootCd <= 0;
+      const fire = (snap.action('shoot').isPressed() || wantShoot) && shootCd <= 0;
       wantShoot = false;
       if (fire) {
         shootCd = SHOOT_CD;

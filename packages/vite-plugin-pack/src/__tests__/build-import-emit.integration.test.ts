@@ -35,6 +35,7 @@
 // against; the plugin emits the pack-index + imported .bin via
 // `generateBundle`.
 
+import { existsSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -65,6 +66,12 @@ const FIXTURE_JPG_SRC = join(
 );
 const WOOD_GUID = '019e3969-1d48-7c3b-ac24-6d68f457065f';
 
+// The Basis encoder WASM (pkg/, gitignored emcc artefact) is needed for the
+// compressionMode:'auto' -> Basis .ktx2 case. CI's build-artifacts job builds
+// it; skip the basis-row assertion on a contributor machine without it.
+const ENCODER_GLUE = join(WORKTREE_ROOT, 'packages', 'codec', 'pkg', 'encode', 'basis_encoder.mjs');
+const pkgBuilt = existsSync(ENCODER_GLUE);
+
 function woodImageMeta(): string {
   return JSON.stringify({
     schemaVersion: '1.0.0',
@@ -76,6 +83,10 @@ function woodImageMeta(): string {
       mipmap: 'auto',
       addressMode: 'repeat',
       filterMode: 'linear',
+      // feat-20260707 M5 / w38: (c) asserts the imported .bin is byte-identical
+      // to raw parseImage RGBA. Pin compressionMode:'none' now that the default
+      // flipped to 'auto' (which would emit a Basis .ktx2 instead of raw RGBA).
+      compressionMode: 'none',
     },
     subAssets: [
       {
@@ -453,4 +464,57 @@ describe('w10 - build-time import emit integration (vite build end-to-end)', () 
     expect(hostRow?.kind).toBe('reel-level');
     expect(hostRow?.sourcePath.endsWith('level.reel')).toBe(true);
   });
+
+  // feat-20260707 M6 fix: a compressionMode:'auto' sRGB texture cooks a Basis
+  // ETC1S .ktx2, and the pack-index ROW must carry `compression: 'basis-etc1s'`
+  // (the resolved delivery discriminant), not the STRATEGY_TABLE 'none' default.
+  // The runtime `loadTextureAsset` dispatches its transcode arm on the ROW-level
+  // `compression`; before this fix compressArtifact overwrote it with 'none' and
+  // the scheme=1 KTX2 fell through to ktx2LevelsToRGBA which rejects BasisLZ.
+  it.skipIf(!pkgBuilt)(
+    '(h) auto-encode texture: pack-index row carries resolved compression=basis-etc1s',
+    async () => {
+      // Re-use the wood.png fixture but flip the sidecar to the 'auto' default.
+      await writeFile(
+        join(assetsDir, 'wood.png.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'image',
+          source: 'wood.png',
+          importSettings: {
+            colorSpace: 'srgb',
+            mipmap: 'auto',
+            addressMode: 'repeat',
+            filterMode: 'linear',
+            compressionMode: 'auto',
+          },
+          subAssets: [{ guid: WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
+        }),
+      );
+
+      await viteBuild({
+        root: tmpRoot,
+        logLevel: 'silent',
+        configFile: false,
+        build: {
+          outDir: distDir,
+          emptyOutDir: true,
+          write: true,
+          rollupOptions: { input: { main: 'main.js' } },
+        },
+        plugins: [pluginPack({ roots: [assetsDir], importers: [imageImporter] })],
+      });
+
+      const entries = await readPackIndex();
+      const textureRow = entries.find((e) => e.guid.toLowerCase() === WOOD_GUID);
+      expect(textureRow).toBeDefined();
+      expect(textureRow?.kind).toBe('texture');
+      // The load-bearing assertion: the ROW-level discriminant is the basis-*
+      // member the runtime loader dispatches on (auto -> etc1s for sRGB color).
+      expect(textureRow?.compression).toBe('basis-etc1s');
+      // The metadata discriminant agrees (importTextureEntry SSOT).
+      expect(textureRow?.metadata?.compression).toBe('basis-etc1s');
+    },
+  );
 });

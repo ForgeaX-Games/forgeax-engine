@@ -270,6 +270,12 @@ export default defineConfig({
             '**/*.dawn.test.ts',
             'packages/rhi-wgpu/src/__tests__/**/*.dawn.test.ts',
             'packages/runtime/src/__tests__/transform-hierarchy-pixel-diff.dawn.test.ts',
+            // feat-20260707 M5 / w32: the equirect BC6H HDR-chain integration
+            // test needs the dawn-node GPU env to read texture-compression-bc
+            // and upload a BC6H texture; it is `.integration.test.ts`-named
+            // (plan-tasks w32), so list it explicitly here and let it skipIf
+            // navigator.gpu is absent under the per-package unit project.
+            'packages/runtime/src/__tests__/equirect-bc6h.integration.test.ts',
           ],
           exclude: [
             '**/node_modules/**',

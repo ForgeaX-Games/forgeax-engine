@@ -102,7 +102,9 @@ const CAPS_KEY_LABELS: Record<keyof RhiCapsRecorded, string> = {
   canvasFormat: 'canvas-format',
   rgba16floatRenderable: 'rgba16float-renderable',
   float32Filterable: 'float32-filterable',
-  textureCompression: 'texture-compression',
+  textureCompressionBc: 'texture-compression-bc',
+  textureCompressionEtc2: 'texture-compression-etc2',
+  textureCompressionAstc: 'texture-compression-astc',
   storageBuffer: 'storage-buffer',
   timestampQuery: 'timestamp-query',
 };
@@ -353,7 +355,9 @@ export function createReplay(
 interface RhiCapsShape {
   readonly rgba16floatRenderable: boolean;
   readonly float32Filterable: boolean;
-  readonly textureCompression: boolean;
+  readonly textureCompressionBc: boolean;
+  readonly textureCompressionEtc2: boolean;
+  readonly textureCompressionAstc: boolean;
   readonly storageBuffer: boolean;
   readonly timestampQuery: boolean;
 }
@@ -376,8 +380,14 @@ function computeMissingCaps(
   if (recorded.float32Filterable && !targetCaps.float32Filterable) {
     missing.push('float32Filterable');
   }
-  if (recorded.textureCompression && !targetCaps.textureCompression) {
-    missing.push('textureCompression');
+  if (recorded.textureCompressionBc && !targetCaps.textureCompressionBc) {
+    missing.push('textureCompressionBc');
+  }
+  if (recorded.textureCompressionEtc2 && !targetCaps.textureCompressionEtc2) {
+    missing.push('textureCompressionEtc2');
+  }
+  if (recorded.textureCompressionAstc && !targetCaps.textureCompressionAstc) {
+    missing.push('textureCompressionAstc');
   }
   if (recorded.storageBuffer && !targetCaps.storageBuffer) {
     missing.push('storageBuffer');

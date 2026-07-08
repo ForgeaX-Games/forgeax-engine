@@ -9,6 +9,16 @@
 // NOTE: rootsToSceneAsset collects the root entity itself in the BFS closure,
 // unlike old collectSceneAsset (which only returned SceneAsset entities).
 // Entity counts here include the synthetic root from instantiateScene.
+//
+// M1T7 AUDIT (feat-20260707-engine-world-clone-transient-for-editor-ssot):
+//   Classification: (b) false-positive modification risk — all 10 tests
+//   preserved as-is. These tests check entity count, component value fidelity,
+//   and round-trip semantics using custom non-transient test components
+//   (Test_Transform, Test_Pos3, etc.). None of them assert on Children or
+//   SceneInstance presence in output. Entity-count checks (n entities + 1
+//   synthetic root) are unaffected by transient — transient only skips
+//   component-level keys, not entity-level entries.
+//   VERDICT: zero expectations encoded pre-fix bug.
 
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';

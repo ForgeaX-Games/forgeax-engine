@@ -38,6 +38,7 @@ import {
   type FrameLoopHandle,
 } from '../src/internal/frame-loop';
 import { loadGame } from '../src/load-game';
+import { INPUT_MAP_KEY, type ActionConfig } from '@forgeax/engine-input';
 import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 
 {
@@ -1252,6 +1253,69 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 
         expect(callCount).toEqual([1, 1]);
         expect(errorCount).toBe(2);
+      });
+    });
+  });
+}
+
+{
+  // ─── from create-app-inputmap.test.ts ───
+
+  describe('create-app-inputmap.test.ts', () => {
+    describe('CreateAppOptions.inputMap type + Resource plumbing', () => {
+      it('world.insertResource(INPUT_MAP_KEY, map) → world.hasResource(INPUT_MAP_KEY) and getResource returns same value', () => {
+        const world = new World();
+        const map: readonly ActionConfig[] = [
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+        ];
+        world.insertResource(INPUT_MAP_KEY, map);
+        expect(world.hasResource(INPUT_MAP_KEY)).toBe(true);
+        const retrieved = world.getResource<readonly ActionConfig[]>(INPUT_MAP_KEY);
+        expect(retrieved).toBe(map);
+      });
+
+      it('absent INPUT_MAP_KEY → hasResource returns false', () => {
+        const world = new World();
+        expect(world.hasResource(INPUT_MAP_KEY)).toBe(false);
+      });
+
+      it('CreateAppOptions.inputMap is typed as readonly ActionConfig[] | undefined', () => {
+        // AC-08(a) type probe: verify the type compiles.
+        // If this test compiles, CreateAppOptions.inputMap accepts ActionConfig[].
+        const opts: import('../src/types').CreateAppOptions = {
+          inputMap: [
+            { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+          ],
+        };
+        expect(opts.inputMap).toBeDefined();
+        expect(opts.inputMap!.length).toBe(1);
+      });
+
+      it('empty inputMap array yields zero actions', () => {
+        const opts: import('../src/types').CreateAppOptions = {
+          inputMap: [],
+        };
+        expect(opts.inputMap).toBeDefined();
+        expect(opts.inputMap!.length).toBe(0);
+      });
+
+      it('absent inputMap → CreateAppOptions.inputMap is undefined', () => {
+        const opts: import('../src/types').CreateAppOptions = {};
+        expect(opts.inputMap).toBeUndefined();
+      });
+
+      it('inputMap normalization: duplicate action names → last-wins', () => {
+        // D-8: duplicate action names → last config wins.
+        const appOpts: import('../src/types').CreateAppOptions = {
+          inputMap: [
+            { action: 'jump', bindings: [{ type: 'key', key: 'a' }] },
+            { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+          ],
+        };
+        expect(appOpts.inputMap).toBeDefined();
+        expect(appOpts.inputMap!.length).toBe(2);
+        // The normalization (last-wins dedup) happens in input-attach.ts,
+        // tested in m1t6. This test just verifies the type accepts duplicates.
       });
     });
   });

@@ -35,6 +35,7 @@
 // both dual-impl shim backends through the @forgeax/engine-rhi interface
 // SSOT at the consumer site.
 
+import type { TranscodeModel } from '@forgeax/engine-codec';
 import type { EcsError, EntityHandle, World } from '@forgeax/engine-ecs';
 import { meshFromInterleaved } from '@forgeax/engine-geometry';
 import type { PackError } from '@forgeax/engine-pack/errors';
@@ -82,6 +83,7 @@ import {
   type TagOf,
   type TextureAsset,
   type TilesetAsset,
+  type TranscodeCaps,
   type MeshAsset as TypesMeshAsset,
   toShared,
   unwrapHandle,
@@ -1045,6 +1047,23 @@ async function loadTextureAsset(entry: LoaderEntry, ctx: LoadContext): Promise<L
   if (!fetched.ok) return { ok: false, error: fetched.error };
   const bytes = fetched.value;
 
+  // feat-20260707 M5 / w34 (AC-04, AC-11b): Basis transcode arm. A catalog row
+  // whose `compression` is a `basis-*` member is a Basis KTX2 payload: parse the
+  // container, pick a transcode target from `ctx.transcodeCaps` (the codec's
+  // pure `selectTranscodeTarget`), transcode every mip level, and stamp
+  // `TextureAsset.format` with the chosen target -- no `rgba8unorm` hardcode.
+  // fetchBinary already passed basis-* through un-zstd'd (the single zstd gate
+  // only fires on 'zstd'), so the transcode sits after the ONE decompression
+  // point (AC-11b -- no second decode call site). scheme=0/2 KTX2 (compression
+  // absent or 'zstd') skips this arm and takes the RGBA path below unchanged.
+  if (
+    entry.compression === 'basis-etc1s' ||
+    entry.compression === 'basis-uastc' ||
+    entry.compression === 'basis-uastc-hdr'
+  ) {
+    return transcodeBasisTexture(entry, bytes, meta.colorSpace, ctx.transcodeCaps);
+  }
+
   // KTX2 magic dispatch (D-5): cheap first-byte sniff (0xAB) keeps non-KTX2
   // texture loads from importing the codec, then verify the full 12-byte
   // identifier against the codec's SSOT constant so runtime and codec cannot
@@ -1122,6 +1141,126 @@ async function loadTextureAsset(entry: LoaderEntry, ctx: LoadContext): Promise<L
 }
 
 /**
+ * Map a `basis-*` catalog compression member to the codec's `TranscodeModel`
+ * (feat-20260707 M5 / w34). The build-time delivery encoding is the authoritative
+ * source-model signal (it is what the encoder wrote), so the loader reads it
+ * straight off the catalog row rather than re-deriving the model from the DFD.
+ */
+function transcodeModelFor(
+  compression: 'basis-etc1s' | 'basis-uastc' | 'basis-uastc-hdr',
+): TranscodeModel {
+  switch (compression) {
+    case 'basis-etc1s':
+      return 'etc1s';
+    case 'basis-uastc':
+      return 'uastc-ldr';
+    case 'basis-uastc-hdr':
+      return 'uastc-hdr';
+  }
+}
+
+/**
+ * Concatenate the mip-major transcoded level byte arrays into one buffer the GPU
+ * upload path slices per level via `deriveMipUploadLayout` (feat-20260707 M5 /
+ * w34). Level order is base-first, matching the layout the store walks.
+ */
+function concatTranscodedMips(mips: readonly { readonly data: Uint8Array }[]): Uint8Array {
+  let total = 0;
+  for (const m of mips) total += m.data.length;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const m of mips) {
+    out.set(m.data, offset);
+    offset += m.data.length;
+  }
+  return out;
+}
+
+/**
+ * Transcode a Basis KTX2 payload into a `TextureAsset` (feat-20260707 M5 / w34,
+ * AC-04). Parses the container, picks a `GPUTextureFormat` target from the
+ * device caps via the codec's pure `selectTranscodeTarget` (no cap -> an
+ * uncompressed `rgba8unorm[-srgb]` fallback, section 8 P3), transcodes every mip
+ * level, and stamps `TextureAsset.format` with the chosen target. `mipmap` /
+ * `mipLevelCount` mirror the transcoded chain truthfully, so a multi-level
+ * compressed chain (offline mips) never trips the runtime-mip-gen gate (w35).
+ */
+async function transcodeBasisTexture(
+  entry: LoaderEntry,
+  bytes: Uint8Array,
+  colorSpace: 'srgb' | 'linear',
+  caps: TranscodeCaps,
+): Promise<LoaderAsyncResult> {
+  const compression = entry.compression as 'basis-etc1s' | 'basis-uastc' | 'basis-uastc-hdr';
+  try {
+    const { parseKtx2, selectTranscodeTarget, transcodeKtx2 } = await import(
+      '@forgeax/engine-codec'
+    );
+    const parsed = await parseKtx2(bytes);
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        error: new AssetError({
+          code: 'asset-fetch-failed',
+          expected: 'valid Basis KTX2 texture container',
+          hint: `KTX2 parse failed (${parsed.error.code}): ${JSON.stringify(parsed.error.detail)}. ${parsed.error.hint}`,
+          detail: { sourcePath: entry.relativeUrl },
+        }),
+      };
+    }
+
+    // The encoder produces RGBA color / HDR RGBA payloads (the image arm feeds
+    // 4-channel sources); RG / R data-channel encode is not on the M3 encoder
+    // path, so the loader selects on the 'rgba' arm. srgb follows the catalog
+    // colorSpace (only the LDR color arm varies on it).
+    const targetFormat = selectTranscodeTarget(
+      { model: transcodeModelFor(compression), srgb: colorSpace === 'srgb', channels: 'rgba' },
+      caps,
+    );
+
+    const transcoded = await transcodeKtx2(parsed.value, targetFormat);
+    if (!transcoded.ok) {
+      return {
+        ok: false,
+        error: new AssetError({
+          code: 'asset-fetch-failed',
+          expected: `transcodable Basis KTX2 (${compression}) to ${targetFormat}`,
+          hint: `Basis transcode failed (${transcoded.error.code}): ${JSON.stringify(transcoded.error.detail)}. ${transcoded.error.hint}`,
+          detail: { sourcePath: entry.relativeUrl },
+        }),
+      };
+    }
+
+    const mips = transcoded.value.mips;
+    const texAsset: TextureAsset = {
+      kind: 'texture',
+      width: transcoded.value.width,
+      height: transcoded.value.height,
+      format: targetFormat,
+      data: concatTranscodedMips(mips),
+      colorSpace,
+      // Truthful mip projection: a multi-level offline chain sets mipmap:true +
+      // mipLevelCount=N, which the w35 gate treats as an offline chain (no
+      // runtime mip-gen requested). A single level stays mipmap:false.
+      mipmap: mips.length > 1,
+      mipLevelCount: Math.max(1, mips.length),
+    };
+    return { ok: true, value: texAsset };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      error: new AssetError({
+        code: 'asset-fetch-failed',
+        expected: 'loadable Basis KTX2 texture',
+        hint: `Basis codec dynamic import or transcode failed: ${message}. Check that @forgeax/engine-codec is installed.`,
+        detail: { sourcePath: entry.relativeUrl },
+      }),
+    };
+  }
+}
+
+/**
  * equirect loader (feat-20260630 M1 / w4) -- fetch the build-time-imported
  * rgba16float `.bin` and assemble an EquirectAsset POD. An equirect `.hdr`
  * folds to a single 2D image with a disk identity (unlike the retired
@@ -1138,9 +1277,16 @@ export const equirectLoader: Loader = {
 };
 
 async function loadEquirectAsset(entry: LoaderEntry, ctx: LoadContext): Promise<LoaderAsyncResult> {
-  // The `.bin` suffix is the single import-state judgement (mirrors
-  // loadTextureAsset): an unimported equirect row fails fast with the
-  // dedicated sentinel rather than reaching fetchBinary on a raw `.hdr`.
+  // The `.bin` (uncompressed rgba16float) suffix is the single import-state
+  // judgement (mirrors loadTextureAsset): an unimported equirect row fails fast
+  // with the dedicated sentinel rather than reaching fetchBinary on a raw `.hdr`.
+  //
+  // feat-20260707 M5 fix: equirect is ALWAYS delivered uncompressed rgba16float.
+  // An equirect drives equirect-to-cube / irradiance / prefilter RENDER passes,
+  // and a BC6H (block-compressed) source is sample-only, never color-renderable,
+  // so it is never block-compressed (import-texture.ts forces compression 'none').
+  // There is therefore no Basis UASTC-HDR `.ktx2` equirect arm -- the `.bin` path
+  // below is the whole body.
   if (!entry.relativeUrl.endsWith('.bin')) {
     return {
       ok: false,
@@ -2203,6 +2349,14 @@ export class AssetRegistry {
   // structured fail-fast branches still fire; only the metric is dropped).
   private metrics: EngineMetrics | null = null;
 
+  // feat-20260707 M5 / w33 (D-11): device texture-compression caps the Basis
+  // texture / equirect arms feed to `selectTranscodeTarget`. `createRenderer`
+  // projects `RhiCaps` -> `TranscodeCaps` and calls `setTranscodeCaps` right
+  // after construction (D-8 one-line projection). A standalone registry (test /
+  // headless) keeps the all-false default, which drives the uncompressed
+  // fallback path (section 8 P3, AC-04) rather than a hard failure.
+  private transcodeCaps: TranscodeCaps = { bc: false, etc2: false, astc: false };
+
   // feat-20260703-collect-nested-sceneinstance-to-mount-roundtrip M1 (D-1):
   // origin reverse-index: resolved SceneAsset copy -> original catalog GUID.
   // WeakMap so entries auto-GC when the world despawns and the copy is
@@ -2295,6 +2449,17 @@ export class AssetRegistry {
    */
   setMetrics(metrics: EngineMetrics): void {
     this.metrics = metrics;
+  }
+
+  /**
+   * feat-20260707 M5 / w33 (D-11): wire the device compression caps used by the
+   * Basis texture / equirect transcode arms. `createRenderer` calls this right
+   * after construction with `RhiCaps` projected to `TranscodeCaps` (D-8). Left
+   * at the all-false default, the loaders transcode to the uncompressed
+   * `rgba8unorm` / `rgba16float` fallback (AC-04, section 8 P3).
+   */
+  setTranscodeCaps(caps: TranscodeCaps): void {
+    this.transcodeCaps = caps;
   }
 
   /**
@@ -4718,9 +4883,18 @@ export class AssetRegistry {
         if (Array.isArray(item.refs) && item.refs.every((r) => typeof r === 'string')) {
           row.refs = item.refs as readonly string[];
         }
-        // compression is the optional compression strategy field (Loop 1).
-        // Narrow to literal union values to reject malformed rows.
-        if (item.compression === 'none' || item.compression === 'zstd') {
+        // compression is the optional compression strategy field. Narrow to
+        // the five AssetCompression literals to reject malformed rows (R-8:
+        // this catalog site must stay in sync with the union; the basis-*
+        // members only record the encoding here -- the transcode load path is
+        // M5's fetchBinary + loader, not this immediate catalog record).
+        if (
+          item.compression === 'none' ||
+          item.compression === 'zstd' ||
+          item.compression === 'basis-etc1s' ||
+          item.compression === 'basis-uastc' ||
+          item.compression === 'basis-uastc-hdr'
+        ) {
           row.compression = item.compression;
         }
         catalog.set(item.guid.toLowerCase(), row);
@@ -5129,6 +5303,7 @@ export class AssetRegistry {
         if (!lookup.ok) return undefined;
         return derive(lookup.value.paramSchema).textureFieldNames;
       },
+      transcodeCaps: this.transcodeCaps,
       device: undefined,
     };
   }

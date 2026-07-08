@@ -1133,7 +1133,7 @@ console.log('import-hdr-test entry');
       expect(meta.colorSpace).toBe('linear');
     });
 
-    it('(d) w11: imported .bin byte length === width * height * 4 * 2 (strict ===)', async () => {
+    it("(d) feat-20260707 fix: default 'auto' HDR equirect stays uncompressed rgba16float .bin", async () => {
       await viteBuild({
         root: tmpRoot,
         logLevel: 'silent',
@@ -1154,12 +1154,19 @@ console.log('import-hdr-test entry');
       expect(hdrBin).toBeDefined();
       if (hdrBin === undefined) return;
 
+      // The sidecar declares no compressionMode -> default 'auto'. An equirect is
+      // ALWAYS an IBL / skybox source (equirect-to-cube / irradiance / prefilter
+      // RENDER passes) and BC6H is not color-renderable, so the equirect kind is
+      // never block-compressed: the emitted `.bin` carries raw rgba16float (NOT a
+      // Basis KTX2) and the pack-index row records compression 'none'.
       const raw = await readFile(join(distDir, 'assets', hdrBin));
+      const KTX2_MAGIC = [0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a];
+      expect(Array.from(raw.subarray(0, 12))).not.toEqual(KTX2_MAGIC);
       expect(raw.byteLength).toBe(HDR_WIDTH * HDR_HEIGHT * 4 * 2);
-      // biome-ignore lint/suspicious/noConsole: w11 volume assessment (R-2)
-      console.log(
-        `[w11] HDR imported .bin byteLength=${raw.byteLength} (${HDR_WIDTH}x${HDR_HEIGHT}, rgba16f)`,
-      );
+
+      const entries = await readPackIndex();
+      const hdrRow = entries.find((e) => e.guid.toLowerCase() === IMP_HDR_GUID);
+      expect(hdrRow?.compression).toBe('none');
     });
 
     it('(e) w11: metadata width/height match the imported (decoded HDR) values', async () => {

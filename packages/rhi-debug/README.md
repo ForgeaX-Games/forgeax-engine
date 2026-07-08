@@ -250,7 +250,7 @@ node packages/rhi-debug/dist/cli.mjs summary <tapePath>
 node packages/rhi-debug/dist/cli.mjs summary .forgeax-debug/<runId>/frame-0.tape.bin
 ```
 
-`buildFrameModel` is also importable directly from the node-free `@forgeax/engine-rhi-debug/frame-model` subpath (zero `node:` / `pngjs` / GPU, tree-shake gated like `inspect-core`); the RHI debug viewer re-exports it as its `ViewModel` so the UI and the CLI share one analysis SSOT. The `resources` map and per-draw `vertexBuffers` map serialize to arrays in the CLI JSON (`Map` has no JSON form).
+`buildFrameModel` is also importable directly from the node-free `@forgeax/engine-rhi-debug/frame-model` subpath (zero `node:` / `pngjs` / GPU, tree-shake gated like `inspect-core`); the RHI debug viewer re-exports it as its `ViewModel` so the UI and the CLI share one analysis SSOT. The `resources` map and per-draw `vertexBuffers` map serialize to arrays in the CLI JSON (`Map` has no JSON form). **After M2 the `vertexBuffers` entries serialize as `[[slot, {handleId, offset, size}], ...]`** (previously `[[slot, handleId], ...]`) — `jq '.draws[0].vertexBuffers[0]'` now yields `[N, {"handleId": "...", "offset": 0, "size": ...}]` rather than a bare handleId string.
 
 The package exposes the CLI two ways: `package.json#bin` declares `forgeax-rhi-debug -> ./dist/cli.mjs`, and `package.json#exports['./cli']` re-exports the subcommand functions for programmatic use. The barrel does **not** re-export CLI symbols (Node `ws` / `pngjs` are reached only via `/cli`, `/inspector`, `/adapter` subpaths, keeping the tree-shake gate intact).
 
@@ -470,6 +470,23 @@ const offsets = computePassOffsets(events);
 | `@forgeax/engine-rhi-wgpu` | `peerDependencies` | wgpu-wasm binding. Same rationale (OOS-7: capture/replay against wgpu-wasm is v2) |
 
 The original AC-01 wording is preserved as a **descriptive intent** ("debug instrumentation should not pull in the RHI backends"), but the *literal* one-dep constraint was relaxed to honor the SSOT axiom (`@forgeax/engine-types`) and to avoid a base64-encoded inline PNG implementation (`pngjs`). Backends remain `peer`, satisfying the original tree-shake intent: AC-03 (tree-shake grep gate) verifies no `engine-rhi-debug` import survives in `FORGEAX_ENGINE_RHI_DEBUG=0` bundles.
+
+## Instance Data decode convention
+
+The forgeax engine binds a `array<InstanceData>` buffer at `@group(3) @binding(0)` for every instanced draw (`instanceCount > 1`). The struct has two stride variants:
+
+| stride | variant | shader define |
+|:--|:--|:--|
+| 64 B | `mat4` only (`localFromInstance`) | `PER_INSTANCE_REGION` undefined |
+| 80 B | `mat4 + region: vec4<f32>` (per-instance atlas region) | `PER_INSTANCE_REGION == true` (sprite pipeline) |
+
+**Struct SSOT**: `packages/shader/src/common.wgsl:374-390`. Any future field addition bumps this table and must sync the decoder + panel below.
+
+**Decode + UI consumers**:
+- `apps/rhi-debug-viewer/src/instance-decode.ts` — pure decoder (`decodeInstanceData(draw, tape, resources): InstanceDecodeResult`) that maps `bufferSize / instanceCount` to a variant and yields per-instance TRS + optional region.
+- `apps/rhi-debug-viewer/src/components/PipelineState.tsx` — PipelineState panel renders the decoded rows as the collapsible `Instance Data` section (anchors `data-forgeax-instance-data-section` + `data-forgeax-instance-row="<idx>"`; SSOT `apps/rhi-debug-viewer/src/selectors.ts`).
+
+**Convention lockdown**: `packages/rhi-debug/src/__tests__/instance-decode-convention.dawn.test.ts` records a real dawn-node WebGPU submit that binds a 4×80 B storage buffer at `@group(3) @binding(0)`, wraps it through the recorder, and asserts on the resulting tape: `bufferSize % instanceCount === 0` and `bufferSize / instanceCount ∈ {64, 80}` for every multi-instance draw carrying a group-3 / binding-0 binding. Because the bytes flow through the real `queue.writeBuffer` → `blobPool` path, evolving the `InstanceData` struct (e.g. adding a new `vec4` field so stride jumps to 96 B) causes the recorded buffer length to change on the next dawn-project run and the `{64, 80}` set assertion fires — no manual fixture regeneration step. Update the SSOT above, the decoder, and the panel in the same PR. Local dawn unavailable? Set `FORGEAX_SKIP_DAWN=1`; CI's dawn project is the SSOT gate.
 
 ## Out of scope
 

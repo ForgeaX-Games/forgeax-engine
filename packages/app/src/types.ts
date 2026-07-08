@@ -12,7 +12,7 @@
 import type { AudioBackend } from '@forgeax/engine-audio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
 import type { Result, World } from '@forgeax/engine-ecs';
-import type { InputBackend, VirtualJoystickConfig } from '@forgeax/engine-input';
+import type { ActionConfig, InputBackend, VirtualJoystickConfig } from '@forgeax/engine-input';
 import type { PhysicsWorld, PhysicsWorld2D } from '@forgeax/engine-physics';
 import type { Plugin, PluginError } from '@forgeax/engine-plugin';
 import type { RhiError, RhiInstance } from '@forgeax/engine-rhi';
@@ -126,6 +126,19 @@ export interface CreateAppOptions {
    * dead-ends before reaching the backend that already supports it.
    */
   readonly virtualJoysticks?: readonly VirtualJoystickConfig[];
+  /**
+   * Action mapping configuration (M1: action semantic abstraction layer).
+   *
+   * Declares named actions (e.g. 'jump', 'moveRight') bound to raw input sources
+   * (key, mouseButton, gamepadButton, gamepadAxis). The engine derives per-frame
+   * action states via `deriveActionStates()` and exposes them via
+   * `snap.action(name).isPressed()`. Duplicate action names follow last-wins
+   * semantics (D-8).
+   *
+   * This is canvas-form only. Assemble-form hosts insert the
+   * `INPUT_MAP_KEY` Resource directly.
+   */
+  readonly inputMap?: readonly ActionConfig[] | undefined;
 }
 
 /**

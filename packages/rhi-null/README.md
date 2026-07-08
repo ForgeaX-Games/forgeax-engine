@@ -38,7 +38,9 @@ The exported `rhi` singleton has the `RhiBackendPack`-mandated shape (`RhiInstan
 | `compute` | `true` | |
 | `timestampQuery` | `true` | |
 | `indirectDrawing` | `true` | |
-| `textureCompression` | `true` | |
+| `textureCompressionBc` | `false` | headless has no compression hardware (AC-06) |
+| `textureCompressionEtc2` | `false` | headless has no compression hardware (AC-06) |
+| `textureCompressionAstc` | `false` | headless has no compression hardware (AC-06) |
 | `multiDrawIndirect` | `false` | `@reserved-for-wgpu-native-only` |
 | `pushConstants` | `false` | `@reserved-for-wgpu-native-only` |
 | `textureBindingArray` | `false` | `@reserved-for-wgpu-native-only` |

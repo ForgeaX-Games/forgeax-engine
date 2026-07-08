@@ -303,6 +303,14 @@ function makeFakeRhiDevice(): Record<string, unknown> {
     lost,
     features: new Set<string>(),
     limits: {} as Record<string, number>,
+    // feat-20260707 M5 / w33: createRenderer projects RhiCaps.textureCompression*
+    // into TranscodeCaps at registry-build time; the fake device needs a caps
+    // object (the real RhiDevice always carries one).
+    caps: {
+      textureCompressionBc: false,
+      textureCompressionEtc2: false,
+      textureCompressionAstc: false,
+    },
     queue: {
       submit: () => undefined,
       writeBuffer: () => undefined,

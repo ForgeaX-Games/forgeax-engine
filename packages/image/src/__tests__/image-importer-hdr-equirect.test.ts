@@ -122,3 +122,77 @@ describe('imageImporter HDR arm produces EquirectAsset (w1)', () => {
     await expect(imageImporter.import(ctx)).rejects.toThrow();
   });
 });
+
+// KTX2 magic identifier (first 12 bytes of every KTX 2.0 container). Used to
+// assert the HDR encode arm produced a real UASTC-HDR KTX2, not raw f16.
+const KTX2_IDENTIFIER = new Uint8Array([
+  0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
+
+describe('imageImporter HDR equirect is never block-compressed (feat-20260707 fix)', () => {
+  // An equirect is ALWAYS an IBL / skybox source: it drives equirect-to-cube /
+  // irradiance / prefilter RENDER passes, and a BC6H (block-compressed) texture
+  // is sample-only, never color-renderable. So the HDR arm never encodes an
+  // equirect sub-asset -- it always ships raw rgba16float, regardless of the
+  // requested compressionMode ('auto' / 'uastc' / 'none' all yield rgba16float).
+  it("compressionMode:'auto' HDR equirect -> raw rgba16float (never a KTX2)", async () => {
+    const width = 8;
+    const height = 4;
+    const ctx = makeHdrCtx(
+      'env.hdr',
+      makeHdrFixture(width, height),
+      [{ guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' }],
+      { colorSpace: 'linear', mipmap: 'none', compressionMode: 'auto' },
+    );
+
+    const produced = await imageImporter.import(ctx);
+    const payload = (produced[0] as { payload: EquirectAsset })?.payload;
+    // Raw rgba16float byte count (w*h*8) and NOT a KTX2 container.
+    expect(payload.data.length).toBe(width * height * 4 * 2);
+    expect(Array.from(payload.data.subarray(0, 12))).not.toEqual(Array.from(KTX2_IDENTIFIER));
+    expect(payload.format).toBe('rgba16float');
+  });
+
+  it("explicit 'uastc' HDR equirect -> raw rgba16float (never a KTX2)", async () => {
+    const width = 8;
+    const height = 4;
+    const ctx = makeHdrCtx(
+      'env.hdr',
+      makeHdrFixture(width, height),
+      [{ guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' }],
+      { colorSpace: 'linear', mipmap: 'none', compressionMode: 'uastc' },
+    );
+    const produced = await imageImporter.import(ctx);
+    const payload = (produced[0] as { payload: EquirectAsset })?.payload;
+    expect(payload.data.length).toBe(width * height * 4 * 2);
+    expect(Array.from(payload.data.subarray(0, 12))).not.toEqual(Array.from(KTX2_IDENTIFIER));
+  });
+
+  it("compressionMode:'none' HDR equirect -> raw rgba16float .bin path", async () => {
+    const width = 8;
+    const height = 4;
+    const ctx = makeHdrCtx(
+      'env.hdr',
+      makeHdrFixture(width, height),
+      [{ guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' }],
+      { colorSpace: 'linear', mipmap: 'none', compressionMode: 'none' },
+    );
+    const produced = await imageImporter.import(ctx);
+    const payload = (produced[0] as { payload: EquirectAsset })?.payload;
+    expect(payload.data.length).toBe(width * height * 4 * 2);
+    expect(Array.from(payload.data.subarray(0, 12))).not.toEqual(Array.from(KTX2_IDENTIFIER));
+  });
+
+  it('AC-02: HDR equirect import is deterministic (double import byte-identical)', async () => {
+    const mk = () =>
+      makeHdrCtx(
+        'env.hdr',
+        makeHdrFixture(8, 4),
+        [{ guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' }],
+        { colorSpace: 'linear', mipmap: 'none', compressionMode: 'auto' },
+      );
+    const a = ((await imageImporter.import(mk()))[0] as { payload: EquirectAsset }).payload.data;
+    const b = ((await imageImporter.import(mk()))[0] as { payload: EquirectAsset }).payload.data;
+    expect(Array.from(a)).toEqual(Array.from(b));
+  });
+});

@@ -1769,6 +1769,27 @@ The equivalence benchmark is a **second collect** (fixed-point): after the
 first reload, collect again and assert the output is identical to the first
 collect output (D-9 normalization converges after one cycle).
 
+#### transient components in collect (feat-20260707)
+
+`rootsToSceneAsset` skips any component declared `transient: true` — it is
+never written to the `SceneAsset` payload. `SceneInstance` and `Children`
+(and every relationship mirror target) are transient. The concept, the
+`Component.transient` field, and the `checkRelationshipMirrorsTransient` dev
+assertion are defined in `@forgeax/engine-ecs` — see its README
+[§transient](../ecs/README.md#transient--serialization-skip-for-derived-runtime-state-feat-20260707)
+for the full contract. Two orthogonal filter dimensions coexist in collect:
+type-level `transient` (whole component skipped) and the instance-level
+`isRoot && ChildOf` root-semantics special case (a root entity's own
+`ChildOf` is dropped, but `ChildOf` itself is not transient).
+
+**Mount round-trip fidelity is guaranteed by the `ChildOf` relationship
+graph, not by serialized `Children` data.** `Children` is transient, never
+serialized; it is rebuilt by `ChildOf`'s mirror hook after
+`instantiateScene`. The `ChildOf` graph is the sole structural authority for
+round-trip equivalence — the mount-collapse fixed point derives entirely
+from it, with serialized `Children` removed from the causal chain
+(feat-20260707 D-7/D-8).
+
 #### Error codes
 
 | Code | Trigger | `.hint` |

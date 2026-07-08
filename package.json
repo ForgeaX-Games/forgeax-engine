@@ -78,7 +78,7 @@
     "sync": "node scripts/sync.mjs",
     "sync:check": "node scripts/check-workspaces-equivalence.mjs",
     "harness:sync": "node scripts/sync-harness.mjs",
-    "postinstall": "node scripts/sync-harness.mjs",
+    "postinstall": "node scripts/sync-harness.mjs && node scripts/ensure-wgpu-wasm-pkg.mjs",
     "changeset": "changeset",
     "changeset:status": "changeset status",
     "changeset:version": "changeset version"

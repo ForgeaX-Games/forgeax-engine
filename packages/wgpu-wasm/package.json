@@ -23,7 +23,9 @@
     "dist",
     "pkg",
     "src",
+    "scripts",
     "Cargo.toml",
+    "Cargo.lock",
     "build.sh",
     "rust-toolchain.toml",
     "README.md",
@@ -31,6 +33,7 @@
   ],
   "scripts": {
     "build:wasm": "bash build.sh",
+    "fetch-wasm": "node scripts/fetch-wasm.mjs",
     "build": "tsup",
     "test": "vitest run",
     "test:wasm": "wasm-pack test --node"

@@ -20,6 +20,17 @@
 //     the producer from the snapshot; `frame-start-scan-system.ts` is the
 //     bridge that calls `backend.sample()` and writes the Resource
 
+import type { ActionConfig, ActionState, GetVectorOptions } from './action-state';
+import { getAxis, getVector } from './action-state';
+import type { GestureEvent, GestureState } from './gesture-recognizer';
+import { IDENTITY_GESTURE } from './gesture-recognizer';
+
+// D-5 / AC-19: pointerType is narrowed from string to a 3-literal union.
+// The W3C Pointer Events spec allows '' when the device type cannot be
+// detected; coercion maps '' to 'mouse' at the producer, so the snapshot
+// only ever sees one of these three canonical values.
+export type PointerType = 'mouse' | 'pen' | 'touch';
+
 /** Standard-layout gamepad button index (0-16 per W3C Gamepad spec). */
 export type GamepadButtonIndex =
   | 0
@@ -46,6 +57,17 @@ export type GamepadAxisIndex = 0 | 1 | 2 | 3;
 /** Per-slot gamepad frame data produced by `sample()`. */
 export interface GamepadSlotSample {
   readonly index: number;
+  /**
+   * True when the browser reports a standard mapping OR the SDL controller
+   * DB has normalized a non-standard layout at the acquisition layer (M3
+   * D-1 redefinition). The Feat1 meaning ("browser-reported standard
+   * mapping only") is widened here: a non-standard pad whose GUID matches
+   * gamecontrollerdb.txt is re-projected onto the standard layout and
+   * reported as standardMapping=true, so bindings and direct reads see a
+   * uniform standard button/axis space. A non-standard pad with no DB match
+   * (or before the DB has loaded) keeps standardMapping=false + empty
+   * readpoints (graceful degradation).
+   */
   readonly standardMapping: boolean;
   readonly pressed: ReadonlySet<number>;
   readonly justPressed: ReadonlySet<number>;
@@ -54,13 +76,19 @@ export interface GamepadSlotSample {
   readonly axes: readonly [number, number, number, number];
 }
 
-/** Per-pointer live state (active contacts tracked by pointerId). */
+/** Per-pointer live state (active contacts tracked by pointerId).
+ *
+ * D-5 / E-10: `pointerType` is a 3-literal union. `'mouse'` is the default
+ * placeholder for inactive pointers — when `active=false`, `pointerType` is
+ * always `'mouse'`. The semantic "no pointer" is carried by the `active`
+ * field, never by a sentinel string value.
+ */
 export interface PointerSample {
   readonly pointerId: number;
   readonly x: number;
   readonly y: number;
   readonly pressure: number;
-  readonly pointerType: string;
+  readonly pointerType: PointerType;
   readonly active: boolean;
   readonly delta: { readonly x: number; readonly y: number };
 }
@@ -72,7 +100,7 @@ export interface PointerPhaseEvent {
   readonly x: number;
   readonly y: number;
   readonly pressure: number;
-  readonly pointerType: string;
+  readonly pointerType: PointerType;
 }
 
 /** Per-frame virtual axis output (named joystick derived from pointer input). */
@@ -220,6 +248,67 @@ export interface InputSnapshot {
    * pointer events occurred this frame.
    */
   readonly pointerEvents: readonly PointerPhaseEvent[];
+  /**
+   * Continuous gesture values (pinch scale + rotation angle) for the
+   * active dual-finger gesture. Returns the identity empty signal
+   * (`pinchScale=1`, `rotationAngle=0`) when no gesture is active (AC-12);
+   * an active gesture retains its value on idle frames (fingers held still
+   * are not a gesture end). AC-11: reading the same frame's snapshot twice
+   * returns the identical object.
+   */
+  readonly gesture: GestureState;
+  /**
+   * Per-frame gesture lifecycle + instantaneous event queue (begin / end /
+   * cancel / swipe / long-press / double-tap). One-frame lifecycle, same
+   * pattern as `pointerEvents` (charter P4). Empty array when no gesture
+   * activity occurred this frame. Closed discriminant union (AC-13): a
+   * consumer exhaustively switches on `kind` without a default branch.
+   */
+  readonly gestureEvents: readonly GestureEvent[];
+  /**
+   * Action mapping readpoint. Returns a frozen reader for the named action.
+   * When `name` is registered in the InputMap, `isPressed()` / `justPressed()`
+   * / `justReleased()` / `strength` reflect the derived state. Unregistered
+   * action names return empty signal (false / 0 / false / false / 0) without
+   * throwing (charter P3: empty signal is the signal). AC-11: calling
+   * action() multiple times in the same frame returns identical values.
+   */
+  action(name: string): {
+    readonly isPressed: () => boolean;
+    readonly justPressed: () => boolean;
+    readonly justReleased: () => boolean;
+    readonly strength: number;
+  };
+  /**
+   * Compose a 1D axis value from two opposing actions.
+   *
+   * Returns `strength(pos) - strength(neg)`, range [-1, 1].
+   * Both registered: combines normally. One unregistered: contributes 0
+   * (E-3). Same action for both ends: always 0 (E-12).
+   *
+   * @param neg - Action name for the negative direction (e.g. 'moveLeft').
+   * @param pos - Action name for the positive direction (e.g. 'moveRight').
+   */
+  getAxis(neg: string, pos: string): number;
+  /**
+   * Compose a 2D vector from four directional actions with a single radial
+   * deadzone (Godot input.cpp three-branch formula). Uses `raw` (not
+   * `strength`) to avoid per-axis deadzone stacking into a square deadzone
+   * (AC-06).
+   *
+   * @param negX - Action name for negative X (e.g. 'moveLeft').
+   * @param posX - Action name for positive X (e.g. 'moveRight').
+   * @param negY - Action name for negative Y (e.g. 'moveUp').
+   * @param posY - Action name for positive Y (e.g. 'moveDown').
+   * @param opts - Optional override (deadzone).
+   */
+  getVector(
+    negX: string,
+    posX: string,
+    negY: string,
+    posY: string,
+    opts?: GetVectorOptions,
+  ): { readonly x: number; readonly y: number };
 }
 
 /**
@@ -273,6 +362,10 @@ export interface InputBackendSample {
   readonly pointerEvents?: readonly PointerPhaseEvent[];
   /** M3+ virtual joystick axis outputs (optional — absent when no virtual joysticks configured). */
   readonly virtualAxes?: readonly VirtualAxisSample[];
+  /** M5+ continuous gesture values (optional — absent when no gesture is active). */
+  readonly gestures?: GestureState;
+  /** M5+ per-frame gesture event queue (optional — absent when no gesture activity occurred). */
+  readonly gestureEvents?: readonly GestureEvent[];
 }
 
 /**
@@ -340,8 +433,19 @@ function buildGamepadReader(slot: GamepadSlotSample): ReturnType<InputSnapshot['
 
 /**
  * Build an `InputSnapshot` from a backend sample.
+ *
+ * @param sample - One frame's raw input backend sample (POD).
+ * @param actionStates - Optional per-frame derived action states from
+ *   deriveActionStates(). When provided, snap.action(name) returns mapped
+ *   values; when absent or empty, all action readpoints return empty signal
+ *   (charter P3: false/0, never throws). AC-11: actionStates is frozen into
+ *   the snapshot so same-frame re-reads return identical values.
  */
-export function snapshotFromSample(sample: InputBackendSample): InputSnapshot {
+export function snapshotFromSample(
+  sample: InputBackendSample,
+  actionStates?: readonly ActionState[],
+  inputMap?: readonly ActionConfig[],
+): InputSnapshot {
   // structuralCopy: copying into local sets isolates the snapshot from
   // any later backend mutation (the browser backend reuses its internal
   // Set across frames). architecture-principles #2 derive: a Snapshot is
@@ -361,6 +465,10 @@ export function snapshotFromSample(sample: InputBackendSample): InputSnapshot {
   const caps: Capabilities =
     sample.capabilities ?? Object.freeze({ gamepad: false, pointer: false });
   const pointerEvts: readonly PointerPhaseEvent[] = sample.pointerEvents ?? [];
+  // D-4 / AC-12: no active gesture -> identity empty signal; gesture events
+  // default to an empty one-frame queue (mirrors pointerEvents).
+  const gesture: GestureState = sample.gestures ?? IDENTITY_GESTURE;
+  const gestureEvts: readonly GestureEvent[] = sample.gestureEvents ?? [];
   // virtualAxes: consumed by M3 virtualAxis reader; stored as local for
   // the snapshot closure below.
   const _virtualAxes: readonly VirtualAxisSample[] = sample.virtualAxes ?? [];
@@ -376,6 +484,23 @@ export function snapshotFromSample(sample: InputBackendSample): InputSnapshot {
   const gamepadSlotMap = new Map<number, GamepadSlotSample>();
   for (const slot of gamepadSlots) {
     gamepadSlotMap.set(slot.index, slot);
+  }
+
+  // Build action lookup map for snap.action(name) readpoint.
+  const actionMap = new Map<string, ActionState>();
+  if (actionStates) {
+    for (const a of actionStates) {
+      actionMap.set(a.action, a);
+    }
+  }
+
+  function emptyActionReader(): ReturnType<InputSnapshot['action']> {
+    return Object.freeze({
+      isPressed: () => false,
+      justPressed: () => false,
+      justReleased: () => false,
+      strength: 0,
+    });
   }
 
   const snapshot: InputSnapshot = {
@@ -413,7 +538,7 @@ export function snapshotFromSample(sample: InputBackendSample): InputSnapshot {
           x: 0,
           y: 0,
           pressure: 0,
-          pointerType: '',
+          pointerType: 'mouse' as PointerType,
           delta: Object.freeze({ x: 0, y: 0 }),
         });
       }
@@ -427,9 +552,41 @@ export function snapshotFromSample(sample: InputBackendSample): InputSnapshot {
       if (!va) return Object.freeze({ x: 0, y: 0 });
       return Object.freeze({ x: va.x, y: va.y });
     },
+    action(name) {
+      const s = actionMap.get(name);
+      if (!s) return emptyActionReader();
+      return Object.freeze({
+        isPressed: () => s.pressed,
+        justPressed: () => s.justPressed,
+        justReleased: () => s.justReleased,
+        strength: s.strength,
+      });
+    },
+    getAxis(neg, pos) {
+      if (!actionStates || !inputMap) return 0;
+      return getAxis(inputMap, actionStates, neg, pos);
+    },
+    getVector(negX, posX, negY, posY, opts) {
+      if (!actionStates || !inputMap) return { x: 0, y: 0 };
+      return getVector(inputMap, actionStates, negX, posX, negY, posY, opts);
+    },
     pointerEvents: pointerEvts,
+    gesture,
+    gestureEvents: gestureEvts,
   };
+  (snapshot as unknown as Record<string, unknown>)._actionStates = actionStates;
+  (snapshot as unknown as Record<string, unknown>)._inputMap = inputMap;
   return Object.freeze(snapshot);
+}
+
+/**
+ * @internal Read previously derived action states from a snapshot for edge diff.
+ * Used by the frame-start scan system (D-6: prev snapshot = edge baseline).
+ */
+export function readActionStatesForEdgeDiff(
+  snap: InputSnapshot,
+): readonly ActionState[] | undefined {
+  return (snap as unknown as { _actionStates?: readonly ActionState[] })._actionStates;
 }
 
 /**

@@ -1,6 +1,48 @@
 # @forgeax/engine-image
 
-> **Disk-to-memory image importer for forgeax-engine.** Pure functions translate `*.jpg` / `*.png` source files into `DecodedImage` POD + `external-asset-package` sidecar JSON. GPU upload lives in `@forgeax/engine-runtime` (charter P5: producer / consumer split).
+> **Disk-to-memory image importer for forgeax-engine.** Pure functions translate `*.jpg` / `*.png` / `*.hdr` source files into `TextureAsset` / `EquirectAsset` PODs (raw `.bin` or Basis `.ktx2`) + `external-asset-package` sidecar JSON. GPU upload lives in `@forgeax/engine-runtime` (charter P5: producer / consumer split).
+
+## compressionMode sidecar field
+
+The `.meta.json` sidecar accepts an optional `compressionMode` field controlling
+the offline block-compression encoding (Basis KTX2). The default is `'auto'`.
+
+### Four-mode semantics
+
+| Mode | Behavior | Encoding | Runtime format |
+|:--|:--|:--|:--|
+| `'auto'` (default) | Derive encoding from color space + source format | Depends on source (see table below) | Depends on target caps |
+| `'etc1s'` | Force ETC1S Basis encoding | ETC1S (fast preset, deterministic) | BC1/ETC1/ETC2 depending on caps |
+| `'uastc'` | Force UASTC-LDR Basis encoding | UASTC-LDR 4x4 (fast preset, deterministic) | BC7/ASTC4x4/ETC2 depending on caps |
+| `'none'` | Skip compression, produce raw RGBA `.bin` | None | `rgba8unorm` / `rgba16float` |
+
+### 'auto' derivation rules (D-12)
+
+| Source | colorSpace | Encoding | Rationale |
+|:--|:--|:--|:--|
+| PNG/JPEG | `'srgb'` | `etc1s` | Albedo/UI textures: ETC1S with sRGB transfer |
+| PNG/JPEG | `'linear'` | `uastc` | Normal/ORM/data textures: UASTC-LDR with linear color |
+| HDR (`.hdr`) | N/A (always linear) | `none` (rgba16float) | `.hdr` sources are always `kind: 'equirect'` (IBL/skybox). The runtime drives them through equirect-to-cube / irradiance / prefilter RENDER passes, and a block-compressed (BC6H) texture is sample-only, never color-renderable -- so equirect is forced to uncompressed rgba16float (feat-20260707 M5 fix). The `uastc-hdr` -> BC6H encoding remains in `compressionFor` for a purely-sampled HDR *texture*, but no current source path produces a non-equirect HDR texture. |
+
+### Mip offline baking constraint
+
+**Block-compressed textures cannot use runtime mipmap generation** (compressed
+formats are not render-target-compatible). Mip chains must be baked offline
+through the importer sidecar:
+
+- Set `importSettings.mipmap: true` in `.meta.json` to bake a full mip chain
+  during import. The encoder produces mip levels with a box filter.
+- Runtime `mipmap: true` on a compressed TextureAsset fails fast with
+  `mipgen-unsupported-compressed-format` (AC-09). The `.hint` directs you to
+  set `compressionMode: 'none'` or bake mips offline.
+- Uncompressed textures (`compressionMode: 'none'`) are exempt: they support
+  runtime mip-gen normally.
+
+### Determinism
+
+Same input bytes + same `compressionMode` + same import settings produce
+byte-identical `.ktx2` every time (AC-02). The encoder runs single-threaded
+with no timestamp or random seed, guaranteeing DDC cache safety.
 
 ## Entry points
 

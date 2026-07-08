@@ -9,10 +9,12 @@
 // - shadow-m3-calibrate-run.dawn.test.ts
 // - tilemap-chunk-y-sort-bench.unit.test.ts (perf_hooks + process.env)
 // - render-system-fold-scene-instances.unit.test.ts (readdirSync + dirname)
+// - basis-catalog-dispatch.integration.test.ts (existsSync pkg-built gate)
 
 declare module 'node:fs' {
   export function readFileSync(path: string, encoding: string): string;
   export function readdirSync(path: string): string[];
+  export function existsSync(path: string): boolean;
 }
 
 declare module 'node:path' {

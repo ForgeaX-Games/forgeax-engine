@@ -578,6 +578,23 @@ function findDanglingHandleId(event: RhiCallEvent, declared: Set<HandleId>): Han
 // Pass offset computation helper (m4-3)
 // ============================================================================
 
+/**
+ * SSOT for the set of `RhiCallEvent.kind` values that count as a draw / dispatch
+ * step in the tape's global "drawIdx" numbering. Consumed by every draw-index
+ * math site (inspect-core.countDraws / findEventIdxForDraw / extractDrawInfo;
+ * frame-model.countDrawEvents / eventKindAt / buildCommands; computePassOffsets
+ * below). Placed here because tape-format is the lowest layer both inspect-core
+ * and frame-model already import — avoids the cycle a shared owner in either of
+ * those two files would introduce.
+ */
+export const DRAW_KINDS: ReadonlySet<RhiCallEvent['kind']> = new Set<RhiCallEvent['kind']>([
+  'draw',
+  'drawIndexed',
+  'drawIndirect',
+  'drawIndexedIndirect',
+  'dispatchWorkgroups',
+]);
+
 export interface PassOffset {
   readonly passIdx: number;
   readonly startDrawIdx: number;
@@ -639,14 +656,7 @@ export function computePassOffsets(events: readonly RhiCallEvent[]): PassOffset[
         passIdx++;
       }
       inPass = false;
-    } else if (
-      (event.kind === 'draw' ||
-        event.kind === 'drawIndexed' ||
-        event.kind === 'drawIndirect' ||
-        event.kind === 'drawIndexedIndirect' ||
-        event.kind === 'dispatchWorkgroups') &&
-      inPass
-    ) {
+    } else if (DRAW_KINDS.has(event.kind) && inPass) {
       passEndDrawIdx = globalDrawIdx;
       globalDrawIdx++;
     }

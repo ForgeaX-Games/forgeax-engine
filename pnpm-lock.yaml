@@ -414,6 +414,49 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
 
+  apps/hello/compressed-texture:
+    dependencies:
+      '@forgeax/engine-app':
+        specifier: workspace:*
+        version: link:../../../packages/app
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../../../packages/ecs
+      '@forgeax/engine-math':
+        specifier: workspace:*
+        version: link:../../../packages/math
+      '@forgeax/engine-pack':
+        specifier: workspace:*
+        version: link:../../../packages/pack
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
+      '@forgeax/engine-types':
+        specifier: workspace:*
+        version: link:../../../packages/types
+    devDependencies:
+      '@forgeax/engine-image':
+        specifier: workspace:*
+        version: link:../../../packages/image
+      '@forgeax/engine-vite-plugin-pack':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-pack
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-shader
+      '@types/node':
+        specifier: ^25.8.0
+        version: 25.8.0
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
+
   apps/hello/cube:
     dependencies:
       '@forgeax/engine-app':
@@ -3894,6 +3937,9 @@ importers:
 
   packages/image:
     dependencies:
+      '@forgeax/engine-codec':
+        specifier: workspace:*
+        version: link:../codec
       '@forgeax/engine-math':
         specifier: workspace:*
         version: link:../math
@@ -4357,6 +4403,9 @@ importers:
       '@forgeax/engine-geometry':
         specifier: workspace:*
         version: link:../../packages/geometry
+      '@forgeax/engine-input':
+        specifier: workspace:*
+        version: link:../../packages/input
       '@forgeax/engine-pack':
         specifier: workspace:*
         version: link:../../packages/pack
@@ -8200,7 +8249,7 @@ snapshots:
 
   '@types/pngjs@6.0.5':
     dependencies:
-      '@types/node': 25.8.0
+      '@types/node': 20.19.40
 
   '@types/react-dom@19.2.3(@types/react@19.2.17)':
     dependencies:
@@ -8214,7 +8263,7 @@ snapshots:
 
   '@types/ws@8.18.1':
     dependencies:
-      '@types/node': 25.8.0
+      '@types/node': 20.19.40
 
   '@vitejs/plugin-react@4.7.0(vite@8.0.10(@types/node@20.19.40)(esbuild@0.27.7)(jiti@1.21.7))':
     dependencies:

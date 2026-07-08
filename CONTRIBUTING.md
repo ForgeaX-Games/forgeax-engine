@@ -14,7 +14,7 @@ If you use `corepack enable`, pnpm comes bundled with the right version automati
 
 `@forgeax/engine-wgpu-wasm` is the **only** Rust crate in the monorepo — a single wasm-bindgen crate merging `wgpu 29` (RHI raw bindings) and `naga 29` (three-phase shader pipeline), produced by `feat-20260511-naga-rhi-wgpu-merge`. It replaced the two earlier crates (`naga-wasm-shim` + `rhi-wgpu/crate`), which are archived. Two TS-only thin shells consume its raw bindings: `@forgeax/engine-rhi-wgpu` (RHI) and `@forgeax/engine-naga` (shader tooling) — neither contains Rust anymore.
 
-**You only need the Rust toolchain if you are editing `packages/wgpu-wasm/src/*.rs` or `Cargo.toml`.** Most contributors never touch Rust because the prebuilt `pkg/` output (`*.wasm` + `*.d.ts` + `*.js` glue) is committed to git and consumed by `pnpm install` directly.
+**You only need the Rust toolchain if you are editing `packages/wgpu-wasm/src/*.rs` or `Cargo.toml`.** Most contributors never touch Rust: the prebuilt `pkg/` bundle (`*.wasm` + `*.d.ts` + `*.js` glue) is **not** committed to git (ufbx-style release, mirroring `packages/fbx/`), and `pnpm install`'s `postinstall` hydrates it automatically by downloading the content-keyed bundle from the `wasm-artifacts` GitHub Release (`scripts/ensure-wgpu-wasm-pkg.mjs` → `fetch-wasm`). The fetch is non-fatal: offline or unauthenticated, `install` still succeeds and you build `pkg/` locally when you next need it.
 
 ### One-time install
 
@@ -34,7 +34,7 @@ bash packages/wgpu-wasm/build.sh            # -> wasm-pack build --target web --
 pnpm -F @forgeax/engine-wgpu-wasm build     # tsc -b + tsup (rebuilds the JS shim around prebuilt pkg/)
 ```
 
-`build.sh` asserts `rustc >= 1.93` explicitly with a structured error message (charter proposition 4 explicit failure) so a missing toolchain pin surfaces at the `.sh` entry rather than as an opaque `cargo` error. Stage **both** `packages/wgpu-wasm/src/...` and the regenerated `packages/wgpu-wasm/pkg/...` artifacts in the same commit so non-Rust contributors stay unblocked.
+`build.sh` asserts `rustc >= 1.93` explicitly with a structured error message (charter proposition 4 explicit failure) so a missing toolchain pin surfaces at the `.sh` entry rather than as an opaque `cargo` error. Commit **only** `packages/wgpu-wasm/src/...` (+ `Cargo.toml` / `Cargo.lock` if changed) — `pkg/` is gitignored and never committed. On the next main push, the `publish-wgpu-wasm-release` CI job rebuilds `pkg/` and publishes the content-keyed bundle so non-Rust contributors' `fetch-wasm` picks it up. The content key (`scripts/content-key.mjs`) hashes `src/**/*.rs` + `Cargo.{toml,lock}` + `rust-toolchain.toml` + `build.sh`, so any source change yields a fresh bundle name and stale `pkg/` can no longer be served.
 
 > [!NOTE]
 > wasm-pack's bundled binaryen is too old to parse wgpu 29's multi-table WASM, so `Cargo.toml` sets `wasm-opt = false`. CI installs a system `binaryen` (>= 116) and `build.sh` runs an extra `wasm-opt -Oz` pass when one is on `PATH`; local builds without binaryen skip that pass silently (dev-only size penalty).
@@ -42,7 +42,7 @@ pnpm -F @forgeax/engine-wgpu-wasm build     # tsc -b + tsup (rebuilds the JS shi
 ### When the toolchain is unavailable
 
 - CI builds the wasm crate from scratch via `dtolnay/rust-toolchain@stable` + `taiki-e/install-action` (`wasm-pack@0.14.0`) in `.github/workflows/ci.yml`, so a fork PR without Rust locally still verifies cleanly.
-- Locally, if you need to run `pnpm test` on a machine without Rust, the committed `pkg/` output is already wired into the workspace — `pnpm install` does **not** invoke `cargo` / `wasm-pack`. The `@forgeax/engine-rhi-wgpu` and `@forgeax/engine-naga` shells resolve the prebuilt `wgpu_wasm_bg.wasm` directly.
+- Locally, if you need to run `pnpm test` on a machine without Rust, `pnpm install` does **not** invoke `cargo` / `wasm-pack` — its `postinstall` fetches the prebuilt `pkg/` bundle from the `wasm-artifacts` release instead. The `@forgeax/engine-rhi-wgpu` and `@forgeax/engine-naga` shells then resolve the hydrated `wgpu_wasm_bg.wasm` directly. If the fetch could not run (offline / private repo without `GITHUB_TOKEN` / bundle not yet published), run `pnpm -F @forgeax/engine-wgpu-wasm fetch-wasm` once connectivity returns, or `build:wasm` if you have the Rust toolchain.
 
 `packages/wgpu-wasm/Cargo.lock` is committed (applications-tier crate convention) and is **not** part of the dual-lockfile sync — `pnpm-lock.yaml` and `bun.lock` describe the npm side; `Cargo.lock` is owned by `cargo` alone. The pre-commit `check-staged-lockfiles.mjs` guard does not touch it. See `packages/rhi-wgpu/README.md` and AGENTS.md §Packages for the dual-impl / auto-select-facade rationale.
 

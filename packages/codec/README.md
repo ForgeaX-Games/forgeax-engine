@@ -1,14 +1,16 @@
 # @forgeax/engine-codec
 
-> `@forgeax/engine-codec` provides runtime-safe zstd decode, KTX2 container parse,
-> and build-time zstd encode for the forgeax asset pipeline.
+> `@forgeax/engine-codec` provides zstd decode/encode, KTX2 container parse,
+> Basis transcode, block-format lookup, and build-time Basis encode --
+> a single package covering the full runtime codec surface for the forgeax
+> asset pipeline.
 
 > [!IMPORTANT]
 > This package uses **subpath-level encode/decode separation** (D-1). The main entry
-(`@forgeax/engine-codec`) exports runtime-safe decode functions. The `/encode`
-subpath (`@forgeax/engine-codec/encode`) exports build-time encoding. Runtime code
-must never import from `/encode` -- this is enforced by
-`check-image-pipeline-isolation.mjs` path d (AC-09).
+(`@forgeax/engine-codec`) exports runtime-safe decode + transcode + block-format
+functions. The `/encode` subpath (`@forgeax/engine-codec/encode`) exports
+build-time encode (zstd + Basis). Runtime code must never import from `/encode` --
+this is enforced by `check-image-pipeline-isolation.mjs` path d (AC-09).
 
 ## API
 
@@ -19,6 +21,39 @@ must never import from `/encode` -- this is enforced by
 | `decompressZstd` | `(bytes: Uint8Array) => Promise<CodecResult<Uint8Array>>` | Decompress a zstd-compressed byte buffer. Lazy-init singleton (fzstd pure JS, zero WASM); concurrent first calls share the same init promise (AC-12). Returns `CodecOk<Uint8Array>` on success, `CodecError` on failure. |
 | `parseKtx2` | `(bytes: Uint8Array) => Promise<CodecResult<Ktx2Parsed>>` | Parse a KTX2 2.0 container (12B magic validation). Returns header, index, level index, DFD, KV metadata, and SGD descriptor -- all five parts per AC-03. Does **not** interpret block-compressed payload content (OOS-6, Loop 2). Async -- `await` the result. |
 | `ktx2LevelsToRGBA` | `(parsed: Ktx2Parsed, level?: number) => Promise<CodecResult<Uint8Array>>` | Extract RGBA bytes from a parsed KTX2 container. Handles scheme=0 (uncompressed, pass-through) and scheme=2 (zstd supercompression, reuses `decompressZstd` per AC-04). The optional `level` parameter selects a mip level (default: 0). Returns the level's RGBA bytes as a flat `Uint8Array`. |
+| `selectTranscodeTarget` | `(dfdModel: number, srgb: boolean, channels: number, caps: TranscodeCaps) => GPUTextureFormat \| null` | Pure-function priority chain (node-safe, zero DOM): given a DFD color model, srgb flag, channel count, and device caps, returns the best native block format. The chain is LDR RGBA: `ASTC4x4 -> BC7 -> ETC2 -> RGBA8` (with srgb variants); single-channel R: `BC4 -> EAC-R11 -> R8`; two-channel RG: `BC5 -> EAC-RG11 -> RG8`; HDR: `BC6H -> rgba16float`. BC-first rule: when BC and ETC2/ASTC coexist, the chain selects BC (D-4 Mesa guard). Input `TranscodeCaps { bc, etc2, astc }` is a local struct -- codec never imports from rhi. Returns non-null (no-cap fallback to rgba8unorm/rgba16float). |
+| `initBasisTranscoder` | `() => Promise<BasisTranscoderModule>` | Lazy-init singleton (main-thread, D-10). First call dynamic-imports + initializes the basis_transcoder WASM; subsequent calls return the cached instance. |
+| `transcodeKtx2` | `(parsed: Ktx2Parsed, targetFormat: GPUTextureFormat) => Promise<CodecResult<TranscodedMips>>` | Transcode a scheme=1 (BasisLZ) KTX2 payload to a native block format. Iterates every mip level through the transcoder, returning `TranscodedMips { format, mips: { data, width, height }[] }`. Calls init on first use. |
+| `bytesPerRow` | `(width: number, format: GPUTextureFormat) => number` | Block-aligned bytes-per-row: `ceil(width / blockW) * bytesPerBlock`. Returns `width * 4` for non-compressed formats. SSOT with `blockFormatInfo`. |
+| `rowsPerImage` | `(height: number, format: GPUTextureFormat) => number` | Block-aligned rows-per-image: `ceil(height / blockH)`. Returns `height` for non-compressed formats. |
+| `blockFormatInfo` | `(format: GPUTextureFormat) => { blockW: number, blockH: number, bytesPerBlock: number } \| undefined` | Block dimension lookup table covering BC1-BC7, ETC2, ASTC4x4, EAC, BC6H. Returns undefined for non-compressed formats. |
+| `isCompressedFormat` | `(format: GPUTextureFormat) => boolean` | Type guard returning true for all block-compressed formats in `blockFormatInfo`. |
+
+**Priority chain rules** (D-4 BC-first, D-8 local TranscodeCaps):
+
+| Source (channels, color, srgb) | BC cap | ETC2 cap | ASTC cap | Target format |
+|:--|:--|:--|:--|:--|
+| RGBA, LDR, srgb | yes | yes | yes | `bc7-rgba-unorm-srgb` |
+| RGBA, LDR, srgb | no | yes | -- | `etc2-rgba8unorm-srgb` |
+| RGBA, LDR, srgb | no | no | yes | `astc-4x4-unorm-srgb` |
+| RGBA, LDR, srgb | no | no | no | `rgba8unorm-srgb` |
+| R, LDR | yes | -- | -- | `bc4-r-unorm` |
+| R, LDR | no | yes | -- | `eac-r11unorm` |
+| R, LDR | no | no | -- | `r8unorm` |
+| RG, LDR | yes | -- | -- | `bc5-rg-unorm` |
+| RG, LDR | no | yes | -- | `eac-rg11unorm` |
+| RG, LDR | no | no | -- | `rg8unorm` |
+| HDR | yes | -- | -- | `bc6h-rgb-ufloat` |
+| HDR | no | -- | -- | `rgba16float` |
+
+**Scheme support** (extended in Loop 2):
+
+| Scheme | Name | Supported | Path |
+|:--|:--|:--|:--|
+| 0 | None (uncompressed) | yes | `ktx2LevelsToRGBA` pass-through |
+| 1 | BasisLZ | yes | `parseKtx2` -> `transcodeKtx2` |
+| 2 | Zstandard | yes | `ktx2LevelsToRGBA` + `decompressZstd` |
+| 3 | ZLIB / DEFLATE | no | returns `ktx2-unsupported-scheme` |
 
 Usage example:
 
@@ -64,7 +99,7 @@ import { compressZstd } from '@forgeax/engine-codec/encode';
 
 | Export | Description |
 |:--|:--|
-| `CodecErrorCode` | Closed union: `'decompression-failed' \| 'codec-init-failed' \| 'ktx2-parse-failed' \| 'ktx2-unsupported-scheme'` (order-locked, add-only-minor for Loop 2) |
+| `CodecErrorCode` | Closed union: `'decompression-failed' \| 'codec-init-failed' \| 'ktx2-parse-failed' \| 'ktx2-unsupported-scheme' \| 'transcode-failed' \| 'ktx2-encode-failed'` (order-locked, add-only-minor) |
 | `CodecError` | Structured error: `{ ok: false, error: { code, expected, hint, detail } }` with per-code narrowed `detail` |
 | `CodecOk<T>` | Success branch: `{ ok: true, value: T }` |
 | `CodecResult<T>` | Discriminated union: `CodecOk<T> \| CodecError` |
@@ -85,7 +120,9 @@ All codec errors use the `CodecErrorCode` closed union. Consume with exhaustive
 | `decompression-failed` | Corrupted/malformed zstd input, or encode failure surfaced as decompression error | "Check catalog row compression field and asset binary consistency; re-run asset import." | `{ reason: string }` -- failure cause |
 | `codec-init-failed` | Dynamic import of fzstd decode module failed (network / bundling) | "Uncompressed assets are still loadable. Verify the codec module is installed correctly." | `{ stage: string }` -- failed initialization stage |
 | `ktx2-parse-failed` | KTX2 magic mismatch, header truncation, level index out of bounds (E5) | "Check that the KTX2 file is valid and not truncated. Re-import the texture asset." | `{ reason: string }` -- parse failure location |
-| `ktx2-unsupported-scheme` | KTX2 supercompression scheme is BasisLZ (=1), ZLIB (=3), or other non-zstd (E6) | "This supercompression scheme requires a future codec upgrade. Check the codec README Loop 2 extension points." | `{ scheme: number }` -- the unsupported scheme value |
+| `ktx2-unsupported-scheme` | KTX2 supercompression scheme is ZLIB (=3) or other unsupported scheme. Scheme 1 (BasisLZ) and 2 (Zstd) are accepted. | "This supercompression scheme requires a future codec upgrade. Check the codec README Loop 2 extension points." | `{ scheme: number }` -- the unsupported scheme value |
+| `transcode-failed` | Basis transcoder returned 0 bytes or threw an error during transcode. The payload may be corrupt or the target format incompatible with the DFD model. | "Verify the KTX2/Basis asset payload is valid. Check that selectTranscodeTarget returned a compatible format." | `{ sourceFormat: GPUTextureFormat, targetFormat: GPUTextureFormat }` -- the source + requested target |
+| `ktx2-encode-failed` | Basis encoder returned 0 bytes or threw. May indicate invalid dimensions, incompatible pixel format, or encoder-side memory exhaustion. | "Check input texture dimensions and pixel format. Verify the Basis encoder WASM was built correctly (pnpm --filter @forgeax/engine-codec build:wasm)." | `{ mode: string, reason: string }` -- the encode mode + failure reason |
 
 ### Error propagation
 

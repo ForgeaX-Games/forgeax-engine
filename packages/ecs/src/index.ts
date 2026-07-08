@@ -209,7 +209,13 @@ export type {
  * {@link getRegisteredComponents} returns the read-only name -> token map for
  * enumerating every defined component (mirrors `getRegisteredSystems`).
  */
-export { defineComponent, getRegisteredComponents, resolveComponent } from './component';
+export {
+  checkRelationshipMirrorsTransient,
+  defineComponent,
+  getRegisteredComponents,
+  RELATIONSHIP_COMPONENTS,
+  resolveComponent,
+} from './component';
 export type { ManagedArrayErrorEnvelope } from './errors';
 /**
  * Query descriptor for With/Without archetype filtering.

@@ -22,7 +22,7 @@ import {
   scanPassStates,
 } from './inspect-core';
 import type { PassOffset } from './tape-format';
-import { computePassOffsets } from './tape-format';
+import { computePassOffsets, DRAW_KINDS } from './tape-format';
 import type {
   CreateDescriptor,
   DrawPipelineState,
@@ -67,7 +67,24 @@ export interface DrawEntry {
   readonly drawCall: InspectDrawCall;
   readonly colorAttachmentHandleId: string | undefined;
   readonly pipelineState: DrawPipelineState;
-  readonly vertexBuffers: ReadonlyMap<number, HandleId>;
+  /**
+   * Bound vertex buffers keyed by slot. Each entry carries `handleId` +
+   * `offset` + `size` from the raw `setVertexBuffer` event (offset defaults
+   * to 0; size 0 keeps the WebGPU "to end of buffer" convention verbatim).
+   * AI users read offset / size directly here without re-scanning tape events.
+   */
+  readonly vertexBuffers: ReadonlyMap<
+    number,
+    { readonly handleId: HandleId; readonly offset: number; readonly size: number }
+  >;
+  /**
+   * Bound index buffer at this draw (mirrors `setIndexBuffer` event); absent
+   * when the pass never issued one. Only meaningful for `drawIndexed` /
+   * `drawIndexedIndirect` — non-indexed draws leave it dangling; consumers
+   * cross-reference `drawCall.kind` if they need it. Truly optional so viewer
+   * fixtures can omit it entirely.
+   */
+  readonly indexBuffer?: { handleId: HandleId; format: GPUIndexFormat; offset: number } | undefined;
   readonly depthStencil: DrawDepthStencil;
 }
 
@@ -110,14 +127,6 @@ export interface FrameModel {
 // ============================================================================
 // Event-kind extraction
 // ============================================================================
-
-const DRAW_KINDS = new Set([
-  'draw',
-  'drawIndexed',
-  'drawIndirect',
-  'drawIndexedIndirect',
-  'dispatchWorkgroups',
-]);
 
 const META_KINDS = new Set(['frameMark', 'submit', 'finish', 'createCommandEncoder']);
 
@@ -192,7 +201,8 @@ function buildCommands(events: readonly RhiCallEvent[]): readonly CommandEntry[]
 const EMPTY_PASS_STATE = {
   handleId: '',
   pipelineHandleId: undefined,
-  vertexBuffers: new Map<number, HandleId>(),
+  vertexBuffers: new Map<number, { handleId: HandleId; offset: number; size: number }>(),
+  indexBuffer: undefined,
   blendConstant: undefined,
   stencilReference: 0,
   depthStencilViewHandleId: undefined,
@@ -248,7 +258,8 @@ export function buildFrameModel(tape: Tape): FrameModel {
       resources,
       passState ?? EMPTY_PASS_STATE,
     );
-    const vertexBuffers: ReadonlyMap<number, HandleId> = passState?.vertexBuffers ?? new Map();
+    const vertexBuffers = passState?.vertexBuffers ?? new Map();
+    const indexBuffer = passState?.indexBuffer;
     const depthStencil: DrawDepthStencil = {
       depthStencilViewHandleId: passState?.depthStencilViewHandleId,
       depthStencilAttachment: passState?.depthStencilAttachment,
@@ -262,6 +273,7 @@ export function buildFrameModel(tape: Tape): FrameModel {
       colorAttachmentHandleId: info.colorAttachmentHandleId,
       pipelineState,
       vertexBuffers,
+      indexBuffer,
       depthStencil,
     });
 

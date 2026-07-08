@@ -13,12 +13,23 @@
 //
 // Note: merged from src/__tests__/ into __tests__/; import paths adjusted (../ → ../src/).
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
-import { attachBrowserInputBackend } from '../src/browser-backend';
+import { attachBrowserInputBackend, coercePointerType } from '../src/browser-backend';
+import {
+  buildGuidFromVidPid,
+  extractGuidFromGamepadId,
+  type MappingTokens,
+  parseControllerDb,
+  platformFromUserAgent,
+  selectBestMappingEntry,
+} from '../src/controller-db';
 import type {
   Capabilities,
   GamepadSlotSample,
+  PointerPhaseEvent,
   VirtualJoystickConfig,
 } from '../src/input-snapshot';
 import {
@@ -28,6 +39,8 @@ import {
   type InputBackend,
   InputFrameStartScan,
   type InputSnapshot,
+  type PointerType,
+  snapshotFromSample,
 } from '../src/index';
 import { diffGamepadFrame, type RawGamepadStub } from '../src/gamepad-frame';
 import {
@@ -35,6 +48,28 @@ import {
   handleVirtualJoystickUnbind,
   type BindState,
 } from '../src/virtual-joystick';
+import {
+  deriveActionStates,
+  getAxis,
+  getVector,
+  type ActionConfig,
+  type ActionState,
+  type GetVectorOptions,
+} from '../src/action-state';
+import {
+  createRecognizerState,
+  DOUBLE_TAP_DISTANCE,
+  DOUBLE_TAP_INTERVAL_MS,
+  type GestureEvent,
+  type GestureState,
+  LONG_PRESS_DURATION_MS,
+  LONG_PRESS_SLOP,
+  processGestureFrame,
+  type RecognizerPointer,
+  type RecognizerState,
+  SWIPE_VELOCITY_THRESHOLD,
+  SWIPE_WINDOW_MS,
+} from '../src/gesture-recognizer';
 
 /**
  * Build a standard-layout GamepadSlotSample for test injection.
@@ -1450,7 +1485,7 @@ function fixtureBackend(initial: {
       x: number;
       y: number;
       pressure?: number;
-      pointerType?: string;
+      pointerType?: import('../src/input-snapshot').PointerType;
       active?: boolean;
     }): import('../src/input-snapshot').PointerSample {
       return {
@@ -1975,6 +2010,7 @@ function fixtureBackend(initial: {
    */
   function rawStub(overrides?: {
     index?: number;
+    id?: string;
     pressed?: number[];
     buttonValues?: [number, number][];
     axes?: number[];
@@ -1989,6 +2025,7 @@ function fixtureBackend(initial: {
     }
     return {
       index: idx,
+      id: overrides?.id ?? 'standard pad',
       connected: true,
       mapping: overrides?.mapping ?? 'standard',
       buttons,
@@ -2536,6 +2573,2465 @@ function fixtureBackend(initial: {
       expect(sample.virtualAxes![1].name).toBe('look');
       expect(sample.virtualAxes![1].x).toBeCloseTo(1.0);
       expect(sample.virtualAxes![1].y).toBeCloseTo(0);
+    });
+  });
+}
+
+{
+  // ─── from action-state.test.ts ───
+
+  /**
+   * Synthetic InputBackendSample for deriveActionStates testing.
+   */
+  function sampleForAction(overrides?: {
+    downKeys?: string[];
+    buttons?: [boolean, boolean, boolean];
+    gamepads?: readonly GamepadSlotSample[];
+  }): import('../src/input-snapshot').InputBackendSample {
+    return {
+      downKeys: new Set(overrides?.downKeys ?? []),
+      upKeys: new Set(),
+      buttons: overrides?.buttons ?? [false, false, false],
+      movementX: 0,
+      movementY: 0,
+      wheelDelta: 0,
+      focused: true,
+      gamepads: overrides?.gamepads ?? [],
+    };
+  }
+
+  function standardGamepadSlot(index: number, overrides?: {
+    pressed?: number[];
+    buttonValues?: [number, number][];
+    axes?: [number, number, number, number];
+  }): GamepadSlotSample {
+    const bv = new Map<number, number>(overrides?.buttonValues ?? []);
+    return {
+      index,
+      standardMapping: true,
+      pressed: new Set(overrides?.pressed ?? []),
+      justPressed: new Set(),
+      justReleased: new Set(),
+      buttonValues: bv,
+      axes: overrides?.axes ?? [0, 0, 0, 0],
+    };
+  }
+
+  /**
+   * Extract strength from ActionState[] for a given action name.
+   */
+  function strengthOf(states: readonly ActionState[], name: string): number {
+    const s = states.find((a) => a.action === name);
+    return s?.strength ?? -999;
+  }
+
+  function pressedOf(states: readonly ActionState[], name: string): boolean {
+    const s = states.find((a) => a.action === name);
+    return s?.pressed ?? false;
+  }
+
+  function rawOf(states: readonly ActionState[], name: string): number {
+    const s = states.find((a) => a.action === name);
+    return s?.raw ?? -999;
+  }
+
+  function justPressedOf(states: readonly ActionState[], name: string): boolean {
+    const s = states.find((a) => a.action === name);
+    return s?.justPressed ?? false;
+  }
+
+  function justReleasedOf(states: readonly ActionState[], name: string): boolean {
+    const s = states.find((a) => a.action === name);
+    return s?.justReleased ?? false;
+  }
+
+  // Minimal InputMap type for tests (will expand when m1t2 ships the real type)
+  type InputMapForTest = readonly ActionConfig[];
+
+  describe('action-state.test.ts', () => {
+    describe('deriveActionStates — AC-04 OR/MAX aggregation', () => {
+      it('key 1.0 + gamepadButton held → strength = MAX = 1.0 (AC-04 literal)', () => {
+        const map: InputMapForTest = [
+          {
+            action: 'jump',
+            bindings: [
+              { type: 'key', key: ' ' },
+              { type: 'gamepadButton', button: 0 },
+            ],
+          },
+        ];
+        const sample = sampleForAction({
+          downKeys: [' '],
+          gamepads: [
+            standardGamepadSlot(0, { pressed: [0], buttonValues: [[0, 1.0]] }),
+          ],
+        });
+        const states = deriveActionStates(sample, map);
+        expect(pressedOf(states, 'jump')).toBe(true);
+        expect(strengthOf(states, 'jump')).toBeCloseTo(1.0);
+      });
+
+      it('key 1.0 + stick 0.3 → strength 1.0 (MAX, not sum)', () => {
+        const map: InputMapForTest = [
+          {
+            action: 'moveRight',
+            bindings: [
+              { type: 'key', key: 'd' },
+              { type: 'gamepadAxis', axis: 0, sign: 1 },
+            ],
+          },
+        ];
+        const sample = sampleForAction({
+          downKeys: ['d'],
+          gamepads: [
+            standardGamepadSlot(0, { axes: [0.3, 0, 0, 0] }),
+          ],
+        });
+        const states = deriveActionStates(sample, map);
+        expect(pressedOf(states, 'moveRight')).toBe(true);
+        // key contributes 1.0, stick contributes deadzone-remapped 0.3 → ~0.125
+        // MAX should be 1.0
+        expect(strengthOf(states, 'moveRight')).toBeCloseTo(1.0);
+      });
+    });
+
+    describe('deriveActionStates — AC-02 strength/raw separation', () => {
+      it('digital binding (key) → strength is 1.0, raw is 1.0 when pressed', () => {
+        const map: InputMapForTest = [
+          { action: 'fire', bindings: [{ type: 'key', key: 'f' }] },
+        ];
+        const sample = sampleForAction({ downKeys: ['f'] });
+        const states = deriveActionStates(sample, map);
+        expect(pressedOf(states, 'fire')).toBe(true);
+        expect(strengthOf(states, 'fire')).toBe(1.0);
+        expect(rawOf(states, 'fire')).toBe(1.0);
+      });
+
+      it('digital binding (key) → strength is 0, raw is 0 when not pressed', () => {
+        const map: InputMapForTest = [
+          { action: 'fire', bindings: [{ type: 'key', key: 'f' }] },
+        ];
+        const sample = sampleForAction({ downKeys: [] });
+        const states = deriveActionStates(sample, map);
+        expect(pressedOf(states, 'fire')).toBe(false);
+        expect(strengthOf(states, 'fire')).toBe(0);
+        expect(rawOf(states, 'fire')).toBe(0);
+      });
+
+      it('analog binding (gamepadAxis) → strength is deadzone-remapped, raw is |value|', () => {
+        const map: InputMapForTest = [
+          { action: 'moveRight', bindings: [{ type: 'gamepadAxis', axis: 0, sign: 1 }] },
+        ];
+        // axis value 0.5 → raw = 0.5, deadzone=0.2 → strength = inverse_lerp(0.2, 1, 0.5) = (0.5-0.2)/(1-0.2) = 0.375
+        const sample = sampleForAction({
+          gamepads: [standardGamepadSlot(0, { axes: [0.5, 0, 0, 0] })],
+        });
+        const states = deriveActionStates(sample, map);
+        expect(pressedOf(states, 'moveRight')).toBe(true); // 0.5 >= 0.2 deadzone
+        expect(rawOf(states, 'moveRight')).toBeCloseTo(0.5);
+        expect(strengthOf(states, 'moveRight')).toBeCloseTo(0.375, 5);
+      });
+
+      it('gamepadAxis below deadzone → pressed=false, strength=0, raw=0.1', () => {
+        const map: InputMapForTest = [
+          { action: 'moveRight', bindings: [{ type: 'gamepadAxis', axis: 0, sign: 1 }] },
+        ];
+        const sample = sampleForAction({
+          gamepads: [standardGamepadSlot(0, { axes: [0.1, 0, 0, 0] })],
+        });
+        const states = deriveActionStates(sample, map);
+        expect(pressedOf(states, 'moveRight')).toBe(false);
+        expect(rawOf(states, 'moveRight')).toBeCloseTo(0.1);
+        expect(strengthOf(states, 'moveRight')).toBe(0);
+      });
+
+      it('per-action deadzone override', () => {
+        const map: InputMapForTest = [
+          { action: 'moveRight', bindings: [{ type: 'gamepadAxis', axis: 0, sign: 1 }], deadzone: 0.5 },
+        ];
+        // axis 0.4 → below custom deadzone 0.5
+        const sample = sampleForAction({
+          gamepads: [standardGamepadSlot(0, { axes: [0.4, 0, 0, 0] })],
+        });
+        const states = deriveActionStates(sample, map);
+        expect(pressedOf(states, 'moveRight')).toBe(false);
+        expect(strengthOf(states, 'moveRight')).toBe(0);
+      });
+
+      it('mouseButton binding → digital on/off 1.0/0', () => {
+        const map: InputMapForTest = [
+          { action: 'click', bindings: [{ type: 'mouseButton', button: 0 }] },
+        ];
+        const sample = sampleForAction({ buttons: [true, false, false] });
+        const states = deriveActionStates(sample, map);
+        expect(pressedOf(states, 'click')).toBe(true);
+        expect(strengthOf(states, 'click')).toBe(1.0);
+      });
+    });
+
+    describe('deriveActionStates — AC-09 empty signal for unmapped action', () => {
+      it('unregistered action → isPressed=false, strength=0, no throw', () => {
+        const map: InputMapForTest = [];
+        const sample = sampleForAction({ downKeys: [' '] });
+        const states = deriveActionStates(sample, map);
+        expect(states.length).toBe(0);
+      });
+
+      it('some registered, some not — only registered actions appear', () => {
+        const map: InputMapForTest = [
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+        ];
+        const sample = sampleForAction({ downKeys: [' '] });
+        const states = deriveActionStates(sample, map);
+        expect(states.length).toBe(1);
+        expect(states[0]!.action).toBe('jump');
+      });
+    });
+
+    describe('deriveActionStates — AC-03 justPressed/justReleased edge semantics', () => {
+      it('justPressed fires on first frame of press, not on held', () => {
+        const map: InputMapForTest = [
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+        ];
+        const sample = sampleForAction({ downKeys: [' '] });
+        // prevActionStates: empty (no action was pressed)
+        const prev: ActionState[] = [];
+        const states = deriveActionStates(sample, map, prev);
+        expect(justPressedOf(states, 'jump')).toBe(true);
+        expect(justReleasedOf(states, 'jump')).toBe(false);
+      });
+
+      it('held does not re-fire justPressed', () => {
+        const map: InputMapForTest = [
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+        ];
+        const sample = sampleForAction({ downKeys: [' '] });
+        // prev has 'jump' already pressed
+        const prev: ActionState[] = [
+          { action: 'jump', pressed: true, justPressed: true, justReleased: false, strength: 1.0, raw: 1.0 },
+        ];
+        const states = deriveActionStates(sample, map, prev);
+        expect(pressedOf(states, 'jump')).toBe(true);
+        expect(justPressedOf(states, 'jump')).toBe(false);
+      });
+
+      it('justReleased fires on first frame after release', () => {
+        const map: InputMapForTest = [
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+        ];
+        const sample = sampleForAction({ downKeys: [] });
+        // prev has 'jump' pressed
+        const prev: ActionState[] = [
+          { action: 'jump', pressed: true, justPressed: false, justReleased: false, strength: 1.0, raw: 1.0 },
+        ];
+        const states = deriveActionStates(sample, map, prev);
+        expect(pressedOf(states, 'jump')).toBe(false);
+        expect(justReleasedOf(states, 'jump')).toBe(true);
+      });
+
+      it('justReleased does not fire on second frame of release', () => {
+        const map: InputMapForTest = [
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+        ];
+        const sample = sampleForAction({ downKeys: [] });
+        // prev was already released (pressed=false)
+        const prev: ActionState[] = [
+          { action: 'jump', pressed: false, justPressed: false, justReleased: true, strength: 0, raw: 0 },
+        ];
+        const states = deriveActionStates(sample, map, prev);
+        expect(justReleasedOf(states, 'jump')).toBe(false);
+      });
+    });
+
+    describe('deriveActionStates — E-11 last-wins override', () => {
+      it('duplicate action name → later config wins (last-wins)', () => {
+        const map: InputMapForTest = [
+          { action: 'jump', bindings: [{ type: 'key', key: 'a' }], deadzone: 0.1 },
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }], deadzone: 0.3 },
+        ];
+        const sample = sampleForAction({ downKeys: [' '] });
+        // 'a' is NOT pressed, ' ' IS pressed. If later config wins, jump should fire.
+        const states = deriveActionStates(sample, map);
+        expect(pressedOf(states, 'jump')).toBe(true);
+        // 'a' is not pressed, only ' ' binding (later) fires
+      });
+
+      it('duplicate action name — earlier config ignored when later resolves', () => {
+        const map: InputMapForTest = [
+          { action: 'jump', bindings: [{ type: 'key', key: 'a' }] },
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+        ];
+        const sample = sampleForAction({ downKeys: ['a'] });
+        // Both 'a' and ' ' — but last-wins means only ' ' binding matters, 'a' ignored
+        const states = deriveActionStates(sample, map);
+        // Only last binding counts → ' ' is NOT pressed → jump should be false
+        expect(pressedOf(states, 'jump')).toBe(false);
+      });
+    });
+
+    describe('deriveActionStates — E-1 disconnected slot contribution', () => {
+      it('binding to disconnected gamepad slot → contributes false/0', () => {
+        const map: InputMapForTest = [
+          { action: 'jump', bindings: [{ type: 'gamepadButton', button: 0 }] },
+        ];
+        const sample = sampleForAction({ gamepads: [] }); // no gamepad slots
+        const states = deriveActionStates(sample, map);
+        expect(pressedOf(states, 'jump')).toBe(false);
+        expect(strengthOf(states, 'jump')).toBe(0);
+      });
+    });
+
+    describe('deriveActionStates — AC-11 same-frame freeze', () => {
+      it('same input, same map → same result (pure function)', () => {
+        const map: InputMapForTest = [
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+        ];
+        const sample = sampleForAction({ downKeys: [' '] });
+        const a = deriveActionStates(sample, map);
+        const b = deriveActionStates(sample, map);
+        expect(a).toEqual(b);
+      });
+    });
+
+    describe('deriveActionStates — gamepadAxis sign semantics', () => {
+      it('sign omitted → contributes |value| (trigger semantics)', () => {
+        const map: InputMapForTest = [
+          { action: 'accelerate', bindings: [{ type: 'gamepadAxis', axis: 2 }] }, // right trigger
+        ];
+        const sample = sampleForAction({
+          gamepads: [standardGamepadSlot(0, { axes: [0, 0, 0.7, 0] })],
+        });
+        const states = deriveActionStates(sample, map);
+        expect(rawOf(states, 'accelerate')).toBeCloseTo(0.7);
+      });
+
+      it('sign=1 → max(0, value), sign=-1 → max(0, -value)', () => {
+        const map: InputMapForTest = [
+          { action: 'moveLeft', bindings: [{ type: 'gamepadAxis', axis: 0, sign: -1 }] },
+          { action: 'moveRight', bindings: [{ type: 'gamepadAxis', axis: 0, sign: 1 }] },
+        ];
+        // axis 0 = -0.6 (stick pushed left). sign=1 → max(0,-0.6)=0. sign=-1 → max(0,0.6)=0.6
+        const sample = sampleForAction({
+          gamepads: [standardGamepadSlot(0, { axes: [-0.6, 0, 0, 0] })],
+        });
+        const states = deriveActionStates(sample, map);
+        expect(rawOf(states, 'moveLeft')).toBeCloseTo(0.6);
+        expect(rawOf(states, 'moveRight')).toBeCloseTo(0);
+      });
+    });
+
+    describe('deriveActionStates — D-9 gamepad cross-slot aggregation', () => {
+      it('gamepadButton aggregates across ALL connected standardMapping slots', () => {
+        const map: InputMapForTest = [
+          { action: 'jump', bindings: [{ type: 'gamepadButton', button: 0 }] },
+        ];
+        // slot 0: button 0 not pressed. slot 1: button 0 pressed.
+        const sample = sampleForAction({
+          gamepads: [
+            standardGamepadSlot(0, { pressed: [], buttonValues: [] }),
+            standardGamepadSlot(1, { pressed: [0], buttonValues: [[0, 1.0]] }),
+          ],
+        });
+        const states = deriveActionStates(sample, map);
+        expect(pressedOf(states, 'jump')).toBe(true);
+      });
+    });
+  });
+}
+
+{
+  // ─── from action-snapshot-integration.test.ts ───
+
+  function sampleForActionInt(overrides?: {
+    downKeys?: string[];
+    buttons?: [boolean, boolean, boolean];
+    gamepads?: readonly GamepadSlotSample[];
+  }): import('../src/input-snapshot').InputBackendSample {
+    return {
+      downKeys: new Set(overrides?.downKeys ?? []),
+      upKeys: new Set(),
+      buttons: overrides?.buttons ?? [false, false, false],
+      movementX: 0,
+      movementY: 0,
+      wheelDelta: 0,
+      focused: true,
+      gamepads: overrides?.gamepads ?? [],
+    };
+  }
+
+  describe('action-snapshot-integration.test.ts', () => {
+    describe('snap.action() end-to-end pipeline', () => {
+      it('mapped action key press → snap.action(jump).isPressed()=true, justPressed()=true, strength=1', () => {
+        const map: import('../src/action-state').ActionConfig[] = [
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+        ];
+        const sample = sampleForActionInt({ downKeys: [' '] });
+        const actionStates = deriveActionStates(sample, map);
+        const snap = snapshotFromSample(
+          sample,
+          actionStates,
+        );
+        expect(snap.action('jump').isPressed()).toBe(true);
+        expect(snap.action('jump').justPressed()).toBe(true);
+        expect(snap.action('jump').strength).toBe(1.0);
+      });
+
+      it('unregistered action → isPressed()=false, strength=0, never throws', () => {
+        const map: import('../src/action-state').ActionConfig[] = [];
+        const sample = sampleForActionInt({ downKeys: [] });
+        const actionStates = deriveActionStates(sample, map);
+        const snap = snapshotFromSample(sample, actionStates);
+        expect(snap.action('nonexistent').isPressed()).toBe(false);
+        expect(snap.action('nonexistent').strength).toBe(0);
+        expect(snap.action('nonexistent').justPressed()).toBe(false);
+        expect(snap.action('nonexistent').justReleased()).toBe(false);
+      });
+
+      it('multiple mapped actions work independently', () => {
+        const map: import('../src/action-state').ActionConfig[] = [
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+          { action: 'fire', bindings: [{ type: 'key', key: 'f' }] },
+        ];
+        const sample = sampleForActionInt({ downKeys: [' '] });
+        const actionStates = deriveActionStates(sample, map);
+        const snap = snapshotFromSample(sample, actionStates);
+        expect(snap.action('jump').isPressed()).toBe(true);
+        expect(snap.action('fire').isPressed()).toBe(false);
+      });
+    });
+
+    describe('snap.action() — E-9 pre-run empty snapshot', () => {
+      it('createInputSnapshot → snap.action(any) returns empty signal', () => {
+        const snap = createInputSnapshot();
+        expect(snap.action('jump').isPressed()).toBe(false);
+        expect(snap.action('jump').strength).toBe(0);
+        expect(snap.action('jump').justPressed()).toBe(false);
+        expect(snap.action('jump').justReleased()).toBe(false);
+      });
+    });
+
+    describe('snap.action() — AC-11 same-frame freeze (action half)', () => {
+      it('two snap.action() calls in same frame → identical return', () => {
+        const map: import('../src/action-state').ActionConfig[] = [
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+        ];
+        const sample = sampleForActionInt({ downKeys: [' '] });
+        const actionStates = deriveActionStates(sample, map);
+        const snap = snapshotFromSample(sample, actionStates);
+        const a = snap.action('jump');
+        const b = snap.action('jump');
+        expect(a.isPressed()).toBe(b.isPressed());
+        expect(a.strength).toBe(b.strength);
+      });
+    });
+
+    describe('snap.action() — AC-02 type inference', () => {
+      it('isPressed() returns boolean without as assertion', () => {
+        const map: import('../src/action-state').ActionConfig[] = [
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+        ];
+        const sample = sampleForActionInt({ downKeys: [' '] });
+        const actionStates = deriveActionStates(sample, map);
+        const snap = snapshotFromSample(sample, actionStates);
+        const pressed: boolean = snap.action('jump').isPressed();
+        expect(pressed).toBe(true);
+      });
+
+      it('strength returns number without as assertion', () => {
+        const map: import('../src/action-state').ActionConfig[] = [
+          { action: 'jump', bindings: [{ type: 'key', key: ' ' }] },
+        ];
+        const sample = sampleForActionInt({ downKeys: [' '] });
+        const actionStates = deriveActionStates(sample, map);
+        const snap = snapshotFromSample(sample, actionStates);
+        const s: number = snap.action('jump').strength;
+        expect(s).toBe(1.0);
+      });
+    });
+  });
+}
+
+// ─── M2: getAxis / getVector math tests (m2t1) ───
+
+{
+  /**
+   * Helper: build an InputBackendSample for getAxis/getVector testing.
+   */
+  function sampleForVector(overrides?: {
+    downKeys?: string[];
+    gamepads?: readonly GamepadSlotSample[];
+  }): import('../src/input-snapshot').InputBackendSample {
+    return {
+      downKeys: new Set(overrides?.downKeys ?? []),
+      upKeys: new Set(),
+      buttons: [false, false, false],
+      movementX: 0,
+      movementY: 0,
+      wheelDelta: 0,
+      focused: true,
+      gamepads: overrides?.gamepads ?? [],
+    };
+  }
+
+  /**
+   * Build a named ActionConfig[] and derive ActionState[] from a sample.
+   * Convenience: `actions` is an array of [actionName, ...bindings] for quick test fixture building.
+   */
+  function deriveForVector(
+    map: ActionConfig[],
+    sample?: import('../src/input-snapshot').InputBackendSample,
+  ): { map: ActionConfig[]; states: ActionState[] } {
+    const s = sample ?? sampleForVector();
+    return { map, states: deriveActionStates(s, map) };
+  }
+
+  /**
+   * Build WASD action map: 4 directional actions bound to 'a'/'d'/'w'/'s'.
+   */
+  function wasdMap(): ActionConfig[] {
+    return [
+      { action: 'moveLeft', bindings: [{ type: 'key' as const, key: 'a' }] },
+      { action: 'moveRight', bindings: [{ type: 'key' as const, key: 'd' }] },
+      { action: 'moveUp', bindings: [{ type: 'key' as const, key: 'w' }] },
+      { action: 'moveDown', bindings: [{ type: 'key' as const, key: 's' }] },
+    ];
+  }
+
+  describe('getAxis — AC-05 (m2t1)', () => {
+    const map: ActionConfig[] = [
+      { action: 'moveLeft', bindings: [{ type: 'key', key: 'a' }], deadzone: 0.2 },
+      { action: 'moveRight', bindings: [{ type: 'key', key: 'd' }], deadzone: 0.2 },
+    ];
+
+    it('both registered, pos pressed, neg not → strength(pos) - strength(neg)', () => {
+      const sample = sampleForVector({ downKeys: ['d'] });
+      const states = deriveActionStates(sample, map);
+      const v = getAxis(map, states, 'moveLeft', 'moveRight');
+      // pos (moveRight) strength=1.0, neg (moveLeft) strength=0 → 1.0
+      expect(v).toBeCloseTo(1.0);
+    });
+
+    it('both registered, neg pressed, pos not → strength(pos) - strength(neg)', () => {
+      const sample = sampleForVector({ downKeys: ['a'] });
+      const states = deriveActionStates(sample, map);
+      const v = getAxis(map, states, 'moveLeft', 'moveRight');
+      // pos (moveRight) strength=0, neg (moveLeft) strength=1.0 → -1.0
+      expect(v).toBeCloseTo(-1.0);
+    });
+
+    it('neither pressed → 0', () => {
+      const sample = sampleForVector({ downKeys: [] });
+      const states = deriveActionStates(sample, map);
+      const v = getAxis(map, states, 'moveLeft', 'moveRight');
+      expect(v).toBe(0);
+    });
+
+    it('one unregistered action (E-3) → contributes 0', () => {
+      // 'moveRight' is NOT in the map; only 'moveLeft' is registered.
+      const partialMap: ActionConfig[] = [
+        { action: 'moveLeft', bindings: [{ type: 'key', key: 'a' }] },
+      ];
+      const sample = sampleForVector({ downKeys: ['a'] });
+      const states = deriveActionStates(sample, partialMap);
+      // pos='moveRight' is unregistered → strength=0, neg='moveLeft' strength=1.0 → -1.0
+      const v = getAxis(partialMap, states, 'moveLeft', 'moveRight');
+      expect(v).toBeCloseTo(-1.0);
+    });
+
+    it('neither registered → returns 0', () => {
+      const emptyMap: ActionConfig[] = [];
+      const sample = sampleForVector({ downKeys: ['a', 'd'] });
+      const states = deriveActionStates(sample, emptyMap);
+      const v = getAxis(emptyMap, states, 'moveLeft', 'moveRight');
+      expect(v).toBe(0);
+    });
+
+    it('same action for both ends (E-12) → always 0', () => {
+      const mapSame: ActionConfig[] = [
+        { action: 'move', bindings: [{ type: 'key', key: 'd' }] },
+      ];
+      const sample = sampleForVector({ downKeys: ['d'] });
+      const states = deriveActionStates(sample, mapSame);
+      // Both neg and pos are 'move' — strength('move')=1.0, difference = 0
+      const v = getAxis(mapSame, states, 'move', 'move');
+      expect(v).toBe(0);
+    });
+
+    it('range bound: [-1, 1] even with extreme inputs', () => {
+      const mapExt: ActionConfig[] = [
+        { action: 'pos', bindings: [{ type: 'gamepadAxis', axis: 0, sign: 1 }], deadzone: 0.2 },
+        { action: 'neg', bindings: [{ type: 'gamepadAxis', axis: 0, sign: -1 }], deadzone: 0.2 },
+      ];
+      // axis 0 = 1.0 → pos contributes strength=1.0, neg contributes 0
+      const sample = sampleForVector({
+        gamepads: [buildGamepadSlot(0, { axes: [1, 0, 0, 0] })],
+      });
+      const states = deriveActionStates(sample, mapExt);
+      const v = getAxis(mapExt, states, 'neg', 'pos');
+      expect(v).toBeCloseTo(1.0);
+      // Can never exceed 1.0 since strength is in [0,1]
+      expect(v).toBeLessThanOrEqual(1.0);
+      expect(v).toBeGreaterThanOrEqual(-1.0);
+    });
+  });
+
+  describe('getVector — AC-06 three-branch formula (m2t1)', () => {
+    it('WASD diagonal: all 4 keys pressed → magnitude 1, not sqrt(2) (raw used, radial deadzone)', () => {
+      const map = wasdMap();
+      const sample = sampleForVector({ downKeys: ['w', 'd'] }); // up + right → diagonal
+      const states = deriveActionStates(sample, map);
+      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      // With raw=1.0 for both w and d keys, vector = (1, -1) (Y neg=moveDown at 0, Y pos=moveUp at 1)
+      // Wait: negY='moveDown', posY='moveUp'. With w pressed: posY raw=1.0.
+      // negX='moveLeft', posX='moveRight'. With d pressed: posX raw=1.0.
+      // raw vector = (1.0 - 0, 1.0 - 0) = (1, 1). Length = sqrt(2) ≈ 1.414.
+      // Branch: length > 1 → v/len = (1/1.414, 1/1.414) ≈ (0.707, 0.707). Magnitude = 1.
+      expect(v.x).toBeCloseTo(Math.SQRT1_2, 3); // ~0.707
+      expect(v.y).toBeCloseTo(Math.SQRT1_2, 3); // ~0.707
+      const mag = Math.sqrt(v.x * v.x + v.y * v.y);
+      expect(mag).toBeCloseTo(1.0, 3);
+    });
+
+    it('WASD right only → (1, 0)', () => {
+      const map = wasdMap();
+      const sample = sampleForVector({ downKeys: ['d'] });
+      const states = deriveActionStates(sample, map);
+      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(v.x).toBeCloseTo(1.0);
+      expect(v.y).toBeCloseTo(0);
+    });
+
+    it('WASD up only → (0, 1)', () => {
+      const map = wasdMap();
+      const sample = sampleForVector({ downKeys: ['w'] });
+      const states = deriveActionStates(sample, map);
+      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(v.x).toBeCloseTo(0);
+      expect(v.y).toBeCloseTo(1.0);
+    });
+
+    it('WASD left only → (-1, 0)', () => {
+      const map = wasdMap();
+      const sample = sampleForVector({ downKeys: ['a'] });
+      const states = deriveActionStates(sample, map);
+      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(v.x).toBeCloseTo(-1.0);
+      expect(v.y).toBeCloseTo(0);
+    });
+
+    it('length <= deadzone → (0, 0)', () => {
+      // Use gamepadAxis with tiny values below deadzone
+      const map: ActionConfig[] = [
+        { action: 'moveLeft', bindings: [{ type: 'gamepadAxis', axis: 0, sign: -1 }], deadzone: 0.2 },
+        { action: 'moveRight', bindings: [{ type: 'gamepadAxis', axis: 0, sign: 1 }], deadzone: 0.2 },
+        { action: 'moveDown', bindings: [{ type: 'gamepadAxis', axis: 1, sign: -1 }], deadzone: 0.2 },
+        { action: 'moveUp', bindings: [{ type: 'gamepadAxis', axis: 1, sign: 1 }], deadzone: 0.2 },
+      ];
+      // axis 0 = 0.1, axis 1 = 0.1 → raw vector = (0.1, 0.1), length ≈ 0.141
+      // Default deadzone = (0.2+0.2+0.2+0.2)/4 = 0.2. length=0.141 <= 0.2 → (0,0)
+      const sample = sampleForVector({
+        gamepads: [buildGamepadSlot(0, { axes: [0.1, 0.1, 0, 0] })],
+      });
+      const states = deriveActionStates(sample, map);
+      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(v.x).toBe(0);
+      expect(v.y).toBe(0);
+    });
+
+    it('length > 1 → clamped to unit circle', () => {
+      const map = wasdMap();
+      // Both 'd' and 'w' pressed → raw (1,1), length=√2>1 → (0.707, 0.707)
+      const sample = sampleForVector({ downKeys: ['d', 'w'] });
+      const states = deriveActionStates(sample, map);
+      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const mag = Math.sqrt(v.x * v.x + v.y * v.y);
+      expect(mag).toBeCloseTo(1.0, 3);
+    });
+
+    it('mid-range: inverse_lerp smooth transition', () => {
+      // Use gamepadAxis to get raw values between deadzone and 1
+      const map: ActionConfig[] = [
+        { action: 'moveLeft', bindings: [{ type: 'gamepadAxis', axis: 0, sign: -1 }], deadzone: 0.2 },
+        { action: 'moveRight', bindings: [{ type: 'gamepadAxis', axis: 0, sign: 1 }], deadzone: 0.2 },
+        { action: 'moveDown', bindings: [{ type: 'gamepadAxis', axis: 1, sign: -1 }], deadzone: 0.2 },
+        { action: 'moveUp', bindings: [{ type: 'gamepadAxis', axis: 1, sign: 1 }], deadzone: 0.2 },
+      ];
+      // axis 0 = 0.6, axis 1 = 0 → raw = (0.6, 0), len = 0.6
+      // Default deadzone = 0.2. Branch: 0.2 < 0.6 <= 1 → vec * inverse_lerp(0.2, 1, 0.6) / 0.6
+      // inverse_lerp(0.2, 1, 0.6) = (0.6-0.2)/(1-0.2) = 0.4/0.8 = 0.5
+      // output = (0.6, 0) * 0.5 / 0.6 = (0.5, 0)
+      const sample = sampleForVector({
+        gamepads: [buildGamepadSlot(0, { axes: [0.6, 0, 0, 0] })],
+      });
+      const states = deriveActionStates(sample, map);
+      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(v.x).toBeCloseTo(0.5, 3);
+      expect(v.y).toBeCloseTo(0);
+    });
+
+    it('opts.deadzone override bypasses default-avg', () => {
+      const map = wasdMap(); // DEFAULT_DEADZONE = 0.2 per action
+      // With default deadzone 0.2 and digital keys (raw=1.0): length=1 > deadzone, passes
+      // With override deadzone=2.0: length=1 <= 2.0 → (0,0)
+      const sample = sampleForVector({ downKeys: ['d'] });
+      const states = deriveActionStates(sample, map);
+      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp', { deadzone: 2.0 });
+      expect(v.x).toBe(0);
+      expect(v.y).toBe(0);
+    });
+
+    it('default deadzone = average of 4 action deadzones', () => {
+      const mapCustom: ActionConfig[] = [
+        { action: 'moveLeft', bindings: [{ type: 'gamepadAxis', axis: 0, sign: -1 }], deadzone: 0.1 },
+        { action: 'moveRight', bindings: [{ type: 'gamepadAxis', axis: 0, sign: 1 }], deadzone: 0.3 },
+        { action: 'moveDown', bindings: [{ type: 'gamepadAxis', axis: 1, sign: -1 }], deadzone: 0.2 },
+        { action: 'moveUp', bindings: [{ type: 'gamepadAxis', axis: 1, sign: 1 }], deadzone: 0.4 },
+      ];
+      // Default deadzone = (0.1+0.3+0.2+0.4)/4 = 0.25
+      // axis 0 = 0.24, axis 1 = 0 → raw = (0.24, 0), len = 0.24 <= 0.25 → (0,0)
+      const sample = sampleForVector({
+        gamepads: [buildGamepadSlot(0, { axes: [0.24, 0, 0, 0] })],
+      });
+      const states = deriveActionStates(sample, mapCustom);
+      const v = getVector(mapCustom, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(v.x).toBe(0);
+      expect(v.y).toBe(0);
+    });
+  });
+
+  describe('getVector — AC-06 falsification: per-axis deadzone must FAIL', () => {
+    /**
+     * This test verifies falsification sensitivity (§5.4).
+     *
+     * If getVector were to use `strength` (which has per-action deadzone applied)
+     * instead of `raw`, a WASD diagonal with keys w+d would produce:
+     *   strength('moveRight') = 1.0  (digital, always 1 after deadzone remap)
+     *   strength('moveUp') = 1.0
+     *   → vector = (1, 1), magnitude = √2 ≈ 1.414
+     *
+     * The correct implementation uses `raw` + radial deadzone:
+     *   raw('moveRight') = 1.0, raw('moveUp') = 1.0
+     *   → vector = (1, 1), length > 1 → clamp to unit circle → (0.707, 0.707)
+     *
+     * This test asserts magnitude ≈ 1.0. A per-axis deadzone implementation
+     * would produce magnitude ≈ 1.414 and FAIL this assertion.
+     */
+    it('WASD diagonal: magnitude must be 1 (not sqrt(2)) — falsifies per-axis deadzone', () => {
+      const map = wasdMap();
+      const sample = sampleForVector({ downKeys: ['w', 'd'] });
+      const states = deriveActionStates(sample, map);
+      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const mag = Math.sqrt(v.x * v.x + v.y * v.y);
+      // With per-axis deadzone, magnitude would be ~1.414 (sqrt(2)).
+      // The correct radial deadzone clamps to the unit circle.
+      expect(mag).toBeCloseTo(1.0, 3);
+      // also verify x and y are equal (unit circle diagonal)
+      expect(Math.abs(v.x - v.y)).toBeLessThan(0.001);
+    });
+
+    /**
+     * Additional falsification: check that getVector uses raw, not strength.
+     *
+     * With gamepadAxis raw=0.15 (below deadzone 0.2):
+     * - strength would be 0 (deadzone remapped to 0).
+     * - raw stays at 0.15.
+     * - getVector with raw + 4-action avg deadzone 0.2: length=0.15 <= 0.2 → (0,0).
+     *
+     * With a single gamepadAxis at 0.15 on X and 0 on Y:
+     * raw vector = (0.15, 0), length=0.15, deadzone=0.2 → (0,0).
+     * This test doesn't distinguish raw vs strength here because both give (0,0).
+     * Instead, we test at raw=0.5: strength would apply per-axis deadzone (0.2)
+     * giving strength=inverse_lerp(0.2,1,0.5)=0.375. getVector with raw=0.5
+     * and radial deadzone gives inverse_lerp(0.2,1,0.5)=0.375. Same result
+     * for a pure single-axis case.
+     *
+     * The key falsification is the diagonal case above (magnitude must be 1,
+     * not sqrt(2)). That's the definitive test.
+     */
+    it('WASD single axis + inactive opposite: no per-axis deadzone leakage', () => {
+      const map = wasdMap();
+      // Only 'd' pressed → right only
+      const sample = sampleForVector({ downKeys: ['d'] });
+      const states = deriveActionStates(sample, map);
+      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      // Both raw and strength give 1.0 for digital keys, so result is the same (1, 0)
+      // But verify the magnitude is exactly 1, not softened by some phantom deadzone
+      const mag = Math.sqrt(v.x * v.x + v.y * v.y);
+      expect(mag).toBeCloseTo(1.0);
+      expect(v.x).toBeCloseTo(1.0);
+      expect(v.y).toBeCloseTo(0);
+    });
+  });
+
+  describe('getVector — E-3 partial unregistered actions', () => {
+    it('one of the 4 action names unregistered → contributes raw=0', () => {
+      const map: ActionConfig[] = [
+        { action: 'moveRight', bindings: [{ type: 'key', key: 'd' }] },
+        // moveLeft, moveUp, moveDown not registered → each raw=0
+      ];
+      const sample = sampleForVector({ downKeys: ['d'] });
+      const states = deriveActionStates(sample, map);
+      // posX='moveRight' raw=1.0, negX='moveLeft' raw=0, posY='moveUp' raw=0, negY='moveDown' raw=0
+      // raw vector = (1, 0), length=1 > all-zero deadzone avg.
+      // getAxis for unregistered = strength(registered) - 0 if unregistered pos = 0
+      // Actually getAxis(pos) for 'moveUp' with unregistered → strength=0.
+      // So y = 0-0 = 0, x = 1-0 = 1. Length=1, no clamp → (1,0)
+      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(v.x).toBeCloseTo(1.0);
+      expect(v.y).toBeCloseTo(0);
+    });
+
+    it('all 4 unregistered → (0, 0)', () => {
+      const map: ActionConfig[] = [];
+      const sample = sampleForVector({ downKeys: ['w', 'd'] });
+      const states = deriveActionStates(sample, map);
+      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(v.x).toBe(0);
+      expect(v.y).toBe(0);
+    });
+  });
+}
+
+// ─── M2: getAxis/getVector end-to-end + AC-07 tests (m2t3) ───
+
+{
+  /**
+   * Build a snapshot with action states and input map wired through.
+   */
+  function makeVectorSnap(
+    map: ActionConfig[],
+    overrides?: {
+      downKeys?: string[];
+      gamepads?: readonly GamepadSlotSample[];
+    },
+  ): InputSnapshot {
+    const sample: import('../src/input-snapshot').InputBackendSample = {
+      downKeys: new Set(overrides?.downKeys ?? []),
+      upKeys: new Set(),
+      buttons: [false, false, false],
+      movementX: 0,
+      movementY: 0,
+      wheelDelta: 0,
+      focused: true,
+      gamepads: overrides?.gamepads ?? [],
+    };
+    const actionStates = deriveActionStates(sample, map);
+    return snapshotFromSample(sample, actionStates, map);
+  }
+
+  describe('snap.getVector() end-to-end (m2t3)', () => {
+    it('WASD keyboard → getVector via snapshot returns correct directional output', () => {
+      const map: ActionConfig[] = [
+        { action: 'moveLeft', bindings: [{ type: 'key', key: 'a' }] },
+        { action: 'moveRight', bindings: [{ type: 'key', key: 'd' }] },
+        { action: 'moveDown', bindings: [{ type: 'key', key: 's' }] },
+        { action: 'moveUp', bindings: [{ type: 'key', key: 'w' }] },
+      ];
+      // w+d pressed → diagonal up-right
+      const snap = makeVectorSnap(map, { downKeys: ['w', 'd'] });
+      const v = snap.getVector('moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(v.x).toBeCloseTo(Math.SQRT1_2, 3);
+      expect(v.y).toBeCloseTo(Math.SQRT1_2, 3);
+    });
+
+    it('getVector with gamepadAxis keys → snapshot readpoint works', () => {
+      const map: ActionConfig[] = [
+        { action: 'moveLeft', bindings: [{ type: 'gamepadAxis', axis: 0, sign: -1 }], deadzone: 0.2 },
+        { action: 'moveRight', bindings: [{ type: 'gamepadAxis', axis: 0, sign: 1 }], deadzone: 0.2 },
+        { action: 'moveDown', bindings: [{ type: 'gamepadAxis', axis: 1, sign: -1 }], deadzone: 0.2 },
+        { action: 'moveUp', bindings: [{ type: 'gamepadAxis', axis: 1, sign: 1 }], deadzone: 0.2 },
+      ];
+      // Stick fully right → axis 0 = 1.0
+      const snap = makeVectorSnap(map, {
+        gamepads: [buildGamepadSlot(0, { axes: [1, 0, 0, 0] })],
+      });
+      const v = snap.getVector('moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(v.x).toBeCloseTo(1.0);
+      expect(v.y).toBeCloseTo(0);
+    });
+
+    it('getVector with deadzone override opts via snapshot', () => {
+      const map: ActionConfig[] = [
+        { action: 'moveLeft', bindings: [{ type: 'key', key: 'a' }] },
+        { action: 'moveRight', bindings: [{ type: 'key', key: 'd' }] },
+        { action: 'moveDown', bindings: [{ type: 'key', key: 's' }] },
+        { action: 'moveUp', bindings: [{ type: 'key', key: 'w' }] },
+      ];
+      // With deadzone override 2.0 and digital keys raw=1.0: length=1 <= 2.0 → (0,0)
+      const snap = makeVectorSnap(map, { downKeys: ['d'] });
+      const v = snap.getVector('moveLeft', 'moveRight', 'moveDown', 'moveUp', { deadzone: 2.0 });
+      expect(v.x).toBe(0);
+      expect(v.y).toBe(0);
+    });
+
+    it('getVector with unregistered actions → (0, 0)', () => {
+      const map: ActionConfig[] = [];
+      const snap = makeVectorSnap(map, { downKeys: ['w', 'd'] });
+      const v = snap.getVector('moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(v.x).toBe(0);
+      expect(v.y).toBe(0);
+    });
+
+    it('getVector without inputMap → returns (0, 0) (empty signal)', () => {
+      const snap = createInputSnapshot();
+      const v = snap.getVector('moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(v.x).toBe(0);
+      expect(v.y).toBe(0);
+    });
+  });
+
+  describe('snap.getAxis() end-to-end (m2t3)', () => {
+    it('getAxis via snapshot: keyboard press → correct axis value', () => {
+      const map: ActionConfig[] = [
+        { action: 'moveLeft', bindings: [{ type: 'key', key: 'a' }] },
+        { action: 'moveRight', bindings: [{ type: 'key', key: 'd' }] },
+      ];
+      const snap = makeVectorSnap(map, { downKeys: ['d'] });
+      expect(snap.getAxis('moveLeft', 'moveRight')).toBeCloseTo(1.0);
+    });
+
+    it('getAxis via snapshot: unregistered → returns 0', () => {
+      const map: ActionConfig[] = [];
+      const snap = makeVectorSnap(map, { downKeys: ['a'] });
+      expect(snap.getAxis('moveLeft', 'moveRight')).toBe(0);
+    });
+
+    it('getAxis via snapshot: E-12 same action for both ends → 0', () => {
+      const map: ActionConfig[] = [
+        { action: 'move', bindings: [{ type: 'key', key: 'd' }] },
+      ];
+      const snap = makeVectorSnap(map, { downKeys: ['d'] });
+      expect(snap.getAxis('move', 'move')).toBe(0);
+    });
+  });
+
+  describe('AC-07 cross-device uniform lever (m2t3)', () => {
+    /**
+     * AC-07: Same action name bound to 'key' AND 'gamepadButton' →
+     * getVector produces identical results for keyboard vs gamepad input.
+     * The consumer code has zero knowledge of which device produced the input.
+     */
+    const crossDeviceWASD: ActionConfig[] = [
+      {
+        action: 'moveLeft',
+        bindings: [
+          { type: 'key', key: 'a' },
+          { type: 'gamepadButton', button: 14 }, // d-pad left
+        ],
+      },
+      {
+        action: 'moveRight',
+        bindings: [
+          { type: 'key', key: 'd' },
+          { type: 'gamepadButton', button: 15 }, // d-pad right
+        ],
+      },
+      {
+        action: 'moveDown',
+        bindings: [
+          { type: 'key', key: 's' },
+          { type: 'gamepadButton', button: 13 }, // d-pad down
+        ],
+      },
+      {
+        action: 'moveUp',
+        bindings: [
+          { type: 'key', key: 'w' },
+          { type: 'gamepadButton', button: 12 }, // d-pad up
+        ],
+      },
+    ];
+
+    it('keyboard w+d → same getVector output as gamepad dpad-up+dpad-right', () => {
+      // Keyboard: w + d pressed
+      const keySnap = makeVectorSnap(crossDeviceWASD, { downKeys: ['w', 'd'] });
+      const keyVec = keySnap.getVector('moveLeft', 'moveRight', 'moveDown', 'moveUp');
+
+      // Gamepad: d-pad up (button 12) + d-pad right (button 15) pressed
+      const gamepadSnap = makeVectorSnap(crossDeviceWASD, {
+        gamepads: [buildGamepadSlot(0, { pressed: [12, 15], buttonValues: [[12, 1.0], [15, 1.0]] })],
+      });
+      const gamepadVec = gamepadSnap.getVector('moveLeft', 'moveRight', 'moveDown', 'moveUp');
+
+      // AC-07: identical action semantic → zero consumer-code delta.
+      expect(keyVec.x).toBeCloseTo(gamepadVec.x, 3);
+      expect(keyVec.y).toBeCloseTo(gamepadVec.y, 3);
+      const keyMag = Math.sqrt(keyVec.x * keyVec.x + keyVec.y * keyVec.y);
+      const gpadMag = Math.sqrt(gamepadVec.x * gamepadVec.x + gamepadVec.y * gamepadVec.y);
+      expect(keyMag).toBeCloseTo(gpadMag, 3);
+    });
+
+    it('keyboard right only → same as gamepad right only', () => {
+      const keySnap = makeVectorSnap(crossDeviceWASD, { downKeys: ['d'] });
+      const keyVec = keySnap.getVector('moveLeft', 'moveRight', 'moveDown', 'moveUp');
+
+      const gamepadSnap = makeVectorSnap(crossDeviceWASD, {
+        gamepads: [buildGamepadSlot(0, { pressed: [15], buttonValues: [[15, 1.0]] })],
+      });
+      const gamepadVec = gamepadSnap.getVector('moveLeft', 'moveRight', 'moveDown', 'moveUp');
+
+      expect(keyVec.x).toBeCloseTo(gamepadVec.x, 3);
+      expect(keyVec.y).toBeCloseTo(gamepadVec.y, 3);
+      expect(keyVec.x).toBeCloseTo(1.0);
+    });
+
+    it('no input → keyboard and gamepad both return (0, 0)', () => {
+      const emptyKeySnap = makeVectorSnap(crossDeviceWASD, { downKeys: [] });
+      const keyVec = emptyKeySnap.getVector('moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(keyVec.x).toBe(0);
+      expect(keyVec.y).toBe(0);
+
+      const emptyGpadSnap = makeVectorSnap(crossDeviceWASD, {
+        gamepads: [buildGamepadSlot(0, { pressed: [] })],
+      });
+      const gpadVec = emptyGpadSnap.getVector('moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      expect(gpadVec.x).toBe(0);
+      expect(gpadVec.y).toBe(0);
+    });
+  });
+}
+// ─── M3 (m3t1): controller-db parser pure-function tests (SDL DB) ───
+
+{
+  const VENDOR_DB_PATH = fileURLToPath(
+    new URL('../vendor/gamecontrollerdb.txt', import.meta.url),
+  );
+
+  // A synthetic multi-entry snippet exercising: comments, blank lines, the
+  // platform suffix, analog + button + hat + half-axis tokens.
+  const SYNTHETIC_DB = [
+    '# Game Controller DB (synthetic test fixture)',
+    '',
+    '# Windows',
+    '030000005e0400008e02000000000000,Xbox 360 Controller,a:b0,b:b1,x:b2,y:b3,leftx:a0,lefty:a1,dpup:h0.1,platform:Windows,',
+    '# Mac OS X',
+    '030000005e0400008e02000000000000,Xbox 360 Controller,a:b0,b:b1,leftx:a0,platform:Mac OS X,',
+    '030000004c050000c405000000000000,PS4 Controller,a:b1,b:b2,lefttrigger:a3,dpleft:+a4,platform:Windows,',
+  ].join('\n');
+
+  describe('parseControllerDb (m3t1)', () => {
+    it('parses GUID keys with mapping token objects (button / axis / hat)', () => {
+      const db = parseControllerDb(SYNTHETIC_DB);
+      const guid = '030000005e0400008e02000000000000';
+      const entries = db[guid];
+      expect(entries).toBeDefined();
+      // Two platform variants for the Xbox 360 GUID.
+      expect(entries).toHaveLength(2);
+      const win = entries?.find((e) => e.platform === 'Windows');
+      expect(win).toBeDefined();
+      expect(win?.tokens.a).toEqual({ kind: 'button', index: 0 });
+      expect(win?.tokens.b).toEqual({ kind: 'button', index: 1 });
+      expect(win?.tokens.leftx).toEqual({ kind: 'axis', index: 0 });
+      expect(win?.tokens.lefty).toEqual({ kind: 'axis', index: 1 });
+      expect(win?.tokens.dpup).toEqual({ kind: 'hat', index: 0, mask: 1 });
+    });
+
+    it('parses half-axis tokens (+aN / -aN) with sign', () => {
+      const db = parseControllerDb(SYNTHETIC_DB);
+      const ps4 = db['030000004c050000c405000000000000']?.[0];
+      expect(ps4?.tokens.dpleft).toEqual({ kind: 'axis', index: 4, half: '+' });
+      expect(ps4?.tokens.lefttrigger).toEqual({ kind: 'axis', index: 3 });
+    });
+
+    it('skips comment (#) and blank lines', () => {
+      const db = parseControllerDb('# comment\n\n   \n');
+      expect(Object.keys(db)).toHaveLength(0);
+    });
+
+    it('parses the real vendored gamecontrollerdb.txt with >= 2000 GUID entries', () => {
+      const txt = readFileSync(VENDOR_DB_PATH, 'utf8');
+      const db = parseControllerDb(txt);
+      expect(Object.keys(db).length).toBeGreaterThanOrEqual(2000);
+      // Spot-check a well-known entry (Xbox 360, VID 045e PID 028e).
+      const xbox = db['030000005e0400008e02000000000000'];
+      expect(xbox).toBeDefined();
+      expect(xbox?.[0]?.tokens.a).toEqual({ kind: 'button', index: 0 });
+    });
+  });
+
+  describe('buildGuidFromVidPid (m3t1, D-13 strategy 2)', () => {
+    it('builds a 32-char SDL GUID with bus=03, CRC=0, version=0, driver=0', () => {
+      // VID=0x045e PID=0x028e (Xbox 360) -> matches the real DB GUID.
+      const guid = buildGuidFromVidPid(0x045e, 0x028e);
+      expect(guid).toBe('030000005e0400008e02000000000000');
+      expect(guid).toHaveLength(32);
+    });
+
+    it('builds Xbox One S BT GUID (VID=0x045e PID=0x02ea)', () => {
+      const guid = buildGuidFromVidPid(0x045e, 0x02ea);
+      expect(guid).toBe('030000005e040000ea02000000000000');
+    });
+
+    it('encodes VID/PID little-endian within their 16-bit fields', () => {
+      // PS4 DualShock 4: VID=0x054c PID=0x05c4.
+      expect(buildGuidFromVidPid(0x054c, 0x05c4)).toBe('030000004c050000c405000000000000');
+    });
+  });
+
+  describe('extractGuidFromGamepadId (m3t1, cross-browser F3)', () => {
+    it('Chrome format: "... (STANDARD GAMEPAD Vendor: 054c Product: 09cc)"', () => {
+      const id = 'Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 09cc)';
+      expect(extractGuidFromGamepadId(id)).toBe('030000004c050000cc09000000000000');
+    });
+
+    it('Firefox format: "046d-c216-Logitech Dual Action"', () => {
+      expect(extractGuidFromGamepadId('046d-c216-Logitech Dual Action')).toBe(
+        buildGuidFromVidPid(0x046d, 0xc216),
+      );
+    });
+
+    it('Firefox format tolerates a dropped leading zero on the VID (46d-c216-...)', () => {
+      expect(extractGuidFromGamepadId('46d-c216-Logicool Dual Action')).toBe(
+        buildGuidFromVidPid(0x046d, 0xc216),
+      );
+    });
+
+    it('Safari / name-only string returns undefined (VID/PID unextractable)', () => {
+      expect(extractGuidFromGamepadId('Wireless Controller')).toBeUndefined();
+    });
+
+    it('XInput string (Chrome) returns undefined (no VID/PID present)', () => {
+      expect(
+        extractGuidFromGamepadId('Xbox 360 Controller (XInput STANDARD GAMEPAD)'),
+      ).toBeUndefined();
+    });
+
+    it('XInput string (Firefox literal "xinput") returns undefined', () => {
+      expect(extractGuidFromGamepadId('xinput')).toBeUndefined();
+    });
+  });
+
+  describe('platformFromUserAgent (m3t1, D-13)', () => {
+    it('detects Windows / Mac OS X / Linux / Android / iOS', () => {
+      expect(platformFromUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')).toBe('Windows');
+      expect(platformFromUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')).toBe(
+        'Mac OS X',
+      );
+      expect(platformFromUserAgent('Mozilla/5.0 (X11; Linux x86_64)')).toBe('Linux');
+      expect(platformFromUserAgent('Mozilla/5.0 (Linux; Android 13; Pixel 7)')).toBe('Android');
+      expect(platformFromUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)')).toBe(
+        'iOS',
+      );
+    });
+
+    it('returns undefined for an unrecognised user agent', () => {
+      expect(platformFromUserAgent('SomeRandomBot/1.0')).toBeUndefined();
+    });
+  });
+
+  describe('selectBestMappingEntry (m3t1, platform section preference)', () => {
+    it('prefers the platform-matching entry when present', () => {
+      const db = parseControllerDb(SYNTHETIC_DB);
+      const guid = '030000005e0400008e02000000000000';
+      const mac = selectBestMappingEntry(db, guid, 'Mac OS X');
+      expect(mac?.platform).toBe('Mac OS X');
+    });
+
+    it('falls back to any entry when the platform does not match', () => {
+      const db = parseControllerDb(SYNTHETIC_DB);
+      const guid = '030000005e0400008e02000000000000';
+      const linux = selectBestMappingEntry(db, guid, 'Linux');
+      expect(linux).toBeDefined();
+      // Falls back to the first available (Windows or Mac OS X entry).
+      expect(['Windows', 'Mac OS X']).toContain(linux?.platform);
+    });
+
+    it('returns undefined when the GUID is not in the DB', () => {
+      const db = parseControllerDb(SYNTHETIC_DB);
+      expect(selectBestMappingEntry(db, 'ffffffffffffffffffffffffffffffff', 'Windows')).toBeUndefined();
+    });
+  });
+}
+
+// ─── M3 (m3t2): diffGamepadFrame acquisition-layer remap tests ───
+
+{
+  /**
+   * Build a non-standard RawGamepadStub whose raw HID layout is arbitrary.
+   * `raw` maps a physical button index -> value (pressed = value > 0).
+   * `rawAxes` is the raw physical axes array.
+   */
+  function nonStandardStub(overrides: {
+    index?: number;
+    id?: string;
+    raw?: [number, number][];
+    rawAxes?: number[];
+    buttonCount?: number;
+  }): RawGamepadStub {
+    const values = new Map<number, number>(overrides.raw ?? []);
+    const count = overrides.buttonCount ?? 20;
+    const buttons: { value: number; pressed: boolean }[] = [];
+    for (let b = 0; b < count; b++) {
+      const v = values.get(b) ?? 0;
+      buttons.push({ value: v, pressed: v > 0 });
+    }
+    return {
+      index: overrides.index ?? 0,
+      id: overrides.id ?? 'usb gamepad (Vendor: 0810 Product: e501)',
+      connected: true,
+      mapping: 'no-standard-here',
+      buttons,
+      axes: overrides.rawAxes ?? [0, 0, 0, 0, 0, 0],
+    };
+  }
+
+  // A remap table where the SDL logical 'a' maps to raw physical button 3
+  // (NOT identity), 'b' to raw button 5, and 'leftx' to raw axis 4. This
+  // deliberately-permuted table proves the remap consults the DB rather
+  // than passing raw indices through unchanged.
+  const permutedTokens: MappingTokens = {
+    a: { kind: 'button', index: 3 },
+    b: { kind: 'button', index: 5 },
+    leftx: { kind: 'axis', index: 4 },
+    lefttrigger: { kind: 'axis', index: 5 },
+  };
+
+  describe('diffGamepadFrame remap (m3t2, D-1 option A)', () => {
+    it('non-standard + remapLookup hit: standardMapping=true, raw HID remapped to standard layout', () => {
+      const prev = new Map<number, GamepadSlotSample>();
+      // raw button 3 pressed -> standard 'a' (index 0); raw axis 4 = 0.7 -> standard leftx (axis 0).
+      const cur = [nonStandardStub({ raw: [[3, 1]], rawAxes: [0, 0, 0, 0, 0.7, 0.4] })];
+      const result = diffGamepadFrame(prev, cur, () => permutedTokens);
+      expect(result).toHaveLength(1);
+      const slot = result[0];
+      expect(slot.standardMapping).toBe(true);
+      // standard button 0 ('a') reflects raw button 3 -- proves table consulted.
+      expect(slot.pressed.has(0)).toBe(true);
+      // raw button 0 (unmapped) must NOT leak into standard index 0 identity.
+      expect(slot.pressed.has(3)).toBe(false);
+      // standard axis 0 (leftx) reflects raw axis 4.
+      expect(slot.axes[0]).toBeCloseTo(0.7, 5);
+      // trigger mapped to an axis -> standard buttonValue at index 6 (lefttrigger).
+      expect(slot.buttonValues.get(6)).toBeCloseTo(0.4, 5);
+    });
+
+    it('AC-10 falsification: a wrong remap table does NOT surface the pressed button at standard 0', () => {
+      const prev = new Map<number, GamepadSlotSample>();
+      const cur = [nonStandardStub({ raw: [[3, 1]] })];
+      // Wrong table: 'a' maps to raw button 9 (which is NOT pressed).
+      const wrongTokens: MappingTokens = { a: { kind: 'button', index: 9 } };
+      const result = diffGamepadFrame(prev, cur, () => wrongTokens);
+      // Sensitivity: standard button 0 must be false because raw 9 is unpressed.
+      expect(result[0].pressed.has(0)).toBe(false);
+    });
+
+    it('edge transition: frame N (no lookup) empty -> frame N+1 (DB loaded) justPressed fires', () => {
+      // Frame N: remapLookup returns null (DB not yet loaded).
+      const prev1 = new Map<number, GamepadSlotSample>();
+      const cur1 = [nonStandardStub({ raw: [[3, 1]] })];
+      const r1 = diffGamepadFrame(prev1, cur1, () => null);
+      expect(r1[0].standardMapping).toBe(false);
+      expect(r1[0].pressed.size).toBe(0);
+
+      // Frame N+1: DB loaded, remap active, button 3 still held raw.
+      const prev2 = new Map<number, GamepadSlotSample>();
+      prev2.set(0, r1[0]);
+      const cur2 = [nonStandardStub({ raw: [[3, 1]] })];
+      const r2 = diffGamepadFrame(prev2, cur2, () => permutedTokens);
+      expect(r2[0].standardMapping).toBe(true);
+      // First frame the remap becomes active -> justPressed edge fires at standard 0.
+      expect(r2[0].pressed.has(0)).toBe(true);
+      expect(r2[0].justPressed.has(0)).toBe(true);
+    });
+
+    it('non-standard + remapLookup miss (returns null): Feat1 empty signal, connected=true', () => {
+      const prev = new Map<number, GamepadSlotSample>();
+      const cur = [nonStandardStub({ raw: [[3, 1]], rawAxes: [0.5, 0, 0, 0] })];
+      const result = diffGamepadFrame(prev, cur, () => null);
+      expect(result[0].standardMapping).toBe(false);
+      expect(result[0].pressed.size).toBe(0);
+      expect(result[0].buttonValues.size).toBe(0);
+      expect(result[0].axes).toEqual([0, 0, 0, 0]);
+    });
+
+    it('no remapLookup arg at all: non-standard stays empty (backward compat with Feat1)', () => {
+      const prev = new Map<number, GamepadSlotSample>();
+      const cur = [nonStandardStub({ raw: [[3, 1]] })];
+      const result = diffGamepadFrame(prev, cur);
+      expect(result[0].standardMapping).toBe(false);
+      expect(result[0].pressed.size).toBe(0);
+    });
+
+    it('standard-mapping gamepad is unaffected by remapLookup (never consulted)', () => {
+      const prev = new Map<number, GamepadSlotSample>();
+      let consulted = false;
+      const std: RawGamepadStub = {
+        index: 0,
+        id: 'standard pad',
+        connected: true,
+        mapping: 'standard',
+        buttons: Array.from({ length: 17 }, (_, b) => ({ value: b === 0 ? 1 : 0, pressed: b === 0 })),
+        axes: [0.1, 0.2, 0.3, 0.4],
+      };
+      const result = diffGamepadFrame(prev, [std], () => {
+        consulted = true;
+        return permutedTokens;
+      });
+      expect(consulted).toBe(false);
+      expect(result[0].standardMapping).toBe(true);
+      expect(result[0].pressed.has(0)).toBe(true);
+      expect(result[0].axes[0]).toBeCloseTo(0.1, 5);
+    });
+  });
+
+  describe('AC-10 snapshot-level: binding-visible remap through snap.gamepad(i)', () => {
+    it('non-standard DB-hit slot reads standard button(0) true via snapshot reader', () => {
+      const prev = new Map<number, GamepadSlotSample>();
+      const cur = [nonStandardStub({ raw: [[3, 1]] })];
+      const slots = diffGamepadFrame(prev, cur, () => permutedTokens);
+      const snap = snapshotFromSample({
+        downKeys: new Set(),
+        upKeys: new Set(),
+        buttons: [false, false, false],
+        movementX: 0,
+        movementY: 0,
+        wheelDelta: 0,
+        focused: true,
+        capabilities: { gamepad: true, pointer: false },
+        gamepads: slots,
+      });
+      const g = snap.gamepad(0);
+      expect(g.connected).toBe(true);
+      expect(g.standardMapping).toBe(true);
+      expect(g.button(0)).toBe(true);
+    });
+
+    it('non-standard DB-miss slot reports standardMapping=false + empty via snapshot reader', () => {
+      const prev = new Map<number, GamepadSlotSample>();
+      const cur = [nonStandardStub({ raw: [[3, 1]] })];
+      const slots = diffGamepadFrame(prev, cur, () => null);
+      const snap = snapshotFromSample({
+        downKeys: new Set(),
+        upKeys: new Set(),
+        buttons: [false, false, false],
+        movementX: 0,
+        movementY: 0,
+        wheelDelta: 0,
+        focused: true,
+        capabilities: { gamepad: true, pointer: false },
+        gamepads: slots,
+      });
+      const g = snap.gamepad(0);
+      expect(g.connected).toBe(true);
+      expect(g.standardMapping).toBe(false);
+      expect(g.button(0)).toBe(false);
+    });
+  });
+}
+
+// ─── M3 (m3t3): backend lazy-load + Safari/XInput fallback tests ───
+
+{
+  /** Fake nav.getGamepads() returning the supplied raw stubs each call. */
+  function fakeNavigator(stubs: readonly RawGamepadStub[]): {
+    getGamepads(): (RawGamepadStub | null)[];
+  } {
+    return { getGamepads: () => [...stubs] };
+  }
+
+  /** Minimal fake canvas/doc/win that ignore all wiring (no listeners needed). */
+  function inertDom(): { canvas: HTMLCanvasElement; doc: Document; win: Window } {
+    const canvas = {} as HTMLCanvasElement;
+    const doc = { hasFocus: () => true } as unknown as Document;
+    const win = {} as Window;
+    return { canvas, doc, win };
+  }
+
+  // Synthetic DB text: the permuted non-standard pad's GUID maps 'a' -> raw
+  // button 3. The pad id embeds Chrome-format VID/PID so the GUID derives.
+  const NONSTD_ID = 'usb gamepad (Vendor: 0810 Product: e501)';
+  const NONSTD_GUID = buildGuidFromVidPid(0x0810, 0xe501);
+  const SYNTH_DB_TEXT = `# Windows\n${NONSTD_GUID},Test Pad,a:b3,b:b5,leftx:a4,platform:Windows,\n`;
+
+  function nsStub(overrides?: { id?: string; raw?: [number, number][] }): RawGamepadStub {
+    const values = new Map<number, number>(overrides?.raw ?? [[3, 1]]);
+    const buttons = Array.from({ length: 20 }, (_, b) => {
+      const v = values.get(b) ?? 0;
+      return { value: v, pressed: v > 0 };
+    });
+    return {
+      index: 0,
+      id: overrides?.id ?? NONSTD_ID,
+      connected: true,
+      mapping: 'no-standard-here',
+      buttons,
+      axes: [0, 0, 0, 0, 0, 0],
+    };
+  }
+
+  // Drain a bounded number of macrotask cycles. Used only by the negative
+  // tests (Safari / XInput / standard) where no remap is ever expected --
+  // draining then re-sampling proves the empty signal is stable.
+  const drain = async () => {
+    for (let i = 0; i < 8; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  };
+
+  // Sample until the slot flips standardMapping=true, or throw after a
+  // bounded number of macrotask cycles. The backend's first non-standard
+  // gamepad triggers a cold dynamic import() of the controller-db module,
+  // whose resolution latency varies under concurrent-worker CPU load; a
+  // fixed tick count is racy. Polling on the deterministic post-condition
+  // removes the flake (each sample() re-checks the loaded-DB state).
+  const sampleUntilStandard = async (
+    backend: InputBackend,
+    maxTicks = 200,
+  ): Promise<import('../src/input-snapshot').InputBackendSample> => {
+    for (let i = 0; i < maxTicks; i++) {
+      const s = backend.sample();
+      if (s.gamepads?.[0]?.standardMapping === true) return s;
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    throw new Error('DB never loaded: slot did not flip standardMapping=true within budget');
+  };
+
+  describe('backend lazy-load remap (m3t3, D-2 / D-13)', () => {
+    it('first non-standard gamepad triggers loadControllerDb; later frames remap via loaded DB', async () => {
+      const { canvas, doc, win } = inertDom();
+      let loadCalls = 0;
+      const handle = attachBrowserInputBackend(canvas, {
+        document: doc,
+        window: win,
+        navigator: fakeNavigator([nsStub()]),
+        loadControllerDb: async () => {
+          loadCalls += 1;
+          return SYNTH_DB_TEXT;
+        },
+      });
+      const backend = handle.backend;
+
+      // Frame 1: DB not yet loaded -> Feat1 empty signal, but load kicked off.
+      const s1 = backend.sample();
+      expect(s1.gamepads?.[0]?.standardMapping).toBe(false);
+      expect(s1.gamepads?.[0]?.pressed.size).toBe(0);
+      expect(loadCalls).toBe(1);
+
+      // Later frame(s): DB loaded -> remap active, standard 'a' (idx 0)
+      // reflects raw button 3.
+      const s2 = await sampleUntilStandard(backend);
+      expect(s2.gamepads?.[0]?.pressed.has(0)).toBe(true);
+      // loadControllerDb is invoked once total (not per frame).
+      expect(loadCalls).toBe(1);
+      handle();
+    });
+
+    it('frames before load completes maintain Feat1 empty signal without crashing', async () => {
+      const { canvas, doc, win } = inertDom();
+      let resolveLoad: (txt: string) => void = () => {};
+      const handle = attachBrowserInputBackend(canvas, {
+        document: doc,
+        window: win,
+        navigator: fakeNavigator([nsStub()]),
+        loadControllerDb: () => new Promise<string>((res) => (resolveLoad = res)),
+      });
+      const backend = handle.backend;
+      // Several frames while the load promise is still pending.
+      for (let i = 0; i < 3; i++) {
+        const s = backend.sample();
+        expect(s.gamepads?.[0]?.standardMapping).toBe(false);
+        expect(s.gamepads?.[0]?.pressed.size).toBe(0);
+      }
+      // Complete the load; a later frame should remap.
+      resolveLoad(SYNTH_DB_TEXT);
+      const sAfter = await sampleUntilStandard(backend);
+      expect(sAfter.gamepads?.[0]?.standardMapping).toBe(true);
+      handle();
+    });
+
+    it('injected loadControllerDb override is used for remap (D-13 test injection)', async () => {
+      const { canvas, doc, win } = inertDom();
+      const handle = attachBrowserInputBackend(canvas, {
+        document: doc,
+        window: win,
+        navigator: fakeNavigator([nsStub({ raw: [[5, 1]] })]),
+        loadControllerDb: async () => SYNTH_DB_TEXT,
+      });
+      const backend = handle.backend;
+      const s2 = await sampleUntilStandard(backend);
+      // raw button 5 -> standard 'b' (index 1).
+      expect(s2.gamepads?.[0]?.pressed.has(1)).toBe(true);
+      handle();
+    });
+
+    it('Safari / name-only gamepad id: GUID unextractable, no DB lookup, stays empty', async () => {
+      const { canvas, doc, win } = inertDom();
+      let loadCalls = 0;
+      const handle = attachBrowserInputBackend(canvas, {
+        document: doc,
+        window: win,
+        navigator: fakeNavigator([nsStub({ id: 'Wireless Controller' })]),
+        loadControllerDb: async () => {
+          loadCalls += 1;
+          return SYNTH_DB_TEXT;
+        },
+      });
+      const backend = handle.backend;
+      backend.sample();
+      await drain();
+      const s2 = backend.sample();
+      expect(s2.gamepads?.[0]?.standardMapping).toBe(false);
+      // A name-only id may still trigger a load attempt, but the GUID never
+      // resolves so remap never surfaces; the key guarantee is empty signal.
+      expect(s2.gamepads?.[0]?.pressed.size).toBe(0);
+      expect(loadCalls).toBeLessThanOrEqual(1);
+      handle();
+    });
+
+    it('XInput gamepad id: GUID unextractable, stays empty (R-3 fallback)', async () => {
+      const { canvas, doc, win } = inertDom();
+      const handle = attachBrowserInputBackend(canvas, {
+        document: doc,
+        window: win,
+        navigator: fakeNavigator([nsStub({ id: 'Xbox 360 Controller (XInput STANDARD GAMEPAD)' })]),
+        loadControllerDb: async () => SYNTH_DB_TEXT,
+      });
+      const backend = handle.backend;
+      backend.sample();
+      await drain();
+      const s2 = backend.sample();
+      expect(s2.gamepads?.[0]?.standardMapping).toBe(false);
+      expect(s2.gamepads?.[0]?.pressed.size).toBe(0);
+      handle();
+    });
+
+    it('standard-mapping gamepad never triggers a DB load (C-5 lazy trigger)', async () => {
+      const { canvas, doc, win } = inertDom();
+      let loadCalls = 0;
+      const stdPad: RawGamepadStub = {
+        index: 0,
+        id: 'standard pad',
+        connected: true,
+        mapping: 'standard',
+        buttons: Array.from({ length: 17 }, (_, b) => ({ value: b === 0 ? 1 : 0, pressed: b === 0 })),
+        axes: [0, 0, 0, 0],
+      };
+      const handle = attachBrowserInputBackend(canvas, {
+        document: doc,
+        window: win,
+        navigator: fakeNavigator([stdPad]),
+        loadControllerDb: async () => {
+          loadCalls += 1;
+          return SYNTH_DB_TEXT;
+        },
+      });
+      const backend = handle.backend;
+      backend.sample();
+      await drain();
+      backend.sample();
+      expect(loadCalls).toBe(0);
+      handle();
+    });
+  });
+}
+
+{
+  // M4 TDD red-phase: pointerType narrowing tests.
+  // plan-strategy D-5: PointerType = 'mouse' | 'pen' | 'touch'
+  // plan-strategy D-5: coercePointerType('pen'→'pen', 'touch'→'touch', ''/garbage→'mouse')
+  // plan-strategy E-10: inactive pointer placeholder = 'mouse', semantics by active field
+  describe('m4t1: PointerType coercion + placeholder (red phase)', () => {
+    /** Minimal fake canvas with listener dispatch for browser-backend tests. */
+    function fakeBB(): {
+      canvas: HTMLCanvasElement;
+      doc: Document;
+      win: Window;
+      fire(target: string, kind: string, ev: Record<string, unknown>): void;
+    } {
+      const listeners = new Map<string, Map<string, Set<EventListener>>>();
+      const makeTarget = (label: string) => ({
+        addEventListener(kind: string, handler: EventListener): void {
+          let perTarget = listeners.get(label);
+          if (!perTarget) { perTarget = new Map(); listeners.set(label, perTarget); }
+          let set = perTarget.get(kind);
+          if (!set) { set = new Set(); perTarget.set(kind, set); }
+          set.add(handler);
+        },
+        removeEventListener(kind: string, handler: EventListener): void {
+          listeners.get(label)?.get(kind)?.delete(handler);
+        },
+      });
+      const canvas = { ...makeTarget('canvas'), width: 800, height: 600, getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }), style: {} as CSSStyleDeclaration } as unknown as HTMLCanvasElement;
+      const doc = { ...makeTarget('document'), hasFocus: () => true } as unknown as Document;
+      const win = makeTarget('window') as unknown as Window;
+      return {
+        canvas, doc, win,
+        fire(target, kind, ev) {
+          for (const h of listeners.get(target)?.get(kind) ?? []) h(ev as Event);
+        },
+      };
+    }
+
+    it('coercePointerType: known values pass through unchanged', () => {
+      expect(coercePointerType('mouse')).toBe('mouse');
+      expect(coercePointerType('pen')).toBe('pen');
+      expect(coercePointerType('touch')).toBe('touch');
+    });
+
+    it('coercePointerType: empty string coerced to mouse (Pointer Events spec fallback)', () => {
+      expect(coercePointerType('')).toBe('mouse');
+    });
+
+    it('coercePointerType: unknown/garbage strings coerced to mouse', () => {
+      expect(coercePointerType('eraser')).toBe('mouse');
+      expect(coercePointerType('stylus')).toBe('mouse');
+      expect(coercePointerType('coarse')).toBe('mouse');
+    });
+
+    it('coercePointerType: return type is PointerType (structural check via tsc)', () => {
+      const a: PointerType = coercePointerType('mouse');
+      const b: PointerType = coercePointerType('pen');
+      const c: PointerType = coercePointerType('touch');
+      const d: PointerType = coercePointerType('');
+      const e: PointerType = coercePointerType('garbage');
+      expect([a, b, c, d, e].every((v) => typeof v === 'string')).toBe(true);
+    });
+
+    it('inactive pointer placeholder: snap.pointer(nonexistentId) returns pointerType mouse + active=false', () => {
+      const snap = createInputSnapshot();
+      const p = snap.pointer(999);
+      expect(p.active).toBe(false);
+      expect(p.pointerType).toBe('mouse');
+      const t: PointerType = p.pointerType;
+      expect(t).toBe('mouse');
+    });
+
+    it('active pointer: real pointer down carries pointerType from backend via coercion', () => {
+      const { canvas, doc, win, fire: f } = fakeBB();
+      const handle = attachBrowserInputBackend(canvas, { document: doc, window: win });
+      const backend = handle.backend;
+
+      f('canvas', 'pointerdown', { button: 0, pointerType: 'pen', pointerId: 3, clientX: 10, clientY: 20 });
+
+      const sample = backend.sample();
+      const pointers = sample.pointers;
+      expect(pointers).toBeDefined();
+      const p = pointers!.find((x: { pointerId: number }) => x.pointerId === 3);
+      expect(p).toBeDefined();
+      expect(p!.pointerType).toBe('pen');
+      expect(p!.active).toBe(true);
+
+      const events = sample.pointerEvents;
+      expect(events).toBeDefined();
+      const ev = events!.find((x: { pointerId: number }) => x.pointerId === 3);
+      expect(ev).toBeDefined();
+      expect(ev!.pointerType).toBe('pen');
+
+      handle();
+    });
+
+    it('PointerType excludes empty string (verified at type level)', () => {
+      const snap = createInputSnapshot();
+      expect(snap.pointer(0).pointerType).not.toBe('');
+      expect(snap.pointer(0).pointerType).toBe('mouse');
+    });
+
+    it('PointerPhaseEvent carries coerced pointerType through phase queue', () => {
+      const { canvas, doc, win, fire: f } = fakeBB();
+      const handle = attachBrowserInputBackend(canvas, { document: doc, window: win });
+      const backend = handle.backend;
+
+      f('canvas', 'pointerdown', { button: 0, pointerType: 'touch', pointerId: 5, clientX: 30, clientY: 40 });
+
+      const sample = backend.sample();
+      const events = sample.pointerEvents;
+      expect(events).toBeDefined();
+      const ev = events!.find((x: { pointerId: number; phase: string }) => x.pointerId === 5 && x.phase === 'down');
+      expect(ev).toBeDefined();
+      expect(ev!.pointerType).toBe('touch');
+
+      handle();
+    });
+
+    it('phase events from onPointerCancel carry coerced pointerType', () => {
+      const { canvas, doc, win, fire: f } = fakeBB();
+      const handle = attachBrowserInputBackend(canvas, { document: doc, window: win });
+      const backend = handle.backend;
+
+      f('canvas', 'pointerdown', { button: 0, pointerType: 'pen', pointerId: 7, clientX: 50, clientY: 60 });
+      f('canvas', 'pointercancel', { pointerType: 'pen', pointerId: 7 });
+
+      const sample = backend.sample();
+      const events = sample.pointerEvents;
+      const cancelEv = events?.find((x: { pointerId: number; phase: string }) => x.pointerId === 7 && x.phase === 'cancel');
+      expect(cancelEv).toBeDefined();
+      expect(cancelEv!.pointerType).toBe('pen');
+
+      handle();
+    });
+
+    it('phase events from onBlur carry pointerType from pointerMap (coerced on entry)', () => {
+      const { canvas, doc, win, fire: f } = fakeBB();
+      const handle = attachBrowserInputBackend(canvas, { document: doc, window: win });
+      const backend = handle.backend;
+
+      f('canvas', 'pointerdown', { button: 0, pointerType: 'touch', pointerId: 9, clientX: 70, clientY: 80 });
+      f('window', 'blur', {});
+
+      const sample = backend.sample();
+      const events = sample.pointerEvents;
+      const cancelBlurEv = events?.find((x: { pointerId: number; phase: string }) => x.pointerId === 9 && x.phase === 'cancel');
+      expect(cancelBlurEv).toBeDefined();
+      expect(cancelBlurEv!.pointerType).toBe('touch');
+
+      handle();
+    });
+  });
+}
+
+{
+  // ─── M5 gesture recognizer (gesture-recognizer.ts) ───
+  // Pure-function state machines called directly with synthetic phaseQueue +
+  // pointerMap + injected now() clock (D-3/D-4). No DOM.
+
+  /** Build a synthetic PointerPhaseEvent. */
+  function ph(
+    pointerId: number,
+    phase: PointerPhaseEvent['phase'],
+    x: number,
+    y: number,
+    pointerType: PointerType = 'touch',
+  ): PointerPhaseEvent {
+    return { pointerId, phase, x, y, pressure: 0.5, pointerType };
+  }
+
+  /** Build a pointerMap (pointerId -> live position) for the recognizer. */
+  function pm(
+    entries: readonly (readonly [number, number, number, PointerType?])[],
+  ): ReadonlyMap<number, RecognizerPointer> {
+    const m = new Map<number, RecognizerPointer>();
+    for (const [id, x, y, pt] of entries) {
+      m.set(id, { x, y, pointerType: pt ?? 'touch' });
+    }
+    return m;
+  }
+
+  const EMPTY_MAP: ReadonlyMap<number, RecognizerPointer> = new Map();
+
+  describe('m5t1: pinch + rotate recognizer (D-11)', () => {
+    it('two fingers down -> pinch + rotate begin, scale 1.0 / angle 0 (AC-14)', () => {
+      const s0 = createRecognizerState();
+      const r = processGestureFrame(
+        [ph(1, 'down', 0, 0), ph(2, 'down', 100, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 100, 0],
+        ]),
+        s0,
+        1000,
+      );
+      const kinds = r.gestureEvents.map((e) => e.kind);
+      expect(kinds).toContain('pinch-begin');
+      expect(kinds).toContain('rotate-begin');
+      const begin = r.gestureEvents.find((e) => e.kind === 'pinch-begin');
+      expect(begin).toBeDefined();
+      if (begin && begin.kind === 'pinch-begin') {
+        expect([...begin.pointerIds].sort()).toEqual([1, 2]);
+        expect(begin.pointerType).toBe('touch');
+      }
+      expect(r.gestureState.pinchScale).toBeCloseTo(1.0, 5);
+      expect(r.gestureState.rotationAngle).toBeCloseTo(0, 5);
+    });
+
+    it('fingers spread -> pinchScale increases proportionally', () => {
+      let s = createRecognizerState();
+      s = processGestureFrame(
+        [ph(1, 'down', 0, 0), ph(2, 'down', 100, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 100, 0],
+        ]),
+        s,
+        1000,
+      ).newState;
+      // Spread finger 2 from x=100 to x=200 (distance 100 -> 200 => scale 2.0).
+      const r = processGestureFrame(
+        [ph(2, 'move', 200, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 200, 0],
+        ]),
+        s,
+        1016,
+      );
+      expect(r.gestureState.pinchScale).toBeCloseTo(2.0, 5);
+      expect(r.gestureState.rotationAngle).toBeCloseTo(0, 5);
+      // No new begin/end on a pure move frame.
+      expect(r.gestureEvents.map((e) => e.kind)).not.toContain('pinch-begin');
+    });
+
+    it('fingers rotate -> rotationAngle tracks atan2 frame delta', () => {
+      let s = createRecognizerState();
+      s = processGestureFrame(
+        [ph(1, 'down', 0, 0), ph(2, 'down', 100, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 100, 0],
+        ]),
+        s,
+        1000,
+      ).newState;
+      // Rotate finger 2 from (100,0) [angle 0] to (0,100) [angle +PI/2].
+      const r = processGestureFrame(
+        [ph(2, 'move', 0, 100)],
+        pm([
+          [1, 0, 0],
+          [2, 0, 100],
+        ]),
+        s,
+        1016,
+      );
+      expect(r.gestureState.rotationAngle).toBeCloseTo(Math.PI / 2, 5);
+      // Distance unchanged (100) => scale stays 1.0.
+      expect(r.gestureState.pinchScale).toBeCloseTo(1.0, 5);
+    });
+
+    it('2->1 lift emits end + freezes continuous value; back to 2 re-begins + resets (D-11/E-6)', () => {
+      let s = createRecognizerState();
+      s = processGestureFrame(
+        [ph(1, 'down', 0, 0), ph(2, 'down', 100, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 100, 0],
+        ]),
+        s,
+        1000,
+      ).newState;
+      // Spread to scale 2.0.
+      s = processGestureFrame(
+        [ph(2, 'move', 200, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 200, 0],
+        ]),
+        s,
+        1016,
+      ).newState;
+      // Lift finger 1 (2->1): end events, continuous value frozen at 2.0.
+      const rEnd = processGestureFrame([ph(1, 'up', 0, 0)], pm([[2, 200, 0]]), s, 1032);
+      const endKinds = rEnd.gestureEvents.map((e) => e.kind);
+      expect(endKinds).toContain('pinch-end');
+      expect(endKinds).toContain('rotate-end');
+      expect(rEnd.gestureState.pinchScale).toBeCloseTo(2.0, 5);
+      s = rEnd.newState;
+      // Idle frame with a single finger: frozen value retained (not identity).
+      const rIdle = processGestureFrame([], pm([[2, 200, 0]]), s, 1048);
+      expect(rIdle.gestureState.pinchScale).toBeCloseTo(2.0, 5);
+      s = rIdle.newState;
+      // Second finger returns -> new begin, reset to identity 1.0/0.
+      const rBegin = processGestureFrame(
+        [ph(3, 'down', 300, 0)],
+        pm([
+          [2, 200, 0],
+          [3, 300, 0],
+        ]),
+        s,
+        1064,
+      );
+      expect(rBegin.gestureEvents.map((e) => e.kind)).toContain('pinch-begin');
+      expect(rBegin.gestureState.pinchScale).toBeCloseTo(1.0, 5);
+      expect(rBegin.gestureState.rotationAngle).toBeCloseTo(0, 5);
+    });
+
+    it('third finger down is ignored while a pair is locked (D-11)', () => {
+      let s = createRecognizerState();
+      s = processGestureFrame(
+        [ph(1, 'down', 0, 0), ph(2, 'down', 100, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 100, 0],
+        ]),
+        s,
+        1000,
+      ).newState;
+      s = processGestureFrame(
+        [ph(2, 'move', 200, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 200, 0],
+        ]),
+        s,
+        1016,
+      ).newState;
+      // Third finger arrives; locked pair (1,2) unchanged, no new begin.
+      const r = processGestureFrame(
+        [ph(3, 'down', 50, 50)],
+        pm([
+          [1, 0, 0],
+          [2, 200, 0],
+          [3, 50, 50],
+        ]),
+        s,
+        1032,
+      );
+      expect(r.gestureEvents.map((e) => e.kind)).not.toContain('pinch-begin');
+      // Scale still reflects the locked pair (1,2): 200/100 = 2.0.
+      expect(r.gestureState.pinchScale).toBeCloseTo(2.0, 5);
+    });
+
+    it('AC-12: no active gesture returns identity empty signal without throwing', () => {
+      const s = createRecognizerState();
+      const r = processGestureFrame([], EMPTY_MAP, s, 1000);
+      expect(r.gestureState.pinchScale).toBe(1);
+      expect(r.gestureState.rotationAngle).toBe(0);
+      expect(r.gestureEvents).toEqual([]);
+    });
+
+    it('AC-12: active gesture retains continuous value on an idle (no-event) frame', () => {
+      let s = createRecognizerState();
+      s = processGestureFrame(
+        [ph(1, 'down', 0, 0), ph(2, 'down', 100, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 100, 0],
+        ]),
+        s,
+        1000,
+      ).newState;
+      s = processGestureFrame(
+        [ph(2, 'move', 300, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 300, 0],
+        ]),
+        s,
+        1016,
+      ).newState;
+      // Idle frame: fingers unchanged, no events -> value retained (scale 3.0).
+      const r = processGestureFrame(
+        [],
+        pm([
+          [1, 0, 0],
+          [2, 300, 0],
+        ]),
+        s,
+        1032,
+      );
+      expect(r.gestureState.pinchScale).toBeCloseTo(3.0, 5);
+      expect(r.gestureEvents).toEqual([]);
+    });
+  });
+
+  describe('m5t2: swipe recognizer (D-10)', () => {
+    it('fast flick over threshold emits a single swipe (right) with direction (AC-15)', () => {
+      // Frame 1: down at origin, t=1000.
+      let res = processGestureFrame([ph(1, 'down', 0, 0)], pm([[1, 0, 0]]), createRecognizerState(), 1000);
+      // Frame 2: move + up at (100,0), t=1100 -> displacement 100 over 100ms = 1.0 px/ms >= 0.5.
+      res = processGestureFrame(
+        [ph(1, 'move', 100, 0), ph(1, 'up', 100, 0)],
+        EMPTY_MAP,
+        res.newState,
+        1100,
+      );
+      const swipes = res.gestureEvents.filter((e) => e.kind === 'swipe');
+      expect(swipes).toHaveLength(1);
+      const sw = swipes[0];
+      if (sw && sw.kind === 'swipe') {
+        expect(sw.direction).toBe('right');
+        expect(sw.pointerId).toBe(1);
+        expect(sw.pointerType).toBe('touch');
+      }
+    });
+
+    it('slow drag under threshold emits no swipe on up', () => {
+      let res = processGestureFrame([ph(2, 'down', 0, 0)], pm([[2, 0, 0]]), createRecognizerState(), 2000);
+      // Move only 10px over 100ms -> 0.1 px/ms < 0.5.
+      res = processGestureFrame([ph(2, 'move', 10, 0), ph(2, 'up', 10, 0)], EMPTY_MAP, res.newState, 2100);
+      expect(res.gestureEvents.filter((e) => e.kind === 'swipe')).toHaveLength(0);
+    });
+
+    it('direction classification: pure-down, pure-left, diagonal-dominant-horizontal', () => {
+      // pure down (screen y increases downward -> 'down')
+      let r = processGestureFrame([ph(3, 'down', 0, 0)], pm([[3, 0, 0]]), createRecognizerState(), 3000);
+      r = processGestureFrame([ph(3, 'move', 0, 100), ph(3, 'up', 0, 100)], EMPTY_MAP, r.newState, 3100);
+      let sw = r.gestureEvents.find((e) => e.kind === 'swipe');
+      expect(sw && sw.kind === 'swipe' ? sw.direction : undefined).toBe('down');
+
+      // pure left
+      r = processGestureFrame([ph(4, 'down', 100, 0)], pm([[4, 100, 0]]), createRecognizerState(), 3200);
+      r = processGestureFrame([ph(4, 'move', 0, 0), ph(4, 'up', 0, 0)], EMPTY_MAP, r.newState, 3300);
+      sw = r.gestureEvents.find((e) => e.kind === 'swipe');
+      expect(sw && sw.kind === 'swipe' ? sw.direction : undefined).toBe('left');
+
+      // up-right diagonal, larger horizontal component -> 'right'
+      r = processGestureFrame([ph(5, 'down', 0, 100)], pm([[5, 0, 100]]), createRecognizerState(), 3400);
+      r = processGestureFrame([ph(5, 'move', 120, 40), ph(5, 'up', 120, 40)], EMPTY_MAP, r.newState, 3500);
+      sw = r.gestureEvents.find((e) => e.kind === 'swipe');
+      expect(sw && sw.kind === 'swipe' ? sw.direction : undefined).toBe('right');
+    });
+
+    it('AC-15: swipe is a single instantaneous event with no begin/end pair', () => {
+      let r = processGestureFrame([ph(6, 'down', 0, 0)], pm([[6, 0, 0]]), createRecognizerState(), 4000);
+      r = processGestureFrame([ph(6, 'move', 200, 0), ph(6, 'up', 200, 0)], EMPTY_MAP, r.newState, 4100);
+      const kinds = r.gestureEvents.map((e) => e.kind);
+      expect(kinds).toContain('swipe');
+      expect(kinds).not.toContain('pinch-begin');
+      expect(kinds).not.toContain('pinch-end');
+      // Next frame carries no lingering swipe (one-frame lifecycle).
+      const r2 = processGestureFrame([], EMPTY_MAP, r.newState, 4116);
+      expect(r2.gestureEvents.filter((e) => e.kind === 'swipe')).toHaveLength(0);
+    });
+
+    it('velocity threshold uses SWIPE_WINDOW_MS + SWIPE_VELOCITY_THRESHOLD constants', () => {
+      expect(SWIPE_VELOCITY_THRESHOLD).toBe(0.5);
+      expect(SWIPE_WINDOW_MS).toBe(100);
+    });
+  });
+
+  describe('m5t3: long-press recognizer (D-10, AC-16)', () => {
+    it('constants match D-10 defaults', () => {
+      expect(LONG_PRESS_DURATION_MS).toBe(500);
+      expect(LONG_PRESS_SLOP).toBe(10);
+      expect(DOUBLE_TAP_INTERVAL_MS).toBe(350);
+      expect(DOUBLE_TAP_DISTANCE).toBe(10);
+    });
+
+    it('hold >= 500ms within slop fires exactly one long-press', () => {
+      // Down at t=1000.
+      let res = processGestureFrame([ph(1, 'down', 50, 50)], pm([[1, 50, 50]]), createRecognizerState(), 1000);
+      expect(res.gestureEvents.filter((e) => e.kind === 'long-press')).toHaveLength(0);
+      // Idle frame at t=1400 (400ms elapsed) -> not yet.
+      res = processGestureFrame([], pm([[1, 50, 50]]), res.newState, 1400);
+      expect(res.gestureEvents.filter((e) => e.kind === 'long-press')).toHaveLength(0);
+      // Idle frame at t=1500 (500ms elapsed) -> fires.
+      res = processGestureFrame([], pm([[1, 50, 50]]), res.newState, 1500);
+      const lp = res.gestureEvents.filter((e) => e.kind === 'long-press');
+      expect(lp).toHaveLength(1);
+      if (lp[0] && lp[0].kind === 'long-press') {
+        expect(lp[0].pointerId).toBe(1);
+        expect(lp[0].x).toBe(50);
+        expect(lp[0].y).toBe(50);
+        expect(lp[0].pointerType).toBe('touch');
+      }
+      // Subsequent idle frame does not re-fire (one-shot per press).
+      res = processGestureFrame([], pm([[1, 50, 50]]), res.newState, 1700);
+      expect(res.gestureEvents.filter((e) => e.kind === 'long-press')).toHaveLength(0);
+    });
+
+    it('AC-16 clock decoupling: no pointer events, only clock advance -> timer still fires', () => {
+      // Down, then ALL subsequent frames have an EMPTY phase queue. Only the
+      // injected clock advances. The timer must still cross 500ms and fire.
+      let res = processGestureFrame([ph(2, 'down', 10, 10)], pm([[2, 10, 10]]), createRecognizerState(), 0);
+      // Many empty frames advancing the clock; finger stays down in pointerMap.
+      res = processGestureFrame([], pm([[2, 10, 10]]), res.newState, 200);
+      res = processGestureFrame([], pm([[2, 10, 10]]), res.newState, 400);
+      expect(res.gestureEvents.filter((e) => e.kind === 'long-press')).toHaveLength(0);
+      res = processGestureFrame([], pm([[2, 10, 10]]), res.newState, 550);
+      expect(res.gestureEvents.filter((e) => e.kind === 'long-press')).toHaveLength(1);
+    });
+
+    it('AC-16 (2b) F-1 falsification: single empty-queue frame past 500ms fires (event-coupled impl FAILS)', () => {
+      // The ONLY pointer event ever seen is the down at t=0. If a recognizer
+      // coupled its timer to event arrival (advances only when the phase queue
+      // is non-empty), this assertion FAILS -- the empty-queue frame at t=600
+      // would never advance the timer. A clock-driven recognizer fires.
+      const afterDown = processGestureFrame([ph(3, 'down', 0, 0)], pm([[3, 0, 0]]), createRecognizerState(), 0);
+      const idle = processGestureFrame([], pm([[3, 0, 0]]), afterDown.newState, 600);
+      expect(idle.gestureEvents.filter((e) => e.kind === 'long-press')).toHaveLength(1);
+    });
+
+    it('move beyond slop before 500ms disarms -> no long-press', () => {
+      let res = processGestureFrame([ph(4, 'down', 0, 0)], pm([[4, 0, 0]]), createRecognizerState(), 0);
+      // Move 15px (> slop 10) at t=100.
+      res = processGestureFrame([ph(4, 'move', 15, 0)], pm([[4, 15, 0]]), res.newState, 100);
+      // Clock crosses 500ms; disarmed -> no fire.
+      res = processGestureFrame([], pm([[4, 15, 0]]), res.newState, 600);
+      expect(res.gestureEvents.filter((e) => e.kind === 'long-press')).toHaveLength(0);
+    });
+
+    it('up before 500ms cancels the pending long-press', () => {
+      let res = processGestureFrame([ph(5, 'down', 0, 0)], pm([[5, 0, 0]]), createRecognizerState(), 0);
+      // Up at t=300 (before 500ms).
+      res = processGestureFrame([ph(5, 'up', 0, 0)], EMPTY_MAP, res.newState, 300);
+      // Later clock -> nothing pending.
+      res = processGestureFrame([], EMPTY_MAP, res.newState, 800);
+      expect(res.gestureEvents.filter((e) => e.kind === 'long-press')).toHaveLength(0);
+    });
+  });
+
+  describe('m5t3: double-tap recognizer (D-10, AC-17)', () => {
+    it('two ups within 350ms + 10px window fire one double-tap (AC-17)', () => {
+      let res = createRecognizerState();
+      // First tap: down + up at (0,0), t=1000.
+      let r = processGestureFrame([ph(1, 'down', 0, 0)], pm([[1, 0, 0]]), res, 1000);
+      r = processGestureFrame([ph(1, 'up', 0, 0)], EMPTY_MAP, r.newState, 1010);
+      expect(r.gestureEvents.filter((e) => e.kind === 'double-tap')).toHaveLength(0);
+      // Second tap: down + up at (5,5), t=1300 (interval 290ms, dist ~7px).
+      r = processGestureFrame([ph(2, 'down', 5, 5)], pm([[2, 5, 5]]), r.newState, 1300);
+      r = processGestureFrame([ph(2, 'up', 5, 5)], EMPTY_MAP, r.newState, 1310);
+      const dt = r.gestureEvents.filter((e) => e.kind === 'double-tap');
+      expect(dt).toHaveLength(1);
+      if (dt[0] && dt[0].kind === 'double-tap') {
+        expect(dt[0].pointerType).toBe('touch');
+      }
+    });
+
+    it('second tap outside time window (>350ms) does not fire', () => {
+      let r = processGestureFrame([ph(1, 'down', 0, 0)], pm([[1, 0, 0]]), createRecognizerState(), 1000);
+      r = processGestureFrame([ph(1, 'up', 0, 0)], EMPTY_MAP, r.newState, 1010);
+      // Second up at t=1400 -> interval 390ms > 350ms.
+      r = processGestureFrame([ph(2, 'down', 0, 0)], pm([[2, 0, 0]]), r.newState, 1390);
+      r = processGestureFrame([ph(2, 'up', 0, 0)], EMPTY_MAP, r.newState, 1400);
+      expect(r.gestureEvents.filter((e) => e.kind === 'double-tap')).toHaveLength(0);
+    });
+
+    it('second tap outside distance window (>10px) does not fire', () => {
+      let r = processGestureFrame([ph(1, 'down', 0, 0)], pm([[1, 0, 0]]), createRecognizerState(), 1000);
+      r = processGestureFrame([ph(1, 'up', 0, 0)], EMPTY_MAP, r.newState, 1010);
+      // Second up at (20,0) -> distance 20px > 10px, within time window.
+      r = processGestureFrame([ph(2, 'down', 20, 0)], pm([[2, 20, 0]]), r.newState, 1100);
+      r = processGestureFrame([ph(2, 'up', 20, 0)], EMPTY_MAP, r.newState, 1110);
+      expect(r.gestureEvents.filter((e) => e.kind === 'double-tap')).toHaveLength(0);
+    });
+
+    it('AC-17: double-tap is a single instantaneous event (no lingering next frame)', () => {
+      let r = processGestureFrame([ph(1, 'down', 0, 0)], pm([[1, 0, 0]]), createRecognizerState(), 1000);
+      r = processGestureFrame([ph(1, 'up', 0, 0)], EMPTY_MAP, r.newState, 1010);
+      r = processGestureFrame([ph(2, 'down', 2, 2)], pm([[2, 2, 2]]), r.newState, 1200);
+      r = processGestureFrame([ph(2, 'up', 2, 2)], EMPTY_MAP, r.newState, 1210);
+      expect(r.gestureEvents.filter((e) => e.kind === 'double-tap')).toHaveLength(1);
+      const r2 = processGestureFrame([], EMPTY_MAP, r.newState, 1226);
+      expect(r2.gestureEvents.filter((e) => e.kind === 'double-tap')).toHaveLength(0);
+    });
+  });
+
+  describe('m5t4: gesture cancel + idle retention (AC-18/E-7/E-8/AC-12)', () => {
+    // onBlur maps to the recognizer's cancel-phase path (D-4): the backend
+    // funnel pushes a cancel phase per active pointer into the queue, which
+    // the recognizer consumes before drain. Backend-level onBlur e2e is in
+    // the m5t8 integration block; here we drive the recognizer directly.
+
+    /** Set up an active 2-finger pinch spread to scale 2.0. */
+    function activePinch(): RecognizerState {
+      let s = processGestureFrame(
+        [ph(1, 'down', 0, 0), ph(2, 'down', 100, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 100, 0],
+        ]),
+        createRecognizerState(),
+        1000,
+      ).newState;
+      s = processGestureFrame(
+        [ph(2, 'move', 200, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 200, 0],
+        ]),
+        s,
+        1016,
+      ).newState;
+      return s;
+    }
+
+    it('pointercancel on active pinch -> cancel events + values reset to identity (AC-18/E-8)', () => {
+      const s = activePinch();
+      // A cancel phase for one locked finger cancels the pair.
+      const r = processGestureFrame([ph(1, 'cancel', 0, 0)], pm([[2, 200, 0]]), s, 1032);
+      const kinds = r.gestureEvents.map((e) => e.kind);
+      expect(kinds).toContain('pinch-cancel');
+      expect(kinds).toContain('rotate-cancel');
+      // Continuous value reset to identity (NOT frozen, unlike the 2->1 end path).
+      expect(r.gestureState.pinchScale).toBe(1);
+      expect(r.gestureState.rotationAngle).toBe(0);
+      // Next idle frame emits no ghost gesture.
+      const r2 = processGestureFrame([], EMPTY_MAP, r.newState, 1048);
+      expect(r2.gestureEvents).toEqual([]);
+      expect(r2.gestureState.pinchScale).toBe(1);
+    });
+
+    it('onBlur path (cancel phases for all pointers) -> cancels + identity + no ghost next frame', () => {
+      const s = activePinch();
+      // Backend onBlur clears pointerMap and pushes a cancel phase per pointer.
+      const r = processGestureFrame(
+        [ph(1, 'cancel', 0, 0), ph(2, 'cancel', 200, 0)],
+        EMPTY_MAP,
+        s,
+        1032,
+      );
+      expect(r.gestureEvents.map((e) => e.kind)).toContain('pinch-cancel');
+      expect(r.gestureState.pinchScale).toBe(1);
+      const r2 = processGestureFrame([], EMPTY_MAP, r.newState, 1048);
+      expect(r2.gestureEvents).toEqual([]);
+    });
+
+    it('idle frames retain continuous values while gesture stays active (AC-12)', () => {
+      let s = activePinch(); // scale 2.0
+      for (const t of [1032, 1048, 1064, 1080]) {
+        const r = processGestureFrame(
+          [],
+          pm([
+            [1, 0, 0],
+            [2, 200, 0],
+          ]),
+          s,
+          t,
+        );
+        expect(r.gestureState.pinchScale).toBeCloseTo(2.0, 5);
+        expect(r.gestureEvents).toEqual([]);
+        s = r.newState;
+      }
+    });
+
+    it('long-press armed then cancelled before 500ms -> timer reset, no fire (E-7)', () => {
+      let s = processGestureFrame([ph(7, 'down', 5, 5)], pm([[7, 5, 5]]), createRecognizerState(), 0);
+      // onBlur before 500ms: cancel phase + cleared pointerMap.
+      s = processGestureFrame([ph(7, 'cancel', 5, 5)], EMPTY_MAP, s.newState, 200);
+      // Clock advances well past 500ms; timer must have been reset.
+      const r = processGestureFrame([], EMPTY_MAP, s.newState, 800);
+      expect(r.gestureEvents.filter((e) => e.kind === 'long-press')).toHaveLength(0);
+    });
+
+    it('cascading: pinch + long-press both active -> cancel resets both independently (AC-18)', () => {
+      // Pinch on (1,2); a third finger (3) arms a long-press (ignored by pinch, D-11).
+      let s = processGestureFrame(
+        [ph(1, 'down', 0, 0), ph(2, 'down', 100, 0)],
+        pm([
+          [1, 0, 0],
+          [2, 100, 0],
+        ]),
+        createRecognizerState(),
+        0,
+      ).newState;
+      s = processGestureFrame(
+        [ph(3, 'down', 300, 300)],
+        pm([
+          [1, 0, 0],
+          [2, 100, 0],
+          [3, 300, 300],
+        ]),
+        s,
+        16,
+      ).newState;
+      // Cancel everything (onBlur).
+      const r = processGestureFrame(
+        [ph(1, 'cancel', 0, 0), ph(2, 'cancel', 100, 0), ph(3, 'cancel', 300, 300)],
+        EMPTY_MAP,
+        s,
+        32,
+      );
+      expect(r.gestureEvents.map((e) => e.kind)).toContain('pinch-cancel');
+      expect(r.gestureState.pinchScale).toBe(1);
+      // After cancel, advancing the clock past 500ms fires NO long-press for finger 3.
+      const r2 = processGestureFrame([], EMPTY_MAP, r.newState, 700);
+      expect(r2.gestureEvents.filter((e) => e.kind === 'long-press')).toHaveLength(0);
+    });
+  });
+
+  describe('m5t8: gesture e2e through backend + snapshot (AC-11/AC-13)', () => {
+    /** Backend fixture with an injectable fake clock. */
+    function gestureBackend(): {
+      backend: InputBackend;
+      fire(kind: string, ev: Record<string, unknown>): void;
+      setNow(t: number): void;
+      blur(): void;
+      handle: () => void;
+    } {
+      const listeners = new Map<string, Map<string, Set<EventListener>>>();
+      const makeTarget = (label: string) => ({
+        addEventListener(kind: string, handler: EventListener): void {
+          let perTarget = listeners.get(label);
+          if (!perTarget) { perTarget = new Map(); listeners.set(label, perTarget); }
+          let set = perTarget.get(kind);
+          if (!set) { set = new Set(); perTarget.set(kind, set); }
+          set.add(handler);
+        },
+        removeEventListener(kind: string, handler: EventListener): void {
+          listeners.get(label)?.get(kind)?.delete(handler);
+        },
+      });
+      const canvas = {
+        ...makeTarget('canvas'),
+        width: 800,
+        height: 600,
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+        setPointerCapture: () => {},
+        style: {} as CSSStyleDeclaration,
+      } as unknown as HTMLCanvasElement;
+      const doc = { ...makeTarget('document'), hasFocus: () => true } as unknown as Document;
+      const win = makeTarget('window') as unknown as Window;
+      let clock = 0;
+      const handle = attachBrowserInputBackend(canvas, {
+        document: doc,
+        window: win,
+        now: () => clock,
+      });
+      return {
+        backend: handle.backend,
+        fire(kind, ev) {
+          for (const h of listeners.get('canvas')?.get(kind) ?? []) h(ev as Event);
+        },
+        setNow(t) { clock = t; },
+        blur() {
+          for (const h of listeners.get('window')?.get('blur') ?? []) h({} as Event);
+        },
+        handle,
+      };
+    }
+
+    it('full pipeline: pinch flows through sample() into snap.gesture + snap.gestureEvents (AC-13)', () => {
+      const bb = gestureBackend();
+      // Two fingers down at t=0.
+      bb.setNow(0);
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 1, clientX: 0, clientY: 0 });
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 2, clientX: 100, clientY: 0 });
+      let snap = snapshotFromSample(bb.backend.sample());
+      let kinds = snap.gestureEvents.map((e) => e.kind);
+      expect(kinds).toContain('pinch-begin');
+      expect(snap.gesture.pinchScale).toBeCloseTo(1.0, 5);
+
+      // Spread finger 2 to x=200 -> scale 2.0. No begin/end on this frame.
+      bb.setNow(16);
+      bb.fire('pointermove', { pointerType: 'touch', pointerId: 2, clientX: 200, clientY: 0, movementX: 100, movementY: 0 });
+      snap = snapshotFromSample(bb.backend.sample());
+      expect(snap.gesture.pinchScale).toBeCloseTo(2.0, 5);
+      expect(snap.gestureEvents.map((e) => e.kind)).not.toContain('pinch-begin');
+
+      // Lift finger 1 -> pinch-end in this frame's events, value frozen at 2.0.
+      bb.setNow(32);
+      bb.fire('pointerup', { pointerType: 'touch', pointerId: 1, clientX: 0, clientY: 0 });
+      snap = snapshotFromSample(bb.backend.sample());
+      kinds = snap.gestureEvents.map((e) => e.kind);
+      expect(kinds).toContain('pinch-end');
+      expect(snap.gesture.pinchScale).toBeCloseTo(2.0, 5);
+
+      bb.handle();
+    });
+
+    it('AC-13 lifecycle: begin/end appear only on their frames, middle frames empty', () => {
+      const bb = gestureBackend();
+      bb.setNow(0);
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 1, clientX: 0, clientY: 0 });
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 2, clientX: 100, clientY: 0 });
+      let snap = snapshotFromSample(bb.backend.sample());
+      expect(snap.gestureEvents.filter((e) => e.kind === 'pinch-begin')).toHaveLength(1);
+
+      // Idle frame: no pointer events -> no lifecycle events.
+      bb.setNow(16);
+      snap = snapshotFromSample(bb.backend.sample());
+      expect(snap.gestureEvents).toHaveLength(0);
+
+      bb.setNow(32);
+      bb.fire('pointerup', { pointerType: 'touch', pointerId: 2, clientX: 100, clientY: 0 });
+      snap = snapshotFromSample(bb.backend.sample());
+      expect(snap.gestureEvents.filter((e) => e.kind === 'pinch-end')).toHaveLength(1);
+
+      // Next frame empty again (one-frame lifecycle).
+      bb.setNow(48);
+      snap = snapshotFromSample(bb.backend.sample());
+      expect(snap.gestureEvents).toHaveLength(0);
+
+      bb.handle();
+    });
+
+    it('AC-11 gesture half: same-frame double read returns identical GestureState object', () => {
+      const bb = gestureBackend();
+      bb.setNow(0);
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 1, clientX: 0, clientY: 0 });
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 2, clientX: 100, clientY: 0 });
+      const snap = snapshotFromSample(bb.backend.sample());
+      const first = snap.gesture;
+      const second = snap.gesture;
+      expect(first).toBe(second); // frozen: identical reference
+      expect(first.pinchScale).toBe(second.pinchScale);
+      bb.handle();
+    });
+
+    it('AC-16 through backend: long-press fires on idle frames driven only by injected clock', () => {
+      const bb = gestureBackend();
+      bb.setNow(0);
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 1, clientX: 50, clientY: 50 });
+      let snap = snapshotFromSample(bb.backend.sample());
+      expect(snap.gestureEvents.filter((e) => e.kind === 'long-press')).toHaveLength(0);
+      // No further pointer events; only advance the clock past 500ms.
+      bb.setNow(600);
+      snap = snapshotFromSample(bb.backend.sample());
+      expect(snap.gestureEvents.filter((e) => e.kind === 'long-press')).toHaveLength(1);
+      bb.handle();
+    });
+
+    it('multiple simultaneous gestures: pinch (fingers 1,2) + long-press (finger 3)', () => {
+      const bb = gestureBackend();
+      bb.setNow(0);
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 1, clientX: 0, clientY: 0 });
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 2, clientX: 100, clientY: 0 });
+      snapshotFromSample(bb.backend.sample()); // pinch-begin frame
+      // Finger 3 arrives (ignored by pinch pair D-11) but arms a long-press.
+      bb.setNow(16);
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 3, clientX: 400, clientY: 400 });
+      snapshotFromSample(bb.backend.sample());
+      // Advance past 500ms -> finger 3 long-press fires; pinch value still live.
+      bb.setNow(600);
+      const snap = snapshotFromSample(bb.backend.sample());
+      const lp = snap.gestureEvents.filter((e) => e.kind === 'long-press');
+      expect(lp).toHaveLength(1);
+      if (lp[0] && lp[0].kind === 'long-press') expect(lp[0].pointerId).toBe(3);
+      // Fingers 1,2 are committed to the pinch and do NOT fire long-presses.
+      expect(lp.every((e) => e.kind === 'long-press' && e.pointerId === 3)).toBe(true);
+      bb.handle();
+    });
+
+    it('onBlur end-to-end: active pinch cancelled + values reset, no ghost next frame (AC-18)', () => {
+      const bb = gestureBackend();
+      bb.setNow(0);
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 1, clientX: 0, clientY: 0 });
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 2, clientX: 100, clientY: 0 });
+      snapshotFromSample(bb.backend.sample());
+      bb.setNow(16);
+      bb.fire('pointermove', { pointerType: 'touch', pointerId: 2, clientX: 300, clientY: 0, movementX: 200, movementY: 0 });
+      let snap = snapshotFromSample(bb.backend.sample());
+      expect(snap.gesture.pinchScale).toBeCloseTo(3.0, 5);
+      // Blur pushes cancel phases; recognizer consumes them before drain.
+      bb.setNow(32);
+      bb.blur();
+      snap = snapshotFromSample(bb.backend.sample());
+      expect(snap.gestureEvents.map((e) => e.kind)).toContain('pinch-cancel');
+      expect(snap.gesture.pinchScale).toBe(1);
+      // Next frame: no ghost gesture.
+      bb.setNow(48);
+      snap = snapshotFromSample(bb.backend.sample());
+      expect(snap.gestureEvents).toHaveLength(0);
+      expect(snap.gesture.pinchScale).toBe(1);
+      bb.handle();
+    });
+
+    it('no active gesture: snap.gesture identity + empty gestureEvents (AC-12)', () => {
+      const bb = gestureBackend();
+      bb.setNow(0);
+      const snap = snapshotFromSample(bb.backend.sample());
+      expect(snap.gesture.pinchScale).toBe(1);
+      expect(snap.gesture.rotationAngle).toBe(0);
+      expect(snap.gestureEvents).toEqual([]);
+      bb.handle();
+    });
+
+    it('AC-19 real consumption: GestureEvent consumer exhaustively switches on kind + pointerType', () => {
+      const bb = gestureBackend();
+      bb.setNow(0);
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 1, clientX: 0, clientY: 0 });
+      bb.fire('pointerdown', { pointerType: 'touch', pointerId: 2, clientX: 100, clientY: 0 });
+      const snap = snapshotFromSample(bb.backend.sample());
+      // Exhaustive consumption path: no default branch on either discriminant.
+      const label = (e: GestureEvent): string => {
+        const device = ((pt: PointerType): string => {
+          switch (pt) {
+            case 'mouse': return 'M';
+            case 'pen': return 'P';
+            case 'touch': return 'T';
+          }
+        })(e.pointerType);
+        switch (e.kind) {
+          case 'pinch-begin': case 'pinch-end': case 'pinch-cancel':
+          case 'rotate-begin': case 'rotate-end': case 'rotate-cancel':
+            return `${e.kind}:${device}`;
+          case 'swipe': return `swipe-${e.direction}:${device}`;
+          case 'long-press': return `lp:${device}`;
+          case 'double-tap': return `dt:${device}`;
+        }
+      };
+      const labels = snap.gestureEvents.map(label);
+      expect(labels.some((l) => l.startsWith('pinch-begin:T'))).toBe(true);
+      bb.handle();
     });
   });
 }

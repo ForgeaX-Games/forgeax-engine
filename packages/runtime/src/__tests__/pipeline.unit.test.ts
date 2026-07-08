@@ -197,6 +197,14 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       lost,
       features: new Set(),
       limits: {},
+      // feat-20260707 M5 / w33: createRenderer projects RhiCaps.textureCompression*
+      // into TranscodeCaps at registry-build time; the mock device needs a caps
+      // object (the real RhiDevice always carries one).
+      caps: {
+        textureCompressionBc: false,
+        textureCompressionEtc2: false,
+        textureCompressionAstc: false,
+      },
       queue: { submit: () => undefined, writeBuffer: () => undefined },
       createCommandEncoder: () => ({
         beginRenderPass: () => ({
@@ -236,7 +244,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         }
         return {
           ok: true,
-          value: { requestDevice: async () => ({ ok: true, value: device }) },
+          // feat-20260707 M5 / w28: createRenderer filters COMPRESSION_FEATURES
+          // via adapter.features.has() (AC-07). The real RhiAdapter.features is
+          // non-optional, so the mock adapter must carry a features Set.
+          value: {
+            features: new Set(),
+            requestDevice: async () => ({ ok: true, value: device }),
+          },
         };
       },
       getPreferredCanvasFormat: () => 'bgra8unorm',
@@ -1085,6 +1099,14 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       lost,
       features: new Set(),
       limits: {},
+      // feat-20260707 M5 / w33: createRenderer projects RhiCaps.textureCompression*
+      // into TranscodeCaps at registry-build time; the mock device needs a caps
+      // object (the real RhiDevice always carries one).
+      caps: {
+        textureCompressionBc: false,
+        textureCompressionEtc2: false,
+        textureCompressionAstc: false,
+      },
       queue: { submit: () => undefined, writeBuffer: () => undefined },
       createCommandEncoder: () => ({
         beginRenderPass: () => ({
@@ -1143,7 +1165,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         }
         return {
           ok: true,
-          value: { requestDevice: async () => ({ ok: true, value: device }) },
+          // feat-20260707 M5 / w28: createRenderer filters COMPRESSION_FEATURES
+          // via adapter.features.has() (AC-07). The real RhiAdapter.features is
+          // non-optional, so the mock adapter must carry a features Set.
+          value: {
+            features: new Set(),
+            requestDevice: async () => ({ ok: true, value: device }),
+          },
         };
       },
       getPreferredCanvasFormat: () => 'bgra8unorm',
@@ -1504,7 +1532,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     compute: true,
     timestampQuery: false,
     indirectDrawing: false,
-    textureCompression: false,
+    textureCompressionBc: false,
+    textureCompressionEtc2: false,
+    textureCompressionAstc: false,
     multiDrawIndirect: false,
     pushConstants: false,
     textureBindingArray: false,
@@ -5392,7 +5422,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     compute: true,
     timestampQuery: false,
     indirectDrawing: false,
-    textureCompression: false,
+    textureCompressionBc: false,
+    textureCompressionEtc2: false,
+    textureCompressionAstc: false,
     multiDrawIndirect: false,
     pushConstants: false,
     textureBindingArray: false,

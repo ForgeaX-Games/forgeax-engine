@@ -8,17 +8,24 @@
 //   5. AC-28: real-consumer-path type inference verification
 //      (useViewModel + useSelection + vm.draws[0].pipelineState.blend.blendConstant
 //       accessed without `as` type assertion).
+//   6. M4 AC-01/02/04/12: Instance Data section behavior + anchor SSOT grep.
 //
 // Uses jsdom + @testing-library/react.
 //
 // Related: requirements AC-15/AC-26/AC-28; plan-strategy 5.1/5.4.
 
+// biome-ignore-all lint/style/noNonNullAssertion: M4 fixture builders index into caller-provided arrays with known-good indices under an explicit loop bound; a type-narrowed access adds noise without safety gain.
+
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import type { HandleId, InspectBindingEntry, RhiCallEvent, Tape } from '@forgeax/engine-rhi-debug';
 import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { PipelineState } from '../components/PipelineState';
 import { SelectionContext } from '../selection-context';
-import { ViewModelContext } from '../viewer-context';
-import type { ViewModel } from '../viewer-model';
+import { instanceDataSectionAnchor, instanceRowAnchor } from '../selectors';
+import { TapeContext, ViewModelContext } from '../viewer-context';
+import type { CreateDescriptor, DrawEntry, ViewModel } from '../viewer-model';
 
 const mockProps = {
   api: {},
@@ -408,5 +415,218 @@ describe('AC-28: real-consumer-path type inference', () => {
 
     const vsHandle = draw.pipelineState.shaders.vertexShaderModuleHandleId;
     expect(vsHandle).toBe('vs-1');
+  });
+});
+
+// ============================================================================
+// M4: Instance Data section (AC-01 / AC-02 / AC-04 / AC-12)
+// ============================================================================
+
+const INSTANCE_BUFFER: HandleId = 'buf-instances';
+const INSTANCE_HASH = 'hash-instances';
+
+/** Identity mat4 as 16 column-major floats. */
+function identityMat4Floats(): number[] {
+  const m = new Array<number>(16).fill(0);
+  m[0] = 1;
+  m[5] = 1;
+  m[10] = 1;
+  m[15] = 1;
+  return m;
+}
+
+/** Build a stride-64 (mat4 only) or stride-80 (mat4+region) instance buffer. */
+function buildInstanceBuffer(
+  matsPerInstance: readonly (readonly number[])[],
+  regions?: readonly (readonly number[])[],
+): ArrayBuffer {
+  const stride = regions ? 80 : 64;
+  const buf = new ArrayBuffer(matsPerInstance.length * stride);
+  const dv = new DataView(buf);
+  for (let i = 0; i < matsPerInstance.length; i++) {
+    const base = i * stride;
+    const mat = matsPerInstance[i]!;
+    for (let j = 0; j < 16; j++) {
+      dv.setFloat32(base + j * 4, mat[j] ?? 0, true);
+    }
+    if (regions) {
+      const region = regions[i]!;
+      for (let j = 0; j < 4; j++) {
+        dv.setFloat32(base + 64 + j * 4, region[j] ?? 0, true);
+      }
+    }
+  }
+  return buf;
+}
+
+function makeInstanceTape(bytes: ArrayBuffer): Tape {
+  const blobPool = new Map<string, ArrayBuffer>();
+  blobPool.set(INSTANCE_HASH, bytes);
+  const events: RhiCallEvent[] = [
+    { kind: 'initialData', handleId: INSTANCE_BUFFER, dataHash: INSTANCE_HASH } as RhiCallEvent,
+  ];
+  return {
+    formatVersion: 1,
+    rhiCapsRecorded: {
+      canvasFormat: 'bgra8unorm' as GPUTextureFormat,
+      rgba16floatRenderable: false,
+      float32Filterable: false,
+      textureCompressionBc: false,
+      textureCompressionEtc2: false,
+      textureCompressionAstc: false,
+      storageBuffer: true,
+      timestampQuery: false,
+    },
+    events,
+    blobPool,
+  };
+}
+
+/** Clone the base mockViewModel and swap draw[0]'s bindings + instanceCount. */
+function mockViewModelWithInstances(
+  bindings: readonly InspectBindingEntry[],
+  instanceCount: number,
+): ViewModel {
+  const base = mockViewModel();
+  const draw = base.draws[0]!;
+  const newDraw: DrawEntry = {
+    ...draw,
+    bindings,
+    drawCall: { ...draw.drawCall, instanceCount },
+  };
+  const resources = new Map<HandleId, CreateDescriptor>(base.resources);
+  resources.set(INSTANCE_BUFFER, {
+    kind: 'createBuffer',
+    handleId: INSTANCE_BUFFER,
+    size: 0,
+    usage: 0,
+  });
+  return { ...base, draws: [newDraw], resources };
+}
+
+function renderWithTape(vm: ViewModel, tape: Tape, selectedDrawIdx = 0) {
+  return render(
+    <ViewModelContext.Provider value={vm}>
+      <TapeContext.Provider value={tape}>
+        <SelectionContext.Provider value={makeSelection({ selectedDrawIdx }) as never}>
+          <PipelineState {...mockProps} />
+        </SelectionContext.Provider>
+      </TapeContext.Provider>
+    </ViewModelContext.Provider>,
+  );
+}
+
+describe('M4 AC-01: Instance Data section renders when group-3 binding-0 present', () => {
+  it('stride 64 (mat4-only) → table element with instance-data-section anchor', () => {
+    const blob = buildInstanceBuffer([identityMat4Floats(), identityMat4Floats()]);
+    const tape = makeInstanceTape(blob);
+    const binding: InspectBindingEntry = {
+      groupIndex: 3,
+      entryIndex: 0,
+      handleId: INSTANCE_BUFFER,
+      kind: 'buffer',
+    };
+    const vm = mockViewModelWithInstances([binding], 2);
+
+    const { container } = renderWithTape(vm, tape);
+    const table = container.querySelector(`[${instanceDataSectionAnchor()}]`);
+    expect(table).not.toBeNull();
+    expect(table?.tagName.toLowerCase()).toBe('table');
+  });
+});
+
+describe('M4 AC-02: row count matches instanceCount, >256 truncates', () => {
+  it('instanceCount=4 → exactly 4 instance rows, no truncation notice', () => {
+    const mats = [
+      identityMat4Floats(),
+      identityMat4Floats(),
+      identityMat4Floats(),
+      identityMat4Floats(),
+    ];
+    const blob = buildInstanceBuffer(mats);
+    const tape = makeInstanceTape(blob);
+    const binding: InspectBindingEntry = {
+      groupIndex: 3,
+      entryIndex: 0,
+      handleId: INSTANCE_BUFFER,
+      kind: 'buffer',
+    };
+    const vm = mockViewModelWithInstances([binding], 4);
+
+    const { container } = renderWithTape(vm, tape);
+    const rows = container.querySelectorAll(`[${instanceRowAnchor()}]`);
+    expect(rows.length).toBe(4);
+    expect(container.textContent).not.toContain('more (truncated)');
+  });
+
+  it('instanceCount=300 → 256 rows + truncation notice mentioning remaining 44', () => {
+    const N = 300;
+    const mats: number[][] = [];
+    for (let i = 0; i < N; i++) mats.push(identityMat4Floats());
+    const blob = buildInstanceBuffer(mats);
+    const tape = makeInstanceTape(blob);
+    const binding: InspectBindingEntry = {
+      groupIndex: 3,
+      entryIndex: 0,
+      handleId: INSTANCE_BUFFER,
+      kind: 'buffer',
+    };
+    const vm = mockViewModelWithInstances([binding], N);
+
+    const { container } = renderWithTape(vm, tape);
+    const rows = container.querySelectorAll(`[${instanceRowAnchor()}]`);
+    expect(rows.length).toBe(256);
+    // Truncation footer: "... 44 more (truncated)"
+    expect(container.textContent).toContain('44 more');
+    expect(container.textContent).toContain('(truncated)');
+  });
+});
+
+describe('M4 AC-04: draw without group-3 binding → (none) placeholder', () => {
+  it('empty bindings → shows "(none)" and no instance-data-section element', () => {
+    const vm = mockViewModelWithInstances([], 4);
+    // Tape without any relevant events still fine; decoder returns 'none' before reading blob.
+    const tape = makeInstanceTape(new ArrayBuffer(0));
+
+    const { container } = renderWithTape(vm, tape);
+    expect(container.querySelector(`[${instanceDataSectionAnchor()}]`)).toBeNull();
+    // The Instance Data section body should render the placeholder KvRow.
+    expect(container.textContent).toContain('Instance Data');
+    expect(container.textContent).toContain('(none)');
+  });
+});
+
+describe('M4 AC-12: data-forgeax-instance-* anchor literals live only in selectors.ts', () => {
+  it('grep across apps/rhi-debug-viewer/src returns only selectors.ts + this test', () => {
+    // Rebuild the anchor prefix at runtime so the string literal in this test
+    // file itself does not trip the grep gate (would create a false positive).
+    const prefix = `data-forgeax-${'instance'}-`;
+
+    // src/ is a stable sibling of __tests__/. import.meta.dirname (Node 20.11+)
+    // gives an absolute filesystem path independent of the jsdom base URL.
+    const srcDir = resolve(import.meta.dirname, '..');
+    const testFile = resolve(import.meta.dirname, 'PipelineState.test.tsx');
+    const selectorsFile = resolve(srcDir, 'selectors.ts');
+
+    function walk(dir: string): string[] {
+      const out: string[] = [];
+      for (const name of readdirSync(dir)) {
+        const p = join(dir, name);
+        const s = statSync(p);
+        if (s.isDirectory()) out.push(...walk(p));
+        else if (s.isFile() && (p.endsWith('.ts') || p.endsWith('.tsx'))) out.push(p);
+      }
+      return out;
+    }
+
+    const hits: string[] = [];
+    for (const file of walk(srcDir)) {
+      if (file === selectorsFile || file === testFile) continue;
+      const text = readFileSync(file, 'utf8');
+      if (text.includes(prefix)) hits.push(file);
+    }
+    expect(hits).toEqual([]);
+    // Sanity: selectors.ts IS the SSOT and MUST hold the prefix.
+    expect(readFileSync(selectorsFile, 'utf8').includes(prefix)).toBe(true);
   });
 });

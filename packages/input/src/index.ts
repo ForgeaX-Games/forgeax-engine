@@ -24,6 +24,18 @@
 //     type InputBackend,
 //   } from '@forgeax/engine-input';
 
+export type {
+  ActionBinding,
+  ActionConfig,
+  ActionState,
+  GetVectorOptions,
+} from './action-state';
+export {
+  deriveActionStates,
+  getAxis,
+  getVector,
+  INPUT_MAP_KEY,
+} from './action-state';
 export {
   attachBrowserInputBackend,
   type BrowserInputBackendOptions,
@@ -34,6 +46,21 @@ export {
   InputFrameStartScan,
 } from './frame-start-scan-system';
 export type {
+  GestureEvent,
+  GestureState,
+  RecognizerState,
+  SwipeDirection,
+} from './gesture-recognizer';
+export {
+  DOUBLE_TAP_DISTANCE,
+  DOUBLE_TAP_INTERVAL_MS,
+  IDENTITY_GESTURE,
+  LONG_PRESS_DURATION_MS,
+  LONG_PRESS_SLOP,
+  SWIPE_VELOCITY_THRESHOLD,
+  SWIPE_WINDOW_MS,
+} from './gesture-recognizer';
+export type {
   Capabilities,
   GamepadAxisIndex,
   GamepadButtonIndex,
@@ -43,6 +70,7 @@ export type {
   InputSnapshot,
   PointerPhaseEvent,
   PointerSample,
+  PointerType,
   VirtualAxisSample,
   VirtualJoystickConfig,
 } from './input-snapshot';

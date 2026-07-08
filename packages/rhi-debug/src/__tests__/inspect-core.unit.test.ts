@@ -143,6 +143,97 @@ describe('extractDrawInfo', () => {
     expect(info.drawCall.pipelineHandleId).toBe('unknown');
     expect(info.colorAttachmentHandleId).toBeUndefined();
   });
+
+  it('surfaces firstVertex + firstInstance on raw `draw` events (m1-1 additive fields)', () => {
+    const events: readonly RhiCallEvent[] = [
+      { kind: 'frameMark', frameIdx: 0 },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: ['tv:1'],
+      },
+      { kind: 'createRenderPipeline', handleId: 'pipe:1', desc: {}, layoutHandleId: 'layout:auto' },
+      { kind: 'setPipeline', passHandleId: 'pass:1', pipelineHandleId: 'pipe:1' },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:1',
+        vertexCount: 6,
+        instanceCount: 4,
+        firstVertex: 12,
+        firstInstance: 2,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+    ];
+    const info = extractDrawInfo(events, 0);
+    expect(info.drawCall.firstVertex).toBe(12);
+    expect(info.drawCall.firstInstance).toBe(2);
+  });
+
+  it('surfaces firstIndex + baseVertex + firstInstance on raw `drawIndexed` events (m1-1 additive fields)', () => {
+    const events: readonly RhiCallEvent[] = [
+      { kind: 'frameMark', frameIdx: 0 },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: ['tv:1'],
+      },
+      { kind: 'createRenderPipeline', handleId: 'pipe:1', desc: {}, layoutHandleId: 'layout:auto' },
+      { kind: 'setPipeline', passHandleId: 'pass:1', pipelineHandleId: 'pipe:1' },
+      {
+        kind: 'drawIndexed',
+        passHandleId: 'pass:1',
+        indexCount: 36,
+        instanceCount: 3,
+        firstIndex: 6,
+        baseVertex: 100,
+        firstInstance: 7,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+    ];
+    const info = extractDrawInfo(events, 0);
+    expect(info.drawCall.firstIndex).toBe(6);
+    expect(info.drawCall.baseVertex).toBe(100);
+    expect(info.drawCall.firstInstance).toBe(7);
+  });
+
+  it('surfaces indirectBufferHandleId + indirectOffset on `drawIndirect` / `drawIndexedIndirect` (m1-1)', () => {
+    const events: readonly RhiCallEvent[] = [
+      { kind: 'frameMark', frameIdx: 0 },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: ['tv:1'],
+      },
+      { kind: 'createRenderPipeline', handleId: 'pipe:1', desc: {}, layoutHandleId: 'layout:auto' },
+      { kind: 'setPipeline', passHandleId: 'pass:1', pipelineHandleId: 'pipe:1' },
+      {
+        kind: 'drawIndirect',
+        passHandleId: 'pass:1',
+        indirectBufferHandleId: 'buf:indirect-a',
+        indirectOffset: 16,
+      },
+      {
+        kind: 'drawIndexedIndirect',
+        passHandleId: 'pass:1',
+        indirectBufferHandleId: 'buf:indirect-b',
+        indirectOffset: 32,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+    ];
+    const info0 = extractDrawInfo(events, 0);
+    expect(info0.drawCall.indirectBufferHandleId).toBe('buf:indirect-a');
+    expect(info0.drawCall.indirectOffset).toBe(16);
+
+    const info1 = extractDrawInfo(events, 1);
+    expect(info1.drawCall.indirectBufferHandleId).toBe('buf:indirect-b');
+    expect(info1.drawCall.indirectOffset).toBe(32);
+  });
 });
 
 describe('findPassIdx', () => {

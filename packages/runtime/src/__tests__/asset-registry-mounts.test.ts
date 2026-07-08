@@ -259,6 +259,7 @@ describe('sceneLoader returns ParseSceneError (F21 / AC-09 + AC-10) [w15]', () =
     const ctx: LoadContext = {
       fetchBinary: async () => ({ ok: false, error: new Error('not wired') }),
       resolveRef: async () => ({ ok: false, error: new Error('not wired') }),
+      transcodeCaps: { bc: false, etc2: false, astc: false },
       device: undefined,
     };
 
@@ -325,6 +326,7 @@ describe('sceneLoader returns ParseSceneError (F21 / AC-09 + AC-10) [w15]', () =
     const ctx: LoadContext = {
       fetchBinary: async () => ({ ok: false, error: new Error('not wired') }),
       resolveRef: async () => ({ ok: false, error: new Error('not wired') }),
+      transcodeCaps: { bc: false, etc2: false, astc: false },
       device: undefined,
     };
 

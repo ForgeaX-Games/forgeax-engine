@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildFrameModel } from '../frame-model';
 import { buildResources, makePipelineState, scanPassStates } from '../inspect-core';
-import { computePassOffsets } from '../tape-format';
+import { computePassOffsets, DRAW_KINDS } from '../tape-format';
 import type { RhiCallEvent, Tape } from '../types';
 
 function makeTape(events: readonly RhiCallEvent[]): Tape {
@@ -18,7 +18,9 @@ function makeTape(events: readonly RhiCallEvent[]): Tape {
       canvasFormat: 'bgra8unorm' as GPUTextureFormat,
       rgba16floatRenderable: false,
       float32Filterable: false,
-      textureCompression: false,
+      textureCompressionBc: false,
+      textureCompressionEtc2: false,
+      textureCompressionAstc: false,
       storageBuffer: false,
       timestampQuery: false,
     },
@@ -152,6 +154,7 @@ describe('inspect-core atoms — shared SSOT used by buildFrameModel + inspectDr
       handleId: '',
       pipelineHandleId: undefined,
       vertexBuffers: new Map(),
+      indexBuffer: undefined,
       blendConstant: undefined,
       stencilReference: 0,
       depthStencilViewHandleId: undefined,
@@ -160,5 +163,117 @@ describe('inspect-core atoms — shared SSOT used by buildFrameModel + inspectDr
     expect(ps.inputAssembly.topology).toBe('triangle-list');
     expect(ps.depthStencil.format).toBe('depth24plus');
     expect(ps.multisample.count).toBe(1);
+  });
+});
+
+// ============================================================================
+// m1-1: DRAW_KINDS SSOT + indexBuffer surfaces on DrawEntry
+// ============================================================================
+
+describe('m1-1 SSOT — DRAW_KINDS covers all draw + indirect + dispatch kinds', () => {
+  it('the exported set matches the 5 canonical draw/dispatch kinds; frame-model + inspect-core count the same', () => {
+    // SSOT membership (locks any future addition/removal from silently drifting between callers).
+    expect(DRAW_KINDS.has('draw')).toBe(true);
+    expect(DRAW_KINDS.has('drawIndexed')).toBe(true);
+    expect(DRAW_KINDS.has('drawIndirect')).toBe(true);
+    expect(DRAW_KINDS.has('drawIndexedIndirect')).toBe(true);
+    expect(DRAW_KINDS.has('dispatchWorkgroups')).toBe(true);
+    expect(DRAW_KINDS.size).toBe(5);
+
+    // Build a tape covering all 5 kinds. buildFrameModel.meta.totalDraws is the
+    // pure-frame-model side; countDraws (inspect-core internal via SSOT) is the
+    // per-draw / drawIdx bounds check side. Both must agree on the same 5.
+    const events: readonly RhiCallEvent[] = [
+      { kind: 'frameMark', frameIdx: 0 },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: ['tv:1'],
+      },
+      {
+        kind: 'draw',
+        passHandleId: 'pass:1',
+        vertexCount: 3,
+        instanceCount: 1,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      {
+        kind: 'drawIndexed',
+        passHandleId: 'pass:1',
+        indexCount: 3,
+        instanceCount: 1,
+        firstIndex: 0,
+        baseVertex: 0,
+        firstInstance: 0,
+      },
+      {
+        kind: 'drawIndirect',
+        passHandleId: 'pass:1',
+        indirectBufferHandleId: 'buf:ind1',
+        indirectOffset: 0,
+      },
+      {
+        kind: 'drawIndexedIndirect',
+        passHandleId: 'pass:1',
+        indirectBufferHandleId: 'buf:ind2',
+        indirectOffset: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+      { kind: 'beginComputePass', cmdHandleId: 'cmd:2', passHandleId: 'cpass:1' },
+      { kind: 'dispatchWorkgroups', passHandleId: 'cpass:1', x: 1, y: 1, z: 1 },
+      { kind: 'endComputePass', passHandleId: 'cpass:1' },
+    ];
+
+    const model = buildFrameModel(makeTape(events));
+    expect(model.meta.totalDraws).toBe(5);
+    // pass offsets is the third independent counter — same SSOT closes the loop.
+    const offsets = computePassOffsets(events);
+    const spanned = offsets.reduce(
+      (acc, o) => acc + Math.max(0, o.endDrawIdx - o.startDrawIdx + 1),
+      0,
+    );
+    expect(spanned).toBe(5);
+  });
+});
+
+describe('m1-1 DrawEntry.indexBuffer — mirrors setIndexBuffer event', () => {
+  it('propagates handleId + format + offset onto every draw in the pass; undefined before setIndexBuffer', () => {
+    const events: readonly RhiCallEvent[] = [
+      { kind: 'frameMark', frameIdx: 0 },
+      {
+        kind: 'beginRenderPass',
+        cmdHandleId: 'cmd:1',
+        passHandleId: 'pass:1',
+        desc: { colorAttachments: [] },
+        colorAttachmentViewHandleIds: ['tv:1'],
+      },
+      { kind: 'createRenderPipeline', handleId: 'pipe:1', desc: {}, layoutHandleId: 'layout:auto' },
+      { kind: 'setPipeline', passHandleId: 'pass:1', pipelineHandleId: 'pipe:1' },
+      {
+        kind: 'setIndexBuffer',
+        passHandleId: 'pass:1',
+        bufferHandleId: 'buf:ib',
+        format: 'uint16',
+        offset: 8,
+      },
+      {
+        kind: 'drawIndexed',
+        passHandleId: 'pass:1',
+        indexCount: 6,
+        instanceCount: 1,
+        firstIndex: 0,
+        baseVertex: 0,
+        firstInstance: 0,
+      },
+      { kind: 'endRenderPass', passHandleId: 'pass:1' },
+    ];
+    const model = buildFrameModel(makeTape(events));
+    const draw = model.draws[0];
+    expect(draw?.indexBuffer?.handleId).toBe('buf:ib');
+    expect(draw?.indexBuffer?.format).toBe('uint16');
+    expect(draw?.indexBuffer?.offset).toBe(8);
   });
 });

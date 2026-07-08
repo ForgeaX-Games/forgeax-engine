@@ -214,7 +214,147 @@ app.start();   // arms the rAF loop
 // app.pause(); app.resume(); app.stop();
 ```
 
-`InputSnapshot` 多设备读点面——全部在同一 `world.getResource<InputSnapshot>(...)` 对象上，无需任何互斥 / mode 开关：
+### Action mapping recipe (declare once, forget device)
+
+Declare an `InputMap` (via `INPUT_MAP_KEY` Resource) to derive per-frame `snap.action(name)` / `snap.getVector` readpoints -- consumers only know action names, never raw device details (AC-07: same getVector output from keyboard WASD AND gamepad left stick).
+
+```ts
+import { createApp } from '@forgeax/engine-app';
+import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
+import { INPUT_MAP_KEY, INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
+import { defineSystem } from '@forgeax/engine-ecs';
+import { Transform } from '@forgeax/engine-runtime';
+
+const res = await createApp(canvas, {}, forgeaxBundlerAdapter());
+const world = res.value.world;
+
+// Insert InputMap BEFORE adding InputFrameStartScan.
+// Duplicate action names → last-wins (D-8). Per-action deadzone: default 0.2.
+world.insertResource(INPUT_MAP_KEY, [
+  { action: 'jump', bindings: [
+    { type: 'key', key: ' ' },
+    { type: 'gamepadButton', button: 0 },
+  ]},
+  { action: 'moveLeft',  bindings: [
+    { type: 'key', key: 'a' },
+    { type: 'gamepadAxis', axis: 0, sign: -1 },
+  ]},
+  { action: 'moveRight', bindings: [
+    { type: 'key', key: 'd' },
+    { type: 'gamepadAxis', axis: 0, sign: 1 },
+  ]},
+  { action: 'moveUp',    bindings: [
+    { type: 'key', key: 'w' },
+    { type: 'gamepadAxis', axis: 1, sign: -1 },
+  ]},
+  { action: 'moveDown',  bindings: [
+    { type: 'key', key: 's' },
+    { type: 'gamepadAxis', axis: 1, sign: 1 },
+  ]},
+]);
+
+const MovePlayer = defineSystem({
+  name: 'move-player',
+  queries: [{ with: [Transform] }],
+  fn: (world, queryResults) => {
+    const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
+
+    // Action: same isPressed() for keyboard space AND gamepad A (AC-07)
+    if (snap.action('jump').justPressed()) {
+      // one-frame edge -- jump (space or gamepad A)
+    }
+
+    // getVector: radial deadzone, WASD diagonal magnitude = 1 (AC-06)
+    const move = snap.getVector('moveLeft', 'moveRight', 'moveUp', 'moveDown');
+    // move.x / move.y ∈ [-1, 1]; circular deadzone (NOT square)
+    for (const bundle of queryResults[0]) {
+      const xs = bundle.Transform.posX;
+      for (let i = 0; i < bundle.entityCount; i++) {
+        xs[i] = (xs[i] ?? 0) + move.x;
+      }
+    }
+  },
+});
+world.addSystem(MovePlayer);
+```
+
+**ActionBinding types** (4-member closed discriminant union, AC-08b: exhaustive switch at compile time):
+
+| binding type | fields | semantics |
+|:--|:--|:--|
+| `'key'` | `key: string` | `KeyboardEvent.key` value (e.g. `' '`, `'a'`, `'ArrowUp'`) |
+| `'mouseButton'` | `button: 0 \| 1 \| 2` | W3C MouseEvent.button |
+| `'gamepadButton'` | `button: GamepadButtonIndex` (0..16) | Standard-layout button index. Aggregates across ALL connected `standardMapping` slots (D-9: Godot device=-1 semantic) |
+| `'gamepadAxis'` | `axis: GamepadAxisIndex` (0..3) + `sign?: 1 \| -1` | Standard-layout axis index. `sign` omitted → \|value\| (trigger); `sign=1\|-1` → max(0, value*sign). Aggregates across ALL connected `standardMapping` slots |
+
+**Unregistered action names** → empty signal: `isPressed()=false`, `strength=0`, `justPressed=false` -- never throws (AC-01/09, charter P3).
+
+### Gesture reading recipe (five recognizers, dual-channel)
+
+Gesture recognizers (pinch / rotate / swipe / long-press / double-tap) run in the browser backend closure (C-3). Two output channels: continuous values via `snap.gesture`, one-frame lifecycle events via `snap.gestureEvents` (D-4).
+
+```ts
+import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
+import { defineSystem } from '@forgeax/engine-ecs';
+
+const GestureConsumer = defineSystem({
+  name: 'gesture-consumer',
+  queries: [],
+  fn: (world) => {
+    const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
+
+    // Continuous values -- identity when no gesture active (AC-12)
+    const zoom = snap.gesture.pinchScale;       // 1.0 = no pinch
+    const rot = snap.gesture.rotationAngle;      // 0 = no rotation
+
+    // Lifecycle events -- one-frame queue (mirrors pointerEvents)
+    for (const ev of snap.gestureEvents) {
+      switch (ev.kind) {
+        case 'pinch-begin':
+          // ev.pointerIds: [number, number], ev.pointerType: 'mouse'|'pen'|'touch'
+          break;
+        case 'pinch-end':
+          break;
+        case 'pinch-cancel':
+          break;
+        case 'rotate-begin':
+          break;
+        case 'rotate-end':
+          break;
+        case 'rotate-cancel':
+          break;
+        case 'swipe':
+          // ev.direction: 'left' | 'right' | 'up' | 'down'
+          break;
+        case 'long-press':
+          // ev.pointerId, ev.position: {x,y}
+          break;
+        case 'double-tap':
+          // ev.pointerId, ev.position: {x,y}
+          break;
+      }
+      // Exhaustive switch on GestureEvent kind -- no default branch (AC-13)
+    }
+  },
+});
+world.addSystem(GestureConsumer);
+```
+
+**Gesture thresholds** (all exported constants from `@forgeax/engine-input`, D-10):
+
+| constant | value | meaning |
+|:--|:--|:--|
+| `LONG_PRESS_DURATION_MS` | 500 | Hold time before long-press fires |
+| `LONG_PRESS_SLOP` | 10 | Max pointer movement (canvas px) during hold |
+| `DOUBLE_TAP_INTERVAL_MS` | 350 | Max time between two taps |
+| `DOUBLE_TAP_DISTANCE` | 10 | Max distance between two tap positions (canvas px) |
+| `SWIPE_VELOCITY_THRESHOLD` | 0.5 | Min speed (px/ms) over SWIPE_WINDOW_MS |
+| `SWIPE_WINDOW_MS` | 100 | Velocity computation sliding window |
+| Per-action deadzone | 0.2 | Default for action analog deadzone (Godot prior-art) |
+
+**Gesture events** carry `pointerType` (narrowed `'mouse' | 'pen' | 'touch'`, AC-19) -- consumers can exhaustively switch on both `kind` and `pointerType`. Blur/visibilitychange resets all recognizers: emits cancel events, resets continuous values to identity, and clears timers (AC-18). Clock is decoupled from pointer-event frequency: a long-press timer advances on idle frames too (AC-16, D-3).
+
+`InputSnapshot` 多设备读点面——全部在同一 `world.getResource<InputSnapshot>(...)` 对象上，无需任何互斥 / mode 开关。action / gesture 是构建在原始设备集群之上的高层抽象：action 将跨设备输入的 N 种组合坍缩为单一语义名，gesture 从相位事件流派生连续值 + 生命周期事件。
 
 | 集群 | 读点 | 类型 |
 |:--|:--|:--|
@@ -225,6 +365,8 @@ app.start();   // arms the rAF loop
 | virtualAxis | `.virtualAxis(name)` — 返回 `{ x, y }` | named joystick 读点；不存在 → 零向量（空信号） |
 | capabilities | `.capabilities` — 返回 `{ gamepad: boolean, pointer: boolean }` | 后端 attach 时冻结的一次性探针 |
 | pointerEvents | `.pointerEvents` — 返回 `readonly PointerPhaseEvent[]` | 本帧相位事件队列（down / move / up / cancel，一帧寿命） |
+| **action** | `.action(name)` — 返回 `{ isPressed, justPressed, justReleased, strength }` / `.getAxis(neg,pos)` / `.getVector(nX,pX,nY,pY)` | 声明式设备无关语义层：一次性声明 InputMap（`INPUT_MAP_KEY` Resource），消费端盲写 action 名（AC-07 跨设备统一）。未注册 → 空信号不抛。WASD 斜向 `getVector` 模长 1（径向死区，AC-06） |
+| **gesture** | `.gesture` — `{ pinchScale, rotationAngle }` / `.gestureEvents` — `GestureEvent[]` | 五类触摸手势识别器（pinch/rotate/swipe/long-press/double-tap），双通道输出：连续值 + 一帧寿命事件队列。无手势 → identity（1.0/0），不抛（AC-12） |
 
 未按下的键 / 断连 slot / 不对齐 pointerId / 不存在的 virtualAxis name 全部返回 `false` / `0` / 零向量——空信号即信号（charter P3）。超出字面量范围的 gamepad button/axis 索引触发 TS 编译错误（literal union 收紧）。
 

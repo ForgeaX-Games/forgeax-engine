@@ -74,7 +74,12 @@ export function installHud(opts: { initialMode: ViewMode; onToggle: () => void; 
     borderRadius: '8px', cursor: 'pointer', pointerEvents: 'auto', font: 'inherit',
     backdropFilter: 'blur(4px)',
   } as CSSStyleDeclaration);
-  btn.addEventListener('click', (e) => { e.preventDefault(); opts.onToggle(); });
+  // blur after activation so the button does not keep keyboard focus: input is
+  // now read from the engine InputSnapshot (a passive backend that does NOT
+  // preventDefault), so a focused <button> would let Space/Enter re-fire the
+  // toggle while the player also uses Space to jump. Dropping focus keeps the
+  // canvas the sole keyboard consumer.
+  btn.addEventListener('click', (e) => { e.preventDefault(); opts.onToggle(); btn.blur(); });
   btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(40,52,84,0.9)'; });
   btn.addEventListener('mouseleave', () => { btn.style.background = 'rgba(20,28,48,0.78)'; });
 

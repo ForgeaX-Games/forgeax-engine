@@ -202,6 +202,27 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/hello/compressed-texture": {
+      "name": "@forgeax/hello-compressed-texture",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-image": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@types/node": "^25.8.0",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/hello/cube": {
       "name": "@forgeax/hello-cube",
       "version": "0.0.0",
@@ -1966,6 +1987,7 @@
       "name": "@forgeax/engine-image",
       "version": "0.0.0",
       "dependencies": {
+        "@forgeax/engine-codec": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
@@ -2296,6 +2318,7 @@
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-geometry": "workspace:*",
+        "@forgeax/engine-input": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-physics": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
@@ -2700,6 +2723,8 @@
     "@forgeax/hello-bloom": ["@forgeax/hello-bloom@workspace:apps/hello/bloom"],
 
     "@forgeax/hello-character": ["@forgeax/hello-character@workspace:apps/hello/character"],
+
+    "@forgeax/hello-compressed-texture": ["@forgeax/hello-compressed-texture@workspace:apps/hello/compressed-texture"],
 
     "@forgeax/hello-cube": ["@forgeax/hello-cube@workspace:apps/hello/cube"],
 

@@ -1,7 +1,7 @@
 /**
  * Codec error model — closed union per D-8.
  *
- * All 4 error codes live here as the SSOT. Runtime never extends the types
+ * All codec error codes live here as the SSOT. Runtime never extends the types
  * shared union; codec errors are nested in existing asset error detail.
  *
  * Union is order-locked and add-only-minor for Loop 2 additions.
@@ -12,7 +12,9 @@ export type CodecErrorCode =
   | 'decompression-failed'
   | 'codec-init-failed'
   | 'ktx2-parse-failed'
-  | 'ktx2-unsupported-scheme';
+  | 'ktx2-unsupported-scheme'
+  | 'transcode-failed'
+  | 'ktx2-encode-failed';
 
 /** Per-code narrowed detail payloads. */
 export interface CodecErrorDetails {
@@ -20,6 +22,8 @@ export interface CodecErrorDetails {
   'codec-init-failed': { readonly stage: string };
   'ktx2-parse-failed': { readonly reason: string };
   'ktx2-unsupported-scheme': { readonly scheme: number };
+  'transcode-failed': { readonly sourceFormat: string; readonly targetFormat: string };
+  'ktx2-encode-failed': { readonly mode: string; readonly reason: string };
 }
 
 /** Structured codec error with executable hint + per-code narrowed detail. */
@@ -56,6 +60,10 @@ export function codecError<C extends CodecErrorCode>(
       'Check that the KTX2 file is valid and not truncated. Re-import the texture asset.',
     'ktx2-unsupported-scheme':
       'This supercompression scheme requires a future codec upgrade. Check the codec README Loop 2 extension points.',
+    'transcode-failed':
+      'Basis transcode failed for this source/target format pair. Verify the KTX2 payload is a valid Basis (ETC1S / UASTC) texture and re-import the asset.',
+    'ktx2-encode-failed':
+      'Basis encode failed for this compression mode. Verify the source image dimensions / pixel format match the mode (LDR rgba8 vs HDR rgba16float) and retry the asset import.',
   };
 
   return {

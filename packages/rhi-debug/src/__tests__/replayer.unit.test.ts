@@ -30,7 +30,9 @@ function makeTape(caps: Partial<RhiCapsRecorded>, events: Tape['events']): Tape 
       canvasFormat: caps.canvasFormat ?? ('bgra8unorm' as GPUTextureFormat),
       rgba16floatRenderable: caps.rgba16floatRenderable ?? false,
       float32Filterable: caps.float32Filterable ?? false,
-      textureCompression: caps.textureCompression ?? false,
+      textureCompressionBc: caps.textureCompressionBc ?? false,
+      textureCompressionEtc2: caps.textureCompressionEtc2 ?? false,
+      textureCompressionAstc: caps.textureCompressionAstc ?? false,
       storageBuffer: caps.storageBuffer ?? false,
       timestampQuery: caps.timestampQuery ?? false,
     },
@@ -89,7 +91,9 @@ function makeMockDevice(overrides: Partial<RhiCaps>): {
       compute: true,
       timestampQuery: overrides.timestampQuery ?? true,
       indirectDrawing: false,
-      textureCompression: overrides.textureCompression ?? true,
+      textureCompressionBc: overrides.textureCompressionBc ?? true,
+      textureCompressionEtc2: false,
+      textureCompressionAstc: false,
       multiDrawIndirect: false,
       pushConstants: false,
       textureBindingArray: false,
@@ -171,9 +175,9 @@ describe('createReplay caps mismatch (m5-3)', () => {
     }
   });
 
-  it('fails when textureCompression is required but missing', () => {
-    const tape = makeTape({ textureCompression: true }, []);
-    const { device } = makeMockDevice({ textureCompression: false });
+  it('fails when textureCompressionBc is required but missing', () => {
+    const tape = makeTape({ textureCompressionBc: true }, []);
+    const { device } = makeMockDevice({ textureCompressionBc: false });
     const result = createReplay(tape, device);
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -216,7 +220,9 @@ describe('createReplay caps mismatch (m5-3)', () => {
     const { device } = makeMockDevice({
       rgba16floatRenderable: false,
       float32Filterable: false,
-      textureCompression: false,
+      textureCompressionBc: false,
+      textureCompressionEtc2: false,
+      textureCompressionAstc: false,
       storageBuffer: false,
       timestampQuery: false,
     });
@@ -514,7 +520,9 @@ function makeSpyDevice() {
       compute: true,
       timestampQuery: true,
       indirectDrawing: false,
-      textureCompression: true,
+      textureCompressionBc: true,
+      textureCompressionEtc2: false,
+      textureCompressionAstc: false,
       multiDrawIndirect: false,
       pushConstants: false,
       textureBindingArray: false,

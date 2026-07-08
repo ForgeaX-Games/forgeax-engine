@@ -21,7 +21,10 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
+import type { CompressionMode } from '@forgeax/engine-image/ktx2-encode';
+import { resolveEncodeMode } from '@forgeax/engine-image/ktx2-encode';
 import type {
+  AssetCompression,
   EquirectAsset,
   ImageMetadata,
   ImportContext,
@@ -29,6 +32,40 @@ import type {
   TextureAsset,
 } from '@forgeax/engine-types';
 import { read as ddcRead, write as ddcWrite, keyFor } from './ddc-cache.js';
+
+/**
+ * Read the sidecar compressionMode token, defaulting to `'auto'` (M5 / w38 flip,
+ * frozen decision 4 final form). With the runtime loader + upload path now in
+ * place (M5 w34/w35/w36), an absent token cooks a Basis `.ktx2` via the 'auto'
+ * derivation (albedo/UI -> etc1s, normal/ORM -> uastc, HDR -> uastc-hdr). A
+ * sidecar can still opt out explicitly with `compressionMode:'none'` (R-9
+ * per-fixture escape hatch for any pixel-parity smoke that will not converge).
+ */
+function compressionModeOf(meta: ImageMetadata): CompressionMode {
+  const token = meta.compressionMode;
+  if (token === 'auto' || token === 'etc1s' || token === 'uastc' || token === 'none') {
+    return token;
+  }
+  return 'auto';
+}
+
+/** Map a resolved delivery encoding to the catalog `AssetCompression` discriminant. */
+function compressionFor(
+  mode: CompressionMode,
+  colorSpace: 'srgb' | 'linear',
+  isHdr: boolean,
+): AssetCompression {
+  switch (resolveEncodeMode(mode, { colorSpace, isHdr })) {
+    case 'etc1s':
+      return 'basis-etc1s';
+    case 'uastc':
+      return 'basis-uastc';
+    case 'uastc-hdr':
+      return 'basis-uastc-hdr';
+    case 'none':
+      return 'none';
+  }
+}
 
 /** Options for {@link importTextureEntry}. */
 export interface ImportTextureOptions {
@@ -116,10 +153,17 @@ export async function importTextureEntry(
     };
   }
 
-  // `importSettings` carries the colorSpace / mipmap the catalog already
-  // derived so the importer folds the same texture format -- and is the
-  // settings half of the DDC key (D-2).
-  const importSettings = { colorSpace: meta.colorSpace, mipmap: meta.mipmap };
+  // `importSettings` carries the colorSpace / mipmap / compressionMode the
+  // catalog already derived so the importer folds the same texture format +
+  // encoding -- and is the settings half of the DDC key (D-2). Including
+  // compressionMode here means changing it re-keys the DDC and forces a clean
+  // re-cook (R-9: no stale-cache poisoning across a mode change).
+  const compressionMode = compressionModeOf(meta);
+  const importSettings = {
+    colorSpace: meta.colorSpace,
+    mipmap: meta.mipmap,
+    compressionMode,
+  };
 
   // Build-time DDC (D-1): the decode is deterministic for a given
   // (source bytes, import settings), so a cache hit returns the previously
@@ -183,6 +227,22 @@ export async function importTextureEntry(
     imported.data instanceof Uint8Array
       ? imported.data
       : new Uint8Array(imported.data.buffer, imported.data.byteOffset, imported.data.byteLength);
+  // Record the resolved compression discriminant: mode != 'none' produced a
+  // Basis KTX2 in `bytes` (w18), so the catalog row carries the basis-* member;
+  // 'none' keeps the uncompressed `.bin` (compression 'none'). isHdr follows the
+  // source extension (the .hdr / equirect arm produces UASTC-HDR under 'auto').
+  //
+  // equirect is ALWAYS an IBL / skybox source (feat-20260707 M5 fix): the runtime
+  // drives it through equirect-to-cube / irradiance / prefilter RENDER passes, and
+  // a BC6H (block-compressed) texture is sample-only, never color-renderable, so a
+  // compressed equirect breaks cube projection with a WebGPU "not color renderable"
+  // error. Force 'none' for the equirect kind so the row stays uncompressed
+  // rgba16float `.bin` -- this agrees with the imageImporter HDR arm, which also
+  // never encodes an equirect sub. Only purely-sampled textures take the basis-*
+  // path (compressionFor).
+  const isHdr = lower.endsWith('.hdr');
+  const compression: AssetCompression =
+    entry.kind === 'equirect' ? 'none' : compressionFor(compressionMode, meta.colorSpace, isHdr);
   const metadata: ImageMetadata = {
     kind: 'texture',
     width: imported.width,
@@ -190,6 +250,8 @@ export async function importTextureEntry(
     format: meta.format,
     colorSpace: meta.colorSpace,
     mipmap: meta.mipmap,
+    compressionMode,
+    compression,
   };
   // Populate the build DDC so the next build with identical (source, settings)
   // hits and skips this decode (D-1). Fail-open inside ddcWrite.

@@ -125,6 +125,55 @@ describe('compress-artifact dual-arm round-trip (AC-07)', () => {
     expect(diff).toBe(true);
   });
 
+  it('alreadyCompressed=basis-*: passthrough bytes + row records the basis discriminant (no zstd stacking)', async () => {
+    // feat-20260707 M6 fix: a Basis KTX2 is self-supercompressed; the row must
+    // carry its basis-* discriminant so the runtime loader takes the transcode
+    // arm. Without this the row landed on 'none' and the scheme=1 KTX2 hit
+    // ktx2LevelsToRGBA which rejects BasisLZ. D-3: no outer zstd layer stacks.
+    for (const mode of ['basis-etc1s', 'basis-uastc', 'basis-uastc-hdr'] as const) {
+      const ktx2Bytes = new Uint8Array(512);
+      for (let i = 0; i < ktx2Bytes.length; i++) ktx2Bytes[i] = (i * 5 + 3) % 256;
+      const result = await compressArtifact({
+        bytes: ktx2Bytes,
+        kind: 'texture',
+        isPackJson: false,
+        alreadyCompressed: mode,
+      });
+      expect(result.compression).toBe(mode);
+      // Bytes pass through untouched (no zstd re-encode of the Basis container).
+      expect(result.compressed).toEqual(ktx2Bytes);
+    }
+  });
+
+  it('alreadyCompressed=basis-* wins over an explicit zstd override (D-3 mutual exclusion)', async () => {
+    // Even a sidecar zstd override must not stack an outer zstd layer on a Basis
+    // container -- the basis-* delivery encoding is authoritative.
+    const ktx2Bytes = new Uint8Array(256).fill(7);
+    const result = await compressArtifact({
+      bytes: ktx2Bytes,
+      kind: 'texture',
+      isPackJson: false,
+      override: 'zstd',
+      alreadyCompressed: 'basis-uastc',
+    });
+    expect(result.compression).toBe('basis-uastc');
+    expect(result.compressed).toEqual(ktx2Bytes);
+  });
+
+  it('alreadyCompressed=none: falls through to the STRATEGY_TABLE/override path unchanged', async () => {
+    // An uncompressed import (compressionMode:'none') must NOT short-circuit --
+    // the kind-keyed default still decides (texture -> none here).
+    const rgba = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    const result = await compressArtifact({
+      bytes: rgba,
+      kind: 'texture',
+      isPackJson: false,
+      alreadyCompressed: 'none',
+    });
+    expect(result.compression).toBe('none');
+    expect(result.compressed).toEqual(rgba);
+  });
+
   it('round-trip through codec encode→decode path (end-to-end verification)', async () => {
     // Full chain: programmatic fixture → compressZstd → decompressZstd → identical.
     // This is the same chain that w13's compressArtifact will use when force='zstd'.

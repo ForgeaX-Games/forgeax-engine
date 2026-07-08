@@ -24,7 +24,7 @@ description: >-
 
 | 入口 | 形态 | 用途 |
 |:--|:--|:--|
-| `defineComponent(name, fields, options?)` | `=> Component` | 定义组件 schema；单 field-descriptor 签名，定义即全局可用 |
+| `defineComponent(name, fields, options?)` | `=> Component` | 定义组件 schema；单 field-descriptor 签名，定义即全局可用。`options` 可带 `transient` / `relationship` / `cardinality` / `validate` / `onInsert` / `onRemove` |
 | `defineSystem({ name, queries, fn, ... })` | `=> SystemHandle<Qs>` | 定义系统 token；返回冻结 descriptor，`world.addSystem(token)` 直接激活 |
 | `getRegisteredSystems()` | `=> ReadonlyMap<string, SystemHandle>` | 枚举全部 defineSystem 注册的系统（按名取回） |
 | `getRegisteredComponents()` | `=> ReadonlyMap<string, Component>` | 枚举全部 defineComponent 注册的组件（按名取回） |
@@ -143,6 +143,24 @@ const ChildOf = defineComponent('ChildOf', { parent: { type: 'entity' } }, {
   relationship: { mirror: 'Children', field: 'entities', exclusive: true, linkedSpawn: false },
 });
 world.addChild(parent, child, ChildOf); // child gains ChildOf; parent.Children.entities auto-updated
+```
+
+### transient — 运行时派生、collect 跳过
+
+`transient: true` 声明组件为运行时派生态，`rootsToSceneAsset` collect 跳过（不写盘）。
+
+- **运行时仍在**：transient 组件在 archetype 列中物理存在，正常参与 `world.get` / query。`instantiateScene` 后由 relationship mirror hook 重建（如 `Children` 作为 `ChildOf` 的 mirror 由 mirror hook 填充）。**transient 只 gate collect 写盘路径，不影响运行时。**
+- **relationship mirror 义务**：relationship 组件的 mirror target（如 `ChildOf` 的 mirror `Children`）应声明 `transient: true`。引擎提供 `checkRelationshipMirrorsTransient(RELATIONSHIP_COMPONENTS, resolveComponent)`（collect 时的 dev 断言）检测遗漏声明。断言检查的是 **mirror token**（如 `Children`），不是 **holder token**（如 `ChildOf`）。
+- **标准示例**：`Children` 声明 `transient: true`，作为 `ChildOf` 的 mirror，instantiate 后由 mirror hook 重建，**永不序列化**。Mount round-trip 保真由 `ChildOf` 图保证，不依赖序列化 `Children` 数据。
+
+```ts
+// Children 声明 transient—collect 永不写盘
+export const Children = defineComponent('Children', {
+  entities: { type: 'array<entity>' },
+}, { transient: true });
+
+// SceneInstance 同样 transient—编辑态 play 不泄漏
+export const SceneInstance = defineComponent('SceneInstance', { ... }, { transient: true });
 ```
 
 ## 踩坑

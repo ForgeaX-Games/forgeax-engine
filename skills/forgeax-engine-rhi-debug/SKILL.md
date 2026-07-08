@@ -267,6 +267,25 @@ Single texture error does not affect other textures in the same draw.
 - **viewer ↔ CLI 改一处动两处**：整帧分析在 `/frame-model`（包内），viewer 与 `cli.mjs summary` 共用。改 `FrameModel` 形状要同步 `viewer-model.ts` re-export 与 CLI `summary` 序列化（resources/vertexBuffers Map → 数组）。`InspectReport.pipelineState` 由 `inspect-core.inspectDrawJson` 用同组原子填充，改 `makePipelineState` 同时影响 viewer、`summary`、`inspect-offline`。
 - **TextureViewer 乐观初值**：`data-forgeax-rt-status` 在异步 replay 完成前先同步给乐观值（color-rt+WebGPU→ok；可预览的绑定纹理同 ok，不可预览的绑定纹理→no-rt），消费方再 poll canvas 像素确认真实出图——否则 smoke 一次性读到的是初始 `no-rt` 而误判 SKIP。
 
+## Instance Data 面板与 group-3 约定
+
+PipelineState 底部有可折叠 section **`Instance Data`**：选中一个 `instanceCount > 1` 的 draw，若它绑了 `@group(3) @binding(0)`（forgeax 引擎约定 = `array<InstanceData>`），面板会解码 buffer 字节输出 per-instance TRS（+可选 region）表格。
+
+**约定 SSOT**：`packages/shader/src/common.wgsl:374-390` `struct InstanceData { localFromInstance: mat4x4<f32>, region?: vec4<f32> }`——两种变体：
+
+| stride | 变体 | 覆盖路径 |
+|:--|:--|:--|
+| 64 B | `mat4` only | 3D Instances + record-stage fold |
+| 80 B | `mat4 + region(vec4)` | SpriteInstances（含 tilemap 每 chunk 一 draw） |
+
+**失败态字面量**（AI 用户可字符串匹配路由）：`(none)` / `buffer not readable (no blob)` / `unexpected stride NN B (expected 64 or 80)` / `buffer truncated (got NN B, expected MM B)`
+
+**Anchor**：`data-forgeax-instance-data-section`（table 容器）+ `data-forgeax-instance-row="<idx>"`（每行）——SSOT `apps/rhi-debug-viewer/src/selectors.ts`
+
+**CLI 通道**：`pnpm rhi-debug summary <tape>` emit 的 JSON 自动带上 M1 补齐后的 `draws[i].drawCall.{firstIndex,firstVertex,firstInstance,baseVertex,indirectBufferHandleId,indirectOffset}` + `draws[i].{indexBuffer,vertexBuffers}`。**M2 之后 `vertexBuffers` entry 序列化为 `[[slot, {handleId, offset, size}], ...]`**（原为 `[[slot, handleId], ...]`）——`jq '.draws[0].vertexBuffers[0]'` 现返回 `[N, {"handleId": "...", "offset": 0, "size": ...}]` 的 record 而非裸字符串。CLI 侧未改代码，因 emit 的是 FrameModel SSOT。
+
+**约定漂移检测**：`packages/rhi-debug/src/__tests__/instance-decode-convention.dawn.test.ts` — 用 dawn-node 录一帧真实 WebGPU submit（`@group(3) @binding(0)` storage 存 4 个 80 B InstanceData），wrap 后 serialize，`buildFrameModel` 扫出 `instanceCount > 1` 的 draw，断言 `bufferSize / instanceCount ∈ {64, 80}` 且 `bufferSize === stride * instanceCount`。**lockdown 机制**：因 tape bytes 走真实 `queue.writeBuffer` → `blobPool` 通道，若 shader 侧 `InstanceData` struct 未来加字段（例：加一个 `vec4` 使 stride → 96），rerecord 后真实 GPU 上传 stride 变、断言集合 `{64, 80}` 不含 96 → CI 红。**rerecord 流程**：本 test 每次 `pnpm --filter @forgeax/engine-rhi-debug test:dawn`（或根 `pnpm test:dawn`）都会重录——无 checked-in fixture 需要人肉更新，dawn project 就是重录源。本地 dawn 不可用时 `FORGEAX_SKIP_DAWN=1` 跳过；CI dawn project 是 SSOT gate。
+
 ## 深入
 
 - 包全貌 / API 签名 / 错误码 hint 全串 / tape format 常量 / OOS 列表：[`packages/rhi-debug/README.md`](../../packages/rhi-debug/README.md)（contract SSOT）

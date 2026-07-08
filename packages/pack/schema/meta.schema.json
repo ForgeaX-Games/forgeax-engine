@@ -28,7 +28,7 @@
     },
     "importSettings": {
       "type": "object",
-      "description": "Importer-specific settings (compression, mipmap, etc.). Free-form object."
+      "description": "Importer-specific settings. Free-form object. Common texture keys: compressionMode ('auto' | 'etc1s' | 'uastc' | 'none', default 'auto'; see @forgeax/engine-image README), mipmap (boolean, bake mip chain offline)."
     },
     "paramSchema": {
       "type": "array",

@@ -19,6 +19,7 @@ function mockCtx(binaries: Record<string, Uint8Array>): LoadContext {
         : { ok: false as const, error: new Error(`no binary for ${url}`) };
     },
     resolveRef: async () => ({ ok: false as const, error: new Error('no ref') }),
+    transcodeCaps: { bc: false, etc2: false, astc: false },
     device: undefined,
   };
 }

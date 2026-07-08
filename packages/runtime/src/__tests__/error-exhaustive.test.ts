@@ -45,9 +45,9 @@ describe('ASSET_ERROR_HINTS runtime guard (23-member key set)', () => {
     expect(hint.length).toBeGreaterThan(0);
   });
 
-  it('Object.keys(ASSET_ERROR_HINTS) length is 24 (M0 baseline 20 + M1 +1 + feat-20260621 +1 + feat-20260629 +1 + perf-20260706 +1 source-not-imported)', () => {
+  it('Object.keys(ASSET_ERROR_HINTS) length is 25 (M0 baseline 20 + M1 +1 + feat-20260621 +1 + feat-20260629 +1 + perf-20260706 +1 source-not-imported + feat-20260707 +1 mipgen-unsupported-compressed-format)', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
-    expect(keys.length).toBe(24);
+    expect(keys.length).toBe(25);
   });
 
   it('hint contains >= 3 of the 7 .detail.field tokens', () => {
@@ -119,6 +119,9 @@ describe('AssetErrorCode 23-member exhaustive switch (M1 +tileset-tile-entry-mal
         // === 1 new code (feat-20260629-multi-uv-set-support M2 / m2-w5) ===
         case 'mesh-bin-contract-violation':
           return 'mesh-bin-contract-violation';
+        // === 1 new code (feat-20260707-texture-block-compression M5 / w35) ===
+        case 'mipgen-unsupported-compressed-format':
+          return 'mipgen-unsupported-compressed-format';
       }
       // No default -- TS proves completeness (charter P3).
     }

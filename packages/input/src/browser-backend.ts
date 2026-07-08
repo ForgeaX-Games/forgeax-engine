@@ -19,7 +19,16 @@
 // protocol. The browser-mode coverage of this file is the M2b layer
 // (plan-strategy section 5.4 reason for the 70% floor).
 
+import type { ControllerDb, MappingTokens } from './controller-db';
 import { diffGamepadFrame, type RawGamepadStub } from './gamepad-frame';
+import {
+  createRecognizerState,
+  type GestureEvent,
+  type GestureState,
+  processGestureFrame,
+  type RecognizerPointer,
+  type RecognizerState,
+} from './gesture-recognizer';
 import type {
   Capabilities,
   GamepadSlotSample,
@@ -27,10 +36,21 @@ import type {
   InputBackendSample,
   PointerPhaseEvent,
   PointerSample,
+  PointerType,
   VirtualAxisSample,
   VirtualJoystickConfig,
 } from './input-snapshot';
 import { type BindState, deriveVirtualAxes, handleVirtualJoystickUnbind } from './virtual-joystick';
+
+// D-5: normalize W3C PointerEvent.pointerType to the canonical 3-literal union.
+// The spec allows '' when device type is undetectable; we map it to 'mouse' so
+// the snapshot consumers (action matchers, gesture recognizers) can exhaustively
+// switch on PointerType without a default branch (AC-19).
+export function coercePointerType(raw: string): PointerType {
+  if (raw === 'pen') return 'pen';
+  if (raw === 'touch') return 'touch';
+  return 'mouse';
+}
 
 /**
  * Options accepted by `attachBrowserInputBackend`.
@@ -73,6 +93,24 @@ export interface BrowserInputBackendOptions {
    * and derives per-frame VirtualAxisSample outputs via deriveVirtualAxes.
    */
   readonly virtualJoysticks?: readonly VirtualJoystickConfig[];
+  /**
+   * Optional SDL controller DB text loader (M3 D-13 test injection). When
+   * omitted, the backend dynamic-imports the vendored 554KB DB from
+   * `@forgeax/engine-input/controller-db-data` on first sight of a
+   * non-standard gamepad (D-2 lazy-load: the 554KB never sits in the
+   * default path). Tests inject a synthetic DB string to avoid loading the
+   * real vendored file. Returns the raw gamecontrollerdb.txt contents.
+   */
+  readonly loadControllerDb?: () => Promise<string>;
+  /**
+   * Optional monotonic clock (M5 D-3 test injection). Defaults to
+   * `() => performance.now()`. The gesture recognizer advances all timers
+   * (long-press duration, double-tap / swipe windows) off this clock, NOT
+   * off pointer-event arrival, so recognition stays decoupled from event
+   * frequency (AC-16). Tests inject a fake clock for deterministic timing,
+   * mirroring the `document` / `window` / `navigator` override pattern.
+   */
+  readonly now?: () => number;
 }
 
 /**
@@ -116,17 +154,98 @@ export function attachBrowserInputBackend(
   // Stored in backend closure; diffGamepadFrame compares prev vs cur each sample().
   let prevGamepadFrame = new Map<number, GamepadSlotSample>();
 
+  // M3 D-2 lazy-load state. The SDL DB (554KB) is loaded once, on first sight
+  // of a non-standard gamepad, then cached here. `controllerDb` stays
+  // undefined until the async load resolves; frames before that keep the
+  // Feat1 empty signal (graceful degradation). `dbLoadStarted` prevents
+  // re-triggering the load on every frame while the promise is pending.
+  let controllerDb: ControllerDb | undefined;
+  let dbLoadStarted = false;
+  // Per-id GUID resolution cache (avoids re-parsing the same Gamepad.id).
+  const guidCache = new Map<string, string | undefined>();
+
+  // M3 D-13: the DB parser + GUID helpers live in the pure controller-db
+  // module. They are dynamic-imported alongside the data so neither the
+  // parser nor the 554KB vendored text enters the main-entry bundle.
+  let controllerDbApi:
+    | {
+        parseControllerDb: (txt: string) => ControllerDb;
+        extractGuidFromGamepadId: (id: string) => string | undefined;
+        selectBestMappingEntry: (
+          db: ControllerDb,
+          guid: string,
+          platform: string | undefined,
+        ) => { readonly tokens: MappingTokens } | undefined;
+        platformFromUserAgent: (ua: string) => string | undefined;
+      }
+    | undefined;
+
+  function kickOffDbLoad(): void {
+    if (dbLoadStarted) return;
+    dbLoadStarted = true;
+    const loadApi = controllerDbApi
+      ? Promise.resolve(controllerDbApi)
+      : import('@forgeax/engine-input/controller-db').then((m) => {
+          controllerDbApi = m;
+          return m;
+        });
+    const loadText = options.loadControllerDb
+      ? options.loadControllerDb()
+      : import('@forgeax/engine-input/controller-db-data').then((m) => m.loadBundledControllerDb());
+    Promise.all([loadApi, loadText])
+      .then(([api, txt]) => {
+        controllerDb = api.parseControllerDb(txt);
+      })
+      .catch(() => {
+        // Load failed (offline chunk / bad text): keep the Feat1 empty
+        // signal. Reset so a later frame may retry.
+        dbLoadStarted = false;
+      });
+  }
+
+  // Acquisition-layer remap lookup passed to diffGamepadFrame. Returns the
+  // standard-layout mapping tokens for a Gamepad.id, or null when the DB is
+  // not yet loaded / the GUID is unextractable / no DB entry matches.
+  function remapLookup(gamepadId: string): MappingTokens | null {
+    if (!controllerDb || !controllerDbApi) return null;
+    let guid = guidCache.get(gamepadId);
+    if (!guidCache.has(gamepadId)) {
+      guid = controllerDbApi.extractGuidFromGamepadId(gamepadId);
+      guidCache.set(gamepadId, guid);
+    }
+    if (!guid) return null;
+    const ua =
+      typeof globalThis.navigator?.userAgent === 'string' ? globalThis.navigator.userAgent : '';
+    const platform = controllerDbApi.platformFromUserAgent(ua);
+    const entry = controllerDbApi.selectBestMappingEntry(controllerDb, guid, platform);
+    return entry ? entry.tokens : null;
+  }
+
   // w15: pointer map (pointerId → live position), phase queue (one-frame lifecycle),
   // and per-pointer previous position for cross-frame delta.
   const pointerMap = new Map<
     number,
-    { x: number; y: number; pressure: number; pointerType: string; prevX: number; prevY: number }
+    {
+      x: number;
+      y: number;
+      pressure: number;
+      pointerType: PointerType;
+      prevX: number;
+      prevY: number;
+    }
   >();
   const phaseQueue: PointerPhaseEvent[] = [];
 
   // w21: virtual joystick binding state (per-joystick name → BindState).
   const vjConfigs = options.virtualJoysticks ?? [];
   const vjBindState = new Map<string, BindState>();
+
+  // M5 D-3/D-4: gesture recognizer cross-frame state lives in this closure
+  // (C-3: the only sanctioned cross-frame gesture holder, alongside
+  // prevGamepadFrame / pointerMap / vjBindState). `now` is injectable for
+  // deterministic test timing; production uses performance.now().
+  const now = options.now ?? (() => performance.now());
+  let recognizerState: RecognizerState = createRecognizerState();
 
   // DPR coordinate helpers. computePointerCoords applies the standard DPR-correct
   // canvas-pixel formula; falls back to clientX/clientY when getBoundingClientRect
@@ -176,7 +295,7 @@ export function attachBrowserInputBackend(
       x: coords.x,
       y: coords.y,
       pressure: ev.pressure,
-      pointerType: ev.pointerType,
+      pointerType: coercePointerType(ev.pointerType),
       prevX: coords.x,
       prevY: coords.y,
     });
@@ -186,7 +305,7 @@ export function attachBrowserInputBackend(
       x: coords.x,
       y: coords.y,
       pressure: ev.pressure,
-      pointerType: ev.pointerType,
+      pointerType: coercePointerType(ev.pointerType),
     });
     // w21: virtual joystick auto-bind -- first config whose region contains
     // the pointerdown position, if not already bound to another pointer.
@@ -233,7 +352,7 @@ export function attachBrowserInputBackend(
         x: entry.x,
         y: entry.y,
         pressure: ev.pressure,
-        pointerType: ev.pointerType,
+        pointerType: coercePointerType(ev.pointerType),
       });
       pointerMap.delete(ev.pointerId);
     }
@@ -262,7 +381,7 @@ export function attachBrowserInputBackend(
         x: coords.x,
         y: coords.y,
         pressure: ev.pressure,
-        pointerType: ev.pointerType,
+        pointerType: coercePointerType(ev.pointerType),
       });
     }
   }
@@ -275,7 +394,7 @@ export function attachBrowserInputBackend(
         x: entry.x,
         y: entry.y,
         pressure: ev.pressure,
-        pointerType: ev.pointerType,
+        pointerType: coercePointerType(ev.pointerType),
       });
       pointerMap.delete(ev.pointerId);
     }
@@ -395,10 +514,16 @@ export function attachBrowserInputBackend(
       try {
         const rawGamepads = (nav.getGamepads?.() ?? []) as (RawGamepadStub | null)[];
         const valid: RawGamepadStub[] = [];
+        let hasNonStandard = false;
         for (const gp of rawGamepads) {
-          if (gp?.connected) valid.push(gp);
+          if (!gp?.connected) continue;
+          valid.push(gp);
+          if (gp.mapping !== 'standard') hasNonStandard = true;
         }
-        gamepads = diffGamepadFrame(prevGamepadFrame, valid);
+        // M3 D-2 / C-5: only a real non-standard gamepad triggers the DB
+        // load. Standard pads never pull in the 554KB DB.
+        if (hasNonStandard) kickOffDbLoad();
+        gamepads = diffGamepadFrame(prevGamepadFrame, valid, remapLookup);
         // Store this frame's state for next frame's diff.
         const nextFrame = new Map<number, GamepadSlotSample>();
         for (const slot of gamepads) {
@@ -449,6 +574,26 @@ export function attachBrowserInputBackend(
       virtualAxes = deriveVirtualAxes(vjConfigs, pointerMap, vjBindState);
     }
 
+    // M5 D-4: run the gesture recognizer over this frame's phase queue BEFORE
+    // it is drained below. onBlur / pointercancel pushed cancel phases into
+    // the same queue, so the recognizer naturally resets active gestures +
+    // emits cancel events (AC-18) without a separate reset path. All timers
+    // advance off `now()` (D-3), decoupled from event frequency (AC-16).
+    const gestureResult = processGestureFrame(
+      phaseQueue,
+      pointerMap as ReadonlyMap<number, RecognizerPointer>,
+      recognizerState,
+      now(),
+    );
+    recognizerState = gestureResult.newState;
+    // Emit optional fields only when there is gesture signal to carry: an
+    // active/frozen continuous value (non-identity) or lifecycle events.
+    const gestureEvents: readonly GestureEvent[] | undefined =
+      gestureResult.gestureEvents.length > 0 ? gestureResult.gestureEvents : undefined;
+    const gs = gestureResult.gestureState;
+    const gestures: GestureState | undefined =
+      gs.pinchScale !== 1 || gs.rotationAngle !== 0 ? gs : undefined;
+
     const out: InputBackendSample = {
       downKeys: new Set(heldKeys),
       upKeys: new Set(upEdges),
@@ -462,6 +607,8 @@ export function attachBrowserInputBackend(
       ...(pointers ? { pointers } : {}),
       ...(pointerEvents ? { pointerEvents } : {}),
       ...(virtualAxes ? { virtualAxes } : {}),
+      ...(gestures ? { gestures } : {}),
+      ...(gestureEvents ? { gestureEvents } : {}),
     };
     // Reset per-frame accumulators (movement delta + up-edge set + wheel notches + phase queue).
     upEdges.clear();
@@ -499,6 +646,7 @@ export function attachBrowserInputBackend(
     phaseQueue.length = 0;
     prevGamepadFrame.clear();
     vjBindState.clear();
+    recognizerState = createRecognizerState();
     buttons[0] = false;
     buttons[1] = false;
     buttons[2] = false;

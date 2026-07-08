@@ -21,11 +21,12 @@ import { bufferBindingConsumers } from '../buffer-binding';
 // --------------------------------------------------------------------------
 
 type HandleId = string;
+type VertexBufferBinding = { handleId: HandleId; offset: number; size: number };
 
 function stubDraw(
   passIdx: number,
   overrides: {
-    vertexBuffers?: Map<number, HandleId>;
+    vertexBuffers?: Map<number, VertexBufferBinding>;
   } = {},
 ): DrawEntry {
   return {
@@ -89,9 +90,9 @@ function stubDraw(
 
 describe('AC-06a: vertex buffer slot → draw', () => {
   it('maps buffer to draw via DrawEntry.vertexBuffers', () => {
-    const vb = new Map<number, HandleId>();
-    vb.set(0, 'buf-vbo');
-    vb.set(1, 'buf-instanceData');
+    const vb = new Map<number, VertexBufferBinding>();
+    vb.set(0, { handleId: 'buf-vbo', offset: 0, size: 72 });
+    vb.set(1, { handleId: 'buf-instanceData', offset: 0, size: 128 });
 
     const draws: readonly DrawEntry[] = [stubDraw(0, { vertexBuffers: vb })];
 
@@ -104,13 +105,17 @@ describe('AC-06a: vertex buffer slot → draw', () => {
     expect(vboConsumers![0]!.role).toBe('vertex');
     expect(vboConsumers![0]!.slot).toBe(0);
     expect(vboConsumers![0]!.stride).toBeUndefined();
+    // AC-09: details string surfaces offset + size verbatim so AI users read
+    // them from the "Used by" list without re-scanning the tape.
+    expect(vboConsumers![0]!.details).toContain('offset=0');
+    expect(vboConsumers![0]!.details).toContain('size=72');
   });
 
   it('maps a buffer referenced by multiple draws in same/different passes', () => {
-    const vb0 = new Map<number, HandleId>();
-    vb0.set(0, 'buf-shared');
-    const vb1 = new Map<number, HandleId>();
-    vb1.set(0, 'buf-shared');
+    const vb0 = new Map<number, VertexBufferBinding>();
+    vb0.set(0, { handleId: 'buf-shared', offset: 0, size: 0 });
+    const vb1 = new Map<number, VertexBufferBinding>();
+    vb1.set(0, { handleId: 'buf-shared', offset: 16, size: 32 });
 
     const draws: readonly DrawEntry[] = [
       stubDraw(0, { vertexBuffers: vb0 }),
@@ -124,11 +129,15 @@ describe('AC-06a: vertex buffer slot → draw', () => {
     expect(consumers).toHaveLength(2);
     expect(consumers![0]!.drawIdx).toBe(0);
     expect(consumers![1]!.drawIdx).toBe(1);
+    // per-draw offset/size preserved independently
+    expect(consumers![0]!.details).toContain('offset=0');
+    expect(consumers![1]!.details).toContain('offset=16');
+    expect(consumers![1]!.details).toContain('size=32');
   });
 
   it('returns undefined for buffer not referenced by any draw', () => {
-    const vb = new Map<number, HandleId>();
-    vb.set(0, 'buf-used');
+    const vb = new Map<number, VertexBufferBinding>();
+    vb.set(0, { handleId: 'buf-used', offset: 0, size: 0 });
 
     const draws: readonly DrawEntry[] = [stubDraw(0, { vertexBuffers: vb })];
 
@@ -296,8 +305,8 @@ describe('AC-06c: bind group binding → buffer', () => {
 
 describe('AC-06: mixed binding paths', () => {
   it('buffer used as both vertex buffer and bind group shows both consumers', () => {
-    const vb = new Map<number, HandleId>();
-    vb.set(0, 'buf-multi');
+    const vb = new Map<number, VertexBufferBinding>();
+    vb.set(0, { handleId: 'buf-multi', offset: 0, size: 0 });
 
     const draws: readonly DrawEntry[] = [stubDraw(0, { vertexBuffers: vb })];
 

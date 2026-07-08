@@ -970,6 +970,10 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
         format: 'rgba8unorm-srgb',
         colorSpace: 'srgb',
         mipmap: true,
+        // feat-20260707 M5 / w38: these arms assert the UNCOMPRESSED RGBA import
+        // shape (byteLength == w*h*4). Pin compressionMode:'none' now that the
+        // default flipped to 'auto' (which would cook a Basis .ktx2 instead).
+        compressionMode: 'none',
       },
     };
   }
@@ -1039,7 +1043,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect('relativeUrl' in result).toBe(false);
     });
 
-    it('(c) .hdr arm (AC-12): imports rgba16float bytes (8 bytes/px) + folded metadata', async () => {
+    it("(c) .hdr arm (AC-12) compressionMode:'none' imports raw rgba16float bytes (8 bytes/px)", async () => {
       const width = 8;
       const height = 4;
       const sourceRel = relative(tmpRoot, join(tmpRoot, 'assets', 'env.hdr'));
@@ -1055,6 +1059,9 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
           format: 'rgba16float',
           colorSpace: 'linear',
           mipmap: false,
+          // Pin 'none' to assert the UNCOMPRESSED rgba16float import shape now
+          // that the default flipped to 'auto' (which cooks a UASTC-HDR .ktx2).
+          compressionMode: 'none',
         },
       };
 
@@ -1066,7 +1073,44 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(result.metadata.width).toBe(width);
       expect(result.metadata.height).toBe(height);
       expect(result.bytes.byteLength).toBe(width * height * 4 * 2);
+      expect(result.metadata.compression).toBe('none');
       expect('relativeUrl' in result).toBe(false);
+    });
+
+    it("(c2) .hdr equirect default 'auto' stays uncompressed rgba16float (feat-20260707 fix)", async () => {
+      const width = 8;
+      const height = 4;
+      const sourceRel = relative(tmpRoot, join(tmpRoot, 'assets', 'env-auto.hdr'));
+      await writeFile(join(tmpRoot, sourceRel), itMakeMinimalHdr(width, height));
+
+      const entry: PackIndexEntry = {
+        guid: IT_HDR_GUID,
+        relativeUrl: `/${sourceRel}`,
+        kind: 'equirect',
+        sourcePath: sourceRel,
+        metadata: {
+          kind: 'texture',
+          format: 'rgba16float',
+          colorSpace: 'linear',
+          mipmap: false,
+          // No compressionMode -> defaults to 'auto'. An equirect is ALWAYS an
+          // IBL / skybox source (equirect-to-cube / irradiance / prefilter RENDER
+          // passes) and BC6H is not color-renderable, so the equirect kind is
+          // never block-compressed: the catalog row is forced to compression
+          // 'none' and the importer ships raw rgba16float (the two agree).
+        },
+      };
+
+      const result = await importTextureEntry(entry, { cwd: tmpRoot });
+      expect('bytes' in result).toBe(true);
+      if (!('bytes' in result)) return;
+      // KTX2 magic identifier (first 12 bytes of every KTX 2.0 container).
+      const KTX2_MAGIC = [0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a];
+      // Raw rgba16float byte count (w*h*8), NOT a KTX2 container.
+      expect(result.bytes.byteLength).toBe(width * height * 4 * 2);
+      expect(Array.from(result.bytes.subarray(0, 12))).not.toEqual(KTX2_MAGIC);
+      expect(result.metadata.compression).toBe('none');
+      expect(result.metadata.format).toBe('rgba16float');
     });
 
     it('(d) non-texture / unknown-extension rows are skipped (no import)', async () => {

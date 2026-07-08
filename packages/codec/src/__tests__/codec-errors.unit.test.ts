@@ -55,18 +55,24 @@ describe('codec error paths (w4)', () => {
           return 'ktx2-parse';
         case 'ktx2-unsupported-scheme':
           return 'ktx2-unsupported';
+        case 'transcode-failed':
+          return 'transcode';
+        case 'ktx2-encode-failed':
+          return 'ktx2-encode';
       }
     }
     // If we got here, exhaustive switch compiled without TS error.
-    // Verify all 4 codes produce distinct strings (not a degenerate pass-through).
+    // Verify all 6 codes produce distinct strings (not a degenerate pass-through).
     const handled = [
       handleCode('decompression-failed'),
       handleCode('codec-init-failed'),
       handleCode('ktx2-parse-failed'),
       handleCode('ktx2-unsupported-scheme'),
+      handleCode('transcode-failed'),
+      handleCode('ktx2-encode-failed'),
     ];
-    expect(handled.length).toBe(4);
-    expect(new Set(handled).size).toBe(4); // all distinct
+    expect(handled.length).toBe(6);
+    expect(new Set(handled).size).toBe(6); // all distinct
   });
 
   // --- ktx2-parse-failed shape via factory ---

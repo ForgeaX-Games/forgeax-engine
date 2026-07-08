@@ -236,7 +236,9 @@ function makeTapeFromEventsBase(
       canvasFormat: 'bgra8unorm' as GPUTextureFormat,
       rgba16floatRenderable: false,
       float32Filterable: false,
-      textureCompression: false,
+      textureCompressionBc: false,
+      textureCompressionEtc2: false,
+      textureCompressionAstc: false,
       storageBuffer: false,
       timestampQuery: false,
     },
@@ -743,13 +745,15 @@ describe('buildViewModel — extended fields (w12)', () => {
     expect(ct?.color?.srcFactor).toBe('src-alpha');
   });
 
-  it('draws[].vertexBuffers maps slot -> bufferHandleId', () => {
+  it('draws[].vertexBuffers maps slot -> {handleId, offset, size}', () => {
     const d = vm.draws[0]!;
     expect(d.vertexBuffers).toBeDefined();
     expect(d.vertexBuffers instanceof Map).toBe(true);
     expect(d.vertexBuffers.size).toBe(2);
-    expect(d.vertexBuffers.get(0)).toBe('buf:vbo');
-    expect(d.vertexBuffers.get(1)).toBe('buf:ibo');
+    // Slot 0: setVertexBuffer omitted offset/size → both default to 0
+    expect(d.vertexBuffers.get(0)).toEqual({ handleId: 'buf:vbo', offset: 0, size: 0 });
+    // Slot 1: fixture passed offset:0, size:12 verbatim (see event above)
+    expect(d.vertexBuffers.get(1)).toEqual({ handleId: 'buf:ibo', offset: 0, size: 12 });
   });
 
   it('draws[].depthStencil references the depthStencilViewHandleId', () => {

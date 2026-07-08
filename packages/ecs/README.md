@@ -392,6 +392,22 @@ const ChildOf = defineComponent('ChildOf', { parent: 'entity' }, {
 
 > Eliminates the prior manual `Children` ↔ `ChildOf` two-step maintenance (OOS-09 / OOS-10).
 
+> Because the mirror component (`Children`) is a derived runtime view, it must be declared `transient: true` so scene collect never serializes it — see [§transient](#transient--serialization-skip-for-derived-runtime-state-feat-20260707) below.
+
+## transient — serialization-skip for derived runtime state (feat-20260707)
+
+`transient: true` declares a component as derived runtime state. `rootsToSceneAsset` collect skips transient components — they are never written to `SceneAsset` payload. However, they remain physically in archetype columns and participate normally in queries and `world.get`. After `instantiateScene`, relationship mirror hooks rebuild them (e.g., `Children` is rebuilt by `ChildOf`'s `onInsert` hook). `transient` only gates the collect write path, not runtime presence.
+
+**Relationship mirror obligation**: mirror targets of relationship components MUST declare `transient: true`. The engine provides `checkRelationshipMirrorsTransient(RELATIONSHIP_COMPONENTS, resolveComponent)` — a dev assertion at collect time that catches omissions. The assertion checks the **mirror token** (e.g., `Children`), not the **holder token** (e.g., `ChildOf`). `RELATIONSHIP_COMPONENTS` is a `ReadonlySet<Component>` of every component declared with `relationship` metadata; exported from `@forgeax/engine-ecs`. The assertion is **dev-gated** — `rootsToSceneAsset` runs it only when `NODE_ENV !== 'production'` (browser-safe probe), so it names an omitted mirror during development and adds zero production overhead.
+
+**Canonical example** — `Children` is the standard transient component:
+```ts
+export const Children = defineComponent('Children', {
+  entities: { type: 'array<entity>' },
+}, { transient: true });
+```
+It is the mirror of `ChildOf`, rebuilt by the mirror hook after `instantiateScene`, and never serialized. Mount round-trip fidelity (`rootsToSceneAsset` -> `instantiateScene` -> `rootsToSceneAsset` structural equivalence) is guaranteed by the `ChildOf` relationship graph, not by serialized `Children` data.
+
 ## Query — `optional` per-archetype column-level exposure (feat-20260531)
 
 **`optional` = per-archetype column-level data exposure; does not participate in matching/filtering.** The `with` set determines **which archetypes match** (`with ∩ ¬without`); `optional` only decides **which extra columns the bundle carries** on each matched archetype. A component in `optional` that is absent from an archetype simply omits its key from `bundle` (overall absent — no `undefined` value, no empty object). This is the data/filter separation (wiki/bevy-ecs AP-3): optional lives in the data dimension, not the filter dimension.

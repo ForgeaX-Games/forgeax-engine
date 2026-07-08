@@ -1861,9 +1861,12 @@ export function countExtraUvSets(attrs: UvAttributeSource | undefined): number {
  * feat-20260603-asset-import-loader-injection M1 2 members +
  * feat-20260604-hdr-equirect-cube-importer-loader M2 1 member +
  * feat-20260608-mesh-multi-section-primitive-multi-material-slot M1 3 members +
- * feat-20260621-asset-registry-robustness-invalidate-inflight-cach M2 1 member;
+ * feat-20260621-asset-registry-robustness-invalidate-inflight-cach M2 1 member +
+ * feat-20260707-texture-block-compression M5 1 member
+ * (mipgen-unsupported-compressed-format);
  * requirements §G3 + AC-03 + AC-21 +
- * feat-20260518 AC-02 + bug-20260523 AC-01).
+ * feat-20260518 AC-02 + bug-20260523 AC-01. The runtime-guard SSOT for the
+ * current member count is the ASSET_ERROR_HINTS key-count test, not this prose.)
  * Exhaustive `switch (err.code)` needs no default fallback — TypeScript guards
  * union completeness at compile time (charter F2/P2 machine-readable union >
  * prose + P3 explicit failure).
@@ -1945,7 +1948,16 @@ export type AssetErrorCode =
   // charter P3 closed enum + AI-grep affordance). 20 -> 21 M1 net add.
   | 'tileset-tile-entry-malformed'
   // === 1 new code (feat-20260621-asset-registry-robustness-invalidate-inflight-cach M2 / w4) ===
-  | 'asset-invalidated';
+  | 'asset-invalidated'
+  // === 1 new code (feat-20260707-texture-block-compression M5 / w35, D-9) ===
+  // deriveRenderDataTexture fail-fast: a block-compressed `format` requested
+  // RUNTIME mip generation (`mipmap:true` with no offline `mipLevelCount>1`
+  // chain). Compressed formats are not render targets, so the mipmap blit
+  // pipeline cannot generate their mips (F-7); the chain must be baked offline.
+  // `.hint` carries the self-recovery (bake offline mips, or set the sidecar
+  // `compressionMode:'none'`). A compressed texture whose mips are ALREADY in
+  // `data` (mipLevelCount>1 from a KTX2 level chain) does NOT trip this gate.
+  | 'mipgen-unsupported-compressed-format';
 
 /**
  * Structured asset error -- four-field surface (`.code` / `.expected` /
@@ -2070,6 +2082,9 @@ export const ASSET_ERROR_HINTS: Readonly<Record<AssetErrorCode, string>> = {
   // === 1 new hint (feat-20260629-multi-uv-set-support M2 / m2-w5) ===
   'mesh-bin-contract-violation':
     're-cook the asset via importer; the .bin sidecar header v2 contract is violated — check err.detail for version/uvSetCount/stride mismatch',
+  // === 1 new hint (feat-20260707-texture-block-compression M5 / w35, D-9) ===
+  'mipgen-unsupported-compressed-format':
+    'compressed-texture mips must be baked offline (the GPU cannot generate mips for a non-render-target block format); re-cook with an offline mip chain, or set the sidecar .meta.json compressionMode:"none" (or mipmap:false) to keep runtime mip generation on an uncompressed texture',
 };
 
 // === Font error model SSOT (feat-20260531-world-space-msdf-text-rendering M2 / w6) ===
@@ -4212,13 +4227,23 @@ interface MetricErrorBase {
  */
 
 /**
- * Asset compression strategy — closed literal union.
+ * Asset compression strategy — closed literal union (SSOT, D-3 / D-9).
  *
- * Single SSOT (D-9). Loop 1 supports `'none'` (pass-through) and `'zstd'`.
- * Loop 2 may add members (add-only-minor). A missing / `undefined` field
- * means legacy uncompressed artefact (E1 backward-compat).
+ * Five flat, mutually-exclusive members describing how an artefact is stored:
+ *   - `'none'`  — pass-through (uncompressed bytes)
+ *   - `'zstd'`  — generic zstd container compression (Loop 1)
+ *   - `'basis-etc1s'` / `'basis-uastc'` / `'basis-uastc-hdr'` — a Basis-encoded
+ *     KTX2 texture (Loop 2). The `basis-*` members fully describe the delivered
+ *     encoding: the KTX2 container carries its own supercompression (self-
+ *     described by the KTX2 header) and does NOT stack an outer `'zstd'` layer
+ *     (mutual exclusion by construction, D-3). The `basis-` kebab prefix is
+ *     visually distinct from GPU texture-format literals (naming rule, §8).
+ *
+ * Add-only-minor: Loop 2 appends the three `basis-*` members without repainting
+ * `'none'` / `'zstd'` semantics (AC-11a). A missing / `undefined` field means a
+ * legacy uncompressed artefact (E1 backward-compat).
  */
-export type AssetCompression = 'none' | 'zstd';
+export type AssetCompression = 'none' | 'zstd' | 'basis-etc1s' | 'basis-uastc' | 'basis-uastc-hdr';
 
 export interface ImageMetadata {
   readonly kind: 'texture';
@@ -4229,6 +4254,14 @@ export interface ImageMetadata {
   readonly mipmap: boolean;
   /** Build-time compression strategy used for this image artefact. `undefined` for legacy assets. */
   readonly compression?: AssetCompression;
+  /**
+   * Sidecar control-plane request for the offline texture encoder (D-12).
+   * `'auto'` derives the delivery encoding from `colorSpace` + HDR source;
+   * `'etc1s'` / `'uastc'` force a Basis encoding; `'none'` keeps the
+   * uncompressed `.bin` path. Aligns with the mipmap sidecar tri-state idiom.
+   * The `'auto'` default semantics activate in M5; M3 keeps the default `'none'`.
+   */
+  readonly compressionMode?: 'auto' | 'etc1s' | 'uastc' | 'none';
 }
 
 /**
@@ -4386,6 +4419,27 @@ export interface ParseErrorDetail {
   readonly refsLength: number;
 }
 
+/**
+ * Device texture-compression capabilities the transcode target selector reads
+ * (feat-20260707 M5 / D-8, D-11).
+ *
+ * Three independent booleans mirror the WebGPU `texture-compression-{bc,etc2,
+ * astc}` device features (and the `RhiCaps.textureCompression{Bc,Etc2,Astc}`
+ * triple they are projected from — createRenderer does the one-line RhiCaps ->
+ * TranscodeCaps projection). This shape is structurally identical to the codec
+ * package's own `TranscodeCaps` (`@forgeax/engine-codec`): the codec keeps a
+ * LOCAL copy on purpose (D-8 — codec is a pure, dependency-light transcode
+ * library and must not take a `@forgeax/engine-types` edge just to name its
+ * pure-function input). The runtime passes a value of this type straight into
+ * `selectTranscodeTarget` by structural compatibility; there is exactly one
+ * value threaded through `LoadContext`, so no fact is duplicated at runtime.
+ */
+export interface TranscodeCaps {
+  readonly bc: boolean;
+  readonly etc2: boolean;
+  readonly astc: boolean;
+}
+
 export interface LoadContext {
   /**
    * Fetch raw bytes for an asset artefact, with optional decompression.
@@ -4422,6 +4476,16 @@ export interface LoadContext {
    * handles via paramSchema validation and falls back to MISSING_TEXTURE_HANDLE.
    */
   getMaterialShaderTextureFieldNames?(shaderId: string): ReadonlySet<string> | undefined;
+  /**
+   * feat-20260707 M5 / w33 (D-11): device compression caps the texture / equirect
+   * Basis arms feed to `selectTranscodeTarget` to pick a transcode target. Wired
+   * by `createRenderer` from `RhiCaps` (D-8 one-line projection); a bare
+   * AssetRegistry (test / headless path) defaults to all-false, which drives the
+   * uncompressed `rgba8unorm` / `rgba16float` fallback (section 8 P3, AC-04).
+   * Extends the single ctx input face rather than opening a new loader channel
+   * (Pipeline Isolation — inputs declared explicitly).
+   */
+  readonly transcodeCaps: TranscodeCaps;
   readonly device: unknown;
 }
 

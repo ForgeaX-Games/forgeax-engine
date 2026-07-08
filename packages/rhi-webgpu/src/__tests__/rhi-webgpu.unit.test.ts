@@ -61,7 +61,9 @@ import { createMockGpu, type MockCapture, makeShaderError } from './__mocks__/gp
       expect(typeof device.caps.compute).toBe('boolean');
       expect(typeof device.caps.timestampQuery).toBe('boolean');
       expect(typeof device.caps.indirectDrawing).toBe('boolean');
-      expect(typeof device.caps.textureCompression).toBe('boolean');
+      expect(typeof device.caps.textureCompressionBc).toBe('boolean');
+      expect(typeof device.caps.textureCompressionEtc2).toBe('boolean');
+      expect(typeof device.caps.textureCompressionAstc).toBe('boolean');
     });
 
     it('M2 w10 — device.caps.backendKind === "webgpu" (backend self-report)', async () => {

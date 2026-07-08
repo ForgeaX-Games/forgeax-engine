@@ -305,9 +305,13 @@ export async function parseKtx2(bytes: Uint8Array): Promise<CodecResult<Ktx2Pars
       sgdByteLength: readU64(bytes, 72),
     };
 
-    // 3. Reject unsupported supercompression schemes (spec section 2.9)
+    // 3. Reject unsupported supercompression schemes (spec section 2.9).
+    // scheme 0 = none, 1 = BasisLZ (Basis ETC1S payload, Loop 2 transcode arm),
+    // 2 = Zstandard. scheme 3 (ZLIB) and any future scheme are still rejected;
+    // scheme=1 is opened here (F-1 single-point gate) so the Basis payload passes
+    // through to the transcode layer -- parseKtx2 itself does not interpret it.
     const scheme = header.supercompressionScheme;
-    if (scheme !== 0 && scheme !== 2) {
+    if (scheme !== 0 && scheme !== 1 && scheme !== 2) {
       return codecError('ktx2-unsupported-scheme', { scheme });
     }
 

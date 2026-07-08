@@ -374,11 +374,13 @@ function deriveCaps(
   limits: GPUSupportedLimits,
 ): RhiCaps {
   const has = (name: string): boolean => features.has(name as GPUFeatureName);
-  // Texture-compression rolls up: any of bc / etc2 / astc means the cap is enabled.
-  const textureCompression =
-    has('texture-compression-bc') ||
-    has('texture-compression-etc2') ||
-    has('texture-compression-astc');
+  // Texture-compression three-way caps (M4 w26): derived from adapter.features
+  // per-compression-format, replacing the single rolled-up boolean.
+  // D-8: no hand-assigned true/false literals; all derived via has(...) from
+  // the features Set.
+  const textureCompressionBc = has('texture-compression-bc');
+  const textureCompressionEtc2 = has('texture-compression-etc2');
+  const textureCompressionAstc = has('texture-compression-astc');
   // HDR renderable + filterable caps (m1-1-b: split probe by spec-feature gate
   // vs mandatory-but-noncompliant fallback). `rgba16float` is mandatory
   // `RENDER_ATTACHMENT` per spec but unreliable on WebKit — keep the real
@@ -396,7 +398,9 @@ function deriveCaps(
     compute: true, // WebGPU spec mandates compute-pipeline support.
     timestampQuery: has('timestamp-query'),
     indirectDrawing: true, // WebGPU spec mandates drawIndirect / drawIndexedIndirect.
-    textureCompression,
+    textureCompressionBc,
+    textureCompressionEtc2,
+    textureCompressionAstc,
     multiDrawIndirect: false, // wgpu native extension; unavailable on WebGPU browser path.
     pushConstants: false, // wgpu native extension; unavailable on WebGPU browser path.
     textureBindingArray: false, // wgpu native extension; unavailable on WebGPU browser path.

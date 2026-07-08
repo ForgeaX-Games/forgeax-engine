@@ -12,6 +12,7 @@
   },
   "include": ["src/**/*"],
   "references": [
+    { "path": "../codec" },
     { "path": "../math" },
     { "path": "../types" },
     { "path": "../pack" },

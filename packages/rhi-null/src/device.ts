@@ -114,7 +114,9 @@ export class RhiNullDevice implements RhiDevice {
       compute: true,
       timestampQuery: true,
       indirectDrawing: true,
-      textureCompression: true,
+      textureCompressionBc: false,
+      textureCompressionEtc2: false,
+      textureCompressionAstc: false,
       // 3 wgpu-native-only reserved flags stay false on non-native backends
       // (D-5); the headless backend is not a native runtime.
       multiDrawIndirect: false,

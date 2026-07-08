@@ -609,7 +609,7 @@ export function runSummary(opts: { readonly tapePath: string }): SummaryResult {
 
   const model = buildFrameModel(tapeLoad.tape);
   // Map -> array so JSON.stringify keeps the resources (Map serializes to {}).
-  // vertexBuffers (per-draw Map<number, HandleId>) likewise -> entries array.
+  // vertexBuffers (per-draw Map<number, {handleId, offset, size}>) likewise -> entries array.
   const wire = {
     meta: model.meta,
     tree: model.tree,

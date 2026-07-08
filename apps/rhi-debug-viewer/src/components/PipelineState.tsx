@@ -1,6 +1,6 @@
 // PipelineState.tsx — pipeline state panel for the selected draw (w24).
 //
-// Seven collapsible sections (RenderDoc-style):
+// Eight collapsible sections (RenderDoc-style):
 //   1. Input Assembly — topology, stripIndexFormat
 //   2. Vertex Input — per-slot buffer layout (arrayStride, stepMode, attributes)
 //   3. Shaders — vertex/fragment module handles + inline expandable WGSL source
@@ -8,18 +8,21 @@
 //   5. Depth-Stencil — format, depthCompare, depthWriteEnabled, stencil state
 //   6. Blend — per-target blend state + blendConstant
 //   7. Multisample — count, mask, alphaToCoverageEnabled
+//   8. Instance Data — decoded group-3 binding-0 InstanceData rows (M4)
 //
 // When no draw is selected, shows default text for non-draw command.
 //
 // Related: requirements AC-15/AC-26; plan-strategy D-5; RenderDoc prior art.
 // biome-ignore-all lint/suspicious/noArrayIndexKey: vertex buffer slots, attributes, and color targets are hardware-stable ordered lists; compound keys include semantic identifiers (arrayStride, shaderLocation, format).
 
+import type { Tape } from '@forgeax/engine-rhi-debug';
 import type { IDockviewPanelProps } from 'dockview-react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
+import { decodeInstanceData, INSTANCE_MAX_ROWS } from '../instance-decode';
 import { useSelection } from '../selection-context';
-import { pipelineStateAnchor } from '../selectors';
-import { useViewModel } from '../viewer-context';
+import { instanceDataSectionAnchor, instanceRowAnchor, pipelineStateAnchor } from '../selectors';
+import { useTape, useViewModel } from '../viewer-context';
 import type { CreateDescriptor, DrawEntry } from '../viewer-model';
 import { CodeMirrorShader } from './CodeMirrorShader';
 
@@ -30,7 +33,8 @@ type SectionId =
   | 'rasterizer'
   | 'depthStencil'
   | 'blend'
-  | 'multisample';
+  | 'multisample'
+  | 'instanceData';
 
 const SECTION_LABELS: Record<SectionId, string> = {
   ia: 'Input Assembly',
@@ -40,6 +44,7 @@ const SECTION_LABELS: Record<SectionId, string> = {
   depthStencil: 'Depth-Stencil',
   blend: 'Blend',
   multisample: 'Multisample',
+  instanceData: 'Instance Data',
 };
 
 const ALL_SECTIONS: readonly SectionId[] = [
@@ -50,6 +55,7 @@ const ALL_SECTIONS: readonly SectionId[] = [
   'depthStencil',
   'blend',
   'multisample',
+  'instanceData',
 ];
 
 function topologyLabel(t: string): string {
@@ -360,8 +366,100 @@ function BlendSection({ draw }: { draw: DrawEntry }) {
   );
 }
 
+function fmtVec3(v: readonly [number, number, number]): string {
+  return `(${v[0].toFixed(3)}, ${v[1].toFixed(3)}, ${v[2].toFixed(3)})`;
+}
+
+function fmtVec4(v: readonly [number, number, number, number]): string {
+  return `(${v[0].toFixed(4)}, ${v[1].toFixed(4)}, ${v[2].toFixed(4)}, ${v[3].toFixed(4)})`;
+}
+
+function InstanceDataSection({
+  draw,
+  tape,
+  resources,
+}: {
+  draw: DrawEntry;
+  tape: Tape | null;
+  resources: ReadonlyMap<string, CreateDescriptor>;
+}) {
+  if (!tape) return <KvRow label="Instance Data" value="(none)" />;
+  const result = decodeInstanceData(draw, tape, resources);
+  switch (result.kind) {
+    case 'none':
+      return <KvRow label="Instance Data" value="(none)" />;
+    case 'no-blob':
+      return (
+        <div className="text-xs text-muted-foreground font-mono py-0.5">
+          buffer not readable (no blob)
+        </div>
+      );
+    case 'unexpected-stride':
+      return (
+        <div className="text-xs text-muted-foreground font-mono py-0.5">
+          unexpected stride {result.strideBytes} B (expected 64 or 80)
+        </div>
+      );
+    case 'buffer-truncated':
+      return (
+        <div className="text-xs text-muted-foreground font-mono py-0.5">
+          buffer truncated (got {result.gotBytes} B, expected {result.expectedBytes} B)
+        </div>
+      );
+    case 'ok': {
+      const showRegion = result.variant === 'mat4+region';
+      const colCount = showRegion ? 5 : 4;
+      const total = draw.drawCall.instanceCount ?? result.instances.length;
+      return (
+        <table
+          {...{ [instanceDataSectionAnchor()]: '' }}
+          className="text-xs font-mono w-full text-left"
+        >
+          <thead>
+            <tr className="text-muted-foreground">
+              <th className="pr-2 py-0.5 font-normal">idx</th>
+              <th className="pr-2 py-0.5 font-normal">position</th>
+              <th className="pr-2 py-0.5 font-normal">scale</th>
+              <th className="pr-2 py-0.5 font-normal">rotation</th>
+              {showRegion && <th className="pr-2 py-0.5 font-normal">region</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {result.instances.map((inst) => (
+              <tr
+                key={inst.index}
+                {...{ [instanceRowAnchor()]: String(inst.index) }}
+                className="text-foreground"
+              >
+                <td className="pr-2 py-0.5">{inst.index}</td>
+                <td className="pr-2 py-0.5">{fmtVec3(inst.position)}</td>
+                <td className="pr-2 py-0.5">{fmtVec3(inst.scale)}</td>
+                <td className="pr-2 py-0.5">
+                  ({inst.rotation[0].toFixed(4)}, {inst.rotation[1].toFixed(4)},{' '}
+                  {inst.rotation[2].toFixed(4)}, {inst.rotation[3].toFixed(4)})
+                </td>
+                {showRegion && inst.region && (
+                  <td className="pr-2 py-0.5">{fmtVec4(inst.region)}</td>
+                )}
+              </tr>
+            ))}
+            {result.truncated && (
+              <tr className="text-muted-foreground">
+                <td colSpan={colCount} className="pr-2 py-0.5">
+                  ... {total - INSTANCE_MAX_ROWS} more (truncated)
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      );
+    }
+  }
+}
+
 export function PipelineState(_props: IDockviewPanelProps) {
   const vm = useViewModel();
+  const tape = useTape();
   const { selectedDrawIdx } = useSelection();
   const [openSections, setOpenSections] = useState<Set<SectionId>>(new Set(ALL_SECTIONS));
 
@@ -500,6 +598,18 @@ export function PipelineState(_props: IDockviewPanelProps) {
             label="Alpha-to-Coverage"
             value={ps.multisample.alphaToCoverageEnabled ? 'ON' : 'OFF'}
           />
+        </div>
+      )}
+
+      {/* Instance Data (M4) */}
+      <SectionHeader
+        label={SECTION_LABELS.instanceData}
+        open={openSections.has('instanceData')}
+        onToggle={() => toggleSection('instanceData')}
+      />
+      {openSections.has('instanceData') && (
+        <div className="ml-2 border-l border-border pl-2 py-1">
+          <InstanceDataSection draw={draw} tape={tape} resources={vm.resources} />
         </div>
       )}
     </div>

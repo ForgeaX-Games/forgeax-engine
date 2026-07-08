@@ -471,6 +471,7 @@ async function createAppFromCanvas(
   const inputHandle = attachInputAuto(canvas, world, {
     ...(opts?.pointerLockAllowed ? { pointerLockAllowed: opts.pointerLockAllowed } : {}),
     ...(opts?.virtualJoysticks ? { virtualJoysticks: opts.virtualJoysticks } : {}),
+    ...(opts?.inputMap ? { inputMap: opts.inputMap } : {}),
   });
 
   // Audio backend (D-4): auto-create the WebAudioBackend when the user listed

@@ -211,6 +211,14 @@ function makeFakeRhiDevice(): Record<string, unknown> {
     lost,
     features: new Set<string>(),
     limits: {},
+    // feat-20260707 M5 / w33: createRenderer projects RhiCaps.textureCompression*
+    // into TranscodeCaps right after building the registry, so the fake device
+    // must expose a caps object (the real RhiDevice always carries one).
+    caps: {
+      textureCompressionBc: false,
+      textureCompressionEtc2: false,
+      textureCompressionAstc: false,
+    },
     queue: {
       submit: () => undefined,
       writeBuffer: () => undefined,
@@ -426,6 +434,7 @@ function makeStubGPU(): unknown {
           ? { ok: true as const, value: h }
           : { ok: false as const, error: new Error(`no ref for ${guid}`) };
       },
+      transcodeCaps: { bc: false, etc2: false, astc: false },
       device: undefined,
     };
     return ctx;
@@ -3018,7 +3027,9 @@ function makeStubGPU(): unknown {
     compute: true,
     timestampQuery: false,
     indirectDrawing: false,
-    textureCompression: false,
+    textureCompressionBc: false,
+    textureCompressionEtc2: false,
+    textureCompressionAstc: false,
     multiDrawIndirect: false,
     pushConstants: false,
     textureBindingArray: false,

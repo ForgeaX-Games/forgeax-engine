@@ -152,16 +152,16 @@ describe('KTX2 error paths (w23)', () => {
   });
 
   describe('E6 — unsupported supercompression scheme', () => {
-    it('scheme=1 (BasisLZ) returns ktx2-unsupported-scheme with scheme value', async () => {
+    it('scheme=1 (BasisLZ) now parses (Loop 2 Basis transcode arm, F-1 gate opened)', async () => {
+      // Loop 2 (w13) opened the single-point scheme gate for BasisLZ so the
+      // Basis payload passes through to the transcode layer. scheme=1 is no
+      // longer rejected; parseKtx2 does not interpret the payload itself.
       const valid = buildMinimalHeader(1);
 
       const result = await parseKtx2(valid);
-      expect(result.ok).toBe(false);
-      if (result.ok) throw new Error('expected failure');
-      expect(result.error.code).toBe('ktx2-unsupported-scheme');
-      expect((result.error.detail as { scheme: number }).scheme).toBe(1);
-      // hint should mention BasisLZ or Loop 2
-      expect(result.error.hint.toLowerCase()).toMatch(/basis|loop 2|future/);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(`expected ok, got ${result.error.code}`);
+      expect(result.value.header.supercompressionScheme).toBe(1);
     });
 
     it('scheme=3 (ZLIB) returns ktx2-unsupported-scheme with scheme value', async () => {
@@ -199,8 +199,8 @@ describe('KTX2 error paths (w23)', () => {
   });
 
   describe('Error code closed-union exhaustiveness', () => {
-    it('all 4 CodecErrorCode members are reachable', () => {
-      // Type-level check: verify the CodecErrorCode union has exactly 4 members.
+    it('all 5 CodecErrorCode members are reachable', () => {
+      // Type-level check: verify the CodecErrorCode union has exactly 5 members.
       // This is validated by TS compilation — if a member is missing,
       // the following code fails to typecheck.
       const codes: CodecErrorCode[] = [
@@ -208,8 +208,10 @@ describe('KTX2 error paths (w23)', () => {
         'codec-init-failed',
         'ktx2-parse-failed',
         'ktx2-unsupported-scheme',
+        'transcode-failed',
+        'ktx2-encode-failed',
       ];
-      expect(codes.length).toBe(4);
+      expect(codes.length).toBe(6);
 
       // Verify exhaustive switch compiles (no default branch)
       for (const code of codes) {
@@ -224,6 +226,10 @@ describe('KTX2 error paths (w23)', () => {
               return 'ktx2-parse-failed';
             case 'ktx2-unsupported-scheme':
               return 'ktx2-unsupported-scheme';
+            case 'transcode-failed':
+              return 'transcode-failed';
+            case 'ktx2-encode-failed':
+              return 'ktx2-encode-failed';
           }
         })();
         expect(typeof _checked).toBe('string');

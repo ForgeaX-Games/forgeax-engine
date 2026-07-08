@@ -1,6 +1,6 @@
 # @forgeax/engine-input
 
-> **Frame-start scanned, frozen `InputSnapshot` Resource for forgeax-engine.** Multi-device surface frozen before user systems run each frame: keyboard (down/up edge) + mouse (movementDelta / button / wheelDelta) + gamepad (7 readpoints: button / buttonValue / justPressed / justReleased / axis / standardMapping / connected) + pointer (per-pointerId position / pressure / delta / phase event queue) + virtualAxis (named joystick readpoint). Capability probe (`snap.capabilities`) available at attach time.
+> **Frame-start scanned, frozen `InputSnapshot` Resource for forgeax-engine.** Multi-device surface frozen before user systems run each frame: keyboard (down/up edge) + mouse (movementDelta / button / wheelDelta) + gamepad (7 readpoints: button / buttonValue / justPressed / justReleased / axis / standardMapping / connected) + pointer (per-pointerId position / pressure / delta / phase event queue) + virtualAxis (named joystick readpoint). Higher-level abstractions: **action indirection** (declare once, forget device — `snap.action(name)` / `snap.getAxis` / `snap.getVector`) + **gesture recognizer** (pinch / rotate / swipe / long-press / double-tap — `snap.gesture` + `snap.gestureEvents`). Capability probe (`snap.capabilities`) available at attach time.
 
 ## 4 步 recipe
 
@@ -9,6 +9,7 @@ import { World } from '@forgeax/engine-ecs';
 import {
   attachBrowserInputBackend,
   INPUT_BACKEND_KEY,
+  INPUT_MAP_KEY,
   InputFrameStartScan,
   type InputSnapshot,
 } from '@forgeax/engine-input';
@@ -23,16 +24,32 @@ const detach = attachBrowserInputBackend(canvas);
 //    finds the resource on the first tick.
 const world = new World();
 world.insertResource(INPUT_BACKEND_KEY, detach.backend);
+
+// 2b. (optional) declare an InputMap to enable action readpoints.
+//     Duplicate action names → last-wins. Per-action deadzone default: 0.2.
+world.insertResource(INPUT_MAP_KEY, [
+  { action: 'jump', bindings: [{ type: 'key', key: ' ' }, { type: 'gamepadButton', button: 0 }] },
+  { action: 'moveLeft',  bindings: [{ type: 'key', key: 'a' }, { type: 'gamepadAxis', axis: 0, sign: -1 }] },
+  { action: 'moveRight', bindings: [{ type: 'key', key: 'd' }, { type: 'gamepadAxis', axis: 0, sign: 1 }] },
+  { action: 'moveUp',    bindings: [{ type: 'key', key: 'w' }, { type: 'gamepadAxis', axis: 1, sign: -1 }] },
+  { action: 'moveDown',  bindings: [{ type: 'key', key: 's' }, { type: 'gamepadAxis', axis: 1, sign: 1 }] },
+]);
+
 world.addSystem(InputFrameStartScan);
 
 // 3. user system reads the frozen snapshot via the standard Resource API;
 //    multi-device surface: keyboard + mouse + gamepad + pointer + virtualAxis
+//    + action + gesture
 world.addSystem({
   name: 'first-person-camera',
   after: ['input-frame-start-scan'],
   queries: [],
   fn: (w) => {
     const snap = w.getResource<InputSnapshot>('InputSnapshot');
+    // action: declare once, forget device — same isPressed() for keyboard AND gamepad
+    if (snap.action('jump').justPressed()) {/* jump (space or gamepad A) */}
+    const move = snap.getVector('moveLeft', 'moveRight', 'moveUp', 'moveDown');
+    // move.x / move.y: circular deadzone [−1,1], WASD diagonal magnitude 1
     if (snap.keyboard.down('w')) {/* move forward */}
     const { x, y } = snap.mouse.movementDelta;
     if (snap.mouse.button(0)) {/* primary down */}
@@ -44,6 +61,10 @@ world.addSystem({
     if (touch.active) {/* use touch.x, touch.y, touch.pressure */}
     // virtualAxis: named joystick readpoint (zero-vector for unbound)
     const joy = snap.virtualAxis('move');
+    // gesture: pinch/rotate continuous values + one-frame lifecycle events
+    const gs = snap.gesture.pinchScale;
+    const ga = snap.gesture.rotationAngle;
+    const gevs = snap.gestureEvents; // GestureEvent[] one-frame lifecycle
     // capability probe (frozen at attach time)
     const hasGamepad = snap.capabilities.gamepad;
   },
@@ -76,7 +97,7 @@ detach();
 | 调用 | 返回 | 语义 |
 |:--|:--|:--|
 | `snap.gamepad(i).connected` | `boolean` | slot `i` 已连接（index-based，null-padded 自动跳过）。越界 / 断连 → `false` |
-| `snap.gamepad(i).standardMapping` | `boolean` | 标准布局（`mapping==='standard'`）。非标准布局 → `false` + 全读点空信号 |
+| `snap.gamepad(i).standardMapping` | `boolean` | Standard layout available: **true** when browser reports `mapping==='standard'` **or** the SDL controller DB has normalized a non-standard layout (D-1 redline). `false` = not standard AND DB miss/unavailable — explicitly detectable (AC-10/E-2). When false, all readpoints return empty signals. |
 | `snap.gamepad(i).button(b)` | `boolean`（`b: 0\|1\|...\|16`） | 按钮 `b` 当前帧按下（held）。越界字面量触发 TS 编译错误 |
 | `snap.gamepad(i).buttonValue(b)` | `number` | 按钮 `b` 模拟值（0..1）；扳机半程典型 0.5。OOS-4：不施加 gamepad 死区（轴 deadzone 排除） |
 | `snap.gamepad(i).justPressed(b)` | `boolean`（`b: 0\|1\|...\|16`） | 按钮 `b` 边沿——上帧未按、本帧按下（一帧寿命） |
@@ -106,6 +127,43 @@ detach();
 |:--|:--|:--|
 | `snap.capabilities` | `{ gamepad: boolean; pointer: boolean }` | 后端 attach 时冻结的环境探针（`typeof navigator.getGamepads === 'function'` / `typeof PointerEvent !== 'undefined'`）。不须每帧重查 |
 
+### action（声明式设备无关语义层）
+
+4-member `ActionBinding` discriminant union: `'key'` | `'mouseButton'` | `'gamepadButton'` | `'gamepadAxis'`. Declared via `INPUT_MAP_KEY` Resource (`ActionConfig[]`). Per-action deadzone default: **0.2** (Godot prior-art). Aggregation: OR for pressed, MAX for strength/raw. Duplicate action names: last-wins (D-8).
+
+| 调用 | 返回 | 语义 |
+|:--|:--|:--|
+| `snap.action(name).isPressed()` | `boolean` | 任意绑定源当前激活（OR 聚合）。未注册 action → `false` |
+| `snap.action(name).justPressed()` | `boolean` | 上帧未按、本帧按下（一帧寿命）。首帧无 prev → justPressed=pressed |
+| `snap.action(name).justReleased()` | `boolean` | 上帧按下、本帧释放（一帧寿命） |
+| `snap.action(name).strength` | `number` | 死区重映射模拟强度 [0, 1]。`\|raw\|<deadzone` → 0；`\|raw\|≥deadzone` → `inverse_lerp(deadzone, 1, \|raw\|)`。数字绑定 → 1.0 |
+| `snap.getAxis(neg, pos)` | `number` | `strength(pos) − strength(neg)`，值域 [-1, 1]。一端/两端未注册 → 该端贡献 0；同 action 双端 → 恒 0 (E-12) |
+| `snap.getVector(nX, pX, nY, pY, opts?)` | `{x: number, y: number}` | 四行动方向合成 2D 向量，单次径向死区（三分支公式，Godot input.cpp F2）：`length≤deadzone` → (0,0)；`length>1` → 单位圆 clamp；中段 → `vec·inverse_lerp(deadzone, 1, length)/length`。默认 deadzone = 4 个 action 的 per-action deadzone 均值；`opts.deadzone` 覆盖。读 action 的 `raw`（非 `strength`）避免逐轴死区叠加成方形死区。 |
+
+WASD 斜向：键盘 a/d/w/s 绑为 `getVector('moveLeft','moveRight','moveUp','moveDown')` → 斜向模长 1（非 √2；AC-06）。
+
+### gesture（触摸手势 recognizer，五类）
+
+Five gesture recognizers running in the backend closure (C-3 single legal cross-frame state). All timers advance off injected `now()` (D-3), decoupled from pointer-event frequency. Two output channels (D-4): continuous values via `snap.gesture`, one-frame lifecycle events via `snap.gestureEvents`. No active gesture → identity empty signal (pinchScale=1.0, rotationAngle=0; AC-12).
+
+| 调用 | 返回 | 语义 |
+|:--|:--|:--|
+| `snap.gesture.pinchScale` | `number` | 双指捏合缩放比值（累计）；无手势 → 1.0。begin 时复位为 1.0，2→1 指抬 end 后冻结，回 2 指 new begin 再复 1.0 (D-11) |
+| `snap.gesture.rotationAngle` | `number` | 双指旋转累计角度（弧度）；无手势 → 0。与 pinch 共用同一双指 tracker，同帧 begin/end 成对 |
+| `snap.gestureEvents` | `readonly GestureEvent[]` | 本帧手势生命周期事件队列（一帧寿命，对齐 pointerEvents）。`GestureEvent` 是封闭判别联合：`pinch-begin/end/cancel`、`rotate-begin/end/cancel`、`swipe`（含 direction）、`long-press`、`double-tap`。每个 event 带 `pointerType`（`'mouse' \| 'pen' \| 'touch'`，AC-19 消费路径） |
+
+### 手势阈值默认表
+
+| 常量 | 值 | 来源 |
+|:--|:--|:--|
+| 默认 per-action deadzone | `0.2` | Godot prior-art (F2) |
+| `LONG_PRESS_DURATION_MS` | `500` | LayaAir prior-art |
+| `LONG_PRESS_SLOP` | `10`（canvas px） | LayaAir prior-art |
+| `DOUBLE_TAP_INTERVAL_MS` | `350` | LayaAir prior-art |
+| `DOUBLE_TAP_DISTANCE` | `10`（canvas px） | LayaAir prior-art |
+| `SWIPE_VELOCITY_THRESHOLD` | `0.5`（px/ms） | up 前 100ms 位移窗口推速度 |
+| `SWIPE_WINDOW_MS` | `100` | 速度计算滑动窗口 (D-10) |
+
 `engine.run()` 启动前调用返回空快照（不抛异常；charter P3 例外：构造阶段无事件源，空快照即"显式无信号"）。
 
 ## 形态铁律
@@ -124,6 +182,10 @@ detach();
 | `mouse.button(3)` | TS 编译错误（字面量类型 `0 \| 1 \| 2` 收紧）；运行时表面不暴露 |
 | `snap.gamepad(i)` 越界 / `i` 断连 | `connected=false` + 全读点 `false`/`0`（空信号不抛） |
 | `snap.gamepad(i)` 非标准布局 | `connected=true` + `standardMapping=false` + 全读点空信号（区分断连——显式可检测） |
+| `snap.gamepad(i).standardMapping` 语义 | **true** when browser reports `mapping==='standard'` **or** SDL controller DB has normalized a non-standard layout (D-1 redline). `false` = not standard AND DB miss/unavailable — the downgrade is explicitly detectable (AC-10/E-2) |
+| `snap.action(name)` 未注册 | 返回空信号：`isPressed()=false` / `strength=0` / `justPressed()=false` / `justReleased()=false`（不抛；AC-01/09） |
+| `snap.gesture` 无活跃手势 | `pinchScale=1.0` / `rotationAngle=0`（恒等空信号，不抛；AC-12） |
+| `snap.gestureEvents` 无生命周期事件 | 空数组 `[]`（不抛） |
 | `snap.gamepad(i).button(17)` / `.axis(4)` | TS 编译错误（字面量 union `0\|1\|...\|16` / `0\|1\|2\|3` 收紧） |
 | `typeof navigator.getGamepads !== 'function'` | `snap.capabilities.gamepad=false` + `snap.gamepad(0..N)` 全空信号（不抛） |
 | `snap.pointer(id)` 不存在 | `active=false` + 全字段空信号（不抛） |
@@ -137,6 +199,9 @@ detach();
 | 越界坐标 | pointer `x`/`y` 原样保留不 clamp（可为负或超出 canvas 尺寸）；charter P3：显式文档化不隐式行为 |
 | `touch-action` | `attach` 时浏览器 backend 内部设置 `canvas.style.touchAction='none'`（existential 探测——fake canvas 无 `.style` 时静默跳过）；detach 恢复原值。AI 用户不需手动设 CSS |
 | 失焦（blur / visibilitychange `hidden`） | pointerMap 全清 + 每活跃触点 push cancel 相位事件进入队列；gamepad justPressed/justReleased 集合复位——下帧不喷幽灵边沿。恢复焦点后下次 `sample()` 自然恢复 |
+| assemble form — action surface | Assemble-form hosts must manually `world.insertResource(INPUT_MAP_KEY, map)` to enable action readpoints (D-7). Canvas-form `createApp` does this automatically. |
+| controller-db 子导出懒加载 | `@forgeax/engine-input/controller-db` is dynamically imported only on first connected non-standard gamepad (D-2). Until then (or on DB miss), non-standard slots maintain the Feat1 empty-signal behavior (`standardMapping=false`). Standard gamepads never trigger the load (C-5). |
+| 手势 cancel on blur | `onBlur` resets all active gesture recognizers: emits cancel events for each active gesture type, resets continuous values to identity, and clears timers (AC-18). Prevent ghost gestures on refocus. |
 
 ## 相关包
 

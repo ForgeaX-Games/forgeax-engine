@@ -820,8 +820,30 @@ export interface RhiCaps {
   readonly timestampQuery: boolean;
   /** Whether indirect drawing is supported. */
   readonly indirectDrawing: boolean;
-  /** Whether texture compression is available (BC / ETC2 / ASTC, any). */
-  readonly textureCompression: boolean;
+  /**
+   * Whether BC texture compression (BC1-BC7) is available.
+   *
+   * Derived from `adapter.features.has('texture-compression-bc')`.
+   * On rhi-null this is always `false` (headless has no compression hardware,
+   * AC-06).
+   */
+  readonly textureCompressionBc: boolean;
+  /**
+   * Whether ETC2 texture compression is available.
+   *
+   * Derived from `adapter.features.has('texture-compression-etc2')`.
+   * On rhi-null this is always `false` (headless has no compression hardware,
+   * AC-06).
+   */
+  readonly textureCompressionEtc2: boolean;
+  /**
+   * Whether ASTC texture compression is available.
+   *
+   * Derived from `adapter.features.has('texture-compression-astc')`.
+   * On rhi-null this is always `false` (headless has no compression hardware,
+   * AC-06).
+   */
+  readonly textureCompressionAstc: boolean;
   /**
    * Whether multi-draw indirect is available (wgpu native extension).
    *

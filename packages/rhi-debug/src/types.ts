@@ -34,7 +34,9 @@ export interface RhiCapsRecorded {
   readonly canvasFormat: GPUTextureFormat;
   readonly rgba16floatRenderable: boolean;
   readonly float32Filterable: boolean;
-  readonly textureCompression: boolean;
+  readonly textureCompressionBc: boolean;
+  readonly textureCompressionEtc2: boolean;
+  readonly textureCompressionAstc: boolean;
   readonly storageBuffer: boolean;
   readonly timestampQuery: boolean;
 }
@@ -605,6 +607,18 @@ export interface InspectDrawCall {
   readonly dispatchX?: number | undefined;
   readonly dispatchY?: number | undefined;
   readonly dispatchZ?: number | undefined;
+  /** Present on `draw` — the first vertex offset (raw event field carried through). */
+  readonly firstVertex?: number | undefined;
+  /** Present on `drawIndexed` — index of the first element of the index buffer to read. */
+  readonly firstIndex?: number | undefined;
+  /** Present on `draw` and `drawIndexed` — the first instance for instanced rendering. */
+  readonly firstInstance?: number | undefined;
+  /** Present on `drawIndexed` — vertex offset added before indexing the vertex buffer. */
+  readonly baseVertex?: number | undefined;
+  /** Present on `drawIndirect` / `drawIndexedIndirect` — handle of the buffer holding the parameters. */
+  readonly indirectBufferHandleId?: HandleId | undefined;
+  /** Present on `drawIndirect` / `drawIndexedIndirect` — byte offset into the indirect buffer. */
+  readonly indirectOffset?: number | undefined;
 }
 
 /**

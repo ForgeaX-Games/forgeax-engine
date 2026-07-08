@@ -236,10 +236,9 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       compute: true,
       timestampQuery: hasFeature('timestamp-query'),
       indirectDrawing: true,
-      textureCompression:
-        hasFeature('texture-compression-bc') ||
-        hasFeature('texture-compression-etc2') ||
-        hasFeature('texture-compression-astc'),
+      textureCompressionBc: hasFeature('texture-compression-bc'),
+      textureCompressionEtc2: hasFeature('texture-compression-etc2'),
+      textureCompressionAstc: hasFeature('texture-compression-astc'),
       multiDrawIndirect: false,
       pushConstants: false,
       textureBindingArray: false,

@@ -26,6 +26,7 @@ function makeCtx(): LoadContext {
     fetchBinary: () =>
       Promise.resolve({ ok: false as const, error: new Error('not used in unit') }),
     resolveRef: () => Promise.resolve({ ok: false as const, error: new Error('not used in unit') }),
+    transcodeCaps: { bc: false, etc2: false, astc: false },
     device: undefined,
   };
 }

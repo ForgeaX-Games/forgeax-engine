@@ -43,8 +43,8 @@ export interface BufferConsumer {
  * Build a map from buffer handleId to its consumer list.
  *
  * Three data paths:
- *   1. Vertex buffers — from DrawEntry.vertexBuffers (slot → bufferHandleId).
- *      Iterate all draws, collect per-slot refs.
+ *   1. Vertex buffers — from DrawEntry.vertexBuffers (slot → {handleId, offset, size}).
+ *      Iterate all draws, collect per-slot refs; details string carries offset+size.
  *   2. Index buffers — scan raw events for setIndexBuffer per pass,
  *      match to draw via passIdx ordering.
  *   3. Bind groups — scan createBindGroup + setBindGroup events,
@@ -69,14 +69,15 @@ export function bufferBindingConsumers(
   for (let di = 0; di < draws.length; di++) {
     const draw = draws[di];
     if (!draw) continue;
-    for (const [slot, bufferHandleId] of draw.vertexBuffers) {
-      const arr = ensure(bufferHandleId);
+    for (const [slot, vb] of draw.vertexBuffers) {
+      const { handleId, offset, size } = vb;
+      const arr = ensure(handleId);
       arr.push({
         drawIdx: di,
         passIdx: draw.passIdx,
         role: 'vertex',
         slot,
-        details: `vertex slot=${slot}`,
+        details: `vertex slot=${slot}, offset=${offset}, size=${size}`,
       });
     }
   }

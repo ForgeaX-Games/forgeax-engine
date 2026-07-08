@@ -114,21 +114,23 @@ The 9 descriptor types above are wrapped by an internal `ExplicitUndefined<T>` m
 
 | Field | Type | Semantics |
 |:--|:--|:--|
-| `RhiCaps` | `readonly { compute / timestampQuery / indirectDrawing / textureCompression / multiDrawIndirect / pushConstants / textureBindingArray / samplerAliasing / firstInstanceIndirect / storageBuffer / storageTexture: boolean }` | Hardware feature probe (proposition 5: `caps.X = false` is the same signal shape as a value field, no exception) |
+| `RhiCaps` | `readonly { compute / timestampQuery / indirectDrawing / textureCompressionBc / textureCompressionEtc2 / textureCompressionAstc / multiDrawIndirect / pushConstants / textureBindingArray / samplerAliasing / firstInstanceIndirect / storageBuffer / storageTexture: boolean }` | Hardware feature probe (proposition 5: `caps.X = false` is the same signal shape as a value field, no exception) |
 | `RhiFeatures` | `readonly Set<GPUFeatureName>` | Enabled feature set (a subset of capabilities) |
 | `RhiLimits` | `readonly GPUSupportedLimits` | Numeric limits (`maxBindGroups`, `maxBufferSize`, etc.) |
 
-### Capabilities — 11-field `RhiCaps` index
+### Capabilities — 13-field `RhiCaps` index
 
 > [!NOTE]
-> **ROLE: RhiCaps detail SSOT (M1-T7 / AC-02)**. Field set + ordering kept byte-for-byte aligned with [`packages/rhi/src/index.ts`](./src/index.ts) `RhiCaps` interface (L795-895). AGENTS.md §RHI form rules carries the pointer entry (`Capabilities — see packages/rhi/README.md §Capabilities for the 11-field index`); this section is the deep index. Cross-link is intentional and asymmetric — manifest vs detail (架构原则 #1 双源 ROLE 区分).
+> **ROLE: RhiCaps detail SSOT (M1-T7 / AC-02)**. Field set + ordering kept byte-for-byte aligned with [`packages/rhi/src/index.ts`](./src/index.ts) `RhiCaps` interface (L795-935). AGENTS.md §RHI form rules carries the pointer entry (`Capabilities — see packages/rhi/README.md §Capabilities for the 13-field index`); this section is the deep index. Cross-link is intentional and asymmetric — manifest vs detail (架构原则 #1 双源 ROLE 区分).
 
 | Field | Type | Trigger / probe site | WebGPU (`navigator.gpu`) | wgpu wasm (webgl backend) | wgpu native |
 |:--|:--|:--|:--|:--|:--|
 | `compute` | `boolean` | compute pipelines supported (W3C 13.2 GPUComputePipeline) | `true` (spec-mandated) | `false` (no compute) | `true` |
 | `timestampQuery` | `boolean` | `device.features.has('timestamp-query')` (W3C 21 query sets) | gated; off by default | `false` | gated |
 | `indirectDrawing` | `boolean` | `drawIndirect` / `drawIndexedIndirect` supported (W3C 22.4) | `true` (spec-mandated) | `false` (lacks the analogue) | `true` |
-| `textureCompression` | `boolean` | any of BC / ETC2 / ASTC feature flags advertised | adapter-dependent | `false` | adapter-dependent |
+| `textureCompressionBc` | `boolean` | `adapter.features.has('texture-compression-bc')` (BC1-BC7) | adapter-dependent | `false` | adapter-dependent |
+| `textureCompressionEtc2` | `boolean` | `adapter.features.has('texture-compression-etc2')` | adapter-dependent | `false` | adapter-dependent |
+| `textureCompressionAstc` | `boolean` | `adapter.features.has('texture-compression-astc')` | adapter-dependent | `false` | adapter-dependent |
 | `multiDrawIndirect` | `boolean` | wgpu native `multi-draw-indirect` extension (research §3 wgpu features) | `false` (not in W3C spec) | `false` | `true` when feature enabled |
 | `pushConstants` | `boolean` | wgpu native `push-constants` extension | `false` (not in W3C spec) | `false` | `true` when feature enabled |
 | `textureBindingArray` | `boolean` | wgpu native bindless texture array extension | `false` (not in W3C spec) | `false` | `true` when feature enabled |

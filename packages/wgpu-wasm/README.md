@@ -92,17 +92,23 @@ AI 引擎用户的工程模型是「`Engine.create({ canvas })` → `world.spawn
 
 `RhiWgpuInstance`, `RhiWgpuAdapter`, `RhiWgpuDevice`, `RhiWgpuQueue`, `RhiWgpuBuffer`, `RhiWgpuTexture`, `RhiWgpuSampler`, `RhiWgpuBindGroupLayout`, `RhiWgpuPipelineLayout`, `RhiWgpuBindGroup`, `RhiWgpuRenderPipeline`, `RhiWgpuComputePipeline`, `RhiWgpuShaderModule`, `RhiWgpuCommandEncoder`, `RhiWgpuRenderPass`, `RhiWgpuQuerySet`, `RhiWgpuRenderBundleEncoder`, `RhiWgpuCommandBuffer`, `RhiWgpuSurface`, `RhiWgpuSurfaceTexture`
 
-## 构建
+## 构建 / 获取 pkg/
+
+`pkg/`（`wgpu_wasm_bg.wasm` + `wgpu_wasm.js` glue + 两个 `.d.ts` + `package.json`）是 wasm-pack 产物，**不入 git**（ufbx 式 release，对齐 `packages/fbx/`）。两条获取路径：
 
 ```bash
-# 显式构建（首次或 src/ 改动后）
-bash packages/wgpu-wasm/build.sh
+# A. 有 Rust 工具链 —— 本地构建（首次或 src/*.rs / Cargo.* 改动后）
+bash packages/wgpu-wasm/build.sh            # 或 pnpm -F @forgeax/engine-wgpu-wasm build:wasm
 
-# 或 pnpm script
-pnpm -F @forgeax/engine-wgpu-wasm build
+# B. 无 Rust 工具链 —— 从 wasm-artifacts release 拉预构建 bundle
+pnpm -F @forgeax/engine-wgpu-wasm fetch-wasm
 ```
 
-需 Rust ≥ 1.93 + `wasm32-unknown-unknown` target + `wasm-pack`（详见 [CONTRIBUTING.md](../../CONTRIBUTING.md) §Rust toolchain）。`rust-toolchain.toml` 在本目录 pin 1.93，rustup 通常自动应用；若未生效，跑 `rustup show` 检查。
+路径 A 需 Rust ≥ 1.93 + `wasm32-unknown-unknown` target + `wasm-pack`（详见 [CONTRIBUTING.md](../../CONTRIBUTING.md) §Rust toolchain）。`rust-toolchain.toml` 在本目录 pin 1.93，rustup 通常自动应用；若未生效，跑 `rustup show` 检查。
+
+路径 B 由根 `postinstall` 在 `pkg/` 缺失时**非致命**自动执行（离线 / 私仓无 `GITHUB_TOKEN` / bundle 未发布时仅告警，不阻断 `pnpm install`）。release 资产按内容 hash 命名（`scripts/content-key.mjs` 覆盖 `src/**/*.rs` + `Cargo.{toml,lock}` + `rust-toolchain.toml` + `build.sh`），CI `publish-wgpu-wasm-release` job 在 main push 时打包发布——源码改一次，asset 名随之变，**旧 stale `pkg/` 无从被服务**（根治 `.d.ts` 与 `rhi.rs` 漂移）。
+
+> `pnpm -F @forgeax/engine-wgpu-wasm build`（无 `:wasm`）只跑 `tsc -b` + tsup，围绕已存在的 `pkg/` 重建 JS shim；不生成 `pkg/`——先经路径 A 或 B 备好。
 
 ## 体积承诺
 

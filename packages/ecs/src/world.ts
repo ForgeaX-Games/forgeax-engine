@@ -3668,6 +3668,14 @@ export class World {
     // does the wiring once the synthetic root entity is materialised; we
     // collect them here in step 1.
     const mountEntitiesNeedingRootParent: EntityHandle[] = [];
+    // D-8 (feat-20260707): mount entities whose `mount.parent` points at an
+    // OWNED entity slot are wired AFTER step 2 spawns the owned entities —
+    // mounts are processed first (step 1), so the owned parent slot is still
+    // ENTITY_NULL_RAW at mount-processing time. Same deferred-wiring shape as
+    // mountEntitiesNeedingRootParent: register [mountEntity, parentSlot] here,
+    // wire ChildOf once the slot is live. Without this the edge was silently
+    // dropped, and the mount carrier stayed unreachable from its owned parent.
+    const mountEntitiesNeedingDeferredParent: Array<[EntityHandle, number]> = [];
 
     // 1. Recurse into mounts[] FIRST so the mount-window slots
     //    (`mount.localId` + `[memberFirst, memberFirst+memberCount)`) are
@@ -3754,6 +3762,11 @@ export class World {
               } as never);
               if (!set.ok) return set as Result<EntityHandle, EcsError>;
             }
+          } else {
+            // D-8: the owned parent slot is not spawned yet (owned entities
+            // spawn in step 2, after this mount loop). Defer the ChildOf wire
+            // to step 2's tail once mapping[parentSlot] is live.
+            mountEntitiesNeedingDeferredParent.push([mountEntity, parentSlot]);
           }
         } else {
           // R2/B-1: default semantic — mount.parent === undefined wires the
@@ -3786,6 +3799,26 @@ export class World {
       entityToLocalId.set(e, lid as unknown as LocalEntityId);
       if (node.components.ChildOf === undefined) {
         rootEntities.push(e);
+      }
+    }
+
+    // 2b. D-8 (feat-20260707): wire deferred owned-parent mount ChildOf edges.
+    //     Owned entities are now live (step 2 above), so mapping[parentSlot]
+    //     resolves. Same shape as the mountEntitiesNeedingRootParent wiring in
+    //     step 5. The relationship mirror hook (relationshipOnInsert) pushes the
+    //     carrier into the owned parent's Children mirror automatically.
+    if (childOfToken !== undefined) {
+      for (const [mountEntity, parentSlot] of mountEntitiesNeedingDeferredParent) {
+        const parentEntity = mapping[parentSlot];
+        if (parentEntity === undefined || parentEntity === ENTITY_NULL_RAW) continue;
+        const set = this.set(mountEntity, childOfToken, { parent: parentEntity } as never);
+        if (!set.ok) {
+          const r = this.addComponent(mountEntity, {
+            component: childOfToken,
+            data: { parent: parentEntity } as never,
+          });
+          if (!r.ok) return r as Result<EntityHandle, EcsError>;
+        }
       }
     }
 

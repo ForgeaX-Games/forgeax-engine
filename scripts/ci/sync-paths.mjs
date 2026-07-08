@@ -52,24 +52,35 @@ let patchedCount = 0;
 
 for (const fp of ymls) {
   const original = readFileSync(fp, 'utf8');
-  const beginIdx = original.indexOf(BEGIN);
-  if (beginIdx === -1) continue; // file has no marker — skip
+  if (original.indexOf(BEGIN) === -1) continue; // file has no marker — skip
 
-  const endIdx = original.indexOf(END, beginIdx);
-  if (endIdx === -1) {
-    fail(
-      'ci-paths-marker-mismatch',
-      `${fp} has BEGIN marker but no END marker`,
-      `add '      ${END}' after the paths list`,
-    );
+  // A single workflow can carry multiple marker regions (e.g. ci.yml has one
+  // under `push:` and one under `pull_request:`). Patch EVERY region, not just
+  // the first — otherwise the pull_request paths silently drift out of sync
+  // while the push paths look correct.
+  let patched = '';
+  let cursor = 0;
+  while (true) {
+    const beginIdx = original.indexOf(BEGIN, cursor);
+    if (beginIdx === -1) {
+      patched += original.slice(cursor);
+      break;
+    }
+    const endIdx = original.indexOf(END, beginIdx);
+    if (endIdx === -1) {
+      fail(
+        'ci-paths-marker-mismatch',
+        `${fp} has BEGIN marker but no END marker`,
+        `add '      ${END}' after the paths list`,
+      );
+    }
+    // Slice from the start of the BEGIN line to the end of the END line
+    const beginLineStart = original.lastIndexOf('\n', beginIdx) + 1;
+    const endLineEnd = original.indexOf('\n', endIdx);
+    patched += original.slice(cursor, beginLineStart);
+    patched += `${block}\n`;
+    cursor = endLineEnd === -1 ? original.length : endLineEnd + 1;
   }
-
-  // Slice from the start of the BEGIN line to the end of the END line
-  const beginLineStart = original.lastIndexOf('\n', beginIdx) + 1;
-  const endLineEnd = original.indexOf('\n', endIdx);
-  const before = original.slice(0, beginLineStart);
-  const after = endLineEnd === -1 ? '' : original.slice(endLineEnd + 1);
-  const patched = `${before}${block}\n${after}`;
 
   if (patched === original) continue; // already in sync
 

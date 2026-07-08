@@ -38,6 +38,7 @@ function makeCtx(opts: {
   const ctx: LoadContext = {
     fetchBinary: async () => ({ ok: false as const, error: new Error('no binary') }),
     resolveRef: async () => ({ ok: false as const, error: new Error('no ref') }),
+    transcodeCaps: { bc: false, etc2: false, astc: false },
     device: undefined,
   };
   if (opts.shaderTextureFieldNames) {

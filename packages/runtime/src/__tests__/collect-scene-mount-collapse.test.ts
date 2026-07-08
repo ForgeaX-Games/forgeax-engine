@@ -1,5 +1,12 @@
 // collect-scene-mount-collapse.test.ts — M2 mount-collapse tests
 // (feat-20260703-collect-nested-sceneinstance-to-mount-roundtrip).
+//
+// M1T7 AUDIT (feat-20260707-engine-world-clone-transient-for-editor-ssot):
+//   Classification: (c) unaffected — Children used only for runtime hierarchy
+//   wiring (w.get, w.addComponent), never for collect output assertions.
+//   SceneInstance absence assertions at lines 87-89 / 137-140 check that
+//   SceneInstance is absent from output — already true with old hardcoded skip
+//   and preserved by the new transient check. No test modification required.
 
 import { type EntityHandle, err, ok, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';

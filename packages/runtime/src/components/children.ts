@@ -103,6 +103,10 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *     // if the child has been despawned (OOS-01 dangling-entity surface).
  *   }
  */
-export const Children = defineComponent('Children', {
-  entities: { type: 'array<entity>' },
-});
+export const Children = defineComponent(
+  'Children',
+  {
+    entities: { type: 'array<entity>' },
+  },
+  { transient: true },
+);
