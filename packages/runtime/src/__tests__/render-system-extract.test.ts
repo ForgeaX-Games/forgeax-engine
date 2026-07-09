@@ -155,7 +155,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           { component: Transform, data: { ...identity(), posX: 2, posY: 3, posZ: 0 } },
           { component: ChildOf, data: { parent } },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-          { component: MeshRenderer, data: { frustumCulled: 0 } as never },
+          { component: MeshRenderer, data: {} },
         )
         .unwrap();
 
@@ -180,7 +180,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .spawn(
           { component: Transform, data: { ...identity(), posX: 5, posY: 6, posZ: 7, scaleX: 2 } },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-          { component: MeshRenderer, data: { frustumCulled: 0 } as never },
+          { component: MeshRenderer, data: {} },
         )
         .unwrap();
 
@@ -335,7 +335,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .spawn(
           { component: Transform, data: { ...identity(), posX: 1, posY: 2, posZ: 3 } },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-          { component: MeshRenderer, data: { frustumCulled: 0 } as never },
+          { component: MeshRenderer, data: {} },
         )
         .unwrap();
       expect(propagateTransforms(world).ok).toBe(true);

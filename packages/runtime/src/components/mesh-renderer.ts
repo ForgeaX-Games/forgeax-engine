@@ -58,6 +58,4 @@ import { defineComponent } from '@forgeax/engine-ecs';
  */
 export const MeshRenderer = defineComponent('MeshRenderer', {
   materials: { type: 'array<shared<MaterialAsset>>', default: [] },
-  frustumCulled: { type: 'u8', default: 1 },
-  pickable: { type: 'u8', default: 1 },
 });

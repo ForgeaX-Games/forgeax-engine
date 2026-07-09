@@ -377,6 +377,7 @@ export type SystemFn<
 export type {
   ArchetypeInfo,
   SceneInstantiateDiagnostic,
+  SceneInstantiateFlatOk,
   SceneInstantiateOk,
   WorldInspection,
 } from './world';

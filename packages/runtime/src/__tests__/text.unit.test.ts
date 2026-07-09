@@ -512,21 +512,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         expect(hit).toBeDefined();
         expect(hit?.entity).toBe(label);
       });
-
-      it('(e) pickable=0 label is skipped by pick', () => {
-        resetGlyphBakeCache();
-        const assets = new AssetRegistry(makeMockShaderRegistry());
-        const world = makeWorld();
-        const fontId = registerFont(world, 'Hi');
-        const camera = spawnCamera(world, 5);
-        const label = spawnLabel(world, fontId);
-
-        glyphTextLayoutSystem(world, assets, gpuStore, 0);
-        world.set(label, MeshRenderer, { pickable: 0 }).unwrap();
-
-        const hit = pick(world, camera, VP / 2, VP / 2, VP, VP);
-        expect(hit).toBeUndefined();
-      });
     });
   });
 }
