@@ -9,14 +9,12 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
+import {
+  AssetRegistry,
+  resolveAssetHandle,
+  walkMaterialPassesOverSharedRefs,
+} from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, type Handle, World } from '@forgeax/engine-ecs';
-import type { FontAsset, GlyphMetric, MeshAsset } from '@forgeax/engine-types';
-import { TextError } from '@forgeax/engine-types';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
-import { CAMERA_PROJECTION_PERSPECTIVE, Camera, MeshRenderer, Transform } from '../components';
-import { GlyphText } from '../components/glyph-text';
-import { MeshFilter } from '../components/mesh-filter';
 import {
   FloatsPerGlyphVertex,
   FONT_CONCURRENCY_LIMIT,
@@ -24,11 +22,15 @@ import {
   resetFontConcurrency,
   trackFontConcurrency,
   VERTEX_OFFSET,
-} from '../glyph-layout';
+} from '@forgeax/engine-graphics-extras';
+import type { FontAsset, GlyphMetric, MeshAsset } from '@forgeax/engine-types';
+import { TextError } from '@forgeax/engine-types';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { MeshRenderer, Transform } from '../components';
+import { GlyphText } from '../components/glyph-text';
+import { MeshFilter } from '../components/mesh-filter';
 import { glyphTextLayoutSystem, resetGlyphBakeCache } from '../glyph-text-layout-system';
 import { GpuResourceStore } from '../gpu-resource-store';
-import { pick } from '../pick';
-import { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from '../resolve-asset-handle';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
@@ -135,7 +137,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         // MeshFilter then MeshRenderer.
         const e = world
           .spawn(
-            { component: Transform, data: { posX: 1, posY: 2, posZ: 0 } },
+            { component: Transform, data: { pos: [1, 2, 0] } },
             {
               component: GlyphText,
               data: {
@@ -378,139 +380,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         // re-tracking an existing id is a no-op, not a 9th distinct font.
         expect(() => trackFontConcurrency(1)).not.toThrow();
         resetFontConcurrency();
-      });
-    });
-  });
-}
-
-{
-  // ─── from glyph-text-pick.test.ts ───
-  describe('glyph-text-pick.test.ts', () => {
-    // feat-20260601-gpu-resource-store-extraction M1: glyphTextLayoutSystem gained
-    // a 3rd param (the GPU residency store). Pick tests do not wire a device.
-    const gpuStore = new GpuResourceStore();
-
-    const VP = 600;
-
-    function metric(): GlyphMetric {
-      return {
-        advance: 10,
-        bearingX: 0,
-        bearingY: 8,
-        size: { w: 8, h: 8 },
-        region: { x: 0, y: 0, w: 8, h: 8 },
-      };
-    }
-
-    function registerFont(world: World, chars: string): number {
-      const glyphs: Record<number, GlyphMetric> = {};
-      for (const ch of chars) glyphs[ch.codePointAt(0) as number] = metric();
-      const font: FontAsset = {
-        kind: 'font',
-        atlas: 0 as never,
-        sampler: 0 as never,
-        glyphs,
-        common: {
-          lineHeight: 12,
-          base: 8,
-          distanceRange: 4,
-          pxRange: 4,
-          atlasWidth: 64,
-          atlasHeight: 64,
-        },
-      };
-      return world.allocSharedRef('FontAsset', font) as unknown as number;
-    }
-
-    function makeWorld(): World {
-      const world = new World();
-      return world;
-    }
-
-    function spawnCamera(world: World, z: number): EntityHandle {
-      return world
-        .spawn(
-          {
-            component: Transform,
-            data: {
-              posX: 0,
-              posY: 0,
-              posZ: z,
-              quatX: 0,
-              quatY: 0,
-              quatZ: 0,
-              quatW: 1,
-              scaleX: 1,
-              scaleY: 1,
-              scaleZ: 1,
-            },
-          },
-          {
-            component: Camera,
-            data: {
-              fov: Math.PI / 4,
-              aspect: 1,
-              near: 0.1,
-              far: 100,
-              projection: CAMERA_PROJECTION_PERSPECTIVE,
-              left: -1,
-              right: 1,
-              bottom: -1,
-              top: 1,
-            },
-          },
-        )
-        .unwrap();
-    }
-
-    function spawnLabel(world: World, fontId: number): EntityHandle {
-      return world
-        .spawn(
-          {
-            component: Transform,
-            data: {
-              posX: 0,
-              posY: 0,
-              posZ: 0,
-              quatX: 0,
-              quatY: 0,
-              quatZ: 0,
-              quatW: 1,
-              scaleX: 1,
-              scaleY: 1,
-              scaleZ: 1,
-            },
-          },
-          {
-            component: GlyphText,
-            data: {
-              fontHandle: fontId as unknown as Handle<'FontAsset', 'shared'>,
-              text: 'Hi',
-              fontSize: 1,
-              colorR: 1,
-              colorG: 1,
-              colorB: 1,
-              colorA: 1,
-            },
-          },
-        )
-        .unwrap();
-    }
-
-    describe('glyph text pick (AC-13, pick.ts unchanged)', () => {
-      it('(d) center-viewport ray hits the baked text entity', () => {
-        resetGlyphBakeCache();
-        const assets = new AssetRegistry(makeMockShaderRegistry());
-        const world = makeWorld();
-        const fontId = registerFont(world, 'Hi');
-        const camera = spawnCamera(world, 5);
-        const label = spawnLabel(world, fontId);
-
-        glyphTextLayoutSystem(world, assets, gpuStore, 0); // bake + attach MeshFilter + MeshRenderer
-
-        const hit = pick(world, camera, VP / 2, VP / 2, VP, VP);
-        expect(hit).toBeDefined();
-        expect(hit?.entity).toBe(label);
       });
     });
   });

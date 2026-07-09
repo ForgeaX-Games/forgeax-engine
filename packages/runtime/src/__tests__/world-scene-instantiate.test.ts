@@ -35,7 +35,7 @@ describe('world.instantiateScene basic (w17)', () => {
       entities: [
         {
           localId: 0 as never,
-          components: { Transform: { posX: 1, posY: 2, posZ: 3 } },
+          components: { Transform: { pos: [1, 2, 3] } },
         },
       ],
     };
@@ -73,7 +73,7 @@ describe('world.instantiateScene basic (w17)', () => {
       entities: [
         {
           localId: 0 as never,
-          components: { Transform: { posX: 7, posY: 8, posZ: 9 } },
+          components: { Transform: { pos: [7, 8, 9] } },
         },
       ],
     };
@@ -88,9 +88,7 @@ describe('world.instantiateScene basic (w17)', () => {
     const t = world.get(memberRaw as never, Transform);
     expect(t.ok).toBe(true);
     if (!t.ok) return;
-    expect(t.value.posX).toBe(7);
-    expect(t.value.posY).toBe(8);
-    expect(t.value.posZ).toBe(9);
+    expect(Array.from(t.value.pos)).toEqual([7, 8, 9]);
   });
 
   it('synthetic root ChildOf flows to caller-supplied parent', () => {

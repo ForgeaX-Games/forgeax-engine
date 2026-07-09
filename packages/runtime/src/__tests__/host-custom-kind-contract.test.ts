@@ -7,11 +7,10 @@
 // AC-02 (w13): custom kind sans refs, dev + prod paths, negative path
 // AC-03 (w14): refs recursion (host->host, host->engine, engine->host, cycle)
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Loader, LoaderOutput } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ── host-defined custom payload types (NOT in Asset union) ──────────

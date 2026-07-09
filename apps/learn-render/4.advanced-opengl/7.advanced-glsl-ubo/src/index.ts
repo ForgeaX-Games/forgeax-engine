@@ -21,16 +21,8 @@
 // 1. engine usage
 import { createApp } from '@forgeax/engine-app';
 import type { App } from '@forgeax/engine-app';
-import {
-  Camera,
-  DirectionalLight,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
@@ -98,7 +90,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.spawn(
       {
         component: Transform,
-        data: { posX: px, posY: py, posZ: pz },
+        data: { pos: [px, py, pz]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -126,7 +118,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: CAMERA_POS_X, posY: CAMERA_POS_Y, posZ: CAMERA_POS_Z },
+      data: { pos: [CAMERA_POS_X, CAMERA_POS_Y, CAMERA_POS_Z]},
     },
     {
       component: Camera,

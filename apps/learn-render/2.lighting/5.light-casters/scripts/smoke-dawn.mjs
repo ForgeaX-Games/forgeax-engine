@@ -236,7 +236,6 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   Materials,
   MeshFilter,
   MeshRenderer,
@@ -245,6 +244,9 @@ const {
   SpotLight,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
@@ -298,7 +300,7 @@ for (const pos of CUBE_POSITIONS) {
   world.spawn(
     {
       component: Transform,
-      data: { posX: pos[0], posY: pos[1], posZ: pos[2], quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [pos[0], pos[1], pos[2]], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [gridMat] } },
@@ -328,7 +330,7 @@ for (let i = 0; i < POINT_LIGHT_POSITIONS.length; i++) {
   world.spawn(
     {
       component: Transform,
-      data: { posX: plPos[0], posY: plPos[1], posZ: plPos[2], quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [plPos[0], plPos[1], plPos[2]], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
     },
     {
       component: PointLight,
@@ -354,7 +356,7 @@ world
   .spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: -2, posZ: -3, quatX: FLOOR_QUAT_X, quatW: FLOOR_QUAT_W, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [0, -2, -3], quat: [FLOOR_QUAT_X, 0, 0, FLOOR_QUAT_W], scale: [1, 1, 1]},
     },
     { component: MeshFilter, data: { assetHandle: floorMesh } },
     { component: MeshRenderer, data: { materials: [floorMat] } },
@@ -381,7 +383,7 @@ if (!occluderPresent) {
     .spawn(
       {
         component: Transform,
-        data: { posX: SHADOW_X, posY: -0.6, posZ: SHADOW_Z, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+        data: { pos: [SHADOW_X, -0.6, SHADOW_Z], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [obstructorMat] } },
@@ -402,7 +404,7 @@ const SPOT_DIR_LEN = Math.hypot(-0.6, -1, 0);
 world.spawn(
   {
     component: Transform,
-    data: { posX: SHADOW_X + 2.2, posY: 4, posZ: SHADOW_Z, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+    data: { pos: [SHADOW_X + 2.2, 4, SHADOW_Z], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
   },
   {
     component: SpotLight,
@@ -429,17 +431,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: SHADOW_X,
-      posY: 6,
-      posZ: SHADOW_Z + 2.5,
-      quatX: Math.sin(CAM_PITCH / 2),
-      quatY: 0,
-      quatZ: 0,
-      quatW: Math.cos(CAM_PITCH / 2),
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    },
+      pos: [SHADOW_X, 6, SHADOW_Z + 2.5], quat: [Math.sin(CAM_PITCH / 2), 0, 0, Math.cos(CAM_PITCH / 2)], scale: [1, 1, 1],},
   },
   {
     component: Camera,

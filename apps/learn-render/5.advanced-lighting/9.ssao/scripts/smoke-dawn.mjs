@@ -196,17 +196,19 @@ if (DISCRIMINATION) {
     const { createApp: createAppLocal } = await import('@forgeax/engine-app');
     const runtimePkgLocal = await import('@forgeax/engine-runtime');
     const {
-      Camera: CameraLocal,
-      DirectionalLight: DirectionalLightLocal,
-      HANDLE_CUBE: HANDLE_CUBE_LOCAL,
-      HANDLE_SPHERE: HANDLE_SPHERE_LOCAL,
-      HDRP_PIPELINE_ID: HDRP_PIPELINE_ID_LOCAL,
-      Materials: MaterialsLocal,
-      MeshFilter: MeshFilterLocal,
-      MeshRenderer: MeshRendererLocal,
-      perspective: perspectiveLocal,
-      Transform: TransformLocal,
-    } = runtimePkgLocal;
+  Camera: CameraLocal,
+  DirectionalLight: DirectionalLightLocal,
+  HDRP_PIPELINE_ID: HDRP_PIPELINE_ID_LOCAL,
+  Materials: MaterialsLocal,
+  MeshFilter: MeshFilterLocal,
+  MeshRenderer: MeshRendererLocal,
+  perspective: perspectiveLocal,
+  Transform: TransformLocal,
+} = runtimePkgLocal;
+const {
+  HANDLE_CUBE: HANDLE_CUBE_LOCAL,
+  HANDLE_SPHERE: HANDLE_SPHERE_LOCAL,
+} = await import('@forgeax/engine-assets-runtime');
 
     const appResult = await createAppLocal(canvas, {}, { shaderManifestUrl: MANIFEST_URL });
     globalThis.navigator.gpu.requestAdapter = originalReqAdapter;
@@ -260,26 +262,26 @@ if (DISCRIMINATION) {
     const sphereMatHandle = world.allocSharedRef('MaterialAsset', MaterialsLocal.standard({ baseColor: [0.2, 0.45, 0.9, 1] }));
 
     world.spawn(
-      { component: TransformLocal, data: { posX: 0, posY: FLOOR_Y, posZ: 0, quatW: 1, scaleX: FLOOR_SCALE_XZ, scaleY: FLOOR_SCALE_Y, scaleZ: FLOOR_SCALE_XZ } },
+      { component: TransformLocal, data: { pos: [0, FLOOR_Y, 0], quat: [0, 0, 0, 1], scale: [FLOOR_SCALE_XZ, FLOOR_SCALE_Y, FLOOR_SCALE_XZ]} },
       { component: MeshFilterLocal, data: { assetHandle: HANDLE_CUBE_LOCAL } },
       { component: MeshRendererLocal, data: { materials: [floorMatHandle] } },
     ).unwrap();
     world.spawn(
-      { component: TransformLocal, data: { posX: -OBJECT_X_OFFSET, posY: CUBE_Y, posZ: 0, quatW: 1, scaleX: 0.7, scaleY: 0.7, scaleZ: 0.7 } },
+      { component: TransformLocal, data: { pos: [-OBJECT_X_OFFSET, CUBE_Y, 0], quat: [0, 0, 0, 1], scale: [0.7, 0.7, 0.7]} },
       { component: MeshFilterLocal, data: { assetHandle: HANDLE_CUBE_LOCAL } },
       { component: MeshRendererLocal, data: { materials: [cubeMatHandle] } },
     ).unwrap();
     world.spawn(
-      { component: TransformLocal, data: { posX: OBJECT_X_OFFSET, posY: SPHERE_Y, posZ: 0, quatW: 1, scaleX: 0.6, scaleY: 0.6, scaleZ: 0.6 } },
+      { component: TransformLocal, data: { pos: [OBJECT_X_OFFSET, SPHERE_Y, 0], quat: [0, 0, 0, 1], scale: [0.6, 0.6, 0.6]} },
       { component: MeshFilterLocal, data: { assetHandle: HANDLE_SPHERE_LOCAL } },
       { component: MeshRendererLocal, data: { materials: [sphereMatHandle] } },
     ).unwrap();
     world.spawn(
-      { component: TransformLocal, data: { posX: 1, posY: 2, posZ: 1, quatW: 1 } },
+      { component: TransformLocal, data: { pos: [1, 2, 1], quat: [0, 0, 0, 1]} },
       { component: DirectionalLightLocal, data: { colorR: 1.0, colorG: 0.95, colorB: 0.85, intensity: 0.6 } },
     );
     world.spawn(
-      { component: TransformLocal, data: { posX: 0, posY: 1.8, posZ: 4.5, quatW: 1 } },
+      { component: TransformLocal, data: { pos: [0, 1.8, 4.5], quat: [0, 0, 0, 1]} },
       { component: CameraLocal, data: { ...perspectiveLocal({ fov: Math.PI / 3.5, aspect: WIDTH / HEIGHT, near: 0.1, far: 50 }), clearR: 0.02, clearG: 0.02, clearB: 0.04 } },
     ).unwrap();
 
@@ -448,8 +450,6 @@ const runtimePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
   DirectionalLight,
-  HANDLE_CUBE,
-  HANDLE_SPHERE,
   HDRP_PIPELINE_ID,
   Materials,
   MeshFilter,
@@ -457,6 +457,10 @@ const {
   perspective,
   Transform,
 } = runtimePkg;
+const {
+  HANDLE_CUBE,
+  HANDLE_SPHERE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
@@ -523,9 +527,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0, posY: FLOOR_Y, posZ: 0, quatW: 1,
-      scaleX: FLOOR_SCALE_XZ, scaleY: FLOOR_SCALE_Y, scaleZ: FLOOR_SCALE_XZ,
-    },
+      pos: [0, FLOOR_Y, 0], quat: [0, 0, 0, 1], scale: [FLOOR_SCALE_XZ, FLOOR_SCALE_Y, FLOOR_SCALE_XZ],},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [floorMatHandle] } },
@@ -537,9 +539,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: -OBJECT_X_OFFSET, posY: CUBE_Y, posZ: 0, quatW: 1,
-      scaleX: 0.7, scaleY: 0.7, scaleZ: 0.7,
-    },
+      pos: [-OBJECT_X_OFFSET, CUBE_Y, 0], quat: [0, 0, 0, 1], scale: [0.7, 0.7, 0.7],},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
@@ -551,9 +551,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: OBJECT_X_OFFSET, posY: SPHERE_Y, posZ: 0, quatW: 1,
-      scaleX: 0.6, scaleY: 0.6, scaleZ: 0.6,
-    },
+      pos: [OBJECT_X_OFFSET, SPHERE_Y, 0], quat: [0, 0, 0, 1], scale: [0.6, 0.6, 0.6],},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
   { component: MeshRenderer, data: { materials: [sphereMatHandle] } },
@@ -563,7 +561,7 @@ world.spawn(
 world.spawn(
   {
     component: Transform,
-    data: { posX: 1, posY: 2, posZ: 1, quatW: 1 },
+    data: { pos: [1, 2, 1], quat: [0, 0, 0, 1]},
   },
   {
     component: DirectionalLight,
@@ -575,7 +573,7 @@ world.spawn(
 world.spawn(
   {
     component: Transform,
-    data: { posX: 0, posY: 1.8, posZ: 4.5, quatW: 1 },
+    data: { pos: [0, 1.8, 4.5], quat: [0, 0, 0, 1]},
   },
   {
     component: Camera,

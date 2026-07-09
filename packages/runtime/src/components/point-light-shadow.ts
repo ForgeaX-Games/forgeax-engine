@@ -26,7 +26,7 @@ import { ShadowInvalidConfigError } from '../errors/render';
  *
  * @example Spawn a point light with default shadow config:
  *   world.spawn(
- *     { component: Transform, data: { posX: 0, posY: 4, posZ: 0 } },
+ *     { component: Transform, data: { pos: [0, 4, 0] } },
  *     { component: PointLight, data: { range: 25 } },
  *     { component: PointLightShadow, data: {} }, // 6 fields filled from defaults
  *   );

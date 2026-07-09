@@ -125,6 +125,9 @@ const {
   MeshRenderer,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const world = new World();
 
@@ -182,16 +185,14 @@ const customCubeHandle = world.allocSharedRef('MeshAsset', boxResult.value);
 // the culling stat stays observably active (mirrors apps/hello/culling/src/main.ts).
 for (let ix = 0; ix < GRID_SIZE; ix++) {
   for (let iz = 0; iz < GRID_SIZE; iz++) {
-    const posX = (ix - (GRID_SIZE - 1) / 2) * GRID_SPACING;
-    const posZ = (iz - (GRID_SIZE - 1) / 2) * GRID_SPACING;
+    const gx = (ix - (GRID_SIZE - 1) / 2) * GRID_SPACING;
+    const gz = (iz - (GRID_SIZE - 1) / 2) * GRID_SPACING;
     world.spawn(
       {
         component: Transform,
         data: {
-          posX, posY: 0, posZ,
-          quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-          scaleX: 0.7, scaleY: 0.7, scaleZ: 0.7,
-        },
+          pos: [gx, 0, gz],
+          quat: [0, 0, 0, 1], scale: [0.7, 0.7, 0.7],},
       },
       { component: MeshFilter, data: { assetHandle: customCubeHandle } },
       { component: MeshRenderer, data: { materials: [] } },
@@ -204,10 +205,7 @@ const cameraEntity = world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0, posY: 4, posZ: 6,
-      quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-      scaleX: 1, scaleY: 1, scaleZ: 1,
-    },
+      pos: [0, 4, 6], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
   {
     component: Camera,
@@ -234,10 +232,7 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
 
   // Orbit camera around the grid
   world.set(cameraEntity, Transform, {
-    posX: camX, posY: 4, posZ: camZ,
-    quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-    scaleX: 1, scaleY: 1, scaleZ: 1,
-  });
+    pos: [camX, 4, camZ], quat: [0, 0, 0, 1], scale: [1, 1, 1],});
 
   const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);

@@ -24,6 +24,20 @@
 // AC-15 source-level: this file uses `globalThis.navigator` rather than
 // `navigator` directly; it never touches `window` or `document`.
 
+import type { MipmapShaderModuleFactory } from '@forgeax/engine-assets-runtime';
+import {
+  AssetRegistry,
+  BuiltinAssetRegistry,
+  DynamicTextureStore,
+  HANDLE_CUBE,
+  HANDLE_NINESLICE_QUAD,
+  HANDLE_QUAD,
+  HANDLE_SPHERE,
+  HANDLE_TRIANGLE,
+  MeshSsboCapacityExceededError,
+  MeshSsboCeilingReachedError,
+  resolveAssetHandle,
+} from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import { deriveVertexBufferLayout } from '@forgeax/engine-geometry';
 import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
@@ -69,19 +83,9 @@ import type {
   VertexAttributeMap,
 } from '@forgeax/engine-types';
 import { derive, handleSlot } from '@forgeax/engine-types';
-import {
-  AssetRegistry,
-  HANDLE_CUBE,
-  HANDLE_NINESLICE_QUAD,
-  HANDLE_QUAD,
-  HANDLE_SPHERE,
-  HANDLE_TRIANGLE,
-} from './asset-registry';
-import { BuiltinAssetRegistry } from './builtin-asset-registry';
+import { audioLoaderPlaceholder } from './audio-loader-placeholder';
 import { classifyEnvErrorReason, composeEnvErrorHint } from './create-renderer-env-classify';
-import { DynamicTextureStore } from './dynamic-texture-store';
 import { createEngineMetrics } from './engine-metrics';
-import { MeshSsboCapacityExceededError, MeshSsboCeilingReachedError } from './errors/asset';
 import { EngineEnvironmentError } from './errors/environment';
 import { RecoverError } from './errors/recover';
 import type { PostProcessShaderEntry } from './fullscreen-post-process-pass';
@@ -99,7 +103,6 @@ import {
   POINT_LIGHT_STD430_BYTES,
   SPOT_LIGHT_STD430_BYTES,
 } from './light-buffer-layout';
-import type { MipmapShaderModuleFactory } from './mipmap-generator';
 import {
   buildPbrPipelineLayouts,
   buildPbrSkinLayouts,
@@ -137,7 +140,7 @@ import {
   RhiErrorListenerRegistry,
   resolveDrawOwners,
 } from './renderer';
-import { resolveAssetHandle } from './resolve-asset-handle';
+import { postSpawnResolveJoints } from './scene-instances/post-spawn-resolve-joints';
 import {
   ADVANCE_ANIMATION_PLAYER_SYSTEM,
   AdvanceAnimationPlayer,
@@ -1059,7 +1062,23 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // the host-injected ImportTransport (or undefined for the shipped form) is
   // threaded into the AssetRegistry ctor -- the construction-time-
   // only single injection point (no setter, no illegal intermediate state).
-  const assets = new AssetRegistry(shaderRegistry, internals.importTransport);
+  // feat-20260705-runtime-tier2-decomposition M1 / w10 (D-1 / D-2): the sole
+  // production assembly point injects (a) the post-spawn hook
+  // `postSpawnResolveJoints` (auto-wire Skin.joints; D-1) and (b) the extra
+  // loader [audioLoaderPlaceholder] that wire-default-loaders does not import
+  // directly (D-2). M3 / w32 (D-2 terminal): videoLoader moved to
+  // @forgeax/engine-graphics-extras and is now statically imported by
+  // wire-default-loaders itself (assets-runtime -> graphics-extras forward
+  // edge), so it drops out of extraLoaders here; the wired set stays 11 kinds
+  // (10 from wire internals + audioLoaderPlaceholder). audioLoaderPlaceholder
+  // stays in runtime (OOS-9). This is the only `new AssetRegistry(...)` call in
+  // the repo (research F7 / F10).
+  const assets = new AssetRegistry(
+    shaderRegistry,
+    internals.importTransport,
+    [audioLoaderPlaceholder],
+    postSpawnResolveJoints,
+  );
   // feat-20260601-gpu-resource-store-extraction M1: the GPU residency layer
   // lives in a standalone store; `assets` keeps the CPU POD registry only.
   const gpuStore = new GpuResourceStore();
@@ -6009,7 +6028,7 @@ async function buildReadyWebGPU(
   // can skip SPEC_CONST entries at their own peril via a future M7 opt-out
   // gate; the current M2 contract is fail-fast.
   // feat-20260608-tilemap-object-layer-rendering M2 / m2-t6 (D-8): SPEC_CONST
-  // sprite entries set cullMode='none' so H/V flip via negative scaleX/scaleY
+  // sprite entries set cullMode='none' so H/V flip via negative scale x/y
   // (tilemap per-cell entity TRS form, D-1) does not get culled when winding
   // inverts. See pipeline-spec.ts sprite LDR S1/S4 + HDR S1/S4 entries.
 

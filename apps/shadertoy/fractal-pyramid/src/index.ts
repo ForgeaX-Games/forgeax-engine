@@ -157,7 +157,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // shader ignores its transform.
   world
     .spawn(
-      { component: Transform, data: { posZ: 3 } },
+      { component: Transform, data: { pos: [0, 0, 3]} },
       { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: cssW / cssH }) },
     )
     .unwrap();

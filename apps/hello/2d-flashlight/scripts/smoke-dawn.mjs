@@ -6,7 +6,7 @@
 // dawn-node smoke for the flat sprite-lit shading model. Two scenes match
 // the requirements' AC-1 and AC-2 assertion coordinates one to one:
 //
-//   1. sweep-spot (AC-1). SpotLight at world origin, dirX=1, posZ=0. Sprite
+//   1. sweep-spot (AC-1). SpotLight at world origin, dirX=1, pos z=0. Sprite
 //      plane covers x=[1, 3], y=[-1, 1]. The wedge center at world (2, 0)
 //      lands inside the smoothstep cone at near-max range attenuation, so
 //      the framebuffer-center pixel brightness (max channel / 255) must
@@ -146,7 +146,6 @@ const enginePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
   createRenderer,
-  HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
   PointLight,
@@ -154,6 +153,9 @@ const {
   TONEMAP_NONE,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_QUAD,
+} = await import('@forgeax/engine-assets-runtime');
 
 const CAMERA_PROJECTION_ORTHOGRAPHIC = 1;
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
@@ -226,12 +228,12 @@ function expectOk(r, label) {
   return r.value;
 }
 
-function spawnSprite(world, matHandle, x, y, z, scaleX, scaleY) {
+function spawnSprite(world, matHandle, x, y, z, sx, sy) {
   expectOk(
     world.spawn(
       {
         component: Transform,
-        data: { posX: x, posY: y, posZ: z, quatW: 1, scaleX, scaleY, scaleZ: 1 },
+        data: { pos: [x, y, z], quat: [0, 0, 0, 1], scale: [sx, sy, 1] },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
       { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -319,7 +321,7 @@ async function buildSweepSpotWorld({ intensity }) {
 
   expectOk(
     world.spawn(
-      { component: Transform, data: { posX: 1.9, posY: 0, posZ: 5, quatW: 1 } },
+      { component: Transform, data: { pos: [1.9, 0, 5], quat: [0, 0, 0, 1]} },
       { component: Camera, data: orthoCameraData({ left: -1.5, right: 1.5, bottom: -1.5, top: 1.5 }) },
     ),
     'spawn Camera (sweep-spot)',
@@ -327,7 +329,7 @@ async function buildSweepSpotWorld({ intensity }) {
 
   expectOk(
     world.spawn(
-      { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatW: 1 } },
+      { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1]} },
       {
         component: SpotLight,
         data: {
@@ -360,7 +362,7 @@ async function buildPointCircleWorld() {
 
   expectOk(
     world.spawn(
-      { component: Transform, data: { posX: 0, posY: 0, posZ: 5, quatW: 1 } },
+      { component: Transform, data: { pos: [0, 0, 5], quat: [0, 0, 0, 1]} },
       { component: Camera, data: orthoCameraData({ left: -1.5, right: 1.5, bottom: -1.5, top: 1.5 }) },
     ),
     'spawn Camera (point-circle)',
@@ -368,7 +370,7 @@ async function buildPointCircleWorld() {
 
   expectOk(
     world.spawn(
-      { component: Transform, data: { posX: 0, posY: 0, posZ: 0.01, quatW: 1 } },
+      { component: Transform, data: { pos: [0, 0, 0.01], quat: [0, 0, 0, 1]} },
       {
         component: PointLight,
         data: {
@@ -388,7 +390,7 @@ async function buildPointCircleWorld() {
   return { ok: true, world };
 }
 
-// Camera framing: sweep-spot uses left/right=[-1.5, 1.5] centred on posX=1.9
+// Camera framing: sweep-spot uses left/right=[-1.5, 1.5] centred on pos x=1.9
 // so pixel column 400 (WIDTH/2) maps to world x=1.9. Sprite center world
 // x=2.0 maps to pixel column 427 -- we sample there for the AC-1 assertion.
 // point-circle centres on world (0, 0) so framebuffer center is the AC-2

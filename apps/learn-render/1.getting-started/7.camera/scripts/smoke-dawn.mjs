@@ -196,12 +196,14 @@ const enginePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
   createRenderer,
-  HANDLE_CUBE,
   Materials,
   MeshFilter,
   MeshRenderer,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
 // M5-engine-fix: build a real engine manifest carrying pbr.wgsl + unlit.wgsl
 // (post w22.9 the inline fallback was deleted; the engine demands real
@@ -334,17 +336,7 @@ const cubeEntity = world
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 0,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -357,17 +349,7 @@ const cameraEntity = world
     {
       component: Transform,
       data: {
-        posX: camPosX,
-        posY: camPosY,
-        posZ: camPosZ,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [camPosX, camPosY, camPosZ], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     {
       component: Camera,

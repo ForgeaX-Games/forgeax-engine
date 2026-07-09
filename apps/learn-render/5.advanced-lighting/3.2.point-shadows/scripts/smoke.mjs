@@ -143,7 +143,6 @@ const runtimePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
   DirectionalLight,
-  HANDLE_CUBE,
   Materials,
   MeshFilter,
   MeshRenderer,
@@ -152,6 +151,9 @@ const {
   PointLightShadow,
   Transform,
 } = runtimePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
@@ -217,7 +219,7 @@ if (roomCullMode === 'none') {
 world.spawn(
   {
     component: Transform,
-    data: { posY: 0, scaleX: 5, scaleY: 5, scaleZ: 5, quatW: 1 },
+    data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [5, 5, 5]},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [roomMat] } },
@@ -225,11 +227,11 @@ world.spawn(
 
 // 5 inner solid-color cubes.
 const innerObjects = [
-  { posX: -2, posY: 0, posZ: -1, scale: 1, color: [1, 0.3, 0.3] },
-  { posX: 1, posY: -1, posZ: -2, scale: 0.7, color: [0.3, 1, 0.3] },
-  { posX: 0, posY: 1.5, posZ: -3, scale: 0.5, color: [0.3, 0.3, 1] },
-  { posX: -1, posY: -0.5, posZ: 2, scale: 1.2, color: [1, 1, 0.3] },
-  { posX: 2, posY: -1.5, posZ: 1, scale: 0.8, color: [1, 0.3, 1] },
+  { pos: [-2, 0, -1],scale: 1, color: [1, 0.3, 0.3] },
+  { pos: [1, -1, -2],scale: 0.7, color: [0.3, 1, 0.3] },
+  { pos: [0, 1.5, -3],scale: 0.5, color: [0.3, 0.3, 1] },
+  { pos: [-1, -0.5, 2],scale: 1.2, color: [1, 1, 0.3] },
+  { pos: [2, -1.5, 1],scale: 0.8, color: [1, 0.3, 1] },
 ];
 for (const obj of innerObjects) {
   const [r, g, b] = obj.color;
@@ -239,9 +241,9 @@ for (const obj of innerObjects) {
     {
       component: Transform,
       data: {
-        posX: obj.posX, posY: obj.posY, posZ: obj.posZ,
-        quatW: 1,
-        scaleX: obj.scale, scaleY: obj.scale, scaleZ: obj.scale,
+        pos: obj.pos,
+        quat: [0, 0, 0, 1],
+        scale: [obj.scale, obj.scale, obj.scale],
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -264,7 +266,7 @@ world.spawn(
 const lightEntity = world.spawn(
   {
     component: Transform,
-    data: { posX: 0, posY: 4, posZ: 0 },
+    data: { pos: [0, 4, 0]},
   },
   {
     component: PointLight,
@@ -280,7 +282,7 @@ const lightEntity = world.spawn(
 const cameraEntity = world.spawn(
   {
     component: Transform,
-    data: { posY: 1.5, quatW: 1 },
+    data: { pos: [0, 1.5, 0], quat: [0, 0, 0, 1]},
   },
   {
     component: Camera,
@@ -302,9 +304,7 @@ world.addSystem({
     elapsed += 1 / 60;
     const t = elapsed;
     world.set(lightEntity, Transform, {
-      posX: Math.sin(t) * 3,
-      posZ: Math.cos(t) * 3,
-    });
+      pos: [Math.sin(t) * 3, 0, Math.cos(t) * 3],});
   },
 });
 

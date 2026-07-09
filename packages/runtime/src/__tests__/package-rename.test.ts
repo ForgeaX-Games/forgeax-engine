@@ -9,11 +9,10 @@
 //   4. name collision inside the same package -> err(asset-invalid-value)
 //   5. target guid not registered -> err(asset-not-found)
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { SamplerAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const NULL_PKG = 'd0000000-0000-4000-d000-000000000001';

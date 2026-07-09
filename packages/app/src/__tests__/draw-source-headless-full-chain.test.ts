@@ -29,6 +29,7 @@
 //   feat-20260623 rhi-null-command-flow.unit.test.ts (headless full-chain
 //     precedent: createRenderer + RhiNull + bookkeeper counters)
 
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import type { RhiNullDevice } from '@forgeax/engine-rhi-null';
 import { rhi } from '@forgeax/engine-rhi-null';
@@ -36,7 +37,6 @@ import {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
   type Renderer,
@@ -76,19 +76,12 @@ function buildManifestDataUrl(): string {
 }
 
 function identityTransform(
-  overrides: Partial<Record<string, number>> = {},
-): Record<string, number> {
+  overrides: Partial<Record<string, number[]>> = {},
+): Record<string, number[]> {
   return {
-    posX: 0,
-    posY: 0,
-    posZ: 0,
-    quatX: 0,
-    quatY: 0,
-    quatZ: 0,
-    quatW: 1,
-    scaleX: 1,
-    scaleY: 1,
-    scaleZ: 1,
+    pos: [0, 0, 0],
+    quat: [0, 0, 0, 1],
+    scale: [1, 1, 1],
     ...overrides,
   };
 }
@@ -100,7 +93,7 @@ function makeInjectedWorld(): World {
   const world = new World();
   registerPropagateTransforms(world);
   world.spawn(
-    { component: Transform, data: identityTransform({ posZ: 5 }) },
+    { component: Transform, data: identityTransform({ pos: [0, 0, 5] }) },
     { component: Camera, data: { fov: 60, near: 0.1, far: 1000, tonemap: 4 } },
   );
   world.spawn(

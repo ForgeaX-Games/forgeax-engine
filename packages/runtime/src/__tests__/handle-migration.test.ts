@@ -7,13 +7,15 @@
 // biome-ignore-all lint/suspicious/noExplicitAny: test seams accessing
 // private store fields + raw Handle casts via pack().
 
+import {
+  BuiltinAssetRegistry,
+  HANDLE_CUBE,
+  resolveAssetHandle,
+} from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { handleSlot, pack } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { HANDLE_CUBE } from '../asset-registry';
-import { BuiltinAssetRegistry } from '../builtin-asset-registry';
 import { GpuResourceStore } from '../gpu-resource-store';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 
 describe('M5 handle-migration', () => {
   describe('GPU store Map key uses handleSlot (AC-09)', () => {

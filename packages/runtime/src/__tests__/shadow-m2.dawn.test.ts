@@ -21,12 +21,12 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
   Transform,
@@ -218,16 +218,9 @@ function buildFixtureWorld(): World {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 10,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
+        pos: [0, 0, 10],
+        quat: [0, 0, 0, 1],
+        scale: [1, 1, 1],
       },
     },
     {
@@ -251,16 +244,9 @@ function buildFixtureWorld(): World {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: -0.005,
-        posZ: 0,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: GROUND_SIZE,
-        scaleY: 0.01,
-        scaleZ: GROUND_SIZE,
+        pos: [0, -0.005, 0],
+        quat: [0, 0, 0, 1],
+        scale: [GROUND_SIZE, 0.01, GROUND_SIZE],
       },
     },
     {
@@ -278,16 +264,9 @@ function buildFixtureWorld(): World {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 1.5,
-        posZ: 0,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 2,
-        scaleY: 2,
-        scaleZ: 2,
+        pos: [0, 1.5, 0],
+        quat: [0, 0, 0, 1],
+        scale: [2, 2, 2],
       },
     },
     {

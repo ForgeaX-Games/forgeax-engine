@@ -120,12 +120,14 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   Materials,
   MeshFilter,
   MeshRenderer,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
 let renderer;
 try {
@@ -209,7 +211,7 @@ world.spawn(
 world.spawn(
   {
     component: Transform,
-    data: { posX: 0, posY: 12, posZ: 8, quatX: -0.4718579255320243, quatY: 0, quatZ: 0, quatW: 0.8816745987679437, scaleX: 1, scaleY: 1, scaleZ: 1 },
+    data: { pos: [0, 12, 8], quat: [-0.4718579255320243, 0, 0, 0.8816745987679437], scale: [1, 1, 1]},
   },
   { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
 );
@@ -218,7 +220,7 @@ world.spawn(
 world.spawn(
   {
     component: Transform,
-    data: { posX: 0, posY: -0.01, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 10, scaleY: 0.02, scaleZ: 10 },
+    data: { pos: [0, -0.01, 0], quat: [0, 0, 0, 1], scale: [10, 0.02, 10]},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: {} },
@@ -229,7 +231,7 @@ const matA = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColo
 world.spawn(
   {
     component: Transform,
-    data: { posX: -3, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
+    data: { pos: [-3, 1.25, 0], quat: [0, 0, 0, 1], scale: [1.5, 1.5, 1.5]},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [matA] } },
@@ -240,7 +242,7 @@ const matB = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColo
 world.spawn(
   {
     component: Transform,
-    data: { posX: 0, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
+    data: { pos: [0, 1.25, 0], quat: [0, 0, 0, 1], scale: [1.5, 1.5, 1.5]},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [matB] } },
@@ -258,7 +260,7 @@ const matC = world.allocSharedRef('MaterialAsset', {
 world.spawn(
   {
     component: Transform,
-    data: { posX: 3, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
+    data: { pos: [3, 1.25, 0], quat: [0, 0, 0, 1], scale: [1.5, 1.5, 1.5]},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [matC] } },

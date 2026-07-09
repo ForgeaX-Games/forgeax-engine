@@ -86,16 +86,14 @@ export function createCollectSystem(player: EntityHandle): SystemHandle<readonly
       if (hits.length === 0) return;
 
       // Capture world positions before despawn (AC-12): the Transform is
-      // gone after despawn, so read posX/posY/posZ now and write the signal
+      // gone after despawn, so read Transform.pos now and write the signal
       // so the pickup-text system can spawn floating "+1" text at each site.
       const signals: PickupSignal[] = [];
       for (const core of hits) {
         const t = world.get(core as EntityHandle, Transform);
         if (t.ok) {
           signals.push({
-            posX: t.value.posX,
-            posY: t.value.posY,
-            posZ: t.value.posZ,
+            pos: [t.value.pos[0] ?? 0, t.value.pos[1] ?? 0, t.value.pos[2] ?? 0],
           });
         }
       }

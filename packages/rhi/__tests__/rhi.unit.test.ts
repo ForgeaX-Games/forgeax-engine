@@ -471,7 +471,7 @@ import type { RhiCaps } from '../src/index';
   const D_S7_TEMPLATES = {
     'render-system-no-camera': {
       expected: 'world has at least one entity with Transform + Camera',
-      hint: 'world.spawn({ component: Transform, data: { posX, posY, posZ, quatX, quatY, quatZ, quatW, scaleX, scaleY, scaleZ } }, { component: Camera, data: { fov, aspect, near, far } }) before renderer.draw(world)',
+      hint: 'world.spawn({ component: Transform, data: { pos: [x, y, z], quat: [x, y, z, w], scale: [x, y, z] } }, { component: Camera, data: { fov, aspect, near, far } }) before renderer.draw(world)',
     },
     'render-system-multi-camera': {
       expected: 'world has exactly one entity with Transform + Camera',

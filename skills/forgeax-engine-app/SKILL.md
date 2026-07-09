@@ -203,8 +203,8 @@ const MovePlayer = defineSystem({
     // capability probe (one-shot at attach)
     const hasGamepad = input.capabilities.gamepad;
     for (const bundle of queryResults[0]) {
-      const xs = bundle.Transform.posX;
-      for (let i = 0; i < bundle.entityCount; i++) xs[i] = (xs[i] ?? 0) + dx + gpx;
+      const pos = bundle.Transform.pos; // flat stride-3: row i x lane at pos[i * 3]
+      for (let i = 0; i < bundle.entityCount; i++) pos[i * 3] = (pos[i * 3] ?? 0) + dx + gpx;
     }
   },
 });
@@ -268,9 +268,9 @@ const MovePlayer = defineSystem({
     const move = snap.getVector('moveLeft', 'moveRight', 'moveUp', 'moveDown');
     // move.x / move.y ∈ [-1, 1]; circular deadzone (NOT square)
     for (const bundle of queryResults[0]) {
-      const xs = bundle.Transform.posX;
+      const pos = bundle.Transform.pos; // flat stride-3: row i x lane at pos[i * 3]
       for (let i = 0; i < bundle.entityCount; i++) {
-        xs[i] = (xs[i] ?? 0) + move.x;
+        pos[i * 3] = (pos[i * 3] ?? 0) + move.x;
       }
     }
   },

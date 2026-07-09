@@ -10,12 +10,12 @@
 //   child  (With<ChildOf>):    world = parent.world x compose(local.TRS)
 //   stale ChildOf ref:         Result.err(RhiError({ code: 'hierarchy-broken' }))
 //
-// The kernel composes the local TRS scalar columns into a mat4 and writes the
-// 16 contiguous floats straight into the entity's `Transform.world` slot via
-// the M1 column-level zero-copy accessor (`world._getArrayView`). It never
-// decomposes back to scalar columns (plan-strategy §2 D-3: compose -> multiply,
-// no decompose) and never reads/writes the legacy global-transform component
-// (retired in M4).
+// The kernel composes the local TRS array columns (pos / quat / scale, flat
+// stride-N indexed reads) into a mat4 and writes the 16 contiguous floats
+// straight into the entity's `Transform.world` slot via the M1 column-level
+// zero-copy accessor (`world._getArrayView`). It never decomposes back to the
+// local columns (plan-strategy §2 D-3: compose -> multiply, no decompose)
+// and never reads/writes the legacy global-transform component (retired in M4).
 // Every entity with a Transform is processed every frame (the flat opt-out is
 // gone; requirements §3): a flat entity gets `world = compose(local)` with no
 // extra component registration (AC-06).
@@ -170,29 +170,46 @@ interface RowLocator {
 }
 
 /**
- * Compose an entity's local TRS scalar columns (at `row`) into `out` (mat4).
+ * Module-scope scratch vectors reused by every `composeLocalInto` call so the
+ * hot path feeds `mat4.compose` without allocating per-entity literal arrays
+ * (D-3: TRS reads are flat-column indexed, zero per-call allocation; the
+ * compose in-params reuse these three scratch buffers). propagateTransforms
+ * is single-threaded per world update, so module-scope reuse is safe.
+ */
+const scratchPos = new Float32Array(3);
+const scratchQuat = new Float32Array(4);
+const scratchScale = new Float32Array(3);
+
+/**
+ * Compose an entity's local TRS array columns (at `row`) into `out` (mat4).
  * `out` is a `FieldView` (the live `Transform.world` view, a `Float32Array` at
  * runtime); the cast below reinterprets it as the `mat4.compose` out-param.
+ *
+ * Reads go through the flat stride-N column views -- `pos[row*3+a]` /
+ * `quat[row*4+a]` / `scale[row*3+a]` -- one indexed read per component lane,
+ * zero per-call allocation (AC-08, research Finding 5 adjudication table).
  */
 function composeLocalInto(out: FieldView, arch: Archetype, row: number): void {
+  const pos = getField(arch, Transform.id, 'pos');
+  const quat = getField(arch, Transform.id, 'quat');
+  const scale = getField(arch, Transform.id, 'scale');
+  const p = row * 3;
+  const q = row * 4;
+  scratchPos[0] = pos[p] as number;
+  scratchPos[1] = pos[p + 1] as number;
+  scratchPos[2] = pos[p + 2] as number;
+  scratchQuat[0] = quat[q] as number;
+  scratchQuat[1] = quat[q + 1] as number;
+  scratchQuat[2] = quat[q + 2] as number;
+  scratchQuat[3] = quat[q + 3] as number;
+  scratchScale[0] = scale[p] as number;
+  scratchScale[1] = scale[p + 1] as number;
+  scratchScale[2] = scale[p + 2] as number;
   mat4.compose(
     out as unknown as Parameters<typeof mat4.compose>[0],
-    [
-      getField(arch, Transform.id, 'posX')[row] as number,
-      getField(arch, Transform.id, 'posY')[row] as number,
-      getField(arch, Transform.id, 'posZ')[row] as number,
-    ],
-    [
-      getField(arch, Transform.id, 'quatX')[row] as number,
-      getField(arch, Transform.id, 'quatY')[row] as number,
-      getField(arch, Transform.id, 'quatZ')[row] as number,
-      getField(arch, Transform.id, 'quatW')[row] as number,
-    ],
-    [
-      getField(arch, Transform.id, 'scaleX')[row] as number,
-      getField(arch, Transform.id, 'scaleY')[row] as number,
-      getField(arch, Transform.id, 'scaleZ')[row] as number,
-    ],
+    scratchPos,
+    scratchQuat,
+    scratchScale,
   );
 }
 

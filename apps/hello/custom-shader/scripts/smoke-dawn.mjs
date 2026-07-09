@@ -267,17 +267,7 @@ world
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 0,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: MeshFilter, data: { assetHandle: boxMeshHandle } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },
@@ -287,17 +277,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0,
-      posY: 0,
-      posZ: 3,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    },
+      pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
   { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
 );
@@ -468,13 +448,13 @@ const msaaCustomMeshHandle = worldMsaaCustom.allocSharedRef('MeshAsset', boxRes.
 
 worldMsaaCustom
   .spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+    { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
     { component: MeshFilter, data: { assetHandle: msaaCustomMeshHandle } },
     { component: MeshRenderer, data: { materials: [msaaCustomMatHandle] } },
   )
   .unwrap();
 worldMsaaCustom.spawn(
-  { component: Transform, data: { posX: 0, posY: 0, posZ: 3, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
   { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100, antialias: ANTIALIAS_MSAA } },
 );
 worldMsaaCustom.spawn({
@@ -507,13 +487,13 @@ const msaaPbrMeshHandle = worldMsaaPbr.allocSharedRef('MeshAsset', boxRes.value)
 
 worldMsaaPbr
   .spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+    { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
     { component: MeshFilter, data: { assetHandle: msaaPbrMeshHandle } },
     { component: MeshRenderer, data: { materials: [msaaPbrMatHandle] } },
   )
   .unwrap();
 worldMsaaPbr.spawn(
-  { component: Transform, data: { posX: 0, posY: 0, posZ: 3, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
   { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100, antialias: ANTIALIAS_MSAA } },
 );
 worldMsaaPbr.spawn({

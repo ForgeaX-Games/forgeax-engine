@@ -11,14 +11,13 @@
 // AC-15 source-level guarantee: this file does NOT touch `window` or
 // `document` at import time; canvas is supplied by the caller.
 
+import type { AssetRegistry, AssetRuntimeError } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import type { Result, RhiDevice, RhiError, RhiInstance } from '@forgeax/engine-rhi';
 import type { ShaderRegistry } from '@forgeax/engine-shader';
 import type { RenderPipelineAsset } from '@forgeax/engine-types';
-import type { AssetRegistry } from './asset-registry';
 import type { EngineMetrics } from './engine-metrics';
-import type { AssetRuntimeError } from './errors/asset';
 import type { RecoverError } from './errors/recover';
 import type { RenderError } from './errors/render';
 import type { SkinError } from './errors/skin';

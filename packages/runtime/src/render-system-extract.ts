@@ -96,6 +96,12 @@
 // Layer-3 ErrorHandler and the renderable is skipped. The record stage
 // trusts the invariant and does not re-check.
 
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import {
+  MaterialResolvedEmptyPassesError,
+  resolveAssetHandle,
+  walkMaterialPassesOverSharedRefs,
+} from '@forgeax/engine-assets-runtime';
 import type { Archetype, EntityHandle, ErrorContext, FieldView, World } from '@forgeax/engine-ecs';
 import {
   createQueryState,
@@ -117,7 +123,6 @@ import type {
   SkeletonAsset,
 } from '@forgeax/engine-types';
 import { ASSET_ERROR_HINTS, AssetError, toShared } from '@forgeax/engine-types';
-import type { AssetRegistry } from './asset-registry';
 import {
   Camera,
   DirectionalLight,
@@ -144,7 +149,6 @@ import {
   tonemapFromF32,
   tonemapToU32,
 } from './components/camera';
-import { MaterialResolvedEmptyPassesError } from './errors/asset';
 import { ShadowInvalidConfigError } from './errors/render';
 import {
   JointCountMismatchError,
@@ -155,7 +159,6 @@ import {
   SkinMaterialMismatchError,
 } from './errors/skin';
 import { computeInvRangeSquared, degToCos } from './light-helpers';
-import { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from './resolve-asset-handle';
 import { getActiveCamera, selectActiveCameraIndex } from './systems/active-camera';
 import { selectPasses } from './systems/pass-selector';
 import { propagateTransforms } from './systems/propagate-transforms';

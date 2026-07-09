@@ -13,13 +13,13 @@
 // In forgeax the equivalent surface is split across three layers
 // (charter P4 consistent abstraction):
 //   1. **model** -> per-entity `Transform` component (10 f32 SoA cols:
-//      `posXYZ + quatXYZW quaternion + scaleXYZ`); the engine
+//      `pos + quat quaternion + scale` array columns); the engine
 //      `RenderSystem` internally composes `worldFromLocal: mat4` per
 //      frame using `@forgeax/engine-math` (see `packages/runtime/src/
 //      components/transform.ts`).
 //   2. **view** -> the active camera entity's `Transform` (the engine
 //      computes `viewFromWorld = inverse(cameraTransform)`); LO's
-//      `glm::vec3(0, 0, -3)` translation becomes `Transform.posZ = 3.0`
+//      `glm::vec3(0, 0, -3)` translation becomes `Transform.pos = [0, 0, 3]`
 //      on the camera entity (note the sign: in forgeax the camera sits
 //      at +z and looks down -z, matching LO right-handed convention).
 //   3. **projection** -> the `Camera` component's `fov / aspect / near /
@@ -88,16 +88,8 @@ import { createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { quat, vec3 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  MeshFilter,
-  MeshRenderer,
-  resolveAssetHandle,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, EngineEnvironmentError, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -132,7 +124,7 @@ const PACK_INDEX_URL = '/pack-index.json';
 
 // LO 1.6 cubePositions[] array (verbatim translation; the LO source
 // uses `glm::vec3(...)` literals, here they map onto the per-entity
-// `Transform.posXYZ` SoA columns the engine RenderSystem reads each
+// `Transform.pos` flat array column the engine RenderSystem reads each
 // frame). 10 cubes laid out in a loose grid so AI users can visually
 // confirm the perspective projection in the captured PNG. Source:
 // LearnOpenGL/src/1.getting_started/6.1.coordinate_systems/coordinate
@@ -314,17 +306,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         {
           component: Transform,
           data: {
-            posX: pos[0],
-            posY: pos[1],
-            posZ: pos[2],
-            quatX: cubeQuat[0] ?? 0,
-            quatY: cubeQuat[1] ?? 0,
-            quatZ: cubeQuat[2] ?? 0,
-            quatW: cubeQuat[3] ?? 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
-          },
+            pos: [pos[0], pos[1], pos[2]], quat: [cubeQuat[0] ?? 0, cubeQuat[1] ?? 0, cubeQuat[2] ?? 0, cubeQuat[3] ?? 1], scale: [1, 1, 1],},
         },
         { component: MeshFilter, data: { assetHandle: cubeHandle } },
         {
@@ -347,17 +329,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 3,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     {
       component: Camera,

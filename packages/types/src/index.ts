@@ -4788,5 +4788,66 @@ export interface ImportTransport {
   >;
 }
 
+// === EngineMetrics contract SSOT (feat-20260705-runtime-tier2-decomposition M1 / w2, D-3) ===
+//
+// Decision anchors:
+//   - plan-strategy D-3 (the 3-method EngineMetrics interface has zero type
+//     dependencies; sinking it into @forgeax/engine-types makes types the SSOT
+//     leaf. EngineMetricsImpl + createEngineMetrics stay in runtime.)
+//   - research F5 (asset-registry.ts `import type { EngineMetrics }` was the
+//     third reverse edge from assets cluster to runtime; type-only but the
+//     project-reference layer still had to resolve it — relocating the contract
+//     to the leaf removes the edge).
+//
+// The interface was originally defined in runtime/src/engine-metrics.ts. It is
+// promoted here so both @forgeax/engine-runtime and @forgeax/engine-assets-runtime
+// import the contract from a single entry point (charter F1).
+
+/**
+ * Per-Renderer metrics counter API. Backed by a `Map<string, number>`; reads
+ * return a frozen plain object so external mutation never leaks back into the
+ * registry (D-5 + R-2 mutation-resistance).
+ *
+ * Three methods cover the full surface:
+ *
+ *   const r = await createRenderer(canvas);
+ *   // ... renderer hits some nineslice runtime soft-warn
+ *   r.metrics.snapshot()['nineslice.scale-too-small'];   // -> number | undefined
+ *
+ *   r.metrics.increment('nineslice.scale-too-small');    // mutate counter
+ *   r.metrics.reset();                                   // drop all counters
+ *
+ * Callers can `for (const k in renderer.metrics.snapshot())` to enumerate
+ * fired events without knowing the namespace ahead of time.
+ *
+ * @remarks Closed namespace (charter P5):
+ * - `nineslice.scale-too-small`
+ * - `nineslice.tile-needs-repeat-sampler`
+ * - `render.instancing.foldedDraws`
+ */
+export interface EngineMetrics {
+  /**
+   * Bump the counter for `name` by 1. Counters start at 0 implicitly; the
+   * first `increment(name)` lands a 1 in the snapshot. Names are free-form
+   * strings (no prior registration), so feat-local namespaces (e.g.
+   * `nineslice.*`) coexist without coordination.
+   */
+  increment(name: string): void;
+  /**
+   * Read all counters as an immutable `Readonly<Record<string, number>>`.
+   * The returned object is frozen — external mutation throws in strict mode
+   * and is silently ignored otherwise. Snapshot-then-mutate is decoupled
+   * from the registry: a later `increment` does not retroactively alter the
+   * already-returned snapshot.
+   */
+  snapshot(): Readonly<Record<string, number>>;
+  /**
+   * Drop every counter back to 0 (counter rows physically removed). Provided
+   * for test isolation and Inspector reset workflows; production code on
+   * the hot path never calls this.
+   */
+  reset(): void;
+}
+
 // inspector-client is Node-only (imports 'ws'); consume via
 //   import { ... } from '@forgeax/engine-types/inspector-client'

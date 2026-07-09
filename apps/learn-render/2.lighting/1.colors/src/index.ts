@@ -17,17 +17,8 @@ import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { Entity, World } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
 import { vec3 } from '@forgeax/engine-math';
-import {
-  Camera,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, DirectionalLight, EngineEnvironmentError, Materials, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
@@ -137,9 +128,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: LIGHT_POS_X, posY: LIGHT_POS_Y, posZ: LIGHT_POS_Z,
-          scaleX: LAMP_SCALE, scaleY: LAMP_SCALE, scaleZ: LAMP_SCALE,
-        },
+          pos: [LIGHT_POS_X, LIGHT_POS_Y, LIGHT_POS_Z], scale: [LAMP_SCALE, LAMP_SCALE, LAMP_SCALE],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [lampMatHandle] } },
@@ -167,7 +156,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posZ: CAMERA_POS_Z },
+      data: { pos: [0, 0, CAMERA_POS_Z]},
     },
     {
       component: Camera,

@@ -131,13 +131,15 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
   perspective,
   Transform,
-  VideoPlayer,
 } = enginePkg;
+const {
+  HANDLE_QUAD,
+} = await import('@forgeax/engine-assets-runtime');
+const { VideoPlayer } = await import('@forgeax/engine-graphics-extras');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
@@ -237,7 +239,7 @@ world.spawn(
     // would leave aspect=0 (degenerate projection) and treat 60 as radians.
     data: perspective({ fov: Math.PI / 3, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 }),
   },
-  { component: Transform, data: { posX: 0, posY: 0, posZ: 5 } },
+  { component: Transform, data: { pos: [0, 0, 5]} },
 );
 console.log('[video-texture] camera entity spawned');
 
@@ -254,7 +256,7 @@ world.spawn(
       intensity: 1.5,
     },
   },
-  { component: Transform, data: { posX: 1, posY: 2, posZ: 1 } },
+  { component: Transform, data: { pos: [1, 2, 1]} },
 );
 console.log('[video-texture] light entity spawned');
 
@@ -273,7 +275,7 @@ const videoEnt = world.spawn(
   },
   {
     component: Transform,
-    data: { posX: 0, posY: 0, posZ: -1, scaleX: 2, scaleY: 2, scaleZ: 1 },
+    data: { pos: [0, 0, -1], scale: [2, 2, 1]},
   },
 );
 console.log(`[video-texture] video-textured quad entity spawned: ${String(videoEnt)}`);

@@ -108,16 +108,10 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
     // end-to-end on dawn.
 
     const { World } = await import('@forgeax/engine-ecs');
-    const {
-      AssetRegistry,
-      Camera,
-      createRenderer,
-      HANDLE_CUBE,
-      Instances,
-      MeshFilter,
-      MeshRenderer,
-      Transform,
-    } = await import('@forgeax/engine-runtime');
+    const { AssetRegistry, HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
+    const { Camera, createRenderer, Instances, MeshFilter, MeshRenderer, Transform } = await import(
+      '@forgeax/engine-runtime'
+    );
     const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
     const ENGINE_MANIFEST_W6 = await buildEngineShaderManifest();
     const ENGINE_MANIFEST_URL_W6 = `data:application/json,${encodeURIComponent(
@@ -238,16 +232,9 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 0.3,
-          scaleY: 0.3,
-          scaleZ: 0.3,
+          pos: [0, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [0.3, 0.3, 0.3],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -258,16 +245,9 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 25,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 25],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       {

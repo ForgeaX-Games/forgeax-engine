@@ -200,24 +200,26 @@ export function addFirstPersonSystem(
         let camPosZ = 3;
         for (const bundles of queryResults[0]) {
           for (let i = 0; i < bundles.Entity.self.length; i++) {
-            camPosX = (bundles.Transform.posX[i] ?? 0) + displacement.x;
-            camPosY = (bundles.Transform.posY[i] ?? 0) + displacement.y;
-            camPosZ = (bundles.Transform.posZ[i] ?? 0) + displacement.z;
-            bundles.Transform.posX[i] = camPosX;
-            bundles.Transform.posY[i] = camPosY;
-            bundles.Transform.posZ[i] = camPosZ;
-            bundles.Transform.quatX[i] = qTmp[0] ?? 0;
-            bundles.Transform.quatY[i] = qTmp[1] ?? 0;
-            bundles.Transform.quatZ[i] = qTmp[2] ?? 0;
-            bundles.Transform.quatW[i] = qTmp[3] ?? 1;
+            // Flat stride-N array columns (feat-20260709 M2): row i lanes at
+            // pos[i*3+a] / quat[i*4+a].
+            camPosX = (bundles.Transform.pos[i * 3] ?? 0) + displacement.x;
+            camPosY = (bundles.Transform.pos[i * 3 + 1] ?? 0) + displacement.y;
+            camPosZ = (bundles.Transform.pos[i * 3 + 2] ?? 0) + displacement.z;
+            bundles.Transform.pos[i * 3] = camPosX;
+            bundles.Transform.pos[i * 3 + 1] = camPosY;
+            bundles.Transform.pos[i * 3 + 2] = camPosZ;
+            bundles.Transform.quat[i * 4] = qTmp[0] ?? 0;
+            bundles.Transform.quat[i * 4 + 1] = qTmp[1] ?? 0;
+            bundles.Transform.quat[i * 4 + 2] = qTmp[2] ?? 0;
+            bundles.Transform.quat[i * 4 + 3] = qTmp[3] ?? 1;
           }
         }
 
         for (const bundles of queryResults[1]) {
           for (let i = 0; i < bundles.Entity.self.length; i++) {
-            bundles.Transform.posX[i] = camPosX;
-            bundles.Transform.posY[i] = camPosY;
-            bundles.Transform.posZ[i] = camPosZ;
+            bundles.Transform.pos[i * 3] = camPosX;
+            bundles.Transform.pos[i * 3 + 1] = camPosY;
+            bundles.Transform.pos[i * 3 + 2] = camPosZ;
             bundles.SpotLight.directionX[i] = forward.x;
             bundles.SpotLight.directionY[i] = forward.y;
             bundles.SpotLight.directionZ[i] = forward.z;
@@ -239,13 +241,15 @@ export function addFirstPersonSystem(
 
         for (const bundles of queryResults[0]) {
           for (let i = 0; i < bundles.Entity.self.length; i++) {
-            bundles.Transform.posX[i] = (bundles.Transform.posX[i] ?? 0) + displacement.x;
-            bundles.Transform.posY[i] = (bundles.Transform.posY[i] ?? 0) + displacement.y;
-            bundles.Transform.posZ[i] = (bundles.Transform.posZ[i] ?? 0) + displacement.z;
-            bundles.Transform.quatX[i] = qTmp[0] ?? 0;
-            bundles.Transform.quatY[i] = qTmp[1] ?? 0;
-            bundles.Transform.quatZ[i] = qTmp[2] ?? 0;
-            bundles.Transform.quatW[i] = qTmp[3] ?? 1;
+            bundles.Transform.pos[i * 3] = (bundles.Transform.pos[i * 3] ?? 0) + displacement.x;
+            bundles.Transform.pos[i * 3 + 1] =
+              (bundles.Transform.pos[i * 3 + 1] ?? 0) + displacement.y;
+            bundles.Transform.pos[i * 3 + 2] =
+              (bundles.Transform.pos[i * 3 + 2] ?? 0) + displacement.z;
+            bundles.Transform.quat[i * 4] = qTmp[0] ?? 0;
+            bundles.Transform.quat[i * 4 + 1] = qTmp[1] ?? 0;
+            bundles.Transform.quat[i * 4 + 2] = qTmp[2] ?? 0;
+            bundles.Transform.quat[i * 4 + 3] = qTmp[3] ?? 1;
           }
         }
       },

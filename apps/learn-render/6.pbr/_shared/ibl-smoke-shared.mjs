@@ -308,17 +308,7 @@ export async function runIblSmoke(opts) {
         {
           component: Transform,
           data: {
-            posX: cx,
-            posY: cy,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: SCALE,
-            scaleY: SCALE,
-            scaleZ: SCALE,
-          },
+            pos: [cx, cy, 0], quat: [0, 0, 0, 1], scale: [SCALE, SCALE, SCALE],},
         },
         { component: MeshFilter, data: { assetHandle: sphereAssetHandle } },
         { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -334,17 +324,7 @@ export async function runIblSmoke(opts) {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 2,
-        posZ: 8,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [0, 2, 8], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: Camera, data: cameraData },
   );

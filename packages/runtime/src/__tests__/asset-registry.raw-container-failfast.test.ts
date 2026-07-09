@@ -22,11 +22,11 @@
 //       via the imported artifact -- no loop back onto the raw container.
 // Anti-vacuous: without the fix, the raw `.glb` is fetched (res.json throws).
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { defineComponent } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { ImportTransport } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const MAT_GUID = 'a0000000-0000-4000-a000-00006d6174a1';

@@ -211,7 +211,7 @@ export function createMoveSystem(
       pw.moveAndSlide(player, vec3.create(moveX, dy, moveZ));
 
       // Face the planar move direction. moveAndSlide writes back ONLY position
-      // (rapier3d computeMove sets posX/posY/posZ + grounded, never rotation), so
+      // (rapier3d computeMove sets Transform.pos + grounded, never rotation), so
       // without this the parent quat stays at spawn identity forever and the rig
       // never turns (D2). The capsule collider is Y-symmetric, so yawing the KCC
       // parent is physics-safe; propagateTransforms rotates the child rig with it.
@@ -219,7 +219,7 @@ export function createMoveSystem(
       // survives this rotation-only write.
       if (moveX !== 0 || moveZ !== 0) {
         const q = yawQuat(facingYawFromMove(moveX, moveZ));
-        world.set(player, Transform, { quatX: q.x, quatY: q.y, quatZ: q.z, quatW: q.w });
+        world.set(player, Transform, { quat: [q.x, q.y, q.z, q.w] });
       }
 
       // Publish the locomotion signal for player-anim (one-way producer).
@@ -242,8 +242,8 @@ export function createMoveSystem(
  *
  * Uses mat4.lookAt to build the view matrix, inverts it to get the camera's
  * world transform, then mat4.decompose extracts the rotation quaternion.
- * Returns the quaternion components suitable for writing to
- * Transform { quatX, quatY, quatZ, quatW }.
+ * Returns the quaternion as an [x, y, z, w] tuple suitable for writing to
+ * Transform.quat.
  *
  * Pure — no World dependency, unit-testable.
  */
@@ -257,7 +257,7 @@ export function cameraLookAtQuat(
   upX: number,
   upY: number,
   upZ: number,
-): { quatX: number; quatY: number; quatZ: number; quatW: number } {
+): readonly [number, number, number, number] {
   const view = mat4.create();
   const eye = vec3.create(eyeX, eyeY, eyeZ);
   const target = vec3.create(targetX, targetY, targetZ);
@@ -270,12 +270,7 @@ export function cameraLookAtQuat(
   const r = quat.create();
   const s = vec3.create();
   mat4.decompose(t, r, s, worldMat as Mat4Like);
-  return {
-    quatX: r[0] as number,
-    quatY: r[1] as number,
-    quatZ: r[2] as number,
-    quatW: r[3] as number,
-  };
+  return [r[0] as number, r[1] as number, r[2] as number, r[3] as number];
 }
 
 /**
@@ -343,24 +338,22 @@ function followCamera(world: World, player: EntityHandle, camera: EntityHandle):
   if (!cameraFollowEnabled) return;
   const playerTf = world.get(player, Transform);
   if (!playerTf.ok) return;
+  const px = playerTf.value.pos[0] ?? 0;
+  const py = playerTf.value.pos[1] ?? 0;
+  const pz = playerTf.value.pos[2] ?? 0;
   const look = cameraLookAtQuat(
-    playerTf.value.posX,
-    playerTf.value.posY + CAMERA_OFFSET_Y,
-    playerTf.value.posZ + CAMERA_OFFSET_Z,
-    playerTf.value.posX,
-    playerTf.value.posY + 1, // look at player torso, not feet
-    playerTf.value.posZ,
+    px,
+    py + CAMERA_OFFSET_Y,
+    pz + CAMERA_OFFSET_Z,
+    px,
+    py + 1, // look at player torso, not feet
+    pz,
     0,
     1,
     0, // up = +Y
   );
   world.set(camera, Transform, {
-    posX: playerTf.value.posX,
-    posY: playerTf.value.posY + CAMERA_OFFSET_Y,
-    posZ: playerTf.value.posZ + CAMERA_OFFSET_Z,
-    quatX: look.quatX,
-    quatY: look.quatY,
-    quatZ: look.quatZ,
-    quatW: look.quatW,
+    pos: [px, py + CAMERA_OFFSET_Y, pz + CAMERA_OFFSET_Z],
+    quat: look,
   });
 }

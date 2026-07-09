@@ -1,6 +1,7 @@
 // @forgeax/engine-runtime - RenderSystem record stage: frame.
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
 
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import { type RhiCommandEncoder, RhiError, type TextureView } from '@forgeax/engine-rhi';
 import type { MaterialRenderState, MeshAsset } from '@forgeax/engine-types';
@@ -34,7 +35,6 @@ import {
   foldDispatchBuckets,
   incrementFoldedDrawsMetric,
 } from '../render-system-fold';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 import { getTransparentSortConfig } from '../systems/transparent-sort-config';
 import {
   buildPerFrameBindGroups,
@@ -103,7 +103,7 @@ export function recordFrame(
       new RhiError({
         code: 'render-system-no-camera',
         expected: 'world has at least one entity with Transform + Camera',
-        hint: 'world.spawn({ component: Transform, data: { posX, posY, posZ, quatX, quatY, quatZ, quatW, scaleX, scaleY, scaleZ } }, { component: Camera, data: { fov, aspect, near, far, clearR, clearG, clearB, clearA } }) before renderer.draw([world], { owner: 0 })',
+        hint: 'world.spawn({ component: Transform, data: { pos: [x, y, z], quat: [x, y, z, w], scale: [x, y, z] } }, { component: Camera, data: { fov, aspect, near, far, clearR, clearG, clearB, clearA } }) before renderer.draw([world], { owner: 0 })',
       }),
     );
     activeCameras = [makeZeroCameraFallbackSnapshot()];
@@ -937,7 +937,7 @@ function cleanPerFrameCaches(
  * feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4 + w5 (D-1, D-5):
  * groups transparent-sort-ordered dispatch entries with equal (Layer.value,
  * sortKey, materialHandle) into fold buckets. Mode-gate (D-5 extended): modes 0
- * (LAYER_Z) and 1 (LAYER_Y) fold using posZ/posY; modes 2/3 bypass per-entity
+ * (LAYER_Z) and 1 (LAYER_Y) fold using the pos z/y lanes; modes 2/3 bypass per-entity
  * (each entry a singleton bucket). Records `frameState.lastFoldBucketCount` =
  * fold-eligible buckets (bucketSize > 1) for the AC-06 metric. Empty dispatch
  * short-circuits (test fixtures pass null world).

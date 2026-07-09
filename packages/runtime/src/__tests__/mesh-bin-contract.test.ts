@@ -20,8 +20,8 @@
 //   (E) encode: uvSetCount=9 -> error (Fail Fast at encode exit)
 //   (F) external: clamp excess is not a contract violation — only format corrupt
 
+import { unpackMeshBin } from '@forgeax/engine-assets-runtime';
 import { describe, expect, it } from 'vitest';
-import { unpackMeshBin } from '../mesh-bin';
 
 const HEADER_V2 = 28;
 

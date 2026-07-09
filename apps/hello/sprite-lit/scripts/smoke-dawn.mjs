@@ -143,8 +143,6 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
-  HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
   PointLight,
@@ -152,6 +150,10 @@ const {
   TONEMAP_NONE,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+  HANDLE_QUAD,
+} = await import('@forgeax/engine-assets-runtime');
 
 const CAMERA_PROJECTION_ORTHOGRAPHIC = 1;
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
@@ -298,7 +300,7 @@ async function buildWorld({ includePoint, includeSpot }) {
   if (includePoint) {
     expectOk(
       world.spawn(
-        { component: Transform, data: { posX: 0.0, posY: 0.3, posZ: 1.5, quatW: 1 } },
+        { component: Transform, data: { pos: [0.0, 0.3, 1.5], quat: [0, 0, 0, 1]} },
         {
           component: PointLight,
           data: { colorR: 1.0, colorG: 0.4, colorB: 1.0, intensity: 3.0, range: 4.0 },
@@ -310,7 +312,7 @@ async function buildWorld({ includePoint, includeSpot }) {
   if (includeSpot) {
     expectOk(
       world.spawn(
-        { component: Transform, data: { posX: 2.0, posY: 1.0, posZ: 1.5, quatW: 1 } },
+        { component: Transform, data: { pos: [2.0, 1.0, 1.5], quat: [0, 0, 0, 1]} },
         {
           component: SpotLight,
           data: {
@@ -340,14 +342,7 @@ async function buildWorld({ includePoint, includeSpot }) {
         {
           component: Transform,
           data: {
-            posX: slot.pos[0],
-            posY: slot.pos[1],
-            posZ: slot.pos[2],
-            quatW: 1,
-            scaleX: 0.45,
-            scaleY: 0.45,
-            scaleZ: 1,
-          },
+            pos: [slot.pos[0], slot.pos[1], slot.pos[2]], quat: [0, 0, 0, 1], scale: [0.45, 0.45, 1],},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
         { component: MeshRenderer, data: { materials: [mat] } },
@@ -374,14 +369,7 @@ async function buildWorld({ includePoint, includeSpot }) {
       {
         component: Transform,
         data: {
-          posX: 0.0,
-          posY: -0.6,
-          posZ: 0.0,
-          quatW: 1,
-          scaleX: 0.3,
-          scaleY: 0.3,
-          scaleZ: 0.3,
-        },
+          pos: [0.0, -0.6, 0.0], quat: [0, 0, 0, 1], scale: [0.3, 0.3, 0.3],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [cubeMat] } },
@@ -394,7 +382,7 @@ async function buildWorld({ includePoint, includeSpot }) {
     world.spawn(
       {
         component: Transform,
-        data: { posX: 0, posY: 0, posZ: 5, quatW: 1 },
+        data: { pos: [0, 0, 5], quat: [0, 0, 0, 1]},
       },
       {
         component: Camera,
@@ -496,7 +484,7 @@ async function renderCase({ includePoint, includeSpot, label }) {
   // Sample point: sprite-lit slot 1 center at world (-0.3, 0). Framebuffer
   // maps world x to (x + 1.6) / 3.2 * WIDTH (ortho left=-1.6, right=1.6),
   // so world x=-0.3 -> pixel column 325 -- well inside the sprite footprint
-  // (slot 1 spans world x=[-0.525, -0.075] at scaleX=0.45). The prior sample
+  // (slot 1 spans world x=[-0.525, -0.075] at scale x=0.45). The prior sample
   // at framebuffer center (world (0, 0)) fell in the inter-sprite gap and
   // read only the clear color, so the three-lights vs directional-only
   // delta was structurally zero under the flat sprite-lit shading model.

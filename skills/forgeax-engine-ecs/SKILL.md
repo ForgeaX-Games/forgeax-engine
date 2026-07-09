@@ -163,6 +163,17 @@ export const Children = defineComponent('Children', {
 export const SceneInstance = defineComponent('SceneInstance', { ... }, { transient: true });
 ```
 
+**field 级 transient（feat-20260709）**：`transient: true` 也可声明在**单个 field**（`FieldDescriptor`）上，非只能整组件。collect 跳过 reflection 携带 `transient: true` 的 field——通用机制，key 在 `component.fields[fieldName].transient`，非组件特判。典型用途是每帧派生的 cache field：`Transform.world`（propagate 每帧从 local TRS 重算的 world mat4）声明 `transient: true`，场景 JSON 不存这 16 float 冗余（Derive）；instantiate 后首帧 propagate 重算等价 world。可反射自查：`Transform.fields.world.transient === true`。
+
+```ts
+export const Transform = defineComponent('Transform', {
+  pos: { type: 'array<f32, 3>', default: new Float32Array([0, 0, 0]) },
+  quat: { type: 'array<f32, 4>', default: new Float32Array([0, 0, 0, 1]) },
+  scale: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
+  world: { type: 'array<f32, 16>', default: IDENTITY_MAT4, transient: true },
+});
+```
+
 ## 踩坑
 
 - **系统 fn 首参必须是 `world`**：`defineSystem({ fn: (world, queryResults, commands) => {...} })`——旧签名 `(queryResults, commands)` 已废弃。typecheck 不足以兜底此陷阱（TS 参数前插后 `arity-narrowed assignment` 合法，见 memory `overload-arg-shape-dispatch-hides-p0`）。迁移：形参加 `world`，体内原闭包捕获的 `world` 改用参数 `world`。

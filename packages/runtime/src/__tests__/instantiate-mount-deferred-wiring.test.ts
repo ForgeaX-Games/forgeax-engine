@@ -19,12 +19,13 @@
 // serialized Children — so it FAILS on main too (proving the hole is
 // PRE-EXISTING, not introduced by M1). m2t4's deferred wiring turns it green.
 
+import type { Asset } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import type { Asset } from '../asset-registry';
-import { AssetRegistry } from '../asset-registry';
+import '../components';
 import { ChildOf } from '../components/child-of';
 import { SceneInstance } from '../components/scene-instance';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
@@ -55,7 +56,7 @@ describe('instantiate deferred ChildOf wiring for owned-parent mounts (D-8)', ()
     // Child scene = one owned entity.
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 7 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [7, 0, 0] } } }],
     };
     cat(reg, G_CHILD, child);
 
@@ -64,7 +65,7 @@ describe('instantiate deferred ChildOf wiring for owned-parent mounts (D-8)', ()
     // spawnGlbSceneAsMount on-disk shape (wrapper W + nested mount).
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 1 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,

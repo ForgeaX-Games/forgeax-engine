@@ -187,14 +187,16 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
   PointLight,
-  resolveAssetHandle,
   SpotLight,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+  resolveAssetHandle,
+} = await import('@forgeax/engine-assets-runtime');
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
@@ -284,17 +286,7 @@ for (let i = 0; i < CUBE_POSITIONS.length; i++) {
     {
       component: Transform,
       data: {
-        posX: pos[0],
-        posY: pos[1],
-        posZ: pos[2],
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [pos[0], pos[1], pos[2]], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [litMaterial] } },
@@ -329,17 +321,7 @@ for (let i = 0; i < POINT_LIGHT_POSITIONS.length; i++) {
     {
       component: Transform,
       data: {
-        posX: plPos[0],
-        posY: plPos[1],
-        posZ: plPos[2],
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: LAMP_SCALE,
-        scaleY: LAMP_SCALE,
-        scaleZ: LAMP_SCALE,
-      },
+        pos: [plPos[0], plPos[1], plPos[2]], quat: [0, 0, 0, 1], scale: [LAMP_SCALE, LAMP_SCALE, LAMP_SCALE],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [lampMat] } },
@@ -360,17 +342,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0,
-      posY: 0,
-      posZ: 3,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    },
+      pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
   {
     component: Camera,

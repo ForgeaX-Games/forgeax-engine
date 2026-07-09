@@ -78,7 +78,7 @@ flowchart LR
   Resource --> CamSys["learn-render-camera-first-person<br/>(after: input-frame-start-scan)"]
   TimeRes --> CamSys
   Resource --> ScrollSys["learn-render-camera-scroll-fov<br/>(after: input-frame-start-scan)"]
-  CamSys -->|"yaw/pitch +/-89 clamp + sphere -> Cartesian + WASD * dt"| WriteT["camera.Transform.posXYZ + quatXYZW"]
+  CamSys -->|"yaw/pitch +/-89 clamp + sphere -> Cartesian + WASD * dt"| WriteT["camera.Transform.pos + quat"]
   ScrollSys -->|"fovDeg -= wheelDelta + clamp [1, 45] + deg -> rad"| WriteFov["Camera.fov"]
   WriteT --> Update["world.update()"]
   WriteFov --> Update
@@ -130,12 +130,12 @@ const matHandleRes  = await assets.loadByGuid<MaterialAsset>(matGuid);
 // engine pipelineState.meshes alias map covers user-handle (>=1024) ids
 // (V-3 punt removed in feat-20260519, plan-decisions D-3).
 world.spawn(
-  { component: Transform,  data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform,  data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
   { component: MeshFilter, data: { assetHandle: cubeHandleRes.value } },
   { component: MeshRenderer, data: { material: matHandleRes.value } },
 );
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0, posZ: 3, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
   { component: Camera,    data: { fov: CAMERA_FOV_RADIANS, aspect: canvas.width / canvas.height, near: 0.1, far: 100, projection: CAMERA_PROJECTION_PERSPECTIVE, left: -1, right: 1, bottom: -1, top: 1 } },
 );
 
@@ -164,7 +164,7 @@ world.addSystem({
       a: snap.keyboard.down('KeyA'), d: snap.keyboard.down('KeyD'),
     } as const;
     const disp = computeWasdDisplacement(dt, { x: fwdX, y: fwdY, z: fwdZ }, { x: rightX, y: 0, z: rightZ }, held);
-    // for each camera entity: posX += disp.x; posY += disp.y; posZ += disp.z;
+    // for each camera entity: pos[i*3] += disp.x; pos[i*3+1] += disp.y; pos[i*3+2] += disp.z;
     // Encode forward direction into Transform.quat (Tait-Bryan Y * X).
   },
 });
@@ -199,7 +199,7 @@ app.start();
 | 灵敏度系数 | 在 `mouse_callback` 内部 `xoffset *= sensitivity; yoffset *= sensitivity;` 二次乘法 | `MOUSE_SENSITIVITY` 常量在 first-person system fn body 一次乘法（`yaw += dx * MOUSE_SENSITIVITY`） |
 | Pitch clamp | `if (pitch > 89.0f) pitch = 89.0f; if (pitch < -89.0f) pitch = -89.0f;` 度数 | `if (pitch > PITCH_CLAMP_RAD) pitch = PITCH_CLAMP_RAD;` 弧度（forgeax 内部 yaw/pitch 全用弧度，与 `Math.sin/cos` 契合） |
 | 球极→Cartesian | `front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch)); front.y = sin(glm::radians(pitch)); front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch)); cameraFront = glm::normalize(front);` 公式同 + 弧度转换 | `fwdX = cos(yaw) * cos(pitch); fwdY = sin(pitch); fwdZ = sin(yaw) * cos(pitch);`（弧度直入；不需 normalize：cos²(pitch) + sin²(pitch) = 1） |
-| View 矩阵构造 | `view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);` 显式 lookAt 调用 | camera entity 持 `Transform.posXYZ + quatXYZW`；first-person system 把 yaw/pitch 编码成四元数（Tait-Bryan Y * X）写回 `Transform.quatXYZW`；引擎 `RenderSystem` 内部 `view = inverse(camera.Transform)`；AI 用户**不写 glm::lookAt** |
+| View 矩阵构造 | `view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);` 显式 lookAt 调用 | camera entity 持 `Transform.pos + quat`；first-person system 把 yaw/pitch 编码成四元数（Tait-Bryan Y * X）写回 `Transform.quat`；引擎 `RenderSystem` 内部 `view = inverse(camera.Transform)`；AI 用户**不写 glm::lookAt** |
 | WASD 键查询 | `processInput(window)` 在主循环显式调用；body 内 `if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) cameraPos += cameraSpeed * cameraFront;` | first-person system fn body 直读 `snapshot.keyboard.down('KeyW')`；不写 `processInput` 函数封装（charter P4 一致抽象：`addSystem` 是 ECS schedule 的统一调度入口） |
 | 键名 | `GLFW_KEY_W / GLFW_KEY_S / GLFW_KEY_A / GLFW_KEY_D` 整数枚举 | DOM `KeyboardEvent.code` 字符串字面量 `'KeyW' / 'KeyS' / 'KeyA' / 'KeyD'`（W3C UI Events spec；与键盘布局无关） |
 | `cameraSpeed * deltaTime` | `float cameraSpeed = 2.5f * deltaTime;` 帧时间乘法 | `KEYBOARD_SPEED` 常量（M11 MVP 不做帧时间归一化；feat-20260515 OOS-1 显式不做 deltaTime 调度，是引擎层下一个 feat 的工作） |

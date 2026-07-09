@@ -34,20 +34,8 @@
 import { createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
 
-import {
-  BLOOM_DISABLED,
-  BLOOM_ENABLED,
-  Camera,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  HANDLE_SPHERE,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  TONEMAP_REINHARD_EXTENDED,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
+import { BLOOM_DISABLED, BLOOM_ENABLED, Camera, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, TONEMAP_REINHARD_EXTENDED, Transform } from '@forgeax/engine-runtime';
 
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -134,14 +122,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: -0.6,
-        posY: 0.2,
-        posZ: 0,
-        quatW: 1,
-        scaleX: 0.6,
-        scaleY: 0.6,
-        scaleZ: 0.6,
-      },
+        pos: [-0.6, 0.2, 0], quat: [0, 0, 0, 1], scale: [0.6, 0.6, 0.6],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
     { component: MeshRenderer, data: { materials: [emissiveHandle] } },
@@ -151,14 +132,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0.6,
-        posY: 0,
-        posZ: 0,
-        quatW: 1,
-        scaleX: 0.4,
-        scaleY: 0.4,
-        scaleZ: 0.4,
-      },
+        pos: [0.6, 0, 0], quat: [0, 0, 0, 1], scale: [0.4, 0.4, 0.4],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },
@@ -183,7 +157,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const camEntity = world.spawn(
     {
       component: Transform,
-      data: { posZ: 5 },
+      data: { pos: [0, 0, 5]},
     },
     {
       component: Camera,

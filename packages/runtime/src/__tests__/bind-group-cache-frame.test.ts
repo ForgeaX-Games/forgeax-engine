@@ -6,10 +6,10 @@
 // Each original file body sits in its own block-scope so helper names
 // cannot collide; describe() inside still registers globally with vitest.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import type { Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { MeshFilter, MeshRenderer, Transform } from '../components';
 import { type ExtractedFrame, extractFrame } from '../render-system-extract';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
@@ -205,21 +205,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     DirectionalLight: unknown;
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import('../index')),
+      ...(await import('@forgeax/engine-assets-runtime')),
+    } as never;
   }
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -263,16 +259,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       {
         component: C.Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
     );
@@ -585,21 +574,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import('../index')),
+      ...(await import('@forgeax/engine-assets-runtime')),
+    } as never;
   }
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -676,16 +661,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       {
         component: C.Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
     );
@@ -816,16 +794,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function translateTransform(x = 0, y = 0, z = 0) {
     return {
-      posX: x,
-      posY: y,
-      posZ: z,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [x, y, z],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -1156,21 +1127,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import('../index')),
+      ...(await import('@forgeax/engine-assets-runtime')),
+    } as never;
   }
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -1253,16 +1220,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         {
           component: C.Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
         { component: C.Instances, data: { transforms } },
@@ -1274,16 +1234,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         {
           component: C.Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -1371,16 +1324,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         {
           component: C.Transform,
           data: {
-            posX: 5,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [5, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );

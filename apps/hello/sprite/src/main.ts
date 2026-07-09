@@ -86,22 +86,8 @@ import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import type { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  EngineEnvironmentError,
-  HANDLE_NINESLICE_QUAD,
-  HANDLE_QUAD,
-  Layer,
-  MeshFilter,
-  MeshRenderer,
-  orthographic,
-  setTransparentSortConfig,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  TRANSPARENT_SORT_MODE_LAYER_Y,
-  TRANSPARENT_SORT_MODE_LAYER_Z,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_NINESLICE_QUAD, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, EngineEnvironmentError, Layer, MeshFilter, MeshRenderer, orthographic, setTransparentSortConfig, SPRITE_PREMULTIPLIED_ALPHA_BLEND, TRANSPARENT_SORT_MODE_LAYER_Y, TRANSPARENT_SORT_MODE_LAYER_Z, Transform } from '@forgeax/engine-runtime';
 
 import type {
   Handle,
@@ -285,7 +271,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posZ: 5 },
+      data: { pos: [0, 0, 5]},
     },
     {
       component: Camera,
@@ -400,18 +386,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         {
           component: Transform,
           data: {
-            posX: slot.pos[0],
-            posY: slot.pos[1],
-            posZ: slot.pos[2],
-            // feat-20260625 M4 / w17 (research F-4 + D-6): post-w11 the
-            // sprite quad is a local-space unit quad and world scale flows
-            // entirely through Transform.world (scale^1), not the old
-            // scale^2 path. To preserve visual size, set new scale = old
-            // scale^2; original 0.4 -> 0.16 keeps the same screen area.
-            scaleX: 0.16,
-            scaleY: 0.16,
-            scaleZ: 1,
-          },
+            pos: [slot.pos[0], slot.pos[1], slot.pos[2]], scale: [0.16, 0.16, 1],},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
         { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -587,13 +562,7 @@ function setupNineSliceSection(
         {
           component: Transform,
           data: {
-            posX: slot.pos[0],
-            posY: slot.pos[1],
-            posZ: slot.pos[2],
-            scaleX: slot.scale[0],
-            scaleY: slot.scale[1],
-            scaleZ: 1,
-          },
+            pos: [slot.pos[0], slot.pos[1], slot.pos[2]], scale: [slot.scale[0], slot.scale[1], 1],},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_NINESLICE_QUAD } },
         { component: MeshRenderer, data: { materials: [panelMat] } },
@@ -611,13 +580,7 @@ function setupNineSliceSection(
       {
         component: Transform,
         data: {
-          posX: 0.0,
-          posY: -0.7,
-          posZ: 0,
-          scaleX: 0.36,
-          scaleY: 0.16,
-          scaleZ: 1,
-        },
+          pos: [0.0, -0.7, 0], scale: [0.36, 0.16, 1],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_NINESLICE_QUAD } },
       { component: MeshRenderer, data: { materials: [tileMat] } },

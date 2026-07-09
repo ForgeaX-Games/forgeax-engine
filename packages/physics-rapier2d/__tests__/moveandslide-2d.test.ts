@@ -55,7 +55,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
   ): number {
     const entity = world
       .spawn(
-        { component: Transform as never, data: { posX: pos[0], posY: pos[1] } },
+        { component: Transform as never, data: { pos: [pos[0], pos[1], 0]} },
         { component: RigidBody as never, data: { type: bodyType } },
         {
           component: Collider as never,
@@ -70,7 +70,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
   function spawnStaticBox(world: World, pos: Vec2Tuple, halfExtents: Vec2Tuple): number {
     const entity = world
       .spawn(
-        { component: Transform as never, data: { posX: pos[0], posY: pos[1] } },
+        { component: Transform as never, data: { pos: [pos[0], pos[1], 0]} },
         { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
         {
           component: Collider as never,
@@ -101,8 +101,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
   function tfPos(world: World, entity: number): { x: number; y: number } {
     const r = world.get(entity as never, Transform as never);
     if (!r.ok) throw new Error('transform missing');
-    const v = r.value as Record<string, number>;
-    return { x: v.posX as number, y: v.posY as number };
+    const v = r.value as { pos: Float32Array };
+    return { x: v.pos[0] as number, y: v.pos[1] as number };
   }
 
   function ccGrounded(world: World, entity: number): boolean {
@@ -401,7 +401,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
       // Plain kinematic body (no CharacterController) — Transform drives it.
       const platform = world
         .spawn(
-          { component: Transform as never, data: { posX: 5, posY: 2 } },
+          { component: Transform as never, data: { pos: [5, 2, 0]} },
           { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
           { component: Collider as never, data: { shape: 0, halfExtentsX: 1, halfExtentsY: 0.2 } },
         )

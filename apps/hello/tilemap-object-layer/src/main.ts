@@ -39,20 +39,9 @@ import {
   type SamplerAsset,
   type TilesetAsset,
 } from '@forgeax/engine-types';
-import {
-  CAMERA_PROJECTION_ORTHOGRAPHIC,
-  Camera,
-  ChildOf,
-  HANDLE_QUAD,
-  MeshFilter,
-  MeshRenderer,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  TileLayer,
-  Tilemap,
-  Transform,
-  createRenderer,
-  encodeTileBits,
-} from '@forgeax/engine-runtime';
+import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { encodeTileBits } from '@forgeax/engine-graphics-extras';
+import { CAMERA_PROJECTION_ORTHOGRAPHIC, Camera, ChildOf, MeshFilter, MeshRenderer, SPRITE_PREMULTIPLIED_ALPHA_BLEND, TileLayer, Tilemap, Transform, createRenderer } from '@forgeax/engine-runtime';
 
 const COLS = 32;
 const ROWS = 32;
@@ -216,7 +205,7 @@ async function main(): Promise<void> {
   );
   world
     .spawn(
-      { component: Transform, data: { posX: 16.5, posY: 28.5, posZ: 0 } },
+      { component: Transform, data: { pos: [16.5, 28.5, 0]} },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
       { component: MeshRenderer, data: { materials: [spriteMaterialHandle] } },
     )
@@ -224,7 +213,7 @@ async function main(): Promise<void> {
 
   // Orthographic camera framing 0..COLS x 0..ROWS world bounds.
   world.spawn(
-    { component: Transform, data: { posX: COLS / 2, posY: ROWS / 2, posZ: 10 } },
+    { component: Transform, data: { pos: [COLS / 2, ROWS / 2, 10]} },
     {
       component: Camera,
       data: {

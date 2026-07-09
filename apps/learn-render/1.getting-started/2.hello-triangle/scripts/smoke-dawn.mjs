@@ -147,12 +147,14 @@ const enginePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
   createRenderer,
-  HANDLE_TRIANGLE,
   Materials,
   MeshFilter,
   MeshRenderer,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_TRIANGLE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();
@@ -195,17 +197,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    },
+      pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_TRIANGLE } },
   {
@@ -217,17 +209,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0,
-      posY: 0,
-      posZ: 3,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    },
+      pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
   {
     component: Camera,

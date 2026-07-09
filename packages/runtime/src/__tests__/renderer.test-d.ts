@@ -10,6 +10,7 @@
 // Source: requirements AC-11 (Renderer.startConsole literally absent) +
 // plan-strategy section 5.3 key test points (type-level surface assertion).
 
+import type { AssetRuntimeError } from '@forgeax/engine-assets-runtime';
 import type { RhiError } from '@forgeax/engine-rhi';
 import type {
   // @ts-expect-error - ConsoleHandle must not be exported from @forgeax/engine-runtime
@@ -18,7 +19,6 @@ import type {
   StartConsoleOptions as _StartConsoleOptionsRemoved,
 } from '@forgeax/engine-runtime';
 import { describe, expectTypeOf, it } from 'vitest';
-import type { AssetRuntimeError } from '../errors/asset';
 import type { EquirectProjectionFailedError, RenderError } from '../errors/render';
 import type { SkinError } from '../errors/skin';
 import type { PostProcessError } from '../post-process-errors';

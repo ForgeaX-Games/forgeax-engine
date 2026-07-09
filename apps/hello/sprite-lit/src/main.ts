@@ -32,22 +32,8 @@
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import type { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  createDevImportTransport,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  HANDLE_QUAD,
-  MeshFilter,
-  MeshRenderer,
-  orthographic,
-  PointLight,
-  SpotLight,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  TONEMAP_NONE,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, orthographic, PointLight, SpotLight, SPRITE_PREMULTIPLIED_ALPHA_BLEND, TONEMAP_NONE, Transform } from '@forgeax/engine-runtime';
 import type { Handle, MaterialAsset, SamplerAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -180,7 +166,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.spawn(
       {
         component: Transform,
-        data: { posX: 0.0, posY: 0.3, posZ: 1.5, quatW: 1 },
+        data: { pos: [0.0, 0.3, 1.5], quat: [0, 0, 0, 1]},
       },
       {
         component: PointLight,
@@ -199,7 +185,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.spawn(
       {
         component: Transform,
-        data: { posX: 2.0, posY: 1.0, posZ: 1.5, quatW: 1 },
+        data: { pos: [2.0, 1.0, 1.5], quat: [0, 0, 0, 1]},
       },
       {
         component: SpotLight,
@@ -223,7 +209,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 0, posZ: 5, quatW: 1 },
+      data: { pos: [0, 0, 5], quat: [0, 0, 0, 1]},
     },
     {
       component: Camera,
@@ -343,7 +329,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.spawn(
       {
         component: Transform,
-        data: { posX: 0.0, posY: -0.6, posZ: 0.0, quatW: 1, scaleX: 0.3, scaleY: 0.3, scaleZ: 0.3 },
+        data: { pos: [0.0, -0.6, 0.0], quat: [0, 0, 0, 1], scale: [0.3, 0.3, 0.3]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [cubeMaterial] } },
@@ -373,14 +359,7 @@ function spawnSpriteRow(
         {
           component: Transform,
           data: {
-            posX: slot.pos[0],
-            posY: slot.pos[1] + yOffset,
-            posZ: slot.pos[2],
-            quatW: 1,
-            scaleX: 0.45,
-            scaleY: 0.45,
-            scaleZ: 1,
-          },
+            pos: [slot.pos[0], slot.pos[1] + yOffset, slot.pos[2]], quat: [0, 0, 0, 1], scale: [0.45, 0.45, 1],},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
         { component: MeshRenderer, data: { materials: [matHandle] } },

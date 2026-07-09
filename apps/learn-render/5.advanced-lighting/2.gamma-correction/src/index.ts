@@ -20,16 +20,8 @@
 // 1. engine usage
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  HANDLE_QUAD,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, MeshFilter, MeshRenderer, perspective, PointLight, Transform } from '@forgeax/engine-runtime';
 import type {
   MaterialAsset,
   RenderPipelineAsset,
@@ -273,7 +265,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // expose the gamma delta uniformly across the framebuffer.
   world
     .spawn(
-      { component: Transform, data: { posZ: 0 } },
+      { component: Transform, data: { pos: [0, 0, 0]} },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
       { component: MeshRenderer, data: { materials: [planeMat] } },
     )
@@ -282,14 +274,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: LIGHT_POS_X, posY: LIGHT_POS_Y, posZ: LIGHT_POS_Z },
+      data: { pos: [LIGHT_POS_X, LIGHT_POS_Y, LIGHT_POS_Z]},
     },
     { component: PointLight, data: {} },
   );
 
   const cameraEntity = world
     .spawn(
-      { component: Transform, data: { posZ: CAMERA_POS_Z } },
+      { component: Transform, data: { pos: [0, 0, CAMERA_POS_Z]} },
       {
         component: Camera,
         data: perspective({

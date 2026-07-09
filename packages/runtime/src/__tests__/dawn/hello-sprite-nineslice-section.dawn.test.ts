@@ -45,12 +45,11 @@
 // Each scene captures the rendered RGBA, then the comparator across the two
 // captured byte arrays asserts mid-band divergence.
 
+import { AssetRegistry, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import {
-  AssetRegistry,
   Camera,
   createRenderer,
-  HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
   SPRITE_PREMULTIPLIED_ALPHA_BLEND,
@@ -268,16 +267,9 @@ async function renderOneFrame(opts: {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 0,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: opts.scaleX,
-        scaleY: opts.scaleY,
-        scaleZ: 1,
+        pos: [0, 0, 0],
+        quat: [0, 0, 0, 1],
+        scale: [opts.scaleX, opts.scaleY, 1],
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
@@ -287,16 +279,9 @@ async function renderOneFrame(opts: {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 3,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
+        pos: [0, 0, 3],
+        quat: [0, 0, 0, 1],
+        scale: [1, 1, 1],
       },
     },
     {

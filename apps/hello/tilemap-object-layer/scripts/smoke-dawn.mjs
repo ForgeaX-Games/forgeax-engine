@@ -127,10 +127,14 @@ const mockCanvas = {
 let runtime;
 let ecs;
 let types;
+let assetsRuntime;
+let graphicsExtras;
 try {
   runtime = await import('@forgeax/engine-runtime');
   ecs = await import('@forgeax/engine-ecs');
   types = await import('@forgeax/engine-types');
+  assetsRuntime = await import('@forgeax/engine-assets-runtime');
+  graphicsExtras = await import('@forgeax/engine-graphics-extras');
 } catch (err) {
   await deferred(
     `engine-runtime import failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -141,7 +145,6 @@ const {
   CAMERA_PROJECTION_ORTHOGRAPHIC,
   Camera,
   ChildOf,
-  HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
   SPRITE_PREMULTIPLIED_ALPHA_BLEND,
@@ -149,8 +152,9 @@ const {
   Tilemap,
   Transform,
   createRenderer,
-  encodeTileBits,
 } = runtime;
+const { HANDLE_QUAD } = assetsRuntime;
+const { encodeTileBits } = graphicsExtras;
 const { World } = ecs;
 const { toManaged } = types;
 
@@ -299,14 +303,14 @@ if (!spriteMaterialResult.ok) {
 }
 world
   .spawn(
-    { component: Transform, data: { posX: 16.5, posY: 28.5, posZ: 0 } },
+    { component: Transform, data: { pos: [16.5, 28.5, 0]} },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
     { component: MeshRenderer, data: { materials: [spriteMaterialResult.value] } },
   )
   .unwrap();
 
 world.spawn(
-  { component: Transform, data: { posX: COLS / 2, posY: ROWS / 2, posZ: 10 } },
+  { component: Transform, data: { pos: [COLS / 2, ROWS / 2, 10]} },
   {
     component: Camera,
     data: {

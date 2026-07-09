@@ -125,7 +125,7 @@ export function recordSpritePass(
     // `shader-compile-failed` RhiError mirroring the pre-w14 behaviour.
     //
     // feat-20260608-tilemap-object-layer-rendering M2 / m2-t6 (D-8): sprite
-    // pipeline cullMode='none'. H/V flip via negative scaleX/scaleY (tilemap
+    // pipeline cullMode='none'. H/V flip via negative scale x/y (tilemap
     // per-cell entity TRS form) inverts the triangle winding; cullMode='back'
     // would throw the flipped quad away. The sprite pass runs in the
     // alpha-blend transparent bucket back-to-front already, so cullMode='none'

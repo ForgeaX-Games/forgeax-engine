@@ -17,6 +17,7 @@
 // atlas slot is unexpectedly empty rather than silently sampling the
 // wrong texture).
 
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { Entity, World } from '@forgeax/engine-ecs';
 import {
   type Handle,
@@ -33,7 +34,6 @@ import {
   Tilemap,
   Transform,
 } from '../components';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 import {
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,

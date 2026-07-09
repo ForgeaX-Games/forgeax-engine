@@ -9,13 +9,29 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "tsBuildInfoFile": "./dist/.tsbuildinfo",
-    "types": ["@webgpu/types", "node"]
+    "types": [
+      "@webgpu/types",
+      "node"
+    ]
   },
-  "include": ["src/**/*"],
+  "include": [
+    "src/**/*"
+  ],
   "references": [
-    { "path": "../types" },
-    { "path": "../math" },
-    { "path": "../pack" },
-    { "path": "../import" }
+    {
+      "path": "../assets-runtime"
+    },
+    {
+      "path": "../import"
+    },
+    {
+      "path": "../math"
+    },
+    {
+      "path": "../pack"
+    },
+    {
+      "path": "../types"
+    }
   ]
 }

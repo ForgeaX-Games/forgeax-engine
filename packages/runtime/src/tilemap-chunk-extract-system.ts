@@ -46,6 +46,7 @@
 // §D-2 (multi-cell + flip x pivot) + §D-5 (M0 baseline file-by-file
 // ECS API adaptation) + §D-7 step 3 (half-texel UV inset).
 
+import { HANDLE_QUAD, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import {
   createQueryState,
   Entity,
@@ -53,6 +54,7 @@ import {
   queryRun,
   type World,
 } from '@forgeax/engine-ecs';
+import { decodeTileBits } from '@forgeax/engine-graphics-extras';
 import { type box3, frustum, mat4 } from '@forgeax/engine-math';
 import {
   type Handle,
@@ -62,7 +64,6 @@ import {
   type TilesetTileEntry,
   unwrapHandle,
 } from '@forgeax/engine-types';
-import { HANDLE_QUAD } from './asset-registry';
 import {
   CAMERA_PROJECTION_ORTHOGRAPHIC,
   Camera,
@@ -79,8 +80,6 @@ import {
 } from './components';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
 import { worldEntityKey } from './record/frame-snapshot';
-import { resolveAssetHandle } from './resolve-asset-handle';
-import { decodeTileBits } from './tile-bits';
 
 // Module-scoped caches (charter P5 — engine-side memoisation; AI users
 // never reach in). Test harness can flush them via the reset helpers.
@@ -530,16 +529,9 @@ function spawnDerivedRenderEntities(
       {
         component: Transform,
         data: {
-          posX,
-          posY,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ,
-          quatW,
-          scaleX,
-          scaleY,
-          scaleZ: 1,
+          pos: [posX, posY, 0],
+          quat: [0, 0, quatZ, quatW],
+          scale: [scaleX, scaleY, 1],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
@@ -687,16 +679,9 @@ function spawnSpriteInstancesGroup(
       {
         component: Transform,
         data: {
-          posX: chunkCenterX,
-          posY: chunkCenterY,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: chunkScaleX,
-          scaleY: chunkScaleY,
-          scaleZ: 1,
+          pos: [chunkCenterX, chunkCenterY, 0],
+          quat: [0, 0, 0, 1],
+          scale: [chunkScaleX, chunkScaleY, 1],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },

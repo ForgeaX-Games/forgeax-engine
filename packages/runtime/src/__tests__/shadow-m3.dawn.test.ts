@@ -38,10 +38,11 @@
 //     renderer.draw would not return ok. A clean default-config render across
 //     the four clamped kernel sizes is the proxy for "VIEW_UBO_BYTES unchanged".
 
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer, Transform } from '../components';
-import { createRenderer, HANDLE_CUBE } from '../index';
+import { createRenderer } from '../index';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -135,13 +136,9 @@ function buildShadowScene(world: World, pcfKernelSize: number): void {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: -0.005,
-          posZ: 0,
-          quatW: 1,
-          scaleX: GROUND_SIZE,
-          scaleY: 0.01,
-          scaleZ: GROUND_SIZE,
+          pos: [0, -0.005, 0],
+          quat: [0, 0, 0, 1],
+          scale: [GROUND_SIZE, 0.01, GROUND_SIZE],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -154,7 +151,7 @@ function buildShadowScene(world: World, pcfKernelSize: number): void {
     .spawn(
       {
         component: Transform,
-        data: { posX: 0, posY: 1.5, posZ: 0, quatW: 1, scaleX: 2, scaleY: 2, scaleZ: 2 },
+        data: { pos: [0, 1.5, 0], quat: [0, 0, 0, 1], scale: [2, 2, 2] },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: {} },
@@ -184,7 +181,7 @@ function buildShadowScene(world: World, pcfKernelSize: number): void {
 
   world
     .spawn(
-      { component: Transform, data: { posX: 0, posY: 0, posZ: 10, quatW: 1 } },
+      { component: Transform, data: { pos: [0, 0, 10], quat: [0, 0, 0, 1] } },
       {
         component: Camera,
         data: {

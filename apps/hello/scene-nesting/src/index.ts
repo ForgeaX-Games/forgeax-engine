@@ -56,10 +56,7 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   // Camera: position looking at the scene origin.
   world.spawn(
     { component: Transform, data: {
-      posX: 0, posY: 1.5, posZ: 3,
-      quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-      scaleX: 1, scaleY: 1, scaleZ: 1,
-    } },
+      pos: [0, 1.5, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],} },
     { component: Camera, data: { fov: 60, aspect: 800/600, near: 0.1, far: 100 } },
   );
 

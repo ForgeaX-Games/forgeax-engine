@@ -215,7 +215,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posZ: 3 },
+      data: { pos: [0, 0, 3]},
   },
     { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },
   ).unwrap();

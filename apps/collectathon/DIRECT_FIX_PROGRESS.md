@@ -15,7 +15,7 @@
 > hoisting the camera to app-lifetime. Both verified live by the agent from the running game.
 >
 > **D2 facing fix** (`apps/collectathon/src/systems/player-move.ts`): `moveAndSlide` writes back
-> ONLY position (rapier3d `computeMove` sets posX/posY/posZ + grounded, never rotation), so the
+> ONLY position (rapier3d `computeMove` sets Transform.pos + grounded, never rotation), so the
 > KCC parent quat stayed at spawn identity forever and the rig never turned. Fix: after
 > moveAndSlide, write a Y-axis yaw quat to the parent Transform from the planar move direction
 > (`yawQuat(facingYawFromMove(moveX, moveZ))`). The capsule collider is Y-symmetric so yawing the
@@ -51,7 +51,7 @@
 > + a `fixCamera(eye, target)` that pins the camera at a fixed wide vantage (disabling follow via
 > `setCameraFollowEnabled(false)` in player-move). With the camera pinned, the agent read motion
 > DIRECTLY from static screenshots:
->   - **D move (+X):** player runs screen-right, rig faces right. posX 0 -> 2.7, quatY=sin45.
+>   - **D move (+X):** player runs screen-right, rig faces right. pos x 0 -> 2.7, quat y=sin45.
 >   - **W move (-Z):** player runs away from camera, BACK shown. quatY ~ 1 (180deg).
 >   - **S move (+Z):** player runs toward camera, FACE shown. quat -> identity.
 >   - **sustained run:** clear running stride (legs split, arms pumping); `anim().times[0]`
@@ -101,7 +101,7 @@ camera — it was both the "weird wall" the user saw (D5) AND the occluder hidin
 which sits at z≈-2.8 behind the wall.
 
 **Fix** (`apps/collectathon/src/spawn/spawn-level.ts`): rotate the visible plane -90° about X to lay it
-flat (`quatX=sin(-π/4), quatW=cos(-π/4)`, the canonical floor idiom from
+flat (`quat=[sin(-π/4), 0, 0, cos(-π/4)]`, the canonical floor idiom from
 `apps/learn-render/5.advanced-lighting/3.3.csm`). The visible plane and the physics cuboid collider are
 now **separate entities** (`spawnGroundVisual` + `spawnGroundCollider`) because the -90° rotation must
 NOT apply to the (15, 0.5, 15) collider (it would stand it up as a vertical slab and break KCC contact).
@@ -195,7 +195,7 @@ not positional drift. Camera POD is clean (fov pi/4, aspect 16:9, autoAspect, no
   corruption -- it was the KCC treating **sensor colliders as solid walls**. Mechanism:
   - The guardian *attack sensor* spawns with `ChildOf(body)` but `Transform.local = (0,0,0)`. ChildOf
     drives the rendered `world` matrix via propagateTransforms, but the **physics** body position
-    comes from `syncBackend` reading `Transform.local` (posX/Y/Z) -- which stays (0,0,0). So all 3
+    comes from `syncBackend` reading the local `Transform.pos` -- which stays (0,0,0). So all 3
     guardian sensors sit at physics **world origin = the player spawn**.
   - `moveAndSlide` -> Rapier `computeColliderMovement` filtered only self-by-handle, so it treated the
     overlapping sensors as solid -> the player was walled in on all axes (correctedX/Y/Z all 0).
@@ -214,7 +214,7 @@ not positional drift. Camera POD is clean (fov pi/4, aspect 16:9, autoAspect, no
   `createPlaneGeometry()` WITHOUT rotating it -- but that factory makes an **XY plane facing +Z**
   (Three.js r184; the old comment "lies in the XZ plane already" was false). So the ground was a
   30x30 **vertical wall** at z=0: it was both the "weird wall" (D5) and the occluder hiding the
-  character at z~-2.8 (D1). Fix: rotate the visible plane -90deg about X (`quatX=sin(-pi/4),
+  character at z~-2.8 (D1). Fix: rotate the visible plane -90deg about X (`quat x=sin(-pi/4),
   quatW=cos(-pi/4)`, canonical floor idiom from learn-render/5.3.3 csm); split ground into
   `spawnGroundVisual` (rotated plane) + `spawnGroundCollider` (axis-aligned cuboid, must NOT rotate or
   the floor stands up). Kept a cyan skin material override (FBX grey is invisible vs grey scene).
@@ -503,7 +503,7 @@ their bodies. Once the player roamed off-origin, an armed guardian could close t
 still register **zero** overlap.
 
 Root cause: `rapier-physics-world-3d.ts` `physicsSyncBackend` kinematic mirror fed the **local**
-`transform.posX/Y/Z` to `setKinematicPosition`. A `ChildOf` collider (the attack sensor, local pos
+`Transform.pos` to `setKinematicPosition`. A `ChildOf` collider (the attack sensor, local pos
 `(0,0,0)`) therefore had its Rapier collider **pinned at the world origin forever** — only its ECS
 Transform followed the parent (via `propagateTransforms`). This single bug caused BOTH #19 symptoms:
 spawn-camp kills (player sits on the stuck sensors) + un-hittable chasers (sensors never leave

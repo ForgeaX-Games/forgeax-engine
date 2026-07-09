@@ -154,19 +154,21 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   Materials,
   MeshFilter,
   MeshRenderer,
   perspective,
   Transform,
 } = await import('@forgeax/engine-runtime');
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
-function spawnLitBox(world, color, posX, posY) {
+function spawnLitBox(world, color, x, y) {
   const mat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: color, metallic: 0, roughness: 0.5 }));
   world
     .spawn(
-      { component: Transform, data: { posX, posY, posZ: 0, scaleX: 1.4, scaleY: 1.4, scaleZ: 1.4 } },
+      { component: Transform, data: { pos: [x, y, 0], scale: [1.4, 1.4, 1.4] } },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [mat] } },
     )
@@ -177,7 +179,7 @@ const worldA = new World();
 spawnLitBox(worldA, A_GREEN, -BOX_X, 0);
 worldA
   .spawn(
-    { component: Transform, data: { posZ: CAMERA_Z } },
+    { component: Transform, data: { pos: [0, 0, CAMERA_Z]} },
     {
       component: Camera,
       data: {

@@ -46,17 +46,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 
   function identityTransformData() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    };
+      pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],};
   }
 
   describe('create-app-propagate-transforms.test.ts', () => {
@@ -72,7 +62,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
         const root = world
           .spawn({
             component: Transform,
-            data: { ...identityTransformData(), posX: 1, posY: 2, posZ: 3 },
+            data: { ...identityTransformData(), pos: [1, 2, 3]},
           })
           .unwrap();
 

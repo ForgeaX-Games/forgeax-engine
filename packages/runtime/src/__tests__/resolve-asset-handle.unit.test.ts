@@ -6,13 +6,11 @@
 // slots (>= BUILTIN_BASE) resolve through world.sharedRefs (minted via
 // world.allocSharedRef). The AssetRegistry holds no handle->payload map.
 
+import { BUILTIN_CUBE, HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { BUILTIN_BASE } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { HANDLE_CUBE } from '../asset-registry';
-import { BUILTIN_CUBE } from '../builtin-asset-registry';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 
 function mesh(): MeshAsset {
   return {

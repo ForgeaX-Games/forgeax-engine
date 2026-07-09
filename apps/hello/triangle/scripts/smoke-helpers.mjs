@@ -176,14 +176,17 @@ export async function setupGpuShim({ width, height, rerunCmd }) {
 // Spawn the canonical 3-entity smoke world (triangle mesh, camera, directional light).
 // Caller supplies runtime exports because smoke-coverage-gate.mjs delta layer requires
 // the literal `import('@forgeax/engine-runtime')` token in each smoke script (charter
-// prop 6 shared-symbol grep). Data values mirror apps/hello/triangle/src/main.ts M0
-// SSOT lock (charter proposition 5 co-source binding exemplar).
-export function populateSmokeWorld(world, runtime) {
-  const { Camera, DirectionalLight, HANDLE_TRIANGLE, MeshFilter, MeshRenderer, Transform } = runtime;
+// prop 6 shared-symbol grep). The builtin mesh handle now lives in
+// @forgeax/engine-assets-runtime, passed as `assets`. Data values mirror
+// apps/hello/triangle/src/main.ts M0 SSOT lock (charter proposition 5 co-source
+// binding exemplar).
+export function populateSmokeWorld(world, runtime, assets) {
+  const { Camera, DirectionalLight, MeshFilter, MeshRenderer, Transform } = runtime;
+  const { HANDLE_TRIANGLE } = assets;
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_TRIANGLE } },
     {
@@ -194,7 +197,7 @@ export function populateSmokeWorld(world, runtime) {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 0, posZ: 3, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
     },
     { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
   );

@@ -27,10 +27,10 @@
 //       value happens to land in [0, refs.length) -> paramSchema-aware path
 //       skips it; the field stays as the original int.
 
+import { materialLoader } from '@forgeax/engine-assets-runtime';
 import type { LoadContext, ParamSchemaEntry } from '@forgeax/engine-types';
 import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { materialLoader } from '../asset-registry';
 
 function makeCtx(opts: {
   shaderTextureFieldNames?: (shaderId: string) => ReadonlySet<string> | undefined;

@@ -12,7 +12,7 @@ description: >-
 
 ## 心智模型
 
-物理是**组件驱动**的：你不调"创建刚体"API，而是给 entity 挂上组件，`physicsSyncBackend` 系统每帧扫描 `(Transform, RigidBody, Collider)` 原型、为新 entity 在 Rapier 侧 `ensureBody`，`physicsStepSimulation` 推进模拟，`physicsWriteback` 把刚体新位置写回 `Transform.posX/Y/Z`。后端选择经 `createApp` 的 `physics` 选项（`'rapier-2d' | 'rapier-3d'`），它把 `PhysicsWorld`（3D）/ `PhysicsWorld2D`（2D 接口）作为 World Resource 注入。`PhysicsWorld` Resource 未就绪时（WASM fire-and-forget 加载），三个系统都安全 early-return——不 fail，等下一帧。碰撞对经只读组件 `CollidingEntities` 读取。
+物理是**组件驱动**的：你不调"创建刚体"API，而是给 entity 挂上组件，`physicsSyncBackend` 系统每帧扫描 `(Transform, RigidBody, Collider)` 原型、为新 entity 在 Rapier 侧 `ensureBody`，`physicsStepSimulation` 推进模拟，`physicsWriteback` 把刚体新位置写回 `Transform.pos`。后端选择经 `createApp` 的 `physics` 选项（`'rapier-2d' | 'rapier-3d'`），它把 `PhysicsWorld`（3D）/ `PhysicsWorld2D`（2D 接口）作为 World Resource 注入。`PhysicsWorld` Resource 未就绪时（WASM fire-and-forget 加载），三个系统都安全 early-return——不 fail，等下一帧。碰撞对经只读组件 `CollidingEntities` 读取。
 
 ## 核心 API / 组件速查
 
@@ -41,7 +41,7 @@ description: >-
 import { CharacterController, Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
 
 const char = world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0.45, posZ: 0 } }, // 静置高度：地面顶 + radius + halfHeight
+  { component: Transform, data: { pos: [0, 0.45, 0] } }, // 静置高度：地面顶 + radius + halfHeight
   { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } },
   { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.5 } },
   { component: CharacterController, data: {} },
@@ -63,7 +63,7 @@ app.registerUpdate(() => {
 flowchart TD
   PT["propagateTransforms（引擎前置）"] --> SB["1. physicsSyncBackend：扫 (Transform,RigidBody,Collider)，ensureBody"]
   SB --> SS["2. physicsStepSimulation：读 Time.dt，PhysicsWorld.step()"]
-  SS --> WB["3. physicsWriteback：writebackDynamicBodies() -> 回写 Transform.posX/Y/Z"]
+  SS --> WB["3. physicsWriteback：writebackDynamicBodies() -> 回写 Transform.pos"]
 ```
 
 > 三系统由 `createApp`（`physics` 选项已设）自动注册并按此序排；`PhysicsWorld` Resource 未就绪时全部安全 early-return。
@@ -80,14 +80,14 @@ const world = app.world;
 
 // dynamic body: falls under gravity
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 5, posZ: 0 } },
+  { component: Transform, data: { pos: [0, 5, 0] } },
   { component: RigidBody, data: { type: RigidBodyTypeValue.dynamic, mass: 1 } },
   { component: Collider, data: { shape: ColliderShapeValue.sphere, radius: 0.5 } },
 );
 
 // static ground: immovable collision target
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+  { component: Transform, data: { pos: [0, 0, 0] } },
   { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
   { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtentsX: 5, halfExtentsY: 1, halfExtentsZ: 5 } },
 );

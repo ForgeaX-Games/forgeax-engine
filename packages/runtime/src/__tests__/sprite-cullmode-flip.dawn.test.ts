@@ -2,7 +2,7 @@
 // feat-20260608-tilemap-object-layer-rendering M2 / m2-t5.
 //
 // Asserts the sprite alpha-blend pipeline must render H/V flipped quads
-// when their Transform encodes the flip via a negative scaleX / scaleY
+// when their Transform encodes the flip via a negative scale.x / scale.y
 // (D-1 per-cell entity TRS form). With cullMode='back', a negative
 // scale flips the triangle winding so 'back' cull throws every flipped
 // quad away, leaving black pixels. M2's D-8 decision is to switch the
@@ -20,11 +20,12 @@
 // Anchors: plan-tasks m2-t5; plan-strategy §D-8 (sprite cullMode 'none')
 // + §R-5 (sprite single-frame baseline non-degradation).
 
+import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
 import { ANTIALIAS_NONE, TONEMAP_NONE } from '../components/camera';
-import { createRenderer, HANDLE_QUAD, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../index';
+import { createRenderer, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../index';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -83,23 +84,16 @@ function buildSyntheticRgba(): { width: number; height: number; data: Uint8Array
 function spawnFlippedSpriteScene(
   world: World,
   spriteMaterial: unknown,
-  scaleX: number,
-  scaleY: number,
+  sx: number,
+  sy: number,
 ): void {
   world.spawn(
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 0,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX,
-        scaleY,
-        scaleZ: 1,
+        pos: [0, 0, 0],
+        quat: [0, 0, 0, 1],
+        scale: [sx, sy, 1],
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
@@ -109,16 +103,9 @@ function spawnFlippedSpriteScene(
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 3,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
+        pos: [0, 0, 3],
+        quat: [0, 0, 0, 1],
+        scale: [1, 1, 1],
       },
     },
     {
@@ -156,7 +143,7 @@ function centreNonBlackCount(pixels: Uint8Array): number {
 }
 
 describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipped quads render (dawn)', () => {
-  it('H flip via negative scaleX renders a visible sprite (cullMode none)', async () => {
+  it('H flip via negative scale.x renders a visible sprite (cullMode none)', async () => {
     const dawnAvailable = typeof globalThis.navigator?.gpu?.requestAdapter === 'function';
     if (!dawnAvailable)
       throw new Error('dawn-node navigator.gpu not injected; vitest.setup-webgpu.ts regressed');
@@ -291,9 +278,9 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
       },
     } as never);
 
-    // Render an H-flipped sprite (scaleX < 0). With cullMode='back' this
+    // Render an H-flipped sprite (scale.x < 0). With cullMode='back' this
     // would be culled and the centre would stay clear-colour-black.
-    spawnFlippedSpriteScene(worldFlip, spriteMaterial, /* scaleX= */ -1, /* scaleY= */ 1);
+    spawnFlippedSpriteScene(worldFlip, spriteMaterial, /* sx= */ -1, /* sy= */ 1);
     const drawn = renderer.draw([worldFlip], { owner: 0 });
     await device.queue.onSubmittedWorkDone();
     expect(drawn.ok, 'H-flipped sprite draw').toBe(true);
@@ -307,7 +294,7 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
     ).toBeGreaterThan(64);
   });
 
-  it('H + V flip via negative scaleX + scaleY still renders (cullMode none)', async () => {
+  it('H + V flip via negative scale.x + scale.y still renders (cullMode none)', async () => {
     const dawnAvailable = typeof globalThis.navigator?.gpu?.requestAdapter === 'function';
     if (!dawnAvailable)
       throw new Error('dawn-node navigator.gpu not injected; vitest.setup-webgpu.ts regressed');
@@ -440,7 +427,7 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
       },
     } as never);
 
-    spawnFlippedSpriteScene(worldFlipBoth, spriteMaterial, /* scaleX= */ -1, /* scaleY= */ -1);
+    spawnFlippedSpriteScene(worldFlipBoth, spriteMaterial, /* sx= */ -1, /* sy= */ -1);
     const drawn = renderer.draw([worldFlipBoth], { owner: 0 });
     await device.queue.onSubmittedWorkDone();
     expect(drawn.ok).toBe(true);

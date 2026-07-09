@@ -1,6 +1,7 @@
 // @forgeax/engine-runtime - RenderSystem record stage: helpers.
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
 
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import { type Mat4, mat4 } from '@forgeax/engine-math';
 import type { EquirectAsset } from '@forgeax/engine-types';
@@ -8,7 +9,6 @@ import { toShared } from '@forgeax/engine-types';
 import { EquirectProjectionFailedError } from '../errors/render';
 import type { RenderSystemInternals } from '../render-system';
 import type { CameraSnapshot, MaterialSnapshot } from '../render-system-extract';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 import type { RenderFrameState } from './frame-snapshot';
 
 /**

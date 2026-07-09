@@ -21,10 +21,10 @@
 // env, and skips itself when navigator.gpu is absent (the per-package unit
 // project) rather than failing.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { EquirectAsset } from '@forgeax/engine-types';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { deriveRenderDataCubemap } from '../render-data';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 

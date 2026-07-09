@@ -15,6 +15,7 @@
 // GPU-resource kind would surface as a `tsc -b` exhaustiveness error at the
 // switch rather than a silent fallthrough (AC-06).
 
+import { numMipLevels } from '@forgeax/engine-assets-runtime';
 import {
   bytesPerRow as blockBytesPerRow,
   blockParamsForFormat,
@@ -29,7 +30,6 @@ import {
   type Submesh,
   type TextureAsset,
 } from '@forgeax/engine-types';
-import { numMipLevels } from './mipmap-generator';
 
 // AssetError without importing AssetRegistry: build the 4-field surface
 // (.code / .expected / .hint) directly against the @forgeax/engine-types SSOT

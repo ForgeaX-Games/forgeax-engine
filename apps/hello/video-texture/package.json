@@ -40,11 +40,13 @@
     }
   },
   "dependencies": {
-    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-graphics-extras": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
-    "@forgeax/engine-types": "workspace:*",
-    "@forgeax/engine-pack": "workspace:*"
+    "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",

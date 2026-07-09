@@ -632,16 +632,9 @@ describe('Renderer draw device-lost guard (w7 TDD RED)', () => {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 10,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 10],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       {

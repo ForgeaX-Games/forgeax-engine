@@ -14,7 +14,7 @@
 //   - setSceneOverride type mismatch -> Err 'scene-override-type-mismatch'
 //     with detail.{ comp, field, expectedType, actualType }.
 
-import { ok, World } from '@forgeax/engine-ecs';
+import { defineComponent, ok, World } from '@forgeax/engine-ecs';
 import { SceneInstance, Transform } from '@forgeax/engine-runtime';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -28,7 +28,7 @@ describe('AC-19 mount-time override apply (w20)', () => {
     const world = new World();
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 1 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
     };
     const childHandle = registerSceneAsset(world, child);
     const parent: SceneAsset = {
@@ -40,7 +40,7 @@ describe('AC-19 mount-time override apply (w20)', () => {
           source: 0,
           memberFirst: 1 as never,
           memberCount: 1,
-          overrides: [{ localId: 1 as never, comp: 'Transform', field: 'posX', value: 42 }],
+          overrides: [{ localId: 1 as never, comp: 'Transform', field: 'pos', value: [42, 0, 0] }],
         },
       ],
     };
@@ -55,15 +55,15 @@ describe('AC-19 mount-time override apply (w20)', () => {
     const t = world.get(member as never, Transform);
     expect(t.ok).toBe(true);
     if (!t.ok) return;
-    expect(t.value.posX).toBe(42);
+    expect(Array.from(t.value.pos)).toEqual([42, 0, 0]);
     // State-map invariant
     const stateRes = world.getSceneInstanceState(r.value.root);
     if (!stateRes.ok) throw new Error('getSceneInstanceState failed');
     expect(stateRes.value.overrides.has(1 as never)).toBe(true);
     const fields = stateRes.value.overrides.get(1 as never);
     expect(fields).toBeDefined();
-    expect(fields?.has('Transform:posX')).toBe(true);
-    expect(fields?.get('Transform:posX')?.value).toBe(42);
+    expect(fields?.has('Transform:pos')).toBe(true);
+    expect(fields?.get('Transform:pos')?.value).toEqual([42, 0, 0]);
   });
 });
 
@@ -72,7 +72,7 @@ describe('world.setSceneOverride (w20)', () => {
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 1 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
     };
     const handle = registerSceneAsset(world, asset);
     const r = world.instantiateScene(handle);
@@ -80,18 +80,22 @@ describe('world.setSceneOverride (w20)', () => {
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
     const member = inst.value.mapping[0] as unknown as number;
-    const sr = world.setSceneOverride(r.value.root, member as never, Transform, 'posX', 99);
+    const sr = world.setSceneOverride(r.value.root, member as never, Transform, 'pos', [99, 0, 0]);
     expect(sr.ok).toBe(true);
     const t = world.get(member as never, Transform);
     if (!t.ok) throw new Error('get t failed');
-    expect(t.value.posX).toBe(99);
+    expect(Array.from(t.value.pos)).toEqual([99, 0, 0]);
   });
 
   it('returns scene-override-type-mismatch on bad value type', () => {
+    // Transform's fields are all arrays now; the scalar typeof guard only
+    // fires for primitive scalar fields, so exercise it via a scalar
+    // component instead.
+    const Hp = defineComponent('SceneOverrideHp', { hp: 'f32' });
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+      entities: [{ localId: 0 as never, components: { SceneOverrideHp: {} } }],
     };
     const handle = registerSceneAsset(world, asset);
     const r = world.instantiateScene(handle);
@@ -103,8 +107,8 @@ describe('world.setSceneOverride (w20)', () => {
     const sr = world.setSceneOverride(
       r.value.root,
       member as never,
-      Transform,
-      'posX',
+      Hp,
+      'hp',
       'oops' as unknown as number,
     );
     expect(sr.ok).toBe(false);
@@ -119,7 +123,7 @@ describe('world.removeSceneOverride (w20)', () => {
     const world = new World();
     const asset: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 5 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [5, 0, 0] } } }],
     };
     const handle = registerSceneAsset(world, asset);
     const r = world.instantiateScene(handle);
@@ -127,12 +131,12 @@ describe('world.removeSceneOverride (w20)', () => {
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
     const member = inst.value.mapping[0] as unknown as number;
-    world.setSceneOverride(r.value.root, member as never, Transform, 'posX', 100);
-    const rr = world.removeSceneOverride(r.value.root, member as never, Transform, 'posX');
+    world.setSceneOverride(r.value.root, member as never, Transform, 'pos', [100, 0, 0]);
+    const rr = world.removeSceneOverride(r.value.root, member as never, Transform, 'pos');
     expect(rr.ok).toBe(true);
     const t = world.get(member as never, Transform);
     if (!t.ok) throw new Error('get failed');
-    expect(t.value.posX).toBe(5);
+    expect(Array.from(t.value.pos)).toEqual([5, 0, 0]);
   });
 });
 

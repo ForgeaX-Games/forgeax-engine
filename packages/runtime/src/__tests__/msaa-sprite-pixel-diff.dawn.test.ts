@@ -34,11 +34,12 @@
 // covered by the hello-sprite smoke FPS gate (smoke green = no
 // regression beyond the SMOKE_PIXEL_THRESHOLD eps).
 
+import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
 import { ANTIALIAS_MSAA, ANTIALIAS_NONE, TONEMAP_NONE } from '../components/camera';
-import { createRenderer, HANDLE_QUAD, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../index';
+import { createRenderer, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../index';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -124,16 +125,9 @@ function spawnSpriteScene(world: World, spriteMaterialPayload: unknown, antialia
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 0,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0.3826834,
-        quatW: 0.9238795,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
+        pos: [0, 0, 0],
+        quat: [0, 0, 0.3826834, 0.9238795],
+        scale: [1, 1, 1],
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
@@ -143,16 +137,9 @@ function spawnSpriteScene(world: World, spriteMaterialPayload: unknown, antialia
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 3,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
+        pos: [0, 0, 3],
+        quat: [0, 0, 0, 1],
+        scale: [1, 1, 1],
       },
     },
     {

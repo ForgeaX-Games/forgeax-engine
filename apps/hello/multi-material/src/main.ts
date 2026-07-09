@@ -255,7 +255,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+        data: { quat: [0, 0, 0, 1], scale: [1, 1, 1]},
       },
       { component: MeshFilter, data: { assetHandle: meshHandle } },
       {
@@ -269,7 +269,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { posX: 0, posY: 0, posZ: 2.5, quatW: 1 },
+        data: { pos: [0, 0, 2.5], quat: [0, 0, 0, 1]},
       },
       {
         component: Camera,

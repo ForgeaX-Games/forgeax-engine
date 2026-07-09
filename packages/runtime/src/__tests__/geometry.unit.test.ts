@@ -21,16 +21,16 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
+import type { AssetRuntimeError } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { PipelineLayout, RenderPipeline, RhiDevice, ShaderModule } from '@forgeax/engine-rhi';
 import type { AssetErrorDetail, Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { ASSET_ERROR_HINTS, AssetError, unwrapHandle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { Camera, Instances, MeshFilter, MeshRenderer, Transform } from '../components';
 import { createMeshSsboGrowController } from '../createRenderer';
-import type { AssetRuntimeError } from '../errors/asset';
 import type { RenderError } from '../errors/render';
 import type { SkinError } from '../errors/skin';
 
@@ -40,6 +40,7 @@ import type { SkinError } from '../errors/skin';
 // (AC-09). Equal to RenderError | AssetRuntimeError | SkinError.
 type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
 
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { GpuBuffer } from '../gpu-resource';
 import { GpuResourceStore } from '../gpu-resource-store';
 import type {
@@ -55,7 +56,6 @@ import {
 import type { MeshGpuHandles } from '../render-system';
 import type { ExtractedFrame } from '../render-system-extract';
 import { extractFrame } from '../render-system-extract';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 import { propagateTransforms } from '../systems/propagate-transforms';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -286,16 +286,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     scaleZ: number;
   } {
     return {
-      posX: x,
-      posY: y,
-      posZ: z,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [x, y, z],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -421,16 +414,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         {
           component: Transform,
           data: {
-            posX: x,
-            posY: y,
-            posZ: z,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [x, y, z],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
         { component: Camera, data: perspectiveCameraData(fov, aspect, near, far) },
@@ -2146,31 +2132,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
   function originTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 0],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 

@@ -4,19 +4,8 @@ import { createApp } from '@forgeax/engine-app';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import type { InputBackend } from '@forgeax/engine-input';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  MeshFilter,
-  MeshRenderer,
-  PointLight,
-  resolveAssetHandle,
-  SpotLight,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, PointLight, SpotLight, Transform } from '@forgeax/engine-runtime';
 import type {
   MaterialAsset,
   MeshAsset,
@@ -227,17 +216,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         {
           component: Transform,
           data: {
-            posX: pos[0],
-            posY: pos[1],
-            posZ: pos[2],
-            quatX: CUBE_AXIS[0] * sinH,
-            quatY: CUBE_AXIS[1] * sinH,
-            quatZ: CUBE_AXIS[2] * sinH,
-            quatW: cosH,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
-          },
+            pos: [pos[0], pos[1], pos[2]], quat: [CUBE_AXIS[0] * sinH, CUBE_AXIS[1] * sinH, CUBE_AXIS[2] * sinH, cosH], scale: [1, 1, 1],},
         },
         { component: MeshFilter, data: { assetHandle: cubeHandle } },
         { component: MeshRenderer, data: { materials: [materialHandle] } },
@@ -249,17 +228,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 3,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     {
       component: Camera,
@@ -303,17 +272,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: plPos[0],
-          posY: plPos[1],
-          posZ: plPos[2],
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: LAMP_SCALE,
-          scaleY: LAMP_SCALE,
-          scaleZ: LAMP_SCALE,
-        },
+          pos: [plPos[0], plPos[1], plPos[2]], quat: [0, 0, 0, 1], scale: [LAMP_SCALE, LAMP_SCALE, LAMP_SCALE],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [lampMatHandle] } },
@@ -334,17 +293,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 3,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     {
       component: SpotLight,

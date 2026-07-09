@@ -148,7 +148,7 @@ This README is the **per-package演进契约 anchor** for `Result<T, E>`. AGENTS
 -} else {
 -  console.error(r._error.code);
 -}
--const doubled = r.map((data) => data.posX * 2);
+-const doubled = r.map((data) => data.pos[0] * 2);
 
  // after — feat-20260511-tetris-retro-followups discriminated union + plain fields
 +const r = world.get(entity, Position);
@@ -159,7 +159,7 @@ This README is the **per-package演进契约 anchor** for `Result<T, E>`. AGENTS
 +  console.error(r.error.code);
 +}
 +// `.map` removed — inline the transform after `.ok` narrow
-+const doubled = r.ok ? r.value.posX * 2 : 0;
++const doubled = r.ok ? r.value.pos[0] * 2 : 0;
 ```
 
 **Why this row exists**: AI users porting code written against the KD-1 surface will see TypeScript errors (`Property 'isOk' does not exist on type 'Result<T, E>'`). Grepping `2026-05-11` in `packages/*/README.md` lands here and on the matching `packages/runtime/README.md` row; the diff above is the mechanical port. Decision rationale, OQ branches, and AI-user charter mapping live in the harness loop anchor above — not duplicated here.
@@ -408,6 +408,23 @@ export const Children = defineComponent('Children', {
 ```
 It is the mirror of `ChildOf`, rebuilt by the mirror hook after `instantiateScene`, and never serialized. Mount round-trip fidelity (`rootsToSceneAsset` -> `instantiateScene` -> `rootsToSceneAsset` structural equivalence) is guaranteed by the `ChildOf` relationship graph, not by serialized `Children` data.
 
+### Field-level `transient` (feat-20260709)
+
+`transient: true` also declares on an **individual field** (via `FieldDescriptor`), not only a whole component. `rootsToSceneAsset` collect skips any field whose reflection carries `transient: true` — a generic mechanism keyed on `component.fields[fieldName].transient`, not a per-component special case. The field stays physically in its column and participates in queries / `world.get`; only the collect write path is gated.
+
+The canonical use is a per-frame **derived cache** field: `Transform.world` (the resolved world mat4, recomposed every frame by the propagate kernel from the persisted local TRS) declares `transient: true`, so scene JSON never stores the reconstructable 16-float matrix (architecture-principles.md #2 Derive). After `instantiateScene` the first propagate pass re-derives an equivalent `world`.
+
+```ts
+export const Transform = defineComponent('Transform', {
+  pos: { type: 'array<f32, 3>', default: new Float32Array([0, 0, 0]) },
+  quat: { type: 'array<f32, 4>', default: new Float32Array([0, 0, 0, 1]) },
+  scale: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
+  world: { type: 'array<f32, 16>', default: IDENTITY_MAT4, transient: true },
+});
+```
+
+The flag is programmatically self-inspectable: `Transform.fields.world.transient === true` (Layer-2 reflection, see [§reflection](#layer-2-componentfieldsfieldname--per-field-pre-parsed-reflection)) — an AI user can confirm whether a field is serialized without reading source or trial-serializing.
+
 ## Query — `optional` per-archetype column-level exposure (feat-20260531)
 
 **`optional` = per-archetype column-level data exposure; does not participate in matching/filtering.** The `with` set determines **which archetypes match** (`with ∩ ¬without`); `optional` only decides **which extra columns the bundle carries** on each matched archetype. A component in `optional` that is absent from an archetype simply omits its key from `bundle` (overall absent — no `undefined` value, no empty object). This is the data/filter separation (wiki/bevy-ecs AP-3): optional lives in the data dimension, not the filter dimension.
@@ -426,7 +443,7 @@ const state = createQueryState({
 | Component source | Bundle key type | Example |
 |:--|:--|:--|
 | `with` (Cs) | Non-optional intersection | `bundle.Camera.fovY` is `number // not undefined` |
-| `optional` (Os) | Overall `?:` intersection | `bundle.GlobalTransform` is `{ posX: Float32Array, ... } \| undefined` |
+| `optional` (Os) | Overall `?:` intersection | `bundle.GlobalTransform` is `{ pos: Float32Array, ... } \| undefined` |
 
 **Callback consumption** — AI users read optional columns with standard TS optional chaining, no cast needed:
 
@@ -434,10 +451,10 @@ const state = createQueryState({
 queryRun(state, world, (bundle) => {
   const count = bundle.entityCount;
   const cam = bundle.Camera;                    // always present (with)
-  const gtf = bundle.GlobalTransform;           // { posX, ... } | undefined
+  const gtf = bundle.GlobalTransform;           // { pos, ... } | undefined
   for (let i = 0; i < count; i++) {
     const fovY = cam.fovY;                      // non-optional read
-    const px = gtf?.posX[i];                    // optional chaining — safe when absent
+    const px = gtf?.pos[i * 3];                 // optional chaining — safe when absent
   }
 });
 ```
@@ -595,6 +612,7 @@ A frozen `Record<fieldName, FieldReflection>` where each entry carries:
 | `type` | `SchemaFieldType` | The field-type keyword (same as `component.schema[fieldName]`) |
 | `default` | `unknown` (if present) | The layer-2 default value from the field descriptor |
 | `arrayMeta` | `ArrayMeta` (if `array<...>` field) | Pre-parsed array metadata — parsed **once** at registration |
+| `transient` | `boolean` (if declared) | Field-level serialization-skip flag — `true` means scene collect omits this field (see [§transient](#transient--serialization-skip-for-derived-runtime-state-feat-20260707)). Programmatically self-inspectable via `component.fields[fieldName].transient`. |
 
 `ArrayMeta` shape (`{ elementType: ManagedArrayElementType, length?: number }`):
 

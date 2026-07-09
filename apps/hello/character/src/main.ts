@@ -26,15 +26,8 @@ import {
   RigidBody,
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
-import {
-  Camera,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 // Capsule character dims: radius 0.3 + halfHeight 0.5 -> half-total 0.8.
@@ -67,7 +60,7 @@ function spawnScene(world: World): number {
   // Ground slab.
   world
     .spawn(
-      { component: Transform, data: { posX: 0, posY: -0.85, posZ: 0, scaleX: 20, scaleY: 1, scaleZ: 20 } },
+      { component: Transform, data: { pos: [0, -0.85, 0], scale: [20, 1, 20]} },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: {} },
       { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
@@ -86,7 +79,7 @@ function spawnScene(world: World): number {
   // A low step ledge to walk up (auto-step territory: 0.2m < default 0.3m).
   world
     .spawn(
-      { component: Transform, data: { posX: 3, posY: -0.45, posZ: 0, scaleX: 2, scaleY: 0.4, scaleZ: 8 } },
+      { component: Transform, data: { pos: [3, -0.45, 0], scale: [2, 0.4, 8]} },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: {} },
       { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
@@ -105,7 +98,7 @@ function spawnScene(world: World): number {
   // A tall box to bump into (collision response / wall slide).
   world
     .spawn(
-      { component: Transform, data: { posX: -3, posY: 0.5, posZ: -2, scaleX: 1, scaleY: 2, scaleZ: 1 } },
+      { component: Transform, data: { pos: [-3, 0.5, -2], scale: [1, 2, 1]} },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: {} },
       { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
@@ -124,7 +117,7 @@ function spawnScene(world: World): number {
   // The character: kinematic capsule + CharacterController, resting on the ground.
   const character = world
     .spawn(
-      { component: Transform, data: { posX: 0, posY: CHAR_REST_Y, posZ: 0 } },
+      { component: Transform, data: { pos: [0, CHAR_REST_Y, 0]} },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: {} },
       { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } },
@@ -143,7 +136,7 @@ function spawnScene(world: World): number {
   // Camera looking at the play area.
   world
     .spawn(
-      { component: Transform, data: { posX: 0, posY: 6, posZ: 12 } },
+      { component: Transform, data: { pos: [0, 6, 12]} },
       { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
     )
     .unwrap();
@@ -245,8 +238,8 @@ function readGrounded(world: World, entity: number): boolean {
 function readPos(world: World, entity: number): { x: number; y: number; z: number } {
   const r = world.get(entity as never, Transform as never);
   if (!r.ok) return { x: 0, y: 0, z: 0 };
-  const v = r.value as { posX: number; posY: number; posZ: number };
-  return { x: v.posX, y: v.posY, z: v.posZ };
+  const v = r.value as { pos: Float32Array };
+  return { x: v.pos[0] ?? 0, y: v.pos[1] ?? 0, z: v.pos[2] ?? 0 };
 }
 
 function drawCharacterGizmo(

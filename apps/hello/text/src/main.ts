@@ -32,19 +32,8 @@
 import { createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
 
-import {
-  BLOOM_ENABLED,
-  Camera,
-  createDevImportTransport,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  TONEMAP_REINHARD_EXTENDED,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { BLOOM_ENABLED, Camera, createDevImportTransport, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, TONEMAP_REINHARD_EXTENDED, Transform } from '@forgeax/engine-runtime';
 import type { FontAsset, Handle, MaterialAsset } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -140,7 +129,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { posX: 2.2, posY: -1.0, posZ: 1.5, quatW: 1, scaleX: 0.5, scaleY: 0.5, scaleZ: 0.5 },
+        data: { pos: [2.2, -1.0, 1.5], quat: [0, 0, 0, 1], scale: [0.5, 0.5, 0.5]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [cubeMat] } },
@@ -166,7 +155,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // bloom bright-pass (AC-12).
   world
     .spawn(
-      { component: Transform, data: { posZ: 8 } },
+      { component: Transform, data: { pos: [0, 0, 8]} },
       {
         component: Camera,
         data: {

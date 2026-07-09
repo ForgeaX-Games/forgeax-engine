@@ -23,13 +23,13 @@
 // readback ε ≤ 0.05); this dawn-tier gate isolates the host-side derivation
 // + GPU-resource accounting that feeds the record stage.
 
+import { BUILTIN_FLOATS_PER_VERTEX } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { mat4 } from '@forgeax/engine-math';
 import { ok } from '@forgeax/engine-rhi';
 import type { EquirectAsset, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { BUILTIN_FLOATS_PER_VERTEX } from '../../builtin-asset-registry';
 import { GpuResourceStore } from '../../gpu-resource-store';
 
 const mockCaps = {

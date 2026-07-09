@@ -17,11 +17,15 @@ import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import '../components';
 import '../components/scene-instance';
-import { type Asset, AssetRegistry } from '../asset-registry';
+import {
+  type Asset,
+  AssetRegistry,
+  resolveAssetHandle,
+  SceneCollectAssetGuidUnresolvedError,
+} from '@forgeax/engine-assets-runtime';
 import { rootsToSceneAsset } from '../collect-scene-asset';
-import { SceneCollectAssetGuidUnresolvedError } from '../errors/asset';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeReg(): AssetRegistry {

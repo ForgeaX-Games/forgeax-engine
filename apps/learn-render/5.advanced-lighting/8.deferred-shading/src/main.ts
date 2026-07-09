@@ -26,18 +26,8 @@
 
 import { type App, createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
-import {
-  Camera,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  HDRP_PIPELINE_ID,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, EngineEnvironmentError, HDRP_PIPELINE_ID, Materials, MeshFilter, MeshRenderer, perspective, PointLight, Transform } from '@forgeax/engine-runtime';
 import type { Handle, MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -82,19 +72,19 @@ function randomColor(state: number): [number, number, number, number] {
 
 // Pre-compute the full 32-light set with deterministic seed=13.
 function generateLightData(): Array<{
-  posX: number; posY: number; posZ: number;
+  pos: readonly [number, number, number];
   colorR: number; colorG: number; colorB: number;
 }> {
   let state = 13; // srand(13)
   const lights: Array<{
-    posX: number; posY: number; posZ: number;
+    pos: readonly [number, number, number];
     colorR: number; colorG: number; colorB: number;
   }> = [];
   for (let i = 0; i < NUM_LIGHTS; i++) {
     const [px, py, pz, sa] = randomPosition(state);
     const [cr, cg, cb, sb] = randomColor(sa);
     state = sb;
-    lights.push({ posX: px, posY: py, posZ: pz, colorR: cr, colorG: cg, colorB: cb });
+    lights.push({ pos: [px, py, pz], colorR: cr, colorG: cg, colorB: cb });
   }
   return lights;
 }
@@ -195,10 +185,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         {
           component: Transform,
           data: {
-            posX: cx, posY: CUBE_Y, posZ: cz,
-            quatW: 1,
-            scaleX: CUBE_SCALE, scaleY: CUBE_SCALE, scaleZ: CUBE_SCALE,
-          },
+            pos: [cx, CUBE_Y, cz], quat: [0, 0, 0, 1], scale: [CUBE_SCALE, CUBE_SCALE, CUBE_SCALE],},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
         { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -213,7 +200,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.spawn(
       {
         component: Transform,
-        data: { posX: ld.posX, posY: ld.posY, posZ: ld.posZ, quatW: 1 },
+        data: { pos: ld.pos, quat: [0, 0, 0, 1] },
       },
       {
         component: PointLight,
@@ -234,9 +221,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: ld.posX, posY: ld.posY, posZ: ld.posZ,
-          quatW: 1,
-          scaleX: 0.125, scaleY: 0.125, scaleZ: 0.125,
+          pos: ld.pos,
+          quat: [0, 0, 0, 1],
+          scale: [0.125, 0.125, 0.125],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -249,7 +236,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 1.5, posZ: 6.0, quatW: 1 },
+      data: { pos: [0, 1.5, 6.0], quat: [0, 0, 0, 1]},
     },
     {
       component: Camera,

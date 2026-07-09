@@ -303,7 +303,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
 
         world
           .spawn(
-            { component: Transform as never, data: { posX: 0, posY: 1, posZ: 0 } },
+            { component: Transform as never, data: { pos: [0, 1, 0] } },
             {
               component: RigidBody as never,
               data: { type: RigidBodyTypeValue.kinematic, ccdEnabled: true },
@@ -362,7 +362,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
 
         const dynamicEntity = world
           .spawn(
-            { component: Transform as never, data: { posX: 0, posY: 5, posZ: 0 } },
+            { component: Transform as never, data: { pos: [0, 5, 0] } },
             {
               component: RigidBody as never,
               data: {
@@ -382,7 +382,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
 
         const staticEntity = world
           .spawn(
-            { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+            { component: Transform as never, data: { pos: [0, 0, 0] } },
             {
               component: RigidBody as never,
               data: { type: RigidBodyTypeValue.static },
@@ -406,7 +406,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         expect(initDynamic.ok).toBe(true);
         expect(initStatic.ok).toBe(true);
         if (!initDynamic.ok || !initStatic.ok) return;
-        const dynPosYBefore = (initDynamic.value as Record<string, number>).posY;
+        const dynPosYBefore = (initDynamic.value as { pos: Float32Array }).pos[1] as number;
         expect(dynPosYBefore).toBeCloseTo(5, 1);
 
         registerPhysicsSystems(world);
@@ -421,7 +421,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
           expect(finalDynamic.ok).toBe(true);
           return;
         }
-        const dynPosYAfter = (finalDynamic.value as Record<string, number>).posY;
+        const dynPosYAfter = (finalDynamic.value as { pos: Float32Array }).pos[1] as number;
         expect(dynPosYAfter).toBeLessThan(4.5);
 
         const finalStatic = world.get(staticEntity, Transform as never);
@@ -429,7 +429,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
           expect(finalStatic.ok).toBe(true);
           return;
         }
-        const staticPosYAfter = (finalStatic.value as Record<string, number>).posY;
+        const staticPosYAfter = (finalStatic.value as { pos: Float32Array }).pos[1] as number;
         expect(staticPosYAfter).toBeCloseTo(0, 1);
 
         const bodyCount = pw.getBodyCount();
@@ -462,7 +462,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         const PARENT_X = 8;
         const parent = world
           .spawn(
-            { component: Transform as never, data: { posX: PARENT_X, posY: 0, posZ: 0 } },
+            { component: Transform as never, data: { pos: [PARENT_X, 0, 0] } },
             { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
             {
               component: Collider as never,
@@ -475,7 +475,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         // pos equals the parent's. This is the shape that regressed.
         const sensor = world
           .spawn(
-            { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+            { component: Transform as never, data: { pos: [0, 0, 0] } },
             { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
             {
               component: Collider as never,
@@ -490,7 +490,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         // the origin, it would overlap this probe.
         const originProbe = world
           .spawn(
-            { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+            { component: Transform as never, data: { pos: [0, 0, 0] } },
             { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
             {
               component: Collider as never,
@@ -503,7 +503,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         // correctly follows the parent.
         const farProbe = world
           .spawn(
-            { component: Transform as never, data: { posX: PARENT_X, posY: 0, posZ: 0 } },
+            { component: Transform as never, data: { pos: [PARENT_X, 0, 0] } },
             { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
             {
               component: Collider as never,
@@ -648,7 +648,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
     ): number {
       const entity = world
         .spawn(
-          { component: Transform as never, data: { posX: pos[0], posY: pos[1], posZ: pos[2] } },
+          { component: Transform as never, data: { pos: [pos[0], pos[1], pos[2]] } },
           { component: RigidBody as never, data: { type: bodyType } },
           {
             component: Collider as never,
@@ -673,7 +673,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         .spawn(
           {
             component: Transform as never,
-            data: { posX: box.pos[0], posY: box.pos[1], posZ: box.pos[2] },
+            data: { pos: [box.pos[0], box.pos[1], box.pos[2]] },
           },
           { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
           { component: Collider as never, data },
@@ -685,8 +685,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
     function tfPos(world: World, entity: number): { x: number; y: number; z: number } {
       const r = world.get(entity as never, Transform as never);
       if (!r.ok) throw new Error('transform missing');
-      const v = r.value as Record<string, number>;
-      return { x: v.posX as number, y: v.posY as number, z: v.posZ as number };
+      const v = r.value as { pos: Float32Array };
+      return { x: v.pos[0] as number, y: v.pos[1] as number, z: v.pos[2] as number };
     }
 
     function ccGrounded(world: World, entity: number): boolean {
@@ -821,7 +821,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         // for the KCC -- before the fix this froze the character in place.
         world
           .spawn(
-            { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+            { component: Transform as never, data: { pos: [0, 0, 0] } },
             { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
             {
               component: Collider as never,
@@ -1232,7 +1232,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         // Platform: kinematic body + collider, NO CharacterController.
         const platform = world
           .spawn(
-            { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+            { component: Transform as never, data: { pos: [0, 0, 0] } },
             { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
             {
               component: Collider as never,
@@ -1242,7 +1242,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
           .unwrap() as unknown as number;
 
         // Move the platform via Transform; syncBackend should mirror it.
-        world.set(platform as never, Transform as never, { posX: 5, posY: 2, posZ: 0 });
+        world.set(platform as never, Transform as never, { pos: [5, 2, 0] });
         for (let i = 0; i < 30; i++) {
           world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
           world.update();
@@ -1276,7 +1276,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         pw.moveAndSlide(char, Float32Array.of(1, 0, 0) as never);
         const afterMove = tfPos(world, char).x;
 
-        world.set(char as never, Transform as never, { posX: 99, posY: 99, posZ: 99 });
+        world.set(char as never, Transform as never, { pos: [99, 99, 99] });
         // Run a tick: if the character row were mirrored, the body would target 99.
         world.insertResource('Time', { dt: 1 / 60, elapsed: 2 / 60 });
         world.update();
@@ -1417,7 +1417,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
       // A "player" kinematic body + CollidingEntities, sitting at the origin.
       const player = world
         .spawn(
-          { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+          { component: Transform as never, data: { pos: [0, 0, 0] } },
           { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
           {
             component: Collider as never,
@@ -1430,7 +1430,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
       // A "Core" kinematic SENSOR overlapping the player.
       const core = world
         .spawn(
-          { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+          { component: Transform as never, data: { pos: [0, 0, 0] } },
           { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
           {
             component: Collider as never,
@@ -1463,7 +1463,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
 
       const player = world
         .spawn(
-          { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+          { component: Transform as never, data: { pos: [0, 0, 0] } },
           { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
           {
             component: Collider as never,
@@ -1474,7 +1474,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         .unwrap();
       const core = world
         .spawn(
-          { component: Transform as never, data: { posX: 0, posY: 0, posZ: 0 } },
+          { component: Transform as never, data: { pos: [0, 0, 0] } },
           { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
           {
             component: Collider as never,

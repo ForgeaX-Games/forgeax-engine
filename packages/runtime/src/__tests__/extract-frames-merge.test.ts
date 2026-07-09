@@ -44,28 +44,14 @@ import { extractFrame } from '../render-system-extract';
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function identityTransform(): {
-  posX: number;
-  posY: number;
-  posZ: number;
-  quatX: number;
-  quatY: number;
-  quatZ: number;
-  quatW: number;
-  scaleX: number;
-  scaleY: number;
-  scaleZ: number;
+  pos: [number, number, number];
+  quat: [number, number, number, number];
+  scale: [number, number, number];
 } {
   return {
-    posX: 0,
-    posY: 0,
-    posZ: 0,
-    quatX: 0,
-    quatY: 0,
-    quatZ: 0,
-    quatW: 1,
-    scaleX: 1,
-    scaleY: 1,
-    scaleZ: 1,
+    pos: [0, 0, 0],
+    quat: [0, 0, 0, 1],
+    scale: [1, 1, 1],
   };
 }
 
@@ -306,7 +292,7 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
     const worldA = new World();
     worldA
       .spawn(
-        { component: Transform, data: { ...identityTransform(), posX: 1 } },
+        { component: Transform, data: { ...identityTransform(), pos: [1, 0, 0] } },
         {
           component: SpotLight,
           data: {
@@ -327,7 +313,7 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
     const worldB = new World();
     worldB
       .spawn(
-        { component: Transform, data: { ...identityTransform(), posX: 2 } },
+        { component: Transform, data: { ...identityTransform(), pos: [2, 0, 0] } },
         {
           component: SpotLight,
           data: {

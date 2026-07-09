@@ -34,15 +34,8 @@
 import { createApp } from '@forgeax/engine-app';
 import type { App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  HANDLE_CUBE,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -178,7 +171,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const cameraEntity = world.spawn(
     {
       component: Transform,
-      data: { posX: CAMERA_POS[0], posY: CAMERA_POS[1], posZ: CAMERA_POS[2] },
+      data: { pos: [CAMERA_POS[0], CAMERA_POS[1], CAMERA_POS[2]]},
     },
     {
       component: Camera,

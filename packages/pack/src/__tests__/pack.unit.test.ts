@@ -587,7 +587,9 @@ const V1_WHITELIST = new Set([
   const TRANSFORM_SCHEMA = {
     type: 'object',
     additionalProperties: false,
-    properties: { posX: { type: 'number' }, posY: { type: 'number' }, posZ: { type: 'number' } },
+    properties: {
+      pos: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
+    },
   } as const;
   const MESH_FILTER_SCHEMA = {
     type: 'object',
@@ -616,17 +618,17 @@ const V1_WHITELIST = new Set([
             {
               localId: 0,
               components: {
-                Transform: { posX: 1, posY: 2, posZ: 3 },
+                Transform: { pos: [1, 2, 3] },
                 MeshFilter: { mesh: 'cube' },
               },
             },
             {
               localId: 1,
-              components: { Transform: { posX: 0, posY: 0, posZ: 0 }, ChildOf: { parent: 0 } },
+              components: { Transform: { pos: [0, 0, 0] }, ChildOf: { parent: 0 } },
             },
             {
               localId: 2,
-              components: { Transform: { posX: 5, posY: 5, posZ: 5 }, ChildOf: { parent: 1 } },
+              components: { Transform: { pos: [5, 5, 5] }, ChildOf: { parent: 1 } },
             },
           ],
         };
@@ -641,9 +643,9 @@ const V1_WHITELIST = new Set([
         const payload = {
           kind: 'scene',
           entities: [
-            { localId: 0, components: { Transform: { posX: 1, posY: 2, posZ: 3 } } },
-            { localId: 1, components: { Transform: { posX: 0, posY: 0, posZ: 0 } } },
-            { localId: 2, components: { Transform: { pozX: 7, posY: 0, posZ: 0 } } },
+            { localId: 0, components: { Transform: { pos: [1, 2, 3] } } },
+            { localId: 1, components: { Transform: { pos: [0, 0, 0] } } },
+            { localId: 2, components: { Transform: { pozX: 7, pos: [0, 0, 0] } } },
           ],
         };
         const ok = sceneValidate(payload);

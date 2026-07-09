@@ -25,19 +25,8 @@
 // 1. engine usage
 import { createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  DirectionalLight,
-  HANDLE_CUBE,
-  HANDLE_QUAD,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-  setTransparentSortConfig,
-  TRANSPARENT_SORT_MODE_DISTANCE,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, DirectionalLight, MeshFilter, MeshRenderer, perspective, Transform, setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { RenderQueue, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -288,13 +277,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posY: FLOOR_Y,
-        scaleX: FLOOR_SCALE,
-        scaleY: FLOOR_SCALE,
-        scaleZ: FLOOR_SCALE,
-        quatX: SIN_NEG_90,
-        quatW: COS_NEG_90,
-      },
+        pos: [0, FLOOR_Y, 0], quat: [SIN_NEG_90, 0, 0, COS_NEG_90], scale: [FLOOR_SCALE, FLOOR_SCALE, FLOOR_SCALE],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
     { component: MeshRenderer, data: { materials: [floorMat] } },
@@ -305,10 +288,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: CUBE_POS[0],
-        posY: CUBE_POS[1],
-        posZ: CUBE_POS[2],
-      },
+        pos: [CUBE_POS[0], CUBE_POS[1], CUBE_POS[2]],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [cubeMat] } },
@@ -319,7 +299,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.spawn(
       {
         component: Transform,
-        data: { posX: p[0], posY: p[1], posZ: p[2] },
+        data: { pos: [p[0], p[1], p[2]]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
       { component: MeshRenderer, data: { materials: [grassMat] } },
@@ -334,7 +314,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.spawn(
       {
         component: Transform,
-        data: { posX: p[0], posY: p[1], posZ: p[2] },
+        data: { pos: [p[0], p[1], p[2]]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
       { component: MeshRenderer, data: { materials: [windowMat] } },
@@ -358,7 +338,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Camera at (0, 0, 3), Zoom=45 deg. First-person system drives
   // WASD/mouse/scroll on top of this spawn.
   const cameraEntity = world.spawn(
-    { component: Transform, data: { posZ: CAMERA_POS_Z } },
+    { component: Transform, data: { pos: [0, 0, CAMERA_POS_Z]} },
     {
       component: Camera,
       data: perspective({

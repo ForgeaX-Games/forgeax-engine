@@ -507,14 +507,15 @@ function foldChannelIntoAccumulator(
  * Per-channel normalize: divide by per-channel sumW. Quat finalize
  * normalizes the resulting vec4 (nlerp). A channel with sumW=0 is silently
  * absent from the partial — `world.set` with a partial leaves untouched
- * fields at their existing values (AC-05(b) per-channel fallback).
+ * fields at their existing values (AC-05(b) per-channel fallback). Channel
+ * granularity maps 1:1 onto the Transform array columns (feat-20260709 M2):
+ * an animated channel always covers its whole pos/quat/scale vector, so the
+ * per-field partial write semantics are unchanged by the column migration.
  */
-function finalizeAccumulator(acc: JointAccumulator): Record<string, number> {
-  const partial: Record<string, number> = {};
+function finalizeAccumulator(acc: JointAccumulator): Record<string, number[]> {
+  const partial: Record<string, number[]> = {};
   if (acc.hasPos && acc.sumWPos > 0) {
-    partial.posX = acc.posX / acc.sumWPos;
-    partial.posY = acc.posY / acc.sumWPos;
-    partial.posZ = acc.posZ / acc.sumWPos;
+    partial.pos = [acc.posX / acc.sumWPos, acc.posY / acc.sumWPos, acc.posZ / acc.sumWPos];
   }
   if (acc.hasQuat && acc.sumWQuat > 0) {
     const qx = acc.quatX / acc.sumWQuat;
@@ -523,16 +524,16 @@ function finalizeAccumulator(acc: JointAccumulator): Record<string, number> {
     const qw = acc.quatW / acc.sumWQuat;
     const len = Math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
     if (len > 0) {
-      partial.quatX = qx / len;
-      partial.quatY = qy / len;
-      partial.quatZ = qz / len;
-      partial.quatW = qw / len;
+      // Component order [x, y, z, w] (E6).
+      partial.quat = [qx / len, qy / len, qz / len, qw / len];
     }
   }
   if (acc.hasScale && acc.sumWScale > 0) {
-    partial.scaleX = acc.scaleX / acc.sumWScale;
-    partial.scaleY = acc.scaleY / acc.sumWScale;
-    partial.scaleZ = acc.scaleZ / acc.sumWScale;
+    partial.scale = [
+      acc.scaleX / acc.sumWScale,
+      acc.scaleY / acc.sumWScale,
+      acc.scaleZ / acc.sumWScale,
+    ];
   }
   return partial;
 }

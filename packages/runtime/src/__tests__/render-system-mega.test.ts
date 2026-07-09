@@ -5,10 +5,10 @@
 // Each original file body sits in its own block-scope so helper names
 // cannot collide; describe() inside still registers globally with vitest.
 
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { type EcsErrorCode, World } from '@forgeax/engine-ecs';
 import type { Handle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HANDLE_CUBE } from '../asset-registry';
 import {
   Camera,
   DirectionalLight,
@@ -318,7 +318,10 @@ import { extractFrame } from '../render-system-extract';
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import('../index')),
+      ...(await import('@forgeax/engine-assets-runtime')),
+    } as never;
   }
 
   interface TestSetup {
@@ -919,44 +922,15 @@ import { extractFrame } from '../render-system-extract';
   // ─── Sample data helpers ────────────────────────────────────────────────────
 
   function identityTransform(): {
-    posX: number;
-    posY: number;
-    posZ: number;
-    quatX: number;
-    quatY: number;
-    quatZ: number;
-    quatW: number;
-    scaleX: number;
-    scaleY: number;
-    scaleZ: number;
+    pos: number[];
+    quat: number[];
+    scale: number[];
   } {
-    return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    };
+    return { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] };
   }
 
   function cameraTransform(): ReturnType<typeof identityTransform> {
-    return {
-      posX: 0,
-      posY: 0,
-      posZ: 3,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    };
+    return { pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1] };
   }
 
   function defaultMaterial(): Record<string, never> {
@@ -1060,9 +1034,9 @@ import { extractFrame } from '../render-system-extract';
       //   far   (0, 0, -7) — distance = 10
       // Spawn in near-first order so dispatch insertion order is near, mid, far.
       // Correct back-to-front draw order should be far, mid, near.
-      const nearTx = { ...identityTransform(), posZ: 0 };
-      const midTx = { ...identityTransform(), posZ: -2 };
-      const farTx = { ...identityTransform(), posZ: -7 };
+      const nearTx = { ...identityTransform(), pos: [0, 0, 0] };
+      const midTx = { ...identityTransform(), pos: [0, 0, -2] };
+      const farTx = { ...identityTransform(), pos: [0, 0, -7] };
 
       world.spawn(
         { component: C.MeshFilter, data: { assetHandle: C.HANDLE_CUBE } },
@@ -1203,8 +1177,8 @@ import { extractFrame } from '../render-system-extract';
 
       // Spawn 2 opaque (Geometry=2000) entities at different distances.
       // The record stage should NOT re-sort Geometry-queue entities.
-      const nearOpaque = { ...identityTransform(), posZ: 0 };
-      const farOpaque = { ...identityTransform(), posZ: -10 };
+      const nearOpaque = { ...identityTransform(), pos: [0, 0, 0] };
+      const farOpaque = { ...identityTransform(), pos: [0, 0, -10] };
 
       world.spawn(
         { component: C.MeshFilter, data: { assetHandle: C.HANDLE_CUBE } },
@@ -1587,29 +1561,11 @@ describe('RenderSystem Skylight extract + record phase contract (plan-strategy D
   }
 
   function makeIdentityTransform(): {
-    posX: number;
-    posY: number;
-    posZ: number;
-    quatX: number;
-    quatY: number;
-    quatZ: number;
-    quatW: number;
-    scaleX: number;
-    scaleY: number;
-    scaleZ: number;
+    pos: number[];
+    quat: number[];
+    scale: number[];
   } {
-    return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    };
+    return { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] };
   }
 
   function makeWorld(): { world: World; collected: CollectedError[] } {

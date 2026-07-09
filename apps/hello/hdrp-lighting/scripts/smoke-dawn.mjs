@@ -158,7 +158,6 @@ const { createApp } = enginePkg;
 const runtimePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
-  HANDLE_CUBE,
   HDRP_PIPELINE_ID,
   MeshFilter,
   MeshRenderer,
@@ -168,6 +167,9 @@ const {
   TONEMAP_ACES_FILMIC,
   Transform,
 } = runtimePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
@@ -227,12 +229,12 @@ const matHandle = world.allocSharedRef('MaterialAsset', {
 });
 
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: -0.5, posZ: 0, quatW: 1, scaleX: 6, scaleY: 0.1, scaleZ: 6 } },
+  { component: Transform, data: { pos: [0, -0.5, 0], quat: [0, 0, 0, 1], scale: [6, 0.1, 6]} },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [matHandle] } },
 );
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0.6, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0.6, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [matHandle] } },
 );
@@ -257,7 +259,7 @@ for (let i = 0; i < 200; i++) {
   const z = (rng() - 0.5) * 5.5;
   const y = 1.5 + rng() * 2.0;
   world.spawn(
-    { component: Transform, data: { posX: x, posY: y, posZ: z, quatW: 1 } },
+    { component: Transform, data: { pos: [x, y, z], quat: [0, 0, 0, 1]} },
     {
       component: PointLight,
       data: {
@@ -275,7 +277,7 @@ for (let i = 0; i < 56; i++) {
   const z = (rng() - 0.5) * 5.5;
   const y = 2.0 + rng() * 2.0;
   world.spawn(
-    { component: Transform, data: { posX: x, posY: y, posZ: z, quatW: 1 } },
+    { component: Transform, data: { pos: [x, y, z], quat: [0, 0, 0, 1]} },
     {
       component: SpotLight,
       data: {
@@ -301,7 +303,7 @@ for (let i = 0; i < 56; i++) {
 // drawn (632 successful drawIndexed across 332 frames) but landed off-screen,
 // so the readback PNG returned only the camera clearColor.
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 1.5, posZ: 6.0, quatW: 1 } },
+  { component: Transform, data: { pos: [0, 1.5, 6.0], quat: [0, 0, 0, 1]} },
   {
     component: Camera,
     data: {

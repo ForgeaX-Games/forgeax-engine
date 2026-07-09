@@ -197,7 +197,6 @@ const enginePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
   createRenderer,
-  HANDLE_QUAD,
   Layer,
   MeshFilter,
   MeshRenderer,
@@ -209,6 +208,9 @@ const {
   TRANSPARENT_SORT_MODE_LAYER_Z,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_QUAD,
+} = await import('@forgeax/engine-assets-runtime');
 
 // Mirror the CAMERA_PROJECTION_ORTHOGRAPHIC constant inline (the runtime
 // barrel does not re-export it today; the demo's main.ts inlines the
@@ -422,17 +424,7 @@ for (const matrixCase of MATRIX) {
         {
           component: Transform,
           data: {
-            posX: slot.pos[0],
-            posY: slot.pos[1],
-            posZ: slot.pos[2],
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 0.4,
-            scaleY: 0.4,
-            scaleZ: 1,
-          },
+            pos: [slot.pos[0], slot.pos[1], slot.pos[2]], quat: [0, 0, 0, 1], scale: [0.4, 0.4, 1],},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
         { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -447,17 +439,7 @@ for (const matrixCase of MATRIX) {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 5,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
-        },
+          pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
       },
       {
         component: Camera,
@@ -630,7 +612,7 @@ for (const matrixCase of MATRIX) {
 //   The 9-slice work must NOT add `9-slice` / `nineslice` references to
 //   `packages/runtime/src/components/sort-key.ts` /
 //   `packages/runtime/src/components/layer.ts` (RenderQueue + Layer + sort
-//   formula `posY - pivotY * sizeY` stay 9-slice-agnostic). The smoke greps
+//   formula `pos y - pivotY * sizeY` stay 9-slice-agnostic). The smoke greps
 //   the two files inline and fails if either contains a hit.
 
 const FALSIFY_NINESLICE_ANCHOR = FALSIFY === 'nineslice-anchor';
@@ -640,7 +622,7 @@ console.log(
 );
 
 // Assertion #1: HANDLE_NINESLICE_QUAD shape.
-const { HANDLE_NINESLICE_QUAD } = enginePkg;
+const { HANDLE_NINESLICE_QUAD } = await import('@forgeax/engine-assets-runtime');
 if (HANDLE_NINESLICE_QUAD === undefined) {
   failures.push('nineslice: HANDLE_NINESLICE_QUAD missing from @forgeax/engine-runtime barrel');
 }
@@ -764,17 +746,7 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
         {
           component: Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 0.6,
-            scaleY: 0.4,
-            scaleZ: 1,
-          },
+            pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [0.6, 0.4, 1],},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_NINESLICE_QUAD } },
         { component: MeshRenderer, data: { materials: [ninesliceMatHandle] } },
@@ -786,17 +758,7 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
         {
           component: Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 5,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
-          },
+            pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
         },
         {
           component: Camera,

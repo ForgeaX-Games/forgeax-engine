@@ -318,16 +318,14 @@ const pointDefs = [
 ];
 for (const pd of pointDefs) {
   world.spawn(
-    { component: Transform, data: { posX: pd.pos[0], posY: pd.pos[1], posZ: pd.pos[2],
-      quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+    { component: Transform, data: { pos: [pd.pos[0], pd.pos[1], pd.pos[2]], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
     { component: PointLight, data: { colorR: pd.color[0], colorG: pd.color[1], colorB: pd.color[2],
       intensity: pd.intensity, range: pd.range } },
   );
 }
 
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 1.5, posZ: 4,
-    quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 1.5, 4], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
   { component: Camera, data: { fov: Math.PI / 3, aspect: WIDTH / HEIGHT, near: 0.08, far: 120 } },
 );
 

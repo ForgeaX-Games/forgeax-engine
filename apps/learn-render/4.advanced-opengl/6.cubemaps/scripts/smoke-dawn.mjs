@@ -171,7 +171,6 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
   SKYBOX_MODE_CUBEMAP,
@@ -180,6 +179,9 @@ const {
   TONEMAP_REINHARD_EXTENDED,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 const { buildEngineShaderManifest } = await import(
   '@forgeax/engine-vite-plugin-shader'
 );
@@ -303,7 +305,7 @@ const nonReflectiveMatPayload = {
  *   - Reflective cube (metallic=1, roughness=0) at x=-1.5
  *   - Non-reflective cube (metallic=0) at x=+1.5
  *   - DirectionalLight
- *   - Camera at posZ=6, tonemap=REINHARD_EXTENDED
+ *   - Camera at pos z=6, tonemap=REINHARD_EXTENDED
  */
 async function spawnScene(world, spawnSkybox) {
   // Mint this world's column handles (M8 D-19): equirect source + two PBR
@@ -330,10 +332,7 @@ async function spawnScene(world, spawnSkybox) {
     {
       component: Transform,
       data: {
-        posX: -1.5, posY: 0, posZ: 0,
-        quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [-1.5, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [reflectiveMatHandle] } },
@@ -344,10 +343,7 @@ async function spawnScene(world, spawnSkybox) {
     {
       component: Transform,
       data: {
-        posX: 1.5, posY: 0, posZ: 0,
-        quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [1.5, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [nonReflectiveMatHandle] } },
@@ -371,7 +367,7 @@ async function spawnScene(world, spawnSkybox) {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 0, posZ: 6 },
+      data: { pos: [0, 0, 6]},
     },
     {
       component: Camera,

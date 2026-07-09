@@ -16,11 +16,11 @@
 // directional light pointing diagonally down-and-back. NDC center pixel distance to
 // black stays >> 0.05 for the hello-cube smoke verdict.
 
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import {
   Camera,
   DirectionalLight,
-  HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
   perspective,
@@ -48,7 +48,7 @@ export function populateDemoWorld(world: World): void {
     .spawn(
       {
         component: Transform,
-        data: { posZ: 3 },
+        data: { pos: [0, 0, 3] },
       },
       { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },
     )

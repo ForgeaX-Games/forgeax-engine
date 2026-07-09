@@ -14,10 +14,10 @@
 //   E9: mesh inline (import-runner.ts:422-427) excluded — not in scope
 //   D-10: all fixture data programmatic
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const GUID_MESH = 'c0000000-0000-4000-a000-00006d657368';

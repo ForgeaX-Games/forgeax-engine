@@ -17,9 +17,9 @@
 // skeletonLoader pattern); risk R-2 (mesh-loader dual-contract gap surfaces
 // only on the browser pack-body path).
 
+import { meshLoader } from '@forgeax/engine-assets-runtime';
 import type { LoadContext } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { meshLoader } from '../asset-registry';
 
 function makeCtx(): LoadContext {
   return {

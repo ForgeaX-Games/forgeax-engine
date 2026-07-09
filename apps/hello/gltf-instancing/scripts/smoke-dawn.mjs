@@ -146,12 +146,14 @@ const {
   ChildOf,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   Instances,
   MeshFilter,
   MeshRenderer,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { parseGltf, gltfDocToSceneAsset } = await import('@forgeax/engine-gltf');
 

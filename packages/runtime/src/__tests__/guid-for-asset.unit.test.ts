@@ -7,9 +7,9 @@
 //
 // TDD phase "red": guidForAsset does not exist yet.
 
+import { type Asset, AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { describe, expect, it } from 'vitest';
-import { type Asset, AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeRegistry(): AssetRegistry {

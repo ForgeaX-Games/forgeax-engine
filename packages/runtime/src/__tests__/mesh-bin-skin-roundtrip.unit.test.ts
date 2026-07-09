@@ -17,9 +17,9 @@
 //   (C) edge -- vertex count zero (empty mesh, empty skin streams) does
 //       not panic and unpacks to a vertex-less mesh with no skin streams.
 
+import { unpackMeshBin } from '@forgeax/engine-assets-runtime';
 import { packMeshBin } from '@forgeax/engine-import';
 import { describe, expect, it } from 'vitest';
-import { unpackMeshBin } from '../mesh-bin';
 
 const FLOATS_PER_VERTEX_18 = 18;
 const FLOATS_PER_VERTEX_12 = 12;

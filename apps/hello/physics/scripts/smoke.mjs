@@ -3,14 +3,14 @@
 //
 // Strategy: createApp with physicsPlugin('rapier-3d'), spawn a dynamic sphere +
 // static ground scene, start the app, poll for PhysicsWorld (async WASM), then
-// run N frames with working tick systems, and assert the sphere's Transform.posY
+// run N frames with working tick systems, and assert the sphere's Transform pos y
 // has decreased (gravity-driven free-fall).
 //
 // This smoke verifies the full createApp -> physics tick pipeline:
 //   1. createApp(canvas, { plugins: [physicsPlugin('rapier-3d')] }) succeeds.
 //   2. app.start() + N-frame loop + app.stop() succeeds.
 //   3. PhysicsWorld resource is inserted into World after WASM init.
-//   4. Dynamic RigidBody has Transform.posY strictly lower than initial
+//   4. Dynamic RigidBody has Transform pos y strictly lower than initial
 //      after simulation advances (verifying the three-phase tick systems
 //      -- physicsSyncBackend, physicsStepSimulation, physicsWriteback --
 //      are registered and running, AC-04).
@@ -159,7 +159,7 @@ console.log(`[hello-physics] backend=${app.renderer.backend}`);
 
 // Spawn the physics scene.
 app.world.spawn(
-  { component: Transform, data: { posX: 0, posY: -2, posZ: 0, scaleX: 10, scaleY: 0.5, scaleZ: 10 } },
+  { component: Transform, data: { pos: [0, -2, 0], scale: [10, 0.5, 10]} },
   { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
   {
     component: Collider,
@@ -168,7 +168,7 @@ app.world.spawn(
 );
 
 const sphereSpawn = app.world.spawn(
-  { component: Transform, data: { posX: 0, posY: 5, posZ: 0 } },
+  { component: Transform, data: { pos: [0, 5, 0]} },
   { component: RigidBody, data: { type: RigidBodyTypeValue.dynamic, mass: 1, linearDamping: 0.01 } },
   {
     component: Collider,
@@ -182,7 +182,7 @@ if (!sphereSpawn.ok) {
 const sphereEntity = sphereSpawn.value;
 
 app.world.spawn(
-  { component: Transform, data: { posX: 8, posY: 4, posZ: 10 } },
+  { component: Transform, data: { pos: [8, 4, 10]} },
   { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
 );
 app.world.spawn({
@@ -209,14 +209,14 @@ if (!startResult.ok) {
   process.exit(1);
 }
 
-// Read initial sphere posY before simulation.
+// Read initial sphere pos y before simulation.
 const initialTransform = app.world.get(sphereEntity, Transform);
 if (!initialTransform.ok) {
   originalConsoleError(`[smoke] FAIL - initial Transform read failed: ${initialTransform.error.code}`);
   process.exit(1);
 }
-const initialPosY = initialTransform.value.posY;
-console.log(`[smoke] sphere initial posY=${initialPosY}`);
+const initialPosY = initialTransform.value.pos[1];
+console.log(`[smoke] sphere initial pos y=${initialPosY}`);
 
 // Run frames. The WASM loads asynchronously; early frames have no physics,
 // but once PhysicsWorld appears the tick systems activate.
@@ -241,8 +241,8 @@ if (!finalTransform.ok) {
   originalConsoleError(`[smoke] FAIL - final Transform read failed: ${finalTransform.error.code}`);
   process.exit(1);
 }
-const finalPosY = finalTransform.value.posY;
-console.log(`[smoke] sphere final posY=${finalPosY}`);
+const finalPosY = finalTransform.value.pos[1];
+console.log(`[smoke] sphere final pos y=${finalPosY}`);
 
 const stopResult = app.stop();
 if (!stopResult.ok) {
@@ -265,12 +265,12 @@ if (totalFrames < SMOKE_MIN_FRAMES) {
 }
 
 // AC-04: PhysicsWorld must be present (physicsPlugin awaits WASM import before
-// createApp resolves). Dynamic RigidBody must have posY strictly lower than
+// createApp resolves). Dynamic RigidBody must have pos y strictly lower than
 // initial after simulation frames advance.
 if (!hasPhysicsWorld) {
   failures.push(`(d) PhysicsWorld not present -- WASM did not load or physicsPlugin build failed`);
 } else if (finalPosY >= initialPosY) {
-  failures.push(`(e) sphere posY did not decrease: ${initialPosY} -> ${finalPosY} (delta=${(finalPosY - initialPosY).toFixed(4)})`);
+  failures.push(`(e) sphere pos y did not decrease: ${initialPosY} -> ${finalPosY} (delta=${(finalPosY - initialPosY).toFixed(4)})`);
 }
 
 if (failures.length > 0) {
@@ -281,7 +281,7 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`[smoke] PASS - frames=${totalFrames}, PhysicsWorld=${hasPhysicsWorld}, posY: ${initialPosY} -> ${finalPosY}, app.onError=0`);
+console.log(`[smoke] PASS - frames=${totalFrames}, PhysicsWorld=${hasPhysicsWorld}, pos y: ${initialPosY} -> ${finalPosY}, app.onError=0`);
 
 if (sharedDevice) sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;

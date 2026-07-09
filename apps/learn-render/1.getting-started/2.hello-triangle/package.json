@@ -39,6 +39,7 @@
     }
   },
   "dependencies": {
+    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*"
   },

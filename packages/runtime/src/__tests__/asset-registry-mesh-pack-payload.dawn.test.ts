@@ -29,12 +29,12 @@
 //          requirements AC-06 (cascading exhaustive);
 //          charter P3 (structured failure: .code / .expected / .hint / .detail).
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { ok } from '@forgeax/engine-rhi';
 import type { EquirectAsset, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { GpuResourceStore } from '../gpu-resource-store';
 
 // feat-20260601-gpu-resource-store-extraction M1: configureGpuDevice moved to

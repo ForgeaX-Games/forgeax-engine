@@ -143,13 +143,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // bug-20260615-skin-mesh-node-double-transform: parent the Fox under a
   // non-identity rig. With the shader fix (M1), the skinned mesh rigid-follows
-  // the parent; without it, the parent transform doubles. posY=1 lifts the Fox
+  // the parent; without it, the parent transform doubles. pos y=1 lifts the Fox
   // 1 world unit upward (~30px at 200x150 smoke resolution), producing a
   // visible pixel difference between parented and identity-parent modes.
   const parentRig = world
     .spawn({
       component: Transform,
-      data: { posX: 0, posY: 1, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [0, 1, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
     })
     .unwrap();
   world.addComponent(root, { component: ChildOf, data: { parent: parentRig } });
@@ -188,7 +188,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // ~140 cm) so the frustum has to match: camera at (0, 35, 280) with far=500.
   world
     .spawn(
-      { component: Transform, data: { posX: 0, posY: 35, posZ: 280 } },
+      { component: Transform, data: { pos: [0, 35, 280]} },
       {
         component: Camera,
         data: {

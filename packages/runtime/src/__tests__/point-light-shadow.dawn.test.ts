@@ -553,7 +553,8 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
       const { Camera, DirectionalLight, MeshFilter, MeshRenderer, PointLight, Transform } =
         componentsModule;
       const { PointLightShadow } = await import('../components/point-light-shadow');
-      const { createRenderer, HANDLE_CUBE } = await import('../index');
+      const { createRenderer } = await import('../index');
+      const { HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
       const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
       const manifest = await buildEngineShaderManifest();
       const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
@@ -639,16 +640,9 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
         {
           component: Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 3,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 3],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
         {
@@ -672,16 +666,9 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
         {
           component: Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -691,16 +678,9 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
         {
           component: Transform,
           data: {
-            posX: 1.5,
-            posY: 1.5,
-            posZ: 1.5,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [1.5, 1.5, 1.5],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
         {
@@ -739,16 +719,9 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
         {
           component: Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 3,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 3],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
         {
@@ -772,16 +745,9 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
         {
           component: Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -791,16 +757,9 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
         {
           component: Transform,
           data: {
-            posX: 1.5,
-            posY: 1.5,
-            posZ: 1.5,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [1.5, 1.5, 1.5],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
         {

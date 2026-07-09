@@ -315,12 +315,12 @@ function spawnScene(world) {
     materials = [redHandle, cyanHandle];
   }
   world.spawn(
-    { component: Transform, data: { quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+    { component: Transform, data: { quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
     { component: MeshFilter, data: { assetHandle: meshHandle } },
     { component: MeshRenderer, data: { materials } },
   );
   world.spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 2.5, quatW: 1 } },
+    { component: Transform, data: { pos: [0, 0, 2.5], quat: [0, 0, 0, 1]} },
     {
       component: Camera,
       data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },

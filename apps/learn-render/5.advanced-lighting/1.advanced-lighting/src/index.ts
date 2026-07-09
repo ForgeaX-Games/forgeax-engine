@@ -161,7 +161,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posY: FLOOR_Y, quatX: FLOOR_QUAT_X, quatW: FLOOR_QUAT_W },
+      data: { pos: [0, FLOOR_Y, 0], quat: [FLOOR_QUAT_X, 0, 0, FLOOR_QUAT_W]},
     },
     { component: MeshFilter, data: { assetHandle: floorMesh } },
     { component: MeshRenderer, data: { materials: [mat] } },
@@ -169,7 +169,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Camera at (0, 0, 3), FOV=45 deg.
   const cameraEntity = world.spawn(
-    { component: Transform, data: { posZ: CAMERA_POS_Z } },
+    { component: Transform, data: { pos: [0, 0, CAMERA_POS_Z]} },
     {
       component: Camera,
       data: perspective({

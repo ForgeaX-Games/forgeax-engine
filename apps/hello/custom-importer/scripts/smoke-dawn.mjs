@@ -228,11 +228,13 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
 // The host loader, inlined here as a plain-JS twin of src/reel-game-blob-loader.ts
 // (the browser entry main.ts imports the .ts; this node smoke harness cannot
@@ -321,17 +323,7 @@ if (loadOk) {
       {
         component: Transform,
         data: {
-          posX: reel.x,
-          posY: (reel.symbols.length - 2) * 0.2,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
-        },
+          pos: [reel.x, (reel.symbols.length - 2) * 0.2, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: {} },
@@ -341,7 +333,7 @@ if (loadOk) {
 world.spawn(
   {
     component: Transform,
-    data: { posX: 0, posY: 0, posZ: 3, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+    data: { pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
   },
   { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
 );

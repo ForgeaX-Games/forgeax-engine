@@ -119,12 +119,14 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
   perspective,
   Transform,
 } = engine;
+const {
+  HANDLE_QUAD,
+} = await import('@forgeax/engine-assets-runtime');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const distShaders = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
@@ -222,7 +224,7 @@ for (const [px, py, pz, sx, sy, sz] of quads) {
     { component: MeshRenderer, data: { materials: [matHandle] } },
     {
       component: Transform,
-      data: { posX: px, posY: py, posZ: pz, scaleX: sx, scaleY: sy, scaleZ: sz },
+      data: { pos: [px, py, pz], scale: [sx, sy, sz]},
     },
   );
 }
@@ -242,7 +244,7 @@ world.spawn({
 });
 // Camera: perspective from Z=3.
 world.spawn(
-  { component: Transform, data: { posZ: 3 } },
+  { component: Transform, data: { pos: [0, 0, 3]} },
   {
     component: Camera,
     data: {

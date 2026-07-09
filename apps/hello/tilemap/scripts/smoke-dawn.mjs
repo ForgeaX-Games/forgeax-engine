@@ -185,7 +185,7 @@ const layer = world
   .unwrap();
 
 world.spawn(
-  { component: Transform, data: { posX: 4, posY: 4, posZ: 8 } },
+  { component: Transform, data: { pos: [4, 4, 8]} },
   { component: Camera, data: { fov: Math.PI / 4, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 } },
 );
 

@@ -258,7 +258,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn(
             {
               component: Transform,
-              data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: Camera,
@@ -298,7 +298,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn(
             {
               component: Transform,
-              data: { posX: 1, posY: 2, posZ: 3, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [1, 2, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: PointLight,
@@ -317,7 +317,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn(
             {
               component: Transform,
-              data: { posX: -2, posY: 0, posZ: 1, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [-2, 0, 1], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: PointLight,
@@ -337,7 +337,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn(
             {
               component: Transform,
-              data: { posX: 0, posY: 5, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [0, 5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: SpotLight,
@@ -440,7 +440,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn(
             {
               component: Transform,
-              data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: Camera,
@@ -477,7 +477,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn(
             {
               component: Transform,
-              data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: Camera,
@@ -500,7 +500,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn(
             {
               component: Transform,
-              data: { posX: 0, posY: 5, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [0, 5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: SpotLight,
@@ -545,7 +545,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn(
             {
               component: Transform,
-              data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: Camera,
@@ -569,7 +569,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn(
             {
               component: Transform,
-              data: { posX: 0, posY: 5, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [0, 5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: SpotLight,
@@ -601,7 +601,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn(
             {
               component: Transform,
-              data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: Camera,
@@ -625,7 +625,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn(
             {
               component: Transform,
-              data: { posX: 0, posY: 5, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [0, 5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: SpotLight,
@@ -667,7 +667,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn(
             {
               component: Transform,
-              data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: Camera,
@@ -687,12 +687,12 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .unwrap();
       }
 
-      function spawnSpot(world: World, posX: number, castShadow: boolean): void {
+      function spawnSpot(world: World, x: number, castShadow: boolean): void {
         world
           .spawn(
             {
               component: Transform,
-              data: { posX, posY: 5, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [x, 5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             {
               component: SpotLight,
@@ -1874,23 +1874,12 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       return { createRenderer: engine.createRenderer, log };
     }
 
-    function identityTransform(): Record<string, number> {
-      return {
-        posX: 0,
-        posY: 0,
-        posZ: 0,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      };
+    function identityTransform(): Record<string, number[]> {
+      return { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] };
     }
 
-    function cameraTransform(): Record<string, number> {
-      return { ...identityTransform(), posZ: 3 };
+    function cameraTransform(): Record<string, number[]> {
+      return { ...identityTransform(), pos: [0, 0, 3] };
     }
 
     function pointLightData(intensity: number): Record<string, number> {
@@ -1946,7 +1935,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           world.spawn(
             {
               component: C.Transform,
-              data: { ...identityTransform(), posX: i },
+              data: { ...identityTransform(), pos: [i, 0, 0] },
             },
             { component: C.PointLight, data: pointLightData(1) },
           );
@@ -1988,7 +1977,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         );
         for (let i = 0; i < 5; i++) {
           world.spawn(
-            { component: C.Transform, data: { ...identityTransform(), posX: i } },
+            { component: C.Transform, data: { ...identityTransform(), pos: [i, 0, 0] } },
             { component: C.SpotLight, data: spotLightData(1) },
           );
         }
@@ -2065,7 +2054,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         );
         for (let i = 0; i < 4; i++) {
           world.spawn(
-            { component: C.Transform, data: { ...identityTransform(), posX: i } },
+            { component: C.Transform, data: { ...identityTransform(), pos: [i, 0, 0] } },
             { component: C.PointLight, data: pointLightData(1) },
           );
         }
@@ -2095,11 +2084,11 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         );
         for (let i = 0; i < 4; i++) {
           world.spawn(
-            { component: C.Transform, data: { ...identityTransform(), posX: i } },
+            { component: C.Transform, data: { ...identityTransform(), pos: [i, 0, 0] } },
             { component: C.PointLight, data: pointLightData(1) },
           );
           world.spawn(
-            { component: C.Transform, data: { ...identityTransform(), posY: i } },
+            { component: C.Transform, data: { ...identityTransform(), pos: [0, i, 0] } },
             { component: C.SpotLight, data: spotLightData(1) },
           );
         }

@@ -24,8 +24,9 @@
 //   - F1 context-limited: BootstrapEntry AI users see the full contract in one screen
 //   - P4 consistent abstraction: single ctx object wraps App/AssetRegistry, world as explicit first param
 
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import type { AssetRegistry, Renderer } from '@forgeax/engine-runtime';
+import type { Renderer } from '@forgeax/engine-runtime';
 import type { SceneAsset } from '@forgeax/engine-types';
 
 import type { App } from './types';

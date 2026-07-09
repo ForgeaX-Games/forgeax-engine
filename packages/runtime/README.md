@@ -26,7 +26,7 @@
 ## Transform: local TRS (you write) + world mat4 (engine derives, you read)
 
 > [!IMPORTANT]
-> **One component, two halves** (feat-20260601-unify-transform-local-global-mat4-drop-globaltrans). `Transform` carries the local TRS you author (`posX/Y/Z`, `quatX/Y/Z/W`, `scaleX/Y/Z` — 10 f32 scalar columns) **plus** a derived `world: array<f32, 16>` resolved world-space mat4 (column-major 16 floats). There is no separate `GlobalTransform` component — it was deleted. The world column is the SSOT for the resolved transform; `propagateTransforms` is its sole writer (root: `world = local`; child: `world = parent.world x local`). AI users **write** the local TRS and **read** the world mat4; never hand-write the world column (propagate overwrites it every frame).
+> **One component, two halves** (feat-20260601-unify-transform-local-global-mat4-drop-globaltrans). `Transform` carries the local TRS you author (`pos: array<f32, 3>`, `quat: array<f32, 4>` in `[x, y, z, w]` order, `scale: array<f32, 3>` — three inline stride-N columns) **plus** a derived `world: array<f32, 16>` resolved world-space mat4 (column-major 16 floats). There is no separate `GlobalTransform` component — it was deleted. The world column is the SSOT for the resolved transform; `propagateTransforms` is its sole writer (root: `world = local`; child: `world = parent.world x local`). AI users **write** the local TRS and **read** the world mat4; never hand-write the world column (propagate overwrites it every frame).
 
 Read the resolved world transform off `Transform.world`, then pull pose out with `@forgeax/engine-math` mat4 helpers — do not reinvent the matrix math:
 
@@ -547,7 +547,7 @@ flowchart LR
 ```ts
 // tonemap defaults to 'none' (TONEMAP_NONE = 0); no HDR, no extra pass.
 world.spawn(
-  { component: Transform, data: { posZ: 3, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0, 3] } },
   { component: Camera,    data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
 ).unwrap();
 ```
@@ -557,7 +557,7 @@ world.spawn(
 ```ts
 import { TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-runtime';
 world.spawn(
-  { component: Transform, data: { posZ: 3, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0, 3] } },
   { component: Camera,    data: {
       fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100,
       tonemap: TONEMAP_REINHARD_EXTENDED, exposure: 1.0, whitePoint: 8.0,
@@ -588,7 +588,7 @@ world.spawn(
 ```ts
 import { Camera, Transform } from '@forgeax/engine-runtime';
 world.spawn(
-  { component: Transform, data: { posZ: 3, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0, 3] } },
   { component: Camera, data: {
       fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100,
       // dark slate background for sprite-alpha-blend visual contrast
@@ -606,14 +606,14 @@ world.spawn(
 ```ts
 // Zero-overhead default (ANTIALIAS_NONE = 0; no extra pass, no allocation).
 world.spawn(
-  { component: Transform, data: { posZ: 3, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0, 3] } },
   { component: Camera,    data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
 ).unwrap();
 
 // FXAA opt-in (1 extra field on Camera):
 import { ANTIALIAS_FXAA } from '@forgeax/engine-runtime';
 world.spawn(
-  { component: Transform, data: { posZ: 3, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0, 3] } },
   {
     component: Camera,
     data: {
@@ -667,7 +667,8 @@ No `registerRuntimeInspector`, Registry, or `wireDefaultInspectors` assembly is 
 
 - **`@forgeax/engine-rhi-webgpu`** — WebGPU 路径注入的薄 shim 实现（M2 引入）。
 - **`@forgeax/engine-rhi`** — 纯接口契约（14 opaque handle + 5 描述符 + 7 主接口）。
-- **`@forgeax/engine-image`** — runtime → image 反向依赖（feat-20260517-vite-plugin-image-build-time-cook M2/M3）。`asset-registry.ts` 的 `parseAssetPayload` `'texture'` arm 通过 `import { parseImage } from '@forgeax/engine-image/parse-image'` 调用 disk decoder SSOT；runtime 不在自家源码内重新实现 PNG/JPG 解码（由 `scripts/check-image-pipeline-isolation.mjs` Path (a) grep gate 守护，supersedes feat-20260515 AC-15a literal grep）。dev HMR / build cook 两条子路径在该 arm 内分流。
+- **`@forgeax/engine-assets-runtime`** — feat-20260705-runtime-tier2-decomposition M1 抽出的 asset 簇（`AssetRegistry` / `LoaderRegistry` / `HANDLE_*` / `resolveAssetHandle` / `wireDefaultLoaders`）。`Renderer.assets` 仍是一个 `AssetRegistry`，由 `createRenderer` 装配（注入 post-spawn hook + audio placeholder loader；M3 D-2 terminal 后 `videoLoader` 由 `wireDefaultLoaders` 静态从 `@forgeax/engine-graphics-extras` import 并内部 wire）。纹理 decode 反向边（→ `@forgeax/engine-image`）随 texture loader 迁入本包：`loaders/upstream-entry.ts` 的 texture arm 读 build-time 导入的 `.bin`（runtime/assets-runtime 都不在源码内重新实现 PNG/JPG 解码；由 `scripts/check-image-pipeline-isolation.mjs` Path (a) grep gate 守护，扫描根 w16 扩为 runtime + assets-runtime 双目录）。
+- **`@forgeax/engine-graphics-extras`** — feat-20260705-runtime-tier2-decomposition M3 抽出的纯逻辑图形附属簇（glyph `layoutGlyphText` / `bakeGlyphMesh`、tile-bits `encodeTileBits` / `decodeTileBits`、video `VideoPlayer` / `VideoElementProvider` / `videoLoader` / `probeVideoHighPerfUpload`）。系统入口 `tilemapChunkExtractSystem` / `glyphTextLayoutSystem` 仍在 runtime，跨包 import 消费这些纯逻辑（AC-302 系统入口留 runtime）。
 
 ## Demo idiom
 
@@ -683,7 +684,7 @@ No `registerRuntimeInspector`, Registry, or `wireDefaultInspectors` assembly is 
 
 ## Built-in mesh handles
 
-Five process-static `Handle<'MeshAsset', 'shared'>` constants occupy reserved builtin ids 1-5 (`< BUILTIN_BASE`), resolved through `BuiltinAssetRegistry` (D-15, never reference-counted), all available as top-level re-exports from `@forgeax/engine-runtime`. Id=4 `HANDLE_SPHERE` was added 2026-05-29 (feat-20260529-fxaa-demo-real-antialiasing-comparison-runtime-tog); id=5 `HANDLE_NINESLICE_QUAD` was added 2026-06-03 (feat-20260527-sprite-nineslice / D-2).
+Five process-static `Handle<'MeshAsset', 'shared'>` constants occupy reserved builtin ids 1-5 (`< BUILTIN_BASE`), resolved through `BuiltinAssetRegistry` (D-15, never reference-counted). feat-20260705-runtime-tier2-decomposition (M1) moved the asset cluster out of runtime: `HANDLE_*` + `AssetRegistry` + `BuiltinAssetRegistry` now live in **`@forgeax/engine-assets-runtime`** — import them from there, not `@forgeax/engine-runtime`. Id=4 `HANDLE_SPHERE` was added 2026-05-29 (feat-20260529-fxaa-demo-real-antialiasing-comparison-runtime-tog); id=5 `HANDLE_NINESLICE_QUAD` was added 2026-06-03 (feat-20260527-sprite-nineslice / D-2).
 
 | Handle | id | Geometry source | Notes |
 |:--|:--|:--|:--|
@@ -696,9 +697,10 @@ Five process-static `Handle<'MeshAsset', 'shared'>` constants occupy reserved bu
 Consume in `MeshFilter.assetHandle`:
 
 ```ts
-import { HANDLE_SPHERE } from '@forgeax/engine-runtime';
+import { HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
+import { MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 world.spawn(
-  { component: Transform, data: { posX: 1, posY: 0, posZ: 0, quatW: 1, scaleX: 0.5, scaleY: 0.5, scaleZ: 0.5 } },
+  { component: Transform, data: { pos: [1, 0, 0], scale: [0.5, 0.5, 0.5] } },
   { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
   { component: MeshRenderer, data: { materials: [matHandle] } },
 ).unwrap();
@@ -743,17 +745,17 @@ const renderer = await createRenderer(canvas);
 const world = new World();
 world.spawn(
   { component: Transform, data: {
-    posX: 0, posY: 0, posZ: 3,
-    quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-    scaleX: 1, scaleY: 1, scaleZ: 1,
+    pos: [0, 0, 3],
+    quat: [0, 0, 0, 1],
+    scale: [1, 1, 1],
   } },
   { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
 ).unwrap();
 world.spawn(
   { component: Transform, data: {
-    posX: 0, posY: 0, posZ: 0,
-    quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-    scaleX: 1, scaleY: 1, scaleZ: 1,
+    pos: [0, 0, 0],
+    quat: [0, 0, 0, 1],
+    scale: [1, 1, 1],
   } },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: {
@@ -795,7 +797,7 @@ import {
 
 | Component | 字段（SoA f32 / ref 列） | 默认 / 缺省回退 |
 |:--|:--|:--|
-| `Transform` | `posX/Y/Z + quatX/Y/Z/W + scaleX/Y/Z`（10 f32） | pos=`[0,0,0]` / quat=identity / scale=`[1,1,1]`（缺 → 默认） |
+| `Transform` | `pos: array<f32,3> + quat: array<f32,4>（[x,y,z,w]）+ scale: array<f32,3>` | pos=`[0,0,0]` / quat=identity / scale=`[1,1,1]`（缺 → 默认） |
 | `MeshFilter` | `assetHandle: ref` (u32) | 必填；未注册 → fire onError + skip entity |
 | `MeshRenderer` | `materials: array<shared<MaterialAsset>>`（spawn payload 是 `Partial<ShapeOf<S>>`，字段可省略；feat-20260608 M2 / w7 multi-material array：positional `materials[i]` ↔ `MeshAsset.submeshes[i]`；feat-20260614 handle->shared rename） | `materials` undefined / 空数组 → `defaultMaterialSnapshot()` mid-grey unlit（D-Q7 case B，no onError）；`materials.length !== submeshes.length` → fire `AssetError 'mesh-renderer-material-count-mismatch'` + entity skip（feat-20260608 M2 / w11）；`materials[i]` 非零但未注册 → fire `RhiError 'asset-not-registered'` + entity skip（D-Q7 case C） |
 | `Camera` | `fov + aspect + near + far + clearR/G/B/A + tonemap + exposure + whitePoint + antialias + bloom* + ...`（projection + clear + tonemap + AA + bloom 字段族） | spawn 时显式给（不自动）；clear 默认 `[0, 0, 0, 1]`；详见 §Camera clear color + §Anti-Aliasing 子章节 |
@@ -897,7 +899,7 @@ if (!r.ok) {
 renderer.onError((err) => {
   switch (err.code) {
     case 'render-system-no-camera':
-      console.warn(err.hint); // 'world.spawn({ component: Transform, data: { posX, ... } }, { component: Camera, data: { fov, aspect, near, far } }) before renderer.draw([world], { owner: 0 })'
+      console.warn(err.hint); // 'world.spawn({ component: Transform, data: { pos: [x, y, z], ... } }, { component: Camera, data: { fov, aspect, near, far } }) before renderer.draw([world], { owner: 0 })'
       break;
     case 'render-system-empty-worlds':
       console.warn(err.hint); // 'pass at least one world: draw([world], { owner: 0 })'
@@ -1033,112 +1035,6 @@ world.spawn({ component: DirectionalLight, data: {
 } }).unwrap();
 ```
 
-## Picking（屏幕 → 实体拾取）
-
-> feat-20260529-picking-raycasting-screen-to-entity — 屏幕坐标反投影 + ray-AABB 拾取，对标 Three.js `Raycaster`。AABB 粒度 MVP（逐三角形精化为后续）。
-
-**第一跳 — 一行拿命中实体：**
-
-```ts
-import { pick } from '@forgeax/engine-runtime';
-
-canvas.addEventListener('click', (e) => {
-  const rect = canvas.getBoundingClientRect();
-  const hit = pick(
-    world, renderer.assets, cameraEntity,
-    e.clientX - rect.left, e.clientY - rect.top,
-    canvas.width, canvas.height,
-  );
-  if (hit) world.set(hit.entity, MeshRenderer, { materials: [highlightHandle] });
-});
-```
-
-**第二跳 — 签名与返回：** `pick(world, assets, cameraEntity, screenX, screenY, viewportWidth, viewportHeight) → PickHit | undefined`。`assets` 取自 `renderer.assets`（拾取需 `MeshAsset.aabb`，仅 `AssetRegistry` 持有）；`screenX/Y` 为 viewport-relative、y-down、左上原点像素坐标。返回最近命中的 `PickHit { entity, point, distance }`（`point` 是射线进入 AABB 的世界坐标），未命中返回 `undefined`。相机 `perspective` / `orthographic` 两种 projection 均支持。
-
-**第三跳 — 精度 / 过滤 / 错误：**
-- **AABB 粒度**：射线穿过实体 AABB 但未击中实际几何体时仍返回 hit（已知 MVP 取舍）；`PickHit` 因此不含 `face` / `uv` / `normal`。
-- **拾取范围**：所有带有效 `MeshAsset.aabb` 的 mesh 实体均可被拾取；无 opt-out（拾取范围由 `MeshFilter` + AABB 决定，非逐实体开关）。
-- **结构化错误**：`cameraEntity` 缺 `Camera` 组件 → 抛 `PickError`（`.code='camera-component-missing'` + `.expected` + `.hint` + `.detail.cameraEntity`，闭合 `PickErrorCode`）；常态 miss 走 `undefined` 与错误信道物理分离（charter P3）。
-- **math 层原语**（高级组装）：`ray.*`（`rayAabbIntersects(ray, box3) → {hit, tmin}`）+ `mat4.unproject` + `screenToRay(out, sx, sy, vpW, vpH, view, proj, kind)`，全 `@forgeax/engine-math` 导出、纯函数 out-param 风格。
-
-可见验收：`apps/hello/picking`（点击立方体高亮）+ structural-only dawn-node smoke（断言 `pick` 返回预期 entity + miss undefined）。
-
-## Vertex Picking（屏幕 → 最近顶点查询）
-
-> feat-20260630-vertex-snapping-picking — 逐三角形顶点查询，对标编辑器顶点吸附工作流。引擎只查询，不编辑——吸附位移计算、gizmo、拖拽交互全部留在编辑器侧。
-
-**第一跳 — 一行拿到命中顶点：**
-
-```ts
-import { pickVertexOnEntity, type VertexHit } from '@forgeax/engine-runtime';
-
-// Single-entity query (adsorption step 1: find the source vertex)
-// NOTE: throws PickError only if cameraEntity has no Camera component (see error
-// table below). If cameraEntity is guaranteed valid, call directly; otherwise wrap
-// in try-catch. A normal miss is NOT an error — it returns undefined.
-const hit = pickVertexOnEntity(world, cameraEntity, screenX, screenY, vpW, vpH, entity);
-if (hit) {
-  // hit.worldPos: world-space position of the nearest vertex (Vec3Like)
-  // hit.vertexIndex: index into the vertex position buffer
-  // hit.screenDist: screen-space pixel distance from query point (non-negative)
-  // hit.worldDist: perpendicular 3D distance from vertex to pick ray (non-negative)
-  // hit.deformed: true when mesh is skinned (rest-pose worldPos, see below)
-}
-```
-
-**第二跳 — 全场景查询 + 多候选模式：**
-
-```ts
-import { pickVertex } from '@forgeax/engine-runtime';
-
-// Full-scene query (adsorption step 2: find target vertex anywhere)
-const nearest = pickVertex(world, cameraEntity, screenX, screenY, vpW, vpH);
-if (nearest) { /* globally nearest VertexHit | undefined */ }
-
-// Multi-candidate mode: return up to N candidates sorted by screenDist ascending
-const candidates = pickVertex(world, cameraEntity, screenX, screenY, vpW, vpH, { limit: 5 });
-// candidates: VertexHit[] — empty array on miss; limit > available returns all hits
-```
-
-**第三跳 — 签名与返回：**
-
-| 函数 | 签名 | 返回 |
-|:--|:--|:--|
-| `pickVertexOnEntity` | `(world, cameraEntity, screenX, screenY, vpW, vpH, entity, options?)` | Without `options`: `VertexHit \| undefined` |
-| `pickVertexOnEntity` | `(world, cameraEntity, screenX, screenY, vpW, vpH, entity, { limit })` | `VertexHit[]` (sorted by `screenDist` asc, empty on miss) |
-| `pickVertex` | `(world, cameraEntity, screenX, screenY, vpW, vpH, options?)` | Without `options`: `VertexHit \| undefined` |
-| `pickVertex` | `(world, cameraEntity, screenX, screenY, vpW, vpH, { limit })` | `VertexHit[]` (globally sorted by `screenDist` asc, empty on miss) |
-
-`VertexHit` 字段表：
-
-| 字段 | 类型 | 语义 |
-|:--|:--|:--|
-| `entity` | `EntityHandle` | 命中实体，调用方据此 `world.get(entity, Transform)` 读取变换 |
-| `vertexIndex` | `number` | 顶点位置 buffer 索引（0-based），用于定位到具体顶点 |
-| `worldPos` | `Vec3Like` | 顶点世界空间坐标（`[x, y, z]` 或 `Float32Array` 三元组；D-7：用 `Vec3Like` 而非 branded `Vec3`，与 `PickHit.point` 同构） |
-| `screenDist` | `number` | 屏幕空间投影的像素距离（非负），到查询屏幕坐标的欧氏距离 |
-| `worldDist` | `number` | 顶点世界位置到拾取射线的最短 3D 垂直距离（非负；点到射线正交对偶——屏幕 vs 世界距离并存） |
-| `deformed` | `boolean` | `true` 当 mesh 有 skinIndex 与 skinWeight 双属性（skinned mesh）；此时 `worldPos` 是 **rest-pose** 经 `Transform.world` 变换的位置，**不反映 GPU skinning 变形**（OOS-3）。静态 mesh 为 `false` |
-
-**中段细节 — 排序语义、退化策略、propagate 前置：**
-
-- **排序语义**（AC-04/AC-05）：无 `{ limit }` 时返回 `screenDist` 最小的单个顶点。传 `{ limit }` 时返回按 `screenDist` 升序排列的 `VertexHit[]`。每条 `VertexHit` 同时携带 `screenDist`（屏幕像素距离）与 `worldDist`（点到射线 3D 垂距），形成"屏幕 / 世界"正交对偶——调用方按需择一排序或加权。**屏幕外但相机前方**的顶点（`onScreen: false, behind: false`）**纳入候选**——吸附操作可能想吸刚出屏幕边缘的顶点；behind-camera 顶点（`worldToScreen` 返回 `behind=true`）**被排除**。
-- **退化策略**（AC-09）：(1) `triangle-strip` / `line-list` / `line-strip` / `point-list` 拓扑 submesh **被跳过**不参与三角求交（不崩溃、不报错、不近似）；(2) 无 index buffer 的 mesh **锁定为非索引三角序列**处理——每连续 3 顶点构成一面，对齐 WebGPU `draw` 非索引语义；(3) `Uint16Array` 或 `undefined` 的 position 属性——该 mesh **被跳过**（照搬 `computeAABB` 三分支：`Float32Array` 直用、`ArrayBuffer` 转 `new Float32Array(buf)`、其余跳过）；(4) `NaN` / `Inf` 顶点坐标 **被排除**不污染排序；(5) 空网格（0 顶点 / 0 三角）→ 返回 `undefined` 或空数组。
-- **builtin mesh 降级**（AC-07）：builtin mesh（`CUBE` / `TRIANGLE` / `QUAD` / `SPHERE` / `NINESLICE_QUAD`）无 AABB，AABB 粗筛缺失时**降级逐顶点遍历**——不依赖 `feat-20260618` 的合入时序。
-- **`deformed` 语义声明**（AC-08）：`deformed === true` 当且仅当 mesh 的 `attributes.skinIndex` 与 `attributes.skinWeight` **双存在**（判据 SSOT：`asset-registry.ts:1417`）。此时 `worldPos` 是 rest-pose 经 `Transform.world` 变换的位置，**不反映 GPU skinning 变形**。引擎当前无 morph 数据源（gltf importer 拒绝 morph），故不会出现 morph deformed 顶点。
-- **propagateTransforms 前置契约**（D-9）：调用 `pickVertexOnEntity` / `pickVertex` 前，`propagateTransforms(world)` 必须已跑当前帧——函数内部直接读 `Transform.world` 列主序 mat4，不触发重新传布。此契约与 `pick()` **完全同构**（`pick.ts:26-32`）。
-
-**末尾兜底 — 错误 code 表：**
-
-`PickError` 从同一入口导出：`import { PickError } from '@forgeax/engine-runtime';`，按 `err.code` 穷举分支。
-
-| `PickError.code` | 触发条件 | 语义 |
-|:--|:--|:--|
-| `'camera-component-missing'` | `cameraEntity` 无 `Camera` 组件 | **不可恢复**（throw）；`.hint` 引导 AI 用户排查 Camera spawn；`.detail.cameraEntity` 标明参数 |
-| 无命中 / 空白 mesh / 顶点缺失 / 降级拓扑 | — | **可恢复**：返回 `undefined` 或空数组（与 `pick()` 一致——错误信道与 miss 物理分离，charter P3） |
-
-**零新 error code**（D-8）：`pickVertex*` 复用 `PickError` 的单成员 closed-union。唯一 throw 路径仍是 `camera-component-missing`——所有顶点缺失/空白/降级场景均是可恢复 miss，走 `undefined` / `[]` 而非 throw，让批量吸附查询循环不被单次 miss 打断。
-
 ## Transforms
 
 > feat-20260601-unify-transform-local-global-mat4-drop-globaltrans — `Transform` = local TRS (10 f32 scalar columns) + derived `world: array<f32, 16>` mat4. `GlobalTransform` is deleted; see [§Transform: local TRS + world mat4](#transform-local-trs-you-write--world-mat4-engine-derives-you-read) at the top for the read/write contract + math helpers.
@@ -1152,7 +1048,7 @@ const candidates = pickVertex(world, cameraEntity, screenX, screenY, vpW, vpH, {
 ```ts
 import { Transform } from '@forgeax/engine-runtime';
 import { mat4, vec3 } from '@forgeax/engine-math';
-const e = world.spawn({ component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } }).unwrap();
+const e = world.spawn({ component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } }).unwrap();
 world.update(); // runs propagateTransforms; fills Transform.world
 const worldMat = world.get(e, Transform).unwrap().world; // Float32Array(16), column-major
 const worldPos = mat4.getTranslation(vec3.create(), worldMat);
@@ -1308,7 +1204,7 @@ palette `M_i` **已是完整世界变换**——shader 端不额外左乘 `meshe
 | Component | 强制依赖 | schema fields | first-slice cap | 备注 |
 |:--|:--|:--|:--|:--|
 | `DirectionalLight` | — (世界空间方向，不依赖 entity Transform) | `directionX/Y/Z: f32` (outgoing direction，host upload 原值，shader 内部取负成 L) + `colorR/G/B: f32` + `intensity: f32` | N≤1 | feat-20260518 既有；direction 缺省 `(0, -1, 0)` |
-| `PointLight` | **必须搭配 `Transform`**（位置由 Transform 决定） | `colorR/G/B: f32` + `intensity: f32` + `range: f32` | N≤4 | `range` 缺省 `Infinity`（host 计算 `1 / range²`，`Infinity` 时为 0 → 无距离衰减）；位置取自伴生 `Transform.posX/Y/Z` |
+| `PointLight` | **必须搭配 `Transform`**（位置由 Transform 决定） | `colorR/G/B: f32` + `intensity: f32` + `range: f32` | N≤4 | `range` 缺省 `Infinity`（host 计算 `1 / range²`，`Infinity` 时为 0 → 无距离衰减）；位置取自伴生 `Transform.pos` |
 | `SpotLight` | **必须搭配 `Transform`**（位置 + 方向均依赖 entity Transform） | `directionX/Y/Z: f32` (本地空间方向；spawn-time fail-fast 校验) + `colorR/G/B: f32` + `intensity: f32` + `range: f32` + `innerConeDeg: f32` + `outerConeDeg: f32` | N≤4 | `innerConeDeg ≤ outerConeDeg` 且 `outerConeDeg < 90` 必须满足（spawn-time `'spawn-light-invalid-bounds'`）；`range` 缺省 `Infinity`；cone 单位 **度（deg）**，host 侧 `degToCos(deg)` 转换 |
 | `Skylight` | — (环境光照，不依赖 entity Transform) | `equirect?: handle<EquirectAsset>`（`loadByGuid<EquirectAsset>` 得；可选，省略=纯色环境光）+ `intensity: f32` | N≤1 | feat-20260520 新增、feat-20260630 改 equirect kind；单组件激活完整 IBL pipeline（diffuse irradiance + specular prefilter + BRDF LUT）；equirect→cubemap 投影 + IBL 预计算引擎内部懒触发（用户不调上传 API）；`intensity` 缺省 `1.0`；多 Skylight 时取首个 archetype hit + warn（含 entity handle）；0-light 三条件合取中 Skylight 是合法光源 |
 
@@ -1332,17 +1228,13 @@ world.spawn({
 
 // PointLight（必须搭配 Transform；range 缺省 Infinity）
 world.spawn(
-  { component: Transform, data: { posX: 2, posY: 3, posZ: 0,
-                                  quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-                                  scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [2, 3, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
   { component: PointLight, data: { colorR: 1, colorG: 0.6, colorB: 0.4, intensity: 5, range: 10 } },
 ).unwrap();
 
 // SpotLight（Transform + 方向 + 锥角）
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 5, posZ: 0,
-                                  quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-                                  scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
   { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0,
                                    colorR: 1, colorG: 1, colorB: 1, intensity: 8,
                                    range: 15, innerConeDeg: 12, outerConeDeg: 25 } },
@@ -1687,7 +1579,7 @@ const outer = {
     memberFirst: 2,     // child window starts at slot 2
     memberCount: 1,     // child has totalSlots = 1
     overrides: [
-      { localId: 2, comp: 'Transform', field: 'posX', value: 1.0 },
+      { localId: 2, comp: 'Transform', field: 'pos', value: [1.0, 0, 0] },
       // localId=2 lives in the parent namespace (memberFirst+0).
     ],
   }],
@@ -1723,7 +1615,7 @@ Test coverage: `packages/ecs/src/__tests__/scene-instantiate.test.ts`
 
 ### `world.set` vs `setSceneOverride` — the two ECS write paths
 
-| | `world.set(member, Transform, {posX: 9})` | `world.setSceneOverride(root, member, Transform, 'posX', 9)` |
+| | `world.set(member, Transform, {pos: [9, 0, 0]})` | `world.setSceneOverride(root, member, Transform, 'pos', [9, 0, 0])` |
 |:--|:--|:--|
 | Writes ECS column | yes | yes |
 | Records in `state.overrides` | no | yes |
@@ -2203,8 +2095,8 @@ The pre-refactor sprite material declared a sibling shape (`shadingModel:'sprite
 | Component | Schema | Role |
 |:--|:--|:--|
 | `Tilemap` | `cols / rows: u32`, `tileSizeX / tileSizeY: f32`, `tileset: handle<TilesetAsset>`, `chunkSize: u32` | Parent entity carrying the grid dimensions + tileset reference. One per scene typically. |
-| `TileLayer` | `tiles: array<u32>`, `layerOrder: i32`, `dirty: u8` | Child entity (via `ChildOf parent=<tilemapEntity>`) carrying one dense `cols * rows` cell sheet. Cell value 0 = empty; non-zero encodes tile id + flip bits via `encodeTileBits(id, flipH, flipV, flipDiagonal, flipHex120)`. |
-| `pickTile(world, tilemapEntity, worldX, worldY)` | helper | Returns `{ layerEntity, cellX, cellY, tileId } | null` for the topmost non-zero cell at a world coordinate. |
+| `TileLayer` | `tiles: array<u32>`, `layerOrder: i32`, `dirty: u8` | Child entity (via `ChildOf parent=<tilemapEntity>`) carrying one dense `cols * rows` cell sheet. Cell value 0 = empty; non-zero encodes tile id + flip bits via `encodeTileBits(id, flipH, flipV, flipDiagonal, flipHex120)` — import `encodeTileBits` / `decodeTileBits` from `@forgeax/engine-graphics-extras` (moved out of runtime in feat-20260705; the `tilemapChunkExtractSystem` that consumes them stays here). |
+| `pickTile(world, tilemapEntity, worldX, worldY)` | helper (moved to `@forgeax/engine-picking`) | Returns `{ layerEntity, cellX, cellY, tileId } | null` for the topmost non-zero cell at a world coordinate. Import from `@forgeax/engine-picking` (extracted from runtime in feat-20260705). |
 
 `TileLayer.tiles[cell]` encodes `tileId + 1` (engine reads
 `tileset.tiles[(value) - 1]`); cell value `0` is the empty-cell
@@ -2412,9 +2304,9 @@ themselves at import time.
 
 | Constant | Value | Formula | Use case |
 |:--|:--|:--|:--|
-| `TRANSPARENT_SORT_MODE_LAYER_Z` | 0 | `posZ` | Side-scroller horizontal |
-| `TRANSPARENT_SORT_MODE_LAYER_Y` | 1 | `-(posY - pivotY * sizeY)` | Top-down JRPG |
-| `TRANSPARENT_SORT_MODE_LAYER_YZ` | 2 | `(posY - pivotY * sizeY) + yzAlpha * posZ` | Isometric / Don't Starve |
+| `TRANSPARENT_SORT_MODE_LAYER_Z` | 0 | `pos` z | Side-scroller horizontal |
+| `TRANSPARENT_SORT_MODE_LAYER_Y` | 1 | `-(pos y - pivotY * sizeY)` | Top-down JRPG |
+| `TRANSPARENT_SORT_MODE_LAYER_YZ` | 2 | `(pos y - pivotY * sizeY) + yzAlpha * pos z` | Isometric / Don't Starve |
 | `TRANSPARENT_SORT_MODE_DISTANCE` | 3 | `-dist^2` from camera | 3D back-to-front (far first) |
 
 ### Usage
@@ -2453,7 +2345,7 @@ setTransparentSortConfig(world, { mode: TRANSPARENT_SORT_MODE_DISTANCE });
 | 来源 | 触发 | ECS 可见？ | 观测信号 |
 |:--|:--|:--|:--|
 | Source 1（显式手挂） | AI 用户主动 `world.set(e, Instances, { transforms })` | 是（`world.get(e, Instances)` 取回原 payload） | 该 entity 的 ECS row |
-| Source 2（引擎透明折叠） | record-stage 把同 `(Layer.value, posZ, materialHandle)` 桶折成 1 instanced draw | **否**（不回写 `Instances` 组件，使用内部 transient buffer） | `renderer.metrics.snapshot()['render.instancing.foldedDraws']` 计数；超 cap 时 `RhiError 'instancing-exceeds-uniform-cap'` |
+| Source 2（引擎透明折叠） | record-stage 把同 `(Layer.value, pos z, materialHandle)` 桶折成 1 instanced draw | **否**（不回写 `Instances` 组件，使用内部 transient buffer） | `renderer.metrics.snapshot()['render.instancing.foldedDraws']` 计数；超 cap 时 `RhiError 'instancing-exceeds-uniform-cap'` |
 
 grep 入口（源即 SSOT）：
 

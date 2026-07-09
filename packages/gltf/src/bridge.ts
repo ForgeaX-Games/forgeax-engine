@@ -440,16 +440,19 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
   const pushLocalTransform = (
     transform: import('./transform.js').DecomposedTransform,
   ): Record<string, unknown> => ({
-    posX: transform.translation[0] ?? 0,
-    posY: transform.translation[1] ?? 0,
-    posZ: transform.translation[2] ?? 0,
-    quatX: transform.rotation[0] ?? 0,
-    quatY: transform.rotation[1] ?? 0,
-    quatZ: transform.rotation[2] ?? 0,
-    quatW: transform.rotation[3] ?? 1,
-    scaleX: transform.scale[0] ?? 1,
-    scaleY: transform.scale[1] ?? 1,
-    scaleZ: transform.scale[2] ?? 1,
+    pos: [
+      transform.translation[0] ?? 0,
+      transform.translation[1] ?? 0,
+      transform.translation[2] ?? 0,
+    ],
+    // Quaternion component order [x, y, z, w] (glTF-aligned; E6).
+    quat: [
+      transform.rotation[0] ?? 0,
+      transform.rotation[1] ?? 0,
+      transform.rotation[2] ?? 0,
+      transform.rotation[3] ?? 1,
+    ],
+    scale: [transform.scale[0] ?? 1, transform.scale[1] ?? 1, transform.scale[2] ?? 1],
   });
 
   const visit = (gltfNodeIdx: number, parentLocalIdx: number | null): void => {

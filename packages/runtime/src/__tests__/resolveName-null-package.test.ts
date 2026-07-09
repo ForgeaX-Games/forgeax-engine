@@ -6,11 +6,10 @@
 //   AC-03 — no-package asset: packageOf(guid) === null, resolveName returns the
 //           stored self name, and no synthetic guid path is minted (OOS-3).
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { SamplerAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const NO_PKG_GUID = 'b0000000-0000-4000-b000-000000000001';

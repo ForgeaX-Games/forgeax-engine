@@ -29,16 +29,9 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 
 function identityTransformData() {
   return {
-    posX: 0,
-    posY: 0,
-    posZ: 0,
-    quatX: 0,
-    quatY: 0,
-    quatZ: 0,
-    quatW: 1,
-    scaleX: 1,
-    scaleY: 1,
-    scaleZ: 1,
+    pos: [0, 0, 0],
+    quat: [0, 0, 0, 1],
+    scale: [1, 1, 1],
   };
 }
 
@@ -61,16 +54,9 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
       .spawn({
         component: Transform,
         data: {
-          posX: 3,
-          posY: 4,
-          posZ: 5,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 2,
-          scaleY: 2,
-          scaleZ: 2,
+          pos: [3, 4, 5],
+          quat: [0, 0, 0, 1],
+          scale: [2, 2, 2],
         },
       })
       .unwrap();
@@ -91,16 +77,9 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
       .spawn({
         component: Transform,
         data: {
-          posX: 10,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [10, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       })
       .unwrap();
@@ -109,16 +88,9 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
         {
           component: Transform,
           data: {
-            posX: 2,
-            posY: 3,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [2, 3, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
         { component: ChildOf, data: { parent: root } },
@@ -143,16 +115,9 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
       .spawn({
         component: Transform,
         data: {
-          posX: 1,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [1, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       })
       .unwrap();
@@ -161,16 +126,9 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
         {
           component: Transform,
           data: {
-            posX: 2,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [2, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
         { component: ChildOf, data: { parent: root } },
@@ -181,16 +139,9 @@ describe('propagate-transforms.dawn - root-down DFS + stale ChildOf fail-fast (A
         {
           component: Transform,
           data: {
-            posX: 4,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [4, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
         { component: ChildOf, data: { parent: mid } },

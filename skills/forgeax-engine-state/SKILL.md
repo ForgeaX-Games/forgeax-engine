@@ -65,7 +65,8 @@ flowchart TD
 ```ts
 import { createApp } from '@forgeax/engine-app';
 import { defineState, setNextState, getState, despawnOnExit, OnEnter, addOnEnter, inState } from '@forgeax/engine-state';
-import { defineSystem, Transform, MeshFilter, MeshRenderer, Camera, DirectionalLight, HANDLE_CUBE } from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { defineSystem, Transform, MeshFilter, MeshRenderer, Camera, DirectionalLight } from '@forgeax/engine-runtime';
 
 // 1) Define state machines at module level
 export const LevelId = defineState('LevelId', ['main-menu', 'tutorial', 'street-a'] as const);
@@ -81,7 +82,7 @@ const world = res.value.world;
 // 2) Spawn level-scoped entities
 function spawnTutorial(world: World): void {
   const e = world.spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+    { component: Transform, data: { pos: [0, 0, 0] } },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   ).unwrap();
   despawnOnExit(world, e, LevelId, 'tutorial');

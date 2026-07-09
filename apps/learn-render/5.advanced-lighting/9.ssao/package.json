@@ -42,6 +42,7 @@
   "dependencies": {
     "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-gltf": "workspace:*",
     "@forgeax/engine-image": "workspace:*",

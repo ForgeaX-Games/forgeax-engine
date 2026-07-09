@@ -6,15 +6,16 @@
 //   m3-t2: registry.instantiate with mounts overload
 //   m3-t3: cyclic mount fail-fast
 
+import type { Asset } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, err, ok, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset, SceneInstanceMount } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import type { Asset } from '../asset-registry';
-import { AssetRegistry } from '../asset-registry';
 import { serializeSceneAssetToPack } from '../collect-scene-asset';
+import '../components';
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { SceneInstance } from '../components/scene-instance';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -130,7 +131,7 @@ describe('m3-t1 — serialize<->parse mounts symmetry round-trip', () => {
     ];
     const scene: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 1 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
       mounts,
     };
 
@@ -212,7 +213,7 @@ describe('m3-t1 — serialize<->parse mounts symmetry round-trip', () => {
 
     const scene: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 1 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
     };
     const serResBackcompat = serializeSceneAssetToPack(scene, G3);
     expect(serResBackcompat.ok).toBe(true);
@@ -289,8 +290,8 @@ describe('m3-t2 — registry.instantiate with mounts overload', () => {
     const child: SceneAsset = {
       kind: 'scene',
       entities: [
-        { localId: 0 as never, components: { Transform: { posX: 1 } } },
-        { localId: 1 as never, components: { Transform: { posX: 2 } } },
+        { localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } },
+        { localId: 1 as never, components: { Transform: { pos: [2, 0, 0] } } },
       ],
     };
     cat(reg, G1, child);
@@ -299,7 +300,7 @@ describe('m3-t2 — registry.instantiate with mounts overload', () => {
     // Parent scene: one owned entity + mount referencing child.
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 10 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,
@@ -349,7 +350,7 @@ describe('m3-t2 — registry.instantiate with mounts overload', () => {
     // Step 1: Catalog child scene.
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 5 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [5, 0, 0] } } }],
     };
     cat(reg, G1, child);
     const ch = rs(w, child);
@@ -357,7 +358,7 @@ describe('m3-t2 — registry.instantiate with mounts overload', () => {
     // Step 2: Build parent with mount -> catalog.
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 100 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [100, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,

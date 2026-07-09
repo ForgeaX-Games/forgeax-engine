@@ -49,6 +49,7 @@
 //   - plan-strategy §5.3 D2 test points
 
 import { Entity, type EntityHandle, World } from '@forgeax/engine-ecs';
+import { encodeTileBits } from '@forgeax/engine-graphics-extras';
 import { frustum, mat4 } from '@forgeax/engine-math';
 import { type TilesetAsset, type TilesetTileEntry, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -62,7 +63,6 @@ import {
   Transform,
 } from '../components';
 import { propagateTransforms } from '../systems/propagate-transforms';
-import { encodeTileBits } from '../tile-bits';
 import {
   computeChunkStreamBounds,
   resetTilemapChunkExtractCache,
@@ -154,7 +154,7 @@ function makeOverhangScene(opts: OverhangSceneOpts = {}): Scene {
   // depth range.
   const cameraEntity = world
     .spawn(
-      { component: Transform, data: { posX: CAMERA_POS, posZ: 5 } },
+      { component: Transform, data: { pos: [CAMERA_POS, 0, 5] } },
       {
         component: Camera,
         data: {

@@ -26,15 +26,8 @@ import { createApp } from '@forgeax/engine-app';
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { Entity, World } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
-import {
-  Camera,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  MeshFilter,
-  MeshRenderer,
-  PointLight,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, EngineEnvironmentError, MeshFilter, MeshRenderer, PointLight, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
@@ -150,10 +143,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: 0, posY: 0, posZ: 0,
-          quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-          scaleX: 1, scaleY: 1, scaleZ: 1,
-        },
+          pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [objectMatHandle] } },
@@ -171,10 +161,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: LIGHT_POS_X, posY: LIGHT_POS_Y, posZ: LIGHT_POS_Z,
-          quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-          scaleX: LAMP_SCALE, scaleY: LAMP_SCALE, scaleZ: LAMP_SCALE,
-        },
+          pos: [LIGHT_POS_X, LIGHT_POS_Y, LIGHT_POS_Z], quat: [0, 0, 0, 1], scale: [LAMP_SCALE, LAMP_SCALE, LAMP_SCALE],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [lampMatHandle] } },
@@ -213,10 +200,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0, posY: 0, posZ: CAMERA_POS_Z,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [0, 0, CAMERA_POS_Z], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     {
       component: Camera,

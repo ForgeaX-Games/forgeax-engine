@@ -12,12 +12,12 @@
 // shadow-atlas state and device-lost crashes from prior A/B rounds cannot
 // contaminate the current comparison.
 
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   Instances,
   MeshFilter,
   MeshRenderer,
@@ -130,16 +130,9 @@ function spawnScene(
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 5,
-        posZ: 5,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 8,
-        scaleY: 0.1,
-        scaleZ: 8,
+        pos: [0, 5, 5],
+        quat: [0, 0, 0, 1],
+        scale: [8, 0.1, 8],
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -149,16 +142,9 @@ function spawnScene(
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 8,
-        posZ: 16,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
+        pos: [0, 8, 16],
+        quat: [0, 0, 0, 1],
+        scale: [1, 1, 1],
       },
     },
     {
@@ -197,16 +183,9 @@ function spawnScene(
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 7,
-        posZ: 5,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 0.5,
-        scaleY: 0.5,
-        scaleZ: 0.5,
+        pos: [0, 7, 5],
+        quat: [0, 0, 0, 1],
+        scale: [0.5, 0.5, 0.5],
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },

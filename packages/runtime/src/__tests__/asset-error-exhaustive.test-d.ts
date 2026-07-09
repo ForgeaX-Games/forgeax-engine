@@ -2,7 +2,7 @@
 // exhaustive type-level regression guard (see render-error-exhaustive.test-d.ts
 // header for the shared pattern rationale).
 
-import type { AssetRuntimeError, AssetRuntimeErrorCode } from '../errors/asset';
+import type { AssetRuntimeError, AssetRuntimeErrorCode } from '@forgeax/engine-assets-runtime';
 
 function exhaustiveSwitchOnAssetCode(code: AssetRuntimeErrorCode): string {
   switch (code) {

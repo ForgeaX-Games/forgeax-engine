@@ -85,16 +85,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // dropped in the extract stage, so the culling stat stays observably active.
   for (let ix = 0; ix < GRID_SIZE; ix++) {
     for (let iz = 0; iz < GRID_SIZE; iz++) {
-      const posX = (ix - (GRID_SIZE - 1) / 2) * GRID_SPACING;
-      const posZ = (iz - (GRID_SIZE - 1) / 2) * GRID_SPACING;
+      const gx = (ix - (GRID_SIZE - 1) / 2) * GRID_SPACING;
+      const gz = (iz - (GRID_SIZE - 1) / 2) * GRID_SPACING;
       world.spawn(
         {
           component: Transform,
           data: {
-            posX, posY: 0, posZ,
-            quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-            scaleX: 0.7, scaleY: 0.7, scaleZ: 0.7,
-          },
+            pos: [gx, 0, gz],
+            quat: [0, 0, 0, 1], scale: [0.7, 0.7, 0.7],},
         },
         { component: MeshFilter, data: { assetHandle: cubeHandle } },
         { component: MeshRenderer, data: { materials: [] } },
@@ -107,10 +105,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0, posY: 4, posZ: 6,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [0, 4, 6], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     {
       component: Camera,
@@ -127,10 +122,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
     // Orbit camera around the grid
     world.set(cameraEntity, Transform, {
-      posX: camX, posY: 4, posZ: camZ,
-      quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-      scaleX: 1, scaleY: 1, scaleZ: 1,
-    });
+      pos: [camX, 4, camZ], quat: [0, 0, 0, 1], scale: [1, 1, 1],});
 
     const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error('[culling] draw error:', r.error);

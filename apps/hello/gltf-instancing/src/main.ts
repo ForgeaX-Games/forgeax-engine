@@ -14,12 +14,8 @@
 import { World } from '@forgeax/engine-ecs';
 import { gltfDocToSceneAsset, type GltfMaterialIr, type GltfMeshIr, parseGltf } from '@forgeax/engine-gltf';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  acquireCanvasContext,
-  createRenderer,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import {
   type MaterialAsset,
   type MeshAsset,

@@ -30,13 +30,13 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { packMeshBin } from '@forgeax/engine-import';
+import { pick } from '@forgeax/engine-picking';
 import {
   Camera,
   Materials,
   MeshFilter,
   MeshRenderer,
   perspective,
-  pick,
   Transform,
 } from '@forgeax/engine-runtime';
 import type {

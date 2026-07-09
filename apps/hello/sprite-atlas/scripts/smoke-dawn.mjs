@@ -26,7 +26,7 @@
 //
 // Metric semantics (foldedDraws):
 //   The counter increments once per fold-eligible head bucket per frame.
-//   With 10000 entities sharing one (Layer.value, posZ, materialHandle)
+//   With 10000 entities sharing one (Layer.value, pos z, materialHandle)
 //   triple we expect exactly 1 head bucket per frame -> after N frames the
 //   counter value is N. The smoke reads it post-loop and asserts
 //   value == drawCallCount (each rendered frame contributes exactly 1).
@@ -207,13 +207,15 @@ const enginePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
   createRenderer,
-  HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
   SpriteRegionOverride,
   SPRITE_PREMULTIPLIED_ALPHA_BLEND,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_QUAD,
+} = await import('@forgeax/engine-assets-runtime');
 
 const CAMERA_PROJECTION_ORTHOGRAPHIC = 1;
 
@@ -308,10 +310,7 @@ okResult(
     {
       component: Transform,
       data: {
-        posX: 0, posY: 0, posZ: 5,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     {
       component: Camera,
@@ -333,7 +332,7 @@ okResult(
 );
 
 // 10000 independent sprite entities. fold operator collapses to 1
-// drawIndexed because (Layer.value=0, posZ=0, materialHandle) is uniform.
+// drawIndexed because (Layer.value=0, pos z=0, materialHandle) is uniform.
 const half = (SPRITE_GRID - 1) / 2;
 for (let i = 0; i < SPRITE_COUNT; i++) {
   const row = Math.floor(i / SPRITE_GRID);
@@ -344,12 +343,7 @@ for (let i = 0; i < SPRITE_COUNT; i++) {
     {
       component: Transform,
       data: {
-        posX: cx, posY: cy, posZ: 0,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: SPRITE_SPACING * 0.9,
-        scaleY: SPRITE_SPACING * 0.9,
-        scaleZ: 1,
-      },
+        pos: [cx, cy, 0], quat: [0, 0, 0, 1], scale: [SPRITE_SPACING * 0.9, SPRITE_SPACING * 0.9, 1],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },

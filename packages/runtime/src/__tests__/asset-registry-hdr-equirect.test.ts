@@ -6,9 +6,9 @@
 // registration into UPSTREAM_ENTRY_LOADERS (so 'equirect' is derived into
 // UPSTREAM_ENTRY_KINDS without a second hand-edited list). research F-1.
 
+import { equirectLoader, UPSTREAM_ENTRY_LOADERS } from '@forgeax/engine-assets-runtime';
 import type { LoadContext, LoaderAsyncResult } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { equirectLoader, UPSTREAM_ENTRY_LOADERS } from '../asset-registry.js';
 
 function mockCtx(binaries: Record<string, Uint8Array>): LoadContext {
   return {

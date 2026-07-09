@@ -10,6 +10,7 @@
 //   AC-08 — in-flight dedup + cycle: concurrent Promise.all 3-way dedup;
 //           cycle A→B→A no stack overflow
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { defineComponent } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type {
@@ -20,8 +21,6 @@ import type {
   MeshAsset as TypesMeshAsset,
 } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ── test GUIDs ──────────────────────────────────────────────────────────────
@@ -73,7 +72,7 @@ function makeTestSceneAsset(subRefs: { meshGuid: string; materialGuids: string[]
       {
         localId: localId(0),
         components: {
-          Transform: { posX: 0, posY: 0, posZ: 0 },
+          Transform: { pos: [0, 0, 0] },
           MeshFilter: { assetHandle: subRefs.meshGuid },
           MeshRenderer: { materials: subRefs.materialGuids },
         },
@@ -100,7 +99,7 @@ function preregisterMaterial(reg: AssetRegistry, guidStr: string): void {
 
 describe('AC-01 — scene recursive loadByGuid', () => {
   it('loadByGuid<SceneAsset> in dev mode returns ok when sub-assets pre-registered', async () => {
-    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
     defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
     defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
 
@@ -145,7 +144,7 @@ describe('AC-06 — idempotency', () => {
   });
 
   it('loadByGuid returns the same payload for a pre-registered scene', async () => {
-    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
     defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
     defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
 
@@ -193,7 +192,7 @@ describe('AC-07 — transitive failure attribution', () => {
     // Pack fixture format matches the existing load-by-guid-prod fixtures
     // (pack-index is a flat array, pack file uses schemaVersion + assets[]).
 
-    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
     defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
     defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
 
@@ -223,7 +222,7 @@ describe('AC-07 — transitive failure attribution', () => {
               {
                 localId: 0,
                 components: {
-                  Transform: { posX: 0, posY: 0, posZ: 0 },
+                  Transform: { pos: [0, 0, 0] },
                   MeshFilter: { assetHandle: 0 },
                   MeshRenderer: { materials: [1] },
                 },
@@ -414,7 +413,7 @@ describe('AC-08 — in-flight dedup + cycle', () => {
   });
 
   it('cycle A→B→A no stack overflow, both registered', async () => {
-    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
     defineComponent('SceneCycler', { refScene: 'shared<unknown>' });
 
     const reg = makeRegistry();
@@ -443,7 +442,7 @@ describe('AC-08 — in-flight dedup + cycle', () => {
               {
                 localId: 0,
                 components: {
-                  Transform: { posX: 0, posY: 0, posZ: 0 },
+                  Transform: { pos: [0, 0, 0] },
                   SceneCycler: { refScene: 0 },
                 },
               },
@@ -466,7 +465,7 @@ describe('AC-08 — in-flight dedup + cycle', () => {
               {
                 localId: 0,
                 components: {
-                  Transform: { posX: 0, posY: 0, posZ: 0 },
+                  Transform: { pos: [0, 0, 0] },
                   SceneCycler: { refScene: 0 },
                 },
               },
@@ -667,7 +666,7 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
     // material envelope's refs[] carries the texture GUIDs from paramValues,
     // and the recursive loadByGuid hits the dev fast-path.
 
-    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
     defineComponent('MeshFilter', { assetHandle: 'shared<MeshAsset>' });
     defineComponent('MeshRenderer', { materials: 'array<shared<MaterialAsset>>' });
 
@@ -706,7 +705,7 @@ describe('AC-03 — gltf-shaped scene composite (via SceneAsset, D-9)', () => {
               {
                 localId: 0,
                 components: {
-                  Transform: { posX: 0, posY: 0, posZ: 0 },
+                  Transform: { pos: [0, 0, 0] },
                   MeshFilter: { assetHandle: 0 },
                   MeshRenderer: { materials: [1] },
                 },
@@ -1038,7 +1037,7 @@ describe('feat-20260612 M2 fixup — SceneAsset.skinGuids cross-edge', () => {
     // skinGuids cross-edge encoded in the scene pack body. Without the fix,
     // the SkinAsset is never loaded and no resolveGuid lookup succeeds.
 
-    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
     defineComponent('Skin', {
       skeleton: 'shared<SkeletonAsset>',
       joints: 'array<entity>',
@@ -1072,7 +1071,7 @@ describe('feat-20260612 M2 fixup — SceneAsset.skinGuids cross-edge', () => {
               {
                 localId: 0,
                 components: {
-                  Transform: { posX: 0, posY: 0, posZ: 0 },
+                  Transform: { pos: [0, 0, 0] },
                   Skin: { skeleton: 0 },
                 },
               },
@@ -1134,7 +1133,7 @@ describe('feat-20260612 M2 fixup — SceneAsset.skinGuids cross-edge', () => {
     // (not refs[] indices). parseScenePayload's resolveSkinGuids must accept
     // both shapes for round-trip symmetry with the browser pack-fetch path.
 
-    defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
 
     const reg = makeRegistry();
     reg.catalog(parseGuid(SKIN_FIXUP_SKELETON_GUID), {
@@ -1151,7 +1150,7 @@ describe('feat-20260612 M2 fixup — SceneAsset.skinGuids cross-edge', () => {
     // Build a SceneAsset POD with inline skinGuids (no refs[] indices).
     const scene: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: localId(0), components: { Transform: { posX: 0, posY: 0, posZ: 0 } } }],
+      entities: [{ localId: localId(0), components: { Transform: { pos: [0, 0, 0] } } }],
       skinGuids: [SKIN_FIXUP_SKIN_GUID],
     };
     reg.catalog(parseGuid(SKIN_FIXUP_SCENE_GUID), scene);

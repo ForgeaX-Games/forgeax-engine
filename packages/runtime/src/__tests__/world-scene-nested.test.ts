@@ -154,7 +154,7 @@ describe('AC-26 same prefab mounted multiple times — disjoint mappings', () =>
     const world = new World();
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 99 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [99, 0, 0] } } }],
     };
     const childHandle = registerSceneAsset(world, child);
     // Parent: 1 entity + 2 mounts of `child`

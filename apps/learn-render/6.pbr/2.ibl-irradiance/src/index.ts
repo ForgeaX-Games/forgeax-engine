@@ -168,9 +168,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           {
             component: Transform,
             data: {
-              posX: cx, posY: cy, posZ: 0,
-              scaleX: SPHERE_SCALE, scaleY: SPHERE_SCALE, scaleZ: SPHERE_SCALE,
-            },
+              pos: [cx, cy, 0], scale: [SPHERE_SCALE, SPHERE_SCALE, SPHERE_SCALE],},
           },
           { component: MeshFilter, data: { assetHandle: sphereAssetHandle } },
           { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -184,8 +182,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: CAMERA_POS_X, posY: CAMERA_POS_Y, posZ: CAMERA_POS_Z,
-      },
+        pos: [CAMERA_POS_X, CAMERA_POS_Y, CAMERA_POS_Z],},
     },
     {
       component: Camera,

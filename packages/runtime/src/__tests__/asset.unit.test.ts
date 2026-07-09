@@ -45,6 +45,34 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import * as assetRegistryModule from '@forgeax/engine-assets-runtime';
+import {
+  AssetRegistry,
+  animationClipLoader,
+  BUILTIN_FLOATS_PER_VERTEX,
+  buildSceneChildContext,
+  fontLoader,
+  getOrCreateMipmapPipeline,
+  HANDLE_CUBE,
+  HANDLE_CYLINDER,
+  HANDLE_QUAD,
+  HANDLE_SPHERE,
+  HANDLE_TRIANGLE,
+  INLINE_PACK_LOADERS,
+  LoaderRegistry,
+  materialLoader,
+  meshLoader,
+  mipmapCacheSize,
+  numMipLevels,
+  resolveAssetHandle,
+  sceneLoader,
+  skeletonLoader,
+  skinLoader,
+  textureLoader,
+  UPSTREAM_ENTRY_LOADERS,
+  walkMaterialPassesOverSharedRefs,
+  wireDefaultLoaders,
+} from '@forgeax/engine-assets-runtime';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import {
   createBoxGeometry,
@@ -64,33 +92,10 @@ import type {
 import { AssetError, toShared, toUnique, unwrapHandle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { deriveBuiltin } from '../../../pack/src/builtin';
-import * as assetRegistryModule from '../asset-registry';
-import {
-  AssetRegistry,
-  animationClipLoader,
-  fontLoader,
-  HANDLE_CUBE,
-  HANDLE_CYLINDER,
-  HANDLE_QUAD,
-  HANDLE_SPHERE,
-  HANDLE_TRIANGLE,
-  INLINE_PACK_LOADERS,
-  materialLoader,
-  meshLoader,
-  sceneLoader,
-  skeletonLoader,
-  skinLoader,
-  textureLoader,
-  UPSTREAM_ENTRY_LOADERS,
-} from '../asset-registry';
-import { BUILTIN_FLOATS_PER_VERTEX } from '../builtin-asset-registry';
+import { audioLoaderPlaceholder } from '../audio-loader-placeholder';
 import { createDevImportTransport, type ImportTransport } from '../dev-import-transport';
 import { createEngineMetrics } from '../engine-metrics';
 import { GpuResourceStore } from '../gpu-resource-store';
-import { LoaderRegistry } from '../loader-registry';
-import { getOrCreateMipmapPipeline, mipmapCacheSize, numMipLevels } from '../mipmap-generator';
-import { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from '../resolve-asset-handle';
-import { audioLoaderPlaceholder, wireDefaultLoaders } from '../wire-default-loaders';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 vi.mock('@forgeax/engine-rhi-webgpu', async () => {
@@ -733,19 +738,36 @@ function makeStubGPU(): unknown {
 
   const UNREGISTERED_STUBS = ['sampler', 'render-pipeline', 'shader'] as const;
 
-  describe('wireDefaultLoaders (w5)', () => {
-    it('registers the 9 real loaders + audio placeholder + video loader = 11 kinds', () => {
+  describe('wireDefaultLoaders (w5; D-2 extraLoaders w8; D-2 terminal M3 / w32)', () => {
+    // feat-20260705-runtime-tier2-decomposition M3 / w32 (D-2 terminal):
+    // videoLoader now lives in @forgeax/engine-graphics-extras and is imported +
+    // wired internally by wireDefaultLoaders (assets-runtime -> graphics-extras
+    // forward edge). Only the audio placeholder stays caller-supplied via
+    // `extraLoaders` (OOS-9). Internal default set = 10 kinds (was 9); the
+    // createRenderer assembly point passes `[audioLoaderPlaceholder]` to complete
+    // the 11-kind set. Registration behaviour is equivalent -- the total wired
+    // set is unchanged; only the internal/injected split shifts by one
+    // (AC-05 allowed test attribution adjustment).
+    it('registers the 10 engine loaders + extraLoader (audio) = 11 kinds', () => {
       const reg = new LoaderRegistry();
-      wireDefaultLoaders(reg);
+      wireDefaultLoaders(reg, [audioLoaderPlaceholder]);
       for (const kind of REGISTERED_KINDS) {
         expect(reg.get(kind), `expected loader for kind '${kind}'`).toBeDefined();
       }
       expect(reg.registeredKinds()).toHaveLength(11);
     });
 
-    it('does NOT register sampler / render-pipeline / shader (AC-02 exclusion)', () => {
+    it('default set (no extraLoaders) is the 10 engine-owned kinds (incl. video)', () => {
       const reg = new LoaderRegistry();
       wireDefaultLoaders(reg);
+      expect(reg.registeredKinds()).toHaveLength(10);
+      expect(reg.get('video'), 'video is wired internally (graphics-extras)').toBeDefined();
+      expect(reg.get('audio'), 'audio is injected, not default').toBeUndefined();
+    });
+
+    it('does NOT register sampler / render-pipeline / shader (AC-02 exclusion)', () => {
+      const reg = new LoaderRegistry();
+      wireDefaultLoaders(reg, [audioLoaderPlaceholder]);
       for (const kind of UNREGISTERED_STUBS) {
         expect(reg.get(kind), `kind '${kind}' must stay unregistered`).toBeUndefined();
       }
@@ -2029,7 +2051,7 @@ function makeStubGPU(): unknown {
       const fn = internal.parseAssetPayload.bind(reg);
       const payload = {
         entities: [
-          { localId: 0, components: { Transform: { posX: 1, posY: 2, posZ: 3 } } },
+          { localId: 0, components: { Transform: { pos: [1, 2, 3] } } },
           { localId: 1, components: { ChildOf: { parent: 0 } } },
         ],
       };
@@ -3331,10 +3353,12 @@ function makeStubGPU(): unknown {
 {
   // --- from handle-quad.test.ts ---
   describe('HANDLE_QUAD - builtin mesh handle (M-1 w03)', () => {
-    it('is exported from @forgeax/engine-runtime barrel (single-import discovery)', async () => {
-      // Barrel re-export contract — AI users do `import { HANDLE_QUAD } from
-      // '@forgeax/engine-runtime'` per requirements §2.1 single-import lock.
-      const barrel = await import('../index');
+    it('is exported from @forgeax/engine-assets-runtime barrel (single-import discovery)', async () => {
+      // feat-20260705-runtime-tier2-decomposition M1 (AC-105): the asset cluster
+      // moved to @forgeax/engine-assets-runtime; the runtime barrel no longer
+      // re-exports HANDLE_QUAD (zero shim, C1 SSOT). AI users import it from the
+      // assets-runtime package.
+      const barrel = await import('@forgeax/engine-assets-runtime');
       expect(barrel.HANDLE_QUAD).toBe(HANDLE_QUAD);
     });
 
@@ -3620,8 +3644,13 @@ function makeStubGPU(): unknown {
     fileURLToPath(new URL('../renderer.ts', import.meta.url)),
     'utf-8',
   );
-  const assetRegistrySrc = readFileSync(
-    fileURLToPath(new URL('../asset-registry.ts', import.meta.url)),
+  // feat-20260705-runtime-tier2-decomposition M1 / w7 (D-4): the load-by-guid +
+  // DDC/pack-fetch method cluster moved out of asset-registry.ts into
+  // registry/load-by-guid.ts. Source guards for that pipeline read the new file.
+  // (The former assetRegistrySrc read was dropped -- its sole remaining consumer,
+  // the transport-eligible guard, now reads loadByGuidSrc.)
+  const loadByGuidSrc = readFileSync(
+    fileURLToPath(new URL('../../../assets-runtime/src/registry/load-by-guid.ts', import.meta.url)),
     'utf-8',
   );
 
@@ -3811,9 +3840,9 @@ function makeStubGPU(): unknown {
       // texture-source-not-imported (unimported texture source, D-1 import-on-demand).
       // The eligibility block is layout-robust (the formatter may wrap the
       // clauses), so we slice the guard region and assert by substring.
-      const transportGuard = assetRegistrySrc.slice(
-        assetRegistrySrc.indexOf('ddcError instanceof AssetError'),
-        assetRegistrySrc.indexOf('transportOrFail<T>(guid, guidKey, ddcError.code)'),
+      const transportGuard = loadByGuidSrc.slice(
+        loadByGuidSrc.indexOf('ddcError instanceof AssetError'),
+        loadByGuidSrc.indexOf('transportOrFail<T>(registry, guid, guidKey, ddcError.code)'),
       );
       expect(transportGuard).toContain("ddcError.code === 'asset-not-found'");
       expect(transportGuard).toContain("ddcError.code === 'asset-fetch-failed'");
@@ -5036,17 +5065,22 @@ function makeStubGPU(): unknown {
       );
     });
 
-    it('(w18c) Path B independent early-return block is deleted from asset-registry.ts source', () => {
+    it('(w18c) Path B independent early-return block is deleted from load-by-guid source', () => {
+      // feat-20260705-runtime-tier2-decomposition M1 / w7 (D-4): the loadByGuid
+      // + DDC pipeline moved from asset-registry.ts into registry/load-by-guid.ts.
       const src = readFileSync(
-        fileURLToPath(new URL('../asset-registry.ts', import.meta.url)),
+        fileURLToPath(
+          new URL('../../../assets-runtime/src/registry/load-by-guid.ts', import.meta.url),
+        ),
         'utf-8',
       );
       // The unique parent breadcrumb literal must NOT appear inside an
       // independent `loadByGuid<MaterialAsset>(parentGuid` preload anymore —
       // that whole Path B early-return is folded into the unified for-loop.
       expect(src).not.toContain('loadByGuid<MaterialAsset>(parentGuid');
-      // No early-return that registers a separately rebuilt `resolvedAsset`.
-      expect(src).not.toContain('return this.registerParsedAsset<T>(guid, resolvedAsset');
+      // No early-return that registers a separately rebuilt `resolvedAsset`
+      // (post-w7 the free function form is registerParsedAsset(registry, guid, ...)).
+      expect(src).not.toContain('registerParsedAsset(registry, guid, resolvedAsset');
       // The `loading parent material` literal now lives only in the unified
       // for-loop branch (template form `for child ${guidKey}`). The old Path B
       // used `for child ${guidKey}` against a `parentGuidStr` local — confirm
@@ -5928,7 +5962,7 @@ function makeStubGPU(): unknown {
           {
             localId: 0,
             components: {
-              Transform: { posX: 1.5, posY: 2.7, posZ: -3.2 },
+              Transform: { pos: [1.5, 2.7, -3.2] },
               DirectionalLight: { color: 'white', intensity: 0.8 },
             },
           },
@@ -5939,9 +5973,7 @@ function makeStubGPU(): unknown {
       if (!asset) return;
       const comp = asset.entities[0]?.components as Record<string, Record<string, unknown>>;
       // Non-integer float values are not refs indices — passed through unchanged.
-      expect(comp.Transform?.posX).toBe(1.5);
-      expect(comp.Transform?.posY).toBe(2.7);
-      expect(comp.Transform?.posZ).toBe(-3.2);
+      expect(comp.Transform?.pos).toEqual([1.5, 2.7, -3.2]);
       expect(comp.DirectionalLight?.color).toBe('white');
       expect(comp.DirectionalLight?.intensity).toBe(0.8);
     });
@@ -5956,7 +5988,7 @@ function makeStubGPU(): unknown {
             localId: 0,
             components: {
               ChildOf: { parent: 0 },
-              Transform: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
               MeshFilter: { assetHandle: 0 },
             },
           },
@@ -5968,13 +6000,9 @@ function makeStubGPU(): unknown {
       const comp = asset.entities[0]?.components as Record<string, Record<string, unknown>>;
       // Non-handle integer fields are kept as-is (M1-fixup F-1)
       expect(comp.ChildOf?.parent).toBe(0);
-      expect(comp.Transform?.posX).toBe(0);
-      expect(comp.Transform?.posY).toBe(0);
-      expect(comp.Transform?.posZ).toBe(0);
-      expect(comp.Transform?.quatW).toBe(1);
-      expect(comp.Transform?.scaleX).toBe(1);
-      expect(comp.Transform?.scaleY).toBe(1);
-      expect(comp.Transform?.scaleZ).toBe(1);
+      expect(comp.Transform?.pos).toEqual([0, 0, 0]);
+      expect(comp.Transform?.quat).toEqual([0, 0, 0, 1]);
+      expect(comp.Transform?.scale).toEqual([1, 1, 1]);
       // Handle fields are replaced with GUID strings
       expect(comp.MeshFilter?.assetHandle).toBe(GUID_A);
     });
@@ -6114,7 +6142,7 @@ function makeStubGPU(): unknown {
         entities: [
           {
             localId: 0,
-            components: { Transform: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1 } },
+            components: { Transform: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
           },
         ],
       };
@@ -6124,11 +6152,9 @@ function makeStubGPU(): unknown {
       const comp = asset.entities[0]?.components as Record<string, Record<string, unknown>>;
       // M1-fixup F-1: non-handle integer fields (Transform) are preserved as-is.
       // Only fields in the HANDLE_FIELD_NAMES allowlist get refs resolution.
-      expect(comp.Transform?.posX).toBe(0);
-      expect(comp.Transform?.posY).toBe(0);
-      expect(comp.Transform?.posZ).toBe(0);
-      expect(comp.Transform?.quatW).toBe(1);
-      expect(comp.Transform?.scaleX).toBe(1);
+      expect(comp.Transform?.pos).toEqual([0, 0, 0]);
+      expect(comp.Transform?.quat).toEqual([0, 0, 0, 1]);
+      expect(comp.Transform?.scale).toEqual([1, 1, 1]);
     });
   });
 
@@ -6322,11 +6348,7 @@ function makeStubGPU(): unknown {
     it('(a) resolves GUID string handle fields to Handle numbers via schema-driven handle<> detection', () => {
       // Register components so World knows their schemas (plan-strategy D-4:
       // _resolveSceneGuids uses world._getComponentByName to read fieldType).
-      defineComponent('Transform', {
-        posX: 'f32',
-        posY: 'f32',
-        posZ: 'f32',
-      });
+      defineComponent('Transform', { pos: 'array<f32, 3>' });
       const reg = new AssetRegistry(makeMockShaderRegistry());
 
       // Pre-register mesh asset so resolveGuid finds it.
@@ -6361,7 +6383,7 @@ function makeStubGPU(): unknown {
         {
           localId: 0,
           components: {
-            Transform: { posX: 1, posY: 0, posZ: 0 },
+            Transform: { pos: [1, 0, 0] },
             MeshFilter: { assetHandle: MESH_GUID_STR },
             MeshRenderer: { materials: [MATERIAL_GUID_STR] },
           },
@@ -6510,12 +6532,10 @@ function makeStubGPU(): unknown {
     it('(d) nodes without handle fields pass through unchanged', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry());
 
-      const asset = buildTestAsset([
-        { localId: 0, components: { Transform: { posX: 1, posY: 2, posZ: 3 } } },
-      ]);
+      const asset = buildTestAsset([{ localId: 0, components: { Transform: { pos: [1, 2, 3] } } }]);
 
       const world = new World();
-      defineComponent('Transform', { posX: 'f32', posY: 'f32', posZ: 'f32' });
+      defineComponent('Transform', { pos: 'array<f32, 3>' });
 
       // biome-ignore lint/suspicious/noExplicitAny: private helper access
       const internal = reg as any as {
@@ -6532,7 +6552,7 @@ function makeStubGPU(): unknown {
       const comp = (
         resolvedAsset.entities[0]?.components as Record<string, Record<string, unknown>>
       ).Transform;
-      expect(comp).toEqual({ posX: 1, posY: 2, posZ: 3 });
+      expect(comp).toEqual({ pos: [1, 2, 3] });
     });
   });
 
@@ -6677,7 +6697,7 @@ function makeStubGPU(): unknown {
           {
             localId: 0,
             components: {
-              Transform: { posX: 1, posY: 0, posZ: 0 },
+              Transform: { pos: [1, 0, 0] },
               MeshFilter: { assetHandle: MESH_GUID_STR },
               MeshRenderer: {
                 materials: [MATERIAL_GUID_STR, MATERIAL2_GUID_STR, MATERIAL3_GUID_STR],
@@ -6924,15 +6944,7 @@ function makeStubGPU(): unknown {
         ];
         reg.catalog(sceneGuid, sceneAsset, refs);
 
-        // biome-ignore lint/suspicious/noExplicitAny: private helper access
-        const internal = reg as any as {
-          buildSceneChildContext(
-            scene: SceneAsset,
-            subGuidKey: string,
-          ): { sceneEntityId?: number; componentField?: string } | undefined;
-        };
-
-        const ctx = internal.buildSceneChildContext(sceneAsset, MESH_GUID_STR.toLowerCase());
+        const ctx = buildSceneChildContext(reg, sceneAsset, MESH_GUID_STR.toLowerCase());
 
         expect(ctx).toBeDefined();
         expect(ctx?.sceneEntityId).toBe(5);
@@ -6982,16 +6994,9 @@ function makeStubGPU(): unknown {
         ];
         reg.catalog(sceneGuid, sceneAsset, refs);
 
-        // biome-ignore lint/suspicious/noExplicitAny: private helper access
-        const internal = reg as any as {
-          buildSceneChildContext(
-            scene: SceneAsset,
-            subGuidKey: string,
-          ): { sceneEntityId?: number; componentField?: string } | undefined;
-        };
-
         // Look up the material GUID — should find sceneEntityId + componentField
-        const materialCtx = internal.buildSceneChildContext(
+        const materialCtx = buildSceneChildContext(
+          reg,
           sceneAsset,
           MATERIAL_GUID_STR.toLowerCase(),
         );
@@ -6999,10 +7004,7 @@ function makeStubGPU(): unknown {
         expect(materialCtx?.componentField).toBe('MeshRenderer.materials[0]');
 
         // Look up the texture GUID — sourceField=undefined → componentField undefined
-        const textureCtx = internal.buildSceneChildContext(
-          sceneAsset,
-          TEXTURE_GUID_STR.toLowerCase(),
-        );
+        const textureCtx = buildSceneChildContext(reg, sceneAsset, TEXTURE_GUID_STR.toLowerCase());
         expect(textureCtx).toBeDefined();
         expect(textureCtx?.sceneEntityId).toBeUndefined();
         expect(textureCtx?.componentField).toBeUndefined();

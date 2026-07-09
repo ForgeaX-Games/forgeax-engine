@@ -69,20 +69,8 @@ import { mat4, quat, vec3 } from '@forgeax/engine-math';
 //      `GPUCanvasContext.configure({ device })` slot still receives a valid
 //      raw device, while AI-user-facing code only sees the forgeax
 //      abstraction (charter proposition 5 consistent abstraction red line).
-import {
-  AssetRegistry,
-  Camera,
-  acquireCanvasContext,
-  createRenderer,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_TRIANGLE,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  type Renderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { AssetRegistry, HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
+import { Camera, acquireCanvasContext, createRenderer, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, type Renderer, Transform } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import brdfSrc from './shaders/brdf.wgsl?raw';
 import pbrSrc from './shaders/pbr.wgsl?raw';
@@ -158,7 +146,7 @@ world.spawn(
 world.spawn(
   {
     component: Transform,
-    data: { posZ: 3 },
+    data: { pos: [0, 0, 3]},
   },
   {
     component: Camera,

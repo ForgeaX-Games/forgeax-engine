@@ -18,6 +18,7 @@
 
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 // NOTE: @forgeax/engine-codec/encode is the build-time encoder subpath. The
 // image-pipeline isolation gate (path d) forbids a STATIC import of it from
 // packages/runtime/src (encode is build-time only). This test needs the real
@@ -26,7 +27,6 @@ import { fileURLToPath } from 'node:url';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AssetCompression, TranscodeCaps } from '@forgeax/engine-types';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const ENCODER_GLUE = new URL('../../../codec/pkg/encode/basis_encoder.mjs', import.meta.url);

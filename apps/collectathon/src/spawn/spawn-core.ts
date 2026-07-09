@@ -85,7 +85,7 @@ export function spawnCore(
   );
   return world
     .spawn(
-      { component: Transform, data: { posX: position.x, posY: CORE_BASE_Y, posZ: position.z } },
+      { component: Transform, data: { pos: [position.x, CORE_BASE_Y, position.z] } },
       { component: MeshFilter, data: { assetHandle: coreMesh } },
       { component: MeshRenderer, data: { materials: [coreMat] } },
       { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } },

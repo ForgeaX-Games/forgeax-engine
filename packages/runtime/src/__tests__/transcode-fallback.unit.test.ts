@@ -20,10 +20,10 @@
 //   - no equirect fallback (w32 owns that)
 //   - degradation is not an error (only corrupt payloads raise transcode-failed)
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AssetCompression, TranscodeCaps } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // Mock only the container-parse + WASM-transcode seams; keep the real

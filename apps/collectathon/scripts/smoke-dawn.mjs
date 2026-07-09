@@ -159,7 +159,7 @@ const world = new World();
 const camSpawn = world.spawn(
   {
     component: Transform,
-    data: { posX: 0, posY: 6, posZ: 12, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+    data: { pos: [0, 6, 12], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
   },
   { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
 );
@@ -217,7 +217,7 @@ console.log(`[smoke] humanoid skeleton=${hasSkeleton} skin=${hasSkin} animation=
 
 // Parent: kinematic capsule + CharacterController (KCC physics writer).
 const parentSpawn = world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0.8, posZ: 0 } },
+  { component: Transform, data: { pos: [0, 0.8, 0]} },
   { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } },
   { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.5 } },
   { component: CharacterController, data: {} },
@@ -240,7 +240,7 @@ const matHandle = matAsset ? world.allocSharedRef('MaterialAsset', matAsset.payl
 const clipAsset = fbxResults.find((a) => a.kind === 'animation-clip');
 const clipHandle = clipAsset ? world.allocSharedRef('AnimationClip', clipAsset.payload) : 0;
 const childSpawn = world.spawn(
-  { component: Transform, data: { posX: 0, posY: -0.8, posZ: 0, scaleX: 1 / 90, scaleY: 1 / 90, scaleZ: 1 / 90 } },
+  { component: Transform, data: { pos: [0, -0.8, 0], scale: [1 / 90, 1 / 90, 1 / 90]} },
   { component: MeshFilter, data: { assetHandle: meshHandle } },
   { component: MeshRenderer, data: { materials: [matHandle] } },
   {
@@ -292,7 +292,7 @@ const m3Entities = [];
   const FLOOR_QX = Math.sin(-Math.PI / 4);
   const FLOOR_QW = Math.cos(-Math.PI / 4);
   const g = world.spawn(
-    { component: Transform, data: { posX: 0, posY: -0.1, posZ: 0, quatX: FLOOR_QX, quatW: FLOOR_QW } },
+    { component: Transform, data: { pos: [0, -0.1, 0], quat: [FLOOR_QX, 0, 0, FLOOR_QW]} },
     { component: MeshFilter, data: { assetHandle: groundMesh } },
     { component: MeshRenderer, data: { materials: [groundMat] } },
     { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
@@ -312,7 +312,7 @@ for (const pos of [
   { x: -LEVEL_HALF, z: 0 },
 ]) {
   const w = world.spawn(
-    { component: Transform, data: { posX: pos.x, posY: 2, posZ: pos.z } },
+    { component: Transform, data: { pos: [pos.x, 2, pos.z]} },
     { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
     { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtentsX: 1, halfExtentsY: 2, halfExtentsZ: 1 } },
   );
@@ -330,7 +330,7 @@ for (let i = 0; i < CORE_COUNT; i++) {
     Materials.standard({ baseColor: [1, 0.8, 0.3, 1], emissive: [1, 0.7, 0.3], emissiveIntensity: 2 }),
   );
   const c = world.spawn(
-    { component: Transform, data: { posX: (i - 6) * 2, posY: 1, posZ: 0 } },
+    { component: Transform, data: { pos: [(i - 6) * 2, 1, 0]} },
     { component: MeshFilter, data: { assetHandle: coreMesh } },
     { component: MeshRenderer, data: { materials: [coreMat] } },
     { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } },
@@ -353,7 +353,7 @@ let portalSpawned = false;
     Materials.standard({ baseColor: [0.2, 0.25, 0.35, 1], emissive: [0.05, 0.08, 0.12], emissiveIntensity: 0.3 }),
   );
   const p = world.spawn(
-    { component: Transform, data: { posX: 0, posY: 1.5, posZ: -13 } },
+    { component: Transform, data: { pos: [0, 1.5, -13]} },
     { component: MeshFilter, data: { assetHandle: portalMesh } },
     { component: MeshRenderer, data: { materials: [portalMat] } },
     { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } },
@@ -390,7 +390,7 @@ for (let i = 0; i < GUARDIAN_COUNT; i++) {
     Materials.standard({ baseColor: [0.55, 0.08, 0.08, 1], emissive: [0.15, 0, 0], emissiveIntensity: 0.6 }),
   );
   const body = world.spawn(
-    { component: Transform, data: { posX: (i - 1) * 5, posY: 1.2, posZ: -3 } },
+    { component: Transform, data: { pos: [(i - 1) * 5, 1.2, -3]} },
     { component: MeshFilter, data: { assetHandle: bodyMesh } },
     { component: MeshRenderer, data: { materials: [bodyMat] } },
     { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } },
@@ -404,7 +404,7 @@ for (let i = 0; i < GUARDIAN_COUNT; i++) {
   m4Entities.push(body.value);
   guardianBodies++;
   const sensor = world.spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+    { component: Transform, data: { pos: [0, 0, 0]} },
     { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } },
     { component: Collider, data: { shape: ColliderShapeValue.sphere, radius: 1.5, isSensor: true } },
     { component: ChildOf, data: { parent: body.value } },

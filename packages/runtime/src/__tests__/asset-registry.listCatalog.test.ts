@@ -9,10 +9,10 @@
 // research Finding 5 (AssetRegistry public API is all guid point-lookup;
 // assetCatalog/packIndexCache are private — no enumeration primitive exists yet).
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeReg(): AssetRegistry {

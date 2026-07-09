@@ -5,7 +5,7 @@
 //       signal, spawn a world-space GlyphText "+1" entity at the Core's last-known
 //       world position, scoped to the Play state (despawnOnExit). Track it in a
 //       closure Map for lifecycle animation.
-//   (2) Iterate the tracked text entities: decrement remaining life, move posY
+//   (2) Iterate the tracked text entities: decrement remaining life, raise pos y
 //       upward at ~1.5 m/s (bubble animation), despawn when life expires.
 //
 // The GlyphText entity carries Transform (bubble position), GlyphText ("+1"
@@ -67,7 +67,7 @@ export function createPickupTextSystem(
             .spawn(
               {
                 component: Transform,
-                data: { posX: s.posX, posY: s.posY, posZ: s.posZ, quatW: 1 },
+                data: { pos: s.pos, quat: [0, 0, 0, 1] },
               },
               {
                 component: GlyphText,
@@ -103,7 +103,13 @@ export function createPickupTextSystem(
           active.delete(entity);
           continue;
         }
-        world.set(entity, Transform, { posY: t.value.posY + dt * BUBBLE_RISE_SPEED });
+        world.set(entity, Transform, {
+          pos: [
+            t.value.pos[0] ?? 0,
+            (t.value.pos[1] ?? 0) + dt * BUBBLE_RISE_SPEED,
+            t.value.pos[2] ?? 0,
+          ],
+        });
         active.set(entity, newLife);
       }
     },

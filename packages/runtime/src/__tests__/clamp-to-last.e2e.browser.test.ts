@@ -32,10 +32,11 @@
 //
 // Runs via pnpm test:browser against wgpu-wasm/WebGL2 backend.
 
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
-import { Engine, HANDLE_CUBE } from '../index';
+import { Engine } from '../index';
 
 const W = 256;
 const H = 256;
@@ -142,16 +143,9 @@ describe('clamp-to-last e2e browser (m3-w6)', () => {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -161,16 +155,9 @@ describe('clamp-to-last e2e browser (m3-w6)', () => {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 3,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 3],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },

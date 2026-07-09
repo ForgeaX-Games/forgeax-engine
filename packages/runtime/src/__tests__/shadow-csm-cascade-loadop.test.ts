@@ -209,26 +209,18 @@ async function importComponents(): Promise<{
   DirectionalLight: unknown;
   HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
 }> {
-  return (await import('../index')) as never;
-}
-
-function identityTransform(): Record<string, number> {
   return {
-    posX: 0,
-    posY: 0,
-    posZ: 0,
-    quatX: 0,
-    quatY: 0,
-    quatZ: 0,
-    quatW: 1,
-    scaleX: 1,
-    scaleY: 1,
-    scaleZ: 1,
-  };
+    ...(await import('../index')),
+    ...(await import('@forgeax/engine-assets-runtime')),
+  } as never;
 }
 
-function cameraTransform(): Record<string, number> {
-  return { ...identityTransform(), posZ: 3 };
+function identityTransform(): Record<string, number[]> {
+  return { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] };
+}
+
+function cameraTransform(): Record<string, number[]> {
+  return { ...identityTransform(), pos: [0, 0, 3] };
 }
 
 function directionalLight(): Record<string, number> {

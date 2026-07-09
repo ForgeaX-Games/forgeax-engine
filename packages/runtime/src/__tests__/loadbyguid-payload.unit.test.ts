@@ -21,12 +21,12 @@
 // TDD: RED before the M8 impl (w59) + delete (w60) land; GREEN once they +
 // the sweep batches co-land. M8 is the ATOMIC milestone -- this test is not
 // green-keepable in isolation.
+
+import { AssetRegistry, walkMaterialPassesOverSharedRefs } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { BUILTIN_BASE } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
-import { walkMaterialPassesOverSharedRefs } from '../resolve-asset-handle';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function mesh(): MeshAsset {

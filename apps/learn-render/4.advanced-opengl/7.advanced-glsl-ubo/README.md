@@ -76,7 +76,7 @@ That is the entire UBO story. No `layout(std140)`, no `glBindBufferRange`, no `g
 ## Pipeline steps (how the engine processes the data)
 
 ```
-user spawns Camera { fov, aspect, near, far } + Transform { posX, posY, posZ }
+user spawns Camera { fov, aspect, near, far } + Transform { pos: [x, y, z] }
   |-- propagateTransforms system computes world matrix from local TRS
   |-- render-system-record reads Camera + Transform -> builds viewProj, cameraPos
   |

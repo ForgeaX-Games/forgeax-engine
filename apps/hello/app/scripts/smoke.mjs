@@ -186,7 +186,7 @@ console.log(`[hello-app] backend=${app.renderer.backend}`);
 // framebuffer with clearColor and the center pixel reads the clear
 // value without geometry contamination (R-5 dual-zero precondition).
 app.world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0, posZ: 3, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
   {
     component: Camera,
     data: {

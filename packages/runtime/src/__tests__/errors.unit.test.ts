@@ -16,6 +16,13 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
+import type { AssetRuntimeError, AssetRuntimeErrorCode } from '@forgeax/engine-assets-runtime';
+import {
+  MeshSsboCapacityExceededError,
+  MeshSsboCeilingReachedError,
+  SceneCollectAssetGuidUnresolvedError,
+  SceneCollectEntityRefOutOfClosureError,
+} from '@forgeax/engine-assets-runtime';
 import { RhiError } from '@forgeax/engine-rhi';
 import type { AssetErrorCode, ImageErrorCode } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
@@ -23,13 +30,6 @@ import {
   __classifyEnvErrorReasonForTest,
   __composeEnvErrorHintForTest,
 } from '../create-renderer-env-classify';
-import type { AssetRuntimeError, AssetRuntimeErrorCode } from '../errors/asset';
-import {
-  MeshSsboCapacityExceededError,
-  MeshSsboCeilingReachedError,
-  SceneCollectAssetGuidUnresolvedError,
-  SceneCollectEntityRefOutOfClosureError,
-} from '../errors/asset';
 import type { RenderError, RenderErrorCode } from '../errors/render';
 import { EquirectProjectionFailedError } from '../errors/render';
 import type { SkinError, SkinErrorCode } from '../errors/skin';
@@ -45,7 +45,6 @@ import type { SkinError, SkinErrorCode } from '../errors/skin';
 type RuntimeLayerErrorCode = RenderErrorCode | AssetRuntimeErrorCode | SkinErrorCode;
 type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
 
-import { PickError, type PickErrorCode } from '../pick-errors';
 import {
   PipelineError,
   type PipelineErrorCode,
@@ -1232,70 +1231,6 @@ import { RhiErrorListenerRegistry } from '../renderer';
         });
         reg.fire(outerErr);
         expect(seen).toEqual([{ outerCode: 'unknown', innerCode: 'unknown' }]);
-      });
-    });
-  });
-}
-
-{
-  // ─── from pick-errors.test.ts ───
-  describe('pick-errors.test.ts', () => {
-    const KEBAB_REGEX = /^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$/;
-
-    describe('w8 — PickErrorCode closed union (AC-13)', () => {
-      it('camera-component-missing is a valid PickErrorCode literal', () => {
-        const code: PickErrorCode = 'camera-component-missing';
-        expect(code).toBe('camera-component-missing');
-      });
-
-      it('camera-component-missing is valid kebab-case', () => {
-        const code: PickErrorCode = 'camera-component-missing';
-        expect(code).toMatch(KEBAB_REGEX);
-      });
-
-      it('exhaustive switch over PickErrorCode compiles without default', () => {
-        function exhaustive(code: PickErrorCode): string {
-          switch (code) {
-            case 'camera-component-missing':
-              return 'camera missing';
-          }
-        }
-        expect(exhaustive('camera-component-missing')).toBe('camera missing');
-      });
-    });
-
-    describe('w8 — PickError structured 3-field surface (AC-11)', () => {
-      it('PickError has .code === camera-component-missing', () => {
-        const e = new PickError(7);
-        expect(e.code).toBe('camera-component-missing');
-      });
-
-      it('PickError .expected is a non-empty string', () => {
-        const e = new PickError(7);
-        expect(typeof e.expected).toBe('string');
-        expect(e.expected.length).toBeGreaterThan(0);
-      });
-
-      it('PickError .hint contains a world.set recovery directive', () => {
-        const e = new PickError(7);
-        expect(e.hint.length).toBeGreaterThan(0);
-        expect(e.hint).toContain('world.set');
-      });
-
-      it('PickError super message (Error.message) is non-empty', () => {
-        const e = new PickError(7);
-        expect(e.message.length).toBeGreaterThan(0);
-      });
-
-      it('PickError is an instanceof Error and carries .name', () => {
-        const e = new PickError(7);
-        expect(e).toBeInstanceOf(Error);
-        expect(e.name).toBe('PickError');
-      });
-
-      it('PickError .detail records the offending camera entity', () => {
-        const e = new PickError(42);
-        expect(e.detail).toEqual({ cameraEntity: 42 });
       });
     });
   });

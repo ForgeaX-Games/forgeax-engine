@@ -41,6 +41,7 @@
   },
   "dependencies": {
     "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-rhi-wgpu": "workspace:*",

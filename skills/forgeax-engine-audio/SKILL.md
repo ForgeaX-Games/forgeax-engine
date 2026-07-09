@@ -59,7 +59,8 @@ import { createApp } from '@forgeax/engine-app';
 import { AUDIO_ENGINE_RESOURCE_KEY, AudioListener, AudioSource } from '@forgeax/engine-audio';
 import type { AudioBackend, AudioClipAsset } from '@forgeax/engine-audio';
 import { audioPlugin } from '@forgeax/engine-audio-webaudio';
-import { Camera, MeshFilter, MeshRenderer, Transform, HANDLE_CUBE } from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 
 // createApp({ plugins: [audioPlugin()] }) auto-registers audioTickSystem —
 // no manual registerUpdate(audioTickSystem) needed.
@@ -76,7 +77,7 @@ if (!clipRes.ok) throw new Error(clipRes.error.code);
 //    (edge detected by the auto-registered audioTickSystem)
 world
   .spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+    { component: Transform, data: { pos: [0, 0, 0] } },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: {} },
     { component: AudioSource, data: { clip: clipRes.value, playing: true, loop: true, volume: 0.8, bus: 'music' } },

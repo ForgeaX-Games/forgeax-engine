@@ -17,17 +17,21 @@
 // by-handle `get`); w49 removes those entries and turns this file green.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import {
+  AssetRegistry,
+  BUILTIN_CUBE,
+  BuiltinAssetRegistry,
+  HANDLE_CUBE,
+} from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { BUILTIN_BASE } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AssetRegistry, HANDLE_CUBE } from '../asset-registry';
-import { BUILTIN_CUBE, BuiltinAssetRegistry } from '../builtin-asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const ASSET_REGISTRY_SRC = readFileSync(
-  fileURLToPath(new URL('../asset-registry.ts', import.meta.url)),
+  fileURLToPath(new URL('../../../assets-runtime/src/asset-registry.ts', import.meta.url)),
   'utf8',
 );
 

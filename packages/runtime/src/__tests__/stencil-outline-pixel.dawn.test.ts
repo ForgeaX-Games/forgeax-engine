@@ -27,12 +27,13 @@
 // without lighting, giving the LO 4.2 cyan-green tint regardless of
 // lighting setup, and the test scene needs no DirectionalLight.
 
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { RenderQueue } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
-import { createRenderer, HANDLE_CUBE } from '../index';
+import { createRenderer } from '../index';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -226,16 +227,9 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -247,16 +241,9 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1.1,
-          scaleY: 1.1,
-          scaleZ: 1.1,
+          pos: [0, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1.1, 1.1, 1.1],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -268,16 +255,9 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 3,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 3],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       {

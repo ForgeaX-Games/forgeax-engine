@@ -16,21 +16,8 @@
 import { createApp } from '@forgeax/engine-app';
 import type { App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  DirectionalLight,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  SKYBOX_MODE_CUBEMAP,
-  SkyboxBackground,
-  Skylight,
-  TONEMAP_REINHARD_EXTENDED,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, SKYBOX_MODE_CUBEMAP, SkyboxBackground, Skylight, TONEMAP_REINHARD_EXTENDED, Transform } from '@forgeax/engine-runtime';
 import type { EquirectAsset, MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
@@ -130,7 +117,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { posX: -1.5, posY: 0, posZ: 0 },
+        data: { pos: [-1.5, 0, 0]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [reflectiveMatHandle] } },
@@ -150,7 +137,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { posX: 1.5, posY: 0, posZ: 0 },
+        data: { pos: [1.5, 0, 0]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [nonReflectiveMatHandle] } },
@@ -177,10 +164,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: CAMERA_POS_X,
-          posY: CAMERA_POS_Y,
-          posZ: CAMERA_POS_Z,
-        },
+          pos: [CAMERA_POS_X, CAMERA_POS_Y, CAMERA_POS_Z],},
       },
       {
         component: Camera,

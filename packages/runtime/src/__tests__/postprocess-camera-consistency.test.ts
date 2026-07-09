@@ -26,28 +26,14 @@ import { extractFrame } from '../render-system-extract';
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function identityTransform(): {
-  posX: number;
-  posY: number;
-  posZ: number;
-  quatX: number;
-  quatY: number;
-  quatZ: number;
-  quatW: number;
-  scaleX: number;
-  scaleY: number;
-  scaleZ: number;
+  pos: [number, number, number];
+  quat: [number, number, number, number];
+  scale: [number, number, number];
 } {
   return {
-    posX: 0,
-    posY: 0,
-    posZ: 0,
-    quatX: 0,
-    quatY: 0,
-    quatZ: 0,
-    quatW: 1,
-    scaleX: 1,
-    scaleY: 1,
-    scaleZ: 1,
+    pos: [0, 0, 0],
+    quat: [0, 0, 0, 1],
+    scale: [1, 1, 1],
   };
 }
 

@@ -11,12 +11,11 @@
 //
 // biome-ignore-all lint/suspicious/noExplicitAny: type-level extract + test seams
 
-import { describe, expect, it } from 'vitest';
-
 // Type-level re-export to verify stale error codes appear in resolveAssetHandle
 // return type. The return type is `Result<T, AssetErrorType | SharedRefStaleError | UniqueRefStaleError>`.
 // This test verifies structural narrowing works.
-import type { resolveAssetHandle } from '../resolve-asset-handle';
+import type { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { describe, expect, it } from 'vitest';
 
 // Extract the Error union from resolveAssetHandle return type at the
 // type level — this is a compile-time assertion.

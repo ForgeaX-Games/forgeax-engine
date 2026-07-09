@@ -23,17 +23,8 @@
 import type { App } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { quat } from '@forgeax/engine-math';
-import {
-  Camera,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, DirectionalLight, EngineEnvironmentError, Materials, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -81,7 +72,7 @@ const cubeMatHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
 
 const cube = world
   .spawn(
-    { component: Transform, data: { posY: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+    { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
   )
@@ -104,7 +95,7 @@ world
 
 world
   .spawn(
-    { component: Transform, data: { posY: 1, posZ: 4, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+    { component: Transform, data: { pos: [0, 1, 4], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
     { component: Camera, data: perspective({ fov: Math.PI / 3, aspect: canvas.width / canvas.height }) },
   )
   .unwrap();
@@ -121,11 +112,7 @@ app.registerUpdate((dt: number) => {
   // spin is a length-4 Float32Array; noUncheckedIndexedAccess widens the reads
   // to number | undefined, so coalesce to keep the Transform set value typed.
   world.set(cube, Transform, {
-    quatX: spin[0] ?? 0,
-    quatY: spin[1] ?? 0,
-    quatZ: spin[2] ?? 0,
-    quatW: spin[3] ?? 1,
-  });
+    quat: [spin[0] ?? 0, spin[1] ?? 0, spin[2] ?? 0, spin[3] ?? 1],});
 });
 
 // --- Cutscene: pause -> overlay -> resume (contract section 4.2) ---

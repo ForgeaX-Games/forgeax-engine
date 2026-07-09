@@ -11,17 +11,8 @@
 // 1. engine usage
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  DirectionalLight,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
@@ -60,12 +51,12 @@ const SHADOW_CONFIG = {
 
 // Cube scene objects: position, scale, color.
 const CUBES = [
-  { posX: -3, posY: 1.5, posZ: -2, scaleX: 1, scaleY: 2, scaleZ: 1, color: [1, 0.3, 0.3] },
-  { posX: 0, posY: 0.5, posZ: -4, scaleX: 1, scaleY: 1, scaleZ: 1, color: [0.3, 1, 0.3] },
-  { posX: 3, posY: 0.75, posZ: -1, scaleX: 1.5, scaleY: 0.5, scaleZ: 1.5, color: [0.3, 0.3, 1] },
-  { posX: -4, posY: 1, posZ: -5, scaleX: 0.5, scaleY: 1.5, scaleZ: 0.5, color: [1, 1, 0.3] },
-  { posX: 2, posY: 0.5, posZ: -6, scaleX: 2, scaleY: 1, scaleZ: 0.5, color: [1, 0.3, 1] },
-  { posX: -1, posY: 0.5, posZ: -3, scaleX: 0.8, scaleY: 0.8, scaleZ: 0.8, color: [0.3, 1, 1] },
+  { pos: [-3, 1.5, -2], scale: [1, 2, 1],color: [1, 0.3, 0.3] },
+  { pos: [0, 0.5, -4], scale: [1, 1, 1],color: [0.3, 1, 0.3] },
+  { pos: [3, 0.75, -1], scale: [1.5, 0.5, 1.5],color: [0.3, 0.3, 1] },
+  { pos: [-4, 1, -5], scale: [0.5, 1.5, 0.5],color: [1, 1, 0.3] },
+  { pos: [2, 0.5, -6], scale: [2, 1, 0.5],color: [1, 0.3, 1] },
+  { pos: [-1, 0.5, -3], scale: [0.8, 0.8, 0.8],color: [0.3, 1, 1] },
 ] as const;
 
 // 3. bootstrap
@@ -154,7 +145,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posY: FLOOR_Y, quatX: FLOOR_QUAT_X, quatW: FLOOR_QUAT_W },
+      data: { pos: [0, FLOOR_Y, 0], quat: [FLOOR_QUAT_X, 0, 0, FLOOR_QUAT_W]},
     },
     { component: MeshFilter, data: { assetHandle: floorMesh } },
     { component: MeshRenderer, data: { materials: [floorMat] } },
@@ -169,9 +160,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: c.posX, posY: c.posY, posZ: c.posZ,
-          quatW: 1,
-          scaleX: c.scaleX, scaleY: c.scaleY, scaleZ: c.scaleZ,
+          pos: c.pos,
+          quat: [0, 0, 0, 1],
+          scale: c.scale,
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -194,7 +185,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Camera: first-person starting at (0, 1.5, 8).
   const cameraEntity = world.spawn(
-    { component: Transform, data: { posY: CAMERA_POS_Y, posZ: CAMERA_POS_Z } },
+    { component: Transform, data: { pos: [0, CAMERA_POS_Y, CAMERA_POS_Z]} },
     {
       component: Camera,
       data: perspective({

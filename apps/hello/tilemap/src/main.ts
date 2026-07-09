@@ -98,14 +98,14 @@ async function main(): Promise<void> {
     .spawn(
       { component: TileLayer, data: { tiles, layerOrder: 0, dirty: 1 } },
       { component: ChildOf, data: { parent: tilemap } },
-      { component: Transform, data: { posX: 0, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+      { component: Transform, data: { pos: [0, 0, 0], scale: [1, 1, 1]} },
     )
     .unwrap();
 
   world.spawn(
     {
       component: Transform,
-      data: { posX: 4, posY: 4, posZ: 8 },
+      data: { pos: [4, 4, 8]},
     },
     {
       component: Camera,

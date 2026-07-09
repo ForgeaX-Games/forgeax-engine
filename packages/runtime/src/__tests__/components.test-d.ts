@@ -14,7 +14,7 @@
 //   physically gone. AC-04 / AC-05 literals follow plan-strategy
 //   decision §2.6.
 
-import type { Handle, ShapeOf } from '@forgeax/engine-ecs';
+import type { Handle, InputShapeOf, ShapeOf } from '@forgeax/engine-ecs';
 import { describe, expectTypeOf, it } from 'vitest';
 
 import type {
@@ -27,25 +27,20 @@ import type {
 } from '../components';
 
 describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeOf', () => {
-  it('Transform data shape has 10 local number fields + world array<f32,16>', () => {
+  it('Transform data shape has 3 local inline-array fields + world array<f32,16>', () => {
     type Data = ShapeOf<typeof Transform.schema>;
-    expectTypeOf<keyof Data>().toEqualTypeOf<
-      | 'posX'
-      | 'posY'
-      | 'posZ'
-      | 'quatX'
-      | 'quatY'
-      | 'quatZ'
-      | 'quatW'
-      | 'scaleX'
-      | 'scaleY'
-      | 'scaleZ'
-      | 'world'
-    >();
-    expectTypeOf<Data['posX']>().toEqualTypeOf<number>();
-    expectTypeOf<Data['quatW']>().toEqualTypeOf<number>();
-    expectTypeOf<Data['scaleZ']>().toEqualTypeOf<number>();
+    expectTypeOf<keyof Data>().toEqualTypeOf<'pos' | 'quat' | 'scale' | 'world'>();
+    expectTypeOf<Data['pos']>().toEqualTypeOf<Float32Array>();
+    expectTypeOf<Data['quat']>().toEqualTypeOf<Float32Array>();
+    expectTypeOf<Data['scale']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<Data['world']>().toEqualTypeOf<Float32Array>();
+    // Write side widens `array<f32, N>` to also accept plain number[] literals
+    // (InputShapeOf asymmetry): `pos: [1, 2, 3]` spawns without a
+    // Float32Array wrapper at the call site.
+    type Input = InputShapeOf<typeof Transform.schema>;
+    expectTypeOf<Input['pos']>().toEqualTypeOf<Float32Array | readonly number[]>();
+    expectTypeOf<Input['quat']>().toEqualTypeOf<Float32Array | readonly number[]>();
+    expectTypeOf<Input['scale']>().toEqualTypeOf<Float32Array | readonly number[]>();
   });
 
   it("MeshFilter data shape has 1 Handle<'MeshAsset','shared'> field (assetHandle; M5 / w19)", () => {
@@ -182,26 +177,22 @@ describe('w7 type-level - component name literal types are preserved', () => {
 //       from the field-descriptor input guarantees that every field's default
 //       value type aligns with the schema `type` (compile-time SSOT).
 //       Proof points:
-//         (a) ShapeOf<typeof Transform.schema> => 10 number fields
-//         (b) Transform's field descriptor uses `default: number` for each `type:'f32'`
-//         (c) A mismatched default (e.g. `default: "zero"` for `type:'f32'`) would be
-//             rejected by TypeScript because FieldDescriptor<'f32'> requires
-//             `default?: number` (via FieldValueType<'f32'> = number).
+//         (a) ShapeOf<typeof Transform.schema> => 4 Float32Array view fields
+//         (b) Transform's field descriptor uses `default: Float32Array` for each
+//             `type:'array<f32, N>'`
+//         (c) A mismatched default (e.g. `default: "zero"` for `type:'array<f32, 3>'`)
+//             would be rejected by TypeScript because
+//             FieldDescriptor<'array<f32, 3>'> requires `default?: Float32Array`
+//             (via FieldValueType<'array<f32, 3>'> = Float32Array).
 // ────────────────────────────────────────────────────────────────────────────
 
 describe('w15 AC-04 type constraint — ShapeOf derivation from field-payload', () => {
-  it("ShapeOf<typeof Transform.schema> yields 10 number fields (all 'f32' -> number)", () => {
+  it("ShapeOf<typeof Transform.schema> yields Float32Array views (all 'array<f32, N>' -> Float32Array)", () => {
     type T = ShapeOf<typeof Transform.schema>;
-    expectTypeOf<T['posX']>().toEqualTypeOf<number>();
-    expectTypeOf<T['posY']>().toEqualTypeOf<number>();
-    expectTypeOf<T['posZ']>().toEqualTypeOf<number>();
-    expectTypeOf<T['quatX']>().toEqualTypeOf<number>();
-    expectTypeOf<T['quatY']>().toEqualTypeOf<number>();
-    expectTypeOf<T['quatZ']>().toEqualTypeOf<number>();
-    expectTypeOf<T['quatW']>().toEqualTypeOf<number>();
-    expectTypeOf<T['scaleX']>().toEqualTypeOf<number>();
-    expectTypeOf<T['scaleY']>().toEqualTypeOf<number>();
-    expectTypeOf<T['scaleZ']>().toEqualTypeOf<number>();
+    expectTypeOf<T['pos']>().toEqualTypeOf<Float32Array>();
+    expectTypeOf<T['quat']>().toEqualTypeOf<Float32Array>();
+    expectTypeOf<T['scale']>().toEqualTypeOf<Float32Array>();
+    expectTypeOf<T['world']>().toEqualTypeOf<Float32Array>();
   });
 
   it("ShapeOf<typeof Camera.schema> yields 21 number fields ('f32' -> number) + autoAspect boolean ('bool' -> boolean)", () => {
@@ -220,24 +211,25 @@ describe('w15 AC-04 type constraint — ShapeOf derivation from field-payload', 
   it('ShapeOf<typeof Transform.schema> is non-empty (field cardinality > 0)', () => {
     type T = ShapeOf<typeof Transform.schema>;
     // If the schema were empty {}, keyof T would be never.
-    // Transform has 10 keys => keyof T is a non-never union.
+    // Transform has 4 keys (pos/quat/scale/world) => keyof T is a non-never union.
     type Keys = keyof T;
-    // The assertion: Keys is exactly 10 string keys, not never.
+    // The assertion: Keys is exactly 4 string keys, not never.
     expectTypeOf<Keys>().toMatchTypeOf<string>();
     // The inverse: never would NOT be matched by a string literal.
   });
 
-  it('AC-04 guard: default values in Transform field descriptors are number-typed', () => {
-    // The Transform component definition from M3 (w9) supplies
-    // { type:'f32', default: 0 } for each of its 10 fields.
-    // Because FieldDescriptor<'f32'> expects default?: number,
-    // any non-numeric literal (e.g. "hello") would be a type error.
-    // This compile-time assertion confirms the derivation chain:
-    //   field.type='f32' -> FieldValueType<'f32'> = number
-    //   -> default must satisfy number
+  it('AC-04 guard: default values in Transform field descriptors are Float32Array-typed', () => {
+    // The Transform component definition supplies
+    // { type: 'array<f32, N>', default: new Float32Array([...]) } for each of
+    // its 3 local TRS fields. Because FieldDescriptor<'array<f32, 3>'> expects
+    // default?: Float32Array, any non-typed-array default (e.g. "hello" or a
+    // bare number) would be a type error. This compile-time assertion confirms
+    // the derivation chain:
+    //   field.type='array<f32, 3>' -> FieldValueType<'array<f32, 3>'> = Float32Array
+    //   -> default must satisfy Float32Array
     // The ShapeOf projection is the final consumer evidence.
     type T = ShapeOf<typeof Transform.schema>;
-    expectTypeOf<T['posX']>().toEqualTypeOf<number>();
-    // If FieldValueType<'f32'> had resolved to, say, string, this would fail.
+    expectTypeOf<T['pos']>().toEqualTypeOf<Float32Array>();
+    // If FieldValueType<'array<f32, 3>'> had resolved to, say, number[], this would fail.
   });
 });

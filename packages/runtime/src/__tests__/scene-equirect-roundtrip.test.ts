@@ -20,12 +20,12 @@
 // w27 (HANDLE_FIELD_NAMES). Until then the `shared<EquirectAsset>` field name
 // is `cubemap` and this file fails to compile / resolve — that is the red.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, Handle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import type { EquirectAsset, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { BUILTIN_BASE } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { Skylight } from '../components';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 

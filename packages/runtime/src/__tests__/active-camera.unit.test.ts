@@ -25,11 +25,10 @@
 //   plan-strategy D-2: engine renderer gains neutral by-entity-ID active
 //     camera capability; resource absent -> first-hit fallback (backward compat)
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import { describe, expect, it } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { Camera, Transform } from '../components';
 import { extractFrame } from '../render-system-extract';
 import {
@@ -42,29 +41,11 @@ import {
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
 function identityTransform(): {
-  posX: number;
-  posY: number;
-  posZ: number;
-  quatX: number;
-  quatY: number;
-  quatZ: number;
-  quatW: number;
-  scaleX: number;
-  scaleY: number;
-  scaleZ: number;
+  pos: number[];
+  quat: number[];
+  scale: number[];
 } {
-  return {
-    posX: 0,
-    posY: 0,
-    posZ: 0,
-    quatX: 0,
-    quatY: 0,
-    quatZ: 0,
-    quatW: 1,
-    scaleX: 1,
-    scaleY: 1,
-    scaleZ: 1,
-  };
+  return { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] };
 }
 
 function makeAssets(): AssetRegistry {

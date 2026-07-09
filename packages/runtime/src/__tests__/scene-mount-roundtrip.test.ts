@@ -11,13 +11,14 @@
 //   parse back -> catalog -> registry.instantiate (reload) ->
 //   rootsToSceneAsset -> structural equivalence
 
+import type { Asset } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import type { Asset } from '../asset-registry';
-import { AssetRegistry } from '../asset-registry';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
+import '../components';
 import { SceneInstance } from '../components/scene-instance';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -174,8 +175,8 @@ describe('m4-t1 — single-layer mount round-trip', () => {
     const child: SceneAsset = {
       kind: 'scene',
       entities: [
-        { localId: 0 as never, components: { Transform: { posX: 1 } } },
-        { localId: 1 as never, components: { Transform: { posX: 2 } } },
+        { localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } },
+        { localId: 1 as never, components: { Transform: { pos: [2, 0, 0] } } },
       ],
     };
     cat(reg, G1, child);
@@ -183,7 +184,7 @@ describe('m4-t1 — single-layer mount round-trip', () => {
     // Step 2: Build parent scene with mount (source = GUID string, post-parse shape).
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 10 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,
@@ -306,14 +307,14 @@ describe('m4-t1 — single-layer mount round-trip', () => {
     // Child scene with one entity.
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 5 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [5, 0, 0] } } }],
     };
     cat(reg, G1, child);
 
     // Parent with one entity + mount.
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 1 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,
@@ -380,14 +381,14 @@ describe('m4-t2 — double-layer nested mount round-trip', () => {
     // Grandchild scene C.
     const sceneC: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 1 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
     };
     cat(reg, G1, sceneC);
 
     // Child scene B: mounts C.
     const sceneB: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 10 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,
@@ -404,7 +405,7 @@ describe('m4-t2 — double-layer nested mount round-trip', () => {
     expect(bTotalSlots).toBe(3);
     const sceneA: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 100 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [100, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,
@@ -524,8 +525,8 @@ describe('m4-t2 — double-layer nested mount round-trip', () => {
     const sceneC: SceneAsset = {
       kind: 'scene',
       entities: [
-        { localId: 0 as never, components: { Transform: { posX: 1 } } },
-        { localId: 1 as never, components: { Transform: { posX: 2 } } },
+        { localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } },
+        { localId: 1 as never, components: { Transform: { pos: [2, 0, 0] } } },
       ],
     };
     cat(reg, G1, sceneC);
@@ -533,7 +534,7 @@ describe('m4-t2 — double-layer nested mount round-trip', () => {
     // Child B: mounts C.
     const sceneB: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 10 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,
@@ -549,7 +550,7 @@ describe('m4-t2 — double-layer nested mount round-trip', () => {
     // Parent A: mounts B with correct memberCount.
     const sceneA: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 100 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [100, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,
@@ -647,15 +648,15 @@ describe('m4-t3 — fixed-point: post-normalization collect equality', () => {
     const child: SceneAsset = {
       kind: 'scene',
       entities: [
-        { localId: 0 as never, components: { Transform: { posX: 1 } } },
-        { localId: 1 as never, components: { Transform: { posX: 2 } } },
+        { localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } },
+        { localId: 1 as never, components: { Transform: { pos: [2, 0, 0] } } },
       ],
     };
     cat(reg, G1, child);
 
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 10 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,
@@ -727,13 +728,13 @@ describe('m4-t3 — fixed-point: post-normalization collect equality', () => {
 
     const sceneC: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 1 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
     };
     cat(reg, G1, sceneC);
 
     const sceneB: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 10 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,
@@ -748,7 +749,7 @@ describe('m4-t3 — fixed-point: post-normalization collect equality', () => {
 
     const sceneA: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 100 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [100, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,

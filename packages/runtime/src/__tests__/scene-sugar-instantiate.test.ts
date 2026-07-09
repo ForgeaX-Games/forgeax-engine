@@ -16,11 +16,11 @@
 //       rename, no message rewrite (research §error-model + plan-strategy
 //       §3.3 closed-union transparency).
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
 import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { ChildOf, SceneInstance } from '../components';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -29,15 +29,11 @@ function localId(n: number): LocalEntityId {
 }
 
 function buildScene(): SceneAsset {
-  const Transform = defineComponent('Transform', {
-    posX: 'f32',
-    posY: 'f32',
-    posZ: 'f32',
-  });
+  const Transform = defineComponent('Transform', { pos: 'array<f32, 3>' });
   void Transform;
   const nodes: SceneEntity[] = [
-    { localId: localId(0), components: { Transform: { posX: 1 } } },
-    { localId: localId(1), components: { Transform: { posX: 2 } } },
+    { localId: localId(0), components: { Transform: { pos: [1, 0, 0] } } },
+    { localId: localId(1), components: { Transform: { pos: [2, 0, 0] } } },
   ];
   return { kind: 'scene', entities: nodes };
 }
@@ -48,11 +44,7 @@ function registerSceneAsset(world: World, asset: SceneAsset): Handle<'SceneAsset
 
 describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', () => {
   it('(a) sugar entry produces the same Entity root / mapping shape as the main entry', () => {
-    defineComponent('Transform', {
-      posX: 'f32',
-      posY: 'f32',
-      posZ: 'f32',
-    });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const asset = buildScene();
     // Direct path baseline.
@@ -88,18 +80,14 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
   });
 
   it('(b) parent? passthrough attaches ChildOf via the sugar entry', () => {
-    const Transform = defineComponent('Transform', {
-      posX: 'f32',
-      posY: 'f32',
-      posZ: 'f32',
-    });
+    const Transform = defineComponent('Transform', { pos: 'array<f32, 3>' });
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const asset = buildScene();
     const world = new World();
     const handle = registerSceneAsset(world, asset);
     const parentSpawn = world.spawn({
       component: Transform,
-      data: { posX: 0, posY: 0, posZ: 0 },
+      data: { pos: [0, 0, 0] },
     });
     expect(parentSpawn.ok).toBe(true);
     if (!parentSpawn.ok) return;
@@ -148,8 +136,8 @@ describe('w30 - engine.assets.instantiate sugar wrapper equivalence (AC-03)', ()
 
 function buildPostScene(): SceneAsset {
   const nodes: SceneEntity[] = [
-    { localId: localId(0), components: { Transform: { posX: 0 } } },
-    { localId: localId(1), components: { Transform: { posX: 1 }, ChildOf: { parent: 0 } } },
+    { localId: localId(0), components: { Transform: { pos: [0, 0, 0] } } },
+    { localId: localId(1), components: { Transform: { pos: [1, 0, 0] }, ChildOf: { parent: 0 } } },
   ];
   return { kind: 'scene', entities: nodes };
 }
@@ -167,11 +155,7 @@ function postInstantiateEntity(entity: EntityHandle | number | undefined): Entit
 
 describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => {
   it('(d) AC-09: rootEntities() + world.addComponent -> hasComponent is true', () => {
-    defineComponent('Transform', {
-      posX: 'f32',
-      posY: 'f32',
-      posZ: 'f32',
-    });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const asset = buildPostScene();
     const world = new World();
@@ -201,11 +185,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
   });
 
   it('(e) AC-10: mapping[localId] + world.addComponent -> hasComponent is true', () => {
-    defineComponent('Transform', {
-      posX: 'f32',
-      posY: 'f32',
-      posZ: 'f32',
-    });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const asset = buildPostScene();
     const world = new World();
@@ -236,14 +216,10 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
 
   it('(d-ii) AC-09: addComponent on a second root entity (multi-root scene)', () => {
     // Two root nodes, each gets a different component via query-after.
-    defineComponent('Transform', {
-      posX: 'f32',
-      posY: 'f32',
-      posZ: 'f32',
-    });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
     const multiRoot: SceneEntity[] = [
-      { localId: localId(0), components: { Transform: { posX: 0 } } },
-      { localId: localId(1), components: { Transform: { posX: 10 } } },
+      { localId: localId(0), components: { Transform: { pos: [0, 0, 0] } } },
+      { localId: localId(1), components: { Transform: { pos: [10, 0, 0] } } },
     ];
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
@@ -276,15 +252,11 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
   });
 
   it('rootEntities snapshot is stable (not a live view)', () => {
-    defineComponent('Transform', {
-      posX: 'f32',
-      posY: 'f32',
-      posZ: 'f32',
-    });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
     const singleRoot: SceneEntity[] = [
-      { localId: localId(0), components: { Transform: { posX: 0 } } },
+      { localId: localId(0), components: { Transform: { pos: [0, 0, 0] } } },
     ];
     const asset: SceneAsset = { kind: 'scene', entities: singleRoot };
     const handle = registerSceneAsset(world, asset);
@@ -312,11 +284,7 @@ describe('M5 post-instantiate component injection (w13 / AC-09 + AC-10)', () => 
   });
 
   it('mapping identity: mapping[localId] returns the same Entity across calls', () => {
-    defineComponent('Transform', {
-      posX: 'f32',
-      posY: 'f32',
-      posZ: 'f32',
-    });
+    defineComponent('Transform', { pos: 'array<f32, 3>' });
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const world = new World();
     const asset = buildPostScene();

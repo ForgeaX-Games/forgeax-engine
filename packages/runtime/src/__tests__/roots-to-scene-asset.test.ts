@@ -8,18 +8,18 @@
 //   m2-t4: root ChildOf strip + cross-root closure refs (AC-09/10)
 //   m2-t5: out-of-bounds fail-fast + GUID unresolved fail-fast + exhaustive switch (AC-11/12/17)
 
+import type { Asset } from '@forgeax/engine-assets-runtime';
+import {
+  AssetRegistry,
+  SceneCollectAssetGuidUnresolvedError,
+  SceneCollectEntityRefOutOfClosureError,
+} from '@forgeax/engine-assets-runtime';
 import { defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { describe, expect, it } from 'vitest';
-import type { Asset } from '../asset-registry';
-import { AssetRegistry } from '../asset-registry';
 import { rootsToSceneAsset } from '../collect-scene-asset';
 import { ChildOf } from '../components/child-of';
 import { Children } from '../components/children';
-import {
-  SceneCollectAssetGuidUnresolvedError,
-  SceneCollectEntityRefOutOfClosureError,
-} from '../errors/asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ═══════════════════════════════════════════════════════════════════════════════

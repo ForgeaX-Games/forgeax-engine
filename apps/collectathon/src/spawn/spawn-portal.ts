@@ -79,7 +79,7 @@ export function spawnPortal(
     .spawn(
       {
         component: Transform,
-        data: { posX: position.x, posY: PORTAL_HEIGHT / 2, posZ: position.z },
+        data: { pos: [position.x, PORTAL_HEIGHT / 2, position.z] },
       },
       { component: MeshFilter, data: { assetHandle: portalMesh } },
       { component: MeshRenderer, data: { materials: [portalMat] } },

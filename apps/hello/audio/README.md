@@ -50,7 +50,7 @@ const clipHandle = assets.registerWithGuid(guidRes.value, clip);
 
 // 3. Declarative spawn -- AudioSource with clip handle.
 const emitter = world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+  { component: Transform, data: { pos: [0, 0, 0] } },
   { component: MeshFilter,  data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: {} },
   { component: AudioSource,  data: { clip: clipHandle, playing: false, spatialBlend: 1.0, bus: 'sfx' } },
@@ -58,7 +58,7 @@ const emitter = world.spawn(
 
 // 4. Camera + AudioListener marker as the spatial listener.
 const camera = world.spawn(
-  { component: Transform, data: { posX: 0, posY: 1, posZ: 5 } },
+  { component: Transform, data: { pos: [0, 1, 5] } },
   { component: Camera, data: { fov: Math.PI/4, aspect: 16/9, near: 0.1, far: 100 } },
   { component: AudioListener, data: {} },
 ).unwrap();

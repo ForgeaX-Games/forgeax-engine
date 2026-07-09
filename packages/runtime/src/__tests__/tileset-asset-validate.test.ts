@@ -22,6 +22,7 @@
 // enum) + §R-6 (first-error order); feat-20260604 D-5 single-error-code
 // continuation.
 
+import { AssetRegistry, validateTilesetPayload } from '@forgeax/engine-assets-runtime';
 import {
   AssetError,
   type Handle,
@@ -31,7 +32,6 @@ import {
   toShared,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry, validateTilesetPayload } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeAssetRegistry(): AssetRegistry {

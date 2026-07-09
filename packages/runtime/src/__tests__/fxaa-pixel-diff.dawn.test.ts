@@ -6,11 +6,12 @@
 // Follows the user-handle-mesh-render.dawn.test.ts pattern for canvas mock,
 // device capture, and pixel readback.
 
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
 import { ANTIALIAS_FXAA, ANTIALIAS_NONE, TONEMAP_NONE } from '../components/camera';
-import { createRenderer, HANDLE_CUBE } from '../index';
+import { createRenderer } from '../index';
 
 const WIDTH = 256;
 const HEIGHT = 256;
@@ -58,16 +59,9 @@ function spawnCubeScene(world: World, antialias: number, tonemap?: number): void
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 0,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
+        pos: [0, 0, 0],
+        quat: [0, 0, 0, 1],
+        scale: [1, 1, 1],
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -85,16 +79,9 @@ function spawnCubeScene(world: World, antialias: number, tonemap?: number): void
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 3,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
+        pos: [0, 0, 3],
+        quat: [0, 0, 0, 1],
+        scale: [1, 1, 1],
       },
     },
     {

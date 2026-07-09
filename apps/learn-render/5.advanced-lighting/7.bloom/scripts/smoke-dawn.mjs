@@ -176,7 +176,6 @@ const {
   BLOOM_ENABLED,
   Camera,
   createRenderer,
-  HANDLE_CUBE,
   Materials,
   MeshFilter,
   MeshRenderer,
@@ -184,6 +183,9 @@ const {
   TONEMAP_REINHARD_EXTENDED,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { quat } = await import('@forgeax/engine-math');
@@ -298,10 +300,7 @@ world
     {
       component: Transform,
       data: {
-        posX: 0, posY: -1.0, posZ: 0,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 12.5, scaleY: 0.5, scaleZ: 12.5,
-      },
+        pos: [0, -1.0, 0], quat: [0, 0, 0, 1], scale: [12.5, 0.5, 12.5],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [floorMatHandle] } },
@@ -317,10 +316,7 @@ for (const box of CONTAINER_BOXES) {
       {
         component: Transform,
         data: {
-          posX: box.pos[0], posY: box.pos[1], posZ: box.pos[2],
-          quatX: rot[0], quatY: rot[1], quatZ: rot[2], quatW: rot[3],
-          scaleX: box.scale, scaleY: box.scale, scaleZ: box.scale,
-        },
+          pos: [box.pos[0], box.pos[1], box.pos[2]], quat: [rot[0], rot[1], rot[2], rot[3]], scale: [box.scale, box.scale, box.scale],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [containerMatHandle] } },
@@ -336,7 +332,7 @@ for (let i = 0; i < LIGHT_POSITIONS.length; i++) {
   world.spawn(
     {
       component: Transform,
-      data: { posX: pos[0], posY: pos[1], posZ: pos[2], quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [pos[0], pos[1], pos[2]], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
     },
     {
       component: PointLight,
@@ -352,10 +348,7 @@ for (let i = 0; i < LIGHT_POSITIONS.length; i++) {
       {
         component: Transform,
         data: {
-          posX: pos[0], posY: pos[1], posZ: pos[2],
-          quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-          scaleX: 0.25, scaleY: 0.25, scaleZ: 0.25,
-        },
+          pos: [pos[0], pos[1], pos[2]], quat: [0, 0, 0, 1], scale: [0.25, 0.25, 0.25],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [lightBoxMat] } },
@@ -369,10 +362,7 @@ const cameraEntity = world
     {
       component: Transform,
       data: {
-        posX: 0, posY: 0, posZ: 5,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     {
       component: Camera,

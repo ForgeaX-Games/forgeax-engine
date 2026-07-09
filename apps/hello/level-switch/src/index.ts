@@ -10,15 +10,8 @@
 //   7. HUD div shows the current state variant name
 
 import { createApp } from '@forgeax/engine-app';
-import {
-  Camera,
-  DirectionalLight,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset, SceneAsset } from '@forgeax/engine-types';
 import { defineState, setNextState, getState, addOnEnter, despawnOnExit } from '@forgeax/engine-state';
 import type { StateTokenVariant } from '@forgeax/engine-state';
@@ -90,10 +83,7 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   // HANDLE_CUBE geometry scaled flat. Inline registration before loadByGuid
   // is what the dev-server pack path needs; this demo wires no pluginPack.
   const FLOOR_TRANSFORM = {
-    posX: 0, posY: -0.5, posZ: 0,
-    quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-    scaleX: 10, scaleY: 0.1, scaleZ: 10,
-  };
+    pos: [0, -0.5, 0], quat: [0, 0, 0, 1], scale: [10, 0.1, 10],};
 
   const tutorialGuid = AssetGuid.parse(TUTORIAL_GUID);
   if (!tutorialGuid.ok) throw new Error('tutorial GUID parse failed');
@@ -136,10 +126,7 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0, posY: 2, posZ: 5,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [0, 2, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: Camera, data: { fov: 60, aspect: 800 / 600, near: 0.1, far: 100 } },
   );
@@ -161,10 +148,7 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0, posY: 1.2, posZ: 1.5,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 0.8, scaleY: 0.8, scaleZ: 0.8,
-      },
+        pos: [0, 1.2, 1.5], quat: [0, 0, 0, 1], scale: [0.8, 0.8, 0.8],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [playerMatHandle] } },

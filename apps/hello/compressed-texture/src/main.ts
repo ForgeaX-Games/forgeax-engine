@@ -26,17 +26,8 @@
 
 import { createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_QUAD,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import type { TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -170,13 +161,7 @@ async function bootstrap(
       {
         component: Transform,
         data: {
-          posX: px,
-          posY: py,
-          posZ: pz,
-          scaleX: sx,
-          scaleY: sy,
-          scaleZ: sz,
-        },
+          pos: [px, py, pz], scale: [sx, sy, sz],},
       },
     );
   }
@@ -197,7 +182,7 @@ async function bootstrap(
 
   // Camera: perspective from Z=3, looking at origin.
   world.spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 3 } },
+    { component: Transform, data: { pos: [0, 0, 3]} },
     {
       component: Camera,
       data: {

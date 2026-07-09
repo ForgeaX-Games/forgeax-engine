@@ -31,10 +31,12 @@
     "bench:nineslice": "node ../../scripts/bench/bench-nineslice-100panel.mjs"
   },
   "dependencies": {
+    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-debug-draw": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
+    "@forgeax/engine-graphics-extras": "workspace:*",
     "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:^",

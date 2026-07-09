@@ -8,11 +8,10 @@
 //   AC-02-concurrent  — pack.json fetched once per URL for concurrent loads
 //   AC-02-reject      — fetch reject clears in-flight, retry re-fetches
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ── test GUIDs ──────────────────────────────────────────────────────────────

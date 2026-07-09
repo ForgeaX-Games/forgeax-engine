@@ -8,7 +8,7 @@
 //   2. >= 300 frames observed.
 //   3. PhysicsWorld resource is present after WASM init.
 //   4. moveAndSlide advanced the character horizontally (it did NOT fall through
-//      the ground): final posX > initial posX by a clear margin, and posY stays
+//      the ground): final pos x > initial pos x by a clear margin, and pos y stays
 //      near the resting height (no tunneling).
 //   5. CharacterController.grounded reads true while walking on flat ground.
 //
@@ -172,7 +172,7 @@ const CHAR_REST_Y = 0.45;
 
 // Static ground.
 app.world.spawn(
-  { component: Transform, data: { posX: 0, posY: -0.85, posZ: 0, scaleX: 20, scaleY: 1, scaleZ: 20 } },
+  { component: Transform, data: { pos: [0, -0.85, 0], scale: [20, 1, 20]} },
   { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
   {
     component: Collider,
@@ -182,7 +182,7 @@ app.world.spawn(
 
 // Kinematic capsule character.
 const charSpawn = app.world.spawn(
-  { component: Transform, data: { posX: 0, posY: CHAR_REST_Y, posZ: 0 } },
+  { component: Transform, data: { pos: [0, CHAR_REST_Y, 0]} },
   { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } },
   {
     component: Collider,
@@ -197,7 +197,7 @@ if (!charSpawn.ok) {
 const character = charSpawn.value;
 
 app.world.spawn(
-  { component: Transform, data: { posX: 0, posY: 6, posZ: 12 } },
+  { component: Transform, data: { pos: [0, 6, 12]} },
   { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
 );
 app.world.spawn({
@@ -224,7 +224,7 @@ if (!startResult.ok) {
 }
 
 const initialTransform = app.world.get(character, Transform);
-const initialPosX = initialTransform.ok ? initialTransform.value.posX : 0;
+const initialPosX = initialTransform.ok ? (initialTransform.value.pos[0] ?? 0) : 0;
 
 function grounded() {
   const r = app.world.get(character, CharacterController);
@@ -298,10 +298,10 @@ await delay(500);
 
 const hasPhysicsWorld = app.world.hasResource('PhysicsWorld') === true;
 const finalTransform = app.world.get(character, Transform);
-const finalPosX = finalTransform.ok ? finalTransform.value.posX : 0;
-const finalPosY = finalTransform.ok ? finalTransform.value.posY : 0;
+const finalPosX = finalTransform.ok ? (finalTransform.value.pos[0] ?? 0) : 0;
+const finalPosY = finalTransform.ok ? (finalTransform.value.pos[1] ?? 0) : 0;
 console.log(
-  `[smoke] frames=${totalFrames} driven=${drivenFrames} grounded=${groundedFrames} posX ${initialPosX} -> ${finalPosX} posY=${finalPosY}`,
+  `[smoke] frames=${totalFrames} driven=${drivenFrames} grounded=${groundedFrames} pos x ${initialPosX} -> ${finalPosX} pos y=${finalPosY}`,
 );
 
 const stopResult = app.stop();
@@ -329,10 +329,10 @@ if (!hasPhysicsWorld) {
 } else {
   // AC-15: moveAndSlide advanced the character and it did not tunnel.
   if (finalPosX <= initialPosX + 0.3) {
-    failures.push(`(e) character did not advance via moveAndSlide: posX ${initialPosX} -> ${finalPosX}`);
+    failures.push(`(e) character did not advance via moveAndSlide: pos x ${initialPosX} -> ${finalPosX}`);
   }
   if (finalPosY < CHAR_REST_Y - 0.5) {
-    failures.push(`(f) character tunneled through the ground: posY=${finalPosY} (rest ${CHAR_REST_Y})`);
+    failures.push(`(f) character tunneled through the ground: pos y=${finalPosY} (rest ${CHAR_REST_Y})`);
   }
   if (drivenFrames > 0 && groundedFrames < drivenFrames * 0.5) {
     failures.push(`(g) character not grounded while walking flat: ${groundedFrames}/${drivenFrames}`);
@@ -348,7 +348,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - frames=${totalFrames}, PhysicsWorld=${hasPhysicsWorld}, posX ${initialPosX} -> ${finalPosX}, grounded=${groundedFrames}/${drivenFrames}, app.onError=0`,
+  `[smoke] PASS - frames=${totalFrames}, PhysicsWorld=${hasPhysicsWorld}, pos x ${initialPosX} -> ${finalPosX}, grounded=${groundedFrames}/${drivenFrames}, app.onError=0`,
 );
 
 if (sharedDevice) sharedDevice.destroy?.();

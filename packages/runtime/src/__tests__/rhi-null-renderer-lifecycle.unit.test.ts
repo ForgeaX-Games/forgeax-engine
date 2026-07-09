@@ -13,10 +13,10 @@
 //   4. await queue.onSubmittedWorkDone() resolves immediately (AC-12)
 //   5. renderer.dispose() then draw returns err (lifecycle guard)
 
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { rhi } from '@forgeax/engine-rhi-null';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HANDLE_CUBE } from '../asset-registry';
 import { Camera, DirectionalLight, MeshFilter, MeshRenderer, Transform } from '../components';
 import type { Renderer } from '../renderer';
 

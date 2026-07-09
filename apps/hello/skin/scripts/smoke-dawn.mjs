@@ -36,8 +36,8 @@ const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOL
 //     component is emitted on any Fox instance. Smoke asserts at least one
 //     resolved Skin entity exists in each spawn subtree; with the falsify
 //     mutation findSkinnedMember returns undefined and exit !=0.
-//   FALSIFY=identity-parent -> parent rig uses identity Transform (posY=0)
-//     instead of posY=1. With the shader fix (M1), the rendered frame must
+//   FALSIFY=identity-parent -> parent rig uses identity Transform (pos y=0)
+//     instead of pos y=1. With the shader fix (M1), the rendered frame must
 //     differ from the parented baseline; if it does NOT differ, either the
 //     parent is not being applied or the camera framing washes out the
 //     difference, and the smoke is suspect. Counter-proof for AC-02.
@@ -405,14 +405,14 @@ const perInstance = [];
 // bug-20260615-skin-mesh-node-double-transform: parent all 3 Fox instances
 // under a single non-identity rig. With the shader fix (M1), the skinned
 // meshes rigid-follow the parent; without it, the parent transform doubles.
-// posY=1 lifts the Fox 1 unit upward, producing a visible pixel difference
+// pos y=1 lifts the Fox 1 unit upward, producing a visible pixel difference
 // between parented and identity-parent modes at 200x150 resolution.
 // FALSIFY=identity-parent: rig uses identity Transform -- the rendered
 // full-frame hash must differ from the parented-baseline reference.
 const parentRigTr =
   FALSIFY === 'identity-parent'
-    ? { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 }
-    : { posX: 0, posY: 1, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 };
+    ? { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]}
+    : { pos: [0, 1, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]};
 const parentRigRes = world.spawn({ component: Transform, data: parentRigTr });
 if (!parentRigRes.ok) {
   console.error(`[smoke] FAIL - parent rig spawn failed: ${parentRigRes.error.code}`);
@@ -428,7 +428,7 @@ for (const { x, clip, label } of lineup) {
   }
   const root = instRes.value;
   const tr = world.get(root, Transform);
-  if (tr.ok) world.set(root, Transform, { ...tr.value, posX: x });
+  if (tr.ok) world.set(root, Transform, { ...tr.value, pos: [x, 0, 0]});
   else {
     console.error(`[smoke] FAIL - ${label} root has no Transform`);
     process.exit(1);
@@ -509,7 +509,7 @@ if (!allClipsDistinct) {
 world.spawn(
   {
     component: Transform,
-    data: { posX: 0, posY: 1.2, posZ: 6, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+    data: { pos: [0, 1.2, 6], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
   },
   { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
 );
@@ -665,8 +665,8 @@ if (skinPaletteFullHashSetDawn.size < 2) {
 }
 
 // bug-20260615 M4 AC-02 counter-proof (palette-hash structural assertion).
-// The parented-rig (posY=1) palette hashes differ from the identity-parent
-// palette hashes. The parented-mode reference set (posY=1):
+// The parented-rig (pos y=1) palette hashes differ from the identity-parent
+// palette hashes. The parented-mode reference set (pos y=1):
 //   {c72b7794, bfe6ce5c, 7d92e658}
 // The FALSIFY=identity-parent mode produces a different set:
 //   {05dba7cc, b8f254fc, 7cbb03c9}

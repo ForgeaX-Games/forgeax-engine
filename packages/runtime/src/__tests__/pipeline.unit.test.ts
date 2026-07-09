@@ -46,6 +46,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  BUILTIN_FLOATS_PER_VERTEX,
+  HANDLE_CUBE,
+  HANDLE_TRIANGLE,
+  resolveAssetHandle,
+} from '@forgeax/engine-assets-runtime';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import {
   createBoxGeometry,
@@ -94,8 +100,6 @@ import {
   toShared,
 } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HANDLE_CUBE, HANDLE_TRIANGLE } from '../asset-registry';
-import { BUILTIN_FLOATS_PER_VERTEX } from '../builtin-asset-registry';
 import {
   bin,
   type ClusterBinError,
@@ -124,7 +128,6 @@ import {
   deriveRenderDataTexture,
 } from '../render-data';
 import { extractFrame, sortDispatchByQueue } from '../render-system-extract';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 import { matchPass } from '../systems/pass-selector';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -3036,31 +3039,17 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
   function originTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 0],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -3368,31 +3357,17 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
   function originTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 0],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -3655,7 +3630,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         .spawn(
           {
             component: Transform,
-            data: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
           },
           { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
         )
@@ -3665,7 +3640,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         .spawn(
           {
             component: Transform,
-            data: { posX: 1, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            data: { pos: [1, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
           },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
           { component: MeshRenderer, data: { materials: [MATERIAL_SENTINEL] } },
@@ -3683,7 +3658,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         .spawn(
           {
             component: Transform,
-            data: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
           },
           { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
         )
@@ -3693,7 +3668,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         .spawn(
           {
             component: Transform,
-            data: { posX: 1, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            data: { pos: [1, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
           },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
           { component: MeshRenderer, data: { materials: [MATERIAL_SENTINEL] } },
@@ -3712,7 +3687,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       const parent = world
         .spawn({
           component: Transform,
-          data: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+          data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
         })
         .unwrap();
 
@@ -3720,7 +3695,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         .spawn(
           {
             component: Transform,
-            data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            data: { pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
           },
           { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
         )
@@ -3730,7 +3705,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         .spawn(
           {
             component: Transform,
-            data: { posX: 1, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            data: { pos: [1, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
           },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
           { component: MeshRenderer, data: { materials: [MATERIAL_SENTINEL] } },
@@ -3748,7 +3723,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       const parent = world
         .spawn({
           component: Transform,
-          data: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+          data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
         })
         .unwrap();
 
@@ -3756,7 +3731,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         .spawn(
           {
             component: Transform,
-            data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            data: { pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
           },
           { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
         )
@@ -3767,7 +3742,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
           .spawn(
             {
               component: Transform,
-              data: { posX: n, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+              data: { pos: [n, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
             },
             { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
             { component: MeshRenderer, data: { materials: [MATERIAL_SENTINEL] } },
@@ -3789,7 +3764,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         .spawn(
           {
             component: Transform,
-            data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            data: { pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
           },
           { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
         )
@@ -3799,7 +3774,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         .spawn(
           {
             component: Transform,
-            data: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
           },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
           { component: MeshRenderer, data: { materials: [MATERIAL_SENTINEL] } },
@@ -3820,7 +3795,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         .spawn(
           {
             component: Transform,
-            data: { posX: 0, posY: 0, posZ: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            data: { pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
           },
           { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
         )
@@ -3830,7 +3805,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         .spawn(
           {
             component: Transform,
-            data: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
           },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
           { component: MeshRenderer, data: { materials: [MATERIAL_SENTINEL] } },
@@ -3841,7 +3816,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         .spawn(
           {
             component: Transform,
-            data: { posX: 2, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+            data: { pos: [2, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
           },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
           { component: MeshRenderer, data: { materials: [MATERIAL_SENTINEL] } },
@@ -4147,7 +4122,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         MeshFilter: unknown;
         MeshRenderer: unknown;
       };
-      const assetRegistry = (await import('../asset-registry')) as {
+      const assetRegistry = (await import('@forgeax/engine-assets-runtime')) as {
         HANDLE_TRIANGLE: number;
       };
 
@@ -4197,16 +4172,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
           {
             component: components.Transform,
             data: {
-              posX: 0,
-              posY: 0,
-              posZ: 5,
-              quatX: 0,
-              quatY: 0,
-              quatZ: 0,
-              quatW: 1,
-              scaleX: 1,
-              scaleY: 1,
-              scaleZ: 1,
+              pos: [0, 0, 5],
+              quat: [0, 0, 0, 1],
+              scale: [1, 1, 1],
             },
           },
           {
@@ -4230,16 +4198,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
           {
             component: components.Transform,
             data: {
-              posX: 0,
-              posY: 0,
-              posZ: 0,
-              quatX: 0,
-              quatY: 0,
-              quatZ: 0,
-              quatW: 1,
-              scaleX: 1,
-              scaleY: 1,
-              scaleZ: 1,
+              pos: [0, 0, 0],
+              quat: [0, 0, 0, 1],
+              scale: [1, 1, 1],
             },
           },
           {

@@ -20,21 +20,9 @@
 // pointer to the viewport-relative coordinate `pick` expects.
 
 import { World } from '@forgeax/engine-ecs';
-import {
-  acquireCanvasContext,
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  EngineEnvironmentError,
-  type MaterialAsset,
-  Materials,
-  type MeshAsset,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  pick,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { type MeshAsset } from '@forgeax/engine-assets-runtime';
+import { acquireCanvasContext, Camera, createRenderer, DirectionalLight, EngineEnvironmentError, type MaterialAsset, Materials, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
+import { pick } from '@forgeax/engine-picking';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -108,7 +96,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const cameraEntity = world.spawn(
     {
       component: Transform,
-      data: { posZ: 4 },
+      data: { pos: [0, 0, 4]},
     },
     {
       component: Camera,

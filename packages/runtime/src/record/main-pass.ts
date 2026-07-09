@@ -1,3 +1,4 @@
+import { probeVideoHighPerfUpload } from '@forgeax/engine-graphics-extras';
 import { type BindGroup, RhiError, type RhiRenderPassEncoder } from '@forgeax/engine-rhi';
 import type { Handle, PassSelector } from '@forgeax/engine-types';
 import { createHdrpUnifiedBindGroup, getOrCreateHdrpBuffers } from '../hdrp-buffers';
@@ -6,7 +7,6 @@ import { buildBeginRenderPassDescriptor } from '../pipeline-spec';
 import type { _InternalRenderPipelineContext } from '../render-pipeline-context';
 import { STANDARD_PBR_UBO_SIZE } from '../render-system';
 import type { MaterialSnapshot } from '../render-system-extract';
-import { probeVideoHighPerfUpload } from '../video-player-system';
 import { recordGeometryDraws } from './main-pass-geometry';
 import {
   applyParamSnapshotToUbo,

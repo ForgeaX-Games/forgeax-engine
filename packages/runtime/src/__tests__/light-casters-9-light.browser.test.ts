@@ -90,10 +90,10 @@
 // section 6.1 4-light accumulation precedent) + Finding 9 (storage
 // buffer count 0 retreat path).
 
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import type { Handle, MaterialAsset } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
-import { HANDLE_CUBE } from '../asset-registry';
 import {
   Camera,
   DirectionalLight,
@@ -169,16 +169,9 @@ function spawnCamera(world: World): void {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 5,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 5],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       {
@@ -205,16 +198,9 @@ function spawnStandardCube(world: World, hStandard: Handle<'MaterialAsset', 'sha
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -253,16 +239,9 @@ function spawnPointAt(
       {
         component: Transform,
         data: {
-          posX: x,
-          posY: y,
-          posZ: z,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [x, y, z],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       {
@@ -295,16 +274,9 @@ function spawnSpotAimingAtOrigin(
       {
         component: Transform,
         data: {
-          posX: x,
-          posY: y,
-          posZ: z,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [x, y, z],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       {

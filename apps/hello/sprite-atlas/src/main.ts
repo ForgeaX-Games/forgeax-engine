@@ -6,7 +6,7 @@
 // spawn 10000 independent sprite entities sharing one MaterialAsset handle.
 // The record-stage fold operator (M1 / w4) collapses the 10000 transparent
 // dispatch entries into one instanced drawIndexed because all share
-// `(Layer.value=0, posZ=0, materialHandle)` -- AC-03 transparent abstraction
+// `(Layer.value=0, pos z=0, materialHandle)` -- AC-03 transparent abstraction
 // (AI users spawn N entities, engine collapses to 1 draw automatically).
 //
 // What this demo exercises end-to-end (charter F1 progressive disclosure):
@@ -16,7 +16,7 @@
 //     + SpriteRegionOverride) -- the canonical AI-user spawn shape (AGENTS.md
 //     §Component naming) without the Instances opt-in.
 //   - record-stage fold operator (this feat M1 / w4) -- 10000 entries with
-//     equal (Layer.value, posZ, materialHandle) collapse into one fold
+//     equal (Layer.value, pos z, materialHandle) collapse into one fold
 //     bucket -> one drawIndexed(indexCount, 10000).
 //   - foldedDraws metric (this feat M3 / w13) -- exposed via
 //     `renderer.metrics.snapshot()['render.instancing.foldedDraws']`; the
@@ -34,18 +34,8 @@ import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { ok as okResult } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  CAMERA_PROJECTION_ORTHOGRAPHIC,
-  Camera,
-  createDevImportTransport,
-  EngineEnvironmentError,
-  HANDLE_QUAD,
-  MeshFilter,
-  MeshRenderer,
-  SpriteRegionOverride,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { CAMERA_PROJECTION_ORTHOGRAPHIC, Camera, createDevImportTransport, EngineEnvironmentError, MeshFilter, MeshRenderer, SpriteRegionOverride, SPRITE_PREMULTIPLIED_ALPHA_BLEND, Transform } from '@forgeax/engine-runtime';
 
 import type {
   Handle,
@@ -61,7 +51,7 @@ const PACK_INDEX_URL = '/pack-index.json';
 // 10000 independent sprite entities arranged in a 100x100 grid. Each gets
 // its own Transform / MeshFilter / MeshRenderer / SpriteRegionOverride;
 // the fold operator (record stage) collapses them into one drawIndexed
-// because all share (Layer.value=0, posZ=0, materialHandle). Performance
+// because all share (Layer.value=0, pos z=0, materialHandle). Performance
 // anchor: requirements AC-01 sprite-atlas 10k @ p95>=60fps (verify-stage
 // SSOT, charter P5).
 const SPRITE_GRID = 100;
@@ -197,17 +187,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 5,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
-        },
+          pos: [0, 0, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
       },
       {
         component: Camera,
@@ -233,7 +213,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Step 5: spawn 10000 independent sprite entities. Each has its own
   // Transform / MeshFilter / MeshRenderer / SpriteRegionOverride. The
   // record-stage fold operator collapses them into one instanced
-  // drawIndexed because the (Layer.value, posZ, materialHandle) triple
+  // drawIndexed because the (Layer.value, pos z, materialHandle) triple
   // is uniform across the batch (charter P4 transparent optimisation).
   // Per-entity SpriteRegionOverride still works because the sprite
   // shader reads it via a per-entity mesh UBO slice.
@@ -248,17 +228,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: cx,
-          posY: cy,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: SPRITE_SPACING * 0.9,
-          scaleY: SPRITE_SPACING * 0.9,
-          scaleZ: 1,
-        },
+          pos: [cx, cy, 0], quat: [0, 0, 0, 1], scale: [SPRITE_SPACING * 0.9, SPRITE_SPACING * 0.9, 1],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
       { component: MeshRenderer, data: { materials: [materialHandle] } },

@@ -16,10 +16,11 @@
 // The child NEVER writes Transform.local.position to chase the parent and there
 // is NO second position cache (no *PositionCache field): the child's world
 // placement is purely derived through ChildOf + propagateTransforms (AC-04
-// review anchor). The only `posX:` writes here are the parent spawn pose and the
+// review anchor). The only Transform pos writes here are the parent spawn pose and the
 // child's authored local offset (cm->world scale + feet drop) -- never a
 // per-frame parent-follow copy.
 
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import {
   CharacterController,
@@ -29,7 +30,6 @@ import {
   RigidBody,
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
-import type { AssetRegistry } from '@forgeax/engine-runtime';
 import {
   AnimationPlayer,
   ChildOf,
@@ -127,7 +127,7 @@ export function spawnPlayer(
   const parentRes = world.spawn(
     {
       component: Transform,
-      data: { posX: spawnXZ.x, posY: PLAYER_SPAWN_Y, posZ: spawnXZ.z },
+      data: { pos: [spawnXZ.x, PLAYER_SPAWN_Y, spawnXZ.z] },
     },
     { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } },
     {
@@ -173,12 +173,8 @@ export function spawnPlayer(
   // root's world is then parent.world x root.local through ChildOf, so the
   // visual rig rigid-follows the KCC parent without a position cache.
   world.set(sceneRoot, Transform, {
-    posX: 0,
-    posY: CHILD_FEET_OFFSET_Y,
-    posZ: 0,
-    scaleX: FBX_CM_TO_WORLD_SCALE,
-    scaleY: FBX_CM_TO_WORLD_SCALE,
-    scaleZ: FBX_CM_TO_WORLD_SCALE,
+    pos: [0, CHILD_FEET_OFFSET_Y, 0],
+    scale: [FBX_CM_TO_WORLD_SCALE, FBX_CM_TO_WORLD_SCALE, FBX_CM_TO_WORLD_SCALE],
   });
 
   // 3. Parent the scene root under the KCC parent. propagateTransforms (auto-

@@ -432,9 +432,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     if (ctx) {
       // D-6: writeback Result ignored — entry checks already guard liveness.
       ctx.world.set(entity as EntityHandle, ctx.transform, {
-        posX: next.x,
-        posY: next.y,
-        posZ: next.z,
+        pos: [next.x, next.y, next.z],
       });
       ctx.world.set(entity as EntityHandle, ctx.characterController, { grounded });
     }
@@ -891,13 +889,14 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
       const cCGroups = cCols.get('collisionGroups')?.view as Uint32Array | undefined;
       const cSGroups = cCols.get('solverGroups')?.view as Uint32Array | undefined;
 
-      const tfPx = tfCols.get('posX')?.view as Float32Array | undefined;
-      const tfPy = tfCols.get('posY')?.view as Float32Array | undefined;
-      const tfPz = tfCols.get('posZ')?.view as Float32Array | undefined;
+      // Local TRS position is a flat stride-3 array<f32,3> column
+      // (feat-20260709 M2): row i's xyz at pos[i*3 .. +2]. Indexed reads only
+      // -- zero per-call allocation on this per-frame sync path (AC-08).
+      const tfPos = tfCols.get('pos')?.view as Float32Array | undefined;
       // Transform.world is an inline `array<f32, 16>` column (stride 16,
       // column-major mat4); row r's world-space translation is at
       // [r*16 + 12 .. +14]. The kinematic mirror MUST drive the Rapier collider
-      // from WORLD space, not local posX/Y/Z: a ChildOf collider (e.g. a Guardian
+      // from WORLD space, not local pos: a ChildOf collider (e.g. a Guardian
       // attack sensor parented to its body) has local pos (0,0,0), so mirroring
       // local would pin its collider at the world origin forever while only its
       // ECS Transform follows the parent (via propagateTransforms). physicsSync
@@ -923,9 +922,7 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
         !cSensor ||
         !cCGroups ||
         !cSGroups ||
-        !tfPx ||
-        !tfPy ||
-        !tfPz
+        !tfPos
       ) {
         continue;
       }
@@ -934,9 +931,9 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
         const entity = readEntityAt(arch, row);
 
         const transform = {
-          posX: tfPx[row] as number,
-          posY: tfPy[row] as number,
-          posZ: tfPz[row] as number,
+          posX: tfPos[row * 3] as number,
+          posY: tfPos[row * 3 + 1] as number,
+          posZ: tfPos[row * 3 + 2] as number,
         };
 
         const rigidBody: {
@@ -1061,9 +1058,7 @@ export const PhysicsWriteback: SystemHandle<readonly []> = defineSystem({
     for (const r of results) {
       const entity = r.entity as EntityHandle;
       world.set(entity, transformComponent, {
-        posX: r.pos.x,
-        posY: r.pos.y,
-        posZ: r.pos.z,
+        pos: [r.pos.x, r.pos.y, r.pos.z],
       });
     }
   },

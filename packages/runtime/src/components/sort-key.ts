@@ -60,9 +60,8 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *
  * @example Bias one sprite above the JRPG Y-sort formula:
  *   world.spawn(
- *     { component: Transform, data: { posX: 0, posY: 1, posZ: 0,
- *       quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
- *       scaleX: 1, scaleY: 1, scaleZ: 1 } },
+ *     { component: Transform, data: { pos: [0, 1, 0],
+ *       quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
  *     { component: Layer, data: { value: 0 } },
  *     { component: SortKey, data: { value: -100 } },
  *   );

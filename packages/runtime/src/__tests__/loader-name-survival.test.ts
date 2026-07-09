@@ -23,11 +23,10 @@
 //                 a tautology). The FALSIFY block does not gate CI; it documents
 //                 discriminating power.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const MESH_A = '70000000-0000-4000-7000-000000000001';

@@ -198,12 +198,12 @@ const world = new World();
 const meshHandle = world.allocSharedRef('MeshAsset', meshAsset.payload);
 const matHandle = world.allocSharedRef('MaterialAsset', matAsset.payload);
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
   { component: MeshFilter, data: { assetHandle: meshHandle } },
   { component: MeshRenderer, data: { materials: [matHandle] } },
 );
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0, posZ: 30, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0, 30], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
   { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
 );
 world.spawn({

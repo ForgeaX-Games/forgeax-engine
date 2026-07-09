@@ -31,9 +31,9 @@
 //   - tweak-20260611 plan-strategy D-7 (subtree-scope)
 //   - charter P3 (explicit failure: path-unresolved fail-fast)
 
+import type { SkinJointResolver } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { Entity as EntityComponent } from '@forgeax/engine-ecs';
-import type { SkinAsset } from '@forgeax/engine-types';
 import { Name } from '../components/name';
 import { Skin } from '../components/skin';
 import { collectSubtree } from '../scene-utils/collect-subtree';
@@ -62,9 +62,12 @@ interface InternalArchetype {
   readonly size: number;
 }
 
-export interface SkinJointResolver {
-  resolveSkinAsset(skeletonHandleRaw: number): SkinAsset | undefined;
-}
+// feat-20260705-runtime-tier2-decomposition M1 / w6 (D-1): SkinJointResolver
+// relocated to registry/instantiate.ts so the hook contract travels with the
+// instantiate cluster into @forgeax/engine-assets-runtime. Imported back here as
+// a forward (runtime -> assets-runtime-bound module) type-only reference and
+// re-exported for existing consumers of this module's SkinJointResolver export.
+export type { SkinJointResolver } from '@forgeax/engine-assets-runtime';
 
 interface JointPathUnresolvedError {
   code: 'skin-joint-path-unresolved';

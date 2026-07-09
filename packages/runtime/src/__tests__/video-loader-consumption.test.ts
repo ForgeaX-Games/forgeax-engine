@@ -15,11 +15,10 @@
 // unit so the consumption path is exercised with a concrete AssetRegistry,
 // not just a *.test-d.ts compile-only check.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Asset, VideoAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function parseGuid(s: string): AssetGuid {

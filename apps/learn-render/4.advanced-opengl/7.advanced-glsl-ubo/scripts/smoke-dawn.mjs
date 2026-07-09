@@ -157,13 +157,15 @@ const enginePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
   DirectionalLight,
-  HANDLE_CUBE,
   Materials,
   MeshFilter,
   MeshRenderer,
   perspective,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 // createApp lives in @forgeax/engine-app, not @forgeax/engine-runtime.
 const { createApp } = await import('@forgeax/engine-app');
 const { buildEngineShaderManifest } = await import(
@@ -213,7 +215,7 @@ for (let i = -1; i <= 1; i++) {
   world.spawn(
     {
       component: Transform,
-      data: { posX: i * 1.5, posY: 0, posZ: 0 },
+      data: { pos: [i * 1.5, 0, 0]},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -238,7 +240,7 @@ world.spawn({
 world.spawn(
   {
     component: Transform,
-    data: { posX: 0, posY: 0, posZ: 6 },
+    data: { pos: [0, 0, 6]},
   },
   {
     component: Camera,

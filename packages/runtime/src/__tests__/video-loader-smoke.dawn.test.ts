@@ -10,11 +10,10 @@
 // (w4), so the AssetRegistry's built-in loaders field dispatches 'video'
 // kind through videoLoader without manual registration.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { VideoAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const GUID_SMOKE_A = '00000000-0000-7000-8000-00000000a010';

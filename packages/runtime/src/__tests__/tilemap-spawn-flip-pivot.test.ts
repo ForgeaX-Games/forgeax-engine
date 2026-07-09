@@ -34,10 +34,10 @@
 // (`requirements.md §AC-10 falsifier` charter F1 alignment).
 
 import { Entity, World } from '@forgeax/engine-ecs';
+import { encodeTileBits } from '@forgeax/engine-graphics-extras';
 import { type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { ChildOf, encodeSortScope, TileLayer, Tilemap, Transform } from '../components';
-import { encodeTileBits } from '../tile-bits';
 import {
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
@@ -108,12 +108,12 @@ function readDerivedTransform(world: World): {
       if (e === undefined || e === 0) continue;
       const t = world.get(e as never, Transform).unwrap();
       return {
-        posX: t.posX,
-        posY: t.posY,
-        scaleX: t.scaleX,
-        scaleY: t.scaleY,
-        quatZ: t.quatZ,
-        quatW: t.quatW,
+        posX: t.pos[0] ?? 0,
+        posY: t.pos[1] ?? 0,
+        scaleX: t.scale[0] ?? 1,
+        scaleY: t.scale[1] ?? 1,
+        quatZ: t.quat[2] ?? 0,
+        quatW: t.quat[3] ?? 1,
       };
     }
   }

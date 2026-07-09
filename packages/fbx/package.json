@@ -35,6 +35,7 @@
   },
   "devDependencies": {
     "@forgeax/engine-import": "workspace:*",
+    "@forgeax/engine-picking": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
     "@types/node": "^20.14.0"
   },

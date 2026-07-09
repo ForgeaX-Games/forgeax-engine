@@ -18,7 +18,7 @@
 
 import type { World } from '@forgeax/engine-ecs';
 import { GlyphText, Transform } from '@forgeax/engine-runtime';
-import type { AssetRegistry } from '@forgeax/engine-runtime';
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SamplerAsset } from '@forgeax/engine-types';
 
@@ -63,14 +63,14 @@ export function registerSharedSampler(
  *   (d) depth-occluded text        -- AC-11 (sits behind the occluder cube)
  */
 export const TEXT_SCENES: ReadonlyArray<{
-  readonly pos: { posX: number; posY: number; posZ: number };
+  readonly pos: readonly [number, number, number];
   readonly text: string;
   readonly color: readonly [number, number, number, number];
 }> = [
-  { pos: { posX: -3, posY: 2.5, posZ: 0 }, text: 'PLAYER 1', color: [1, 1, 1, 1] },
-  { pos: { posX: -3, posY: 0, posZ: 0 }, text: 'HP\nMANA', color: [0.6, 0.9, 1, 1] },
-  { pos: { posX: 1, posY: 2.5, posZ: 0 }, text: 'BLOOM', color: [3, 2.4, 1.2, 1] },
-  { pos: { posX: 1.6, posY: -1.0, posZ: 0 }, text: 'HIDDEN', color: [1, 0.8, 0.2, 1] },
+  { pos: [-3, 2.5, 0], text: 'PLAYER 1', color: [1, 1, 1, 1] },
+  { pos: [-3, 0, 0], text: 'HP\nMANA', color: [0.6, 0.9, 1, 1] },
+  { pos: [1, 2.5, 0], text: 'BLOOM', color: [3, 2.4, 1.2, 1] },
+  { pos: [1.6, -1.0, 0], text: 'HIDDEN', color: [1, 0.8, 0.2, 1] },
 ];
 
 /** Spawn the four world-space text scenes. Shared by demo + smoke. */
@@ -81,7 +81,7 @@ export function spawnTextScenes(
   for (const s of TEXT_SCENES) {
     world
       .spawn(
-        { component: Transform, data: { ...s.pos, quatW: 1 } },
+        { component: Transform, data: { ...s.pos, quat: [0, 0, 0, 1]} },
         {
           component: GlyphText,
           data: {

@@ -235,13 +235,13 @@ const planeMeshHandle = world.allocSharedRef('MeshAsset', planeRes.value);
 
 world
   .spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+    { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
     { component: MeshFilter, data: { assetHandle: planeMeshHandle } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },
   )
   .unwrap();
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0, posZ: 3, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
   { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
 );
 

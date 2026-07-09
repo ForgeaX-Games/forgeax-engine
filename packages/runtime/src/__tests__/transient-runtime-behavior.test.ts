@@ -18,12 +18,12 @@
 // Depends on m2t4 (deferred ChildOf wiring) — ChildOf hierarchy is the
 // canonical cause of Children being populated by the mirror hook.
 
+import type { Asset } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { createQueryState, Entity, type EntityHandle, queryRun, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, LocalEntityId, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import type { Asset } from '../asset-registry';
-import { AssetRegistry } from '../asset-registry';
 import { rootsToSceneAsset } from '../collect-scene-asset';
 import { ChildOf } from '../components/child-of';
 import { Children } from '../components/children';

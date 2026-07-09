@@ -10,14 +10,13 @@
 // or the buffer count would grow across repeated calls. This test
 // validates the structural invariants on a real GPU device.
 
+import { BUILTIN_FLOATS_PER_VERTEX, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { mat4 } from '@forgeax/engine-math';
 import { ok } from '@forgeax/engine-rhi';
 import type { EquirectAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { BUILTIN_FLOATS_PER_VERTEX } from '../../builtin-asset-registry';
 import { GpuResourceStore } from '../../gpu-resource-store';
-import { resolveAssetHandle } from '../../resolve-asset-handle';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,

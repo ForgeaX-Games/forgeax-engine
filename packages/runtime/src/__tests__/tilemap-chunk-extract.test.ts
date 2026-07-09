@@ -5,19 +5,19 @@
 //  - One ECS entity is spawned per NON-ZERO cell (no Instances component).
 //  - Each spawned entity carries Transform + MeshFilter (HANDLE_QUAD) +
 //    MeshRenderer + Layer + ChildOf.
-//  - Transform.posX = (cellX + 0.5) * tileSizeX (M0 1x1 unit-cell form).
-//  - Transform.posY = (cellY + 0.5) * tileSizeY.
-//  - scaleX sign encodes flipH, scaleY sign encodes flipV.
-//  - quatZ / quatW encode D flip (90deg CW z-rotation).
+//  - Transform.pos[0] = (cellX + 0.5) * tileSizeX (M0 1x1 unit-cell form).
+//  - Transform.pos[1] = (cellY + 0.5) * tileSizeY.
+//  - scale[0] sign encodes flipH, scale[1] sign encodes flipV.
+//  - quat[2] / quat[3] encode D flip (90deg CW z-rotation).
 //
 // Anchors: plan-tasks m0-t9 / m0-t10; plan-strategy §D-1 per-cell entity TRS.
 
+import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { Entity, World } from '@forgeax/engine-ecs';
+import { encodeTileBits } from '@forgeax/engine-graphics-extras';
 import { type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { HANDLE_QUAD } from '../asset-registry';
 import { ChildOf, encodeSortScope, MeshFilter, TileLayer, Tilemap, Transform } from '../components';
-import { encodeTileBits } from '../tile-bits';
 import {
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
@@ -107,7 +107,7 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     expect(derivedCount).toBe(3);
   });
 
-  it('Transform.posX/posY land at cell center (M0 1x1 form)', () => {
+  it('Transform.pos[0]/pos[1] land at cell center (M0 1x1 form)', () => {
     const cols = 2;
     const rows = 2;
     const tileSize = 16;
@@ -121,8 +121,8 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
       tiles,
     });
     tilemapChunkExtractSystem(world, 0);
-    let posX = Number.NaN;
-    let posY = Number.NaN;
+    let px = Number.NaN;
+    let py = Number.NaN;
     for (const arch of world.inspect().archetypes) {
       if (!arch.componentNames.includes('Transform')) continue;
       if (!arch.componentNames.includes('MeshFilter')) continue;
@@ -150,14 +150,14 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
       const firstEntity = entityCol[0];
       if (firstEntity === undefined) continue;
       const t = world.get(firstEntity as never, Transform).unwrap();
-      posX = t.posX;
-      posY = t.posY;
+      px = t.pos[0] ?? Number.NaN;
+      py = t.pos[1] ?? Number.NaN;
     }
-    expect(posX).toBeCloseTo((1 + 0.5) * tileSize, 5);
-    expect(posY).toBeCloseTo((1 + 0.5) * tileSize, 5);
+    expect(px).toBeCloseTo((1 + 0.5) * tileSize, 5);
+    expect(py).toBeCloseTo((1 + 0.5) * tileSize, 5);
   });
 
-  it('flipH negates scaleX; flipV negates scaleY; D sets quatZ=quatW=SQRT1_2', () => {
+  it('flipH negates scale[0]; flipV negates scale[1]; D sets quat[2]=quat[3]=SQRT1_2', () => {
     const tileSize = 16;
     const tiles = new Uint32Array(1);
     tiles[0] = encodeTileBits(1, true, true, true, false);
@@ -169,10 +169,10 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
       tiles,
     });
     tilemapChunkExtractSystem(world, 0);
-    let scaleX = Number.NaN;
-    let scaleY = Number.NaN;
-    let quatZ = Number.NaN;
-    let quatW = Number.NaN;
+    let sx = Number.NaN;
+    let sy = Number.NaN;
+    let qz = Number.NaN;
+    let qw = Number.NaN;
     for (const arch of world.inspect().archetypes) {
       if (!arch.componentNames.includes('Transform')) continue;
       if (!arch.componentNames.includes('MeshFilter')) continue;
@@ -196,15 +196,15 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
       const firstEntity = entityCol?.[0];
       if (firstEntity === undefined) continue;
       const t = world.get(firstEntity as never, Transform).unwrap();
-      scaleX = t.scaleX;
-      scaleY = t.scaleY;
-      quatZ = t.quatZ;
-      quatW = t.quatW;
+      sx = t.scale[0] ?? Number.NaN;
+      sy = t.scale[1] ?? Number.NaN;
+      qz = t.quat[2] ?? Number.NaN;
+      qw = t.quat[3] ?? Number.NaN;
     }
-    expect(scaleX).toBe(-tileSize);
-    expect(scaleY).toBe(-tileSize);
-    expect(quatZ).toBeCloseTo(SQRT1_2, 5);
-    expect(quatW).toBeCloseTo(SQRT1_2, 5);
+    expect(sx).toBe(-tileSize);
+    expect(sy).toBe(-tileSize);
+    expect(qz).toBeCloseTo(SQRT1_2, 5);
+    expect(qw).toBeCloseTo(SQRT1_2, 5);
   });
 
   it('uses HANDLE_QUAD as the MeshFilter handle on derived entities', () => {

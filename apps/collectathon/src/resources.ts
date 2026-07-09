@@ -90,7 +90,5 @@ export const PICKUP_SIGNAL_KEY = 'CollectathonPickupSignal';
 
 /** A pickup signal carrying the world position where a Core was collected. */
 export interface PickupSignal {
-  readonly posX: number;
-  readonly posY: number;
-  readonly posZ: number;
+  readonly pos: readonly [number, number, number];
 }

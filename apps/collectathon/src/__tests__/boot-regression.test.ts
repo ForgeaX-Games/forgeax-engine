@@ -61,7 +61,7 @@ function wireBoot(state: BootState, spawned: { count: number }): void {
   });
   addOnEnter(state, 'Play', (w: World) => {
     w.spawn(
-      { component: Transform, data: { posX: 0, posY: 5, posZ: 9 } },
+      { component: Transform, data: { pos: [0, 5, 9] } },
       { component: Camera, data: {} },
     ).unwrap();
     spawned.count += 1;

@@ -46,12 +46,8 @@ import {
   type GltfSceneIr,
 } from '@forgeax/engine-gltf';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  AssetRegistry,
-  type Handle,
-  type MaterialAsset,
-  type MeshAsset,
-  type RhiError} from '@forgeax/engine-runtime';
+import { AssetRegistry, type MeshAsset } from '@forgeax/engine-assets-runtime';
+import { type Handle, type MaterialAsset, type RhiError } from '@forgeax/engine-runtime';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type {
   AssetError,
@@ -161,17 +157,7 @@ function gltfDocToSceneAsset(
     if (ir === undefined) continue;
     const components: Record<string, Record<string, unknown>> = {
       Transform: {
-        posX: ir.transform.translation[0],
-        posY: ir.transform.translation[1],
-        posZ: ir.transform.translation[2],
-        quatX: ir.transform.rotation[0],
-        quatY: ir.transform.rotation[1],
-        quatZ: ir.transform.rotation[2],
-        quatW: ir.transform.rotation[3],
-        scaleX: ir.transform.scale[0],
-        scaleY: ir.transform.scale[1],
-        scaleZ: ir.transform.scale[2],
-      },
+        pos: [ir.transform.translation[0], ir.transform.translation[1], ir.transform.translation[2]], quat: [ir.transform.rotation[0], ir.transform.rotation[1], ir.transform.rotation[2], ir.transform.rotation[3]], scale: [ir.transform.scale[0], ir.transform.scale[1], ir.transform.scale[2]],},
     };
     if (ir.meshIndex !== null) {
       components.MeshFilter = { assetHandle: 1 };
@@ -188,17 +174,7 @@ function gltfDocToSceneAsset(
       localId: nodes.length as LocalEntityId,
       components: {
         Transform: {
-          posX: camNode.transform.translation[0],
-          posY: camNode.transform.translation[1],
-          posZ: camNode.transform.translation[2],
-          quatX: camNode.transform.rotation[0],
-          quatY: camNode.transform.rotation[1],
-          quatZ: camNode.transform.rotation[2],
-          quatW: camNode.transform.rotation[3],
-          scaleX: camNode.transform.scale[0],
-          scaleY: camNode.transform.scale[1],
-          scaleZ: camNode.transform.scale[2],
-        },
+          pos: [camNode.transform.translation[0], camNode.transform.translation[1], camNode.transform.translation[2]], quat: [camNode.transform.rotation[0], camNode.transform.rotation[1], camNode.transform.rotation[2], camNode.transform.rotation[3]], scale: [camNode.transform.scale[0], camNode.transform.scale[1], camNode.transform.scale[2]],},
         Camera: {
           fov: 0.7853981633974483,
           aspect: 1.7777777777777777,

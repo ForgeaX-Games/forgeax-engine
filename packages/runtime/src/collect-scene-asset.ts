@@ -44,6 +44,12 @@
 //   proven to be a mount entity, components is left undefined (one-time
 //   normalization on first reload; fixed-point from second collect onward).
 
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import {
+  resolveAssetHandle,
+  SceneCollectAssetGuidUnresolvedError,
+  SceneCollectEntityRefOutOfClosureError,
+} from '@forgeax/engine-assets-runtime';
 import {
   checkRelationshipMirrorsTransient,
   type Component as EcsComponent,
@@ -62,13 +68,7 @@ import type {
   SceneEntity,
   SceneInstanceMount,
 } from '@forgeax/engine-types';
-import type { AssetRegistry } from './asset-registry';
 import { SceneInstance } from './components/scene-instance';
-import {
-  SceneCollectAssetGuidUnresolvedError,
-  SceneCollectEntityRefOutOfClosureError,
-} from './errors/asset';
-import { resolveAssetHandle } from './resolve-asset-handle';
 import { collectSubtree } from './scene-utils/collect-subtree';
 
 // Shared helpers
@@ -569,6 +569,12 @@ export function rootsToSceneAsset(
       for (const fieldName of schemaKeys) {
         const rawValue = val[fieldName];
         if (rawValue === undefined) continue;
+
+        // Field-level transient skip (D-5): a field declared `transient: true`
+        // is derived/reconstructable and excluded from serialization, just as a
+        // transient component (L554) is. Generic — reads the reflection flag for
+        // any component/field; no hardcoded component or field name.
+        if (comp.fields[fieldName]?.transient) continue;
 
         const classification = classifyFieldSchema(comp.schema[fieldName]);
 

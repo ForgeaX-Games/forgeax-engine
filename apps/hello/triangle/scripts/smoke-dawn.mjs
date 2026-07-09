@@ -49,14 +49,14 @@ const { mockCanvas } = shim;
 // Drive engine ECS path. Imports happen AFTER the GPU shim is installed.
 const { World } = await import('@forgeax/engine-ecs');
 const runtime = await import('@forgeax/engine-runtime');
-const { createRenderer, HANDLE_TRIANGLE } = runtime;
+const { createRenderer } = runtime;
+const assets = await import('@forgeax/engine-assets-runtime');
 const { _internal_getRawDevice: captureRawDevice, rhi } = await import('@forgeax/engine-rhi-webgpu');
-void HANDLE_TRIANGLE; // delta-layer token preservation (smoke-coverage-gate / charter prop 6).
 
 // World spawn: data-equivalent mirror of apps/hello/triangle/src/main.ts M0
 // SSOT lock values (charter proposition 5 co-source binding exemplar).
 const world = new World();
-populateSmokeWorld(world, runtime);
+populateSmokeWorld(world, runtime, assets);
 
 // rhi.requestDevice was deprecated by feat-20260510-rhi-resource-creation
 // breaking point #2 (top-level single-step factory removed; spec-aligned

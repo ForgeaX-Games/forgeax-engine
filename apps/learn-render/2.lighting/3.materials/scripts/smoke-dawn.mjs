@@ -123,12 +123,14 @@ const { World } = await import('@forgeax/engine-ecs');
 const {
   Camera,
   createRenderer,
-  HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
   PointLight,
   Transform,
 } = await import('@forgeax/engine-runtime');
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const { buildEngineShaderManifest } = await import(
   '@forgeax/engine-vite-plugin-shader'
@@ -203,10 +205,7 @@ world
     {
       component: Transform,
       data: {
-        posX: 0, posY: 0, posZ: 0,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [objectMatHandle] } },
@@ -222,10 +221,7 @@ const lightEntity = world
     {
       component: Transform,
       data: {
-        posX: LPX, posY: LPY, posZ: LPZ,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 0.2, scaleY: 0.2, scaleZ: 0.2,
-      },
+        pos: [LPX, LPY, LPZ], quat: [0, 0, 0, 1], scale: [0.2, 0.2, 0.2],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [lampMatHandle] } },
@@ -264,10 +260,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0, posY: 0, posZ: 3,
-      quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-      scaleX: 1, scaleY: 1, scaleZ: 1,
-    },
+      pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
   {
     component: Camera,

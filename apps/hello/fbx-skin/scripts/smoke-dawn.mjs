@@ -379,7 +379,7 @@ world.addComponent(skinEnt, {
 
 // Camera + directional light. humanoid.fbx is in cm; ~150-unit body.
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 90, posZ: 250, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 90, 250], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
   { component: Camera, data: { fov: Math.PI / 4, aspect: WIDTH / HEIGHT, near: 1, far: 1000 } },
 );
 world.spawn({

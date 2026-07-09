@@ -10,11 +10,10 @@
 //             "genuinely no name" signal), no throw.
 //   D-5     — builtin meshes resolve to '' (null package, no name).
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { SamplerAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const MULTI_A = 'e0000000-0000-4000-e000-000000000001';

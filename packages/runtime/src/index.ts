@@ -37,24 +37,11 @@ export { createRenderer } from './createRenderer';
 // ./errors/<cluster> (NOT the transitional errors.ts barrel, deleted in w15;
 // NOT the @forgeax/engine-types zombie RuntimeErrorCode -- D-9).
 
-// -- asset cluster --
-export type {
-  AssetRuntimeError,
-  AssetRuntimeErrorCode,
-  MaterialResolvedEmptyPassesDetail,
-  // feat-20260701-rootstosceneasset verify minor-edit (F1): scene-collect
-  // error detail types re-exported so AI users narrow `.detail` per `.code`.
-  SceneCollectAssetGuidUnresolvedDetail,
-  SceneCollectEntityRefOutOfClosureDetail,
-} from './errors/asset';
-export {
-  MaterialResolvedEmptyPassesError,
-  // feat-20260701-rootstosceneasset verify minor-edit (F1): scene-collect
-  // fail-fast error classes re-exported so AI users `instanceof` them when
-  // rootsToSceneAsset / serializeSceneAssetToPack return err.
-  SceneCollectAssetGuidUnresolvedError,
-  SceneCollectEntityRefOutOfClosureError,
-} from './errors/asset';
+// feat-20260705-runtime-tier2-decomposition M1 / w14: the asset cluster error
+// re-exports (AssetRuntimeError / *Detail types + MaterialResolvedEmptyPasses /
+// SceneCollect* classes) moved to @forgeax/engine-assets-runtime. Consumers
+// import them from that package directly (AC-105: runtime barrel exports zero
+// asset-cluster symbols).
 // -- environment cluster --
 export { EngineEnvironmentError } from './errors/environment';
 // -- recover cluster --
@@ -231,6 +218,21 @@ export {
   type RhiWebgpuRuntimeDetail,
 } from '@forgeax/engine-rhi';
 /**
+ * feat-20260527-sprite-nineslice M4 / w16 (D-5 + AC-16): per-Renderer
+ * EngineMetrics counter. Surfaced through `renderer.metrics`; exported here
+ * so AI users can grep `EngineMetrics` and reach the public type for ts
+ * generics, and so test utilities can construct a free-standing instance.
+ *
+ * @example
+ *   const renderer = await createRenderer(canvas);
+ *   // ...later, after the world has rendered for a few frames...
+ *   const counts = renderer.metrics.snapshot();
+ *   if (counts['nineslice.scale-too-small'] !== undefined) {
+ *     // surface a once-per-session UI hint, run a regression bench, etc.
+ *   }
+ */
+export type { EngineMetrics } from '@forgeax/engine-types';
+/**
  * Asset system SSOT re-exports (feat-20260511-asset-system-v1 / w30 / D-P7 +
  * plan-strategy §7.4 discoverability dual-entry).
  *
@@ -257,48 +259,17 @@ export {
   type TextureAsset,
   type VertexAttributeMap,
 } from '@forgeax/engine-types';
-export type { Asset, MeshAsset } from './asset-registry';
-/**
- * AssetRegistry (D-S9) + builtin mesh handles. Pair with `MeshFilter` to
- * spawn cube / triangle / quad entities without writing geometry by hand.
- *
- * `HANDLE_QUAD` (feat-20260520-2d-sprite-layer-mvp M-1 w06) joins the
- * builtin trio as the base mesh for sprite + tilemap; same 12-floats
- * vertex layout as the cube / triangle so the sprite pipeline (M-3)
- * reuses the existing vertex branch without a new layout discriminator.
- *
- * @example
- *   import { AssetRegistry, HANDLE_CUBE, HANDLE_TRIANGLE, HANDLE_QUAD } from '@forgeax/engine-runtime';
- *
- * @example Spawn the cube entity:
- *   world.spawn({ component: MeshFilter, data: { assetHandle: HANDLE_CUBE } });
- *
- * @example Spawn a sprite quad entity (M-1 surface; full sprite material in M-3):
- *   world.spawn({ component: MeshFilter, data: { assetHandle: HANDLE_QUAD } });
- */
-export {
-  AssetRegistry,
-  HANDLE_CUBE,
-  HANDLE_CYLINDER,
-  HANDLE_NINESLICE_QUAD,
-  HANDLE_QUAD,
-  HANDLE_SPHERE,
-  HANDLE_TRIANGLE,
-} from './asset-registry';
-// D-15: builtin payloads + slot boundary are owned by the process-static
-// BuiltinAssetRegistry tier (builtin-asset-registry.ts), not the World-bound
-// AssetRegistry. BUILTIN_FLOATS_PER_VERTEX is the single vertex-layout SSOT.
-export {
-  BUILTIN_BASE,
-  BUILTIN_CUBE,
-  BUILTIN_CYLINDER,
-  BUILTIN_FLOATS_PER_VERTEX,
-  BUILTIN_NINESLICE_QUAD,
-  BUILTIN_QUAD,
-  BUILTIN_SPHERE,
-  BUILTIN_TRIANGLE,
-  BuiltinAssetRegistry,
-} from './builtin-asset-registry';
+// feat-20260705-runtime-tier2-decomposition M1 / w14: Asset / MeshAsset types
+// moved to @forgeax/engine-assets-runtime (AC-105).
+// feat-20260705-runtime-tier2-decomposition M1 / w14: AssetRegistry + the
+// HANDLE_* builtin mesh handles moved to @forgeax/engine-assets-runtime (AC-105).
+// feat-20260705-runtime-tier2-decomposition M1 / w8 (D-2): audioLoaderPlaceholder
+// + videoLoader are no longer re-exported from wire-default-loaders (that reverse
+// edge is severed); they re-export from their own runtime-side modules.
+export { audioLoaderPlaceholder } from './audio-loader-placeholder';
+// feat-20260705-runtime-tier2-decomposition M1 / w14: the process-static
+// BuiltinAssetRegistry tier (BUILTIN_* payloads + BUILTIN_FLOATS_PER_VERTEX)
+// moved to @forgeax/engine-assets-runtime (AC-105).
 /**
  * 5-component schema set (Transform / MeshFilter / MeshRenderer /
  * Camera / DirectionalLight). Each is a frozen `Component<N, S>`
@@ -415,37 +386,14 @@ export {
 // a DDC miss at runtime triggers an on-demand POST /__import import against the
 // vite-plugin-pack dev server. Aligned with the create*/wire* factory family.
 export { createDevImportTransport } from './dev-import-transport';
-/**
- * feat-20260527-sprite-nineslice M4 / w16 (D-5 + AC-16): per-Renderer
- * EngineMetrics counter. Surfaced through `renderer.metrics`; exported here
- * so AI users can grep `EngineMetrics` and reach the public type for ts
- * generics, and so test utilities can construct a free-standing instance.
- *
- * @example
- *   const renderer = await createRenderer(canvas);
- *   // ...later, after the world has rendered for a few frames...
- *   const counts = renderer.metrics.snapshot();
- *   if (counts['nineslice.scale-too-small'] !== undefined) {
- *     // surface a once-per-session UI hint, run a regression bench, etc.
- *   }
- */
-export type { EngineMetrics } from './engine-metrics';
 export { createEngineMetrics } from './engine-metrics';
-export {
-  FloatsPerGlyphVertex,
-  FONT_CONCURRENCY_LIMIT,
-  type GlyphLayoutResult,
-  layoutGlyphText,
-  resetFontConcurrency,
-  trackFontConcurrency,
-  VERTEX_OFFSET,
-} from './glyph-layout';
-export {
-  bakeGlyphMesh,
-  buildGlyphMeshAsset,
-  conservativeCubeAabb,
-  type GlyphMeshBakeResult,
-} from './glyph-mesh-bake';
+// feat-20260705-runtime-tier2-decomposition M3 / w31: glyph-layout +
+// glyph-mesh-bake (FloatsPerGlyphVertex / FONT_CONCURRENCY_LIMIT /
+// GlyphLayoutResult / layoutGlyphText / resetFontConcurrency /
+// trackFontConcurrency / VERTEX_OFFSET / bakeGlyphMesh / buildGlyphMeshAsset /
+// conservativeCubeAabb / GlyphMeshBakeResult) moved to
+// @forgeax/engine-graphics-extras (AC-303). Zero shim -- import from that
+// package. glyphTextLayoutSystem stays here (system entry, S12).
 /**
  * glyphTextLayoutSystem (feat-20260531-world-space-msdf-text-rendering) -- lays
  * out + bakes every `GlyphText` entity, attaching MeshFilter + MeshRenderer on
@@ -477,20 +425,13 @@ export { GpuBuffer, GpuTexture } from './gpu-resource';
  * directly for tests and `grep GpuResourceStore` discovers it.
  */
 export { GpuResourceStore } from './gpu-resource-store';
-/**
- * Loader-injection surface (feat-20260603-asset-import-loader-injection M1).
- * `LoaderRegistry` is the injectable `asset.kind` -> loader table held by
- * `AssetRegistry`; `wireDefaultLoaders` wires the engine's default loader set
- * onto it in one call (mirrors `@forgeax/engine-remote` `wireDefaultInspectors`).
- *
- * @example
- *   import { LoaderRegistry, wireDefaultLoaders } from '@forgeax/engine-runtime';
- *   const loaders = new LoaderRegistry();
- *   wireDefaultLoaders(loaders);
- */
-export { LoaderRegistry } from './loader-registry';
-// feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild — pickTile cell-level query
-export { type PickTileError, type PickTileHit, pickTile } from './pick-tile';
+// feat-20260705-runtime-tier2-decomposition M1 / w14: the loader-injection
+// surface (LoaderRegistry / wireDefaultLoaders / createDefaultLoaderRegistry)
+// moved to @forgeax/engine-assets-runtime (AC-105).
+// feat-20260705-runtime-tier2-decomposition M2 / w25: the picking cluster
+// (pick / pickVertex / pickVertexOnEntity / pickTile + PickHit / VertexHit /
+// PickError / PickErrorCode / PickTileError / PickTileHit) moved to
+// @forgeax/engine-picking (AC-204). Zero shim -- import from that package.
 /**
  * RenderSystem (D-S2 — feat-20260509-ecs-render-bridge-mvp).
  *
@@ -509,10 +450,8 @@ export { type PickTileError, type PickTileHit, pickTile } from './pick-tile';
  *   } from '@forgeax/engine-runtime';
  */
 export type { RenderSystem } from './render-system';
-// M7 w56: resolveAssetHandle two-tier slot-range dispatch (D-15).
-// Single-entry handle-to-payload resolution; AI users import one helper
-// instead of switching between BuiltinAssetRegistry.resolve and assets.get.
-export { resolveAssetHandle } from './resolve-asset-handle';
+// feat-20260705-runtime-tier2-decomposition M1 / w14: resolveAssetHandle moved
+// to @forgeax/engine-assets-runtime (AC-105).
 export type { SpriteParamValues } from './sprite-param-values';
 // feat-20260630-viewport-2x2-run-x-display-redesign M2 / w12 / plan-strategy D-2:
 // engine-neutral by-entity-id active camera selection (no editor concept).
@@ -575,8 +514,10 @@ export {
   TRANSPARENT_SORT_MODE_LAYER_Z,
   type TransparentSortConfig,
 } from './systems/transparent-sort-config';
-// feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild — tile-bits SSOT
-export { decodeTileBits, encodeTileBits } from './tile-bits';
+// feat-20260705-runtime-tier2-decomposition M3 / w31: tile-bits (decodeTileBits
+// / encodeTileBits) moved to @forgeax/engine-graphics-extras (AC-303). Zero shim
+// -- import from that package. tilemapChunkExtractSystem stays here (system
+// entry, S12).
 // feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild — chunk-extract system
 export {
   encodeTilemapLayerValue,
@@ -584,24 +525,14 @@ export {
   resetTilemapDerivedEntityTracker,
   tilemapChunkExtractSystem,
 } from './tilemap-chunk-extract-system';
-// ─── VideoElementProvider host bridge (M3 / w9) ─────────────────────────
-export {
-  VIDEO_ELEMENT_PROVIDER_KEY,
-  type VideoElementProvider,
-} from './video-element-provider';
-
-// ─── VideoPlayer component (M3 / w7) ────────────────────────────────────
-export { VideoPlayer } from './video-player';
-// ─── video high-perf upload capability probe (M4 / w17) ──────────────────
-// The single per-frame video upload + AC-10 failure path lives in the record
-// stage (videoTextureView); this module only exports the AC-09 capability probe.
-export { probeVideoHighPerfUpload, type VideoCapabilityDevice } from './video-player-system';
-export {
-  audioLoaderPlaceholder,
-  createDefaultLoaderRegistry,
-  videoLoader,
-  wireDefaultLoaders,
-} from './wire-default-loaders';
+// feat-20260705-runtime-tier2-decomposition M3 / w31: the video cluster
+// (VIDEO_ELEMENT_PROVIDER_KEY / VideoElementProvider / videoLoader / VideoPlayer
+// / probeVideoHighPerfUpload / VideoCapabilityDevice) moved to
+// @forgeax/engine-graphics-extras (AC-303). Zero shim -- import from that
+// package.
+// feat-20260705-runtime-tier2-decomposition M1 / w14: createDefaultLoaderRegistry
+// + wireDefaultLoaders moved to @forgeax/engine-assets-runtime. Consumers import
+// them from that package directly (AC-105).
 
 // ─── Math namespace re-export (M2 / w15) ────────────────────────────────
 
@@ -666,9 +597,12 @@ export {
 } from './createRenderer';
 // ─── Plugin factories (M2 / w6 - feat-20260623-plugin-system-unify) ─────────
 export { animationPlugin, timePlugin, transformPlugin } from './plugin-factories';
+// feat-20260705-runtime-tier2-decomposition M2 / w25: the imperative
+// propagateTransforms(world) driver — required by the @forgeax/engine-picking
+// vertex/AABB pick contract (D-9: callers must resolve Transform.world before
+// picking). Barrel-exported so downstream picking consumers can drive it.
+export { propagateTransforms } from './systems/propagate-transforms';
 // w8: registerRuntimeInspector export deleted alongside register-inspector.ts removal.
-
-// ─── Screen-to-entity picking (feat-20260529-picking-raycasting-screen-to-entity M3 / w14) ──
 
 // feat-20260623-editor-openproject M2 w11+w12: SceneInstance→SceneAsset writeback
 // chain (plan-strategy D-1: pure-data collection + pack serialization).
@@ -705,40 +639,6 @@ export {
   MAX_LIGHTS,
   validateClusterGrid,
 } from './hdrp-pipeline';
-export type { PickHit } from './pick';
-/**
- * `pick(world, cameraEntity, screenX, screenY, viewportWidth, viewportHeight)`
- * unprojects a viewport-relative screen coordinate into a world-space ray through the
- * supplied camera and returns the nearest pickable mesh entity's `PickHit`
- * (`{ entity, point, distance }`), or `undefined` on a miss. A `cameraEntity` without a
- * `Camera` component throws a structured `PickError` (`code: 'camera-component-missing'`).
- *
- * @example
- *   import { pick, type PickHit, PickError, type PickErrorCode } from '@forgeax/engine-runtime';
- *   const hit = pick(world, cameraEntity, x, y, canvas.width, canvas.height);
- *   if (hit) world.set(hit.entity, MeshRenderer, { materials: [highlight] });
- */
-export { pick } from './pick';
-export type { PickErrorCode } from './pick-errors';
-export { PickError } from './pick-errors';
-/**
- * `pickVertexOnEntity(world, cameraEntity, screenX, screenY, vpW, vpH, entity, options?)`
- * returns the nearest vertex on a single mesh entity.
- *
- * Three-state return (static dispatch via overload):
- *   - No options → `VertexHit | undefined` (nearest, or undefined on miss).
- *   - `{ limit: N }` → `VertexHit[]` sorted by `screenDist` ascending.
- *
- * `VertexHit` fields: `{ entity, vertexIndex, worldPos: Vec3Like, screenDist, worldDist, deformed }`.
- * Caller must `propagateTransforms(world)` before calling.
- *
- * @example
- *   import { pickVertexOnEntity, type VertexHit } from '@forgeax/engine-runtime';
- *   const hit = pickVertexOnEntity(world, cam, x, y, w, h, entity);
- *   if (hit) console.log(hit.worldPos, hit.vertexIndex);
- */
-export type { VertexHit } from './pick-vertex';
-export { pickVertex, pickVertexOnEntity } from './pick-vertex';
 export type {
   PipelineErrorCode,
   PipelineErrorDetail,

@@ -230,7 +230,7 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
         // Spawn entity AFTER createApp but BEFORE start(), so the listener-sync
         // system (registered during createApp) finds it on the first frame.
         app.world.spawn(
-          { component: Transform, data: { posX: 5, posY: 0, posZ: 0 } },
+          { component: Transform, data: { pos: [5, 0, 0] } },
           { component: AudioListenerComponent, data: {} },
         );
 
@@ -330,7 +330,7 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
 
         // Spawn entity at (0,0,0).
         const spawnResult = app.world.spawn(
-          { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+          { component: Transform, data: { pos: [0, 0, 0] } },
           { component: AudioListenerComponent, data: {} },
         );
         expect(spawnResult.ok).toBe(true);
@@ -348,7 +348,7 @@ describe('feat-20260619 M7: listener sync real consumption path (canvas form)', 
         // listener entity. If the listener-sync system ran BEFORE
         // propagateTransforms, the next frame would still read the old
         // world mat4 with posX=0 (1-frame lag).
-        const setResult = app.world.set(entity, Transform, { posX: 8 });
+        const setResult = app.world.set(entity, Transform, { pos: [8, 0, 0] });
         expect(setResult.ok).toBe(true);
 
         // Frame 2: propagateTransforms recomputes world with posX=8,

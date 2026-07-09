@@ -18,7 +18,7 @@
 //
 // charter mapping:
 //   - F1 (limited context):  three-section markers double as grep
-//     anchors (AC-06); `world.addSystem` / `bundles.Transform.quatZ` is
+//     anchors (AC-06); `world.addSystem` / `bundles.Transform.quat` is
 //     the LO §1.5 -> forgeax animation idiom anchor.
 //   - F2 (text > image):     the LO §1.5 GLM chapter is documented as
 //     text in this file's comment block + the README LO folded
@@ -33,7 +33,7 @@
 //     err.code and log structured detail.
 //   - P4 (consistent abstraction):  the same `createApp(canvas, opts)`
 //     factory + ECS spawn + `MeshRenderer` discriminator + 10 f32
-//     Transform column SoA (`bundles.Transform.quatZ` -> engine internal
+//     Transform column SoA (`bundles.Transform.quat` -> engine internal
 //     mat4 compose) is the entry across every learn-render example;
 //     LO §1.5 just adds the per-frame system fn atop the LO §1.4
 //     textured cube baseline.
@@ -58,16 +58,8 @@ import { createApp } from '@forgeax/engine-app';
 import { Entity, type World } from '@forgeax/engine-ecs';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  MeshFilter,
-  MeshRenderer,
-  resolveAssetHandle,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, EngineEnvironmentError, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -238,17 +230,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
-        },
+          pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
       },
       { component: MeshFilter, data: { assetHandle: cubeHandle } },
       {
@@ -261,17 +243,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 3,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     {
       component: Camera,
@@ -301,22 +273,24 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const fields = computeTransformAt(elapsedSec);
       for (const bundles of queryResults[0]) {
         const count = bundles.Entity.self.length;
+        // Flat stride-N array columns: row i lanes at pos[i*3+a] /
+        // quat[i*4+a] / scale[i*3+a] (feat-20260709 M2).
         for (let i = 0; i < count; i++) {
-          bundles.Transform.posX[i] = fields.posX;
-          bundles.Transform.posY[i] = fields.posY;
-          bundles.Transform.posZ[i] = fields.posZ;
-          bundles.Transform.quatX[i] = fields.quatX;
-          bundles.Transform.quatY[i] = fields.quatY;
-          bundles.Transform.quatZ[i] = fields.quatZ;
-          bundles.Transform.quatW[i] = fields.quatW;
-          bundles.Transform.scaleX[i] = fields.scaleX;
-          bundles.Transform.scaleY[i] = fields.scaleY;
-          bundles.Transform.scaleZ[i] = fields.scaleZ;
+          bundles.Transform.pos[i * 3] = fields.pos[0];
+          bundles.Transform.pos[i * 3 + 1] = fields.pos[1];
+          bundles.Transform.pos[i * 3 + 2] = fields.pos[2];
+          bundles.Transform.quat[i * 4] = fields.quat[0];
+          bundles.Transform.quat[i * 4 + 1] = fields.quat[1];
+          bundles.Transform.quat[i * 4 + 2] = fields.quat[2];
+          bundles.Transform.quat[i * 4 + 3] = fields.quat[3];
+          bundles.Transform.scale[i * 3] = fields.scale[0];
+          bundles.Transform.scale[i * 3 + 1] = fields.scale[1];
+          bundles.Transform.scale[i * 3 + 2] = fields.scale[2];
         }
       }
-      lastTickQuatZ = fields.quatZ;
-      lastTickScaleX = fields.scaleX;
-      lastTickScaleY = fields.scaleY;
+      lastTickQuatZ = fields.quat[2];
+      lastTickScaleX = fields.scale[0];
+      lastTickScaleY = fields.scale[1];
       tickCount += 1;
     },
   });
@@ -328,9 +302,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // renderer.readPixels() (engine API since 2026-05-17).
   type CaptureHook = () => Promise<Uint8Array>;
   type StateHook = () => {
-    readonly quatZ: number;
-    readonly scaleX: number;
-    readonly scaleY: number;
+    readonly quat: readonly [number, number, number, number];
+    readonly scale: readonly [number, number, number];
     readonly elapsedSec: number;
     readonly tickCount: number;
     readonly cubeEntity: ReturnType<World['spawn']>;
@@ -340,9 +313,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     __captureTransformationsState?: StateHook;
   };
   win.__captureTransformationsState = (): ReturnType<StateHook> => ({
-    quatZ: lastTickQuatZ,
-    scaleX: lastTickScaleX,
-    scaleY: lastTickScaleY,
+    quat: [0, 0, lastTickQuatZ, 1],
+    scale: [lastTickScaleX, lastTickScaleY, 1],
     elapsedSec,
     tickCount,
     cubeEntity: { ok: true, value: cubeSpawn } as unknown as ReturnType<World['spawn']>,

@@ -15,7 +15,7 @@
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-2d-flashlight smoke",
-    "_comment": "smokeInvocation = self-contained SSOT. hello-2d-flashlight covers the flat sprite-lit shading model AC-1 (SpotLight sweep on the sprite plane, posZ=0/directionZ=0, wedge center brightness > 0.5) + AC-2 (PointLight circle patch, center > 0.7 / edge < 0.1) via dawn-node pixel readback. Browser probe asserts sprite-lit pipeline is built end-to-end and zero device validation errors.",
+    "_comment": "smokeInvocation = self-contained SSOT. hello-2d-flashlight covers the flat sprite-lit shading model AC-1 (SpotLight sweep on the sprite plane, pos z=0/directionZ=0, wedge center brightness > 0.5) + AC-2 (PointLight circle patch, center > 0.7 / edge < 0.1) via dawn-node pixel readback. Browser probe asserts sprite-lit pipeline is built end-to-end and zero device validation errors.",
     "metrics": {
       "bundle-size": {
         "enabled": false,
@@ -41,6 +41,7 @@
   },
   "dependencies": {
     "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",

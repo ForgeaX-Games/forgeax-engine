@@ -216,20 +216,13 @@ async function importComponents(): Promise<{
 
 function idTransform() {
   return {
-    posX: 0,
-    posY: 0,
-    posZ: 0,
-    quatX: 0,
-    quatY: 0,
-    quatZ: 0,
-    quatW: 1,
-    scaleX: 1,
-    scaleY: 1,
-    scaleZ: 1,
+    pos: [0, 0, 0],
+    quat: [0, 0, 0, 1],
+    scale: [1, 1, 1],
   };
 }
 function cameraTransform() {
-  return { ...idTransform(), posZ: 5 };
+  return { ...idTransform(), pos: [0, 0, 5] };
 }
 
 function makeTex(): TextureAsset {

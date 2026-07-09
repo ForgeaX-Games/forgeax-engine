@@ -215,7 +215,7 @@ describe('bug-20260529 M2 real ECS bridge (regression)', () => {
     // Spawn dynamic ball at y=5 with (Transform, RigidBody{dynamic}, Collider{sphere}).
     const dynamicEntity = world
       .spawn(
-        { component: Transform as never, data: { posX: 0, posY: 5 } },
+        { component: Transform as never, data: { pos: [0, 5, 0]} },
         {
           component: RigidBody as never,
           data: {
@@ -236,7 +236,7 @@ describe('bug-20260529 M2 real ECS bridge (regression)', () => {
     // Spawn static ground at y=0 with (Transform, RigidBody{static}, Collider{cuboid}).
     const staticEntity = world
       .spawn(
-        { component: Transform as never, data: { posX: 0, posY: 0 } },
+        { component: Transform as never, data: { pos: [0, 0, 0]} },
         {
           component: RigidBody as never,
           data: { type: RigidBodyTypeValue.static },
@@ -260,7 +260,7 @@ describe('bug-20260529 M2 real ECS bridge (regression)', () => {
     expect(initDynamic.ok).toBe(true);
     expect(initStatic.ok).toBe(true);
     if (!initDynamic.ok || !initStatic.ok) return;
-    const dynPosYBefore = (initDynamic.value as Record<string, number>).posY;
+    const dynPosYBefore = (initDynamic.value as { pos: Float32Array }).pos[1] as number;
     expect(dynPosYBefore).toBeCloseTo(5, 1);
 
     // Register physics systems.
@@ -278,7 +278,7 @@ describe('bug-20260529 M2 real ECS bridge (regression)', () => {
       expect(finalDynamic.ok).toBe(true);
       return;
     }
-    const dynPosYAfter = (finalDynamic.value as Record<string, number>).posY;
+    const dynPosYAfter = (finalDynamic.value as { pos: Float32Array }).pos[1] as number;
     expect(dynPosYAfter).toBeLessThan(4.5);
 
     // Static entity Transform should be unchanged.
@@ -287,7 +287,7 @@ describe('bug-20260529 M2 real ECS bridge (regression)', () => {
       expect(finalStatic.ok).toBe(true);
       return;
     }
-    const staticPosYAfter = (finalStatic.value as Record<string, number>).posY;
+    const staticPosYAfter = (finalStatic.value as { pos: Float32Array }).pos[1] as number;
     expect(staticPosYAfter).toBeCloseTo(0, 1);
 
     // Verify physics body count: 2 entities should exist in Rapier world.

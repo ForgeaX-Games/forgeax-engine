@@ -117,6 +117,7 @@ const mockCanvas = {
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const { createBoxGeometry } = await import('@forgeax/engine-geometry');
+const { pick } = await import('@forgeax/engine-picking');
 const {
   Camera,
   createRenderer,
@@ -125,7 +126,6 @@ const {
   MeshFilter,
   MeshRenderer,
   perspective,
-  pick,
   Transform,
 } = enginePkg;
 
@@ -182,7 +182,7 @@ const cubeEntity = world.spawn(
 ).unwrap();
 
 const cameraEntity = world.spawn(
-  { component: Transform, data: { posZ: 4 } },
+  { component: Transform, data: { pos: [0, 0, 4]} },
   { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: WIDTH / HEIGHT }) },
 ).unwrap();
 

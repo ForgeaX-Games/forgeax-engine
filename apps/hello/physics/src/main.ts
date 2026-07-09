@@ -18,15 +18,8 @@
 
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
-import {
-  Camera,
-  DirectionalLight,
-  EngineEnvironmentError,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-  HANDLE_CUBE,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue, physicsPlugin } from '@forgeax/engine-physics';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -49,7 +42,7 @@ function spawnScene(world: import('@forgeax/engine-ecs').World): void {
     .spawn(
       {
         component: Transform,
-        data: { posX: 0, posY: -2, posZ: 0, scaleX: 10, scaleY: 0.5, scaleZ: 10 },
+        data: { pos: [0, -2, 0], scale: [10, 0.5, 10]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: {} },
@@ -75,7 +68,7 @@ function spawnScene(world: import('@forgeax/engine-ecs').World): void {
     .spawn(
       {
         component: Transform,
-        data: { posX: 0, posY: 5, posZ: 0 },
+        data: { pos: [0, 5, 0]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: {} },
@@ -113,7 +106,7 @@ function spawnScene(world: import('@forgeax/engine-ecs').World): void {
   mat4.decompose(camPos, cameraQuat, camScale, worldMatrix);
   world
     .spawn(
-      { component: Transform, data: { posX: 8, posY: 4, posZ: 10, quatX: cameraQuat[0]!, quatY: cameraQuat[1]!, quatZ: cameraQuat[2]!, quatW: cameraQuat[3]! } },
+      { component: Transform, data: { pos: [8, 4, 10], quat: [cameraQuat[0]!, cameraQuat[1]!, cameraQuat[2]!, cameraQuat[3]!]} },
       { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
     )
     .unwrap();

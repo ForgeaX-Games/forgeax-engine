@@ -23,10 +23,10 @@
 // Field grouping below is documented (FSceneView vs FRDGBuilder) with grep-able field
 // names so an AI user reading the type knows what each field is FOR, not just its type.
 
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import type { BindGroup, RhiCommandEncoder, Texture, TextureView } from '@forgeax/engine-rhi';
 import type { RenderPipelineAsset } from '@forgeax/engine-types';
-import type { AssetRegistry } from './asset-registry';
 import type { GpuResourceStore } from './gpu-resource-store';
 import type {
   BindGroupCounts,

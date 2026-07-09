@@ -253,7 +253,7 @@ const appRes = await createApp(
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 0, posZ: 0, scaleX: PLANET_SCALE, scaleY: PLANET_SCALE, scaleZ: PLANET_SCALE },
+      data: { pos: [0, 0, 0], scale: [PLANET_SCALE, PLANET_SCALE, PLANET_SCALE]},
     },
     { component: MeshFilter, data: { assetHandle: planetMeshHandle } },
     { component: MeshRenderer, data: { materials: [planetMat] } },
@@ -288,7 +288,7 @@ const appRes = await createApp(
   world.spawn(
     {
       component: Transform,
-      data: { posX: CAMERA_POS_X, posY: CAMERA_POS_Y, posZ: CAMERA_POS_Z },
+      data: { pos: [CAMERA_POS_X, CAMERA_POS_Y, CAMERA_POS_Z]},
     },
     {
       component: Camera,

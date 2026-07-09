@@ -5,15 +5,7 @@
 // >= BUILTIN_BASE belong to the user tier (World.sharedRefs) and resolve to
 // null here. R-13: module init order — importing BuiltinAssetRegistry then
 // immediately resolving all 5 handles must not throw / return undefined.
-import { toShared } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
-import {
-  HANDLE_CUBE,
-  HANDLE_NINESLICE_QUAD,
-  HANDLE_QUAD,
-  HANDLE_SPHERE,
-  HANDLE_TRIANGLE,
-} from '../asset-registry';
+
 import {
   BUILTIN_BASE,
   BUILTIN_CUBE,
@@ -22,7 +14,14 @@ import {
   BUILTIN_SPHERE,
   BUILTIN_TRIANGLE,
   BuiltinAssetRegistry,
-} from '../builtin-asset-registry';
+  HANDLE_CUBE,
+  HANDLE_NINESLICE_QUAD,
+  HANDLE_QUAD,
+  HANDLE_SPHERE,
+  HANDLE_TRIANGLE,
+} from '@forgeax/engine-assets-runtime';
+import { toShared } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
 
 describe('BuiltinAssetRegistry.resolve (AC-30)', () => {
   it('resolves each builtin slot 1..5 to its frozen payload', () => {

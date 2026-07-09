@@ -1,7 +1,12 @@
 // @forgeax/engine-runtime - RenderSystem record stage: main-pass-material.
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
 
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import {
+  VIDEO_ELEMENT_PROVIDER_KEY,
+  type VideoElementProvider,
+} from '@forgeax/engine-graphics-extras';
 import {
   type BindGroup,
   type BindGroupEntry,
@@ -33,8 +38,6 @@ import {
   STANDARD_PBR_UBO_SIZE,
 } from '../render-system';
 import type { MaterialSnapshot } from '../render-system-extract';
-import { resolveAssetHandle } from '../resolve-asset-handle';
-import { VIDEO_ELEMENT_PROVIDER_KEY, type VideoElementProvider } from '../video-element-provider';
 import type { BindGroupCounts } from './frame-snapshot';
 import { extractEntryResourceHandle, getOrCreatePerEntity } from './mesh-ssbo';
 
@@ -278,7 +281,7 @@ export function residentTextureView(
 // general copyExternalImageToTexture path is the only one taken.
 export function videoTextureView(
   world: World,
-  store: import('../dynamic-texture-store').DynamicTextureStore | undefined,
+  store: import('@forgeax/engine-assets-runtime').DynamicTextureStore | undefined,
   runtime: RenderSystemRuntime,
   entityKey: number,
   clip: Handle<'VideoAsset', 'shared'>,
@@ -368,7 +371,7 @@ export function defaultViewForUserRegionField(
  * GPU device — the recordFrame loop calls this with its `transformWorld` /
  * `slices` / `renderableIndex` / `seenIndices` / `metrics` arguments.
  *
- * The scale-vs-anchor formula mirrors plan-strategy §D-3 — `scaleX` must
+ * The scale-vs-anchor formula mirrors plan-strategy §D-3 — the world x scale must
  * accommodate `|slices.x| + |slices.z|`, and `scaleY` must accommodate
  * `|slices.y| + |slices.w|`. Slices ≡ all zero is a no-op (legacy quad
  * path); a breach increments `nineslice.scale-too-small` exactly once per
@@ -392,11 +395,11 @@ export function detectNineSliceScaleTooSmall(
 ): void {
   const anyNonZero = slices[0] !== 0 || slices[1] !== 0 || slices[2] !== 0 || slices[3] !== 0;
   if (!anyNonZero) return;
-  const scaleX = Math.hypot(transformWorld[0] ?? 1, transformWorld[1] ?? 0, transformWorld[2] ?? 0);
-  const scaleY = Math.hypot(transformWorld[4] ?? 0, transformWorld[5] ?? 1, transformWorld[6] ?? 0);
+  const sx = Math.hypot(transformWorld[0] ?? 1, transformWorld[1] ?? 0, transformWorld[2] ?? 0);
+  const sy = Math.hypot(transformWorld[4] ?? 0, transformWorld[5] ?? 1, transformWorld[6] ?? 0);
   const horizontalAnchor = Math.abs(slices[0]) + Math.abs(slices[2]);
   const verticalAnchor = Math.abs(slices[1]) + Math.abs(slices[3]);
-  if (scaleX < horizontalAnchor || scaleY < verticalAnchor) {
+  if (sx < horizontalAnchor || sy < verticalAnchor) {
     if (!seenIndices.has(renderableIndex)) {
       seenIndices.add(renderableIndex);
       metrics.increment('nineslice.scale-too-small');

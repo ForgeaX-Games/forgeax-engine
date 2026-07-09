@@ -288,10 +288,7 @@ world
     {
       component: Transform,
       data: {
-        posX: 0, posY: -0.5, posZ: 0,
-        quatX: Math.sin(-Math.PI / 4), quatY: 0, quatZ: 0, quatW: Math.cos(-Math.PI / 4),
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [0, -0.5, 0], quat: [Math.sin(-Math.PI / 4), 0, 0, Math.cos(-Math.PI / 4)], scale: [1, 1, 1],},
     },
     { component: MeshFilter, data: { assetHandle: floorHandle } },
     { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -303,10 +300,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0, posY: 0, posZ: 3,
-      quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-      scaleX: 1, scaleY: 1, scaleZ: 1,
-    },
+      pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
   {
     component: Camera,

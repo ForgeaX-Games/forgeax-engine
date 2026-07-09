@@ -82,7 +82,7 @@ if (r.onScreen && !r.behind) {
 ```
 
 ```ts
-import { pickVertexOnEntity, pickVertex } from '@forgeax/engine-runtime';
+import { pickVertexOnEntity, pickVertex } from '@forgeax/engine-picking';
 
 // propagateTransforms 必须已跑当前帧（D-9 前置契约）
 propagateTransforms(world);
@@ -155,7 +155,7 @@ const vp = mat4.computeViewProj(mat4.create(), eye, target, up, fovY, aspect, ne
 **错误协议**：复用 `PickError` 零新 error code——唯一 throw 是 `camera-component-missing`；所有顶点缺失/空白/降级走 `undefined` / `[]`（可恢复 miss，不打断批量循环）。
 
 ```ts
-import { pickVertexOnEntity, pickVertex, type VertexHit } from '@forgeax/engine-runtime';
+import { pickVertexOnEntity, pickVertex, type VertexHit } from '@forgeax/engine-picking';
 
 const hit = pickVertexOnEntity(world, cameraEntity, sx, sy, w, h, entity);
 if (hit) {

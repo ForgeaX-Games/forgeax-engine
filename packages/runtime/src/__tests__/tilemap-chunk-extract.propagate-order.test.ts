@@ -207,16 +207,9 @@ describe('FALSIFY: tilemap-chunk-extract does not propagate on its own', () => {
       .spawn({
         component: Transform,
         data: {
-          posX: 5,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [5, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       })
       .unwrap();

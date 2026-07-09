@@ -27,6 +27,7 @@
 //      the per-frame upload itself lands in w16, here the field falls back to the
 //      default view until a frame is uploaded).
 
+import { AssetRegistry, HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type {
@@ -37,10 +38,8 @@ import type {
   VideoAsset,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
-import { createRenderer, HANDLE_CUBE, HANDLE_QUAD } from '../index';
+import { createRenderer } from '../index';
 import { extractFrame } from '../render-system-extract';
 import { propagateTransforms } from '../systems/propagate-transforms';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
@@ -58,16 +57,9 @@ const FORWARD_PBR_PASS: MaterialPassDescriptor = {
 
 function transformData(x: number, y: number, z: number) {
   return {
-    posX: x,
-    posY: y,
-    posZ: z,
-    quatX: 0,
-    quatY: 0,
-    quatZ: 0,
-    quatW: 1,
-    scaleX: 1,
-    scaleY: 1,
-    scaleZ: 1,
+    pos: [x, y, z],
+    quat: [0, 0, 0, 1],
+    scale: [1, 1, 1],
   };
 }
 

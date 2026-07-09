@@ -33,10 +33,10 @@
 //   then ilen*iwidth bytes Uint16Array | Uint32Array indices,
 //   then jsonlen bytes UTF-8 JSON metadata { submeshes?, attributes?, aabb? }.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // 12 floats per vertex (position vec3 + normal vec3 + uv vec2 + tangent vec4) --

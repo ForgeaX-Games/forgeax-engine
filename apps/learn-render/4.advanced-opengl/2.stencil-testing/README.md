@@ -55,11 +55,11 @@ pnpm --filter "@forgeax/app-learn-render-4-advanced-opengl-2-stencil-testing" ty
 | Stencil func always (cube pass) | `glStencilFunc(GL_ALWAYS, 1, 0xFF)` | `renderState.stencil: { compare:'always', passOp:'replace' }` + `stencilReference: 1` |
 | Stencil func not-equal (outline) | `glStencilFunc(GL_NOTEQUAL, 1, 0xFF)` | `renderState.stencilReadMask: 0xFF` + `renderState.stencil: { compare:'not-equal' }` + `stencilReference: 1` |
 | Depth test disable (outline) | `glDisable(GL_DEPTH_TEST)` | `renderState.depthWriteEnabled: false` (outline pass renderState) |
-| Outline scale 1.1 | `glm::scale(model, glm::vec3(1.1))` | ECS `Transform` component: `scaleX=1.1, scaleY=1.1, scaleZ=1.1` |
+| Outline scale 1.1 | `glm::scale(model, glm::vec3(1.1))` | ECS `Transform` component: `scale=[1.1, 1.1, 1.1]` |
 | Single-color outline shader | `2.stencil_single_color.fs` outputs constant `vec4(0.04,0.28,0.26,1.0)` | `outline-solid.wgsl` fragment returns `material.baseColor` (uniform parameter) |
 | Floor plane | Custom 6-vertex plane at Y=-0.5 with texcoord=2.0 | `HANDLE_QUAD` (engine-builtin 1x1 quad) rotated -90 deg around X, scaled 5x5 at Y=-0.5 |
 | Cube geometry | 1x1x1 CCW cube, 36 vertices | `HANDLE_CUBE` (engine-builtin CCW cube) |
-| Cube transforms | `glm::translate((-1,0,-1))` / `glm::translate((2,0,0))` | ECS `Transform` component: `posX=-1, posY=0, posZ=-1` / `posX=2, posY=0, posZ=0` |
+| Cube transforms | `glm::translate((-1,0,-1))` / `glm::translate((2,0,0))` | ECS `Transform` component: `pos=[-1, 0, -1]` / `pos=[2, 0, 0]` |
 | Texture loading | `stb_image.h` + `loadTexture(path)` with `GL_REPEAT` | `configurePackIndex` + `loadByGuid<TextureAsset>` with sidecar `.meta.json` |
 | Camera | LO `Camera` class at (0,0,3), Zoom=45 deg | `Transform` (at (0,0,3)) + `Camera` (fov=PI/4, near=0.1, far=100) |
 | Window + loop | `glfwCreateWindow` + `while(!glfwWindowShouldClose)` | `createApp(canvas, opts)` from `@forgeax/engine-app` |

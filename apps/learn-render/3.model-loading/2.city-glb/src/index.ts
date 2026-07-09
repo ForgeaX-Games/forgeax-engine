@@ -159,10 +159,7 @@ function spawnLights(world: World): void {
       {
         component: Transform,
         data: {
-          posX: pd.pos[0], posY: pd.pos[1], posZ: pd.pos[2],
-          quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-          scaleX: 1, scaleY: 1, scaleZ: 1,
-        },
+          pos: [pd.pos[0], pd.pos[1], pd.pos[2]], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
       },
       {
         component: PointLight,
@@ -184,10 +181,7 @@ function spawnCamera(world: World): import('@forgeax/engine-ecs').EntityHandle |
     {
       component: Transform,
       data: {
-        posX: 0, posY: 3, posZ: 18,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [0, 3, 18], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     {
       component: Camera,

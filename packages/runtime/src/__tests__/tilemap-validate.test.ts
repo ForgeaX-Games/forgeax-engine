@@ -24,8 +24,11 @@
 import { World } from '@forgeax/engine-ecs';
 import { AssetError, type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { validateTileLayerAtRegister, validateTilemapAtRegister } from '../asset-registry';
 import { ChildOf, TileLayer, Tilemap } from '../components';
+import {
+  validateTileLayerAtRegister,
+  validateTilemapAtRegister,
+} from '../tilemap-register-validate';
 
 function makeTilesetHandle(world: World) {
   const tileset: TilesetAsset = {

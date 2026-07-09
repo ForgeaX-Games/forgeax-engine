@@ -8,11 +8,10 @@
 //           Asset POD carries no `name` property (name is never on the payload).
 //   AC-02 — multi-asset package: resolveName returns each entry's stored name.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { SamplerAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const SINGLE_GUID = 'a0000000-0000-4000-a000-000000000001';

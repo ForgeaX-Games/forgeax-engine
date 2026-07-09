@@ -12,7 +12,7 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import { AssetRegistry } from '@forgeax/engine-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { Handle, MaterialAsset, ParamSchemaEntry, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { gltfDocToSceneAsset, meshIrToMeshAsset, toMaterialAsset } from '../bridge.js';
@@ -952,9 +952,7 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         // Local TRS: child node carries its own [2, 0, 0]; parent's [5, 0, 0]
         // is encoded via ChildOf -> parent's Transform, accumulated by
         // propagateTransforms downstream.
-        expect(t?.posX).toBe(2);
-        expect(t?.posY).toBe(0);
-        expect(t?.posZ).toBe(0);
+        expect(t?.pos).toEqual([2, 0, 0]);
         expect(childNode?.components.ChildOf?.parent).toBeDefined();
       });
     });

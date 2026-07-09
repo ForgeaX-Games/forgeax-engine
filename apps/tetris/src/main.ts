@@ -4,20 +4,19 @@
 // entities mirrors the visible board (one entity per cell + one per "next"
 // preview cell). Each frame, the input → tick → render pipeline reads the
 // board, paints the active piece + its ghost on top of locked cells, and
-// writes Transform.scale / posX / posY and MeshRenderer.material (handle
+// writes Transform.scale / pos and MeshRenderer.material (handle
 // pointing at a cached unlit MaterialAsset) into the pre-allocated
 // entities. Empty cells are hidden by collapsing the transform scale to 0
 // (vertices collapse to a single NDC point, no fragments emitted).
 
+import { type AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import {
-  type AssetRegistry,
   acquireCanvasContext,
   Camera,
   createRenderer,
   DirectionalLight,
   EngineEnvironmentError,
-  HANDLE_CUBE,
   type Handle,
   type MaterialAsset,
   Materials,
@@ -81,7 +80,7 @@ world
   .spawn(
     {
       component: Transform,
-      data: { posZ: cameraDistance },
+      data: { pos: [0, 0, cameraDistance] },
     },
     {
       component: Camera,
@@ -244,9 +243,7 @@ function spawnGrid(w: World, count: number): EntityHandle[] {
       {
         component: Transform,
         data: {
-          scaleX: HIDDEN_SCALE,
-          scaleY: HIDDEN_SCALE,
-          scaleZ: HIDDEN_SCALE,
+          scale: [HIDDEN_SCALE, HIDDEN_SCALE, HIDDEN_SCALE],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -329,12 +326,8 @@ function paint(): void {
       }
       if (color) {
         world.set(entity, Transform, {
-          posX: BOARD_OX + x * CELL,
-          posY: BOARD_OY + y * CELL,
-          posZ: 0,
-          scaleX: VISIBLE_SCALE,
-          scaleY: VISIBLE_SCALE,
-          scaleZ: VISIBLE_SCALE,
+          pos: [BOARD_OX + x * CELL, BOARD_OY + y * CELL, 0],
+          scale: [VISIBLE_SCALE, VISIBLE_SCALE, VISIBLE_SCALE],
         });
         const mat = materialFor(color[0], color[1], color[2]);
         if (mat !== null) {
@@ -344,9 +337,7 @@ function paint(): void {
         }
       } else {
         world.set(entity, Transform, {
-          scaleX: HIDDEN_SCALE,
-          scaleY: HIDDEN_SCALE,
-          scaleZ: HIDDEN_SCALE,
+          scale: [HIDDEN_SCALE, HIDDEN_SCALE, HIDDEN_SCALE],
         });
       }
     }
@@ -363,12 +354,8 @@ function paint(): void {
       const entity = previewEntities[py * 4 + px] as EntityHandle;
       if (nextCells.has(`${px},${py}`)) {
         world.set(entity, Transform, {
-          posX: PREVIEW_OX + (px - 1.5) * PREVIEW_CELL,
-          posY: PREVIEW_OY + (py - 1.5) * PREVIEW_CELL,
-          posZ: 0,
-          scaleX: PREVIEW_SCALE,
-          scaleY: PREVIEW_SCALE,
-          scaleZ: PREVIEW_SCALE,
+          pos: [PREVIEW_OX + (px - 1.5) * PREVIEW_CELL, PREVIEW_OY + (py - 1.5) * PREVIEW_CELL, 0],
+          scale: [PREVIEW_SCALE, PREVIEW_SCALE, PREVIEW_SCALE],
         });
         const mat = materialFor(nextSpec.color[0], nextSpec.color[1], nextSpec.color[2]);
         if (mat !== null) {
@@ -378,9 +365,7 @@ function paint(): void {
         }
       } else {
         world.set(entity, Transform, {
-          scaleX: HIDDEN_SCALE,
-          scaleY: HIDDEN_SCALE,
-          scaleZ: HIDDEN_SCALE,
+          scale: [HIDDEN_SCALE, HIDDEN_SCALE, HIDDEN_SCALE],
         });
       }
     }

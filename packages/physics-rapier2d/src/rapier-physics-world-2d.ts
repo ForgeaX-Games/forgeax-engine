@@ -336,8 +336,7 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
     if (ctx) {
       // D-6: writeback Result ignored — entry checks already guard liveness.
       ctx.world.set(entity as EntityHandle, ctx.transform, {
-        posX: next.x,
-        posY: next.y,
+        pos: [next.x, next.y, readTransformPosZ(ctx.world, entity as EntityHandle, ctx.transform)],
       });
       ctx.world.set(entity as EntityHandle, ctx.characterController, { grounded });
     }
@@ -644,9 +643,31 @@ interface ArchetypeLike {
 interface InternalWorldSurface {
   /** @internal Archetype graph accessor mirrored from World; used for tick-system traversal. */
   _getGraph(): GraphLike;
+  /**
+   * @internal Column-level zero-copy view of an `array<T, N>` field row
+   * (mirrored from World; see runtime propagate-transforms). Used by the 2D
+   * write paths to read the current pos z lane.
+   */
+  _getArrayView(
+    entity: EntityHandle,
+    component: Component,
+    fieldName: string,
+  ): ArrayLike<number> | undefined;
 }
 function asInternal(w: World): InternalWorldSurface {
   return w as unknown as InternalWorldSurface;
+}
+
+/**
+ * Read the entity's current `Transform.pos` z lane. Transform.pos is one
+ * `array<f32, 3>` column row (feat-20260709 M2) so per-axis partial writes no
+ * longer exist; 2D physics owns only the xy lanes and must carry the authored
+ * z (sprite layering / camera depth) through its full-row `world.set` writes.
+ * Falls back to 0 when the row is unreachable (entity died mid-frame).
+ */
+function readTransformPosZ(w: World, entity: EntityHandle, transform: Component): number {
+  const view = asInternal(w)._getArrayView(entity, transform, 'pos');
+  return view?.[2] ?? 0;
 }
 
 /**
@@ -784,12 +805,12 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
       const cCGroups = cCols.get('collisionGroups')?.view as Uint32Array | undefined;
       const cSGroups = cCols.get('solverGroups')?.view as Uint32Array | undefined;
 
-      const tfPx = tfCols.get('posX')?.view as Float32Array | undefined;
-      const tfPy = tfCols.get('posY')?.view as Float32Array | undefined;
-      const tfQx = tfCols.get('quatX')?.view as Float32Array | undefined;
-      const tfQy = tfCols.get('quatY')?.view as Float32Array | undefined;
-      const tfQz = tfCols.get('quatZ')?.view as Float32Array | undefined;
-      const tfQw = tfCols.get('quatW')?.view as Float32Array | undefined;
+      // Local TRS flat stride-N array columns (feat-20260709 M2): pos is
+      // array<f32,3> (row i at pos[i*3+a]), quat is array<f32,4> (row i at
+      // quat[i*4+a]). Indexed reads only -- zero per-call allocation on this
+      // per-frame sync path (AC-08).
+      const tfPos = tfCols.get('pos')?.view as Float32Array | undefined;
+      const tfQuat = tfCols.get('quat')?.view as Float32Array | undefined;
 
       if (
         !rbType ||
@@ -810,8 +831,7 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
         !cSensor ||
         !cCGroups ||
         !cSGroups ||
-        !tfPx ||
-        !tfPy
+        !tfPos
       ) {
         continue;
       }
@@ -820,12 +840,12 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
         const entity = readEntityAt(arch, row);
 
         const transform = {
-          posX: tfPx[row] as number,
-          posY: tfPy[row] as number,
-          quatX: (tfQx?.[row] as number) ?? 0,
-          quatY: (tfQy?.[row] as number) ?? 0,
-          quatZ: (tfQz?.[row] as number) ?? 0,
-          quatW: (tfQw?.[row] as number) ?? 1,
+          posX: tfPos[row * 3] as number,
+          posY: tfPos[row * 3 + 1] as number,
+          quatX: (tfQuat?.[row * 4] as number) ?? 0,
+          quatY: (tfQuat?.[row * 4 + 1] as number) ?? 0,
+          quatZ: (tfQuat?.[row * 4 + 2] as number) ?? 0,
+          quatW: (tfQuat?.[row * 4 + 3] as number) ?? 1,
         };
 
         const rigidBody: {
@@ -950,12 +970,10 @@ export const PhysicsWriteback2D: SystemHandle<readonly []> = defineSystem({
       // biome-ignore lint/suspicious/noExplicitAny: quat accepts Vec3 array
       quat.fromAxisAngle(outQuat, [0, 0, 1] as any as Vec3Like, r.rotation);
       world.set(entity, transformComponent, {
-        posX: r.pos.x,
-        posY: r.pos.y,
-        quatX: outQuat[0],
-        quatY: outQuat[1],
-        quatZ: outQuat[2],
-        quatW: outQuat[3],
+        pos: [r.pos.x, r.pos.y, readTransformPosZ(world, entity, transformComponent)],
+        // Component order [x, y, z, w] (E6). `?? 0/1` narrows the
+        // noUncheckedIndexedAccess undefined out of the quat elements.
+        quat: [outQuat[0] ?? 0, outQuat[1] ?? 0, outQuat[2] ?? 0, outQuat[3] ?? 1],
       });
     }
   },

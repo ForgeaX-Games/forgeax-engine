@@ -17,7 +17,7 @@
 //   5. Stability re-render: world.update() + draw + readback pixelsAA WITHOUT
 //      moving the parent. Assert pixelsA ~= pixelsAA (parent-static reference
 //      frame is stable; AC-08 "parent stationary reference frame is stable").
-//   6. Frame B (parent moved): world.set(parent, Transform, { posX: ... }) ->
+//   6. Frame B (parent moved): world.set(parent, Transform, { pos: [..., 0, 0]}) ->
 //      world.update() (re-runs propagate; child's Transform.world follows the
 //      parent) -> draw -> readback pixelsB.
 //   7. Diff A vs B: per-pixel byte comparison. Assert diffCount > 0.1% of
@@ -150,14 +150,16 @@ const {
   ChildOf,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
-  HANDLE_SPHERE,
   MeshFilter,
   MeshRenderer,
   perspective,
   registerPropagateTransforms,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+  HANDLE_SPHERE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
@@ -231,14 +233,7 @@ const parent = world
     {
       component: Transform,
       data: {
-        posX: PARENT_X_REST,
-        posY: -0.4,
-        posZ: 0,
-        quatW: 1,
-        scaleX: 0.4,
-        scaleY: 0.4,
-        scaleZ: 0.4,
-      },
+        pos: [PARENT_X_REST, -0.4, 0], quat: [0, 0, 0, 1], scale: [0.4, 0.4, 0.4],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },
@@ -252,7 +247,7 @@ world
   .spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 2.0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [0, 2.0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
     },
     { component: ChildOf, data: { parent } },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -265,7 +260,7 @@ world
   .spawn(
     {
       component: Transform,
-      data: { posX: 1.4, posY: 0.0, posZ: 0, quatW: 1, scaleX: 0.4, scaleY: 0.4, scaleZ: 0.4 },
+      data: { pos: [1.4, 0.0, 0], quat: [0, 0, 0, 1], scale: [0.4, 0.4, 0.4]},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },
@@ -289,7 +284,7 @@ world
 
 world
   .spawn(
-    { component: Transform, data: { posZ: 7 } },
+    { component: Transform, data: { pos: [0, 0, 7]} },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) } },
   )
   .unwrap();
@@ -384,7 +379,7 @@ const pixelsAA = await doReadPixels();
 
 // --- 9. Frame B (parent moved -> child must follow) ------------------------
 
-const setRes = world.set(parent, Transform, { posX: PARENT_X_MOVED });
+const setRes = world.set(parent, Transform, { pos: [PARENT_X_MOVED, 0, 0]});
 if (!setRes.ok) {
   console.error(`[smoke] FAIL - world.set(parent move) failed: ${setRes.error.code}`);
   process.exit(1);

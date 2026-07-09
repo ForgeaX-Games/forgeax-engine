@@ -15,10 +15,10 @@
 //   AC-14: backward compat = missing opts = passthrough
 //   research Finding 2: 4 call sites at L1036/1100/1124/3905
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // Stable non-colliding GUIDs for test assets.

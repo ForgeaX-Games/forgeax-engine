@@ -24,7 +24,7 @@ In forgeax, this example expresses the same culling semantics without manual ver
 
 2. **`cullMode: 'back'`** (in `MaterialRenderState`) culls back-facing triangles. The outer faces (originally CCW-wound, now back-facing because `frontFace='cw'`) are discarded. The inner faces (CW-appearing from inside, now front-facing) survive and are rendered. The camera at `(0,0,0)` inside the [-0.5, 0.5]^3 cube sees marble-textured interior walls.
 
-3. **Camera inside the cube**: The camera entity has `Transform.posX=0, posY=0, posZ=0` (cube center). With `perspective({ fov: PI/4, aspect: computed from canvas, near: 0.1, far: 100 })`, the view frustum captures the inner back face (z=-0.5), inner floor (y=-0.5), and inner side walls (x=-0.5, x=0.5).
+3. **Camera inside the cube**: The camera entity has `Transform.pos=[0, 0, 0]` (cube center). With `perspective({ fov: PI/4, aspect: computed from canvas, near: 0.1, far: 100 })`, the view frustum captures the inner back face (z=-0.5), inner floor (y=-0.5), and inner side walls (x=-0.5, x=0.5).
 
 4. **AC-09 verification**: Changing `cullMode` to `'front'` culls front-facing triangles -- the inner faces (CW-appearing from inside, front-facing with `frontFace='cw'`) are discarded, and the camera inside the cube sees only clear-color. Changing `frontFace` to `'ccw'` restores the default: CCW outer faces are front-facing and only the outer faces render (invisible from inside because they face outward).
 

@@ -199,22 +199,14 @@ async function importComponents(): Promise<{
   DirectionalLight: unknown;
   HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
 }> {
-  return (await import('../index')) as never;
+  return {
+    ...(await import('../index')),
+    ...(await import('@forgeax/engine-assets-runtime')),
+  } as never;
 }
 
-function identityTransform(): Record<string, number> {
-  return {
-    posX: 0,
-    posY: 0,
-    posZ: 0,
-    quatX: 0,
-    quatY: 0,
-    quatZ: 0,
-    quatW: 1,
-    scaleX: 1,
-    scaleY: 1,
-    scaleZ: 1,
-  };
+function identityTransform(): Record<string, number[]> {
+  return { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] };
 }
 
 async function captureCascadeViewports(cascadeCount: number, mapSize: number): Promise<CaptureLog> {
@@ -246,7 +238,7 @@ async function captureCascadeViewports(cascadeCount: number, mapSize: number): P
         top: 1,
       },
     },
-    { component: C.Transform, data: { ...identityTransform(), posZ: 3 } },
+    { component: C.Transform, data: { ...identityTransform(), pos: [0, 0, 3] } },
   );
   world.spawn({
     component: C.DirectionalLight,

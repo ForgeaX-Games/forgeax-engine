@@ -16,8 +16,8 @@
 // the Package mapping for name resolution. Both are needed before inspect()
 // can surface resolved names.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeReg() {

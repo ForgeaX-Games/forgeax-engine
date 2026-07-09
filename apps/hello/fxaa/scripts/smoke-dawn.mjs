@@ -138,15 +138,17 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
-  HANDLE_QUAD,
-  HANDLE_SPHERE,
-  HANDLE_TRIANGLE,
   MeshFilter,
   MeshRenderer,
   perspective,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+  HANDLE_QUAD,
+  HANDLE_SPHERE,
+  HANDLE_TRIANGLE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
@@ -212,13 +214,13 @@ if (!device) {
 // 4-geometry static layout matching demo main.ts (w6):
 // triangle @ -1.05, cube @ -0.35, quad @ 0.35, sphere @ 1.05; all scale=0.5.
 // DirectionalLight direction ~(-0.4, -0.6, -0.7), intensity=1.5.
-// Camera posZ=6, fov=PI/4, aspect=16/9, antialias set by caller.
+// Camera pos z=6, fov=PI/4, aspect=16/9, antialias set by caller.
 
 const GEOMETRY_LAYOUT = [
-  { handle: HANDLE_TRIANGLE, posX: -1.05 },
-  { handle: HANDLE_CUBE, posX: -0.35 },
-  { handle: HANDLE_QUAD, posX: 0.35 },
-  { handle: HANDLE_SPHERE, posX: 1.05 },
+  { handle: HANDLE_TRIANGLE, pos: [-1.05, 0, 0]},
+  { handle: HANDLE_CUBE, pos: [-0.35, 0, 0]},
+  { handle: HANDLE_QUAD, pos: [0.35, 0, 0]},
+  { handle: HANDLE_SPHERE, pos: [1.05, 0, 0]},
 ];
 
 /**
@@ -234,13 +236,9 @@ function spawnScene(world, antialias) {
       {
         component: Transform,
         data: {
-          posX: slot.posX,
-          posY: 0,
-          posZ: 0,
-          quatW: 1,
-          scaleX: 0.5,
-          scaleY: 0.5,
-          scaleZ: 0.5,
+          pos: slot.pos,
+          quat: [0, 0, 0, 1],
+          scale: [0.5, 0.5, 0.5],
         },
       },
       { component: MeshFilter, data: { assetHandle: slot.handle } },
@@ -266,7 +264,7 @@ function spawnScene(world, antialias) {
   world.spawn(
     {
       component: Transform,
-      data: { posZ: 6 },
+      data: { pos: [0, 0, 6]},
     },
     {
       component: Camera,

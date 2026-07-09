@@ -12,11 +12,13 @@
     "src/**/*"
   ],
   "references": [
+    { "path": "../assets-runtime" },
     { "path": "../codec" },
     { "path": "../debug-draw" },
     { "path": "../math" },
     { "path": "../ecs" },
     { "path": "../geometry" },
+    { "path": "../graphics-extras" },
     { "path": "../types" },
     { "path": "../rhi" },
     { "path": "../rhi-debug" },

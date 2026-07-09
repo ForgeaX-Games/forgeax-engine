@@ -17,7 +17,7 @@
 //   [writeback] serialize: OK, refs=<N>
 //   [writeback] reload: OK
 //   [writeback] parent check: OK (bone joints[0] in new instance)
-//   [writeback] transform check: OK (posY=10 preserved)
+//   [writeback] transform check: OK (pos y=10 preserved)
 //   [writeback] PASS
 
 import { fileURLToPath } from 'node:url';
@@ -267,10 +267,7 @@ if (typeof boneEntity !== 'number' || boneEntity === 0) {
 // 4a. Spawn prop entity under the bone.
 const PROP_POS_Y = 10;
 const propTr = {
-  posX: 0, posY: PROP_POS_Y, posZ: 0,
-  quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-  scaleX: 1, scaleY: 1, scaleZ: 1,
-};
+  pos: [0, PROP_POS_Y, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],};
 const propRes = world.spawn({ component: Transform, data: propTr });
 if (!propRes.ok) {
   console.error('[writeback] FAIL - prop spawn:', propRes.error.code);
@@ -363,7 +360,7 @@ for (const e of world.iterDescendants(newRoot)) {
   }
   if (foundProp === undefined) {
     const tr = world.get(e, Transform);
-    if (tr.ok && Math.abs(tr.value.posY - PROP_POS_Y) < 0.001) {
+    if (tr.ok && Math.abs(tr.value.pos[1] - PROP_POS_Y) < 0.001) {
       foundProp = e;
     }
   }
@@ -388,10 +385,10 @@ if (!newJoints || newJoints.length === 0) {
 }
 const newBoneEntity = newJoints[0]; // root joint in reloaded instance
 
-// Assertion (a): the prop (found by posY) must be parented to the bone entity.
+// Assertion (a): the prop (found by pos y) must be parented to the bone entity.
 if (foundProp === undefined) {
   console.error('[writeback] FAIL - prop entity not found in reloaded tree');
-  console.error('  expected: entity with Transform.posY === PROP_POS_Y');
+  console.error('  expected: entity with Transform.pos[1] === PROP_POS_Y');
   process.exit(1);
 }
 
@@ -402,20 +399,20 @@ if (!propChildOf.ok || propChildOf.value.parent !== newBoneEntity) {
 }
 console.log('[writeback] parent check: OK (bone joints[0] in new instance)');
 
-// Assertion (b): prop Transform survived round-trip (local posY preserved).
+// Assertion (b): prop Transform survived round-trip (local pos y preserved).
 const propTransform = world.get(foundProp, Transform);
 if (!propTransform.ok) {
   console.error('[writeback] FAIL - prop has no Transform in reloaded tree');
   process.exit(1);
 }
-const reloadedPosY = propTransform.value.posY;
+const reloadedPosY = propTransform.value.pos[1];
 if (Math.abs(reloadedPosY - PROP_POS_Y) > 0.001) {
   console.error(
-    `[writeback] FAIL - prop posY changed: expected ${PROP_POS_Y}, got ${reloadedPosY}`,
+    `[writeback] FAIL - prop pos y changed: expected ${PROP_POS_Y}, got ${reloadedPosY}`,
   );
   process.exit(1);
 }
-console.log(`[writeback] transform check: OK (posY=${PROP_POS_Y} preserved)`);
+console.log(`[writeback] transform check: OK (pos y=${PROP_POS_Y} preserved)`);
 
 // Assertion (c): refs[] contains fox-related GUID (material or skeleton).
 let foundSkeletonGUID = false;

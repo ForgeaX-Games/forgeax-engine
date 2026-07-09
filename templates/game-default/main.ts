@@ -22,12 +22,14 @@
 
 import {
   Transform, Camera, perspective, quat, Materials, MeshFilter, MeshRenderer,
-  HANDLE_CUBE, HANDLE_SPHERE, ChildOf,
+  ChildOf,
   SceneInstance,
   TONEMAP_REINHARD_EXTENDED,
-  BLOOM_ENABLED, ANTIALIAS_FXAA, PointLight, pick,
+  BLOOM_ENABLED, ANTIALIAS_FXAA, PointLight,
   type MaterialAsset, type Handle,
 } from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
+import { pick } from '@forgeax/engine-picking';
 import { createSphereGeometry } from '@forgeax/engine-geometry';
 
 type MatHandle = Handle<'MaterialAsset', 'shared'>;
@@ -117,7 +119,7 @@ function spawnFallbackScene(ctx: Ctx): void {
   const { world } = ctx;
   const ground = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ baseColor: [0.48, 0.62, 0.35, 1], roughness: 0.95, metallic: 0 }));
   world.spawn(
-    { component: Transform, data: { posY: -0.1, scaleX: 24, scaleY: 0.2, scaleZ: 24 } },
+    { component: Transform, data: { pos: [0, -0.1, 0], scale: [24, 0.2, 24]} },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [ground] } },
   );
@@ -128,7 +130,7 @@ function spawnFallbackScene(ctx: Ctx): void {
 // so a hard knock can't push them partway THROUGH a thin slab and leave them sunk.
 function spawnGroundCollider(ctx: Ctx): void {
   ctx.world.spawn(
-    { component: Transform, data: { posX: 0, posY: -5, posZ: 0 } },
+    { component: Transform, data: { pos: [0, -5, 0]} },
     { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
     { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtentsX: 60, halfExtentsY: 5, halfExtentsZ: 60, friction: 0.9, restitution: 0 } },
   );
@@ -178,14 +180,14 @@ function attachScenePhysics(
     const name = (node.components.Name as { value?: string } | undefined)?.value;
     const e = loaded.mapping.get(node.localId);
     if (e === undefined || !name) continue;
-    const t = (node.components.Transform ?? {}) as Record<string, number>;
+    const t = (node.components.Transform ?? {}) as { pos?: number[]; scale?: number[] };
     // Collider sizing: the builtin CUBE is createBoxGeometry(1,1,1) → extent 1
     // (half 0.5), but the builtin SPHERE is createSphereGeometry(1,…) → radius 1.
     // So a cuboid half-extent is scale·0.5, while a sphere's radius is the FULL
     // scale (scale·1). Getting this wrong makes the collider half the visual size
     // → the mesh sinks into the floor and bodies interpenetrate before colliding.
-    const hx = (t.scaleX ?? 1) * 0.5, hy = (t.scaleY ?? 1) * 0.5, hz = (t.scaleZ ?? 1) * 0.5;
-    const sphereR = t.scaleX ?? 1;
+    const hx = (t.scale?.[0] ?? 1) * 0.5, hy = (t.scale?.[1] ?? 1) * 0.5, hz = (t.scale?.[2] ?? 1) * 0.5;
+    const sphereR = t.scale?.[0] ?? 1;
     const box = (restitution: number) =>
       world.addComponent(e, { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtentsX: hx, halfExtentsY: hy, halfExtentsZ: hz, restitution, friction: 0.7 } });
     const sphere = (restitution: number) =>
@@ -205,8 +207,8 @@ function attachScenePhysics(
       // entities with the full (Transform, RigidBody, Collider) triplet, so a
       // Collider WITHOUT a RigidBody is silently ignored (no collision at all).
       // A static RigidBody is the right way to get an immovable obstacle.
-      case 'TreeTrunk': staticBody(); box(0.2); addBlocker(t.posX ?? 0, t.posZ ?? 0, Math.hypot(hx, hz), (t.posY ?? 0) - hy); break;
-      case 'TreeCanopy': staticBody(); sphere(0.2); addBlocker(t.posX ?? 0, t.posZ ?? 0, sphereR, (t.posY ?? 0) - sphereR); break;
+      case 'TreeTrunk': staticBody(); box(0.2); addBlocker(t.pos?.[0] ?? 0, t.pos?.[2] ?? 0, Math.hypot(hx, hz), (t.pos?.[1] ?? 0) - hy); break;
+      case 'TreeCanopy': staticBody(); sphere(0.2); addBlocker(t.pos?.[0] ?? 0, t.pos?.[2] ?? 0, sphereR, (t.pos?.[1] ?? 0) - sphereR); break;
       case 'RedBox': dynamic(); box(0.25); props.push({ e, mat: matOf(e) }); targets.push({ e, points: 10 }); break;
       case 'BlueBall': dynamic(); sphere(0.55); props.push({ e, mat: matOf(e) }); targets.push({ e, points: 15 }); break;
       case 'YellowPillar': dynamic(); box(0.2); props.push({ e, mat: matOf(e) }); targets.push({ e, points: 10 }); break;
@@ -235,7 +237,7 @@ function setupPlayerRoot(
 ): void {
   const { world } = ctx;
   const rt = world.get(root, Transform);
-  const rx = rt.ok ? rt.value.posX : 0, ry = rt.ok ? rt.value.posY : PLAYER_Y, rz = rt.ok ? rt.value.posZ : 0;
+  const rx = rt.ok ? (rt.value.pos[0] ?? 0) : 0, ry = rt.ok ? (rt.value.pos[1] ?? PLAYER_Y) : PLAYER_Y, rz = rt.ok ? (rt.value.pos[2] ?? 0) : 0;
   // Re-parent each body part to the root, converting its authored WORLD position to
   // a LOCAL offset (part − root). The root has uniform scale 1, so parts keep shape.
   for (const node of loaded.nodes) {
@@ -246,7 +248,9 @@ function setupPlayerRoot(
     const t = world.get(e, Transform);
     if (!t.ok) continue;
     world.addComponent(e, { component: ChildOf, data: { parent: root } });
-    world.set(e, Transform, { posX: t.value.posX - rx, posY: t.value.posY - ry, posZ: t.value.posZ - rz });
+    world.set(e, Transform, {
+      pos: [(t.value.pos[0] ?? 0) - rx, (t.value.pos[1] ?? 0) - ry, (t.value.pos[2] ?? 0) - rz],
+    });
   }
   world.addComponent(root, { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } });
   world.addComponent(root, { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.4 } });
@@ -330,8 +334,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     targets.push(...phys.targets);
     const playerNode = loaded.nodes.find((n) => (n.components.Name as { value?: string } | undefined)?.value === 'Player');
     if (playerNode) {
-      const t = (playerNode.components.Transform ?? {}) as Record<string, number>;
-      initX = t.posX ?? 0; initZ = t.posZ ?? 0;
+      const t = (playerNode.components.Transform ?? {}) as { pos?: number[] };
+      initX = t.pos?.[0] ?? 0; initZ = t.pos?.[2] ?? 0;
       player = loaded.mapping.get(playerNode.localId);
       if (player !== undefined) setupPlayerRoot({ world }, player, loaded);
     }
@@ -350,7 +354,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   quat.fromAxisAngle(topQ, [1, 0, 0], topPitch);
   let camX = initX, camZ = initZ + TOP_DZ;
   const camera = world.spawn(
-    { component: Transform, data: { posX: camX, posY: TOP_DY, posZ: camZ, quatX: topQ[0]!, quatY: topQ[1]!, quatZ: topQ[2]!, quatW: topQ[3]! } },
+    { component: Transform, data: { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!]} },
     // clearR/G/B = visible sky background. WebKit/WKWebView (the desktop app)
     // can't render the cubemap SkyboxBackground (needs rgba16float render targets
     // it lacks), so without this the background clears to black. The Camera clear
@@ -362,7 +366,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // ── one warm accent point light (learn-render §2 multiple-lights; the scene
   //    already has the directional Sun + IBL skylight — keep ≤1 of each). ───────
   world.spawn(
-    { component: Transform, data: { posX: 3, posY: 5, posZ: 1 } },
+    { component: Transform, data: { pos: [3, 5, 1]} },
     { component: PointLight, data: { colorR: 1, colorG: 0.72, colorB: 0.42, intensity: 40, range: 22 } },
   );
 
@@ -397,13 +401,18 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         const pe = loaded.mapping.get(n.localId);
         if (pe === undefined) continue;
         const tr = world.get(pe, Transform);
-        bodyParts.push({ e: pe, sx: tr.ok ? tr.value.scaleX : 1, sy: tr.ok ? tr.value.scaleY : 1, sz: tr.ok ? tr.value.scaleZ : 1 });
+        bodyParts.push({
+          e: pe,
+          sx: tr.ok ? (tr.value.scale[0] ?? 1) : 1,
+          sy: tr.ok ? (tr.value.scale[1] ?? 1) : 1,
+          sz: tr.ok ? (tr.value.scale[2] ?? 1) : 1,
+        });
       }
     }
   }
   const setPlayerVisible = (vis: boolean) => {
     for (const p of bodyParts) {
-      world.set(p.e, Transform, vis ? { scaleX: p.sx, scaleY: p.sy, scaleZ: p.sz } : { scaleX: 0, scaleY: 0, scaleZ: 0 });
+      world.set(p.e, Transform, vis ? { scale: [p.sx, p.sy, p.sz]} : { scale: [0, 0, 0]});
     }
   };
 
@@ -478,9 +487,9 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const spawnPopup = (text: string, wx: number, wy: number, wz: number): void => {
     const camTr = world.get(camera, Transform);
     if (!camTr.ok) return;
-    const cpx = camTr.value.posX, cpy = camTr.value.posY, cpz = camTr.value.posZ;
+    const cpx = camTr.value.pos[0] ?? 0, cpy = camTr.value.pos[1] ?? 0, cpz = camTr.value.pos[2] ?? 0;
     // Inverse camera rotation = quaternion conjugate (negate xyz, keep w).
-    const qx = -camTr.value.quatX, qy = -camTr.value.quatY, qz = -camTr.value.quatZ, qw = camTr.value.quatW;
+    const qx = -(camTr.value.quat[0] ?? 0), qy = -(camTr.value.quat[1] ?? 0), qz = -(camTr.value.quat[2] ?? 0), qw = camTr.value.quat[3] ?? 1;
     const dx = wx - cpx, dy = wy - cpy, dz = wz - cpz;
     // Quat-vector rotation: t = 2 * (q.xyz × v); v' = v + q.w * t + q.xyz × t.
     const tx = 2 * (qy * dz - qz * dy);
@@ -608,7 +617,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         let aimX: number, aimZ: number;
         if (hit) {
           const tr = world.get(hit.entity, Transform);
-          if (tr.ok) { aimX = tr.value.posX; aimZ = tr.value.posZ; }
+          if (tr.ok) { aimX = tr.value.pos[0] ?? 0; aimZ = tr.value.pos[2] ?? 0; }
           else { aimX = px + (ev.x - canvas.width / 2); aimZ = pz + (ev.y - canvas.height / 2); }
         } else {
           aimX = px + (ev.x - canvas.width / 2); aimZ = pz + (ev.y - canvas.height / 2);
@@ -698,7 +707,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       // Arrows alias WASD only in top-down; in FPS they steer the view (above).
       const am = mode !== 'fps';   // arrows-move (top-down only)
       const move = snap.getVector('moveLeft', 'moveRight', 'moveBack', 'moveForward');
-      // getVector's Y is (posY=moveForward) − (negY=moveBack); forward intent f
+      // getVector's Y is (posY action=moveForward) − (negY=moveBack); forward intent f
       // is +forward, so f = move.y. s = strafe right(+)/left(−) = move.x.
       const f = move.y + (am ? ((arrowUp ? 1 : 0) - (arrowDown ? 1 : 0)) : 0);
       const s = move.x + (am ? ((arrowRight ? 1 : 0) - (arrowLeft ? 1 : 0)) : 0);
@@ -747,7 +756,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       // — drive the kinematic root: position + facing yaw (front = local −Z) —
       const yaw = Math.atan2(-faceX, -faceZ);
       const q = quat.eulerY(yaw);
-      world.set(root, Transform, { posX: px, posY: jumpY, posZ: pz, quatX: q[0]!, quatY: q[1]!, quatZ: q[2]!, quatW: q[3]! });
+      world.set(root, Transform, { pos: [px, jumpY, pz], quat: [q[0]!, q[1]!, q[2]!, q[3]!]});
 
       // — shoot (F, or left-click in FPS): kinematic bullet flies along `face` —
       shootCd -= dt;
@@ -772,7 +781,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         shotDir = null;   // one-shot snapshot consumed
         const bx = px + dirX * 0.6, byy = by + dirY * 0.6, bz = pz + dirZ * 0.6;
         const e = world.spawn(
-          { component: Transform, data: { posX: bx, posY: byy, posZ: bz } },
+          { component: Transform, data: { pos: [bx, byy, bz]} },
           { component: MeshFilter, data: { assetHandle: bulletMesh } },
           { component: MeshRenderer, data: { materials: [bulletMat] } },
           // ccdEnabled sweeps the fast kinematic bullet's collider along each
@@ -792,7 +801,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         b.x += b.dx * BULLET_SPEED * dt;
         b.y += b.dy * BULLET_SPEED * dt;
         b.z += b.dz * BULLET_SPEED * dt;
-        world.set(b.e, Transform, { posX: b.x, posY: b.y, posZ: b.z });
+        world.set(b.e, Transform, { pos: [b.x, b.y, b.z]});
       }
 
       // — bullet↔target hit (rapier3d doesn't populate CollidingEntities →
@@ -807,7 +816,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
           if (b.hits.has(fl.e)) continue;
           const tr = world.get(fl.e, Transform);
           if (!tr.ok) continue;
-          const fxp = tr.value.posX, fyp = tr.value.posY, fzp = tr.value.posZ;
+          const fxp = tr.value.pos[0] ?? 0, fyp = tr.value.pos[1] ?? 0, fzp = tr.value.pos[2] ?? 0;
           const ex = b.x - fxp, ey = b.y - fyp, ez = b.z - fzp;
           if (ex * ex + ey * ey + ez * ez < HIT2) {
             b.hits.add(fl.e);
@@ -841,12 +850,12 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         const qy = quat.create(); quat.fromAxisAngle(qy, [0, 1, 0], lookYaw);
         const qx = quat.create(); quat.fromAxisAngle(qx, [1, 0, 0], lookPitch);
         const cq = quat.create(); quat.multiply(cq, qy, qx);
-        world.set(camera, Transform, { posX: px, posY: jumpY + EYE, posZ: pz, quatX: cq[0]!, quatY: cq[1]!, quatZ: cq[2]!, quatW: cq[3]! });
+        world.set(camera, Transform, { pos: [px, jumpY + EYE, pz], quat: [cq[0]!, cq[1]!, cq[2]!, cq[3]!]});
       } else {
         const a = 1 - Math.exp(-CAM_FOLLOW * dt);
         camX += (px - camX) * a;
         camZ += (pz + TOP_DZ - camZ) * a;
-        world.set(camera, Transform, { posX: camX, posY: TOP_DY, posZ: camZ, quatX: topQ[0]!, quatY: topQ[1]!, quatZ: topQ[2]!, quatW: topQ[3]! });
+        world.set(camera, Transform, { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!]});
       }
     });
   }

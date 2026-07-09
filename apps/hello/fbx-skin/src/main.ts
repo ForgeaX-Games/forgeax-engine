@@ -136,9 +136,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const tfRes = world.get(ent, Transform);
       if (tfRes.ok) {
         world.set(ent, Transform, {
-          posX: tfRes.value.posX + pos[0],
-          posY: tfRes.value.posY + pos[1],
-          posZ: tfRes.value.posZ + pos[2],
+          pos: [
+            (tfRes.value.pos[0] ?? 0) + pos[0],
+            (tfRes.value.pos[1] ?? 0) + pos[1],
+            (tfRes.value.pos[2] ?? 0) + pos[2],
+          ],
         });
       }
       const clipIdx = i % Math.max(1, clipHandles.length);
@@ -168,7 +170,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Camera + directional light. humanoid.fbx is in cm; ~150 unit body.
   world
     .spawn(
-      { component: Transform, data: { posX: 0, posY: 90, posZ: 520 } },
+      { component: Transform, data: { pos: [0, 90, 520]} },
       {
         component: Camera,
         data: {

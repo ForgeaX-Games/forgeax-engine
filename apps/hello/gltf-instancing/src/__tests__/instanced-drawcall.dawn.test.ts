@@ -32,13 +32,8 @@ import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
 import { gltfDocToSceneAsset, parseGltf } from '@forgeax/engine-gltf';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  createRenderer,
-  HANDLE_CUBE,
-  type Handle,
-  type MaterialAsset,
-  type MeshAsset,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, type MeshAsset } from '@forgeax/engine-assets-runtime';
+import { createRenderer, type Handle, type MaterialAsset } from '@forgeax/engine-runtime';
 import type { SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 

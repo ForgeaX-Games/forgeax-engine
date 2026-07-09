@@ -30,13 +30,12 @@
 // gate passes while browser renders black) + comparison-demo-exposes-frozen-fxaa
 // (assert two states differ, don't match one self-made baseline).
 
+import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import {
-  AssetRegistry,
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   Instances,
   MeshFilter,
   MeshRenderer,
@@ -218,16 +217,9 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: -3,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 12,
-          scaleY: 0.2,
-          scaleZ: 12,
+          pos: [0, -3, 0],
+          quat: [0, 0, 0, 1],
+          scale: [12, 0.2, 12],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -239,16 +231,9 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 8,
-          posZ: 16,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 8, 16],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       {
@@ -296,16 +281,9 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 2,
-          posZ: -2,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 0.5,
-          scaleY: 0.5,
-          scaleZ: 0.5,
+          pos: [0, 2, -2],
+          quat: [0, 0, 0, 1],
+          scale: [0.5, 0.5, 0.5],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },

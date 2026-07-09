@@ -149,13 +149,15 @@ const {
   Camera,
   DirectionalLight,
   GlyphText,
-  HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
   perspective,
   TONEMAP_REINHARD_EXTENDED,
   Transform,
 } = runtimePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
 // MUST stay in sync with apps/hello/text/src/text-scenes.ts (lesson:
 // smoke-script-duplicate-scene-must-stay-in-sync-with-main). dawn-node cannot
@@ -170,10 +172,10 @@ const FONT_GUID = '019eb276-4d96-7f2c-9ecf-5124a020eebb';
 const SAMPLER_GUID = '019eb276-4d96-7313-b4f0-f5d55536acd2';
 
 const TEXT_SCENES = [
-  { p: { posX: -3, posY: 2.5, posZ: 0, quatW: 1 }, text: 'PLAYER 1', color: [1, 1, 1, 1] },
-  { p: { posX: -3, posY: 0, posZ: 0, quatW: 1 }, text: 'HP\nMANA', color: [0.6, 0.9, 1, 1] },
-  { p: { posX: 1, posY: 2.5, posZ: 0, quatW: 1 }, text: 'BLOOM', color: [3, 2.4, 1.2, 1] },
-  { p: { posX: 1.6, posY: -1.0, posZ: 0, quatW: 1 }, text: 'HIDDEN', color: [1, 0.8, 0.2, 1] },
+  { p: { pos: [-3, 2.5, 0], quat: [0, 0, 0, 1] }, text: 'PLAYER 1', color: [1, 1, 1, 1] },
+  { p: { pos: [-3, 0, 0], quat: [0, 0, 0, 1] }, text: 'HP\nMANA', color: [0.6, 0.9, 1, 1] },
+  { p: { pos: [1, 2.5, 0], quat: [0, 0, 0, 1] }, text: 'BLOOM', color: [3, 2.4, 1.2, 1] },
+  { p: { pos: [1.6, -1.0, 0], quat: [0, 0, 0, 1] }, text: 'HIDDEN', color: [1, 0.8, 0.2, 1] },
 ];
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -220,7 +222,7 @@ const cubeMat = world.allocSharedRef('MaterialAsset', {
   paramValues: { baseColor: [0.6, 0.6, 0.6], metallic: 0, roughness: 0.5 },
 });
 world.spawn(
-  { component: Transform, data: { posX: 2.2, posY: -1.0, posZ: 1.5, quatW: 1, scaleX: 0.5, scaleY: 0.5, scaleZ: 0.5 } },
+  { component: Transform, data: { pos: [2.2, -1.0, 1.5], quat: [0, 0, 0, 1], scale: [0.5, 0.5, 0.5]} },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [cubeMat.value] } },
 );
@@ -229,7 +231,7 @@ world.spawn({
   data: { directionX: -0.3, directionY: -0.5, directionZ: -0.8, colorR: 1, colorG: 1, colorB: 1, intensity: 1.2 },
 });
 world.spawn(
-  { component: Transform, data: { posZ: 8 } },
+  { component: Transform, data: { pos: [0, 0, 8]} },
   {
     component: Camera,
     data: {

@@ -899,15 +899,13 @@ describe('SceneInstance transition survival (m5w1)', () => {
 
     // Register Transform to give entities some data
     const Transform = defineComponent('Transform_test_m5w1', {
-      posX: { type: 'f32' },
-      posY: { type: 'f32' },
-      posZ: { type: 'f32' },
+      pos: 'array<f32, 3>',
     });
 
     const nodes: SceneEntity[] = [
       {
         localId: localId(0),
-        components: { Transform_test_m5w1: { posX: 1, posY: 2, posZ: 3 } },
+        components: { Transform_test_m5w1: { pos: [1, 2, 3]} },
       },
     ];
     const handle = registerSceneAsset(world, buildScene(nodes));
@@ -921,16 +919,14 @@ describe('SceneInstance transition survival (m5w1)', () => {
     // Read component data before transition
     const memberHandle = mapping[1] as unknown as EntityHandle; // index 1 = first member
     const dataBefore = world.get(memberHandle, Transform).unwrap();
-    expect(dataBefore.posX).toBe(1);
+    expect(Array.from(dataBefore.pos)).toEqual([1, 2, 3]);
 
     setNextState(world, LevelId, 'tutorial');
     world.update();
 
     // Entity still alive and component data still readable
     const dataAfter = world.get(memberHandle, Transform).unwrap();
-    expect(dataAfter.posX).toBe(1);
-    expect(dataAfter.posY).toBe(2);
-    expect(dataAfter.posZ).toBe(3);
+    expect(Array.from(dataAfter.pos)).toEqual([1, 2, 3]);
   });
 
   // Regression (verify round 1, B2): a token defined AFTER registerStatesPlugin

@@ -27,19 +27,10 @@ import { World } from '@forgeax/engine-ecs';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import type { VideoAsset } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-  HANDLE_QUAD,
-  perspective,
-  Transform,
-  VideoPlayer,
-  VIDEO_ELEMENT_PROVIDER_KEY,
-} from '@forgeax/engine-runtime';
-import type { VideoElementProvider } from '@forgeax/engine-runtime';
+import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { VideoPlayer, VIDEO_ELEMENT_PROVIDER_KEY } from '@forgeax/engine-graphics-extras';
+import type { VideoElementProvider } from '@forgeax/engine-graphics-extras';
+import { Camera, createRenderer, DirectionalLight, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 // GUIDs: stable per-run (not persisted across builds).
@@ -205,7 +196,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           far: 100,
         }),
       },
-      { component: Transform, data: { posX: 0, posY: 0, posZ: 5 } },
+      { component: Transform, data: { pos: [0, 0, 5]} },
     );
 
     // Spawn directional light.
@@ -222,7 +213,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           intensity: 1.5,
         },
       },
-      { component: Transform, data: { posX: 1, posY: 2, posZ: 1 } },
+      { component: Transform, data: { pos: [1, 2, 1]} },
     );
 
     // Mint handles from the payloads returned by loadByGuid (D-17:
@@ -242,7 +233,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
       {
         component: Transform,
-        data: { posX: 0, posY: 0, posZ: -1, scaleX: 2, scaleY: 2, scaleZ: 1 },
+        data: { pos: [0, 0, -1], scale: [2, 2, 1]},
       },
     );
     console.log(`[video-texture] video-textured quad spawned: entity=${String(videoEnt)}`);

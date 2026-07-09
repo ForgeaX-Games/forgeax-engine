@@ -175,13 +175,15 @@ const { createPlaneGeometry } = await import('@forgeax/engine-geometry');
 const {
   Camera,
   DirectionalLight,
-  HANDLE_CUBE,
   Materials,
   MeshFilter,
   MeshRenderer,
   perspective,
   Transform,
 } = runtimePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
@@ -273,7 +275,7 @@ const floorMesh = world.allocSharedRef('MeshAsset', floorRes.value);
 world.spawn(
   {
     component: Transform,
-    data: { posY: -0.5, quatX: FLOOR_QUAT_X, quatW: FLOOR_QUAT_W },
+    data: { pos: [0, -0.5, 0], quat: [FLOOR_QUAT_X, 0, 0, FLOOR_QUAT_W]},
   },
   { component: MeshFilter, data: { assetHandle: floorMesh } },
   { component: MeshRenderer, data: { materials: [floorMat] } },
@@ -281,12 +283,12 @@ world.spawn(
 
 // 6 cubes at varying positions/sizes/colors.
 const cubes = [
-  { posX: -3, posY: 1.5, posZ: -2, scaleX: 1, scaleY: 2, scaleZ: 1, color: [1, 0.3, 0.3] },
-  { posX: 0, posY: 0.5, posZ: -4, scaleX: 1, scaleY: 1, scaleZ: 1, color: [0.3, 1, 0.3] },
-  { posX: 3, posY: 0.75, posZ: -1, scaleX: 1.5, scaleY: 0.5, scaleZ: 1.5, color: [0.3, 0.3, 1] },
-  { posX: -4, posY: 1, posZ: -5, scaleX: 0.5, scaleY: 1.5, scaleZ: 0.5, color: [1, 1, 0.3] },
-  { posX: 2, posY: 0.5, posZ: -6, scaleX: 2, scaleY: 1, scaleZ: 0.5, color: [1, 0.3, 1] },
-  { posX: -1, posY: 0.5, posZ: -3, scaleX: 0.8, scaleY: 0.8, scaleZ: 0.8, color: [0.3, 1, 1] },
+  { pos: [-3, 1.5, -2], scale: [1, 2, 1],color: [1, 0.3, 0.3] },
+  { pos: [0, 0.5, -4], scale: [1, 1, 1],color: [0.3, 1, 0.3] },
+  { pos: [3, 0.75, -1], scale: [1.5, 0.5, 1.5],color: [0.3, 0.3, 1] },
+  { pos: [-4, 1, -5], scale: [0.5, 1.5, 0.5],color: [1, 1, 0.3] },
+  { pos: [2, 0.5, -6], scale: [2, 1, 0.5],color: [1, 0.3, 1] },
+  { pos: [-1, 0.5, -3], scale: [0.8, 0.8, 0.8],color: [0.3, 1, 1] },
 ];
 for (const c of cubes) {
   const [r, g, b] = c.color;
@@ -296,9 +298,9 @@ for (const c of cubes) {
     {
       component: Transform,
       data: {
-        posX: c.posX, posY: c.posY, posZ: c.posZ,
-        quatW: 1,
-        scaleX: c.scaleX, scaleY: c.scaleY, scaleZ: c.scaleZ,
+        pos: c.pos,
+        quat: [0, 0, 0, 1],
+        scale: c.scale,
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -331,7 +333,7 @@ world.spawn(
 const cameraEntity = world.spawn(
   {
     component: Transform,
-    data: { posY: 1.5, posZ: 8, quatW: 1 },
+    data: { pos: [0, 1.5, 8], quat: [0, 0, 0, 1]},
   },
   {
     component: Camera,

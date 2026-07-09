@@ -114,8 +114,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const mat = Materials.standard({ baseColor: [r, g, b, 1] });
       const matRes = assets.register<MaterialAsset>(mat);
       world.spawn(
-        { component: Transform, data: { posX: cx, posY: CUBE_Y, posZ: cz, quatW: 1,
-            scaleX: CUBE_SCALE, scaleY: CUBE_SCALE, scaleZ: CUBE_SCALE } },
+        { component: Transform, data: { pos: [cx, CUBE_Y, cz],
+            scale: [CUBE_SCALE, CUBE_SCALE, CUBE_SCALE] } },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
         { component: MeshRenderer, data: { materials: [matRes.value] } },
       );
@@ -126,13 +126,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   for (let i = 0; i < NUM_LIGHTS; i++) {
     const ld = LIGHT_DATA[i]!;
     world.spawn(
-      { component: Transform, data: { posX: ld.posX, posY: ld.posY, posZ: ld.posZ, quatW: 1 } },
+      { component: Transform, data: { pos: ld.pos } },
       { component: PointLight, data: { colorR: ld.colorR, colorG: ld.colorG, colorB: ld.colorB,
           intensity: 1.0, range: 6.0 } },
     );
     world.spawn(
-      { component: Transform, data: { posX: ld.posX, posY: ld.posY, posZ: ld.posZ, quatW: 1,
-          scaleX: 0.125, scaleY: 0.125, scaleZ: 0.125 } },
+      { component: Transform, data: { pos: ld.pos, scale: [0.125, 0.125, 0.125] } },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [cubeHandles[0]!] } },
     );
@@ -140,7 +139,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Camera at (0, 1.5, 6) looking -Z.
   world.spawn(
-    { component: Transform, data: { posX: 0, posY: 1.5, posZ: 6.0, quatW: 1 } },
+    { component: Transform, data: { pos: [0, 1.5, 6.0] } },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 50 }),
         clearR: 0.02, clearG: 0.02, clearB: 0.04 } },
   );

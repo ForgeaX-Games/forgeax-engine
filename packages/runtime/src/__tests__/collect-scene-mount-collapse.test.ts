@@ -8,17 +8,18 @@
 //   SceneInstance is absent from output — already true with old hardcoded skip
 //   and preserved by the new transient check. No test modification required.
 
+import type { Asset } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, err, ok, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import type { Asset } from '../asset-registry';
-import { AssetRegistry } from '../asset-registry';
 import { rootsToSceneAsset } from '../collect-scene-asset';
+import '../components';
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { ChildOf } from '../components/child-of';
 import { Children } from '../components/children';
 import { SceneInstance } from '../components/scene-instance';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function mkReg() {
@@ -70,7 +71,7 @@ describe('m2-t1 — Form 2: root itself is SceneInstance', () => {
 
     const parent: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 10 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [10, 0, 0] } } }],
       mounts: [{ localId: 1 as never, source: 0, memberFirst: 2 as never, memberCount: 1 }],
     };
     const ch = rs(w, child);
@@ -110,8 +111,8 @@ describe('m2-t2 — Form 1: deep anchor with ChildOf parent', () => {
     const child: SceneAsset = {
       kind: 'scene',
       entities: [
-        { localId: 0 as never, components: { Transform: { posX: 1 } } },
-        { localId: 1 as never, components: { Transform: { posX: 2 } } },
+        { localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } },
+        { localId: 1 as never, components: { Transform: { pos: [2, 0, 0] } } },
       ],
     };
     reg.catalog(pg(G1), child as Asset);
@@ -185,8 +186,8 @@ describe('m2-t3 — AC-03 window invariants', () => {
     const ca: SceneAsset = {
       kind: 'scene',
       entities: [
-        { localId: 0 as never, components: { Transform: { posX: 1 } } },
-        { localId: 1 as never, components: { Transform: { posX: 2 } } },
+        { localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } },
+        { localId: 1 as never, components: { Transform: { pos: [2, 0, 0] } } },
       ],
     };
     reg.catalog(pg(G1), ca as Asset);

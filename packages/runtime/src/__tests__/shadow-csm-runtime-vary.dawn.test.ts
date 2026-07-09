@@ -91,7 +91,7 @@ function buildScene(initialCascadeCount: number, initialMapSize: number): SceneE
   const world = new World();
   world
     .spawn(
-      { component: Transform, data: { posY: 5, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+      { component: Transform, data: { pos: [0, 5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
       { component: Camera, data: { fov: 1.0472, near: 0.1, far: 60 } },
     )
     .unwrap();

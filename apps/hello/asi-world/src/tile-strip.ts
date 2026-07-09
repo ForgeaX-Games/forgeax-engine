@@ -10,6 +10,7 @@
 
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
+import { encodeTileBits } from '@forgeax/engine-graphics-extras';
 import {
   CAMERA_PROJECTION_ORTHOGRAPHIC,
   Camera,
@@ -20,7 +21,6 @@ import {
   TileLayer,
   Transform,
   TRANSPARENT_SORT_MODE_LAYER_Y,
-  encodeTileBits,
 } from '@forgeax/engine-runtime';
 import type {
   Handle,
@@ -145,7 +145,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const tilemapRes = world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [0, 0, 0], scale: [1, 1, 1]},
     },
     {
       component: Tilemap,
@@ -175,10 +175,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0, posY: 0, posZ: 0,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
   );
   if (!terrainLayerRes.ok) {
@@ -202,10 +199,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0, posY: 0, posZ: 0,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
   );
   if (!objectLayerRes.ok) {
@@ -223,7 +217,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const cameraRes = world.spawn(
     {
       component: Transform,
-      data: { posX: camX, posY: camY, posZ: 5, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [camX, camY, 5], scale: [1, 1, 1]},
     },
     {
       component: Camera,

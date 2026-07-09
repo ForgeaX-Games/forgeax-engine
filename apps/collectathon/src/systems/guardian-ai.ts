@@ -224,8 +224,8 @@ export function createGuardianAISystem(
       }
       const playerTf = world.get(player, Transform);
       if (!playerTf.ok) return;
-      const px = playerTf.value.posX;
-      const pz = playerTf.value.posZ;
+      const px = playerTf.value.pos[0] ?? 0;
+      const pz = playerTf.value.pos[2] ?? 0;
       const dt = readDt(world);
 
       for (const g of guardians) {
@@ -250,8 +250,8 @@ function stepGuardian(
   if (!tf.ok || !guardianState.ok) return;
   if (!pw.hasBody(g.body)) return;
 
-  const gx = tf.value.posX;
-  const gz = tf.value.posZ;
+  const gx = tf.value.pos[0] ?? 0;
+  const gz = tf.value.pos[2] ?? 0;
   const distToPlayer = Math.hypot(px - gx, pz - gz);
 
   const state: GuardianAIState = {

@@ -3,7 +3,7 @@
 //
 // Two behaviors share this one system (AC-20: one defineSystem per domain file):
 //   - spin: accumulate a Y-axis angle at SPIN_SPEED rad/s, written as a quaternion
-//   - bob:  offset posY by a sine wave (+/- BOB_AMPLITUDE) around CORE_BASE_Y
+//   - bob:  offset pos y by a sine wave (+/- BOB_AMPLITUDE) around CORE_BASE_Y
 //
 // The system queries every Core + Transform and writes each entity's
 // Transform.local. The Cores are kinematic-position bodies, so writing Transform
@@ -69,11 +69,8 @@ export function createSpinSystem(cores: ReadonlyArray<EntityHandle>): SystemHand
         // no-op Result, but world.get gates it explicitly for clarity.
         if (!world.get(core, Transform).ok) continue;
         world.set(core, Transform, {
-          posY: y,
-          quatX: quat.x,
-          quatY: quat.y,
-          quatZ: quat.z,
-          quatW: quat.w,
+          pos: [0, y, 0],
+          quat: [quat.x, quat.y, quat.z, quat.w],
         });
       }
     },

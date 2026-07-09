@@ -10,18 +10,8 @@
 
 // 1. engine usage
 import { createApp } from '@forgeax/engine-app';
-import {
-  Camera,
-  DirectionalLight,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  PointLightShadow,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, PointLight, PointLightShadow, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';
@@ -39,11 +29,11 @@ const CAMERA_FAR = 50.0;
 
 // Inner objects: solid-color cubes at varying positions inside the room.
 const INNER_OBJECTS = [
-  { posX: -2, posY: 0, posZ: -1, scale: 1, color: [1, 0.3, 0.3] as const },
-  { posX: 1, posY: -1, posZ: -2, scale: 0.7, color: [0.3, 1, 0.3] as const },
-  { posX: 0, posY: 1.5, posZ: -3, scale: 0.5, color: [0.3, 0.3, 1] as const },
-  { posX: -1, posY: -0.5, posZ: 2, scale: 1.2, color: [1, 1, 0.3] as const },
-  { posX: 2, posY: -1.5, posZ: 1, scale: 0.8, color: [1, 0.3, 1] as const },
+  { pos: [-2, 0, -1],scale: 1, color: [1, 0.3, 0.3] as const },
+  { pos: [1, -1, -2],scale: 0.7, color: [0.3, 1, 0.3] as const },
+  { pos: [0, 1.5, -3],scale: 0.5, color: [0.3, 0.3, 1] as const },
+  { pos: [-1, -0.5, 2],scale: 1.2, color: [1, 1, 0.3] as const },
+  { pos: [2, -1.5, 1],scale: 0.8, color: [1, 0.3, 1] as const },
 ];
 
 // Point light: orbits in a circle (x=sin(t)*3, z=cos(t)*3) at fixed y=4.
@@ -118,12 +108,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posY: ROOM_Y,
-        scaleX: ROOM_SCALE,
-        scaleY: ROOM_SCALE,
-        scaleZ: ROOM_SCALE,
-        quatW: 1,
-      },
+        pos: [0, ROOM_Y, 0], quat: [0, 0, 0, 1], scale: [ROOM_SCALE, ROOM_SCALE, ROOM_SCALE],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [roomMat] } },
@@ -138,9 +123,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: obj.posX, posY: obj.posY, posZ: obj.posZ,
-          quatW: 1,
-          scaleX: obj.scale, scaleY: obj.scale, scaleZ: obj.scale,
+          pos: obj.pos,
+          quat: [0, 0, 0, 1],
+          scale: [obj.scale, obj.scale, obj.scale],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -166,7 +151,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const lightEntity = world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: LIGHT_ORBIT_Y, posZ: 0 },
+      data: { pos: [0, LIGHT_ORBIT_Y, 0]},
     },
     {
       component: PointLight,
@@ -180,7 +165,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Camera: first-person starting at origin.
   const cameraEntity = world.spawn(
-    { component: Transform, data: { posY: 1.5, quatW: 1 } },
+    { component: Transform, data: { pos: [0, 1.5, 0], quat: [0, 0, 0, 1]} },
     {
       component: Camera,
       data: perspective({
@@ -206,9 +191,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       elapsed += 1 / 60;
       const t = elapsed;
       world.set(lightEntity, Transform, {
-        posX: Math.sin(t) * LIGHT_ORBIT_RADIUS,
-        posZ: Math.cos(t) * LIGHT_ORBIT_RADIUS,
-      });
+        pos: [Math.sin(t) * LIGHT_ORBIT_RADIUS, 0, Math.cos(t) * LIGHT_ORBIT_RADIUS],});
     },
   });
 

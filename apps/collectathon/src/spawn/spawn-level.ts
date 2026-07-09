@@ -87,7 +87,7 @@ function spawnGroundVisual(world: World): EntityHandle {
     .spawn(
       {
         component: Transform,
-        data: { posX: 0, posY: 0, posZ: 0, quatX: FLOOR_QUAT_X, quatW: FLOOR_QUAT_W },
+        data: { pos: [0, 0, 0], quat: [FLOOR_QUAT_X, 0, 0, FLOOR_QUAT_W] },
       },
       { component: MeshFilter, data: { assetHandle: groundMesh } },
       { component: MeshRenderer, data: { materials: [groundMat] } },
@@ -102,7 +102,7 @@ function spawnGroundCollider(world: World): EntityHandle {
   // the visual is the separate rotated plane above.
   return world
     .spawn(
-      { component: Transform, data: { posX: 0, posY: -GROUND_HALF_THICK, posZ: 0 } },
+      { component: Transform, data: { pos: [0, -GROUND_HALF_THICK, 0] } },
       { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
       {
         component: Collider,
@@ -150,7 +150,7 @@ function spawnWalls(world: World): EntityHandle[] {
   return specs.map((s) =>
     world
       .spawn(
-        { component: Transform, data: { posX: s.pos.x, posY: s.pos.y, posZ: s.pos.z } },
+        { component: Transform, data: { pos: [s.pos.x, s.pos.y, s.pos.z] } },
         { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
         {
           component: Collider,

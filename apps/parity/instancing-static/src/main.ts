@@ -31,17 +31,8 @@
 // (mirrors apps/parity/forgeax + apps/hello/triangle smoke pattern).
 
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  Instances,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, createRenderer, DirectionalLight, EngineEnvironmentError, Instances, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const CANVAS_W = 1280;
@@ -155,17 +146,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 0,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     {
@@ -183,17 +164,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: CAM_POS_X,
-        posY: CAM_POS_Y,
-        posZ: CAM_POS_Z,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [CAM_POS_X, CAM_POS_Y, CAM_POS_Z], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     {
       component: Camera,

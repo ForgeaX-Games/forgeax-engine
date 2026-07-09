@@ -22,18 +22,8 @@
 // 1. engine usage
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  AssetRegistry,
-  Camera,
-  createDevImportTransport,
-  DirectionalLight,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
@@ -87,16 +77,16 @@ const SHADOW_CONFIG = {
 // the material: 'wood' / 'metal' load a GUID texture, a color triple is a solid
 // Materials.standard. The depth spread exercises all four cascade bands.
 const CUBES = [
-  { posX: -2, posY: 0.5, posZ: -1, scaleX: 1, scaleY: 1, scaleZ: 1, tex: 'wood' },
-  { posX: 2, posY: 1, posZ: -4, scaleX: 1, scaleY: 2, scaleZ: 1, tex: 'metal' },
-  { posX: -3, posY: 0.75, posZ: -8, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5, tex: [1, 0.3, 0.3] },
-  { posX: 3, posY: 0.5, posZ: -12, scaleX: 1, scaleY: 1, scaleZ: 1, tex: 'wood' },
-  { posX: -1, posY: 1.5, posZ: -16, scaleX: 1, scaleY: 3, scaleZ: 1, tex: [0.3, 1, 0.3] },
-  { posX: 4, posY: 1, posZ: -22, scaleX: 2, scaleY: 2, scaleZ: 2, tex: 'metal' },
-  { posX: -4, posY: 0.75, posZ: -28, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5, tex: [0.3, 0.3, 1] },
-  { posX: 1, posY: 1, posZ: -33, scaleX: 1, scaleY: 2, scaleZ: 1, tex: 'wood' },
-  { posX: -2, posY: 1.5, posZ: -38, scaleX: 2, scaleY: 3, scaleZ: 2, tex: 'metal' },
-  { posX: 3, posY: 1, posZ: -40, scaleX: 1.5, scaleY: 2, scaleZ: 1.5, tex: [1, 1, 0.3] },
+  { pos: [-2, 0.5, -1], scale: [1, 1, 1],tex: 'wood' },
+  { pos: [2, 1, -4], scale: [1, 2, 1],tex: 'metal' },
+  { pos: [-3, 0.75, -8], scale: [1.5, 1.5, 1.5],tex: [1, 0.3, 0.3] },
+  { pos: [3, 0.5, -12], scale: [1, 1, 1],tex: 'wood' },
+  { pos: [-1, 1.5, -16], scale: [1, 3, 1],tex: [0.3, 1, 0.3] },
+  { pos: [4, 1, -22], scale: [2, 2, 2],tex: 'metal' },
+  { pos: [-4, 0.75, -28], scale: [1.5, 1.5, 1.5],tex: [0.3, 0.3, 1] },
+  { pos: [1, 1, -33], scale: [1, 2, 1],tex: 'wood' },
+  { pos: [-2, 1.5, -38], scale: [2, 3, 2],tex: 'metal' },
+  { pos: [3, 1, -40], scale: [1.5, 2, 1.5],tex: [1, 1, 0.3] },
 ] as const;
 
 // 3. bootstrap
@@ -175,7 +165,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posY: FLOOR_Y, quatX: FLOOR_QUAT_X, quatW: FLOOR_QUAT_W },
+      data: { pos: [0, FLOOR_Y, 0], quat: [FLOOR_QUAT_X, 0, 0, FLOOR_QUAT_W]},
     },
     { component: MeshFilter, data: { assetHandle: floorMesh } },
     { component: MeshRenderer, data: { materials: [floorMat] } },
@@ -188,9 +178,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: c.posX, posY: c.posY, posZ: c.posZ,
-          quatW: 1,
-          scaleX: c.scaleX, scaleY: c.scaleY, scaleZ: c.scaleZ,
+          pos: c.pos,
+          quat: [0, 0, 0, 1],
+          scale: c.scale,
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -213,7 +203,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // First-person camera.
   const cameraEntity = world.spawn(
-    { component: Transform, data: { posY: CAMERA_POS_Y, posZ: CAMERA_POS_Z } },
+    { component: Transform, data: { pos: [0, CAMERA_POS_Y, CAMERA_POS_Z]} },
     {
       component: Camera,
       data: perspective({

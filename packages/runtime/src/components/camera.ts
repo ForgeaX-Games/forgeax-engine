@@ -257,9 +257,9 @@ export function bloomEnabledFromF32(value: number): BloomEnabled {
  * @example Perspective camera at (0, 0, 3) looking down -Z (zero-config tonemap):
  *   world.spawn(
  *     { component: Transform, data: {
- *       posX: 0, posY: 0, posZ: 3,
- *       quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
- *       scaleX: 1, scaleY: 1, scaleZ: 1,
+ *       pos: [0, 0, 3],
+ *       quat: [0, 0, 0, 1],
+ *       scale: [1, 1, 1],
  *     } },
  *     { component: Camera, data: {
  *       fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100,
@@ -281,9 +281,9 @@ export function bloomEnabledFromF32(value: number): BloomEnabled {
  * @example Orthographic camera spanning [-10, 10]^2 on the near plane:
  *   world.spawn(
  *     { component: Transform, data: {
- *       posX: 0, posY: 0, posZ: 5,
- *       quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
- *       scaleX: 1, scaleY: 1, scaleZ: 1,
+ *       pos: [0, 0, 5],
+ *       quat: [0, 0, 0, 1],
+ *       scale: [1, 1, 1],
  *     } },
  *     { component: Camera, data: {
  *       fov: 0, aspect: 1, near: 0.1, far: 100,

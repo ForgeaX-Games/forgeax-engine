@@ -1032,23 +1032,39 @@ export interface ArrayMeta {
  * - `default` — layer-2 default value; aggregated into `component.defaults`.
  * - `meta` — field-level open namespace; aggregated into `component.meta`. The
  *   infra gives no key special meaning (open map, OOS-1).
+ * - `transient` — when `true`, scene collect skips this field (D-5). Same word,
+ *   same meaning as the component-level `transient` flag, with granularity sunk
+ *   to the field level: a field that is derived/reconstructable (e.g. a resolved
+ *   world mat4) is excluded from serialization while its component's persisted
+ *   fields still round-trip. Absent (the common case) means the field is
+ *   serialized.
  */
 export interface FieldDescriptor<T extends SchemaFieldType = SchemaFieldType> {
   readonly type: T;
   readonly default?: FieldValueType<T>;
   readonly meta?: Readonly<Record<string, unknown>>;
+  readonly transient?: boolean;
 }
 
 /**
  * Per-field reflection produced at registration time and read off
  * `component.fields[fieldName]` (D-A3). Carries the pre-parsed facts: the
- * field `type`, its `default` (if any), and — for `array<...>` fields only —
- * the pre-parsed `arrayMeta` (parse happens once at registration, AC-03c).
+ * field `type`, its `default` (if any), — for `array<...>` fields only — the
+ * pre-parsed `arrayMeta` (parse happens once at registration, AC-03c), and the
+ * field-level `transient` flag (D-5) when declared.
+ *
+ * `transient` mirrors the component-level `Component.transient` (same word,
+ * same meaning): scene collect skips a `transient` field just as it skips a
+ * `transient` component. Granularity is sunk to the field level so a component
+ * can persist most of its fields while excluding a derived/reconstructable one
+ * (e.g. `Transform.world`). Absent means the field participates in
+ * serialization.
  */
 export interface FieldReflection {
   readonly type: SchemaFieldType;
   readonly default?: unknown;
   readonly arrayMeta?: ArrayMeta;
+  readonly transient?: boolean;
 }
 
 /**
@@ -1260,7 +1276,9 @@ export function defineComponent<const N extends string, const S extends FieldsIn
 
     // Per-field reflection row — only attach arrayMeta / default when present
     // (exactOptionalPropertyTypes: never set an explicit `undefined`).
-    const row: { type: string; default?: unknown; arrayMeta?: ArrayMeta } = { type: fieldType };
+    const row: { type: string; default?: unknown; arrayMeta?: ArrayMeta; transient?: boolean } = {
+      type: fieldType,
+    };
     if (typeof spec !== 'string') {
       const desc = spec as FieldDescriptor;
       if ('default' in desc) {
@@ -1270,6 +1288,8 @@ export function defineComponent<const N extends string, const S extends FieldsIn
       if (desc.meta !== undefined) {
         Object.assign(collectedMeta, desc.meta);
       }
+      // exactOptionalPropertyTypes: only attach `transient` when declared.
+      if (desc.transient !== undefined) row.transient = desc.transient;
     }
     if (arrayMeta !== undefined) row.arrayMeta = arrayMeta;
     reflectedFields[fieldName] = Object.freeze(row) as FieldReflection;

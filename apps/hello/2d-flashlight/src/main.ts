@@ -5,8 +5,8 @@
 // `albedo * lightColor * attenuation * cone`; sprites are omnidirectional
 // receivers and light direction only shapes the SpotLight cone. This lets
 // a "person holding a flashlight" scene put the SpotLight on the sprite
-// plane (posZ=0, directionZ=0) and get a visible sweep beam -- the pre-M1
-// Half-Lambert path required posZ>0 or the beam vanished.
+// plane (pos z=0, directionZ=0) and get a visible sweep beam -- the pre-M1
+// Half-Lambert path required pos z>0 or the beam vanished.
 //
 // URL modes (mirrors the sprite-lit demo's ?mode= convention):
 //   ?mode=sweep-spot     -- AC-1 harness. Sole SpotLight at world origin
@@ -38,20 +38,8 @@
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import type { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  createDevImportTransport,
-  EngineEnvironmentError,
-  HANDLE_QUAD,
-  MeshFilter,
-  MeshRenderer,
-  orthographic,
-  PointLight,
-  SpotLight,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  TONEMAP_NONE,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, EngineEnvironmentError, MeshFilter, MeshRenderer, orthographic, PointLight, SpotLight, SPRITE_PREMULTIPLIED_ALPHA_BLEND, TONEMAP_NONE, Transform } from '@forgeax/engine-runtime';
 import type { Handle, MaterialAsset, SamplerAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -153,7 +141,7 @@ function buildSweepSpotScene(ctx: SceneCtx): void {
   const { world, textureHandle, samplerHandle } = ctx;
 
   world.spawn(
-    { component: Transform, data: { posX: 1.9, posY: 0, posZ: 5, quatW: 1 } },
+    { component: Transform, data: { pos: [1.9, 0, 5], quat: [0, 0, 0, 1]} },
     {
       component: Camera,
       data: {
@@ -164,11 +152,11 @@ function buildSweepSpotScene(ctx: SceneCtx): void {
     },
   ).unwrap();
 
-  // SpotLight on the sprite plane; posZ=0 + directionZ=0 sweeps parallel
+  // SpotLight on the sprite plane; pos z=0 + directionZ=0 sweeps parallel
   // to the plane (the pre-M1 Half-Lambert path returned near-black here
   // because dot(N=(0,0,1), L) collapsed to 0).
   world.spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatW: 1 } },
+    { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1]} },
     {
       component: SpotLight,
       data: {
@@ -192,7 +180,7 @@ function buildSweepSpotScene(ctx: SceneCtx): void {
 }
 
 // ─── point-circle: AC-2 harness ──────────────────────────────────────────────
-// PointLight just above the plane (posZ=0.01) with range=1 makes a soft
+// PointLight just above the plane (pos z=0.01) with range=1 makes a soft
 // circle. Center world (0, 0) saturates (dSq clamped to guard 1e-4,
 // attenuation ~10000); edge world (1, 0) is outside the quartic window
 // (factor clamped to 0), so the smoke asserts center > 0.7 / edge < 0.1.
@@ -200,7 +188,7 @@ function buildPointCircleScene(ctx: SceneCtx): void {
   const { world, textureHandle, samplerHandle } = ctx;
 
   world.spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 5, quatW: 1 } },
+    { component: Transform, data: { pos: [0, 0, 5], quat: [0, 0, 0, 1]} },
     {
       component: Camera,
       data: {
@@ -212,7 +200,7 @@ function buildPointCircleScene(ctx: SceneCtx): void {
   ).unwrap();
 
   world.spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0.01, quatW: 1 } },
+    { component: Transform, data: { pos: [0, 0, 0.01], quat: [0, 0, 0, 1]} },
     {
       component: PointLight,
       data: {
@@ -237,7 +225,7 @@ function buildBothScene(ctx: SceneCtx): void {
   const { world, textureHandle, samplerHandle } = ctx;
 
   world.spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 5, quatW: 1 } },
+    { component: Transform, data: { pos: [0, 0, 5], quat: [0, 0, 0, 1]} },
     {
       component: Camera,
       data: {
@@ -249,7 +237,7 @@ function buildBothScene(ctx: SceneCtx): void {
   ).unwrap();
 
   world.spawn(
-    { component: Transform, data: { posX: -1.5, posY: 0, posZ: 0.01, quatW: 1 } },
+    { component: Transform, data: { pos: [-1.5, 0, 0.01], quat: [0, 0, 0, 1]} },
     {
       component: PointLight,
       data: {
@@ -261,7 +249,7 @@ function buildBothScene(ctx: SceneCtx): void {
   ).unwrap();
 
   world.spawn(
-    { component: Transform, data: { posX: 0.4, posY: 0, posZ: 0, quatW: 1 } },
+    { component: Transform, data: { pos: [0.4, 0, 0], quat: [0, 0, 0, 1]} },
     {
       component: SpotLight,
       data: {
@@ -294,8 +282,8 @@ function spawnSprite(
   x: number,
   y: number,
   z: number,
-  scaleX: number,
-  scaleY: number,
+  sx: number,
+  sy: number,
 ): void {
   const mat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',
@@ -320,7 +308,7 @@ function spawnSprite(
   });
   world
     .spawn(
-      { component: Transform, data: { posX: x, posY: y, posZ: z, quatW: 1, scaleX, scaleY, scaleZ: 1 } },
+      { component: Transform, data: { pos: [x, y, z], quat: [0, 0, 0, 1], scale: [sx, sy, 1] } },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
       { component: MeshRenderer, data: { materials: [mat] } },
     )

@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
-const registrySrc = readFileSync(`${here}../asset-registry.ts`, 'utf8');
+const registrySrc = readFileSync(`${here}../../../assets-runtime/src/asset-registry.ts`, 'utf8');
 const deriveSrc = readFileSync(
   fileURLToPath(new URL('../../../pack/src/deriveAssetName.ts', import.meta.url)),
   'utf8',

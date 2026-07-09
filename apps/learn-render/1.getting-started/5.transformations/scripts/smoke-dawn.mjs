@@ -184,11 +184,13 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 const { unwrapHandle } = await import('@forgeax/engine-types');
 
 const decodeRes = await decodeImageFromFile(CONTAINER_SRC_PATH);
@@ -263,17 +265,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: ROT_QUAT_Z,
-      quatW: ROT_QUAT_W,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    },
+      pos: [0, 0, 0], quat: [0, 0, ROT_QUAT_Z, ROT_QUAT_W], scale: [1, 1, 1],},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   {
@@ -285,17 +277,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0,
-      posY: 0,
-      posZ: 3,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    },
+      pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
   {
     component: Camera,

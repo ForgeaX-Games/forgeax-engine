@@ -20,6 +20,8 @@
 | RigidBody / Collider / PhysicsWorld (rapier 2D/3D) | `forgeax-engine-physics` |
 | AudioSource / AudioListener / bus 拓扑 | `forgeax-engine-audio` |
 | immediate-mode 调试可视化：line / sphere / aabb / frustum | `forgeax-engine-debug-draw` |
+| 拾取 ray/pick：屏幕→实体 `pick` / 顶点级 `pickVertex` / tile-cell `pickTile` / `PickError` | `@forgeax/engine-picking`（无独立 skill,见 `packages/picking/README.md`) |
+| 纯逻辑图形附属：字形布局/烘焙 `layoutGlyphText`/`bakeGlyphMesh` / 图块位编解码 `encodeTileBits`/`decodeTileBits` / 视频 `VideoPlayer`/`VideoElementProvider`/`videoLoader`/`probeVideoHighPerfUpload` | `@forgeax/engine-graphics-extras`（无独立 skill,见 `packages/graphics-extras/README.md`；系统入口 `tilemapChunkExtractSystem`/`glyphTextLayoutSystem` 仍在 runtime） |
 | 状态机 / defineState / setNextState / 状态 scoped 实体 / OnEnter/OnExit | `forgeax-engine-state` |
 | 底层后端（贡献者）：opaque handle / capability / 双实现 | `forgeax-engine-rhi` |
 | 渲染 / 测试 / CI 出错 — 症状→根因→修法 | `forgeax-engine-debug` |

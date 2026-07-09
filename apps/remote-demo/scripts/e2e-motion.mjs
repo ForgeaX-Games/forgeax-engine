@@ -63,10 +63,7 @@ async function main() {
   const eRes = world.spawn({
     component: Transform,
     data: {
-      posX: 0, posY: 0, posZ: 0,
-      quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-      scaleX: 1, scaleY: 1, scaleZ: 1,
-    },
+      pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   });
   if (!eRes.ok) {
     logCase('spawn-entity', false, { error: eRes.error?.code });
@@ -76,21 +73,24 @@ async function main() {
   const entityHandle = eRes.value;
   logCase('spawn-entity', true, {});
 
-  // Add a system that increments posX each frame.
+  // Add a system that increments pos x each frame.
   world.addSystem({
     name: 'move-x',
     queries: [],
     fn: () => {
       const t = world.get(entityHandle, Transform);
-      if (t.ok) world.set(entityHandle, Transform, { posX: t.value.posX + 1 });
+      if (t.ok)
+        world.set(entityHandle, Transform, {
+          pos: [(t.value.pos[0] ?? 0) + 1, t.value.pos[1] ?? 0, t.value.pos[2] ?? 0],
+        });
     },
   });
 
-  // Advance 1 frame, verify posX changed.
+  // Advance 1 frame, verify pos x changed.
   world.update();
   const afterOne = world.get(entityHandle, Transform);
-  const pos1 = afterOne.ok ? afterOne.value.posX : null;
-  logCase('frame-advance-local', pos1 === 1, { posX: pos1 });
+  const pos1 = afterOne.ok ? afterOne.value.pos[0] : null;
+  logCase('frame-advance-local', pos1 === 1, { px: pos1 });
 
   // 2. Start remote server.
   const serverResult = await startServer({
@@ -147,7 +147,7 @@ async function main() {
     "(async () => {" +
     "var m = await _import('@forgeax/engine-runtime'); " +
     "var r = world.get(%%HANDLE%%, m.Transform); " +
-    "return r.ok ? r.value.posX : null;" +
+    "return r.ok ? r.value.pos[0] : null;" +
     "})()";
   const readScript = readScriptTpl.replace('%%HANDLE%%', String(handle));
 
@@ -157,7 +157,7 @@ async function main() {
   } catch (err) {
     logCase('read-pos-n', false, { error: err?.message ?? String(err) });
   }
-  logCase('read-pos-n', posN !== null, { posX: posN });
+  logCase('read-pos-n', posN !== null, { px: posN });
 
   // 6. Advance another frame.
   world.update();
@@ -169,7 +169,7 @@ async function main() {
   } catch (err) {
     logCase('read-pos-n1', false, { error: err?.message ?? String(err) });
   }
-  logCase('read-pos-n1', posN1 !== null, { posX: posN1 });
+  logCase('read-pos-n1', posN1 !== null, { px: posN1 });
 
   // 8. AC-13 core assertion.
   const motionOk = typeof posN === 'number' && typeof posN1 === 'number' && posN1 !== posN;
@@ -183,13 +183,13 @@ async function main() {
   const writeScript =
     "(async () => {" +
     "var m = await _import('@forgeax/engine-runtime'); " +
-    "world.set(" + String(handle) + ", m.Transform, { posX: 99 }); " +
+    "world.set(" + String(handle) + ", m.Transform, { pos: [99, 0, 0]}); " +
     "return 'ok';" +
     "})()";
   try {
     await client.eval(writeScript);
     const posAfter = await client.eval(readScript);
-    logCase('eval-write-readback', posAfter === 99, { posX: posAfter });
+    logCase('eval-write-readback', posAfter === 99, { pos: [posAfter, 0, 0]});
   } catch (err) {
     logCase('eval-write-readback', false, { error: err?.message ?? String(err) });
   }

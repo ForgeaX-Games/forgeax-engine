@@ -75,25 +75,25 @@ import { ShadowInvalidConfigError } from '../errors/render';
  *
  * @example Spawn a single spot light casting shadows (zero-config):
  *   world.spawn(
- *     { component: Transform, data: { posX: 0, posY: 5, posZ: 0 } },
+ *     { component: Transform, data: { pos: [0, 5, 0] } },
  *     { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0 } },
  *   );
  *
  * @example Opt out of shadows:
  *   world.spawn(
- *     { component: Transform, data: { posX: 0, posY: 5, posZ: 0 } },
+ *     { component: Transform, data: { pos: [0, 5, 0] } },
  *     { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0, castShadow: false } },
  *   );
  *
  * @example Explicit shadow config:
  *   world.spawn(
- *     { component: Transform, data: { posX: 0, posY: 5, posZ: 0 } },
+ *     { component: Transform, data: { pos: [0, 5, 0] } },
  *     { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0, depthBias: 0.01, normalBias: 0.08, mapSize: 1024 } },
  *   );
  *
  * @example Minimal spawn -- defaults give neutral white at full strength, range 10m, KHR pi/4 cone:
  *   world.spawn(
- *     { component: Transform, data: { posX: 0, posY: 5, posZ: 0 } },
+ *     { component: Transform, data: { pos: [0, 5, 0] } },
  *     { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0 } },
  *   );
  *   // resolves to color=[1,1,1], intensity=1, range=10.0,

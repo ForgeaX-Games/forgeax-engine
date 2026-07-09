@@ -27,11 +27,11 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, resolveComponent, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { LocalEntityId, MaterialAsset, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 // Importing the runtime components barrel populates the global component
 // table consulted by `World._buildSceneEntityComponentDatas` — without
 // these named bindings, Transform / MeshRenderer / ChildOf resolve to
@@ -62,7 +62,7 @@ function buildSceneAssetWithGuidRef(): SceneAsset {
     {
       localId: lid(0),
       components: {
-        Transform: { posX: 0 },
+        Transform: { pos: [0, 0, 0] },
         // GUID string (post template ref-int → GUID rewrite). The registry's
         // `_resolveSceneGuids` lifts this to a `Handle<MaterialAsset>` at
         // instantiate time.
@@ -72,7 +72,7 @@ function buildSceneAssetWithGuidRef(): SceneAsset {
     {
       localId: lid(1),
       components: {
-        Transform: { posX: 1 },
+        Transform: { pos: [1, 0, 0] },
         ChildOf: { parent: 0 as unknown as EntityHandle },
       },
     },

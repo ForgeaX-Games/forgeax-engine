@@ -27,6 +27,8 @@
 // AABB and the entity carries MeshFilter + MeshRenderer + Transform, so the
 // existing `pick()` raycast walk catches it for free.
 
+import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import {
   decodeEntity,
   Entity,
@@ -36,18 +38,19 @@ import {
   type Result,
   type World,
 } from '@forgeax/engine-ecs';
+import {
+  bakeGlyphMesh,
+  layoutGlyphText,
+  resetFontConcurrency,
+  trackFontConcurrency,
+} from '@forgeax/engine-graphics-extras';
 import type { FontAsset, Handle } from '@forgeax/engine-types';
 import { TextError } from '@forgeax/engine-types';
-
-import type { AssetRegistry } from './asset-registry';
 import { GlyphText } from './components/glyph-text';
 import { MeshFilter } from './components/mesh-filter';
 import { MeshRenderer } from './components/mesh-renderer';
-import { layoutGlyphText, resetFontConcurrency, trackFontConcurrency } from './glyph-layout';
-import { bakeGlyphMesh } from './glyph-mesh-bake';
 import type { GpuResourceStore } from './gpu-resource-store';
 import { worldEntityKey } from './record/frame-snapshot';
-import { resolveAssetHandle } from './resolve-asset-handle';
 
 // Per-entity bake bookkeeping: the baked mesh handle id + the authoring
 // signature it was baked from. Keyed by the entity index slot (stable across

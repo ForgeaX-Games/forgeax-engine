@@ -16,6 +16,7 @@
 // .invert` (charter proposition 5: no math reinvention; render-system.test.ts
 // asserts `/@forgeax\/engine-math/` shows up in render-system.ts source).
 
+import { type AssetRegistry, HANDLE_CUBE, HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import type {
   BindGroup,
@@ -38,7 +39,6 @@ import {
   type RenderPipelineAsset,
   RenderQueue,
 } from '@forgeax/engine-types';
-import { type AssetRegistry, HANDLE_CUBE, HANDLE_TRIANGLE } from './asset-registry';
 
 import type { EngineMetrics } from './engine-metrics';
 import { HdrpCapsInsufficientError } from './errors/render';
@@ -553,7 +553,9 @@ export interface RenderSystemRuntime {
    * need not supply one — a video field then degrades to the default view
    * (charter P3). The production createRenderer always wires it.
    */
-  readonly dynamicTextureStore?: import('./dynamic-texture-store').DynamicTextureStore | undefined;
+  readonly dynamicTextureStore?:
+    | import('@forgeax/engine-assets-runtime').DynamicTextureStore
+    | undefined;
 }
 
 export interface RenderSystemInternals extends RenderSystemRuntime {

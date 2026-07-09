@@ -21,19 +21,8 @@
 // 1. engine usage
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  PointLight,
-  PostProcessParams,
-  TONEMAP_REINHARD_EXTENDED,
-  Transform,
-  createDevImportTransport,
-  perspective,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, Materials, MeshFilter, MeshRenderer, PointLight, PostProcessParams, TONEMAP_REINHARD_EXTENDED, Transform, createDevImportTransport, perspective } from '@forgeax/engine-runtime';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, MeshAsset, RenderPipelineAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
@@ -406,13 +395,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: TUNNEL_POS_Z,
-          scaleX: TUNNEL_SCALE_X,
-          scaleY: TUNNEL_SCALE_Y,
-          scaleZ: TUNNEL_SCALE_Z,
-        },
+          pos: [0, 0, TUNNEL_POS_Z], scale: [TUNNEL_SCALE_X, TUNNEL_SCALE_Y, TUNNEL_SCALE_Z],},
       },
       { component: MeshFilter, data: { assetHandle: tunnelMeshHandle } },
       { component: MeshRenderer, data: { materials: [tunnelMat] } },
@@ -438,13 +421,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: STRONG_LIGHT_POS[0],
-          posY: STRONG_LIGHT_POS[1],
-          posZ: STRONG_LIGHT_POS[2],
-          scaleX: LIGHT_BOX_SCALE,
-          scaleY: LIGHT_BOX_SCALE,
-          scaleZ: LIGHT_BOX_SCALE,
-        },
+          pos: [STRONG_LIGHT_POS[0], STRONG_LIGHT_POS[1], STRONG_LIGHT_POS[2]], scale: [LIGHT_BOX_SCALE, LIGHT_BOX_SCALE, LIGHT_BOX_SCALE],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [strongMarkerMat] } },
@@ -454,10 +431,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: STRONG_LIGHT_POS[0],
-        posY: STRONG_LIGHT_POS[1],
-        posZ: STRONG_LIGHT_POS[2],
-      },
+        pos: [STRONG_LIGHT_POS[0], STRONG_LIGHT_POS[1], STRONG_LIGHT_POS[2]],},
     },
     {
       component: PointLight,
@@ -494,13 +468,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         {
           component: Transform,
           data: {
-            posX: pos[0],
-            posY: pos[1],
-            posZ: pos[2],
-            scaleX: LIGHT_BOX_SCALE,
-            scaleY: LIGHT_BOX_SCALE,
-            scaleZ: LIGHT_BOX_SCALE,
-          },
+            pos: [pos[0], pos[1], pos[2]], scale: [LIGHT_BOX_SCALE, LIGHT_BOX_SCALE, LIGHT_BOX_SCALE],},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
         { component: MeshRenderer, data: { materials: [weakMarkerMat] } },
@@ -509,7 +477,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.spawn(
       {
         component: Transform,
-        data: { posX: pos[0], posY: pos[1], posZ: pos[2] },
+        data: { pos: [pos[0], pos[1], pos[2]]},
       },
       {
         component: PointLight,
@@ -542,7 +510,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { posX: CAMERA_POS_X, posY: CAMERA_POS_Y, posZ: CAMERA_POS_Z },
+        data: { pos: [CAMERA_POS_X, CAMERA_POS_Y, CAMERA_POS_Z]},
       },
       {
         component: Camera,

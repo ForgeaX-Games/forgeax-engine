@@ -144,13 +144,15 @@ const { createApp } = engineApp;
 const runtimePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
-  HANDLE_CUBE,
   HDRP_PIPELINE_ID,
   MeshFilter,
   MeshRenderer,
   perspective,
   Transform,
 } = runtimePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
@@ -218,7 +220,7 @@ function populateScene(app) {
   });
 
   world.spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatW: 1 } },
+    { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1]} },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [matHandle] } },
   ).unwrap();
@@ -229,7 +231,7 @@ function populateScene(app) {
 
   // Camera locked: fov = 45deg, aspect = 1 (512x512), z = 3.
   world.spawn(
-    { component: Transform, data: { posZ: 3 } },
+    { component: Transform, data: { pos: [0, 0, 3]} },
     { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 1.0 }) },
   ).unwrap();
 }

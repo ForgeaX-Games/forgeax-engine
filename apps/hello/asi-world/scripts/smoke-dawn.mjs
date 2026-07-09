@@ -6,7 +6,7 @@
 // is verify-stage SSOT per plan-strategy §5.1 charter P5):
 //   1. A non-y-sort tilemap (mode 0 fold-eligible) collapses N per-cell
 //      entities into chunk-level instanced drawIndexed calls. The fold
-//      operator (M1 / w4) groups by (Layer.value, posZ, materialHandle)
+//      operator (M1 / w4) groups by (Layer.value, pos z, materialHandle)
 //      where Layer.value already encodes chunkIndex (research F-2).
 //   2. drawIndexed call count per frame falls dramatically below
 //      per-cell entity count (i.e. fold engaged; AC-02 lower-bound).
@@ -315,7 +315,7 @@ world
 // Camera at the centre of the tilemap with enough frustum to see the
 // whole 64x64 grid.
 world.spawn(
-  { component: Transform, data: { posX: COLS / 2, posY: ROWS / 2, posZ: 8 } },
+  { component: Transform, data: { pos: [COLS / 2, ROWS / 2, 8]} },
   {
     component: Camera,
     data: {

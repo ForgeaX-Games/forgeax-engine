@@ -43,19 +43,8 @@
 // in parallel with the same evaluate() shape).
 
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  createRenderer,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  quat,
-  type Renderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, createRenderer, EngineEnvironmentError, Materials, MeshFilter, MeshRenderer, perspective, quat, type Renderer, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -86,7 +75,7 @@ const world = new World();
 world.spawn(
   {
     component: Transform,
-    data: { posZ: 3 },
+    data: { pos: [0, 0, 3]},
   },
   { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 1.0 }) },
 ).unwrap();
@@ -141,11 +130,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        quatX: QX,
-        quatY: QY,
-        quatZ: QZ,
-        quatW: QW,
-      },
+        quat: [QX, QY, QZ, QW],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     {

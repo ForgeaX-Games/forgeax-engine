@@ -38,15 +38,8 @@ import type { App } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { AudioListener, AudioSource } from '@forgeax/engine-audio';
 import { audioPlugin, loadAudioClipByGuid } from '@forgeax/engine-audio-webaudio';
-import {
-  Camera,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import type { Handle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -118,7 +111,7 @@ const world = app.world;
 // Camera as listener (movable via WASD).
 const cameraEntity = world
   .spawn(
-    { component: Transform, data: { posX: 0, posY: 1, posZ: 5 } },
+    { component: Transform, data: { pos: [0, 1, 5]} },
     {
       component: Camera,
       data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 },
@@ -150,7 +143,7 @@ const HANDLE_NONE = 0 as unknown as Handle<'AudioClipAsset', 'shared'>;
 // Emitter: marker cube at origin.
 const emitterEntity = world
   .spawn(
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+    { component: Transform, data: { pos: [0, 0, 0]} },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: {} },
     {
@@ -226,9 +219,7 @@ app.registerUpdate((_dt: number) => {
       if (snap.keyboard.down('d') || snap.keyboard.down('D')) dx += MOVE_SPEED * _dt;
       if (dx !== 0 || dz !== 0) {
         world.set(listenerEntity, Transform, {
-          posX: tg.posX + dx,
-          posY: tg.posY,
-          posZ: tg.posZ + dz,
+          pos: [(tg.pos[0] ?? 0) + dx, tg.pos[1] ?? 0, (tg.pos[2] ?? 0) + dz],
         });
       }
     }

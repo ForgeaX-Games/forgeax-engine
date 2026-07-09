@@ -100,7 +100,7 @@ describe('skin parented double transform (AC-01)', () => {
     const world = new World();
 
     // Parent at z=5.
-    const parent = world.spawn({ component: Transform, data: { posZ: 5 } }).unwrap();
+    const parent = world.spawn({ component: Transform, data: { pos: [0, 0, 5] } }).unwrap();
 
     // Joint entity: identity local, also child of parent.
     const jointEntity = world
@@ -176,7 +176,7 @@ describe('skin parented double transform (AC-01)', () => {
     const world = new World();
 
     // Parent at z=5.
-    const parent = world.spawn({ component: Transform, data: { posZ: 5 } }).unwrap();
+    const parent = world.spawn({ component: Transform, data: { pos: [0, 0, 5] } }).unwrap();
 
     // Joint entity: identity local, child of parent.
     const jointEntity = world

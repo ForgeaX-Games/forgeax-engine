@@ -22,7 +22,7 @@
 //   );
 //   // Mutation (eval full-access, zero interception):
 //   await c.value.eval(
-//     "world.set(<handle>, (await _import('@forgeax/engine-runtime')).Transform, { posX: 5 })"
+//     "world.set(<handle>, (await _import('@forgeax/engine-runtime')).Transform, { pos: [5, 0, 0]})"
 //   );
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';

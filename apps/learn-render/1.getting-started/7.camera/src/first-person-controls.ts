@@ -67,7 +67,7 @@ export interface DisplacementXYZ {
  *
  * Pure function: no allocations beyond the returned POD; no engine /
  * world / renderer references. The demo system fn integrates the
- * returned vector into the camera Transform's posXYZ each tick.
+ * returned vector into the camera Transform's pos lanes each tick.
  *
  * @param dt seconds elapsed since previous tick (Time resource SSOT).
  * @param forward unit forward direction reconstructed from yaw/pitch.

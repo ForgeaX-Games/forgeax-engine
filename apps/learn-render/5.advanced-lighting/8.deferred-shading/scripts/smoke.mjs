@@ -151,7 +151,6 @@ const { createApp } = enginePkg;
 const runtimePkg = await import('@forgeax/engine-runtime');
 const {
   Camera,
-  HANDLE_CUBE,
   HDRP_PIPELINE_ID,
   Materials,
   MeshFilter,
@@ -160,6 +159,9 @@ const {
   PointLight,
   Transform,
 } = runtimePkg;
+const {
+  HANDLE_CUBE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL });
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
@@ -229,10 +231,7 @@ for (let row = 0; row < 3; row++) {
       {
         component: Transform,
         data: {
-          posX: cx, posY: CUBE_Y, posZ: cz,
-          quatW: 1,
-          scaleX: CUBE_SCALE, scaleY: CUBE_SCALE, scaleZ: CUBE_SCALE,
-        },
+          pos: [cx, CUBE_Y, cz], quat: [0, 0, 0, 1], scale: [CUBE_SCALE, CUBE_SCALE, CUBE_SCALE],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -280,7 +279,7 @@ for (let i = 0; i < NUM_LIGHTS; i++) {
   world.spawn(
     {
       component: Transform,
-      data: { posX: px, posY: py, posZ: pz, quatW: 1 },
+      data: { pos: [px, py, pz], quat: [0, 0, 0, 1]},
     },
     {
       component: PointLight,
@@ -299,10 +298,7 @@ for (let i = 0; i < NUM_LIGHTS; i++) {
     {
       component: Transform,
       data: {
-        posX: px, posY: py, posZ: pz,
-        quatW: 1,
-        scaleX: 0.125, scaleY: 0.125, scaleZ: 0.125,
-      },
+        pos: [px, py, pz], quat: [0, 0, 0, 1], scale: [0.125, 0.125, 0.125],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [cubeHandles[0]] } },
@@ -313,7 +309,7 @@ for (let i = 0; i < NUM_LIGHTS; i++) {
 world.spawn(
   {
     component: Transform,
-    data: { posX: 0, posY: 1.5, posZ: 6.0, quatW: 1 },
+    data: { pos: [0, 1.5, 6.0], quat: [0, 0, 0, 1]},
   },
   {
     component: Camera,

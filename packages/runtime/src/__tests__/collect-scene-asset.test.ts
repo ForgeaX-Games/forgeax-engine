@@ -24,9 +24,11 @@ import { defineComponent, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import '../components';
 import '../components/scene-instance';
-import { AssetRegistry } from '../asset-registry';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
+import { Transform } from '../components/transform';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeRegistry(): AssetRegistry {
@@ -64,17 +66,15 @@ function findEntityWith(entities: readonly SceneEntity[], compName: string): Sce
 describe('w9 — round-trip semantic equivalence', () => {
   it('(a) entity count and localId set survive instantiate->collect round-trip', () => {
     defineComponent('Test_Transform', {
-      posX: 'f32',
-      posY: 'f32',
-      posZ: 'f32',
+      pos: 'array<f32, 3>',
     });
 
     const asset: SceneAsset = {
       kind: 'scene',
       entities: [
-        { localId: localId(0), components: { Test_Transform: { posX: 1, posY: 2, posZ: 3 } } },
-        { localId: localId(1), components: { Test_Transform: { posX: 4, posY: 5, posZ: 6 } } },
-        { localId: localId(2), components: { Test_Transform: { posX: 7, posY: 8, posZ: 9 } } },
+        { localId: localId(0), components: { Test_Transform: { pos: [1, 2, 3] } } },
+        { localId: localId(1), components: { Test_Transform: { pos: [4, 5, 6] } } },
+        { localId: localId(2), components: { Test_Transform: { pos: [7, 8, 9] } } },
       ],
     };
 
@@ -405,5 +405,210 @@ describe('w9 — round-trip semantic equivalence', () => {
     );
     expect(names).toContain('e0');
     expect(names).toContain('e1');
+  });
+});
+
+// feat-20260709-transform-serialization-vec-fields-and-field-trans M1 / w1:
+// Field-level transient collect skip (AC-02 + AC-03, TDD red-first).
+//
+// AC-02: a Transform-carrying entity serializes with no `world` key in its
+//   component output (world is field-level transient, D-5).
+// AC-03: the skip is a generic mechanism — ANY component declaring ANY field
+//   transient:true has that field skipped, while undeclared fields serialize
+//   as usual. No hardcoded 'world'/'Transform' special-case (collect field
+//   loop reads comp.fields[fieldName].transient).
+describe('w1 — field-level transient collect skip (AC-02 + AC-03)', () => {
+  it('(AC-02) Transform entity serializes without a world key', () => {
+    const asset: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: localId(0), components: { Transform: { pos: [1, 2, 3] } } }],
+    };
+
+    const world = new World();
+    const reg = makeRegistry();
+    const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
+    if (sg.ok) reg.catalog(sg.value, asset);
+    const handle = registerSceneAsset(world, asset);
+    const res = world.instantiateScene(handle);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    const collected = rootsToSceneAsset(reg, world, [res.value.root]);
+    expect(collected.ok).toBe(true);
+    if (!collected.ok) return;
+
+    // Every Transform-carrying entity (synthetic identity root + the authored
+    // child) must omit the transient world field.
+    const transformEntities = collected.value.entities.filter(
+      (e) => (e.components as Record<string, Record<string, unknown>>).Transform !== undefined,
+    );
+    expect(transformEntities.length).toBeGreaterThan(0);
+    for (const e of transformEntities) {
+      const t = def(comp(e, 'Transform'), 'Transform');
+      // world field is transient -> absent from serialized output.
+      expect('world' in t).toBe(false);
+    }
+
+    // The authored (non-root) entity retains its persisted local TRS. Locate it
+    // by its ChildOf link (the synthetic root carries no ChildOf).
+    const authored = transformEntities.find(
+      (e) => (e.components as Record<string, Record<string, unknown>>).ChildOf !== undefined,
+    );
+    const t = def(comp(def(authored, 'authored'), 'Transform'), 'Transform');
+    expect(t.pos).toEqual([1, 2, 3]);
+    // Reference the imported Transform token so the schema is registered.
+    expect(Transform.name).toBe('Transform');
+  });
+
+  it('(AC-03) generic: an arbitrary component field declared transient is skipped, others kept', () => {
+    // Brand-new component, arbitrary field names -> proves no Transform/world
+    // hardcode in the collect skip path.
+    defineComponent('W1_GenericTransient', {
+      persisted: { type: 'f32', default: 0 },
+      cache: { type: 'array<f32, 4>', default: new Float32Array(4), transient: true },
+    });
+
+    const asset: SceneAsset = {
+      kind: 'scene',
+      entities: [
+        {
+          localId: localId(0),
+          components: { W1_GenericTransient: { persisted: 7, cache: [9, 9, 9, 9] } },
+        },
+      ],
+    };
+
+    const world = new World();
+    const reg = makeRegistry();
+    const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
+    if (sg.ok) reg.catalog(sg.value, asset);
+    const handle = registerSceneAsset(world, asset);
+    const res = world.instantiateScene(handle);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    const collected = rootsToSceneAsset(reg, world, [res.value.root]);
+    expect(collected.ok).toBe(true);
+    if (!collected.ok) return;
+
+    const e = findEntityWith(collected.value.entities, 'W1_GenericTransient');
+    const c = def(comp(e, 'W1_GenericTransient'), 'W1_GenericTransient');
+    // transient field skipped.
+    expect('cache' in c).toBe(false);
+    // undeclared field kept.
+    expect(c.persisted).toBeCloseTo(7, 5);
+  });
+
+  it('(AC-03 control) a component with no transient field serializes every field', () => {
+    defineComponent('W1_NoTransient', {
+      a: { type: 'f32', default: 0 },
+      b: { type: 'f32', default: 0 },
+    });
+
+    const asset: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: localId(0), components: { W1_NoTransient: { a: 3, b: 4 } } }],
+    };
+
+    const world = new World();
+    const reg = makeRegistry();
+    const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
+    if (sg.ok) reg.catalog(sg.value, asset);
+    const handle = registerSceneAsset(world, asset);
+    const res = world.instantiateScene(handle);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    const collected = rootsToSceneAsset(reg, world, [res.value.root]);
+    expect(collected.ok).toBe(true);
+    if (!collected.ok) return;
+
+    const e = findEntityWith(collected.value.entities, 'W1_NoTransient');
+    const c = def(comp(e, 'W1_NoTransient'), 'W1_NoTransient');
+    expect(c.a).toBeCloseTo(3, 5);
+    expect(c.b).toBeCloseTo(4, 5);
+  });
+});
+
+// feat-20260709 M2 / w4: serialization output shape + unknown-field downgrade
+// regression (TDD red-first; goes green with the w6 schema rewrite).
+describe('w4 -- Transform vec serialization shape (AC-05)', () => {
+  it('rootsToSceneAsset emits pos/quat/scale plain arrays, no per-axis keys, no world', () => {
+    const world = new World();
+    const reg = makeRegistry();
+    const e = world
+      .spawn({
+        component: Transform,
+        data: { pos: [1, 2, 3], quat: [0, 0.6, 0, 0.8], scale: [2, 2, 2] },
+      })
+      .unwrap();
+
+    const collected = rootsToSceneAsset(reg, world, [e]);
+    expect(collected.ok).toBe(true);
+    if (!collected.ok) return;
+
+    const entity = findEntityWith(collected.value.entities, 'Transform');
+    const tf = def(comp(entity, 'Transform'), 'Transform');
+
+    // Plain JSON arrays (normalized from the Float32Array column views).
+    expect(tf.pos).toEqual([1, 2, 3]);
+    // quat component order is [x, y, z, w] end to end (E6).
+    expect(tf.quat).toEqual([0, 0.6000000238418579, 0, 0.800000011920929]);
+    expect(tf.scale).toEqual([2, 2, 2]);
+
+    // No legacy per-axis keys; `world` stays excluded (M1 field transient).
+    for (const legacy of ['posX', 'posY', 'posZ', 'quatX', 'quatW', 'scaleX', 'world']) {
+      expect(legacy in tf).toBe(false);
+    }
+  });
+});
+
+describe('w4 -- old-shape scene JSON downgrade regression (research Finding 3)', () => {
+  it('unknown per-axis keys are silently skipped with diagnostics, known keys still apply', () => {
+    // Old 10-scalar shape scene JSON: every per-axis key is unknown after the
+    // M2 schema cut. instantiateScene must not abort and must not dirty-write;
+    // each unknown key surfaces one production-observable diagnostic and the
+    // entity lands the default identity transform (Finding 3 + 4 downgrade).
+    const asset: SceneAsset = {
+      kind: 'scene',
+      entities: [
+        {
+          localId: localId(0),
+          components: {
+            Transform: { posX: 5, posY: 6, posZ: 7, quatW: 1, scaleX: 2 },
+          },
+        },
+      ],
+    };
+
+    const world = new World();
+    const reg = makeRegistry();
+    const sg = AssetGuid.parse('00000000-0000-0000-0000-000000000000');
+    if (sg.ok) reg.catalog(sg.value, asset);
+    const handle = registerSceneAsset(world, asset);
+    const res = world.instantiateScene(handle);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    // One diagnostic per unknown key, all attributed to Transform.
+    const fields = res.value.diagnostics
+      .filter((d) => d.component === 'Transform')
+      .map((d) => d.field)
+      .sort();
+    expect(fields).toEqual(['posX', 'posY', 'posZ', 'quatW', 'scaleX']);
+
+    // The carrying entity degrades to the identity transform (defaults).
+    const tfEntity = findEntityWith(
+      (() => {
+        const collected = rootsToSceneAsset(reg, world, [res.value.root]);
+        if (!collected.ok) throw new Error('collect failed');
+        return collected.value.entities;
+      })(),
+      'Transform',
+    );
+    const tf = def(comp(tfEntity, 'Transform'), 'Transform');
+    expect(tf.pos).toEqual([0, 0, 0]);
+    expect(tf.quat).toEqual([0, 0, 0, 1]);
+    expect(tf.scale).toEqual([1, 1, 1]);
   });
 });

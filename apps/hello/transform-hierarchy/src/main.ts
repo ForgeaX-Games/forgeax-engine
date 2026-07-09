@@ -11,7 +11,7 @@
 //     Transform.world column is always present (feat-20260601 unified Transform),
 //     so a ChildOf entity follows its parent with no extra component to
 //     register (plan-strategy D-3).
-//   - A non-identity parent (posX shifted) + a child entity carrying
+//   - A non-identity parent (pos x shifted) + a child entity carrying
 //     ChildOf{parent} + Transform (local offset) + MeshFilter + MeshRenderer.
 //     The child's Transform.world = parent.world x child-local, so moving the
 //     parent at runtime drags the child across the screen.
@@ -29,20 +29,8 @@
 // sphere sits off to the side and is NOT part of the hierarchy, giving the
 // eye (and the smoke's stability check) a fixed landmark.
 
-import {
-  Camera,
-  ChildOf,
-  createRenderer,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  HANDLE_SPHERE,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  registerPropagateTransforms,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
+import { Camera, ChildOf, createRenderer, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, registerPropagateTransforms, Transform } from '@forgeax/engine-runtime';
 
 import { World } from '@forgeax/engine-ecs';
 
@@ -107,7 +95,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { posX: -0.6, posY: -0.4, posZ: 0, quatW: 1, scaleX: 0.4, scaleY: 0.4, scaleZ: 0.4 },
+        data: { pos: [-0.6, -0.4, 0], quat: [0, 0, 0, 1], scale: [0.4, 0.4, 0.4]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [materialHandle] } },
@@ -121,7 +109,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { posX: 0, posY: 2.0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+        data: { pos: [0, 2.0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
       },
       { component: ChildOf, data: { parent } },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -135,7 +123,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { posX: 1.4, posY: 0.0, posZ: 0, quatW: 1, scaleX: 0.4, scaleY: 0.4, scaleZ: 0.4 },
+        data: { pos: [1.4, 0.0, 0], quat: [0, 0, 0, 1], scale: [0.4, 0.4, 0.4]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
       { component: MeshRenderer, data: { materials: [materialHandle] } },
@@ -161,7 +149,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Step 6: camera.
   world
     .spawn(
-      { component: Transform, data: { posZ: 7 } },
+      { component: Transform, data: { pos: [0, 0, 7]} },
       {
         component: Camera,
         data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },
@@ -184,9 +172,9 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     fn: () => {
       phase += 0.02;
       const parentX = -0.6 + 1.2 * Math.sin(phase);
-      const setRes = world.set(parent, Transform, { posX: parentX });
+      const setRes = world.set(parent, Transform, { pos: [parentX, 0, 0]});
       if (setRes.ok) {
-        if (hudEl) hudEl.textContent = `parent.posX = ${parentX.toFixed(2)} (child follows)`;
+        if (hudEl) hudEl.textContent = `parent.pos[0] = ${parentX.toFixed(2)} (child follows)`;
       } else {
         // charter P3: surface the failure rather than silently dropping it.
         console.error('[transform-hierarchy] parent move world.set failed:', setRes.error.code);

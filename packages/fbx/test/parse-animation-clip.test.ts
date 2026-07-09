@@ -96,7 +96,7 @@ describe('parseAnimationClips', () => {
     expect(out.length).toBe(31 * 4);
 
     // Every frame must be a UNIT quaternion. The old euler-as-quat bug
-    // produced values like quatX=62.93 (length far from 1).
+    // produced values like quat x=62.93 (length far from 1).
     for (let f = 0; f < 31; f++) {
       const b = f * 4;
       const len = Math.hypot(out[b]!, out[b + 1]!, out[b + 2]!, out[b + 3]!);

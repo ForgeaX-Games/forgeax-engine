@@ -13,22 +13,30 @@
             "localId": 0,
             "components": {
               "Transform": {
-                "posX": 0,
-                "posY": 0.5,
-                "posZ": 0,
-                "quatX": 0,
-                "quatY": 0,
-                "quatZ": 0,
-                "quatW": 1,
-                "scaleX": 0.5,
-                "scaleY": 0.5,
-                "scaleZ": 0.5
+                "pos": [
+                  0,
+                  0.5,
+                  0
+                ],
+                "quat": [
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "scale": [
+                  0.5,
+                  0.5,
+                  0.5
+                ]
               },
               "MeshFilter": {
                 "assetHandle": 0
               },
               "MeshRenderer": {
-                "materials": [1]
+                "materials": [
+                  1
+                ]
               }
             }
           }

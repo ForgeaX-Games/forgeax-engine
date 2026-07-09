@@ -6,6 +6,7 @@
 // Each original file body sits in its own block-scope so helper names
 // cannot collide; describe() inside still registers globally with vitest.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type {
@@ -18,7 +19,6 @@ import type {
 } from '@forgeax/engine-types';
 import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
 import { SpriteRegionOverride } from '../components/sprite-region-override';
 import { createEngineMetrics } from '../engine-metrics';
@@ -322,16 +322,9 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 
   function identity() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 0],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -360,7 +353,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
   function spawnCamera(world: World): void {
     world
       .spawn(
-        { component: Transform, data: { ...identity(), posZ: 5 } },
+        { component: Transform, data: { ...identity(), pos: [0, 0, 5] } },
         {
           component: Camera,
           data: {
@@ -458,7 +451,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       // entity A: no override, sees the asset-side region.
       world
         .spawn(
-          { component: Transform, data: { ...identity(), posX: -1 } },
+          { component: Transform, data: { ...identity(), pos: [-1, 0, 0] } },
           { component: MeshFilter, data: { assetHandle: mesh } },
           { component: MeshRenderer, data: { materials: [matHandle] } },
         )
@@ -466,7 +459,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       // entity B: half-width override, sees the override region.
       world
         .spawn(
-          { component: Transform, data: { ...identity(), posX: 1 } },
+          { component: Transform, data: { ...identity(), pos: [1, 0, 0] } },
           { component: MeshFilter, data: { assetHandle: mesh } },
           { component: MeshRenderer, data: { materials: [matHandle] } },
           {

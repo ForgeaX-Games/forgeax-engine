@@ -7,14 +7,12 @@
 // Covers catalog + loadByGuid ok path + payload idempotency + asset-not-found
 // error path on missing GUID + asset-not-found on an unresolvable handle.
 
+import { AssetRegistry, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, TextureAsset, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const GUID_DAWN_A = '00000000-0000-7000-8000-000000000031';

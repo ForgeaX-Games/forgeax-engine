@@ -29,20 +29,8 @@
 // geometry + light compositing; gizmo picking/placement is a separate loop.
 
 import { World } from '@forgeax/engine-ecs';
-import {
-  acquireCanvasContext,
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  type MaterialAsset,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { acquireCanvasContext, Camera, createRenderer, DirectionalLight, EngineEnvironmentError, type MaterialAsset, Materials, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 // ── Scene SSOT lock values (paired with scripts/smoke-dawn.mjs) ──────────────
@@ -61,8 +49,8 @@ const B_BLUE: readonly [number, number, number, number] = [0.2, 0.3, 0.85, 1];
 function litBox(
   world: World,
   color: readonly [number, number, number, number],
-  posX: number,
-  posY: number,
+  x: number,
+  y: number,
 ): void {
   const matHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
     'MaterialAsset',
@@ -72,7 +60,7 @@ function litBox(
     .spawn(
       {
         component: Transform,
-        data: { posX, posY, posZ: 0, scaleX: BOX_SCALE, scaleY: BOX_SCALE, scaleZ: BOX_SCALE },
+        data: { pos: [x, y, 0], scale: [BOX_SCALE, BOX_SCALE, BOX_SCALE] },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -86,7 +74,7 @@ function buildWorldA(): World {
   litBox(world, A_GREEN, -BOX_X, 0);
   world
     .spawn(
-      { component: Transform, data: { posZ: CAMERA_Z } },
+      { component: Transform, data: { pos: [0, 0, CAMERA_Z]} },
       { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },
     )
     .unwrap();

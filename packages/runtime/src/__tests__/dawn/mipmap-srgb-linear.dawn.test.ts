@@ -20,12 +20,11 @@
 // Red-stage scaffolding: implementation lands in T-M3-04 (mipmap-generator.ts)
 // + T-M3-05 (uploadTexture call site).
 
+import { numMipLevels } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import type { DecodedImage, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
 import { GpuResourceStore } from '../../gpu-resource-store';
-import { numMipLevels } from '../../mipmap-generator';
 
 // feat-20260601-gpu-resource-store-extraction M1: uploadTexture moved to the
 // store (POD carries format + mipmap flag, decoded carries pixel bytes; D-2).

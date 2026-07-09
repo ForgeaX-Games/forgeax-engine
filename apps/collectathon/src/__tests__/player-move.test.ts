@@ -165,20 +165,20 @@ describe('facingYawFromMove + yawQuat (D2 facing)', () => {
     expect(q.w).toBeCloseTo(1, 5);
   });
 
-  it('moving -Z (away, W) yaws 180 (quatY ~ 1, faces -Z)', () => {
+  it('moving -Z (away, W) yaws 180 (quat y ~ 1, faces -Z)', () => {
     const q = yawQuat(facingYawFromMove(0, -1));
     expect(Math.abs(q.y)).toBeCloseTo(1, 5);
     expect(q.x).toBeCloseTo(0, 5);
     expect(q.z).toBeCloseTo(0, 5);
   });
 
-  it('moving +X (right, D) yaws +90 (quatY=sin45, quatW=cos45)', () => {
+  it('moving +X (right, D) yaws +90 (quat y=sin45, quat w=cos45)', () => {
     const q = yawQuat(facingYawFromMove(1, 0));
     expect(q.y).toBeCloseTo(Math.SQRT1_2, 5);
     expect(q.w).toBeCloseTo(Math.SQRT1_2, 5);
   });
 
-  it('moving -X (left, A) yaws -90 (quatY=-sin45)', () => {
+  it('moving -X (left, A) yaws -90 (quat y=-sin45)', () => {
     const q = yawQuat(facingYawFromMove(-1, 0));
     expect(q.y).toBeCloseTo(-Math.SQRT1_2, 5);
     expect(q.w).toBeCloseTo(Math.SQRT1_2, 5);
@@ -201,10 +201,10 @@ describe('cameraLookAtQuat', () => {
   it('returns identity when eye equals target (degenerate guard)', () => {
     const q = cameraLookAtQuat(0, 5, 9, 0, 5, 9, 0, 1, 0);
     // mat4.lookAt returns identity when eye == target; invert yields identity; decompose gives identity quat.
-    expect(q.quatX).toBeCloseTo(0, 5);
-    expect(q.quatY).toBeCloseTo(0, 5);
-    expect(q.quatZ).toBeCloseTo(0, 5);
-    expect(q.quatW).toBeCloseTo(1, 5);
+    expect(q[0]).toBeCloseTo(0, 5);
+    expect(q[1]).toBeCloseTo(0, 5);
+    expect(q[2]).toBeCloseTo(0, 5);
+    expect(q[3]).toBeCloseTo(1, 5);
   });
 
   it('camera above (0,0,0) looking at target ahead yields a downward pitch', () => {
@@ -213,31 +213,31 @@ describe('cameraLookAtQuat', () => {
     const q = cameraLookAtQuat(0, CAMERA_OFFSET_Y, CAMERA_OFFSET_Z, 0, 0, 0, 0, 1, 0);
     // A downward pitch means the forward vector has a negative Y component.
     // Quaternion must be unit-length.
-    const len = Math.hypot(q.quatX, q.quatY, q.quatZ, q.quatW);
+    const len = Math.hypot(q[0], q[1], q[2], q[3]);
     expect(len).toBeCloseTo(1, 5);
     // The quaternion should have a nonzero X component (pitch rotation) and
     // the Y component should be near identity (no yaw — camera is directly
     // behind along Z).
-    expect(Math.abs(q.quatX)).toBeGreaterThan(0.01); // nonzero pitch
-    expect(Math.abs(q.quatZ)).toBeCloseTo(0, 5); // no roll
+    expect(Math.abs(q[0])).toBeGreaterThan(0.01); // nonzero pitch
+    expect(Math.abs(q[2])).toBeCloseTo(0, 5); // no roll
   });
 
   it('camera looking at higher target pitches upward', () => {
     // Camera at (0, 0, 9), target (0, 5, 0) — camera below target, pitches up.
     const q = cameraLookAtQuat(0, 0, CAMERA_OFFSET_Z, 0, 5, 0, 0, 1, 0);
-    const len = Math.hypot(q.quatX, q.quatY, q.quatZ, q.quatW);
+    const len = Math.hypot(q[0], q[1], q[2], q[3]);
     expect(len).toBeCloseTo(1, 5);
     // X component should be nonzero (pitch).
-    expect(Math.abs(q.quatX)).toBeGreaterThan(0.01);
+    expect(Math.abs(q[0])).toBeGreaterThan(0.01);
   });
 
   it('reproduces consistent orientation for the actual target pose', () => {
     // Simulate actual game: eye (0, 5.8, 9), target (0, 1.8, 0), up=(0,1,0).
-    // Player at spawn: posY=0.8 (PLAYER_SPAWN_Y) + 1 = 1.8 torso target.
+    // Player at spawn: y=0.8 (PLAYER_SPAWN_Y) + 1 = 1.8 torso target.
     const q = cameraLookAtQuat(0, CAMERA_OFFSET_Y + 0.8, CAMERA_OFFSET_Z, 0, 1.8, 0, 0, 1, 0);
-    const len = Math.hypot(q.quatX, q.quatY, q.quatZ, q.quatW);
+    const len = Math.hypot(q[0], q[1], q[2], q[3]);
     expect(len).toBeCloseTo(1, 5);
     // Should have a dominant pitch (X rotation) and possibly small yaw.
-    expect(Math.abs(q.quatX)).toBeGreaterThan(0);
+    expect(Math.abs(q[0])).toBeGreaterThan(0);
   });
 });

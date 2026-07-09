@@ -7,8 +7,8 @@
 // RED at this commit: unpackMeshBin reads 16B header, missing v2 fields.
 // GREEN after m2-w4 (decode v2).
 
+import { unpackMeshBin } from '@forgeax/engine-assets-runtime';
 import { describe, expect, it } from 'vitest';
-import { unpackMeshBin } from '../mesh-bin';
 
 const HEADER_V2 = 28;
 

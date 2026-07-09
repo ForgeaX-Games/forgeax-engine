@@ -12,12 +12,11 @@
 // It does NOT assert pixel content -- M3 / w15 (hello-sprite-nineslice-section
 // dawn fixture) covers stretch + tile pixel parity.
 
+import { AssetRegistry, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import {
-  AssetRegistry,
   Camera,
   createRenderer,
-  HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
   SPRITE_PREMULTIPLIED_ALPHA_BLEND,
@@ -207,16 +206,9 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
@@ -226,16 +218,9 @@ describe('feat-20260527-sprite-nineslice w13 dawn smoke (HANDLE_NINESLICE_QUAD b
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 3,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 3],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       {

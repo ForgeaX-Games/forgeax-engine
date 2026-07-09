@@ -119,7 +119,7 @@ export function spawnGuardian(
     .spawn(
       {
         component: Transform,
-        data: { posX: position.x, posY: GUARDIAN_HALF_TOTAL, posZ: position.z },
+        data: { pos: [position.x, GUARDIAN_HALF_TOTAL, position.z] },
       },
       { component: MeshFilter, data: { assetHandle: bodyMesh } },
       { component: MeshRenderer, data: { materials: [bodyMat] } },
@@ -143,7 +143,7 @@ export function spawnGuardian(
   // guardian-ai arms it in attack mode.
   const attackSensor = world
     .spawn(
-      { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+      { component: Transform, data: { pos: [0, 0, 0] } },
       { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } },
       {
         component: Collider,

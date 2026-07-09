@@ -197,12 +197,14 @@ const {
   addScenePass,
   Camera,
   createRenderer,
-  HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
   PointLight,
   Transform,
 } = enginePkg;
+const {
+  HANDLE_QUAD,
+} = await import('@forgeax/engine-assets-runtime');
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { RenderGraph } = await import('@forgeax/engine-render-graph');
@@ -294,10 +296,7 @@ world
     {
       component: Transform,
       data: {
-        posX: 0, posY: 0, posZ: 0,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
     { component: MeshRenderer, data: { materials: [planeMat] } },
@@ -308,10 +307,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0, posY: 1, posZ: 1,
-      quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-      scaleX: 1, scaleY: 1, scaleZ: 1,
-    },
+      pos: [0, 1, 1], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
   { component: PointLight, data: {} },
 );
@@ -320,10 +316,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0, posY: 0, posZ: 3,
-      quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-      scaleX: 1, scaleY: 1, scaleZ: 1,
-    },
+      pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
   {
     component: Camera,

@@ -197,13 +197,15 @@ const {
   addFullscreenPass,
   addScenePass,
   Camera,
-  HANDLE_CUBE,
-  HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
   perspective,
   Transform,
 } = runtimePkg;
+const {
+  HANDLE_CUBE,
+  HANDLE_QUAD,
+} = await import('@forgeax/engine-assets-runtime');
 const { RenderGraph } = await import('@forgeax/engine-render-graph');
 const { unwrapHandle } = await import('@forgeax/engine-types');
 
@@ -327,14 +329,14 @@ const FLOOR_QUAT_W = Math.cos(-Math.PI / 4);
 
 world
   .spawn(
-    { component: Transform, data: { posX: -1, posY: 0, posZ: -1 } },
+    { component: Transform, data: { pos: [-1, 0, -1]} },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
   )
   .unwrap();
 world
   .spawn(
-    { component: Transform, data: { posX: 2, posY: 0, posZ: 0 } },
+    { component: Transform, data: { pos: [2, 0, 0]} },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
   )
@@ -344,22 +346,14 @@ world
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: -0.5,
-        posZ: 0,
-        quatX: FLOOR_QUAT_X,
-        quatW: FLOOR_QUAT_W,
-        scaleX: 5,
-        scaleY: 5,
-        scaleZ: 1,
-      },
+        pos: [0, -0.5, 0], quat: [FLOOR_QUAT_X, 0, 0, FLOOR_QUAT_W], scale: [5, 5, 1],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
     { component: MeshRenderer, data: { materials: [floorMatHandle] } },
   )
   .unwrap();
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0, posZ: 3 } },
+  { component: Transform, data: { pos: [0, 0, 3]} },
   {
     component: Camera,
     data: perspective({

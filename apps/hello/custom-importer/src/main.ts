@@ -25,17 +25,8 @@ import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import type { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 import { type ReelGameBlob, REEL_GAME_LEVEL_1_GUID } from './reel-game-blob';
@@ -131,7 +122,7 @@ function populateSceneFromBlob(world: World, blob: ReelGameBlob): void {
       .spawn(
         {
           component: Transform,
-          data: { posX: reel.x, posY: (reel.symbols.length - 2) * 0.2, posZ: 0 },
+          data: { pos: [reel.x, (reel.symbols.length - 2) * 0.2, 0]},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
         { component: MeshRenderer, data: {} },
@@ -141,7 +132,7 @@ function populateSceneFromBlob(world: World, blob: ReelGameBlob): void {
 
   world
     .spawn(
-      { component: Transform, data: { posZ: 3 } },
+      { component: Transform, data: { pos: [0, 0, 3]} },
       { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },
     )
     .unwrap();

@@ -57,6 +57,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { AssetRuntimeErrorCode } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import {
   createQueryState,
@@ -80,7 +82,6 @@ import type {
 } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import {
   SPRITE_PLAYBACK_MODE_CLAMP,
   SPRITE_PLAYBACK_MODE_LOOP,
@@ -109,7 +110,6 @@ import { SkyboxBackground } from '../components/skybox-background';
 import { Skylight } from '../components/skylight';
 import { Transform } from '../components/transform';
 import { selectSwapChainFormat } from '../createRenderer';
-import type { AssetRuntimeErrorCode } from '../errors/asset';
 import type { RenderErrorCode } from '../errors/render';
 import { VertexStorageBufferUnavailableError } from '../errors/render';
 import type { SkinErrorCode } from '../errors/skin';
@@ -1920,31 +1920,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
   function originTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 0],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -4019,16 +4005,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           {
             component: Transform,
             data: {
-              posX: 0,
-              posY: 0,
-              posZ: 0,
-              quatX: 0,
-              quatY: 0,
-              quatZ: 0,
-              quatW: 1,
-              scaleX: 1,
-              scaleY: 1,
-              scaleZ: 1,
+              pos: [0, 0, 0],
+              quat: [0, 0, 0, 1],
+              scale: [1, 1, 1],
             },
           },
           { component: MeshFilter, data: { assetHandle: toShared<'MeshAsset'>(1) } },
@@ -4060,16 +4039,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // --- from advance-animation-player.test.ts ---
 
   const defaultTransform = {
-    posX: 0,
-    posY: 0,
-    posZ: 0,
-    quatX: 0,
-    quatY: 0,
-    quatZ: 0,
-    quatW: 1,
-    scaleX: 1,
-    scaleY: 1,
-    scaleZ: 1,
+    pos: [0, 0, 0],
+    quat: [0, 0, 0, 1],
+    scale: [1, 1, 1],
   };
 
   function makeSampler(
@@ -4607,9 +4579,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       advanceAnimationPlayer(world, resolver, 0.5); // time=0.5 => lerp midway
       const tf = world.get(jointE, Transform).unwrap();
-      expect(tf.posX).toBeCloseTo(5.5); // lerp(1,10,0.5) = 5.5
-      expect(tf.posY).toBeCloseTo(11); // lerp(2,20,0.5) = 11
-      expect(tf.posZ).toBeCloseTo(16.5); // lerp(3,30,0.5) = 16.5
+      expect(tf.pos[0]).toBeCloseTo(5.5); // lerp(1,10,0.5) = 5.5
+      expect(tf.pos[1]).toBeCloseTo(11); // lerp(2,20,0.5) = 11
+      expect(tf.pos[2]).toBeCloseTo(16.5); // lerp(3,30,0.5) = 16.5
     });
 
     it('two-slot weights=[0.5,0.5,0,0] yields midpoint pose', () => {
@@ -4660,9 +4632,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       advanceAnimationPlayer(world, resolver, 0.5); // both at t=0.5
       const tf = world.get(jointE, Transform).unwrap();
       // clipA pos=(2,0,0), clipB pos=(0,3,0), blended=(1,1.5,0) with equal weights
-      expect(tf.posX).toBeCloseTo(1);
-      expect(tf.posY).toBeCloseTo(1.5);
-      expect(tf.posZ).toBeCloseTo(0);
+      expect(tf.pos[0]).toBeCloseTo(1);
+      expect(tf.pos[1]).toBeCloseTo(1.5);
+      expect(tf.pos[2]).toBeCloseTo(0);
     });
 
     it('three-slot weights=[1/3,1/3,1/3,0] equal-weight blend', () => {
@@ -4718,9 +4690,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       advanceAnimationPlayer(world, resolver, 0.5); // all at t=0.5
       const tf = world.get(jointE, Transform).unwrap();
       // Each clip at t=0.5: (1.5,0,0), (0,1.5,0), (0,0,1.5) => avg = (0.5,0.5,0.5)
-      expect(tf.posX).toBeCloseTo(0.5);
-      expect(tf.posY).toBeCloseTo(0.5);
-      expect(tf.posZ).toBeCloseTo(0.5);
+      expect(tf.pos[0]).toBeCloseTo(0.5);
+      expect(tf.pos[1]).toBeCloseTo(0.5);
+      expect(tf.pos[2]).toBeCloseTo(0.5);
     });
 
     it('un-normalized weights [0.6,0.6,0,0] normalize to [0.5,0.5,0,0]', () => {
@@ -4771,8 +4743,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       advanceAnimationPlayer(world, resolver, 0.5);
       const tf = world.get(jointE, Transform).unwrap();
       // Normalized blend: sumW=1.2, each w/Σw=0.5. pos = (5*0.5 + 0*0.5, 0*0.5 + 5*0.5) = (2.5, 2.5)
-      expect(tf.posX).toBeCloseTo(2.5);
-      expect(tf.posY).toBeCloseTo(2.5);
+      expect(tf.pos[0]).toBeCloseTo(2.5);
+      expect(tf.pos[1]).toBeCloseTo(2.5);
       // Weights column unchanged (weightsView reflects the original 0.6 values)
     });
 
@@ -4821,9 +4793,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // Transform should remain at its default (position = 0).
       advanceAnimationPlayer(world, resolver, 0.5);
       const tf = world.get(jointE, Transform).unwrap();
-      expect(tf.posX).toBe(0);
-      expect(tf.posY).toBe(0);
-      expect(tf.posZ).toBe(0);
+      expect(tf.pos[0]).toBe(0);
+      expect(tf.pos[1]).toBe(0);
+      expect(tf.pos[2]).toBe(0);
 
       // Read-back: weights[0] is still -0.5 (not written back per D-7).
       const apRes = world.get(animE, AnimationPlayer).unwrap() as unknown as {
@@ -4887,8 +4859,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const tf = world.get(jointE, Transform).unwrap();
       // clipA at t=0.5: pos (5,0,0); clipB at t=0.2: pos (0,2,0)
       // blended: (2.5, 1.0, 0)
-      expect(tf.posX).toBeCloseTo(2.5);
-      expect(tf.posY).toBeCloseTo(1.0);
+      expect(tf.pos[0]).toBeCloseTo(2.5);
+      expect(tf.pos[1]).toBeCloseTo(1.0);
 
       // Times unchanged by paused gate
       const apRes = world.get(animE, AnimationPlayer).unwrap() as unknown as {
@@ -4940,9 +4912,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         advanceAnimationPlayer(world, resolver, 0.5);
         // clip 1 at t=0.5 with weight=1: pos=(5,5,5). Slot 2 skipped silently.
         const tf = world.get(jointE, Transform).unwrap();
-        expect(tf.posX).toBeCloseTo(5);
-        expect(tf.posY).toBeCloseTo(5);
-        expect(tf.posZ).toBeCloseTo(5);
+        expect(tf.pos[0]).toBeCloseTo(5);
+        expect(tf.pos[1]).toBeCloseTo(5);
+        expect(tf.pos[2]).toBeCloseTo(5);
         // No warn emitted for resolver miss (AC-04: invalid handle / miss = silent skip).
         expect(warnSpy).not.toHaveBeenCalled();
       } finally {
@@ -4989,7 +4961,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       advanceAnimationPlayer(world, resolver, 0);
       const tf = world.get(jointE, Transform).unwrap();
       // clipA at t=0 always gives pos=(3,0,0), regardless of other slots being 0.
-      expect(tf.posX).toBeCloseTo(3);
+      expect(tf.pos[0]).toBeCloseTo(3);
     });
 
     it('different durations each modulo independently without warning', () => {
@@ -5043,8 +5015,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       advanceAnimationPlayer(world, resolver, 1.25);
       const tf = world.get(jointE, Transform).unwrap();
       // 0.5*(0.25,0,0) + 0.5*(0,1.25,0) => (0.125, 0.625, 0)
-      expect(tf.posX).toBeCloseTo(0.125);
-      expect(tf.posY).toBeCloseTo(0.625);
+      expect(tf.pos[0]).toBeCloseTo(0.125);
+      expect(tf.pos[1]).toBeCloseTo(0.625);
     });
 
     it('targetPath leaf mismatch skips channel (no crash)', () => {
@@ -5088,7 +5060,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(() => advanceAnimationPlayer(world, resolver, 0.5)).not.toThrow();
       // The joint0 channel still applies.
       const tf = world.get(jointE, Transform).unwrap();
-      expect(tf.posX).toBeCloseTo(2); // lerp(0,4,0.5) = 2
+      expect(tf.pos[0]).toBeCloseTo(2); // lerp(0,4,0.5) = 2
     });
 
     it('two-slot quat nlerp with sign fix (opposite hemispheres)', () => {
@@ -5152,8 +5124,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const tf = world.get(jointE, Transform).unwrap();
       // nlerp of equal-weight opposite y-rotations should give identity-ish result.
       // quatX/quatZ should stay near 0, quatW stays near 1.
-      expect(Math.abs(tf.quatY)).toBeLessThan(0.01);
-      expect(tf.quatW).toBeGreaterThan(0.99);
+      expect(Math.abs(tf.quat[1])).toBeLessThan(0.01);
+      expect(tf.quat[3]).toBeGreaterThan(0.99);
     });
 
     it('speed<0 reverses time (looping wraparound)', () => {
@@ -5194,7 +5166,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       advanceAnimationPlayer(world, resolver, 0.5); // t = 0.5 + (-2)*0.5 = -0.5 => -0.5 % 2 = -0.5 => -0.5+2=1.5
       const tf = world.get(jointE, Transform).unwrap();
-      expect(tf.posX).toBeCloseTo(1.5); // lerp(0,2,0.75) = 1.5
+      expect(tf.pos[0]).toBeCloseTo(1.5); // lerp(0,2,0.75) = 1.5
     });
 
     it('entity with Skin but empty joints is skipped', () => {
@@ -5397,30 +5369,16 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // --- from propagate-transforms.test.ts ---
 
   interface LocalTrs {
-    posX: number;
-    posY: number;
-    posZ: number;
-    quatX: number;
-    quatY: number;
-    quatZ: number;
-    quatW: number;
-    scaleX: number;
-    scaleY: number;
-    scaleZ: number;
+    pos: number[];
+    quat: number[];
+    scale: number[];
   }
 
   function trs(overrides: Partial<LocalTrs> = {}): LocalTrs {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 0],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
       ...overrides,
     };
   }
@@ -5428,12 +5386,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   /** Independent reference compose(local.TRS) for in-test expectation. */
   function composeLocal(t: LocalTrs): Float32Array {
     const out = mat4.create();
-    mat4.compose(
-      out,
-      [t.posX, t.posY, t.posZ],
-      [t.quatX, t.quatY, t.quatZ, t.quatW],
-      [t.scaleX, t.scaleY, t.scaleZ],
-    );
+    mat4.compose(out, t.pos, t.quat, t.scale);
     return out;
   }
 
@@ -5456,7 +5409,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   describe('w7 - propagate writes Transform.world mat4 (AC-05 / AC-06)', () => {
     it('root: world == compose(local.TRS) element-wise epsilon<=1e-5 (AC-06)', () => {
       const world = new World();
-      const local = trs({ posX: 3, posY: 4, posZ: 5, scaleX: 2, scaleY: 2, scaleZ: 2 });
+      const local = trs({ pos: [3, 4, 5], scale: [2, 2, 2] });
       const root = world.spawn({ component: Transform, data: local }).unwrap();
 
       const r = propagateTransforms(world);
@@ -5469,7 +5422,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('flat (no ChildOf, no extra component): world == compose(local) without registering anything (AC-06)', () => {
       const world = new World();
       // 90deg rotation about +Z: quat (0, 0, sin45, cos45) = (0, 0, SQRT1_2, SQRT1_2).
-      const local = trs({ posY: 7, quatZ: Math.SQRT1_2, quatW: Math.SQRT1_2 });
+      const local = trs({ pos: [0, 7, 0], quat: [0, 0, Math.SQRT1_2, Math.SQRT1_2] });
       const flat = world.spawn({ component: Transform, data: local }).unwrap();
 
       const r = propagateTransforms(world);
@@ -5481,8 +5434,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('child: world == parent.world x compose(local) element-wise epsilon<=1e-5 (AC-05)', () => {
       const world = new World();
-      const parentLocal = trs({ posX: 10, scaleX: 2, scaleY: 2, scaleZ: 2 });
-      const childLocal = trs({ posX: 2, posY: 3 });
+      const parentLocal = trs({ pos: [10, 0, 0], scale: [2, 2, 2] });
+      const childLocal = trs({ pos: [2, 3, 0] });
       const parent = world.spawn({ component: Transform, data: parentLocal }).unwrap();
       const child = world
         .spawn({ component: Transform, data: childLocal }, { component: ChildOf, data: { parent } })
@@ -5509,9 +5462,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('deep chain grandparent -> parent -> child: world stacks left-multiplied (AC-05)', () => {
       const world = new World();
-      const gpLocal = trs({ posX: 1 });
-      const pLocal = trs({ posX: 2 });
-      const cLocal = trs({ posX: 4 });
+      const gpLocal = trs({ pos: [1, 0, 0] });
+      const pLocal = trs({ pos: [2, 0, 0] });
+      const cLocal = trs({ pos: [4, 0, 0] });
       const gp = world.spawn({ component: Transform, data: gpLocal }).unwrap();
       const p = world
         .spawn({ component: Transform, data: pLocal }, { component: ChildOf, data: { parent: gp } })
@@ -7729,31 +7682,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
   function originTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 0],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -8188,31 +8127,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
   function originTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 0],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -8521,16 +8446,9 @@ const SKIN_M2_TRIANGLE_VERTICES = new Float32Array([
 const SKIN_M2_TRIANGLE_POSITIONS = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
 
 const SKIN_M2_IDENTITY_TRANSFORM = {
-  posX: 0,
-  posY: 0,
-  posZ: 0,
-  quatX: 0,
-  quatY: 0,
-  quatZ: 0,
-  quatW: 1,
-  scaleX: 1,
-  scaleY: 1,
-  scaleZ: 1,
+  pos: [0, 0, 0],
+  quat: [0, 0, 0, 1],
+  scale: [1, 1, 1],
 } as const;
 
 function makeSkinM2AssetRegistry(): AssetRegistry {
@@ -8597,7 +8515,7 @@ function registerSkinM2Skeleton(
 function spawnSkinM2Camera(world: World): void {
   world
     .spawn(
-      { component: Transform, data: { ...SKIN_M2_IDENTITY_TRANSFORM, posZ: 5 } },
+      { component: Transform, data: { ...SKIN_M2_IDENTITY_TRANSFORM, pos: [0, 0, 5] } },
       {
         component: Camera,
         data: {
@@ -9369,7 +9287,10 @@ type ExtractFrameWithPipeline = (
     const { World: WorldCtor } = (await import('@forgeax/engine-ecs')) as unknown as {
       World: new () => IntegrationWorld;
     };
-    const C = (await import('../index')) as unknown as IntegrationComponents;
+    const C = {
+      ...(await import('../index')),
+      ...(await import('@forgeax/engine-assets-runtime')),
+    } as unknown as IntegrationComponents;
     const errors: { code: string }[] = [];
     renderer.onError((e) => errors.push(e));
     return { renderer, world: new WorldCtor(), C, errors };
@@ -9394,16 +9315,9 @@ type ExtractFrameWithPipeline = (
       {
         component: C.Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 5,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 5],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
     );
@@ -9421,16 +9335,9 @@ type ExtractFrameWithPipeline = (
         {
           component: C.Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
         { component: C.Instances, data: { transforms: new Float32Array(instanceCount * 16) } },

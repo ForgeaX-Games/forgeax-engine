@@ -29,7 +29,7 @@
 //   3. **camera Transform + Camera.fov** -> per-tick the first-person
 //      system accumulates yaw/pitch from `mouse.movementDelta`,
 //      clamps pitch at +/-89 deg, reconstructs forward via spherical
-//      -> Cartesian, integrates `Transform.posXYZ`; the scroll system
+//      -> Cartesian, integrates `Transform.pos`; the scroll system
 //      maintains `fovDeg` in [1, 45] (LO 1.7.3 clamp) and writes
 //      `Camera.fov = fovDeg * Math.PI / 180`.
 //
@@ -60,18 +60,8 @@ import {
 } from '@forgeax/engine-input';
 import { quat, vec3 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  createRenderer,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  resolveAssetHandle,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, createRenderer, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -103,7 +93,7 @@ const PACK_INDEX_URL = '/pack-index.json';
 
 // LO 7.3 cubePositions[] array (verbatim translation; the LO source
 // uses `glm::vec3(...)` literals, here they map onto the per-entity
-// `Transform.posXYZ` SoA columns the engine RenderSystem reads each
+// `Transform.pos` flat array column the engine RenderSystem reads each
 // frame). 10 cubes laid out in a loose grid so the first-person tour
 // has reference geometry. Source: LearnOpenGL/src/1.getting_started/
 // 7.3.camera_mouse_zoom/camera_mouse_zoom.cpp `cubePositions[]`.
@@ -308,14 +298,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         {
           component: Transform,
           data: {
-            posX: pos[0],
-            posY: pos[1],
-            posZ: pos[2],
-            quatX: CUBE_AXIS[0] * sinH,
-            quatY: CUBE_AXIS[1] * sinH,
-            quatZ: CUBE_AXIS[2] * sinH,
-            quatW: cosH,
-          },
+            pos: [pos[0], pos[1], pos[2]], quat: [CUBE_AXIS[0] * sinH, CUBE_AXIS[1] * sinH, CUBE_AXIS[2] * sinH, cosH],},
         },
         { component: MeshFilter, data: { assetHandle: cubeHandle } },
         {
@@ -333,7 +316,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posZ: 3 },
+      data: { pos: [0, 0, 3]},
     },
     {
       component: Camera,
@@ -357,7 +340,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // First-person camera system. The fn body implements LO 1.7 4-step
   // algorithm. Bound queries return the camera entity's Transform
-  // SoA columns; the system rewrites posXYZ + quatXYZW each tick.
+  // array columns; the system rewrites pos + quat lanes each tick.
   let yaw = 0;
   let pitch = 0;
   let lastDirX = 0;
@@ -426,16 +409,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       for (const bundles of queryResults[0]) {
         const count = bundles.Entity.self.length;
         for (let i = 0; i < count; i++) {
-          const posX = (bundles.Transform.posX[i] ?? 0) + disp.x;
-          const posY = (bundles.Transform.posY[i] ?? 0) + disp.y;
-          const posZ = (bundles.Transform.posZ[i] ?? 0) + disp.z;
-          bundles.Transform.posX[i] = posX;
-          bundles.Transform.posY[i] = posY;
-          bundles.Transform.posZ[i] = posZ;
-          bundles.Transform.quatX[i] = qTmp[0] ?? 0;
-          bundles.Transform.quatY[i] = qTmp[1] ?? 0;
-          bundles.Transform.quatZ[i] = qTmp[2] ?? 0;
-          bundles.Transform.quatW[i] = qTmp[3] ?? 1;
+          // Flat stride-N array columns (feat-20260709 M2): row i lanes at
+          // pos[i*3+a] / quat[i*4+a].
+          const px = (bundles.Transform.pos[i * 3] ?? 0) + disp.x;
+          const py = (bundles.Transform.pos[i * 3 + 1] ?? 0) + disp.y;
+          const pz = (bundles.Transform.pos[i * 3 + 2] ?? 0) + disp.z;
+          bundles.Transform.pos[i * 3] = px;
+          bundles.Transform.pos[i * 3 + 1] = py;
+          bundles.Transform.pos[i * 3 + 2] = pz;
+          bundles.Transform.quat[i * 4] = qTmp[0] ?? 0;
+          bundles.Transform.quat[i * 4 + 1] = qTmp[1] ?? 0;
+          bundles.Transform.quat[i * 4 + 2] = qTmp[2] ?? 0;
+          bundles.Transform.quat[i * 4 + 3] = qTmp[3] ?? 1;
         }
       }
       lastDirX = fwdX;

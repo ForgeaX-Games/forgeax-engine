@@ -15,7 +15,8 @@
 // preservation). plan-strategy D-3 + D-4 (test matrix migration: dawn
 // project mirror).
 
-import { AssetRegistry, createRenderer } from '@forgeax/engine-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { createRenderer } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 

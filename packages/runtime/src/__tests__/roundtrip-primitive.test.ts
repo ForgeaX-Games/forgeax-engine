@@ -7,11 +7,11 @@
 // instantiateScene creates internal shared<> refs back to the SceneAsset itself,
 // which would require cataloguing the scene asset.
 
+import type { Asset } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { describe, expect, it } from 'vitest';
-import type { Asset } from '../asset-registry';
-import { AssetRegistry } from '../asset-registry';
 import { rootsToSceneAsset } from '../collect-scene-asset';
 import { Children } from '../components/children';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';

@@ -17,11 +17,12 @@
 // invariant directly: resolving the same texture GUID across two extract
 // frames yields the SAME handle, and `world.allocSharedRef` is NOT called again
 // on the second frame's resolution.
+
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
 import { GpuResourceStore } from '../gpu-resource-store';
 import { extractFrame } from '../render-system-extract';
@@ -30,16 +31,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function identityTx() {
   return {
-    posX: 0,
-    posY: 0,
-    posZ: 0,
-    quatX: 0,
-    quatY: 0,
-    quatZ: 0,
-    quatW: 1,
-    scaleX: 1,
-    scaleY: 1,
-    scaleZ: 1,
+    pos: [0, 0, 0],
+    quat: [0, 0, 0, 1],
+    scale: [1, 1, 1],
   };
 }
 
@@ -97,7 +91,7 @@ function spawnTexturedRenderable(world: World, assets: AssetRegistry): { texture
 
   world
     .spawn(
-      { component: Transform, data: { ...identityTx(), posZ: 5 } },
+      { component: Transform, data: { ...identityTx(), pos: [0, 0, 5] } },
       {
         component: Camera,
         data: {

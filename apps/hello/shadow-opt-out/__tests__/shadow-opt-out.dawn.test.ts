@@ -14,16 +14,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, createRenderer, DirectionalLight, Materials, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import { describe, expect, it } from 'vitest';
 
 // ── Fixture constants ──────────────────────────────────────────────────
@@ -142,7 +134,7 @@ function buildWorld(): World {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 12, posZ: 8, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [0, 12, 8], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
     },
     { component: Camera, data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 } },
   );
@@ -151,7 +143,7 @@ function buildWorld(): World {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: -0.01, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 10, scaleY: 0.02, scaleZ: 10 },
+      data: { pos: [0, -0.01, 0], quat: [0, 0, 0, 1], scale: [10, 0.02, 10]},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: {} },
@@ -214,7 +206,7 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
       world.spawn(
         {
           component: Transform,
-          data: { posX: -3, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
+          data: { pos: [-3, 1.25, 0], quat: [0, 0, 0, 1], scale: [1.5, 1.5, 1.5]},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
         { component: MeshRenderer, data: { materials: [matA] } },
@@ -225,7 +217,7 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
       world.spawn(
         {
           component: Transform,
-          data: { posX: 0, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
+          data: { pos: [0, 1.25, 0], quat: [0, 0, 0, 1], scale: [1.5, 1.5, 1.5]},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
         { component: MeshRenderer, data: { materials: [matB] } },
@@ -243,7 +235,7 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
       world.spawn(
         {
           component: Transform,
-          data: { posX: 3, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
+          data: { pos: [3, 1.25, 0], quat: [0, 0, 0, 1], scale: [1.5, 1.5, 1.5]},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
         { component: MeshRenderer, data: { materials: [matC] } },

@@ -28,21 +28,8 @@ import { createApp } from '@forgeax/engine-app';
 import type { App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { RenderGraph } from '@forgeax/engine-render-graph';
-import {
-  addFullscreenPass,
-  addScenePass,
-  Camera,
-  createDevImportTransport,
-  HANDLE_CUBE,
-  HANDLE_QUAD,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  type RenderPipeline,
-  type RenderPipelineContext,
-  type RenderPipelineData,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { addFullscreenPass, addScenePass, Camera, createDevImportTransport, MeshFilter, MeshRenderer, perspective, type RenderPipeline, type RenderPipelineContext, type RenderPipelineData, Transform } from '@forgeax/engine-runtime';
 import type {
   MaterialAsset,
   RenderPipelineAsset,
@@ -422,7 +409,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { posX: CUBE1_POS[0], posY: CUBE1_POS[1], posZ: CUBE1_POS[2] },
+        data: { pos: [CUBE1_POS[0], CUBE1_POS[1], CUBE1_POS[2]]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
@@ -434,7 +421,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { posX: CUBE2_POS[0], posY: CUBE2_POS[1], posZ: CUBE2_POS[2] },
+        data: { pos: [CUBE2_POS[0], CUBE2_POS[1], CUBE2_POS[2]]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
@@ -447,15 +434,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: FLOOR_POS[0],
-          posY: FLOOR_POS[1],
-          posZ: FLOOR_POS[2],
-          quatX: FLOOR_QUAT_X,
-          quatW: FLOOR_QUAT_W,
-          scaleX: FLOOR_SCALE[0],
-          scaleY: FLOOR_SCALE[1],
-          scaleZ: FLOOR_SCALE[2],
-        },
+          pos: [FLOOR_POS[0], FLOOR_POS[1], FLOOR_POS[2]], quat: [FLOOR_QUAT_X, 0, 0, FLOOR_QUAT_W], scale: [FLOOR_SCALE[0], FLOOR_SCALE[1], FLOOR_SCALE[2]],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
       { component: MeshRenderer, data: { materials: [floorMatHandle] } },
@@ -467,7 +446,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { posX: CAMERA_POS[0], posY: CAMERA_POS[1], posZ: CAMERA_POS[2] },
+        data: { pos: [CAMERA_POS[0], CAMERA_POS[1], CAMERA_POS[2]]},
       },
       {
         component: Camera,

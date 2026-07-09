@@ -43,14 +43,8 @@ import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
 import { decodeImageFromFile } from '@forgeax/engine-image/decode-image-from-file';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createRenderer,
-  HANDLE_CUBE,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, createRenderer, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -210,10 +204,7 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
       {
         component: Transform,
         data: {
-          posX: 0, posY: 0, posZ: 0,
-          quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-          scaleX: 1, scaleY: 1, scaleZ: 1,
-        },
+          pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -222,10 +213,7 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
       {
         component: Transform,
         data: {
-          posX: 0, posY: 0, posZ: 3,
-          quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-          scaleX: 1, scaleY: 1, scaleZ: 1,
-        },
+          pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
       },
       {
         component: Camera,

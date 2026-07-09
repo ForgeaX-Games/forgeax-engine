@@ -132,8 +132,8 @@ const mockCanvas = {
 // --- Engine boot (createApp path, mirrors src/main.ts) ---
 const { createApp } = await import('@forgeax/engine-app');
 const runtime = await import('@forgeax/engine-runtime');
-const { Camera, DirectionalLight, HANDLE_CUBE, Materials, MeshFilter, MeshRenderer, perspective, Transform } =
-  runtime;
+const { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, Transform } = runtime;
+const { HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
 const { quat } = await import('@forgeax/engine-math');
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -159,7 +159,7 @@ const world = app.world;
 const cubeMatHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([0.9, 0.3, 0.25, 1]));
 const cube = world
   .spawn(
-    { component: Transform, data: { posY: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+    { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
   )
@@ -169,7 +169,7 @@ world.spawn({
   data: { directionX: -0.4, directionY: -0.6, directionZ: -0.7, colorR: 1, colorG: 1, colorB: 1, intensity: 1.2 },
 });
 world.spawn(
-  { component: Transform, data: { posY: 1, posZ: 4, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+  { component: Transform, data: { pos: [0, 1, 4], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
   { component: Camera, data: perspective({ fov: Math.PI / 3, aspect: WIDTH / HEIGHT }) },
 );
 
@@ -186,11 +186,7 @@ app.registerUpdate((dt) => {
   angle += dt;
   quat.fromAxisAngle(spin, [0, 1, 0], angle);
   world.set(cube, Transform, {
-    quatX: spin[0] ?? 0,
-    quatY: spin[1] ?? 0,
-    quatZ: spin[2] ?? 0,
-    quatW: spin[3] ?? 1,
-  });
+    quat: [spin[0] ?? 0, spin[1] ?? 0, spin[2] ?? 0, spin[3] ?? 1],});
 });
 
 const onErrorEvents = [];

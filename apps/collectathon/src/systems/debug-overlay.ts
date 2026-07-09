@@ -114,5 +114,5 @@ export function createDebugOverlaySystem(
 function entityPos(world: World, entity: EntityHandle): ReturnType<typeof vec3.create> | undefined {
   const tf = world.get(entity, Transform);
   if (!tf.ok) return undefined;
-  return vec3.create(tf.value.posX, tf.value.posY, tf.value.posZ);
+  return vec3.create(tf.value.pos[0] ?? 0, tf.value.pos[1] ?? 0, tf.value.pos[2] ?? 0);
 }

@@ -17,9 +17,9 @@
 //   (f) mounts.memberFirst / mounts.memberCount / mounts.parent (LocalEntityId)
 //       are NOT refs[] indices -- they are local entity ids preserved as-is.
 
+import { AssetRegistry, sceneLoader } from '@forgeax/engine-assets-runtime';
 import type { LoadContext, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AssetRegistry, sceneLoader } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 /** Access the private parseAssetPayload method via structural view-cast. */
@@ -248,7 +248,7 @@ describe('sceneLoader returns ParseSceneError (F21 / AC-09 + AC-10) [w15]', () =
         {
           localId: 200,
           components: {
-            Transform: { posX: 1, posY: 2, posZ: 3 },
+            Transform: { pos: [1, 2, 3] },
           },
         },
       ],
@@ -316,7 +316,7 @@ describe('sceneLoader returns ParseSceneError (F21 / AC-09 + AC-10) [w15]', () =
         {
           localId: 1,
           components: {
-            Transform: { posX: 0, posY: 0, posZ: 0 },
+            Transform: { pos: [0, 0, 0] },
           },
         },
       ],
@@ -368,7 +368,7 @@ describe('integration: concurrent scene load via parseAssetPayload (F21 / AC-09 
         {
           localId: 200,
           components: {
-            Transform: { posX: 1, posY: 2, posZ: 3 },
+            Transform: { pos: [1, 2, 3] },
           },
         },
       ],
@@ -434,7 +434,7 @@ describe('integration: concurrent scene load via parseAssetPayload (F21 / AC-09 
         {
           localId: 1,
           components: {
-            Transform: { posX: 0, posY: 0, posZ: 0 },
+            Transform: { pos: [0, 0, 0] },
           },
         },
       ],

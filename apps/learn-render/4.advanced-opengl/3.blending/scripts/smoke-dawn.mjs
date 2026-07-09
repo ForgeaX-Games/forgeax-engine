@@ -225,14 +225,16 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
-  HANDLE_QUAD,
   MeshFilter,
   MeshRenderer,
   Transform,
   setTransparentSortConfig,
   TRANSPARENT_SORT_MODE_DISTANCE,
 } = enginePkg;
+const {
+  HANDLE_CUBE,
+  HANDLE_QUAD,
+} = await import('@forgeax/engine-assets-runtime');
 const MODE_DISTANCE = TRANSPARENT_SORT_MODE_DISTANCE;
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
@@ -460,12 +462,7 @@ world
     {
       component: Transform,
       data: {
-        posX: 0, posY: -0.5, posZ: 0,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 5, scaleY: 5, scaleZ: 5,
-        quatX: SIN_NEG_90,
-        quatW: COS_NEG_90,
-      },
+        pos: [0, -0.5, 0], quat: [0, 0, 0, 1], scale: [5, 5, 5],quat: [SIN_NEG_90, 0, 0, COS_NEG_90],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
     { component: MeshRenderer, data: { materials: [floorMatHandle] } },
@@ -478,10 +475,7 @@ world
     {
       component: Transform,
       data: {
-        posX: 0, posY: 0.5, posZ: 0,
-        quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-        scaleX: 1, scaleY: 1, scaleZ: 1,
-      },
+        pos: [0, 0.5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [cubeMatHandle] } },
@@ -503,7 +497,7 @@ for (const p of TRANSPARENT_POSITIONS) {
     .spawn(
       {
         component: Transform,
-        data: { posX: p[0], posY: p[1], posZ: p[2], quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+        data: { pos: [p[0], p[1], p[2]], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
       { component: MeshRenderer, data: { materials: [grassMatHandle] } },
@@ -517,7 +511,7 @@ for (const p of TRANSPARENT_POSITIONS) {
     .spawn(
       {
         component: Transform,
-        data: { posX: p[0], posY: p[1], posZ: p[2], quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+        data: { pos: [p[0], p[1], p[2]], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
       { component: MeshRenderer, data: { materials: [windowMatHandle] } },
@@ -544,10 +538,7 @@ world.spawn(
   {
     component: Transform,
     data: {
-      posX: 0, posY: 0, posZ: 3,
-      quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-      scaleX: 1, scaleY: 1, scaleZ: 1,
-    },
+      pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
   },
   {
     component: Camera,

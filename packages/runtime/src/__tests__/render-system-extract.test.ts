@@ -6,6 +6,7 @@
 // Each original file body sits in its own block-scope so helper names
 // cannot collide; describe() inside still registers globally with vitest.
 
+import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { mat4, vec3 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
@@ -17,7 +18,6 @@ import type {
   MeshAsset,
 } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import {
   Camera,
   ChildOf,
@@ -28,7 +28,6 @@ import {
   SpotLight,
   Transform,
 } from '../components';
-import { HANDLE_CUBE } from '../index';
 import { extractFrame } from '../render-system-extract';
 import { propagateTransforms } from '../systems/propagate-transforms';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
@@ -61,16 +60,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function identity() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 0],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -148,11 +140,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = new World();
       spawnCamera(world);
       const parent = world
-        .spawn({ component: Transform, data: { ...identity(), posX: 10, posY: 0, posZ: 0 } })
+        .spawn({ component: Transform, data: { ...identity(), pos: [10, 0, 0] } })
         .unwrap();
       world
         .spawn(
-          { component: Transform, data: { ...identity(), posX: 2, posY: 3, posZ: 0 } },
+          { component: Transform, data: { ...identity(), pos: [2, 3, 0] } },
           { component: ChildOf, data: { parent } },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
           { component: MeshRenderer, data: {} },
@@ -178,7 +170,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnCamera(world);
       world
         .spawn(
-          { component: Transform, data: { ...identity(), posX: 5, posY: 6, posZ: 7, scaleX: 2 } },
+          { component: Transform, data: { ...identity(), pos: [5, 6, 7], scale: [2, 1, 1] } },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
           { component: MeshRenderer, data: {} },
         )
@@ -198,11 +190,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('camera view: child camera position reflects world translation (parent x child)', () => {
       const world = new World();
       const rig = world
-        .spawn({ component: Transform, data: { ...identity(), posX: 0, posY: 5, posZ: 0 } })
+        .spawn({ component: Transform, data: { ...identity(), pos: [0, 5, 0] } })
         .unwrap();
       world
         .spawn(
-          { component: Transform, data: { ...identity(), posX: 1, posY: 0, posZ: 2 } },
+          { component: Transform, data: { ...identity(), pos: [1, 0, 2] } },
           { component: ChildOf, data: { parent: rig } },
           { component: Camera, data: cameraData },
         )
@@ -221,17 +213,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     it('light position: child point + spot light position reflects world translation', () => {
       const world = new World();
       const rig = world
-        .spawn({ component: Transform, data: { ...identity(), posX: 0, posY: 0, posZ: 7 } })
+        .spawn({ component: Transform, data: { ...identity(), pos: [0, 0, 7] } })
         .unwrap();
       world
         .spawn(
-          { component: Transform, data: { ...identity(), posX: 3, posY: 0, posZ: 0 } },
+          { component: Transform, data: { ...identity(), pos: [3, 0, 0] } },
           { component: ChildOf, data: { parent: rig } },
           { component: PointLight, data: { intensity: 1 } },
         )
         .unwrap();
       const spotRig = world
-        .spawn({ component: Transform, data: { ...identity(), posX: 0, posY: 4, posZ: 0 } })
+        .spawn({ component: Transform, data: { ...identity(), pos: [0, 4, 0] } })
         .unwrap();
       world
         .spawn(
@@ -284,12 +276,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         const mat = registerMaterial(world);
         world
           .spawn(
-            { component: Transform, data: { ...identity(), posX: 0, posY: 0, posZ: 5 } },
+            { component: Transform, data: { ...identity(), pos: [0, 0, 5] } },
             { component: Camera, data: perspectiveCameraData() },
           )
           .unwrap();
         const parent = world
-          .spawn({ component: Transform, data: { ...identity(), posX: 0, posY: 0, posZ: 100 } })
+          .spawn({ component: Transform, data: { ...identity(), pos: [0, 0, 100] } })
           .unwrap();
         world
           .spawn(
@@ -309,7 +301,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         const mat = registerMaterial(world);
         world
           .spawn(
-            { component: Transform, data: { ...identity(), posX: 0, posY: 0, posZ: 5 } },
+            { component: Transform, data: { ...identity(), pos: [0, 0, 5] } },
             { component: Camera, data: perspectiveCameraData() },
           )
           .unwrap();
@@ -333,7 +325,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnCamera(world);
       world
         .spawn(
-          { component: Transform, data: { ...identity(), posX: 1, posY: 2, posZ: 3 } },
+          { component: Transform, data: { ...identity(), pos: [1, 2, 3] } },
           { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
           { component: MeshRenderer, data: {} },
         )
@@ -453,28 +445,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     y: number,
     z: number,
   ): {
-    posX: number;
-    posY: number;
-    posZ: number;
-    quatX: number;
-    quatY: number;
-    quatZ: number;
-    quatW: number;
-    scaleX: number;
-    scaleY: number;
-    scaleZ: number;
+    pos: number[];
+    quat: number[];
+    scale: number[];
   } {
     return {
-      posX: x,
-      posY: y,
-      posZ: z,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [x, y, z],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -707,16 +685,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function identity() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 0],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -757,7 +728,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     // Spawn a camera so extract has a viewport.
     world
       .spawn(
-        { component: Transform, data: { ...identity(), posZ: 5 } },
+        { component: Transform, data: { ...identity(), pos: [0, 0, 5] } },
         {
           component: Camera,
           data: {
@@ -898,16 +869,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function identityTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 0],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -1046,16 +1010,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function identityTx() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 0,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 0],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -1114,7 +1071,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       world
         .spawn(
-          { component: Transform, data: { ...identityTx(), posZ: 5 } },
+          { component: Transform, data: { ...identityTx(), pos: [0, 0, 5] } },
           {
             component: Camera,
             data: {

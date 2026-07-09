@@ -176,14 +176,16 @@ const {
   BLOOM_ENABLED,
   Camera,
   DirectionalLight,
-  HANDLE_CUBE,
-  HANDLE_SPHERE,
   MeshFilter,
   MeshRenderer,
   perspective,
   TONEMAP_REINHARD_EXTENDED,
   Transform,
 } = runtimePkg;
+const {
+  HANDLE_CUBE,
+  HANDLE_SPHERE,
+} = await import('@forgeax/engine-assets-runtime');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
@@ -250,7 +252,7 @@ const emissiveHandle = app.world.allocSharedRef('MaterialAsset', {
 app.world.spawn(
   {
     component: Transform,
-    data: { posX: -0.6, posY: 0.2, posZ: 0, quatW: 1, scaleX: 0.6, scaleY: 0.6, scaleZ: 0.6 },
+    data: { pos: [-0.6, 0.2, 0], quat: [0, 0, 0, 1], scale: [0.6, 0.6, 0.6]},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
   { component: MeshRenderer, data: { materials: [emissiveHandle] } },
@@ -259,7 +261,7 @@ app.world.spawn(
 app.world.spawn(
   {
     component: Transform,
-    data: { posX: 0.6, posY: 0, posZ: 0, quatW: 1, scaleX: 0.4, scaleY: 0.4, scaleZ: 0.4 },
+    data: { pos: [0.6, 0, 0], quat: [0, 0, 0, 1], scale: [0.4, 0.4, 0.4]},
   },
   { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
   { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -273,7 +275,7 @@ app.world.spawn({
 
 // Camera with bloom ENABLED.
 app.world.spawn(
-  { component: Transform, data: { posZ: 5 } },
+  { component: Transform, data: { pos: [0, 0, 5]} },
   {
     component: Camera,
     data: {

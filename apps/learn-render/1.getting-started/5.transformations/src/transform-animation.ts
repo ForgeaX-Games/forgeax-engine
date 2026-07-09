@@ -15,10 +15,10 @@
 //   trans = glm::rotate(trans, (float)glfwGetTime(), glm::vec3(0,0,1));
 //   trans = glm::scale(trans, glm::vec3(0.5, 0.5, 0.5));
 //
-// forgeax maps this to the Transform component's 10 f32 SoA columns:
-//   posXYZ      = (0.5, -0.5, 0)               (LO translate constant).
-//   quatXYZW     = (0, 0, sin(t/2), cos(t/2))   (Z-axis quaternion).
-//   scaleXYZ    = sin-pulse 0.5 + 0.5*sin(t*2pi/3) (D-8 / OOS-8 carve-
+// forgeax maps this to the Transform component's pos/quat/scale array columns:
+//   pos   = (0.5, -0.5, 0)               (LO translate constant).
+//   quat  = (0, 0, sin(t/2), cos(t/2))   (Z-axis quaternion, [x,y,z,w]).
+//   scale = sin-pulse 0.5 + 0.5*sin(t*2pi/3) (D-8 / OOS-8 carve-
 //                                                   out animates the
 //                                                   static glm::vec3(
 //                                                   0.5) into a
@@ -32,16 +32,10 @@
 import { quat } from '@forgeax/engine-math';
 
 export interface TransformFieldsAt {
-  readonly posX: number;
-  readonly posY: number;
-  readonly posZ: number;
-  readonly quatX: number;
-  readonly quatY: number;
-  readonly quatZ: number;
-  readonly quatW: number;
-  readonly scaleX: number;
-  readonly scaleY: number;
-  readonly scaleZ: number;
+  readonly pos: readonly [number, number, number];
+  /** Quaternion component order [x, y, z, w]. */
+  readonly quat: readonly [number, number, number, number];
+  readonly scale: readonly [number, number, number];
 }
 
 const PULSE_PERIOD_SECONDS = 3;
@@ -55,11 +49,6 @@ const Z_AXIS: Readonly<[number, number, number]> = [0, 0, 1];
  * @param t elapsed seconds since the demo's animation epoch.
  */
 export function computeTransformAt(t: number): TransformFieldsAt {
-  // LO translate constant.
-  const posX = 0.5;
-  const posY = -0.5;
-  const posZ = 0;
-
   // LO rotate(t, Z) -> quat.fromAxisAngle(Z_AXIS, t).
   const q = quat.fromAxisAngle(quat.create(), Z_AXIS, t);
 
@@ -67,15 +56,9 @@ export function computeTransformAt(t: number): TransformFieldsAt {
   const pulse = 0.5 + 0.5 * Math.sin((t * TWO_PI) / PULSE_PERIOD_SECONDS);
 
   return {
-    posX,
-    posY,
-    posZ,
-    quatX: q[0] ?? 0,
-    quatY: q[1] ?? 0,
-    quatZ: q[2] ?? 0,
-    quatW: q[3] ?? 1,
-    scaleX: pulse,
-    scaleY: pulse,
-    scaleZ: pulse,
+    // LO translate constant.
+    pos: [0.5, -0.5, 0],
+    quat: [q[0] ?? 0, q[1] ?? 0, q[2] ?? 0, q[3] ?? 1],
+    scale: [pulse, pulse, pulse],
   };
 }

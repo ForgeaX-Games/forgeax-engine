@@ -16,6 +16,7 @@
 // Follows the fxaa-pixel-diff.dawn.test.ts pattern for canvas mock,
 // device capture, and pixel readback.
 
+import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import {
@@ -26,7 +27,7 @@ import {
   MeshRenderer,
   Transform,
 } from '../components';
-import { createRenderer, HANDLE_CUBE, HANDLE_SPHERE } from '../index';
+import { createRenderer } from '../index';
 import { registerPropagateTransforms } from '../systems/propagate-transforms';
 
 const WIDTH = 256;
@@ -181,13 +182,9 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
         {
           component: Transform,
           data: {
-            posX: PARENT_X_REST,
-            posY: -0.4,
-            posZ: 0,
-            quatW: 1,
-            scaleX: 0.4,
-            scaleY: 0.4,
-            scaleZ: 0.4,
+            pos: [PARENT_X_REST, -0.4, 0],
+            quat: [0, 0, 0, 1],
+            scale: [0.4, 0.4, 0.4],
           },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -199,7 +196,7 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
       .spawn(
         {
           component: Transform,
-          data: { posX: 0, posY: 2.0, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+          data: { pos: [0, 2.0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
         },
         { component: ChildOf, data: { parent } },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
@@ -211,7 +208,7 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
       .spawn(
         {
           component: Transform,
-          data: { posX: 1.4, posY: 0, posZ: 0, quatW: 1, scaleX: 0.4, scaleY: 0.4, scaleZ: 0.4 },
+          data: { pos: [1.4, 0, 0], quat: [0, 0, 0, 1], scale: [0.4, 0.4, 0.4] },
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE } },
         { component: MeshRenderer, data: { materials: [materialHandle] } },
@@ -235,7 +232,7 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
 
     world
       .spawn(
-        { component: Transform, data: { posZ: 7 } },
+        { component: Transform, data: { pos: [0, 0, 7] } },
         {
           component: Camera,
           data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } as Record<
@@ -263,7 +260,7 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
     expect(diffCountOf(pixelsA, pixelsAA)).toBe(0);
 
     // Frame B: move the PARENT only. propagate re-derives the child's world transform.
-    const setRes = world.set(parent, Transform, { posX: PARENT_X_MOVED });
+    const setRes = world.set(parent, Transform, { pos: [PARENT_X_MOVED, 0, 0] });
     expect(setRes.ok).toBe(true);
     world.update();
     const drawB = renderer.draw([world], { owner: 0 });

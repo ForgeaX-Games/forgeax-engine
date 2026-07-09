@@ -47,7 +47,7 @@ function setupWorld(cascadeCount: number): World {
     },
   });
   world.spawn(
-    { component: Transform, data: { posY: 5, posZ: 10 } },
+    { component: Transform, data: { pos: [0, 5, 10] } },
     { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
   );
 

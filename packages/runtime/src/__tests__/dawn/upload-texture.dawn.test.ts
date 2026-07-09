@@ -27,6 +27,7 @@
 // is not called (M3-only deferred-upload semantics; M5 wires the device into
 // render-system bootstrap).
 
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { ok } from '@forgeax/engine-rhi';
 import { rhi } from '@forgeax/engine-rhi-webgpu';
@@ -34,7 +35,6 @@ import type { DecodedImage, EquirectAsset, TextureAsset } from '@forgeax/engine-
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { GpuResourceStore } from '../../gpu-resource-store';
-import { resolveAssetHandle } from '../../resolve-asset-handle';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,

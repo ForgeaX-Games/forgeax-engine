@@ -16,12 +16,12 @@
 // save→reload cycle. This test asserts collect is a FIXED POINT across two
 // reload cycles.
 
+import type { Asset } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import type { Asset } from '../asset-registry';
-import { AssetRegistry } from '../asset-registry';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
 import { Children, Name, Transform } from '../components';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
@@ -69,7 +69,7 @@ describe('editor Add-to-Scene wrapper+mount round-trip (ghost accretion regressi
       entities: [
         {
           localId: 0 as never,
-          components: { Name: { value: 'bed-mesh' }, Transform: { posX: 0 } },
+          components: { Name: { value: 'bed-mesh' }, Transform: { pos: [0, 0, 0] } },
         },
       ],
     };
@@ -80,7 +80,10 @@ describe('editor Add-to-Scene wrapper+mount round-trip (ghost accretion regressi
     const top: SceneAsset = {
       kind: 'scene',
       entities: [
-        { localId: 0 as never, components: { Name: { value: 'Ground' }, Transform: { posX: 0 } } },
+        {
+          localId: 0 as never,
+          components: { Name: { value: 'Ground' }, Transform: { pos: [0, 0, 0] } },
+        },
       ],
     };
     cat(reg, G_TOP, top);
@@ -143,7 +146,7 @@ describe('editor Add-to-Scene wrapper+mount round-trip (ghost accretion regressi
     //    instantiateSceneRefUnderWorld. ──
     const wrapperRes = w.spawn(
       { component: Name, data: { value: 'bed.glb' } },
-      { component: Transform, data: { posX: 0 } },
+      { component: Transform, data: { pos: [0, 0, 0] } },
     );
     expect(wrapperRes.ok).toBe(true);
     if (!wrapperRes.ok) return;

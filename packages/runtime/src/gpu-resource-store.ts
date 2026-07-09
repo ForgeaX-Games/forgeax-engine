@@ -29,6 +29,12 @@
 // not prewarmed surfaces a structured RhiError on the sync path -- it is never
 // lazily awaited (that would break the sync draw contract).
 
+import {
+  blitMipmapsSync,
+  getOrCreateMipmapPipeline,
+  type MipmapBlitDevice,
+  type MipmapShaderModuleFactory,
+} from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import { halfFloat } from '@forgeax/engine-math';
 import {
@@ -68,12 +74,6 @@ import {
   createIblPipelines,
   runIblPrecompute,
 } from './ibl/IblPipelineCache';
-import {
-  blitMipmapsSync,
-  getOrCreateMipmapPipeline,
-  type MipmapBlitDevice,
-  type MipmapShaderModuleFactory,
-} from './mipmap-generator';
 import {
   type CubeRenderData,
   deriveMipUploadLayout,

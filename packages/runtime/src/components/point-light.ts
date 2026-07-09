@@ -42,13 +42,13 @@ import { defineComponent, SpawnLightInvalidBoundsError } from '@forgeax/engine-e
  *
  * @example Spawn a single point light at (5, 3, 5):
  *   world.spawn(
- *     { component: Transform, data: { posX: 5, posY: 3, posZ: 5 } },
+ *     { component: Transform, data: { pos: [5, 3, 5] } },
  *     { component: PointLight, data: { intensity: 8, range: 25 } },
  *   );
  *
  * @example Minimal spawn -- defaults give neutral white at full strength, range 10m:
  *   world.spawn(
- *     { component: Transform, data: { posX: 0, posY: 1, posZ: 0 } },
+ *     { component: Transform, data: { pos: [0, 1, 0] } },
  *     { component: PointLight, data: {} },
  *   );
  *   // resolves to colorR=colorG=colorB=1, intensity=1, range=10.0.

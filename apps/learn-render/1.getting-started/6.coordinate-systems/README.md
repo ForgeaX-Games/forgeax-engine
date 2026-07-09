@@ -11,7 +11,7 @@
 |:--|:--|:--|
 | **6.1 single textured cube + MVP** (`model = translate * rotate(time)`) | 部分落（10-cube 总入口已含静态 model；time-rotate 时序动画延后到 §1.5 sin-pulse 路径） | LO 6.1 单 cube + 时序旋转拆做独立 sub-example 文档膨胀不偿（OOS-4 / Q3 决议）；本示例直接进 6.3 形态 |
 | **6.2 depth-test on/off** (`glEnable(GL_DEPTH_TEST)` 单列教学子项) | 部分落（引擎默认开 + README 文字段对照 + 反例 PNG，无独立 src） | 引擎 `RenderSystem` 默认开 depth-test（`packages/runtime/src/render-system-record.ts` 不暴露开关），与 LO 默认关 + 显式 `glEnable(GL_DEPTH_TEST)` 教学起点不同；详见下文「depth-test on (默认) vs off」段 + `screenshots/depth-disabled-vs-default.png`（C-5 SHOULD：占位反例图，文本优先 charter F2） |
-| **6.3 multiple cubes** (10 cubes via `cubePositions[]` + per-index axis-angle rotate) | 命中（LO `cubePositions[]` 逐字翻译 + textured wood-container） | LO `glm::rotate(model, glm::radians(20.0f * i), vec3(1, 0.3, 0.5))` 在 demo 端被烘焙到 spawn 时的 `Transform.quatXYZW` 四元数（静态值，无 per-frame 累乘）；引擎合成 mat4（OOS-11 不复现 `glm::rotate`） |
+| **6.3 multiple cubes** (10 cubes via `cubePositions[]` + per-index axis-angle rotate) | 命中（LO `cubePositions[]` 逐字翻译 + textured wood-container） | LO `glm::rotate(model, glm::radians(20.0f * i), vec3(1, 0.3, 0.5))` 在 demo 端被烘焙到 spawn 时的 `Transform.quat` 四元数（静态值，无 per-frame 累乘）；引擎合成 mat4（OOS-11 不复现 `glm::rotate`） |
 | **6.4 ex3** (camera 自由飞行 / FPS 输入) | 偏离（OOS） | LO §1.6.4 是 §1.7 camera 章的预告习题；本 feat 把 camera 输入移到 `7.camera/` example 落地（charter P5 producer / consumer split） |
 
 ## 这个示例展示什么
@@ -19,7 +19,7 @@
 LO §1.6 的核心论点是「在 CPU 端用 `glm::mat4` 各自构造 `model = glm::translate(... cubePositions[i])` + `view = glm::translate(..., glm::vec3(0,0,-3))` + `projection = glm::perspective(glm::radians(45.0f), w/h, 0.1f, 100.0f)`，然后把三个 mat4 作为独立 uniform 上传到 vertex shader」。forgeax 把同样的语义切成三层（charter P4 + AC-04）：
 
 1. **磁盘 GUID-寻址 cube + wood-container 纹理** — `assets/wood-container.meta.json` (`kind=external-asset-package`，`subAssets[0]={kind:'image', sourceIndex:0, guid:UUIDv7}`) + `forgeax-engine-assets/learn-opengl/meshes/cube-mesh.stub.meta.json` 把磁盘端的 GUID 映射到引擎内置 `HANDLE_CUBE` 程序化 cube；运行时通过 `loadByGuid<TextureAsset>` + `loadByGuid<MeshAsset>` + `loadByGuid<MaterialAsset>` 三入口寻址（charter P5 producer / consumer split + AC-15 (c)）
-2. **10 个 textured cube entity + 1 个 camera entity** — `world.spawn({Transform, MeshFilter{cube}, MeshRenderer{material}})` 沿 LO `cubePositions[]` 数组逐 cube spawn，每个 cube 的 `posXYZ + 四元数 quatXYZW` 各不相同（直接对应 LO 「model = translate ∘ rotate(angle * i, axis)」累乘）；camera entity 单独持有 `Transform` 表 view（LO `view = glm::translate(view, glm::vec3(0,0,-3))` ↔ camera `Transform.posZ = 3`）和 `Camera` 组件表 projection
+2. **10 个 textured cube entity + 1 个 camera entity** — `world.spawn({Transform, MeshFilter{cube}, MeshRenderer{material}})` 沿 LO `cubePositions[]` 数组逐 cube spawn，每个 cube 的 `pos + 四元数 quat` 各不相同（直接对应 LO 「model = translate ∘ rotate(angle * i, axis)」累乘）；camera entity 单独持有 `Transform` 表 view（LO `view = glm::translate(view, glm::vec3(0,0,-3))` ↔ camera `Transform.pos = [0,0,3]`）和 `Camera` 组件表 projection
 3. **`Camera.projection: CAMERA_PROJECTION_PERSPECTIVE` + `fov / aspect / near / far`** — forgeax 不暴露 `glm::perspective(...)` 这种 mat4 构造器；AI 用户只填 5 个标量字段，引擎 `RenderSystem` 在 `draw(world)` 内部根据 `cameraProjectionFromF32(camera.projection)` 切换 perspective / orthographic 投影矩阵 compose（OOS-1：`Camera.projection` 同时承担「模式 0/1 离散字面量」和「未来扩展坑」）
 
 > [!IMPORTANT]
@@ -125,9 +125,9 @@ for (let i = 0; i < CUBE_POSITIONS.length; i++) {
   // axis = normalise(1, 0.3, 0.5) -> (0.879, 0.264, 0.440)
   world.spawn(
     { component: Transform, data: {
-      posX: px, posY: py, posZ: pz,
-      quatX: 0.879 * sinH, quatY: 0.264 * sinH, quatZ: 0.440 * sinH, quatW: cosH,
-      scaleX: 1, scaleY: 1, scaleZ: 1,
+      pos: [px, py, pz],
+      quat: [0.879 * sinH, 0.264 * sinH, 0.440 * sinH, cosH],
+      scale: [1, 1, 1],
     } },
     { component: MeshFilter, data: { assetHandle: cubeHandleRes.value } },
     { component: MeshRenderer, data: { material: matHandleRes.value } },
@@ -137,9 +137,9 @@ for (let i = 0; i < CUBE_POSITIONS.length; i++) {
 // spawn 1 perspective camera at (0, 0, 3) (LO view = translate(view, vec3(0,0,-3)))
 world.spawn(
   { component: Transform, data: {
-    posX: 0, posY: 0, posZ: 3,
-    quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-    scaleX: 1, scaleY: 1, scaleZ: 1,
+    pos: [0, 0, 3],
+    quat: [0, 0, 0, 1],
+    scale: [1, 1, 1],
   } },
   { component: Camera, data: {
     fov: CAMERA_FOV_RADIANS, aspect: canvas.width / canvas.height,
@@ -160,7 +160,7 @@ app.start();
 
 | 维度 | LO 原版（C++ / GLSL 330） | forgeax 这里（TS / WGSL） |
 |:--|:--|:--|
-| Model 矩阵构造 | `glm::mat4 model = glm::mat4(1.0f); model = glm::translate(model, cubePositions[i]); model = glm::rotate(model, glm::radians(20.0f * i), glm::vec3(1.0f, 0.3f, 0.5f))` 在 CPU 端逐 cube 累乘 | 直接写 cube entity 的 `Transform.posXYZ + 四元数 quatXYZW`；引擎 `RenderSystem` 内部按帧 compose `worldFromLocal: mat4`（`@forgeax/engine-math` mat4.compose） |
+| Model 矩阵构造 | `glm::mat4 model = glm::mat4(1.0f); model = glm::translate(model, cubePositions[i]); model = glm::rotate(model, glm::radians(20.0f * i), glm::vec3(1.0f, 0.3f, 0.5f))` 在 CPU 端逐 cube 累乘 | 直接写 cube entity 的 `Transform.pos + 四元数 quat`；引擎 `RenderSystem` 内部按帧 compose `worldFromLocal: mat4`（`@forgeax/engine-math` mat4.compose） |
 | View 矩阵构造 | `glm::mat4 view = glm::mat4(1.0f); view = glm::translate(view, glm::vec3(0.0f, 0.0f, -3.0f))` 显式 4x4 累乘；进阶用 `glm::lookAt(eye, center, up)` 构造 | camera entity 持有 `Transform.posZ = 3`（LO 把相机平移到 -3 等价于把世界相对相机平移 +3）；引擎按帧把 `Transform` 求逆得 `viewFromWorld: mat4`，AI 用户不写 `glm::lookAt` |
 | Projection 矩阵构造 | `glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)w/(float)h, 0.1f, 100.0f)` 显式 mat4 构造器 | `Camera` 组件 5 标量字段（`fov / aspect / near / far + projection: CAMERA_PROJECTION_PERSPECTIVE`）；引擎读字面量 0 narrow 到 `'perspective'` 后调 mat4.perspective 内部构造 |
 | Projection 模式切换 | 改写 `glm::perspective` 为 `glm::ortho(left, right, bottom, top, near, far)` 即正交；模式靠源码替换 | `Camera.projection = CAMERA_PROJECTION_ORTHOGRAPHIC` 即正交；`left/right/bottom/top` 字段就位；同一组件 9 f32 列承载两种模式（charter P4：模式不暴露成两套组件） |

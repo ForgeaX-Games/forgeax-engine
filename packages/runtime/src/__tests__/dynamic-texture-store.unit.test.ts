@@ -14,16 +14,16 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-
+import { type DynamicTextureDevice, DynamicTextureStore } from '@forgeax/engine-assets-runtime';
 import type { Result, Texture, TextureView } from '@forgeax/engine-rhi';
 import { err, ok, RhiError } from '@forgeax/engine-rhi';
 import type { Handle } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
-import { type DynamicTextureDevice, DynamicTextureStore } from '../dynamic-texture-store';
-
-const STORE_SRC = fileURLToPath(new URL('../dynamic-texture-store.ts', import.meta.url));
+const STORE_SRC = fileURLToPath(
+  new URL('../../../assets-runtime/src/dynamic-texture-store.ts', import.meta.url),
+);
 
 interface DeviceProbe {
   created: number;

@@ -27,19 +27,8 @@
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { quat } from '@forgeax/engine-math';
-import {
-  BLOOM_DISABLED,
-  BLOOM_ENABLED,
-  Camera,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  TONEMAP_REINHARD_EXTENDED,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { BLOOM_DISABLED, BLOOM_ENABLED, Camera, Materials, MeshFilter, MeshRenderer, perspective, PointLight, TONEMAP_REINHARD_EXTENDED, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -103,7 +92,7 @@ const FLOOR_SCALE_Y = 0.5;
 const FLOOR_SCALE_Z = 12.5;
 
 // Six wooden container boxes (bloom.cpp scenery cubes). Each entry is
-// [posX, posY, posZ, uniformScale, rotAxisXYZ, rotDeg]; rotDeg=0 means no
+// [x, y, z, uniformScale, rotAxisXYZ, rotDeg]; rotDeg=0 means no
 // rotation. Axes are normalised by quat.fromAxisAngle.
 type BoxSpec = {
   pos: readonly [number, number, number];
@@ -209,13 +198,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: FLOOR_POS_Y,
-          posZ: 0,
-          scaleX: FLOOR_SCALE_X,
-          scaleY: FLOOR_SCALE_Y,
-          scaleZ: FLOOR_SCALE_Z,
-        },
+          pos: [0, FLOOR_POS_Y, 0], scale: [FLOOR_SCALE_X, FLOOR_SCALE_Y, FLOOR_SCALE_Z],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [floorMatHandle] } },
@@ -231,17 +214,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         {
           component: Transform,
           data: {
-            posX: box.pos[0],
-            posY: box.pos[1],
-            posZ: box.pos[2],
-            quatX: rot[0] ?? 0,
-            quatY: rot[1] ?? 0,
-            quatZ: rot[2] ?? 0,
-            quatW: rot[3] ?? 1,
-            scaleX: box.scale,
-            scaleY: box.scale,
-            scaleZ: box.scale,
-          },
+            pos: [box.pos[0], box.pos[1], box.pos[2]], quat: [rot[0] ?? 0, rot[1] ?? 0, rot[2] ?? 0, rot[3] ?? 1], scale: [box.scale, box.scale, box.scale],},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
         { component: MeshRenderer, data: { materials: [containerMatHandle] } },
@@ -261,7 +234,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       .spawn(
         {
           component: Transform,
-          data: { posX: pos[0], posY: pos[1], posZ: pos[2] },
+          data: { pos: [pos[0], pos[1], pos[2]]},
         },
         {
           component: PointLight,
@@ -286,13 +259,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         {
           component: Transform,
           data: {
-            posX: pos[0],
-            posY: pos[1],
-            posZ: pos[2],
-            scaleX: LIGHT_BOX_SCALE,
-            scaleY: LIGHT_BOX_SCALE,
-            scaleZ: LIGHT_BOX_SCALE,
-          },
+            pos: [pos[0], pos[1], pos[2]], scale: [LIGHT_BOX_SCALE, LIGHT_BOX_SCALE, LIGHT_BOX_SCALE],},
         },
         { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
         { component: MeshRenderer, data: { materials: [lightBoxMat] } },
@@ -309,7 +276,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn(
       {
         component: Transform,
-        data: { posX: CAMERA_POS_X, posY: CAMERA_POS_Y, posZ: CAMERA_POS_Z },
+        data: { pos: [CAMERA_POS_X, CAMERA_POS_Y, CAMERA_POS_Z]},
       },
       {
         component: Camera,

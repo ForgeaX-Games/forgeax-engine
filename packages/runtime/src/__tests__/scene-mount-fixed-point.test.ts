@@ -26,8 +26,9 @@ import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import type { Asset } from '../asset-registry';
-import { AssetRegistry } from '../asset-registry';
+import '../components';
+import type { Asset } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -124,7 +125,7 @@ describe('AC-09 mount-collapse fixed-point (structural equivalence, D-10)', () =
     // Child scene = one owned mesh entity.
     const child: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 3 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [3, 0, 0] } } }],
     };
     cat(reg, G_CHILD, child);
 
@@ -132,7 +133,7 @@ describe('AC-09 mount-collapse fixed-point (structural equivalence, D-10)', () =
     // spawnGlbSceneAsMount on-disk shape (an owned wrapper with a nested mount).
     const top: SceneAsset = {
       kind: 'scene',
-      entities: [{ localId: 0 as never, components: { Transform: { posX: 1 } } }],
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
       mounts: [
         {
           localId: 1 as never,
@@ -214,8 +215,8 @@ describe('AC-09 mount-collapse fixed-point (structural equivalence, D-10)', () =
     const flat: SceneAsset = {
       kind: 'scene',
       entities: [
-        { localId: 0 as never, components: { Transform: { posX: 1 } } },
-        { localId: 1 as never, components: { Transform: { posX: 2 } } },
+        { localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } },
+        { localId: 1 as never, components: { Transform: { pos: [2, 0, 0] } } },
       ],
     };
     cat(reg, G_TOP, flat);

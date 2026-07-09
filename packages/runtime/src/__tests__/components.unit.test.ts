@@ -27,6 +27,7 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import {
   createQueryState,
   defineComponent,
@@ -36,18 +37,9 @@ import {
   queryRun,
   World,
 } from '@forgeax/engine-ecs';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type {
-  Handle,
-  LocalEntityId,
-  MaterialAsset,
-  MeshAsset,
-  SceneAsset,
-  SceneEntity,
-} from '@forgeax/engine-types';
+import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import {
   ANTIALIAS_NONE,
   AnimationPlayer,
@@ -79,11 +71,8 @@ import {
   Transform,
   tonemapFromF32,
 } from '../components';
-import { type PickHit, pick } from '../pick';
-import { PickError } from '../pick-errors';
 import { extractFrame } from '../render-system-extract';
 import { propagateTransforms } from '../systems/propagate-transforms';
-import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
   // --- from children.test.ts ---
@@ -179,10 +168,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //   Camera:             fov:f32 + aspect:f32 + near:f32 + far:f32   = 4 f32
   //   DirectionalLight: direction:[f32x3] + color:[f32x3] + intensity:f32 = 7 f32
   //
-  // Storage shape: forgeax ECS columns store component fields as flat scalars
-  // (`Float32Array` / `Uint32Array`). Vector / quaternion fields are decomposed
-  // into per-axis scalars at the schema level (e.g. `posX` / `posY` / `posZ`).
-  // The 5-component schema picks names that AI users see in `world.get(e, T).x`
+  // Storage shape: forgeax ECS columns store scalar fields as flat scalars
+  // (`Float32Array` / `Uint32Array`) and vector / quaternion fields as inline
+  // fixed-length array columns (`array<f32, N>`, e.g. `pos: [x, y, z]`).
+  // The 5-component schema picks names that AI users see in `world.get(e, T)`
   // and `data: {...}` shapes.
   //
   // charter mapping: proposition 1 (single import + LSP hover discoverability) +
@@ -190,22 +179,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // abstraction: components are flat-scalar SoA columns, not nested objects).
 
   describe('w7 - 5 component schemas register through defineComponent', () => {
-    it('Transform has 10 local f32 fields + world array<f32,16> (pos/quat/scale + world)', () => {
+    it('Transform has pos/quat/scale inline array fields + world array<f32,16>', () => {
       expect(Transform.name).toBe('Transform');
-      expect(Object.keys(Transform.schema).length).toBe(11);
-      // pos:3 f32
-      expect(Transform.schema.posX).toBe('f32');
-      expect(Transform.schema.posY).toBe('f32');
-      expect(Transform.schema.posZ).toBe('f32');
-      // quat:4 f32 (xyzw quaternion)
-      expect(Transform.schema.quatX).toBe('f32');
-      expect(Transform.schema.quatY).toBe('f32');
-      expect(Transform.schema.quatZ).toBe('f32');
-      expect(Transform.schema.quatW).toBe('f32');
-      // scale:3 f32
-      expect(Transform.schema.scaleX).toBe('f32');
-      expect(Transform.schema.scaleY).toBe('f32');
-      expect(Transform.schema.scaleZ).toBe('f32');
+      expect(Object.keys(Transform.schema).length).toBe(4);
+      // pos: inline [x, y, z]
+      expect(Transform.schema.pos).toBe('array<f32, 3>');
+      // quat: inline [x, y, z, w] quaternion
+      expect(Transform.schema.quat).toBe('array<f32, 4>');
+      // scale: inline [x, y, z]
+      expect(Transform.schema.scale).toBe('array<f32, 3>');
       // world: resolved mat4 (column-major 16 floats)
       expect(Transform.schema.world).toBe('array<f32, 16>');
     });
@@ -294,29 +276,18 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   });
 
   describe('w7 - world.spawn({ component, data }) accepts each of the 5 components', () => {
-    it('spawn Transform succeeds and stores the 10 f32 values', () => {
+    it('spawn Transform succeeds and stores the pos/quat/scale values', () => {
       const world = new World();
       const e = world
         .spawn({
           component: Transform,
-          data: {
-            posX: 1,
-            posY: 2,
-            posZ: 3,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
-          },
+          data: { pos: [1, 2, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
         })
         .unwrap();
       const r = world.get(e, Transform).unwrap();
-      expect(r.posX).toBe(1);
-      expect(r.quatW).toBe(1);
-      expect(r.scaleZ).toBe(1);
+      expect(Array.from(r.pos)).toEqual([1, 2, 3]);
+      expect(Array.from(r.quat)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(r.scale)).toEqual([1, 1, 1]);
     });
 
     it('spawn MeshFilter with HANDLE_CUBE-style u32 succeeds', () => {
@@ -396,16 +367,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           {
             component: Transform,
             data: {
-              posX: 0,
-              posY: 0,
-              posZ: 0,
-              quatX: 0,
-              quatY: 0,
-              quatZ: 0,
-              quatW: 1,
-              scaleX: 1,
-              scaleY: 1,
-              scaleZ: 1,
+              pos: [0, 0, 0],
+              quat: [0, 0, 0, 1],
+              scale: [1, 1, 1],
             },
           },
           { component: MeshFilter, data: { assetHandle: 1 as Handle<'MeshAsset', 'shared'> } },
@@ -431,7 +395,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           },
         )
         .unwrap();
-      expect(world.get(e, Transform).unwrap().posX).toBe(0);
+      expect(world.get(e, Transform).unwrap().pos[0]).toBe(0);
       expect(world.get(e, MeshFilter).unwrap().assetHandle).toBe(1);
       expect(world.get(e, MeshRenderer).unwrap().materials[0]).toBe(5);
       expect(world.get(e, Camera).unwrap().far).toBe(100);
@@ -502,25 +466,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('Transform carries the resolved world mat4 column (array<f32, 16>)', () => {
       // feat-20260601 M4: the world transform lives on Transform.world, not a
-      // separate GlobalTransform component. The 10 local-TRS scalar columns plus
-      // the `world: array<f32, 16>` resolved mat4 are the full shape.
+      // separate GlobalTransform component. The 3 local-TRS inline array
+      // columns (pos/quat/scale) plus the `world: array<f32, 16>` resolved
+      // mat4 are the full shape.
       const tKeys = Object.keys(Transform.schema);
       expect(tKeys).toContain('world');
       expect(Transform.schema.world).toBe('array<f32, 16>');
-      for (const k of [
-        'posX',
-        'posY',
-        'posZ',
-        'quatX',
-        'quatY',
-        'quatZ',
-        'quatW',
-        'scaleX',
-        'scaleY',
-        'scaleZ',
-      ]) {
-        expect(Transform.schema[k as keyof typeof Transform.schema]).toBe('f32');
-      }
+      expect(Transform.schema.pos).toBe('array<f32, 3>');
+      expect(Transform.schema.quat).toBe('array<f32, 4>');
+      expect(Transform.schema.scale).toBe('array<f32, 3>');
     });
 
     it('ChildOf / Children frozen tokens (schema immutable)', () => {
@@ -534,16 +488,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .spawn({
           component: Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         })
         .unwrap();
@@ -552,16 +499,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           {
             component: Transform,
             data: {
-              posX: 1,
-              posY: 0,
-              posZ: 0,
-              quatX: 0,
-              quatY: 0,
-              quatZ: 0,
-              quatW: 1,
-              scaleX: 1,
-              scaleY: 1,
-              scaleZ: 1,
+              pos: [1, 0, 0],
+              quat: [0, 0, 0, 1],
+              scale: [1, 1, 1],
             },
           },
           { component: ChildOf, data: { parent: root } },
@@ -580,16 +520,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           {
             component: Transform,
             data: {
-              posX: 0,
-              posY: 0,
-              posZ: 0,
-              quatX: 0,
-              quatY: 0,
-              quatZ: 0,
-              quatW: 1,
-              scaleX: 1,
-              scaleY: 1,
-              scaleZ: 1,
+              pos: [0, 0, 0],
+              quat: [0, 0, 0, 1],
+              scale: [1, 1, 1],
             },
           },
           { component: Children, data: { entities: new Uint32Array([]) as never } },
@@ -598,8 +531,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const rt = world.get(root, Transform);
       expect(rt.ok).toBe(true);
       if (!rt.ok) return;
-      expect(rt.value.quatW).toBe(1);
-      expect(rt.value.scaleX).toBe(1);
+      expect(rt.value.quat[3]).toBe(1);
+      expect(rt.value.scale[0]).toBe(1);
       const rc = world.get(root, Children);
       expect(rc.ok).toBe(true);
       if (!rc.ok) return;
@@ -694,448 +627,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 }
 
 {
-  // --- from pick.test.ts ---
-  // pick.test.ts — feat-20260529-picking-raycasting-screen-to-entity M3 / w12 (TDD red).
-  //
-  // Integration tests for the screen-to-entity `pick` free function:
-  //   pick(world, cameraEntity, screenX, screenY, viewportWidth, viewportHeight)
-  //     -> PickHit | undefined
-  //
-  // The deterministic scene is built with a bare `new World()` + a real
-  // `AssetRegistry` (the `assets` param introduced by the 2026-05-29 replan: the
-  // ray-AABB test needs `MeshAsset.aabb`, which lives ONLY in the AssetRegistry,
-  // never on a world column). A full `createRenderer` is intentionally NOT used —
-  // it requires a live WebGPU device unavailable in the `pnpm test:unit` project,
-  // and `pick` only consumes an `AssetRegistry`, not the renderer. The registry
-  // instance IS `renderer.assets` at the demo call site (w16), so the surface
-  // under test is identical.
-  //
-  // Coverage (all pick acceptance criteria):
-  //   (AC-06) nearest hit wins — two boxes along the ray, the closer one returns
-  //   (AC-07) miss -> undefined (blank coordinate, no box on the ray)
-  //   (AC-08) PickHit field shape {entity, point, distance} is exact + correct
-  //   (AC-10) orthographic camera picks via the parallel-ray path
-  //   (AC-11) cameraEntity with no Camera -> PickError (structured, not undefined)
-  //   (clamp) out-of-range / negative screen coords clamp to the viewport edge;
-  //           NaN/Inf screen coords are sanitized (no NaN ray, no throw)
-  //
-  // Type-narrowing (AC-05 / AC-08) is asserted in a tsc-only block at the bottom:
-  //   `const hit = pick(...)` needs no `as` cast, `hit.entity` is accessible after
-  //   the `if (hit)` guard, and `hit.face` / `hit.uv` are compile errors.
-  //
-  // Anchors: requirements AC-05..AC-11; plan-strategy D-3 (GlobalTransform fallback
-  // to Transform — the flat scene exercises the Transform path) + D-6 (PickHit
-  // co-located in pick.ts) + 5.3 (all pick branches must-test); plan-tasks.json w12.
-  //
-  // TDD red: pick.ts does not exist yet when this file is first committed, so the
-  // `../pick` import will not resolve. Green after w13.
-
-  // feat-20260601 w12/w13: pick reads the resolved `Transform.world` mat4 written
-  // by propagateTransforms (no GlobalTransform/Transform fallback). Every scene
-  // runs propagate before pick so the world column is fresh; `runPick` folds the
-  // propagate + pick pair so the test bodies stay focused on the pick contract.
-  function runPick(
-    world: World,
-    camera: EntityHandle,
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-  ): PickHit | undefined {
-    propagateTransforms(world);
-    return pick(world, camera, x, y, w, h);
-  }
-
-  // ── helpers ──────────────────────────────────────────────────────────────
-
-  function translateTransform(
-    x: number,
-    y: number,
-    z: number,
-  ): {
-    posX: number;
-    posY: number;
-    posZ: number;
-    quatX: number;
-    quatY: number;
-    quatZ: number;
-    quatW: number;
-    scaleX: number;
-    scaleY: number;
-    scaleZ: number;
-  } {
-    return {
-      posX: x,
-      posY: y,
-      posZ: z,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    };
-  }
-
-  /**
-   * Register a mesh whose computed AABB spans [-0.5, 0.5]^3.
-   *
-   * The registry computes the AABB from `attributes.position` (an explicit `aabb` is
-   * overwritten by `withMeshAabb`), so the position attribute carries the 8 cube corners.
-   * `vertices` must be a multiple of the 12-float interleaved stride; a single 3-vertex
-   * triangle (36 floats) satisfies the gate while the position attribute drives the AABB.
-   */
-  function registerBox(world: World, assets: AssetRegistry): Handle<'MeshAsset', 'shared'> {
-    const vertices = new Float32Array([
-      0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0,
-      1, 0, 0, 0, 0,
-    ]);
-    // 8 cube corners spanning [-0.5, 0.5] on every axis -> computeAABB = [-0.5,-0.5,-0.5, 0.5,0.5,0.5]
-    const positions = new Float32Array([
-      -0.5, -0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5, 0.5, 0.5,
-      -0.5, 0.5, 0.5, 0.5, 0.5, -0.5, 0.5, 0.5,
-    ]);
-    // catalog computes the local-space AABB (withMeshAabb); mint the augmented
-    // payload on the world so resolveAssetHandle (used by pick) reads .aabb.
-    const result = assets.catalog<MeshAsset>(AssetGuid.format(AssetGuid.random()), {
-      kind: 'mesh',
-      vertices,
-      indices: new Uint16Array([0, 1, 2]),
-      attributes: { position: positions },
-      submeshes: [
-        {
-          indexOffset: 0,
-          indexCount: 3,
-          vertexCount: vertices.length,
-          topology: 'triangle-list',
-        },
-      ],
-    });
-    if (!result.ok) throw new Error('mesh catalog failed');
-    return world.allocSharedRef('MeshAsset', result.value);
-  }
-
-  function registerMaterial(
-    world: World,
-    assets: AssetRegistry,
-  ): Handle<'MaterialAsset', 'shared'> {
-    const result = assets.catalog<MaterialAsset>(AssetGuid.format(AssetGuid.random()), {
-      kind: 'material',
-      passes: [
-        {
-          name: 'Forward',
-          shader: 'forgeax::default-unlit',
-          tags: { LightMode: 'Forward' },
-          queue: 2000,
-        },
-      ],
-      paramValues: { baseColor: [1, 1, 1] },
-    });
-    if (!result.ok) throw new Error('material catalog failed');
-    return world.allocSharedRef('MaterialAsset', result.value);
-  }
-
-  interface Scene {
-    world: World;
-    assets: AssetRegistry;
-    mesh: Handle<'MeshAsset', 'shared'>;
-    material: Handle<'MaterialAsset', 'shared'>;
-  }
-
-  function makeScene(): Scene {
-    const world = new World();
-    const assets = new AssetRegistry(makeMockShaderRegistry());
-    const mesh = registerBox(world, assets);
-    const material = registerMaterial(world, assets);
-    return { world, assets, mesh, material };
-  }
-
-  /** Spawn a perspective camera at (x,y,z) looking down -Z (identity rotation). */
-  function spawnPerspectiveCamera(world: World, z: number): EntityHandle {
-    return world
-      .spawn(
-        { component: Transform, data: translateTransform(0, 0, z) },
-        {
-          component: Camera,
-          data: {
-            fov: Math.PI / 4,
-            aspect: 1,
-            near: 0.1,
-            far: 100,
-            projection: CAMERA_PROJECTION_PERSPECTIVE,
-            left: -1,
-            right: 1,
-            bottom: -1,
-            top: 1,
-          },
-        },
-      )
-      .unwrap();
-  }
-
-  /** Spawn an orthographic camera at (x,y,z) looking down -Z. */
-  function spawnOrthographicCamera(world: World, z: number): EntityHandle {
-    return world
-      .spawn(
-        { component: Transform, data: translateTransform(0, 0, z) },
-        {
-          component: Camera,
-          data: {
-            fov: 0,
-            aspect: 1,
-            near: 0.1,
-            far: 100,
-            projection: CAMERA_PROJECTION_ORTHOGRAPHIC,
-            left: -5,
-            right: 5,
-            bottom: -5,
-            top: 5,
-          },
-        },
-      )
-      .unwrap();
-  }
-
-  /** Spawn a box entity at (x,y,z). */
-  function spawnBox(scene: Scene, x: number, y: number, z: number): EntityHandle {
-    return scene.world
-      .spawn(
-        { component: Transform, data: translateTransform(x, y, z) },
-        { component: MeshFilter, data: { assetHandle: scene.mesh } },
-        { component: MeshRenderer, data: { materials: [scene.material] } },
-      )
-      .unwrap();
-  }
-
-  const VP = 600; // square viewport so screen-centre maps to the -Z axis ray
-
-  // ── tests ────────────────────────────────────────────────────────────────
-
-  describe('w12 — pick nearest hit (AC-06)', () => {
-    it('returns the closer of two boxes along the ray', () => {
-      const scene = makeScene();
-      const camera = spawnPerspectiveCamera(scene.world, 5);
-      const near = spawnBox(scene, 0, 0, 0); // closer to camera at z=5
-      spawnBox(scene, 0, 0, -10); // farther along -Z
-
-      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
-      expect(hit).toBeDefined();
-      expect(hit?.entity).toBe(near);
-    });
-
-    it('returns the only box on the ray when a single candidate exists', () => {
-      const scene = makeScene();
-      const camera = spawnPerspectiveCamera(scene.world, 5);
-      const box = spawnBox(scene, 0, 0, 0);
-
-      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
-      expect(hit?.entity).toBe(box);
-    });
-  });
-
-  describe('w12 — pick miss (AC-07)', () => {
-    it('returns undefined when the ray hits nothing', () => {
-      const scene = makeScene();
-      const camera = spawnPerspectiveCamera(scene.world, 5);
-      // box pushed far off the -Z centre axis; the centre ray misses it
-      spawnBox(scene, 50, 0, 0);
-
-      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
-      expect(hit).toBeUndefined();
-    });
-
-    it('returns undefined when the world has no pickable meshes', () => {
-      const scene = makeScene();
-      const camera = spawnPerspectiveCamera(scene.world, 5);
-
-      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
-      expect(hit).toBeUndefined();
-    });
-  });
-
-  describe('w12 — PickHit field shape (AC-08)', () => {
-    it('carries entity + point (Vec3) + distance with correct values', () => {
-      const scene = makeScene();
-      const camera = spawnPerspectiveCamera(scene.world, 5);
-      const box = spawnBox(scene, 0, 0, 0);
-
-      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
-      expect(hit).toBeDefined();
-      if (!hit) throw new Error('expected hit');
-
-      expect(hit.entity).toBe(box);
-      // The ray origin is the unprojected NEAR-plane point (z = 5 - near = 4.9), not the
-      // camera centre; the box front (+Z) face is at z=0.5, so the entry distance along the
-      // ray is 4.9 - 0.5 = 4.4 (distance is measured from the near plane, charter D-NDC).
-      expect(hit.distance).toBeGreaterThan(0);
-      expect(hit.distance).toBeCloseTo(4.4, 1);
-      // point = origin + dir * distance; for the centre ray it lands on the +Z face
-      expect(hit.point.length).toBe(3);
-      expect(hit.point[2]).toBeCloseTo(0.5, 1);
-      expect(hit.point[0]).toBeCloseTo(0, 1);
-      expect(hit.point[1]).toBeCloseTo(0, 1);
-    });
-  });
-
-  describe('w12 — orthographic camera (AC-10)', () => {
-    it('picks the box under the screen coordinate via the parallel ray path', () => {
-      const scene = makeScene();
-      const camera = spawnOrthographicCamera(scene.world, 5);
-      const box = spawnBox(scene, 0, 0, 0);
-
-      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
-      expect(hit?.entity).toBe(box);
-    });
-
-    it('orthographic ray translation: off-centre screen coordinate misses a centred box', () => {
-      const scene = makeScene();
-      const camera = spawnOrthographicCamera(scene.world, 5);
-      spawnBox(scene, 0, 0, 0); // box at world origin, ortho span [-5,5]
-
-      // top-left corner maps to world (-5, +5): far outside the unit box at origin
-      const hit = runPick(scene.world, camera, 0, 0, VP, VP);
-      expect(hit).toBeUndefined();
-    });
-  });
-
-  describe('w12 — camera-missing precondition (AC-11)', () => {
-    it('throws a structured PickError when cameraEntity has no Camera', () => {
-      const scene = makeScene();
-      // entity with a Transform but NO Camera component
-      const notACamera = scene.world
-        .spawn({ component: Transform, data: translateTransform(0, 0, 5) })
-        .unwrap();
-      spawnBox(scene, 0, 0, 0);
-
-      expect(() => runPick(scene.world, notACamera, VP / 2, VP / 2, VP, VP)).toThrow(PickError);
-    });
-
-    it('the PickError carries .code / .expected / .hint / .detail', () => {
-      const scene = makeScene();
-      const notACamera = scene.world
-        .spawn({ component: Transform, data: translateTransform(0, 0, 5) })
-        .unwrap();
-
-      try {
-        runPick(scene.world, notACamera, VP / 2, VP / 2, VP, VP);
-        throw new Error('expected PickError');
-      } catch (e) {
-        expect(e).toBeInstanceOf(PickError);
-        const err = e as PickError;
-        expect(err.code).toBe('camera-component-missing');
-        expect(err.expected.length).toBeGreaterThan(0);
-        expect(err.hint).toContain('world.set');
-        expect(err.detail.cameraEntity).toBe(notACamera as unknown as number);
-      }
-    });
-  });
-
-  describe('w12 — coordinate clamp + sanitization (AC-11 boundary)', () => {
-    it('clamps a negative / out-of-range coordinate to the viewport edge without throwing', () => {
-      const scene = makeScene();
-      const camera = spawnPerspectiveCamera(scene.world, 5);
-      spawnBox(scene, 0, 0, 0);
-
-      // off-screen coordinates: must not throw and must not produce a NaN-driven hit
-      expect(() => runPick(scene.world, camera, -100, -100, VP, VP)).not.toThrow();
-      expect(() => runPick(scene.world, camera, VP + 999, VP + 999, VP, VP)).not.toThrow();
-    });
-
-    it('sanitizes NaN / Infinity screen coordinates (no throw, defined result)', () => {
-      const scene = makeScene();
-      const camera = spawnPerspectiveCamera(scene.world, 5);
-      spawnBox(scene, 0, 0, 0);
-
-      expect(() => runPick(scene.world, camera, Number.NaN, 0, VP, VP)).not.toThrow();
-      expect(() => runPick(scene.world, camera, Number.POSITIVE_INFINITY, 0, VP, VP)).not.toThrow();
-    });
-  });
-
-  // ── tsc-only type-narrowing assertions (AC-05 / AC-08) ─────────────────────
-  // These functions are never invoked at runtime; their sole purpose is to make
-  // `pnpm run typecheck` (tsc -b) fail if the PickHit surface drifts.
-
-  describe('w12 — type narrowing (AC-05 / AC-08, tsc)', () => {
-    // The runtime body was a no-op probe wrapping `@ts-expect-error` calls; the
-    // closure itself is what makes `pnpm run typecheck` fail if PickHit drifts.
-    // Hoisting the closure to module scope keeps the typecheck signal without a
-    // placeholder runtime assertion (feat-20260608-ci-time-cut).
-    const _pickHitTypeProbe = (world: World, cam: EntityHandle): void => {
-      // no `as` cast: pick is correctly typed as PickHit | undefined
-      const hit = pick(world, cam, 0, 0, VP, VP);
-      if (hit) {
-        const e: EntityHandle = hit.entity;
-        const d: number = hit.distance;
-        const p: ArrayLike<number> = hit.point;
-        void e;
-        void d;
-        void p;
-        // @ts-expect-error — PickHit has no `face` field (AC-08)
-        void hit.face;
-        // @ts-expect-error — PickHit has no `uv` field (AC-08)
-        void hit.uv;
-      }
-      // PickHit assignability sanity (no cast required)
-      const explicit: PickHit | undefined = pick(world, cam, 1, 1, VP, VP);
-      void explicit;
-    };
-    void _pickHitTypeProbe;
-
-    it.todo(
-      'PickHit narrows without a cast and rejects absent fields (typecheck-only via _pickHitTypeProbe)',
-    );
-  });
-
-  describe('w12 — pick reads Transform.world for hierarchical entities (AC-05)', () => {
-    it('picks a child box at its resolved world position (parent x child), not its local position', () => {
-      const scene = makeScene();
-      const camera = spawnPerspectiveCamera(scene.world, 5);
-
-      // Parent translates +X by 2; child local sits at the origin. The child's
-      // world position is therefore (2,0,0) -- off the centre -Z ray. A pick
-      // reading the LOCAL transform (origin) would (wrongly) hit; a pick reading
-      // Transform.world (x=2) correctly misses the centre ray.
-      const parent = scene.world
-        .spawn({ component: Transform, data: translateTransform(2, 0, 0) })
-        .unwrap();
-      scene.world
-        .spawn(
-          { component: Transform, data: translateTransform(0, 0, 0) },
-          { component: ChildOf, data: { parent } },
-          { component: MeshFilter, data: { assetHandle: scene.mesh } },
-          { component: MeshRenderer, data: { materials: [scene.material] } },
-        )
-        .unwrap();
-
-      // Centre ray (down -Z) misses the world-shifted child.
-      expect(runPick(scene.world, camera, VP / 2, VP / 2, VP, VP)).toBeUndefined();
-    });
-
-    it('picks a child box whose world position lands back on the ray', () => {
-      const scene = makeScene();
-      const camera = spawnPerspectiveCamera(scene.world, 5);
-
-      // Parent at -X 2, child local +X 2 -> child world (0,0,0) -> on the centre ray.
-      const parent = scene.world
-        .spawn({ component: Transform, data: translateTransform(-2, 0, 0) })
-        .unwrap();
-      const child = scene.world
-        .spawn(
-          { component: Transform, data: translateTransform(2, 0, 0) },
-          { component: ChildOf, data: { parent } },
-          { component: MeshFilter, data: { assetHandle: scene.mesh } },
-          { component: MeshRenderer, data: { materials: [scene.material] } },
-        )
-        .unwrap();
-
-      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
-      expect(hit?.entity).toBe(child);
-    });
-  });
-}
-
-{
   // --- from relationship-migration-regression.test.ts ---
   // relationship-migration-regression.test.ts -- unit project (t21, M4).
   // Zero-regression + auto-sync verification for the ChildOf/Children
@@ -1153,19 +644,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // bidirectional sync is pure ECS bookkeeping, so this runs in the unit layer
   // alongside the pixel-readback propagate coverage in the dawn layer (AC-04).
 
-  function transformData(posX: number, posY: number, posZ: number) {
-    return {
-      posX,
-      posY,
-      posZ,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
-    };
+  function transformData(x: number, y: number, z: number) {
+    return { pos: [x, y, z], quat: [0, 0, 0, 1], scale: [1, 1, 1] };
   }
 
   describe('relationship-migration-regression (t21 / AC-25 / AC-26)', () => {
@@ -1315,16 +795,18 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // §default-value mechanism + plan-strategy §D-P3 / §D-P4):
   //
   //   (a) AC-07 layer 1 explicit Scene value:
-  //       SceneEntity.components.Transform.posX = 1.5 -> instantiate -> posX === 1.5.
-  //       Explicit Scene value beats every layer 2/3 default (no setOverride
-  //       written, so overrides() stays empty).
+  //       SceneEntity.components.Transform.pos = [1.5, 0, 0] -> instantiate ->
+  //       pos === [1.5, 0, 0]. Explicit Scene value beats every layer 2/3
+  //       default (no setOverride written, so overrides() stays empty).
   //
   //   (b) AC-11 layer 2 component-level defaults (D-P3 add-only minor):
-  //       defineComponent('Transform', { posY: { type: 'f32', default: 7.0 } });
-  //       SceneEntity does NOT write posY -> instantiate -> posY === 7.0.
+  //       defineComponent('Transform',
+  //         { pos: { type: 'array<f32, 3>', default: new Float32Array([0, 7, 0]) } });
+  //       SceneEntity does NOT write pos -> instantiate -> pos === [0, 7, 0].
   //
   //   (c) AC-12 layer 3 TS type defaults + NULL_ENTITY sentinel:
-  //       Three layers all silent on posZ -> posZ === 0 (TS f32 default).
+  //       Three layers all silent on pos -> pos === [0, 0, 0] (TS array<f32, N>
+  //       zero-fill default).
   //       'entity' typed field with no source value -> NULL_ENTITY sentinel
   //       (raw u32 = 0xffffffff per ENTITY_NULL_RAW SSOT). Layer 3 silent --
   //       MUST NOT throw 'scene-default-missing'; charter tension explicitly
@@ -1381,16 +863,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   describe('default-value 4-layer fallback (w20 / AC-07 + AC-11 + AC-12)', () => {
     it('AC-07 layer 1: explicit Scene value beats every default', () => {
       const Transform = defineComponent('Transform', {
-        posX: { type: 'f32', default: 99 },
-        posY: { type: 'f32', default: 99 },
-        posZ: { type: 'f32', default: 99 },
+        pos: { type: 'array<f32, 3>', default: new Float32Array([99, 99, 99]) },
       });
       const world = new World();
 
       const nodes: SceneEntity[] = [
         {
           localId: localId(0),
-          components: { Transform: { posX: 1.5 } },
+          components: { Transform: { pos: [1.5, 0, 0] } },
         },
       ];
       const handle = registerSceneAsset(world, buildScene(nodes));
@@ -1399,7 +879,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       if (!r.ok) return;
       const e = firstNodeEntity(world, r.value.root);
       const t = world.get(e, Transform).unwrap();
-      expect(t.posX).toBe(1.5);
+      expect(Array.from(t.pos)).toEqual([1.5, 0, 0]);
       // overrides stay empty - no setSceneOverride was called. M3 reads them
       // from the SceneInstanceState payload via getSceneInstanceState.
       const stateRes = world.getSceneInstanceState(r.value.root);
@@ -1410,18 +890,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('AC-11 layer 2: component-level defaults fill missing fields (D-P3)', () => {
       const Transform = defineComponent('Transform', {
-        posX: 'f32',
-        posY: { type: 'f32', default: 7.0 },
-        posZ: 'f32',
+        pos: { type: 'array<f32, 3>', default: new Float32Array([0, 7, 0]) },
       });
       const world = new World();
 
-      // Node writes posX explicitly; posY + posZ omitted -> layer 2 gives
-      // posY=7.0; posZ falls through to layer 3 (asserted in next test).
+      // Node omits pos entirely -> layer 2 fills the whole array column with
+      // the field-descriptor default [0, 7, 0] (beats the layer-3 zero-fill,
+      // asserted in the next test).
       const nodes: SceneEntity[] = [
         {
           localId: localId(0),
-          components: { Transform: { posX: 1 } },
+          components: { Transform: {} },
         },
       ];
       const handle = registerSceneAsset(world, buildScene(nodes));
@@ -1430,26 +909,24 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       if (!r.ok) return;
       const e = firstNodeEntity(world, r.value.root);
       const t = world.get(e, Transform).unwrap();
-      expect(t.posY).toBe(7.0);
+      expect(Array.from(t.pos)).toEqual([0, 7, 0]);
     });
 
     it('AC-12 layer 3: TS type defaults silently fill three-layer-empty fields', () => {
       const Transform = defineComponent('Transform', {
-        posX: 'f32',
-        posY: 'f32',
-        posZ: 'f32',
+        pos: 'array<f32, 3>',
         flag: 'bool',
         kind: 'u32',
       });
       const world = new World();
 
-      // No defaults at the component level; node writes posX only. Three-layer
-      // chain leaves posY / posZ / flag / kind empty -> layer 3 fills with TS
-      // type defaults. AC-12 mandates this path is SILENT (no error code).
+      // No defaults at the component level; node writes nothing. Three-layer
+      // chain leaves pos / flag / kind empty -> layer 3 fills with TS type
+      // defaults. AC-12 mandates this path is SILENT (no error code).
       const nodes: SceneEntity[] = [
         {
           localId: localId(0),
-          components: { Transform: { posX: 0 } },
+          components: { Transform: {} },
         },
       ];
       const handle = registerSceneAsset(world, buildScene(nodes));
@@ -1458,8 +935,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       if (!r.ok) return;
       const e = firstNodeEntity(world, r.value.root);
       const t = world.get(e, Transform).unwrap();
-      expect(t.posY).toBe(0); // f32 -> 0
-      expect(t.posZ).toBe(0); // f32 -> 0
+      expect(Array.from(t.pos)).toEqual([0, 0, 0]); // array<f32, 3> -> zero-fill
       expect(t.flag).toBe(false); // bool -> false (read back as 0/1)
       expect(t.kind).toBe(0); // u32 -> 0
     });
@@ -1498,21 +974,22 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
     it('layer chain order: layer 1 > layer 2 > layer 3 priority discipline', () => {
       // Compose all three layers in one node so the priority chain is
-      // observable in a single instantiate roundtrip:
-      //   posX: layer 1 wins (explicit Scene value)
-      //   posY: layer 2 wins (component default)
-      //   posZ: layer 3 wins (silent TS default)
+      // observable in a single instantiate roundtrip (one field per layer;
+      // array columns fill whole-field, not per-lane):
+      //   pos:   layer 1 wins (explicit Scene value)
+      //   quat:  layer 2 wins (component default)
+      //   scale: layer 3 wins (silent TS default)
       const Transform = defineComponent('Transform', {
-        posX: { type: 'f32', default: 99 },
-        posY: { type: 'f32', default: 7.0 },
-        posZ: 'f32',
+        pos: { type: 'array<f32, 3>', default: new Float32Array([99, 99, 99]) },
+        quat: { type: 'array<f32, 4>', default: new Float32Array([0, 7, 0, 1]) },
+        scale: 'array<f32, 3>',
       });
       const world = new World();
 
       const nodes: SceneEntity[] = [
         {
           localId: localId(0),
-          components: { Transform: { posX: 1.5 } },
+          components: { Transform: { pos: [1.5, 0, 0] } },
         },
       ];
       const handle = registerSceneAsset(world, buildScene(nodes));
@@ -1521,9 +998,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       if (!r.ok) return;
       const e = firstNodeEntity(world, r.value.root);
       const t = world.get(e, Transform).unwrap();
-      expect(t.posX).toBe(1.5); // layer 1 wins (explicit beats default 99)
-      expect(t.posY).toBe(7.0); // layer 2 wins (component default beats type 0)
-      expect(t.posZ).toBe(0); // layer 3 wins (TS f32 default)
+      expect(Array.from(t.pos)).toEqual([1.5, 0, 0]); // layer 1 wins (explicit beats default 99)
+      expect(Array.from(t.quat)).toEqual([0, 7, 0, 1]); // layer 2 wins (component default beats type 0)
+      expect(Array.from(t.scale)).toEqual([0, 0, 0]); // layer 3 wins (TS array<f32, N> zero-fill)
     });
 
     it('layer 3 silent path: no error code surface on three-layer-empty schema field', () => {
@@ -1532,9 +1009,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // pins the negative -- the Result must be ok and no error-shaped value
       // surfaces to the caller.
       defineComponent('Transform', {
-        posX: 'f32',
-        posY: 'f32',
-        posZ: 'f32',
+        pos: 'array<f32, 3>',
       });
       const world = new World();
 
@@ -2885,9 +2360,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //       transform (pos/quat/scale all identity values), verifying that the
   //       layer-2 defaults map fills every schema field.
   //
-  //   (b) `world.spawn({ component: Transform, data: { posZ: 2 } })` returns
-  //       posZ=2 with remaining fields at identity defaults, verifying that
-  //       layer-1 explicit values take priority over layer-2 defaults.
+  //   (b) `world.spawn({ component: Transform, data: { pos: [0, 0, 2] } })`
+  //       returns pos=[0,0,2] with remaining fields at identity defaults,
+  //       verifying that layer-1 explicit values take priority over layer-2
+  //       defaults.
   //
   //   (c) `world.set` partial patch on Transform does not affect unfilled
   //       columns, verifying the column-wise set semantics.
@@ -2901,55 +2377,34 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const e = world.spawn({ component: Transform, data: {} }).unwrap();
       const row = world.get(e, Transform).unwrap();
 
-      expect(row.posX).toBe(0);
-      expect(row.posY).toBe(0);
-      expect(row.posZ).toBe(0);
-      expect(row.quatX).toBe(0);
-      expect(row.quatY).toBe(0);
-      expect(row.quatZ).toBe(0);
-      expect(row.quatW).toBe(1);
-      expect(row.scaleX).toBe(1);
-      expect(row.scaleY).toBe(1);
-      expect(row.scaleZ).toBe(1);
+      expect(Array.from(row.pos)).toEqual([0, 0, 0]);
+      expect(Array.from(row.quat)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(row.scale)).toEqual([1, 1, 1]);
     });
   });
 
   describe('Transform partial override — layer-1 wins over layer-2 defaults (AC-03)', () => {
-    it('world.spawn with only posZ=2 yields identity on all other fields', () => {
+    it('world.spawn with only pos=[0,0,2] yields identity on all other fields', () => {
       const world = new World();
-      const e = world.spawn({ component: Transform, data: { posZ: 2 } }).unwrap();
+      const e = world.spawn({ component: Transform, data: { pos: [0, 0, 2] } }).unwrap();
       const row = world.get(e, Transform).unwrap();
 
-      expect(row.posX).toBe(0);
-      expect(row.posY).toBe(0);
-      expect(row.posZ).toBe(2);
-      expect(row.quatX).toBe(0);
-      expect(row.quatY).toBe(0);
-      expect(row.quatZ).toBe(0);
-      expect(row.quatW).toBe(1);
-      expect(row.scaleX).toBe(1);
-      expect(row.scaleY).toBe(1);
-      expect(row.scaleZ).toBe(1);
+      expect(Array.from(row.pos)).toEqual([0, 0, 2]);
+      expect(Array.from(row.quat)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(row.scale)).toEqual([1, 1, 1]);
     });
   });
 
-  describe('Transform new schema — local 10 f32 cols + world array<f32,16> (AC-01)', () => {
+  describe('Transform new schema — local pos/quat/scale array cols + world array<f32,16> (AC-01)', () => {
     it('spawn data:{} yields identity local TRS + identity world mat4 (16 contiguous f32)', () => {
       const world = new World();
       const e = world.spawn({ component: Transform, data: {} }).unwrap();
       const row = world.get(e, Transform).unwrap();
 
-      // local 10 f32 scalar columns at identity.
-      expect(row.posX).toBe(0);
-      expect(row.posY).toBe(0);
-      expect(row.posZ).toBe(0);
-      expect(row.quatX).toBe(0);
-      expect(row.quatY).toBe(0);
-      expect(row.quatZ).toBe(0);
-      expect(row.quatW).toBe(1);
-      expect(row.scaleX).toBe(1);
-      expect(row.scaleY).toBe(1);
-      expect(row.scaleZ).toBe(1);
+      // local pos/quat/scale inline array columns at identity.
+      expect(Array.from(row.pos)).toEqual([0, 0, 0]);
+      expect(Array.from(row.quat)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(row.scale)).toEqual([1, 1, 1]);
 
       // world array<f32,16> resolves to a Float32Array view of 16 contiguous
       // floats. Default fill is the identity mat4 (column-major).
@@ -2966,26 +2421,17 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   describe('Transform world.set — partial patch does not affect unfilled columns', () => {
     it('world.set partial patch on Transform leaves unreferenced columns unchanged', () => {
       const world = new World();
-      const e = world
-        .spawn({ component: Transform, data: { posX: 5, posY: 3, posZ: 10 } })
-        .unwrap();
+      const e = world.spawn({ component: Transform, data: { pos: [5, 3, 10] } }).unwrap();
 
-      // Partial set: only change posX.
-      world.set(e, Transform, { posX: 25 }).unwrap();
+      // Partial set: only the pos column (the patch unit is the whole inline
+      // array field; quat/scale columns are not referenced).
+      world.set(e, Transform, { pos: [25, 3, 10] }).unwrap();
 
       const after = world.get(e, Transform).unwrap();
-      expect(after.posX).toBe(25);
-      // Unaffected columns remain unchanged.
-      expect(after.posY).toBe(3);
-      expect(after.posZ).toBe(10);
+      expect(Array.from(after.pos)).toEqual([25, 3, 10]);
       // Identity defaults still in place for unset columns.
-      expect(after.quatX).toBe(0);
-      expect(after.quatY).toBe(0);
-      expect(after.quatZ).toBe(0);
-      expect(after.quatW).toBe(1);
-      expect(after.scaleX).toBe(1);
-      expect(after.scaleY).toBe(1);
-      expect(after.scaleZ).toBe(1);
+      expect(Array.from(after.quat)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(after.scale)).toEqual([1, 1, 1]);
     });
   });
 }

@@ -32,21 +32,8 @@
 //     swaps the pipeline.
 
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  createRenderer,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  HDRP_PIPELINE_ID,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  type Renderer,
-  Transform,
-  URP_PIPELINE_ID,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, createRenderer, EngineEnvironmentError, HDRP_PIPELINE_ID, Materials, MeshFilter, MeshRenderer, perspective, PointLight, type Renderer, Transform, URP_PIPELINE_ID } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const CANVAS_W = 512;
@@ -160,7 +147,7 @@ function populateScene(_renderer: Renderer, world: World): void {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 0, posZ: 0, quatW: 1 },
+      data: { pos: [0, 0, 0], quat: [0, 0, 0, 1]},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [matHandle] } },
@@ -169,7 +156,7 @@ function populateScene(_renderer: Renderer, world: World): void {
   // 4 PointLight matched specs.
   for (const spec of LIGHT_SPECS) {
     world.spawn(
-      { component: Transform, data: { posX: spec.x, posY: spec.y, posZ: spec.z, quatW: 1 } },
+      { component: Transform, data: { pos: [spec.x, spec.y, spec.z], quat: [0, 0, 0, 1]} },
       {
         component: PointLight,
         data: {
@@ -185,7 +172,7 @@ function populateScene(_renderer: Renderer, world: World): void {
 
   // Camera locked: fov = 45deg, aspect = 1 (512x512), z = 3.
   world.spawn(
-    { component: Transform, data: { posZ: 3 } },
+    { component: Transform, data: { pos: [0, 0, 3]} },
     { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 1.0 }) },
   ).unwrap();
 

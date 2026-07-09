@@ -180,7 +180,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { quat: [0, 0, 0, 1], scale: [1, 1, 1]},
     },
     { component: MeshFilter, data: { assetHandle: meshHandle } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },
@@ -191,7 +191,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 1.6, posY: 1.4, posZ: 3.2, quatW: 1 },
+      data: { pos: [1.6, 1.4, 3.2], quat: [0, 0, 0, 1]},
     },
     {
       component: Camera,

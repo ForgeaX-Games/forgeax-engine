@@ -249,7 +249,7 @@ const refs = roomPack.assets[0]?.refs ?? [];
 // must be rewritten to the GUID string `resolveSceneGuids` resolves back to
 // a Handle. Restricted to the known handle fields per component: a blanket
 // "any small integer is a refs index" heuristic mis-rewrites Transform
-// fields whose literal value happens to be 0/1/2 (e.g. posX:0 -> refs[0]
+// fields whose literal value happens to be 0/1/2 (e.g. a zero pos lane -> refs[0]
 // GUID -> NaN position), pushing geometry out of frustum so the frame
 // renders empty (the F-8 false-green masked this for the demo's lifetime).
 const HANDLE_FIELDS = {

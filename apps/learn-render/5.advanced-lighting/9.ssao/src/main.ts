@@ -39,20 +39,8 @@
 
 import { type App, createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
-import {
-  Camera,
-  createDevImportTransport,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  HDRP_PIPELINE_ID,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  Skylight,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, EngineEnvironmentError, HDRP_PIPELINE_ID, Materials, MeshFilter, MeshRenderer, perspective, PointLight, Skylight, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset, SceneAsset } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -219,14 +207,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: Transform,
         data: {
-          posX: s.pos[0],
-          posY: s.pos[1],
-          posZ: s.pos[2],
-          quatW: 1,
-          scaleX: s.scale[0],
-          scaleY: s.scale[1],
-          scaleZ: s.scale[2],
-        },
+          pos: [s.pos[0], s.pos[1], s.pos[2]], quat: [0, 0, 0, 1], scale: [s.scale[0], s.scale[1], s.scale[2]],},
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [roomMat] } },
@@ -252,17 +233,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const placementRes = world.spawn({
     component: Transform,
     data: {
-      posX: 0,
-      posY: BACKPACK_POS_Y,
-      posZ: 0,
-      quatX: 0,
-      quatY: Math.sin(BACKPACK_YAW / 2),
-      quatZ: 0,
-      quatW: Math.cos(BACKPACK_YAW / 2),
-      scaleX: BACKPACK_SCALE,
-      scaleY: BACKPACK_SCALE,
-      scaleZ: BACKPACK_SCALE,
-    },
+      pos: [0, BACKPACK_POS_Y, 0], quat: [0, Math.sin(BACKPACK_YAW / 2), 0, Math.cos(BACKPACK_YAW / 2)], scale: [BACKPACK_SCALE, BACKPACK_SCALE, BACKPACK_SCALE],},
   });
   if (!placementRes.ok) {
     console.error('[learn-render 5.9 ssao] backpack placement spawn failed:', placementRes.error);
@@ -281,7 +252,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: LIGHT_POS[0], posY: LIGHT_POS[1], posZ: LIGHT_POS[2], quatW: 1 },
+      data: { pos: [LIGHT_POS[0], LIGHT_POS[1], LIGHT_POS[2]], quat: [0, 0, 0, 1]},
     },
     {
       component: PointLight,
@@ -303,7 +274,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 2.2, posZ: 7.5, quatX: qx, quatW: qw },
+      data: { pos: [0, 2.2, 7.5], quat: [qx, 0, 0, qw]},
     },
     {
       component: Camera,

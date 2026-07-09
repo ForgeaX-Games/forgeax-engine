@@ -12,19 +12,8 @@
 //   exp-cube-c-cutout-shadow-pattern: floor region under cube C shows a cutout pattern
 
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  acquireCanvasContext,
-  createRenderer,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, acquireCanvasContext, createRenderer, DirectionalLight, EngineEnvironmentError, Materials, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import cutoutShader from '../shaders/cutout-shadow.wgsl';
@@ -127,7 +116,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 12, posZ: 8, quatX: -0.4718579255320243, quatY: 0, quatZ: 0, quatW: 0.8816745987679437, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [0, 12, 8], quat: [-0.4718579255320243, 0, 0, 0.8816745987679437], scale: [1, 1, 1]},
     },
     { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },
   );
@@ -148,17 +137,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: -0.01,
-        posZ: 0,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 10,
-        scaleY: 0.02,
-        scaleZ: 10,
-      },
+        pos: [0, -0.01, 0], quat: [0, 0, 0, 1], scale: [10, 0.02, 10],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [floorMatHandle] } },
@@ -172,7 +151,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: -3, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
+      data: { pos: [-3, 1.25, 0], quat: [0, 0, 0, 1], scale: [1.5, 1.5, 1.5]},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [matAHandle] } },
@@ -186,7 +165,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
+      data: { pos: [0, 1.25, 0], quat: [0, 0, 0, 1], scale: [1.5, 1.5, 1.5]},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [matBHandle] } },
@@ -217,7 +196,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 3, posY: 1.25, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1.5, scaleY: 1.5, scaleZ: 1.5 },
+      data: { pos: [3, 1.25, 0], quat: [0, 0, 0, 1], scale: [1.5, 1.5, 1.5]},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [matCHandle] } },

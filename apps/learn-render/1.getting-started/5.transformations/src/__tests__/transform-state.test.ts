@@ -23,41 +23,41 @@ describe('5.transformations Transform field values reproduce LO §1.5 teaching c
     const out = computeTransformAt(1.5);
 
     // LO §1.5 verbatim: glm::translate(trans, glm::vec3(0.5f, -0.5f, 0.0f)).
-    expect(out.posX).toBeCloseTo(0.5, 6);
-    expect(out.posY).toBeCloseTo(-0.5, 6);
-    expect(out.posZ).toBeCloseTo(0, 6);
+    expect(out.pos[0]).toBeCloseTo(0.5, 6);
+    expect(out.pos[1]).toBeCloseTo(-0.5, 6);
+    expect(out.pos[2]).toBeCloseTo(0, 6);
 
     // LO §1.5 verbatim: glm::rotate(trans, time, glm::vec3(0,0,1)) -- the
     // Z-axis quaternion encoding (0, 0, sin(angle/2), cos(angle/2)). At
-    // t = 1.5s the angle is non-zero -> quatZ (quaternion z component) is
-    // non-zero. quatX / quatY stay 0 (single-axis Z rotation).
-    expect(out.quatX).toBe(0);
-    expect(out.quatY).toBe(0);
-    expect(out.quatZ).not.toBe(0);
-    expect(Math.abs(out.quatZ)).toBeLessThanOrEqual(1);
+    // t = 1.5s the angle is non-zero -> quat[2] (quaternion z component) is
+    // non-zero. quat x / y stay 0 (single-axis Z rotation).
+    expect(out.quat[0]).toBe(0);
+    expect(out.quat[1]).toBe(0);
+    expect(out.quat[2]).not.toBe(0);
+    expect(Math.abs(out.quat[2])).toBeLessThanOrEqual(1);
 
     // Sin-pulse scale (D-8 / OOS-8 carve-out): forgeax animates the
     // glm::scale(trans, glm::vec3(0.5)) static value into a sin envelope
     // 0.5 + 0.5 * sin(t * 2π / 3) so the visible frame proves the system
     // fn writes per tick. Range is [0, 1]; at t=1.5s the value is mid-
     // pulse.
-    expect(out.scaleX).toBeGreaterThanOrEqual(0);
-    expect(out.scaleX).toBeLessThanOrEqual(1);
-    expect(out.scaleX).toBe(out.scaleY);
-    expect(out.scaleX).toBe(out.scaleZ);
+    expect(out.scale[0]).toBeGreaterThanOrEqual(0);
+    expect(out.scale[0]).toBeLessThanOrEqual(1);
+    expect(out.scale[0]).toBe(out.scale[1]);
+    expect(out.scale[0]).toBe(out.scale[2]);
   });
 
-  it('computeTransformAt(0) produces the spawn-time identity baseline (quatZ=0, scaleX in [0,1])', () => {
+  it('computeTransformAt(0) produces the spawn-time identity baseline (quat z=0, scale x in [0,1])', () => {
     const out = computeTransformAt(0);
     // Position is the LO §1.5 translate constant regardless of t.
-    expect(out.posX).toBeCloseTo(0.5, 6);
-    expect(out.posY).toBeCloseTo(-0.5, 6);
+    expect(out.pos[0]).toBeCloseTo(0.5, 6);
+    expect(out.pos[1]).toBeCloseTo(-0.5, 6);
     // At t=0 the Z-axis rotation angle is 0 -> sin(0) = 0 quaternion z.
-    expect(out.quatZ).toBe(0);
-    expect(out.quatW).toBeCloseTo(1, 6);
+    expect(out.quat[2]).toBe(0);
+    expect(out.quat[3]).toBeCloseTo(1, 6);
     // Sin-pulse 0.5 + 0.5 * sin(0) = 0.5 baseline.
-    expect(out.scaleX).toBeCloseTo(0.5, 6);
-    expect(out.scaleX).toBe(out.scaleY);
-    expect(out.scaleX).toBe(out.scaleZ);
+    expect(out.scale[0]).toBeCloseTo(0.5, 6);
+    expect(out.scale[0]).toBe(out.scale[1]);
+    expect(out.scale[0]).toBe(out.scale[2]);
   });
 });

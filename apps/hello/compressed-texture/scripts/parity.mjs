@@ -260,7 +260,8 @@ const mockCanvas = {
 
 const { World } = await import('@forgeax/engine-ecs');
 const engine = await import('@forgeax/engine-runtime');
-const { createRenderer, HANDLE_QUAD, MeshFilter, MeshRenderer, Transform, DirectionalLight, Camera, perspective } = engine;
+const { createRenderer, MeshFilter, MeshRenderer, Transform, DirectionalLight, Camera, perspective } = engine;
+const { HANDLE_QUAD } = await import('@forgeax/engine-assets-runtime');
 
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(
   readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'shaders', 'manifest.json'), 'utf8'),
@@ -332,12 +333,12 @@ for (const [px, py, pz, sx, sy, sz] of quads) {
   world.spawn(
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
     { component: MeshRenderer, data: { materials: [matHandle] } },
-    { component: Transform, data: { posX: px, posY: py, posZ: pz, scaleX: sx, scaleY: sy, scaleZ: sz } },
+    { component: Transform, data: { pos: [px, py, pz], scale: [sx, sy, sz]} },
   );
 }
 world.spawn({ component: DirectionalLight, data: { directionX: -0.1, directionY: -0.6, directionZ: -1, colorR: 1, colorG: 1, colorB: 1, intensity: 3 } });
 world.spawn(
-  { component: Transform, data: { posZ: 3 } },
+  { component: Transform, data: { pos: [0, 0, 3]} },
   { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 }), clearR: 0.02, clearG: 0.02, clearB: 0.05, clearA: 1 } },
 );
 

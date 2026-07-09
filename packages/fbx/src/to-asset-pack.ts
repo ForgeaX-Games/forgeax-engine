@@ -237,16 +237,15 @@ function buildSceneAsset(pod: ScenePod, guid: string, ctx: SceneBuildContext): I
   const entities = pod.entities.map((e, idx) => {
     const components: Record<string, Record<string, unknown>> = {
       Transform: {
-        posX: e.transform.translation[0],
-        posY: e.transform.translation[1],
-        posZ: e.transform.translation[2],
-        quatX: e.transform.rotation[0],
-        quatY: e.transform.rotation[1],
-        quatZ: e.transform.rotation[2],
-        quatW: e.transform.rotation[3],
-        scaleX: e.transform.scale[0],
-        scaleY: e.transform.scale[1],
-        scaleZ: e.transform.scale[2],
+        pos: [e.transform.translation[0], e.transform.translation[1], e.transform.translation[2]],
+        // Quaternion component order [x, y, z, w] (E6).
+        quat: [
+          e.transform.rotation[0],
+          e.transform.rotation[1],
+          e.transform.rotation[2],
+          e.transform.rotation[3],
+        ],
+        scale: [e.transform.scale[0], e.transform.scale[1], e.transform.scale[2]],
       },
     };
 

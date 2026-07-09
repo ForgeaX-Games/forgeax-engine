@@ -34,19 +34,8 @@
 import { createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
 
-import {
-  Camera,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  HDRP_PIPELINE_ID,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  SpotLight,
-  TONEMAP_ACES_FILMIC,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { Camera, EngineEnvironmentError, HDRP_PIPELINE_ID, MeshFilter, MeshRenderer, perspective, PointLight, SpotLight, TONEMAP_ACES_FILMIC, Transform } from '@forgeax/engine-runtime';
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -144,7 +133,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: -0.5, posZ: 0, quatW: 1, scaleX: 6, scaleY: 0.1, scaleZ: 6 },
+      data: { pos: [0, -0.5, 0], quat: [0, 0, 0, 1], scale: [6, 0.1, 6]},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },
@@ -152,7 +141,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 0.6, posZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [0, 0.6, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },
@@ -178,7 +167,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const y = 1.5 + rng() * 2.0;
     pointEntities.push(
       world.spawn(
-        { component: Transform, data: { posX: x, posY: y, posZ: z, quatW: 1 } },
+        { component: Transform, data: { pos: [x, y, z], quat: [0, 0, 0, 1]} },
         {
           component: PointLight,
           data: {
@@ -206,7 +195,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // Spots also lifted to y in [2.0, 4.0] above the scene, pointing -Y.
     const y = 2.0 + rng() * 2.0;
     world.spawn(
-      { component: Transform, data: { posX: x, posY: y, posZ: z, quatW: 1 } },
+      { component: Transform, data: { pos: [x, y, z], quat: [0, 0, 0, 1]} },
       {
         component: SpotLight,
         data: {
@@ -244,7 +233,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 1.5, posZ: 6.0, quatW: 1 },
+      data: { pos: [0, 1.5, 6.0], quat: [0, 0, 0, 1]},
     },
     {
       component: Camera,
@@ -289,10 +278,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         const seedX = ((i * 0.123) % 1 - 0.5) * 5.5;
         const seedZ = ((i * 0.789) % 1 - 0.5) * 5.5;
         world.set(e, Transform, {
-          posX: seedX + dx,
-          posY: 0.6,
-          posZ: seedZ + dz,
-        });
+          pos: [seedX + dx, 0.6, seedZ + dz],});
       }
     },
   });

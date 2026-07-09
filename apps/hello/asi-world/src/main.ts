@@ -27,25 +27,9 @@
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { World } from '@forgeax/engine-ecs';
-import {
-  CAMERA_PROJECTION_ORTHOGRAPHIC,
-  Camera,
-  ChildOf,
-  EngineEnvironmentError,
-  encodeSortScope,
-  HANDLE_QUAD,
-  Layer,
-  MeshFilter,
-  MeshRenderer,
-  setTransparentSortConfig,
-  SpriteRegionOverride,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  TRANSPARENT_SORT_MODE_LAYER_Y,
-  Tilemap,
-  TileLayer,
-  Transform,
-  encodeTileBits,
-} from '@forgeax/engine-runtime';
+import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
+import { encodeTileBits } from '@forgeax/engine-graphics-extras';
+import { CAMERA_PROJECTION_ORTHOGRAPHIC, Camera, ChildOf, EngineEnvironmentError, encodeSortScope, Layer, MeshFilter, MeshRenderer, setTransparentSortConfig, SpriteRegionOverride, SPRITE_PREMULTIPLIED_ALPHA_BLEND, TRANSPARENT_SORT_MODE_LAYER_Y, Tilemap, TileLayer, Transform } from '@forgeax/engine-runtime';
 
 import type {
   Handle,
@@ -224,13 +208,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: playerSpawnX,
-        posY: playerSpawnY,
-        posZ: 5,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [playerSpawnX, playerSpawnY, 5], scale: [1, 1, 1],},
     },
     {
       component: Camera,
@@ -259,7 +237,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const tilemapSpawn = world.spawn(
     {
       component: Transform,
-      data: { posX: 0, posY: 0, posZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1 },
+      data: { pos: [0, 0, 0], scale: [1, 1, 1]},
     },
     {
       component: Tilemap,
@@ -282,7 +260,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const r = world.spawn(
       { component: TileLayer, data: { tiles: flipped, layerOrder: layer.layerOrder } },
       { component: ChildOf, data: { parent: tilemapEntity } },
-      { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+      { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
     );
     if (!r.ok) return logErr(`terrain TileLayer (height=${layer.heightKey} sub=${layer.subIndex})`, r.error);
   }
@@ -302,7 +280,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       },
     },
     { component: ChildOf, data: { parent: tilemapEntity } },
-    { component: Transform, data: { posX: 0, posY: 0, posZ: 0, quatX: 0, quatY: 0, quatZ: 0, quatW: 1, scaleX: 1, scaleY: 1, scaleZ: 1 } },
+    { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
   );
   if (!objectLayerSpawn.ok) return logErr('object TileLayer', objectLayerSpawn.error);
 
@@ -314,12 +292,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        posX: playerSpawnX,
-        posY: playerSpawnY,
-        posZ: 0.1,
-        scaleX: 2.5,
-        scaleY: 4.0,
-        scaleZ: 1,
+        pos: [playerSpawnX, playerSpawnY, 0.1],
+        scale: [2.5, 4.0, 1],
       },
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
@@ -367,14 +341,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
       const tr = world.get(playerEntity, Transform);
       if (!tr.ok) return;
-      const cur = tr.value as { posX: number; posY: number };
-      let nextX = cur.posX + dx * PLAYER_SPEED * dt;
-      let nextY = cur.posY + dy * PLAYER_SPEED * dt;
+      const cur = tr.value as { pos: Float32Array };
+      const curX = cur.pos[0] ?? 0;
+      const curY = cur.pos[1] ?? 0;
+      let nextX = curX + dx * PLAYER_SPEED * dt;
+      let nextY = curY + dy * PLAYER_SPEED * dt;
 
-      if (!isPassableAt(built, nextX, cur.posY)) nextX = cur.posX;
-      if (!isPassableAt(built, nextX, nextY)) nextY = cur.posY;
+      if (!isPassableAt(built, nextX, curY)) nextX = curX;
+      if (!isPassableAt(built, nextX, nextY)) nextY = curY;
 
-      world.set(playerEntity, Transform, { posX: nextX, posY: nextY });
+      world.set(playerEntity, Transform, { pos: [nextX, nextY, 0]});
 
       if (moving) {
         const frameDur = FRAME_DURATION_MS_MOVE / 1000;
@@ -399,7 +375,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         });
       }
 
-      world.set(cameraEntity, Transform, { posX: nextX, posY: nextY });
+      world.set(cameraEntity, Transform, { pos: [nextX, nextY, 0]});
 
       const tileX = Math.floor(nextX);
       const tileY = built.rows - 1 - Math.floor(nextY);

@@ -30,21 +30,8 @@
 import { createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
 
-import {
-  ANTIALIAS_FXAA,
-  ANTIALIAS_NONE,
-  Camera,
-  DirectionalLight,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  HANDLE_QUAD,
-  HANDLE_SPHERE,
-  HANDLE_TRIANGLE,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, HANDLE_QUAD, HANDLE_SPHERE, HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
+import { ANTIALIAS_FXAA, ANTIALIAS_NONE, Camera, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 
 import type { Handle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -110,25 +97,21 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // body is scaled to 0.5 to fit all 4 in view without overlap.
   const LAYOUT: readonly {
     readonly handle: Handle<'MeshAsset', 'shared'>;
-    readonly posX: number;
+    readonly pos: readonly [number, number, number];
   }[] = [
-    { handle: HANDLE_TRIANGLE, posX: -1.05 },
-    { handle: HANDLE_CUBE, posX: -0.35 },
-    { handle: HANDLE_QUAD, posX: 0.35 },
-    { handle: HANDLE_SPHERE, posX: 1.05 },
+    { handle: HANDLE_TRIANGLE, pos: [-1.05, 0, 0]},
+    { handle: HANDLE_CUBE, pos: [-0.35, 0, 0]},
+    { handle: HANDLE_QUAD, pos: [0.35, 0, 0]},
+    { handle: HANDLE_SPHERE, pos: [1.05, 0, 0]},
   ];
   for (const slot of LAYOUT) {
     world.spawn(
       {
         component: Transform,
         data: {
-          posX: slot.posX,
-          posY: 0,
-          posZ: 0,
-          quatW: 1,
-          scaleX: 0.5,
-          scaleY: 0.5,
-          scaleZ: 0.5,
+          pos: slot.pos,
+          quat: [0, 0, 0, 1],
+          scale: [0.5, 0.5, 0.5],
         },
       },
       { component: MeshFilter, data: { assetHandle: slot.handle } },
@@ -155,7 +138,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const camEntity = world.spawn(
     {
       component: Transform,
-      data: { posZ: 6 },
+      data: { pos: [0, 0, 6]},
     },
     {
       component: Camera,

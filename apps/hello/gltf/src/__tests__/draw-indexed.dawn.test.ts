@@ -32,12 +32,8 @@ import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
 import { parseGltf } from '@forgeax/engine-gltf';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  createRenderer,
-  type Handle,
-  type MaterialAsset,
-  type MeshAsset,
-} from '@forgeax/engine-runtime';
+import { type MeshAsset } from '@forgeax/engine-assets-runtime';
+import { createRenderer, type Handle, type MaterialAsset } from '@forgeax/engine-runtime';
 import type { LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
@@ -251,17 +247,16 @@ describe('hello-gltf w28 - dawn drawIndexed real GPU spine (AC-15)', () => {
     expect(cameraNode).toBeDefined();
     if (meshNode === undefined || cameraNode === undefined) return;
 
-    const transformOf = (n: typeof meshNode): Record<string, number> => ({
-      posX: n.transform.translation[0],
-      posY: n.transform.translation[1],
-      posZ: n.transform.translation[2],
-      quatX: n.transform.rotation[0],
-      quatY: n.transform.rotation[1],
-      quatZ: n.transform.rotation[2],
-      quatW: n.transform.rotation[3],
-      scaleX: n.transform.scale[0],
-      scaleY: n.transform.scale[1],
-      scaleZ: n.transform.scale[2],
+    const transformOf = (n: typeof meshNode): Record<string, number[]> => ({
+      pos: [n.transform.translation[0], n.transform.translation[1], n.transform.translation[2]],
+      // Quaternion component order [x, y, z, w] (E6).
+      quat: [
+        n.transform.rotation[0],
+        n.transform.rotation[1],
+        n.transform.rotation[2],
+        n.transform.rotation[3],
+      ],
+      scale: [n.transform.scale[0], n.transform.scale[1], n.transform.scale[2]],
     });
 
     const sceneNodes: SceneEntity[] = [

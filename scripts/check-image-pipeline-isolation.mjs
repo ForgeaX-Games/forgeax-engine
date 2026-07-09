@@ -105,6 +105,13 @@ let totalFailures = 0;
 // (a.1) forbidden implementation symbols
 const runtimeSrc = join(root, 'packages/runtime/src');
 const runtimeRootForFilename = join(root, 'packages/runtime');
+// feat-20260705-runtime-tier2-decomposition M1 / w16 (D-9): the textureLoader
+// (and the rest of the asset cluster) moved to @forgeax/engine-assets-runtime.
+// The a.1 forbidden-symbol + a.2-anti no-engine-image-import invariants must
+// now hold over BOTH package src roots, else the gate goes vacuous for the
+// migrated files (plan-strategy 5.6 R10).
+const assetsRuntimeSrc = join(root, 'packages/assets-runtime/src');
+const pathAScanRoots = [runtimeSrc, assetsRuntimeSrc];
 
 // Three forbidden forms, captured as separate regex patterns so the FAIL
 // stderr can name the matched form for the AI user (better than a single
@@ -116,12 +123,14 @@ const forbiddenForms = [
 ];
 
 const forbiddenHits = [];
-walk(runtimeSrc, (p, content) => {
-  for (const form of forbiddenForms) {
-    const m = content.match(form.re);
-    if (m) forbiddenHits.push({ path: p, form: form.id, match: m[0] });
-  }
-});
+for (const scanRoot of pathAScanRoots) {
+  walk(scanRoot, (p, content) => {
+    for (const form of forbiddenForms) {
+      const m = content.match(form.re);
+      if (m) forbiddenHits.push({ path: p, form: form.id, match: m[0] });
+    }
+  });
+}
 
 // (a.2) decoder-strip requirement (w27, AC-15): inverted from the
 // pre-strip "runtime MUST import the decoder" anchor.
@@ -135,14 +144,16 @@ const decoderStripFailures = [];
 // (a.2-anti) NO file under packages/runtime/src may statically import from
 // @forgeax/engine-image. The runtime carries no decoder after the M3 strip;
 // a static edge here would re-bundle it (regressing the AC-16 delta).
-walk(runtimeSrc, (p, content) => {
-  const importLines = content.match(engineImageImportRe) ?? [];
-  for (const line of importLines) {
-    decoderStripFailures.push(
-      `runtime static import of @forgeax/engine-image: ${p} (\`${line.trim()}\`) -- the runtime decoder was stripped (M3 AC-15); import images at build time via the imageImporter`,
-    );
-  }
-});
+for (const scanRoot of pathAScanRoots) {
+  walk(scanRoot, (p, content) => {
+    const importLines = content.match(engineImageImportRe) ?? [];
+    for (const line of importLines) {
+      decoderStripFailures.push(
+        `runtime/assets-runtime static import of @forgeax/engine-image: ${p} (\`${line.trim()}\`) -- the runtime decoder was stripped (M3 AC-15); import images at build time via the imageImporter`,
+      );
+    }
+  });
+}
 
 // (a.2-pos) the build-time imageImporter must statically import parseImage
 // (the decoder it now holds on the producer side).
@@ -270,14 +281,19 @@ const codecEncodeImportRe =
   /^\s*import\b[\s\S]*?from\s+['"]@forgeax\/engine-codec\/encode['"]\s*;?/gm;
 const pathDFailures = [];
 
-walk(runtimeSrc, (p, content) => {
-  const importLines = content.match(codecEncodeImportRe) ?? [];
-  for (const line of importLines) {
-    pathDFailures.push(
-      `runtime static import of @forgeax/engine-codec/encode: ${p} (\`${line.trim()}\`) -- build-time only; use @forgeax/engine-codec main entry for runtime-safe decode`,
-    );
-  }
-});
+// feat-20260705-runtime-tier2-decomposition M1 / w16 (D-9): textureLoader (the
+// codec consumer) moved to assets-runtime; scan both roots so the encode-subpath
+// ban does not go vacuous for the migrated loader.
+for (const scanRoot of pathAScanRoots) {
+  walk(scanRoot, (p, content) => {
+    const importLines = content.match(codecEncodeImportRe) ?? [];
+    for (const line of importLines) {
+      pathDFailures.push(
+        `runtime/assets-runtime static import of @forgeax/engine-codec/encode: ${p} (\`${line.trim()}\`) -- build-time only; use @forgeax/engine-codec main entry for runtime-safe decode`,
+      );
+    }
+  });
+}
 
 if (pathDFailures.length > 0) {
   process.stderr.write(`AC-15 (d) FAIL: packages/runtime/src has encode subpath imports\n`);

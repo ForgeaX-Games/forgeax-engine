@@ -58,15 +58,8 @@
 // drives the actual GPU dispatch when MaterialAsset.shadingModel
 // resolves to 'unlit').
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  Engine,
-  EngineEnvironmentError,
-  HANDLE_TRIANGLE,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
+import { Camera, Engine, EngineEnvironmentError, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import playShaderSrc from './shaders/play.wgsl?raw';
@@ -99,23 +92,13 @@ import playShaderSrc from './shaders/play.wgsl?raw';
 const PLAY_BASE_COLOR = [1.0, 0.5, 0.2, 1.0] as const;
 
 function spawnPulseScene(world: World): void {
-  // Camera entity: identity orientation + posZ=3 (LO 1.1 / 1.3 cam
+  // Camera entity: identity orientation + pos z=3 (LO 1.1 / 1.3 cam
   // baseline) so the triangle sits inside the perspective frustum.
   world.spawn(
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 3,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } },
   );
@@ -136,17 +119,7 @@ function spawnPulseScene(world: World): void {
     {
       component: Transform,
       data: {
-        posX: 0,
-        posY: 0,
-        posZ: 0,
-        quatX: 0,
-        quatY: 0,
-        quatZ: 0,
-        quatW: 1,
-        scaleX: 1,
-        scaleY: 1,
-        scaleZ: 1,
-      },
+        pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
     },
     { component: MeshFilter, data: { assetHandle: HANDLE_TRIANGLE } },
     {

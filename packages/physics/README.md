@@ -12,14 +12,14 @@ import { Transform } from '@forgeax/engine-runtime';
 
 // Dynamic body: falls under gravity, responds to forces.
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 5, posZ: 0 } },
+  { component: Transform, data: { pos: [0, 5, 0] } },
   { component: RigidBody, data: { type: RigidBodyTypeValue.dynamic, mass: 1 } },
   { component: Collider, data: { shape: ColliderShapeValue.sphere, radius: 0.5 } },
 );
 
 // Static body: immovable, ground/collision target.
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+  { component: Transform, data: { pos: [0, 0, 0] } },
   { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
   { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtentsX: 5, halfExtentsY: 1, halfExtentsZ: 5 } },
 );
@@ -41,7 +41,7 @@ Three ECS systems run in order every frame (registered by `physicsPlugin` during
 |:--|:--|:--|:--|
 | 1. Sync | `physicsSyncBackend` | `propagateTransforms` | Iterates archetypes with (Transform, RigidBody, Collider); calls `ensureBody` to create Rapier bodies for new entities |
 | 2. Step | `physicsStepSimulation` | `physicsSyncBackend` | Reads `Time.dt` resource; calls `PhysicsWorld.step()` to advance simulation (skips when dt <= 0 or > 0.1s) |
-| 3. Writeback | `physicsWriteback` | `physicsStepSimulation` | Calls `writebackDynamicBodies()`; writes Rapier body positions back to ECS `Transform.posX/Y/Z` |
+| 3. Writeback | `physicsWriteback` | `physicsStepSimulation` | Calls `writebackDynamicBodies()`; writes Rapier body positions back to ECS `Transform.pos` |
 
 All three systems early-return safely when the `PhysicsWorld` resource is not yet available (WASM fire-and-forget load).
 
@@ -146,7 +146,7 @@ resolved position back to the entity's `Transform` and the contact state to
 import { CharacterController, Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
 
 const character = world.spawn(
-  { component: Transform, data: { posX: 0, posY: 0.45, posZ: 0 } },
+  { component: Transform, data: { pos: [0, 0.45, 0] } },
   { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } },
   { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.5 } },
   { component: CharacterController, data: {} },

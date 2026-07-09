@@ -25,6 +25,7 @@
 // Anchors: plan-tasks m2-t3; plan-strategy §D-7 step 3; charter P3
 // (default behaviour avoids silently introducing visual defects).
 
+import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { Entity, World } from '@forgeax/engine-ecs';
 import { type MaterialAsset, type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -36,7 +37,6 @@ import {
   Tilemap,
   Transform,
 } from '../components';
-import { resolveAssetHandle } from '../resolve-asset-handle';
 import {
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,

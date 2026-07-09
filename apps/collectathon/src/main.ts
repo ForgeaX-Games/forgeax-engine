@@ -292,7 +292,7 @@ function installSmokeHook(world: World): void {
 
 function wireStates(
   app: import('@forgeax/engine-app').App,
-  assets: import('@forgeax/engine-runtime').AssetRegistry,
+  assets: import('@forgeax/engine-assets-runtime').AssetRegistry,
   sceneHandle: Handle<'SceneAsset', 'shared'>,
   runClip: Handle<'AnimationClip', 'shared'>,
   debugEnabled: boolean,
@@ -506,13 +506,8 @@ function spawnCamera(world: World): EntityHandle {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: CAMERA_OFFSET_Y,
-          posZ: CAMERA_OFFSET_Z,
-          quatX: look.quatX,
-          quatY: look.quatY,
-          quatZ: look.quatZ,
-          quatW: look.quatW,
+          pos: [0, CAMERA_OFFSET_Y, CAMERA_OFFSET_Z],
+          quat: look,
         },
       },
       {
@@ -564,7 +559,7 @@ function spawnSkylight(world: World): EntityHandle {
  */
 async function attachSkyEquirect(
   world: World,
-  assets: import('@forgeax/engine-runtime').AssetRegistry,
+  assets: import('@forgeax/engine-assets-runtime').AssetRegistry,
   skylight: EntityHandle,
 ): Promise<EntityHandle | undefined> {
   const guidRes = AssetGuid.parse(SKY_HDR_GUID);
@@ -595,7 +590,7 @@ async function attachSkyEquirect(
 
 async function loadSceneHandle(
   world: World,
-  assets: import('@forgeax/engine-runtime').AssetRegistry,
+  assets: import('@forgeax/engine-assets-runtime').AssetRegistry,
 ): Promise<Handle<'SceneAsset', 'shared'> | undefined> {
   const guidRes = AssetGuid.parse(HUMANOID_SCENE_GUID);
   if (!guidRes.ok) return undefined;
@@ -606,7 +601,7 @@ async function loadSceneHandle(
 
 async function loadClipHandle(
   world: World,
-  assets: import('@forgeax/engine-runtime').AssetRegistry,
+  assets: import('@forgeax/engine-assets-runtime').AssetRegistry,
 ): Promise<Handle<'AnimationClip', 'shared'> | undefined> {
   const guidRes = AssetGuid.parse(RUN_CLIP_GUID);
   if (!guidRes.ok) return undefined;

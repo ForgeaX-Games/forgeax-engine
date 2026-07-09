@@ -98,16 +98,9 @@ describe('drawSource injected worlds are updated same-frame (w9, stale-matrix re
       .spawn({
         component: Transform,
         data: {
-          posX: INJECTED_TX,
-          posY: INJECTED_TY,
-          posZ: INJECTED_TZ,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [INJECTED_TX, INJECTED_TY, INJECTED_TZ],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       })
       .unwrap();

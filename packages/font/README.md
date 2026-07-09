@@ -20,7 +20,7 @@ const font = (await engine.assets.loadByGuid<FontAsset>(fontGuid)).unwrap();
 //    MeshRenderer on the next frame (AC-06 / AC-07). fontSize is in WORLD
 //    UNITS (0.05 = a ~5cm-tall cap height at unit scale), not pixels.
 world.spawn(
-  { component: Transform, data: { posX: 0, posY: 2, posZ: 0, quatW: 1 } },
+  { component: Transform, data: { pos: [0, 2, 0], quat: [0, 0, 0, 1] } },
   {
     component: GlyphText,
     data: { fontHandle: font, text: 'PLAYER 1', fontSize: 0.05,

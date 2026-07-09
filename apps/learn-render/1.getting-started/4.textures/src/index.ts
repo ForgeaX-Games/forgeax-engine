@@ -105,18 +105,8 @@
 //                                               cache-miss.
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  Engine,
-  EngineEnvironmentError,
-  HANDLE_CUBE,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  resolveAssetHandle,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import { Camera, createDevImportTransport, Engine, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
 import { unwrapHandle } from '@forgeax/engine-types';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -337,7 +327,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.spawn(
       {
         component: Transform,
-        data: { posZ: 3 },
+        data: { pos: [0, 0, 3]},
       },
       {
         component: Camera,

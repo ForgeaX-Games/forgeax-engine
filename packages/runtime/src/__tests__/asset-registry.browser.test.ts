@@ -6,11 +6,10 @@
 // `world.allocSharedRef`. Covers catalog + loadByGuid ok path + payload
 // idempotency + AC-11 inspect() shape for a GUID-catalogued asset.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const GUID_BROWSER_A = '00000000-0000-7000-8000-000000000021';

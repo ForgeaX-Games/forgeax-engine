@@ -17,11 +17,10 @@
 // (A filesystem existsSync check is intentionally avoided: node:fs/node:path
 // named imports are outside @types/node coverage in the runtime tsconfig.)
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-
-import { AssetRegistry } from '../asset-registry';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const PARENT_GUID = 'c0000000-0000-4000-c000-000000000001';

@@ -21,11 +21,11 @@
 // also asserts that a sibling unlit entity in the same frame still extracts
 // to a renderable entry alongside the bad-skin one.
 
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type Handle, Severity, World } from '@forgeax/engine-ecs';
 import type { ShaderRegistry } from '@forgeax/engine-shader';
 import type { MaterialAsset, MeshAsset, SkeletonAsset } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
-import { AssetRegistry } from '../asset-registry';
 import { Camera, MeshFilter, MeshRenderer, Skin, Transform } from '../components';
 import { extractFrame } from '../render-system-extract';
 import { propagateTransforms } from '../systems/propagate-transforms';
@@ -144,16 +144,9 @@ function spawnCamera(world: World): void {
       {
         component: Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 5,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 5],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
       {
@@ -175,16 +168,9 @@ function spawnCamera(world: World): void {
 }
 
 const IDENTITY_TRANSFORM = {
-  posX: 0,
-  posY: 0,
-  posZ: 0,
-  quatX: 0,
-  quatY: 0,
-  quatZ: 0,
-  quatW: 1,
-  scaleX: 1,
-  scaleY: 1,
-  scaleZ: 1,
+  pos: [0, 0, 0],
+  quat: [0, 0, 0, 1],
+  scale: [1, 1, 1],
 } as const;
 
 function spawnRenderable(

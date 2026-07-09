@@ -44,7 +44,7 @@ async function main() {
       return { ok: true, value: 1 };
     },
     get(_entity, _component) {
-      return { ok: true, value: { posX: 0, posY: 0, posZ: 3, quatX: 0, quatY: 0, quatZ: 0, quatW: 1 } };
+      return { ok: true, value: { pos: [0, 0, 3], quat: [0, 0, 0, 1] } };
     },
     set(_entity, _component, _data) {
       return { ok: true };
@@ -90,7 +90,7 @@ async function main() {
       // Case 2: eval a write (no write-denied, full-access).
       {
         try {
-          const v = await client.eval('world.set(1, null, { posX: 5 })');
+          const v = await client.eval('world.set(1, null, { pos: [5, 0, 0] })');
           const ok = v !== undefined;
           logCase('eval-write-no-deny', ok, { value: v });
         } catch (e) {

@@ -226,21 +226,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import('../index')),
+      ...(await import('@forgeax/engine-assets-runtime')),
+    } as never;
   }
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -320,16 +316,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {
           component: C.Transform,
           data: {
-            posX: i * 2,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [i * 2, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -497,16 +486,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {
           component: C.Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -525,16 +507,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       w.spawn({
         component: C.Transform,
         data: {
-          posX: 10,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [10, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       });
 
@@ -546,16 +521,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       w.spawn({
         component: C.Transform,
         data: {
-          posX: 20,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [20, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       });
 
@@ -707,16 +675,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {
           component: C.Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -938,21 +899,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import('../index')),
+      ...(await import('@forgeax/engine-assets-runtime')),
+    } as never;
   }
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -1022,16 +979,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       {
         component: C.Transform,
         data: {
-          posX: 0,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [0, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       },
     );
@@ -1105,16 +1055,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
       world.spawn({
         component: C.Transform,
         data: {
-          posX: 2,
-          posY: 0,
-          posZ: 0,
-          quatX: 0,
-          quatY: 0,
-          quatZ: 0,
-          quatW: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
+          pos: [2, 0, 0],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
         },
       });
 
@@ -1315,21 +1258,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import('../index')),
+      ...(await import('@forgeax/engine-assets-runtime')),
+    } as never;
   }
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -1408,16 +1347,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {
           component: C.Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -1481,16 +1413,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {
           component: C.Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -1550,16 +1475,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {
           component: C.Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -1773,21 +1691,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     DirectionalLight: unknown;
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import('../index')),
+      ...(await import('@forgeax/engine-assets-runtime')),
+    } as never;
   }
 
   function cameraTransform() {
     return {
-      posX: 0,
-      posY: 0,
-      posZ: 5,
-      quatX: 0,
-      quatY: 0,
-      quatZ: 0,
-      quatW: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      pos: [0, 0, 5],
+      quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
     };
   }
 
@@ -1860,16 +1774,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {
           component: C.Transform,
           data: {
-            posX: i * 2,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [i * 2, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -1977,16 +1884,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {
           component: C.Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -2068,16 +1968,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {
           component: C.Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -2087,16 +1980,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {
           component: C.Transform,
           data: {
-            posX: 3,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [3, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -2184,16 +2070,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {
           component: C.Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -2229,16 +2108,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
         {
           component: C.Transform,
           data: {
-            posX: 0,
-            posY: 0,
-            posZ: 0,
-            quatX: 0,
-            quatY: 0,
-            quatZ: 0,
-            quatW: 1,
-            scaleX: 1,
-            scaleY: 1,
-            scaleZ: 1,
+            pos: [0, 0, 0],
+            quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
           },
         },
       );
@@ -2336,16 +2208,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
               {
                 component: C.Transform,
                 data: {
-                  posX: i * 2,
-                  posY: 0,
-                  posZ: 0,
-                  quatX: 0,
-                  quatY: 0,
-                  quatZ: 0,
-                  quatW: 1,
-                  scaleX: 1,
-                  scaleY: 1,
-                  scaleZ: 1,
+                  pos: [i * 2, 0, 0],
+                  quat: [0, 0, 0, 1],
+                  scale: [1, 1, 1],
                 },
               },
             ),
