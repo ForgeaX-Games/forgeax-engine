@@ -22,7 +22,10 @@
 import { ok } from '@forgeax/engine-ecs';
 import type { Plugin } from '@forgeax/engine-plugin';
 
-import { registerAdvanceAnimationPlayer, registerPropagateTransforms } from './createRenderer';
+import {
+  registerAdvanceAnimationPlayer, registerPropagateTransforms,
+  createAnimationAssetResolver, ANIMATION_ASSET_RESOLVER_KEY,
+} from './createRenderer';
 
 /**
  * transformPlugin -- registers propagateTransforms (the sole writer of the
@@ -42,17 +45,31 @@ export function transformPlugin(): Plugin {
 }
 
 /**
- * animationPlugin -- registers advanceAnimationPlayer.
+ * animationPlugin -- inserts the AnimationAssetResolver resource + registers
+ * advanceAnimationPlayer.
  *
- * Equivalent to the create-app.ts canvas-form call
- * `registerAdvanceAnimationPlayer(world)`. The AnimationAssetResolver World
- * resource is inserted by the app layer before the plugins run (D-4 pattern:
- * runtime handles supplied via resource, plugin only registers the system).
+ * SSOT (like physicsPlugin/statePlugin): the plugin OWNS its system's resource.
+ * advanceAnimationPlayer declares `resources: [ANIMATION_ASSET_RESOLVER_KEY]`
+ * UNCONDITIONALLY, so the resolver must exist before the first world.update().
+ * By minting + inserting it here, BOTH createApp forms are correct for free —
+ * the canvas form no longer hand-inserts it (was create-app.ts, the sole writer)
+ * and the assemble form (host-owned world, e.g. the editor ▶ Play fork) gets it
+ * without the host having to remember. That divergence — canvas inserted, assemble
+ * did not — is exactly what crashed editor ▶ Play with "Required resource
+ * 'AnimationAssetResolver' not found".
+ *
+ * The resolver is a pure handle→AnimationClip lookup over the per-World
+ * SharedRefStore (createAnimationAssetResolver ignores its `assets` arg — the
+ * AssetRegistry holds no handle map since feat-20260614 M8), so `null` is the
+ * honest argument here; no registry dependency, no insertion-order coupling.
  */
 export function animationPlugin(): Plugin {
   return {
     name: 'animation',
     build(world) {
+      if (!world.hasResource(ANIMATION_ASSET_RESOLVER_KEY)) {
+        world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, createAnimationAssetResolver(null));
+      }
       registerAdvanceAnimationPlayer(world);
       return ok(undefined);
     },

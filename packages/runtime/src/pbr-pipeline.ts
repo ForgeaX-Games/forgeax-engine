@@ -719,15 +719,30 @@ export type { BindGroup };
  * variantSet string fired into the sprite-pass pipeline cache when the
  * entity carries `SpriteInstances` (plan-strategy D-1 interleaved single
  * buffer + D-4 axis on `sprite.wgsl`).
+ *
+ * bug-20260708 M2 (c): aligned with the canonical all-true variant key
+ * `''` — sprite's manifest emits `{PIR:true, SBA:true}` under the empty-
+ * string key (all variant axes true → canonical). The runtime's
+ * `getMaterialShaderPipeline` variant-substitution branch
+ * (`createRenderer.ts:1730`) resolves this via
+ * `findVariantByKey(msEntry, '')` returning the 5653B PIR=true variant.
+ * Combined with the `cacheKeyOf` sentinel `~` (bug-20260708 M2 (b)) this
+ * value produces a cache key distinct from the `variantSet=undefined`
+ * character/default path (which now resolves to the PIR=false 5575B boot-
+ * registered variant). Sprite pipeline layout routing is anchored via
+ * `LayoutKind='sprite-urp'` so `variantSet=''` here does NOT trigger the
+ * HDRP-layout branch of `selectPipelineLayoutForVariant` (research R-12
+ * flow; plan-strategy §4 R-1' guard).
  */
-export const SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET = 'PER_INSTANCE_REGION=true';
+export const SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET = '';
 
 /**
  * Pick the sprite-pass variant set for the current sprite entry. Returns
- * `'PER_INSTANCE_REGION=true'` when `hasSpriteInstances` is true (the
- * extract stage has populated `RenderableSnapshot.spriteInstances`),
- * otherwise `undefined` so the existing sprite path stays byte-identical
- * for non-SpriteInstances callers (plan-strategy D-4 reverse-falsifier).
+ * `''` (canonical all-true variant key, per bug-20260708 M2 (c)) when
+ * `hasSpriteInstances` is true (the extract stage has populated
+ * `RenderableSnapshot.spriteInstances`), otherwise `undefined` so the
+ * existing sprite path stays byte-identical for non-SpriteInstances callers
+ * (plan-strategy D-4 reverse-falsifier).
  *
  * @param hasSpriteInstances — true when the renderable carries a
  *   `SpriteInstancesSnapshot` (extracted by render-system-extract M3 w10).

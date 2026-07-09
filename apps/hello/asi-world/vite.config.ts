@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
+import { vitePluginRhiDebug } from '@forgeax/engine-vite-plugin-rhi-debug';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -108,6 +109,7 @@ function publicAssetOverridesPlugin(appDir: string): Plugin {
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
+    vitePluginRhiDebug(),
     publicAssetOverridesPlugin(here),
   ],
   server: {

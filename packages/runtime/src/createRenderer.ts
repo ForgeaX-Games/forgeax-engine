@@ -465,6 +465,14 @@ async function loadBackendPack(
  *   material shader.
  * `hdrp-pbr` — feat-20260609 HDRP cluster-forward variant (7-slot group(2)
  *   BGL substituted at slot 2).
+ * `sprite-urp` — bug-20260708 M2 (c): sprite / sprite-lit shaders reuse
+ *   the URP 1-slot mesh-array BGL (they don't declare
+ *   CLUSTER_FORWARD_AVAILABLE) but their canonical all-true variant key
+ *   `''` (`SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET`) MUST NOT trigger
+ *   the `variantSet===''` → HDRP branch of the selector. Callers
+ *   (`buildPipelineContext`) resolve `sprite-urp` from the sprite
+ *   `materialShaderId` and pass it through; the selector short-circuits
+ *   to `pbrPipelineLayout` before the HDRP check.
  *
  * AC-09 grep gate: the selector body (`selectPipelineLayoutForVariant`)
  * **MUST NOT** contain literal `'forgeax::pbr-skin'` (or any other
@@ -473,7 +481,7 @@ async function loadBackendPack(
  * material-shader layouts add a `LayoutKind` member + a PipelineState slot
  * + a switch arm here in one cut (charter P3 extensibility).
  */
-export type LayoutKind = 'pbr' | 'pbr-skin' | 'hdrp-pbr';
+export type LayoutKind = 'pbr' | 'pbr-skin' | 'hdrp-pbr' | 'sprite-urp';
 
 export function selectPipelineLayoutForVariant(
   state: {
@@ -493,6 +501,18 @@ export function selectPipelineLayoutForVariant(
   // `hdrp-active-must-not-fallback-to-urp-pipeline`).
   if (layoutKind === 'pbr-skin') {
     return state.pbrSkinPipelineLayout;
+  }
+  // bug-20260708 M2 (c): sprite / sprite-lit shaders reuse the URP 1-slot
+  // mesh-array pipeline layout but their canonical all-true variant key
+  // `''` (SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET) must NOT trigger
+  // the `variantSet===''` → HDRP branch below. Caller-side
+  // (`buildPipelineContext`) resolves LayoutKind='sprite-urp' from the
+  // sprite `materialShaderId`; the selector short-circuits here before
+  // the HDRP variant check reads `variantSet`. Prevents R-1'
+  // device-lost when a SpriteInstances batch requests the PIR=true
+  // canonical variant.
+  if (layoutKind === 'sprite-urp') {
+    return state.pbrPipelineLayout;
   }
   // HDRP variant matches when:
   //   - layoutKind === 'hdrp-pbr' (caller-driven, future-proof), OR
@@ -1357,8 +1377,17 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // so the selector body stays free of literal shader-id strings (AC-09).
     // Skin shader gets its own 4-slot layout chain with 2-entry mesh-array
     // BGL; everything else routes through the URP/HDRP variantSet logic.
+    // bug-20260708 M2 (c): sprite / sprite-lit map to 'sprite-urp' so the
+    // canonical all-true variant key `''` (used by SpriteInstances batches
+    // via SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET) does NOT route
+    // through the HDRP layout branch of the selector — sprite shaders have
+    // no HDRP variant, plan-strategy R-1' guard.
     const layoutKind: LayoutKind | undefined =
-      materialShaderId === SKIN_MATERIAL_SHADER_ID ? 'pbr-skin' : undefined;
+      materialShaderId === SKIN_MATERIAL_SHADER_ID
+        ? 'pbr-skin'
+        : materialShaderId === 'forgeax::sprite' || materialShaderId === 'forgeax::sprite-lit'
+          ? 'sprite-urp'
+          : undefined;
     // feat-20260621-learn-render-5-5-parallax M2 / w6 (D-1): a custom shader
     // with >3 user-region textures owns a per-shader pipeline layout (its
     // material BGL is wider than the shared built-in 18-entry). Skin / HDRP
@@ -3709,6 +3738,20 @@ async function prepareMaterialShaders(
     if (msEntry.variants.some((v) => 'CLUSTER_FORWARD_AVAILABLE' in v.defines)) {
       variantDefines.CLUSTER_FORWARD_AVAILABLE = isHdrpActive;
     }
+    // bug-20260708 M2 (a): PER_INSTANCE_REGION axis default = false at boot.
+    // Per-entity spritePH path (`main-pass-sprite-draws.ts:511-513`) expects
+    // `variantSet=undefined` to resolve to the PIR=false shader source (64B
+    // InstanceData) via `lookup.value.source` fallback in
+    // `getMaterialShaderPipeline`. The PIR=true canonical variant (80B) is
+    // reserved for SpriteInstances batches which explicitly request it via
+    // `SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET === ''` (canonical all-
+    // true) — resolved through `findVariantByKey(msEntry, '')` in the same
+    // `getMaterialShaderPipeline` substitution branch. Mirrors the
+    // CLUSTER_FORWARD_AVAILABLE pattern above: axis default false unless
+    // explicitly requested by a caller variantSet.
+    if (msEntry.variants.some((v) => 'PER_INSTANCE_REGION' in v.defines)) {
+      variantDefines.PER_INSTANCE_REGION = false;
+    }
     const sortedEntries = Object.entries(variantDefines).sort(([a], [b]) =>
       a < b ? -1 : a > b ? 1 : 0,
     );
@@ -4163,6 +4206,40 @@ async function buildReadyWebGPU(
       }
       if (spriteLitEntry !== undefined) {
         spriteLitEntry = patch(spriteLitEntry, 'forgeax::sprite-lit');
+      }
+    }
+    // bug-20260708 M2 (a): sprite entry WGSL patch — always substitute the
+    // PIR=false variant so the eager compile at line ~4272 (which produces
+    // `spriteModule`, seeded under `module-forgeax::sprite` at line ~4297 and
+    // exposed via `shaderModuleMap.set('forgeax::sprite', ...)` at line
+    // ~5438) yields the 5575B PIR=false shader module. The character /
+    // sprite-atlas per-entity path (`main-pass-sprite-draws.ts:511-513`)
+    // routes `variantSet=undefined` through `getMaterialShaderPipeline`
+    // with `moduleLabel='module-forgeax::sprite'` — hitting this seeded
+    // module. SpriteInstances batches request `variantSet=''` →
+    // `moduleLabel='module-forgeax::sprite#'` (distinct label) → compile
+    // fresh from `findVariantByKey(msEntry, '')` returning the PIR=true
+    // 5653B variant. The upstream `manifestEntries` populated
+    // `spriteEntry.wgsl` with the plugin default (all-true canonical =
+    // PIR=true+SBA=true); we substitute the matching-SBA PIR=false variant
+    // here. Runs regardless of `storageBufferCapable` — the WebGL2 fallback
+    // patch above (bug-20260610) already substitutes SBA=false; we now
+    // substitute PIR=false on top so the boot-time seeded module for
+    // sprite is aligned with the boot-registered material-shader source
+    // (patched at line ~3710 via the PER_INSTANCE_REGION extension above).
+    if (spriteEntry !== undefined) {
+      for (const msEntry of registry.materialShaderManifestEntries()) {
+        if (msEntry.identifier === 'forgeax::sprite') {
+          const pirFalseVariant = msEntry.variants.find(
+            (v) =>
+              v.defines.PER_INSTANCE_REGION === false &&
+              v.defines.STORAGE_BUFFER_AVAILABLE === storageBufferCapable,
+          );
+          if (pirFalseVariant !== undefined) {
+            spriteEntry = { ...spriteEntry, wgsl: pirFalseVariant.composedWgsl };
+          }
+          break;
+        }
       }
     }
     // Wire composed IBL shaders into IblPipelineCache before the cache's

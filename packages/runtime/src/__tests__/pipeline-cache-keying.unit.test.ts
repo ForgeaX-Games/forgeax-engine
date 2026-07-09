@@ -1,5 +1,6 @@
 import { KNOWN_PASS_KINDS, type PassKind, type VertexAttributeMap } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import { SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET } from '../pbr-pipeline';
 import { cacheKeyOf, type PipelineSpec } from '../pipeline-spec';
 
 /*
@@ -206,5 +207,106 @@ describe('cacheKeyOf sampleCount axis', () => {
     );
     const unique = new Set([key1, key2, key3, key4]);
     expect(unique.size).toBe(4);
+  });
+});
+
+/*
+ * bug-20260708 M2 (b) AC-02: `cacheKeyOf` sentinel `~` distinguishes
+ * `variantSet=undefined` from canonical all-true key `''`.
+ *
+ * Before the sentinel `?? ''` collapsed both into the same segment,
+ * causing character (no SpriteInstances, variantSet=undefined) and
+ * terrain-fold (SpriteInstances batch,
+ * `SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET === ''`) requests to hit
+ * the same pipeline cache slot — the first-cached PSO wins, and both end
+ * up with the same shader module (research R-11 / R-12 flow rebuild).
+ *
+ * These assertions are the reverse falsifier for the sentinel:
+ *   1. undefined vs canonical '' (all-true) MUST produce distinct keys.
+ *   2. undefined vs an explicit `'PER_INSTANCE_REGION=true'`-style key
+ *      MUST produce distinct keys (sentinel keeps `undefined` separate
+ *      from any concrete variantSet string).
+ *   3. `''` vs an explicit `'PER_INSTANCE_REGION=true'`-style key MUST
+ *      produce distinct keys (unchanged axis discipline, sanity check
+ *      the sentinel doesn't collapse other values by accident).
+ */
+describe('cacheKeyOf variantSet sentinel (bug-20260708 AC-02)', () => {
+  const SHADER_ID = 'forgeax::sprite';
+
+  it('cacheKeyOf(variantSet=undefined) !== cacheKeyOf(variantSet="") — sentinel decouples undefined from canonical all-true', () => {
+    const undefKey = cacheKeyOf(specOf(SHADER_ID, false, 'forward', 'triangle-list', undefined));
+    const emptyKey = cacheKeyOf(specOf(SHADER_ID, false, 'forward', 'triangle-list', ''));
+    expect(undefKey).not.toBe(emptyKey);
+  });
+
+  it('cacheKeyOf(variantSet=undefined) !== cacheKeyOf(variantSet="PER_INSTANCE_REGION=true")', () => {
+    const undefKey = cacheKeyOf(specOf(SHADER_ID, false, 'forward', 'triangle-list', undefined));
+    const namedKey = cacheKeyOf(
+      specOf(SHADER_ID, false, 'forward', 'triangle-list', 'PER_INSTANCE_REGION=true'),
+    );
+    expect(undefKey).not.toBe(namedKey);
+  });
+
+  it('cacheKeyOf(variantSet="") !== cacheKeyOf(variantSet="PER_INSTANCE_REGION=true")', () => {
+    const emptyKey = cacheKeyOf(specOf(SHADER_ID, false, 'forward', 'triangle-list', ''));
+    const namedKey = cacheKeyOf(
+      specOf(SHADER_ID, false, 'forward', 'triangle-list', 'PER_INSTANCE_REGION=true'),
+    );
+    expect(emptyKey).not.toBe(namedKey);
+  });
+
+  it("sentinel `~` reserved: no legitimate variantSet literal in the codebase contains `~` (reverse falsifier for R-2')", () => {
+    // The sentinel `~` (ASCII 0x7E) is reserved for the `variantSet=undefined`
+    // branch of `cacheKeyOf`. This assertion pins the reserved status by
+    // enumerating known variantSet literals used by the runtime: none may
+    // contain the sentinel char. Future axis additions must not introduce
+    // `~` into any variantSet string (a new axis using `~` collides with
+    // the sentinel and re-opens the R-11 undefined-vs-empty collapse).
+    const knownVariantSets: readonly (string | undefined)[] = [
+      undefined,
+      '',
+      'PER_INSTANCE_REGION=true',
+      'CLUSTER_FORWARD_AVAILABLE=true+STORAGE_BUFFER_AVAILABLE=true',
+      'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+      'STORAGE_BUFFER_AVAILABLE=true',
+      SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET,
+    ];
+    for (const vs of knownVariantSets) {
+      if (vs !== undefined) {
+        expect(vs).not.toContain('~');
+      }
+    }
+  });
+});
+
+/*
+ * bug-20260708 M2 (c) AC-05: `SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET`
+ * is aligned with the canonical variant key so `findVariantByKey` on the
+ * sprite manifest returns the PIR=true+SBA=true (all-true) variant WGSL.
+ * Verifies the constant's cacheKey participates in the cache-slot space
+ * distinct from `variantSet=undefined` (per AC-02 sentinel).
+ */
+describe('SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET (bug-20260708 AC-05)', () => {
+  const SHADER_ID = 'forgeax::sprite';
+
+  it('constant equals canonical all-true key `""` (findVariantByKey resolves to PIR=true+SBA=true variant)', () => {
+    // Canonical all-true key semantics per @forgeax/engine-shader:
+    // "Empty key `""` denotes the default variant (all axes `true`)".
+    // Sprite variants are keyed as `""` for PIR=true+SBA=true.
+    expect(SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET).toBe('');
+  });
+
+  it('cacheKeyOf(spec with SPRITE_PASS_...VARIANT_SET) !== cacheKeyOf(spec with variantSet=undefined) — sentinel gate', () => {
+    const spritePassKey = cacheKeyOf(
+      specOf(
+        SHADER_ID,
+        false,
+        'forward',
+        'triangle-list',
+        SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET,
+      ),
+    );
+    const undefKey = cacheKeyOf(specOf(SHADER_ID, false, 'forward', 'triangle-list', undefined));
+    expect(spritePassKey).not.toBe(undefKey);
   });
 });

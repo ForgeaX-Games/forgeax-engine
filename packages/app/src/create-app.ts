@@ -52,11 +52,9 @@ import type { RhiInstance } from '@forgeax/engine-rhi';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
 import type { CreateShaderModuleFn, DebugRhiInstance } from '@forgeax/engine-rhi-debug';
 import {
-  ANIMATION_ASSET_RESOLVER_KEY,
   animationPlugin,
   CAMERA_PROJECTION_PERSPECTIVE,
   Camera,
-  createAnimationAssetResolver,
   createDebugDrawOnReady,
   createRenderer,
   EngineEnvironmentError,
@@ -451,14 +449,13 @@ async function createAppFromCanvas(
   // Step 3.1 (M2 plugin-system-unify / D-4): app-layer side effects that the
   // plugins consume via pre-injected world resources.
   //
-  // The AnimationAssetResolver is supplied as a world resource; insert it
-  // BEFORE the plugins run so animationPlugin's advanceAnimationPlayer finds
-  // it on the first tick (D-2 / D-4). transform + animation system
-  // registration now lives in transformPlugin() / animationPlugin() (default
-  // set below) -- the sole writer of the derived Transform.world mat4 still
-  // ends up registered, just through the unified plugin path.
-  const animResolver = createAnimationAssetResolver(renderer.assets);
-  world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, animResolver);
+  // NOTE: AnimationAssetResolver is NO LONGER inserted here — animationPlugin()
+  // (in the defaultSet below, and in every assemble-form host's plugin list) now
+  // self-owns it in build(), the same way physicsPlugin/statePlugin own their
+  // resources. This collapses the canvas-vs-assemble divergence that crashed the
+  // editor ▶ Play fork ("Required resource 'AnimationAssetResolver' not found"):
+  // the sole owner is the plugin, so both createApp forms are correct for free.
+  // transform + animation system registration lives in the plugins (default set).
 
   // Input DOM attach (D-3 / C-5): attachBrowserInputBackend needs the canvas
   // (a DOM surface only this path knows about), so the app attaches it and

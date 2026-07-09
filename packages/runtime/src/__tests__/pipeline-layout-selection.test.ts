@@ -175,3 +175,65 @@ describe('selectPipelineLayoutForVariant -- skin LayoutKind routing (bug-2026061
     expect(selectPipelineLayoutForVariant(state, '')).toBe(HDRP_LAYOUT);
   });
 });
+
+// bug-20260708 M2 (c) AC-04: dedicated tests for the LayoutKind='sprite-urp'
+// branch. Sprite / sprite-lit shaders reuse the URP 1-slot mesh-array
+// pipeline layout but their canonical all-true variant key ''
+// (SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET === '') MUST NOT be
+// mis-routed through the variantSet==='' -> HDRP branch. Prevents
+// R-1' device-lost when a SpriteInstances batch requests the canonical
+// PIR=true variant.
+describe('selectPipelineLayoutForVariant -- sprite-urp LayoutKind routing (bug-20260708)', () => {
+  const SPRITE_FULL_STATE = {
+    pbrPipelineLayout: URP_LAYOUT,
+    hdrpPbrPipelineLayout: HDRP_LAYOUT,
+    pbrSkinPipelineLayout: SKIN_LAYOUT,
+  };
+
+  it('(a) layoutKind=sprite-urp + variantSet=undefined -> pbrPipelineLayout (character / sprite-atlas per-entity path)', () => {
+    expect(selectPipelineLayoutForVariant(SPRITE_FULL_STATE, undefined, 'sprite-urp')).toBe(
+      URP_LAYOUT,
+    );
+  });
+
+  it('(b) layoutKind=sprite-urp + variantSet="" -> pbrPipelineLayout (SpriteInstances canonical PIR=true batch, NOT HDRP)', () => {
+    // Critical assertion. Without the sprite-urp branch the canonical ''
+    // variantSet falls into the isHdrpVariant branch of
+    // selectPipelineLayoutForVariant (variantSet === '' short-circuit) and
+    // returns HDRP_LAYOUT — a 7-slot mesh-array BGL incompatible with the
+    // sprite shader's group(2) binding shape. R-1' device-lost path.
+    expect(selectPipelineLayoutForVariant(SPRITE_FULL_STATE, '', 'sprite-urp')).toBe(URP_LAYOUT);
+  });
+
+  it('(c) layoutKind=sprite-urp overrides variantSet with CLUSTER_FORWARD_AVAILABLE=true -> URP (sprite has no HDRP variant)', () => {
+    // Sprite shaders never emit CLUSTER_FORWARD_AVAILABLE axis; this
+    // scenario is a defensive check that sprite-urp routing is stable
+    // even if some caller mis-passes an HDRP-like variantSet.
+    expect(
+      selectPipelineLayoutForVariant(
+        SPRITE_FULL_STATE,
+        'CLUSTER_FORWARD_AVAILABLE=true+STORAGE_BUFFER_AVAILABLE=true',
+        'sprite-urp',
+      ),
+    ).toBe(URP_LAYOUT);
+  });
+
+  it('(d) layoutKind=sprite-urp + pbrPipelineLayout=null -> null (URP layout unavailable, charter P3 explicit fail)', () => {
+    const partial = {
+      pbrPipelineLayout: null,
+      hdrpPbrPipelineLayout: HDRP_LAYOUT,
+      pbrSkinPipelineLayout: SKIN_LAYOUT,
+    };
+    expect(selectPipelineLayoutForVariant(partial, undefined, 'sprite-urp')).toBeNull();
+    expect(selectPipelineLayoutForVariant(partial, '', 'sprite-urp')).toBeNull();
+  });
+
+  it('(e) pbr-skin still wins over sprite-urp when both would apply (skin precedence anchored earlier in selector)', () => {
+    // Defensive: if a call ever lands with layoutKind='pbr-skin' + a
+    // sprite-like variantSet, the skin branch must take precedence (order
+    // of switch arms in the selector). This pins the ordering so a future
+    // reshuffle of the switch arms doesn't silently accept sprite routing
+    // for a skin caller.
+    expect(selectPipelineLayoutForVariant(SPRITE_FULL_STATE, '', 'pbr-skin')).toBe(SKIN_LAYOUT);
+  });
+});

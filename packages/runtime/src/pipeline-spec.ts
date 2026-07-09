@@ -292,11 +292,20 @@ export function cacheKeyOf(spec: PipelineSpec): string {
   const uvSetCountSegment =
     geometry.shaderUvSetCount !== undefined ? `:uvsc${geometry.shaderUvSetCount}` : '';
 
+  // bug-20260708 M2 (b): sentinel `~` distinguishes `variantSet=undefined`
+  // (no-variant / default-variant request) from canonical all-true key `''`
+  // (all variant axes true). Prior `?? ''` collapsed the two into the same
+  // cache key, causing the first-cached pipeline to win and unrelated
+  // variantSet requests to reuse its shader module (research R-11 / R-12).
+  // `~` (ASCII 0x7E) is a reserved sentinel char — no legitimate
+  // variantSet literal contains it; guarded by
+  // `pipeline-cache-keying.unit.test.ts` sentinel-conflict assertions.
+  const variantSegment = shader.variantSet === undefined ? '~' : shader.variantSet;
   return (
     [
       shader.id,
       shader.passKind,
-      shader.variantSet ?? '',
+      variantSegment,
       attachments.colorFormats.join(','),
       attachments.depthFormat ?? '',
       String(attachments.sampleCount),
