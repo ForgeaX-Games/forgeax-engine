@@ -2096,6 +2096,7 @@ export interface RhiComputePipelineOps {
 // ============================================================================
 
 export type {
+  DrawOwnerSplit,
   LimitExceededDetail,
   Result,
   ResultErr,

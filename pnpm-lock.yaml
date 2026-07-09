@@ -3785,6 +3785,9 @@ importers:
       '@forgeax/engine-rhi-debug':
         specifier: workspace:*
         version: link:../rhi-debug
+      '@forgeax/engine-rhi-null':
+        specifier: workspace:*
+        version: link:../rhi-null
       '@forgeax/engine-rhi-webgpu':
         specifier: workspace:*
         version: link:../rhi-webgpu

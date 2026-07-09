@@ -70,6 +70,18 @@ export interface FrameLoopOptions {
   readonly now?: () => number;
   readonly raf?: (cb: (t: number) => void) => number;
   readonly caf?: (id: number) => void;
+  /**
+   * feat-20260709-editor-world-partition-editorworld-super-composite / M2 / D-3:
+   * optional per-frame draw-source pull. When omitted (or when it returns
+   * undefined at tick time), the loop renders its own single `world` via
+   * `renderer.draw([world], { owner: 0 })` (legacy path). When it returns a
+   * result, the loop updates EVERY returned world (transform propagation)
+   * before `renderer.draw(worlds, { cameraOwner, resourceOwner })`. w11 threads
+   * the field; w12 consumes it in tick().
+   */
+  readonly drawSource?: () =>
+    | { worlds: readonly World[]; cameraOwner: number; resourceOwner: number }
+    | undefined;
 }
 
 export interface FrameLoopHandle {
@@ -117,6 +129,39 @@ function makeWorldUpdateError(cause: unknown): AppError {
     'check detail.cause for the original thrown value (EcsError, host system bug, RhiError, ...)',
     { cause },
   );
+}
+
+/**
+ * feat-20260709-editor-world-partition-editorworld-super-composite M2 / D-3:
+ * run world.update() on every draw-source-injected world so its derived
+ * Transform.world mat4 is freshly propagated before the renderer's extract stage
+ * reads it (no stale matrix; w9 pins this). `ownWorld` is skipped — the tick has
+ * already updated it, and a drawSource that (degenerately) lists the own world
+ * must not trigger a second update. A per-world update throw is a host system
+ * bug: surfaced via `fireError` without aborting the remaining worlds (charter
+ * P3 explicit failure + proposition 9 graceful degradation).
+ *
+ * Extracted from tick() so the per-frame draw path reads as three linear steps
+ * (own update -> injected updates -> draw) rather than a nested loop inline.
+ */
+function updateInjectedWorlds(
+  worlds: readonly World[],
+  ownWorld: World,
+  fireError: ((e: AppError | RhiError) => void) | undefined,
+): void {
+  for (let i = 0; i < worlds.length; i++) {
+    const injectedWorld = worlds[i];
+    if (injectedWorld === undefined || injectedWorld === ownWorld) {
+      continue;
+    }
+    try {
+      injectedWorld.update();
+    } catch (e: unknown) {
+      if (fireError !== undefined) {
+        fireError(makeWorldUpdateError(e));
+      }
+    }
+  }
 }
 
 function resolveNow(opts: FrameLoopOptions): () => number {
@@ -235,13 +280,59 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
         fireError(makeWorldUpdateError(e));
       }
     }
+
+    // feat-20260709-editor-world-partition-editorworld-super-composite M2 / D-3:
+    // pull the optional per-frame draw-source AFTER the own world's update. The
+    // pull decides whether this frame stays on the single-world path or switches
+    // to the injected multi-world path.
+    //
+    //   - drawSource absent, OR present but returning undefined -> single-world
+    //     path, byte-identical to the legacy draw([world], { owner: 0 }).
+    //   - drawSource returns a result -> the frame-loop MUST world.update() every
+    //     returned world (skipping the own world, already updated above, so it is
+    //     never double-updated) BEFORE draw. This is load-bearing: the renderer's
+    //     extract stage reads the DERIVED Transform.world mat4, whose sole writer
+    //     is the propagateTransforms system that only runs inside world.update().
+    //     Feeding an un-updated injected world to draw would render a stale (or
+    //     first-frame identity) matrix (Strategist D-3; w9 pins this contract).
+    //
+    // A throwing draw-source is a host bug: surface it via fan-out and fall back
+    // to the single-world path so the frame still renders (charter P3 explicit
+    // failure -- a bad seam callback must not freeze the loop).
+    let injected:
+      | { worlds: readonly World[]; cameraOwner: number; resourceOwner: number }
+      | undefined;
+    if (opts.drawSource !== undefined) {
+      try {
+        injected = opts.drawSource();
+      } catch (e: unknown) {
+        if (fireError !== undefined) {
+          fireError(makeWorldUpdateError(e));
+        }
+        injected = undefined;
+      }
+    }
+    if (injected !== undefined) {
+      updateInjectedWorlds(injected.worlds, world, fireError);
+    }
+
     try {
-      // feat-20260708-composited-multi-world-rendering M3 / AC-03: the app
-      // frame-loop wraps the single World into [world] with owner 0 so the
-      // public Engine.create / createApp API stays unchanged for single-world
-      // AI users. This is the sole AC-03 encapsulation point (plan §7 M3);
-      // owner 0 is the single-world identity path (worldId 0).
-      const drawResult = renderer.draw([world], { owner: 0 });
+      // Single-world path (injected === undefined): wrap the own World into
+      // [world] with owner 0 so the public Engine.create / createApp API stays
+      // unchanged for single-world AI users (feat-20260708 M3 / AC-03; owner 0
+      // is the single-world identity path worldId 0).
+      //
+      // Multi-world path (injected !== undefined): draw the host-supplied worlds
+      // with the split { cameraOwner, resourceOwner } owners (M1 owner-split).
+      // The worlds array is copied ([...worlds]) so the renderer never holds the
+      // host's readonly reference.
+      const drawResult =
+        injected !== undefined
+          ? renderer.draw([...injected.worlds], {
+              cameraOwner: injected.cameraOwner,
+              resourceOwner: injected.resourceOwner,
+            })
+          : renderer.draw([world], { owner: 0 });
       // renderer.draw may legacy-return undefined (older Renderer
       // builds) or the new Result<void, RhiError> shape. Treat
       // undefined as ok and only fan out on the err arm.

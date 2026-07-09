@@ -49,6 +49,51 @@ export type { AppError, AppErrorCode };
 export type AppDispatchError = AppError | RendererError;
 
 /**
+ * Per-frame draw description pulled from the host each frame
+ * (feat-20260709-editor-world-partition-editorworld-super-composite / M2 / D-3).
+ *
+ *   - `worlds`       — the exact world list to render this frame, in draw order.
+ *   - `cameraOwner`  — index into `worlds` whose cameras drive the frame.
+ *   - `resourceOwner`— index into `worlds` whose singleton render resources
+ *                      (skylight / skybox / postProcessParams) drive the frame.
+ *
+ * The two owners are independent (M1 owner-split): an editor can render a scene
+ * world's geometry through an editor world's camera while sourcing lighting from
+ * a third. `cameraOwner === resourceOwner` is the single-owner degenerate case.
+ *
+ * @see {@link DrawSource}
+ */
+export interface DrawSourceResult {
+  readonly worlds: readonly World[];
+  readonly cameraOwner: number;
+  readonly resourceOwner: number;
+}
+
+/**
+ * Optional per-frame draw-source injection seam
+ * (feat-20260709-editor-world-partition-editorworld-super-composite / M2 / D-3).
+ *
+ * The frame-loop invokes this callback once per frame (a "pull"). It lets a host
+ * (e.g. the editor) decide, each frame, WHICH worlds to render and which owner
+ * indices to use — without the engine knowing anything about editor world
+ * partitioning.
+ *
+ *   - Returns `undefined` → the frame-loop degrades to the single-world path,
+ *     byte-identical to `renderer.draw([world], { owner: 0 })` where `world` is
+ *     the App's own world (the single-world AI-user default). A host that wires
+ *     the seam but has nothing multi-world to inject this frame returns
+ *     `undefined`.
+ *   - Returns a {@link DrawSourceResult} → the frame-loop runs `world.update()`
+ *     on EVERY returned world (so transform propagation writes each world's
+ *     derived `Transform.world` mat4 before extract reads it — no stale matrix),
+ *     then calls `renderer.draw(worlds, { cameraOwner, resourceOwner })`.
+ *
+ * When omitted entirely, the App never consults a seam and always renders its
+ * own single world (legacy behaviour unchanged).
+ */
+export type DrawSource = () => DrawSourceResult | undefined;
+
+/**
  * Options for the assemble-form entry createApp({ renderer, world, ... }).
  *
  * Field semantics (final shape -- runtime use lands in M2..M5):
@@ -70,6 +115,13 @@ export interface AppAssembleArgs {
   readonly schedule?: unknown;
   readonly maxDt?: number;
   readonly silenceUnhandledErrors?: boolean;
+  /**
+   * Per-frame draw-source injection seam (M2 / D-3). When supplied, the
+   * frame-loop pulls it each frame to decide which worlds to render + which
+   * owner indices to use; when omitted the App renders its own single world
+   * (legacy behaviour). See {@link DrawSource}.
+   */
+  readonly drawSource?: DrawSource;
 }
 
 /**
@@ -152,6 +204,13 @@ export interface CreateAppOptions {
    * Ignored by the assemble form (host-managed input owns its own lock policy).
    */
   readonly lockProvider?: PointerLockProvider;
+  /**
+   * Per-frame draw-source injection seam (M2 / D-3). When supplied, the
+   * frame-loop pulls it each frame to decide which worlds to render + which
+   * owner indices to use; when omitted the canvas-form App renders its own
+   * single world (legacy behaviour unchanged). See {@link DrawSource}.
+   */
+  readonly drawSource?: DrawSource;
 }
 
 /**

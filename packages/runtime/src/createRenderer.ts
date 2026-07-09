@@ -125,6 +125,7 @@ import {
   type RenderSystem,
 } from './render-system';
 import {
+  type DrawOwnerOptions,
   type HealthChangeListener,
   HealthListenerRegistry,
   type HealthSnapshot,
@@ -134,6 +135,7 @@ import {
   type RendererLostListener,
   type RendererOptions,
   RhiErrorListenerRegistry,
+  resolveDrawOwners,
 } from './renderer';
 import { resolveAssetHandle } from './resolve-asset-handle';
 import {
@@ -2006,7 +2008,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     get bindGroupCounts() {
       return renderSystem.bindGroupCounts;
     },
-    draw(worlds: World[], options: { owner: number }): Result<void, RhiError> {
+    draw(worlds: World[], options: DrawOwnerOptions): Result<void, RhiError> {
       // feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M5 / w21
       // (plan-strategy D-1, D-8): post-dispose the renderer is dead. AI
       // users observing `result.ok === false && err.code === 'rhi-not-
@@ -2070,7 +2072,14 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       // check is defensive against JS callers passing a non-array despite the
       // compile-time World[] type (red-window migration safety).
       const worldCount = Array.isArray(worlds) ? worlds.length : 0;
-      const argsCheck = validateDrawArgs(worldCount, options?.owner as number);
+      // w6: validate both split owner indices (cameraOwner before resourceOwner,
+      // first offender wins). resolveDrawOwners normalizes a legacy { owner }
+      // into the two-index form; the defensive `?? {}` guards a JS caller
+      // passing a non-object despite the compile-time DrawOwnerOptions type
+      // (red-window migration safety — the empty object yields undefined owners
+      // that Number.isInteger rejects with a structured error, never a throw).
+      const drawOwners = resolveDrawOwners(options ?? ({} as DrawOwnerOptions));
+      const argsCheck = validateDrawArgs(worldCount, drawOwners);
       if (!argsCheck.ok) {
         internals.errorRegistry.fire(argsCheck.error);
         return argsCheck;

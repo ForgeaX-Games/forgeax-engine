@@ -572,6 +572,10 @@ async function createAppFromCanvas(
   if (opts?.silenceUnhandledErrors !== undefined) {
     Object.assign(buildArgs, { silenceUnhandledErrors: opts.silenceUnhandledErrors });
   }
+  // M2 / D-3: canvas form forwards the host-supplied draw-source pull.
+  if (opts?.drawSource !== undefined) {
+    Object.assign(buildArgs, { drawSource: opts.drawSource });
+  }
   if (_debugInst !== undefined) {
     Object.assign(buildArgs, { debugRhi: _debugInst });
   }
@@ -735,6 +739,10 @@ async function createAppFromAssemble(
   if (args.silenceUnhandledErrors !== undefined) {
     Object.assign(buildArgs, { silenceUnhandledErrors: args.silenceUnhandledErrors });
   }
+  // M2 / D-3: assemble form forwards the host-supplied draw-source pull.
+  if (args.drawSource !== undefined) {
+    Object.assign(buildArgs, { drawSource: args.drawSource });
+  }
   return buildApp(buildArgs);
 }
 
@@ -772,6 +780,19 @@ interface BuildAppArgs {
   readonly debugDraw?: DebugDraw;
   /** feat-20260629 M4 / w20: remote eval server handle from createAppFromCanvas. */
   readonly remoteHandle?: { readonly port: number; close(): Promise<void> };
+  /**
+   * feat-20260709-editor-world-partition-editorworld-super-composite / M2 / D-3:
+   * per-frame draw-source pull forwarded verbatim into the frame-loop. Absent =>
+   * legacy single-world path. Both createApp forms (canvas + assemble) forward
+   * it from their respective options object.
+   */
+  readonly drawSource?: () =>
+    | {
+        worlds: readonly import('@forgeax/engine-ecs').World[];
+        cameraOwner: number;
+        resourceOwner: number;
+      }
+    | undefined;
 }
 
 /**
@@ -855,6 +876,11 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   };
   if (maxDt !== undefined) {
     Object.assign(loopOpts, { maxDt });
+  }
+  // M2 / D-3: forward the optional draw-source pull into the frame-loop. Absent
+  // => the loop keeps the legacy single-world draw path.
+  if (args.drawSource !== undefined) {
+    Object.assign(loopOpts, { drawSource: args.drawSource });
   }
   const loop = createFrameLoop(loopOpts);
 

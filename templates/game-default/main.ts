@@ -455,6 +455,15 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // the HUD's own dispose so any listeners/timers it owns unwind on ■ (A layer).
   ctx?.registerCleanup?.(() => hud.dispose());
 
+  // Boot the view mode NOW so the engine input backend learns the lock policy
+  // BEFORE the first canvas click. Without this, `setMode` only ran on the HUD
+  // toggle, so the backend kept its default `gameGate = true` and allowed pointer
+  // lock even in top-down — the 1st click locked, the 2nd click's setPointerCapture
+  // then collided with the active lock and threw InvalidStateError (capture and
+  // lock are mutually exclusive, W3C). Syncing the initial `mode` here forbids lock
+  // in top-down from the start; toggling to fps re-allows it.
+  setMode(mode);
+
   // World-space → canvas-CSS-pixel projection for the DOM "+N" popup. Reads
   // the camera's CURRENT Transform (the registerUpdate callback that calls
   // spawnPopup runs AFTER the camera Transform write each frame, so values

@@ -23,6 +23,7 @@
     { "path": "../physics-rapier3d" },
     { "path": "../rhi" },
     { "path": "../rhi-debug" },
+    { "path": "../rhi-null" },
     { "path": "../runtime" },
     { "path": "../state" },
     { "path": "../types" }

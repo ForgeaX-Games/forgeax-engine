@@ -44,6 +44,7 @@
   "devDependencies": {
     "@forgeax/engine-remote": "workspace:*",
     "@forgeax/engine-rhi-debug": "workspace:*",
+    "@forgeax/engine-rhi-null": "workspace:*",
     "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-rhi-wgpu": "workspace:*",
     "@webgpu/types": "^0.1.71"

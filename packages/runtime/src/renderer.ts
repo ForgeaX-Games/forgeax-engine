@@ -30,6 +30,44 @@ import type { RenderPipeline } from './render-pipeline';
 /** Backend marker — single-element union preserved for future extensibility (D-2). */
 export type RendererBackend = 'webgpu';
 
+/**
+ * `renderer.draw(worlds, options)` owner options
+ * (feat-20260709-editor-world-partition M1 / w6, plan-strategy §2 D-3).
+ *
+ * The single `owner` index that previously served BOTH the surfaced cameras
+ * and the singleton render resources (skylight / skybox / postProcessParams) is
+ * split into two independent indices:
+ *   - `cameraOwner`   — the world whose cameras are surfaced.
+ *   - `resourceOwner` — the world whose skylight / skybox / postProcessParams
+ *                       are surfaced.
+ *
+ * Two accepted forms:
+ *   - `{ owner }`                        — backward-compatible legacy form where
+ *     the same world owns both (single-world callers + the app frame-loop; the
+ *     hard cutover to the split form lands in M2).
+ *   - `{ cameraOwner, resourceOwner }`   — the two-index split form (editor
+ *     composite: scene camera + separate editor-overlay resource world).
+ */
+export type DrawOwnerOptions = { owner: number } | { cameraOwner: number; resourceOwner: number };
+
+/**
+ * Normalize {@link DrawOwnerOptions} into the two-index split form. A legacy
+ * `{ owner }` maps to `cameraOwner === resourceOwner === owner` (byte-identical
+ * single-owner path); the split form passes through. World-free (plain number
+ * math) so both the createRenderer draw facade and the internal RenderSystem
+ * draw resolve owners through one SSOT helper (charter P5 consistent
+ * abstraction).
+ */
+export function resolveDrawOwners(options: DrawOwnerOptions): {
+  cameraOwner: number;
+  resourceOwner: number;
+} {
+  if ('owner' in options) {
+    return { cameraOwner: options.owner, resourceOwner: options.owner };
+  }
+  return { cameraOwner: options.cameraOwner, resourceOwner: options.resourceOwner };
+}
+
 /** Information attached to a device-loss notification. */
 export interface RendererLostInfo {
   /** Concise machine-readable cause, mapped to a single vocabulary. */
@@ -301,26 +339,35 @@ export interface Renderer {
    * is the synchronous facade-level summary; AI users can ignore it or
    * branch on `.ok` (biome lint warns on unhandled return).
    *
-   * feat-20260708-composited-multi-world-rendering M3 (AC-01 / AC-02 / D-5):
-   * the single entry path is `draw(worlds, { owner })`. `worlds` is composited
-   * into one frame — renderables + lights merge from every world, while
-   * cameras + singleton resources (skylight / skybox / postProcessParams) come
-   * only from `worlds[owner]`. `owner` is a required index into `worlds` (no
-   * default; omitting it is a compile-time error). There is no legacy
-   * `draw(world)` overload. Single-world users pass `draw([world], { owner: 0 })`
-   * (the app frame-loop does this wrapping transparently). Entry validation
-   * returns `Result.err` before any extract on:
-   *   - empty `worlds`       -> `'render-system-empty-worlds'`
-   *   - `owner` out of range -> `'render-system-owner-out-of-range'`
-   *     (`.detail = { owner, worldCount }`)
+   * feat-20260708-composited-multi-world-rendering M3 (AC-01 / AC-02 / D-5),
+   * extended by feat-20260709-editor-world-partition M1 / w6: `worlds` is
+   * composited into one frame — renderables + lights merge from every world,
+   * while cameras come from the `cameraOwner` world and singleton resources
+   * (skylight / skybox / postProcessParams) come from the `resourceOwner`
+   * world. {@link DrawOwnerOptions} accepts either the legacy `{ owner }`
+   * single-owner form (cameraOwner === resourceOwner === owner) or the split
+   * `{ cameraOwner, resourceOwner }` form; one of the two is required (omitting
+   * both is a compile-time error). There is no legacy `draw(world)` overload.
+   * Single-world users pass `draw([world], { owner: 0 })` (the app frame-loop
+   * does this wrapping transparently). Entry validation returns `Result.err`
+   * before any extract on:
+   *   - empty `worlds`               -> `'render-system-empty-worlds'`
+   *   - `cameraOwner` out of range   -> `'render-system-owner-out-of-range'`
+   *     (`.detail = { role: 'camera', owner, worldCount }`)
+   *   - `resourceOwner` out of range -> `'render-system-owner-out-of-range'`
+   *     (`.detail = { role: 'resource', owner, worldCount }`)
+   * cameraOwner is validated before resourceOwner (first offender wins).
    *
-   * @example Composite two worlds (owner supplies the camera):
+   * @example Composite two worlds (owner supplies both camera + resources):
    *   const scene = new World();   // camera + lights + geometry
    *   const overlay = new World(); // extra geometry, no camera
    *   const r = renderer.draw([scene, overlay], { owner: 0 });
    *   if (!r.ok) handleError(r.error);
+   *
+   * @example Split owners (scene camera, editor-overlay resources):
+   *   const r = renderer.draw([scene, editor], { cameraOwner: 0, resourceOwner: 1 });
    */
-  draw(worlds: World[], options: { owner: number }): Result<void, RhiError>;
+  draw(worlds: World[], options: DrawOwnerOptions): Result<void, RhiError>;
   /**
    * Read the canvas's current pixel contents back into an RGBA Uint8Array.
    *

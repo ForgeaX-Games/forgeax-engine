@@ -60,11 +60,15 @@
 //   M3 (D-5): added 'render-system-empty-worlds' + 'render-system-owner-out-of-
 //   range' for the new draw(worlds, { owner }) entry validation. The
 //   owner-out-of-range path exposes .detail = RhiOwnerOutOfRangeDetail
-//   ({ owner, worldCount }); empty-worlds carries no .detail. The pure
-//   validateDrawArgs(worldCount, owner) helper (World-free primitives) emits
-//   both and is consumed by the runtime createRenderer draw entry (the codes'
-//   SSOT stays in rhi). Two non-exclusive checks: empty-worlds short-circuits
-//   before owner-range. Minor add-only per AGENTS.md evolution contract.
+//   ({ role, owner, worldCount } after feat-20260709-editor-world-partition
+//   M1 / w7: role ∈ {'camera','resource'} names which of the two split draw
+//   owners is out of range); empty-worlds carries no .detail. The pure
+//   validateDrawArgs(worldCount, number | { cameraOwner, resourceOwner })
+//   helper (World-free primitives) emits both and is consumed by the runtime
+//   createRenderer draw entry (the codes' SSOT stays in rhi). Checks run
+//   empty-worlds -> cameraOwner -> resourceOwner; the first out-of-range owner
+//   wins (role='camera' when both offend). Add-only (no new code, 0 net Δ per
+//   D-3) per AGENTS.md evolution contract.
 // - RhiError class has readonly .code / .expected / .hint three-field surface
 //   (AGENTS.md "Errors are structured" / D-5); the 'shader-compile-failed' path
 //   exposes .detail = RhiShaderCompileDetail (compilerMessages array);
@@ -320,11 +324,21 @@ export interface RhiInstancingExceedsUniformCapDetail {
  * out-of-range index cannot resolve, so the frame is skipped before any extract.
  *
  * Fields:
- *   - `owner` — the offending index the caller passed.
+ *   - `role` — WHICH of the two draw-owner indices was out of range
+ *     (feat-20260709-editor-world-partition M1 / w7). `draw(worlds, {
+ *     cameraOwner, resourceOwner })` carries two independent indices; `role`
+ *     tells the AI user whether the camera-source index (`'camera'`) or the
+ *     singleton-resource index (`'resource'`) is the offender, so the fix is
+ *     unambiguous from the text channel (no new error code — D-3 keeps 0 net
+ *     new codes; the discriminator lives in `.detail`). When both indices are
+ *     out of range the first offender is reported: `cameraOwner` is validated
+ *     before `resourceOwner`, so `role === 'camera'`.
+ *   - `owner` — the offending index the caller passed (the `role` index's
+ *     value).
  *   - `worldCount` — `worlds.length` at call time (the valid range is
  *     `0 .. worldCount - 1`).
  *
- * AI users branch via property access (`err.detail.owner` /
+ * AI users branch via property access (`err.detail.role` / `err.detail.owner` /
  * `err.detail.worldCount`) after narrowing on `.code`, rather than parsing the
  * message string (charter P3 structured-failure surface).
  *
@@ -334,6 +348,7 @@ export interface RhiInstancingExceedsUniformCapDetail {
  * non-exclusive).
  */
 export interface RhiOwnerOutOfRangeDetail {
+  readonly role: 'camera' | 'resource';
   readonly owner: number;
   readonly worldCount: number;
 }
@@ -418,43 +433,89 @@ export class RhiError extends Error {
 }
 
 /**
- * Validate `renderer.draw(worlds, { owner })` arguments at the draw entry
- * (feat-20260708-composited-multi-world-rendering M3 / D-5).
+ * The two split draw-owner indices carried by
+ * `draw(worlds, { cameraOwner, resourceOwner })`
+ * (feat-20260709-editor-world-partition M1 / w6). `cameraOwner` selects the
+ * world whose cameras are surfaced; `resourceOwner` selects the world whose
+ * skylight / skybox / postProcessParams are surfaced. Declared here (World-free
+ * primitives) so the validator and the `RhiOwnerOutOfRangeDetail.role`
+ * discriminator live in one SSOT package (architecture-principles §1).
+ */
+export interface DrawOwnerSplit {
+  readonly cameraOwner: number;
+  readonly resourceOwner: number;
+}
+
+/**
+ * Validate `renderer.draw(worlds, { cameraOwner, resourceOwner })` arguments at
+ * the draw entry (feat-20260708 M3 / D-5, extended by
+ * feat-20260709-editor-world-partition M1 / w6-w7).
  *
- * The validator takes primitives (`worldCount = worlds.length`, `owner`) — no
- * `World`, no math — so it lives in `@forgeax/engine-rhi` alongside the
- * `RhiErrorCode` members it emits (architecture-principles §1 SSOT). The runtime
- * `createRenderer` draw entry calls it before any extract; a non-`ok` result
- * skips the frame with a structured error (charter P3), never a silent no-op.
+ * The validator takes primitives (`worldCount = worlds.length`, plus the owner
+ * index/indices) — no `World`, no math — so it lives in `@forgeax/engine-rhi`
+ * alongside the `RhiErrorCode` members it emits (architecture-principles §1
+ * SSOT). The runtime `createRenderer` draw entry calls it before any extract; a
+ * non-`ok` result skips the frame with a structured error (charter P3), never a
+ * silent no-op.
  *
- * Two non-exclusive checks, in order (D-5):
+ * The second argument accepts two forms:
+ *   - a bare `number` — the backward-compatible legacy single-owner form where
+ *     `cameraOwner === resourceOwner === owner` (frame-loop + single-world
+ *     callers, precursor `draw([world], { owner })`); and
+ *   - a `{ cameraOwner, resourceOwner }` object — the two-index split form.
+ *
+ * Checks, in order (D-5 + w6):
  *   1. `worldCount === 0` -> `'render-system-empty-worlds'` (no `.detail`).
- *   2. `owner` is not a valid index (`!Number.isInteger(owner)` or `owner < 0`
- *      or `owner >= worldCount`) -> `'render-system-owner-out-of-range'` with
- *      `.detail = { owner, worldCount }`. The `Number.isInteger` guard rejects
- *      a `NaN` / fractional / undefined-coerced owner that a JS caller could
- *      pass despite the compile-time `owner: number` requirement.
+ *   2. `cameraOwner` is not a valid index -> `'render-system-owner-out-of-range'`
+ *      with `.detail = { role: 'camera', owner: cameraOwner, worldCount }`.
+ *   3. `resourceOwner` is not a valid index -> `'render-system-owner-out-of-range'`
+ *      with `.detail = { role: 'resource', owner: resourceOwner, worldCount }`.
+ * The `Number.isInteger` guard rejects a `NaN` / fractional / undefined-coerced
+ * index a JS caller could pass despite the compile-time requirement. When both
+ * indices are out of range the FIRST offender wins: `cameraOwner` is checked
+ * before `resourceOwner`, so `role === 'camera'` (D-3 / w3 contract).
  *
  * The empty-worlds guard short-circuits first: `validateDrawArgs(0, 5)` returns
  * the empty-worlds code, not the owner-range code.
  */
-export function validateDrawArgs(worldCount: number, owner: number): Result<void, RhiError> {
+export function validateDrawArgs(
+  worldCount: number,
+  owner: number | DrawOwnerSplit,
+): Result<void, RhiError> {
   if (worldCount === 0) {
     return err(
       new RhiError({
         code: 'render-system-empty-worlds',
         expected: 'worlds array has at least one world',
-        hint: 'pass at least one world: draw([world], { owner: 0 })',
+        hint: 'pass at least one world: draw([world], { cameraOwner: 0, resourceOwner: 0 })',
       }),
     );
   }
-  if (!Number.isInteger(owner) || owner < 0 || owner >= worldCount) {
+  // w6: normalize the legacy single-owner number into the two-index form so the
+  // camera-before-resource validation order is uniform for both call shapes.
+  const cameraOwner = typeof owner === 'number' ? owner : owner.cameraOwner;
+  const resourceOwner = typeof owner === 'number' ? owner : owner.resourceOwner;
+  const outOfRange = (index: number): boolean =>
+    !Number.isInteger(index) || index < 0 || index >= worldCount;
+  // cameraOwner is validated first: it is the first offender when both indices
+  // are out of range (w3 contract). role names which index the AI user fixes.
+  if (outOfRange(cameraOwner)) {
     return err(
       new RhiError({
         code: 'render-system-owner-out-of-range',
-        expected: 'owner is an index into worlds (0 <= owner < worlds.length)',
-        hint: 'owner must be in 0..worlds.length-1; the owner world supplies cameras + skylight/skybox/postProcess',
-        detail: { owner, worldCount },
+        expected: 'cameraOwner is an index into worlds (0 <= cameraOwner < worlds.length)',
+        hint: 'cameraOwner must be in 0..worlds.length-1; the cameraOwner world supplies the surfaced cameras',
+        detail: { role: 'camera', owner: cameraOwner, worldCount },
+      }),
+    );
+  }
+  if (outOfRange(resourceOwner)) {
+    return err(
+      new RhiError({
+        code: 'render-system-owner-out-of-range',
+        expected: 'resourceOwner is an index into worlds (0 <= resourceOwner < worlds.length)',
+        hint: 'resourceOwner must be in 0..worlds.length-1; the resourceOwner world supplies skylight/skybox/postProcess',
+        detail: { role: 'resource', owner: resourceOwner, worldCount },
       }),
     );
   }

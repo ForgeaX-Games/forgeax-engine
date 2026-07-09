@@ -481,4 +481,68 @@ describe('browser-backend-lock-state.test.ts (w1)', () => {
       expect(typeof s.pointerLocked).toBe('boolean');
     });
   });
+
+  // Regression: setPointerCapture must NOT be called while pointer lock is active.
+  // Pointer capture + pointer lock are mutually exclusive (W3C) — calling
+  // setPointerCapture on a locked element throws InvalidStateError. This is what
+  // crashed the game template on the 2nd click (1st click locked, 2nd click's
+  // onPointerDown captured → throw). The backend now skips capture while locked.
+  describe('setPointerCapture vs pointer lock (InvalidStateError regression)', () => {
+    function firePointerDown(fakes: LockStateFakes, pointerId = 1): void {
+      fakes.store.fire('canvas', 'pointerdown', {
+        pointerType: 'mouse',
+        button: 0,
+        pointerId,
+        pressure: 0.5,
+        clientX: 10,
+        clientY: 10,
+        movementX: 0,
+        movementY: 0,
+      } as unknown as Event);
+    }
+
+    it('does NOT call setPointerCapture on pointerdown while locked', () => {
+      const fakes = buildLockStateFakes();
+      // Make the fake behave like a real browser: throw if captured while locked.
+      const capture = vi.fn((_id: number) => {
+        if (fakes.doc.pointerLockElement === fakes.canvas) {
+          throw new DOMException('capture while locked', 'InvalidStateError');
+        }
+      });
+      (fakes.canvas as unknown as { setPointerCapture: typeof capture }).setPointerCapture = capture;
+
+      const handle = attachBrowserInputBackend(fakes.canvas, { document: fakes.doc, window: fakes.win });
+
+      // Not locked yet: pointerdown SHOULD capture (drag coherence path).
+      firePointerDown(fakes, 1);
+      expect(capture).toHaveBeenCalledTimes(1);
+
+      // Browser locks onto the canvas, then another pointerdown (the "shoot").
+      firePointerLockChange(fakes, fakes.canvas);
+      expect(handle.backend.sample().pointerLocked).toBe(true);
+      // Must NOT throw and must NOT call capture again while locked.
+      expect(() => firePointerDown(fakes, 1)).not.toThrow();
+      expect(capture).toHaveBeenCalledTimes(1);
+    });
+
+    it('resumes capturing after pointer lock is released', () => {
+      const fakes = buildLockStateFakes();
+      const capture = vi.fn((_id: number) => {
+        if (fakes.doc.pointerLockElement === fakes.canvas) {
+          throw new DOMException('capture while locked', 'InvalidStateError');
+        }
+      });
+      (fakes.canvas as unknown as { setPointerCapture: typeof capture }).setPointerCapture = capture;
+
+      const handle = attachBrowserInputBackend(fakes.canvas, { document: fakes.doc, window: fakes.win });
+      firePointerLockChange(fakes, fakes.canvas); // lock
+      firePointerDown(fakes, 1); // skipped while locked
+      expect(capture).toHaveBeenCalledTimes(0);
+
+      firePointerLockChange(fakes, null); // unlock
+      expect(handle.backend.sample().pointerLocked).toBe(false);
+      firePointerDown(fakes, 1); // capture allowed again
+      expect(capture).toHaveBeenCalledTimes(1);
+    });
+  });
 });

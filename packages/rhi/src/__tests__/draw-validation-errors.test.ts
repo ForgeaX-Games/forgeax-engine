@@ -69,15 +69,21 @@ describe('M3 / m3-t1 — two new RhiErrorCode members', () => {
 });
 
 describe('M3 / m3-t1 — RhiOwnerOutOfRangeDetail shape', () => {
-  it('detail equals { owner: number, worldCount: number }', () => {
+  // feat-20260709-editor-world-partition M1 / w7: the detail grew a `role`
+  // discriminator when the single draw owner was split into cameraOwner +
+  // resourceOwner (plan-strategy §2 D-3; new SSOT contract in
+  // owner-out-of-range-role.test.ts). This precursor shape assertion is
+  // migrated to the two-index form — no new error code, only `.detail` grows.
+  it('detail equals { role, owner: number, worldCount: number }', () => {
     expectTypeOf<RhiOwnerOutOfRangeDetail>().toEqualTypeOf<{
+      readonly role: 'camera' | 'resource';
       readonly owner: number;
       readonly worldCount: number;
     }>();
   });
 
   it('detail is a member of the RhiErrorDetail discriminated union', () => {
-    const detail: RhiOwnerOutOfRangeDetail = { owner: 2, worldCount: 1 };
+    const detail: RhiOwnerOutOfRangeDetail = { role: 'resource', owner: 2, worldCount: 1 };
     const widened: RhiErrorDetail = detail;
     expectTypeOf(widened).toMatchTypeOf<RhiErrorDetail>();
   });

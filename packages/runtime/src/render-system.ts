@@ -60,7 +60,11 @@ import { type RenderFrameState, recordFrame } from './record';
 import type { RenderPipeline as RenderPipelineDef } from './render-pipeline';
 import type { CameraSnapshot, DispatchEntry, RenderableSnapshot } from './render-system-extract';
 import { extractFrames } from './render-system-extract';
-import type { RhiErrorListenerRegistry } from './renderer';
+import {
+  type DrawOwnerOptions,
+  type RhiErrorListenerRegistry,
+  resolveDrawOwners,
+} from './renderer';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
 import {
   getTransparentSortConfig,
@@ -258,7 +262,7 @@ export const STANDARD_PBR_UBO_SIZE = derive(STANDARD_PBR_SIDECAR_SCHEMA).uboLayo
  * whose shader identity is `forgeax::default-standard-pbr`).
  */
 export interface RenderSystem {
-  draw(worlds: readonly World[], opts: { owner: number }): void;
+  draw(worlds: readonly World[], opts: DrawOwnerOptions): void;
   readonly pipelineDispatchCounts: {
     readonly unlit: number;
   };
@@ -1540,8 +1544,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   };
   const lastFrustumStats: { culled: number; total: number } = { culled: 0, total: 0 };
   return {
-    draw(worlds: readonly World[], opts: { owner: number }): void {
+    draw(worlds: readonly World[], opts: DrawOwnerOptions): void {
       try {
+        // w6: resolve the (possibly legacy single-owner) draw options into the
+        // two-index split. cameraOwner drives the surfaced cameras + frustum
+        // cull; resourceOwner drives skylight/skybox/postProcess + per-world
+        // record config. When they coincide the whole path is byte-identical to
+        // the pre-split single-owner behaviour.
+        const { cameraOwner, resourceOwner } = resolveDrawOwners(opts);
         // feat-20260601 M1 / w7: pipeline hot-swap detection. If the installed handle
         // changed since the memoized graph was built (a SWAP, not an effect toggle), null
         // perFrameGraph so recordFrame rebuilds it via the now-active pipeline impl. The
@@ -1565,10 +1575,18 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // Entry validation (empty worlds / owner out of range) is enforced by
         // the public renderer.draw facade (createRenderer.ts, D-5) before this
         // internal method is reached; the owner world is guaranteed present.
-        const ownerWorld = worlds[opts.owner] as World;
+        //
+        // feat-20260709-editor-world-partition M1 / w5+w6 (D-3): per-world
+        // record configuration (transparent-sort mode, fold buckets, skybox /
+        // asset resolution) is read from the resource-owner world — the world
+        // that owns skylight / skybox / postProcessParams. w6 sources it from
+        // the dedicated resourceOwner index. The variable is named
+        // `resourceWorld` so the record-stage reads are self-describing (they
+        // are resource-owner reads, not camera reads).
+        const resourceWorld = worlds[resourceOwner] as World;
         const frame = extractFrames(
           worlds,
-          opts.owner,
+          { cameraOwner, resourceOwner },
           internals.assets,
           internals.getPipelineState(),
           internals.gpuStore,
@@ -1593,18 +1611,23 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
 
         // Unified transparent-sort: (layer ASC, sortValue ASC) for modes 0/1/2;
         // distance back-to-front for mode=3. The transparent-sort config is a
-        // per-world resource; it is read from the owner world (the world that
-        // owns cameras + singleton render state, D-3). Only the Transparent
-        // segment is reordered; queue ordering between segments
-        // (sortDispatchByQueue, stable) is preserved.
-        const orderedDispatch = sortTransparentDispatch(dispatch, ownerWorld, cameras, renderables);
+        // per-world resource; it is read from the resource-owner world (the
+        // world that owns skylight / skybox / singleton render state, w5 / D-3).
+        // Only the Transparent segment is reordered; queue ordering between
+        // segments (sortDispatchByQueue, stable) is preserved.
+        const orderedDispatch = sortTransparentDispatch(
+          dispatch,
+          resourceWorld,
+          cameras,
+          renderables,
+        );
 
         // M3 / w26: single dispatch list replaces old three-bucket model.
         // Pass dispatch to recordFrame — the record stage iterates dispatch
         // entries in queue order per plan-strategy D-3.
         recordFrame(
           internals,
-          ownerWorld,
+          resourceWorld,
           cameras,
           lights,
           renderables,

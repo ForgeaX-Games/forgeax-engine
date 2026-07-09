@@ -350,9 +350,19 @@ export function attachBrowserInputBackend(
         buttons[ev.button] = true;
       }
     }
-    // D-5: setPointerCapture for coherent pointer event dispatching.
-    if (typeof canvas.setPointerCapture === 'function') {
-      canvas.setPointerCapture(ev.pointerId);
+    // D-5: setPointerCapture for coherent pointer event dispatching — but NOT
+    // while pointer lock is active. Pointer capture and pointer lock are mutually
+    // exclusive (W3C): setPointerCapture throws InvalidStateError when the element
+    // already holds the lock. Under lock the cursor is confined and every pointer
+    // event already targets the locked element, so capture is redundant anyway.
+    // The try/catch is belt-and-suspenders for the race where lock/capture state
+    // flips between the pointerlockchange event and this handler.
+    if (!w3cLocked && !providerLocked && typeof canvas.setPointerCapture === 'function') {
+      try {
+        canvas.setPointerCapture(ev.pointerId);
+      } catch {
+        /* capture illegal in the current pointer state (e.g. just-acquired lock) — safe to skip */
+      }
     }
     // Track pointer in map for multi-pointer + delta (w15).
     const coords = computePointerCoords(ev);

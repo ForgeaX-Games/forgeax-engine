@@ -1510,13 +1510,35 @@ export function buildPointShadowMatrices(lightPos: Vec3, near: number, far: numb
   return out;
 }
 
+/**
+ * feat-20260709-editor-world-partition M1 / w4 (AC-08, plan-strategy §2 D-3):
+ * the owner index that previously served BOTH cameras and singleton render
+ * resources (skylight / skybox / postProcessParams) is split into two
+ * independent indices. `cameraOwner` selects the world whose cameras are
+ * surfaced; `resourceOwner` selects the world whose singleton resources are
+ * surfaced. A single number is accepted as the backward-compatible legacy form
+ * where `cameraOwner === resourceOwner === owner` (single-world callers +
+ * frame-loop stay byte-identical; the hard `{ owner }` cutover lands in M2).
+ */
+export interface ExtractFramesOwner {
+  readonly cameraOwner: number;
+  readonly resourceOwner: number;
+}
+
 export function extractFrames(
   worlds: readonly World[],
-  owner: number,
+  owner: number | ExtractFramesOwner,
   assets?: AssetRegistry | null,
   pipelineState?: ExtractPipelineSurface | null,
   gpuStore?: import('./gpu-resource-store').GpuResourceStore,
 ): ExtractedFrame {
+  // w4: normalize the owner argument. A bare number is the legacy single-owner
+  // form (cameraOwner === resourceOwner); an object carries the two split
+  // indices. When they coincide the code path is byte-identical to the pre-w4
+  // single-owner behaviour (w1 contract combination 2).
+  const cameraOwner = typeof owner === 'number' ? owner : owner.cameraOwner;
+  const resourceOwner = typeof owner === 'number' ? owner : owner.resourceOwner;
+
   // ── D-2: frame-level side effects live here ────────────────────────────
   //
   // resetForFrame is called exactly once per frame, at the extractFrames
@@ -1559,10 +1581,12 @@ export function extractFrames(
       // Tilemap chunk streaming: materialize/evict chunks before extract.
       tilemapChunkExtractSystem(world, wi);
 
-      // D-4: owner world uses cull:'self' (normal frustum culling against
-      // own cameras); non-owner worlds use cull:'none' to avoid their own
-      // cameras silently culling geometry the owner camera would see.
-      const cullMode: 'self' | 'none' = wi === owner ? 'self' : 'none';
+      // D-4: the cameraOwner world uses cull:'self' (normal frustum culling
+      // against its own cameras — the cameras that are actually surfaced);
+      // every other world uses cull:'none' to avoid its own cameras silently
+      // culling geometry the surfaced camera would see. w4: frustum culling
+      // follows cameraOwner (the camera source), not resourceOwner.
+      const cullMode: 'self' | 'none' = wi === cameraOwner ? 'self' : 'none';
       const frame = extractFrame(world, assets, pipelineState, gpuStore, { cull: cullMode });
 
       succeededFrames.push(frame);
@@ -1658,22 +1682,23 @@ export function extractFrames(
     pointShadow,
   };
 
-  // AC-05/06: cameras / skylight / skybox / postProcessParams — only from
-  // owner world (holistic snapshot selection, D-3 / R-6).
-  // Find the owner world's frame by scanning succeededIndices.
-  let ownerFrame: ExtractedFrame | undefined;
+  // AC-05/06 + w4 owner split (D-3 / R-6): cameras come from the cameraOwner
+  // world; skylight / skybox / postProcessParams come from the resourceOwner
+  // world (holistic snapshot selection). Scan succeededIndices once to locate
+  // each owner's surviving frame. When cameraOwner === resourceOwner both
+  // resolve to the same frame — byte-identical to the pre-w4 single-owner path.
+  let cameraOwnerFrame: ExtractedFrame | undefined;
+  let resourceOwnerFrame: ExtractedFrame | undefined;
   for (let fi = 0; fi < succeededFrames.length; fi++) {
-    if (succeededIndices[fi] === owner) {
-      ownerFrame = succeededFrames[fi];
-      break;
-    }
+    if (succeededIndices[fi] === cameraOwner) cameraOwnerFrame = succeededFrames[fi];
+    if (succeededIndices[fi] === resourceOwner) resourceOwnerFrame = succeededFrames[fi];
   }
-  const cameras = ownerFrame !== undefined ? [...ownerFrame.cameras] : [];
-  const skylight = ownerFrame?.skylight;
-  const skylightCount = ownerFrame?.skylightCount ?? 0;
-  const skybox = ownerFrame?.skybox;
-  const skyboxCount = ownerFrame?.skyboxCount ?? 0;
-  const postProcessParams = new Map(ownerFrame?.postProcessParams);
+  const cameras = cameraOwnerFrame !== undefined ? [...cameraOwnerFrame.cameras] : [];
+  const skylight = resourceOwnerFrame?.skylight;
+  const skylightCount = resourceOwnerFrame?.skylightCount ?? 0;
+  const skybox = resourceOwnerFrame?.skybox;
+  const skyboxCount = resourceOwnerFrame?.skyboxCount ?? 0;
+  const postProcessParams = new Map(resourceOwnerFrame?.postProcessParams);
 
   // D-3: frustumStats — culled/total summed across worlds.
   const frustumStats = {

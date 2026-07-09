@@ -20,8 +20,8 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
-import { animationPlugin } from '../plugin-factories';
 import { ANIMATION_ASSET_RESOLVER_KEY } from '../createRenderer';
+import { animationPlugin } from '../plugin-factories';
 
 describe('animationPlugin — self-owns AnimationAssetResolver (SSOT)', () => {
   it('build() inserts the resource so a bare-world tick does not fault', async () => {

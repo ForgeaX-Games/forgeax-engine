@@ -88,5 +88,7 @@ export type {
   BundlerOptions,
   CanvasAppError,
   CreateAppOptions,
+  DrawSource,
+  DrawSourceResult,
 } from './types';
 export { isLoadGameError, LOAD_GAME_ERROR_HINTS, LOAD_GAME_EXPECTED, LoadGameError };

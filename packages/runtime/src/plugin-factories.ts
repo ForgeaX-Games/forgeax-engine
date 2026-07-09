@@ -23,8 +23,10 @@ import { ok } from '@forgeax/engine-ecs';
 import type { Plugin } from '@forgeax/engine-plugin';
 
 import {
-  registerAdvanceAnimationPlayer, registerPropagateTransforms,
-  createAnimationAssetResolver, ANIMATION_ASSET_RESOLVER_KEY,
+  ANIMATION_ASSET_RESOLVER_KEY,
+  createAnimationAssetResolver,
+  registerAdvanceAnimationPlayer,
+  registerPropagateTransforms,
 } from './createRenderer';
 
 /**
