@@ -78,6 +78,7 @@ import {
   Transform,
 } from './components';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
+import { worldEntityKey } from './record/frame-snapshot';
 import { resolveAssetHandle } from './resolve-asset-handle';
 import { decodeTileBits } from './tile-bits';
 
@@ -922,8 +923,11 @@ export function computeChunkStreamBounds(
   return [minX, minY, -1, maxX, maxY, 1] as unknown as box3.Box3Like;
 }
 
-function purgeDerivedEntities(world: World, layerEntity: EntityHandle): void {
-  const layerKey = unwrapHandle(layerEntity as unknown as Handle<string, 'shared'>);
+function purgeDerivedEntities(world: World, layerEntity: EntityHandle, worldId: number): void {
+  const layerKey = worldEntityKey(
+    worldId,
+    unwrapHandle(layerEntity as unknown as Handle<string, 'shared'>),
+  );
   const tracked = layerDerivedEntities.get(layerKey);
   if (tracked === undefined) return;
   for (const e of tracked) {
@@ -952,7 +956,7 @@ function purgeDerivedEntities(world: World, layerEntity: EntityHandle): void {
  *     have ECS entities alive, keeping `extractFrame` iteration proportional
  *     to visible tile count rather than total map tile count.
  */
-export function tilemapChunkExtractSystem(world: World): void {
+export function tilemapChunkExtractSystem(world: World, worldId: number): void {
   type LayerWork = {
     readonly layerEntity: EntityHandle;
     readonly parentEntity: EntityHandle;
@@ -982,7 +986,11 @@ export function tilemapChunkExtractSystem(world: World): void {
   let frustumPlanes: frustum.Frustum | null | undefined;
 
   for (const w of work) {
-    const layerKey = unwrapHandle(w.layerEntity as unknown as Handle<string, 'shared'>);
+    // D-1a #7: layerKey = worldEntityKey(worldId, entitySlot) for cross-world isolation.
+    const layerKey = worldEntityKey(
+      worldId,
+      unwrapHandle(w.layerEntity as unknown as Handle<string, 'shared'>),
+    );
     // AC-04: decode via the canonical SortScope union; avoid relying on the
     // raw encoding (0='layer', 1='per-cell') leaking through this call site.
     // `decodeSortScope` is the SSOT used throughout `bucketTileLayer` (see
@@ -996,7 +1004,7 @@ export function tilemapChunkExtractSystem(world: World): void {
       const everBuilt = layerEverBuilt.has(layerKey);
       if (everBuilt && w.dirty === 0) continue;
 
-      purgeDerivedEntities(world, w.layerEntity);
+      purgeDerivedEntities(world, w.layerEntity, worldId);
 
       const bucket = bucketTileLayer(world, w.layerEntity, w.parentEntity);
       if (bucket === undefined) {
@@ -1047,7 +1055,7 @@ export function tilemapChunkExtractSystem(world: World): void {
       const activeSet = layerChunkActive.get(layerKey);
       if (activeSet !== undefined) {
         for (const chunkIdx of activeSet) {
-          const key = `${layerKey}:${chunkIdx}`;
+          const key = `${worldId}:${layerKey}:${chunkIdx}`;
           const entities = layerChunkStreamEntities.get(key);
           if (entities !== undefined) {
             for (const e of entities) world.despawn(e as EntityHandle);
@@ -1126,11 +1134,11 @@ export function tilemapChunkExtractSystem(world: World): void {
           );
           spawned.push(unwrapHandle(e as unknown as Handle<string, 'shared'>));
         }
-        layerChunkStreamEntities.set(`${layerKey}:${chunkIdx}`, spawned);
+        layerChunkStreamEntities.set(`${worldId}:${layerKey}:${chunkIdx}`, spawned);
         activeSet.add(chunkIdx);
       } else if (!visible && wasActive) {
         // Despawn per-cell entities for this newly-invisible chunk.
-        const key = `${layerKey}:${chunkIdx}`;
+        const key = `${worldId}:${layerKey}:${chunkIdx}`;
         const entities = layerChunkStreamEntities.get(key);
         if (entities !== undefined) {
           for (const e of entities) world.despawn(e as EntityHandle);

@@ -12,7 +12,7 @@
 // This DOES NOT re-declare the tile formula and test it against itself (the
 // shadow-csm-atlas.test.ts antipattern: a local computeAtlasLayout copy that
 // could agree with a bug verbatim). The depth tile is captured from the actual
-// urp cascade loop driven through createRenderer + renderer.draw(world); the
+// urp cascade loop driven through createRenderer + renderer.draw([world], { owner: 0 }); the
 // sampler tile is read from the WGSL source the GPU actually compiles. The
 // canonical mapping is asserted against BOTH real sources, so a drift on either
 // side breaks the test.
@@ -180,7 +180,7 @@ async function importEngine(): Promise<{
     bundler?: unknown,
   ) => Promise<{
     ready: Promise<void>;
-    draw: (world: unknown) => void;
+    draw: (worlds: unknown, opts: { owner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
   }>;
 }> {
@@ -268,7 +268,7 @@ async function captureCascadeViewports(cascadeCount: number, mapSize: number): P
     { component: C.Transform, data: identityTransform() },
   );
   renderer.onError(() => undefined);
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
   return log;
 }
 

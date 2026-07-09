@@ -80,6 +80,7 @@ import {
   MeshFilter,
   MeshRenderer,
   perspective,
+  type Renderer,
   Transform,
 } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -302,12 +303,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // RenderSystem walks the query graph (D-S2 Extract / Prepare / Record) and
   // submits one GPU command buffer per call. AC-09 contract: RenderSystem is
   // NOT registered to world.systems schedule; world.update() does not run
-  // it - renderer.draw(world) is the sole invocation site.
+  // it - renderer.draw([world], { owner: 0 }) is the sole invocation site.
   const frame = (): void => {
     if (!clearOnly) {
       // w25 — draw returns Result; ignore .ok for the smoke path (onError
       // listener handles fan-out separately).
-      const r = renderer.draw(world);
+      // feat-20260708-composited-multi-world-rendering M3: this is the D-8
+      // integration probe -- hello-triangle is the first real consumer migrated
+      // to the new draw(worlds, { owner }) signature (AC-01/AC-02), proving the
+      // breaking change compiles + runs end-to-end (dawn-node smoke) rather
+      // than passing compile-only. Single world composites at owner 0.
+      const r = renderer.draw([world], { owner: 0 });
       if (!r.ok) console.error('[triangle] draw error:', r.error);
     } else {
       // Counter-example (ii): skip the draw call, leaving the canvas at
@@ -320,6 +326,31 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   };
   requestAnimationFrame(frame);
 }
+
+// feat-20260708-composited-multi-world-rendering M3 / m3-t2 — AC-02 owner-required
+// compile-time probes at the REAL consumer callsite (requirements AC-02 CAUTION:
+// the owner-required narrowing must be verified on the real draw path, not only
+// via *.test-d.ts). These are dead code (never invoked; `void` reference keeps the
+// bundler + lint happy) so they add no runtime behaviour to the smoke path.
+//
+// Each `@ts-expect-error` asserts the illegal call form fails tsc under the new
+// draw(worlds: World[], { owner: number }) signature:
+//   1. omitting the required `{ owner }` options argument;
+//   2. passing the legacy non-array draw(world) form.
+//
+// Validation timing: hello-triangle is not in the M3 scoped sweep (it is the D-8
+// smoke integration probe), and during the M3->M4 red window the runtime
+// dist/*.d.ts is intentionally stale (tsup dts:false; regen needs tsc -b, which
+// is red until M4 migrates the remaining callsites). So these directives are
+// enforced by the M4 full-repo `pnpm run typecheck` gate. The migrated real call
+// above is exercised by the M3 dawn-node smoke (runtime execution).
+function __ac02OwnerRequiredCompileProbes(renderer: Renderer, world: World): void {
+  // @ts-expect-error AC-02: `owner` is required; omitting the options argument must fail tsc.
+  renderer.draw([world]);
+  // @ts-expect-error AC-02: `worlds` must be an array; the legacy draw(world) form must fail tsc.
+  renderer.draw(world);
+}
+void __ac02OwnerRequiredCompileProbes;
 
 function renderFallbackBanner(target: HTMLCanvasElement, err: EngineEnvironmentError): void {
   const parent = target.parentElement;

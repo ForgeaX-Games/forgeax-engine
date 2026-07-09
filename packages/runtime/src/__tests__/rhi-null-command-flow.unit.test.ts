@@ -151,7 +151,7 @@ describe('rhi-null-command-flow.unit.test.ts (T-b)', () => {
     rhiNullDevice.framePassNames = [];
 
     const world = makeWorld();
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
 
     const passNames = renderer.perFramePassNames;
 
@@ -248,7 +248,7 @@ describe('rhi-null-command-flow.unit.test.ts (T-b)', () => {
       rhiNullDevice.framePassNames = [];
 
       const world = makeWorld();
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       const passNames = renderer.perFramePassNames;
       expect(passNames.length).toBeGreaterThan(0);

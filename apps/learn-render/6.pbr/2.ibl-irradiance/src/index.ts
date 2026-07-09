@@ -223,7 +223,7 @@ function installCaptureHook(
   const renderer = app.renderer;
   win.__captureIblIrradiance = async (): Promise<Uint8Array> => {
     world.update();
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {
       throw new Error(

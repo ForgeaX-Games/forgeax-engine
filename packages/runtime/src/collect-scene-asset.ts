@@ -613,6 +613,13 @@ export function rootsToSceneAsset(
         } else {
           if (classification.scalar) {
             const handle = rawValue as number;
+            // NULL sentinel: an unset shared<T> scalar defaults to slot 0 (ECS
+            // three-layer default; world.ts retain arms treat `!== 0` as the
+            // active-slot guard). Omit the field entirely — deserialize restores
+            // it to the same slot-0 default, so the round-trip is lossless.
+            // Emitting 0 here would be misread as refs index 0 by the pack
+            // deserialize path (parseScenePayload HANDLE_FIELD_NAMES).
+            if (handle === 0) continue;
             const assetRes = resolveAssetHandle(
               world,
               handle as unknown as Handle<string, 'shared'>,
@@ -627,9 +634,20 @@ export function rootsToSceneAsset(
             const arr = _isArrayLike(rawValue)
               ? _normalizeArray(rawValue)
               : (rawValue as unknown[]);
-            const mapped: string[] = [];
+            const mapped: Array<string | number> = [];
             for (const elem of arr) {
               const handle = elem as number;
+              // NULL sentinel: a slot in a positional shared array (e.g.
+              // AnimationPlayer.clips = [h, 0, 0, 0]) may be 0. These slots
+              // correlate positionally with paired SoA arrays (times / weights /
+              // speeds), so we preserve the slot as numeric 0 rather than
+              // dropping it — the schema-driven deserialize (_resolveSceneGuids /
+              // extractSceneEntityHandleGuids) skips non-string elements and
+              // keeps their position.
+              if (handle === 0) {
+                mapped.push(0);
+                continue;
+              }
               const assetRes = resolveAssetHandle(
                 world,
                 handle as unknown as Handle<string, 'shared'>,

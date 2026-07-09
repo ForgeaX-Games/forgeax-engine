@@ -51,6 +51,7 @@ import {
   makeZeroCameraFallbackSnapshot,
   type RenderFrameState,
   type ValidatedRenderable,
+  worldEntityKey,
 } from './frame-snapshot';
 import {
   acquireSwapChainTarget,
@@ -102,7 +103,7 @@ export function recordFrame(
       new RhiError({
         code: 'render-system-no-camera',
         expected: 'world has at least one entity with Transform + Camera',
-        hint: 'world.spawn({ component: Transform, data: { posX, posY, posZ, quatX, quatY, quatZ, quatW, scaleX, scaleY, scaleZ } }, { component: Camera, data: { fov, aspect, near, far, clearR, clearG, clearB, clearA } }) before renderer.draw(world)',
+        hint: 'world.spawn({ component: Transform, data: { posX, posY, posZ, quatX, quatY, quatZ, quatW, scaleX, scaleY, scaleZ } }, { component: Camera, data: { fov, aspect, near, far, clearR, clearG, clearB, clearA } }) before renderer.draw([world], { owner: 0 })',
       }),
     );
     activeCameras = [makeZeroCameraFallbackSnapshot()];
@@ -637,7 +638,7 @@ function validateRenderables(
         new RhiError({
           code: 'asset-not-registered',
           expected: 'GPU mesh buffers uploaded for assetHandle',
-          hint: 'await renderer.ready before draw(world); ensure AssetRegistry.configureGpuDevice ran so user meshes are uploaded',
+          hint: 'await renderer.ready before draw([world], { owner: 0 }); ensure AssetRegistry.configureGpuDevice ran so user meshes are uploaded',
           detail: { assetHandle: r.assetHandle },
         }),
       );
@@ -889,14 +890,13 @@ function cleanPerFrameCaches(
   frameState: RenderFrameState,
   validated: readonly ValidatedRenderable[],
 ): void {
-  // Build a Set<number> of entityKeys from the validated renderables.
-  // The entityKey is the packed Entity u32 (encodeEntity(indexSlot,
-  // generation)) surfaced by D-1. Entries in the per-entity caches
-  // whose outer-Map entityKey is NOT in this set are orphaned (their
-  // entity has been despawned) and must be dropped.
+  // Build a Set<number> of worldEntityKey composites from the validated
+  // renderables. D-1a #4: validatedEntityKeys are worldEntityKey(worldId, entityKey)
+  // composites matching the write-side keys of #1-#3 — cross-world false eviction
+  // is prevented because worldEntityKey(0, k) !== worldEntityKey(1, k).
   const validatedEntityKeys = new Set<number>();
   for (const v of validated) {
-    validatedEntityKeys.add(v.source.entityKey);
+    validatedEntityKeys.add(worldEntityKey(v.source.worldId, v.source.entityKey));
   }
 
   // Clean per-entity material BG cache: drop outer-Map entries whose
@@ -908,11 +908,17 @@ function cleanPerFrameCaches(
   cleanPerEntityCache(frameState.instancesBgPerEntity, validatedEntityKeys);
 
   // D-5 retrofit: instanceBuffers clean-up. The instanceBuffers Map is
-  // keyed by `encacheKey` (packed Entity u32, same as entityKey on
+  // keyed by cacheKey (packed Entity u32, same as entityKey on
   // RenderableSnapshot). Drop entries whose key is no longer in the
   // validated set (OQ-3 / R-4). feat-20260619 M4 / F11: destroy the GPU
   // buffer before Map.delete so despawned entities release their
   // instance-buffer backing memory symmetrically (D-6).
+  //
+  // D-1a #1: instanceBuffers keys on the positive half (>= 0) are
+  // worldEntityKey composites matching the write side. Negative half
+  // fold-bucket keys (< 0) are NOT worldEntityKey; they are
+  // material-handle-based and cross-world collision is semantically
+  // correct (same material renders in same fold bucket).
   for (const [key, entry] of frameState.instanceBuffers.entries()) {
     if (!validatedEntityKeys.has(key)) {
       if (!entry.buffer.isDestroyed) {

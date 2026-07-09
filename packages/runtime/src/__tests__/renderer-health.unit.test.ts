@@ -680,7 +680,7 @@ describe('Renderer draw device-lost guard (w7 TDD RED)', () => {
 
     // Draw N=5 times in device-lost state
     for (let i = 0; i < 5; i++) {
-      const result = renderer.draw(world);
+      const result = renderer.draw([world], { owner: 0 });
       // TDD RED / AC-10: draw returns err silently (not ok for device-lost)
       expect(result.ok).toBe(false);
     }
@@ -726,7 +726,7 @@ describe('Renderer draw device-lost guard (w7 TDD RED)', () => {
     // TDD RED: disposed renderer.draw returns err
     const { World } = await import('@forgeax/engine-ecs');
     const world = new World();
-    const result = renderer.draw(world);
+    const result = renderer.draw([world], { owner: 0 });
     expect(result.ok).toBe(false);
   });
 });

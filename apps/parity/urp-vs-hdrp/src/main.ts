@@ -126,8 +126,8 @@ async function bootstrap(): Promise<void> {
   populateScene(hdrpRenderer, hdrpWorld);
 
   // Initial draw so canvases have content before the first capture call.
-  urpRenderer.draw(urpWorld);
-  hdrpRenderer.draw(hdrpWorld);
+  urpRenderer.draw([urpWorld], { owner: 0 });
+  hdrpRenderer.draw([hdrpWorld], { owner: 0 });
 
   declareCaptureHooks(urpRenderer, urpWorld, hdrpRenderer, hdrpWorld);
 }
@@ -209,7 +209,7 @@ function declareCaptureHooks(
   hdrpWorld: World,
 ): void {
   const captureFor = (renderer: Renderer, world: World): (() => Promise<Uint8Array>) => async () => {
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {
       throw new Error(

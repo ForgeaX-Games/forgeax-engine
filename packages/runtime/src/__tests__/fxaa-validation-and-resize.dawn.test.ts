@@ -206,7 +206,7 @@ describe('feat-20260528-fxaa-post-processing M3 w17: AC-07 validation + AC-08 re
     const world = new World();
     spawnCubeScene(world);
 
-    const drawn = renderer.draw(world);
+    const drawn = renderer.draw([world], { owner: 0 });
     expect(drawn.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
 
@@ -326,7 +326,7 @@ describe('feat-20260528-fxaa-post-processing M3 w17: AC-07 validation + AC-08 re
     const world = new World();
     spawnCubeScene(world);
 
-    const drawn1 = renderer.draw(world);
+    const drawn1 = renderer.draw([world], { owner: 0 });
     expect(drawn1.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
 
@@ -351,7 +351,7 @@ describe('feat-20260528-fxaa-post-processing M3 w17: AC-07 validation + AC-08 re
     canvasH = 128;
 
     // Frame 2: render at 128x128 (post-resize).
-    const drawn2 = renderer.draw(world);
+    const drawn2 = renderer.draw([world], { owner: 0 });
     // AC-08: The draw must not crash.
     expect(drawn2.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();

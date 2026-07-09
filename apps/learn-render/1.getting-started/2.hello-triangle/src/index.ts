@@ -154,7 +154,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // registered to user schedule; renderer.draw(world) is the sole
     // invocation site).
     const tick = (): void => {
-      const drawn = renderer.draw(world);
+      const drawn = renderer.draw([world], { owner: 0 });
       if (!drawn.ok) {
         console.error('[learn-render 1.2 hello-triangle] draw failed:', drawn.error);
         return;
@@ -172,7 +172,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     type CaptureHook = () => Promise<Uint8Array>;
     const win = window as unknown as { __captureHelloTriangle?: CaptureHook };
     win.__captureHelloTriangle = async (): Promise<Uint8Array> => {
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
       const r = await renderer.readPixels();
       if (!r.ok) throw new Error(`[learn-render 1.2 hello-triangle] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`);
       return r.value;

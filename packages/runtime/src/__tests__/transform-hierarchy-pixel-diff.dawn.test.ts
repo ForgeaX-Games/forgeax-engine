@@ -248,7 +248,7 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
 
     // Frame A: parent at rest. world.update() runs propagateTransforms.
     world.update();
-    const drawA = renderer.draw(world);
+    const drawA = renderer.draw([world], { owner: 0 });
     expect(drawA.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     if (renderTarget === undefined) throw new Error('renderTarget not configured');
@@ -256,7 +256,7 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
 
     // Stability: a second render of the rest scene must be pixel-stable.
     world.update();
-    const drawAA = renderer.draw(world);
+    const drawAA = renderer.draw([world], { owner: 0 });
     expect(drawAA.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     const pixelsAA = await doReadPixels(device, renderTarget);
@@ -266,7 +266,7 @@ describe('feat-20260531 M3 w13: AC-08 parent moves -> child follows (dawn)', () 
     const setRes = world.set(parent, Transform, { posX: PARENT_X_MOVED });
     expect(setRes.ok).toBe(true);
     world.update();
-    const drawB = renderer.draw(world);
+    const drawB = renderer.draw([world], { owner: 0 });
     expect(drawB.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     const pixelsB = await doReadPixels(device, renderTarget);

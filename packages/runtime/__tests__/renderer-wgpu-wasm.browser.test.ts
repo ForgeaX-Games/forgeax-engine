@@ -97,6 +97,6 @@ describe.skip('renderer-wgpu-wasm.browser - chromium real path with rhi-wgpu esc
     // (charter proposition 6 enforced at the chromium V8 + lavapipe + wgpu
     // wasm boundary). RenderSystem fires onError for 0 Camera world via the
     // 'render-system-no-camera' code, but draw itself returns void.
-    expect(() => renderer?.draw(world)).not.toThrow();
+    expect(() => renderer?.draw([world], { owner: 0 })).not.toThrow();
   });
 });

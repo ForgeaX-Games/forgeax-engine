@@ -346,7 +346,7 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
     });
 
     for (let f = 0; f < 5; f++) {
-      const drawn = renderer.draw(world);
+      const drawn = renderer.draw([world], { owner: 0 });
       expect(drawn.ok).toBe(true);
     }
     await device.queue.onSubmittedWorkDone();
@@ -578,7 +578,7 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
     });
 
     for (let f = 0; f < 5; f++) {
-      const drawn = renderer.draw(world);
+      const drawn = renderer.draw([world], { owner: 0 });
       expect(drawn.ok).toBe(true);
     }
     await device.queue.onSubmittedWorkDone();

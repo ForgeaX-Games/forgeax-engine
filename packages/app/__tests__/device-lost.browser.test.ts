@@ -112,6 +112,7 @@ function makeFakeBackend(): { backend: InputBackend; detachCalls: number; getDet
       movementY: 0,
       wheelDelta: 0,
       focused: true,
+      pointerLocked: false,
     }),
     detach: () => {
       detachCalls++;

@@ -305,7 +305,7 @@ async function renderOneFrame(opts: {
     },
   );
 
-  const drawn = renderer.draw(world);
+  const drawn = renderer.draw([world], { owner: 0 });
   expect(drawn.ok).toBe(true);
   if (sharedDevice === undefined) throw new Error('device not captured');
   await sharedDevice.queue.onSubmittedWorkDone();

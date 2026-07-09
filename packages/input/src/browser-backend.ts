@@ -111,6 +111,40 @@ export interface BrowserInputBackendOptions {
    * mirroring the `document` / `window` / `navigator` override pattern.
    */
   readonly now?: () => number;
+  /**
+   * Optional lock provider (D-2). When provided, pointer-lock requests
+   * route through requestLock() / exitLock() instead of the W3C
+   * requestPointerLock / exitPointerLock API. The backend remains
+   * host-opaque -- it never learns whether the provider wraps Tauri
+   * native-grab, postMessage, or any other mechanism.
+   */
+  readonly lockProvider?: PointerLockProvider;
+  /**
+   * Optional callback for lock request failures (D-4). When W3C
+   * requestPointerLock rejects or lockProvider.requestLock/exitLock
+   * throws/rejects, the backend calls this with a detail object.
+   * Without this callback, failures are silently caught (backward
+   * compatible but contrary to charter P3).
+   */
+  readonly onLockError?: (detail: { path: 'w3c' | 'provider'; cause: unknown }) => void;
+}
+
+/**
+ * Lock provider interface (D-2). A host injects this to replace the
+ * W3C Pointer Lock API path. requestLock() may return void (fire-and-forget,
+ * D-7 optimistic placement) or Promise<void> (awaitable). exitLock() is
+ * called when the backend needs to release the lock (ESC / blur / detach /
+ * setPointerLockAllowed(false)).
+ */
+export interface PointerLockProvider {
+  /**
+   * Request pointer lock. The backend optimistically sets providerLocked=true
+   * when this is called (D-7). On throw/reject, the backend calls onLockError
+   * and rolls back providerLocked.
+   */
+  requestLock(): void | Promise<void>;
+  /** Release pointer lock. */
+  exitLock(): void;
 }
 
 /**
@@ -142,6 +176,32 @@ export function attachBrowserInputBackend(
   let mvy = 0;
   let wheelAccum = 0;
   let detached = false;
+
+  // w6: merged pointer-lock state tracking (D-1).
+  // w3cLocked is driven by document-level pointerlockchange events,
+  // isolated per-instance by comparing pointerLockElement === this canvas.
+  let w3cLocked = false;
+  // providerLocked is set optimistically when lockProvider.requestLock()
+  // is called (D-7); cleared by exitLock() or on rejection.
+  let providerLocked = false;
+  // gameGate is a command-set boolean (setPointerLockAllowed), default true.
+  let gameGate = true;
+
+  // w8 (D-1/D-3): release the provider lock idempotently. Calls the injected
+  // exitLock (routing any throw to onLockError as { path: 'provider' }) and
+  // clears providerLocked unconditionally. Shared by every provider-release
+  // site (ESC, blur, setPointerLockAllowed(false), detach) so the release
+  // semantics live in one place.
+  function releaseProviderLock(): void {
+    if (providerLocked && options.lockProvider?.exitLock) {
+      try {
+        options.lockProvider.exitLock();
+      } catch (err: unknown) {
+        if (options.onLockError) options.onLockError({ path: 'provider', cause: err });
+      }
+    }
+    providerLocked = false;
+  }
 
   // D-4: capability detected once at attach time.
   const nav =
@@ -271,6 +331,11 @@ export function attachBrowserInputBackend(
   function onKeyDown(ev: KeyboardEvent): void {
     heldKeys.add(ev.key);
     upEdges.delete(ev.key);
+    // w8 (D-1): ESC releases provider lock (W3C path handles ESC via browser
+    // pointerlockchange). Only acts when providerLocked is true.
+    if (ev.key === 'Escape' && providerLocked) {
+      releaseProviderLock();
+    }
   }
   function onKeyUp(ev: KeyboardEvent): void {
     heldKeys.delete(ev.key);
@@ -424,6 +489,9 @@ export function attachBrowserInputBackend(
     // dropped because the matching down-events were never observed by
     // this window.
     upEdges.clear();
+    // w8 (D-1): release provider lock on blur (W3C path handles focus loss
+    // via browser pointerlockchange).
+    releaseProviderLock();
     // w16 (AC-10): clear active pointers and push cancel phase events.
     if (pointerMap.size > 0) {
       for (const [id, entry] of pointerMap) {
@@ -474,6 +542,15 @@ export function attachBrowserInputBackend(
   safeAdd(canvas, 'wheel', onWheel as EventListener);
   safeAdd(doc, 'visibilitychange', onVisibilityChange as EventListener);
 
+  // w6 (D-1): track W3C pointer-lock state via document-level pointerlockchange.
+  // Per-instance isolation: only update w3cLocked when pointerLockElement matches
+  // this backend's canvas. This handles ESC / blur / browser-auto-unlock natively
+  // without backend-side ESC logic for the W3C path.
+  function onPointerLockChange(): void {
+    w3cLocked = doc.pointerLockElement === canvas;
+  }
+  safeAdd(doc, 'pointerlockchange', onPointerLockChange as EventListener);
+
   // PointerLock entry must be triggered by user activation (W3C requires
   // a click / keydown handler to call `requestPointerLock()`). The MVP
   // wires a click listener on the canvas as the activation surface;
@@ -489,19 +566,50 @@ export function attachBrowserInputBackend(
   }
 
   function onCanvasClick(): void {
+    // D-3: dual gate synthesis -- gameGate (command-set by template) AND
+    // hostPredicate (per-click evaluated by host). Both must pass to proceed.
+    if (!gameGate) return;
     // Host gate: when the host says "not now" (e.g. an editor viewport that owns
-    // the cursor outside the play·game quadrant) skip the lock entirely. Default
+    // the cursor outside the play-game quadrant) skip the lock entirely. Default
     // is always-allow, so the standalone game runtime is unchanged.
     if (options.pointerLockAllowed && !options.pointerLockAllowed()) return;
+    // Pointer Lock requires window focus; skip silently when unfocused.
+    if (typeof doc.hasFocus === 'function' && !doc.hasFocus()) return;
+
+    // D-2 / D-7: lockProvider path takes priority over W3C.
+    if (options.lockProvider) {
+      providerLocked = true; // D-7 optimistic placement
+      try {
+        const result = options.lockProvider.requestLock();
+        if (result && typeof (result as Promise<void>).catch === 'function') {
+          (result as Promise<void>).catch((cause: unknown) => {
+            providerLocked = false;
+            if (options.onLockError) {
+              options.onLockError({ path: 'provider', cause });
+            }
+          });
+        }
+      } catch (cause: unknown) {
+        // Synchronous throw from requestLock.
+        providerLocked = false;
+        if (options.onLockError) {
+          options.onLockError({ path: 'provider', cause });
+        }
+      }
+      return;
+    }
+
+    // W3C path: standard requestPointerLock.
     const fn = canvas.requestPointerLock;
     if (typeof fn !== 'function') return;
-    // Pointer Lock requires window focus; skip silently when unfocused
-    // (the next focused click will acquire it) and swallow the async
-    // rejection so a post-load / iframe `WrongDocumentError` never
-    // surfaces as an unhandled promise rejection.
-    if (typeof doc.hasFocus === 'function' && !doc.hasFocus()) return;
     const r = fn.call(canvas) as unknown;
-    if (r && typeof (r as Promise<void>).catch === 'function') (r as Promise<void>).catch(() => {});
+    if (r && typeof (r as Promise<void>).catch === 'function') {
+      (r as Promise<void>).catch((cause: unknown) => {
+        if (options.onLockError) {
+          options.onLockError({ path: 'w3c', cause });
+        }
+      });
+    }
   }
   safeAdd(canvas, 'click', onCanvasClick as EventListener);
 
@@ -603,6 +711,7 @@ export function attachBrowserInputBackend(
       wheelDelta: wheelAccum,
       focused: isFocused(),
       capabilities: caps,
+      pointerLocked: w3cLocked || providerLocked,
       ...(gamepads ? { gamepads } : {}),
       ...(pointers ? { pointers } : {}),
       ...(pointerEvents ? { pointerEvents } : {}),
@@ -619,6 +728,20 @@ export function attachBrowserInputBackend(
     return out;
   }
 
+  // w8 (D-3): command-set game gate for pointer-lock. set(false) immediately
+  // releases any active lock on both W3C and provider paths.
+  function setPointerLockAllowed(allowed: boolean): void {
+    gameGate = allowed;
+    if (!allowed) {
+      // W3C path: exit pointer-lock if currently locked on this canvas.
+      if (typeof doc.exitPointerLock === 'function' && doc.pointerLockElement === canvas) {
+        doc.exitPointerLock();
+      }
+      // Provider path: call exitLock and clear providerLocked.
+      releaseProviderLock();
+    }
+  }
+
   function detach(): void {
     if (detached) return;
     detached = true;
@@ -631,7 +754,10 @@ export function attachBrowserInputBackend(
     safeRemove(canvas, 'pointercancel', onPointerCancel as EventListener);
     safeRemove(canvas, 'wheel', onWheel as EventListener);
     safeRemove(doc, 'visibilitychange', onVisibilityChange as EventListener);
+    safeRemove(doc, 'pointerlockchange', onPointerLockChange as EventListener);
     safeRemove(canvas, 'click', onCanvasClick as EventListener);
+    // w8 (D-1): release provider lock on detach (symmetrical with W3C path).
+    releaseProviderLock();
     // Best-effort exit of PointerLock; older specs require document.exitPointerLock.
     if (doc?.pointerLockElement === canvas && typeof doc.exitPointerLock === 'function') {
       doc.exitPointerLock();
@@ -655,7 +781,7 @@ export function attachBrowserInputBackend(
     wheelAccum = 0;
   }
 
-  const backend: InputBackend = { sample, detach };
+  const backend: InputBackend = { sample, detach, setPointerLockAllowed };
 
   // Returned callable doubles as the InputBackend (detach + sample). AI
   // users see one symbol with both shapes, mirroring the

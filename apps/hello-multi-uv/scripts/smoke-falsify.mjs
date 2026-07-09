@@ -249,7 +249,7 @@ renderer.assets.catalog('guid:1b1b1b1b-0000-0000-0000-1b1b1b1b1b1b', {
 });
 
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const r = renderer.draw(world);
+  const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[falsify-smoke] draw frame ${i} error: ${r.error.code}`);
 }
 await sharedDevice.queue.onSubmittedWorkDone();

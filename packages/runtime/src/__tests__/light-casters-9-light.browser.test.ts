@@ -393,7 +393,7 @@ async function readbackAfterDraw(renderer: EngineRenderer, world: World): Promis
   // skip frames if there is no visible output, so the readback path
   // below uses both rAF + setTimeout fences to bracket both modes.
   for (let i = 0; i < FRAMES_PER_SCENE; i++) {
-    const r = renderer.draw(world);
+    const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) throw new Error(`renderer.draw frame ${i} failed`);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }

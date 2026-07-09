@@ -400,7 +400,7 @@ renderer.shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
 // not prewarmed.
 const yieldTick = () => new Promise((r) => setTimeout(r, 0));
 for (let warm = 0; warm < 16; warm++) {
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
   await yieldTick();
 }
 
@@ -408,7 +408,7 @@ const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, 300);
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < TARGET_FRAMES; i++) {
-  const r = renderer.draw(world);
+  const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;
 }

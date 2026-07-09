@@ -145,7 +145,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       scaleX: 1, scaleY: 1, scaleZ: 1,
     });
 
-    const r = renderer.draw(world);
+    const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error('[culling] draw error:', r.error);
 
     const stats = renderer.frustumStats;

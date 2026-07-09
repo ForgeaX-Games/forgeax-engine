@@ -289,7 +289,7 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
     );
 
     for (let i = 0; i < 5; i++) {
-      const r = renderer.draw(world);
+      const r = renderer.draw([world], { owner: 0 });
       if (!r.ok) throw new Error(`draw frame ${i} error: ${r.error.code}`);
     }
     await sharedDevice?.queue.onSubmittedWorkDone();

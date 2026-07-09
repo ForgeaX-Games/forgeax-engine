@@ -374,12 +374,12 @@ renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
 spawnScene(world);
 
 // First frame + tiny yield to let the first shader-module compile land.
-renderer.draw(world);
+renderer.draw([world], { owner: 0 });
 await delay(20);
 
 let frames = 1;
 for (let i = 1; i < FRAMES; i++) {
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
   frames++;
 }
 

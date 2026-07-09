@@ -91,7 +91,7 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     tiles[5] = 1;
     tiles[10] = 1;
     const { world } = makeSetup({ cols, rows, tiles });
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
     // 3 non-zero cells -> 3 derived entities.
     let derivedCount = 0;
     for (const arch of world.inspect().archetypes) {
@@ -120,7 +120,7 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
       tileSizeY: tileSize,
       tiles,
     });
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
     let posX = Number.NaN;
     let posY = Number.NaN;
     for (const arch of world.inspect().archetypes) {
@@ -168,7 +168,7 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
       tileSizeY: tileSize,
       tiles,
     });
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
     let scaleX = Number.NaN;
     let scaleY = Number.NaN;
     let quatZ = Number.NaN;
@@ -211,7 +211,7 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     const tiles = new Uint32Array(1);
     tiles[0] = 1;
     const { world } = makeSetup({ cols: 1, rows: 1, tiles });
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
     for (const arch of world.inspect().archetypes) {
       if (!arch.componentNames.includes('MeshFilter')) continue;
       if (!arch.componentNames.includes('Layer')) continue;
@@ -244,7 +244,7 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     tiles[0] = 1;
     tiles[1] = 1;
     const { world } = makeSetup({ cols: 2, rows: 1, tiles });
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
     let count = 0;
     for (const arch of world.inspect().archetypes) {
       if (
@@ -275,7 +275,7 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     const tiles = new Uint32Array(cols * rows);
     for (let i = 0; i < tiles.length; i++) tiles[i] = 1;
     const { world } = makeSetup({ cols, rows, chunkSize: 4, tiles });
-    expect(() => tilemapChunkExtractSystem(world)).not.toThrow();
+    expect(() => tilemapChunkExtractSystem(world, 0)).not.toThrow();
     // Without a Camera entity, all 64 cells must have spawned derived
     // entities (per-cell sortScope path under null frustum -> all chunks
     // visible -> every non-empty cell yields one derived entity).

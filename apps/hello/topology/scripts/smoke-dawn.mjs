@@ -437,7 +437,7 @@ spawnScene(world);
 // wireframe rendered as a filled blob. A single warm-up turn is acceptable
 // (one compile); a per-frame yield would mean the engine fix did not work.
 {
-  const warmRes = renderer.draw(world);
+  const warmRes = renderer.draw([world], { owner: 0 });
   if (!warmRes.ok) {
     console.error(`[smoke] FAIL - warmup draw failed: ${warmRes.error.code}`);
     process.exit(1);
@@ -445,7 +445,7 @@ spawnScene(world);
 }
 await delay(0); // single event-loop turn: let the first unlit module compile land.
 for (let f = 1; f < FRAMES; f++) {
-  const drawRes = renderer.draw(world); // tight, synchronous: no yield in steady state.
+  const drawRes = renderer.draw([world], { owner: 0 }); // tight, synchronous: no yield in steady state.
   if (!drawRes.ok) {
     console.error(`[smoke] FAIL - draw failed at frame ${f}: ${drawRes.error.code}`);
     process.exit(1);

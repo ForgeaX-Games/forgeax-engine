@@ -255,7 +255,11 @@ async function main() {
   }
 
   console.log(`Downloading ${assetName} (${(asset.size / 1024).toFixed(0)} KB)...`);
-  await downloadAsset(asset.browser_download_url, TMP_TARBALL);
+  // Use the API asset endpoint (asset.url) + Accept: application/octet-stream, NOT
+  // asset.browser_download_url: the browser URL 404s for PRIVATE repos even with a
+  // Bearer token (it expects a browser session), while the API endpoint authorizes
+  // via the token for both public and private repos.
+  await downloadAsset(asset.url, TMP_TARBALL);
 
   console.log(`Extracting into ${PKG_DIR} ...`);
   await extractTarball(TMP_TARBALL, PKG_DIR);

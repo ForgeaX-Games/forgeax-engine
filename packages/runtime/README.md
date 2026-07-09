@@ -41,7 +41,7 @@ const up = mat4.getUp(vec3.create(), worldMat);           // +Y basis
 const right = mat4.getRight(vec3.create(), worldMat);     // +X basis
 ```
 
-**Column convention fallback.** The world mat4 is column-major (the GPU / WGSL `mat4x4<f32>` layout): translation lives in column 3 (`world[12]`, `world[13]`, `world[14]`); the upper-left 3x3 is the rotation x scale basis. A freshly spawned `Transform` (`data: {}`) lands an identity local TRS and an identity world mat4 before the first propagate pass runs, so a read before `world.update()` / `renderer.draw(world)` returns identity, not stale garbage.
+**Column convention fallback.** The world mat4 is column-major (the GPU / WGSL `mat4x4<f32>` layout): translation lives in column 3 (`world[12]`, `world[13]`, `world[14]`); the upper-left 3x3 is the rotation x scale basis. A freshly spawned `Transform` (`data: {}`) lands an identity local TRS and an identity world mat4 before the first propagate pass runs, so a read before `world.update()` / `renderer.draw([world], { owner: 0 })` returns identity, not stale garbage.
 
 ## API 索引
 
@@ -52,8 +52,8 @@ const right = mat4.getRight(vec3.create(), worldMat);     // +X basis
 | `Renderer.shader` | `ShaderRegistry` readonly | Instance-per-engine ShaderRegistry lazy property (plan-strategy S-10 / D-R10 / OQ-5); `Renderer.ready` auto-loads manifest + compiles PBR pipeline |
 | `Renderer.assets` | `AssetRegistry` readonly | Instance-per-engine AssetRegistry lazy property (feat-20260509-ecs-render-bridge-mvp / D-S9). Post-D-17 it is a GUID -> payload catalogue (`catalog` / `loadByGuid` / `lookup`); the 5 built-in meshes (`HANDLE_CUBE`..`HANDLE_NINESLICE_QUAD`) are process-static in `BuiltinAssetRegistry` (D-15), not catalogued here. See § Assets. |
 | `Renderer.metrics` | `EngineMetrics` readonly | feat-20260527-sprite-nineslice / D-5 — public counter API; `increment(name)` / `snapshot()` / `reset()` (Map-backed). Counter key namespace `<feat>.<event>` (e.g. `nineslice.scale-too-small` / `nineslice.tile-needs-repeat-sampler`). See § Sprite materials. |
-| `Renderer.ready` | `Promise<void>` readonly | Init barrier (D-S3); serial three-step (manifest load -> PBR pipeline compile -> AssetRegistry built-in mesh GPU buffer upload); `await renderer.ready` before calling `draw(world)` |
-| `Renderer.draw(world)` | `(World) => void` | One-frame RenderSystem Extract / Prepare / Record (D-S2 / K-4 rewrite); replaced prior `draw(target: RendererDrawTarget)` (breaking, D-Q4) |
+| `Renderer.ready` | `Promise<void>` readonly | Init barrier (D-S3); serial three-step (manifest load -> PBR pipeline compile -> AssetRegistry built-in mesh GPU buffer upload); `await renderer.ready` before calling `draw([world], { owner: 0 })` |
+| `Renderer.draw(worlds, { owner })` | `(worlds: World[], options: { owner: number }) => Result<void, RhiError>` | One-frame RenderSystem Extract / Prepare / Record over a composited world list (D-S2 / K-4 rewrite; feat-20260708 M3). Single entry — the legacy single-`World` overload was removed; single-world users pass `draw([world], { owner: 0 })`. `owner` is a required index into `worlds` (compile-time error if omitted). Renderables + lights merge across all worlds; cameras + singleton resources (skylight / skybox / postProcessParams) come only from `worlds[owner]`. See § Multi-world compositing for full semantics + 2 new error codes |
 | `Renderer.readPixels()` | `() => Promise<Result<Uint8Array, RhiError>>` | Canvas pixel readback as top-left RGBA `Uint8Array` (length = `canvas.width * canvas.height * 4`); browser path uses `createImageBitmap -> OffscreenCanvas 2D drawImage -> getImageData` (WebGPU `GPUTexture` does not expose `getImageData`; 2D bounce is the browser lowest-common-denominator path); OffscreenCanvas / 2D ctx unavailable / `createImageBitmap` throws returns `'webgpu-runtime-error'` + `detail.error: RhiError | { code: unknown, message: string }`; dawn-node smoke path uses raw RHI (`device.queue.copyTextureToBuffer + mapAsync`) |
 | `Renderer.dispose()` | `() => void` | **@placeholder M2/M3**: unbinds lost / error listeners + flips disposed flag; GPU resources reclaimed by `device.lost` / browser GC (explicit `device.destroy()` path in a follow-up); idempotent |
 | `Renderer.onLost(cb)` | `(RendererLostListener) => () => void` | device-lost notify (R-2, engine does not auto-recover) |
@@ -395,7 +395,7 @@ renderer.installPipeline({
   pipelineId: HDRP_PIPELINE_ID,
   config: { clusterGrid: { x: 16, y: 9, z: 24 } },
 } as RenderPipelineAsset).unwrap();
-// 后续 renderer.draw(world) 即走 cluster-forward；perFramePassNames 含 'cluster-forward'.
+// 后续 renderer.draw([world], { owner: 0 }) 即走 cluster-forward；perFramePassNames 含 'cluster-forward'.
 ```
 
 完整范例见 `apps/hello/hdrp-lighting/src/main.ts`（256-light slab）+ `apps/parity/urp-vs-hdrp/src/main.ts`（同场景 ≤4 light 像素 parity）。参见 `packages/runtime/src/cluster-binner.ts`（CPU cluster binner 纯函数）+ `packages/runtime/src/hdrp-pipeline.ts`（HDRP RenderPipeline 实现）。
@@ -641,7 +641,7 @@ world.spawn(
 
 - **K-4 channel priority** — Channel 1 (explicit rhi) / Channel 2 (rhi-webgpu via navigator.gpu; falls back to Channel 3 on adapter/device/context failure) / Channel 3 (rhi-wgpu wasm) / all fail throw `EngineEnvironmentError` with `detail.webgpuError` + `detail.wgpuError`; no backend type selection API exposed.
 - **internal/ 隔离** — backend 实现模块通过 `package.json#exports` 锁定不导出（grep 静态闸门 + 运行时 import 失败双重保险）。
-- **lazy backend** — `Renderer.draw(world)` 第一次调用才 dynamic import backend chunk；probe-only 调用方零成本。
+- **lazy backend** — `Renderer.draw([world], { owner: 0 })` 第一次调用才 dynamic import backend chunk；probe-only 调用方零成本。
 - **AC-15 source-level** — `createRenderer.ts` 用 `globalThis.navigator` 而非 raw `navigator`；从不触碰 `window` / `document`。
 - **AC-06 grep 闸门** — `packages/engine/src/internal/webgpu-backend.ts` 不再含 raw WebGPU 全局入口调用（M3 重构后改走 `RhiDevice` 接口）。
 
@@ -771,9 +771,10 @@ world.spawn({ component: DirectionalLight, data: {
 // 3. await ready (WebGPU 路径 manifest + pipeline + asset upload 串行三步)
 await renderer.ready;
 
-// 4. raf 循环 draw(world)
+// 4. raf 循环 draw([world], { owner: 0 })
+// 单 world 用法：包一层数组，owner 恒为 0。多 world 合并语义见 § Multi-world compositing。
 function frame() {
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -800,12 +801,76 @@ import {
 | `Camera` | `fov + aspect + near + far + clearR/G/B/A + tonemap + exposure + whitePoint + antialias + bloom* + ...`（projection + clear + tonemap + AA + bloom 字段族） | spawn 时显式给（不自动）；clear 默认 `[0, 0, 0, 1]`；详见 §Camera clear color + §Anti-Aliasing 子章节 |
 | `DirectionalLight` | `directionX/Y/Z + colorR/G/B + intensity + castShadow`（7 f32 + 1 bool gate）+ `cascadeCount + splitLambda + cascadeBlend + mapSize + depthBias + normalBias + shadowDistance + pcfKernelSize`（8 f32 shadow params，feat-20260621 merge；`nearPlane`/`farPlane` 塌为 `shadowDistance`，近端取相机 near） | 0 light = unlit fallback（合法，不 fire onError）；castShadow 默认 true，zero-config spawn 即投射 cascaded shadow maps
 
+### Multi-world compositing — `draw(worlds, { owner })`
+
+> feat-20260708-composited-multi-world-rendering M3 (D-1 / D-3 / D-5). `draw` takes an
+> ordered `World[]` and composites them into one frame. Single-world users never see
+> this — the quickstart `draw([world], { owner: 0 })` is the trivial one-element case.
+
+**Signature.** `draw(worlds: World[], options: { owner: number }): Result<void, RhiError>`.
+`owner` is a **required** index into `worlds` (`0 <= owner < worlds.length`); omitting it is a
+compile-time error (type system enforces discoverability — the type is the doc).
+
+**`owner` semantics.** `worlds[owner]` is the authoritative source for cameras + all
+**singleton** resources. Every other world contributes only its geometry + lights.
+
+**Merge semantics** (what composites vs what `owner` alone supplies):
+
+| Frame data | Merge rule |
+|:--|:--|
+| renderables (`MeshFilter` + `MeshRenderer` entities) | **merged** — concatenated in `worlds[]` order, each stamped with its `worldId`, then stably re-sorted by draw queue |
+| lights (point / spot) | **merged** — concatenated across all worlds |
+| directional light | first non-empty in `worlds[]` order (its CSM `lightViewProj` / split depths chosen atomically from the same world); `directionalCount` summed across worlds → N>1 still fires `'render-system-multi-light'` fail-fast at record (no new silent path) |
+| cameras | **owner only** — taken whole from `worlds[owner]`; other worlds' cameras discarded |
+| skylight | **owner only** |
+| skybox | **owner only** |
+| postProcessParams | **owner only** |
+
+**Order-stability contract** (requirements §6 / R-4). The `worlds[]` order is a
+**documented contract**: caches are namespaced by array index (`worldId`). Passing the
+same worlds in a **different order** invalidates every cache entry → the frame renders
+**correctly but with a full cache miss** (slower, not wrong). Keep a stable world order
+across frames for cache reuse. A single-world `draw([world], { owner: 0 })` always has
+`worldId === 0`, so its cache behavior is bit-identical to the pre-composite path.
+
+**Entry validation** (both codes fire before any extract, so no per-world side effects run):
+
+- empty `worlds` -> `'render-system-empty-worlds'` (`.detail = undefined`)
+- `owner` out of range -> `'render-system-owner-out-of-range'` (`.detail = { owner, worldCount }`)
+
+The two are **non-exclusive** but ordered: an empty array short-circuits to
+`'render-system-empty-worlds'` before the owner-range check. Both return via the
+`Result.err` channel (not `onError`).
+
+```ts
+// Composite two worlds; the owner (index 0) supplies the camera + singletons.
+const scene = new World();    // camera + lights + geometry
+const overlay = new World();  // extra geometry (gizmos / annotations), no camera
+const r = renderer.draw([scene, overlay], { owner: 0 });
+if (!r.ok) {
+  switch (r.error.code) {
+    case 'render-system-empty-worlds': /* pass at least one world */ break;
+    case 'render-system-owner-out-of-range': /* r.error.detail.owner / .worldCount */ break;
+    default: handleRhiError(r.error);
+  }
+}
+```
+
+> [!NOTE]
+> **Video texture boundary (D-1a #10).** Video-textured materials resolve their
+> `<video>` element by real entity handle (not the composite cache key), so a video
+> texture is only resolvable in the **owner** world. In v1, put video-textured
+> entities in `worlds[owner]`; non-owner worlds risk a provider lookup miss. Tracked
+> as a follow-up (widen the video provider to the composite key space).
+
 **错误分档表**（与 AGENTS.md `§ECS render bridge` 错误分档表同结构 SSOT；AI 用户 `renderer.onError(err => switch(err.code) {...})` 主消费方式 + `await renderer.ready` 主 reject 方式）：
 
 | Path | 行为 | onError 触发？ | 错误码 |
 |:--|:--|:--|:--|
 | `await renderer.ready` step 1/2/3 fail | Promise reject with structured `RhiError \| ShaderError` | no (reject channel) | `'manifest-malformed'` / `'shader-compile-failed'` / `'limit-exceeded'` etc. |
-| `draw(world)` before `ready` settles | frame skip | yes | `'rhi-not-available'` |
+| `draw([world], { owner: 0 })` before `ready` settles | frame skip | yes | `'rhi-not-available'` |
+| `draw([], { owner })` empty `worlds` | frame skip — 入口校验先于任何 extract，无 per-world 副作用 | no (return channel: `Result.err`) | `'render-system-empty-worlds'`（`.detail = undefined`） |
+| `draw(worlds, { owner })` `owner` 越界（`owner < 0` 或 `owner >= worlds.length`） | frame skip — empty-worlds 检查之后的入口校验（二码非互斥：空数组先短路到 `'render-system-empty-worlds'`） | no (return channel: `Result.err`) | `'render-system-owner-out-of-range'`（`.detail = { owner, worldCount }`） |
 | **case A** entity 缺 `Transform` | 默认值 fallback | 不（D-Q7 软化：「这本来就不是错」，ergonomic 用法不算误用，类似 three.js Object3D 默认 transform） | — |
 | **case A'** entity 缺 `MeshRenderer` | archetype 缺位 silent skip — entity 不进 single-query 命中域 | 不（feat-20260517 严格 silent skip；详见下方 D-Q7 三档子表） | — |
 | **case B** world 中 0 Camera | frame skip | 是 | `'render-system-no-camera'` |
@@ -832,7 +897,13 @@ import {
 renderer.onError((err) => {
   switch (err.code) {
     case 'render-system-no-camera':
-      console.warn(err.hint); // 'world.spawn({ component: Transform, data: { posX, ... } }, { component: Camera, data: { fov, aspect, near, far } }) before renderer.draw(world)'
+      console.warn(err.hint); // 'world.spawn({ component: Transform, data: { posX, ... } }, { component: Camera, data: { fov, aspect, near, far } }) before renderer.draw([world], { owner: 0 })'
+      break;
+    case 'render-system-empty-worlds':
+      console.warn(err.hint); // 'pass at least one world: draw([world], { owner: 0 })'
+      break;
+    case 'render-system-owner-out-of-range':
+      console.warn(`owner ${err.detail.owner} out of ${err.detail.worldCount}; ${err.hint}`);
       break;
     case 'asset-not-registered':
       console.warn(`unknown handle ${err.detail?.assetHandle}; ${err.hint}`);
@@ -2508,7 +2579,7 @@ if (!frustum.intersectsBox(f, entityAabb)) {
 | WGSL access | `var<uniform> mesh: Mesh` (single struct per draw) | `var<storage, read> meshes: array<Mesh>` + `@builtin(instance_index)` lookup |
 | `MAX_RENDERABLES = 1024` semantics | stride-aligned cap (max dynamic-offset slots; backing buffer = `PER_ENTITY_STRIDE * MAX_RENDERABLES`) | instance count cap (max value of `instanceCount` argument; storage buffer = `64 B * MAX_RENDERABLES` = 64 KiB tight-packed) |
 | Cap-violation behaviour | silent overflow / out-of-bounds dynamic offset (no structured signal) | fail-fast `RhiError({ code: 'limit-exceeded', expected: 'renderables.length ≤ MAX_RENDERABLES', hint, detail: { renderableCount, limit } })` fired via `Renderer.onError` (per-frame dedup engine-side); 17-member `RhiErrorCode` union unchanged (this is a minor extension of `RhiError.detail` for an existing code, not a new union member) |
-| AI-user-visible API | unchanged — still `await createRenderer(canvas)` + `renderer.draw(world)` (charter 命题 5 一致抽象保持) | identical surface; storage-vs-uniform / instanced-vs-looped is engine-internal, not consumer-visible |
+| AI-user-visible API | unchanged — still `await createRenderer(canvas)` + `renderer.draw([world], { owner: 0 })` (charter 命题 5 一致抽象保持) | identical surface; storage-vs-uniform / instanced-vs-looped is engine-internal, not consumer-visible |
 
 For the constant itself plus full JSDoc on the `64 B * MAX_RENDERABLES` storage-buffer sizing rationale, see [`packages/runtime/src/createRenderer.ts`](src/createRenderer.ts) around the `MAX_RENDERABLES = 1024` declaration site and the sibling [`packages/runtime/src/record/`](src/record/) cluster cap-check + `drawIndexed` call site.
 

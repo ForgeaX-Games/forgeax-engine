@@ -137,7 +137,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   });
 
   const frame = (): void => {
-    const r = renderer.draw(world);
+    const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error('[picking] draw error:', r.error);
     requestAnimationFrame(frame);
   };

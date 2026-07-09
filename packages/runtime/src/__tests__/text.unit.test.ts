@@ -111,7 +111,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
         // Before the pass the entity carries only GlyphText + no MeshFilter column.
         expect(world.get(e, GlyphText).ok).toBe(true);
-        glyphTextLayoutSystem(world, assets, gpuStore);
+        glyphTextLayoutSystem(world, assets, gpuStore, 0);
         // After one pass the layout system has baked + attached the render slots.
         expect(world.get(e, MeshFilter).ok).toBe(true);
         expect(world.get(e, MeshRenderer).ok).toBe(true);
@@ -151,7 +151,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           )
           .unwrap();
 
-        glyphTextLayoutSystem(world, assets, gpuStore);
+        glyphTextLayoutSystem(world, assets, gpuStore, 0);
 
         // F-2 guard: MeshFilter.assetHandle reads back the registered mesh id.
         const mf = world.get(e, MeshFilter);
@@ -178,14 +178,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         const fontId = registerFont(world, ASCII('HiABC'));
         const e = spawnLabel(world, fontId, 'Hi');
 
-        glyphTextLayoutSystem(world, assets, gpuStore);
+        glyphTextLayoutSystem(world, assets, gpuStore, 0);
         const sizeAfterBake = world.sharedRefs._liveCount();
         const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
         const meshHandle = mf.assetHandle;
 
         // Mutate text -> next pass must updateMesh in place, not register a new mesh.
         world.set(e, GlyphText, { text: 'ABC' }).unwrap();
-        glyphTextLayoutSystem(world, assets, gpuStore);
+        glyphTextLayoutSystem(world, assets, gpuStore, 0);
 
         expect(world.sharedRefs._liveCount()).toBe(sizeAfterBake); // no new registration (AC-08)
         const mf2 = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
@@ -197,9 +197,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         const world = new World();
         const fontId = registerFont(world, ASCII('Hi'));
         spawnLabel(world, fontId, 'Hi');
-        glyphTextLayoutSystem(world, assets, gpuStore);
+        glyphTextLayoutSystem(world, assets, gpuStore, 0);
         const size1 = world.sharedRefs._liveCount();
-        glyphTextLayoutSystem(world, assets, gpuStore); // no change -> no work
+        glyphTextLayoutSystem(world, assets, gpuStore, 0); // no change -> no work
         expect(world.sharedRefs._liveCount()).toBe(size1);
       });
 
@@ -208,7 +208,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         const world = new World();
         const fontId = registerFont(world, ASCII('HHHH'));
         const e = spawnLabel(world, fontId, 'HHHH');
-        glyphTextLayoutSystem(world, assets, gpuStore);
+        glyphTextLayoutSystem(world, assets, gpuStore, 0);
 
         const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
         const mesh = resolveAssetHandle<MeshAsset>(
@@ -234,7 +234,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           const fontId = registerFont(world, ASCII('A'));
           spawnLabel(world, fontId, 'A');
         }
-        const result = glyphTextLayoutSystem(world, assets, gpuStore);
+        const result = glyphTextLayoutSystem(world, assets, gpuStore, 0);
         expect(result.ok).toBe(false);
         if (!result.ok) {
           expect(result.error).toBeInstanceOf(TextError);
@@ -248,7 +248,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         const world = new World();
         const fontId = registerFont(world, ASCII('Hi'));
         const e = spawnLabel(world, fontId, '');
-        glyphTextLayoutSystem(world, assets, gpuStore);
+        glyphTextLayoutSystem(world, assets, gpuStore, 0);
 
         expect(world.get(e, MeshFilter).ok).toBe(true);
         const mf = world.get(e, MeshFilter).unwrap() as { assetHandle: number };
@@ -506,7 +506,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         const camera = spawnCamera(world, 5);
         const label = spawnLabel(world, fontId);
 
-        glyphTextLayoutSystem(world, assets, gpuStore); // bake + attach MeshFilter + MeshRenderer
+        glyphTextLayoutSystem(world, assets, gpuStore, 0); // bake + attach MeshFilter + MeshRenderer
 
         const hit = pick(world, camera, VP / 2, VP / 2, VP, VP);
         expect(hit).toBeDefined();
@@ -521,7 +521,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         const camera = spawnCamera(world, 5);
         const label = spawnLabel(world, fontId);
 
-        glyphTextLayoutSystem(world, assets, gpuStore);
+        glyphTextLayoutSystem(world, assets, gpuStore, 0);
         world.set(label, MeshRenderer, { pickable: 0 }).unwrap();
 
         const hit = pick(world, camera, VP / 2, VP / 2, VP, VP);

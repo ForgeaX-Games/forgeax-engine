@@ -41,7 +41,7 @@ import type {
   ShaderModule,
   TextureView,
 } from '@forgeax/engine-rhi';
-import { err, ok, RhiError } from '@forgeax/engine-rhi';
+import { err, ok, RhiError, validateDrawArgs } from '@forgeax/engine-rhi';
 // Static rhi-webgpu import — channel 2 (navigator.gpu present) consumes this
 // namespace synchronously. rhi-webgpu is **already** a static dep via
 // `engine-runtime/src/index.ts:export { acquireCanvasContext } from
@@ -1977,7 +1977,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     get bindGroupCounts() {
       return renderSystem.bindGroupCounts;
     },
-    draw(world: World): Result<void, RhiError> {
+    draw(worlds: World[], options: { owner: number }): Result<void, RhiError> {
       // feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M5 / w21
       // (plan-strategy D-1, D-8): post-dispose the renderer is dead. AI
       // users observing `result.ok === false && err.code === 'rhi-not-
@@ -1987,7 +1987,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       if (disposed) {
         const e = new RhiError({
           code: 'rhi-not-available',
-          expected: 'renderer not disposed before calling renderer.draw(world)',
+          expected: 'renderer not disposed before calling renderer.draw(worlds, { owner })',
           hint: 'renderer.dispose() flipped the lifecycle latch; rebuild via createRenderer / Engine.create',
         });
         internals.errorRegistry.fire(e);
@@ -2014,7 +2014,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       if (!readySettled) {
         const e = new RhiError({
           code: 'rhi-not-available',
-          expected: 'await renderer.ready before calling renderer.draw(world)',
+          expected: 'await renderer.ready before calling renderer.draw(worlds, { owner })',
           hint: 'await renderer.ready resolves once the manifest / pipeline / asset upload chain completes',
         });
         internals.errorRegistry.fire(e);
@@ -2033,6 +2033,19 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         internals.errorRegistry.fire(e);
         return err(e);
       }
+      // feat-20260708-composited-multi-world-rendering M3 / D-5: draw-args
+      // entry validation runs before any extract or context configuration.
+      // Empty worlds / owner out of range returns a structured Result.err
+      // (never silent, charter P3) without touching GPU state. The two codes
+      // are non-exclusive: an empty array short-circuits to empty-worlds. The
+      // check is defensive against JS callers passing a non-array despite the
+      // compile-time World[] type (red-window migration safety).
+      const worldCount = Array.isArray(worlds) ? worlds.length : 0;
+      const argsCheck = validateDrawArgs(worldCount, options?.owner as number);
+      if (!argsCheck.ok) {
+        internals.errorRegistry.fire(argsCheck.error);
+        return argsCheck;
+      }
       // Configure context lazily on first draw (D-S1 single-point
       // exemption): GPUCanvasContext.configure({device}) needs a raw
       // GPUDevice; main.ts passes it via RendererOptions.rawDeviceForContextConfigure.
@@ -2046,8 +2059,17 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         // entity before the render walk reaches it. A `font-concurrency-exceeded`
         // TextError is a structured author-facing signal (distinct domain from
         // RhiError); it does not abort the frame -- healthy labels still render.
-        glyphTextLayoutSystem(world, assets, gpuStore);
-        renderSystem.draw(world);
+        //
+        // feat-20260708-composited-multi-world-rendering M3 / D-1a #6: run the
+        // glyph layout system per world, passing worldId = array index so the
+        // bakeCache key is worldEntityKey(worldId, index) and cross-world glyph
+        // entities never collide. worldId matches extractFrames' stamping
+        // (worlds[] index), so glyph cache keys line up with the render walk.
+        for (let wi = 0; wi < worlds.length; wi++) {
+          const w = worlds[wi];
+          if (w !== undefined) glyphTextLayoutSystem(w, assets, gpuStore, wi);
+        }
+        renderSystem.draw(worlds, options);
         // m3-2: fire onFrameEnd listeners after the frame render completes,
         // before returning the synchronous result. Recorder subscribes via
         // renderer._onFrameEnd to inject frameMark events.
@@ -2059,7 +2081,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         const message = cause instanceof Error ? cause.message : String(cause);
         const e = new RhiError({
           code: 'webgpu-runtime-error',
-          expected: 'renderSystem.draw(world) completes without throwing',
+          expected: 'renderSystem.draw(worlds, { owner }) completes without throwing',
           hint: `RenderSystem internal error: ${message}`,
         });
         internals.errorRegistry.fire(e);

@@ -917,6 +917,34 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0
 
+  apps/hello/multi-world:
+    dependencies:
+      '@forgeax/engine-ecs':
+        specifier: workspace:*
+        version: link:../../../packages/ecs
+      '@forgeax/engine-rhi-webgpu':
+        specifier: workspace:*
+        version: link:../../../packages/rhi-webgpu
+      '@forgeax/engine-rhi-wgpu':
+        specifier: workspace:*
+        version: link:../../../packages/rhi-wgpu
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../../../packages/runtime
+    devDependencies:
+      '@forgeax/engine-vite-plugin-shader':
+        specifier: workspace:*
+        version: link:../../../packages/vite-plugin-shader
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
+      vite:
+        specifier: 8.0.10
+        version: 8.0.10(@types/node@25.8.0)(esbuild@0.27.7)(jiti@1.21.7)
+      webgpu:
+        specifier: ^0.4.0
+        version: 0.4.0
+
   apps/hello/physics:
     dependencies:
       '@forgeax/engine-app':

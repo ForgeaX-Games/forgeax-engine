@@ -82,28 +82,28 @@ describe('tilemap dirty rebuild (M0 baseline)', () => {
   it('first frame: dirty=0 + never-built layer still spawns derived entities', () => {
     const { world } = setup();
     expect(countDerived(world)).toBe(0);
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
     expect(countDerived(world)).toBe(2);
   });
 
   it('idempotent: second pass without dirty flag does not duplicate entities', () => {
     const { world } = setup();
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
     const after1 = countDerived(world);
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
     const after2 = countDerived(world);
     expect(after2).toBe(after1);
   });
 
   it('markTileLayerDirty triggers a full rebuild on the next pass', () => {
     const { world, layer } = setup();
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
     expect(countDerived(world)).toBe(2);
     // Mutate the tiles array in place + mark dirty.
     const tiles = world.get(layer, TileLayer).unwrap().tiles as Uint32Array;
     tiles[1] = 1; // adds a non-zero cell
     markTileLayerDirty(world, layer).unwrap();
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
     expect(countDerived(world)).toBe(3);
   });
 });

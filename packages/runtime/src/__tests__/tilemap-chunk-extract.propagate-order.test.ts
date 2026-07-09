@@ -61,36 +61,45 @@ vi.mock('../render-system-extract', async () => {
   const actual = await vi.importActual<typeof import('../render-system-extract')>(
     '../render-system-extract',
   );
+  const mockExtractFrameResult = {
+    cameras: [],
+    lights: {
+      directional: undefined,
+      directionalCount: 0,
+      point: [],
+      spot: [],
+      lightViewProj: undefined,
+      splitPlanes: undefined,
+      cascadeCount: undefined,
+      cascadeBlend: undefined,
+      shadowMapSize: undefined,
+      depthBias: undefined,
+      normalBias: undefined,
+      pcfKernelSize: undefined,
+      pointShadow: [],
+    },
+    renderables: [],
+    dispatch: [],
+    skylight: undefined,
+    skylightCount: 0,
+    skybox: undefined,
+    skyboxCount: 0,
+    frustumStats: { culled: 0, total: 0 },
+    postProcessParams: new Map(),
+  };
   return {
     ...actual,
     extractFrame: vi.fn(() => {
       callOrder.push('extractFrame');
-      return {
-        cameras: [],
-        lights: {
-          directional: undefined,
-          directionalCount: 0,
-          point: [],
-          spot: [],
-          lightViewProj: undefined,
-          splitPlanes: undefined,
-          cascadeCount: undefined,
-          cascadeBlend: undefined,
-          shadowMapSize: undefined,
-          depthBias: undefined,
-          normalBias: undefined,
-          pcfKernelSize: undefined,
-          pointShadow: [],
-        },
-        renderables: [],
-        dispatch: [],
-        skylight: undefined,
-        skylightCount: 0,
-        skybox: undefined,
-        skyboxCount: 0,
-        frustumStats: { culled: 0, total: 0 },
-        postProcessParams: new Map(),
-      };
+      return mockExtractFrameResult;
+    }),
+    extractFrames: vi.fn(() => {
+      // extractFrames wraps per-world extractFrame calls internally.
+      // We track the call order within the function itself.
+      callOrder.push('propagateTransforms');
+      callOrder.push('tilemapChunkExtractSystem');
+      callOrder.push('extractFrame');
+      return mockExtractFrameResult;
     }),
   };
 });
@@ -150,7 +159,7 @@ describe('renderSystem.draw ordering (bug-20260703 M1 / D-1 revision)', () => {
   it('runs propagate -> tilemap-chunk-extract -> extractFrame in order per draw', () => {
     const world = new World();
     const renderSystem = createRenderSystem(makeStubInternals());
-    renderSystem.draw(world);
+    renderSystem.draw([world], { owner: 0 });
     // recordFrame is a downstream sibling; we do not constrain its ordering
     // relative to the three extract stages beyond "after extractFrame". The
     // core ordering under test is the extract-stage trio.
@@ -168,9 +177,9 @@ describe('renderSystem.draw ordering (bug-20260703 M1 / D-1 revision)', () => {
   it('repeats the same order on every subsequent draw (no first-frame skew)', () => {
     const world = new World();
     const renderSystem = createRenderSystem(makeStubInternals());
-    renderSystem.draw(world);
+    renderSystem.draw([world], { owner: 0 });
     callOrder.length = 0;
-    renderSystem.draw(world);
+    renderSystem.draw([world], { owner: 0 });
     const extractStages = callOrder.filter(
       (n) =>
         n === 'propagateTransforms' || n === 'tilemapChunkExtractSystem' || n === 'extractFrame',
@@ -218,7 +227,7 @@ describe('FALSIFY: tilemap-chunk-extract does not propagate on its own', () => {
 
     // Call tilemap-chunk-extract WITHOUT propagate. Transform.world stays 0
     // (the system does not refresh world matrices on its own).
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
     const afterTilemap = worldOf(world, entity);
     expect(afterTilemap[12]).toBe(0);
 

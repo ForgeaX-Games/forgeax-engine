@@ -125,7 +125,7 @@ async function main(): Promise<void> {
       view[7 * cols + 7] = 1;
       markTileLayerDirty(world, layer).unwrap();
     }
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

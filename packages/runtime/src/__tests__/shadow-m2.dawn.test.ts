@@ -328,7 +328,7 @@ describe('shadow M2 dawn (AC-12 real)', () => {
       // Build fixture world and render at least one frame to populate
       // the shadow depth texture.
       const world = buildFixtureWorld();
-      const drawResult = renderer.draw(world);
+      const drawResult = renderer.draw([world], { owner: 0 });
       expect(drawResult.ok).toBe(true);
 
       // Verify the shadow RT exists (shadow pass ran).

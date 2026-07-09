@@ -199,7 +199,7 @@ for (let f = 0; f < TARGET_FRAMES; f++) {
     markTileLayerDirty(world, layer).unwrap();
     dirtyTriggered = true;
   }
-  const r = renderer.draw(world);
+  const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) {
     console.error(`[hello-tilemap smoke] draw frame ${f} error: ${r.error.code}`);
     process.exit(1);

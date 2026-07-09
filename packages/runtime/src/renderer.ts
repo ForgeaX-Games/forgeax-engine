@@ -3,7 +3,7 @@
 // K-4 contract:
 //   - `Renderer.backend` is an opaque marker (`'webgpu'`); callers never
 //     branch on the underlying backend type, only on this string.
-//   - `Renderer.draw(world)` runs one frame for the supplied World.
+//   - `Renderer.draw([world], { owner: 0 })` runs one frame for the supplied worlds.
 //   - `Renderer.onLost(cb)` registers a notify-only listener for device loss.
 //   - `Renderer.onError(cb)` registers a listener for RHI creation-time errors.
 //   - `Renderer.dispose()` releases GPU resources + detaches all listeners.
@@ -161,7 +161,7 @@ export interface RendererOptions {
  * | `ready` step 1 manifest load fails | settles err (`ShaderError 'manifest-malformed'` / `'shader-not-found'`) | no — surfaced through `await renderer.ready` |
  * | `ready` step 2 pipeline compile fails | settles err (`RhiError 'shader-compile-failed'` / `'feature-not-enabled'` / `'limit-exceeded'`) | no — surfaced through ready |
  * | `ready` step 3 asset upload fails | settles err (`RhiError 'limit-exceeded'` / `'webgpu-runtime-error'`) | no — surfaced through ready |
- * | `draw(world)` before `ready` settles (D-S4) | frame skipped | yes — `'rhi-not-available'` |
+ * | `draw([world], { owner: 0 })` before `ready` settles (D-S4) | frame skipped | yes — `'rhi-not-available'` |
  * | RenderSystem 0 Camera | frame skipped | yes — `'render-system-no-camera'` |
  * | RenderSystem N>1 Camera | first archetype hit rendered | yes — `'render-system-multi-camera'` |
  * | RenderSystem N>1 DirectionalLight | first archetype hit used | yes — `'render-system-multi-light'` |
@@ -258,14 +258,14 @@ export interface Renderer {
    *      `queue.writeBuffer` for cube + triangle vertex / index buffers.
    * Any step failure settles with `Result.err(RhiError)`.
    *
-   * Calling `draw(world)` before `ready` settles fires `onError` with
-   * `'rhi-not-available'` and skips the frame (D-S4).
+   * Calling `draw([world], { owner: 0 })` before `ready` settles fires
+   * `onError` with `'rhi-not-available'` and skips the frame (D-S4).
    *
    * @example
    *   const renderer = await createRenderer(canvas);
    *   const ready = await renderer.ready;
    *   if (!ready.ok) throw ready.error;
-   *   const r = renderer.draw(world);
+   *   const r = renderer.draw([world], { owner: 0 });
    *   if (!r.ok) console.error(r.error);
    */
   readonly ready: Promise<Result<void, RhiError>>;
@@ -291,7 +291,7 @@ export interface Renderer {
    *   });
    *   const ready = await renderer.ready;
    *   if (!ready.ok) throw ready.error;
-   *   const r = renderer.draw(world);
+   *   const r = renderer.draw([world], { owner: 0 });
    *   if (!r.ok) handleError(r.error);
    *
    * w24 — Result<void, RhiError> shape: returns Result.ok(undefined) on
@@ -300,8 +300,27 @@ export interface Renderer {
    * (charter proposition 5; D-P6 dual-channel preserved). The Result return
    * is the synchronous facade-level summary; AI users can ignore it or
    * branch on `.ok` (biome lint warns on unhandled return).
+   *
+   * feat-20260708-composited-multi-world-rendering M3 (AC-01 / AC-02 / D-5):
+   * the single entry path is `draw(worlds, { owner })`. `worlds` is composited
+   * into one frame — renderables + lights merge from every world, while
+   * cameras + singleton resources (skylight / skybox / postProcessParams) come
+   * only from `worlds[owner]`. `owner` is a required index into `worlds` (no
+   * default; omitting it is a compile-time error). There is no legacy
+   * `draw(world)` overload. Single-world users pass `draw([world], { owner: 0 })`
+   * (the app frame-loop does this wrapping transparently). Entry validation
+   * returns `Result.err` before any extract on:
+   *   - empty `worlds`       -> `'render-system-empty-worlds'`
+   *   - `owner` out of range -> `'render-system-owner-out-of-range'`
+   *     (`.detail = { owner, worldCount }`)
+   *
+   * @example Composite two worlds (owner supplies the camera):
+   *   const scene = new World();   // camera + lights + geometry
+   *   const overlay = new World(); // extra geometry, no camera
+   *   const r = renderer.draw([scene, overlay], { owner: 0 });
+   *   if (!r.ok) handleError(r.error);
    */
-  draw(world: World): Result<void, RhiError>;
+  draw(worlds: World[], options: { owner: number }): Result<void, RhiError>;
   /**
    * Read the canvas's current pixel contents back into an RGBA Uint8Array.
    *
@@ -316,7 +335,7 @@ export interface Renderer {
    * Apps that need bottom-left origin (parity comparisons against
    * `gl.readPixels`) Y-flip the result locally.
    *
-   * AI users typically: `renderer.draw(world)` to update the canvas,
+   * AI users typically: `renderer.draw([world], { owner: 0 })` to update the canvas,
    * then `await renderer.readPixels()` to sample. Output buffer length
    * is `canvas.width * canvas.height * 4`.
    *
@@ -448,14 +467,14 @@ export interface Renderer {
    * statistics collected during the extract stage. `culled` is the count
    * of entities removed from renderables by frustum culling; `total` is
    * the count that reached the culling decision point. Both are zero
-   * before the first `draw(world)` or when no `MeshRenderer` entities
+   * before the first `draw([world], { owner: 0 })` or when no `MeshRenderer` entities
    * are in the world.
    */
   readonly frustumStats: { readonly culled: number; readonly total: number };
   /**
    * feat-20260531-bloom-first-declarative-render-graph-pass M4 fix-up w19:
    * per-frame render-graph pass names in declaration order. Empty array
-   * before the first `draw(world)` call; populated lazily when the
+   * before the first `draw([world], { owner: 0 })` call; populated lazily when the
    * per-frame graph is built. Read-only introspection surface so smoke
    * tests can assert the declarative pass chain is wired without reaching
    * into engine internals.
@@ -463,7 +482,7 @@ export interface Renderer {
   readonly perFramePassNames: readonly string[];
   /**
    * feat-20260531-per-frame-bind-group-cache M1 / w4: per-frame
-   * createBindGroup counter. Reset to 0 on every `draw(world)` call,
+   * createBindGroup counter. Reset to 0 on every `draw([world], { owner: 0 })` call,
    * bumped per cache-miss in the record stage. Stable-frame AC-03
    * asserts `createBindGroup === 0` when all bind groups are cached.
    * AI users read this getter to verify cache effectiveness without

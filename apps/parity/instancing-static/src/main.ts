@@ -227,7 +227,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Steady rAF loop so scripts/metrics/run-fps.mjs observes natural pacing
   // across its sampleCount * frameCount window.
   const tick = (): void => {
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);

@@ -65,7 +65,7 @@ const app = await createApp(canvas, {}, bundler);
 | `App.pause()` / `App.resume()` | `() => Result<void, AppError>` | rAF paused/running state toggle (idempotent) |
 | `App.onError(cb)` | `((err: AppError \| RhiError) => void) => () => void` | Multi-listener registry; returns unsubscribe handle. **Raw `Error` not in signature** (charter P3) |
 | `App.lastError` | `AppError \| RhiError \| undefined` readonly | Last error captured by the cleanup funnel (stop / device-lost / exception throw); useful for host self-inspection without an `onError` listener |
-| `AppError` | `class extends Error` | 5-member closed `code` union; 4-field surface (`.code` / `.expected` / `.hint` / `.detail`) byte-for-byte parallel to `RhiError` |
+| `AppError` | `class extends Error` | 6-member closed `code` union; 4-field surface (`.code` / `.expected` / `.hint` / `.detail`) byte-for-byte parallel to `RhiError` |
 | `MAX_DT_DEFAULT` | `number` | dt clamp ceiling = 1/30s. Override via `opts.maxDt` |
 
 ## Assemble form (named args + explicit injection)
@@ -95,7 +95,7 @@ app.value.start();
 
 The assemble form does **not** auto-load the default plugin set (D-2): the host must explicitly list every plugin. Input backend is pre-injected into the World as a resource before `createApp` runs plugins — `inputPlugin().build()` guards on `hasResource(INPUT_BACKEND_KEY)` and is a no-op if the backend was not pre-injected.
 
-## AppError 5-member closed union
+## AppError 6-member closed union
 
 `AppErrorCode` (SSOT: `packages/app/src/errors.ts`):
 
@@ -106,8 +106,20 @@ The assemble form does **not** auto-load the default plugin set (D-2): the host 
 | `'app-canvas-detached'` | `createApp(canvas)` thin wrapper found `canvas.isConnected === false` at entry. `detail.canvasId?: string` |
 | `'app-paused-while-stop'` | `stop()` invoked from `'paused'` state. Forces host to call `resume()` first (avoids stop state-machine ambiguity) |
 | `'app-system-update-failed'` | `world.update()` threw a synchronous exception during the rAF tick. `detail = { cause: unknown, systemName?: string }` carries the wrapped EcsError or other thrown value (D-4) |
+| `'app-pointer-lock-failed'` | `attachInputAuto`'s `onLockError` callback received a lock failure from the input backend. `detail.path` carries `'w3c'` (W3C `requestPointerLock` rejection) or `'provider'` (host-injected `lockProvider.requestLock` throw/reject). `detail.cause` carries the original rejection value verbatim. The host recovers by remaining in unlocked state; the next trusted click will retry the lock request. |
 
-Plan-strategy D-3 lock: device-lost stays on `RhiErrorCode` (18-member union); `AppError` does **not** add a sixth `'app-device-lost'`. Host `onError` listeners receive `RhiError({ code: 'device-lost' })` verbatim through the fan-out.
+Plan-strategy D-4 lock: device-lost stays on `RhiErrorCode` (18-member union); `AppError` does **not** add a seventh `'app-device-lost'`. Host `onError` listeners receive `RhiError({ code: 'device-lost' })` verbatim through the fan-out.
+
+## Pointer-lock gate: lockProvider + setPointerLockAllowed
+
+Two extension points give the host and game full control over pointer-lock without either side carrying foreign concepts.
+
+| Anchor | Location | Shape | Role |
+|:--|:--|:--|:--|
+| `lockProvider` | `CreateAppOptions.lockProvider?` | `PointerLockProvider` (`{ requestLock, exitLock }`) | Host-injected pointer-lock implementation. Absent => fall back to W3C `requestPointerLock()`. The engine never learns *why* locking is (dis)allowed — it delegates to the provider. Forwarded verbatim through `InputAttachOptions` to `BrowserInputBackendOptions`. |
+| `setPointerLockAllowed` | `BootstrapContext.setPointerLockAllowed?` | `(allowed: boolean) => void` | Game-side command gate. `setPointerLockAllowed(mode === 'fps')` allows lock in FPS, disallows in top-down. Setting `false` immediately releases any active lock (W3C path: `exitPointerLock`; provider path: `exitLock()` + clears `providerLocked`). Delegates to `App.input.setPointerLockAllowed?.()`. |
+
+The full `@forgeax/engine-input` surface (PointerLockProvider / backend lockProvider option / InputBackend.setPointerLockAllowed / snap.mouse.pointerLocked) SSOT is `packages/input/README.md`.
 
 ## onError multi-listener + console.error fallback
 
@@ -139,6 +151,7 @@ function reportError(err: AppError | RhiError | EngineEnvironmentError): void {
     case 'app-canvas-detached':
     case 'app-paused-while-stop':
     case 'app-system-update-failed':
+    case 'app-pointer-lock-failed':
     case 'adapter-unavailable':
     case 'feature-not-enabled':
     case 'limit-exceeded':
@@ -163,7 +176,7 @@ function reportError(err: AppError | RhiError | EngineEnvironmentError): void {
 }
 ```
 
-The `switch (err.code)` is exhaustive across 5 + 18 = 23 cases (`AppErrorCode | RhiErrorCode`); tsc strict mode guards completeness, no default branch needed. Live exemplar: `apps/hello/app/src/main.ts`.
+The `switch (err.code)` is exhaustive across 6 + 18 = 24 cases (`AppErrorCode | RhiErrorCode`); tsc strict mode guards completeness, no default branch needed. Live exemplar: `apps/hello/app/src/main.ts`.
 
 <!-- TODO(future-feat): once EngineEnvironmentError adopts the 4-field
      surface (.code / .expected / .hint / .detail), collapse the dual-layer
@@ -228,7 +241,7 @@ The boundary between host (DOM, canvas, UI) and engine (renderer, world, frame l
 
 - One-screen takeoff exemplar: `apps/hello/app/src/main.ts`
 - Assemble form exemplar: `packages/app/__tests__/thin-wrapper.browser.test.ts`
-- AppError 5-member union + APP_ERROR_HINTS / APP_EXPECTED: `packages/app/src/errors.ts`
+- AppError 6-member union + APP_ERROR_HINTS / APP_EXPECTED: `packages/app/src/errors.ts`
 - Frame-loop state machine: `packages/app/src/internal/frame-loop.ts`
 - Cleanup triple-funnel (stop / device-lost / exception): `packages/app/src/internal/cleanup.ts`
 - Plugin runner (merge + dedup + ordered await): `packages/app/src/internal/run-plugins.ts`

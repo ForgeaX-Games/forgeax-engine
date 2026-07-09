@@ -9,7 +9,7 @@
 // Scenario coverage matrix (plan-strategy D-3):
 //   1. createRenderer({rhi: rhiNull}) does not throw
 //   2. await renderer.ready does not reject (AC-02 — R-2 createShaderModule)
-//   3. renderer.draw(world) does not crash (AC-03 — headless frame)
+//   3. renderer.draw([world], { owner: 0 }) does not crash (AC-03 — headless frame)
 //   4. await queue.onSubmittedWorkDone() resolves immediately (AC-12)
 //   5. renderer.dispose() then draw returns err (lifecycle guard)
 
@@ -125,13 +125,13 @@ describe('rhi-null-renderer-lifecycle.unit.test.ts (T-a)', () => {
     expect(ready.ok).toBe(true);
   });
 
-  it('3. renderer.draw(world) does not crash (AC-03)', async () => {
+  it('3. renderer.draw([world], { owner: 0 }) does not crash (AC-03)', async () => {
     const engine = await loadEngine();
     const canvas = makeStubCanvas();
     renderer = await engine.createRenderer(canvas, rhiOptions, bundler);
     await renderer.ready;
     const world = makeWorld();
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
   });
 
   it('4. await queue.onSubmittedWorkDone() resolves immediately (AC-12)', async () => {
@@ -152,7 +152,7 @@ describe('rhi-null-renderer-lifecycle.unit.test.ts (T-a)', () => {
     await renderer.ready;
     renderer.dispose();
     const world = makeWorld();
-    const drawResult = renderer.draw(world);
+    const drawResult = renderer.draw([world], { owner: 0 });
     expect(drawResult.ok).toBe(false);
   });
 

@@ -341,7 +341,7 @@ const falsifyLabel = FALSIFY === 'msaa-noop' ? ' (FALSIFY=msaa-noop)' : '';
 const worldNone = new World();
 spawnScene(worldNone, ANTIALIAS_NONE);
 
-const drawNoneRes = renderer.draw(worldNone);
+const drawNoneRes = renderer.draw([worldNone], { owner: 0 });
 if (!drawNoneRes.ok) {
   console.error(`[smoke] FAIL - draw (none) failed: ${drawNoneRes.error.code}`);
   process.exit(1);
@@ -353,7 +353,7 @@ const pixelsNone = await doReadPixels();
 const worldMsaa = new World();
 spawnScene(worldMsaa, antialiasForPass2);
 
-const drawMsaaRes = renderer.draw(worldMsaa);
+const drawMsaaRes = renderer.draw([worldMsaa], { owner: 0 });
 if (!drawMsaaRes.ok) {
   console.error(`[smoke] FAIL - draw (msaa${falsifyLabel}) failed: ${drawMsaaRes.error.code}`);
   process.exit(1);

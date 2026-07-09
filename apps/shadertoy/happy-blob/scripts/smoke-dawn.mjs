@@ -263,7 +263,7 @@ const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
 async function captureFrameAtT(t) {
   paramValues.iTime = t;
   for (let i = 0; i < SMOKE_FRAMES_PER_T; i++) {
-    const r = renderer.draw(world);
+    const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error(`[smoke] draw t=${t} frame ${i} error: ${r.error.code}`);
   }
   await device.queue.onSubmittedWorkDone();

@@ -435,7 +435,7 @@ if (!ready.ok) {
 
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  const r = renderer.draw(world);
+  const r = renderer.draw([world], { owner: 0 });
   // Track draw errors via onError — do not fail on individual frames.
   void r;
   framesObserved++;

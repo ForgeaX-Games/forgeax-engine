@@ -265,7 +265,7 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
     expect(uploadRes.ok, `uploadTexture failed: ${uploadRes.ok ? '' : uploadRes.error.code}`)
       .toBe(true);
     if (!uploadRes.ok) return;
-    const drawn = renderer.draw(world);
+    const drawn = renderer.draw([world], { owner: 0 });
     expect(drawn.ok).toBe(true);
 
     const device = sharedDevice;

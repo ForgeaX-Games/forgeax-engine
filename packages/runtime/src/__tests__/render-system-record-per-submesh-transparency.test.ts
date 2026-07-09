@@ -187,7 +187,7 @@ function buildManifestDataUrl(): string {
 
 interface RendererLike {
   ready: Promise<unknown>;
-  draw: (world: unknown) => void;
+  draw: (worlds: unknown, opts: { owner: number }) => void;
   onError: (cb: (err: { code: string }) => void) => () => void;
 }
 
@@ -382,7 +382,7 @@ describe('record: per-submesh transparency (feat-city-glb Bug 5)', () => {
     renderer.onError((e) => errors.push(e.code));
 
     const { world } = await spawnMixedTransparentScene();
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
 
     // The transparent submesh must be drawn through the generic PBR per-submesh
     // path (label 'pbr-material-skylight-bg'), NOT the sprite fallback

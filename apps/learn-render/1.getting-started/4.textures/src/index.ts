@@ -369,7 +369,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // automatically consumes baseColorTexture via AssetRegistry.get
     // TextureGpuView (research F-6 fix) on every frame.
     const tick = (): void => {
-      const drawn = renderer.draw(world);
+      const drawn = renderer.draw([world], { owner: 0 });
       if (!drawn.ok) {
         console.error('[learn-render 1.4 textures] draw failed:', drawn.error);
         return;
@@ -391,7 +391,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     type TexturesCaptureHook = () => Promise<Uint8Array>;
     const win = window as unknown as { __captureTextures?: TexturesCaptureHook };
     win.__captureTextures = async (): Promise<Uint8Array> => {
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
       const r = await renderer.readPixels();
       if (!r.ok) throw new Error(`[learn-render 1.4 textures] readPixels failed: ${r.error.code} -- ${r.error.hint ?? ''}`);
       return r.value;

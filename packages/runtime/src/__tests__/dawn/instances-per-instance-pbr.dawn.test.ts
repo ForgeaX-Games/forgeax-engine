@@ -243,7 +243,7 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
     });
 
     for (let i = 0; i < 5; i++) {
-      const r = renderer.draw(worldN);
+      const r = renderer.draw([worldN], { owner: 0 });
       if (!r.ok) throw new Error(`draw N frame ${i} error: ${r.error.code}`);
     }
 
@@ -341,7 +341,7 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
     });
 
     for (let i = 0; i < 5; i++) {
-      const r = renderer.draw(world1);
+      const r = renderer.draw([world1], { owner: 0 });
       if (!r.ok) throw new Error(`draw 1 frame ${i} error: ${r.error.code}`);
     }
     await device.queue.onSubmittedWorkDone();
@@ -545,7 +545,7 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
     );
 
     for (let i = 0; i < 5; i++) {
-      const r = renderer2.draw(worldN2);
+      const r = renderer2.draw([worldN2], { owner: 0 });
       if (!r.ok) throw new Error(`draw N frame ${i} error: ${r.error.code}`);
     }
 
@@ -630,7 +630,7 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
     );
 
     for (let i = 0; i < 5; i++) {
-      const r = renderer2.draw(world12);
+      const r = renderer2.draw([world12], { owner: 0 });
       if (!r.ok) throw new Error(`draw 1 frame ${i} error: ${r.error.code}`);
     }
     await device2.queue.onSubmittedWorkDone();

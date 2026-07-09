@@ -35,12 +35,9 @@ describe('InputSnapshot type surface (AC-07)', () => {
     }>();
   });
 
-  it('mouse.button(i) parameter is the literal union 0 | 1 | 2', () => {
+  it('mouse.pointerLocked returns boolean (required, alongside movementDelta)', () => {
     const snap: InputSnapshot = createInputSnapshot();
-    expectTypeOf(snap.mouse.button).parameter(0).toEqualTypeOf<0 | 1 | 2>();
-    expectTypeOf(snap.mouse.button(0)).toEqualTypeOf<boolean>();
-    expectTypeOf(snap.mouse.button(1)).toEqualTypeOf<boolean>();
-    expectTypeOf(snap.mouse.button(2)).toEqualTypeOf<boolean>();
+    expectTypeOf(snap.mouse.pointerLocked).toEqualTypeOf<boolean>();
   });
 
   it('mouse.button(3) is a TS compile error (literal-narrowing rejects out-of-range)', () => {

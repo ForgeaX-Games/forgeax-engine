@@ -1,7 +1,7 @@
 // @forgeax/engine-rhi/src/errors - RhiError + closed RhiErrorCode union + Result<T, E>.
 //
 // Shape:
-// - RhiErrorCode = closed union 21 members (charter P3: closed-union
+// - RhiErrorCode = closed union 23 members (charter P3: closed-union
 //   exhaustive switch needs no default fallback; tsc strict mode guards
 //   completeness). Extended from 6 to 10 in feat-20260508-rhi-surface-completion
 //   w7 (D-S3): added 'command-encoder-finished' / 'render-pass-not-ended' /
@@ -56,6 +56,15 @@
 //   detail.requested / .limit / .scope through property access (charter
 //   P3 + plan-strategy 8.3 actionable hint). Minor add-only
 //   per AGENTS.md evolution contract.
+//   Extended from 21 to 23 in feat-20260708-composited-multi-world-rendering
+//   M3 (D-5): added 'render-system-empty-worlds' + 'render-system-owner-out-of-
+//   range' for the new draw(worlds, { owner }) entry validation. The
+//   owner-out-of-range path exposes .detail = RhiOwnerOutOfRangeDetail
+//   ({ owner, worldCount }); empty-worlds carries no .detail. The pure
+//   validateDrawArgs(worldCount, owner) helper (World-free primitives) emits
+//   both and is consumed by the runtime createRenderer draw entry (the codes'
+//   SSOT stays in rhi). Two non-exclusive checks: empty-worlds short-circuits
+//   before owner-range. Minor add-only per AGENTS.md evolution contract.
 // - RhiError class has readonly .code / .expected / .hint three-field surface
 //   (AGENTS.md "Errors are structured" / D-5); the 'shader-compile-failed' path
 //   exposes .detail = RhiShaderCompileDetail (compilerMessages array);
@@ -77,6 +86,8 @@
 //          / D-S8 (4 RenderSystem / AssetRegistry members + .detail structure).
 
 /// <reference types="@webgpu/types" />
+
+import { err, ok, type Result } from '@forgeax/engine-types';
 
 /**
  * Closed RhiErrorCode union. `switch` exhaustive checks need no default
@@ -106,6 +117,8 @@
  * | `'destroy-after-destroy'` | A `RhiDevice.destroyBuffer(buf)` / `RhiDevice.destroyTexture(tex)` call observed the same handle had already been destroyed (per-handle `destroyed: boolean` bookkeeping in the shim layer). The forgeax form prefers fail-fast over the spec idempotent-void path (W3C WebGPU §22 / wgpu wasm both treat double-destroy as a no-op): double-destroy is almost always a lifecycle bug — caching a stale handle, a forgotten registry slot, a race between dispose paths — and surfacing it is more useful than swallowing it (plan-strategy D-7). `.expected` / `.hint` template: `expected: 'GPU buffer/texture handle has not been destroyed yet'` / `hint: 'object already destroyed; track lifecycle in caller or check isDestroyed before re-destroy'` (feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle D-6 + D-7). Minor add-only per AGENTS.md evolution contract. |
  * | `'rhi-descriptor-invalid'` | A `createRenderPipeline` (or other create* entry) descriptor failed to parse in the wgpu-wasm backend (Rust `#[wasm_bindgen(catch)]` Err with the stable prefix `[wgpu-wasm] failed to parse`). The descriptor data shape passed from TS was malformed — this is a caller bug (the caller passed descriptor data that the wasm deserializer rejected), not a runtime condition. Differs from `'webgpu-runtime-error'`: the latter is a valid descriptor rejected by the wgpu runtime (e.g. binding count exceeds limits); this code means the descriptor never reached the runtime because its shape was unparseable. `.hint` carries the parse-error message including the failing field index (e.g. `fragment.targets[0]`) for human triage. `.expected` / `.hint` template: `expected: 'caller passed well-formed descriptor data matching the wgpu-wasm serialization contract'` / `hint: 'check the descriptor field named in the error message for type mismatch or missing required fields'` (feat-20260619-wasm-fault-isolation D-1/D-2/D-8). Minor add-only per AGENTS.md evolution contract. |
  * | `'instancing-exceeds-uniform-cap'` | A record-stage fold bucket carries more than 128 instances on the WebGL2 uniform-fallback path (`caps.storageBuffer === false`). The engine fires the error AND falls the offending bucket back to per-entity drawIndexed (the same exit the mode-gate bypass uses — plan-strategy D-9 "shared fallback exit"), so the frame is still visually correct (no identity-collapse / black screen). The 128 cap comes from research N-1: 128 instances × 64 B/mat4 = 8192 B fits comfortably inside the WebGL2 minimum 16384 B UBO size, leaving headroom for the per-frame material UBO slice. `.detail = { requested: number, limit: 128, scope: 'sprite' | 'tilemap-chunk' }` carries the offending bucket size + the scope discriminator (sprite vs tilemap-chunk dispatch site). Differs from `'limit-exceeded'`: that code targets a static `device.limits.maxStorageBufferBindingSize` byte ceiling; this code targets a per-bucket instance-count ceiling enforced only when the backend lacks storage-buffer bindings. AI users branch on `.code === 'instancing-exceeds-uniform-cap'` first, then read `.detail.requested` / `.detail.limit` / `.detail.scope` through property access (charter P3 + plan-strategy 8.3 actionable hint). `.expected` / `.hint` template: `expected: 'bucket instance count <= 128 (uniform fallback cap)'` / `hint: 'reduce the bucket size (smaller layer/material groupings), switch to a WebGPU-capable backend (storage buffers lift the cap), or accept the per-cell drawIndexed fallback'` (feat-20260622-chunk-gpu-instancing-sprite-tilemap D-2 + D-9 + N-1). Minor add-only per AGENTS.md evolution contract. |
+ * | `'render-system-empty-worlds'` | `renderer.draw(worlds, { owner })` received an empty `worlds` array. The frame is skipped (no GPU commands recorded); validation runs at the draw entry (before any extract), so no per-world side effects fire. Distinct from `'render-system-no-camera'` (the world exists but has no Camera entity) — here there is no world at all. `.expected` / `.hint` template: `expected: 'worlds array has at least one world'` / `hint: 'pass at least one world: draw([world], { owner: 0 })'` (feat-20260708-composited-multi-world-rendering D-5). `.detail = undefined` (the failure is fully described by `.code`). Minor add-only per AGENTS.md evolution contract. |
+ * | `'render-system-owner-out-of-range'` | `renderer.draw(worlds, { owner })` received an `owner` index that is not a valid index into `worlds` (`owner < 0` or `owner >= worlds.length`). `owner` selects which world contributes cameras + singleton resources (skylight / skybox / postProcessParams); an out-of-range index cannot resolve. The frame is skipped; validation runs at the draw entry after the empty-worlds check (the two codes are non-exclusive: an empty array short-circuits to `'render-system-empty-worlds'` before this check). `.detail = { owner: number, worldCount: number }` carries the offending index + the array length so AI users branch via property access (`err.detail.owner` / `err.detail.worldCount`) rather than parsing the message string. `.expected` / `.hint` template: `expected: 'owner is an index into worlds (0 <= owner < worlds.length)'` / `hint: 'owner must be in 0..worlds.length-1; the owner world supplies cameras + skylight/skybox/postProcess'` (feat-20260708-composited-multi-world-rendering D-5). Minor add-only per AGENTS.md evolution contract. |
  *
  * @example AI-user exhaustive switch on the 4 command/queue members (no default fallback)
  * ```ts
@@ -144,7 +157,9 @@ export type RhiErrorCode =
   | 'hierarchy-broken'
   | 'destroy-after-destroy'
   | 'rhi-descriptor-invalid'
-  | 'instancing-exceeds-uniform-cap';
+  | 'instancing-exceeds-uniform-cap'
+  | 'render-system-empty-worlds'
+  | 'render-system-owner-out-of-range';
 
 /**
  * Detail structure exclusive to the `shader-compile-failed` path.
@@ -295,6 +310,35 @@ export interface RhiInstancingExceedsUniformCapDetail {
 }
 
 /**
+ * Detail structure exclusive to the `'render-system-owner-out-of-range'` path
+ * (feat-20260708-composited-multi-world-rendering M3 / D-5).
+ *
+ * Emitted by the `renderer.draw(worlds, { owner })` entry validation when the
+ * `owner` index is not a valid index into `worlds` (`owner < 0` or
+ * `owner >= worlds.length`). `owner` names the world that supplies cameras +
+ * singleton render resources (skylight / skybox / postProcessParams); an
+ * out-of-range index cannot resolve, so the frame is skipped before any extract.
+ *
+ * Fields:
+ *   - `owner` — the offending index the caller passed.
+ *   - `worldCount` — `worlds.length` at call time (the valid range is
+ *     `0 .. worldCount - 1`).
+ *
+ * AI users branch via property access (`err.detail.owner` /
+ * `err.detail.worldCount`) after narrowing on `.code`, rather than parsing the
+ * message string (charter P3 structured-failure surface).
+ *
+ * The sibling `'render-system-empty-worlds'` path carries no `.detail` — an
+ * empty array is fully described by `.code`, and the entry check short-circuits
+ * to that code before the owner-range check runs (the two codes are
+ * non-exclusive).
+ */
+export interface RhiOwnerOutOfRangeDetail {
+  readonly owner: number;
+  readonly worldCount: number;
+}
+
+/**
  * Tagged union of `.detail` shapes carried by structured errors.
  *
  * Entries:
@@ -322,7 +366,8 @@ export type RhiErrorDetail =
   | RhiWebgpuRuntimeDetail
   | LimitExceededDetail
   | RhiMultiLightDetail
-  | RhiInstancingExceedsUniformCapDetail;
+  | RhiInstancingExceedsUniformCapDetail
+  | RhiOwnerOutOfRangeDetail;
 
 /**
  * Structured RHI error.
@@ -370,6 +415,50 @@ export class RhiError extends Error {
     this.hint = args.hint;
     this.detail = args.detail;
   }
+}
+
+/**
+ * Validate `renderer.draw(worlds, { owner })` arguments at the draw entry
+ * (feat-20260708-composited-multi-world-rendering M3 / D-5).
+ *
+ * The validator takes primitives (`worldCount = worlds.length`, `owner`) — no
+ * `World`, no math — so it lives in `@forgeax/engine-rhi` alongside the
+ * `RhiErrorCode` members it emits (architecture-principles §1 SSOT). The runtime
+ * `createRenderer` draw entry calls it before any extract; a non-`ok` result
+ * skips the frame with a structured error (charter P3), never a silent no-op.
+ *
+ * Two non-exclusive checks, in order (D-5):
+ *   1. `worldCount === 0` -> `'render-system-empty-worlds'` (no `.detail`).
+ *   2. `owner` is not a valid index (`!Number.isInteger(owner)` or `owner < 0`
+ *      or `owner >= worldCount`) -> `'render-system-owner-out-of-range'` with
+ *      `.detail = { owner, worldCount }`. The `Number.isInteger` guard rejects
+ *      a `NaN` / fractional / undefined-coerced owner that a JS caller could
+ *      pass despite the compile-time `owner: number` requirement.
+ *
+ * The empty-worlds guard short-circuits first: `validateDrawArgs(0, 5)` returns
+ * the empty-worlds code, not the owner-range code.
+ */
+export function validateDrawArgs(worldCount: number, owner: number): Result<void, RhiError> {
+  if (worldCount === 0) {
+    return err(
+      new RhiError({
+        code: 'render-system-empty-worlds',
+        expected: 'worlds array has at least one world',
+        hint: 'pass at least one world: draw([world], { owner: 0 })',
+      }),
+    );
+  }
+  if (!Number.isInteger(owner) || owner < 0 || owner >= worldCount) {
+    return err(
+      new RhiError({
+        code: 'render-system-owner-out-of-range',
+        expected: 'owner is an index into worlds (0 <= owner < worlds.length)',
+        hint: 'owner must be in 0..worlds.length-1; the owner world supplies cameras + skylight/skybox/postProcess',
+        detail: { owner, worldCount },
+      }),
+    );
+  }
+  return ok(undefined);
 }
 
 // Result<T, E> + ok / err live in `@forgeax/engine-types` (tweak-20260612-result-

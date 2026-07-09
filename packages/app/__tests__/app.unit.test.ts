@@ -363,41 +363,42 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 {
   // ─── from errors.test.ts ───
 
-  const FIVE_CODES: readonly AppErrorCode[] = [
+  const SIX_CODES: readonly AppErrorCode[] = [
     'app-not-started',
     'app-already-running',
     'app-canvas-detached',
     'app-paused-while-stop',
     'app-system-update-failed',
+    'app-pointer-lock-failed',
   ] as const;
 
   describe('errors.test.ts', () => {
-    describe('AppErrorCode -- 5-member closed union (AC-07)', () => {
-      it('exposes exactly 5 hints, one per code, each non-empty (bidirectional)', () => {
-        expect(Object.keys(APP_ERROR_HINTS).length).toBe(5);
+    describe('AppErrorCode -- 6-member closed union', () => {
+      it('exposes exactly 6 hints, one per code, each non-empty (bidirectional)', () => {
+        expect(Object.keys(APP_ERROR_HINTS).length).toBe(6);
 
-        for (const code of FIVE_CODES) {
+        for (const code of SIX_CODES) {
           const hint = APP_ERROR_HINTS[code];
           expect(typeof hint).toBe('string');
           expect(hint.length).toBeGreaterThan(0);
         }
 
         for (const key of Object.keys(APP_ERROR_HINTS)) {
-          expect(FIVE_CODES).toContain(key as AppErrorCode);
+          expect(SIX_CODES).toContain(key as AppErrorCode);
         }
       });
 
-      it('exposes exactly 5 expected entries, one per code, each non-empty (bidirectional)', () => {
-        expect(Object.keys(APP_EXPECTED).length).toBe(5);
+      it('exposes exactly 6 expected entries, one per code, each non-empty (bidirectional)', () => {
+        expect(Object.keys(APP_EXPECTED).length).toBe(6);
 
-        for (const code of FIVE_CODES) {
+        for (const code of SIX_CODES) {
           const expected = APP_EXPECTED[code];
           expect(typeof expected).toBe('string');
           expect(expected.length).toBeGreaterThan(0);
         }
 
         for (const key of Object.keys(APP_EXPECTED)) {
-          expect(FIVE_CODES).toContain(key as AppErrorCode);
+          expect(SIX_CODES).toContain(key as AppErrorCode);
         }
       });
     });
@@ -429,13 +430,15 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
       });
 
       it('builds via new AppError({...}) for every closed-union member', () => {
-        for (const code of FIVE_CODES) {
+        for (const code of SIX_CODES) {
           const detail =
             code === 'app-canvas-detached'
               ? { canvasId: 'main' }
               : code === 'app-system-update-failed'
                 ? { cause: new Error('boom') }
-                : {};
+                : code === 'app-pointer-lock-failed'
+                  ? { path: 'w3c' as const, cause: new Error('lock failed') }
+                  : {};
           const err = new AppError({
             code,
             expected: APP_EXPECTED[code],
@@ -575,7 +578,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
           }
         }
         const seen = new Set<string>();
-        for (const code of FIVE_CODES) {
+        for (const code of SIX_CODES) {
           const err = new AppError({
             code,
             expected: APP_EXPECTED[code],
@@ -584,7 +587,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
           });
           seen.add(classify(err));
         }
-        expect(seen.size).toBe(5);
+        expect(seen.size).toBe(6);
       });
     });
   });
@@ -593,11 +596,13 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
 {
   // ─── from frame-loop.test.ts ───
 
-  function makeRendererStubFL(): { renderer: Renderer; drawCalls: World[] } {
-    const drawCalls: World[] = [];
+  function makeRendererStubFL(): { renderer: Renderer; drawCalls: readonly World[][] } {
+    // feat-20260708-composited-multi-world-rendering M3: draw is now
+    // draw(worlds, { owner }); the stub records the worlds array per call.
+    const drawCalls: World[][] = [];
     const renderer = {
-      draw(w: World): void {
-        drawCalls.push(w);
+      draw(worlds: readonly World[]): void {
+        drawCalls.push([...worlds]);
       },
     } as unknown as Renderer;
     return { renderer, drawCalls };
@@ -839,16 +844,20 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
           callOrder.push('update');
         });
         const origDraw = renderer.draw;
-        (renderer as { draw: (w: World) => void }).draw = (w: World): void => {
+        (renderer as { draw: (w: readonly World[], o: { owner: number }) => void }).draw = (
+          w: readonly World[],
+          o: { owner: number },
+        ): void => {
           callOrder.push('draw');
-          origDraw.call(renderer, w);
+          origDraw.call(renderer, w as World[], o);
         };
         const loop = createFrameLoop({ world, renderer, now, raf });
         loop.start();
         pendingCallbacks[0]?.(0);
         expect(callOrder).toEqual(['update', 'draw']);
         expect(drawCalls).toHaveLength(1);
-        expect(drawCalls[0]).toBe(world);
+        // M3 / AC-03: the frame-loop wraps the single world into [world].
+        expect(drawCalls[0]).toEqual([world]);
       });
     });
 

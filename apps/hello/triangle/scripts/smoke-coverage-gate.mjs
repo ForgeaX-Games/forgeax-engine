@@ -103,7 +103,9 @@ const REQUIRED_TOKENS = [
   },
   { name: 'HANDLE_TRIANGLE', patterns: ['HANDLE_TRIANGLE'] },
   { name: 'await renderer.ready', patterns: ['await renderer.ready'] },
-  { name: 'renderer.draw(world)', patterns: ['renderer.draw(world)'] },
+  // feat-20260708-composited-multi-world-rendering M3: draw signature migrated
+  // to renderer.draw([world], { owner: 0 }) (AC-01/AC-02); track the new literal.
+  { name: 'renderer.draw([world], { owner: 0 })', patterns: ['renderer.draw([world], { owner: 0 })'] },
 ];
 
 // delta layer: forbidden tokens (each must appear 0 times).

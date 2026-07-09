@@ -205,7 +205,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     let pulse = 0;
     const tick = (): void => {
       pulse = computePulse(performance.now(), basePulseTime);
-      const drawn = renderer.draw(world);
+      const drawn = renderer.draw([world], { owner: 0 });
       if (!drawn.ok) {
         console.error('[learn-render 1.3 shaders] draw failed:', drawn.error);
         return;
@@ -229,7 +229,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     win.__captureShadersPulse = (): number => pulse;
     win.__captureShaders = async (): Promise<{ pixels: Uint8Array; pulse: number }> => {
       pulse = computePulse(performance.now(), basePulseTime);
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
       // Body delegates pixel readback to renderer.readPixels() (engine
       // API since 2026-05-17; AGENTS.md §Breaking changes); the
       // wrapper combines engine pixels + the LO 1.3 pulse scalar so

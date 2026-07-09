@@ -344,7 +344,7 @@ world.spawn(
 const start = performance.now();
 let frames = 0;
 while (true) {
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
   frames++;
   if (performance.now() - start >= SMOKE_DURATION_MS) break;
   await delay(0);

@@ -1819,7 +1819,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       ) => Promise<{
         backend: string;
         ready: Promise<void>;
-        draw: (world: unknown) => void;
+        draw: (worlds: unknown, opts: { owner: number }) => void;
         onError: (
           cb: (err: { code: string; detail?: unknown; hint?: string; expected?: string }) => void,
         ) => () => void;
@@ -1858,7 +1858,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       ) => Promise<{
         backend: string;
         ready: Promise<void>;
-        draw: (world: unknown) => void;
+        draw: (worlds: unknown, opts: { owner: number }) => void;
         onError: (
           cb: (err: { code: string; detail?: unknown; hint?: string; expected?: string }) => void,
         ) => () => void;
@@ -1953,7 +1953,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         }
 
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        renderer.draw(world);
+        renderer.draw([world], { owner: 0 });
 
         const multiLightCalls = warnSpy.mock.calls.filter(
           (c) =>
@@ -1994,7 +1994,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         }
 
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        renderer.draw(world);
+        renderer.draw([world], { owner: 0 });
 
         const multiLightCalls = warnSpy.mock.calls.filter(
           (c) =>
@@ -2031,7 +2031,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         world.spawn({ component: C.DirectionalLight, data: directionalLightData(2) });
 
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        renderer.draw(world);
+        renderer.draw([world], { owner: 0 });
 
         const multiLightCalls = warnSpy.mock.calls.filter(
           (c) =>
@@ -2072,7 +2072,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 
         const errors: { code: string }[] = [];
         renderer.onError((e) => errors.push(e));
-        renderer.draw(world);
+        renderer.draw([world], { owner: 0 });
 
         expect(errors.some((e) => e.code === 'render-system-multi-light')).toBe(false);
       });
@@ -2106,7 +2106,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 
         const errors: { code: string }[] = [];
         renderer.onError((e) => errors.push(e));
-        renderer.draw(world);
+        renderer.draw([world], { owner: 0 });
 
         expect(errors.some((e) => e.code === 'render-system-multi-light')).toBe(false);
       });

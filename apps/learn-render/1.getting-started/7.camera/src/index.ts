@@ -542,7 +542,7 @@ function installCaptureHooks(
   const renderer = app.renderer;
   win.__captureCamera = async (): Promise<Uint8Array> => {
     world.update();
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {
       throw new Error(
@@ -577,7 +577,7 @@ function installCaptureHooks(
           world.insertResource('Time', { dt: 1 / 60 });
         }
         world.update();
-        renderer.draw(world);
+        renderer.draw([world], { owner: 0 });
         return readState();
       },
     };
@@ -633,6 +633,7 @@ void ((): void => {
         movementY: mvyPending,
         wheelDelta: wheelPending,
         focused: true,
+        pointerLocked: false,
       };
       mvxPending = 0;
       mvyPending = 0;

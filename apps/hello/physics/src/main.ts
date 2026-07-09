@@ -144,6 +144,7 @@ function reportError(err: CanvasAppError): void {
     case 'app-canvas-detached':
     case 'app-paused-while-stop':
     case 'app-system-update-failed':
+    case 'app-pointer-lock-failed':
     case 'adapter-unavailable':
     case 'feature-not-enabled':
     case 'limit-exceeded':

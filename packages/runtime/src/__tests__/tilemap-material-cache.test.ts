@@ -115,7 +115,7 @@ describe('resolveTilesetMaterial — binary (atlasHandle, regionIndex) cache key
     spawnTilemapWithLayer(world1, handle1, 1, 1, new Uint32Array([1]));
     resetTilemapChunkExtractCache();
     resetTilemapDerivedEntityTracker();
-    tilemapChunkExtractSystem(world1);
+    tilemapChunkExtractSystem(world1, 0);
     const mats1 = readDerivedMaterialHandles(world1);
     expect(mats1.length).toBe(1);
 
@@ -130,7 +130,7 @@ describe('resolveTilesetMaterial — binary (atlasHandle, regionIndex) cache key
       }),
     );
     spawnTilemapWithLayer(world2, handle2, 1, 1, new Uint32Array([1]));
-    tilemapChunkExtractSystem(world2);
+    tilemapChunkExtractSystem(world2, 0);
     const mats2 = readDerivedMaterialHandles(world2);
     expect(mats2.length).toBe(1);
     expect(mats1[0]).toBe(mats2[0]);
@@ -152,7 +152,7 @@ describe('resolveTilesetMaterial — binary (atlasHandle, regionIndex) cache key
     spawnTilemapWithLayer(world, handle, 2, 1, new Uint32Array([1, 2]));
     resetTilemapChunkExtractCache();
     resetTilemapDerivedEntityTracker();
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
     const mats = readDerivedMaterialHandles(world).sort((a, b) => a - b);
     expect(mats.length).toBe(2);
     expect(mats[0]).not.toBe(mats[1]);

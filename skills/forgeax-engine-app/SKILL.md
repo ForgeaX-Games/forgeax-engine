@@ -9,7 +9,7 @@ description: >-
 
 # forgeax-engine-app
 
-> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: [`a7de53330`](../../commit/a7de53330) (2026-07-06)
+> 基线: [`5c8c90f1`](../../commit/5c8c90f1) (2026-06-03) · 同步至: [`c182ffc00`](../../commit/c182ffc00) (2026-07-08)
 
 > 把"一块 canvas"变成"一个在跑的游戏"。引导 + 主循环 + 输入 + 动画/物理接线，四件事一个 skill。聚合 `@forgeax/engine-app` · `@forgeax/engine-input` · `@forgeax/engine-runtime`（引导面）。
 
@@ -20,7 +20,7 @@ description: >-
 | 入口 | 给你 | 谁驱动循环 |
 |:--|:--|:--|
 | `createApp(canvas, opts?, bundler?)` | `App`——rAF 循环 / dt 钳制 / 输入 attach / 错误 fan-out 已接好 | 引擎 |
-| `createRenderer(canvas, opts?, bundler?)` | `Renderer`——只渲染 | 你自己拿 rAF 调 `draw(world)` |
+| `createRenderer(canvas, opts?, bundler?)` | `Renderer`——只渲染 | 你自己拿 rAF 调 `draw([world], { owner: 0 })` |
 
 绝大多数游戏从 `createApp` 起步。`App` 是状态机：`start → (pause ⇄ resume) → stop`。输入不轮询——引擎在**帧起始**冻结成只读 `InputSnapshot` 资源，系统在 `world` 里读它。
 
@@ -359,7 +359,7 @@ world.addSystem(GestureConsumer);
 | 集群 | 读点 | 类型 |
 |:--|:--|:--|
 | keyboard | `.down(key)` / `.up(key)` | `boolean` per key（key 匹配 `KeyboardEvent.key`） |
-| mouse | `.movementDelta`（`{x,y}`）/ `.button(0\|1\|2)`（`boolean`）/ `.wheelDelta`（`number`） | PointerLock 累加 + W3C button 槽 + sign-discrete 滚轮 notches |
+| mouse | `.movementDelta`（`{x,y}`）/ `.pointerLocked`（`boolean`）/ `.button(0\|1\|2)`（`boolean`）/ `.wheelDelta`（`number`） | PointerLock 累加 + 合并锁态 + W3C button 槽 + sign-discrete 滚轮 notches |
 | gamepad | `.gamepad(i).button(b)` / `.buttonValue(b)` / `.justPressed(b)` / `.justReleased(b)` / `.axis(a)` / `.connected` / `.standardMapping` | slot `i` 不收窄（运行时断连 / 越界回空信号）；`b: 0\|1\|...\|16` / `a: 0\|1\|2\|3`——越界字面量 TS 编译报错 |
 | pointer | `.pointer(id)` — 返回 `{ active, x, y, pressure, pointerType, delta }` | per-pointerId reader；不存在 → `active=false`（空信号） |
 | virtualAxis | `.virtualAxis(name)` — 返回 `{ x, y }` | named joystick 读点；不存在 → 零向量（空信号） |
@@ -369,6 +369,63 @@ world.addSystem(GestureConsumer);
 | **gesture** | `.gesture` — `{ pinchScale, rotationAngle }` / `.gestureEvents` — `GestureEvent[]` | 五类触摸手势识别器（pinch/rotate/swipe/long-press/double-tap），双通道输出：连续值 + 一帧寿命事件队列。无手势 → identity（1.0/0），不抛（AC-12） |
 
 未按下的键 / 断连 slot / 不对齐 pointerId / 不存在的 virtualAxis name 全部返回 `false` / `0` / 零向量——空信号即信号（charter P3）。超出字面量范围的 gamepad button/axis 索引触发 TS 编译错误（literal union 收紧）。
+
+### Pointer-lock（单属性 + 单 setter + 单 error code）
+
+Pointer-lock 的全部状态收敛为三个锚点——消费侧读 `snap.mouse.pointerLocked`，游戏侧通过 `ctx.setPointerLockAllowed` 命令锁门，host 侧注入 `lockProvider`（`CreateAppOptions.lockProvider`）替代 W3C path。
+
+| 锚点 | 位置 | 形态 | 作用 |
+|:--|:--|:--|:--|
+| `pointerLocked` | `snap.mouse.pointerLocked` | `boolean`（required） | 合并锁态——W3C `pointerlockchange` OR host provider `requestLock` 置位；consumer 读此判断是否消费 `movementDelta` |
+| `setPointerLockAllowed` | `BootstrapContext.setPointerLockAllowed?` | `(allowed: boolean) => void` | 游戏侧命令式 gate——`setPointerLockAllowed(mode === 'fps')` 允许/禁止锁；`false` 立即释放已锁 + 下次 click 不锁 |
+| `lockProvider` | `CreateAppOptions.lockProvider?` | `PointerLockProvider`（`{ requestLock, exitLock }`） | host 注入的 pointer-lock 实现——editor 包装 `set_pointer_capture`；缺省走 W3C `requestPointerLock()` |
+| `app-pointer-lock-failed` | `AppError.code` closed union member #6 | `err.detail.path: 'w3c' \| 'provider'` + `err.detail.cause: unknown` | 锁请求失败的结构化信号——host `onError` 消费，exhaustive switch 守卫完整性 |
+
+> 签名 SSOT 在 README/源码：`packages/input/README.md`（本表各 readpoint 的全签名）、`packages/app/README.md`（`CreateAppOptions.lockProvider` / `BootstrapContext.setPointerLockAllowed` / `AppErrorCode` 码表）。
+
+**契约要点**：
+
+- `pointerLocked` 是 `required boolean`（非 optional）——与 `movementDelta` 同路径，consumer 写 `if (snap.mouse.pointerLocked)` 判断"仅锁定态消费 look delta"
+- `lockProvider` 是 host 注入的抽象回调——`engine` 仓零 Tauri/WKWebView 知识，backend 只见 `PointerLockProvider` 接口
+- `setPointerLockAllowed` 是双 gate 的 game 侧——`set(false)` 立即释放已锁（W3C 路径调 `exitPointerLock`、provider 路径调 `exitLock` + 清算 `providerLocked`）；与既有 host predicate `pointerLockAllowed`（`CreateAppOptions`）AND 合成
+- `app-pointer-lock-failed` 经 `app.onError` fan-out——`err.detail.path` 区分 w3c/provider 来源，`err.detail.cause` 携带原始拒因
+
+**模板用法**（见 `templates/game-default/main.ts`）：
+
+```ts
+// setPointerLockAllowed — fps 允许锁、top-down 立即释放并禁锁
+const setMode = (m: ViewMode) => {
+  mode = m;
+  ctx.setPointerLockAllowed?.(m === 'fps');
+};
+
+// pointerLocked — look system 仅锁定态消费 movementDelta
+const lookSystem = defineSystem({
+  name: 'game-look',
+  fn: () => {
+    const snap = readInput();
+    if (mode !== 'fps' || !snap.mouse.pointerLocked) return;
+    lookYaw -= snap.mouse.movementDelta.x * LOOK_SENS;
+  },
+});
+```
+
+**宿主注入**（`apps/preview/src/main.ts` + editor `play-runtime`）：
+
+```ts
+// Editor host: inject lockProvider wrapping set_pointer_capture
+const app = await createApp(canvas, {
+  lockProvider: { requestLock: () => post(true), exitLock: () => post(false) },
+});
+
+// setPointerLockAllowed is a readonly BootstrapContext field — wire it inline
+// when assembling ctx (Web host omits lockProvider → W3C path):
+const ctx: BootstrapContext = {
+  registerUpdate,
+  registerCleanup,
+  setPointerLockAllowed: (v) => app.value.input?.setPointerLockAllowed?.(v),
+};
+```
 
 ### Sprite bootstrap：`renderState.blend` 是 transparent 的 SSOT
 
@@ -584,7 +641,7 @@ if (snap.reason !== 'alive') {
 
 ## 深入
 
-- 引导 / 主循环状态机 / AppError 5 成员 / onError fan-out / 资源化接线：见 `packages/app/README.md` §One-screen takeoff · §AppError 5-member closed union · §onError multi-listener；源码 SSOT `packages/app/src/create-app.ts` + `packages/app/src/errors.ts`
+- 引导 / 主循环状态机 / AppError 6 成员 / onError fan-out / 资源化接线：见 `packages/app/README.md` §One-screen takeoff · §AppError 6-member closed union · §onError multi-listener；源码 SSOT `packages/app/src/create-app.ts` + `packages/app/src/errors.ts`
 - 低层渲染器 / `Renderer.draw` / `Renderer.ready` 屏障：见 `packages/runtime/README.md` §API 索引；源码 `packages/runtime/src/createRenderer.ts`
 - 输入 4 步 recipe / 形态铁律 / 多设备表面（keyboard + mouse + gamepad + pointer + virtualAxis）/ `InputFrameStartScan` token + `INPUT_BACKEND_KEY` 资源化接线：见 `packages/input/README.md` §4 步 recipe · §多设备表面；源码 `packages/input/src/input-snapshot.ts` + `packages/input/src/frame-start-scan-system.ts`
 - 蒙皮 / 动画 4 步 recipe（`createApp` + `configurePackIndex` + `loadByGuid<SceneAsset>` + 多实例 instantiate + 每实例独立 `AnimationPlayer`）+ `AdvanceAnimationPlayer` token + `ANIMATION_ASSET_RESOLVER_KEY` 资源化接线：参考 `apps/hello/skin/src/main.ts`；底层 SkinAsset / SkeletonAsset / AnimationClip POD 由 gltfImporter 自动 emit，bridge 自动挂 `Skin` 组件；多实例关节隔离由 postSpawnResolveJoints 子树作用域兜底；源码 `packages/runtime/src/systems/advance-animation-player.ts`

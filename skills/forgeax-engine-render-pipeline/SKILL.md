@@ -137,7 +137,7 @@ flowchart TD
   PIPE --> RG["graph.addColorTarget(...) -> addScenePass / addShadowPass / ... -> compile(device, opts) -> execute(ctx)"]
   RG --> REG_P["renderer.registerPipeline(id, impl)"]
   REG_P --> INS["renderer.installPipeline({kind:'render-pipeline', pipelineId, config?})"]
-  CAM --> DR["renderer.draw(world) / app.start()"]
+  CAM --> DR["renderer.draw([world], { owner: 0 }) / app.start()"]
   SKY --> DR
   BUILD --> DR
   INS --> DR

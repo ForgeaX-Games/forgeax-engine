@@ -312,6 +312,7 @@ describe.skip('createApp(assemble form) host-supplied InputBackend bypass', () =
         movementY: 0,
         wheelDelta: 0,
         focused: true,
+        pointerLocked: false,
       }),
       detach: () => {
         // host-managed

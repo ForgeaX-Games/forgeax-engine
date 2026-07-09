@@ -8,7 +8,7 @@
 // This test does NOT re-declare the decision expression and feed it to the
 // pure builder (that would be tautological — the bug could regress verbatim
 // while the suite stays green). Instead it drives the whole pipeline through
-// createRenderer + renderer.draw(world): the URP cascade loop calls
+// createRenderer + renderer.draw([world], { owner: 0 }): the URP cascade loop calls
 // addShadowPass per cascade, whose execute closure invokes the real
 // recordShadowPass(c, selector, viewport, cascadeIndex). A mock GPU device
 // captures every descriptor handed to beginRenderPass on the dedicated
@@ -190,7 +190,7 @@ async function importEngine(): Promise<{
     bundler?: unknown,
   ) => Promise<{
     ready: Promise<void>;
-    draw: (world: unknown) => void;
+    draw: (worlds: unknown, opts: { owner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
   }>;
 }> {
@@ -290,7 +290,7 @@ async function drawCsmScene(cascadeCount: number): Promise<CaptureLog> {
 
   const errors: { code: string }[] = [];
   renderer.onError((e) => errors.push(e));
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
   return log;
 }
 

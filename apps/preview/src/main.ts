@@ -48,6 +48,11 @@ const ctx: BootstrapContext = {
   assets,
   app: app.value,
   registerUpdate: (fn: (dt: number) => void) => app.value.registerUpdate(fn),
+  // M2 D-9: wire the pointer-lock gate setter. The game template calls
+  // setPointerLockAllowed(mode === 'fps') when switching modes; the
+  // preview host delegates to the input backend's setPointerLockAllowed.
+  // No lockProvider is injected — Web host goes W3C path.
+  setPointerLockAllowed: (allowed: boolean) => app.value.input?.setPointerLockAllowed?.(allowed),
 };
 
 const slug = new URLSearchParams(window.location.search).get('game') ?? 'game-default';
@@ -111,6 +116,7 @@ function reportCreateError(err: CanvasAppError): void {
       case 'app-canvas-detached':
       case 'app-paused-while-stop':
       case 'app-system-update-failed':
+      case 'app-pointer-lock-failed':
         console.error(`[preview] AppError ${err.code}: ${err.hint}`);
         return;
     }

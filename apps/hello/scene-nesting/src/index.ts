@@ -120,7 +120,7 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   });
 
   function frame() {
-    const r = renderer.draw(world);
+    const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error(`[hello-scene-nesting] draw error: ${r.error.code}`);
     requestAnimationFrame(frame);
   }

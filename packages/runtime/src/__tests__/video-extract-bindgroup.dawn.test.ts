@@ -277,7 +277,7 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
       )
       .unwrap();
 
-    const drawn = renderer.draw(world);
+    const drawn = renderer.draw([world], { owner: 0 });
     expect(drawn.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     if (typeof unsub === 'function') unsub();
@@ -351,7 +351,7 @@ describe('AC-06 — extract->record->bind group does not blow up on a video fiel
       )
       .unwrap();
 
-    const drawn = renderer.draw(world);
+    const drawn = renderer.draw([world], { owner: 0 });
     expect(drawn.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     if (typeof unsub === 'function') unsub();

@@ -146,6 +146,7 @@ describe('builtin-systems.test.ts', () => {
             movementY: 0,
             wheelDelta: 0,
             focused: true,
+            pointerLocked: false,
           };
         },
         detach: () => {},

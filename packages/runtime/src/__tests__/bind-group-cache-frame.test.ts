@@ -175,7 +175,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     ) => Promise<{
       backend: string;
       ready: Promise<unknown>;
-      draw: (world: unknown) => unknown;
+      draw: (worlds: unknown, opts: { owner: number }) => unknown;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: {
         register: (asset: unknown) => { ok: boolean; value: unknown };
@@ -307,13 +307,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const world = await buildStableWorld();
 
       // Draw 3 frames in a stable scene (no spawn/despawn/material-change/resize/skylight-change).
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
       const countFrame1 = renderer.bindGroupCounts.createBindGroup;
 
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
       const countFrame2 = renderer.bindGroupCounts.createBindGroup;
 
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
       const countFrame3 = renderer.bindGroupCounts.createBindGroup;
 
       // Type-level assertions — all counters must be numbers (AC-09 gating:
@@ -347,7 +347,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       await (renderer.ready as Promise<void>);
 
       const world = await buildStableWorld();
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       // AC-09 application point: this access line is where TypeScript must
       // infer `number` without requiring `as` or any type assertion.
@@ -381,14 +381,14 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
       // Warm up 3 frames.
       for (let i = 0; i < 3; i++) {
-        renderer.draw(world);
+        renderer.draw([world], { owner: 0 });
       }
 
       // Frames 4 and 5 must both report 0 — cache is hot.
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
       expect(renderer.bindGroupCounts.createBindGroup).toBe(0);
 
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
       expect(renderer.bindGroupCounts.createBindGroup).toBe(0);
     });
   });
@@ -557,7 +557,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (world: unknown) => void;
+      draw: (worlds: unknown, opts: { owner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: {
         register: (asset: unknown) => { ok: boolean; value: unknown };
@@ -611,7 +611,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (world: unknown) => void;
+      draw: (worlds: unknown, opts: { owner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
     }>;
@@ -626,7 +626,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   interface RendererForTest {
     bindGroupCounts?: { readonly createBindGroup: number };
-    draw: (world: unknown) => void;
+    draw: (worlds: unknown, opts: { owner: number }) => void;
   }
 
   function spawnBasicScene(
@@ -718,15 +718,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnBasicScene(world, C);
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown) => void;
+      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
 
       // Frame 1: all cache misses (cold start) => counter > 0
-      draw(world);
+      draw([world], { owner: 0 });
       const countFrame1 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countFrame1).toBeGreaterThan(0);
 
       // Frame 2: view cache should hit (same handles) => counter < frame 1
-      draw(world);
+      draw([world], { owner: 0 });
       const countFrame2 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countFrame2).toBeLessThan(countFrame1);
     });
@@ -747,20 +747,20 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnBasicScene(world, C);
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown) => void;
+      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
 
       // Frame 1: cold cache — createBindGroup calls > 0
-      draw(world);
+      draw([world], { owner: 0 });
       const coldCount = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(coldCount).toBeGreaterThan(0);
 
       // Frame 2: view + mesh cache hits reduce counter
-      draw(world);
+      draw([world], { owner: 0 });
       const hotCount = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(hotCount).toBeLessThan(coldCount);
 
       // Frame 3: stable scene, further cache hits (approach 0 as M3/M4 come)
-      draw(world);
+      draw([world], { owner: 0 });
       const stableCount = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(stableCount).toBeLessThanOrEqual(hotCount);
     });
@@ -782,15 +782,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnBasicScene(world, C, { withShadow: true });
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown) => void;
+      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
 
       // Frame 1: cold start — view main + view shadow both cache miss
-      draw(world);
+      draw([world], { owner: 0 });
       const countFrame1 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countFrame1).toBeGreaterThan(0);
 
       // Frame 2: both view variants hit (same handles, same scene)
-      draw(world);
+      draw([world], { owner: 0 });
       const countFrame2 = rs.bindGroupCounts?.createBindGroup ?? -1;
       // Both view variants cached independently => counter lower than frame 1
       expect(countFrame2).toBeLessThan(countFrame1);
@@ -1127,7 +1127,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (world: unknown) => void;
+      draw: (worlds: unknown, opts: { owner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: {
         register: (asset: unknown) => { ok: boolean; value: unknown };
@@ -1182,7 +1182,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (world: unknown) => void;
+      draw: (worlds: unknown, opts: { owner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
     }>;
@@ -1195,7 +1195,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   interface RendererForTest {
     bindGroupCounts?: { readonly createBindGroup: number };
-    draw: (world: unknown) => void;
+    draw: (worlds: unknown, opts: { owner: number }) => void;
   }
 
   function spawnBasicScene(
@@ -1317,15 +1317,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnBasicScene(world, C, { withInstances: true });
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown) => void;
+      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
 
       // Frame 1: cold start — all caches empty
-      draw(world);
+      draw([world], { owner: 0 });
       const countFrame1 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countFrame1).toBeGreaterThan(0);
 
       // Frame 2: view + mesh cache hit (M2); instances still cold (M3 not yet wired)
-      draw(world);
+      draw([world], { owner: 0 });
       const countFrame2 = rs.bindGroupCounts?.createBindGroup ?? -1;
       // View/mesh cache reduces counter from frame 1
       expect(countFrame2).toBeLessThanOrEqual(countFrame1);
@@ -1347,11 +1347,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnBasicScene(world, C, { withInstances: true });
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown) => void;
+      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
 
       // Warm the cache
-      draw(world);
-      draw(world);
+      draw([world], { owner: 0 });
+      draw([world], { owner: 0 });
 
       // Spawn another entity that triggers archetype changes. In a real GPU
       // context, archVersion bump causes instanceBuffer rebuild => cache
@@ -1385,7 +1385,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         },
       );
 
-      draw(world);
+      draw([world], { owner: 0 });
       off();
       const afterArchVersionBump = rs.bindGroupCounts?.createBindGroup ?? -1;
       if (errors.length === 0) {
@@ -1414,15 +1414,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnBasicScene(world, C, { withInstances: false });
 
       const rs = renderer as unknown as RendererForTest;
-      const draw = renderer.draw.bind(renderer) as (w: unknown) => void;
+      const draw = renderer.draw.bind(renderer) as (w: unknown, o: { owner: number }) => void;
 
       // Frame 1: cold start
-      draw(world);
+      draw([world], { owner: 0 });
       const countFrame1 = rs.bindGroupCounts?.createBindGroup ?? -1;
       expect(countFrame1).toBeGreaterThan(0);
 
       // Frame 2: identityInstanceBuffer handle is init-time stable -> cache hit
-      draw(world);
+      draw([world], { owner: 0 });
       const countFrame2 = rs.bindGroupCounts?.createBindGroup ?? -1;
       // View/mesh caches hit; instances still cold but handle stable
       expect(countFrame2).toBeLessThanOrEqual(countFrame1);

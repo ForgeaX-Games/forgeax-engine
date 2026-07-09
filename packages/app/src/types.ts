@@ -12,7 +12,12 @@
 import type { AudioBackend } from '@forgeax/engine-audio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
 import type { Result, World } from '@forgeax/engine-ecs';
-import type { ActionConfig, InputBackend, VirtualJoystickConfig } from '@forgeax/engine-input';
+import type {
+  ActionConfig,
+  InputBackend,
+  PointerLockProvider,
+  VirtualJoystickConfig,
+} from '@forgeax/engine-input';
 import type { PhysicsWorld, PhysicsWorld2D } from '@forgeax/engine-physics';
 import type { Plugin, PluginError } from '@forgeax/engine-plugin';
 import type { RhiError, RhiInstance } from '@forgeax/engine-rhi';
@@ -139,6 +144,14 @@ export interface CreateAppOptions {
    * `INPUT_MAP_KEY` Resource directly.
    */
   readonly inputMap?: readonly ActionConfig[] | undefined;
+  /**
+   * M2: pointer-lock provider injected by the host (e.g. editor play-runtime).
+   * Forwarded verbatim through InputAttachOptions to BrowserInputBackendOptions.
+   * When absent, the backend falls back to the W3C requestPointerLock() path.
+   * Type SSOT is @forgeax/engine-input's PointerLockProvider.
+   * Ignored by the assemble form (host-managed input owns its own lock policy).
+   */
+  readonly lockProvider?: PointerLockProvider;
 }
 
 /**

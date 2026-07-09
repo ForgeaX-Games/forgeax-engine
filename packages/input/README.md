@@ -84,11 +84,12 @@ detach();
 | `snap.keyboard.down(key)` | `boolean` | `key` 当前帧首仍处于按下状态（`document.hasFocus()` 失焦时保持上一帧状态） |
 | `snap.keyboard.up(key)` | `boolean` | `key` 上一帧 down、本帧 up 的边沿（一帧内 true，下一帧自动消失） |
 
-### mouse（3 读点）
+### mouse（4 读点）
 
 | 调用 | 返回 | 语义 |
 |:--|:--|:--|
 | `snap.mouse.movementDelta` | `{ x: number; y: number }` | PointerLock `movementX/Y` 自上次扫描以来的累加；扫描后 backend 自动清零 |
+| `snap.mouse.pointerLocked` | `boolean` | 合并锁态——W3C `pointerlockchange`（`pointerLockElement === canvas`）OR host `lockProvider.requestLock()` 置位；`required` 字段，非 optional。consumer 写 `if (snap.mouse.pointerLocked)` 判断"仅锁定态消费 look delta"。与 `movementDelta` 同位——两个事实在同一属性路径下（charter F1 单点可索引） |
 | `snap.mouse.button(i)` | `boolean`（`i: 0 \| 1 \| 2`） | 对齐 W3C MouseEvent.button：0=主键 / 1=辅助键 / 2=次键。`i: 3` 触发 TS 编译错误 |
 | `snap.mouse.wheelDelta` | `number` | 每帧 sign-discrete 滚轮 notches 累加（W3C `WheelEvent.deltaY`：正=下滚/负=上滚）；frame-start 冻结后清零。OOS-7：轨迹板高精度滚动未展开（sub-notch 量值保留给未来 `ScrollSnapshot`） |
 
@@ -169,7 +170,7 @@ Five gesture recognizers running in the backend closure (C-3 single legal cross-
 ## 形态铁律
 
 - **Resource 形态唯一入口** — 用户胶水通过 `world.getResource<InputSnapshot>('InputSnapshot')` 消费；不暴露 `world.input` 平行 API（charter P4 一致抽象）
-- **PointerLock 内部消化** — `requestPointerLock` 用户激活、`pointerlockchange` 状态机、`movementX/Y` 单位陷阱、`firstMouse` flag 全部封装在 `browser-backend.ts`；`InputSnapshot` 表面不暴露这些细节（plan-strategy OOS-1）
+- **PointerLock 内部消化** — `requestPointerLock` 用户激活、`pointerlockchange` 状态机、`movementX/Y` 单位陷阱、`firstMouse` flag 全部封装在 `browser-backend.ts`；`InputSnapshot` 表面仅暴露 `snap.mouse.pointerLocked`（合并锁态 boolean）与 `snap.mouse.movementDelta`（累加 delta），不暴露 W3C DOM 细节（plan-strategy OOS-1）
 - **帧首扫描后冻结** — `InputFrameStartScan` system token（顶层 `defineSystem`）先于其他用户系统跑（用 `before` 约束），从 `INPUT_BACKEND_KEY` resource 取 backend、扫描累积器后调用 `world.insertResource` 写入冻结快照；当帧内任何系统调 `snap.*` 看到的都是同一份值（architecture-principles #2 Derive）。backend 经 `world.insertResource(INPUT_BACKEND_KEY, backend)` 注入，descriptor 的 `resources:[INPUT_BACKEND_KEY]` 走结构化 ParamValidation（依赖未注入 -> invalid，非裸 throw）
 - **OOS-1 范围外** — PointerLock 进入/退出事件、`unadjustedMovement` 选项、hot-reload 不在本 MVP 内；后续作为独立 feat 拆出
 
@@ -202,6 +203,68 @@ Five gesture recognizers running in the backend closure (C-3 single legal cross-
 | assemble form — action surface | Assemble-form hosts must manually `world.insertResource(INPUT_MAP_KEY, map)` to enable action readpoints (D-7). Canvas-form `createApp` does this automatically. |
 | controller-db 子导出懒加载 | `@forgeax/engine-input/controller-db` is dynamically imported only on first connected non-standard gamepad (D-2). Until then (or on DB miss), non-standard slots maintain the Feat1 empty-signal behavior (`standardMapping=false`). Standard gamepads never trigger the load (C-5). |
 | 手势 cancel on blur | `onBlur` resets all active gesture recognizers: emits cancel events for each active gesture type, resets continuous values to identity, and clears timers (AC-18). Prevent ghost gestures on refocus. |
+| pointer-lock gate = game gate AND host predicate | `onCanvasClick` evaluates `gameGate && (predicate?.() ?? true)`. `gameGate` defaults to `true` and is set via `InputBackend.setPointerLockAllowed()`. `predicate` is `BrowserInputBackendOptions.pointerLockAllowed` (frozen at attach). Both must be true for a click to request lock. |
+| `setPointerLockAllowed(false)` immediate release | When `gameGate` transitions from `true` to `false` and a lock is active, the backend immediately releases: W3C path calls `exitPointerLock()`, provider path calls `exitLock()` + clears `providerLocked`. This solves the "mode switches to top-down while locked" boundary. |
+| lockProvider error → onLockError | W3C `requestPointerLock` promise rejection and provider `requestLock` throw/reject both route through `onLockError({ path, cause })`. Provider failure also rolls back `providerLocked = false`. The callback is wired by `attachInputAuto` into `AppError({ code: 'app-pointer-lock-failed' })` on the app's `onError` fan-out. |
+
+## Pointer-lock contract: PointerLockProvider / lockProvider / setPointerLockAllowed / pointerLocked
+
+Four anchors cover the full pointer-lock surface across the input-backend boundary.
+
+### PointerLockProvider (type SSOT)
+
+```ts
+// @forgeax/engine-input — exported from barrel
+interface PointerLockProvider {
+  requestLock(): void | Promise<void>;  // request pointer capture (W3C replacement)
+  exitLock(): void;                      // release pointer capture
+}
+```
+
+A single object (not two flat callbacks) — structural typing requires both halves, preventing "requestLock-only" half-injected states. The engine never learns *why* locking is (dis)allowed; it delegates to the abstract callback.
+
+### BrowserInputBackendOptions.lockProvider (injection point)
+
+```ts
+// BrowserInputBackendOptions — optional field, parallel to pointerLockAllowed
+interface BrowserInputBackendOptions {
+  pointerLockAllowed?: () => boolean;
+  lockProvider?: PointerLockProvider;      // absent => fall back to W3C requestPointerLock()
+  // ... other options
+}
+```
+
+When `lockProvider` is present, `onCanvasClick` calls `requestLock()` instead of `requestPointerLock()`. The provider's `exitLock()` replaces `exitPointerLock()` in release paths (ESC provider branch, blur, detach, `setPointerLockAllowed(false)` immediate release).
+
+### InputBackend.setPointerLockAllowed (command gate)
+
+```ts
+// InputBackend protocol — optional method
+interface InputBackend {
+  sample(): InputBackendSample;
+  setPointerLockAllowed?(allowed: boolean): void;  // game-side gate
+  detach(): void;
+}
+```
+
+- `setPointerLockAllowed(true)` — allow pointer-lock on next trusted click
+- `setPointerLockAllowed(false)` — block pointer-lock AND immediately release any active lock (W3C path: `exitPointerLock`; provider path: `exitLock()` + clears `providerLocked`)
+- Default state: `true` (allow lock)
+- Optional — backends without pointer-lock support omit this method
+
+This works together with the pre-existing host predicate `pointerLockAllowed?: () => boolean` (evaluated fresh on each click, e.g. "is input focus in the game quadrant?"). Two gates AND-combine: both must be true for lock; neither duplicates the other's information.
+
+### InputBackendSample.pointerLocked (readpoint)
+
+```ts
+// InputBackendSample — required field (not optional)
+interface InputBackendSample {
+  // ... movementX/Y, buttons, downKeys, upKeys, etc.
+  readonly pointerLocked: boolean;  // W3C pointerlockchange OR provider requestLock engage
+}
+```
+
+Frozen into `snap.mouse.pointerLocked` at frame-start. Consumers read `if (snap.mouse.pointerLocked)` to gate look/camera rotation — both facts (`movementDelta` + `pointerLocked`) sit at the same attribute path for single-point indexing (charter F1).
 
 ## 相关包
 

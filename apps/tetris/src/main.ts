@@ -227,7 +227,7 @@ async function bootstrap(): Promise<void> {
     tick(game, dt);
     paint();
     updateHud();
-    const r = renderer.draw(world);
+    const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) {
       console.error('[tetris] draw error:', r.error);
       pushError(r.error.code, r.error.hint);

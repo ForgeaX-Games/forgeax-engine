@@ -22,6 +22,7 @@ import type { _InternalRenderPipelineContext } from '../render-pipeline-context'
 import { STANDARD_PBR_UBO_SIZE } from '../render-system';
 import type { DispatchEntry } from '../render-system-extract';
 import { matchPass } from '../systems/pass-selector';
+import { worldEntityKey } from './frame-snapshot';
 import {
   COPY_DST_USAGE,
   getOrCreateFromChain,
@@ -572,7 +573,9 @@ function recordShadowCasterDraws(
           ? UNIFORM_USAGE | COPY_DST_USAGE
           : STORAGE_USAGE | COPY_DST_USAGE;
         const requestedBytes = shadowInst.transforms.byteLength;
-        const cached = c.frameState.instanceBuffers.get(shadowInst.cacheKey);
+        const cached = c.frameState.instanceBuffers.get(
+          worldEntityKey(entry.source.worldId, shadowInst.cacheKey),
+        );
         let active: InstanceBufferCacheEntry | null = null;
         if (
           cached !== undefined &&
@@ -601,7 +604,10 @@ function recordShadowCasterDraws(
               uploadedArchVersion: shadowInst.archVersion,
               uploadedByteLength: requestedBytes,
             };
-            c.frameState.instanceBuffers.set(shadowInst.cacheKey, active);
+            c.frameState.instanceBuffers.set(
+              worldEntityKey(entry.source.worldId, shadowInst.cacheKey),
+              active,
+            );
           }
         }
         if (active !== null) {
@@ -622,12 +628,13 @@ function recordShadowCasterDraws(
 
     // Bind per-entity instances BG for @group(3) (or fallback identity).
     // D-4: write end of the HDRP shadow-instances producer/consumer pair.
-    // outerKey = entry.source.entityKey, handle = shadowInstanceBuffer;
-    // the HDRP main pass read end (:3820 below) must look up the same
-    // (entityKey, instBuffer) leaf or the shadow instances silently drop.
+    // outerKey = worldEntityKey(entry.source.worldId, entry.source.entityKey),
+    // handle = shadowInstanceBuffer; the HDRP main pass read end (:3820 below)
+    // must look up the same (compositeKey, instBuffer) leaf or the shadow
+    // instances silently drop.
     const shadowInstancesBg = getOrCreatePerEntity(
       c.frameState.instancesBgPerEntity,
-      entry.source.entityKey,
+      worldEntityKey(entry.source.worldId, entry.source.entityKey),
       [shadowInstanceBuffer],
       'shadow-instances',
       () => {
@@ -1007,7 +1014,9 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
         let instCount = 1;
         let instBufferKey: object = pipelineState.identityInstanceBuffer as unknown as object;
         if (inst !== undefined) {
-          const cached = frameState.instanceBuffers.get(inst.cacheKey);
+          const cached = frameState.instanceBuffers.get(
+            worldEntityKey(entry.source.worldId, inst.cacheKey),
+          );
           if (
             cached !== undefined &&
             cached.uploadedArchVersion === inst.archVersion &&
@@ -1024,7 +1033,7 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
         // step. The inner WeakMap value is opaque (`unknown`); the 1-handle
         // shadow-instances chain guarantees it is the leaf Map here.
         const shadowInstLeaf = frameState.instancesBgPerEntity
-          .get(entry.source.entityKey)
+          .get(worldEntityKey(entry.source.worldId, entry.source.entityKey))
           ?.get(instBufferKey) as Map<string, BindGroup> | undefined;
         const cachedInstBg = shadowInstLeaf?.get('shadow-instances');
         if (cachedInstBg === undefined) continue; // recordShadowPass should have populated it
@@ -1454,7 +1463,9 @@ function recordSpotShadowGeometry(
     let instCount = 1;
     let instBufferKey: object = pipelineState.identityInstanceBuffer as unknown as object;
     if (inst !== undefined) {
-      const cached = frameState.instanceBuffers.get(inst.cacheKey);
+      const cached = frameState.instanceBuffers.get(
+        worldEntityKey(entry.source.worldId, inst.cacheKey),
+      );
       if (
         cached !== undefined &&
         cached.uploadedArchVersion === inst.archVersion &&
@@ -1465,7 +1476,7 @@ function recordSpotShadowGeometry(
       }
     }
     const spotInstLeaf = frameState.instancesBgPerEntity
-      .get(entry.source.entityKey)
+      .get(worldEntityKey(entry.source.worldId, entry.source.entityKey))
       ?.get(instBufferKey) as Map<string, BindGroup> | undefined;
     const cachedInstBg = spotInstLeaf?.get('shadow-instances');
     if (cachedInstBg === undefined) continue;

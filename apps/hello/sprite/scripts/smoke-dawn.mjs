@@ -485,7 +485,7 @@ for (const matrixCase of MATRIX) {
 
   let framesObserved = 0;
   for (let i = 0; i < TARGET_FRAMES; i++) {
-    const r = renderer.draw(world);
+    const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error(`[smoke] case ${scene}/${tonemap} draw frame ${i}: ${r.error.code}`);
     framesObserved++;
   }
@@ -822,7 +822,7 @@ const ninesliceFrames = Math.max(30, Math.floor(SMOKE_MIN_FRAMES / 10));
       ),
     );
     for (let i = 0; i < ninesliceFrames; i++) {
-      const r = renderer.draw(world);
+      const r = renderer.draw([world], { owner: 0 });
       if (!r.ok) ninesliceDrawErrors++;
     }
     await sharedDevice?.queue.onSubmittedWorkDone();

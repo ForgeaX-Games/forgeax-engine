@@ -198,7 +198,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // the parent-slide system) before each draw.
   function frame(): void {
     world.update();
-    const draw = renderer.draw(world);
+    const draw = renderer.draw([world], { owner: 0 });
     if (!draw.ok) {
       console.error('[transform-hierarchy] draw failed:', draw.error.code);
       return;

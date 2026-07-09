@@ -24,6 +24,7 @@ import { buildBeginRenderPassDescriptor } from '../pipeline-spec';
 import type { _InternalRenderPipelineContext } from '../render-pipeline-context';
 import { STANDARD_PBR_UBO_SIZE } from '../render-system';
 import type { MaterialSnapshot, SpriteInstancesSnapshot } from '../render-system-extract';
+import { worldEntityKey } from './frame-snapshot';
 import { entityHasTransparentSubmesh, residentTextureView } from './main-pass-material';
 import { interleaveSpriteInstanceBuffer, spriteInstancesCacheHit } from './main-pass-sprite';
 import {
@@ -342,7 +343,7 @@ function recordSpriteTransparentPbrDraws(
     // Identity instance BG (instanceCount=1); reuse the per-entity cache.
     const identityInstBg: BindGroup = getOrCreatePerEntity(
       frameState.instancesBgPerEntity,
-      entry.source.entityKey,
+      worldEntityKey(entry.source.worldId, entry.source.entityKey),
       [pipelineState.identityInstanceBuffer],
       'instances',
       () => {
@@ -698,7 +699,9 @@ function recordSpriteEntityDraws(
             }),
           );
         } else {
-          const cachedSprite = frameState.instanceBuffers.get(spriteInst.cacheKey);
+          const cachedSprite = frameState.instanceBuffers.get(
+            worldEntityKey(spriteEntry.source.worldId, spriteInst.cacheKey),
+          );
           let activeSprite: InstanceBufferCacheEntry | null = null;
           if (
             cachedSprite !== undefined &&
@@ -727,7 +730,10 @@ function recordSpriteEntityDraws(
                 uploadedArchVersion: spriteInst.archVersion,
                 uploadedByteLength: requestedBytes,
               };
-              frameState.instanceBuffers.set(spriteInst.cacheKey, activeSprite);
+              frameState.instanceBuffers.set(
+                worldEntityKey(spriteEntry.source.worldId, spriteInst.cacheKey),
+                activeSprite,
+              );
             }
           }
           if (activeSprite !== null) {
@@ -769,7 +775,7 @@ function recordSpriteEntityDraws(
     // Same pattern as #7.
     const spriteInstancesBg: BindGroup = getOrCreatePerEntity(
       frameState.instancesBgPerEntity,
-      spriteEntry.source.entityKey,
+      worldEntityKey(spriteEntry.source.worldId, spriteEntry.source.entityKey),
       [spriteInstanceBuffer],
       'instances',
       () => {
@@ -924,7 +930,9 @@ function resolveSpriteInstancesBuffer(
         }),
       );
     } else {
-      const cachedSpriteInst = frameState.instanceBuffers.get(spriteInstancesSnap.cacheKey);
+      const cachedSpriteInst = frameState.instanceBuffers.get(
+        worldEntityKey(spriteEntry.source.worldId, spriteInstancesSnap.cacheKey),
+      );
       let activeSpriteInst: InstanceBufferCacheEntry | null = null;
       if (spriteInstancesCacheHit(cachedSpriteInst, spriteInstancesSnap, requestedBytes)) {
         activeSpriteInst = cachedSpriteInst ?? null;
@@ -947,7 +955,10 @@ function resolveSpriteInstancesBuffer(
             uploadedArchVersion: spriteInstancesSnap.archVersion,
             uploadedByteLength: requestedBytes,
           };
-          frameState.instanceBuffers.set(spriteInstancesSnap.cacheKey, activeSpriteInst);
+          frameState.instanceBuffers.set(
+            worldEntityKey(spriteEntry.source.worldId, spriteInstancesSnap.cacheKey),
+            activeSpriteInst,
+          );
         }
       }
       if (activeSpriteInst !== null && requestedBytes > 0) {

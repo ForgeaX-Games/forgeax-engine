@@ -2103,10 +2103,11 @@ export type {
   RhiAssetNotRegisteredDetail,
   RhiErrorCode,
   RhiErrorDetail,
+  RhiOwnerOutOfRangeDetail,
   RhiShaderCompileDetail,
   RhiWebgpuRuntimeDetail,
 } from './errors';
-export { err, ok, RhiError } from './errors';
+export { err, ok, RhiError, validateDrawArgs } from './errors';
 
 // re-export common descriptor-related aliases for single-entry consumption.
 export type { AddressMode, CompareFunction, FilterMode, TextureFormat };

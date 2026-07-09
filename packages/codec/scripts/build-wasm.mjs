@@ -20,7 +20,7 @@
 // Usage: node packages/codec/scripts/build-wasm.mjs
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -326,6 +326,16 @@ function main() {
 
   buildTranscoder();
   buildEncoder();
+
+  // Drop the intermediate emcc object files: they are recompiled from source on
+  // every run (no .o-keyed caching) and are NOT part of the shipped runtime. The
+  // release publisher packs pkg/ with `tar -C pkg .`, so leaving them here would
+  // bloat the content-keyed tarball with non-runtime bytes. pkg/ then holds only
+  // the four runtime files (basis_transcoder.{mjs,wasm} + encode/basis_encoder.
+  // {mjs,wasm}) that fetch-wasm.mjs extracts back.
+  for (const o of [join(PKG, 'zstddeclib.transcoder.o'), join(PKG, 'zstd.encoder.o')]) {
+    rmSync(o, { force: true });
+  }
 
   console.log('\nBuild complete:');
   console.log(`  ${join(PKG, 'basis_transcoder.mjs')} + .wasm`);

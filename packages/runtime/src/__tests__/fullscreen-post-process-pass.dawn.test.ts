@@ -214,7 +214,7 @@ describe('feat-20260604 M2 w10: FullscreenPostProcessPass dawn tests', () => {
     const world = new World();
     spawnCubeScene(world, ANTIALIAS_FXAA);
 
-    const drawn = renderer.draw(world);
+    const drawn = renderer.draw([world], { owner: 0 });
     expect(drawn.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
 
@@ -245,7 +245,7 @@ describe('feat-20260604 M2 w10: FullscreenPostProcessPass dawn tests', () => {
     // Pass 1: antialias='none' baseline.
     const worldNone = new World();
     spawnCubeScene(worldNone, ANTIALIAS_NONE);
-    const drawnNone = renderer.draw(worldNone);
+    const drawnNone = renderer.draw([worldNone], { owner: 0 });
     expect(drawnNone.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     const pixelsNone = await doReadPixels(device, renderTarget);
@@ -253,7 +253,7 @@ describe('feat-20260604 M2 w10: FullscreenPostProcessPass dawn tests', () => {
     // Pass 2: antialias='fxaa'.
     const worldFxaa = new World();
     spawnCubeScene(worldFxaa, ANTIALIAS_FXAA);
-    const drawnFxaa = renderer.draw(worldFxaa);
+    const drawnFxaa = renderer.draw([worldFxaa], { owner: 0 });
     expect(drawnFxaa.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();
     const pixelsFxaa = await doReadPixels(device, renderTarget);

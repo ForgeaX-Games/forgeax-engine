@@ -242,7 +242,7 @@ async function main(): Promise<void> {
   );
 
   const loop = (): void => {
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

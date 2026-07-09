@@ -139,21 +139,21 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
     expect(ready.ok).toBe(true);
     const { world, shadowEntity } = buildScene(4, 2048);
 
-    expect(renderer.draw(world).ok).toBe(true);
+    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
 
     world.set(shadowEntity, DirectionalLight, {
       mapSize: 2048,
       shadowDistance: 50,
       cascadeCount: 2,
     });
-    expect(renderer.draw(world).ok).toBe(true);
+    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
 
     world.set(shadowEntity, DirectionalLight, {
       mapSize: 2048,
       shadowDistance: 50,
       cascadeCount: 4,
     });
-    expect(renderer.draw(world).ok).toBe(true);
+    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
   });
 
   it('mapSize 2048 -> 1024 -> 2048 RT rebuild without device error', async () => {
@@ -168,21 +168,21 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
     expect(ready.ok).toBe(true);
     const { world, shadowEntity } = buildScene(4, 2048);
 
-    expect(renderer.draw(world).ok).toBe(true);
+    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
 
     world.set(shadowEntity, DirectionalLight, {
       mapSize: 1024,
       shadowDistance: 50,
       cascadeCount: 4,
     });
-    expect(renderer.draw(world).ok).toBe(true);
+    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
 
     world.set(shadowEntity, DirectionalLight, {
       mapSize: 2048,
       shadowDistance: 50,
       cascadeCount: 4,
     });
-    expect(renderer.draw(world).ok).toBe(true);
+    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
   });
 
   it('cascadeCount=1 renders through the unified pathway (AC-10)', async () => {
@@ -196,6 +196,6 @@ describe('CSM runtime cascade + mapSize variation (M5/w26)', () => {
     const ready = await renderer.ready;
     expect(ready.ok).toBe(true);
     const { world } = buildScene(1, 1024);
-    expect(renderer.draw(world).ok).toBe(true);
+    expect(renderer.draw([world], { owner: 0 }).ok).toBe(true);
   });
 });

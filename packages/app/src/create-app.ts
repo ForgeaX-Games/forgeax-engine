@@ -472,6 +472,7 @@ async function createAppFromCanvas(
     ...(opts?.pointerLockAllowed ? { pointerLockAllowed: opts.pointerLockAllowed } : {}),
     ...(opts?.virtualJoysticks ? { virtualJoysticks: opts.virtualJoysticks } : {}),
     ...(opts?.inputMap ? { inputMap: opts.inputMap } : {}),
+    ...(opts?.lockProvider ? { lockProvider: opts.lockProvider } : {}),
   });
 
   // Audio backend (D-4): auto-create the WebAudioBackend when the user listed
@@ -551,6 +552,13 @@ async function createAppFromCanvas(
     inputBackend: inputHandle.backend,
     cleanup: (onErrorDispatch: (err: AppError) => void) => {
       inputHandle.cleanup({ onError: onErrorDispatch });
+    },
+    // M2 D-4: wire the input handle's setOnErrorDispatch so that onLockError
+    // signals from the backend reach the buildApp error fan-out. The dispatch
+    // function is created inside buildApp (after the ErrorFanoutRegistry is
+    // set up), so we use a callback to bridge the gap.
+    wireOnLockErrorDispatch: (dispatch: (err: AppError) => void) => {
+      inputHandle.setOnErrorDispatch(dispatch);
     },
   };
   if (audioBackend !== undefined) {
@@ -739,6 +747,14 @@ interface BuildAppArgs {
   /** Plugin registry from runPlugins -- exposed on App.pluginRegistry for inspector consumption. */
   readonly pluginRegistry: Map<string, Plugin>;
   readonly inputBackend?: InputBackend;
+  /**
+   * M2 D-4: callback that buildApp calls after creating the ErrorFanoutRegistry
+   * dispatch function. The input handle's onLockError callback needs the dispatch
+   * function to fan out 'app-pointer-lock-failed' errors, but the dispatch function
+   * is created inside buildApp (after the input handle is already constructed).
+   * This callback bridges the gap.
+   */
+  readonly wireOnLockErrorDispatch?: (dispatch: (err: AppError) => void) => void;
   readonly audioBackend?: AudioBackend;
   readonly cleanup?: (onErrorDispatch: (err: AppError) => void) => void;
   readonly maxDt?: number;
@@ -825,6 +841,14 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
 
   function dispatch(e: AppDispatchError): void {
     fanout.fire(e);
+  }
+
+  // M2 D-4: wire the input handle's onLockError callback to the error fan-out.
+  // The dispatch function is created here; the input handle was created earlier
+  // in createAppFromCanvas and passed to buildApp with a wireOnLockErrorDispatch
+  // callback that calls setOnErrorDispatch on the handle.
+  if (args.wireOnLockErrorDispatch) {
+    args.wireOnLockErrorDispatch(dispatch);
   }
 
   const loopOpts: Parameters<typeof createFrameLoop>[0] = {

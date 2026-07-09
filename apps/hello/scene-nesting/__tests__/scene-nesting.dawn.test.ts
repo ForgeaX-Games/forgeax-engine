@@ -245,7 +245,7 @@ describe('hello-scene-nesting w34 - dawn draw scene with mount (AC-33)', () => {
 
     let framesObserved = 0;
     for (let i = 0; i < TARGET_FRAMES; i++) {
-      const r = renderer.draw(world);
+      const r = renderer.draw([world], { owner: 0 });
       if (!r.ok) {
         console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
       }

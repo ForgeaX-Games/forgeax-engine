@@ -96,7 +96,7 @@ function spawnAndExtract(
   );
   resetTilemapChunkExtractCache();
   resetTilemapDerivedEntityTracker();
-  tilemapChunkExtractSystem(world);
+  tilemapChunkExtractSystem(world, 0);
   return world;
 }
 

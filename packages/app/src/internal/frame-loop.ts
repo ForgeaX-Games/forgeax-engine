@@ -236,7 +236,12 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
       }
     }
     try {
-      const drawResult = renderer.draw(world);
+      // feat-20260708-composited-multi-world-rendering M3 / AC-03: the app
+      // frame-loop wraps the single World into [world] with owner 0 so the
+      // public Engine.create / createApp API stays unchanged for single-world
+      // AI users. This is the sole AC-03 encapsulation point (plan §7 M3);
+      // owner 0 is the single-world identity path (worldId 0).
+      const drawResult = renderer.draw([world], { owner: 0 });
       // renderer.draw may legacy-return undefined (older Renderer
       // builds) or the new Result<void, RhiError> shape. Treat
       // undefined as ok and only fan out on the err arm.

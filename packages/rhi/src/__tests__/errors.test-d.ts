@@ -129,7 +129,7 @@ describe('MVP-1.7 — RhiErrorCode closed union 20 members', () => {
     void _bogus;
   });
 
-  it('exhaustive switch with no default fallback for all 20 members (charter proposition 4)', () => {
+  it('exhaustive switch with no default fallback for all members (charter proposition 4)', () => {
     function describeCode(code: RhiErrorCode): string {
       switch (code) {
         case 'adapter-unavailable':
@@ -174,6 +174,10 @@ describe('MVP-1.7 — RhiErrorCode closed union 20 members', () => {
           return 'descriptor-invalid';
         case 'instancing-exceeds-uniform-cap':
           return 'instancing-cap';
+        case 'render-system-empty-worlds':
+          return 'empty-worlds';
+        case 'render-system-owner-out-of-range':
+          return 'owner-oob';
       }
       // No default — TS guards: union drift here triggers compile-time red.
     }

@@ -283,7 +283,7 @@ import { extractFrame } from '../render-system-extract';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (world: unknown) => void;
+      draw: (worlds: unknown, opts: { owner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: {
         register: (asset: unknown) => { ok: boolean; value: unknown };
@@ -329,7 +329,7 @@ import { extractFrame } from '../render-system-extract';
     ) => Promise<{
       backend: string;
       ready: Promise<void>;
-      draw: (world: unknown) => void;
+      draw: (worlds: unknown, opts: { owner: number }) => void;
       onError: (cb: (err: { code: string; detail?: unknown; hint?: string }) => void) => () => void;
       assets: {
         register: (asset: unknown) => { ok: boolean; value: unknown };
@@ -400,7 +400,7 @@ import { extractFrame } from '../render-system-extract';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       // DirectionalLight with merged shadow fields.
       expect(errors).toHaveLength(0);
@@ -472,7 +472,7 @@ import { extractFrame } from '../render-system-extract';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
       expect(errors).toHaveLength(0);
     });
 
@@ -504,7 +504,7 @@ import { extractFrame } from '../render-system-extract';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       expect(errors.some((e) => e.code === 'render-system-no-camera')).toBe(true);
       // Clear pass executed under the synthetic camera path; the frame is
@@ -564,7 +564,7 @@ import { extractFrame } from '../render-system-extract';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       // Soft path: no error fired (D-Q7 mirroring; LO §1.1 minimum semantic).
       expect(errors).toHaveLength(0);
@@ -614,7 +614,7 @@ import { extractFrame } from '../render-system-extract';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       expect(errors).toHaveLength(0);
       expect(log.drawIndexedCount).toBe(1);
@@ -674,7 +674,7 @@ import { extractFrame } from '../render-system-extract';
 
       const errors: { code: string; hint?: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       expect(errors.some((e) => e.code === 'render-system-multi-camera')).toBe(true);
       // First archetype hit still rendered.
@@ -728,7 +728,7 @@ import { extractFrame } from '../render-system-extract';
       );
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       const multiLightCalls = warnSpy.mock.calls.filter(
         (c) =>
@@ -780,7 +780,7 @@ import { extractFrame } from '../render-system-extract';
 
       const errors: { code: string; detail?: { assetHandle?: number } }[] = [];
       renderer.onError((e) => errors.push(e as never));
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       const assetErr = errors.find((e) => e.code === 'asset-not-registered');
       expect(assetErr).toBeDefined();
@@ -873,7 +873,7 @@ import { extractFrame } from '../render-system-extract';
         detail?: { error?: { code: string; message: string } };
       }[] = [];
       renderer.onError((e) => errors.push(e as never));
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       const runtimeErr = errors.find((e) => e.code === 'webgpu-runtime-error');
       expect(runtimeErr).toBeDefined();
@@ -1098,7 +1098,7 @@ import { extractFrame } from '../render-system-extract';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       expect(errors).toHaveLength(0);
       // All 3 transparent entities are drawn.
@@ -1225,7 +1225,7 @@ import { extractFrame } from '../render-system-extract';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       expect(errors).toHaveLength(0);
       // Both opaque entities are drawn (structural).
@@ -1312,7 +1312,7 @@ import { extractFrame } from '../render-system-extract';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       expect(errors).toHaveLength(0);
       expect(log.drawIndexedCount).toBe(1);
@@ -1378,7 +1378,7 @@ import { extractFrame } from '../render-system-extract';
 
       const errors: { code: string }[] = [];
       renderer.onError((e) => errors.push(e));
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       expect(errors).toHaveLength(0);
       expect(log.drawIndexedCount).toBe(1);

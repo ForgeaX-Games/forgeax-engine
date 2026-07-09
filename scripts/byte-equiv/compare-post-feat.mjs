@@ -424,7 +424,7 @@ async function compareDemo(demo) {
   // 6. Run frames 0..29
   for (let frame = 0; frame < TARGET_FRAME; frame++) {
     currentFrame = frame;
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
     await delay(0);
   }
 

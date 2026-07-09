@@ -363,7 +363,7 @@ renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
 // --- 7. Frame A (parent at rest) -------------------------------------------
 
 world.update(); // runs propagateTransforms so child Transform.world is composed
-const drawARes = renderer.draw(world);
+const drawARes = renderer.draw([world], { owner: 0 });
 if (!drawARes.ok) {
   console.error(`[smoke] FAIL - draw (frame A) failed: ${drawARes.error.code}`);
   process.exit(1);
@@ -374,7 +374,7 @@ const pixelsA = await doReadPixels();
 // --- 8. Stability re-render (parent still at rest) -------------------------
 
 world.update();
-const drawAARes = renderer.draw(world);
+const drawAARes = renderer.draw([world], { owner: 0 });
 if (!drawAARes.ok) {
   console.error(`[smoke] FAIL - draw (stability frame) failed: ${drawAARes.error.code}`);
   process.exit(1);
@@ -390,7 +390,7 @@ if (!setRes.ok) {
   process.exit(1);
 }
 world.update(); // re-runs propagateTransforms; child Transform.world follows parent
-const drawBRes = renderer.draw(world);
+const drawBRes = renderer.draw([world], { owner: 0 });
 if (!drawBRes.ok) {
   console.error(`[smoke] FAIL - draw (frame B) failed: ${drawBRes.error.code}`);
   process.exit(1);

@@ -372,7 +372,7 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   rhiDrawIndexedCallsThisFrame = 0;
   rhiLastInstanceCount = 0;
 
-  const r = renderer.draw(world);
+  const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) {
     console.warn(`[smoke] draw frame ${i}: ${r.error.code}`);
     continue;

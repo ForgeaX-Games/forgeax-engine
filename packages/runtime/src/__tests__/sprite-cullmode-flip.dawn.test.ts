@@ -294,7 +294,7 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
     // Render an H-flipped sprite (scaleX < 0). With cullMode='back' this
     // would be culled and the centre would stay clear-colour-black.
     spawnFlippedSpriteScene(worldFlip, spriteMaterial, /* scaleX= */ -1, /* scaleY= */ 1);
-    const drawn = renderer.draw(worldFlip);
+    const drawn = renderer.draw([worldFlip], { owner: 0 });
     await device.queue.onSubmittedWorkDone();
     expect(drawn.ok, 'H-flipped sprite draw').toBe(true);
 
@@ -441,7 +441,7 @@ describe('feat-20260608 M2 m2-t5: sprite pipeline cullMode "none" lets H/V flipp
     } as never);
 
     spawnFlippedSpriteScene(worldFlipBoth, spriteMaterial, /* scaleX= */ -1, /* scaleY= */ -1);
-    const drawn = renderer.draw(worldFlipBoth);
+    const drawn = renderer.draw([worldFlipBoth], { owner: 0 });
     await device.queue.onSubmittedWorkDone();
     expect(drawn.ok).toBe(true);
 

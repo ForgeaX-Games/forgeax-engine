@@ -709,7 +709,7 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
         },
       );
 
-      const drawnBaseline = renderer.draw(worldBaseline);
+      const drawnBaseline = renderer.draw([worldBaseline], { owner: 0 });
       expect(drawnBaseline.ok).toBe(true);
       await device.queue.onSubmittedWorkDone();
       if (renderTarget === undefined) throw new Error('renderTarget not configured');
@@ -816,10 +816,10 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
       // Render two frames of the shadow scene -- the first allocates the
       // ShadowAtlas + warms the shadow caster PSO cache; the second is the
       // assertion frame.
-      const drawnShadow1 = renderer.draw(worldShadow);
+      const drawnShadow1 = renderer.draw([worldShadow], { owner: 0 });
       expect(drawnShadow1.ok).toBe(true);
       await device.queue.onSubmittedWorkDone();
-      const drawnShadow2 = renderer.draw(worldShadow);
+      const drawnShadow2 = renderer.draw([worldShadow], { owner: 0 });
       expect(drawnShadow2.ok).toBe(true);
       await device.queue.onSubmittedWorkDone();
       if (renderTarget === undefined) throw new Error('renderTarget not configured');

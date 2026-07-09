@@ -282,7 +282,7 @@ describe('hello-gltf-instancing w28 - dawn drawIndexed real GPU spine (AC-15)', 
 
     let framesObserved = 0;
     for (let i = 0; i < TARGET_FRAMES; i++) {
-      const r = renderer.draw(world);
+      const r = renderer.draw([world], { owner: 0 });
       expect(r.ok).toBe(true);
       framesObserved++;
     }

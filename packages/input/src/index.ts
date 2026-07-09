@@ -39,6 +39,7 @@ export {
 export {
   attachBrowserInputBackend,
   type BrowserInputBackendOptions,
+  type PointerLockProvider,
 } from './browser-backend';
 export {
   FRAME_START_SCAN_SYSTEM_NAME,

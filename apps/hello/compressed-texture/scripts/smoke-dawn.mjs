@@ -267,7 +267,7 @@ const start = performance.now();
 let totalFrames = 0;
 const pixelReads = [];
 while (true) {
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
   totalFrames++;
   const now = performance.now();
   if (now - start >= SMOKE_DURATION_MS) break;

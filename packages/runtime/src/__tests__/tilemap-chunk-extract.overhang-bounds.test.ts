@@ -195,7 +195,7 @@ function countDerivedPerCellEntities(world: World): number {
 
 function runFrame(scene: Scene): number {
   propagateTransforms(scene.world);
-  tilemapChunkExtractSystem(scene.world);
+  tilemapChunkExtractSystem(scene.world, 0);
   return countDerivedPerCellEntities(scene.world);
 }
 

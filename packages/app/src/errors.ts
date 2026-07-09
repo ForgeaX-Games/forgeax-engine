@@ -1,8 +1,8 @@
-// @forgeax/engine-app -- AppError + closed AppErrorCode union (5 members) +
+// @forgeax/engine-app -- AppError + closed AppErrorCode union (6 members) +
 // APP_ERROR_HINTS / APP_EXPECTED + discriminated AppErrorDetail per code.
 //
 // Shape:
-//   - AppErrorCode = closed union 5 members (charter P4 closed-union
+//   - AppErrorCode = closed union 6 members (charter P4 closed-union
 //     exhaustive switch needs no default fallback; tsc strict mode guards
 //     completeness; AGENTS.md "Errors are structured" + AC-07).
 //     Members:
@@ -11,8 +11,9 @@
 //       - 'app-canvas-detached'
 //       - 'app-paused-while-stop'
 //       - 'app-system-update-failed'
+//       - 'app-pointer-lock-failed'
 //     Plan-strategy D-3 lock: device-lost stays on RhiErrorCode (18-member
-//     union); the AppError surface does NOT add a sixth 'app-device-lost'
+//     union); the AppError surface does NOT add a seventh 'app-device-lost'
 //     member. Host onError listener receives RhiError({code:'device-lost'})
 //     verbatim through the fan-out.
 //
@@ -35,14 +36,14 @@
 //     non-canonical fields like `{ state: 'running' }` on the
 //     'app-already-running' arm.
 //
-//   - APP_ERROR_HINTS / APP_EXPECTED are 5-key Records keyed by AppErrorCode;
-//     bidirectional 5/5 assertion in __tests__/errors.test.ts asserts that
-//     every code has a non-empty entry on each table (forward) and that
-//     every key is one of the 5 members (reverse). Adding / dropping a
+//   - APP_ERROR_HINTS / APP_EXPECTED are 6-key Records keyed by AppErrorCode;
+//     bidirectional 6/6 assertion in __tests__/errors-pointer-lock-failed.test.ts
+//     asserts that every code has a non-empty entry on each table (forward) and
+//     that every key is one of the 6 members (reverse). Adding / dropping a
 //     member without updating both tables fails the unit test (AC-07).
 //
 // Related: requirements AC-07 / AC-04 / AC-09; plan-strategy section 2 D-3
-// (5-member lock) + D-4 ('app-system-update-failed' detail = { cause,
+// (6-member lock) + D-4 ('app-system-update-failed' detail = { cause,
 // systemName? }) + D-6 (dual-layer instanceof + switch consumption form);
 // research section 2.7 (AppErrorCode lands in AGENTS.md Error model table
 // alongside RhiErrorCode et al.); charter P3 (explicit failure) + P4
@@ -52,7 +53,7 @@ import type { PluginError } from '@forgeax/engine-plugin';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
 
 /**
- * Closed AppErrorCode union (5 members).
+ * Closed AppErrorCode union (6 members).
  *
  * | code | trigger |
  * |:--|:--|
@@ -61,15 +62,17 @@ import type { RhiError } from '@forgeax/engine-rhi/errors';
  * | `'app-canvas-detached'` | `createApp(canvas)` thin wrapper found `canvas.isConnected === false` at entry. Detail carries optional `canvasId` so the host can surface the offending canvas in a multi-canvas page (D-2 minor). |
  * | `'app-paused-while-stop'` | `stop()` invoked while the rAF loop is `'paused'`. AI users must `resume()` then `stop()` (matches the React component-unmount-then-stop pattern). |
  * | `'app-system-update-failed'` | `world.update(...)` or `world.removeSystem(...)` (input-attach cleanup path) threw or returned `Result.err`; the original failure value is forwarded on `detail.cause` so AI users can two-level narrow (`detail.cause instanceof EcsError` etc.). `detail.systemName` is optional and present when the call site can name the offending system (e.g. input-attach reports `FRAME_START_SCAN_SYSTEM_NAME`). |
+ * | `'app-pointer-lock-failed'` | `attachInputAuto`'s `onLockError` callback received a lock failure from the input backend. `detail.path` carries `'w3c'` (W3C `requestPointerLock` rejection) or `'provider'` (host-injected `lockProvider.requestLock` throw/reject). `detail.cause` carries the original rejection value verbatim. The host recovers by remaining in unlocked state; the next trusted click will retry the lock request. |
  *
- * Plan-strategy D-3 locks the count at 5; device-lost rides RhiErrorCode.
+ * Plan-strategy D-4 locked the count at 6; device-lost rides RhiErrorCode.
  */
 export type AppErrorCode =
   | 'app-not-started'
   | 'app-already-running'
   | 'app-canvas-detached'
   | 'app-paused-while-stop'
-  | 'app-system-update-failed';
+  | 'app-system-update-failed'
+  | 'app-pointer-lock-failed';
 
 /**
  * Detail variant for the `'app-canvas-detached'` arm.
@@ -97,6 +100,20 @@ export interface AppDetailSystemUpdateFailed {
 }
 
 /**
+ * Detail variant for the `'app-pointer-lock-failed'` arm (plan-strategy D-4).
+ *
+ * `path` discriminates between W3C `requestPointerLock` rejections (`'w3c'`)
+ * and host-injected `lockProvider.requestLock` throw/reject (`'provider'`).
+ * `cause` carries the original rejection value verbatim so AI users can
+ * narrow further (e.g. `cause instanceof DOMException` for W3C timeout
+ * rejections).
+ */
+export interface AppDetailPointerLockFailed {
+  readonly path: 'w3c' | 'provider';
+  readonly cause: unknown;
+}
+
+/**
  * Empty-detail shape for the 3 codes that carry no payload
  * (`'app-not-started'`, `'app-already-running'`, `'app-paused-while-stop'`).
  *
@@ -115,7 +132,9 @@ export type AppErrorDetailFor<C extends AppErrorCode> = C extends 'app-canvas-de
   ? AppDetailCanvasDetached
   : C extends 'app-system-update-failed'
     ? AppDetailSystemUpdateFailed
-    : AppDetailEmpty;
+    : C extends 'app-pointer-lock-failed'
+      ? AppDetailPointerLockFailed
+      : AppDetailEmpty;
 
 /**
  * Tagged union of `.detail` payloads carried by structured AppError.
@@ -125,7 +144,11 @@ export type AppErrorDetailFor<C extends AppErrorCode> = C extends 'app-canvas-de
  * has `canvasId`, `AppDetailSystemUpdateFailed` has `cause`, the empty
  * shape has neither).
  */
-export type AppErrorDetail = AppDetailEmpty | AppDetailCanvasDetached | AppDetailSystemUpdateFailed;
+export type AppErrorDetail =
+  | AppDetailEmpty
+  | AppDetailCanvasDetached
+  | AppDetailSystemUpdateFailed
+  | AppDetailPointerLockFailed;
 
 /**
  * Render a one-line summary of `detail.cause` for embedding in
@@ -184,6 +207,9 @@ class AppErrorClass extends Error {
           ? ` (system=${d.systemName})`
           : '';
       causeSuffix = `; cause: ${summarizeCause(d.cause)}${sys}`;
+    } else if (args.code === 'app-pointer-lock-failed') {
+      const d = args.detail as AppDetailPointerLockFailed;
+      causeSuffix = `; path: ${d.path}; cause: ${summarizeCause(d.cause)}`;
     }
     super(`[AppError ${args.code}] expected: ${args.expected}; hint: ${args.hint}${causeSuffix}`);
     this.name = 'AppError';
@@ -206,7 +232,7 @@ type AppErrorVariant<C extends AppErrorCode> = AppErrorClass & {
 };
 
 /**
- * Public AppError type — discriminated union of the 5 variants.
+ * Public AppError type — discriminated union of the 6 variants.
  *
  * AI-user form (charter P3 explicit failure):
  *
@@ -219,6 +245,8 @@ type AppErrorVariant<C extends AppErrorCode> = AppErrorClass & {
  *     case 'app-paused-while-stop':   return 'resume() then stop()';
  *     case 'app-system-update-failed':
  *       return err.detail.cause instanceof Error ? err.detail.cause.message : 'unknown';
+ *     case 'app-pointer-lock-failed':
+ *       return `lock failed (${err.detail.path}): ${err.detail.cause}`;
  *   }
  * }
  * ```
@@ -228,7 +256,8 @@ export type AppError =
   | AppErrorVariant<'app-already-running'>
   | AppErrorVariant<'app-canvas-detached'>
   | AppErrorVariant<'app-paused-while-stop'>
-  | AppErrorVariant<'app-system-update-failed'>;
+  | AppErrorVariant<'app-system-update-failed'>
+  | AppErrorVariant<'app-pointer-lock-failed'>;
 
 interface AppErrorConstructor {
   new <C extends AppErrorCode>(args: {
@@ -259,8 +288,8 @@ export const AppError: AppErrorConstructor = AppErrorClass as unknown as AppErro
  * code surfaces. AI users read this as the L2 detail (charter F2 priority
  * text); `.hint` carries the recovery action.
  *
- * 5 keys; bidirectional assertion in `__tests__/errors.test.ts` locks the
- * count and non-emptiness of every entry (AC-07).
+ * 6 keys; bidirectional assertion in `__tests__/errors-pointer-lock-failed.test.ts`
+ * locks the count and non-emptiness of every entry.
  */
 export const APP_EXPECTED: Readonly<Record<AppErrorCode, string>> = {
   'app-not-started':
@@ -272,6 +301,8 @@ export const APP_EXPECTED: Readonly<Record<AppErrorCode, string>> = {
     'state must be "running" to stop; paused handles must resume() before stop()',
   'app-system-update-failed':
     'world.update(world) and renderer.draw(world) complete synchronously each frame; world.removeSystem(name) returns Result.ok during cleanup',
+  'app-pointer-lock-failed':
+    'pointer-lock request (W3C requestPointerLock or host lockProvider.requestLock) to succeed; failure signals the browser rejected the lock or the host provider threw',
 };
 
 /**
@@ -279,8 +310,8 @@ export const APP_EXPECTED: Readonly<Record<AppErrorCode, string>> = {
  * proposition 3: machine-readable hint > prose; AGENTS.md "Errors are
  * structured").
  *
- * 5 keys; bidirectional assertion in `__tests__/errors.test.ts` locks the
- * count and non-emptiness of every entry (AC-07).
+ * 6 keys; bidirectional assertion in `__tests__/errors-pointer-lock-failed.test.ts`
+ * locks the count and non-emptiness of every entry.
  */
 export const APP_ERROR_HINTS: Readonly<Record<AppErrorCode, string>> = {
   'app-not-started':
@@ -293,6 +324,8 @@ export const APP_ERROR_HINTS: Readonly<Record<AppErrorCode, string>> = {
     'call resume() then stop(), or treat stop-while-paused as a host bug and audit the lifecycle',
   'app-system-update-failed':
     'inspect detail.cause for the original thrown value (EcsError / RhiError / host system bug); detail.systemName names the offending system when the call site can supply it',
+  'app-pointer-lock-failed':
+    'remain in unlocked state; the next trusted click will automatically retry the lock request. inspect detail.path ("w3c" or "provider") and detail.cause to determine the root cause',
 };
 
 /**

@@ -6,9 +6,9 @@
 
 | Proposition | This package's contract |
 |:--|:--|
-| 1 渐进披露 | Single `import { rhi } from '@forgeax/engine-rhi-webgpu'` reaches 14 opaque handles + 7 main interfaces + 9 descriptors + 18 `RhiErrorCode` members in one read. Top-level table of contents below precedes detail. |
+| 1 渐进披露 | Single `import { rhi } from '@forgeax/engine-rhi-webgpu'` reaches 14 opaque handles + 7 main interfaces + 9 descriptors + 23 `RhiErrorCode` members in one read. Top-level table of contents below precedes detail. |
 | 2 业界实践 | 5 descriptors = `Pick<GPUXxxDescriptor, ...>` byte-aligned with `@webgpu/types`; mirrors typescript-eslint / `@microsoft/api-extractor` selection patterns (S-2 ts-morph). |
-| 3 机读 union > 散文 | `RhiErrorCode` is a closed string-literal union (19 members); AI users `switch (err.code)` is TypeScript-exhaustive with no `default` fallback. Tables below are machine-readable, not paragraphs. |
+| 3 机读 union > 散文 | `RhiErrorCode` is a closed string-literal union (23 members); AI users `switch (err.code)` is TypeScript-exhaustive with no `default` fallback. Tables below are machine-readable, not paragraphs. |
 | 4 显式失败 | Every method returns `Result<T, RhiError>`. Errors carry `.code` + `.expected` + `.hint` (and optional `.detail` for compile-failed). 3 placeholder methods (executeBundles / beginOcclusionQuery / endOcclusionQuery) return structured `'rhi-not-available'` until `feat-future-rhi-resource-creation` lands. |
 | 5 一致抽象 | 14 opaque handles use brand-only `Id<T>`; the shim never renames fields; `caps.X = false` is the same signal shape as a value field. Single hatch: `_internal_getRawDevice` (D-S1; no other escape). |
 | 6 (candidate) mock vs real-GPU | dawn.node integration tests trigger the 4 D-S3 error codes against a real GPU adapter (`packages/rhi-webgpu/src/__tests__/dawn-real-gpu.dawn.test.ts`); mock-only coverage is monitored as a silent-pass blind spot (plan-strategy R-7). |
@@ -81,7 +81,7 @@ The 9 descriptor types above are wrapped by an internal `ExplicitUndefined<T>` m
 
 **Upgrade path**: once upstream `@webgpu/types` v0.2.x ships `?: T | undefined` uniformly (L-P4 widening contract), `ExplicitUndefined<>` can be removed without changing forgeax's public descriptor types.
 
-## Error model — 19-member closed `RhiErrorCode`
+## Error model — 23-member closed `RhiErrorCode`
 
 > [!NOTE]
 > **ROLE: RHI 包契约 SSOT**——this section is the closed-union contract source. The sibling table in [`packages/engine/README.md` §错误处理](../engine/README.md) (`'rhi-not-available'` row) mirrors the same trigger/consumption wording for the engine-entry quickstart audience; descriptions are kept byte-for-byte aligned with [`packages/rhi/src/errors.ts`](./src/errors.ts) JSDoc to prevent drift (decision D-7 双源 ROLE 不合并 / 架构原则 #1 双源 ROLE 区分).
@@ -107,6 +107,10 @@ The 9 descriptor types above are wrapped by an internal `ExplicitUndefined<T>` m
 | `'internal-error'` | `GPUInternalError` subtype — driver-bug / unrecoverable internal failure that is neither validation nor OOM. `.hint` suggests reproducing on a stable adapter + file an issue with the underlying GPU.message | W3C 22.2 GPUInternalError |
 | `'hierarchy-broken'` | `propagateTransforms` system (ECS `'pre-render'` schedule) encountered a `Parent` whose referenced entity no longer exists. The single entity's subtree is skipped; other entities continue rendering (charter proposition 9 graceful degradation + architecture-principles #5 Fail Fast; feat-20260511-asset-system-v1 D-P2 + requirements §9 row 8) | engine-internal RenderSystem |
 | `'destroy-after-destroy'` | A second `RhiDevice.destroyBuffer(buf)` / `RhiDevice.destroyTexture(tex)` on the same handle. The shim layer tracks per-handle `destroyed: boolean` in WeakMap-backed meta and surfaces this code on the second call rather than swallowing it (W3C / wgpu wasm both treat double-destroy as idempotent void; forgeax prefers fail-fast because double-destroy is almost always a lifecycle bug — feat-20260612 D-6 / D-7). `.expected` / `.hint`: `'GPU buffer/texture handle has not been destroyed yet'` / `'object already destroyed; track lifecycle in caller or check isDestroyed before re-destroy'` | engine-internal RHI shim |
+| `'rhi-descriptor-invalid'` | A `createRenderPipeline` (or other `create*` entry) descriptor failed to parse in the wgpu-wasm backend (Rust `#[wasm_bindgen(catch)]` Err, stable prefix `[wgpu-wasm] failed to parse`). The descriptor shape passed from TS was malformed — a caller bug, not a runtime condition. Differs from `'webgpu-runtime-error'` (a valid descriptor rejected by the runtime): here the descriptor never reached the runtime because its shape was unparseable. `.hint` carries the parse-error message including the failing field index (e.g. `fragment.targets[0]`). `.expected` / `.hint`: `'caller passed well-formed descriptor data matching the wgpu-wasm serialization contract'` / `'check the descriptor field named in the error message for type mismatch or missing required fields'` (feat-20260619) | engine-internal RHI shim |
+| `'instancing-exceeds-uniform-cap'` | A record-stage fold bucket carries more than 128 instances on the WebGL2 uniform-fallback path (`caps.storageBuffer === false`). The engine fires the error AND falls the bucket back to per-entity `drawIndexed` (shared fallback exit, plan D-9), so the frame is still visually correct. The 128 cap: 128 instances x 64 B/mat4 = 8192 B fits inside the WebGL2 minimum 16384 B UBO. `.detail = { requested: number, limit: 128, scope: 'sprite' \| 'tilemap-chunk' }`. Differs from `'limit-exceeded'` (static `device.limits` byte ceiling): this is a per-bucket instance-count ceiling enforced only when the backend lacks storage-buffer bindings. `.expected` / `.hint`: `'bucket instance count <= 128 (uniform fallback cap)'` / `'reduce the bucket size, switch to a WebGPU-capable backend (storage buffers lift the cap), or accept the per-cell drawIndexed fallback'` (feat-20260622) | engine-internal RenderSystem |
+| `'render-system-empty-worlds'` | `renderer.draw(worlds, { owner })` received an empty `worlds` array. The frame is skipped (no GPU commands recorded); validation runs at the draw entry (before any extract), so no per-world side effects fire. Distinct from `'render-system-no-camera'` (the world exists but has no Camera entity) — here there is no world at all. `.detail = undefined` (the failure is fully described by `.code`). `.expected` / `.hint`: `'worlds array has at least one world'` / `'pass at least one world: draw([world], { owner: 0 })'` (feat-20260708 D-5) | engine-internal RenderSystem |
+| `'render-system-owner-out-of-range'` | `renderer.draw(worlds, { owner })` received an `owner` index that is not a valid index into `worlds` (`owner < 0` or `owner >= worlds.length`). `owner` selects which world contributes cameras + singleton resources (skylight / skybox / postProcessParams). The frame is skipped; validation runs after the empty-worlds check (non-exclusive: an empty array short-circuits to `'render-system-empty-worlds'` first). `.detail = { owner: number, worldCount: number }` carries the offending index + array length for property-access branching (`err.detail.owner` / `err.detail.worldCount`). `.expected` / `.hint`: `'owner is an index into worlds (0 <= owner < worlds.length)'` / `'owner must be in 0..worlds.length-1; the owner world supplies cameras + skylight/skybox/postProcess'` (feat-20260708 D-5) | engine-internal RenderSystem |
 
 `RhiError` carries `.code` + `.expected` + `.hint` readonly (and `.detail.compilerMessages` for shader-compile-failed; `.detail.assetHandle` for asset-not-registered). AI users `switch (err.code)` is exhaustive — no `default` needed.
 
@@ -158,7 +162,7 @@ AI users gate optional fast paths via `caps.X` instead of try / catch (`caps.X =
 | minor | add new `RhiErrorCode` member; widen a descriptor field type (e.g. broaden a single brand to a union `T -> T \| U`) | rename / delete / reorder existing members; narrow types |
 | major | any breaking change with a "破坏点列表" entry | — |
 
-**破坏点列表 — 暂无.** `feat-20260508-shader-pipeline-mvp` first defined the 9-member union; `feat-20260508-rhi-surface-completion` adds 4 D-S3 codes additively; `feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle` adds `'destroy-after-destroy'` (18 -> 19, minor add-only). Future shrinkage (e.g. tightening `view` from union back to a single type) is a major bump and must register here.
+**破坏点列表 — 暂无.** `feat-20260508-shader-pipeline-mvp` first defined the 9-member union; `feat-20260508-rhi-surface-completion` adds 4 D-S3 codes additively; `feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle` adds `'destroy-after-destroy'` (18 -> 19); `feat-20260619` adds `'rhi-descriptor-invalid'` (19 -> 20); `feat-20260622-chunk-gpu-instancing-sprite-tilemap` adds `'instancing-exceeds-uniform-cap'` (20 -> 21); `feat-20260708-composited-multi-world-rendering` adds `'render-system-empty-worlds'` + `'render-system-owner-out-of-range'` (21 -> 23), all minor add-only. Future shrinkage (e.g. tightening `view` from union back to a single type) is a major bump and must register here.
 
 ## AI user trial (charter proposition 1-5 walk)
 
@@ -182,7 +186,7 @@ if (!dr.ok) {
     case 'render-pass-not-ended':     /* call pass.end() before next beginRenderPass() */ break;
     case 'queue-submit-failed':       /* audit buffer/pipeline lifetimes before submit */ break;
     case 'queue-write-buffer-out-of-bounds': /* realign offset, re-check buffer.size */ break;
-    case 'render-system-no-camera':   /* world.spawn(Transform + Camera) before draw(world) */ break;
+    case 'render-system-no-camera':   /* world.spawn(Transform + Camera) before draw([world], { owner: 0 }) */ break;
     case 'render-system-multi-camera':/* deduplicate Camera entities or wait for feat-future-multi-viewport */ break;
     case 'render-system-multi-light': /* deduplicate DirectionalLight or wait for feat-future-pbr-multi-light */ break;
     case 'asset-not-registered':      /* use HANDLE_CUBE / HANDLE_TRIANGLE imports; or feat-future-asset-system custom register */ break;
@@ -191,6 +195,10 @@ if (!dr.ok) {
     case 'internal-error':            /* reproduce on stable adapter; file an issue with @forgeax/engine-runtime + GPU.message */ break;
     case 'hierarchy-broken':          /* remove stale Parent via world.removeComponent before destroying ancestor; engine.assets.inspect() to audit */ break;
     case 'destroy-after-destroy':     /* track lifecycle in caller or check GpuResource.isDestroyed before re-destroy */ break;
+    case 'rhi-descriptor-invalid':    /* fix the malformed descriptor field named in dr.error.hint (wgpu-wasm parse failure) */ break;
+    case 'instancing-exceeds-uniform-cap': /* shrink bucket (<=128) or switch to a storage-buffer backend; dr.error.detail.requested/scope */ break;
+    case 'render-system-empty-worlds':/* pass at least one world: draw([world], { owner: 0 }) */ break;
+    case 'render-system-owner-out-of-range': /* owner in 0..worlds.length-1; dr.error.detail.owner/worldCount */ break;
   }
   return;
 }

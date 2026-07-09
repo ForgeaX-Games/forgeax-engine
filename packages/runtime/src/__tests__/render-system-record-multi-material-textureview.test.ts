@@ -223,7 +223,7 @@ function buildManifestDataUrl(): string {
 
 interface RendererLike {
   ready: Promise<unknown>;
-  draw: (world: unknown) => void;
+  draw: (worlds: unknown, opts: { owner: number }) => void;
   onError: (cb: (err: { code: string }) => void) => () => void;
 }
 
@@ -434,7 +434,7 @@ describe('record: per-submesh PBR material BG textureView (bug-20260610 D2 regre
     renderer.onError((e) => errors.push(e.code));
 
     const world = await spawnPbrMultiMaterialScene();
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
 
     // Filter to the PBR-bucket BG creations only. Sprite / shadow / tonemap
     // BGs use different labels and would falsely inflate the count.
@@ -598,8 +598,8 @@ describe('record: PBR missing baseColorTexture telemetry (feat-future-pbr-missin
       // Two frames: the RhiError fires per-frame (machine-readable signal), but
       // the console.warn fires exactly once (warn-once across RenderSystem
       // lifetime -- signal/noise floor, charter P3).
-      renderer.draw(world);
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
+      renderer.draw([world], { owner: 0 });
 
       const missing = errors.filter((e) => e.code === 'asset-not-registered');
       expect(missing.length).toBeGreaterThanOrEqual(1);

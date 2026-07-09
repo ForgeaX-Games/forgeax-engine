@@ -2,6 +2,30 @@
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
 
 import { vec3 } from '@forgeax/engine-math';
+
+/**
+ * feat-20260708-composited-multi-world-rendering M1 / D-1 / D-9:
+ * worldId-entityKey composite key helper. Formula: `worldId * 2^32 + entityKey`.
+ *
+ * worldId is the index into `worlds[]` (the `draw` call argument). entityKey
+ * is the packed Entity u32 (encodeEntity(indexSlot, generation)) surfaced
+ * through `RenderableSnapshot.entityKey`.
+ *
+ * Key properties:
+ *   - worldId=0 identity: `worldEntityKey(0, k) === k` — single-world path
+ *     cache behavior is bit-for-bit unchanged (AC-03 regression guarantee).
+ *   - JS safe integer: worldId < 2^21 keeps the composite key below
+ *     Number.MAX_SAFE_INTEGER (2^53).
+ *   - SSOT: all cache-key compositing consumers import this single helper;
+ *     no inline `worldId * 2^32 + k` duplication (D-9).
+ *
+ * @internal — exported for unit test + glyph/tilemap/record consumers;
+ * not part of the public @forgeax/engine-runtime API surface.
+ */
+export function worldEntityKey(worldId: number, entityKey: number): number {
+  return worldId * 4294967296 + entityKey; // 2^32 = 4294967296
+}
+
 import type { RenderGraph } from '@forgeax/engine-render-graph';
 import type { BindGroup } from '@forgeax/engine-rhi';
 import type { MaterialRenderState, RenderPipelineAsset } from '@forgeax/engine-types';
@@ -213,7 +237,15 @@ export interface RenderFrameState {
    * only the final handle maps to the variant->BindGroup leaf Map. Direct
    * readers (HDRP shadow-instances read end) assert the leaf shape locally.
    */
+  /**
+   * feat-20260708-composited-multi-world-rendering M1 / D-1a #2: outer Map
+   * keyed by `worldEntityKey(worldId, entityKey)`. Inner WeakMap unchanged.
+   */
   readonly materialBgPerEntity: Map<number, WeakMap<object, unknown>>;
+  /**
+   * feat-20260708-composited-multi-world-rendering M1 / D-1a #3: outer Map
+   * keyed by `worldEntityKey(worldId, entityKey)`. Inner WeakMap unchanged.
+   */
   readonly instancesBgPerEntity: Map<number, WeakMap<object, unknown>>;
   /**
    * feat-20260622-handle-to-id-allocator-elimination M1 / w2: cross-entity

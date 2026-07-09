@@ -46,6 +46,7 @@ import { MeshRenderer } from './components/mesh-renderer';
 import { layoutGlyphText, resetFontConcurrency, trackFontConcurrency } from './glyph-layout';
 import { bakeGlyphMesh } from './glyph-mesh-bake';
 import type { GpuResourceStore } from './gpu-resource-store';
+import { worldEntityKey } from './record/frame-snapshot';
 import { resolveAssetHandle } from './resolve-asset-handle';
 
 // Per-entity bake bookkeeping: the baked mesh handle id + the authoring
@@ -131,6 +132,7 @@ export function glyphTextLayoutSystem(
   world: World,
   assets: AssetRegistry,
   gpuStore: GpuResourceStore,
+  worldId: number,
 ): Result<void, TextError> {
   resetFontConcurrency();
 
@@ -143,7 +145,7 @@ export function glyphTextLayoutSystem(
 
   let firstError: TextError | null = null;
   for (const entity of entities) {
-    const error = processEntity(world, assets, gpuStore, entity);
+    const error = processEntity(world, assets, gpuStore, entity, worldId);
     if (error !== null && firstError === null) firstError = error;
   }
 
@@ -176,6 +178,7 @@ function processEntity(
   assets: AssetRegistry,
   gpuStore: GpuResourceStore,
   entity: EntityHandle,
+  worldId: number,
 ): TextError | null {
   const gtRes = world.get(entity, GlyphText);
   if (!gtRes.ok) return null;
@@ -198,7 +201,9 @@ function processEntity(
 
   const signature = signatureOf(gt);
   const indexSlot = decodeEntity(entity).index;
-  const cached = bakeCache.get(indexSlot);
+  // D-1a #6: bakeCache key = worldEntityKey(worldId, index) for cross-world isolation.
+  const cacheKey = worldEntityKey(worldId, indexSlot);
+  const cached = bakeCache.get(cacheKey);
 
   // Dirty path: same entity already baked, but the authoring signature changed.
   if (cached !== undefined) {
@@ -219,7 +224,7 @@ function processEntity(
         materials: [materialId] as unknown as never,
       });
     }
-    bakeCache.set(indexSlot, {
+    bakeCache.set(cacheKey, {
       meshHandleId: cached.meshHandleId,
       signature,
       materialHandleId: materialId,
@@ -248,7 +253,7 @@ function processEntity(
     component: MeshRenderer,
     data: { materials: [materialId] as unknown as never },
   });
-  bakeCache.set(indexSlot, {
+  bakeCache.set(cacheKey, {
     meshHandleId: handleId(bake.value.handle),
     signature,
     materialHandleId: materialId,

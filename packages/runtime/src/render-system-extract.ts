@@ -158,7 +158,9 @@ import { computeInvRangeSquared, degToCos } from './light-helpers';
 import { resolveAssetHandle, walkMaterialPassesOverSharedRefs } from './resolve-asset-handle';
 import { getActiveCamera, selectActiveCameraIndex } from './systems/active-camera';
 import { selectPasses } from './systems/pass-selector';
+import { propagateTransforms } from './systems/propagate-transforms';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
+import { tilemapChunkExtractSystem } from './tilemap-chunk-extract-system';
 
 export interface CameraSnapshot {
   /** World-space camera translation (mat4.getTranslation of Transform.world). */
@@ -543,6 +545,18 @@ export interface RenderableSnapshot {
    */
   readonly materials: readonly MaterialSnapshot[];
   /**
+   * feat-20260708-composited-multi-world-rendering M1 / D-1: the worldId
+   * of the world this renderable was extracted from. Defaults to 0 in
+   * single-world path (extractFrame always assigns 0). The merge layer
+   * (extractFrames in M2) stamps the correct worldId per world before
+   * the record stage consumes it. Combined with `entityKey` via
+   * `worldEntityKey(worldId, entityKey)` to form per-entity cache keys.
+   *
+   * Never rewrite `entityKey` itself — consumers that need the real
+   * entity handle (video provider, etc.) read the bare `entityKey`.
+   */
+  readonly worldId: number;
+  /**
    * feat-20260531-per-frame-bind-group-cache M1 / w3: packed Entity u32
    * (encodeEntity(indexSlot, generation)) surface'd from the extract
    * stage. Stable per-entity identity for the record stage cache keys
@@ -551,6 +565,9 @@ export interface RenderableSnapshot {
    * snapshot POD). Reuses the encodeEntity calculation already performed
    * at :1293 for the Instances path, and now also computed for plain
    * (non-Instances) renderables.
+   *
+   * Never rewrite this field — cache keys use `worldEntityKey(worldId, entityKey)`,
+   * not the bare entityKey alone (D-1).
    */
   readonly entityKey: number;
   /**
@@ -1493,21 +1510,215 @@ export function buildPointShadowMatrices(lightPos: Vec3, near: number, far: numb
   return out;
 }
 
+export function extractFrames(
+  worlds: readonly World[],
+  owner: number,
+  assets?: AssetRegistry | null,
+  pipelineState?: ExtractPipelineSurface | null,
+  gpuStore?: import('./gpu-resource-store').GpuResourceStore,
+): ExtractedFrame {
+  // ── D-2: frame-level side effects live here ────────────────────────────
+  //
+  // resetForFrame is called exactly once per frame, at the extractFrames
+  // entry. The skinPaletteAllocator cursor is reset before any per-world
+  // extract runs, so sequential per-world allocation yields non-overlapping
+  // palette slices (AC-08).
+  const skinPaletteAllocator = pipelineState?.skinPaletteAllocator ?? null;
+  if (skinPaletteAllocator !== null) {
+    skinPaletteAllocator.resetForFrame();
+  }
+
+  // ── D-2: per-world extract with error isolation ────────────────────────
+  //
+  // Each world runs propagateTransforms → tilemapChunkExtractSystem →
+  // extractFrame. Failure in one world is caught, routed to that world's
+  // _routeError (systemName carries worldId for source identification),
+  // and the world's contribution is skipped (AC-09 graceful degradation).
+
+  // Parallel arrays: frames[i] stores the frame from worlds[wi] where
+  // wi appears in succeededIndices[i].
+  const succeededFrames: ExtractedFrame[] = [];
+  const succeededIndices: number[] = [];
+
+  for (let wi = 0; wi < worlds.length; wi++) {
+    const world = worlds[wi];
+    if (world === undefined) continue;
+    try {
+      // Per-world propagate: guarantee Transform.world is fresh before extract.
+      const propagateResult = propagateTransforms(world);
+      if (!propagateResult.ok) {
+        (world as World & { _routeError(err: Error, ctx: ErrorContext): void })._routeError(
+          propagateResult.error as unknown as Error,
+          {
+            severity: Severity.Error,
+            systemName: `RenderSystem.extractFrames(world[${wi}]) (propagateTransforms)`,
+          },
+        );
+      }
+
+      // Tilemap chunk streaming: materialize/evict chunks before extract.
+      tilemapChunkExtractSystem(world, wi);
+
+      // D-4: owner world uses cull:'self' (normal frustum culling against
+      // own cameras); non-owner worlds use cull:'none' to avoid their own
+      // cameras silently culling geometry the owner camera would see.
+      const cullMode: 'self' | 'none' = wi === owner ? 'self' : 'none';
+      const frame = extractFrame(world, assets, pipelineState, gpuStore, { cull: cullMode });
+
+      succeededFrames.push(frame);
+      succeededIndices.push(wi);
+    } catch (err) {
+      // Per-world failure: route to world's own error handler, skip contribution.
+      try {
+        (world as World & { _routeError(err: Error, ctx: ErrorContext): void })._routeError(
+          err as Error,
+          {
+            severity: Severity.Error,
+            systemName: `RenderSystem.extractFrames(world[${wi}])`,
+          },
+        );
+      } catch {
+        // If _routeError itself throws, the world already failed — skip silently.
+      }
+    }
+  }
+
+  // ── D-3: merge semantics ───────────────────────────────────────────────
+
+  // AC-04: renderables — concat by worlds[] order, stamp worldId.
+  const renderables: RenderableSnapshot[] = [];
+  const dispatchEntries: DispatchEntry[] = [];
+
+  for (let fi = 0; fi < succeededFrames.length; fi++) {
+    const f = succeededFrames[fi];
+    const wId = succeededIndices[fi];
+    if (f === undefined || wId === undefined) continue;
+
+    const base = renderables.length;
+    for (const r of f.renderables) {
+      renderables.push({ ...r, worldId: wId });
+    }
+
+    // D-3: dispatch — per-world renderableIndex rebased by base offset.
+    for (const d of f.dispatch) {
+      dispatchEntries.push({ ...d, renderableIndex: (d.renderableIndex ?? 0) + base });
+    }
+  }
+
+  // Stable sort dispatch by queue value.
+  dispatchEntries.sort((a, b) => (a.queue ?? 0) - (b.queue ?? 0));
+
+  // AC-04: lights — point[]/spot[] concat; directional first-hit in
+  // succeededFrames order (which preserves worlds[] order for successful
+  // frames); directionalCount sum.
+  const point: PointLightSnapshot[] = [];
+  const spot: SpotLightSnapshot[] = [];
+  let directional: DirectionalLightSnapshot | undefined;
+  let directionalCount = 0;
+  let lightViewProj: readonly Float32Array[] | undefined;
+  let splitPlanes: Float32Array | undefined;
+  let cascadeCount: number | undefined;
+  let cascadeBlend: number | undefined;
+  let shadowMapSize: number | undefined;
+  let depthBias: number | undefined;
+  let normalBias: number | undefined;
+  let pcfKernelSize: number | undefined;
+  const pointShadow: PointShadowSnapshot[] = [];
+  for (const f of succeededFrames) {
+    for (const p of f.lights.point) point.push(p);
+    for (const s of f.lights.spot) spot.push(s);
+    for (const ps of f.lights.pointShadow) pointShadow.push(ps);
+    if (directional === undefined && f.lights.directional !== undefined) {
+      directional = f.lights.directional;
+      // Carry CSM shadow fields from the first-hit directional's world.
+      lightViewProj = f.lights.lightViewProj;
+      splitPlanes = f.lights.splitPlanes;
+      cascadeCount = f.lights.cascadeCount;
+      cascadeBlend = f.lights.cascadeBlend;
+      shadowMapSize = f.lights.shadowMapSize;
+      depthBias = f.lights.depthBias;
+      normalBias = f.lights.normalBias;
+      pcfKernelSize = f.lights.pcfKernelSize;
+    }
+    directionalCount += f.lights.directionalCount;
+  }
+  const lights: ExtractedLights = {
+    directional,
+    directionalCount,
+    point,
+    spot,
+    lightViewProj,
+    splitPlanes,
+    cascadeCount,
+    cascadeBlend,
+    shadowMapSize,
+    depthBias,
+    normalBias,
+    pcfKernelSize,
+    pointShadow,
+  };
+
+  // AC-05/06: cameras / skylight / skybox / postProcessParams — only from
+  // owner world (holistic snapshot selection, D-3 / R-6).
+  // Find the owner world's frame by scanning succeededIndices.
+  let ownerFrame: ExtractedFrame | undefined;
+  for (let fi = 0; fi < succeededFrames.length; fi++) {
+    if (succeededIndices[fi] === owner) {
+      ownerFrame = succeededFrames[fi];
+      break;
+    }
+  }
+  const cameras = ownerFrame !== undefined ? [...ownerFrame.cameras] : [];
+  const skylight = ownerFrame?.skylight;
+  const skylightCount = ownerFrame?.skylightCount ?? 0;
+  const skybox = ownerFrame?.skybox;
+  const skyboxCount = ownerFrame?.skyboxCount ?? 0;
+  const postProcessParams = new Map(ownerFrame?.postProcessParams);
+
+  // D-3: frustumStats — culled/total summed across worlds.
+  const frustumStats = {
+    culled: succeededFrames.reduce((s, f) => s + f.frustumStats.culled, 0),
+    total: succeededFrames.reduce((s, f) => s + f.frustumStats.total, 0),
+  };
+
+  return {
+    cameras,
+    lights,
+    renderables,
+    dispatch: dispatchEntries,
+    skylight,
+    skylightCount,
+    skybox,
+    skyboxCount,
+    frustumStats,
+    postProcessParams,
+  };
+}
+
 export function extractFrame(
   world: World,
   assets?: AssetRegistry | null,
   pipelineState?: ExtractPipelineSurface | null,
   gpuStore?: import('./gpu-resource-store').GpuResourceStore,
+  /**
+   * feat-20260708-composited-multi-world-rendering M2 / D-2 / D-4:
+   * optional per-call overrides.
+   *
+   * - `cull` (default `'self'`): when `'none'`, skip frustum-plane
+   *   construction and keep all renderables (used by extractFrames for
+   *   non-owner worlds whose cameras are discarded post-merge).
+   *
+   * This parameter is add-only (non-breaking): existing 4-arg callers
+   * keep the default `'self'` behavior.
+   */
+  opts?: { cull?: 'self' | 'none' },
 ): ExtractedFrame {
-  // feat-20260612 M2 / m2-6 / D-9: reset the palette allocator cursor at
-  // extractFrame entry so each frame starts with a fresh slice budget. Same
-  // SSOT location that owns the per-entity allocateSlice + writeJointPalette
-  // calls below; same-frame multiple extractFrame calls (theoretical) clear
-  // the prior frame's slices, idempotent by design.
+  // feat-20260708-composited-multi-world-rendering M2 / D-2: resetForFrame
+  // has been lifted to extractFrames (the frame-level entry point).
+  // extractFrame is now a pure world->snapshot function with no frame-level
+  // side effects. See plan-decisions PD2 for the reviewer ruling.
   const skinPaletteAllocator = pipelineState?.skinPaletteAllocator ?? null;
-  if (skinPaletteAllocator !== null) {
-    skinPaletteAllocator.resetForFrame();
-  }
+  const cullMode = opts?.cull ?? 'self';
 
   const directionalLightQuery = createQueryState({ with: [DirectionalLight, Entity] });
 
@@ -2214,44 +2425,51 @@ export function extractFrame(
   // Cameras with degenerate projection parameters (e.g. zero fov, zero aspect)
   // are skipped — entities are always-visible for those. Frustum plane cache
   // stored as Float32Array[] parallel to the cameras[] array.
+  //
+  // feat-20260708-composited-multi-world-rendering M2 / D-4: when cullMode
+  // is 'none' (non-owner world in extractFrames), skip frustum construction
+  // entirely — all renderables are kept. This avoids the non-owner world's
+  // own cameras silently culling geometry that the owner camera would see.
   const frustumPlanes: Float32Array[] = [];
-  for (const cam of cameras) {
-    // feat-20260613 M6 / w20: orthographic cameras have fov=0 by design;
-    // the previous degeneracy guard (`fov <= 0`) was rejecting valid ortho
-    // cameras and returning the always-visible escape hatch. Only the
-    // perspective path needs the fov check.
-    if (cam.projection === 'perspective' && (cam.fov <= 0 || cam.aspect <= 0)) {
-      frustumPlanes.push(new Float32Array(0)); // degenerate → always-visible
-      continue;
+  if (cullMode !== 'none') {
+    for (const cam of cameras) {
+      // feat-20260613 M6 / w20: orthographic cameras have fov=0 by design;
+      // the previous degeneracy guard (`fov <= 0`) was rejecting valid ortho
+      // cameras and returning the always-visible escape hatch. Only the
+      // perspective path needs the fov check.
+      if (cam.projection === 'perspective' && (cam.fov <= 0 || cam.aspect <= 0)) {
+        frustumPlanes.push(new Float32Array(0)); // degenerate → always-visible
+        continue;
+      }
+      if (cam.near >= cam.far) {
+        frustumPlanes.push(new Float32Array(0));
+        continue;
+      }
+      const proj = mat4.create();
+      if (cam.projection === 'orthographic') {
+        mat4.orthographic(
+          proj,
+          cam.orthoLeft,
+          cam.orthoRight,
+          cam.orthoBottom,
+          cam.orthoTop,
+          cam.near,
+          cam.far,
+        );
+      } else {
+        mat4.perspective(proj, cam.fov, cam.aspect, cam.near, cam.far);
+      }
+      // feat-20260601 D-3: view = invert(camera world mat4). The camera scale is
+      // carried in the world basis columns; the cull frustum uses the same view
+      // the record stage derives, so cull stays same-source with render (AC-05).
+      const view = mat4.create();
+      mat4.invert(view, cam.world as unknown as mat4.Mat4Like);
+      const vp = mat4.create();
+      mat4.multiply(vp, proj, view);
+      const f = frustum.create();
+      frustum.fromViewProjection(f, vp);
+      frustumPlanes.push(f);
     }
-    if (cam.near >= cam.far) {
-      frustumPlanes.push(new Float32Array(0));
-      continue;
-    }
-    const proj = mat4.create();
-    if (cam.projection === 'orthographic') {
-      mat4.orthographic(
-        proj,
-        cam.orthoLeft,
-        cam.orthoRight,
-        cam.orthoBottom,
-        cam.orthoTop,
-        cam.near,
-        cam.far,
-      );
-    } else {
-      mat4.perspective(proj, cam.fov, cam.aspect, cam.near, cam.far);
-    }
-    // feat-20260601 D-3: view = invert(camera world mat4). The camera scale is
-    // carried in the world basis columns; the cull frustum uses the same view
-    // the record stage derives, so cull stays same-source with render (AC-05).
-    const view = mat4.create();
-    mat4.invert(view, cam.world as unknown as mat4.Mat4Like);
-    const vp = mat4.create();
-    mat4.multiply(vp, proj, view);
-    const f = frustum.create();
-    frustum.fromViewProjection(f, vp);
-    frustumPlanes.push(f);
   }
 
   const renderables: RenderableSnapshot[] = [];
@@ -3197,6 +3415,7 @@ export function extractFrame(
           transform: transformSnap,
           material: materialSnap,
           materials: materialsArr,
+          worldId: 0,
           entityKey: 0,
           ...(skinSlice !== undefined ? { skin: skinSlice } : {}),
           ...(spriteInstancesSnap !== undefined ? { spriteInstances: spriteInstancesSnap } : {}),

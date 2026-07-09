@@ -316,7 +316,7 @@ world.addSystem({
 const BASELINE_FRAMES = 30;
 for (let i = 0; i < BASELINE_FRAMES; i++) {
   world.update();
-  const r = renderer.draw(world);
+  const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] baseline draw frame ${i} error: ${r.error.code}`);
 }
 
@@ -325,7 +325,7 @@ const steadyTimes = [];
 for (let i = 0; i < 10; i++) {
   const t0 = performance.now();
   world.update();
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
   const t1 = performance.now();
   steadyTimes.push(t1 - t0);
 }
@@ -342,7 +342,7 @@ for (let s = 0; s < 10; s++) {
   const variant = _variants[s % 2];
   setNextState(world, LevelId, variant);
   world.update();
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
 }
 const switchTotalWall = performance.now() - switchTotalStart;
 
@@ -350,7 +350,7 @@ const switchTotalWall = performance.now() - switchTotalStart;
 const baselineTotalStart = performance.now();
 for (let i = 0; i < 10; i++) {
   world.update();
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
 }
 const baselineTotalWall = performance.now() - baselineTotalStart;
 const threshold = baselineTotalWall * 5;
@@ -365,7 +365,7 @@ console.log(`[smoke] GATE 1 PASS: total 10-switch wall ${switchTotalWall.toFixed
 // Stabilise: 5 frames after all switches.
 for (let i = 0; i < 5; i++) {
   world.update();
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
 }
 
 // AC-14 #2: Player survives through all transitions.
@@ -429,7 +429,7 @@ console.log(`[smoke] GATE 4/5 PASS: falsification check — scope-despawn verifi
 const remainingFrames = Math.max(0, SMOKE_MIN_FRAMES - BASELINE_FRAMES - 10 - 5);
 for (let i = 0; i < remainingFrames; i++) {
   world.update();
-  const r = renderer.draw(world);
+  const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] tail draw frame ${i} error: ${r.error.code}`);
 }
 

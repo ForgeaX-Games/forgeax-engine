@@ -176,6 +176,15 @@ export interface InputSnapshot {
      */
     readonly movementDelta: { readonly x: number; readonly y: number };
     /**
+     * Merged pointer-lock state: true when either W3C pointer-lock
+     * (pointerLockElement === this backend's canvas) OR the lockProvider
+     * path has engaged. Consumers read this to decide whether to consume
+     * movementDelta for look/camera rotation. Required field, alongside
+     * movementDelta -- both facts sit at the same attribute path for
+     * single-point indexing (charter F1).
+     */
+    readonly pointerLocked: boolean;
+    /**
      * `true` while the W3C MouseEvent.button slot `i` is held. `i` is
      * narrowed to the literal `0 | 1 | 2` so out-of-range indices are
      * rejected at compile time (charter P3 explicit failure: TS literal
@@ -333,6 +342,16 @@ export interface InputBackend {
    *   suppress spurious up-edges across alt-tab transitions
    */
   sample(): InputBackendSample;
+  /**
+   * Command-set game gate for pointer-lock. When set to `false`, the
+   * backend will not request pointer-lock on click AND will immediately
+   * release any currently active lock (W3C path: `exitPointerLock`;
+   * provider path: `exitLock()`). When `true` (default), pointer-lock
+   * can be requested through the normal gate logic.
+   *
+   * Optional -- backends without pointer-lock support omit this method.
+   */
+  setPointerLockAllowed?(allowed: boolean): void;
   /** Detach DOM listeners; called when the engine shuts down. */
   detach(): void;
 }
@@ -366,6 +385,13 @@ export interface InputBackendSample {
   readonly gestures?: GestureState;
   /** M5+ per-frame gesture event queue (optional — absent when no gesture activity occurred). */
   readonly gestureEvents?: readonly GestureEvent[];
+  /**
+   * Merged pointer-lock state: true when either W3C pointer-lock is active
+   * (pointerLockElement === this backend's canvas) OR the lockProvider path
+   * has engaged (requestLock() was called and not yet released). Required
+   * field -- always present, defaults to false when no lock is active.
+   */
+  readonly pointerLocked: boolean;
 }
 
 /**
@@ -514,6 +540,7 @@ export function snapshotFromSample(
     },
     mouse: {
       movementDelta,
+      pointerLocked: sample.pointerLocked,
       button(i) {
         // i is narrowed to 0 | 1 | 2 by the type system; the runtime
         // index is therefore guaranteed to land in `buttons` (charter P3
@@ -607,6 +634,7 @@ export function createInputSnapshot(): InputSnapshot {
     movementY: 0,
     wheelDelta: 0,
     focused: true,
+    pointerLocked: false,
   });
 }
 

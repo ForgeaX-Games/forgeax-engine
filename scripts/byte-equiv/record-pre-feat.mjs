@@ -401,7 +401,7 @@ async function recordDemo(demo) {
   // We track the frame number from draw() calls.
   for (let frame = 0; frame < TARGET_FRAME; frame++) {
     currentFrame = frame;
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
     await delay(0); // yield event loop
   }
 

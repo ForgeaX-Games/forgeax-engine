@@ -407,7 +407,7 @@ if (!device) { console.error('[smoke] FAIL - no shared device captured'); proces
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update();
-  const r = renderer.draw(world);
+  const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) errors.push(r.error?.code ?? 'unknown');
   framesObserved++;
 }

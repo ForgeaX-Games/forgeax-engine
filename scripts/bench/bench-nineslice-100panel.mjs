@@ -489,12 +489,12 @@ async function main() {
   const measureFrames = FRAMES - WARM_UP;
   let drawErrors = 0;
   for (let i = 0; i < WARM_UP; i++) {
-    const r = renderer.draw(world);
+    const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) drawErrors++;
   }
   const t0 = process.hrtime.bigint();
   for (let i = 0; i < measureFrames; i++) {
-    const r = renderer.draw(world);
+    const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) drawErrors++;
   }
   await sharedDevice?.queue.onSubmittedWorkDone();

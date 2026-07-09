@@ -66,6 +66,7 @@ function fixtureBackend(): InputBackend & {
         movementY: mvy,
         wheelDelta: 0,
         focused: true,
+        pointerLocked: false,
       };
       // Per-frame accumulators reset (movement + up-edge); held set
       // survives across frames (LO 1.7 keyboard hold semantics).

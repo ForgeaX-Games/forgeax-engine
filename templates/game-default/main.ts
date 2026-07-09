@@ -33,7 +33,7 @@ import { createSphereGeometry } from '@forgeax/engine-geometry';
 type MatHandle = Handle<'MaterialAsset', 'shared'>;
 import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { EntityHandle, World } from '@forgeax/engine-ecs';
+import { defineSystem, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from '@forgeax/engine-app';
 import {
   createInputSnapshot,
@@ -255,22 +255,11 @@ function setupPlayerRoot(
 export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const { registerUpdate, registerCleanup } = ctx ?? {};
 
-  // Route EVERY DOM listener through registerCleanup so the host tears them all
-  // down on ■ Stop. A bare canvas/window/document listener outlives the ECS
-  // world: its closure keeps play-time entity handles (camera, world) alive
-  // after Stop despawns them, so a post-Stop canvas click fires pick() against
-  // a despawned camera entity -> Uncaught PickError. registerCleanup detaches
-  // in reverse order on ■ (see BootstrapContext); when the host omits it (reload-
-  // on-stop host) the listeners die with the page reload anyway.
-  const listen = <E extends Event>(
-    target: Window | Document | HTMLElement,
-    type: string,
-    handler: (ev: E) => void,
-    options?: AddEventListenerOptions,
-  ): void => {
-    target.addEventListener(type, handler as EventListener, options);
-    registerCleanup?.(() => target.removeEventListener(type, handler as EventListener, options));
-  };
+  // No DOM listeners are registered in this template (AC-01). The engine input
+  // backend (browser-backend.ts) handles all pointer/keyboard events via the
+  // InputSnapshot Resource, and the backend's own detach/cleanup lifecycle
+  // (via App.stop) tears down its listeners. registerCleanup is only used for
+  // HUD dispose (below).
 
   const canvas = document.querySelector<HTMLCanvasElement>('#app')!;
   const dpr = window.devicePixelRatio || 1;
@@ -421,27 +410,15 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // ── on-screen UI + view-mode state (DOM overlay; gameplay stays ECS) ─────────
   let mode: ViewMode = 'topdown';
   let score = 0;
-  let locked = false;
-  // Pointer-lock path. Two modes:
-  //   - Web (Chrome/Edge): use the real Pointer Lock API (`requestPointerLock`).
-  //   - Tauri WKWebView: WKWebView DENIES the web API for embedded content (see
-  //     packages/interface/src-tauri/src/lib.rs:24-32), so we use the team's
-  //     Tauri-native fallback: postMessage({type:'fx-pointer-capture', capture})
-  //     to the parent, which invokes the `set_pointer_capture` Tauri command →
-  //     `window.set_cursor_grab` (CGAssociateMouseAndMouseCursorPosition(false)
-  //     on macOS) + `set_cursor_visible(false)`. Listener: PreviewMode.tsx:58-69.
-  //
-  // CRUCIAL: we do NOT opt into forge.json `pointerLock:true`. That flag makes
-  // the Play host install its OWN canvas click handler that calls setCaptured(true)
-  // on every click (host main.ts:179) — which posts fx-pointer-capture true and
-  // locks the cursor in BOTH modes (the user-reported "top-down also locks"
-  // bug). Without the flag the host noops `canvas.requestPointerLock` instance-
-  // level, but we bypass that with the prototype method (`realRequestLock`), so
-  // FPS lock still works on Web. Top-down has zero lock paths.
-  const realRequestLock = HTMLElement.prototype.requestPointerLock;
-  const postCapture = (capture: boolean) => {
-    try { window.parent.postMessage({ type: 'fx-pointer-capture', capture }, '*'); } catch { /* not embedded */ }
-  };
+  // Pointer-lock is managed by engine-input's browser backend (M3 D-1/D-3):
+  //   - Web:   backend onCanvasClick calls the W3C Pointer Lock API directly.
+  //   - Host:  the editor play-runtime injects a lockProvider wrapping the native
+  //            cursor-grab channel.
+  // The template ONLY controls whether lock is allowed via ctx.setPointerLockAllowed
+  // (fps = allowed, top-down = forbidden + immediate release). Lock state is read
+  // from snap.mouse.pointerLocked — no dual-write locked flag (constraint 3).
+  // No host-specific (editor, desktop-webview, or inter-frame messaging)
+  // knowledge exists here.
   // setMode is captured inside the toggle button click; declared above the HUD
   // so installHud's onToggle can call it.
   const setMode = (m: ViewMode) => {
@@ -449,16 +426,15 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     hud.setMode(m);
     setPlayerVisible(m !== 'fps');
     canvas.style.cursor = m === 'fps' ? 'crosshair' : '';
-    if (m !== 'fps' && locked) {
-      // Leaving FPS — release whichever lock is engaged (web or Tauri-native).
-      postCapture(false);
-      try { document.exitPointerLock?.(); } catch { /* ignore */ }
-      setLocked(false);
-    }
+    // M3 D-3: gate pointer-lock through the engine backend. fps = allow lock;
+    // top-down = forbid + immediate release (backend handles both W3C exit
+    // and provider exitLock pathways). The template no longer touches
+    // any pointer-lock escape-hatch directly (AC-06).
+    ctx?.setPointerLockAllowed?.(m === 'fps');
     // Don't request lock from here: setMode is called from the toggle BUTTON's
     // click; Chromium rejects pointer-lock requests on a different element from
-    // the gesture's target. The canvas mousedown below requests it instead
-    // (same-element gesture; matches packages/games/fps).
+    // the gesture's target. The backend's onCanvasClick requests it on canvas
+    // click (same-element gesture).
   };
   // Mount the HUD into the host-provided controlled UI root (`ctx.uiRoot`) — the
   // disposable container the Play host removes WHOLE on ■ Stop. This is what makes
@@ -516,37 +492,6 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     hud.floatScore(text, sx, sy);
   };
 
-  // Track lock state via BOTH web Pointer Lock events AND our manual flag (set
-  // by the Tauri postCapture path, where pointerLockElement stays null).
-  const setLocked = (v: boolean) => {
-    locked = v;
-    canvas.style.cursor = v ? 'none' : (mode === 'fps' ? 'crosshair' : '');
-    hud.setLockStatus(v ? '🎮 已锁定 · 鼠标转视角 · ESC 释放' : '🖱️ 点击画面锁定鼠标');
-  };
-  listen(document, 'pointerlockchange', () => setLocked(document.pointerLockElement === canvas));
-  listen(document, 'pointerlockerror', () => {
-    // Web API rejected. ONLY fall back to Tauri-native cursor grab when in FPS:
-    // engine-input's onCanvasClick (browser-backend.ts) auto-calls
-    // canvas.requestPointerLock() on EVERY canvas click — in top-down mode that
-    // fires pointerlockerror in WKWebView/CDP-driven Chrome, and an unconditional
-    // fallback would lock the cursor in top-down too (the user-reported bug).
-    if (mode !== 'fps') return;
-    console.warn('[game] web pointer-lock denied — falling back to Tauri-native cursor grab via postMessage');
-    postCapture(true);
-    setLocked(true);
-  });
-  // Manual ESC handler — required for the Tauri path (no browser-native ESC release
-  // since the web API was never engaged). Web path: ESC releases automatically
-  // and pointerlockchange fires; this listener also fires but `setLocked(false)`
-  // is idempotent. postCapture(false) tells Tauri to release the OS cursor grab.
-  listen(window, 'keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Escape' && locked) {
-      postCapture(false);
-      try { document.exitPointerLock?.(); } catch { /* ignore */ }
-      setLocked(false);
-    }
-  });
-
   // ── input: keyboard via the engine InputSnapshot (WASD/Space/F + arrows) ─────
   // The host (apps/preview) createApp attaches the browser input backend and
   // runs InputFrameStartScan each frame; the template only DECLARES an action
@@ -595,73 +540,82 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // the movement block overwrites faceX/faceZ on the same frame).
   let shotDir: { x: number; z: number } | null = null;
   const clampPitch = (p: number) => Math.max(-1.2, Math.min(1.2, p));
-  listen(window, 'mousemove', (e: MouseEvent) => {
-    if (mode !== 'fps' || !locked) return;          // ONLY look while locked → cursor never "flies"
-    lookYaw -= e.movementX * LOOK_SENS;
-    lookPitch = clampPitch(lookPitch - e.movementY * LOOK_SENS);
+  // FPS mouse-look now reads from the engine InputSnapshot (M3 D-1):
+  // snap.mouse.movementDelta carries the per-frame accumulated pointer-lock
+  // movement, and snap.mouse.pointerLocked gates consumption (AC-02: only
+  // consume delta while locked). The look system is an ECS system registered
+  // on the world schedule — no DOM mousemove listener.
+  const GameLook = defineSystem({
+    name: 'game-look',
+    queries: [] as const,
+    after: ['input-frame-start-scan'],
+    fn: (world) => {
+      const snap = readInput();
+      if (mode !== 'fps' || !snap.mouse.pointerLocked) {
+        // Update HUD lock status every frame from the SSOT (D-8).
+        // The backend controls cursor hiding via browser behaviors; the
+        // template only drives the HUD text line.
+        if (mode === 'fps') {
+          hud.setLockStatus(snap.mouse.pointerLocked
+            ? '🎮 Locked · mouse look · ESC releases'
+            : '👍 Click canvas to lock mouse');
+        }
+        return;
+      }
+      lookYaw -= snap.mouse.movementDelta.x * LOOK_SENS;
+      lookPitch = clampPitch(lookPitch - snap.mouse.movementDelta.y * LOOK_SENS);
+      hud.setLockStatus('🎮 Locked · mouse look · ESC releases');
+    },
   });
+  world.addSystem(GameLook);
 
-  // Detect Tauri once (WKWebView denies the web Pointer Lock API for embedded
-  // content; we use the native cursor-grab path via parent postMessage).
-  const isTauri = !!(window as unknown as { __TAURI__?: unknown }).__TAURI__
-               || !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  // Pointer-lock is now handled entirely by the engine backend's onCanvasClick
+  // (browser-backend.ts). The host (apps/preview) calls ctx.setPointerLockAllowed
+  // via the setMode pathway above; the backend's gate (gameGate × hostPredicate)
+  // decides whether to request lock per click. Template has zero DOM listeners
+  // for pointer-lock / mousedown / mousemove / click (AC-01, AC-06).
 
-  // FPS-only: mousedown grabs the pointer-lock (the canvas is the user-gesture
-  // target). Top-down's click is handled in the click listener below.
-  listen(canvas, 'mousedown', () => {
-    if (mode !== 'fps' || locked) return;
-    if (isTauri) {
-      // Tauri WKWebView: jump straight to the native cursor grab — web pointer-lock
-      // would silently fail without firing pointerlockerror.
-      postCapture(true);
-      setLocked(true);
-    } else {
-      // Web browser: PROTOTYPE method bypass — the host noops `canvas.requestPointerLock`
-      // instance-level for non-FPS games (and we deliberately don't opt-in via
-      // forge.json to avoid the host's auto-capture-every-click handler). The
-      // prototype method `realRequestLock.call(canvas)` is the real native call
-      // and engages lock from this same-element user gesture.
-      try { realRequestLock.call(canvas); } catch { /* error listener handles fallback */ }
-    }
+  // Click handling, per mode, now reads from the engine InputSnapshot (M3 D-5):
+  //   - FPS (locked):   pointerEvents down edge → shoot forward (look direction).
+  //   - FPS (unlocked):  no-op (backend onCanvasClick already requested lock).
+  //   - Top-down:       pointerEvents down edge → AIM character toward the click
+  //                     point via pick(), then shoot. Coordinates come from the
+  //                     event (DPR-corrected canvas pixels), matching pick()'s
+  //                     contract. No DOM closure — world comes from ECS params.
+  const GamePickShoot = defineSystem({
+    name: 'game-pick-shoot',
+    queries: [] as const,
+    after: ['input-frame-start-scan'],
+    fn: (world) => {
+      const snap = readInput();
+      for (const ev of snap.pointerEvents) {
+        if (ev.phase !== 'down' || ev.pointerType !== 'mouse') continue;
+        if (mode === 'fps') {
+          if (snap.mouse.pointerLocked) wantShoot = true;
+          continue;
+        }
+        // top-down: screen-to-world pick + aim
+        const hit = pick(world, camera, ev.x, ev.y, canvas.width, canvas.height);
+        let aimX: number, aimZ: number;
+        if (hit) {
+          const tr = world.get(hit.entity, Transform);
+          if (tr.ok) { aimX = tr.value.posX; aimZ = tr.value.posZ; }
+          else { aimX = px + (ev.x - canvas.width / 2); aimZ = pz + (ev.y - canvas.height / 2); }
+        } else {
+          aimX = px + (ev.x - canvas.width / 2); aimZ = pz + (ev.y - canvas.height / 2);
+        }
+        const dx = aimX - px, dz = aimZ - pz;
+        const len = Math.hypot(dx, dz);
+        if (len > 1e-3) {
+          const nx = dx / len, nz = dz / len;
+          shotDir = { x: nx, z: nz };
+          faceX = nx; faceZ = nz;
+          wantShoot = true;
+        }
+      }
+    },
   });
-
-  // Click handling, per mode:
-  //   - FPS (locked):   click → shoot forward (look direction).
-  //   - FPS (unlocked): click → no-op (mousedown above already requested lock).
-  //   - Top-down:       click → AIM character toward the click point, then shoot.
-  //                     pick() snaps onto an entity under the cursor (so shooting
-  //                     a target is precise); on a miss the click direction is
-  //                     projected from canvas-center into world XZ (canvas Y down
-  //                     ↔ world +Z under the top-down tilt). The aim is stashed
-  //                     in `shotDir` so a moving player still shoots toward the
-  //                     click (the movement block doesn't override it for the
-  //                     fire frame).
-  listen(canvas, 'click', (e: MouseEvent) => {
-    if (mode === 'fps') {
-      if (locked) wantShoot = true;
-      return;
-    }
-    const rect = canvas.getBoundingClientRect();
-    const sx = (e.clientX - rect.left) * (canvas.width / Math.max(1, rect.width));
-    const sy = (e.clientY - rect.top) * (canvas.height / Math.max(1, rect.height));
-    let aimX: number, aimZ: number;
-    const hit = pick(world, camera, sx, sy, canvas.width, canvas.height);
-    if (hit) {
-      const tr = world.get(hit.entity, Transform);
-      if (tr.ok) { aimX = tr.value.posX; aimZ = tr.value.posZ; }
-      else { aimX = px + (sx - canvas.width / 2); aimZ = pz + (sy - canvas.height / 2); }
-    } else {
-      aimX = px + (sx - canvas.width / 2); aimZ = pz + (sy - canvas.height / 2);
-    }
-    const dx = aimX - px, dz = aimZ - pz;
-    const len = Math.hypot(dx, dz);
-    if (len > 1e-3) {
-      const nx = dx / len, nz = dz / len;
-      shotDir = { x: nx, z: nz };
-      faceX = nx; faceZ = nz;       // visually face the shot direction
-      wantShoot = true;
-    }
-  });
+  world.addSystem(GamePickShoot);
 
   // Bullet material — EMISSIVE so it glows and drives the Camera.bloom bright-pass
   // (HDR emissive > bloomThreshold 1.0 → blooms). Showcases the post-processing path.

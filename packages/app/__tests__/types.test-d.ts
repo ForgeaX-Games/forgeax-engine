@@ -27,12 +27,13 @@ import { AppError, type AppErrorCode } from '../src/errors';
 import type { App } from '../src/types';
 
 describe('AppErrorCode is the 5-member closed union (AC-07)', () => {
-  it('is assignable from each of the 5 string literals', () => {
+  it('is assignable from each of the 6 string literals', () => {
     expectTypeOf<'app-not-started'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-already-running'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-canvas-detached'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-paused-while-stop'>().toMatchTypeOf<AppErrorCode>();
     expectTypeOf<'app-system-update-failed'>().toMatchTypeOf<AppErrorCode>();
+    expectTypeOf<'app-pointer-lock-failed'>().toMatchTypeOf<AppErrorCode>();
   });
 
   it('rejects strings outside the closed union (D-3 lock: no app-device-lost)', () => {
@@ -84,6 +85,21 @@ describe('AppError.detail is discriminated per code (AC-07)', () => {
       expectTypeOf(c.detail).toMatchTypeOf<Readonly<Record<string, never>>>();
     }
   });
+
+  it('app-pointer-lock-failed narrows detail to { path: "w3c"|"provider", cause: unknown }', () => {
+    const e = new AppError({
+      code: 'app-pointer-lock-failed',
+      expected: '',
+      hint: '',
+      detail: { path: 'w3c', cause: new Error('test') },
+    });
+    if (e.code === 'app-pointer-lock-failed') {
+      expectTypeOf(e.detail).toMatchTypeOf<{
+        readonly path: 'w3c' | 'provider';
+        readonly cause: unknown;
+      }>();
+    }
+  });
 });
 
 describe('exhaustive switch over (AppError | RhiError) compiles with no default arm (AC-07)', () => {
@@ -103,6 +119,8 @@ describe('exhaustive switch over (AppError | RhiError) compiles with no default 
           return 'd';
         case 'app-system-update-failed':
           return 'e';
+        case 'app-pointer-lock-failed':
+          return 'f';
         case 'adapter-unavailable':
         case 'feature-not-enabled':
         case 'limit-exceeded':
@@ -149,6 +167,7 @@ describe('dual-layer instanceof EngineEnvironmentError + switch pattern (D-6)', 
         case 'app-canvas-detached':
         case 'app-paused-while-stop':
         case 'app-system-update-failed':
+        case 'app-pointer-lock-failed':
           return 'app';
         case 'adapter-unavailable':
         case 'feature-not-enabled':

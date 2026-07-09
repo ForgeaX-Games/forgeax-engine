@@ -115,6 +115,15 @@ export interface BootstrapContext {
    * reload-on-stop host); games should still register defensively.
    */
   readonly registerCleanup?: (fn: () => void) => void;
+  /**
+   * M2 D-3: command-set pointer-lock gate. The game template calls this
+   * when the view mode changes (e.g. `setPointerLockAllowed(mode === 'fps')`
+   * to allow lock in FPS, disallow in top-down). The host wires this to
+   * App.input.setPointerLockAllowed?.() which delegates to the input backend.
+   * Absent → the host does not support pointer-lock gating (e.g. a host
+   * that only runs top-down games).
+   */
+  readonly setPointerLockAllowed?: (allowed: boolean) => void;
 }
 
 /**

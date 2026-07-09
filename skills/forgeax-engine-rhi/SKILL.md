@@ -88,7 +88,7 @@ import { createRenderer } from '@forgeax/engine-runtime';
 const canvas = { width: 1, height: 1 } as unknown as HTMLCanvasElement;
 const renderer = await createRenderer(canvas, { rhi });
 await renderer.ready; // resolves ok — createShaderModule skips WGSL compilation
-renderer.draw(world);  // no-op execution, command-stream ledger populated
+renderer.draw([world], { owner: 0 });  // no-op execution, command-stream ledger populated
 
 // Read back command-stream shape for assertions. renderer.device is typed
 // RhiDevice (spec surface); cast to RhiNullDevice for the ledger + counters.

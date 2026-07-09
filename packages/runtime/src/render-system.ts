@@ -2,7 +2,7 @@
 // Prepare -> Record + 4-tier error fan-out).
 //
 // Engine-internal phase: NOT registered to World schedule (AC-09);
-// `Renderer.draw(world)` invokes once per frame. See `Renderer` JSDoc in
+// `Renderer.draw([world], { owner: 0 })` invokes once per frame. See `Renderer` JSDoc in
 // `./renderer.ts` for the full error tier table (D-S4..D-S8) and AGENTS.md
 // "ECS render bridge" section for the AI-user-facing contract.
 //
@@ -16,8 +16,7 @@
 // .invert` (charter proposition 5: no math reinvention; render-system.test.ts
 // asserts `/@forgeax\/engine-math/` shows up in render-system.ts source).
 
-import type { ErrorContext, World } from '@forgeax/engine-ecs';
-import { Severity } from '@forgeax/engine-ecs';
+import type { World } from '@forgeax/engine-ecs';
 import type {
   BindGroup,
   BindGroupLayout,
@@ -60,9 +59,8 @@ import { type RenderFrameState, recordFrame } from './record';
 // handle stays internal (requirements line 155); this concept type is the public surface.
 import type { RenderPipeline as RenderPipelineDef } from './render-pipeline';
 import type { CameraSnapshot, DispatchEntry, RenderableSnapshot } from './render-system-extract';
-import { extractFrame } from './render-system-extract';
+import { extractFrames } from './render-system-extract';
 import type { RhiErrorListenerRegistry } from './renderer';
-import { propagateTransforms } from './systems/propagate-transforms';
 import type { SkinPaletteAllocator } from './systems/skin-palette-allocator';
 import {
   getTransparentSortConfig,
@@ -71,7 +69,6 @@ import {
   TRANSPARENT_SORT_MODE_LAYER_YZ,
   TRANSPARENT_SORT_MODE_LAYER_Z,
 } from './systems/transparent-sort-config';
-import { tilemapChunkExtractSystem } from './tilemap-chunk-extract-system';
 import { urpPipeline } from './urp-pipeline';
 
 /**
@@ -250,8 +247,8 @@ export const STANDARD_PBR_UBO_SIZE = derive(STANDARD_PBR_SIDECAR_SCHEMA).uboLayo
  * w15 M5 dual-pipeline dispatch: `pipelineDispatchCounts` surfaces per-frame
  * counters of how many entities were routed to each pipeline (plan-strategy
  * D-P4 / requirements AC-07). The counts roll over monotonically — test
- * callers read them after `draw(world)` to assert each tag saw >= 1 draw.
- * Reset is intentional on every `draw(world)` entry so per-frame assertions
+ * callers read them after `draw([world], { owner: 0 })` to assert each tag saw >= 1 draw.
+ * Reset is intentional on every `draw([world], { owner: 0 })` entry so per-frame assertions
  * stay local (charter proposition 4 explicit failure: test code sees exact
  * per-draw counts, not stale cross-frame totals).
  *
@@ -261,19 +258,19 @@ export const STANDARD_PBR_UBO_SIZE = derive(STANDARD_PBR_SIDECAR_SCHEMA).uboLayo
  * whose shader identity is `forgeax::default-standard-pbr`).
  */
 export interface RenderSystem {
-  draw(world: World): void;
+  draw(worlds: readonly World[], opts: { owner: number }): void;
   readonly pipelineDispatchCounts: {
     readonly unlit: number;
   };
   /**
    * feat-20260528-frustum-culling M5 / w14: per-frame frustum-culling counters.
-   * Updated by `draw(world)` on every call from the Extract stage.
+   * Updated by `draw([world], { owner: 0 })` on every call from the Extract stage.
    */
   readonly frustumStats: { culled: number; total: number };
   /**
    * feat-20260531-bloom-first-declarative-render-graph-pass M4 fix-up w19:
    * per-frame render-graph pass names in declaration order. Empty array
-   * before the first `draw(world)` call; populated after the per-frame
+   * before the first `draw([world], { owner: 0 })` call; populated after the per-frame
    * graph is built (lazily on first draw). Read-only introspection surface
    * so smoke tests can assert the declarative pass chain is wired without
    * reaching into engine internals.
@@ -281,7 +278,7 @@ export interface RenderSystem {
   readonly perFramePassNames: readonly string[];
   /**
    * feat-20260531-per-frame-bind-group-cache M1 / w4: per-frame
-   * createBindGroup counter. Reset to 0 on every `draw(world)` entry,
+   * createBindGroup counter. Reset to 0 on every `draw([world], { owner: 0 })` entry,
    * bumped on each cache-miss createBindGroup call in the record stage.
    * Aligns with pipelineDispatchCounts precedent: closure-mutable object
    * + draw-entry reset + readonly getter. Stable-frame AC-03 asserts
@@ -634,7 +631,7 @@ export interface PipelineState {
   // the 3 BindGroups (view / material / mesh-array) the pbr.wgsl pipeline
   // expects (D-S2 + plan-strategy 1 architecture). The view + material UBOs
   // and the mesh SSBO are reused across frames; only the contents are
-  // queue.writeBuffer-updated each draw(world) invocation.
+  // queue.writeBuffer-updated each draw([world], { owner: 0 }) invocation.
   readonly viewBindGroupLayout: BindGroupLayout;
   readonly materialBindGroupLayout: BindGroupLayout;
   readonly meshBindGroupLayout: BindGroupLayout;
@@ -1383,6 +1380,10 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   // `lastFiredLimitExceededFrame` engine-side dedup field was removed in
   // feat-20260513-instanced-mesh M5 (T-M5-1 + T-M5-3); the active
   // `'limit-exceeded'` emit point is now the record stage upload path.
+  //
+  // feat-20260708 M1 / D-1a #1: positive-half keys are worldEntityKey(worldId,
+  // cacheKey) composites. Negative-half fold-bucket keys (sprite fold) stay
+  // raw (material-handle-based, cross-world collision semantically correct).
   const frameState: RenderFrameState = {
     frameNumber: 0,
     perFrameGraph: null,
@@ -1521,7 +1522,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     internals as unknown as { getPostProcessPipeline: typeof getPostProcessPipeline }
   ).getPostProcessPipeline = getPostProcessPipeline;
   // w15 M5 (plan-strategy D-P4 / AC-07): per-frame dispatch counters. Reset
-  // on every `draw(world)` entry; bumped once per actual `pass.setPipeline`
+  // on every `draw([world], { owner: 0 })` entry; bumped once per actual `pass.setPipeline`
   // dispatch in render-system-record.ts. Two-way split mirrors the two
   // render pipelines on PipelineState (bug-20260519: BUILTIN cube migrated
   // to 12F so `unlitBuiltin` retired): `unlit` covers every
@@ -1530,7 +1531,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     unlit: 0,
   };
   // feat-20260531-per-frame-bind-group-cache M1 / w4: per-frame
-  // createBindGroup counter scaffolding. Reset on every draw(world) entry,
+  // createBindGroup counter scaffolding. Reset on every draw([world], { owner: 0 }) entry,
   // bumped on cache-miss in render-system-record.ts (M2-M4 bump points).
   // Aligns with dispatchCounts precedent: closure-mutable object.
   const bindGroupCounts: { createBindGroup: number; keys: string[] } = {
@@ -1539,7 +1540,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   };
   const lastFrustumStats: { culled: number; total: number } = { culled: 0, total: 0 };
   return {
-    draw(world: World): void {
+    draw(worlds: readonly World[], opts: { owner: number }): void {
       try {
         // feat-20260601 M1 / w7: pipeline hot-swap detection. If the installed handle
         // changed since the memoized graph was built (a SWAP, not an effect toggle), null
@@ -1551,41 +1552,27 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           lastBuiltPipelineHandle = frameState.installedPipelineHandle;
         }
         dispatchCounts.unlit = 0;
-        // feat-20260601 D-3: the render path reads the resolved `Transform.world`
-        // mat4 for every world-space consumer (extract mesh-walk / camera / light
-        // / cull). That column is derived by `propagateTransforms`; running it at
-        // the top of draw guarantees a fresh world for any caller, including
-        // `createRenderer` demos that drive `renderer.draw(world)` directly
-        // without a `world.update()` schedule tick (requirements line 221:
-        // createRenderer auto-wire fallback). It is idempotent -- a createApp
-        // driver that already ran propagate via the schedule recomposes the same
-        // world (compose -> multiply, no decompose), so the second pass is a
-        // redundant-but-correct write, not a behaviour change. Errors route
-        // through the World Layer-3 ErrorHandler (a stale ChildOf surfaces as a
-        // structured `hierarchy-broken`), matching the schedule path.
-        const propagateResult = propagateTransforms(world);
-        if (!propagateResult.ok) {
-          (world as unknown as { _routeError(err: Error, ctx: ErrorContext): void })._routeError(
-            propagateResult.error as unknown as Error,
-            {
-              severity: Severity.Error,
-              systemName: 'RenderSystem.draw (propagateTransforms)',
-            },
-          );
-        }
-        // bug-20260703 M1 / D-1 revision 2026-07-06: tilemapChunkExtractSystem
-        // lives here (sibling of extractFrame) so both extract stages share
-        // the propagate-fresh guarantee. Placement rationale: propagate must
-        // run before ANY consumer that reads Transform.world (D-3 above), and
-        // the chunk-streaming frustum test reads camera Transform.world to
-        // decide which chunks materialize as ECS entities. Keeping the two
-        // extract systems at the same layer (rather than externalising the
-        // tilemap-chunk stage to createRenderer.draw) collapses the frame
-        // graph to a single seam and removes the previous double-propagate
-        // hack. See feat-20260601 D-3 (propagate guarantee) and
-        // plan-strategy §D-1 revision 2026-07-06 (user checkpoint 3
-        // architectural feedback) for the placement rationale.
-        tilemapChunkExtractSystem(world);
+
+        // feat-20260708-composited-multi-world-rendering M3 / D-2 / m3-i2:
+        // extractFrames merges per-world snapshots (renderables + lights from
+        // every world, cameras + singleton resources from the owner world),
+        // runs propagateTransforms + tilemapChunkExtractSystem + extractFrame
+        // per world, resetForFrame once, and isolates per-world errors (AC-09).
+        // Single-world draw([world], { owner: 0 }) is the identity path
+        // (worldId=0), byte-for-byte equivalent to the pre-M3 direct
+        // extractFrame path (AC-03 regression guarantee).
+        //
+        // Entry validation (empty worlds / owner out of range) is enforced by
+        // the public renderer.draw facade (createRenderer.ts, D-5) before this
+        // internal method is reached; the owner world is guaranteed present.
+        const ownerWorld = worlds[opts.owner] as World;
+        const frame = extractFrames(
+          worlds,
+          opts.owner,
+          internals.assets,
+          internals.getPipelineState(),
+          internals.gpuStore,
+        );
         const {
           cameras,
           lights,
@@ -1597,27 +1584,27 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           skyboxCount,
           frustumStats,
           postProcessParams,
-        } = extractFrame(world, internals.assets, internals.getPipelineState(), internals.gpuStore);
+        } = frame;
+
         bindGroupCounts.createBindGroup = 0;
         bindGroupCounts.keys = [];
         lastFrustumStats.culled = frustumStats.culled;
         lastFrustumStats.total = frustumStats.total;
 
         // Unified transparent-sort: (layer ASC, sortValue ASC) for modes 0/1/2;
-        // distance back-to-front for mode=3. `world` and the camera/renderable
-        // snapshots are only in scope here (the record stage no longer receives
-        // `world` after the render-graph refactor), so the sub-sort runs at
-        // the extract/record boundary. Only the Transparent segment is
-        // reordered; queue ordering between segments (sortDispatchByQueue,
-        // stable) is preserved.
-        const orderedDispatch = sortTransparentDispatch(dispatch, world, cameras, renderables);
+        // distance back-to-front for mode=3. The transparent-sort config is a
+        // per-world resource; it is read from the owner world (the world that
+        // owns cameras + singleton render state, D-3). Only the Transparent
+        // segment is reordered; queue ordering between segments
+        // (sortDispatchByQueue, stable) is preserved.
+        const orderedDispatch = sortTransparentDispatch(dispatch, ownerWorld, cameras, renderables);
 
         // M3 / w26: single dispatch list replaces old three-bucket model.
         // Pass dispatch to recordFrame — the record stage iterates dispatch
         // entries in queue order per plan-strategy D-3.
         recordFrame(
           internals,
-          world,
+          ownerWorld,
           cameras,
           lights,
           renderables,

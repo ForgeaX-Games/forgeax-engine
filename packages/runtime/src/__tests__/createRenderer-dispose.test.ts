@@ -212,7 +212,7 @@ function buildManifestDataUrl(): string {
 interface RendererShape {
   backend: string;
   ready: Promise<void>;
-  draw: (world: unknown) => { ok: boolean; error?: { code: string } };
+  draw: (worlds: unknown, opts: { owner: number }) => { ok: boolean; error?: { code: string } };
   dispose: () => void;
   onError: (cb: (err: { code: string }) => void) => () => void;
   store: {
@@ -301,7 +301,7 @@ describe('Renderer.dispose() 6-step cascade (w17)', () => {
     // Post-dispose draw fires errorRegistry; cleared listeners should NOT
     // observe the fire (charter P3: post-dispose renderer is dead, no
     // observable side-effects on user-supplied listeners).
-    renderer.draw({} as unknown);
+    renderer.draw({} as unknown, { owner: 0 });
     expect(postDisposeFireCount).toBe(0);
   });
 });
@@ -370,7 +370,7 @@ describe('Renderer.draw() after dispose() fail-fast (w19, D-1)', () => {
     const setup = await setupWebGPU();
     const renderer = await makeRenderer(setup);
     renderer.dispose();
-    const result = renderer.draw({} as unknown);
+    const result = renderer.draw({} as unknown, { owner: 0 });
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('rhi-not-available');
   });
@@ -382,7 +382,7 @@ describe('Renderer.draw() after dispose() fail-fast (w19, D-1)', () => {
     // gate must trigger only post-dispose; without a real World the inner
     // record stage may surface a different runtime error, but never the
     // disposed gate).
-    const result = renderer.draw({} as unknown);
+    const result = renderer.draw({} as unknown, { owner: 0 });
     if (!result.ok) {
       expect(result.error?.code).not.toBe('rhi-not-available');
     }
@@ -406,7 +406,7 @@ describe('Renderer.dispose() idempotency (w20, D-5)', () => {
     const renderer = await makeRenderer(setup);
     renderer.dispose();
     renderer.dispose();
-    const result = renderer.draw({} as unknown);
+    const result = renderer.draw({} as unknown, { owner: 0 });
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('rhi-not-available');
   });

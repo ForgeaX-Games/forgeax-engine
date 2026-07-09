@@ -110,6 +110,7 @@ function fixtureBackend(initial: {
   movementY?: number;
   wheelDelta?: number;
   focused?: boolean;
+  pointerLocked?: boolean;
   gamepads?: readonly GamepadSlotSample[];
   capabilities?: Capabilities;
   pointers?: readonly import('../src/input-snapshot').PointerSample[];
@@ -125,6 +126,7 @@ function fixtureBackend(initial: {
       movementY: number;
       wheelDelta: number;
       focused: boolean;
+      pointerLocked: boolean;
       gamepads?: readonly GamepadSlotSample[];
       capabilities?: Capabilities;
       pointers?: readonly import('../src/input-snapshot').PointerSample[];
@@ -139,6 +141,7 @@ function fixtureBackend(initial: {
         movementY: initial.movementY ?? 0,
         wheelDelta: initial.wheelDelta ?? 0,
         focused: initial.focused ?? true,
+        pointerLocked: initial.pointerLocked ?? false,
         gamepads: initial.gamepads,
         capabilities: initial.capabilities,
         pointers: initial.pointers,
@@ -373,10 +376,10 @@ function fixtureBackend(initial: {
 
   describe('browser-backend.test.ts', () => {
     describe('attachBrowserInputBackend (browser-backend.ts)', () => {
-      it('attaches keydown / keyup / pointerdown / pointerup / pointermove / pointercancel / wheel / visibilitychange listeners', () => {
+      it('attaches keydown / keyup / pointerdown / pointerup / pointermove / pointercancel / wheel / visibilitychange + pointerlockchange / click listeners', () => {
         const { canvas, doc, win, store } = buildBBFakes();
         attachBrowserInputBackend(canvas, { document: doc, window: win });
-        expect(store.count()).toBe(10);
+        expect(store.count()).toBe(11);
       });
 
       it('translates keyboard events into the snapshot held-key set', () => {
@@ -500,7 +503,7 @@ function fixtureBackend(initial: {
       it('detach removes every listener and is idempotent on second call', () => {
         const { canvas, doc, win, store } = buildBBFakes();
         const handle = attachBrowserInputBackend(canvas, { document: doc, window: win });
-        expect(store.count()).toBe(10);
+        expect(store.count()).toBe(11);
         handle();
         expect(store.count()).toBe(0);
         expect(() => handle()).not.toThrow();
@@ -890,6 +893,7 @@ function fixtureBackend(initial: {
         movementY: number;
         wheelDelta: number;
         focused: boolean;
+        pointerLocked: boolean;
       } {
         const snap = {
           downKeys: new Set(downKeys),
@@ -899,6 +903,7 @@ function fixtureBackend(initial: {
           movementY: mvy,
           wheelDelta: 0,
           focused,
+          pointerLocked: false,
         };
         mvx = 0;
         mvy = 0;
@@ -2596,6 +2601,7 @@ function fixtureBackend(initial: {
       movementY: 0,
       wheelDelta: 0,
       focused: true,
+      pointerLocked: false,
       gamepads: overrides?.gamepads ?? [],
     };
   }
@@ -2955,6 +2961,7 @@ function fixtureBackend(initial: {
       movementY: 0,
       wheelDelta: 0,
       focused: true,
+      pointerLocked: false,
       gamepads: overrides?.gamepads ?? [],
     };
   }
@@ -3413,6 +3420,7 @@ function fixtureBackend(initial: {
       movementY: 0,
       wheelDelta: 0,
       focused: true,
+      pointerLocked: false,
       gamepads: overrides?.gamepads ?? [],
     };
     const actionStates = deriveActionStates(sample, map);
@@ -3887,6 +3895,7 @@ function fixtureBackend(initial: {
         movementY: 0,
         wheelDelta: 0,
         focused: true,
+        pointerLocked: false,
         capabilities: { gamepad: true, pointer: false },
         gamepads: slots,
       });
@@ -3908,6 +3917,7 @@ function fixtureBackend(initial: {
         movementY: 0,
         wheelDelta: 0,
         focused: true,
+        pointerLocked: false,
         capabilities: { gamepad: true, pointer: false },
         gamepads: slots,
       });

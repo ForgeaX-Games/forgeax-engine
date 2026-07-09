@@ -433,7 +433,7 @@ async function renderCase({ includePoint, includeSpot, label }) {
   let draws = 0;
   let drawErrors = 0;
   for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-    const r = renderer.draw(world);
+    const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) drawErrors++;
     draws++;
   }

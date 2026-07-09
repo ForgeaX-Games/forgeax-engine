@@ -2146,7 +2146,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   interface RendererLike {
     ready: Promise<void>;
-    draw: (world: unknown) => void;
+    draw: (worlds: unknown, opts: { owner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
     assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
   }
@@ -2341,7 +2341,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnInstancedScene(renderer, twoSubmeshMesh(), 2, 4);
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       // Each submesh draws M times (4 instances each, shared instanceCount).
       // N=2 submeshes * M=1 draw each = 2 drawIndexed calls.
@@ -2359,7 +2359,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnInstancedScene(renderer, twoSubmeshMesh(), 2, 4);
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       // All submesh draws share the same instanceCount (D-8).
       // Verify drawIndexed calls carry instanceCount parameter at index 1.
@@ -2430,7 +2430,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         { component: C.Transform, data: originTransform() },
       );
 
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       // Without Instances, instanceCount defaults to 1.
       const indexedCalls = spies.drawIndexed.mock.calls as Array<

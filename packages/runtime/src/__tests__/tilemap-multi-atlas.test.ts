@@ -158,7 +158,7 @@ describe('resolveTilesetMaterial - 3-hop atlasIndex routing (m3-t6)', () => {
     resetTilemapDerivedEntityTracker();
 
     spawnTilemap(world, tileset, 3, 1, new Uint32Array([1, 2, 3]));
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
 
     const mats = readDerivedMaterialHandles(world);
     expect(mats.length).toBe(3);
@@ -203,7 +203,7 @@ describe('resolveTilesetMaterial - 3-hop atlasIndex routing (m3-t6)', () => {
     resetTilemapDerivedEntityTracker();
 
     spawnTilemap(world, tileset, 2, 1, new Uint32Array([1, 2]));
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
 
     const mats = readDerivedMaterialHandles(world);
     expect(mats.length).toBe(2);
@@ -234,7 +234,7 @@ describe('resolveTilesetMaterial - 3-hop atlasIndex routing (m3-t6)', () => {
     resetTilemapDerivedEntityTracker();
 
     spawnTilemap(world, tileset, 2, 1, new Uint32Array([1, 2]));
-    tilemapChunkExtractSystem(world);
+    tilemapChunkExtractSystem(world, 0);
 
     const mats = readDerivedMaterialHandles(world).sort((a, b) => a - b);
     expect(mats.length).toBe(2);

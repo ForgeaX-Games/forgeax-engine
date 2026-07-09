@@ -182,7 +182,7 @@ describe('clamp-to-last e2e browser (m3-w6)', () => {
     });
 
     for (let f = 0; f < 10; f++) {
-      const drawn = renderer.draw(world);
+      const drawn = renderer.draw([world], { owner: 0 });
       expect(drawn.ok).toBe(true);
     }
 

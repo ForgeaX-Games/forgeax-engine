@@ -194,7 +194,8 @@ async function getReleaseByTag(owner, repo, tag) {
 }
 
 /**
- * Download an asset by its browser_download_url.
+ * Download a release asset via the API asset endpoint (asset.url) with
+ * Accept: application/octet-stream — works for public and private repos.
  */
 async function downloadAsset(downloadUrl, destPath) {
   let resp;
@@ -287,8 +288,12 @@ async function main() {
   }
 
   // 5. Download
+  // Use the API asset endpoint (asset.url) + Accept: application/octet-stream, NOT
+  // asset.browser_download_url: the browser URL 404s for PRIVATE repos even with a
+  // Bearer token (it expects a browser session), while the API endpoint authorizes
+  // via the token for both public and private repos.
   console.log(`Downloading ${assetName} (${(asset.size / 1024).toFixed(0)} KB)...`);
-  await downloadAsset(asset.browser_download_url, DEST_FILE);
+  await downloadAsset(asset.url, DEST_FILE);
   console.log(`  -> ${DEST_FILE}`);
   console.log('Done.');
 }

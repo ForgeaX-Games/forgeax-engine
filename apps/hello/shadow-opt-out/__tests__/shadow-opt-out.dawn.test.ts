@@ -250,7 +250,7 @@ describe('shadow-opt-out AC-17 dawn (castShadow + cutout)', () => {
       );
 
       // Render one frame to populate shadow map
-      const drawResult = renderer.draw(world);
+      const drawResult = renderer.draw([world], { owner: 0 });
       expect(drawResult.ok).toBe(true);
 
       // Sample shadow factor at floor positions inside each cube's shadow

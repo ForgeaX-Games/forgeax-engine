@@ -377,6 +377,82 @@ describe('m2-t3: shared<> / array<shared<>> -> GUID', () => {
     expect('array<shared<TestAsset>>'.startsWith('array<shared<')).toBe(true);
     expect('array<shared<>>'.startsWith('array<shared<')).toBe(true);
   });
+
+  // NULL sentinel handle 0 -- an UNSET shared<T> field defaults to slot 0
+  // (ECS three-layer default). world.ts retain arms treat `!== 0` as the
+  // active-slot guard, so slot 0 is the documented "no asset here" sentinel.
+  // collect must NOT try to resolve it to a GUID (there is none) -- otherwise
+  // every entity carrying an unset shared field aborts the whole scene
+  // serialize (regression: feedback 2026-07-08-rootstosceneasset).
+  it('scalar shared<> field left at NULL sentinel (handle 0) is OMITTED, not an error', () => {
+    const reg = makeRegistry();
+    const world = new World();
+
+    const Test_UnsetScalar = defineComponent('Test_UnsetScalarShared', {
+      ref: { type: 'shared<TestAsset>' },
+      tag: { type: 'f32', default: 7 },
+      // biome-ignore lint/suspicious/noExplicitAny: defineComponent constraint is too strict for shared<>
+    } as any);
+
+    // Spawn WITHOUT setting `ref` -- it defaults to slot 0 (NULL sentinel).
+    const r0 = s(world, Test_UnsetScalar, { tag: 42 });
+
+    const result = rootsToSceneAsset(reg, world, [r0 as EntityHandle]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ent0 = result.value.entities[0];
+    if (!ent0) throw new Error('entity 0 missing');
+    const comps = (ent0.components as Record<string, Record<string, unknown>>)
+      .Test_UnsetScalarShared;
+    if (!comps) throw new Error('Test_UnsetScalarShared missing');
+    // The unset shared scalar is omitted; other fields survive.
+    expect(comps.ref).toBeUndefined();
+    expect(comps.tag).toBe(42);
+  });
+
+  it('array<shared<T>,N> with NULL sentinel slots preserves POSITION (does not compact)', () => {
+    // Positional SoA (e.g. AnimationPlayer.clips = [h, 0, 0, 0]) -- a slot may
+    // be 0 while its paired arrays (times/weights) carry per-slot data at the
+    // same index. collect must keep the slot as numeric 0, not drop it, or the
+    // arrays desynchronize on reload.
+    const assetA = makePayload('skeleton');
+    const reg = makeRegistry();
+    const guidA = AssetGuid.parse('d0000000-d000-0000-0000-000000000009');
+    if (!guidA.ok) throw new Error('guid parse failed');
+    reg.catalog(guidA.value, assetA);
+
+    const world = new World();
+    const hA = world.allocSharedRef('', assetA);
+
+    // Fixed-size-4 array; only slot 2 is populated -> [0, 0, hA, 0].
+    const Test_SparseArray = defineComponent('Test_SparseSharedArray', {
+      slots: { type: 'array<shared<TestAsset>, 4>' },
+      // biome-ignore lint/suspicious/noExplicitAny: defineComponent constraint is too strict for array<shared<>,N>
+    } as any);
+
+    const r0 = s(world, Test_SparseArray, {
+      // biome-ignore lint/suspicious/noExplicitAny: short-prefix write pads tail with sentinel 0
+      slots: [0, 0, hA as any, 0],
+      // biome-ignore lint/suspicious/noExplicitAny: test helper adapter for component spawn
+    } as any);
+
+    const result = rootsToSceneAsset(reg, world, [r0 as EntityHandle]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const ent0 = result.value.entities[0];
+    if (!ent0) throw new Error('entity 0 missing');
+    const comps = (ent0.components as Record<string, Record<string, unknown>>)
+      .Test_SparseSharedArray;
+    if (!comps) throw new Error('Test_SparseSharedArray missing');
+    const slots = comps.slots as unknown[];
+    expect(Array.isArray(slots)).toBe(true);
+    // Position preserved: 4 slots, GUID only at index 2, sentinel 0 elsewhere.
+    expect(slots).toHaveLength(4);
+    expect(slots[0]).toBe(0);
+    expect(slots[1]).toBe(0);
+    expect(slots[2]).toBe(AssetGuid.format(guidA.value));
+    expect(slots[3]).toBe(0);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -337,7 +337,7 @@ renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
 const worldNone = new World();
 spawnScene(worldNone, ANTIALIAS_NONE);
 
-const drawNoneRes = renderer.draw(worldNone);
+const drawNoneRes = renderer.draw([worldNone], { owner: 0 });
 if (!drawNoneRes.ok) {
   console.error(`[smoke] FAIL - draw (none) failed: ${drawNoneRes.error.code}`);
   process.exit(1);
@@ -354,7 +354,7 @@ const pixelsNone = await doReadPixels();
 const worldFxaa = new World();
 spawnScene(worldFxaa, ANTIALIAS_FXAA);
 
-const drawFxaaRes = renderer.draw(worldFxaa);
+const drawFxaaRes = renderer.draw([worldFxaa], { owner: 0 });
 if (!drawFxaaRes.ok) {
   console.error(`[smoke] FAIL - draw (fxaa) failed: ${drawFxaaRes.error.code}`);
   process.exit(1);

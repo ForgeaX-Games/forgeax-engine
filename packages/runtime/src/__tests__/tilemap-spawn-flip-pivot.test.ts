@@ -178,7 +178,7 @@ function runOneCase(s: Setup): {
   );
   resetTilemapChunkExtractCache();
   resetTilemapDerivedEntityTracker();
-  tilemapChunkExtractSystem(world);
+  tilemapChunkExtractSystem(world, 0);
   return readDerivedTransform(world);
 }
 

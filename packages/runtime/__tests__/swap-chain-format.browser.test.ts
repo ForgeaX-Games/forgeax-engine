@@ -77,7 +77,7 @@ describe('swap-chain-format.browser - AC-01 + AC-02 integration guards', () => {
     });
     await renderer.ready;
     const world = new World();
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
 
     // Inspect every recorded console.warn call: none of them should
     // contain the chromium format-mismatch substring.
@@ -109,7 +109,7 @@ describe('swap-chain-format.browser - AC-01 + AC-02 integration guards', () => {
     });
     await renderer.ready;
     const world = new World();
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
 
     // The probe is set by ensureContextConfigured in createRenderer.ts after
     // the helper chooses the format and after `context.configure({...})` runs.

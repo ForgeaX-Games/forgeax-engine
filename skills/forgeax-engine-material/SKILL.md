@@ -43,7 +43,7 @@ flowchart TD
   R --> S["world.spawn 三件套：Transform + MeshFilter + MeshRenderer"]
   S --> L["world.spawn 一盏灯（standard 必需；unlit 可省）"]
   L --> CAM["world.spawn 一个 Camera"]
-  CAM --> D["renderer.draw(world) / app.start() 出画面"]
+  CAM --> D["renderer.draw([world], { owner: 0 }) / app.start() 出画面"]
 ```
 
 ## idiom 代码骨架
@@ -495,7 +495,7 @@ world.spawn({ component: DirectionalLight, data: {} });
 
 // --- render loop ---
 const frame = () => {
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
   requestAnimationFrame(frame);
 };
 requestAnimationFrame(frame);

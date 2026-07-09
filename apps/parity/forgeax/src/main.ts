@@ -157,10 +157,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // Static fixture: draw once. window.__captureRight re-issues a draw
   // before each readback so the canvas observes the latest frame even
   // if the compositor cleared it between calls.
-  renderer.draw(world);
+  renderer.draw([world], { owner: 0 });
 
   declare_capture_hook(renderer, () => {
-    renderer.draw(world);
+    renderer.draw([world], { owner: 0 });
   });
 }
 

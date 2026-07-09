@@ -332,7 +332,7 @@ let firstFrameDrawCount = 0;
 let lastFrameDrawCount = 0;
 for (let f = 0; f < TARGET_FRAMES; f++) {
   drawIndexedCallsThisFrame = 0;
-  const r = renderer.draw(world);
+  const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) {
     console.error(`[hello-asi-world smoke] draw frame ${f}: ${r.error.code}`);
     process.exit(1);

@@ -286,7 +286,7 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
     scaleX: 1, scaleY: 1, scaleZ: 1,
   });
 
-  const r = renderer.draw(world);
+  const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
 
   const stats = renderer.frustumStats;

@@ -312,7 +312,7 @@ async function renderConfig(
   spawnScene(w, castShadow, depthBias, normalBias, pcf, mapSize);
   let de = 0;
   for (let i = 0; i < 300; i++) {
-    const r = renderer.draw(w);
+    const r = renderer.draw([w], { owner: 0 });
     if (!r.ok) de++;
   }
   if (de > 0) throw new Error(`draw errors: ${de}`);
@@ -418,7 +418,7 @@ async function renderConfigWithSpy(
   spawnScene(w, castShadow, depthBias, normalBias, pcf, mapSize);
   let de = 0;
   for (let i = 0; i < 10; i++) {
-    const r = renderer.draw(w);
+    const r = renderer.draw([w], { owner: 0 });
     if (!r.ok) de++;
   }
   if (de > 0) throw new Error(`draw errors: ${de}`);

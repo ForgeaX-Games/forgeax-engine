@@ -48,10 +48,11 @@ import {
   INPUT_BACKEND_KEY,
   INPUT_MAP_KEY,
   type InputBackend,
+  type PointerLockProvider,
   type VirtualJoystickConfig,
 } from '@forgeax/engine-input';
 
-import { AppError } from '../errors';
+import { APP_ERROR_HINTS, APP_EXPECTED, AppError } from '../errors';
 
 /**
  * Handle returned by attachInputAuto. Captures the backend (exposed via
@@ -61,6 +62,13 @@ import { AppError } from '../errors';
 export interface InputAttachHandle {
   readonly backend: InputBackend;
   cleanup(options: InputCleanupOptions): void;
+  /**
+   * M2: install the error dispatch callback for onLockError events.
+   * Must be called by createApp after the ErrorFanoutRegistry is created
+   * (the dispatch function is created after attachInputAuto returns).
+   * Idempotent — subsequent calls replace the previous callback.
+   */
+  setOnErrorDispatch(fn: (err: AppError) => void): void;
 }
 
 /**
@@ -114,6 +122,13 @@ export interface InputAttachOptions {
    * hosts insert INPUT_MAP_KEY directly.
    */
   readonly inputMap?: readonly ActionConfig[] | undefined;
+  /**
+   * M2: pointer-lock provider injected by the host (e.g. editor play-runtime).
+   * Forwarded to BrowserInputBackendOptions.lockProvider. When absent, the
+   * backend falls back to the W3C requestPointerLock() path.
+   * Type SSOT is @forgeax/engine-input's PointerLockProvider.
+   */
+  readonly lockProvider?: PointerLockProvider;
 }
 
 export function attachInputAuto(
@@ -121,11 +136,34 @@ export function attachInputAuto(
   world: World,
   options: InputAttachOptions = {},
 ): InputAttachHandle {
-  const backendOpts = Object.assign(
-    {} as BrowserInputBackendOptions,
-    options.pointerLockAllowed ? { pointerLockAllowed: options.pointerLockAllowed } : {},
-    options.virtualJoysticks ? { virtualJoysticks: options.virtualJoysticks } : {},
-  );
+  // Mutable slot for error dispatch. The dispatch function is created by
+  // createApp AFTER the ErrorFanoutRegistry is set up, so we need an
+  // indirection: the backend's onLockError callback fires synchronously
+  // inside the click handler, but the fan-out is ready by then because
+  // createApp wires it before calling app.start().
+  let onLockErrorDispatch: ((err: AppError) => void) | undefined;
+
+  const backendOpts: BrowserInputBackendOptions = {
+    ...(options.pointerLockAllowed ? { pointerLockAllowed: options.pointerLockAllowed } : {}),
+    ...(options.virtualJoysticks ? { virtualJoysticks: options.virtualJoysticks } : {}),
+    ...(options.lockProvider ? { lockProvider: options.lockProvider } : {}),
+    onLockError: (detail: { path: 'w3c' | 'provider'; cause: unknown }) => {
+      // D-4: wrap the backend's onLockError signal into a structured AppError
+      // and fan-out through createApp's onError channel. The dispatch function
+      // is installed by setOnErrorDispatch after createApp creates the
+      // ErrorFanoutRegistry. If no dispatch is set yet (e.g. during unit tests
+      // that don't call setOnErrorDispatch), the error is silently dropped.
+      if (onLockErrorDispatch) {
+        const err = new AppError({
+          code: 'app-pointer-lock-failed',
+          expected: APP_EXPECTED['app-pointer-lock-failed'],
+          hint: APP_ERROR_HINTS['app-pointer-lock-failed'],
+          detail,
+        });
+        onLockErrorDispatch(err);
+      }
+    },
+  };
   const detach = attachBrowserInputBackend(canvas, backendOpts);
   const backend = detach.backend;
   world.insertResource(INPUT_BACKEND_KEY, backend);
@@ -149,6 +187,9 @@ export function attachInputAuto(
 
   return {
     backend,
+    setOnErrorDispatch(fn: (err: AppError) => void): void {
+      onLockErrorDispatch = fn;
+    },
     cleanup(options: InputCleanupOptions): void {
       if (cleanedUp) {
         // idempotent: the device-lost path + the explicit stop path may

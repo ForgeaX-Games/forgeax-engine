@@ -238,7 +238,7 @@ describe('M3 calibration runner (one-off)', () => {
 
     // Draw one frame to populate the shadow depth texture.
     const world = buildFixtureWorld();
-    const drawResult = renderer.draw(world);
+    const drawResult = renderer.draw([world], { owner: 0 });
     expect(drawResult.ok).toBe(true);
 
     // In the single-session calibration workflow, M2 and M3 measurements

@@ -30,7 +30,8 @@
   "scripts": {
     "build": "tsup",
     "build:wasm": "node scripts/fetch-basis.mjs && node scripts/build-wasm.mjs",
-    "postinstall": "node -e \"const fs=require('node:fs'),cp=require('node:child_process'),p=require('node:path');if(fs.existsSync(p.join(process.cwd(),'pkg','basis_transcoder.wasm')))process.exit(0);try{cp.execSync('emcc --version',{stdio:'ignore'})}catch{console.log('[codec] emcc not on PATH; skipping basis WASM build (run: pnpm -F @forgeax/engine-codec build:wasm after installing emsdk)');process.exit(0)}cp.execSync('node scripts/fetch-basis.mjs && node scripts/build-wasm.mjs',{stdio:'inherit'})\"",
+    "fetch-wasm": "node scripts/fetch-wasm.mjs",
+    "postinstall": "node scripts/ensure-wasm.mjs",
     "test": "vitest run"
   },
   "dependencies": {

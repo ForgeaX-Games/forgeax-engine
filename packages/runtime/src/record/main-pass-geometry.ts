@@ -14,6 +14,7 @@ import type { InstanceBufferCacheEntry } from '../instance-buffer-cache';
 import { SKIN_MATERIAL_SHADER_ID } from '../pbr-pipeline';
 import type { _InternalRenderPipelineContext } from '../render-pipeline-context';
 import type { MaterialSnapshot } from '../render-system-extract';
+import { worldEntityKey } from './frame-snapshot';
 import { isEntityFullyTransparent, selectGeometryPipeline } from './main-pass-material';
 import { _computeSkinGroup2DynOffsets } from './main-pass-skin';
 import {
@@ -151,7 +152,7 @@ export function recordGeometryDraws(
     // naturally misses when the underlying handle id differs.
     const instancesBindGroup: BindGroup = getOrCreatePerEntity(
       frameState.instancesBgPerEntity,
-      entry.source.entityKey,
+      worldEntityKey(entry.source.worldId, entry.source.entityKey),
       [instanceBuffer],
       'instances',
       () => {
@@ -627,7 +628,9 @@ function resolveGeometryInstanceBuffer(
       } else {
         // Look up the cached GPU buffer or create a fresh one when the
         // archetype version bumped or the byte length changed.
-        const cached = frameState.instanceBuffers.get(inst.cacheKey);
+        const cached = frameState.instanceBuffers.get(
+          worldEntityKey(entry.source.worldId, inst.cacheKey),
+        );
         let active: InstanceBufferCacheEntry | null = null;
         if (
           cached !== undefined &&
@@ -656,7 +659,10 @@ function resolveGeometryInstanceBuffer(
               uploadedArchVersion: inst.archVersion,
               uploadedByteLength: requestedBytes,
             };
-            frameState.instanceBuffers.set(inst.cacheKey, active);
+            frameState.instanceBuffers.set(
+              worldEntityKey(entry.source.worldId, inst.cacheKey),
+              active,
+            );
           }
         }
         if (active !== null) {

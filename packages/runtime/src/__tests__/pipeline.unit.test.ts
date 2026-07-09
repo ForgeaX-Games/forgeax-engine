@@ -2857,7 +2857,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   interface RendererLike {
     ready: Promise<void>;
-    draw: (world: unknown) => void;
+    draw: (worlds: unknown, opts: { owner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
     assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
   }
@@ -3028,7 +3028,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         renderer.onError((e) => errors.push(e.code));
 
         const world = await spawnScene(renderer, meshForTopology(topology));
-        renderer.draw(world);
+        renderer.draw([world], { owner: 0 });
 
         // Some dispatch verb must have fired for this topology's mesh.
         const dispatched = spies.draw.mock.calls.length + spies.drawIndexed.mock.calls.length;
@@ -3189,7 +3189,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   interface RendererLike {
     ready: Promise<void>;
-    draw: (world: unknown) => void;
+    draw: (worlds: unknown, opts: { owner: number }) => void;
     onError: (cb: (err: { code: string }) => void) => () => void;
     assets: { register: (asset: unknown) => { ok: boolean; value: unknown } };
   }
@@ -3348,7 +3348,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnScene(renderer, vertexOnlyLineMesh());
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       // The vertex-only mesh draws via the non-indexed path.
       expect(spies.draw).toHaveBeenCalled();
@@ -3370,7 +3370,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       renderer.onError((e) => errors.push(e.code));
 
       const world = await spawnScene(renderer, indexedTriangleMesh());
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       expect(spies.setIndexBuffer).toHaveBeenCalled();
       expect(spies.drawIndexed).toHaveBeenCalled();
@@ -3885,7 +3885,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
           opts?: unknown,
           bundler?: unknown,
         ) => Promise<{
-          draw: (world: unknown) => void;
+          draw: (worlds: unknown, opts: { owner: number }) => void;
           ready: Promise<void>;
         }>;
       };
@@ -3900,7 +3900,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       const world = new World();
       // No throw: draw accepts a World. We do not assert specific recording
       // here — that lives in render-system.test.ts (w14 / w15).
-      expect(() => renderer.draw(world)).not.toThrow();
+      expect(() => renderer.draw([world], { owner: 0 })).not.toThrow();
       // Source-level guarantee: createRenderer.ts must use World as the draw
       // parameter type after the K-4 rewrite (D-S2: RenderSystem walks the
       // World query graph; charter proposition 5 single ECS-driven entry).
@@ -3934,7 +3934,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
           opts?: unknown,
           bundler?: unknown,
         ) => Promise<{
-          draw: (world: unknown) => void;
+          draw: (worlds: unknown, opts: { owner: number }) => void;
           ready: Promise<void>;
           onError: (cb: (err: { code: string }) => void) => () => void;
         }>;
@@ -3951,7 +3951,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       renderer.onError((e) => errors.push(e));
 
       // Call draw before awaiting ready - must fire onError + skip frame.
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
       expect(errors.some((e) => e.code === 'rhi-not-available')).toBe(true);
     });
   });
@@ -3980,7 +3980,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
           opts?: unknown,
           bundler?: unknown,
         ) => Promise<{
-          draw: (world: unknown) => void;
+          draw: (worlds: unknown, opts: { owner: number }) => void;
           ready: Promise<unknown>;
           onError: (cb: (err: { code: string; hint?: string }) => void) => () => void;
           assets: {
@@ -4004,7 +4004,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       // surface is caught at extract (not record):
       //   - `await renderer.ready` resolves Result.ok (Step 2 guard skips
       //     dual createShaderModule because `registry.entries().length === 0`)
-      //   - on `renderer.draw(world)` the per-entity loop in
+      //   - on `renderer.draw([world], { owner: 0 })` the per-entity loop in
       //     `render-system-extract.ts` walks the material parent chain (none),
       //     finds zero passes, and fires
       //     `material-resolved-empty-passes` (RuntimeError).
@@ -4098,7 +4098,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         )
         .unwrap();
 
-      renderer.draw(world);
+      renderer.draw([world], { owner: 0 });
 
       // Property-access assertions only (charter P3 + P5: structured error
       // surface; no string-parse on `.message`).
