@@ -100,6 +100,9 @@ function makeShaderRegistry(): ShaderRegistry {
 }
 
 // Minimal triangle mesh so the entity is renderable and produces a dispatch.
+// No `aabb` field: the extract-stage frustum cull treats an AABB-less mesh as
+// always-visible (conservative pass-through), so the entity survives extract
+// regardless of camera frustum (headless robustness).
 function registerMesh(world: World): Handle<'MeshAsset', 'shared'> {
   return world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', {
     kind: 'mesh',
@@ -109,7 +112,6 @@ function registerMesh(world: World): Handle<'MeshAsset', 'shared'> {
     ]),
     indices: new Uint16Array([0, 1, 2]),
     attributes: { position: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]) },
-    aabb: new Float32Array([0, 0, 0, 1, 1, 1]),
     submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
   });
 }
@@ -127,8 +129,9 @@ function registerMaterial(world: World, queue: number): Handle<'MaterialAsset', 
   } as MaterialAsset);
 }
 
-// A world holding a single renderable at the given queue. frustumCulled=0 so the
-// entity survives extract regardless of camera frustum (headless robustness).
+// A world holding a single renderable at the given queue. The mesh carries no
+// AABB, so the entity survives extract regardless of camera frustum (headless
+// robustness — see registerMesh).
 function makeRenderableWorld(queue: number): World {
   const world = new World();
   const mesh = registerMesh(world);
@@ -137,7 +140,7 @@ function makeRenderableWorld(queue: number): World {
     .spawn(
       { component: Transform, data: identityTransform() },
       { component: MeshFilter, data: { assetHandle: mesh } },
-      { component: MeshRenderer, data: { materials: [mat], frustumCulled: 0 } as never },
+      { component: MeshRenderer, data: { materials: [mat] } },
     )
     .unwrap();
   return world;

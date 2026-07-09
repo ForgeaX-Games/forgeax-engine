@@ -164,18 +164,12 @@ export function pick(
     if (!arch.components.some((c) => c.id === MeshFilter.id)) continue;
     if (!arch.components.some((c) => c.id === Transform.id)) continue;
 
-    const mrCols = arch.columns.get(MeshRenderer.id);
     const mfCols = arch.columns.get(MeshFilter.id);
-    if (!mrCols || !mfCols) continue;
-    const pickableView = mrCols.get('pickable')?.view as Uint8Array | undefined;
+    if (!mfCols) continue;
     const assetHandleView = mfCols.get('assetHandle')?.view as Uint32Array | undefined;
     if (!assetHandleView) continue;
 
     for (let i = 0; i < arch.size; i++) {
-      // pickable filter (AC-09): default 1; explicit 0 -> skip
-      const pickableVal = pickableView?.[i] ?? 1;
-      if (pickableVal === 0) continue;
-
       const assetHandleRaw = Math.round(assetHandleView[i] ?? 0);
       if (assetHandleRaw === 0) continue;
       const meshRes = resolveAssetHandle<MeshAsset>(world, toShared<'MeshAsset'>(assetHandleRaw));

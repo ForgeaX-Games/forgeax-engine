@@ -279,7 +279,7 @@ function spawnMeshEntity(
     .spawn(
       { component: Transform, data: translateTransform(x, y, z) },
       { component: MeshFilter, data: { assetHandle: mesh } },
-      { component: MeshRenderer, data: { materials: [scene.material], pickable: 1 } },
+      { component: MeshRenderer, data: { materials: [scene.material] } },
     )
     .unwrap();
 }
@@ -1262,7 +1262,7 @@ describe('w6: degradation input + builtin fallback', () => {
         .spawn(
           { component: Transform, data: translateTransform(0, 0, 0) },
           { component: MeshFilter, data: { assetHandle: toShared<'MeshAsset'>(1) } },
-          { component: MeshRenderer, data: { materials: [scene.material], pickable: 1 } },
+          { component: MeshRenderer, data: { materials: [scene.material] } },
         )
         .unwrap();
       propagateTransforms(scene.world);
@@ -1284,7 +1284,7 @@ describe('w6: degradation input + builtin fallback', () => {
         .spawn(
           { component: Transform, data: translateTransform(0, 0, 0) },
           { component: MeshFilter, data: { assetHandle: toShared<'MeshAsset'>(2) } },
-          { component: MeshRenderer, data: { materials: [scene.material], pickable: 1 } },
+          { component: MeshRenderer, data: { materials: [scene.material] } },
         )
         .unwrap();
       propagateTransforms(scene.world);

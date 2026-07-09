@@ -1,22 +1,11 @@
-// apps/hello/culling — frustum-culling end-to-end demonstration (feat-20260528
-// frustum-culling M5 / w13; extended in feat-20260608-mesh-ssbo-dynamic-grow
-// M5 to also stress the SSBO grow path).
+// apps/hello/culling — frustum-culling end-to-end demonstration
+// (feat-20260528-frustum-culling M5 / w13).
 //
-// Spawns a grid of 46 x 46 = 2116 cubes in a plane at z=0 spaced 3 units
-// apart (-67.5 to +67.5 in X, Z). To exercise BOTH surfaces:
-//   - half the grid (every other cube via (ix+iz)%2==0) keeps the default
-//     `frustumCulled=1` so frustum culling stays observably active and the
-//     `frustumStats.culled` counter still reports a non-zero value
-//     (preserves the original demo's purpose);
-//   - the other half opts out via `frustumCulled=0` so they always flow
-//     through the per-entity SSBO writeBuffer pipeline regardless of camera
-//     pose, guaranteeing `validatedOrdered.length` >= 1058 every frame.
-//     1058 > 1024 forces the grow path to fire on the first draw
-//     (1024 -> 2048; AC-11 + AC-12 dynamic grow stress).
-// The camera has a narrow fov so the always-rendered half still falls
-// outside it most of the time visually -- the grow happens because the
-// SSBO sizes against `validatedOrdered.length`, not against camera-visible
-// count.
+// Spawns a GRID_SIZE x GRID_SIZE plane of cubes at y=0 and orbits a
+// narrow-fov camera around them. Frustum culling runs unconditionally in the
+// extract stage: every cube whose world-space AABB falls entirely outside the
+// view frustum is dropped, so `frustumStats.culled` stays non-zero every
+// frame while the orbit keeps most of the grid off-screen.
 //
 // Four-step recipe (same as hello-cube):
 //   (1) spawn grid entities
@@ -92,14 +81,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const cubeHandle = world.allocSharedRef('MeshAsset', boxResult.value);
 
   // Spawn cubes AFTER renderer is ready (mesh assets with AABB are registered).
-  // Half the cubes keep `frustumCulled=1` (default) so the demo's culling
-  // stat stays observably active; the other half opts out (frustumCulled=0)
-  // to guarantee the SSBO grow path fires every run (M5 stress).
+  // Frustum culling is unconditional: every cube outside the camera frustum is
+  // dropped in the extract stage, so the culling stat stays observably active.
   for (let ix = 0; ix < GRID_SIZE; ix++) {
     for (let iz = 0; iz < GRID_SIZE; iz++) {
       const posX = (ix - (GRID_SIZE - 1) / 2) * GRID_SPACING;
       const posZ = (iz - (GRID_SIZE - 1) / 2) * GRID_SPACING;
-      const culled = (ix + iz) % 2 === 0 ? 1 : 0;
       world.spawn(
         {
           component: Transform,
@@ -110,7 +97,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           },
         },
         { component: MeshFilter, data: { assetHandle: cubeHandle } },
-        { component: MeshRenderer, data: { frustumCulled: culled } },
+        { component: MeshRenderer, data: { materials: [] } },
       );
     }
   }

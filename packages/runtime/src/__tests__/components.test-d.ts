@@ -54,12 +54,10 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     expectTypeOf<Data['assetHandle']>().toEqualTypeOf<Handle<'MeshAsset', 'shared'>>();
   });
 
-  it('MeshRenderer data shape has 3 fields (materials + frustumCulled + pickable; feat-20260608 M2 / w7 multi-material array)', () => {
+  it('MeshRenderer data shape has 1 field (materials; feat-20260608 M2 / w7 multi-material array)', () => {
     type Data = ShapeOf<typeof MeshRenderer.schema>;
-    expectTypeOf<keyof Data>().toEqualTypeOf<'materials' | 'frustumCulled' | 'pickable'>();
+    expectTypeOf<keyof Data>().toEqualTypeOf<'materials'>();
     expectTypeOf<Data['materials']>().toEqualTypeOf<readonly Handle<'MaterialAsset', 'shared'>[]>();
-    expectTypeOf<Data['frustumCulled']>().toEqualTypeOf<number>();
-    expectTypeOf<Data['pickable']>().toEqualTypeOf<number>();
   });
 
   it('MeshRenderer spawn payload accepts empty data (AC-04 plan §2.6 literal)', () => {
@@ -162,9 +160,7 @@ describe('w7 type-level - component name literal types are preserved', () => {
     // schema carries the merged surface; AC-13 routes per-frame via
     // `switch (mat.shadingModel)` in the canonical dispatch site.
     expectTypeOf<typeof MeshRenderer.name>().toEqualTypeOf<'MeshRenderer'>();
-    expectTypeOf<keyof typeof MeshRenderer.schema>().toEqualTypeOf<
-      'materials' | 'frustumCulled' | 'pickable'
-    >();
+    expectTypeOf<keyof typeof MeshRenderer.schema>().toEqualTypeOf<'materials'>();
   });
 
   it('Camera.name has the literal type "Camera"', () => {

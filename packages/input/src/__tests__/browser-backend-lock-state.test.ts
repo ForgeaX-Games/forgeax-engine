@@ -509,9 +509,13 @@ describe('browser-backend-lock-state.test.ts (w1)', () => {
           throw new DOMException('capture while locked', 'InvalidStateError');
         }
       });
-      (fakes.canvas as unknown as { setPointerCapture: typeof capture }).setPointerCapture = capture;
+      (fakes.canvas as unknown as { setPointerCapture: typeof capture }).setPointerCapture =
+        capture;
 
-      const handle = attachBrowserInputBackend(fakes.canvas, { document: fakes.doc, window: fakes.win });
+      const handle = attachBrowserInputBackend(fakes.canvas, {
+        document: fakes.doc,
+        window: fakes.win,
+      });
 
       // Not locked yet: pointerdown SHOULD capture (drag coherence path).
       firePointerDown(fakes, 1);
@@ -532,9 +536,13 @@ describe('browser-backend-lock-state.test.ts (w1)', () => {
           throw new DOMException('capture while locked', 'InvalidStateError');
         }
       });
-      (fakes.canvas as unknown as { setPointerCapture: typeof capture }).setPointerCapture = capture;
+      (fakes.canvas as unknown as { setPointerCapture: typeof capture }).setPointerCapture =
+        capture;
 
-      const handle = attachBrowserInputBackend(fakes.canvas, { document: fakes.doc, window: fakes.win });
+      const handle = attachBrowserInputBackend(fakes.canvas, {
+        document: fakes.doc,
+        window: fakes.win,
+      });
       firePointerLockChange(fakes, fakes.canvas); // lock
       firePointerDown(fakes, 1); // skipped while locked
       expect(capture).toHaveBeenCalledTimes(0);

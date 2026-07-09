@@ -162,6 +162,43 @@ export type SceneInstantiateOk = {
 };
 
 /**
+ * Success value of `world.instantiateSceneFlat` — the "edit the scene itself"
+ * primitive. Unlike `instantiateScene`, NO synthetic SceneInstance root is
+ * minted and NO `ChildOf` is forced onto top-level members: the scene's own
+ * entities become plain top-level world entities whose hierarchy is exactly
+ * their authored `ChildOf` (an entity with no `ChildOf` stays a root). `roots`
+ * is the set of those top-level handles (own rootless entities + top-level
+ * mount carriers). Nested prefabs inside the scene STILL materialise as their
+ * own SceneInstance anchors (charter P4: instance == entity-with-SceneInstance)
+ * — only THIS scene is flat.
+ */
+export type SceneInstantiateFlatOk = {
+  readonly roots: EntityHandle[];
+  readonly diagnostics: readonly SceneInstantiateDiagnostic[];
+};
+
+/**
+ * @internal Intermediate produced by `_spawnSceneMembers` and consumed by both
+ * the anchor finisher (`_instantiateSceneAsset`) and the flat finisher
+ * (`_instantiateSceneAssetFlat`). Holds everything the shared member-spawn
+ * (mounts recursion + own-entity spawn + deferred owned-parent wiring) computes,
+ * before either finisher decides whether to wrap the members in a synthetic
+ * SceneInstance root.
+ */
+export interface SceneMembersSpawn {
+  /** LocalEntityId → live Entity u32 (ENTITY_NULL_RAW for unspawned slots). */
+  readonly mapping: Uint32Array;
+  /** Reverse map live Entity → LocalEntityId for override / detach bookkeeping. */
+  readonly entityToLocalId: Map<EntityHandle, LocalEntityId>;
+  /** Own entities that carried no `ChildOf` — the scene's authored top-level roots. */
+  readonly rootEntities: EntityHandle[];
+  /** Mount carriers whose `mount.parent === undefined` (default-parented). */
+  readonly mountEntitiesNeedingRootParent: EntityHandle[];
+  /** `entities.length + mounts + Σ memberCount`, captured at instantiate-time. */
+  readonly totalSlots: number;
+}
+
+/**
  * Union of all EcsError types that World methods can return via Result.
  * AI users: switch on `.code` for programmatic branching.
  */
@@ -3509,6 +3546,42 @@ export class World {
   }
 
   /**
+   * Materialise a SceneAsset FLAT — the "edit the scene itself" primitive.
+   * Unlike `instantiateScene`, this mints NO synthetic SceneInstance root and
+   * forces NO `ChildOf` onto top-level members: the scene's own entities become
+   * plain top-level world entities whose hierarchy is exactly their authored
+   * `ChildOf` (an entity with no `ChildOf` is a root). Use this to OPEN a scene
+   * for editing; use `instantiateScene` (anchor) at runtime / for nested
+   * prefabs where an instance boundary + override isolation is wanted.
+   *
+   * Nested prefabs referenced via `mounts[]` STILL materialise as their own
+   * SceneInstance anchors (charter P4 preserved) — only THIS top scene is flat.
+   *
+   * @example
+   *   const r = world.instantiateSceneFlat(handle);
+   *   if (!r.ok) return r;
+   *   const { roots, diagnostics } = r.value; // roots = top-level handles
+   */
+  instantiateSceneFlat(
+    handle: Handle<'SceneAsset', 'shared'>,
+  ): Result<SceneInstantiateFlatOk, EcsError> {
+    const stack = new Set<number>();
+    const diagnostics: SceneInstantiateDiagnostic[] = [];
+    const handleKey = unwrapHandle(handle);
+    const resolved = this._resolveSceneAsset(handle);
+    if (!resolved.ok) return resolved;
+    stack.add(handleKey);
+    let r: Result<EntityHandle[], EcsError>;
+    try {
+      r = this._instantiateSceneAssetFlat(handle, resolved.value, stack, diagnostics);
+    } finally {
+      stack.delete(handleKey);
+    }
+    if (!r.ok) return r;
+    return ok({ roots: r.value, diagnostics });
+  }
+
+  /**
    * @internal Recursive helper carrying the cycle-detection stack. Sugar /
    * other public callers must not see this mechanic — use `instantiateScene`
    * (D-3 / charter P1).
@@ -3563,16 +3636,19 @@ export class World {
   }
 
   /**
-   * @internal Spawn one SceneAsset's entities + apply mounts recursively.
-   * Caller (`_instantiateSceneRec`) owns cycle bookkeeping.
+   * @internal Spawn one SceneAsset's members — the shared body of both scene
+   * finishers. Recurses into `mounts[]` (each nested prefab becomes its own
+   * SceneInstance anchor), spawns `entities[]` honouring their authored
+   * `ChildOf`, and wires deferred owned-parent mount edges. Does NOT create a
+   * synthetic root or force any `ChildOf` — that is the caller's (finisher's)
+   * job. `_instantiateSceneRec` owns cycle bookkeeping.
    */
-  _instantiateSceneAsset(
+  _spawnSceneMembers(
     handle: Handle<'SceneAsset', 'shared'>,
     asset: SceneAsset,
-    parent: EntityHandle | undefined,
     stack: Set<number>,
     diagnostics: SceneInstantiateDiagnostic[],
-  ): Result<EntityHandle, EcsError> {
+  ): Result<SceneMembersSpawn, EcsError> {
     const sceneInstanceToken = resolveComponent('SceneInstance');
     if (sceneInstanceToken === undefined) {
       return err(new ComponentNotDefinedError('SceneInstance'));
@@ -3760,7 +3836,7 @@ export class World {
               const set = this.set(mountEntity, childOfToken, {
                 parent: parentEntity,
               } as never);
-              if (!set.ok) return set as Result<EntityHandle, EcsError>;
+              if (!set.ok) return set as Result<SceneMembersSpawn, EcsError>;
             }
           } else {
             // D-8: the owned parent slot is not spawned yet (owned entities
@@ -3793,7 +3869,7 @@ export class World {
       const sp = (this.spawn as (...c: ComponentData[]) => Result<EntityHandle, EcsError>)(
         ...compDataRes.value,
       );
-      if (!sp.ok) return sp as Result<EntityHandle, EcsError>;
+      if (!sp.ok) return sp as Result<SceneMembersSpawn, EcsError>;
       const e = sp.value;
       mapping[lid] = e as unknown as number;
       entityToLocalId.set(e, lid as unknown as LocalEntityId);
@@ -3817,10 +3893,45 @@ export class World {
             component: childOfToken,
             data: { parent: parentEntity } as never,
           });
-          if (!r.ok) return r as Result<EntityHandle, EcsError>;
+          if (!r.ok) return r as Result<SceneMembersSpawn, EcsError>;
         }
       }
     }
+
+    return ok({
+      mapping,
+      entityToLocalId,
+      rootEntities,
+      mountEntitiesNeedingRootParent,
+      totalSlots,
+    });
+  }
+
+  /**
+   * @internal Spawn one SceneAsset's entities + apply mounts recursively, then
+   * wrap them in a synthetic SceneInstance root (the anchor). This is the
+   * runtime / Play / nested-mount finisher (charter P4: instance ==
+   * entity-with-SceneInstance). Caller (`_instantiateSceneRec`) owns cycle
+   * bookkeeping.
+   */
+  _instantiateSceneAsset(
+    handle: Handle<'SceneAsset', 'shared'>,
+    asset: SceneAsset,
+    parent: EntityHandle | undefined,
+    stack: Set<number>,
+    diagnostics: SceneInstantiateDiagnostic[],
+  ): Result<EntityHandle, EcsError> {
+    const sceneInstanceToken = resolveComponent('SceneInstance');
+    if (sceneInstanceToken === undefined) {
+      return err(new ComponentNotDefinedError('SceneInstance'));
+    }
+    const childOfToken = resolveComponent('ChildOf');
+
+    const membersRes = this._spawnSceneMembers(handle, asset, stack, diagnostics);
+    if (!membersRes.ok) return membersRes;
+    const { mapping, entityToLocalId, rootEntities, mountEntitiesNeedingRootParent, totalSlots } =
+      membersRes.value;
+    const ownMounts = asset.mounts ?? [];
 
     // 3. Spawn the synthetic root entity carrying SceneInstance.
     //    First alloc the state ref so the SceneInstance.state column has a
@@ -3958,6 +4069,64 @@ export class World {
     }
 
     return ok(rootEntity);
+  }
+
+  /**
+   * @internal Flat finisher — spawn one SceneAsset's members WITHOUT wrapping
+   * them in a synthetic SceneInstance root and WITHOUT forcing `ChildOf` onto
+   * top-level members. Used for "opening a scene to edit": the scene's own
+   * entities become plain top-level world entities whose hierarchy is exactly
+   * their authored `ChildOf`. Nested prefabs inside still materialise as their
+   * own SceneInstance anchors (the mount recursion in `_spawnSceneMembers` is
+   * always anchored). Returns the top-level handles (own rootless entities +
+   * top-level mount carriers).
+   */
+  _instantiateSceneAssetFlat(
+    handle: Handle<'SceneAsset', 'shared'>,
+    asset: SceneAsset,
+    stack: Set<number>,
+    diagnostics: SceneInstantiateDiagnostic[],
+  ): Result<EntityHandle[], EcsError> {
+    const membersRes = this._spawnSceneMembers(handle, asset, stack, diagnostics);
+    if (!membersRes.ok) return membersRes;
+    const { mapping, rootEntities, mountEntitiesNeedingRootParent } = membersRes.value;
+    const childOfToken = resolveComponent('ChildOf');
+    const ownMounts = asset.mounts ?? [];
+
+    // Apply mount-time overrides through to the live member entity columns so a
+    // hand-authored pack's `mounts[].overrides` still take visual effect. There
+    // is no parent SceneInstanceState to record them in (flat = no anchor for
+    // THIS scene); the nested prefab keeps its OWN anchor for round-trip.
+    for (const mount of ownMounts) {
+      for (const ov of mount.overrides ?? []) {
+        const memberEntityRaw = mapping[ov.localId as unknown as number];
+        if (memberEntityRaw !== undefined && memberEntityRaw !== ENTITY_NULL_RAW) {
+          const ovToken = resolveComponent(ov.comp);
+          if (ovToken !== undefined) {
+            const setRes = this.set(memberEntityRaw as unknown as EntityHandle, ovToken, {
+              [ov.field]: ov.value,
+            } as never);
+            if (!setRes.ok) return setRes as Result<EntityHandle[], EcsError>;
+          }
+        }
+      }
+    }
+
+    // Default-parented mount carriers (`mount.parent === undefined`) would, in
+    // anchor mode, attach to the synthetic root. Flat mode has none, so they
+    // stay top-level. `_spawnMountEntity` may have left a placeholder
+    // `ChildOf {parent: ENTITY_NULL_RAW}` (rare: mount with no components AND
+    // Transform unregistered) — strip it so the carrier is a genuine root.
+    if (childOfToken !== undefined) {
+      for (const mountE of mountEntitiesNeedingRootParent) {
+        const co = this.get(mountE, childOfToken);
+        if (co.ok && (co.value as { parent: number }).parent === ENTITY_NULL_RAW) {
+          this._removeComponentCore(mountE, childOfToken, false);
+        }
+      }
+    }
+
+    return ok([...rootEntities, ...mountEntitiesNeedingRootParent]);
   }
 
   /** @internal Build ComponentData[] for one SceneEntity, remapping localIds.

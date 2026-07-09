@@ -255,17 +255,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // Coverage:
   //   (1) entity outside frustum → culled (not in renderables)
   //   (2) entity inside frustum → not culled (in renderables)
-  //   (3) frustumCulled=false → always visible (culling opt-out)
   //   (4) no AABB (undefined/inverted-infinity) → always visible
   //   (5) instanced mesh → union AABB granularity
   //   (6) multi-camera → each camera independently culls
-  //   (7) frustumCulled defaults to true (enabled)
+  //   (7) culling runs unconditionally (entity behind camera is culled)
   //   (8) entity exactly on frustum boundary → not culled
   //   (9) entity wholly outside all cameras → culled
   //   (10) mixed scene: inside + outside entities produce correct split
   //
   // Anchors: requirements AC-13 (frustum culling during extract);
-  // plan-strategy D-3 (MeshRenderer.frustumCulled u8, default 1);
   // plan-strategy D-5 (entity-level union AABB, no per-instance expansion);
   // research §F-5 (Gribb/Hartmann frustum plane extraction).
 
@@ -389,7 +387,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     return { world, assets, meshHandle, matHandle };
   }
 
-  /** Spawn a renderable entity at (x,y,z) with default frustumCulled=1 enabled. */
+  /** Spawn a renderable entity at (x,y,z). */
   function spawnEntity(
     world: World,
     meshHandle: Handle<'MeshAsset', 'shared'>,
@@ -403,25 +401,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         { component: Transform, data: translateTransform(x, y, z) },
         { component: MeshFilter, data: { assetHandle: meshHandle } },
         { component: MeshRenderer, data: { materials: [matHandle] } },
-      )
-      .unwrap();
-  }
-
-  /** Spawn a renderable entity with explicit frustumCulled value. */
-  function spawnEntityWithFrustumCulled(
-    world: World,
-    meshHandle: Handle<'MeshAsset', 'shared'>,
-    matHandle: Handle<'MaterialAsset', 'shared'>,
-    frustumCulled: number,
-    x = 0,
-    y = 0,
-    z = 0,
-  ): void {
-    world
-      .spawn(
-        { component: Transform, data: translateTransform(x, y, z) },
-        { component: MeshFilter, data: { assetHandle: meshHandle } },
-        { component: MeshRenderer, data: { materials: [matHandle], frustumCulled } },
       )
       .unwrap();
   }
@@ -491,18 +470,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       spawnCameraAt(world, 0, 0, 5);
       // entity directly in front of camera at z=0 (between near=0.1 and far=100)
       spawnEntity(world, meshHandle, matHandle, 0, 0, 0);
-
-      propagateTransforms(world);
-
-      const frame: ExtractedFrame = extractFrame(world, assets);
-      expect(frame.renderables).toHaveLength(1);
-    });
-
-    it('(3) frustumCulled=false entity is always visible (skip culling)', () => {
-      const { world, assets, meshHandle, matHandle } = makeWorldWithAssets();
-      spawnCameraAt(world, 0, 0, 5);
-      // entity behind camera but with frustumCulled=0
-      spawnEntityWithFrustumCulled(world, meshHandle, matHandle, 0, 0, 0, 6);
 
       propagateTransforms(world);
 
@@ -587,10 +554,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(frame.renderables).toHaveLength(1);
     });
 
-    it('(7) frustumCulled defaults to true (enabled by default)', () => {
+    it('(7) culling runs unconditionally (entity behind camera is culled)', () => {
       const { world, assets, meshHandle, matHandle } = makeWorldWithAssets();
       spawnCameraAt(world, 0, 0, 5);
-      // entity behind camera; spawn WITHOUT explicit frustumCulled -> default = 1 (enabled)
+      // entity behind camera
       world
         .spawn(
           { component: Transform, data: translateTransform(0, 0, 6) },
@@ -602,7 +569,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       propagateTransforms(world);
 
       const frame: ExtractedFrame = extractFrame(world, assets);
-      // frustumCulled defaults to 1, so entity behind camera is culled
+      // culling is unconditional, so entity behind camera is culled
       expect(frame.renderables).toHaveLength(0);
     });
 

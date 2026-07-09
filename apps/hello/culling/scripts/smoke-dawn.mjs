@@ -1,33 +1,16 @@
 #!/usr/bin/env node
-// hello-culling headless smoke (feat-20260528-frustum-culling M5 / w13;
-// extended in feat-20260608-mesh-ssbo-dynamic-grow M5 to stress the SSBO
-// grow path with GRID_SIZE=46 -> 2116 entities crossing the 1024->2048
-// initial-grow boundary).
+// hello-culling headless smoke (feat-20260528-frustum-culling M5 / w13).
 //
 // Strategy: drive the engine ECS path with a NxN cube grid and a revolving
-// camera. Verify:
+// camera. Frustum culling runs unconditionally in the extract stage. Verify:
 //   (a) backend=webgpu
 //   (b) frames >= 300
 //   (c) pixel readback epsilon <= 0.05
 //   (d) at least one frame has culled > 0 (frustum culling is active)
 //   (e) Renderer.onError count == 0
-//   (f) no 'queue-write-buffer-out-of-bounds' string in console output
-//       (proves the SSBO never overflows its bound buffer; AC-15)
-//   (g) RhiError fan-out count == 0 (dual-channel observability; AC-13)
-//   (h) mesh-ssbo-capacity-exceeded + mesh-ssbo-ceiling-reached event
-//       count == 0 (AC-13: post-grow steady state should be silent)
-//   (i) [mesh-ssbo] info line count >= 1 (AC-11 + AC-12: proves the grow
-//       hook actually fired during the run; with GRID_SIZE=46 = 2116
-//       entities the initial 1024->2048 grow MUST happen on the first
-//       frame, so 0 lines = grow path never reached and the AC-12 stress
-//       expectation is unverified)
-//   (j) culling semantic guard preserved via the half of the grid that
-//       keeps `frustumCulled=1` (every-other-cube checkerboard): of those
-//       1058 cubes, the narrow-fov orbit camera leaves >= 80% outside the
-//       frustum every frame, so maxVisible / total <= 0.20 on the
-//       culling-active subset (plan-strategy 2.D-2: SSBO stress + frustum
-//       culling co-exist -- the opt-out half drives the SSBO size, the
-//       opt-in half drives the culling stat)
+//   (f) culling semantic guard: the narrow-fov orbit camera leaves >= 80% of
+//       the grid outside the frustum every frame, so maxVisible / total
+//       <= 0.20 across the run (culling actually removes the majority)
 
 import { setTimeout as delay } from 'node:timers/promises';
 import { readFileSync } from 'node:fs';
@@ -40,8 +23,10 @@ const SMOKE_PIXEL_THRESHOLD = Number.parseFloat(process.env.SMOKE_PIXEL_THRESHOL
 
 const WIDTH = 800;
 const HEIGHT = 600;
-// 46 x 46 = 2116 entities -- crosses the 1024 -> 2048 initial-grow boundary
-// on the first draw to exercise the SSBO dynamic grow path (AC-12 stress).
+// 46 x 46 = 2116 cubes: the wide grid keeps the narrow-fov orbit camera's
+// centre ray on a cube (far cubes project toward the horizon) and leaves the
+// large majority outside the frustum every frame so the culling stat is
+// observable.
 const GRID_SIZE = 46;
 const GRID_SPACING = 3;
 
@@ -73,24 +58,6 @@ Object.defineProperty(globalThis.navigator, 'gpu', { value: gpu, configurable: t
 // path (test:browser project) does not run smoke-dawn.mjs; the real Channel 2
 // BGRA path is exercised through the helper unmodified there.
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
-
-// Stdout tap for [culling] / [mesh-ssbo] log lines. We intercept BOTH
-// console.log (engine + smoke status) and console.info (where the grow
-// hook emits its `[mesh-ssbo] grew slotCount...` dev-mode line via
-// AC-11) so the post-run grep can count grow events.
-const stdoutLines = [];
-const originalConsoleLog = console.log.bind(console);
-const originalConsoleInfo = console.info.bind(console);
-const tap = (forward) =>
-  (...args) => {
-    const line = args
-      .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
-      .join(' ');
-    stdoutLines.push(line);
-    forward(...args);
-  };
-console.log = tap(originalConsoleLog);
-console.info = tap(originalConsoleInfo);
 
 let sharedDevice;
 const originalAmbientRequestAdapter = globalThis.navigator.gpu.requestAdapter.bind(
@@ -154,7 +121,6 @@ const {
   Camera,
   createRenderer,
   DirectionalLight,
-  HANDLE_CUBE,
   MeshFilter,
   MeshRenderer,
   Transform,
@@ -188,18 +154,8 @@ try {
 console.log(`[culling] backend=${renderer.backend}`);
 
 const errors = [];
-let meshSsboEventCount = 0;
-let rhiErrorCount = 0;
-const MESH_SSBO_CODES = new Set([
-  'mesh-ssbo-capacity-exceeded',
-  'mesh-ssbo-ceiling-reached',
-]);
 renderer.onError((err) => {
   errors.push({ code: err.code, hint: err.hint, detail: err.detail });
-  if (MESH_SSBO_CODES.has(err.code)) meshSsboEventCount++;
-  // Every fan-out callback is a RhiError surface (the registry only
-  // fires structured RhiError objects; AC-10 / AC-13).
-  rhiErrorCount++;
 });
 
 const ready = await renderer.ready;
@@ -221,16 +177,13 @@ if (!boxResult.ok) {
 const customCubeHandle = world.allocSharedRef('MeshAsset', boxResult.value);
 
 // Spawn cubes AFTER the renderer is ready (assets must be registered
-// so AABB lookup succeeds). Half opt out of culling (frustumCulled=0) so
-// validatedOrdered.length stays >= 1058 every frame, forcing the SSBO
-// grow path to fire on the first draw (AC-11 + AC-12 stress); the other
-// half keeps the default frustumCulled=1 so the demo's culling stat
-// stays observably active (mirrors apps/hello/culling/src/main.ts).
+// so AABB lookup succeeds). Frustum culling is unconditional; the orbit
+// camera's narrow fov leaves most of the grid off-screen every frame so
+// the culling stat stays observably active (mirrors apps/hello/culling/src/main.ts).
 for (let ix = 0; ix < GRID_SIZE; ix++) {
   for (let iz = 0; iz < GRID_SIZE; iz++) {
     const posX = (ix - (GRID_SIZE - 1) / 2) * GRID_SPACING;
     const posZ = (iz - (GRID_SIZE - 1) / 2) * GRID_SPACING;
-    const culled = (ix + iz) % 2 === 0 ? 1 : 0;
     world.spawn(
       {
         component: Transform,
@@ -241,7 +194,7 @@ for (let ix = 0; ix < GRID_SIZE; ix++) {
         },
       },
       { component: MeshFilter, data: { assetHandle: customCubeHandle } },
-      { component: MeshRenderer, data: { frustumCulled: culled } },
+      { component: MeshRenderer, data: { materials: [] } },
     );
   }
 }
@@ -296,8 +249,7 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   const ratio = stats.total > 0 ? visible / stats.total : 0;
   if (ratio > maxVisibleRatio) maxVisibleRatio = ratio;
   lastTotal = stats.total;
-  // Cull per-frame line for big grids (2116 cubes x 300 frames = 634800
-  // lines is too noisy and floods stdout); keep first 5 + every 50th.
+  // Cap per-frame log noise; keep first 5 + every 50th.
   if (i < 5 || i % 50 === 0) {
     console.log(`[culling] culled=${stats.culled} total=${stats.total} visible=${visible}`);
   }
@@ -363,15 +315,9 @@ const distance = (a, b) => Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (
 const BLACK = [0, 0, 0];
 const dist = distance(ndcCenter, BLACK);
 
-// AC-12 / AC-15 post-run grep: count [mesh-ssbo] info lines + check that
-// the queue-write-buffer-out-of-bounds string never landed in stdout.
-const meshSsboInfoLines = stdoutLines.filter((l) => l.includes('[mesh-ssbo]'));
-const writeBufferOobLines = stdoutLines.filter((l) =>
-  l.includes('queue-write-buffer-out-of-bounds'),
-);
-// plan-strategy 2.D-2 culling semantic guard: with GRID_SIZE=46 (2116 cubes)
-// and a narrow camera (fov=PI/5, far=30) orbiting at radius 8, frustum
-// culling should drop >= 80% of cubes every frame. Threshold = 20% ratio.
+// culling semantic guard: with a narrow camera (fov=PI/5, far=30) orbiting at
+// radius 8, frustum culling should drop >= 80% of cubes every frame.
+// Threshold = 20% ratio.
 const VISIBLE_RATIO_CEILING = 0.20;
 
 const failures = [];
@@ -394,27 +340,9 @@ if (errors.length > 0) {
     `(e) Renderer.onError fired ${errors.length} times: [${codes}]; first detail=${firstDetailJson}`,
   );
 }
-if (writeBufferOobLines.length > 0) {
-  failures.push(
-    `(f) console output contains 'queue-write-buffer-out-of-bounds' (${writeBufferOobLines.length} hit(s)): SSBO grow path failed to keep buffer >= entity count`,
-  );
-}
-if (rhiErrorCount > 0) {
-  failures.push(`(g) RhiError fan-out count=${rhiErrorCount} (expected 0 in steady state)`);
-}
-if (meshSsboEventCount > 0) {
-  failures.push(
-    `(h) mesh-ssbo-* event count=${meshSsboEventCount} (expected 0; capacity-exceeded / ceiling-reached should not fire under stress)`,
-  );
-}
-if (meshSsboInfoLines.length === 0) {
-  failures.push(
-    "(i) [mesh-ssbo] info line count=0 (expected >= 1; with GRID_SIZE=46 = 2116 entities the 1024->2048 grow MUST fire on the first frame -- 0 means the grow hook never reached, AC-12 stress unverified)",
-  );
-}
 if (maxVisibleRatio > VISIBLE_RATIO_CEILING) {
   failures.push(
-    `(j) culling semantic guard: maxVisible/total=${maxVisibleRatio.toFixed(3)} > ${VISIBLE_RATIO_CEILING} (max ${maxVisible}/${lastTotal}); stress mode broke frustum culling`,
+    `(f) culling semantic guard: maxVisible/total=${maxVisibleRatio.toFixed(3)} > ${VISIBLE_RATIO_CEILING} (max ${maxVisible}/${lastTotal}); frustum culling did not remove the majority`,
   );
 }
 
@@ -428,7 +356,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 10 criteria GREEN: backend=webgpu, frames=${framesObserved}, NDC-center distance to black=${dist.toFixed(4)}, maxCulled=${maxCulled}, RhiError count=0, mesh-ssbo events=0, [mesh-ssbo] info lines=${meshSsboInfoLines.length}, maxVisible/total=${maxVisibleRatio.toFixed(3)} (<=${VISIBLE_RATIO_CEILING})`,
+  `[smoke] PASS - 6 criteria GREEN: backend=webgpu, frames=${framesObserved}, NDC-center distance to black=${dist.toFixed(4)}, maxCulled=${maxCulled}, Renderer.onError count=0, maxVisible/total=${maxVisibleRatio.toFixed(3)} (<=${VISIBLE_RATIO_CEILING})`,
 );
 
 device.destroy?.();

@@ -1003,7 +1003,6 @@ renderer.onError((e: RhiError) => {
 | Unity 槽位 | `Filter` 槽位（资源选择）+ `Renderer` 槽位（材质 / 视觉绑定）后缀作 idiom 保留 | `MeshFilter` / `MeshRenderer` |
 | 关系组件持有者视角 | 名字 = 持有者对父的 verb / role；字段名与组件名互呼 | `ChildOf { parent: Entity }`（schema-vocab `'entity'`，relationship `mirror: 'Children'`，feat-20260514 M5/w18）/ `Children { entities: 'array<entity>' }`（feat-20260514-ecs-children-instances-managed-buffer-array：变长 `array<entity>` 取代 v1 OOS-04 的 `count: 'u32'` 计数 + 旧 `'entity[]'` 占位） |
 | 已合并复合 | category discriminant 下沉到 asset；单 component 持 `readonly Handle<Asset>[]`（feat-20260608 multi-material array：`materials[i]` ↔ `MeshAsset.submeshes[i]`） | `MeshRenderer { materials: readonly Handle<MaterialAsset>[] }`（`MaterialAsset.passes[].shader` 路由 unlit / standard-pbr） |
-| 逐实体标志 | bool-ish `u8` 字段，默认为 1（opt-in culling），设为 0 禁用 | `MeshRenderer.frustumCulled`（`u8`）— per-entity opt-out of frustum culling |
 | 2D 同位组件 | 与 `Instances` 同位的 2D 批绘原语；per-instance 带 mat4 + UV region 双 `array<f32>` 列（stride 16 + 4）；3 条新 `EcsErrorCode` 在 RenderSystem extract entry 防御性 fire | `SpriteInstances { transforms: 'array<f32>', regions: 'array<f32>' }`（feat-20260625；`'sprite-instances-count-mismatch'` / `'sprite-instances-requires-sprite-shader'` / `'sprite-instances-mutually-exclusive-with-instances'`） |
 | 字面量联合 sort 域 | 离散字符串字面量取代 0/1 整数标志；TS exhaustive switch 守门 | `TileLayer.sortScope: 'layer' \| 'per-cell'`（feat-20260625 取代 `ySort: 0 \| 1`） |
 
@@ -1058,7 +1057,7 @@ canvas.addEventListener('click', (e) => {
 
 **第三跳 — 精度 / 过滤 / 错误：**
 - **AABB 粒度**：射线穿过实体 AABB 但未击中实际几何体时仍返回 hit（已知 MVP 取舍）；`PickHit` 因此不含 `face` / `uv` / `normal`。
-- **opt-out 拾取**：`MeshRenderer.pickable: 'u8'`（默认 `1`）—— 设为 `0` 让实体退出拾取，与 `frustumCulled` 正交独立。
+- **拾取范围**：所有带有效 `MeshAsset.aabb` 的 mesh 实体均可被拾取；无 opt-out（拾取范围由 `MeshFilter` + AABB 决定，非逐实体开关）。
 - **结构化错误**：`cameraEntity` 缺 `Camera` 组件 → 抛 `PickError`（`.code='camera-component-missing'` + `.expected` + `.hint` + `.detail.cameraEntity`，闭合 `PickErrorCode`）；常态 miss 走 `undefined` 与错误信道物理分离（charter P3）。
 - **math 层原语**（高级组装）：`ray.*`（`rayAabbIntersects(ray, box3) → {hit, tmin}`）+ `mat4.unproject` + `screenToRay(out, sx, sy, vpW, vpH, view, proj, kind)`，全 `@forgeax/engine-math` 导出、纯函数 out-param 风格。
 
@@ -2544,7 +2543,7 @@ else { const handle = renderer.assets.register(meshRes.value).unwrap(); /* ... *
 
 ## Frustum Culling (feat-20260528-frustum-culling)
 
-Every frame during the extract stage, the render system clips entities whose AABB falls entirely outside the view frustum. Culling is opt-out: the default `MeshRenderer.frustumCulled` value is `1` (enabled); set to `0` to disable per-entity culling (e.g., for skyboxes or always-visible UI elements). Entities without a computed AABB (no `MeshFilter`, or mesh asset not yet registered) are never culled (conservative pass-through).
+Every frame during the extract stage, the render system clips entities whose AABB falls entirely outside the view frustum. Culling is unconditional — there is no per-entity opt-out. Entities without a computed AABB (no `MeshFilter`, or mesh asset not yet registered) or with an inverted-infinity empty box are never culled (conservative pass-through), so built-ins and always-visible geometry stay visible by carrying no AABB.
 
 The math layer provides the frustum namespace (`@forgeax/engine-math`): `frustum.fromViewProjection` extracts 6 planes from a camera's view-projection matrix; `frustum.intersectsBox` tests an AABB against the frustum.
 
