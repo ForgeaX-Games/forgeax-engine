@@ -65,6 +65,7 @@ describe('bug-20260615 — spawn-data unknown-field fail-fast', () => {
       // uses singular `material` (old name).
       const MeshRendererLike = defineComponent('MeshRendererLike', {
         materials: 'array<u32>',
+        frustumCulled: 'u8',
       });
       const world = new World();
       const r = world.spawn({ component: MeshRendererLike, data: { material: 99 } as never });

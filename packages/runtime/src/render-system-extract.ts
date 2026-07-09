@@ -2557,6 +2557,7 @@ export function extractFrame(
     // variable `array<shared<MaterialAsset>>` column -- read slot ids via
     // .get(i); mutation flows through world.set / world.push.
     const mMaterials = mr.materials;
+    const mFrustumCulled = mr.frustumCulled;
     if (mMaterials === undefined) return;
 
     // K-2 archetype-edge sniff (scheme B): a missing optional component
@@ -3446,11 +3447,12 @@ export function extractFrame(
         };
 
         // feat-20260528-frustum-culling M3 / w10: frustum culling check.
-        // Skip the entity if a valid AABB exists AND ALL cameras' frusta
-        // reject the world-space AABB. Entities with no AABB or an
-        // inverted-infinity AABB are always visible. Culling is unconditional
-        // engine behavior; there is no per-entity opt-out.
-        {
+        // Skip the entity if frustumCulled is enabled (default: 1) AND
+        // a valid AABB exists AND ALL cameras' frusta reject the world-space
+        // AABB. Entities with frustumCulled=0, no AABB, or inverted-infinity
+        // AABB are always visible.
+        const frustumCulledVal = mFrustumCulled?.[i] ?? 1;
+        if (frustumCulledVal !== 0) {
           const assetHandleRaw = Math.round(fAssetHandle?.get(i) ?? 0);
           // feat-20260614 M8 (D-15/D-19): the mesh AABB resolves entirely
           // through `resolveAssetHandle(world, ...)` (builtin slots + world

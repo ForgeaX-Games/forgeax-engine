@@ -175,7 +175,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // Locks plan-strategy 7.2 naming + requirements IN-1 schema field set:
   //   Transform: pos:[f32x3] + quat:[f32x4] + scale:[f32x3]   = 10 f32
   //   MeshFilter:         assetHandle:'shared<MeshAsset>' (u32)
-  //   MeshRenderer:       materials:'array<shared<MaterialAsset>>' (u32)
+  //   MeshRenderer:       material:'array<shared<MaterialAsset>>' (u32) + frustumCulled:'u8' (M3 / w8)
   //   Camera:             fov:f32 + aspect:f32 + near:f32 + far:f32   = 4 f32
   //   DirectionalLight: direction:[f32x3] + color:[f32x3] + intensity:f32 = 7 f32
   //
@@ -216,11 +216,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(MeshFilter.schema.assetHandle).toBe('shared<MeshAsset>');
     });
 
-    it('MeshRenderer has 1 field (materials; feat-20260608 M2 / w7 multi-material array)', () => {
+    it('MeshRenderer has 3 fields (materials + frustumCulled + pickable; feat-20260608 M2 / w7 multi-material array)', () => {
       expect(MeshRenderer.name).toBe('MeshRenderer');
-      expect(Object.keys(MeshRenderer.schema).length).toBe(1);
+      expect(Object.keys(MeshRenderer.schema).length).toBe(3);
       const schemaRecord = MeshRenderer.schema as Record<string, string>;
       expect(schemaRecord.materials).toBe('array<shared<MaterialAsset>>');
+      expect(schemaRecord.frustumCulled).toBe('u8');
+      expect(schemaRecord.pickable).toBe('u8');
     });
 
     it('Camera has 22 fields (21 f32 + autoAspect bool: perspective quartet + projection + ortho quartet + tonemap trio + antialias + bloom quartet + clear-color quartet + autoAspect)', () => {
@@ -694,6 +696,97 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 }
 
 {
+  // --- from mesh-renderer-pickable.test.ts ---
+  // feat-20260529-picking-raycasting-screen-to-entity M3 / w10 — MeshRenderer.pickable u8 tests.
+  //
+  // Verifies: MeshRenderer carries a `pickable: 'u8'` schema field defaulting to 1; a bare
+  // `world.spawn({ component: MeshRenderer, data: {} })` reads pickable === 1; `world.set`
+  // round-trips 0 and 1; pickable and frustumCulled are independent orthogonal columns
+  // (mutating one never reads / clobbers the other).
+  //
+  // Anchors: requirements AC-09 (pickable default 1, pickable=0 exits picking, orthogonal to
+  // frustumCulled); research Finding 7 (frustumCulled:'u8' + default:1 verbatim template);
+  // plan-strategy 5.6 don't-break (add-only).
+  //
+  // TDD red: pickable does not exist on the MeshRenderer schema yet when this file is first
+  // committed, so the spawn-default + set round-trip + schema assertions fail. Green after w11.
+
+  const asMat = (n: number) => n as Handle<'MaterialAsset', 'shared'>;
+
+  describe('w10 — MeshRenderer.pickable u8 schema (AC-09)', () => {
+    it('MeshRenderer.schema declares pickable as u8', () => {
+      expect((MeshRenderer.schema as Record<string, string>).pickable).toBe('u8');
+    });
+
+    it('MeshRenderer.schema still declares frustumCulled as u8 (orthogonal column)', () => {
+      expect((MeshRenderer.schema as Record<string, string>).frustumCulled).toBe('u8');
+    });
+
+    it('bare spawn reads pickable default 1', () => {
+      const world = new World();
+      const e = world.spawn({ component: MeshRenderer, data: {} }).unwrap();
+      const r = world.get(e, MeshRenderer).unwrap() as { pickable: number };
+      expect(r.pickable).toBe(1);
+    });
+
+    it('set(pickable: 0) then read 0', () => {
+      const world = new World();
+      const e = world.spawn({ component: MeshRenderer, data: {} }).unwrap();
+      world.set(e, MeshRenderer, { pickable: 0 }).unwrap();
+      const r = world.get(e, MeshRenderer).unwrap() as { pickable: number };
+      expect(r.pickable).toBe(0);
+    });
+
+    it('set(pickable: 0) then set(pickable: 1) round-trips back to 1', () => {
+      const world = new World();
+      const e = world.spawn({ component: MeshRenderer, data: {} }).unwrap();
+      world.set(e, MeshRenderer, { pickable: 0 }).unwrap();
+      world.set(e, MeshRenderer, { pickable: 1 }).unwrap();
+      const r = world.get(e, MeshRenderer).unwrap() as { pickable: number };
+      expect(r.pickable).toBe(1);
+    });
+  });
+
+  describe('w10 — pickable and frustumCulled are independent orthogonal columns (AC-09)', () => {
+    it('mutating frustumCulled does not change pickable', () => {
+      const world = new World();
+      const e = world.spawn({ component: MeshRenderer, data: {} }).unwrap();
+      world.set(e, MeshRenderer, { frustumCulled: 0 }).unwrap();
+      const r = world.get(e, MeshRenderer).unwrap() as {
+        pickable: number;
+        frustumCulled: number;
+      };
+      expect(r.frustumCulled).toBe(0);
+      expect(r.pickable).toBe(1);
+    });
+
+    it('mutating pickable does not change frustumCulled', () => {
+      const world = new World();
+      const e = world.spawn({ component: MeshRenderer, data: {} }).unwrap();
+      world.set(e, MeshRenderer, { pickable: 0 }).unwrap();
+      const r = world.get(e, MeshRenderer).unwrap() as {
+        pickable: number;
+        frustumCulled: number;
+      };
+      expect(r.pickable).toBe(0);
+      expect(r.frustumCulled).toBe(1);
+    });
+
+    it('material handle is preserved alongside pickable mutation', () => {
+      const world = new World();
+      const e = world.spawn({ component: MeshRenderer, data: { materials: [asMat(7)] } }).unwrap();
+      world.set(e, MeshRenderer, { pickable: 0 }).unwrap();
+      const r = world.get(e, MeshRenderer).unwrap() as unknown as {
+        materials: Uint32Array;
+        pickable: number;
+      };
+      expect(r.materials[0]).toBe(7);
+      expect(r.pickable).toBe(0);
+    });
+  });
+}
+
+{
   // --- from pick.test.ts ---
   // pick.test.ts — feat-20260529-picking-raycasting-screen-to-entity M3 / w12 (TDD red).
   //
@@ -714,6 +807,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //   (AC-06) nearest hit wins — two boxes along the ray, the closer one returns
   //   (AC-07) miss -> undefined (blank coordinate, no box on the ray)
   //   (AC-08) PickHit field shape {entity, point, distance} is exact + correct
+  //   (AC-09) pickable=0 entity is skipped (and a pickable sibling still hits)
   //   (AC-10) orthographic camera picks via the parallel-ray path
   //   (AC-11) cameraEntity with no Camera -> PickError (structured, not undefined)
   //   (clamp) out-of-range / negative screen coords clamp to the viewport edge;
@@ -897,13 +991,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       .unwrap();
   }
 
-  /** Spawn a box entity at (x,y,z). */
-  function spawnBox(scene: Scene, x: number, y: number, z: number): EntityHandle {
+  /** Spawn a pickable box entity at (x,y,z). */
+  function spawnBox(scene: Scene, x: number, y: number, z: number, pickable = 1): EntityHandle {
     return scene.world
       .spawn(
         { component: Transform, data: translateTransform(x, y, z) },
         { component: MeshFilter, data: { assetHandle: scene.mesh } },
-        { component: MeshRenderer, data: { materials: [scene.material] } },
+        { component: MeshRenderer, data: { materials: [scene.material], pickable } },
       )
       .unwrap();
   }
@@ -975,6 +1069,27 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(hit.point[2]).toBeCloseTo(0.5, 1);
       expect(hit.point[0]).toBeCloseTo(0, 1);
       expect(hit.point[1]).toBeCloseTo(0, 1);
+    });
+  });
+
+  describe('w12 — pickable filter (AC-09)', () => {
+    it('skips a pickable=0 entity', () => {
+      const scene = makeScene();
+      const camera = spawnPerspectiveCamera(scene.world, 5);
+      spawnBox(scene, 0, 0, 0, 0); // pickable disabled
+
+      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
+      expect(hit).toBeUndefined();
+    });
+
+    it('a pickable sibling still hits when a closer pickable=0 box is skipped', () => {
+      const scene = makeScene();
+      const camera = spawnPerspectiveCamera(scene.world, 5);
+      spawnBox(scene, 0, 0, 0, 0); // closer but not pickable -> skipped
+      const farPickable = spawnBox(scene, 0, 0, -10, 1); // farther but pickable -> selected
+
+      const hit = runPick(scene.world, camera, VP / 2, VP / 2, VP, VP);
+      expect(hit?.entity).toBe(farPickable);
     });
   });
 
@@ -1104,7 +1219,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           { component: Transform, data: translateTransform(0, 0, 0) },
           { component: ChildOf, data: { parent } },
           { component: MeshFilter, data: { assetHandle: scene.mesh } },
-          { component: MeshRenderer, data: { materials: [scene.material] } },
+          { component: MeshRenderer, data: { materials: [scene.material], pickable: 1 } },
         )
         .unwrap();
 
@@ -1125,7 +1240,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           { component: Transform, data: translateTransform(2, 0, 0) },
           { component: ChildOf, data: { parent } },
           { component: MeshFilter, data: { assetHandle: scene.mesh } },
-          { component: MeshRenderer, data: { materials: [scene.material] } },
+          { component: MeshRenderer, data: { materials: [scene.material], pickable: 1 } },
         )
         .unwrap();
 
@@ -2350,8 +2465,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // array added.
   //
   //   (a) `MeshRenderer.defaults` is a frozen map asserting
-  //       `{ materials: [] }` (empty array routes to D-Q7 case B default
-  //       material path).
+  //       `{ materials: [], frustumCulled: 1, pickable: 1 }` (empty array
+  //       routes to D-Q7 case B default material path).
   //
   //   (b) `world.spawn({ component: MeshRenderer, data: {} })` produces a row
   //       with `materials === []` (the D-Q7 case B path, mid-grey default).
@@ -2363,8 +2478,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   //       compile-time error (verified via test-d.ts).
 
   describe('MeshRenderer.defaults — frozen map assertion (w8)', () => {
-    it('MeshRenderer.defaults equals { materials: [] }', () => {
-      expect(MeshRenderer.defaults).toEqual({ materials: [] });
+    it('MeshRenderer.defaults equals { materials: [], frustumCulled: 1, pickable: 1 }', () => {
+      expect(MeshRenderer.defaults).toEqual({ materials: [], frustumCulled: 1, pickable: 1 });
     });
 
     it('MeshRenderer.defaults is deep-frozen (Object.isFrozen returns true)', () => {
