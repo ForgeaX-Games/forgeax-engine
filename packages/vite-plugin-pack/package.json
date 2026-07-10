@@ -34,7 +34,7 @@
   },
   "peerDependencies": {
     "@forgeax/engine-pack": "workspace:*",
-    "vite": "^7"
+    "vite": "^7 || ^8"
   },
   "devDependencies": {
     "@forgeax/engine-pack": "workspace:*",
