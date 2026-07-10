@@ -222,10 +222,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         right: camHalfW,
         bottom: -camHalfH,
         top: camHalfH,
-        clearR: 0.05,
-        clearG: 0.05,
-        clearB: 0.08,
-        clearA: 1,
+        clearColor: [0.05, 0.05, 0.08, 1],
       },
     },
   );
@@ -244,8 +241,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       data: {
         cols: built.cols,
         rows: built.rows,
-        tileSizeX: 1,
-        tileSizeY: 1,
+        tileSize: [1, 1],
         tileset: tilesetHandle,
       },
     },

@@ -171,9 +171,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         {
           component: PointLight,
           data: {
-            colorR: 0.5 + 0.5 * rng(),
-            colorG: 0.5 + 0.5 * rng(),
-            colorB: 0.5 + 0.5 * rng(),
+            color: [0.5 + 0.5 * rng(), 0.5 + 0.5 * rng(), 0.5 + 0.5 * rng()],
             // 256 lights superimpose -- per-light intensity stays modest so
             // overlapping zones show colour mixing rather than saturating to
             // white. ACES tonemap (camera) handles peak roll-off.
@@ -199,12 +197,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: SpotLight,
         data: {
-          directionX: rng() - 0.5,
-          directionY: -1,
-          directionZ: rng() - 0.5,
-          colorR: 0.5 + 0.5 * rng(),
-          colorG: 0.5 + 0.5 * rng(),
-          colorB: 0.5 + 0.5 * rng(),
+          direction: [rng() - 0.5, -1, rng() - 0.5],
+          color: [0.5 + 0.5 * rng(), 0.5 + 0.5 * rng(), 0.5 + 0.5 * rng()],
           intensity: 0.5 + 0.5 * rng(),
           // Range 2.5..4.0m, matches PointLight above; spots reach floor
           // through ~3.5m vertical drop with the cone roughly aimed -Y.
@@ -239,9 +233,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       component: Camera,
       data: {
         ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 50 }),
-        clearR: 0.02,
-        clearG: 0.02,
-        clearB: 0.04,
+        clearColor: [0.02, 0.02, 0.04, 1],
         // 256 punctual lights with per-light intensity 1.5..4.0 push fragment
         // radiance into HDR territory; without a tonemap the swap-chain (sRGB
         // [0,1]) clamps and lit areas burn out to pure white. ACES is the

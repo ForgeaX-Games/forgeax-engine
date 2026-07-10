@@ -245,8 +245,7 @@ describe('bug-20260529 M2 real ECS bridge (regression)', () => {
           component: Collider as never,
           data: {
             shape: 0,
-            halfExtentsX: 10,
-            halfExtentsY: 1,
+            halfExtents: [10, 1],
             friction: 0.5,
             restitution: 0,
           },
@@ -293,5 +292,62 @@ describe('bug-20260529 M2 real ECS bridge (regression)', () => {
     // Verify physics body count: 2 entities should exist in Rapier world.
     const bodyCount = pw.getBodyCount();
     expect(bodyCount).toBe(2);
+  });
+});
+
+describe('feat-20260709 M4 / w18 -- cuboid halfExtents array passes through the 2D bridge', () => {
+  it('ball rests at ground-top + radius, driven by halfExtents[1] (regression)', async () => {
+    const RAPIER = await loadRapier2D();
+    if ('code' in RAPIER) {
+      expect(RAPIER.code).toBe('wasm-load-failed');
+      return;
+    }
+
+    const world = new World();
+    const pw = createRapier2DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+
+    // Dynamic ball (radius 0.5) dropped onto a cuboid ground whose top is at
+    // groundPosY + halfExtents[1] = 0 + 2 = 2. If the array collapse dropped
+    // halfExtents[1] (=> 0 half-height) the ball would settle near 0.5 instead
+    // of ~2.5, so this resting height is a dimension-sensitive regression.
+    const ball = world
+      .spawn(
+        { component: Transform as never, data: { pos: [0, 6, 0] } },
+        {
+          component: RigidBody as never,
+          data: { type: RigidBodyTypeValue.dynamic, mass: 1, gravityScale: 1 },
+        },
+        {
+          component: Collider as never,
+          data: { shape: 1, radius: 0.5, friction: 0.5, restitution: 0 },
+        },
+      )
+      .unwrap();
+
+    world
+      .spawn(
+        { component: Transform as never, data: { pos: [0, 0, 0] } },
+        { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+        {
+          component: Collider as never,
+          data: { shape: 0, halfExtents: [10, 2], friction: 0.5, restitution: 0 },
+        },
+      )
+      .unwrap();
+
+    registerPhysicsSystems2D(world);
+    for (let i = 0; i < 240; i++) {
+      world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
+      world.update();
+    }
+
+    const finalBall = world.get(ball, Transform as never);
+    expect(finalBall.ok).toBe(true);
+    if (!finalBall.ok) return;
+    const restY = (finalBall.value as { pos: Float32Array }).pos[1] as number;
+    // ground top (2.0) + ball radius (0.5) = 2.5.
+    expect(restY).toBeGreaterThan(2.2);
+    expect(restY).toBeLessThan(2.8);
   });
 });

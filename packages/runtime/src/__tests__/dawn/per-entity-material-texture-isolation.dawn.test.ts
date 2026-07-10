@@ -314,12 +314,8 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
     world.spawn({
       component: DirectionalLight,
       data: {
-        directionX: 0,
-        directionY: 0,
-        directionZ: -1,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [0, 0, -1],
+        color: [1, 1, 1],
         intensity: 1,
       },
     });
@@ -525,12 +521,8 @@ describe('bug-20260522 AC-01 per-entity material texture isolation (dawn)', () =
     world.spawn({
       component: DirectionalLight,
       data: {
-        directionX: 0,
-        directionY: 0,
-        directionZ: -1,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [0, 0, -1],
+        color: [1, 1, 1],
         intensity: 1,
       },
     });

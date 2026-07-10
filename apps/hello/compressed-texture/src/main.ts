@@ -170,12 +170,8 @@ async function bootstrap(
   world.spawn({
     component: DirectionalLight,
     data: {
-      directionX: -0.1,
-      directionY: -0.6,
-      directionZ: -1.0,
-      colorR: 1,
-      colorG: 1,
-      colorB: 1,
+      direction: [-0.1, -0.6, -1.0],
+      color: [1, 1, 1],
       intensity: 3,
     },
   });
@@ -187,10 +183,7 @@ async function bootstrap(
       component: Camera,
       data: {
         ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 }),
-        clearR: 0.02,
-        clearG: 0.02,
-        clearB: 0.05,
-        clearA: 1,
+        clearColor: [0.02, 0.02, 0.05, 1],
       },
     },
   );

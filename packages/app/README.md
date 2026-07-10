@@ -16,7 +16,7 @@ app.value.start();
 
 The thin wrapper `createApp(canvas, opts?, bundler?)` allocates a fresh `World`, calls `createRenderer(canvas, opts, bundler)`, runs plugins (default 5-plugin set: transform / time / animation / state / input), and wires the rAF main loop. The browser input backend is attached + pre-injected by `createApp` before plugins run. Discover the API via IDE autocomplete on `@forgeax/engine-app`.
 
-Per-frame clear color now lives on the `Camera` component (`clearR/G/B/A`), not on `RendererOptions` — see `packages/runtime/README.md` §Camera clear color. The canonical sample is `apps/hello/app/src/main.ts`.
+Per-frame clear color now lives on the `Camera` component (`clearColor: array<f32, 4>`), not on `RendererOptions` — see `packages/runtime/README.md` §Camera clear color. The canonical sample is `apps/hello/app/src/main.ts`.
 
 ## Third-arg `BundlerOptions`
 
@@ -196,7 +196,7 @@ The `switch (err.code)` is exhaustive across 6 + 18 = 24 cases (`AppErrorCode | 
 | `maxDt` | `MAX_DT_DEFAULT` (1/30s) | dt clamp ceiling. `dt = Math.min(Math.max(rawDt, 0), maxDt)`. Negative `rawDt` (system clock rewind) → 0 |
 | `silenceUnhandledErrors` | `false` | When `true`, suppresses the `console.error` fallback inside the error fan-out (host accepts total silence). When no `onError` listener is registered AND this flag is `false`, errors land in `console.error` |
 | `schedule` | `undefined` | Opaque hook for advanced scheduling (typed `unknown` in MVP; narrowed in a later feat once the schedule shape lands) |
-| `rhi` / `rawDeviceForContextConfigure` | inherited from `RendererOptions` | RHI escape hatches forwarded into `createRenderer` byte-for-byte. **`shaderManifestUrl`** moved to **third-arg `BundlerOptions`** (post feat-20260608); **`clearColor`** moved to **`Camera` component fields `clearR/clearG/clearB/clearA`** (post feat-20260608) |
+| `rhi` / `rawDeviceForContextConfigure` | inherited from `RendererOptions` | RHI escape hatches forwarded into `createRenderer` byte-for-byte. **`shaderManifestUrl`** moved to **third-arg `BundlerOptions`** (post feat-20260608); **`clearColor`** moved to **`Camera` component field `clearColor: array<f32, 4>`** (post feat-20260608; feat-20260709 M3 collapsed the earlier `clearR/clearG/clearB/clearA` quartet into one column) |
 
 </details>
 

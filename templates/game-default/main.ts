@@ -22,7 +22,6 @@
 
 import {
   Transform, Camera, perspective, quat, Materials, MeshFilter, MeshRenderer,
-  ChildOf,
   SceneInstance,
   TONEMAP_REINHARD_EXTENDED,
   BLOOM_ENABLED, ANTIALIAS_FXAA, PointLight,
@@ -132,7 +131,7 @@ function spawnGroundCollider(ctx: Ctx): void {
   ctx.world.spawn(
     { component: Transform, data: { pos: [0, -5, 0]} },
     { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
-    { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtentsX: 60, halfExtentsY: 5, halfExtentsZ: 60, friction: 0.9, restitution: 0 } },
+    { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtents: [60, 5, 60], friction: 0.9, restitution: 0 } },
   );
 }
 
@@ -189,7 +188,7 @@ function attachScenePhysics(
     const hx = (t.scale?.[0] ?? 1) * 0.5, hy = (t.scale?.[1] ?? 1) * 0.5, hz = (t.scale?.[2] ?? 1) * 0.5;
     const sphereR = t.scale?.[0] ?? 1;
     const box = (restitution: number) =>
-      world.addComponent(e, { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtentsX: hx, halfExtentsY: hy, halfExtentsZ: hz, restitution, friction: 0.7 } });
+      world.addComponent(e, { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtents: [hx, hy, hz], restitution, friction: 0.7 } });
     const sphere = (restitution: number) =>
       world.addComponent(e, { component: Collider, data: { shape: ColliderShapeValue.sphere, radius: sphereR, restitution, friction: 0.6 } });
     const dynamic = () =>
@@ -225,33 +224,17 @@ function attachScenePhysics(
 }
 
 // Wire up the low-poly box-man. Its cube parts ("PlayerTorso/Head/ArmL/ArmR/LegL/
-// LegR") are authored FLAT (absolute positions) in scene.pack.json next to an
-// invisible "Player" root — flat so ✎ Edit renders them standing (the editor's scene
-// projection skips empty roots + doesn't apply ChildOf). At ▶ Play we re-parent the
-// parts to the root at runtime (engine runtime ChildOf works) so the avatar moves as
-// a unit, and make the root a kinematic body (driven by its Transform → shoves props).
-function setupPlayerRoot(
-  ctx: Ctx,
-  root: EntityHandle,
-  loaded: { mapping: ReadonlyMap<number, EntityHandle>; nodes: PackNode[] },
-): void {
+// LegR") are authored in scene.pack.json as ChildOf children of the "Player" root
+// with LOCAL coordinates — a single hierarchy representation that both ✎ Edit and
+// ▶ Play consume verbatim (the editor viewport and Play run the same engine +
+// propagateTransforms, so ChildOf resolves in both; scene-pack round-trips ChildOf
+// losslessly). So the avatar already renders + moves as a unit; here we only make
+// the root a kinematic body (driven by its Transform → shoves props). No runtime
+// re-parenting: that split representation (flat pack + Play-time reparent) was a
+// SSOT violation and the source of a stale-view bug (reading a Transform array view
+// across the ChildOf archetype migration scrambled the parts).
+function setupPlayerRoot(ctx: Ctx, root: EntityHandle): void {
   const { world } = ctx;
-  const rt = world.get(root, Transform);
-  const rx = rt.ok ? (rt.value.pos[0] ?? 0) : 0, ry = rt.ok ? (rt.value.pos[1] ?? PLAYER_Y) : PLAYER_Y, rz = rt.ok ? (rt.value.pos[2] ?? 0) : 0;
-  // Re-parent each body part to the root, converting its authored WORLD position to
-  // a LOCAL offset (part − root). The root has uniform scale 1, so parts keep shape.
-  for (const node of loaded.nodes) {
-    const nm = (node.components.Name as { value?: string } | undefined)?.value;
-    if (!nm || nm === 'Player' || !nm.startsWith('Player')) continue;
-    const e = loaded.mapping.get(node.localId);
-    if (e === undefined) continue;
-    const t = world.get(e, Transform);
-    if (!t.ok) continue;
-    world.addComponent(e, { component: ChildOf, data: { parent: root } });
-    world.set(e, Transform, {
-      pos: [(t.value.pos[0] ?? 0) - rx, (t.value.pos[1] ?? 0) - ry, (t.value.pos[2] ?? 0) - rz],
-    });
-  }
   world.addComponent(root, { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } });
   world.addComponent(root, { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.4 } });
 }
@@ -337,7 +320,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       const t = (playerNode.components.Transform ?? {}) as { pos?: number[] };
       initX = t.pos?.[0] ?? 0; initZ = t.pos?.[2] ?? 0;
       player = loaded.mapping.get(playerNode.localId);
-      if (player !== undefined) setupPlayerRoot({ world }, player, loaded);
+      if (player !== undefined) setupPlayerRoot({ world }, player);
     }
   }
   const origMatOf = new Map<EntityHandle, MatHandle>(flashables.map((f) => [f.e, f.mat] as [EntityHandle, MatHandle]));
@@ -355,19 +338,19 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   let camX = initX, camZ = initZ + TOP_DZ;
   const camera = world.spawn(
     { component: Transform, data: { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!]} },
-    // clearR/G/B = visible sky background. WebKit/WKWebView (the desktop app)
+    // clearColor = visible sky background. WebKit/WKWebView (the desktop app)
     // can't render the cubemap SkyboxBackground (needs rgba16float render targets
     // it lacks), so without this the background clears to black. The Camera clear
     // color needs no GPU feature; a daytime blue reads as sky. Linear/pre-tonemap.
     // On Chromium the cubemap skybox draws over it (harmless).
-    { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect, near: 0.1, far: 200 }), tonemap: TONEMAP_REINHARD_EXTENDED, bloom: BLOOM_ENABLED, antialias: ANTIALIAS_FXAA, clearR: 0.4, clearG: 0.6, clearB: 1.0 } },
+    { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect, near: 0.1, far: 200 }), tonemap: TONEMAP_REINHARD_EXTENDED, bloom: BLOOM_ENABLED, antialias: ANTIALIAS_FXAA, clearColor: [0.4, 0.6, 1.0, 1] } },
   ).unwrap();
 
   // ── one warm accent point light (learn-render §2 multiple-lights; the scene
   //    already has the directional Sun + IBL skylight — keep ≤1 of each). ───────
   world.spawn(
     { component: Transform, data: { pos: [3, 5, 1]} },
-    { component: PointLight, data: { colorR: 1, colorG: 0.72, colorB: 0.42, intensity: 40, range: 22 } },
+    { component: PointLight, data: { color: [1, 0.72, 0.42], intensity: 40, range: 22 } },
   );
 
   // ── on-hit "+N" popup ────────────────────────────────────────────────────

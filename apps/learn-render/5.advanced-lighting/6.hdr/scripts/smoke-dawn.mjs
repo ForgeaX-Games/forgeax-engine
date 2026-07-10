@@ -465,7 +465,7 @@ world.spawn(
   // overbright source (intensity ~200 + range ~60m -> far-wall radiance > 1.0).
   {
     component: PointLight,
-    data: { colorR: 1.0, colorG: 1.0, colorB: 1.0, intensity: 200.0, range: 60.0 },
+    data: { color: [1.0, 1.0, 1.0], intensity: 200.0, range: 60.0 },
   },
 );
 

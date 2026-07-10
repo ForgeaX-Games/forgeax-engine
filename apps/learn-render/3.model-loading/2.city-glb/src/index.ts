@@ -127,12 +127,8 @@ function spawnLights(world: World): void {
   world.spawn({
     component: DirectionalLight,
     data: {
-      directionX: d[0] * invLen,
-      directionY: d[1] * invLen,
-      directionZ: d[2] * invLen,
-      colorR: 1.0,
-      colorG: 0.97,
-      colorB: 0.9,
+      direction: [d[0] * invLen, d[1] * invLen, d[2] * invLen],
+      color: [1.0, 0.97, 0.9],
       intensity: 3.5,
       mapSize: 2048,
       cascadeCount: 4,
@@ -164,9 +160,7 @@ function spawnLights(world: World): void {
       {
         component: PointLight,
         data: {
-          colorR: pd.color[0],
-          colorG: pd.color[1],
-          colorB: pd.color[2],
+          color: [pd.color[0], pd.color[1], pd.color[2]],
           intensity: pd.intensity,
           range: pd.range,
         },

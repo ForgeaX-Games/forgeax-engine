@@ -5,7 +5,7 @@
 // `albedo * lightColor * attenuation * cone`; sprites are omnidirectional
 // receivers and light direction only shapes the SpotLight cone. This lets
 // a "person holding a flashlight" scene put the SpotLight on the sprite
-// plane (pos z=0, directionZ=0) and get a visible sweep beam -- the pre-M1
+// plane (pos z=0, direction z=0) and get a visible sweep beam -- the pre-M1
 // Half-Lambert path required pos z>0 or the beam vanished.
 //
 // URL modes (mirrors the sprite-lit demo's ?mode= convention):
@@ -147,12 +147,12 @@ function buildSweepSpotScene(ctx: SceneCtx): void {
       data: {
         ...orthographic({ left: -1.5, right: 1.5, bottom: -1.5, top: 1.5, near: 0.1, far: 20 }),
         tonemap: TONEMAP_NONE,
-        clearR: 0.01, clearG: 0.01, clearB: 0.02, clearA: 1,
+        clearColor: [0.01, 0.01, 0.02, 1],
       },
     },
   ).unwrap();
 
-  // SpotLight on the sprite plane; pos z=0 + directionZ=0 sweeps parallel
+  // SpotLight on the sprite plane; pos z=0 + direction z=0 sweeps parallel
   // to the plane (the pre-M1 Half-Lambert path returned near-black here
   // because dot(N=(0,0,1), L) collapsed to 0).
   world.spawn(
@@ -160,10 +160,8 @@ function buildSweepSpotScene(ctx: SceneCtx): void {
     {
       component: SpotLight,
       data: {
-        directionX: 1.0,
-        directionY: 0.0,
-        directionZ: 0.0,
-        colorR: 1.0, colorG: 1.0, colorB: 1.0,
+        direction: [1.0, 0.0, 0.0],
+        color: [1.0, 1.0, 1.0],
         intensity: 5.0,
         range: 6.0,
         innerConeDeg: 15,
@@ -194,7 +192,7 @@ function buildPointCircleScene(ctx: SceneCtx): void {
       data: {
         ...orthographic({ left: -1.5, right: 1.5, bottom: -1.5, top: 1.5, near: 0.1, far: 20 }),
         tonemap: TONEMAP_NONE,
-        clearR: 0.01, clearG: 0.01, clearB: 0.02, clearA: 1,
+        clearColor: [0.01, 0.01, 0.02, 1],
       },
     },
   ).unwrap();
@@ -204,7 +202,7 @@ function buildPointCircleScene(ctx: SceneCtx): void {
     {
       component: PointLight,
       data: {
-        colorR: 1.0, colorG: 1.0, colorB: 1.0,
+        color: [1.0, 1.0, 1.0],
         intensity: 2.0,
         range: 1.0,
       },
@@ -231,7 +229,7 @@ function buildBothScene(ctx: SceneCtx): void {
       data: {
         ...orthographic({ left: -3, right: 3, bottom: -1.5, top: 1.5, near: 0.1, far: 20 }),
         tonemap: TONEMAP_NONE,
-        clearR: 0.01, clearG: 0.01, clearB: 0.02, clearA: 1,
+        clearColor: [0.01, 0.01, 0.02, 1],
       },
     },
   ).unwrap();
@@ -241,7 +239,7 @@ function buildBothScene(ctx: SceneCtx): void {
     {
       component: PointLight,
       data: {
-        colorR: 1.0, colorG: 0.72, colorB: 0.28,
+        color: [1.0, 0.72, 0.28],
         intensity: 2.0,
         range: 1.0,
       },
@@ -253,10 +251,8 @@ function buildBothScene(ctx: SceneCtx): void {
     {
       component: SpotLight,
       data: {
-        directionX: 1.0,
-        directionY: 0.0,
-        directionZ: 0.0,
-        colorR: 0.88, colorG: 0.96, colorB: 1.0,
+        direction: [1.0, 0.0, 0.0],
+        color: [0.88, 0.96, 1.0],
         intensity: 5.0,
         range: 4.0,
         innerConeDeg: 15,

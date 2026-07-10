@@ -149,7 +149,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
     {
       component: Tilemap,
-      data: { cols: totalCols, rows: totalRows, tileSizeX: 1, tileSizeY: 1, tileset: tilesetHandle },
+      data: { cols: totalCols, rows: totalRows, tileSize: [1, 1], tileset: tilesetHandle },
     },
   );
   if (!tilemapRes.ok) {
@@ -231,10 +231,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         right: camHalfW,
         bottom: -camHalfH,
         top: camHalfH,
-        clearR: 0.05,
-        clearG: 0.05,
-        clearB: 0.08,
-        clearA: 1,
+        clearColor: [0.05, 0.05, 0.08, 1],
       },
     },
   );

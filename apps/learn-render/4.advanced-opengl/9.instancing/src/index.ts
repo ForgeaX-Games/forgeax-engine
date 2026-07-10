@@ -274,12 +274,8 @@ const appRes = await createApp(
   world.spawn({
     component: DirectionalLight,
     data: {
-      directionX: -0.5,
-      directionY: -0.7,
-      directionZ: -0.4,
-      colorR: 1,
-      colorG: 0.97,
-      colorB: 0.92,
+      direction: [-0.5, -0.7, -0.4],
+      color: [1, 0.97, 0.92],
       intensity: 2.0,
     },
   });

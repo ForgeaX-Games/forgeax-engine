@@ -205,9 +205,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: PointLight,
         data: {
-          colorR: ld.colorR,
-          colorG: ld.colorG,
-          colorB: ld.colorB,
+          color: [ld.colorR, ld.colorG, ld.colorB],
           // LO 5.8 attenuation (1.0, 0.7, 1.8) is shader-side.
           // Intensity 1.0 + range 6.0 gives a healthy falloff across the 3-unit grid.
           intensity: 1.0,
@@ -242,9 +240,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       component: Camera,
       data: {
         ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 50 }),
-        clearR: 0.02,
-        clearG: 0.02,
-        clearB: 0.04,
+        clearColor: [0.02, 0.02, 0.04, 1],
       },
     },
   ).unwrap();

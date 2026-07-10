@@ -68,9 +68,7 @@ function spawnScene(world: World): number {
         component: Collider,
         data: {
           shape: ColliderShapeValue.cuboid,
-          halfExtentsX: 10,
-          halfExtentsY: 0.5,
-          halfExtentsZ: 10,
+          halfExtents: [10, 0.5, 10],
         },
       },
     )
@@ -87,9 +85,7 @@ function spawnScene(world: World): number {
         component: Collider,
         data: {
           shape: ColliderShapeValue.cuboid,
-          halfExtentsX: 1,
-          halfExtentsY: 0.2,
-          halfExtentsZ: 4,
+          halfExtents: [1, 0.2, 4],
         },
       },
     )
@@ -106,9 +102,7 @@ function spawnScene(world: World): number {
         component: Collider,
         data: {
           shape: ColliderShapeValue.cuboid,
-          halfExtentsX: 0.5,
-          halfExtentsY: 1,
-          halfExtentsZ: 0.5,
+          halfExtents: [0.5, 1, 0.5],
         },
       },
     )
@@ -146,12 +140,8 @@ function spawnScene(world: World): number {
     .spawn({
       component: DirectionalLight,
       data: {
-        directionX: -0.4,
-        directionY: -1,
-        directionZ: -0.3,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [-0.4, -1, -0.3],
+        color: [1, 1, 1],
         intensity: 1,
       },
     })

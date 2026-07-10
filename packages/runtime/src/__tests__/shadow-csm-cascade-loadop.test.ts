@@ -223,14 +223,10 @@ function cameraTransform(): Record<string, number[]> {
   return { ...identityTransform(), pos: [0, 0, 3] };
 }
 
-function directionalLight(): Record<string, number> {
+function directionalLight(): Record<string, number | number[]> {
   return {
-    directionX: -0.5,
-    directionY: -1,
-    directionZ: -0.3,
-    colorR: 1,
-    colorG: 1,
-    colorB: 1,
+    direction: [-0.5, -1, -0.3],
+    color: [1, 1, 1],
     intensity: 1,
   };
 }

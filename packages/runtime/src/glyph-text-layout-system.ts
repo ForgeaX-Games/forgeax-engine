@@ -97,10 +97,9 @@ interface GlyphTextData {
   readonly fontHandle: number;
   readonly text: string;
   readonly fontSize: number;
-  readonly colorR: number;
-  readonly colorG: number;
-  readonly colorB: number;
-  readonly colorA: number;
+  // feat-20260709 M3: color collapsed into one inline array<f32,4>; the
+  // world.get read path materialises it as a Float32Array (color[0..3] = rgba).
+  readonly color: ArrayLike<number>;
 }
 
 /** @internal archetype-walk view (same shape reached for in render-system-extract). */
@@ -279,7 +278,7 @@ function resolveTextMaterial(
   font: FontAsset,
   gpuStore: GpuResourceStore,
 ): number {
-  const key = `${gt.fontHandle}|${gt.colorR},${gt.colorG},${gt.colorB},${gt.colorA}`;
+  const key = `${gt.fontHandle}|${gt.color[0]},${gt.color[1]},${gt.color[2]},${gt.color[3]}`;
   const cached = fontMaterialCache.get(key);
   if (cached !== undefined) return cached;
 
@@ -324,7 +323,7 @@ function resolveTextMaterial(
       },
     ],
     paramValues: {
-      tintColor: [gt.colorR, gt.colorG, gt.colorB, gt.colorA],
+      tintColor: [gt.color[0], gt.color[1], gt.color[2], gt.color[3]],
       distanceRange: font.common.distanceRange,
       ...(atlasHandle !== undefined ? { baseColorTexture: atlasHandle as unknown as number } : {}),
       ...(samplerHandle !== undefined ? { sampler: samplerHandle as unknown as number } : {}),
@@ -357,7 +356,7 @@ function deriveTextMaterialGuid(key: string): string {
 }
 
 function signatureOf(gt: GlyphTextData): string {
-  return `${gt.fontHandle}|${gt.fontSize}|${gt.text}|${gt.colorR},${gt.colorG},${gt.colorB},${gt.colorA}`;
+  return `${gt.fontHandle}|${gt.fontSize}|${gt.text}|${gt.color[0]},${gt.color[1]},${gt.color[2]},${gt.color[3]}`;
 }
 
 // Handle bridges: GlyphText.fontHandle / cached mesh ids are packed u32 values;

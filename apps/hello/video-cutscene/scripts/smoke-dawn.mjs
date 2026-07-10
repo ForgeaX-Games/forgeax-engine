@@ -166,7 +166,7 @@ const cube = world
   .unwrap();
 world.spawn({
   component: DirectionalLight,
-  data: { directionX: -0.4, directionY: -0.6, directionZ: -0.7, colorR: 1, colorG: 1, colorB: 1, intensity: 1.2 },
+  data: { direction: [-0.4, -0.6, -0.7], color: [1, 1, 1], intensity: 1.2 },
 });
 world.spawn(
   { component: Transform, data: { pos: [0, 1, 4], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },

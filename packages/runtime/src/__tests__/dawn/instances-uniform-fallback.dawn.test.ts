@@ -258,12 +258,10 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
           near: 0.1,
           far: 200,
           // feat-20260608 TASK-007: clearColor moved from createRenderer to
-          // Camera component. Clear values must match the (13, 13, 20) sRGB
+          // the Camera component (one inline array<f32,4> column as of
+          // feat-20260709 M3). Clear values must match the (13, 13, 20) sRGB
           // bytes referenced at line ~316-318 (linear [0.05, 0.05, 0.08]).
-          clearR: 0.05,
-          clearG: 0.05,
-          clearB: 0.08,
-          clearA: 1,
+          clearColor: [0.05, 0.05, 0.08, 1],
         },
       },
     );

@@ -1952,7 +1952,8 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     },
     // feat-20260608-create-app-param-surface-trim / M1 / AC-02: clearColor
     // is no longer threaded through createRenderSystem; the record stage
-    // reads `camera.clearR/G/B/A` straight from the Camera SoA columns.
+    // reads `camera.clearColor` straight from the Camera SoA column
+    // (array<f32,4>, feat-20260709 M3).
     getPipelineState: () => pipelineState,
     assets,
     gpuStore,

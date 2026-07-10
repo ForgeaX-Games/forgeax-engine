@@ -828,9 +828,15 @@ export class InstanceTransformsStrideMismatchError extends Error {
  * - `outerNinety` — SpotLight `outerConeDeg > 90`. KHR_lights_punctual upper
  *   bound. A spot light cone wider than 90 degrees becomes a point light;
  *   use PointLight instead.
+ * - `direction` — DirectionalLight / SpotLight `direction` is missing or a
+ *   zero vector `[0, 0, 0]`. Direction has no default (there is no universal
+ *   default direction): omitting it lands the array layer-3 all-zero, which is
+ *   the same illegal state as an explicit zero vector. Supply a non-zero
+ *   direction (feat-20260709 M2 / D-1, add-only union member).
  *
  * `.code = 'spawn-light-invalid-bounds'`
- * `.detail = { field: 'range' | 'innerOuter' | 'outerNinety'; got: number }`
+ * `.detail = { field: 'range' | 'innerOuter' | 'outerNinety' | 'direction';`
+ * `            got: number | readonly number[] }`
  * `.hint` — names the offending field plus the valid replacement form.
  */
 export class SpawnLightInvalidBoundsError extends Error {
@@ -839,11 +845,15 @@ export class SpawnLightInvalidBoundsError extends Error {
   readonly hint: string;
   readonly expected: string;
   readonly detail: {
-    readonly field: 'range' | 'innerOuter' | 'outerNinety';
-    readonly got: number;
+    readonly field: 'range' | 'innerOuter' | 'outerNinety' | 'direction';
+    readonly got: number | readonly number[];
   };
 
-  constructor(componentName: string, field: 'range' | 'innerOuter' | 'outerNinety', got: number) {
+  constructor(
+    componentName: string,
+    field: 'range' | 'innerOuter' | 'outerNinety' | 'direction',
+    got: number | readonly number[],
+  ) {
     let hint: string;
     let expectedStr: string;
     switch (field) {
@@ -858,6 +868,10 @@ export class SpawnLightInvalidBoundsError extends Error {
       case 'outerNinety':
         hint = `${componentName}.outerConeDeg = ${got} > 90; a spot light cone wider than 90 degrees becomes a point light; use PointLight instead`;
         expectedStr = 'outerConeDeg <= 90 (KHR_lights_punctual upper bound)';
+        break;
+      case 'direction':
+        hint = `${componentName}.direction is missing or a zero vector (got ${JSON.stringify(got)}); direction has no default, provide a non-zero direction, e.g. [-0.5, -1, -0.3]`;
+        expectedStr = 'direction is a non-zero [x, y, z] vector';
         break;
     }
     super(

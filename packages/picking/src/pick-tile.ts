@@ -77,8 +77,10 @@ export function pickTile(
   const tilemap = tilemapResult.value;
   const cols = tilemap.cols;
   const rows = tilemap.rows;
-  const tileSizeX = tilemap.tileSizeX;
-  const tileSizeY = tilemap.tileSizeY;
+  // feat-20260709 M3: tileSize is one inline array<f32,2> column; the
+  // world.get read path materialises it as a Float32Array ([width, height]).
+  const tileSizeX = tilemap.tileSize[0] ?? 1;
+  const tileSizeY = tilemap.tileSize[1] ?? 1;
 
   // Tilemap origin in world space comes from its Transform.world translation
   // (column-major mat4 columns 12 / 13 carry world-X / world-Y). Tilemap

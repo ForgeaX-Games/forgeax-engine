@@ -241,9 +241,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: PointLight,
         data: {
-          colorR: 1,
-          colorG: 1,
-          colorB: 1,
+          color: [1, 1, 1],
           intensity: 100.0,
           range: 50,
         },

@@ -214,12 +214,8 @@ function spawnDirectional(world: World): void {
     .spawn({
       component: DirectionalLight,
       data: {
-        directionX: 0,
-        directionY: -1,
-        directionZ: -0.2,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [0, -1, -0.2],
+        color: [1, 1, 1],
         intensity: 1,
       },
     })
@@ -246,7 +242,7 @@ function spawnPointAt(
       },
       {
         component: PointLight,
-        data: { colorR: 1, colorG: 0.8, colorB: 0.6, intensity, range },
+        data: { color: [1, 0.8, 0.6], intensity, range },
       },
     )
     .unwrap();
@@ -282,12 +278,8 @@ function spawnSpotAimingAtOrigin(
       {
         component: SpotLight,
         data: {
-          directionX: dx,
-          directionY: dy,
-          directionZ: dz,
-          colorR: 0.8,
-          colorG: 1,
-          colorB: 0.7,
+          direction: [dx, dy, dz],
+          color: [0.8, 1, 0.7],
           intensity,
           range,
           innerConeDeg,

@@ -567,8 +567,9 @@ export interface RenderSystemInternals extends RenderSystemRuntime {
   readonly context: RhiCanvasContext | null;
   // feat-20260608-create-app-param-surface-trim / M1 / AC-02: the legacy
   // `clearColor` field is removed. The record stage reads clear color
-  // straight from the Camera SoA (`camera.clearR/G/B/A`); zero-Camera
-  // fallback uses `ZERO_CAMERA_CLEAR_FALLBACK = [0, 0, 0, 1]` (D-8).
+  // straight from the Camera SoA (`camera.clearColor`, array<f32,4> as of
+  // feat-20260709 M3); zero-Camera fallback uses
+  // `ZERO_CAMERA_CLEAR_FALLBACK = [0, 0, 0, 1]`.
   readonly getPipelineState: () => PipelineState | null;
   readonly assets: AssetRegistry;
   // feat-20260601-gpu-resource-store-extraction M1: GPU residency layer
@@ -1627,6 +1628,21 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // M3 / w26: single dispatch list replaces old three-bucket model.
         // Pass dispatch to recordFrame — the record stage iterates dispatch
         // entries in queue order per plan-strategy D-3.
+        //
+        // feat-20260709-editor-world-partition ENGINE-fix-round2 (defect 2):
+        // the record stage must resolve each renderable's mesh + material
+        // textures against the world it was EXTRACTED from — never the single
+        // resourceWorld. The extract stage already resolves per-world
+        // (extractFrames loops worlds[] and stamps RenderableSnapshot.worldId);
+        // the record stage regressed to resolving everything against
+        // resourceWorld, so a user-tier mesh living in the cameraOwner world
+        // (e.g. an editor gizmo handle) resolves against resourceWorld's
+        // sharedRefs — either a miss (asset-not-registered) or, when that slot
+        // is occupied by an unrelated user-tier payload (equirect), a
+        // wrong-kind resolve that throws in ensureResident. `worlds` is threaded
+        // so the record stage can index worlds[renderable.worldId]. `resourceWorld`
+        // stays the singleton-resource owner (skybox equirect / transparent-sort
+        // config / video provider) — those ARE resource-owner reads.
         recordFrame(
           internals,
           resourceWorld,
@@ -1642,6 +1658,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
           skybox,
           skyboxCount,
           postProcessParams,
+          worlds,
         );
       } catch (err) {
         const innerError =

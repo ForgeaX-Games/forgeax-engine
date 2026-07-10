@@ -133,7 +133,7 @@ axiom declaration; this package does not overstate the slimming it delivers).
 
 | Symbol | Kind | Notes |
 |:--|:--|:--|
-| `VideoPlayer` | component | `defineComponent('VideoPlayer', ...)`; clip / playing / loop |
+| `VideoPlayer` | component | `defineComponent('VideoPlayer', ...)`; clip / playing / loop / `currentTime` (field-level `transient: true`, feat-20260709 -- per-frame playback head derived from the `HTMLVideoElement`, excluded from scene collect/serialization) |
 | `VIDEO_ELEMENT_PROVIDER_KEY` | const | World Resource key for the host bridge |
 | `VideoElementProvider` | interface | host returns an `HTMLVideoElement` per entity + clip |
 | `videoLoader` | const | `Loader<VideoAsset>`; wired by assets-runtime defaults |

@@ -43,7 +43,7 @@ const LIGHT_RANGE = 25;
 const LIGHT_INTENSITY = 8;
 
 // Ambient directional fill so the room interior is not pitch black.
-const FILL_DIRECTION = { directionX: 0, directionY: -1, directionZ: 0.1 };
+const FILL_DIRECTION = { direction: [0, -1, 0.1]};
 const FILL_INTENSITY = 0.15;
 
 // 3. bootstrap
@@ -138,10 +138,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: DirectionalLight,
       data: {
-        directionX: FILL_DIRECTION.directionX,
-        directionY: FILL_DIRECTION.directionY,
-        directionZ: FILL_DIRECTION.directionZ,
-        colorR: 1, colorG: 1, colorB: 1,
+        direction: FILL_DIRECTION.direction,
+        color: [1, 1, 1],
         intensity: FILL_INTENSITY,
       },
     },

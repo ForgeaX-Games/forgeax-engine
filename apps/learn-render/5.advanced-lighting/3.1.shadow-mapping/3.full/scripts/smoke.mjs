@@ -322,8 +322,8 @@ world.spawn(
   {
     component: DirectionalLight,
     data: {
-      directionX: 0.2, directionY: -0.98, directionZ: 0,
-      colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+      direction: [0.2, -0.98, 0],
+      color: [1, 1, 1], intensity: 1,
       ...shadowFields,
     },
   },
@@ -339,9 +339,7 @@ const cameraEntity = world.spawn(
     component: Camera,
     data: {
       ...perspective({ fov: Math.PI / 4, aspect: WIDTH / HEIGHT, near: 0.1, far: 50 }),
-      clearR: 0.02,
-      clearG: 0.02,
-      clearB: 0.04,
+      clearColor: [0.02, 0.02, 0.04, 1],
     },
   },
 ).unwrap();

@@ -81,7 +81,7 @@ async function main(): Promise<void> {
     .spawn(
       {
         component: Tilemap,
-        data: { cols: 8, rows: 8, tileSizeX: 1, tileSizeY: 1, chunkSize: 4, tileset: tilesetHandle },
+        data: { cols: 8, rows: 8, tileSize: [1, 1], chunkSize: 4, tileset: tilesetHandle },
       },
       { component: Transform, data: {} },
     )

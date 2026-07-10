@@ -226,10 +226,7 @@ describe('learn-render section 1.4 textures pixel-readback (AC-08f / AC-08g / AC
           // Camera component. Clear values must match CLEAR_RGB_SRGB
           // [124, 149, 149] bytes asserted at AC-08h rim sites (linear
           // [0.2, 0.3, 0.3]); see the LO 1.4 demo's apps/.../src/index.ts.
-          clearR: 0.2,
-          clearG: 0.3,
-          clearB: 0.3,
-          clearA: 1,
+          clearColor: [0.2, 0.3, 0.3, 1],
         },
       },
     );

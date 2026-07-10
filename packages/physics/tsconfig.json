@@ -24,6 +24,15 @@
     },
     {
       "path": "../types"
+    },
+    {
+      "path": "../assets-runtime"
+    },
+    {
+      "path": "../runtime"
+    },
+    {
+      "path": "../shader"
     }
   ]
 }

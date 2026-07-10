@@ -309,7 +309,7 @@ for (const pos of CUBE_POSITIONS) {
 
 world.spawn({
   component: DirectionalLight,
-  data: { directionX: -0.2, directionY: -1, directionZ: -0.3, colorR: 1, colorG: 1, colorB: 1, intensity: 0.5 },
+  data: { direction: [-0.2, -1, -0.3], color: [1, 1, 1], intensity: 0.5 },
 });
 
 const POINT_LIGHT_POSITIONS = [
@@ -334,7 +334,7 @@ for (let i = 0; i < POINT_LIGHT_POSITIONS.length; i++) {
     },
     {
       component: PointLight,
-      data: { colorR: plColor[0], colorG: plColor[1], colorB: plColor[2], intensity: 100, range: 50 },
+      data: { color: [plColor[0], plColor[1], plColor[2]], intensity: 100, range: 50 },
     },
   );
 }
@@ -409,12 +409,8 @@ world.spawn(
   {
     component: SpotLight,
     data: {
-      directionX: -0.6 / SPOT_DIR_LEN,
-      directionY: -1 / SPOT_DIR_LEN,
-      directionZ: 0,
-      colorR: 1,
-      colorG: 1,
-      colorB: 1,
+      direction: [-0.6 / SPOT_DIR_LEN, -1 / SPOT_DIR_LEN, 0],
+      color: [1, 1, 1],
       intensity: 40,
       range: 50,
       innerConeDeg: 22,
@@ -437,9 +433,7 @@ world.spawn(
     component: Camera,
     data: {
       ...perspective({ fov: Math.PI / 3, aspect: WIDTH / HEIGHT, near: 0.1, far: 100 }),
-      clearR: 0.02,
-      clearG: 0.02,
-      clearB: 0.04,
+      clearColor: [0.02, 0.02, 0.04, 1],
     },
   },
 );

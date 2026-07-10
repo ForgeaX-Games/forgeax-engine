@@ -24,7 +24,7 @@ world.spawn(
   {
     component: GlyphText,
     data: { fontHandle: font, text: 'PLAYER 1', fontSize: 0.05,
-            colorR: 1, colorG: 1, colorB: 1, colorA: 1 },
+            color: [1, 1, 1, 1] },
   },
 );
 ```

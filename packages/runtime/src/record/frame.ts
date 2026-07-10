@@ -81,6 +81,14 @@ export function recordFrame(
   skybox: SkyboxSnapshot | undefined,
   skyboxCount: number,
   postProcessParams: ReadonlyMap<string, Uint8Array>,
+  // feat-20260709-editor-world-partition ENGINE-fix-round2 (defect 2): the
+  // full worlds[] list passed to `renderer.draw`, indexed by
+  // RenderableSnapshot.worldId so the record stage resolves each renderable's
+  // mesh + material textures against the world it was extracted from (mirroring
+  // the per-world extract stage). Optional + defaulting to `[world]` keeps the
+  // pre-split single-world identity path (worldId always 0) byte-for-byte and
+  // the existing unit-test callers (which pass a single mock world) valid.
+  worlds: readonly World[] = [world],
 ): void {
   // The `try / finally` wrapper advances `frameState.frameNumber` exactly
   // once per `recordFrame` invocation regardless of which early-return
@@ -103,7 +111,7 @@ export function recordFrame(
       new RhiError({
         code: 'render-system-no-camera',
         expected: 'world has at least one entity with Transform + Camera',
-        hint: 'world.spawn({ component: Transform, data: { pos: [x, y, z], quat: [x, y, z, w], scale: [x, y, z] } }, { component: Camera, data: { fov, aspect, near, far, clearR, clearG, clearB, clearA } }) before renderer.draw([world], { owner: 0 })',
+        hint: 'world.spawn({ component: Transform, data: { pos: [x, y, z], quat: [x, y, z, w], scale: [x, y, z] } }, { component: Camera, data: { fov, aspect, near, far, clearColor: [r, g, b, a] } }) before renderer.draw([world], { owner: 0 })',
       }),
     );
     activeCameras = [makeZeroCameraFallbackSnapshot()];
@@ -281,16 +289,16 @@ export function recordFrame(
     const graphDepthView =
       (frameState.perFrameGraph?.getColorTargetView('depth') as TextureView | undefined) ?? null;
     const depthView: TextureView | null = graphDepthView;
-    // feat-20260608-create-app-param-surface-trim / M1 / D-1: clear-color
-    // sourced from the active CameraSnapshot SoA columns (first-archetype-hit
-    // per OOS-2). When the world had zero Camera entities, `camera` here is
-    // the synthetic fallback snapshot built above (Case B), which carries
-    // `ZERO_CAMERA_CLEAR_FALLBACK = [0, 0, 0, 1]` per D-8.
+    // feat-20260709 M3 / D-3: clear-color read from the active CameraSnapshot's
+    // single `clearColor` array field (first-archetype-hit per OOS-2). When the
+    // world had zero Camera entities, `camera` here is the synthetic fallback
+    // snapshot built above (Case B), which carries
+    // `ZERO_CAMERA_CLEAR_FALLBACK = [0, 0, 0, 1]`.
     const clear: readonly [number, number, number, number] = [
-      camera.clearR,
-      camera.clearG,
-      camera.clearB,
-      camera.clearA,
+      camera.clearColor[0],
+      camera.clearColor[1],
+      camera.clearColor[2],
+      camera.clearColor[3],
     ];
 
     // M1 / w7: shadow RT owned by render-graph (addColorTarget('shadowDepth', ...)).
@@ -362,6 +370,7 @@ export function recordFrame(
     const validated = validateRenderables(
       internals,
       world,
+      worlds,
       pipelineState,
       renderables,
       transparentDispatch,
@@ -576,6 +585,13 @@ export function recordFrame(
 function validateRenderables(
   internals: RenderSystemInternals,
   world: World,
+  // feat-20260709-editor-world-partition ENGINE-fix-round2 (defect 2): the full
+  // worlds[] list. Each renderable's mesh handle is a user-tier slot in its OWN
+  // world's sharedRefs; resolving against a foreign world either misses
+  // (asset-not-registered) or resolves the wrong slot payload. `world` (the
+  // resource-owner) is retained as the fallback for renderables whose worldId
+  // is out of range (defensive; extractFrames always stamps a valid index).
+  worlds: readonly World[],
   pipelineState: PipelineState,
   renderables: readonly RenderableSnapshot[],
   transparentDispatch: readonly DispatchEntry[],
@@ -602,7 +618,19 @@ function validateRenderables(
   for (let rIdx = 0; rIdx < renderables.length; rIdx++) {
     const r = renderables[rIdx];
     if (r === undefined) continue;
-    const assetRes = resolveAssetHandle<MeshAsset>(world, toShared<'MeshAsset'>(r.assetHandle));
+    // feat-20260709-editor-world-partition ENGINE-fix-round2 (defect 2): resolve
+    // this renderable's mesh against the world it was EXTRACTED from
+    // (worlds[r.worldId]) — NOT the single resource-owner `world`. Builtin mesh
+    // slots (< BUILTIN_BASE) resolve process-statically regardless of world, so
+    // the per-world pick only matters for user-tier handles, but selecting it
+    // unconditionally keeps a single code path. Falls back to the resource-owner
+    // world if worldId is out of range (defensive; extractFrames always stamps
+    // a valid index into worlds[]).
+    const renderableWorld = worlds[r.worldId] ?? world;
+    const assetRes = resolveAssetHandle<MeshAsset>(
+      renderableWorld,
+      toShared<'MeshAsset'>(r.assetHandle),
+    );
     if (!assetRes.ok) {
       internals.errorRegistry.fire(
         new RhiError({

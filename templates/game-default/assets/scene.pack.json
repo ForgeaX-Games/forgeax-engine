@@ -55,12 +55,16 @@
         ]
        },
        "DirectionalLight": {
-        "directionX": -0.4,
-        "directionY": -1,
-        "directionZ": -0.3,
-        "colorR": 1,
-        "colorG": 0.9607843137254902,
-        "colorB": 0.8784313725490196,
+        "direction": [
+         -0.4,
+         -1,
+         -0.3
+        ],
+        "color": [
+         1,
+         0.9607843137254902,
+         0.8784313725490196
+        ],
         "intensity": 3.2,
         "castShadow": true,
         "mapSize": 2048,
@@ -244,7 +248,7 @@
        },
        "Transform": {
         "pos": [
-         6.0,
+         6,
          0.31,
          -4
         ],
@@ -356,7 +360,7 @@
        },
        "Transform": {
         "pos": [
-         6.0,
+         6,
          1.55,
          -4
         ],
@@ -433,7 +437,7 @@
        "Transform": {
         "pos": [
          0,
-         0.75,
+         0,
          0
         ],
         "scale": [
@@ -449,6 +453,9 @@
         "materials": [
          11
         ]
+       },
+       "ChildOf": {
+        "parent": 14
        }
       }
      },
@@ -461,7 +468,7 @@
        "Transform": {
         "pos": [
          0,
-         1.25,
+         0.5,
          0.02
         ],
         "scale": [
@@ -477,6 +484,9 @@
         "materials": [
          10
         ]
+       },
+       "ChildOf": {
+        "parent": 14
        }
       }
      },
@@ -489,7 +499,7 @@
        "Transform": {
         "pos": [
          -0.34,
-         0.75,
+         0,
          0
         ],
         "scale": [
@@ -505,6 +515,9 @@
         "materials": [
          10
         ]
+       },
+       "ChildOf": {
+        "parent": 14
        }
       }
      },
@@ -517,7 +530,7 @@
        "Transform": {
         "pos": [
          0.34,
-         0.75,
+         0,
          0
         ],
         "scale": [
@@ -533,6 +546,9 @@
         "materials": [
          10
         ]
+       },
+       "ChildOf": {
+        "parent": 14
        }
       }
      },
@@ -545,7 +561,7 @@
        "Transform": {
         "pos": [
          -0.12,
-         0.25,
+         -0.5,
          0
         ],
         "scale": [
@@ -561,6 +577,9 @@
         "materials": [
          12
         ]
+       },
+       "ChildOf": {
+        "parent": 14
        }
       }
      },
@@ -573,7 +592,7 @@
        "Transform": {
         "pos": [
          0.12,
-         0.25,
+         -0.5,
          0
         ],
         "scale": [
@@ -589,6 +608,9 @@
         "materials": [
          12
         ]
+       },
+       "ChildOf": {
+        "parent": 14
        }
       }
      },
@@ -600,9 +622,11 @@
        },
        "Skylight": {
         "equirect": 15,
-        "colorR": 1,
-        "colorG": 1,
-        "colorB": 1,
+        "color": [
+         1,
+         1,
+         1
+        ],
         "intensity": 0.2
        }
       }

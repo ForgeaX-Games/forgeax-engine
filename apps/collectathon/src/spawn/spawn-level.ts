@@ -40,7 +40,7 @@ const WALL_HALF_THICK = 0.25;
  * centered offset) rather than a razor-thin one: a thin floor under a KCC capsule
  * resting in exact contact makes Rapier's computeColliderMovement refuse planar
  * movement while grounded (the shape-cast clips the slab edge). Matches the
- * apps/hello/character ground (halfExtentsY 0.5) which moves correctly grounded.
+ * apps/hello/character ground (halfExtents[1] 0.5) which moves correctly grounded.
  */
 const GROUND_HALF_THICK = 0.5;
 
@@ -108,9 +108,7 @@ function spawnGroundCollider(world: World): EntityHandle {
         component: Collider,
         data: {
           shape: ColliderShapeValue.cuboid,
-          halfExtentsX: LEVEL_HALF,
-          halfExtentsY: GROUND_HALF_THICK,
-          halfExtentsZ: LEVEL_HALF,
+          halfExtents: [LEVEL_HALF, GROUND_HALF_THICK, LEVEL_HALF],
           collisionGroups: LEVEL_GROUPS,
         },
       },
@@ -156,9 +154,7 @@ function spawnWalls(world: World): EntityHandle[] {
           component: Collider,
           data: {
             shape: ColliderShapeValue.cuboid,
-            halfExtentsX: s.half.x,
-            halfExtentsY: s.half.y,
-            halfExtentsZ: s.half.z,
+            halfExtents: [s.half.x, s.half.y, s.half.z],
             collisionGroups: LEVEL_GROUPS,
           },
         },

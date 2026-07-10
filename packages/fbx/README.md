@@ -97,7 +97,7 @@ dispatch errors -- `importer-not-registered`, `source-read-failed`,
 <summary>Getting pre-built WASM (fetch-wasm)</summary>
 
 The `pkg/` directory is **not committed to git** (zero-binary invariant). On a
-fresh checkout you can fetch a pre-built WASM binary from GitHub Releases
+fresh checkout you can fetch the pre-built WASM bundle from GitHub Releases
 instead of compiling locally:
 
 ```bash
@@ -106,14 +106,18 @@ pnpm -F @forgeax/engine-fbx fetch-wasm
 
 This runs `scripts/fetch-wasm.mjs`, which:
 1. Resolves the GitHub repo from `git remote get-url origin` (SSH or HTTPS).
-2. Computes the **content key** = `SHA256(bridge.c)` truncated to 8 hex chars.
-3. Looks for a matching asset `fbx-wasm-v0.23.0-{sha8}.wasm` under the
+2. Computes the **content key** = `SHA256(bridge.c + fetch-ufbx.mjs +
+   build-wasm.mjs)` truncated to 8 hex chars (SSOT: `scripts/content-key.mjs`).
+3. Looks for a matching asset `fbx-wasm-v0.23.0-{sha8}.tar.gz` under the
    `wasm-artifacts` release tag.
-4. Downloads it to `pkg/fbx-wasm.wasm` (stable name -- the runtime
-   `new URL('../pkg/fbx-wasm.wasm', import.meta.url)` does not see the hash).
+4. Downloads and extracts it into `pkg/`. emcc emits a **pair** —
+   `pkg/fbx-wasm.wasm` + its self-loading `pkg/fbx-wasm.mjs` glue — and the
+   runtime imports the `.mjs` glue, so the release ships the whole `pkg/` as one
+   tarball (mirrors `@forgeax/engine-wgpu-wasm` and `@forgeax/engine-codec`), not
+   a lone `.wasm`.
 
-The content key guarantees you get the binary that matches your exact
-`bridge.c` source -- no accidental mismatch.
+The content key guarantees you get the bundle that matches your exact source --
+no accidental mismatch.
 
 If the asset is not found (e.g. modified `bridge.c` that was never published),
 the script prints a structured error with a hint to compile locally. If the
@@ -154,16 +158,17 @@ Both `ufbx.c`/`.h` and `pkg/` are in `.gitignore`; CI provides emsdk via
 | `E3_ORIGIN_UNSUPPORTED_HOST` | `git remote get-url origin` returned a non-GitHub host | Check `git remote -v`; set origin to a GitHub remote |
 | `E3_ORIGIN_PARSE_FAILED` | Cannot parse the origin URL into owner/repo | Expected `git@github.com:OWNER/REPO.git` or `https://github.com/OWNER/REPO.git` |
 | `E3_NO_ORIGIN` | No `origin` remote configured | `git remote add origin <url>` or `build:wasm` |
-| `E4_HASH_MISMATCH` | `bridge.c` SHA does not match any published asset | `pnpm -F @forgeax/engine-fbx build:wasm` |
+| `E4_HASH_MISMATCH` | content key does not match any published asset | `pnpm -F @forgeax/engine-fbx build:wasm` |
 | `E5_AUTH_FAILED` | Private repo requires authentication (401/403) | Set `GITHUB_TOKEN` environment variable, or `build:wasm` |
 
 ### Content-keyed idempotency
 
-The CI `main-push` release step publishes `fbx-wasm-v0.23.0-{sha8}.wasm` under
-the `wasm-artifacts` release tag. The publish step checks for an existing asset
-with the same name before uploading -- identical `bridge.c` content never
-produces a duplicate release. The hash is computed from the `bridge.c` content
-at build time (Derive, Don't Duplicate -- no stored hash file).
+The CI `main-push` release step packs `pkg/` into `fbx-wasm-v0.23.0-{sha8}.tar.gz`
+and publishes it under the `wasm-artifacts` release tag. The publish step checks
+for an existing asset with the same name before uploading -- identical source
+content never produces a duplicate release. The hash is computed from the source
+at build time via `scripts/content-key.mjs` (Derive, Don't Duplicate -- no stored
+hash file).
 
 ## License
 

@@ -231,7 +231,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           { component: ChildOf, data: { parent: spotRig } },
           {
             component: SpotLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0, intensity: 1 },
+            data: { direction: [0, -1, 0], intensity: 1 },
           },
         )
         .unwrap();
@@ -253,12 +253,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         .spawn({
           component: DirectionalLight,
           data: {
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
-            colorR: 1,
-            colorG: 1,
-            colorB: 1,
+            direction: [0, -1, 0],
+            color: [1, 1, 1],
             intensity: 1,
           },
         })
@@ -850,22 +846,22 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // @forgeax/engine-runtime/__tests__/render-system-clear-camera.test.ts -
   // feat-20260608-create-app-param-surface-trim / M1 / TASK-002.
   //
-  // Asserts the clear-color flow from a Camera entity's SoA columns into
+  // Asserts the clear-color flow from a Camera entity's SoA column into
   // the per-frame CameraSnapshot the record stage reads. The extract stage
   // is the boundary between the ECS column-views and the record stage's
-  // GPU recording calls; once clearR/G/B/A is on the snapshot, the record
+  // GPU recording calls; once clearColor is on the snapshot, the record
   // stage can drop `internals.clearColor ?? [0.06, 0.06, 0.08, 1.0]` and
   // read directly from `cameras[0]` (first-archetype-hit per
   // requirements §OOS-2).
   //
-  // Plan-strategy §2 D-1 q6-A locks the 4 x f32 scalar idiom (matches
-  // fov / aspect / near / far / tonemap / antialias / bloom* — every
-  // other Camera column is also a scalar f32, so the SoA read pattern
-  // is identical: one column index per field).
+  // feat-20260709 M3 / D-3: clear-color is one inline `array<f32,4>` column
+  // (collapsed from the feat-20260608 clearR/G/B/A quartet) read on the hot
+  // path as a stride-4 subscript, mirroring the light direction/color SoA
+  // idiom.
   //
-  // AC-03 asserts the boundary: if the snapshot does not surface
-  // clearR/G/B/A, the record stage cannot read them without re-walking
-  // the ECS, defeating the SoA pipeline.
+  // AC-03 asserts the boundary: if the snapshot does not surface clearColor,
+  // the record stage cannot read it without re-walking the ECS, defeating the
+  // SoA pipeline.
 
   function identityTransform() {
     return {
@@ -877,12 +873,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   function spawnCamera(
     world: World,
-    cam: {
-      clearR: number;
-      clearG: number;
-      clearB: number;
-      clearA: number;
-    },
+    cam: { clearColor: readonly [number, number, number, number] },
   ) {
     world
       .spawn(
@@ -894,10 +885,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
             aspect: 1,
             near: 0.1,
             far: 100,
-            clearR: cam.clearR,
-            clearG: cam.clearG,
-            clearB: cam.clearB,
-            clearA: cam.clearA,
+            clearColor: cam.clearColor,
           },
         },
       )
@@ -905,25 +893,25 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   }
 
   describe('render-system-extract clear-color SoA flow (TASK-002)', () => {
-    it('CameraSnapshot surfaces clearR/G/B/A read straight from Camera SoA columns', () => {
+    it('CameraSnapshot surfaces clearColor read straight from the Camera SoA column', () => {
       const world = new World();
-      spawnCamera(world, { clearR: 0.25, clearG: 0.5, clearB: 0.75, clearA: 1.0 });
+      spawnCamera(world, { clearColor: [0.25, 0.5, 0.75, 1.0] });
       propagateTransforms(world);
       const frame = extractFrame(world);
       expect(frame.cameras.length).toBe(1);
       const cam = frame.cameras[0];
       expect(cam).toBeDefined();
       if (!cam) return;
-      expect(cam.clearR).toBeCloseTo(0.25, 6);
-      expect(cam.clearG).toBeCloseTo(0.5, 6);
-      expect(cam.clearB).toBeCloseTo(0.75, 6);
-      expect(cam.clearA).toBeCloseTo(1.0, 6);
+      expect(cam.clearColor[0]).toBeCloseTo(0.25, 6);
+      expect(cam.clearColor[1]).toBeCloseTo(0.5, 6);
+      expect(cam.clearColor[2]).toBeCloseTo(0.75, 6);
+      expect(cam.clearColor[3]).toBeCloseTo(1.0, 6);
     });
 
     it('first-archetype-hit semantics: when N>1 cameras carry distinct clear, snapshot[0] is the first one', () => {
       const world = new World();
-      spawnCamera(world, { clearR: 0.1, clearG: 0.2, clearB: 0.3, clearA: 1.0 });
-      spawnCamera(world, { clearR: 0.9, clearG: 0.8, clearB: 0.7, clearA: 1.0 });
+      spawnCamera(world, { clearColor: [0.1, 0.2, 0.3, 1.0] });
+      spawnCamera(world, { clearColor: [0.9, 0.8, 0.7, 1.0] });
       propagateTransforms(world);
       const frame = extractFrame(world);
       expect(frame.cameras.length).toBeGreaterThanOrEqual(1);
@@ -933,12 +921,12 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // The record stage uses cameras[0] (first-archetype-hit) per OOS-2;
       // assert the snapshot ordering preserves the spawn order so the
       // record stage's cameras[0] read is deterministic.
-      expect(cam0.clearR).toBeCloseTo(0.1, 6);
-      expect(cam0.clearG).toBeCloseTo(0.2, 6);
-      expect(cam0.clearB).toBeCloseTo(0.3, 6);
+      expect(cam0.clearColor[0]).toBeCloseTo(0.1, 6);
+      expect(cam0.clearColor[1]).toBeCloseTo(0.2, 6);
+      expect(cam0.clearColor[2]).toBeCloseTo(0.3, 6);
     });
 
-    it('Camera spawned without explicit clearR/G/B/A defaults to opaque black [0,0,0,1]', () => {
+    it('Camera spawned without explicit clearColor defaults to opaque black [0,0,0,1]', () => {
       const world = new World();
       world
         .spawn(
@@ -954,10 +942,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const cam = frame.cameras[0];
       expect(cam).toBeDefined();
       if (!cam) return;
-      expect(cam.clearR).toBe(0);
-      expect(cam.clearG).toBe(0);
-      expect(cam.clearB).toBe(0);
-      expect(cam.clearA).toBe(1);
+      expect(Array.from(cam.clearColor)).toEqual([0, 0, 0, 1]);
     });
   });
 }

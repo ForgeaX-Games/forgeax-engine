@@ -100,7 +100,7 @@ function makeInjectedWorld(): World {
     { component: Transform, data: identityTransform() },
     {
       component: DirectionalLight,
-      data: { directionX: 0.5, directionY: -1, directionZ: -0.5, castShadow: true, intensity: 1 },
+      data: { direction: [0.5, -1, -0.5], castShadow: true, intensity: 1 },
     },
   );
   world.spawn(

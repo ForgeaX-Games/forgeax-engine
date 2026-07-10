@@ -182,12 +182,8 @@ function buildFixtureWorld(): World {
   world.spawn({
     component: DirectionalLight,
     data: {
-      directionX: FIXTURE_LIGHT_DIR[0],
-      directionY: FIXTURE_LIGHT_DIR[1],
-      directionZ: FIXTURE_LIGHT_DIR[2],
-      colorR: 1,
-      colorG: 1,
-      colorB: 1,
+      direction: [FIXTURE_LIGHT_DIR[0], FIXTURE_LIGHT_DIR[1], FIXTURE_LIGHT_DIR[2]],
+      color: [1, 1, 1],
       intensity: 1,
       // feat-20260613-csm M6 / w22: shadow-m2 fixture predates CSM and
       // expects all geometry to land in cascade 0 (the test reads

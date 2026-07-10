@@ -359,7 +359,7 @@ export {
 /**
  * GlyphText authoring component for world-space MSDF text
  * (feat-20260531-world-space-msdf-text-rendering M4 / w14). Carries
- * `fontHandle` / `text` / `fontSize` / `colorR/G/B/A`; the
+ * `fontHandle` / `text` / `fontSize` / `color: array<f32, 4>`; the
  * `glyphTextLayoutSystem` (this package) bakes a MeshAsset and attaches
  * MeshFilter + MeshRenderer (plan-strategy D-2; GlyphText is pure authoring
  * data, baking is a system responsibility). Co-located with its consuming

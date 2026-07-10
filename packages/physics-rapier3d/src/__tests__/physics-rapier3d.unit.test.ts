@@ -391,9 +391,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
               component: Collider as never,
               data: {
                 shape: 0,
-                halfExtentsX: 10,
-                halfExtentsY: 1,
-                halfExtentsZ: 10,
+                halfExtents: [10, 1, 10],
                 friction: 0.5,
                 restitution: 0,
               },
@@ -434,6 +432,69 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
 
         const bodyCount = pw.getBodyCount();
         expect(bodyCount).toBe(2);
+      });
+    });
+
+    describe('feat-20260709 M4 / w18 -- cuboid halfExtents array passes through the 3D bridge', () => {
+      it('per-axis resting heights track halfExtents[1] (axis-order regression)', async () => {
+        const RAPIER = await loadRapier3D();
+        if ('code' in RAPIER) {
+          expect(RAPIER.code).toBe('wasm-load-failed');
+          return;
+        }
+
+        // Two grounds with distinct halfExtents[1] (Y half-height) at the same
+        // base Y. A ball dropped on each rests at base + halfY + radius. If the
+        // array collapse swizzled axes (e.g. read [2] where [1] was meant) or
+        // dropped an element, the two resting heights would not differ by the
+        // Y-half delta -- a dimension- AND axis-order-sensitive regression.
+        async function restHeight(halfExtents: readonly [number, number, number]): Promise<number> {
+          const world = new World();
+          const pw = createRapier3DPhysicsWorld(RAPIER as never);
+          world.insertResource('PhysicsWorld', pw);
+          const ball = world
+            .spawn(
+              { component: Transform as never, data: { pos: [0, 8, 0] } },
+              {
+                component: RigidBody as never,
+                data: { type: RigidBodyTypeValue.dynamic, mass: 1, gravityScale: 1 },
+              },
+              {
+                component: Collider as never,
+                data: { shape: 1, radius: 0.5, friction: 0.5, restitution: 0 },
+              },
+            )
+            .unwrap();
+          world
+            .spawn(
+              { component: Transform as never, data: { pos: [0, 0, 0] } },
+              { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+              {
+                component: Collider as never,
+                data: { shape: 0, halfExtents, friction: 0.5, restitution: 0 },
+              },
+            )
+            .unwrap();
+          registerPhysicsSystems(world);
+          for (let i = 0; i < 300; i++) {
+            world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
+            world.update();
+          }
+          const r = world.get(ball, Transform as never);
+          expect(r.ok).toBe(true);
+          return r.ok ? ((r.value as { pos: Float32Array }).pos[1] as number) : Number.NaN;
+        }
+
+        // Thin ground: top at 0.5, ball rests ~1.0.
+        const thin = await restHeight([10, 0.5, 10]);
+        // Thick ground: top at 3.0, ball rests ~3.5.
+        const thick = await restHeight([10, 3, 10]);
+        expect(thin).toBeGreaterThan(0.7);
+        expect(thin).toBeLessThan(1.3);
+        expect(thick).toBeGreaterThan(3.2);
+        expect(thick).toBeLessThan(3.8);
+        // Delta must track the Y-half difference (3 - 0.5 = 2.5).
+        expect(thick - thin).toBeGreaterThan(2.0);
       });
     });
 
@@ -661,11 +722,9 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
     }
 
     function spawnStaticBox(world: World, box: StaticBox): number {
-      const data: Record<string, number> = {
+      const data: Record<string, number | readonly number[]> = {
         shape: 0,
-        halfExtentsX: box.halfExtents[0],
-        halfExtentsY: box.halfExtents[1],
-        halfExtentsZ: box.halfExtents[2],
+        halfExtents: [box.halfExtents[0], box.halfExtents[1], box.halfExtents[2]],
         friction: 0.5,
         restitution: 0,
       };
@@ -1236,7 +1295,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
             { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
             {
               component: Collider as never,
-              data: { shape: 0, halfExtentsX: 1, halfExtentsY: 0.5, halfExtentsZ: 1 },
+              data: { shape: 0, halfExtents: [1, 0.5, 1] },
             },
           )
           .unwrap() as unknown as number;

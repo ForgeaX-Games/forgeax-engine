@@ -644,10 +644,7 @@ describe('Renderer draw device-lost guard (w7 TDD RED)', () => {
           aspect: 1,
           near: 0.1,
           far: 100,
-          clearR: 0,
-          clearG: 0,
-          clearB: 0,
-          clearA: 1,
+          clearColor: [0, 0, 0, 1],
         },
       },
     );

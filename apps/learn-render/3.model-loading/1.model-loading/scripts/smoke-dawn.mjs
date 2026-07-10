@@ -304,8 +304,8 @@ const d = [-0.3, -1.0, -0.3];
 const invLen = 1 / Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
 world.spawn(
   { component: DirectionalLight, data: {
-    directionX: d[0] * invLen, directionY: d[1] * invLen, directionZ: d[2] * invLen,
-    colorR: 1.0, colorG: 0.95, colorB: 0.85, intensity: 3.0,
+    direction: [d[0] * invLen, d[1] * invLen, d[2] * invLen],
+    color: [1.0, 0.95, 0.85], intensity: 3.0,
     mapSize: 2048, shadowDistance: 36, depthBias: 0.005,
   } },
 );
@@ -319,7 +319,7 @@ const pointDefs = [
 for (const pd of pointDefs) {
   world.spawn(
     { component: Transform, data: { pos: [pd.pos[0], pd.pos[1], pd.pos[2]], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
-    { component: PointLight, data: { colorR: pd.color[0], colorG: pd.color[1], colorB: pd.color[2],
+    { component: PointLight, data: { color: [pd.color[0], pd.color[1], pd.color[2]],
       intensity: pd.intensity, range: pd.range } },
   );
 }

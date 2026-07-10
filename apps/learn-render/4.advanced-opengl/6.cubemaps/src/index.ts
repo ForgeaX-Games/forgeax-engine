@@ -148,12 +148,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn({
     component: DirectionalLight,
     data: {
-      directionX: -0.4,
-      directionY: -0.6,
-      directionZ: -0.7,
-      colorR: 1,
-      colorG: 1,
-      colorB: 1,
+      direction: [-0.4, -0.6, -0.7],
+      color: [1, 1, 1],
       intensity: 1.5,
     },
   });
@@ -178,10 +174,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           tonemap: TONEMAP_REINHARD_EXTENDED,
           // LO 4.6 dark slate clear (was the retired RendererOptions.clearColor;
           // sinks here per feat-20260608 D-1).
-          clearR: 0.1,
-          clearG: 0.1,
-          clearB: 0.1,
-          clearA: 1.0,
+          clearColor: [0.1, 0.1, 0.1, 1.0],
         },
       },
     )

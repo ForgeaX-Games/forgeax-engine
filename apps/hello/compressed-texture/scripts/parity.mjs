@@ -336,10 +336,10 @@ for (const [px, py, pz, sx, sy, sz] of quads) {
     { component: Transform, data: { pos: [px, py, pz], scale: [sx, sy, sz]} },
   );
 }
-world.spawn({ component: DirectionalLight, data: { directionX: -0.1, directionY: -0.6, directionZ: -1, colorR: 1, colorG: 1, colorB: 1, intensity: 3 } });
+world.spawn({ component: DirectionalLight, data: { direction: [-0.1, -0.6, -1], color: [1, 1, 1], intensity: 3 } });
 world.spawn(
   { component: Transform, data: { pos: [0, 0, 3]} },
-  { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 }), clearR: 0.02, clearG: 0.02, clearB: 0.05, clearA: 1 } },
+  { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 }), clearColor: [0.02, 0.02, 0.05, 1] } },
 );
 
 const start = performance.now();

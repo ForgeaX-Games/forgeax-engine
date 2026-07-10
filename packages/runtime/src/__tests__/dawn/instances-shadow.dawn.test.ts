@@ -244,12 +244,10 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
           near: 0.1,
           far: 100,
           // feat-20260608 TASK-007: clearColor moved from createRenderer to
-          // Camera component. Clear values must match the [13,13,20] sRGB
+          // the Camera component (one inline array<f32,4> column as of
+          // feat-20260709 M3). Clear values must match the [13,13,20] sRGB
           // bytes asserted at line ~405 (linear [0.05, 0.05, 0.08]).
-          clearR: 0.05,
-          clearG: 0.05,
-          clearB: 0.08,
-          clearA: 1,
+          clearColor: [0.05, 0.05, 0.08, 1],
         },
       },
     );
@@ -258,12 +256,8 @@ describe('w10 -- shadow instanced dawn smoke (AC-05 behavioral)', () => {
     world.spawn({
       component: DirectionalLight,
       data: {
-        directionX: 0,
-        directionY: -1,
-        directionZ: -0.3,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [0, -1, -0.3],
+        color: [1, 1, 1],
         intensity: 1,
         mapSize: 1024,
         depthBias: 0.005,

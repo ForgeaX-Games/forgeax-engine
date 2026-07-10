@@ -209,7 +209,7 @@ world.spawn(
 );
 world.spawn({
   component: DirectionalLight,
-  data: { directionX: -0.3, directionY: -1.0, directionZ: -0.5, colorR: 1.0, colorG: 0.95, colorB: 0.9, intensity: 1.0 },
+  data: { direction: [-0.3, -1.0, -0.5], color: [1.0, 0.95, 0.9], intensity: 1.0 },
 });
 
 const instRes = world.instantiateScene(outerHandle);

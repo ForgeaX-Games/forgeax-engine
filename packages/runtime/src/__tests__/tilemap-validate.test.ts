@@ -55,8 +55,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
         data: {
           cols: 2,
           rows: 2,
-          tileSizeX: 16,
-          tileSizeY: 16,
+          tileSize: [16, 16],
           chunkSize: 8,
           tileset: tilesetHandle,
         },
@@ -75,8 +74,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
         data: {
           cols: 0,
           rows: 2,
-          tileSizeX: 16,
-          tileSizeY: 16,
+          tileSize: [16, 16],
           chunkSize: 8,
           tileset: tilesetHandle,
         },
@@ -99,8 +97,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
         data: {
           cols: 2,
           rows: 0,
-          tileSizeX: 16,
-          tileSizeY: 16,
+          tileSize: [16, 16],
           chunkSize: 8,
           tileset: tilesetHandle,
         },
@@ -119,8 +116,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
         data: {
           cols: 2,
           rows: 2,
-          tileSizeX: 16,
-          tileSizeY: 16,
+          tileSize: [16, 16],
           chunkSize: 0,
           tileset: tilesetHandle,
         },
@@ -138,8 +134,7 @@ describe('validateTilemapAtRegister — M0 baseline invariants', () => {
         data: {
           cols: 2,
           rows: 2,
-          tileSizeX: 16,
-          tileSizeY: 16,
+          tileSize: [16, 16],
           chunkSize: 8,
           tileset: toShared<'TilesetAsset'>(0),
         },
@@ -157,7 +152,7 @@ describe('validateTileLayerAtRegister — M0 baseline invariants', () => {
     const tilemap = world
       .spawn({
         component: Tilemap,
-        data: { cols, rows, tileSizeX: 16, tileSizeY: 16, chunkSize: 8, tileset: tilesetHandle },
+        data: { cols, rows, tileSize: [16, 16], chunkSize: 8, tileset: tilesetHandle },
       })
       .unwrap();
     const layer = world

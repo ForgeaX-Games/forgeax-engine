@@ -19,7 +19,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: {},
+        data: { direction: [0, -1, 0] },
       });
       expect(r.ok).toBe(true);
       const e = r.unwrap();
@@ -36,7 +36,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: {},
+        data: { direction: [0, -1, 0] },
       });
       expect(r.ok).toBe(true);
       const e = r.unwrap();
@@ -49,9 +49,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: {
-          mapSize: 1024,
-        },
+        data: { direction: [0, -1, 0], mapSize: 1024 },
       });
       expect(r.ok).toBe(true);
       const e = r.unwrap();
@@ -80,7 +78,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: { cascadeCount: 0 } as any,
+        data: { direction: [0, -1, 0], cascadeCount: 0 } as any,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
       expect(r.error.code).toBe('shadow-invalid-config');
@@ -93,7 +91,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: { cascadeCount: 5 } as any,
+        data: { direction: [0, -1, 0], cascadeCount: 5 } as any,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
       expect(r.error.code).toBe('shadow-invalid-config');
@@ -107,7 +105,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: { splitLambda: -0.1 } as any,
+        data: { direction: [0, -1, 0], splitLambda: -0.1 } as any,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
       expect(r.error.code).toBe('shadow-invalid-config');
@@ -120,7 +118,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: { splitLambda: 1.1 } as any,
+        data: { direction: [0, -1, 0], splitLambda: 1.1 } as any,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
       expect(r.error.code).toBe('shadow-invalid-config');
@@ -134,7 +132,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: { cascadeBlend: -0.1 } as any,
+        data: { direction: [0, -1, 0], cascadeBlend: -0.1 } as any,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
       expect(r.error.code).toBe('shadow-invalid-config');
@@ -147,7 +145,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: { cascadeBlend: 0.6 } as any,
+        data: { direction: [0, -1, 0], cascadeBlend: 0.6 } as any,
       }) as unknown as ErrorShape;
       expect(r.ok).toBe(false);
       expect(r.error.code).toBe('shadow-invalid-config');
@@ -161,7 +159,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: { cascadeCount: 1, splitLambda: 0, cascadeBlend: 0 } as any,
+        data: { direction: [0, -1, 0], cascadeCount: 1, splitLambda: 0, cascadeBlend: 0 } as any,
       });
       expect(r.ok).toBe(true);
     });
@@ -224,7 +222,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: { [legacyField]: 20 } as any,
+        data: { direction: [0, -1, 0], [legacyField]: 20 } as any,
       });
       expect(r.ok).toBe(false);
       if (!r.ok) {
@@ -242,7 +240,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: { mapSize: 0 },
+        data: { direction: [0, -1, 0], mapSize: 0 },
       });
       expect(r.ok).toBe(false);
       if (!r.ok) {
@@ -265,7 +263,7 @@ describe('CSM component schema (w1)', () => {
       const world = new World();
       const r = world.spawn({
         component: DirectionalLight,
-        data: { mapSize: 1 },
+        data: { direction: [0, -1, 0], mapSize: 1 },
       });
       expect(r.ok).toBe(true);
     });

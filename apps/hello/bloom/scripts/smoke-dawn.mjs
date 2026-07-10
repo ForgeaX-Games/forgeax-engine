@@ -270,7 +270,7 @@ app.world.spawn(
 // Directional light.
 app.world.spawn({
   component: DirectionalLight,
-  data: { directionX: -0.4, directionY: -0.6, directionZ: -0.7, colorR: 1, colorG: 1, colorB: 1, intensity: 1.5 },
+  data: { direction: [-0.4, -0.6, -0.7], color: [1, 1, 1], intensity: 1.5 },
 });
 
 // Camera with bloom ENABLED.

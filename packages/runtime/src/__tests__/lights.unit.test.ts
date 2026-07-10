@@ -23,7 +23,14 @@ import { World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
 import type { Handle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Camera, DirectionalLight, PointLight, SpotLight, Transform } from '../components';
+import {
+  Camera,
+  DirectionalLight,
+  PointLight,
+  Skylight,
+  SpotLight,
+  Transform,
+} from '../components';
 import type { ShadowInvalidConfigError } from '../errors/render';
 import { packLightArrayHeader, packPointLight, packSpotLight } from '../light-buffer-layout';
 import { computeInvRangeSquared, degToCos } from '../light-helpers';
@@ -31,6 +38,135 @@ import { buildPbrViewBglEntries } from '../pbr-pipeline';
 import type { PointLightSnapshot, SpotLightSnapshot } from '../render-system-extract';
 import { extractFrame } from '../render-system-extract';
 import { propagateTransforms } from '../systems/propagate-transforms';
+
+{
+  // ─── feat-20260709 M2 / w4: vec-collapse schema shape + default equivalence ───
+  // AC-01 + E1: direction is array<f32,3> with NO default (D-5 -- the only
+  // field deliberately left defaultless so an omitted/zero direction is a
+  // fail-fast validate rejection, not a silent all-zero); color is array<f32,3>
+  // with an explicit layer-2 default [1,1,1] (Skylight/Point/Spot/Dir share the
+  // white default; the array layer-3 fallback is all-zero, so the default MUST
+  // be explicit -- Transform quat/scale precedent).
+  describe('lights vec-collapse schema shape (w4, AC-01 + E1)', () => {
+    it('DirectionalLight direction/color are array<f32,3>; color default [1,1,1], direction no default', () => {
+      expect(DirectionalLight.schema.direction).toBe('array<f32, 3>');
+      expect(DirectionalLight.schema.color).toBe('array<f32, 3>');
+      expect('directionX' in DirectionalLight.schema).toBe(false);
+      expect('colorR' in DirectionalLight.schema).toBe(false);
+      const defaults = DirectionalLight.defaults as Record<string, unknown>;
+      expect(Array.from(defaults.color as Float32Array)).toEqual([1, 1, 1]);
+      expect('direction' in defaults).toBe(false);
+    });
+
+    it('SpotLight direction/color are array<f32,3>; color default [1,1,1], direction no default', () => {
+      expect(SpotLight.schema.direction).toBe('array<f32, 3>');
+      expect(SpotLight.schema.color).toBe('array<f32, 3>');
+      expect('directionX' in SpotLight.schema).toBe(false);
+      expect('colorR' in SpotLight.schema).toBe(false);
+      const defaults = SpotLight.defaults as Record<string, unknown>;
+      expect(Array.from(defaults.color as Float32Array)).toEqual([1, 1, 1]);
+      expect('direction' in defaults).toBe(false);
+    });
+
+    it('PointLight color is array<f32,3> with default [1,1,1]', () => {
+      expect(PointLight.schema.color).toBe('array<f32, 3>');
+      expect('colorR' in PointLight.schema).toBe(false);
+      const defaults = PointLight.defaults as Record<string, unknown>;
+      expect(Array.from(defaults.color as Float32Array)).toEqual([1, 1, 1]);
+    });
+
+    it('Skylight color is array<f32,3> with default [1,1,1]', () => {
+      expect(Skylight.schema.color).toBe('array<f32, 3>');
+      expect('colorR' in Skylight.schema).toBe(false);
+      const defaults = Skylight.defaults as Record<string, unknown>;
+      expect(Array.from(defaults.color as Float32Array)).toEqual([1, 1, 1]);
+    });
+
+    it('E1: omitting color spawns the same white light as the pre-collapse scalar default', () => {
+      const world = new World();
+      const dir = world
+        .spawn({ component: DirectionalLight, data: { direction: [0, -1, 0] } })
+        .unwrap();
+      expect(Array.from(world.get(dir, DirectionalLight).unwrap().color)).toEqual([1, 1, 1]);
+
+      const point = world.spawn({ component: PointLight, data: {} }).unwrap();
+      expect(Array.from(world.get(point, PointLight).unwrap().color)).toEqual([1, 1, 1]);
+
+      const sky = world.spawn({ component: Skylight, data: {} }).unwrap();
+      expect(Array.from(world.get(sky, Skylight).unwrap().color)).toEqual([1, 1, 1]);
+    });
+
+    it('serialized spawn values round-trip as array<f32,3> direction/color', () => {
+      const world = new World();
+      const e = world
+        .spawn({
+          component: SpotLight,
+          data: { direction: [0.1, -0.9, 0.2], color: [0.3, 0.4, 0.5] },
+        })
+        .unwrap();
+      const view = world.get(e, SpotLight).unwrap();
+      expect(Array.from(view.direction)).toEqual([
+        expect.closeTo(0.1, 5),
+        expect.closeTo(-0.9, 5),
+        expect.closeTo(0.2, 5),
+      ]);
+      expect(Array.from(view.color)).toEqual([
+        expect.closeTo(0.3, 5),
+        expect.closeTo(0.4, 5),
+        expect.closeTo(0.5, 5),
+      ]);
+    });
+  });
+}
+
+{
+  // ─── feat-20260709 M2 / w5: direction fail-fast validate rejection ───
+  // AC-03 (+ AC-02 per research-decisions D-R1): direction has NO layer-2
+  // default, so an omitted direction lands the array layer-3 all-zero [0,0,0].
+  // Both an explicit zero-vector and an omitted direction are the same illegal
+  // state -- the light's validate() rejects both with SpawnLightInvalidBoundsError
+  // (detail.field='direction'). AC-02's compile-time "omit direction is red"
+  // is unreachable (spawn data is Partial<InputShapeOf>, all fields optional);
+  // D-R1 folds it into this runtime rejection. The compile-time guarantee that
+  // survives is AC-04 (residual per-axis key = excess-unknown-key typecheck red).
+  describe('lights direction fail-fast validate (w5, AC-03 / AC-02 via D-R1)', () => {
+    for (const [name, component] of [
+      ['DirectionalLight', DirectionalLight],
+      ['SpotLight', SpotLight],
+    ] as const) {
+      it(`${name}: explicit zero-vector direction is rejected with field='direction'`, () => {
+        const world = new World();
+        const r = world.spawn({ component, data: { direction: [0, 0, 0] } });
+        expect(r.ok).toBe(false);
+        if (!r.ok) {
+          expect(r.error.code).toBe('spawn-light-invalid-bounds');
+          const detail = (r.error as unknown as { detail: { field: string } }).detail;
+          expect(detail.field).toBe('direction');
+          const hint = (r.error as unknown as { hint: string }).hint;
+          expect(hint.length).toBeGreaterThan(0);
+          expect(hint).toContain('direction');
+        }
+      });
+
+      it(`${name}: omitted direction (layer-3 all-zero) is rejected with field='direction'`, () => {
+        const world = new World();
+        const r = world.spawn({ component, data: {} });
+        expect(r.ok).toBe(false);
+        if (!r.ok) {
+          expect(r.error.code).toBe('spawn-light-invalid-bounds');
+          const detail = (r.error as unknown as { detail: { field: string } }).detail;
+          expect(detail.field).toBe('direction');
+        }
+      });
+
+      it(`${name}: a non-zero direction spawns successfully`, () => {
+        const world = new World();
+        const r = world.spawn({ component, data: { direction: [0, -1, 0] } });
+        expect(r.ok).toBe(true);
+      });
+    }
+  });
+}
 
 {
   // ─── from directional-light-defaults.test.ts ───
@@ -41,17 +177,13 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const e = world
           .spawn({
             component: DirectionalLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0 },
+            data: { direction: [0, -1, 0] },
           })
           .unwrap();
 
         const view = world.get(e, DirectionalLight).unwrap();
-        expect(view.directionX).toBe(0);
-        expect(view.directionY).toBe(-1);
-        expect(view.directionZ).toBe(0);
-        expect(view.colorR).toBe(1);
-        expect(view.colorG).toBe(1);
-        expect(view.colorB).toBe(1);
+        expect(Array.from(view.direction)).toEqual([0, -1, 0]);
+        expect(Array.from(view.color)).toEqual([1, 1, 1]);
         expect(view.intensity).toBe(1);
       });
 
@@ -61,18 +193,14 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn({
             component: DirectionalLight,
             data: {
-              directionX: -0.5,
-              directionY: -1,
-              directionZ: -0.3,
-              colorR: 0.9,
-              colorG: 0.8,
-              colorB: 0.7,
+              direction: [-0.5, -1, -0.3],
+              color: [0.9, 0.8, 0.7],
               intensity: 0.5,
             },
           })
           .unwrap();
         const view = world.get(e, DirectionalLight).unwrap();
-        expect(view.colorR).toBeCloseTo(0.9, 5);
+        expect(view.color[0]).toBeCloseTo(0.9, 5);
         expect(view.intensity).toBe(0.5);
       });
     });
@@ -102,9 +230,13 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(defaults.shadowDistance).toBeCloseTo(200, 5);
         expect(defaults.pcfKernelSize).toBe(3);
 
-        // Merged component: 7 light + 1 castShadow + 8 shadow = 16 fields
-        // (nearPlane removed — derived from camera near; farPlane -> shadowDistance)
-        expect(Object.keys(dl.schema).length).toBe(16);
+        // Merged component: 3 light (direction + color arrays + intensity) +
+        // 1 castShadow + 8 shadow = 12 fields (feat-20260709 M2 collapsed
+        // direction/color from 6 per-axis scalars to 2 array<f32,3> columns;
+        // nearPlane removed — derived from camera near; farPlane -> shadowDistance)
+        expect(Object.keys(dl.schema).length).toBe(12);
+        expect('direction' in dl.schema).toBe(true);
+        expect('color' in dl.schema).toBe(true);
         expect('cascadeCount' in dl.schema).toBe(true);
         expect('splitLambda' in dl.schema).toBe(true);
         expect('cascadeBlend' in dl.schema).toBe(true);
@@ -123,9 +255,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 
         const r = world.spawn({
           component: DirectionalLight,
-          data: {
-            mapSize: 2048,
-          },
+          data: { direction: [0, -1, 0], mapSize: 2048 },
         });
         expect(r.ok).toBe(true);
         const e = r.unwrap();
@@ -149,7 +279,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 
         const r = world.spawn({
           component: DirectionalLight,
-          data: {},
+          data: { direction: [0, -1, 0] },
         });
         expect(r.ok).toBe(true);
         const e = r.unwrap();
@@ -171,6 +301,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const r = world.spawn({
           component: DirectionalLight,
           data: {
+            direction: [0, -1, 0],
             cascadeCount: 2,
             splitLambda: 0.5,
             cascadeBlend: 0.1,
@@ -201,12 +332,8 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const r = world.spawn({
           component: DirectionalLight,
           data: {
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
-            colorR: 1,
-            colorG: 1,
-            colorB: 1,
+            direction: [0, -1, 0],
+            color: [1, 1, 1],
             intensity: 1,
             mapSize: 2048,
           },
@@ -217,7 +344,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const dlResult = world.get(e, DirectionalLight);
         expect(dlResult.ok).toBe(true);
         const dl = dlResult.unwrap();
-        expect(dl.directionX).toBe(0);
+        expect(dl.direction[0]).toBe(0);
         expect(dl.intensity).toBe(1);
         expect(dl.mapSize).toBeCloseTo(2048, 5);
         expect(dl.depthBias).toBeCloseTo(0.005, 5);
@@ -229,7 +356,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         world
           .spawn({
             component: DirectionalLight,
-            data: { mapSize: 512 },
+            data: { direction: [0, -1, 0], mapSize: 512 },
           })
           .unwrap();
 
@@ -282,12 +409,8 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn({
             component: DirectionalLight,
             data: {
-              directionX: 0,
-              directionY: -1,
-              directionZ: 0,
-              colorR: 1,
-              colorG: 1,
-              colorB: 1,
+              direction: [0, -1, 0],
+              color: [1, 1, 1],
               intensity: 0.5,
             },
           })
@@ -303,9 +426,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
             {
               component: PointLight,
               data: {
-                colorR: 1,
-                colorG: 0.5,
-                colorB: 0.25,
+                color: [1, 0.5, 0.25],
                 intensity: 4,
                 range: 10,
               },
@@ -322,9 +443,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
             {
               component: PointLight,
               data: {
-                colorR: 0.2,
-                colorG: 0.4,
-                colorB: 0.6,
+                color: [0.2, 0.4, 0.6],
                 intensity: 2,
                 range: Number.POSITIVE_INFINITY,
               },
@@ -342,12 +461,8 @@ import { propagateTransforms } from '../systems/propagate-transforms';
             {
               component: SpotLight,
               data: {
-                directionX: 0,
-                directionY: -1,
-                directionZ: 0,
-                colorR: 1,
-                colorG: 1,
-                colorB: 1,
+                direction: [0, -1, 0],
+                color: [1, 1, 1],
                 intensity: 8,
                 range: 25,
                 innerConeDeg: 10,
@@ -504,7 +619,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
             },
             {
               component: SpotLight,
-              data: { directionX: 0, directionY: -1, directionZ: 0, castShadow: true },
+              data: { direction: [0, -1, 0], castShadow: true },
             },
           )
           .unwrap();
@@ -573,7 +688,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
             },
             {
               component: SpotLight,
-              data: { directionX: 0, directionY: 1e-10, directionZ: 0 },
+              data: { direction: [0, 1e-10, 0] },
             },
           )
           .unwrap();
@@ -629,7 +744,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
             },
             {
               component: SpotLight,
-              data: { directionX: 0, directionY: -1, directionZ: 0 },
+              data: { direction: [0, -1, 0] },
             },
           )
           .unwrap();
@@ -696,7 +811,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
             },
             {
               component: SpotLight,
-              data: { directionX: 0, directionY: -1, directionZ: 0, castShadow },
+              data: { direction: [0, -1, 0], castShadow },
             },
           )
           .unwrap();
@@ -1504,9 +1619,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .unwrap();
 
         const view = world.get(e, PointLight).unwrap();
-        expect(view.colorR).toBe(1);
-        expect(view.colorG).toBe(1);
-        expect(view.colorB).toBe(1);
+        expect(Array.from(view.color)).toEqual([1, 1, 1]);
         expect(view.intensity).toBe(1);
         expect(view.range).toBe(10.0);
       });
@@ -1517,18 +1630,16 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn({
             component: PointLight,
             data: {
-              colorR: 0.9,
-              colorG: 0.8,
-              colorB: 0.7,
+              color: [0.9, 0.8, 0.7],
               intensity: 0.5,
               range: 12.5,
             },
           })
           .unwrap();
         const view = world.get(e, PointLight).unwrap();
-        expect(view.colorR).toBeCloseTo(0.9, 5);
-        expect(view.colorG).toBeCloseTo(0.8, 5);
-        expect(view.colorB).toBeCloseTo(0.7, 5);
+        expect(view.color[0]).toBeCloseTo(0.9, 5);
+        expect(view.color[1]).toBeCloseTo(0.8, 5);
+        expect(view.color[2]).toBeCloseTo(0.7, 5);
         expect(view.intensity).toBe(0.5);
         expect(view.range).toBe(12.5);
       });
@@ -1542,33 +1653,31 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           })
           .unwrap();
         const view = world.get(e, PointLight).unwrap();
-        expect(view.colorR).toBe(1);
-        expect(view.colorG).toBe(1);
-        expect(view.colorB).toBe(1);
+        expect(Array.from(view.color)).toEqual([1, 1, 1]);
         expect(view.intensity).toBe(1);
         expect(view.range).toBe(5);
       });
 
-      it('autocomplete application point: payload.range / colorR / intensity inferred without as casts (AC-01)', () => {
+      it('autocomplete application point: payload.range / color / intensity inferred without as casts (AC-01)', () => {
         const world = new World();
         // The data argument shape is `Partial<ShapeOf<PointLight.schema>>`; each
-        // optional field flows in as `number | undefined` so the call below
-        // type-checks without any `as` assertion. The very fact that this body
-        // compiles is the AC-01 autocomplete witness (no `as` casts; runtime
-        // assertions confirm the values landed).
+        // optional field flows in as its field type (color as a numeric tuple)
+        // so the call below type-checks without any `as` assertion. The very
+        // fact that this body compiles is the AC-01 autocomplete witness (no
+        // `as` casts; runtime assertions confirm the values landed).
         const e = world
           .spawn({
             component: PointLight,
             data: {
               range: 7,
-              colorR: 0.25,
+              color: [0.25, 1, 1],
               intensity: 2,
             },
           })
           .unwrap();
         const view = world.get(e, PointLight).unwrap();
         expect(view.range).toBe(7);
-        expect(view.colorR).toBeCloseTo(0.25, 5);
+        expect(view.color[0]).toBeCloseTo(0.25, 5);
         expect(view.intensity).toBe(2);
       });
     });
@@ -1882,18 +1991,14 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       return { ...identityTransform(), pos: [0, 0, 3] };
     }
 
-    function pointLightData(intensity: number): Record<string, number> {
-      return { colorR: 1, colorG: 1, colorB: 1, intensity, range: 10 };
+    function pointLightData(intensity: number): Record<string, number | number[]> {
+      return { color: [1, 1, 1], intensity, range: 10 };
     }
 
-    function spotLightData(intensity: number): Record<string, number> {
+    function spotLightData(intensity: number): Record<string, number | number[]> {
       return {
-        directionX: 0,
-        directionY: -1,
-        directionZ: 0,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [0, -1, 0],
+        color: [1, 1, 1],
         intensity,
         range: 10,
         innerConeDeg: 10,
@@ -1901,14 +2006,10 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       };
     }
 
-    function directionalLightData(intensity: number): Record<string, number> {
+    function directionalLightData(intensity: number): Record<string, number | number[]> {
       return {
-        directionX: 0,
-        directionY: -1,
-        directionZ: 0,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [0, -1, 0],
+        color: [1, 1, 1],
         intensity,
       };
     }
@@ -2112,17 +2213,13 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const e = world
           .spawn({
             component: SpotLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0 },
+            data: { direction: [0, -1, 0] },
           })
           .unwrap();
 
         const view = world.get(e, SpotLight).unwrap();
-        expect(view.directionX).toBe(0);
-        expect(view.directionY).toBe(-1);
-        expect(view.directionZ).toBe(0);
-        expect(view.colorR).toBe(1);
-        expect(view.colorG).toBe(1);
-        expect(view.colorB).toBe(1);
+        expect(Array.from(view.direction)).toEqual([0, -1, 0]);
+        expect(Array.from(view.color)).toEqual([1, 1, 1]);
         expect(view.intensity).toBe(1);
         expect(view.range).toBe(10.0);
         expect(view.innerConeDeg).toBe(0);
@@ -2134,7 +2231,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const e = world
           .spawn({
             component: SpotLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0 },
+            data: { direction: [0, -1, 0] },
           })
           .unwrap();
         const view = world.get(e, SpotLight).unwrap();
@@ -2148,9 +2245,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn({
             component: SpotLight,
             data: {
-              directionX: 0,
-              directionY: -1,
-              directionZ: 0,
+              direction: [0, -1, 0],
               innerConeDeg: 15,
               outerConeDeg: 30,
               intensity: 2,
@@ -2165,29 +2260,27 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(view.range).toBe(12);
       });
 
-      it('autocomplete application point: payload.outerConeDeg / range / colorR inferred without as casts (AC-02)', () => {
+      it('autocomplete application point: payload.outerConeDeg / range / color inferred without as casts (AC-02)', () => {
         const world = new World();
         // The body type-checks without an `as` cast on any optional field
-        // (innerConeDeg / outerConeDeg / range / colorR / colorG / colorB /
-        // intensity all flow as `number | undefined`); compilation success is
-        // the AC-02 autocomplete witness.
+        // (innerConeDeg / outerConeDeg / range / color / intensity all flow as
+        // their field types); compilation success is the AC-02 autocomplete
+        // witness.
         const e = world
           .spawn({
             component: SpotLight,
             data: {
-              directionX: 1,
-              directionY: 0,
-              directionZ: 0,
+              direction: [1, 0, 0],
               outerConeDeg: 35,
               range: 9,
-              colorR: 0.4,
+              color: [0.4, 1, 1],
             },
           })
           .unwrap();
         const view = world.get(e, SpotLight).unwrap();
         expect(view.outerConeDeg).toBe(35);
         expect(view.range).toBe(9);
-        expect(view.colorR).toBeCloseTo(0.4, 5);
+        expect(view.color[0]).toBeCloseTo(0.4, 5);
       });
     });
   });
@@ -2201,7 +2294,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: SpotLight,
-          data: { directionX: 0, directionY: -1, directionZ: 0, range: -2 },
+          data: { direction: [0, -1, 0], range: -2 },
         });
         expect(r.ok).toBe(false);
         if (!r.ok) {
@@ -2222,9 +2315,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const r = world.spawn({
           component: SpotLight,
           data: {
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
+            direction: [0, -1, 0],
             innerConeDeg: 30,
             outerConeDeg: 25,
           },
@@ -2248,9 +2339,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const r = world.spawn({
           component: SpotLight,
           data: {
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
+            direction: [0, -1, 0],
             outerConeDeg: 91,
           },
         });
@@ -2273,7 +2362,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: SpotLight,
-          data: { directionX: 0, directionY: -1, directionZ: 0 },
+          data: { direction: [0, -1, 0] },
         });
         expect(r.ok).toBe(true);
       });
@@ -2283,9 +2372,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const r = world.spawn({
           component: SpotLight,
           data: {
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
+            direction: [0, -1, 0],
             outerConeDeg: 90,
           },
         });
@@ -2297,19 +2384,19 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(
           world.spawn({
             component: SpotLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0, range: Number.POSITIVE_INFINITY },
+            data: { direction: [0, -1, 0], range: Number.POSITIVE_INFINITY },
           }).ok,
         ).toBe(true);
         expect(
           world.spawn({
             component: SpotLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0, range: 0 },
+            data: { direction: [0, -1, 0], range: 0 },
           }).ok,
         ).toBe(true);
         expect(
           world.spawn({
             component: SpotLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0, range: 8 },
+            data: { direction: [0, -1, 0], range: 8 },
           }).ok,
         ).toBe(true);
       });
@@ -2326,7 +2413,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const e = world
           .spawn({
             component: SpotLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0 },
+            data: { direction: [0, -1, 0] },
           })
           .unwrap();
         const view = world.get(e, SpotLight).unwrap();
@@ -2338,7 +2425,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const e = world
           .spawn({
             component: SpotLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0 },
+            data: { direction: [0, -1, 0] },
           })
           .unwrap();
         const view = world.get(e, SpotLight).unwrap();
@@ -2355,7 +2442,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const e = world
           .spawn({
             component: SpotLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0 },
+            data: { direction: [0, -1, 0] },
           })
           .unwrap();
         const view = world.get(e, SpotLight).unwrap();
@@ -2380,7 +2467,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const e = world
           .spawn({
             component: DirectionalLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0 },
+            data: { direction: [0, -1, 0] },
           })
           .unwrap();
         const view = world.get(e, DirectionalLight).unwrap();
@@ -2392,7 +2479,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const e = world
           .spawn({
             component: DirectionalLight,
-            data: { directionX: 0, directionY: -1, directionZ: 0 },
+            data: { direction: [0, -1, 0] },
           })
           .unwrap();
         const view = world.get(e, DirectionalLight).unwrap();
@@ -2406,9 +2493,11 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(view.pcfKernelSize).toBe(3);
       });
 
-      it('spawn with empty data gets all 8 shadow defaults', () => {
+      it('spawn with direction-only data gets all 8 shadow defaults', () => {
         const world = new World();
-        const e = world.spawn({ component: DirectionalLight, data: {} }).unwrap();
+        const e = world
+          .spawn({ component: DirectionalLight, data: { direction: [0, -1, 0] } })
+          .unwrap();
         const view = world.get(e, DirectionalLight).unwrap();
         expect(view.cascadeCount).toBe(4);
         expect(view.splitLambda).toBeCloseTo(0.75, 5);
@@ -2426,9 +2515,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
           .spawn({
             component: DirectionalLight,
             data: {
-              directionX: 0,
-              directionY: -1,
-              directionZ: 0,
+              direction: [0, -1, 0],
               cascadeCount: 2,
               splitLambda: 0.5,
               cascadeBlend: 0.1,
@@ -2451,8 +2538,10 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         expect(view.pcfKernelSize).toBe(5);
       });
 
-      it('schema has 16 fields (7 light + 1 castShadow + 8 shadow)', () => {
-        expect(Object.keys(DirectionalLight.schema).length).toBe(16);
+      it('schema has 12 fields (3 light + 1 castShadow + 8 shadow)', () => {
+        expect(Object.keys(DirectionalLight.schema).length).toBe(12);
+        expect('direction' in DirectionalLight.schema).toBe(true);
+        expect('color' in DirectionalLight.schema).toBe(true);
         expect('castShadow' in DirectionalLight.schema).toBe(true);
         expect('cascadeCount' in DirectionalLight.schema).toBe(true);
         expect('splitLambda' in DirectionalLight.schema).toBe(true);
@@ -2477,7 +2566,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { pcfKernelSize: 2 },
+          data: { direction: [0, -1, 0], pcfKernelSize: 2 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2495,7 +2584,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { pcfKernelSize: 0 },
+          data: { direction: [0, -1, 0], pcfKernelSize: 0 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2509,7 +2598,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { pcfKernelSize: -1 },
+          data: { direction: [0, -1, 0], pcfKernelSize: -1 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2523,7 +2612,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { pcfKernelSize: 1 },
+          data: { direction: [0, -1, 0], pcfKernelSize: 1 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2532,7 +2621,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { pcfKernelSize: 3 },
+          data: { direction: [0, -1, 0], pcfKernelSize: 3 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2541,7 +2630,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { pcfKernelSize: 7 },
+          data: { direction: [0, -1, 0], pcfKernelSize: 7 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2550,7 +2639,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { mapSize: 0 },
+          data: { direction: [0, -1, 0], mapSize: 0 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2563,7 +2652,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { cascadeCount: 0 },
+          data: { direction: [0, -1, 0], cascadeCount: 0 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2576,7 +2665,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { cascadeCount: 5 },
+          data: { direction: [0, -1, 0], cascadeCount: 5 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2590,7 +2679,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { cascadeCount: 1.5 },
+          data: { direction: [0, -1, 0], cascadeCount: 1.5 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2603,7 +2692,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { splitLambda: -0.1 },
+          data: { direction: [0, -1, 0], splitLambda: -0.1 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2616,7 +2705,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { splitLambda: 1.1 },
+          data: { direction: [0, -1, 0], splitLambda: 1.1 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2629,7 +2718,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { splitLambda: 0 },
+          data: { direction: [0, -1, 0], splitLambda: 0 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2638,7 +2727,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { splitLambda: 1 },
+          data: { direction: [0, -1, 0], splitLambda: 1 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2647,7 +2736,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { cascadeBlend: -0.01 },
+          data: { direction: [0, -1, 0], cascadeBlend: -0.01 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2660,7 +2749,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { cascadeBlend: 0.51 },
+          data: { direction: [0, -1, 0], cascadeBlend: 0.51 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2673,7 +2762,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { cascadeBlend: 0 },
+          data: { direction: [0, -1, 0], cascadeBlend: 0 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2682,7 +2771,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { cascadeBlend: 0.5 },
+          data: { direction: [0, -1, 0], cascadeBlend: 0.5 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2698,7 +2787,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { castShadow: false, pcfKernelSize: 2 },
+          data: { direction: [0, -1, 0], castShadow: false, pcfKernelSize: 2 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2707,7 +2796,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { castShadow: false, pcfKernelSize: 0 },
+          data: { direction: [0, -1, 0], castShadow: false, pcfKernelSize: 0 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2716,7 +2805,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { castShadow: false, mapSize: 0 },
+          data: { direction: [0, -1, 0], castShadow: false, mapSize: 0 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2725,7 +2814,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { castShadow: false, cascadeCount: 5 },
+          data: { direction: [0, -1, 0], castShadow: false, cascadeCount: 5 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2734,7 +2823,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { castShadow: false, splitLambda: 2 },
+          data: { direction: [0, -1, 0], castShadow: false, splitLambda: 2 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2743,7 +2832,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { castShadow: false, cascadeBlend: 1 },
+          data: { direction: [0, -1, 0], castShadow: false, cascadeBlend: 1 },
         });
         expect(r.ok).toBe(true);
       });
@@ -2752,7 +2841,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { castShadow: true, pcfKernelSize: 2 },
+          data: { direction: [0, -1, 0], castShadow: true, pcfKernelSize: 2 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2765,7 +2854,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: DirectionalLight,
-          data: { pcfKernelSize: 2 },
+          data: { direction: [0, -1, 0], pcfKernelSize: 2 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2928,7 +3017,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: SpotLight,
-          data: { directionX: 0, directionY: -1, directionZ: 0, pcfKernelSize: 2 },
+          data: { direction: [0, -1, 0], pcfKernelSize: 2 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2943,7 +3032,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: SpotLight,
-          data: { directionX: 0, directionY: -1, directionZ: 0, pcfKernelSize: 0 },
+          data: { direction: [0, -1, 0], pcfKernelSize: 0 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2956,7 +3045,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: SpotLight,
-          data: { directionX: 0, directionY: -1, directionZ: 0, mapSize: 0 },
+          data: { direction: [0, -1, 0], mapSize: 0 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2969,7 +3058,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const world = new World();
         const r = world.spawn({
           component: SpotLight,
-          data: { directionX: 0, directionY: -1, directionZ: 0, nearPlane: 10, farPlane: 5 },
+          data: { direction: [0, -1, 0], nearPlane: 10, farPlane: 5 },
         });
         expect(r.ok).toBe(false);
         if (r.ok) throw new Error('expected spawn to fail validation');
@@ -2983,9 +3072,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const r = world.spawn({
           component: SpotLight,
           data: {
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
+            direction: [0, -1, 0],
             pcfKernelSize: 5,
             mapSize: 1024,
             nearPlane: 0.1,
@@ -3000,9 +3087,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         const r = world.spawn({
           component: SpotLight,
           data: {
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
+            direction: [0, -1, 0],
             castShadow: false,
             pcfKernelSize: 2,
           },

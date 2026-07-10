@@ -301,9 +301,7 @@ world.spawn(
   {
     component: PointLight,
     data: {
-      colorR: 1,
-      colorG: 1,
-      colorB: 1,
+      color: [1, 1, 1],
       intensity: 100.0,
       range: 50,
     },
@@ -323,12 +321,8 @@ world.spawn(
 world.spawn({
   component: DirectionalLight,
   data: {
-    directionX: -0.5,
-    directionY: -1,
-    directionZ: -0.3,
-    colorR: 1,
-    colorG: 1,
-    colorB: 1,
+    direction: [-0.5, -1, -0.3],
+    color: [1, 1, 1],
     intensity: 1,
   },
 });

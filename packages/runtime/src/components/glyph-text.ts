@@ -17,9 +17,10 @@
 //   - `text: 'string'` -> native JS string (UniqueRefStore-backed, same
 //     dispatch as `Name.value`).
 //   - `fontSize: 'f32'` -> layout scale applied to the FontAsset metrics.
-//   - `colorR/G/B/A: 'f32'` -> linear-space rgba tint. Stored as four f32
-//     columns (the schema vocab has no `vec4` keyword; this mirrors the
-//     `DirectionalLight` colorR/G/B convention -- SoA-friendly).
+//   - `color: 'array<f32, 4>'` -> linear-space rgba tint (feat-20260709 M3:
+//     collapsed from four `colorR/G/B/A` scalar columns into one inline
+//     stride-4 SoA column, mirroring the DirectionalLight direction/color
+//     idiom). Explicit layer-2 default [1,1,1,1] (opaque white).
 //
 // charter mapping: P1 (single import surface from `@forgeax/engine-runtime`,
 // co-located with `glyphTextLayoutSystem` that consumes it) + P3
@@ -44,15 +45,14 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   world.spawn({
  *     component: GlyphText,
  *     data: { fontHandle: font, text: 'Hello', fontSize: 32,
- *             colorR: 1, colorG: 1, colorB: 1, colorA: 1 },
+ *             color: [1, 1, 1, 1] },
  *   });
  */
 export const GlyphText = defineComponent('GlyphText', {
   fontHandle: { type: 'shared<FontAsset>', default: 0 as never },
   text: { type: 'string', default: '' },
   fontSize: { type: 'f32', default: 16 },
-  colorR: { type: 'f32', default: 1 },
-  colorG: { type: 'f32', default: 1 },
-  colorB: { type: 'f32', default: 1 },
-  colorA: { type: 'f32', default: 1 },
+  // color carries an explicit layer-2 default [1,1,1,1] (opaque white); the
+  // array layer-3 fallback is all-zero, so the default MUST be explicit (D-5).
+  color: { type: 'array<f32, 4>', default: new Float32Array([1, 1, 1, 1]) },
 });

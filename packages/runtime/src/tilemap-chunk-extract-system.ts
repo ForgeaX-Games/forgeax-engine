@@ -137,8 +137,7 @@ interface StreamLayerCache {
   readonly tilemap: {
     readonly cols: number;
     readonly rows: number;
-    readonly tileSizeX: number;
-    readonly tileSizeY: number;
+    readonly tileSize: ArrayLike<number>;
     readonly chunkSize: number;
   };
   readonly layerOrder: number;
@@ -474,7 +473,7 @@ function specFor(
  * world transforms (charter P4 consistent abstraction).
  */
 function computeTileTrs(
-  tilemap: { tileSizeX: number; tileSizeY: number },
+  tilemap: { tileSize: ArrayLike<number> },
   spec: DerivedSpawnSpec,
   packedTile: number,
 ): {
@@ -494,15 +493,13 @@ function computeTileTrs(
     flipV,
     flipDiagonal,
   );
+  const tileSizeX = tilemap.tileSize[0] ?? 1;
+  const tileSizeY = tilemap.tileSize[1] ?? 1;
   return {
-    posX:
-      (spec.cellX + effectivePivotX + (0.5 - effectivePivotX) * spec.widthCells) *
-      tilemap.tileSizeX,
-    posY:
-      (spec.cellY + effectivePivotY + (0.5 - effectivePivotY) * spec.heightCells) *
-      tilemap.tileSizeY,
-    scaleX: (flipH ? -1 : 1) * spec.widthCells * tilemap.tileSizeX,
-    scaleY: (flipV ? -1 : 1) * spec.heightCells * tilemap.tileSizeY,
+    posX: (spec.cellX + effectivePivotX + (0.5 - effectivePivotX) * spec.widthCells) * tileSizeX,
+    posY: (spec.cellY + effectivePivotY + (0.5 - effectivePivotY) * spec.heightCells) * tileSizeY,
+    scaleX: (flipH ? -1 : 1) * spec.widthCells * tileSizeX,
+    scaleY: (flipV ? -1 : 1) * spec.heightCells * tileSizeY,
     quatZ: flipDiagonal ? SQRT1_2 : 0,
     quatW: flipDiagonal ? SQRT1_2 : 1,
   };
@@ -516,7 +513,7 @@ function computeTileTrs(
  */
 function spawnDerivedRenderEntities(
   world: World,
-  tilemap: { tileSizeX: number; tileSizeY: number },
+  tilemap: { tileSize: ArrayLike<number> },
   layerOrder: number,
   spec: DerivedSpawnSpec,
   packedTile: number,
@@ -578,7 +575,7 @@ function spawnDerivedRenderEntities(
  */
 function spawnSpriteInstancesGroup(
   world: World,
-  tilemap: { cols: number; tileSizeX: number; tileSizeY: number; chunkSize: number },
+  tilemap: { cols: number; tileSize: ArrayLike<number>; chunkSize: number },
   tileset: TilesetAsset,
   layerOrder: number,
   chunkIndex: number,
@@ -619,8 +616,8 @@ function spawnSpriteInstancesGroup(
   const chunksPerRow = Math.max(1, Math.ceil(tilemap.cols / tilemap.chunkSize));
   const chunkX = chunkIndex % chunksPerRow;
   const chunkY = Math.floor(chunkIndex / chunksPerRow);
-  const chunkScaleX = tilemap.chunkSize * tilemap.tileSizeX;
-  const chunkScaleY = tilemap.chunkSize * tilemap.tileSizeY;
+  const chunkScaleX = tilemap.chunkSize * (tilemap.tileSize[0] ?? 1);
+  const chunkScaleY = tilemap.chunkSize * (tilemap.tileSize[1] ?? 1);
   const chunkCenterX = (chunkX + 0.5) * chunkScaleX;
   const chunkCenterY = (chunkY + 0.5) * chunkScaleY;
   const invSX = chunkScaleX > 0 ? 1 / chunkScaleX : 1;
@@ -710,8 +707,7 @@ function bucketTileLayer(
       readonly tilemap: {
         cols: number;
         rows: number;
-        tileSizeX: number;
-        tileSizeY: number;
+        tileSize: ArrayLike<number>;
         chunkSize: number;
       };
       readonly layerOrder: number;
@@ -885,7 +881,7 @@ function buildCameraFrustumPlanes(world: World): frustum.Frustum | null {
  * (plan-strategy §5.3); not part of the AI user surface.
  */
 export function computeChunkStreamBounds(
-  tilemap: { tileSizeX: number; tileSizeY: number },
+  tilemap: { tileSize: ArrayLike<number> },
   specs: readonly DerivedSpawnSpec[],
 ): box3.Box3Like {
   let minX = Number.MAX_VALUE;

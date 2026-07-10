@@ -82,7 +82,7 @@ function spawnAndExtract(
     .spawn(
       {
         component: Tilemap,
-        data: { cols, rows, tileSizeX: 1, tileSizeY: 1, chunkSize: 4, tileset: tilesetHandle },
+        data: { cols, rows, tileSize: [1, 1], chunkSize: 4, tileset: tilesetHandle },
       },
       { component: Transform, data: {} },
     )

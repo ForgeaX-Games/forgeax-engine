@@ -653,12 +653,8 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
       worldBaseline.spawn({
         component: DirectionalLight,
         data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
-          colorR: 1,
-          colorG: 1,
-          colorB: 1,
+          direction: [0, -1, 0],
+          color: [1, 1, 1],
           intensity: 0.5,
         },
       });
@@ -685,7 +681,7 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
         },
         {
           component: PointLight,
-          data: { colorR: 1, colorG: 0.8, colorB: 0.6, intensity: 5, range: 10 },
+          data: { color: [1, 0.8, 0.6], intensity: 5, range: 10 },
         },
       );
 
@@ -732,12 +728,8 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
       worldShadow.spawn({
         component: DirectionalLight,
         data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
-          colorR: 1,
-          colorG: 1,
-          colorB: 1,
+          direction: [0, -1, 0],
+          color: [1, 1, 1],
           intensity: 0.5,
         },
       });
@@ -764,7 +756,7 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
         },
         {
           component: PointLight,
-          data: { colorR: 1, colorG: 0.8, colorB: 0.6, intensity: 5, range: 10 },
+          data: { color: [1, 0.8, 0.6], intensity: 5, range: 10 },
         },
         {
           component: PointLightShadow,

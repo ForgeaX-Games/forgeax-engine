@@ -288,12 +288,8 @@ const sceneAsset = {
       }
       if (name === 'DirectionalLight') {
         components[name] = {
-          directionX: -0.3,
-          directionY: -1.0,
-          directionZ: -0.5,
-          colorR: 1.0,
-          colorG: 0.95,
-          colorB: 0.9,
+          direction: [-0.3, -1.0, -0.5],
+          color: [1.0, 0.95, 0.9],
           intensity: 1.0,
         };
         continue;

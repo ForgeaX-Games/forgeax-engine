@@ -10,7 +10,7 @@
 //
 // The GlyphText entity carries Transform (bubble position), GlyphText ("+1"
 // label in golden/orange), and the mesh is auto-baked by glyphTextLayoutSystem
-// each frame. No alpha fade -- updating GlyphText.colorA each frame would
+// each frame. No alpha fade -- updating GlyphText.color[3] each frame would
 // re-bake the mesh, which is unnecessary overhead for short-lived bubbles.
 //
 // AC-18: this system NEVER writes GameProgress -- the score is already
@@ -75,10 +75,7 @@ export function createPickupTextSystem(
                   fontHandle,
                   text: '+1',
                   fontSize: FONT_SIZE,
-                  colorR: 1.0,
-                  colorG: 0.8,
-                  colorB: 0.2,
-                  colorA: 1.0,
+                  color: [1.0, 0.8, 0.2, 1.0],
                 },
               },
             )

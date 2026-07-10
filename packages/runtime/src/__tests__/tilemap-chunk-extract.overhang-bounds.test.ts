@@ -130,7 +130,7 @@ function makeOverhangScene(opts: OverhangSceneOpts = {}): Scene {
     .spawn(
       {
         component: Tilemap,
-        data: { cols, rows, tileSizeX, tileSizeY, chunkSize, tileset: tilesetHandle },
+        data: { cols, rows, tileSize: [tileSizeX, tileSizeY], chunkSize, tileset: tilesetHandle },
       },
       { component: Transform, data: {} },
     )
@@ -260,7 +260,7 @@ describe('tilemapChunkExtractSystem overhang bounds (D2)', () => {
     // non-zero-normal axis of every plane and returns false -- Infinity
     // multiplied by a zero-component normal would produce NaN and slip
     // through the `< 0` check silently.
-    const bounds = computeChunkStreamBounds({ tileSizeX: 16, tileSizeY: 16 }, []);
+    const bounds = computeChunkStreamBounds({ tileSize: [16, 16] }, []);
     // Inverted-large sentinel shape: min = +MAX_VALUE, max = -MAX_VALUE.
     expect(bounds[0]).toBe(Number.MAX_VALUE);
     expect(bounds[1]).toBe(Number.MAX_VALUE);

@@ -80,7 +80,7 @@ user spawns Camera { fov, aspect, near, far } + Transform { pos: [x, y, z] }
   |-- propagateTransforms system computes world matrix from local TRS
   |-- render-system-record reads Camera + Transform -> builds viewProj, cameraPos
   |
-user spawns DirectionalLight { directionX/Y/Z, colorR/G/B, intensity }
+user spawns DirectionalLight { direction: [x, y, z], color: [r, g, b], intensity }
   |-- render-system-record reads DirectionalLight -> builds lightDir, lightColor
   |
 render-system-record assembles the 60 f32 payload:

@@ -263,9 +263,7 @@ for (let i = 0; i < 200; i++) {
     {
       component: PointLight,
       data: {
-        colorR: 0.5 + 0.5 * rng(),
-        colorG: 0.5 + 0.5 * rng(),
-        colorB: 0.5 + 0.5 * rng(),
+        color: [0.5 + 0.5 * rng(), 0.5 + 0.5 * rng(), 0.5 + 0.5 * rng()],
         intensity: 0.3 + 0.4 * rng(),
         range: 2.5 + 1.5 * rng(),
       },
@@ -281,12 +279,8 @@ for (let i = 0; i < 56; i++) {
     {
       component: SpotLight,
       data: {
-        directionX: rng() - 0.5,
-        directionY: -1,
-        directionZ: rng() - 0.5,
-        colorR: 0.5 + 0.5 * rng(),
-        colorG: 0.5 + 0.5 * rng(),
-        colorB: 0.5 + 0.5 * rng(),
+        direction: [rng() - 0.5, -1, rng() - 0.5],
+        color: [0.5 + 0.5 * rng(), 0.5 + 0.5 * rng(), 0.5 + 0.5 * rng()],
         intensity: 0.5 + 0.5 * rng(),
         range: 2.5 + 1.5 * rng(),
         innerConeDeg: 18,
@@ -308,9 +302,7 @@ world.spawn(
     component: Camera,
     data: {
       ...perspective({ fov: Math.PI / 4, aspect: WIDTH / HEIGHT, near: 0.1, far: 50 }),
-      clearR: 0.02,
-      clearG: 0.02,
-      clearB: 0.04,
+      clearColor: [0.02, 0.02, 0.04, 1],
       // 256 punctual lights at intensity 1.5..4.0 produce HDR radiance that
       // burns out without a tonemap. ACES filmic + exposure 0.6 keeps mid-
       // tones visible while letting hot spots roll off naturally.

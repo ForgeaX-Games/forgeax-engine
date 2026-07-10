@@ -207,9 +207,7 @@ world
     {
       component: PointLight,
       data: {
-        colorR: 1.0,
-        colorG: 1.0,
-        colorB: 1.0,
+        color: [1.0, 1.0, 1.0],
         intensity: 1.0,
         range: Number.POSITIVE_INFINITY,
       },

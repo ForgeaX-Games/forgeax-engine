@@ -279,11 +279,11 @@ grep -n "out.viewZ" packages/shader/src/default-standard-pbr*.wgsl
 ```bash
 # PBR ambient 是否纯 IBL 派生（无常数项）
 grep -n "ambient" packages/shader/src/default-standard-pbr.wgsl
-# Skylight 是否支持无 cubemap 的纯色模式（cubemap 字段是否可选）
-grep -n "cubemap\|colorR\|intensity" packages/runtime/src/components/skylight.ts
+# Skylight 是否支持无 equirect 的纯色模式（equirect 字段是否可选）
+grep -n "equirect\|color\|intensity" packages/runtime/src/components/skylight.ts
 ```
 
-**修法**（引擎已支持，别在 demo 里塞常亮 PointLight 当 crutch）：spawn **无 cubemap 的 Skylight** 拿即时纯色环境光——`world.spawn({ component: Skylight, data: {} })`（白）或带 `colorR/G/B` + `intensity` 调色调强。引擎绑 1×1 白 fallback irradiance cube，首帧即 `ambient = kD·albedo·color·intensity`，零 async；给了 cubemap 才升级完整 IBL。源码 SSOT `packages/runtime/src/components/skylight.ts` + `packages/runtime/src/ibl/skylight-bind-group.ts`（白 fallback）。详见 [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md) §踩坑。
+**修法**（引擎已支持，别在 demo 里塞常亮 PointLight 当 crutch）：spawn **无 equirect 的 Skylight** 拿即时纯色环境光——`world.spawn({ component: Skylight, data: {} })`（白）或带 `color: [r, g, b]` + `intensity` 调色调强。引擎绑 1×1 白 fallback irradiance cube，首帧即 `ambient = kD·albedo·color·intensity`，零 async；给了 equirect 才升级完整 IBL。源码 SSOT `packages/runtime/src/components/skylight.ts` + `packages/runtime/src/ibl/skylight-bind-group.ts`（白 fallback）。详见 [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md) §踩坑。
 
 ---
 

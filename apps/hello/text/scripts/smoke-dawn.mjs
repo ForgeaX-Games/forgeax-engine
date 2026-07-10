@@ -228,7 +228,7 @@ world.spawn(
 );
 world.spawn({
   component: DirectionalLight,
-  data: { directionX: -0.3, directionY: -0.5, directionZ: -0.8, colorR: 1, colorG: 1, colorB: 1, intensity: 1.2 },
+  data: { direction: [-0.3, -0.5, -0.8], color: [1, 1, 1], intensity: 1.2 },
 });
 world.spawn(
   { component: Transform, data: { pos: [0, 0, 8]} },
@@ -404,7 +404,7 @@ function spawnTextScenes(world, fontHandle) {
         { component: Transform, data: s.p },
         {
           component: GlyphText,
-          data: { fontHandle, text: s.text, fontSize: 0.025, colorR: s.color[0], colorG: s.color[1], colorB: s.color[2], colorA: s.color[3] },
+          data: { fontHandle, text: s.text, fontSize: 0.025, color: s.color },
         },
       ).unwrap(),
     );

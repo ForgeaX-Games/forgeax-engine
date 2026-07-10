@@ -160,9 +160,7 @@ function populateScene(_renderer: Renderer, world: World): void {
       {
         component: PointLight,
         data: {
-          colorR: spec.r,
-          colorG: spec.g,
-          colorB: spec.b,
+          color: [spec.r, spec.g, spec.b],
           intensity: spec.intensity,
           range: 8,
         },

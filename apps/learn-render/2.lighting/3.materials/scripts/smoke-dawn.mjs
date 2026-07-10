@@ -228,9 +228,7 @@ const lightEntity = world
     {
       component: PointLight,
       data: {
-        colorR: 1.0,
-        colorG: 1.0,
-        colorB: 1.0,
+        color: [1.0, 1.0, 1.0],
         intensity: 1.0,
         range: Number.POSITIVE_INFINITY,
       },
@@ -251,7 +249,7 @@ world.addSystem({
     const colorR = Math.max(0, Math.sin(elapsed * FREQ_R));
     const colorG = Math.max(0, Math.sin(elapsed * FREQ_G));
     const colorB = Math.max(0, Math.sin(elapsed * FREQ_B));
-    world.set(lightEntity, PointLight, { colorR, colorG, colorB });
+    world.set(lightEntity, PointLight, { color: [colorR, colorG, colorB] });
   },
 });
 

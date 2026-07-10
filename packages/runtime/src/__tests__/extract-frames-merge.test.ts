@@ -74,13 +74,9 @@ function makeWorldWithDirectionalLight(): World {
       {
         component: DirectionalLight,
         data: {
-          colorR: 1,
-          colorG: 1,
-          colorB: 1,
+          color: [1, 1, 1],
           intensity: 1,
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
+          direction: [0, -1, 0],
         },
       },
     )
@@ -296,13 +292,9 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
         {
           component: SpotLight,
           data: {
-            colorR: 1,
-            colorG: 0,
-            colorB: 0,
+            color: [1, 0, 0],
             intensity: 1,
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
+            direction: [0, -1, 0],
             innerConeDeg: 10,
             outerConeDeg: 30,
           },
@@ -317,13 +309,9 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
         {
           component: SpotLight,
           data: {
-            colorR: 0,
-            colorG: 1,
-            colorB: 0,
+            color: [0, 1, 0],
             intensity: 2,
-            directionX: 1,
-            directionY: 0,
-            directionZ: 0,
+            direction: [1, 0, 0],
             innerConeDeg: 15,
             outerConeDeg: 45,
           },
@@ -352,13 +340,9 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
         {
           component: DirectionalLight,
           data: {
-            colorR: 1,
-            colorG: 0,
-            colorB: 0,
+            color: [1, 0, 0],
             intensity: 1,
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
+            direction: [0, -1, 0],
           },
         },
       )
@@ -371,13 +355,9 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
         {
           component: DirectionalLight,
           data: {
-            colorR: 0,
-            colorG: 1,
-            colorB: 0,
+            color: [0, 1, 0],
             intensity: 2,
-            directionX: 1,
-            directionY: 0,
-            directionZ: 0,
+            direction: [1, 0, 0],
           },
         },
       )
@@ -407,13 +387,9 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
         {
           component: DirectionalLight,
           data: {
-            colorR: 1,
-            colorG: 0,
-            colorB: 0,
+            color: [1, 0, 0],
             intensity: 1,
-            directionX: 0,
-            directionY: -1,
-            directionZ: 0,
+            direction: [0, -1, 0],
           },
         },
       )
@@ -426,13 +402,9 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
         {
           component: DirectionalLight,
           data: {
-            colorR: 0,
-            colorG: 1,
-            colorB: 0,
+            color: [0, 1, 0],
             intensity: 2,
-            directionX: 1,
-            directionY: 0,
-            directionZ: 0,
+            direction: [1, 0, 0],
           },
         },
       )

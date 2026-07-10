@@ -160,8 +160,8 @@ import { defineComponent } from '@forgeax/engine-ecs';
 export const SpriteAnimation = defineComponent('SpriteAnimation', {
   frameCount: { type: 'u32' },
   frameDuration: { type: 'f32' },
-  currentFrame: { type: 'u32' },
-  accumDt: { type: 'f32' },
+  currentFrame: { type: 'u32', transient: true },
+  accumDt: { type: 'f32', transient: true },
   regions: { type: 'array<f32>' },
   playbackMode: { type: 'u32' },
 });

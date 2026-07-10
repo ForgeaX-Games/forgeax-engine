@@ -278,11 +278,11 @@ const {
     ).unwrap();
     world.spawn(
       { component: TransformLocal, data: { pos: [1, 2, 1], quat: [0, 0, 0, 1]} },
-      { component: DirectionalLightLocal, data: { colorR: 1.0, colorG: 0.95, colorB: 0.85, intensity: 0.6 } },
+      { component: DirectionalLightLocal, data: { color: [1.0, 0.95, 0.85], intensity: 0.6 } },
     );
     world.spawn(
       { component: TransformLocal, data: { pos: [0, 1.8, 4.5], quat: [0, 0, 0, 1]} },
-      { component: CameraLocal, data: { ...perspectiveLocal({ fov: Math.PI / 3.5, aspect: WIDTH / HEIGHT, near: 0.1, far: 50 }), clearR: 0.02, clearG: 0.02, clearB: 0.04 } },
+      { component: CameraLocal, data: { ...perspectiveLocal({ fov: Math.PI / 3.5, aspect: WIDTH / HEIGHT, near: 0.1, far: 50 }), clearColor: [0.02, 0.02, 0.04, 1] } },
     ).unwrap();
 
     // Render frames.
@@ -565,7 +565,7 @@ world.spawn(
   },
   {
     component: DirectionalLight,
-    data: { colorR: 1.0, colorG: 0.95, colorB: 0.85, intensity: 0.6 },
+    data: { direction: [-0.3, -1, -0.5], color: [1.0, 0.95, 0.85], intensity: 0.6 },
   },
 );
 
@@ -579,9 +579,7 @@ world.spawn(
     component: Camera,
     data: {
       ...perspective({ fov: Math.PI / 3.5, aspect: WIDTH / HEIGHT, near: 0.1, far: 50 }),
-      clearR: 0.02,
-      clearG: 0.02,
-      clearB: 0.04,
+      clearColor: [0.02, 0.02, 0.04, 1],
     },
   },
 ).unwrap();

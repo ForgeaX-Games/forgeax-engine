@@ -60,7 +60,10 @@ function makeWorld(): World {
     { component: Camera, data: { fov: 60, near: 0.1, far: 1000 } },
   );
   // Light + Transform on same entity
-  world.spawn({ component: Transform, data: {} }, { component: DirectionalLight, data: {} });
+  world.spawn(
+    { component: Transform, data: {} },
+    { component: DirectionalLight, data: { direction: [0, -1, 0] } },
+  );
   // Visible entity: MeshFilter + MeshRenderer + Transform on same entity
   world.spawn(
     { component: Transform, data: {} },

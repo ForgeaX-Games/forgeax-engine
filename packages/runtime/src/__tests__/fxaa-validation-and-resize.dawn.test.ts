@@ -98,10 +98,7 @@ function spawnCubeScene(world: World): void {
         near: 0.1,
         far: 100,
         antialias: ANTIALIAS_FXAA,
-        clearR: CLEAR_RGBA[0],
-        clearG: CLEAR_RGBA[1],
-        clearB: CLEAR_RGBA[2],
-        clearA: CLEAR_RGBA[3],
+        clearColor: CLEAR_RGBA,
       },
     },
   );

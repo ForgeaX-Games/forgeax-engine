@@ -163,7 +163,7 @@ export const Children = defineComponent('Children', {
 export const SceneInstance = defineComponent('SceneInstance', { ... }, { transient: true });
 ```
 
-**field 级 transient（feat-20260709）**：`transient: true` 也可声明在**单个 field**（`FieldDescriptor`）上，非只能整组件。collect 跳过 reflection 携带 `transient: true` 的 field——通用机制，key 在 `component.fields[fieldName].transient`，非组件特判。典型用途是每帧派生的 cache field：`Transform.world`（propagate 每帧从 local TRS 重算的 world mat4）声明 `transient: true`，场景 JSON 不存这 16 float 冗余（Derive）；instantiate 后首帧 propagate 重算等价 world。可反射自查：`Transform.fields.world.transient === true`。
+**field 级 transient（feat-20260709）**：`transient: true` 也可声明在**单个 field**（`FieldDescriptor`）上，非只能整组件。collect 跳过 reflection 携带 `transient: true` 的 field——通用机制，key 在 `component.fields[fieldName].transient`，非组件特判。典型用途是每帧派生 / 引擎写回的 cache field：`Transform.world`（propagate 每帧从 local TRS 重算的 world mat4）声明 `transient: true`，场景 JSON 不存这 16 float 冗余（Derive）；instantiate 后首帧 propagate 重算等价 world。可反射自查：`Transform.fields.world.transient === true`。同批 feat 把其他引擎写回态也收敛为 field 级 transient：`CharacterController.grounded`（`moveAndSlide` 每帧写回的接触态）、`VideoPlayer.currentTime`（播放头，每帧从 `HTMLVideoElement` 派生）、`SpriteAnimation.currentFrame`/`accumDt`（动画驱动态）——均 collect 跳过、运行时照常读写。
 
 ```ts
 export const Transform = defineComponent('Transform', {

@@ -284,12 +284,8 @@ world.spawn(
 world.spawn({
   component: DirectionalLight,
   data: {
-    directionX: -0.5,
-    directionY: -1,
-    directionZ: -0.3,
-    colorR: 1,
-    colorG: 0.95,
-    colorB: 0.9,
+    direction: [-0.5, -1, -0.3],
+    color: [1, 0.95, 0.9],
     intensity: 1.0,
   },
 });
@@ -459,7 +455,7 @@ worldMsaaCustom.spawn(
 );
 worldMsaaCustom.spawn({
   component: DirectionalLight,
-  data: { directionX: -0.5, directionY: -1, directionZ: -0.3, colorR: 1, colorG: 0.95, colorB: 0.9, intensity: 1.0 },
+  data: { direction: [-0.5, -1, -0.3], color: [1, 0.95, 0.9], intensity: 1.0 },
 });
 
 // --- 6b. PBR world under MSAA (same baseColor, no custom shader) -----------
@@ -498,7 +494,7 @@ worldMsaaPbr.spawn(
 );
 worldMsaaPbr.spawn({
   component: DirectionalLight,
-  data: { directionX: -0.5, directionY: -1, directionZ: -0.3, colorR: 1, colorG: 0.95, colorB: 0.9, intensity: 1.0 },
+  data: { direction: [-0.5, -1, -0.3], color: [1, 0.95, 0.9], intensity: 1.0 },
 });
 
 // --- 6c. Render both worlds and read back center pixel ---------------------

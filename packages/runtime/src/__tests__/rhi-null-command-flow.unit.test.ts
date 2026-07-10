@@ -73,9 +73,7 @@ function makeWorld(): World {
     {
       component: DirectionalLight,
       data: {
-        directionX: 0.5,
-        directionY: -1,
-        directionZ: -0.5,
+        direction: [0.5, -1, -0.5],
         castShadow: true,
         intensity: 1,
       },

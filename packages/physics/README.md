@@ -21,7 +21,7 @@ world.spawn(
 world.spawn(
   { component: Transform, data: { pos: [0, 0, 0] } },
   { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
-  { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtentsX: 5, halfExtentsY: 1, halfExtentsZ: 5 } },
+  { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtents: [5, 1, 5] } },
 );
 ```
 
@@ -89,7 +89,7 @@ Backend implementations use the narrowing helpers in `switch` statements for exh
 | Field | Type | Default | Description |
 |:--|:--|:--|:--|
 | `shape` | `enum` | `0` (cuboid) | `cuboid` / `sphere` / `capsule` |
-| `halfExtentsX/Y/Z` | `f32` | `0` | Cuboid half-extents |
+| `halfExtents` | `array<f32, 3>` | `[0.5, 0.5, 0.5]` | Cuboid half-width/height/depth |
 | `radius` | `f32` | `0` | Sphere radius or capsule radius |
 | `halfHeight` | `f32` | `0` | Capsule half-height (along Y) |
 | `friction` | `f32` | `0.5` | Coulomb friction coefficient |

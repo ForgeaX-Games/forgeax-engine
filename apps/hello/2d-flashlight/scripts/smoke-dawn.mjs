@@ -279,10 +279,7 @@ function orthoCameraData({ left, right, bottom, top }) {
     tonemap: TONEMAP_NONE,
     exposure: 1.0,
     whitePoint: 8.0,
-    clearR: CLEAR_RGBA[0],
-    clearG: CLEAR_RGBA[1],
-    clearB: CLEAR_RGBA[2],
-    clearA: CLEAR_RGBA[3],
+    clearColor: [CLEAR_RGBA[0], CLEAR_RGBA[1], CLEAR_RGBA[2], CLEAR_RGBA[3]],
   };
 }
 
@@ -333,12 +330,8 @@ async function buildSweepSpotWorld({ intensity }) {
       {
         component: SpotLight,
         data: {
-          directionX: 1.0,
-          directionY: 0.0,
-          directionZ: 0.0,
-          colorR: 1.0,
-          colorG: 1.0,
-          colorB: 1.0,
+          direction: [1.0, 0.0, 0.0],
+          color: [1.0, 1.0, 1.0],
           intensity,
           range: 6.0,
           innerConeDeg: 15,
@@ -374,9 +367,7 @@ async function buildPointCircleWorld() {
       {
         component: PointLight,
         data: {
-          colorR: 1.0,
-          colorG: 1.0,
-          colorB: 1.0,
+          color: [1.0, 1.0, 1.0],
           intensity: 2.0,
           range: 1.0,
         },

@@ -10,6 +10,7 @@
 //
 // Note: merged from __tests__/ into src/__tests__/; import paths adjusted (../src/index → ../index).
 
+import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import type { PhysicsErrorCode } from '../index';
 import {
@@ -53,9 +54,15 @@ import {
         expect(Collider.name).toBe('Collider');
         const schema = Collider.schema;
         expect(schema).toHaveProperty('shape');
-        expect(schema).toHaveProperty('halfExtentsX');
-        expect(schema).toHaveProperty('halfExtentsY');
-        expect(schema).toHaveProperty('halfExtentsZ');
+        // feat-20260709 M4: cuboid half-extents collapsed from 3 per-axis
+        // scalar columns into one inline array<f32,3> column (halfExtents).
+        // radius / halfHeight stay scalar (OOS-1: independent sphere/capsule
+        // params, not part of the cuboid vec).
+        expect(schema).toHaveProperty('halfExtents');
+        expect(schema.halfExtents).toBe('array<f32, 3>');
+        expect('halfExtentsX' in schema).toBe(false);
+        expect('halfExtentsY' in schema).toBe(false);
+        expect('halfExtentsZ' in schema).toBe(false);
         expect(schema).toHaveProperty('radius');
         expect(schema).toHaveProperty('halfHeight');
         expect(schema).toHaveProperty('friction');
@@ -283,6 +290,63 @@ import {
         if (defaults) {
           expect(defaults.restitution).toBe(0);
         }
+      });
+    });
+  });
+}
+
+{
+  // ─── feat-20260709 M4 / w17: Collider halfExtents vec-collapse ───
+  //
+  // AC-01 / E1 / AC-04: halfExtents is array<f32,3> with explicit layer-2
+  // default [0.5,0.5,0.5] (the array layer-3 fallback is all-zero, so the
+  // non-zero default MUST be declared explicitly). Spawn-omit resolves to the
+  // same value the old per-axis scalar defaults produced. radius/halfHeight
+  // stay scalar (OOS-1). TDD red until w19 lands the schema collapse.
+
+  describe('collider-halfextents-vec.test.ts', () => {
+    it('Collider.halfExtents is array<f32,3> with explicit layer-2 default [0.5,0.5,0.5]', () => {
+      expect(Collider.schema.halfExtents).toBe('array<f32, 3>');
+      expect(Array.from(Collider.fields.halfExtents.default as Float32Array)).toEqual([
+        0.5, 0.5, 0.5,
+      ]);
+    });
+
+    it('Collider per-axis scalar keys are gone; radius/halfHeight stay scalar (OOS-1)', () => {
+      expect('halfExtentsX' in Collider.schema).toBe(false);
+      expect('halfExtentsY' in Collider.schema).toBe(false);
+      expect('halfExtentsZ' in Collider.schema).toBe(false);
+      expect(Collider.schema.radius).toBe('f32');
+      expect(Collider.schema.halfHeight).toBe('f32');
+    });
+
+    it('E1: Collider spawned with halfExtents omitted resolves to [0.5,0.5,0.5]', () => {
+      const world = new World();
+      const e = world
+        .spawn({ component: Collider, data: { shape: ColliderShapeValue.cuboid } })
+        .unwrap();
+      const row = world.get(e, Collider).unwrap();
+      expect(Array.from(row.halfExtents)).toEqual([0.5, 0.5, 0.5]);
+    });
+
+    it('E1: Collider spawned with explicit halfExtents carries the array through', () => {
+      const world = new World();
+      const e = world
+        .spawn({
+          component: Collider,
+          data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 2, 3] },
+        })
+        .unwrap();
+      const row = world.get(e, Collider).unwrap();
+      expect(Array.from(row.halfExtents)).toEqual([1, 2, 3]);
+    });
+
+    it('AC-04: residual halfExtentsX at a spawn call-site is a compile error', () => {
+      const world = new World();
+      world.spawn({
+        component: Collider,
+        // @ts-expect-error halfExtentsX/Y/Z were collapsed into the halfExtents array.
+        data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 1, 1], halfExtentsX: 1 },
       });
     });
   });

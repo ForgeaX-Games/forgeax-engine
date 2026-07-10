@@ -428,64 +428,40 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 {
   // --- from camera-clear-schema.test.ts ---
 
-  describe('Camera clear-color schema', () => {
-    it('Camera schema includes clearR: f32 field (scalar, not array)', () => {
-      expect(Camera.schema.clearR).toBe('f32');
+  describe('Camera clear-color schema (feat-20260709 M3: array<f32,4>)', () => {
+    it('Camera schema includes clearColor: array<f32,4> field', () => {
+      expect(Camera.schema.clearColor).toBe('array<f32, 4>');
     });
 
-    it('Camera schema includes clearG: f32 field (scalar, not array)', () => {
-      expect(Camera.schema.clearG).toBe('f32');
+    it('per-axis clear scalars are gone (collapsed into clearColor)', () => {
+      expect('clearR' in Camera.schema).toBe(false);
+      expect('clearG' in Camera.schema).toBe(false);
+      expect('clearB' in Camera.schema).toBe(false);
+      expect('clearA' in Camera.schema).toBe(false);
     });
 
-    it('Camera schema includes clearB: f32 field (scalar, not array)', () => {
-      expect(Camera.schema.clearB).toBe('f32');
-    });
-
-    it('Camera schema includes clearA: f32 field (scalar, not array)', () => {
-      expect(Camera.schema.clearA).toBe('f32');
-    });
-
-    it('Camera defaults clearR to 0 (opaque black)', () => {
-      expect(Camera.defaults?.clearR).toBe(0);
-    });
-
-    it('Camera defaults clearG to 0 (opaque black)', () => {
-      expect(Camera.defaults?.clearG).toBe(0);
-    });
-
-    it('Camera defaults clearB to 0 (opaque black)', () => {
-      expect(Camera.defaults?.clearB).toBe(0);
-    });
-
-    it('Camera defaults clearA to 1 (opaque alpha — note: not 0)', () => {
-      expect(Camera.defaults?.clearA).toBe(1);
+    it('Camera defaults clearColor to opaque black [0,0,0,1]', () => {
+      expect(Array.from(Camera.defaults?.clearColor as Float32Array)).toEqual([0, 0, 0, 1]);
     });
   });
 
   describe('Camera clear-color reflection (fields plumbing)', () => {
-    it('Camera.fields includes clearR/G/B/A entries with default values', () => {
-      const fields = Camera.fields as Record<string, { type: string; default?: number }>;
-      expect(fields.clearR).toBeDefined();
-      expect(fields.clearR?.type).toBe('f32');
-      expect(fields.clearR?.default).toBe(0);
-      expect(fields.clearG?.type).toBe('f32');
-      expect(fields.clearG?.default).toBe(0);
-      expect(fields.clearB?.type).toBe('f32');
-      expect(fields.clearB?.default).toBe(0);
-      expect(fields.clearA?.type).toBe('f32');
-      expect(fields.clearA?.default).toBe(1);
+    it('Camera.fields includes clearColor entry with explicit layer-2 default', () => {
+      const fields = Camera.fields as Record<string, { type: string; default?: unknown }>;
+      expect(fields.clearColor).toBeDefined();
+      expect(fields.clearColor?.type).toBe('array<f32, 4>');
+      expect(Array.from(fields.clearColor?.default as Float32Array)).toEqual([0, 0, 0, 1]);
     });
 
-    it('clear fields are independent f32 scalars (not nested under one array key)', () => {
-      // Plan-strategy §2 D-1 q6-A: the 4 x f32 scalar path is locked. If a
-      // future change collapses the family into `clear: array<f32, 4>` this
-      // test must change in lockstep with consumers (extract / record stages).
+    it('clear color is one inline array column (not four per-axis scalar keys)', () => {
+      // feat-20260709 M3 / D-3: the 4 x f32 scalar clear quartet collapsed into
+      // a single array<f32,4> column, mirroring the Transform / light SoA idiom.
       const keys = Object.keys(Camera.fields);
-      expect(keys).toContain('clearR');
-      expect(keys).toContain('clearG');
-      expect(keys).toContain('clearB');
-      expect(keys).toContain('clearA');
-      expect(keys).not.toContain('clear');
+      expect(keys).toContain('clearColor');
+      expect(keys).not.toContain('clearR');
+      expect(keys).not.toContain('clearG');
+      expect(keys).not.toContain('clearB');
+      expect(keys).not.toContain('clearA');
     });
   });
 }
@@ -508,9 +484,9 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     ];
   }
 
-  describe('Camera schema (22 fields: 21 f32 + autoAspect bool after w9 + tonemap-mvp + fxaa + bloom + clear-color + aspect-sync extensions)', () => {
-    it('Camera.schema has 22 fields (21 f32 + autoAspect bool: perspective quartet + projection + ortho quartet + tonemap trio + antialias + bloom quartet + clear-color quartet + autoAspect)', () => {
-      expect(Object.keys(Camera.schema).length).toBe(22);
+  describe('Camera schema (19 fields: 17 f32 + clearColor array + autoAspect bool after w9 + tonemap-mvp + fxaa + bloom + clearColor + aspect-sync extensions)', () => {
+    it('Camera.schema has 19 fields (17 f32 + clearColor array + autoAspect bool: perspective quartet + projection + ortho quartet + tonemap trio + antialias + bloom quartet + clearColor + autoAspect)', () => {
+      expect(Object.keys(Camera.schema).length).toBe(19);
       expect(Camera.schema.fov).toBe('f32');
       expect(Camera.schema.aspect).toBe('f32');
       expect(Camera.schema.near).toBe('f32');
@@ -530,11 +506,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(Camera.schema.bloomThreshold).toBe('f32');
       expect(Camera.schema.bloomIntensity).toBe('f32');
       expect(Camera.schema.bloomBlurRadius).toBe('f32');
-      // feat-20260608-create-app-param-surface-trim / M1 / D-1 (AC-01).
-      expect(Camera.schema.clearR).toBe('f32');
-      expect(Camera.schema.clearG).toBe('f32');
-      expect(Camera.schema.clearB).toBe('f32');
-      expect(Camera.schema.clearA).toBe('f32');
+      // feat-20260709 M3 / D-3: clear-color collapsed into one array<f32,4>.
+      expect(Camera.schema.clearColor).toBe('array<f32, 4>');
       // feat-20260617-host-engine-contract-and-video-cutscene / M3: aspect-sync
       // opt-out flag (bool column tier).
       expect(Camera.schema.autoAspect).toBe('bool');
@@ -818,10 +791,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       bloomThreshold: 1.0,
       bloomIntensity: 1.0,
       bloomBlurRadius: 4.0,
-      clearR: 0,
-      clearG: 0,
-      clearB: 0,
-      clearA: 1,
+      clearColor: [0, 0, 0, 1],
     };
   }
 
@@ -3678,10 +3648,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       bloomThreshold: 1.0,
       bloomIntensity: 1.0,
       bloomBlurRadius: 4.0,
-      clearR: 0,
-      clearG: 0,
-      clearB: 0,
-      clearA: 1,
+      clearColor: [0, 0, 0, 1],
     };
   }
 
@@ -8994,7 +8961,7 @@ type ExtractFrameWithPipeline = (
       const world = new World();
       world.spawn({
         component: Skylight,
-        data: { colorR: 0.2, colorG: 0.4, colorB: 0.8, intensity: 0.5 },
+        data: { color: [0.2, 0.4, 0.8], intensity: 0.5 },
       });
 
       const frame = extractFrame(world, null as unknown as never) as unknown as {
@@ -9503,12 +9470,8 @@ type ExtractFrameWithPipeline = (
       world.spawn({
         component: C.DirectionalLight,
         data: {
-          directionX: -0.5,
-          directionY: -1,
-          directionZ: -0.3,
-          colorR: 1,
-          colorG: 1,
-          colorB: 1,
+          direction: [-0.5, -1, -0.3],
+          color: [1, 1, 1],
           intensity: 1,
           cascadeCount: 1,
           mapSize: 1024,

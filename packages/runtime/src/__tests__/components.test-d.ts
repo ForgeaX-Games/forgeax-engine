@@ -73,7 +73,7 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     expectTypeOf<{ materials: readonly [0] }>().not.toMatchTypeOf<SpawnData>();
   });
 
-  it('Camera data shape has 22 fields (21 number + autoAspect boolean: w9 9 + tonemap trio + antialias + bloom quartet + clear-color quartet + autoAspect)', () => {
+  it('Camera data shape has 19 fields (17 number + clearColor array + autoAspect boolean: w9 9 + tonemap trio + antialias + bloom quartet + clearColor + autoAspect)', () => {
     type Data = ShapeOf<typeof Camera.schema>;
     expectTypeOf<keyof Data>().toEqualTypeOf<
       | 'fov'
@@ -93,10 +93,7 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
       | 'bloomThreshold'
       | 'bloomIntensity'
       | 'bloomBlurRadius'
-      | 'clearR'
-      | 'clearG'
-      | 'clearB'
-      | 'clearA'
+      | 'clearColor'
       | 'autoAspect'
     >();
     expectTypeOf<Data['fov']>().toEqualTypeOf<number>();
@@ -108,21 +105,22 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
     expectTypeOf<Data['tonemap']>().toEqualTypeOf<number>();
     expectTypeOf<Data['exposure']>().toEqualTypeOf<number>();
     expectTypeOf<Data['whitePoint']>().toEqualTypeOf<number>();
+    // feat-20260709 M3: clear-color quartet collapsed into one inline
+    // array<f32,4> column; read side resolves to Float32Array (mirrors the
+    // Transform pos/quat/scale precedent).
+    expectTypeOf<Data['clearColor']>().toEqualTypeOf<Float32Array>();
     // feat-20260617 / M3: AC-09 -- bool column narrows to boolean, not number.
     expectTypeOf<Data['autoAspect']>().toEqualTypeOf<boolean>();
   });
 
-  it('DirectionalLight data shape: 7 light fields + castShadow bool + 8 merged shadow fields', () => {
+  it('DirectionalLight data shape: 3 light fields + castShadow bool + 8 merged shadow fields', () => {
     // feat-20260621: DirectionalLightShadow merged into DirectionalLight via castShadow toggle.
     // shadowDistance replaced the nearPlane/farPlane pair (near derives from camera).
+    // feat-20260709 M2: direction/color collapsed to array<f32,3> columns.
     type Data = ShapeOf<typeof DirectionalLight.schema>;
     expectTypeOf<keyof Data>().toEqualTypeOf<
-      | 'directionX'
-      | 'directionY'
-      | 'directionZ'
-      | 'colorR'
-      | 'colorG'
-      | 'colorB'
+      | 'direction'
+      | 'color'
       | 'intensity'
       | 'castShadow'
       | 'mapSize'
@@ -134,6 +132,8 @@ describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeO
       | 'shadowDistance'
       | 'pcfKernelSize'
     >();
+    expectTypeOf<Data['direction']>().toEqualTypeOf<Float32Array>();
+    expectTypeOf<Data['color']>().toEqualTypeOf<Float32Array>();
     expectTypeOf<Data['intensity']>().toEqualTypeOf<number>();
     // bool column narrows to boolean, not number.
     expectTypeOf<Data['castShadow']>().toEqualTypeOf<boolean>();

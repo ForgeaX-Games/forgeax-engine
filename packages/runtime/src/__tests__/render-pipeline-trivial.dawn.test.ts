@@ -466,8 +466,9 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
         },
       },
       // feat-20260608 sibling-collateral: clearColor moved off RendererOptions
-      // to Camera schema (clearR/G/B/A); explicit values keep this falsify
-      // discriminator stable across the surface-trim cut.
+      // to the Camera schema (one inline array<f32,4> column as of
+      // feat-20260709 M3); explicit values keep this falsify discriminator
+      // stable across the surface-trim cut.
       {
         component: Camera,
         data: {
@@ -475,10 +476,7 @@ describe('feat-20260601 M2 w11: customizable render pipeline (dawn)', () => {
           aspect: 1,
           near: 0.1,
           far: 100,
-          clearR: 69 / 255,
-          clearG: 69 / 255,
-          clearB: 80 / 255,
-          clearA: 1,
+          clearColor: [69 / 255, 69 / 255, 80 / 255, 1],
         },
       },
     );

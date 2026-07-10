@@ -4332,12 +4332,21 @@ importers:
         specifier: workspace:*
         version: link:../types
     devDependencies:
+      '@forgeax/engine-assets-runtime':
+        specifier: workspace:*
+        version: link:../assets-runtime
       '@forgeax/engine-physics-rapier2d':
         specifier: workspace:*
         version: link:../physics-rapier2d
       '@forgeax/engine-physics-rapier3d':
         specifier: workspace:*
         version: link:../physics-rapier3d
+      '@forgeax/engine-runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      '@forgeax/engine-shader':
+        specifier: workspace:*
+        version: link:../shader
 
   packages/physics-rapier2d:
     dependencies:

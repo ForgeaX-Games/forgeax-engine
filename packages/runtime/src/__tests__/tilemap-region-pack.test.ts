@@ -30,8 +30,7 @@ import {
 function setup(opts: {
   cols: number;
   rows: number;
-  tileSizeX: number;
-  tileSizeY: number;
+  tileSize: readonly [number, number];
   tiles: Uint32Array;
 }) {
   const world = new World();
@@ -54,8 +53,7 @@ function setup(opts: {
         data: {
           cols: opts.cols,
           rows: opts.rows,
-          tileSizeX: opts.tileSizeX,
-          tileSizeY: opts.tileSizeY,
+          tileSize: opts.tileSize,
           chunkSize: 4,
           tileset: tilesetHandle,
         },
@@ -126,7 +124,7 @@ describe('tilemap region pack — M0 1x1 unit-cell Transform field assertions', 
     const tiles = new Uint32Array(2);
     tiles[0] = 1; // (0, 0)
     tiles[1] = 1; // (1, 0)
-    const { world } = setup({ cols: 2, rows: 1, tileSizeX: 32, tileSizeY: 16, tiles });
+    const { world } = setup({ cols: 2, rows: 1, tileSize: [32, 16], tiles });
     tilemapChunkExtractSystem(world, 0);
     const xs = readDerivedTransforms(world)
       .map((t) => t.posX)
@@ -137,7 +135,7 @@ describe('tilemap region pack — M0 1x1 unit-cell Transform field assertions', 
 
   it('default tileSize (1, 1) on a 1x1 cell anchored at (0, 0)', () => {
     const tiles = new Uint32Array([1]);
-    const { world } = setup({ cols: 1, rows: 1, tileSizeX: 1, tileSizeY: 1, tiles });
+    const { world } = setup({ cols: 1, rows: 1, tileSize: [1, 1], tiles });
     tilemapChunkExtractSystem(world, 0);
     const transforms = readDerivedTransforms(world);
     expect(transforms.length).toBe(1);
@@ -153,7 +151,7 @@ describe('tilemap region pack — M0 1x1 unit-cell Transform field assertions', 
 
   it('flipH alone negates scaleX, flipV alone negates scaleY (per-cell sign)', () => {
     const tiles = new Uint32Array([encodeTileBits(1, true, false, false, false)]);
-    const { world } = setup({ cols: 1, rows: 1, tileSizeX: 1, tileSizeY: 1, tiles });
+    const { world } = setup({ cols: 1, rows: 1, tileSize: [1, 1], tiles });
     tilemapChunkExtractSystem(world, 0);
     const t = readDerivedTransforms(world)[0];
     if (t === undefined) throw new Error('expected one derived Transform');

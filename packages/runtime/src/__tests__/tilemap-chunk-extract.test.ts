@@ -29,8 +29,7 @@ const SQRT1_2 = Math.SQRT1_2;
 function makeSetup(opts: {
   cols: number;
   rows: number;
-  tileSizeX?: number;
-  tileSizeY?: number;
+  tileSize?: readonly [number, number];
   chunkSize?: number;
   tiles: Uint32Array;
 }) {
@@ -54,8 +53,7 @@ function makeSetup(opts: {
         data: {
           cols: opts.cols,
           rows: opts.rows,
-          tileSizeX: opts.tileSizeX ?? 1,
-          tileSizeY: opts.tileSizeY ?? 1,
+          tileSize: opts.tileSize ?? [1, 1],
           chunkSize: opts.chunkSize ?? 16,
           tileset: tilesetHandle,
         },
@@ -116,8 +114,7 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     const { world } = makeSetup({
       cols,
       rows,
-      tileSizeX: tileSize,
-      tileSizeY: tileSize,
+      tileSize: [tileSize, tileSize],
       tiles,
     });
     tilemapChunkExtractSystem(world, 0);
@@ -164,8 +161,7 @@ describe('tilemapChunkExtractSystem (M0 baseline)', () => {
     const { world } = makeSetup({
       cols: 1,
       rows: 1,
-      tileSizeX: tileSize,
-      tileSizeY: tileSize,
+      tileSize: [tileSize, tileSize],
       tiles,
     });
     tilemapChunkExtractSystem(world, 0);

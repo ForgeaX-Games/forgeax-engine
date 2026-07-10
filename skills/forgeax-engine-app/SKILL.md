@@ -26,7 +26,7 @@ description: >-
 
 gamepad 采集是「每帧轮询式」（`navigator.getGamepads()` 在 `sample()` 内调用——无 `gamepadconnected` 事件监听），touch 相位转换是「事件流」（pointerdown/pointermove/pointerup 在帧内积入队列），但 `InputSnapshot` 读写面完全一样：`snap.gamepad(0).button(b)` / `snap.pointer(id).x` / `snap.virtualAxis('move')`——charter P4 将采集差异隐藏在后端内部，AI 用户不需感知"轮询 vs 事件流"的区别。
 
-参数面分两层：`canvas`（必选）/ `opts?: CreateAppOptions`（app 行为：`plugins` / `maxDt`）/ `bundler?: BundlerOptions`（构建层：`shaderManifestUrl` + `importTransport`）。`clearColor` 不在参数里——已搬到 `Camera.clearR/G/B/A`：渲染表现归 `Camera`，构建通道归 `bundler`，app 行为归 `opts`，三关注面分离。
+参数面分两层：`canvas`（必选）/ `opts?: CreateAppOptions`（app 行为：`plugins` / `maxDt`）/ `bundler?: BundlerOptions`（构建层：`shaderManifestUrl` + `importTransport`）。`clearColor` 不在参数里——已搬到 `Camera.clearColor`（`array<f32, 4>`）：渲染表现归 `Camera`，构建通道归 `bundler`，app 行为归 `opts`，三关注面分离。
 
 ## Plugin 系统
 
@@ -179,10 +179,10 @@ const world = app.world;
 
 // Per-frame clear color 在 Camera 组件上，不在 createApp 参数里
 world.spawn(
-  new Camera({
-    clearR: 0.1, clearG: 0.1, clearB: 0.1, clearA: 1.0,
-    // ... projection + transform 字段
-  })
+  { component: Camera, data: {
+    clearColor: [0.1, 0.1, 0.1, 1.0],
+    // ... projection 字段
+  } },
 );
 
 const MovePlayer = defineSystem({
@@ -451,7 +451,7 @@ const spriteMat: MaterialAsset = {
 
 - **canvas 起飞失败别吞**：`createApp` 失败回 `Result`，`res.error` 带结构化 `.code` / `.hint`；按属性消费，别 `String(err)` 解析。后端拿不到时是 `createRenderer` throw `EngineEnvironmentError`，不是 `Result`。
 - **预启动读 InputSnapshot 全 false 是预期**：`app.start()` 之前 / headless 下，held-key 与 edge 都报 `false` / `0`，不是 bug——空信号本身是信号。同样：gamepad 断连 slot / non-existent pointerId / unconfigured virtualAxis name 全部返回 `false` / `0` / 零向量——不 throw。
-- **`clearColor` 不在 `createApp` 参数里**：已搬到 `Camera` 组件的 `clearR/G/B/A` 字段（`packages/runtime/README.md` §Camera clear color）。零 Camera 场景 fallback 为 `[0,0,0,1]`。
+- **`clearColor` 不在 `createApp` 参数里**：已搬到 `Camera` 组件的 `clearColor`（`array<f32, 4>`）字段（`packages/runtime/README.md` §Camera clear color）。零 Camera 场景 fallback 为 `[0,0,0,1]`。
 - **`shaderManifestUrl` 不在 `opts` 里**：已搬到第三参数 `BundlerOptions`。零配置场景省略第三参数即可（引擎 fallback `'/shaders/manifest.json'`）；显式注入用 `forgeaxBundlerAdapter()`（`virtual:forgeax/bundler`）。
 - **内置网格不需要 `registerWithGuid`**：`cube` / `triangle` / `quad` / `sphere` 四种内置网格的 GUID→handle 映射已在 `AssetRegistry` 构造时预注册（Tier 0, feat-20260604）。手动再 `registerWithGuid` 会抛 GUID 碰撞错误。自定义资产仍需显式注册。
 - **渲染 / 循环类症状**（白屏、demo 不动、CI 断言全过却 exit 1）先查 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) 的症状索引，再回溯引擎层；别在 app 里塞手动 rAF mutation 绕过。

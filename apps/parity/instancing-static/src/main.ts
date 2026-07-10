@@ -173,10 +173,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         aspect: CANVAS_W / CANVAS_H,
         near: 0.1,
         far: 1000,
-        clearR: CLEAR_R,
-        clearG: CLEAR_G,
-        clearB: CLEAR_B,
-        clearA: CLEAR_A,
+        clearColor: [CLEAR_R, CLEAR_G, CLEAR_B, CLEAR_A],
       },
     },
   );
@@ -185,12 +182,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn({
     component: DirectionalLight,
     data: {
-      directionX: LIGHT_DIR_X,
-      directionY: LIGHT_DIR_Y,
-      directionZ: LIGHT_DIR_Z,
-      colorR: 1,
-      colorG: 1,
-      colorB: 1,
+      direction: [LIGHT_DIR_X, LIGHT_DIR_Y, LIGHT_DIR_Z],
+      color: [1, 1, 1],
       intensity: 1,
     },
   });

@@ -208,10 +208,7 @@ world.spawn(
       aspect: WIDTH / HEIGHT,
       near: 0.1,
       far: 100,
-      clearR: 0.2,
-      clearG: 0.3,
-      clearB: 0.3,
-      clearA: 1.0,
+      clearColor: [0.2, 0.3, 0.3, 1.0],
     },
   },
 );

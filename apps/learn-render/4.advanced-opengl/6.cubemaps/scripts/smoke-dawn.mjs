@@ -353,12 +353,8 @@ async function spawnScene(world, spawnSkybox) {
   world.spawn({
     component: DirectionalLight,
     data: {
-      directionX: -0.4,
-      directionY: -0.6,
-      directionZ: -0.7,
-      colorR: 1,
-      colorG: 1,
-      colorB: 1,
+      direction: [-0.4, -0.6, -0.7],
+      color: [1, 1, 1],
       intensity: 1.5,
     },
   });
@@ -377,10 +373,7 @@ async function spawnScene(world, spawnSkybox) {
         near: 0.1,
         far: 100,
         tonemap: TONEMAP_REINHARD_EXTENDED,
-        clearR: CLEAR_RGBA[0],
-        clearG: CLEAR_RGBA[1],
-        clearB: CLEAR_RGBA[2],
-        clearA: CLEAR_RGBA[3],
+        clearColor: [CLEAR_RGBA[0], CLEAR_RGBA[1], CLEAR_RGBA[2], CLEAR_RGBA[3]],
       },
     },
   );

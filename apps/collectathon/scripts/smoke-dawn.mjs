@@ -171,7 +171,7 @@ const cameraEntity = camSpawn.value;
 
 const lightSpawn = world.spawn({
   component: DirectionalLight,
-  data: { directionX: -0.4, directionY: -1, directionZ: -0.3, colorR: 1, colorG: 1, colorB: 1, intensity: 1 },
+  data: { direction: [-0.4, -1, -0.3], color: [1, 1, 1], intensity: 1 },
 });
 if (!lightSpawn.ok) {
   console.error(`[smoke] FAIL - DirectionalLight spawn failed: ${lightSpawn.error.code}`);
@@ -298,7 +298,7 @@ const m3Entities = [];
     { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
     {
       component: Collider,
-      data: { shape: ColliderShapeValue.cuboid, halfExtentsX: LEVEL_HALF, halfExtentsY: 0.1, halfExtentsZ: LEVEL_HALF },
+      data: { shape: ColliderShapeValue.cuboid, halfExtents: [LEVEL_HALF, 0.1, LEVEL_HALF] },
     },
   );
   if (g.ok) m3Entities.push(g.value);
@@ -314,7 +314,7 @@ for (const pos of [
   const w = world.spawn(
     { component: Transform, data: { pos: [pos.x, 2, pos.z]} },
     { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
-    { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtentsX: 1, halfExtentsY: 2, halfExtentsZ: 1 } },
+    { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 2, 1] } },
   );
   if (w.ok) m3Entities.push(w.value);
 }

@@ -284,9 +284,7 @@ for (let i = 0; i < NUM_LIGHTS; i++) {
     {
       component: PointLight,
       data: {
-        colorR: cr,
-        colorG: cg,
-        colorB: cb,
+        color: [cr, cg, cb],
         intensity: 1.0,
         range: 6.0,
       },
@@ -315,9 +313,7 @@ world.spawn(
     component: Camera,
     data: {
       ...perspective({ fov: Math.PI / 4, aspect: WIDTH / HEIGHT, near: 0.1, far: 50 }),
-      clearR: 0.02,
-      clearG: 0.02,
-      clearB: 0.04,
+      clearColor: [0.02, 0.02, 0.04, 1],
     },
   },
 ).unwrap();

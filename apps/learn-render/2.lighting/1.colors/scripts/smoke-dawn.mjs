@@ -215,12 +215,8 @@ world
 world.spawn({
   component: DirectionalLight,
   data: {
-    directionX: ldX,
-    directionY: ldY,
-    directionZ: ldZ,
-    colorR: 1.0,
-    colorG: 1.0,
-    colorB: 1.0,
+    direction: [ldX, ldY, ldZ],
+    color: [1.0, 1.0, 1.0],
     intensity: 1.0,
   },
 });

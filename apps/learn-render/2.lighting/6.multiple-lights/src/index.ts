@@ -249,12 +249,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn({
     component: DirectionalLight,
     data: {
-      directionX: -0.2,
-      directionY: -1,
-      directionZ: -0.3,
-      colorR: 1,
-      colorG: 1,
-      colorB: 1,
+      direction: [-0.2, -1, -0.3],
+      color: [1, 1, 1],
       intensity: 0.5,
     },
   });
@@ -279,9 +275,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: PointLight,
         data: {
-          colorR: plColor[0],
-          colorG: plColor[1],
-          colorB: plColor[2],
+          color: [plColor[0], plColor[1], plColor[2]],
           intensity: 100,
           range: 50,
         },
@@ -298,12 +292,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: SpotLight,
       data: {
-        directionX: 0,
-        directionY: 0,
-        directionZ: -1,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [0, 0, -1],
+        color: [1, 1, 1],
         intensity: 4,
         range: 50,
         innerConeDeg: 12.5,

@@ -455,12 +455,8 @@ function spawnLight(world: World): EntityHandle {
     .spawn({
       component: DirectionalLight,
       data: {
-        directionX: -0.4,
-        directionY: -1,
-        directionZ: -0.3,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [-0.4, -1, -0.3],
+        color: [1, 1, 1],
         intensity: 1,
       },
     })
@@ -540,7 +536,7 @@ function spawnSkylight(world: World): EntityHandle {
   return world
     .spawn({
       component: Skylight,
-      data: { colorR: 0.9, colorG: 0.95, colorB: 1.0, intensity: 0.35 },
+      data: { color: [0.9, 0.95, 1.0], intensity: 0.35 },
     })
     .unwrap();
 }
@@ -573,9 +569,7 @@ async function attachSkyEquirect(
   // SkyboxBackground (F-05). Projection happens lazily inside the renderer.
   world.set(skylight, Skylight, {
     equirect,
-    colorR: 1,
-    colorG: 1,
-    colorB: 1,
+    color: [1, 1, 1],
     intensity: 0.25,
   });
   return world

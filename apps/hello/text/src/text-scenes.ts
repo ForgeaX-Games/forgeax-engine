@@ -88,10 +88,7 @@ export function spawnTextScenes(
             fontHandle,
             text: s.text,
             fontSize: 0.025,
-            colorR: s.color[0],
-            colorG: s.color[1],
-            colorB: s.color[2],
-            colorA: s.color[3],
+            color: s.color,
           },
         },
       )

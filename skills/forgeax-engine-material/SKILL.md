@@ -26,7 +26,7 @@ description: >-
 | `Materials.standard({ baseColor, metallic?, roughness? })` | `=> MaterialAsset` | PBR；`metallic` 默认 0，`roughness` 默认 0.5 |
 | `assets.register(materialAsset)` | `=> Result<Handle, AssetError>` | 注册材质拿 handle |
 | `DirectionalLight` / `PointLight` / `SpotLight` | 组件 | 直接光源；standard 材质要靠它 |
-| `Skylight` | 组件 `{ equirect?, colorR/G/B, intensity }` | 环境光（ambient）。`equirect` **可选**：省略 → 即时纯色环境光（白 fallback cube，无 async），给 equirect → 完整 IBL（引擎内部懒触发 equirect→cubemap 投影 + irradiance/prefilter/BRDF LUT，**用户不调 `uploadCubemapFromEquirect`**）。`color`×`intensity` 都是每帧实时调的 |
+| `Skylight` | 组件 `{ equirect?, color: [r, g, b], intensity }` | 环境光（ambient）。`equirect` **可选**：省略 → 即时纯色环境光（白 fallback cube，无 async），给 equirect → 完整 IBL（引擎内部懒触发 equirect→cubemap 投影 + irradiance/prefilter/BRDF LUT，**用户不调 `uploadCubemapFromEquirect`**）。`color`×`intensity` 都是每帧实时调的 |
 | `VideoPlayer` | 组件 `{ clip, playing, loop, currentTime }` | 视频播放控制组件；`clip: Handle<'VideoAsset','shared'>` 指向 VideoAsset，对齐 AudioSource.clip |
 | `VideoElementProvider` | interface + Resource key | host 实现的桥接接口；`world.insertResource(VIDEO_ELEMENT_PROVIDER_KEY, provider)` 注册后引擎的**每帧 record 阶段**直接取 element 上传（无需注册任何额外系统）|
 | `HANDLE_CUBE / QUAD / TRIANGLE / SPHERE` | 内建 `Handle<MeshAsset>` | 喂给 `MeshFilter.assetHandle` |
@@ -68,7 +68,8 @@ world.spawn(
 ).unwrap();
 
 // 3) standard PBR needs a light, or the frame is black
-world.spawn({ component: DirectionalLight, data: {} }).unwrap();
+// direction is required (no default); color defaults to [1, 1, 1]
+world.spawn({ component: DirectionalLight, data: { direction: [0, -1, 0] } }).unwrap();
 world.spawn({ component: Camera, data: {} }).unwrap();
 ```
 
@@ -127,7 +128,7 @@ tilemap terrain 透明形态：AI 用户只用 `Tilemap + TileLayer { sortScope:
 ## 踩坑
 
 - **standard 材质全黑**：场景里没灯。`unlit` 自发光不需要灯，`standard` 没有 `DirectionalLight/PointLight/SpotLight`/`Skylight` 任意一种就一团黑——先 spawn 一盏灯。
-- **冷启动 / 无 IBL 时全黑几秒**：只挂 `DirectionalLight` 而环境光指望异步 IBL 时，equirect 投影就绪前场景接近黑。要即时环境光就 spawn **无 equirect 的 Skylight**：`world.spawn({ component: Skylight, data: {} })` 给纯白环境光（首帧即亮，零 async），或 `data: { colorR, colorG, colorB, intensity }` 调色调强。给了 equirect 才升级到完整 IBL——引擎 render record 阶段懒触发 equirect→cubemap 投影 + irradiance/prefilter/BRDF LUT（fire-and-forget，幂等，失败永久退化白 cube 不重试）。**别用高处补一盏常亮 PointLight 当 crutch**——那是绕过引擎缺口，现在引擎已直接支持纯色环境光。
+- **冷启动 / 无 IBL 时全黑几秒**：只挂 `DirectionalLight` 而环境光指望异步 IBL 时，equirect 投影就绪前场景接近黑。要即时环境光就 spawn **无 equirect 的 Skylight**：`world.spawn({ component: Skylight, data: {} })` 给纯白环境光（首帧即亮，零 async），或 `data: { color: [r, g, b], intensity }` 调色调强。给了 equirect 才升级到完整 IBL——引擎 render record 阶段懒触发 equirect→cubemap 投影 + irradiance/prefilter/BRDF LUT（fire-and-forget，幂等，失败永久退化白 cube 不重试）。**别用高处补一盏常亮 PointLight 当 crutch**——那是绕过引擎缺口，现在引擎已直接支持纯色环境光。
 - **贴图槽纯白方块**：`paramValues` 里贴图传了 GUID 字符串而非解析后的 `Handle`（extract 阶段只认 `number`）。详细判定 + 修法见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §贴图纯白。
 - **材质注册失败走黑/白回退**：`.pack.json` 里 `passes[].shader` 标识符改名残留 → `register failed: shader 'X' not registered`。见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md) §shader 标识符残留。
 - **物体不在该在的位置**：`Transform` 写的是 local TRS，引擎每帧派生 world mat4；要读世界坐标见 [`forgeax-engine-math`](../forgeax-engine-math/SKILL.md)。
@@ -169,19 +170,19 @@ tilemap terrain 透明形态：AI 用户只用 `Tilemap + TileLayer { sortScope:
 // 最小 spawn：默认投射阴影，零配置
 world.spawn(
   { component: Transform, data: { pos: [0, 5, 0] } },
-  { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0 } },
+  { component: SpotLight, data: { direction: [0, -1, 0] } },
 );
 
 // 显式关阴影（零开销路径）
 world.spawn(
   { component: Transform, data: { pos: [0, 5, 0] } },
-  { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0, castShadow: false } },
+  { component: SpotLight, data: { direction: [0, -1, 0], castShadow: false } },
 );
 
 // 调参消 self-shadow acne（对齐 directional 词汇）
 world.spawn(
   { component: Transform, data: { pos: [0, 5, 0] } },
-  { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0, depthBias: 0.01, normalBias: 0.08, mapSize: 1024 } },
+  { component: SpotLight, data: { direction: [0, -1, 0], depthBias: 0.01, normalBias: 0.08, mapSize: 1024 } },
 );
 ```
 
@@ -285,7 +286,7 @@ const spriteMat: MaterialAsset = {
 sprite material 的灯光选型是 `passes[0].shader` 字符串切换（材质分派的唯一判别式是 shader identity；`MaterialSnapshot.shadingModel` 字段已于 tweak-20260701 删除，不存在需要扩的 union）：`'forgeax::sprite'` 走 unlit 直采纹理（默认；任意灯光不影响），`'forgeax::sprite-lit'` 走 **flat 2D per-light forward**——每盏灯贡献 = `attenuation × cone × colorTimesIntensity × albedo`（Directional 无 `attenuation`；SpotLight 的 `cone` 是 `smoothstep(cosOuter, cosInner, dot(L, -direction))`），**无表面法线依赖、无 normal map、无 shadow**——light direction 只喂 SpotLight cone 衰减，不参与任何 diffuse 点积。**需场景至少 1 个 DirectionalLight / PointLight / SpotLight**，否则视觉全黑（与 3D `'standard'` 同理）。`paramSchema` 与 `forgeax::sprite` 字段集合 byte-identical（4 vec4 + 1 texture2d；BGL JSON byte-identical，AC-07）。OOS-1 normal-map 跟进 `feat-future-sprite-lit-normal-map`（引入 normal map 时才把 directional diffuse 项加回来）。
 
 > [!IMPORTANT]
-> **摆位直觉对齐 Godot Light2D / Unity URP 2D**：灯任意位置 / 任意方向皆有效——`pos` 的 z=0 或 `directionZ=0` 都能画出可见的衰减亮斑与聚光楔形，不需要把灯抬到 z>0 再朝 `-Z` 打。这条与 3D standard PBR 的方向依赖不同，是 flat 2D 光照的显著语义差；shader 内部 `VsOut.@location(1) worldPos` 从 vertex 阶段直传，避免了旧路径 fragment 反演 worldPos 的 9-slice 不精确与多实例 identity collapse 问题。
+> **摆位直觉对齐 Godot Light2D / Unity URP 2D**：灯任意位置 / 任意方向皆有效——`pos` 的 z=0 或 `direction` z 分量为 0 都能画出可见的衰减亮斑与聚光楔形，不需要把灯抬到 z>0 再朝 `-Z` 打。这条与 3D standard PBR 的方向依赖不同，是 flat 2D 光照的显著语义差；shader 内部 `VsOut.@location(1) worldPos` 从 vertex 阶段直传，避免了旧路径 fragment 反演 worldPos 的 9-slice 不精确与多实例 identity collapse 问题。
 
 ```ts
 // 从 forgeax::sprite 切到 forgeax::sprite-lit：仅改 1 字符串
@@ -304,11 +305,11 @@ const spriteLitMat: MaterialAsset = {
 };
 
 // flat 2D 光照允许灯完全落在 sprite 平面内摆位。示例：SpotLight 从原点朝 +X 横扫，
-// 楔形亮带落在 sprite 平面 x∈[1,3] 上——pos z=0 + directionZ=0 全部生效。
+// 楔形亮带落在 sprite 平面 x∈[1,3] 上——pos z=0 + direction z 分量为 0 全部生效。
 world.spawn(
   { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
   { component: SpotLight, data: {
-      directionX: 1, directionY: 0, directionZ: 0,      // 平面横扫，无需 z 分量
+      direction: [1, 0, 0],      // 平面横扫，无需 z 分量
       innerConeDeg: 15, outerConeDeg: 30,
       intensity: 5, range: 10,
   } },
@@ -495,7 +496,7 @@ world.spawn(
   { component: Camera, data: perspective({ fov: Math.PI / 3, aspect: canvas.width / canvas.height }) },
   { component: Transform, data: { pos: [0, 0, 5] } },
 );
-world.spawn({ component: DirectionalLight, data: {} });
+world.spawn({ component: DirectionalLight, data: { direction: [0, -1, 0] } });
 
 // --- render loop ---
 const frame = () => {

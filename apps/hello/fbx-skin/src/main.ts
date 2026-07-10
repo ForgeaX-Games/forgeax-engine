@@ -175,10 +175,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         component: Camera,
         data: {
           ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 1, far: 2000 }),
-          clearR: 0,
-          clearG: 0.4,
-          clearB: 0.4,
-          clearA: 1,
+          clearColor: [0, 0.4, 0.4, 1],
         },
       },
     )
@@ -187,12 +184,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn({
       component: DirectionalLight,
       data: {
-        directionX: -0.5,
-        directionY: -1,
-        directionZ: -0.3,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [-0.5, -1, -0.3],
+        color: [1, 1, 1],
         intensity: 1,
       },
     })

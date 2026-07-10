@@ -127,7 +127,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     const ld = LIGHT_DATA[i]!;
     world.spawn(
       { component: Transform, data: { pos: ld.pos } },
-      { component: PointLight, data: { colorR: ld.colorR, colorG: ld.colorG, colorB: ld.colorB,
+      { component: PointLight, data: { color: [ld.colorR, ld.colorG, ld.colorB],
           intensity: 1.0, range: 6.0 } },
     );
     world.spawn(
@@ -141,7 +141,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn(
     { component: Transform, data: { pos: [0, 1.5, 6.0] } },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 50 }),
-        clearR: 0.02, clearG: 0.02, clearB: 0.04 } },
+        clearColor: [0.02, 0.02, 0.04, 1] } },
   );
 
   app.start();

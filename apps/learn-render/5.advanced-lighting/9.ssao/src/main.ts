@@ -180,9 +180,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn({
     component: Skylight,
     data: {
-      colorR: SKYLIGHT_COLOR[0],
-      colorG: SKYLIGHT_COLOR[1],
-      colorB: SKYLIGHT_COLOR[2],
+      color: [SKYLIGHT_COLOR[0], SKYLIGHT_COLOR[1], SKYLIGHT_COLOR[2]],
       intensity: SKYLIGHT_INTENSITY,
     },
   });
@@ -257,9 +255,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: PointLight,
       data: {
-        colorR: LIGHT_COLOR[0],
-        colorG: LIGHT_COLOR[1],
-        colorB: LIGHT_COLOR[2],
+        color: [LIGHT_COLOR[0], LIGHT_COLOR[1], LIGHT_COLOR[2]],
         intensity: LIGHT_INTENSITY,
         range: LIGHT_RANGE,
       },
@@ -280,9 +276,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       component: Camera,
       data: {
         ...perspective({ fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 50 }),
-        clearR: 0.04,
-        clearG: 0.04,
-        clearB: 0.06,
+        clearColor: [0.04, 0.04, 0.06, 1],
       },
     },
   ).unwrap();

@@ -140,12 +140,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     .spawn({
       component: DirectionalLight,
       data: {
-        directionX: -0.3,
-        directionY: -0.5,
-        directionZ: -0.8,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [-0.3, -0.5, -0.8],
+        color: [1, 1, 1],
         intensity: 1.2,
       },
     })

@@ -247,8 +247,7 @@ const tilemap = world
       data: {
         cols: COLS,
         rows: ROWS,
-        tileSizeX: 1,
-        tileSizeY: 1,
+        tileSize: [1, 1],
         chunkSize: CHUNK_SIZE,
         tileset: tilesetHandle,
       },

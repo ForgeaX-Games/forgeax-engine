@@ -56,8 +56,7 @@ interface Setup {
   flipH: boolean;
   flipV: boolean;
   flipDiagonal: boolean;
-  tileSizeX: number;
-  tileSizeY: number;
+  tileSize: readonly [number, number];
 }
 
 function expectedTransform(s: Setup): {
@@ -73,10 +72,10 @@ function expectedTransform(s: Setup): {
   const effX = s.flipH ? 1 - basePivotForX : basePivotForX;
   const effY = s.flipV ? 1 - basePivotForY : basePivotForY;
   return {
-    posX: (s.cellX + effX + (0.5 - effX) * s.widthCells) * s.tileSizeX,
-    posY: (s.cellY + effY + (0.5 - effY) * s.heightCells) * s.tileSizeY,
-    scaleX: (s.flipH ? -1 : 1) * s.widthCells * s.tileSizeX,
-    scaleY: (s.flipV ? -1 : 1) * s.heightCells * s.tileSizeY,
+    posX: (s.cellX + effX + (0.5 - effX) * s.widthCells) * s.tileSize[0],
+    posY: (s.cellY + effY + (0.5 - effY) * s.heightCells) * s.tileSize[1],
+    scaleX: (s.flipH ? -1 : 1) * s.widthCells * s.tileSize[0],
+    scaleY: (s.flipV ? -1 : 1) * s.heightCells * s.tileSize[1],
     quatZ: s.flipDiagonal ? SQRT1_2 : 0,
     quatW: s.flipDiagonal ? SQRT1_2 : 1,
   };
@@ -158,8 +157,7 @@ function runOneCase(s: Setup): {
         data: {
           cols,
           rows,
-          tileSizeX: s.tileSizeX,
-          tileSizeY: s.tileSizeY,
+          tileSize: s.tileSize,
           chunkSize: 16,
           tileset: tilesetHandle,
         },
@@ -207,8 +205,7 @@ describe('spawnDerivedRenderEntities — 32 case H/V/D flip x pivot matrix (M2)'
               flipH,
               flipV,
               flipDiagonal,
-              tileSizeX,
-              tileSizeY,
+              tileSize: [tileSizeX, tileSizeY],
             };
             const got = runOneCase(setup);
             const want = expectedTransform(setup);
@@ -242,8 +239,7 @@ describe('spawnDerivedRenderEntities — 32 case H/V/D flip x pivot matrix (M2)'
       flipH: false,
       flipV: false,
       flipDiagonal: false,
-      tileSizeX,
-      tileSizeY,
+      tileSize: [tileSizeX, tileSizeY],
     };
     const noFlipPosY = expectedTransform(baseSetup).posY;
     const vFlipPosY = expectedTransform({ ...baseSetup, flipV: true }).posY;
@@ -274,8 +270,7 @@ describe('spawnDerivedRenderEntities — 32 case H/V/D flip x pivot matrix (M2)'
       flipH: false,
       flipV: false,
       flipDiagonal: false,
-      tileSizeX: 16,
-      tileSizeY: 16,
+      tileSize: [16, 16],
     });
     expect(got.posX).toBeCloseTo(0.5 * 16, 5);
     expect(got.posY).toBeCloseTo(0.5 * 16, 5);

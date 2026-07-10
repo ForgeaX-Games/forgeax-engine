@@ -175,8 +175,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: DirectionalLight,
       data: {
-        directionX: 0.2, directionY: -0.98, directionZ: 0,
-        colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+        direction: [0.2, -0.98, 0],
+        color: [1, 1, 1], intensity: 1,
         castShadow: true,
         ...SHADOW_CONFIG,
       },

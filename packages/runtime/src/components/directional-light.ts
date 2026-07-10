@@ -1,7 +1,9 @@
 // @forgeax/engine-runtime - DirectionalLight (directional light parameters
 // with merged shadow config).
 //
-// Schema: 7 f32 light columns + 1 bool castShadow + 9 f32 shadow columns.
+// Schema: direction array<f32,3> + color array<f32,3> + intensity f32 + 1 bool
+// castShadow + 8 f32 shadow columns (feat-20260709 M2: direction/color collapsed
+// from 6 per-axis scalar columns to two inline array<f32,3> columns).
 //
 // Direction (xyz, normalized) + color (rgb, linear space) + intensity.
 // No Transform dependency (directional lights have no position).
@@ -28,6 +30,7 @@
 
 import { defineComponent } from '@forgeax/engine-ecs';
 import { ShadowInvalidConfigError } from '../errors/render';
+import { validateDirection } from '../light-helpers';
 
 /**
  * Directional light (sun-like infinite light source) with merged shadow
@@ -64,21 +67,21 @@ import { ShadowInvalidConfigError } from '../errors/render';
  *
  * @example Spawn a single directional light with default shadows:
  *   world.spawn({ component: DirectionalLight, data: {
- *     directionX: -0.5, directionY: -1, directionZ: -0.3,
- *     colorR: 1, colorG: 1, colorB: 1,
+ *     direction: [-0.5, -1, -0.3], // [x, y, z]
+ *     color: [1, 1, 1], // [r, g, b]
  *     intensity: 1,
  *   } });
  *
  * @example Opt out of shadows:
  *   world.spawn({ component: DirectionalLight, data: {
- *     directionX: 0, directionY: -1, directionZ: 0,
+ *     direction: [0, -1, 0], // [x, y, z]
  *     castShadow: false,
  *   } });
  *
  * @example Explicit shadow config (single-component spawn):
  *   world.spawn({ component: DirectionalLight, data: {
- *     directionX: 0.2, directionY: -0.98, directionZ: 0,
- *     colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+ *     direction: [0.2, -0.98, 0], // [x, y, z]
+ *     color: [1, 1, 1], intensity: 1, // color is [r, g, b]
  *     cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2,
  *     mapSize: 2048, shadowDistance: 200,
  *   } });
@@ -92,12 +95,13 @@ import { ShadowInvalidConfigError } from '../errors/render';
 export const DirectionalLight = defineComponent(
   'DirectionalLight',
   {
-    directionX: { type: 'f32' },
-    directionY: { type: 'f32' },
-    directionZ: { type: 'f32' },
-    colorR: { type: 'f32', default: 1 },
-    colorG: { type: 'f32', default: 1 },
-    colorB: { type: 'f32', default: 1 },
+    // direction is the ONLY field with no default (D-5): omitting it lands the
+    // array layer-3 all-zero [0,0,0], which validate() rejects -- there is no
+    // universal default direction, so "default is illegal" forces an explicit
+    // non-zero value. color carries an explicit layer-2 default [1,1,1] (white);
+    // the array layer-3 fallback is all-zero, so the default MUST be explicit.
+    direction: { type: 'array<f32, 3>' },
+    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
     intensity: { type: 'f32', default: 1 },
     // Shadow opt-out gate: defaults to true so zero-config spawns get shadows.
     castShadow: { type: 'bool', default: true },
@@ -117,6 +121,12 @@ export const DirectionalLight = defineComponent(
   },
   {
     validate(data) {
+      // D-1: reject a missing or zero-vector direction (shared SSOT helper).
+      const dirErr = validateDirection(
+        'DirectionalLight',
+        data.direction as ArrayLike<number> | undefined,
+      );
+      if (dirErr !== null) return dirErr;
       // castShadow may be undefined when validation runs before defaults fill
       // (not the case in the current ECS pipeline — defaults fill first per
       // world.ts:740-743). But defend against the edge: undefined = default true.

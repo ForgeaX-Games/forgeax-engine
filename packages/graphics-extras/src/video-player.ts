@@ -45,5 +45,5 @@ export const VideoPlayer = defineComponent('VideoPlayer', {
   clip: { type: 'shared<VideoAsset>' },
   playing: { type: 'bool', default: false },
   loop: { type: 'bool', default: false },
-  currentTime: { type: 'f32', default: 0 },
+  currentTime: { type: 'f32', default: 0, transient: true },
 });

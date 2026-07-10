@@ -1,8 +1,9 @@
 // @forgeax/engine-runtime - Skylight (ambient environment light).
 //
-// Schema: 5 fields -- equirect (Handle<EquirectAsset>, u32-stored handle,
-// OPTIONAL) + colorR/G/B (f32, default 1 = white) + intensity (f32, default
-// 1.0). Naming convention follows the DirectionalLight / PointLight /
+// Schema: 3 fields -- equirect (Handle<EquirectAsset>, u32-stored handle,
+// OPTIONAL) + color (array<f32,3>, default [1,1,1] = white) + intensity (f32,
+// default 1.0). feat-20260709 M2 collapsed colorR/G/B into one inline
+// array<f32,3> column. Naming convention follows the DirectionalLight / PointLight /
 // SpotLight family: no Component suffix (AGENTS.md rule #1).
 //
 // Plan-strategy D-6: Skylight component schema is registered but no
@@ -57,15 +58,15 @@ import { defineComponent } from '@forgeax/engine-ecs';
  * cubemap projection is internal and idempotent: the same equirect source
  * always resolves to the same GPU cubemap (no user upload call).
  *
- * `colorR` / `colorG` / `colorB` is the linear-space ambient tint (default
- * white 1,1,1). `intensity` is a linear multiplier (default 1.0; 0 disables
- * ambient). Both are read every frame, so they are live dynamic dials.
+ * `color` is the linear-space ambient tint (default white [1, 1, 1]).
+ * `intensity` is a linear multiplier (default 1.0; 0 disables ambient). Both
+ * are read every frame, so they are live dynamic dials.
  *
  * @example Instant white ambient (no asset, no async):
  *   world.spawn({ component: Skylight, data: {} });
  *
  * @example Dim warm ambient:
- *   world.spawn({ component: Skylight, data: { colorR: 1, colorG: 0.9, colorB: 0.8, intensity: 0.3 } });
+ *   world.spawn({ component: Skylight, data: { color: [1, 0.9, 0.8], intensity: 0.3 } }); // color is [r, g, b]
  *
  * @example Full IBL from an HDR equirect (declarative -- no upload call):
  *   // 1. resolve GUID from vite pack-index (see forgeax-engine-vite-plugin-pack)
@@ -81,8 +82,8 @@ import { defineComponent } from '@forgeax/engine-ecs';
  */
 export const Skylight = defineComponent('Skylight', {
   equirect: { type: 'shared<EquirectAsset>' },
-  colorR: { type: 'f32', default: 1.0 },
-  colorG: { type: 'f32', default: 1.0 },
-  colorB: { type: 'f32', default: 1.0 },
+  // color carries an explicit layer-2 default [1,1,1] (white); the array
+  // layer-3 fallback is all-zero, so the default MUST be explicit (D-5).
+  color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
   intensity: { type: 'f32', default: 1.0 },
 });

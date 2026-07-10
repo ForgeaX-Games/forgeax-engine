@@ -235,19 +235,15 @@ export interface CameraSnapshot {
   /** Gaussian blur kernel radius, clamped [1.0, 4.0] in shader (D-3 default 4.0). */
   readonly bloomBlurRadius: number;
   /**
-   * feat-20260608-create-app-param-surface-trim / M1 / D-1 (q6-A):
-   * clear-color quartet sourced from the Camera entity's SoA columns
-   * (first-archetype-hit per OOS-2). Replaces the prior
-   * `RendererOptions.clearColor` route that landed on
-   * `RenderSystemInternals.clearColor`. AI users override per-camera by
-   * setting `clearR/G/B/A` when spawning the Camera entity; default is
-   * opaque black `[0, 0, 0, 1]` (D-8). The record stage reads these
-   * values verbatim into the LoadOp::Clear color slot.
+   * feat-20260709 M3 / D-3: clear-color RGBA sourced from the Camera entity's
+   * inline `array<f32,4>` column (first-archetype-hit per OOS-2). Collapsed
+   * from the feat-20260608 clearR/G/B/A snapshot quartet into one field aligned
+   * with the light snapshot shape. AI users override per-camera by setting
+   * `clearColor` when spawning the Camera entity; default is opaque black
+   * `[0, 0, 0, 1]` (D-5). The record stage reads these values verbatim into
+   * the LoadOp::Clear color slot.
    */
-  readonly clearR: number;
-  readonly clearG: number;
-  readonly clearB: number;
-  readonly clearA: number;
+  readonly clearColor: readonly [number, number, number, number];
 }
 
 /**
@@ -1701,7 +1697,35 @@ export function extractFrames(
   const skylightCount = resourceOwnerFrame?.skylightCount ?? 0;
   const skybox = resourceOwnerFrame?.skybox;
   const skyboxCount = resourceOwnerFrame?.skyboxCount ?? 0;
+  // User-authored PostProcessParams entities are singleton scene resources, so
+  // they come from the resourceOwner world (holistic snapshot selection).
   const postProcessParams = new Map(resourceOwnerFrame?.postProcessParams);
+  // feat-20260709-editor-world-partition ENGINE-fix-round2 (defect 1): the
+  // engine built-in `'forgeax::tonemap'` param is NOT a scene resource — the
+  // per-world extractFrame bridges it from that world's own `cameras[0]`
+  // (Camera.exposure / whitePoint / tonemap is the SSOT). It therefore lives on
+  // the CAMERA-owner frame, not the resource-owner frame. In the split-owner
+  // editor topology the resourceOwner world has no Camera, so its frame carries
+  // no `forgeax::tonemap` entry; taking postProcessParams from resourceOwner
+  // alone drops it, the tonemap pass's params UBO stays zero-filled
+  // (exposure=0 => tonemapped output is uniformly black), and the whole frame
+  // reads black even though geometry drew into the HDR target. Overlay the
+  // camera-owner frame's tonemap param (its SSOT source) so the surfaced
+  // camera's exposure/whitePoint/mode reach the tonemap pass. When
+  // cameraOwner === resourceOwner this is a no-op (identical entry). The 'na'
+  // literal 'forgeax::tonemap' mirrors the engine provider key set at the
+  // bottom of extractFrame (SSOT: same string, same 16B layout).
+  const TONEMAP_PARAM_KEY = 'forgeax::tonemap';
+  const cameraTonemapParam = cameraOwnerFrame?.postProcessParams.get(TONEMAP_PARAM_KEY);
+  if (cameraTonemapParam !== undefined) {
+    postProcessParams.set(TONEMAP_PARAM_KEY, cameraTonemapParam);
+  } else {
+    // The camera-owner world produced no tonemap param (no Camera surfaced
+    // there this frame); do not leave a stale resource-owner entry that would
+    // apply a foreign camera's exposure. Removing it lets the tonemap pass fall
+    // back to its param-less zero path only when genuinely no camera exists.
+    postProcessParams.delete(TONEMAP_PARAM_KEY);
+  }
 
   // D-3: frustumStats — culled/total summed across worlds.
   const frustumStats = {
@@ -1814,13 +1838,16 @@ export function extractFrame(
         bloomThreshold: cam.bloomThreshold[i] ?? 1.0,
         bloomIntensity: cam.bloomIntensity[i] ?? 1.0,
         bloomBlurRadius: cam.bloomBlurRadius[i] ?? 4.0,
-        // feat-20260608 / M1 / D-1 / D-8: clear-color quartet defaults to
-        // opaque black `[0, 0, 0, 1]` when the column is absent (e.g. an
-        // archetype migrated from a pre-feat snapshot).
-        clearR: cam.clearR[i] ?? 0,
-        clearG: cam.clearG[i] ?? 0,
-        clearB: cam.clearB[i] ?? 0,
-        clearA: cam.clearA[i] ?? 1,
+        // feat-20260709 M3 / D-3: clear-color read from the inline
+        // array<f32,4> column as a stride-4 subscript (zero-alloc bundle read,
+        // AC-09). Defaults to opaque black `[0, 0, 0, 1]` per lane when a slot
+        // is absent (e.g. an archetype migrated from a pre-feat snapshot).
+        clearColor: [
+          cam.clearColor[i * 4] ?? 0,
+          cam.clearColor[i * 4 + 1] ?? 0,
+          cam.clearColor[i * 4 + 2] ?? 0,
+          cam.clearColor[i * 4 + 3] ?? 1,
+        ],
       });
       cameraEntities.push(entity as number);
     }
@@ -1873,11 +1900,15 @@ export function extractFrame(
       const intensity = l.intensity[i] ?? 1;
       const snapshot: DirectionalLightSnapshot = {
         kind: 'directional',
-        direction: vec3.create(l.directionX[i] ?? 0, l.directionY[i] ?? -1, l.directionZ[i] ?? 0),
+        direction: vec3.create(
+          l.direction[i * 3] ?? 0,
+          l.direction[i * 3 + 1] ?? -1,
+          l.direction[i * 3 + 2] ?? 0,
+        ),
         color: vec3.create(
-          (l.colorR[i] ?? 1) * intensity,
-          (l.colorG[i] ?? 1) * intensity,
-          (l.colorB[i] ?? 1) * intensity,
+          (l.color[i * 3] ?? 1) * intensity,
+          (l.color[i * 3 + 1] ?? 1) * intensity,
+          (l.color[i * 3 + 2] ?? 1) * intensity,
         ),
         intensity,
       };
@@ -1934,9 +1965,9 @@ export function extractFrame(
         kind: 'point',
         position,
         color: vec3.create(
-          (p.colorR[i] ?? 1) * intensity,
-          (p.colorG[i] ?? 1) * intensity,
-          (p.colorB[i] ?? 1) * intensity,
+          (p.color[i * 3] ?? 1) * intensity,
+          (p.color[i * 3 + 1] ?? 1) * intensity,
+          (p.color[i * 3 + 2] ?? 1) * intensity,
         ),
         intensity,
         invRangeSquared: computeInvRangeSquared(range),
@@ -1973,7 +2004,11 @@ export function extractFrame(
         worldMat !== undefined
           ? mat4.getTranslation(vec3.create(), worldMat as unknown as mat4.Mat4Like)
           : vec3.create(0, 0, 0);
-      const dir = vec3.create(s.directionX[i] ?? 0, s.directionY[i] ?? -1, s.directionZ[i] ?? 0);
+      const dir = vec3.create(
+        s.direction[i * 3] ?? 0,
+        s.direction[i * 3 + 1] ?? -1,
+        s.direction[i * 3 + 2] ?? 0,
+      );
 
       // ── shadow fields (feat-20260625-spot-light-shadow-mapping M1) ──
       const castShadow = (s.castShadow[i] ?? 1) !== 0;
@@ -2026,13 +2061,13 @@ export function extractFrame(
       spotSnapshots.push({
         kind: 'spot',
         // D-6: position reflects world transform; direction stays sourced
-        // from SpotLight.directionX/Y/Z (NOT rotated by the parent).
+        // from SpotLight.direction (NOT rotated by the parent).
         position,
         direction: dir,
         color: vec3.create(
-          (s.colorR[i] ?? 1) * intensity,
-          (s.colorG[i] ?? 1) * intensity,
-          (s.colorB[i] ?? 1) * intensity,
+          (s.color[i * 3] ?? 1) * intensity,
+          (s.color[i * 3 + 1] ?? 1) * intensity,
+          (s.color[i * 3 + 2] ?? 1) * intensity,
         ),
         intensity,
         invRangeSquared: computeInvRangeSquared(range),
@@ -2409,9 +2444,9 @@ export function extractFrame(
       // skylights, leaving the scene black -- the downstream gap #4).
       const equirectRaw = s.equirect?.get(i);
       const intensity = s.intensity?.[i] ?? 1.0;
-      const colorR = s.colorR?.[i] ?? 1.0;
-      const colorG = s.colorG?.[i] ?? 1.0;
-      const colorB = s.colorB?.[i] ?? 1.0;
+      const colorR = s.color?.[i * 3] ?? 1.0;
+      const colorG = s.color?.[i * 3 + 1] ?? 1.0;
+      const colorB = s.color?.[i * 3 + 2] ?? 1.0;
       skylightCount += 1;
       if (skylight === undefined) {
         skylight = {

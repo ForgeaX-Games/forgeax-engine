@@ -1,86 +1,13 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { execSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { tmpdir } from 'node:os';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { describe, it, expect } from 'vitest';
 
-// ---------------------------------------------------------------------------
-// Test helpers — extract the pure functions we will implement in fetch-wasm.mjs
-// We duplicate their logic here for TDD; T14 will move them into the script
-// and re-export for this test to consume.
-// ---------------------------------------------------------------------------
+// Import the SSOT helpers from the shared lib + content-key module
+// (architecture-principles #1). Vitest can resolve .mjs relative imports; the
+// test runs in a Node ESM context.
+import { parseGitOrigin } from '../../../scripts/lib/fetch-wasm-lib.mjs';
+import { computeContentSha256, buildAssetName } from '../scripts/content-key.mjs';
 
-/**
- * Parse git remote origin URL into { owner, repo }.
- * Supports SSH (git@github.com:OWNER/REPO.git) and HTTPS
- * (https://github.com/OWNER/REPO.git).
- * Throws E3-style structured error for non-GitHub hosts or parse failures.
- */
-function parseGitOrigin(url: string): { owner: string; repo: string } {
-  // SSH: git@github.com:OWNER/REPO.git
-  const sshMatch = url.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
-  if (sshMatch) {
-    const host = sshMatch[1]!;
-    const path = sshMatch[2]!;
-    if (host !== 'github.com') {
-      throw Object.assign(new Error(`Unsupported git host: ${host}`), {
-        code: 'E3_ORIGIN_UNSUPPORTED_HOST' as const,
-        hint: 'fetch-wasm only supports GitHub remotes. Check `git remote -v`.',
-      });
-    }
-    const parts = path.split('/');
-    if (parts.length !== 2) {
-      throw Object.assign(new Error(`Cannot parse owner/repo from: ${path}`), {
-        code: 'E3_ORIGIN_PARSE_FAILED' as const,
-        hint: 'Expected git@github.com:OWNER/REPO.git format.',
-      });
-    }
-    return { owner: parts[0]!, repo: parts[1]! };
-  }
-
-  // HTTPS: https://github.com/OWNER/REPO.git
-  const httpsMatch = url.match(/^https?:\/\/([^/]+)\/(.+?)(?:\.git)?$/);
-  if (httpsMatch) {
-    const host = httpsMatch[1]!;
-    const path = httpsMatch[2]!;
-    if (host !== 'github.com') {
-      throw Object.assign(new Error(`Unsupported git host: ${host}`), {
-        code: 'E3_ORIGIN_UNSUPPORTED_HOST' as const,
-        hint: 'fetch-wasm only supports GitHub remotes. Check `git remote -v`.',
-      });
-    }
-    const parts = path.split('/');
-    if (parts.length !== 2) {
-      throw Object.assign(new Error(`Cannot parse owner/repo from: ${path}`), {
-        code: 'E3_ORIGIN_PARSE_FAILED' as const,
-        hint: 'Expected https://github.com/OWNER/REPO.git format.',
-      });
-    }
-    return { owner: parts[0]!, repo: parts[1]! };
-  }
-
-  throw Object.assign(new Error(`Cannot parse git origin URL: ${url}`), {
-    code: 'E3_ORIGIN_PARSE_FAILED' as const,
-    hint: 'Expected SSH (git@github.com:OWNER/REPO.git) or HTTPS (https://github.com/OWNER/REPO.git) format.',
-  });
-}
-
-function computeBridgeSha256(): string {
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const bridgePath = join(__dirname, '..', 'src', 'native', 'bridge.c');
-  const content = readFileSync(bridgePath, 'utf-8');
-  return createHash('sha256').update(content).digest('hex');
-}
-
-function bridgeSha8(): string {
-  return computeBridgeSha256().slice(0, 8);
-}
-
-function buildAssetName(bridgeSha: string): string {
-  return `fbx-wasm-v0.23.0-${bridgeSha}.wasm`;
+function contentSha8(): Promise<string> {
+  return computeContentSha256().then((sha) => sha.slice(0, 8));
 }
 
 // Error codes for fetch-wasm
@@ -222,10 +149,10 @@ describe('fetch-wasm structured errors (E1-E5)', () => {
   it('E5 auth failed has distinct code with token guidance', () => {
     const err = Object.assign(new Error('Authentication failed (401)'), {
       code: ERROR_CODES.E5_AUTH_FAILED,
-      hint: 'This repository is private and requires authentication. Set the GITHUB_TOKEN environment variable, or run `pnpm -F @forgeax/engine-fbx build:wasm` to compile locally.',
+      hint: 'This repository is private and requires authentication. Set GITHUB_TOKEN, run `gh auth login`, or run `pnpm -F @forgeax/engine-fbx build:wasm` to compile locally.',
     });
     expect(err.code).toBe('E5_AUTH_FAILED');
-    expect(err.hint).toMatch(/GITHUB_TOKEN|build:wasm/);
+    expect(err.hint).toMatch(/GITHUB_TOKEN|build:wasm|gh auth login/);
   });
 
   it('all error codes are distinct and non-overlapping', () => {
@@ -236,25 +163,25 @@ describe('fetch-wasm structured errors (E1-E5)', () => {
 });
 
 describe('fetch-wasm content-keyed asset naming', () => {
-  it('bridge SHA256 compute is deterministic', () => {
-    const sha1 = computeBridgeSha256();
-    const sha2 = computeBridgeSha256();
+  it('content SHA256 compute is deterministic', async () => {
+    const sha1 = await computeContentSha256();
+    const sha2 = await computeContentSha256();
     expect(sha1).toBe(sha2);
     expect(sha1.length).toBe(64);
   });
 
-  it('bridge SHA8 is first 8 hex chars of SHA256', () => {
-    const sha8 = bridgeSha8();
+  it('content SHA8 is first 8 hex chars of SHA256', async () => {
+    const sha8 = await contentSha8();
     expect(sha8.length).toBe(8);
     expect(/^[0-9a-f]{8}$/.test(sha8)).toBe(true);
   });
 
-  it('asset name embeds ufbx version and bridge SHA8', () => {
+  it('asset name embeds ufbx version, content SHA8, and is a tarball', () => {
     const name = buildAssetName('abcdef01');
-    expect(name).toBe('fbx-wasm-v0.23.0-abcdef01.wasm');
+    expect(name).toBe('fbx-wasm-v0.23.0-abcdef01.tar.gz');
   });
 
-  it('different bridge content produces different asset name', () => {
+  it('different content produces different asset name', () => {
     const a = buildAssetName('aaaaaaaa');
     const b = buildAssetName('bbbbbbbb');
     expect(a).not.toBe(b);

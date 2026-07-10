@@ -521,9 +521,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     },
     collider: {
       shape: number;
-      halfExtentsX: number;
-      halfExtentsY: number;
-      halfExtentsZ: number;
+      halfExtents: readonly [number, number, number];
       radius: number;
       halfHeight: number;
       friction: number;
@@ -606,9 +604,9 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
       case 'cuboid': {
         // biome-ignore lint/suspicious/noExplicitAny: Rapier ColliderDesc
         const desc = (RAPIER as any).ColliderDesc.cuboid(
-          collider.halfExtentsX,
-          collider.halfExtentsY,
-          collider.halfExtentsZ,
+          collider.halfExtents[0],
+          collider.halfExtents[1],
+          collider.halfExtents[2],
         )
           .setFriction(collider.friction)
           .setRestitution(collider.restitution)
@@ -877,9 +875,10 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
       const rbCcd = rbCols.get('ccdEnabled')?.view as Uint32Array | undefined;
 
       const cShape = cCols.get('shape')?.view as Uint32Array | undefined;
-      const cHx = cCols.get('halfExtentsX')?.view as Float32Array | undefined;
-      const cHy = cCols.get('halfExtentsY')?.view as Float32Array | undefined;
-      const cHz = cCols.get('halfExtentsZ')?.view as Float32Array | undefined;
+      // feat-20260709 M4: halfExtents is one inline array<f32,3> column
+      // (stride 3, row r's xyz at [r*3 .. +2]). radius/halfHeight stay scalar
+      // columns (OOS-1).
+      const cHalfExtents = cCols.get('halfExtents')?.view as Float32Array | undefined;
       const cRadius = cCols.get('radius')?.view as Float32Array | undefined;
       const cHalfH = cCols.get('halfHeight')?.view as Float32Array | undefined;
       const cFric = cCols.get('friction')?.view as Float32Array | undefined;
@@ -911,9 +910,7 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
         !rbGravScale ||
         !rbCcd ||
         !cShape ||
-        !cHx ||
-        !cHy ||
-        !cHz ||
+        !cHalfExtents ||
         !cRadius ||
         !cHalfH ||
         !cFric ||
@@ -954,9 +951,7 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
 
         const collider: {
           shape: number;
-          halfExtentsX: number;
-          halfExtentsY: number;
-          halfExtentsZ: number;
+          halfExtents: readonly [number, number, number];
           radius: number;
           halfHeight: number;
           friction: number;
@@ -967,9 +962,11 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
           solverGroups: number;
         } = {
           shape: cShape[row] as number,
-          halfExtentsX: cHx[row] as number,
-          halfExtentsY: cHy[row] as number,
-          halfExtentsZ: cHz[row] as number,
+          halfExtents: [
+            cHalfExtents[row * 3] as number,
+            cHalfExtents[row * 3 + 1] as number,
+            cHalfExtents[row * 3 + 2] as number,
+          ],
           radius: cRadius[row] as number,
           halfHeight: cHalfH[row] as number,
           friction: cFric[row] as number,

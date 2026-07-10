@@ -168,9 +168,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: PointLight,
         data: {
-          colorR: 1.0,
-          colorG: 1.0,
-          colorB: 1.0,
+          color: [1.0, 1.0, 1.0],
           intensity: 100.0,
           range: 50,
         },
@@ -189,7 +187,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const colorR = Math.max(0, Math.sin(elapsed * LIGHT_ANIM_FREQ_R));
       const colorG = Math.max(0, Math.sin(elapsed * LIGHT_ANIM_FREQ_G));
       const colorB = Math.max(0, Math.sin(elapsed * LIGHT_ANIM_FREQ_B));
-      world.set(lightEntity, PointLight, { colorR, colorG, colorB });
+      world.set(lightEntity, PointLight, { color: [colorR, colorG, colorB] });
     },
   });
 

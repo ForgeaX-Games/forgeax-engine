@@ -200,7 +200,7 @@ world.spawn(
 );
 world.spawn({
   component: DirectionalLight,
-  data: { directionX: -0.3, directionY: -1, directionZ: -0.5, colorR: 1, colorG: 1, colorB: 1, intensity: 1 },
+  data: { direction: [-0.3, -1, -0.5], color: [1, 1, 1], intensity: 1 },
 });
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');

@@ -162,12 +162,8 @@ function buildShadowScene(world: World, pcfKernelSize: number): void {
     .spawn({
       component: DirectionalLight,
       data: {
-        directionX: 0.2,
-        directionY: -0.98,
-        directionZ: 0,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [0.2, -0.98, 0],
+        color: [1, 1, 1],
         intensity: 1.5,
         // Single cascade so the cube/ground land in the tile-0 slot the probe
         // samples (same migration the prior M2/M3 fixtures relied on).

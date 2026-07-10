@@ -86,10 +86,7 @@ function spawnCameraOnly(world: World): void {
         // LO 1.1's `glClearColor(0.2f, 0.3f, 0.3f, 1.0f)` teal-byte triplet
         // (feat-20260608-create-app-param-surface-trim / M1: clear color
         // sinks onto the Camera entity per AGENTS.md Change stance).
-        clearR: 0.2,
-        clearG: 0.3,
-        clearB: 0.3,
-        clearA: 1.0,
+        clearColor: [0.2, 0.3, 0.3, 1.0],
       },
     },
   );

@@ -330,10 +330,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         // LO 1.7 reuses LO 1.1's teal clear color (was the retired
         // RendererOptions.clearColor; sinks onto Camera per
         // feat-20260608-create-app-param-surface-trim / M1 / D-1).
-        clearR: 0.2,
-        clearG: 0.3,
-        clearB: 0.3,
-        clearA: 1.0,
+        clearColor: [0.2, 0.3, 0.3, 1.0],
       },
     },
   ).unwrap();

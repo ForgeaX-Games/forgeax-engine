@@ -336,7 +336,7 @@ for (let i = 0; i < LIGHT_POSITIONS.length; i++) {
     },
     {
       component: PointLight,
-      data: { colorR: color[0], colorG: color[1], colorB: color[2], intensity: 1.0, range: 30.0 },
+      data: { color: [color[0], color[1], color[2]], intensity: 1.0, range: 30.0 },
     },
   );
   const lightBoxMat = world.allocSharedRef(

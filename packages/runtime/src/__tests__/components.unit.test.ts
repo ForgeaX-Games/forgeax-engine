@@ -66,11 +66,13 @@ import {
   SpriteRegionOverride,
   skyboxModeFromF32,
   spritePlaybackModeFromU32,
+  Tilemap,
   TONEMAP_NONE,
   TONEMAP_REINHARD_EXTENDED,
   Transform,
   tonemapFromF32,
 } from '../components';
+import { GlyphText } from '../components/glyph-text';
 import { extractFrame } from '../render-system-extract';
 import { propagateTransforms } from '../systems/propagate-transforms';
 
@@ -205,9 +207,9 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(schemaRecord.materials).toBe('array<shared<MaterialAsset>>');
     });
 
-    it('Camera has 22 fields (21 f32 + autoAspect bool: perspective quartet + projection + ortho quartet + tonemap trio + antialias + bloom quartet + clear-color quartet + autoAspect)', () => {
+    it('Camera has 19 fields (17 f32 + clearColor array<f32,4> + autoAspect bool: perspective quartet + projection + ortho quartet + tonemap trio + antialias + bloom quartet + clearColor + autoAspect)', () => {
       expect(Camera.name).toBe('Camera');
-      expect(Object.keys(Camera.schema).length).toBe(22);
+      expect(Object.keys(Camera.schema).length).toBe(19);
       expect(Camera.schema.fov).toBe('f32');
       expect(Camera.schema.aspect).toBe('f32');
       expect(Camera.schema.near).toBe('f32');
@@ -227,28 +229,28 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(Camera.schema.bloomThreshold).toBe('f32');
       expect(Camera.schema.bloomIntensity).toBe('f32');
       expect(Camera.schema.bloomBlurRadius).toBe('f32');
-      // feat-20260608-create-app-param-surface-trim / M1: clear-color quartet.
-      expect(Camera.schema.clearR).toBe('f32');
-      expect(Camera.schema.clearG).toBe('f32');
-      expect(Camera.schema.clearB).toBe('f32');
-      expect(Camera.schema.clearA).toBe('f32');
+      // feat-20260709 M3: clear-color quartet collapsed into one inline
+      // array<f32,4> column (clearColor); per-axis scalars are gone.
+      expect(Camera.schema.clearColor).toBe('array<f32, 4>');
+      expect('clearR' in Camera.schema).toBe(false);
+      expect('clearG' in Camera.schema).toBe(false);
+      expect('clearB' in Camera.schema).toBe(false);
+      expect('clearA' in Camera.schema).toBe(false);
       // feat-20260617-host-engine-contract-and-video-cutscene / M3: aspect-sync
       // opt-out flag (bool column tier, not f32).
       expect(Camera.schema.autoAspect).toBe('bool');
     });
 
-    it('DirectionalLight has 16 fields: 7 light f32 + castShadow bool + 8 merged shadow f32', () => {
+    it('DirectionalLight has 12 fields: 3 light + castShadow bool + 8 merged shadow f32', () => {
       // feat-20260621: DirectionalLightShadow merged into DirectionalLight via castShadow toggle.
       // shadowDistance replaced the nearPlane/farPlane pair (near derives from camera).
+      // feat-20260709 M2: direction/color collapsed from 6 per-axis scalars to
+      // two array<f32,3> columns (3 light fields: direction + color + intensity).
       expect(DirectionalLight.name).toBe('DirectionalLight');
-      expect(Object.keys(DirectionalLight.schema).length).toBe(16);
-      // 7 light fields
-      expect(DirectionalLight.schema.directionX).toBe('f32');
-      expect(DirectionalLight.schema.directionY).toBe('f32');
-      expect(DirectionalLight.schema.directionZ).toBe('f32');
-      expect(DirectionalLight.schema.colorR).toBe('f32');
-      expect(DirectionalLight.schema.colorG).toBe('f32');
-      expect(DirectionalLight.schema.colorB).toBe('f32');
+      expect(Object.keys(DirectionalLight.schema).length).toBe(12);
+      // 3 light fields
+      expect(DirectionalLight.schema.direction).toBe('array<f32, 3>');
+      expect(DirectionalLight.schema.color).toBe('array<f32, 3>');
       expect(DirectionalLight.schema.intensity).toBe('f32');
       // shadow gate + 8 merged shadow fields
       expect(DirectionalLight.schema.castShadow).toBe('bool');
@@ -345,19 +347,15 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         .spawn({
           component: DirectionalLight,
           data: {
-            directionX: -0.5,
-            directionY: -1,
-            directionZ: -0.3,
-            colorR: 1,
-            colorG: 1,
-            colorB: 1,
+            direction: [-0.5, -1, -0.3],
+            color: [1, 1, 1],
             intensity: 1,
           },
         })
         .unwrap();
       const r = world.get(e, DirectionalLight).unwrap();
       expect(r.intensity).toBe(1);
-      expect(r.colorR).toBe(1);
+      expect(r.color[0]).toBe(1);
     });
 
     it('multi-component spawn (Transform + MeshFilter + MeshRenderer + Camera) targets a single archetype', () => {
@@ -1283,8 +1281,8 @@ import { propagateTransforms } from '../systems/propagate-transforms';
   //        refactoring — every field value must stay byte-identical)
   // ────────────────────────────────────────────────────────────────────────────
 
-  describe('camera factory 22-field snapshot (w14 AC-07 invariant)', () => {
-    it('perspective({ fov: Math.PI/3, aspect: 16/9 }) — all 22 fields match reference', () => {
+  describe('camera factory 19-field snapshot (w14 AC-07 invariant)', () => {
+    it('perspective({ fov: Math.PI/3, aspect: 16/9 }) — all 19 fields match reference', () => {
       const pod = perspective({ fov: Math.PI / 3, aspect: 16 / 9 });
       // Perspective quartet — caller-supplied
       expect(pod.fov).toBeCloseTo(Math.PI / 3, 6);
@@ -1308,11 +1306,10 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(pod.bloomThreshold).toBeCloseTo(1.0, 6);
       expect(pod.bloomIntensity).toBeCloseTo(1.0, 6);
       expect(pod.bloomBlurRadius).toBeCloseTo(4.0, 6);
-      // Clear-color quartet defaults (feat-20260608 / D-1 / D-8)
-      expect(pod.clearR).toBe(0);
-      expect(pod.clearG).toBe(0);
-      expect(pod.clearB).toBe(0);
-      expect(pod.clearA).toBe(1);
+      // Clear-color default: opaque black array [0,0,0,1] (feat-20260709 M3;
+      // E9 factory-pathway carries the new array default via
+      // cameraPodFromDefaults()).
+      expect(Array.from(pod.clearColor)).toEqual([0, 0, 0, 1]);
       // aspect-sync opt-out default (feat-20260617 / M3)
       expect(pod.autoAspect).toBe(true);
     });
@@ -1338,7 +1335,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(pod.bloomBlurRadius).toBeCloseTo(4.0, 6);
     });
 
-    it('orthographic({ left: -10, right: 10, bottom: -10, top: 10 }) — all 22 fields match reference', () => {
+    it('orthographic({ left: -10, right: 10, bottom: -10, top: 10 }) — all 19 fields match reference', () => {
       const pod = orthographic({ left: -10, right: 10, bottom: -10, top: 10 });
       // Ortho bounds — caller-supplied
       expect(pod.left).toBe(-10);
@@ -1361,11 +1358,8 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(pod.bloomThreshold).toBeCloseTo(1.0, 6);
       expect(pod.bloomIntensity).toBeCloseTo(1.0, 6);
       expect(pod.bloomBlurRadius).toBeCloseTo(4.0, 6);
-      // Clear-color quartet defaults (feat-20260608 / D-1 / D-8)
-      expect(pod.clearR).toBe(0);
-      expect(pod.clearG).toBe(0);
-      expect(pod.clearB).toBe(0);
-      expect(pod.clearA).toBe(1);
+      // Clear-color default: opaque black array [0,0,0,1] (feat-20260709 M3).
+      expect(Array.from(pod.clearColor)).toEqual([0, 0, 0, 1]);
       // aspect-sync opt-out default (feat-20260617 / M3): the sidecar only
       // touches perspective cameras, but the column default is shared.
       expect(pod.autoAspect).toBe(true);
@@ -1385,13 +1379,14 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(pod.tonemap).toBe(TONEMAP_NONE);
     });
 
-    it('perspective + orthographic 22-field counts (22 Camera columns)', () => {
+    it('perspective + orthographic 19-field counts (19 Camera columns)', () => {
       const p = perspective({ fov: 60, aspect: 4 / 3 });
       const o = orthographic({ left: -1, right: 1, bottom: -1, top: 1 });
-      // Both return exactly 22 fields (17 pre-clear + 4 clear-color quartet +
-      // autoAspect bool column, feat-20260617 / M3).
-      expect(Object.keys(p).length).toBe(22);
-      expect(Object.keys(o).length).toBe(22);
+      // Both return exactly 19 fields (17 pre-clear + 1 clearColor array +
+      // autoAspect bool column; feat-20260709 M3 collapsed the 4-scalar
+      // clear-color quartet into one inline array<f32,4>).
+      expect(Object.keys(p).length).toBe(19);
+      expect(Object.keys(o).length).toBe(19);
     });
   });
 
@@ -1400,7 +1395,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
   // ────────────────────────────────────────────────────────────────────────────
 
   describe('Camera.fields reflection (w14 AC-07 SSOT)', () => {
-    it('Camera.fields has exactly 22 keys matching the Camera column set', () => {
+    it('Camera.fields has exactly 19 keys matching the Camera column set', () => {
       const keys = Object.keys(Camera.fields).sort();
       expect(keys).toEqual([
         'antialias',
@@ -1411,10 +1406,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         'bloomIntensity',
         'bloomThreshold',
         'bottom',
-        'clearA',
-        'clearB',
-        'clearG',
-        'clearR',
+        'clearColor',
         'exposure',
         'far',
         'fov',
@@ -1428,9 +1420,10 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       ]);
     });
 
-    it("every Camera.fields entry has type === 'f32' except autoAspect (bool)", () => {
+    it("every Camera.fields entry is 'f32' except autoAspect (bool) and clearColor (array<f32,4>)", () => {
       for (const key of Object.keys(Camera.fields) as Array<keyof typeof Camera.fields>) {
-        const expected = key === 'autoAspect' ? 'bool' : 'f32';
+        const expected =
+          key === 'autoAspect' ? 'bool' : key === 'clearColor' ? 'array<f32, 4>' : 'f32';
         expect(Camera.fields[key].type).toBe(expected);
       }
     });
@@ -1458,11 +1451,10 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(d.bloomThreshold.default).toBeCloseTo(1.0, 6);
       expect(d.bloomIntensity.default).toBeCloseTo(1.0, 6);
       expect(d.bloomBlurRadius.default).toBeCloseTo(4.0, 6);
-      // Clear-color quartet defaults (feat-20260608 / D-1 / D-8: opaque black)
-      expect(d.clearR.default).toBe(0);
-      expect(d.clearG.default).toBe(0);
-      expect(d.clearB.default).toBe(0);
-      expect(d.clearA.default).toBe(1);
+      // Clear-color default: explicit layer-2 opaque black array (feat-20260709
+      // M3; array layer-3 fallback is all-zero so the default MUST be explicit,
+      // D-5).
+      expect(Array.from(d.clearColor.default as Float32Array)).toEqual([0, 0, 0, 1]);
       // aspect-sync opt-out default (feat-20260617 / M3).
       expect(d.autoAspect.default).toBe(true);
       // Perspective quartet defaults intentionally absent (OOS-5).
@@ -1474,7 +1466,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
   });
 
   describe('Camera.defaults — frozen token defaults map (AC-07 + feat-20260528-fxaa-post-processing + feat-20260531-bloom + feat-20260608-clear-color)', () => {
-    it('Camera.defaults equals { projection: 0, left: -1, right: 1, bottom: -1, top: 1, tonemap: 0, exposure: 1.0, whitePoint: 4.0, antialias: 0, bloom: 0, bloomThreshold: 1.0, bloomIntensity: 1.0, bloomBlurRadius: 4.0, clearR: 0, clearG: 0, clearB: 0, clearA: 1 }', () => {
+    it('Camera.defaults equals { projection: 0, left: -1, right: 1, bottom: -1, top: 1, tonemap: 0, exposure: 1.0, whitePoint: 4.0, antialias: 0, bloom: 0, bloomThreshold: 1.0, bloomIntensity: 1.0, bloomBlurRadius: 4.0, clearColor: [0,0,0,1], autoAspect: true }', () => {
       expect(Camera.defaults).toEqual({
         projection: 0,
         left: -1,
@@ -1489,10 +1481,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         bloomThreshold: 1.0,
         bloomIntensity: 1.0,
         bloomBlurRadius: 4.0,
-        clearR: 0,
-        clearG: 0,
-        clearB: 0,
-        clearA: 1,
+        clearColor: new Float32Array([0, 0, 0, 1]),
         autoAspect: true,
       });
     });
@@ -1698,7 +1687,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(pod.exposure).toBeCloseTo(1.0, 6);
     });
 
-    it('perspective return value has all 22 Camera fields', () => {
+    it('perspective return value has all 19 Camera fields', () => {
       const pod = perspective({ fov: 60, aspect: 4 / 3 });
       const keys = Object.keys(pod).sort();
       expect(keys).toEqual([
@@ -1710,10 +1699,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         'bloomIntensity',
         'bloomThreshold',
         'bottom',
-        'clearA',
-        'clearB',
-        'clearG',
-        'clearR',
+        'clearColor',
         'exposure',
         'far',
         'fov',
@@ -2561,6 +2547,87 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 
       const frame = extractFrame(world, assets);
       expect(frame.renderables.length).toBe(0);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // feat-20260709 M3 / w11: Camera clearColor + GlyphText color + Tilemap
+  // tileSize vec collapse -- schema shape, explicit layer-2 defaults, and
+  // spawn-omit equivalence (AC-01 / E1 / E9). D-5 (non-zero array defaults
+  // declared explicitly at layer 2, since the array layer-3 fallback is
+  // all-zero).
+  // ────────────────────────────────────────────────────────────────────────
+  describe('M3 vec-collapse schema + defaults (w11 AC-01 / E1 / E9)', () => {
+    it('Camera.clearColor is array<f32,4> with explicit layer-2 default [0,0,0,1]', () => {
+      expect(Camera.schema.clearColor).toBe('array<f32, 4>');
+      expect(Array.from(Camera.fields.clearColor.default as Float32Array)).toEqual([0, 0, 0, 1]);
+    });
+
+    it('GlyphText.color is array<f32,4> with explicit layer-2 default [1,1,1,1]; per-axis scalars gone', () => {
+      expect(GlyphText.schema.color).toBe('array<f32, 4>');
+      expect('colorR' in GlyphText.schema).toBe(false);
+      expect('colorG' in GlyphText.schema).toBe(false);
+      expect('colorB' in GlyphText.schema).toBe(false);
+      expect('colorA' in GlyphText.schema).toBe(false);
+      expect(Array.from(GlyphText.fields.color.default as Float32Array)).toEqual([1, 1, 1, 1]);
+    });
+
+    it('Tilemap.tileSize is array<f32,2> with explicit layer-2 default [1,1]; per-axis scalars gone', () => {
+      expect(Tilemap.schema.tileSize).toBe('array<f32, 2>');
+      expect('tileSizeX' in Tilemap.schema).toBe(false);
+      expect('tileSizeY' in Tilemap.schema).toBe(false);
+      expect(Array.from(Tilemap.fields.tileSize.default as Float32Array)).toEqual([1, 1]);
+    });
+
+    it('E1: Camera spawned with clearColor omitted resolves to [0,0,0,1] (equal to old scalar default)', () => {
+      const world = new World();
+      const e = world
+        .spawn({ component: Camera, data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 100 } })
+        .unwrap();
+      const row = world.get(e, Camera).unwrap();
+      expect(Array.from(row.clearColor)).toEqual([0, 0, 0, 1]);
+    });
+
+    it('E1: GlyphText spawned with color omitted resolves to [1,1,1,1] (equal to old scalar default)', () => {
+      const world = new World();
+      const e = world
+        .spawn({ component: GlyphText, data: { fontHandle: 0 as never, text: 'x', fontSize: 16 } })
+        .unwrap();
+      const row = world.get(e, GlyphText).unwrap();
+      expect(Array.from(row.color)).toEqual([1, 1, 1, 1]);
+    });
+
+    it('E1: Tilemap spawned with tileSize omitted resolves to [1,1] (equal to old scalar default)', () => {
+      const world = new World();
+      const e = world.spawn({ component: Tilemap, data: { cols: 4, rows: 4 } }).unwrap();
+      const row = world.get(e, Tilemap).unwrap();
+      expect(Array.from(row.tileSize)).toEqual([1, 1]);
+    });
+
+    it('E9: perspective() / orthographic() factories flow the new clearColor array default through cameraPodFromDefaults() (zero signature change)', () => {
+      const p = perspective({ fov: Math.PI / 3, aspect: 4 / 3 });
+      const o = orthographic({ left: -1, right: 1, bottom: -1, top: 1 });
+      // The factory output carries the array-shaped clearColor field verbatim
+      // from Camera.fields defaults -- no per-axis scalar keys survive.
+      expect(Array.from(p.clearColor)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(o.clearColor)).toEqual([0, 0, 0, 1]);
+      expect('clearR' in p).toBe(false);
+      expect('clearR' in o).toBe(false);
+    });
+
+    it('E9: factory spread + clearColor override lands the authored color', () => {
+      const world = new World();
+      const e = world
+        .spawn({
+          component: Camera,
+          data: {
+            ...perspective({ fov: Math.PI / 3, aspect: 4 / 3 }),
+            clearColor: [0.4, 0.6, 1, 1],
+          },
+        })
+        .unwrap();
+      const row = world.get(e, Camera).unwrap();
+      expect(Array.from(row.clearColor)).toEqual([Math.fround(0.4), Math.fround(0.6), 1, 1]);
     });
   });
 }

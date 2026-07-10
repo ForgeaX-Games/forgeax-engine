@@ -1,11 +1,12 @@
 // @forgeax/engine-runtime - Tilemap (grid + tileset reference).
 //
-// Schema (6 fields):
-//   cols       u32         total grid columns
-//   rows       u32         total grid rows
-//   tileSizeX  f32         per-cell world width  (default 1.0)
-//   tileSizeY  f32         per-cell world height (default 1.0)
-//   chunkSize  u32         per-chunk axis-length in cells (default 16)
+// Schema (5 fields):
+//   cols       u32               total grid columns
+//   rows       u32               total grid rows
+//   tileSize   array<f32, 2>     per-cell world [width, height] (default [1, 1];
+//                                feat-20260709 M3: collapsed from the tileSizeX
+//                                / tileSizeY scalar pair into one inline column)
+//   chunkSize  u32               per-chunk axis-length in cells (default 16)
 //   tileset    shared<TilesetAsset>  reference into AssetRegistry
 //
 // Naming: single-semantic Tilemap (AGENTS.md §Component naming drops
@@ -27,7 +28,7 @@ import { defineComponent } from '@forgeax/engine-ecs';
  * (one per render layer; ChildOf points back to the Tilemap entity).
  *
  * Defaults:
- *   - `tileSizeX = tileSizeY = 1.0` (unit-cell world coordinates).
+ *   - `tileSize = [1, 1]` (unit-cell world coordinates).
  *   - `chunkSize = 16` (tilemap-chunk-extract-system chunks 16x16 cells).
  *
  * @example Spawn a 32x32 unit-cell Tilemap referencing a TilesetAsset:
@@ -39,8 +40,9 @@ import { defineComponent } from '@forgeax/engine-ecs';
 export const Tilemap = defineComponent('Tilemap', {
   cols: { type: 'u32', default: 0 },
   rows: { type: 'u32', default: 0 },
-  tileSizeX: { type: 'f32', default: 1 },
-  tileSizeY: { type: 'f32', default: 1 },
+  // tileSize carries an explicit layer-2 default [1,1] (unit cell); the array
+  // layer-3 fallback is all-zero, so the default MUST be explicit (D-5).
+  tileSize: { type: 'array<f32, 2>', default: new Float32Array([1, 1]) },
   chunkSize: { type: 'u32', default: 16 },
   tileset: { type: 'shared<TilesetAsset>' },
 });

@@ -32,8 +32,11 @@
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-physics-rapier2d": "workspace:*",
-    "@forgeax/engine-physics-rapier3d": "workspace:*"
+    "@forgeax/engine-physics-rapier3d": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-shader": "workspace:*"
   },
   "forgeax": {
     "metrics": {

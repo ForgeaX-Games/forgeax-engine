@@ -203,7 +203,7 @@ export function populateSmokeWorld(world, runtime, assets) {
   );
   world.spawn({
     component: DirectionalLight,
-    data: { directionX: -0.5, directionY: -1, directionZ: -0.3, colorR: 1, colorG: 1, colorB: 1, intensity: 1 },
+    data: { direction: [-0.5, -1, -0.3], color: [1, 1, 1], intensity: 1 },
   });
 }
 

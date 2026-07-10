@@ -150,12 +150,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     data: {
       // Outgoing direction: down + slightly forward, simulating a warm key
       // light overhead. The shader negates internally for L vector.
-      directionX: 0.0,
-      directionY: -1.0,
-      directionZ: -0.3,
-      colorR: 1.0,
-      colorG: 0.95,
-      colorB: 0.85,
+      direction: [0.0, -1.0, -0.3],
+      color: [1.0, 0.95, 0.85],
       intensity: 1.0,
     },
   }).unwrap();
@@ -171,9 +167,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: PointLight,
         data: {
-          colorR: 1.0,
-          colorG: 0.4,
-          colorB: 1.0,
+          color: [1.0, 0.4, 1.0],
           intensity: 3.0,
           range: 4.0,
         },
@@ -190,12 +184,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: SpotLight,
         data: {
-          directionX: -0.8,
-          directionY: -0.4,
-          directionZ: -0.4,
-          colorR: 0.3,
-          colorG: 1.0,
-          colorB: 1.0,
+          direction: [-0.8, -0.4, -0.4],
+          color: [0.3, 1.0, 1.0],
           intensity: 4.0,
           range: 6.0,
           innerConeDeg: 15,
@@ -223,10 +213,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           far: 100,
         }),
         tonemap: TONEMAP_NONE,
-        clearR: 0.05,
-        clearG: 0.06,
-        clearB: 0.08,
-        clearA: 1.0,
+        clearColor: [0.05, 0.06, 0.08, 1.0],
       },
     },
   ).unwrap();

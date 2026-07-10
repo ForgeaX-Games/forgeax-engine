@@ -100,18 +100,15 @@ function buildScene(initialCascadeCount: number, initialMapSize: number): SceneE
       {
         component: DirectionalLight,
         data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
-          colorR: 1,
-          colorG: 1,
-          colorB: 1,
+          direction: [0, -1, 0],
+          color: [1, 1, 1],
           intensity: 1,
         },
       },
       {
         component: DirectionalLight,
         data: {
+          direction: [0, -1, 0],
           mapSize: initialMapSize,
           shadowDistance: 50,
           cascadeCount: initialCascadeCount,

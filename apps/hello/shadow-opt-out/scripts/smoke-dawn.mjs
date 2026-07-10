@@ -186,12 +186,8 @@ world.spawn(
   {
     component: DirectionalLight,
     data: {
-      directionX: -0.3,
-      directionY: -1.0,
-      directionZ: -0.5,
-      colorR: 1,
-      colorG: 0.95,
-      colorB: 0.9,
+      direction: [-0.3, -1.0, -0.5],
+      color: [1, 0.95, 0.9],
       intensity: 1.0,
       // feat-20260613-csm M6 / w22: matches src/main.ts (cascadeCount=1
       // AC-10 baseline). orthoHalfExtent removed (legacy field gone);

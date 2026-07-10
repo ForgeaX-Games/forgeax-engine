@@ -385,12 +385,8 @@ import { extractFrame } from '../render-system-extract';
       world.spawn({
         component: C.DirectionalLight,
         data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
-          colorR: 1,
-          colorG: 1,
-          colorB: 1,
+          direction: [0, -1, 0],
+          color: [1, 1, 1],
           intensity: 1,
           mapSize: 1024,
         },
@@ -552,10 +548,7 @@ import { extractFrame } from '../render-system-extract';
             near: 0.1,
             far: 100,
             projection: 0,
-            clearR: 0.2,
-            clearG: 0.3,
-            clearB: 0.3,
-            clearA: 1.0,
+            clearColor: [0.2, 0.3, 0.3, 1.0],
             left: -1,
             right: 1,
             bottom: -1,
@@ -940,21 +933,13 @@ import { extractFrame } from '../render-system-extract';
   }
 
   function directionalLight(): {
-    directionX: number;
-    directionY: number;
-    directionZ: number;
-    colorR: number;
-    colorG: number;
-    colorB: number;
+    direction: readonly number[];
+    color: readonly number[];
     intensity: number;
   } {
     return {
-      directionX: -0.5,
-      directionY: -1,
-      directionZ: -0.3,
-      colorR: 1,
-      colorG: 1,
-      colorB: 1,
+      direction: [-0.5, -1, -0.3],
+      color: [1, 1, 1],
       intensity: 1,
     };
   }
@@ -1016,12 +1001,8 @@ import { extractFrame } from '../render-system-extract';
       world.spawn({
         component: C.DirectionalLight,
         data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
-          colorR: 1,
-          colorG: 1,
-          colorB: 1,
+          direction: [0, -1, 0],
+          color: [1, 1, 1],
           intensity: 1,
           mapSize: 1024,
         },
@@ -1164,12 +1145,8 @@ import { extractFrame } from '../render-system-extract';
       world.spawn({
         component: C.DirectionalLight,
         data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
-          colorR: 1,
-          colorG: 1,
-          colorB: 1,
+          direction: [0, -1, 0],
+          color: [1, 1, 1],
           intensity: 1,
           mapSize: 1024,
         },
@@ -1263,12 +1240,8 @@ import { extractFrame } from '../render-system-extract';
       world.spawn({
         component: C.DirectionalLight,
         data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
-          colorR: 1,
-          colorG: 1,
-          colorB: 1,
+          direction: [0, -1, 0],
+          color: [1, 1, 1],
           intensity: 1,
           mapSize: 1024,
         },
@@ -1332,12 +1305,8 @@ import { extractFrame } from '../render-system-extract';
       world.spawn({
         component: C.DirectionalLight,
         data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
-          colorR: 1,
-          colorG: 1,
-          colorB: 1,
+          direction: [0, -1, 0],
+          color: [1, 1, 1],
           intensity: 1,
           mapSize: 1024,
         },
@@ -1597,12 +1566,8 @@ describe('RenderSystem Skylight extract + record phase contract (plan-strategy D
       .spawn({
         component: DirectionalLight,
         data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
-          colorR: 1,
-          colorG: 1,
-          colorB: 1,
+          direction: [0, -1, 0],
+          color: [1, 1, 1],
           intensity: 1,
         },
       })

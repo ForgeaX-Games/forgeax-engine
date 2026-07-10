@@ -180,12 +180,8 @@ function spawnLights(world: World): void {
     {
       component: DirectionalLight,
       data: {
-        directionX: d[0] * invLen,
-        directionY: d[1] * invLen,
-        directionZ: d[2] * invLen,
-        colorR: 1.0,
-        colorG: 0.95,
-        colorB: 0.85,
+        direction: [d[0] * invLen, d[1] * invLen, d[2] * invLen],
+        color: [1.0, 0.95, 0.85],
         intensity: 3.0,
         mapSize: 2048,
         // feat-20260613-csm M6 / w23: explicit 4-cascade Sponza baseline.
@@ -228,9 +224,7 @@ function spawnLights(world: World): void {
       {
         component: PointLight,
         data: {
-          colorR: pd.color[0],
-          colorG: pd.color[1],
-          colorB: pd.color[2],
+          color: [pd.color[0], pd.color[1], pd.color[2]],
           intensity: pd.intensity,
           range: pd.range,
         },

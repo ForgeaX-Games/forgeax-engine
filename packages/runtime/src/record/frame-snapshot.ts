@@ -92,10 +92,7 @@ export function makeZeroCameraFallbackSnapshot(): CameraSnapshot {
     bloomThreshold: 1.0,
     bloomIntensity: 1.0,
     bloomBlurRadius: 4.0,
-    clearR: ZERO_CAMERA_CLEAR_FALLBACK[0],
-    clearG: ZERO_CAMERA_CLEAR_FALLBACK[1],
-    clearB: ZERO_CAMERA_CLEAR_FALLBACK[2],
-    clearA: ZERO_CAMERA_CLEAR_FALLBACK[3],
+    clearColor: ZERO_CAMERA_CLEAR_FALLBACK,
   };
 }
 

@@ -194,16 +194,13 @@ app.world.spawn(
       aspect: 16 / 9,
       near: 0.1,
       far: 100,
-      clearR: CLEAR_RGBA[0],
-      clearG: CLEAR_RGBA[1],
-      clearB: CLEAR_RGBA[2],
-      clearA: CLEAR_RGBA[3],
+      clearColor: [CLEAR_RGBA[0], CLEAR_RGBA[1], CLEAR_RGBA[2], CLEAR_RGBA[3]],
     },
   },
 );
 app.world.spawn({
   component: DirectionalLight,
-  data: { directionX: -0.5, directionY: -1, directionZ: -0.3, colorR: 1, colorG: 1, colorB: 1, intensity: 1 },
+  data: { direction: [-0.5, -1, -0.3], color: [1, 1, 1], intensity: 1 },
 });
 
 // onError count (R-5 dual-zero criterion).

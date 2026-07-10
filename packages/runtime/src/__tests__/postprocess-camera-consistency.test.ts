@@ -87,10 +87,7 @@ describe('postProcessParams <-> cameras same-origin constraint (m2-t4, R-6)', ()
             near: 0.1,
             far: 100,
             aspect: 1,
-            clearR: 0.1,
-            clearG: 0.2,
-            clearB: 0.3,
-            clearA: 1,
+            clearColor: [0.1, 0.2, 0.3, 1],
           },
         },
       )
@@ -119,10 +116,7 @@ describe('postProcessParams <-> cameras same-origin constraint (m2-t4, R-6)', ()
             near: 0.5,
             far: 50,
             aspect: 2,
-            clearR: 0.9,
-            clearG: 0.8,
-            clearB: 0.7,
-            clearA: 1,
+            clearColor: [0.9, 0.8, 0.7, 1],
           },
         },
       )

@@ -110,10 +110,7 @@ describe('glyph-text-pick', () => {
             fontHandle: fontId as unknown as Handle<'FontAsset', 'shared'>,
             text: 'Hi',
             fontSize: 1,
-            colorR: 1,
-            colorG: 1,
-            colorB: 1,
-            colorA: 1,
+            color: [1, 1, 1, 1],
           },
         },
       )

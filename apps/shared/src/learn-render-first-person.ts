@@ -220,9 +220,9 @@ export function addFirstPersonSystem(
             bundles.Transform.pos[i * 3] = camPosX;
             bundles.Transform.pos[i * 3 + 1] = camPosY;
             bundles.Transform.pos[i * 3 + 2] = camPosZ;
-            bundles.SpotLight.directionX[i] = forward.x;
-            bundles.SpotLight.directionY[i] = forward.y;
-            bundles.SpotLight.directionZ[i] = forward.z;
+            bundles.SpotLight.direction[i * 3] = forward.x;
+            bundles.SpotLight.direction[i * 3 + 1] = forward.y;
+            bundles.SpotLight.direction[i * 3 + 2] = forward.z;
           }
         }
       },

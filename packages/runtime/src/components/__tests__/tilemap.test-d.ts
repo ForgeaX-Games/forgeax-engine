@@ -10,12 +10,13 @@ import { ChildOf } from '../child-of';
 import { Tilemap } from '../tilemap';
 
 describe('Tilemap component schema (M0 baseline)', () => {
-  it('type-level: 6 schema fields (cols / rows / tileSizeX / tileSizeY / tileset / chunkSize)', () => {
+  it('type-level: 5 schema fields (cols / rows / tileSize / tileset / chunkSize)', () => {
     const schema = Tilemap.schema;
     expectTypeOf(schema.cols).toEqualTypeOf<'u32'>();
     expectTypeOf(schema.rows).toEqualTypeOf<'u32'>();
-    expectTypeOf(schema.tileSizeX).toEqualTypeOf<'f32'>();
-    expectTypeOf(schema.tileSizeY).toEqualTypeOf<'f32'>();
+    // feat-20260709 M3: tileSizeX/tileSizeY collapsed into one inline
+    // array<f32,2> column (tileSize).
+    expectTypeOf(schema.tileSize).toEqualTypeOf<'array<f32, 2>'>();
     expectTypeOf(schema.chunkSize).toEqualTypeOf<'u32'>();
     expectTypeOf(schema.tileset).toEqualTypeOf<'shared<TilesetAsset>'>();
   });

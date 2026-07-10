@@ -76,8 +76,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
           component: Collider as never,
           data: {
             shape: 0,
-            halfExtentsX: halfExtents[0],
-            halfExtentsY: halfExtents[1],
+            halfExtents: [halfExtents[0], halfExtents[1]],
             friction: 0.5,
             restitution: 0,
           },
@@ -403,7 +402,7 @@ describe('moveAndSlide 2D (AC-12)', () => {
         .spawn(
           { component: Transform as never, data: { pos: [5, 2, 0]} },
           { component: RigidBody as never, data: { type: RigidBodyTypeValue.kinematic } },
-          { component: Collider as never, data: { shape: 0, halfExtentsX: 1, halfExtentsY: 0.2 } },
+          { component: Collider as never, data: { shape: 0, halfExtents: [1, 0.2] } },
         )
         .unwrap() as unknown as number;
 

@@ -89,7 +89,7 @@ world.spawn(
 world.spawn(
   { component: Transform, data: { pos: [0, 0, 0] } },
   { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
-  { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtentsX: 5, halfExtentsY: 1, halfExtentsZ: 5 } },
+  { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtents: [5, 1, 5] } },
 );
 
 app.start();

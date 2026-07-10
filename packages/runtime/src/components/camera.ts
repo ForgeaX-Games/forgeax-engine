@@ -238,21 +238,21 @@ export function bloomEnabledFromF32(value: number): BloomEnabled {
  *                              @applicableWhen tonemap === 'reinhard-extended'
  *                              @minimum 0 (shader floor `max(Y, 1e-5)` keeps
  *                              the divisor finite even at 0; D-O3)
- *   clearR / clearG / clearB / clearA = 0 / 0 / 0 / 1
- *                            - feat-20260608-create-app-param-surface-trim
- *                              D-1 / D-8: clear-color quartet sinks scene
- *                              description out of `RendererOptions`. Defaults
- *                              to opaque black `[0, 0, 0, 1]`; the record
- *                              stage reads these columns first-archetype-hit
- *                              and uses the same `[0, 0, 0, 1]` fallback when
- *                              no Camera entity exists (AC-05).
+ *   clearColor = [0, 0, 0, 1]
+ *                            - feat-20260709 M3 / D-3: clear-color is one
+ *                              inline `array<f32,4>` column (collapsed from the
+ *                              feat-20260608 clearR/G/B/A quartet). Defaults to
+ *                              opaque black; the record stage reads it
+ *                              first-archetype-hit and uses the same
+ *                              `[0, 0, 0, 1]` fallback when no Camera entity
+ *                              exists (AC-05).
  *
  * MVP supports a single active camera (the first archetype iteration hit;
  * N>1 fires 'render-system-multi-camera' + uses first). Multi-viewport is
  * OOS (see feat-future-multi-viewport). The orthographic path reuses the
- * same near / far as the perspective path — both variants are 12 flat f32
- * columns in a single archetype (9 from feat-20260517-spawn-default-fallback
- * + 3 from feat-20260519-tonemap-reinhard-mvp).
+ * same near / far as the perspective path — both variants share the single
+ * Camera archetype (17 scalar f32 columns + the `clearColor` array<f32,4>
+ * column + the `autoAspect` bool column).
  *
  * @example Perspective camera at (0, 0, 3) looking down -Z (zero-config tonemap):
  *   world.spawn(
@@ -310,19 +310,17 @@ export const Camera = defineComponent('Camera', {
   bloomThreshold: { type: 'f32', default: 1.0 },
   bloomIntensity: { type: 'f32', default: 1.0 },
   bloomBlurRadius: { type: 'f32', default: 4.0 },
-  // feat-20260608-create-app-param-surface-trim / M1 / D-1 (q6-A): the
-  // clear-color quartet sinks scene description out of `RendererOptions`
-  // and onto the Camera entity. Four scalar f32 columns mirror the
-  // existing `fov / aspect / near / far` SoA idiom (every other Camera
-  // column is also a scalar f32). The `array<f32, 4>` alternative was
-  // rejected because no other Camera field is array-shaped — adding one
-  // would break the SoA read pattern the record stage relies on.
-  // Defaults are `[0, 0, 0, 1]` (D-8 user lock; opaque black; replaces
-  // the retired `[0.06, 0.06, 0.08, 1.0]` dark-slate sentinel).
-  clearR: { type: 'f32', default: 0 },
-  clearG: { type: 'f32', default: 0 },
-  clearB: { type: 'f32', default: 0 },
-  clearA: { type: 'f32', default: 1 },
+  // feat-20260709 M3 / D-3: clear-color is one inline `array<f32,4>` column.
+  // The earlier 4-scalar form (clearR/G/B/A) was chosen when this was believed
+  // to be the only SoA-safe shape; the Transform (pos/quat/scale) and light
+  // (direction/color) precedents disprove that -- an `array<f32,N>` IS an
+  // inline stride-N SoA column, read on the hot path as `col[i*N+a]` with zero
+  // allocation, so collapsing four scalars into one column removes three field
+  // names a reader must track without changing the storage layout or read
+  // pattern. Explicit layer-2 default `[0, 0, 0, 1]` (opaque black); the array
+  // layer-3 fallback is all-zero, so the non-zero alpha MUST be declared here
+  // (D-5).
+  clearColor: { type: 'array<f32, 4>', default: new Float32Array([0, 0, 0, 1]) },
   // feat-20260617-host-engine-contract-and-video-cutscene / M3 / D-4: the
   // aspect-sync sidecar on the createApp(canvas) path writes
   // canvas.width / canvas.height into `aspect` every frame when this flag is
@@ -338,7 +336,7 @@ export const Camera = defineComponent('Camera', {
 
 // ─── Camera POD type (derived from Camera token — single source, AC-07) ─────
 //
-// ShapeOf<typeof Camera.schema> resolves the 22-field POD from the Camera
+// ShapeOf<typeof Camera.schema> resolves the 19-field POD from the Camera
 // token's schema, which is itself derived from Camera.fields[k].type (D-A7).
 // This replaces the hand-maintained CameraDataPod interface — the field set
 // lives exclusively in the Camera component definition above.
@@ -346,7 +344,7 @@ type CameraPod = ShapeOf<typeof Camera.schema>;
 
 // ─── Camera factory functions (w13 SSOT refactoring) ─────────────────────
 //
-// Standalone factory functions that return 22-field CameraPod objects
+// Standalone factory functions that return 19-field CameraPod objects
 // matching the Camera component column shape. Not static methods because
 // TypeScript const-namespace merge is not supported, and Object.assign
 // would break the Camera token's reference identity (archetype columns /
@@ -441,12 +439,12 @@ function cameraPodFromDefaults(): CameraPod {
  * ```
  *
  * @example With non-default clear color (default is `[0, 0, 0, 1]`).
- * `clearR/G/B/A` are SoA scalar fields on `Camera`; spread the factory
- * then override:
+ * `clearColor` is an inline `array<f32,4>` field on `Camera`; spread the
+ * factory then override:
  * ```ts
  * world.spawn({
  *   component: Camera,
- *   data: { ...perspective({ fov: Math.PI / 3, aspect: 4 / 3 }), clearG: 1.0 },
+ *   data: { ...perspective({ fov: Math.PI / 3, aspect: 4 / 3 }), clearColor: [0, 1, 0, 1] },
  * }).unwrap();
  * ```
  */

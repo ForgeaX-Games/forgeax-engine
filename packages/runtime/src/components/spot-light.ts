@@ -1,7 +1,9 @@
 // @forgeax/engine-runtime - SpotLight (cone-restricted spot-light parameters).
 //
-// Schema: 9 f32 columns - direction (xyz) + color (rgb, linear space) +
-// intensity + range + innerConeDeg + outerConeDeg. `position` comes from the
+// Schema: direction array<f32,3> + color array<f32,3> + intensity + range +
+// innerConeDeg + outerConeDeg (feat-20260709 M2: direction/color collapsed from
+// 6 per-axis scalar columns to two inline array<f32,3> columns). `position`
+// comes from the
 // Transform component; SpotLight requires a companion Transform on the same
 // entity (ECS query: `[Transform, SpotLight]`). Cone units are degrees on
 // the Component API surface (charter F1 prior-knowledge alignment with
@@ -35,6 +37,7 @@
 
 import { defineComponent, SpawnLightInvalidBoundsError } from '@forgeax/engine-ecs';
 import { ShadowInvalidConfigError } from '../errors/render';
+import { validateDirection } from '../light-helpers';
 
 /**
  * Cone-restricted spot light (KHR_lights_punctual `spot` type).  Casts shadows
@@ -76,25 +79,25 @@ import { ShadowInvalidConfigError } from '../errors/render';
  * @example Spawn a single spot light casting shadows (zero-config):
  *   world.spawn(
  *     { component: Transform, data: { pos: [0, 5, 0] } },
- *     { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0 } },
+ *     { component: SpotLight, data: { direction: [0, -1, 0] } }, // [x, y, z]
  *   );
  *
  * @example Opt out of shadows:
  *   world.spawn(
  *     { component: Transform, data: { pos: [0, 5, 0] } },
- *     { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0, castShadow: false } },
+ *     { component: SpotLight, data: { direction: [0, -1, 0], castShadow: false } },
  *   );
  *
  * @example Explicit shadow config:
  *   world.spawn(
  *     { component: Transform, data: { pos: [0, 5, 0] } },
- *     { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0, depthBias: 0.01, normalBias: 0.08, mapSize: 1024 } },
+ *     { component: SpotLight, data: { direction: [0, -1, 0], depthBias: 0.01, normalBias: 0.08, mapSize: 1024 } },
  *   );
  *
  * @example Minimal spawn -- defaults give neutral white at full strength, range 10m, KHR pi/4 cone:
  *   world.spawn(
  *     { component: Transform, data: { pos: [0, 5, 0] } },
- *     { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0 } },
+ *     { component: SpotLight, data: { direction: [0, -1, 0] } }, // [x, y, z]
  *   );
  *   // resolves to color=[1,1,1], intensity=1, range=10.0,
  *   // innerConeDeg=0, outerConeDeg=45 (KHR pi/4 equivalent).
@@ -102,12 +105,11 @@ import { ShadowInvalidConfigError } from '../errors/render';
 export const SpotLight = defineComponent(
   'SpotLight',
   {
-    directionX: { type: 'f32' },
-    directionY: { type: 'f32' },
-    directionZ: { type: 'f32' },
-    colorR: { type: 'f32', default: 1 },
-    colorG: { type: 'f32', default: 1 },
-    colorB: { type: 'f32', default: 1 },
+    // direction has no default (D-5): omitting it lands the array layer-3
+    // all-zero, which validate() rejects. color carries an explicit layer-2
+    // default [1,1,1] (white); the array layer-3 fallback is all-zero.
+    direction: { type: 'array<f32, 3>' },
+    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
     intensity: { type: 'f32', default: 1 },
     range: { type: 'f32', default: 10.0 },
     innerConeDeg: { type: 'f32', default: 0 },
@@ -124,6 +126,12 @@ export const SpotLight = defineComponent(
   },
   {
     validate: (data) => {
+      // D-1: reject a missing or zero-vector direction (shared SSOT helper).
+      const dirErr = validateDirection(
+        'SpotLight',
+        data.direction as ArrayLike<number> | undefined,
+      );
+      if (dirErr !== null) return dirErr;
       const cs = data.castShadow;
       if (cs === false) {
         return null;

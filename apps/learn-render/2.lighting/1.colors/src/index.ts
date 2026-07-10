@@ -140,12 +140,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   world.spawn({
     component: DirectionalLight,
     data: {
-      directionX: LIGHT_DIR[0] ?? 0,
-      directionY: LIGHT_DIR[1] ?? 0,
-      directionZ: LIGHT_DIR[2] ?? 0,
-      colorR: LIGHT_COLOR_R,
-      colorG: LIGHT_COLOR_G,
-      colorB: LIGHT_COLOR_B,
+      direction: [LIGHT_DIR[0] ?? 0, LIGHT_DIR[1] ?? 0, LIGHT_DIR[2] ?? 0],
+      color: [LIGHT_COLOR_R, LIGHT_COLOR_G, LIGHT_COLOR_B],
       intensity: 1.0,
     },
   });

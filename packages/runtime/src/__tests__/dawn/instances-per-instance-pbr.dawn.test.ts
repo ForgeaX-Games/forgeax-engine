@@ -217,12 +217,8 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
     worldN.spawn({
       component: DirectionalLight,
       data: {
-        directionX: -0.3,
-        directionY: -1,
-        directionZ: -0.5,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [-0.3, -1, -0.5],
+        color: [1, 1, 1],
         intensity: 1,
       },
     });
@@ -301,12 +297,8 @@ describe('w2 -- PBR dual-state dawn smoke (AC-01 / AC-06, RED before w4)', () =>
     world1.spawn({
       component: DirectionalLight,
       data: {
-        directionX: -0.3,
-        directionY: -1,
-        directionZ: -0.5,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [-0.3, -1, -0.5],
+        color: [1, 1, 1],
         intensity: 1,
       },
     });

@@ -240,12 +240,12 @@ channelMap?: {
 
 ### `DirectionalLight.direction` field semantics
 
-> feat-20260518-pbr-direct-lighting-mvp / w17.5 -- `DirectionalLight.direction` (`directionX/Y/Z`) is the **outgoing direction**: light from source pointing toward the illuminated point in world space; shader fragment internally `normalize(-view.lightDir)` reverses to get the BRDF L vector. Host (`render-system-record.ts`) verbatim uploads the host-provided `direction` components to the view UBO, shader holds the reverse semantic unilaterally (single SSOT, no double-negation risk).
+> feat-20260518-pbr-direct-lighting-mvp / w17.5 -- `DirectionalLight.direction` (an `array<f32, 3>` column since feat-20260709 M2) is the **outgoing direction**: light from source pointing toward the illuminated point in world space; shader fragment internally `normalize(-view.lightDir)` reverses to get the BRDF L vector. Host (`render-system-record.ts`) verbatim uploads the host-provided `direction` components to the view UBO, shader holds the reverse semantic unilaterally (single SSOT, no double-negation risk).
 
 | Default | Meaning |
 |:--|:--|
-| `directionX = -0.5, directionY = -1, directionZ = -0.3` | Sun-like from upper-right-behind shining down onto forward-facing objects (M0 spike-report locked value; shared across multiple demos in `populateDemoWorld`) |
-| `colorR = 1, colorG = 1, colorB = 1, intensity = 1` | White light unit intensity (GGX direct light SSOT default case) |
+| `direction = [-0.5, -1, -0.3]` | Sun-like from upper-right-behind shining down onto forward-facing objects (M0 spike-report locked value; shared across multiple demos in `populateDemoWorld`) |
+| `color = [1, 1, 1], intensity = 1` | White light unit intensity (GGX direct light SSOT default case) |
 
 **Validation**: `AssetRegistry.register` does not validate `direction` magnitude; BRDF internally `nDotL = max(dot(n, l), 0.0)` naturally clamps back-face -> 0; `intensity = 0` is a legal case (feat-20260518 case C 0 light physically-correct black screen).
 

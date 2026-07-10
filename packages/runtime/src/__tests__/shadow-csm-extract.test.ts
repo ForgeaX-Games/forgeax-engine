@@ -21,9 +21,7 @@ function makeWorld(castShadow?: boolean): World {
   world.spawn({
     component: DirectionalLight,
     data: {
-      directionX: 0,
-      directionY: -1,
-      directionZ: 0,
+      direction: [0, -1, 0],
       castShadow: castShadow ?? true,
       depthBias: 0.01,
       normalBias: 0.08,
@@ -130,9 +128,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
       world.spawn({
         component: DirectionalLight,
         data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
+          direction: [0, -1, 0],
           cascadeCount: 1,
           shadowDistance: 100,
         },
@@ -191,9 +187,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
       world.spawn({
         component: DirectionalLight,
         data: {
-          directionX: 0,
-          directionY: -1,
-          directionZ: 0,
+          direction: [0, -1, 0],
           cascadeCount: 1,
           shadowDistance: 100,
           pcfKernelSize,
@@ -225,7 +219,7 @@ describe('ExtractedLights interface (M2 castShadow gate)', () => {
       const world = new World();
       world.spawn({
         component: DirectionalLight,
-        data: { directionX: 0, directionY: -1, directionZ: 0, cascadeCount: 1 },
+        data: { direction: [0, -1, 0], cascadeCount: 1 },
       });
       world.spawn(
         { component: Transform, data: {} },

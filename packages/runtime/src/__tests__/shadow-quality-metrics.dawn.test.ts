@@ -149,12 +149,8 @@ function buildScene(world: World, cfg: SceneConfig): void {
     .spawn({
       component: DirectionalLight,
       data: {
-        directionX: 0,
-        directionY: -1,
-        directionZ: 0,
-        colorR: 1,
-        colorG: 1,
-        colorB: 1,
+        direction: [0, -1, 0],
+        color: [1, 1, 1],
         intensity: 1.5,
         castShadow: cfg.castShadow ?? true,
         cascadeCount: cfg.cascadeCount ?? 1,

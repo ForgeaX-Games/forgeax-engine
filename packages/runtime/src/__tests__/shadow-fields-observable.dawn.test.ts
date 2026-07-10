@@ -154,22 +154,15 @@ function spawnScene(
         aspect: 1,
         near: 0.1,
         far: 100,
-        clearR: 0.05,
-        clearG: 0.05,
-        clearB: 0.08,
-        clearA: 1,
+        clearColor: [0.05, 0.05, 0.08, 1],
       },
     },
   );
   world.spawn({
     component: DirectionalLight,
     data: {
-      directionX: 0.3,
-      directionY: -0.9,
-      directionZ: -0.31,
-      colorR: 1,
-      colorG: 1,
-      colorB: 1,
+      direction: [0.3, -0.9, -0.31],
+      color: [1, 1, 1],
       intensity: 1,
       castShadow,
       mapSize: mapSize ?? 1024,
@@ -443,11 +436,14 @@ describe('M6 shadow fields observability', () => {
   it('validate() accepts pcfKernelSize=9 (odd), rejects 2 (even) and 0', () => {
     const v = (
       DirectionalLight as {
-        validate?: (d: Record<string, number | boolean>) => { code: string } | null;
+        validate?: (
+          d: Record<string, number | boolean | readonly number[]>,
+        ) => { code: string } | null;
       }
     ).validate;
     expect(
       v?.({
+        direction: [0, -1, 0],
         castShadow: true,
         cascadeCount: 4,
         splitLambda: 0.75,
@@ -459,6 +455,7 @@ describe('M6 shadow fields observability', () => {
     ).toBeNull();
     expect(
       v?.({
+        direction: [0, -1, 0],
         castShadow: true,
         cascadeCount: 4,
         splitLambda: 0.75,
@@ -470,6 +467,7 @@ describe('M6 shadow fields observability', () => {
     ).toBe('shadow-invalid-config');
     expect(
       v?.({
+        direction: [0, -1, 0],
         castShadow: true,
         cascadeCount: 4,
         splitLambda: 0.75,

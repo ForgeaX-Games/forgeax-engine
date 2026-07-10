@@ -143,10 +143,7 @@ function makeCameras(): MockObj[] {
       quatW: 1,
       viewMatrix: new Float32Array(16),
       projMatrix: new Float32Array(16),
-      clearR: 0,
-      clearG: 0,
-      clearB: 0,
-      clearA: 1,
+      clearColor: [0, 0, 0, 1],
     },
   ];
 }

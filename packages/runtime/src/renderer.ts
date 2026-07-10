@@ -130,11 +130,11 @@ export interface RendererOptions {
   // feat-20260608-create-app-param-surface-trim / M1 / AC-02: `clearColor`
   // was deleted as a one-cut breaking change (AGENTS.md Change stance +
   // requirements constraint #1: no deprecation window, no shim). Scene
-  // clear color now lives on the Camera entity (`clearR / clearG /
-  // clearB / clearA`); zero-Camera fallback uses
+  // clear color now lives on the Camera entity (`clearColor`, an inline
+  // array<f32,4> column as of feat-20260709 M3); zero-Camera fallback uses
   // `ZERO_CAMERA_CLEAR_FALLBACK = [0, 0, 0, 1]` from
-  // `render-system-record`. AI users that pass `{ clearColor: [...] }`
-  // get a TS2353 excess-property error at compile time.
+  // `render-system-record`. AI users that pass `{ clearColor: [...] }` on
+  // RendererOptions still get a TS2353 excess-property error at compile time.
   //
   // feat-20260608-create-app-param-surface-trim / M2 / AC-06 + D-3:
   // `shaderManifestUrl` was deleted from RendererOptions and moved to
@@ -203,7 +203,7 @@ export interface RendererOptions {
  * | RenderSystem N>1 Camera | first archetype hit rendered | yes — `'render-system-multi-camera'` |
  * | RenderSystem N>1 DirectionalLight | first archetype hit used | yes — `'render-system-multi-light'` |
  * | RenderSystem 0 DirectionalLight | unlit fallback (intensity = 0) | no — D-Q7 softening |
- * | RenderSystem 0 renderables (Camera entity only) | clear pass executed; canvas painted with `Camera.clearR/G/B/A`; no geometry submitted | no — D-Q7 softening |
+ * | RenderSystem 0 renderables (Camera entity only) | clear pass executed; canvas painted with `Camera.clearColor`; no geometry submitted | no — D-Q7 softening |
  * | RenderSystem all renderables fail asset-not-registered | clear pass executed; per-entity `'asset-not-registered'` fires for each unregistered handle | yes — per entity |
  * | RenderSystem entity missing Transform / MeshRenderer | default value used | no — D-Q7 softening |
  * | RenderSystem unregistered `MeshFilter.assetHandle` | entity skipped | yes — `'asset-not-registered'` (`detail = { assetHandle }`) |

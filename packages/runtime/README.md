@@ -574,16 +574,13 @@ world.spawn(
 > [!NOTE]
 > 高强度光示例（charter F1 渐进式披露）：apps/hello/tonemap demo 用 `intensity = 2` directional light + 中性灰 PBR 球面，**默认路径**最亮 specular 像素 burn 到 `(255, 255, 255)`（swap-chain `bgra8unorm-srgb` store 在 1.0 之上硬截断 → 整白），**opt-in 路径**同样 scene 最亮像素压回 `(0.3, 1.0)` per-channel band（apps/hello/tonemap/scripts/smoke-dawn.mjs AC-07 + AC-08 mass scan）。
 
-### Camera clear color (`clearR / clearG / clearB / clearA`)
+### Camera clear color (`clearColor: array<f32, 4>`)
 
-> feat-20260608-create-app-param-surface-trim / M1: per-frame clear color migrated from `RendererOptions.clearColor` (M1-retired, 4-tuple `[number, number, number, number]`) to four scalar fields on the `Camera` component. RGB values are linear-space (sRGB encoding still applies on the swap-chain `bgra8unorm-srgb` view).
+> feat-20260608-create-app-param-surface-trim / M1: per-frame clear color migrated from `RendererOptions.clearColor` (M1-retired) to the `Camera` component. feat-20260709 M3: collapsed the earlier four scalar fields (`clearR/G/B/A`) into one inline `array<f32, 4>` column -- an `array<f32, N>` IS a stride-N SoA column, so the collapse removes three field names a reader must track without changing storage layout. RGB values are linear-space (sRGB encoding still applies on the swap-chain `bgra8unorm-srgb` view).
 
 | Field | Type | Default | Semantics |
 |:--|:--|:--|:--|
-| `clearR` | `f32` | `0` | Linear-space red channel; sRGB-encoded on store |
-| `clearG` | `f32` | `0` | Linear-space green channel |
-| `clearB` | `f32` | `0` | Linear-space blue channel |
-| `clearA` | `f32` | `1` | Alpha (usually `1`) |
+| `clearColor` | `array<f32, 4>` | `[0, 0, 0, 1]` | Linear-space `[r, g, b, a]`; RGB sRGB-encoded on store, alpha usually `1` |
 
 ```ts
 import { Camera, Transform } from '@forgeax/engine-runtime';
@@ -592,7 +589,7 @@ world.spawn(
   { component: Camera, data: {
       fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100,
       // dark slate background for sprite-alpha-blend visual contrast
-      clearR: 0.08, clearG: 0.10, clearB: 0.12, clearA: 1,
+      clearColor: [0.08, 0.10, 0.12, 1],
   } },
 ).unwrap();
 ```
@@ -766,8 +763,8 @@ world.spawn(
   } },
 ).unwrap();
 world.spawn({ component: DirectionalLight, data: {
-  directionX: -0.5, directionY: -1, directionZ: -0.3,
-  colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+  direction: [-0.5, -1, -0.3],
+  color: [1, 1, 1], intensity: 1,
 } }).unwrap();
 
 // 3. await ready (WebGPU 路径 manifest + pipeline + asset upload 串行三步)
@@ -800,8 +797,8 @@ import {
 | `Transform` | `pos: array<f32,3> + quat: array<f32,4>（[x,y,z,w]）+ scale: array<f32,3>` | pos=`[0,0,0]` / quat=identity / scale=`[1,1,1]`（缺 → 默认） |
 | `MeshFilter` | `assetHandle: ref` (u32) | 必填；未注册 → fire onError + skip entity |
 | `MeshRenderer` | `materials: array<shared<MaterialAsset>>`（spawn payload 是 `Partial<ShapeOf<S>>`，字段可省略；feat-20260608 M2 / w7 multi-material array：positional `materials[i]` ↔ `MeshAsset.submeshes[i]`；feat-20260614 handle->shared rename） | `materials` undefined / 空数组 → `defaultMaterialSnapshot()` mid-grey unlit（D-Q7 case B，no onError）；`materials.length !== submeshes.length` → fire `AssetError 'mesh-renderer-material-count-mismatch'` + entity skip（feat-20260608 M2 / w11）；`materials[i]` 非零但未注册 → fire `RhiError 'asset-not-registered'` + entity skip（D-Q7 case C） |
-| `Camera` | `fov + aspect + near + far + clearR/G/B/A + tonemap + exposure + whitePoint + antialias + bloom* + ...`（projection + clear + tonemap + AA + bloom 字段族） | spawn 时显式给（不自动）；clear 默认 `[0, 0, 0, 1]`；详见 §Camera clear color + §Anti-Aliasing 子章节 |
-| `DirectionalLight` | `directionX/Y/Z + colorR/G/B + intensity + castShadow`（7 f32 + 1 bool gate）+ `cascadeCount + splitLambda + cascadeBlend + mapSize + depthBias + normalBias + shadowDistance + pcfKernelSize`（8 f32 shadow params，feat-20260621 merge；`nearPlane`/`farPlane` 塌为 `shadowDistance`，近端取相机 near） | 0 light = unlit fallback（合法，不 fire onError）；castShadow 默认 true，zero-config spawn 即投射 cascaded shadow maps
+| `Camera` | `fov + aspect + near + far + clearColor: array<f32,4> + tonemap + exposure + whitePoint + antialias + bloom* + ...`（projection + clear + tonemap + AA + bloom 字段族） | spawn 时显式给（不自动）；clear 默认 `[0, 0, 0, 1]`；详见 §Camera clear color + §Anti-Aliasing 子章节 |
+| `DirectionalLight` | `direction: array<f32,3> + color: array<f32,3> + intensity + castShadow`（2 array 列 + 1 f32 + 1 bool gate）+ `cascadeCount + splitLambda + cascadeBlend + mapSize + depthBias + normalBias + shadowDistance + pcfKernelSize`（8 f32 shadow params，feat-20260621 merge；`nearPlane`/`farPlane` 塌为 `shadowDistance`，近端取相机 near） | 0 light = unlit fallback（合法，不 fire onError）；castShadow 默认 true，zero-config spawn 即投射 cascaded shadow maps
 
 ### Multi-world compositing — `draw(worlds, { owner })`
 
@@ -1017,20 +1014,20 @@ import { DirectionalLight } from '@forgeax/engine-runtime';
 
 // Zero-config（castShadow 默认为 true，4 级 cascade 全默认值）：
 world.spawn({ component: DirectionalLight, data: {
-  directionX: 0.2, directionY: -0.98, directionZ: 0,
+  direction: [0.2, -0.98, 0],
 } }).unwrap();
 
 // 显式 shadow 配置（单组件，17 个字段）：
 world.spawn({ component: DirectionalLight, data: {
-  directionX: 0.2, directionY: -0.98, directionZ: 0,
-  colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+  direction: [0.2, -0.98, 0],
+  color: [1, 1, 1], intensity: 1,
   cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2,
   mapSize: 2048, shadowDistance: 200,
 } }).unwrap();
 
 // 关闭阴影（castShadow: false，shadow 字段仍存但校验跳过）：
 world.spawn({ component: DirectionalLight, data: {
-  directionX: 0, directionY: -1, directionZ: 0,
+  direction: [0, -1, 0],
   castShadow: false,
 } }).unwrap();
 ```
@@ -1203,9 +1200,9 @@ palette `M_i` **已是完整世界变换**——shader 端不额外左乘 `meshe
 
 | Component | 强制依赖 | schema fields | first-slice cap | 备注 |
 |:--|:--|:--|:--|:--|
-| `DirectionalLight` | — (世界空间方向，不依赖 entity Transform) | `directionX/Y/Z: f32` (outgoing direction，host upload 原值，shader 内部取负成 L) + `colorR/G/B: f32` + `intensity: f32` | N≤1 | feat-20260518 既有；direction 缺省 `(0, -1, 0)` |
-| `PointLight` | **必须搭配 `Transform`**（位置由 Transform 决定） | `colorR/G/B: f32` + `intensity: f32` + `range: f32` | N≤4 | `range` 缺省 `Infinity`（host 计算 `1 / range²`，`Infinity` 时为 0 → 无距离衰减）；位置取自伴生 `Transform.pos` |
-| `SpotLight` | **必须搭配 `Transform`**（位置 + 方向均依赖 entity Transform） | `directionX/Y/Z: f32` (本地空间方向；spawn-time fail-fast 校验) + `colorR/G/B: f32` + `intensity: f32` + `range: f32` + `innerConeDeg: f32` + `outerConeDeg: f32` | N≤4 | `innerConeDeg ≤ outerConeDeg` 且 `outerConeDeg < 90` 必须满足（spawn-time `'spawn-light-invalid-bounds'`）；`range` 缺省 `Infinity`；cone 单位 **度（deg）**，host 侧 `degToCos(deg)` 转换 |
+| `DirectionalLight` | — (世界空间方向，不依赖 entity Transform) | `direction: array<f32,3>` (outgoing direction，host upload 原值，shader 内部取负成 L；无 default，缺失/零向量 spawn-time fail-fast) + `color: array<f32,3>` + `intensity: f32` | N≤1 | feat-20260518 既有；feat-20260709 M2 direction/color 塌为 array 列 |
+| `PointLight` | **必须搭配 `Transform`**（位置由 Transform 决定） | `color: array<f32,3>` + `intensity: f32` + `range: f32` | N≤4 | `range` 缺省 `Infinity`（host 计算 `1 / range²`，`Infinity` 时为 0 → 无距离衰减）；位置取自伴生 `Transform.pos` |
+| `SpotLight` | **必须搭配 `Transform`**（位置 + 方向均依赖 entity Transform） | `direction: array<f32,3>` (本地空间方向；无 default，缺失/零向量 spawn-time fail-fast) + `color: array<f32,3>` + `intensity: f32` + `range: f32` + `innerConeDeg: f32` + `outerConeDeg: f32` | N≤4 | `innerConeDeg ≤ outerConeDeg` 且 `outerConeDeg < 90` 必须满足（spawn-time `'spawn-light-invalid-bounds'`）；`range` 缺省 `Infinity`；cone 单位 **度（deg）**，host 侧 `degToCos(deg)` 转换 |
 | `Skylight` | — (环境光照，不依赖 entity Transform) | `equirect?: handle<EquirectAsset>`（`loadByGuid<EquirectAsset>` 得；可选，省略=纯色环境光）+ `intensity: f32` | N≤1 | feat-20260520 新增、feat-20260630 改 equirect kind；单组件激活完整 IBL pipeline（diffuse irradiance + specular prefilter + BRDF LUT）；equirect→cubemap 投影 + IBL 预计算引擎内部懒触发（用户不调上传 API）；`intensity` 缺省 `1.0`；多 Skylight 时取首个 archetype hit + warn（含 entity handle）；0-light 三条件合取中 Skylight 是合法光源 |
 
 **统一不变量**：`intensity ≥ 0`、`range > 0`（包括 `+Infinity`）、color 分量 `≥ 0`；任何越界 spawn-time 即 fail-fast（`EcsErrorCode 'spawn-light-invalid-bounds'`，详见 [`packages/ecs/src/errors.ts`](../ecs/src/errors.ts)）。
@@ -1222,21 +1219,21 @@ import { DirectionalLight, PointLight, SpotLight, Transform } from '@forgeax/eng
 // DirectionalLight（不需要 Transform；世界空间方向）
 world.spawn({
   component: DirectionalLight,
-  data: { directionX: 0, directionY: -1, directionZ: 0,
-          colorR: 1, colorG: 1, colorB: 1, intensity: 1 },
+  data: { direction: [0, -1, 0],
+          color: [1, 1, 1], intensity: 1 },
 }).unwrap();
 
 // PointLight（必须搭配 Transform；range 缺省 Infinity）
 world.spawn(
   { component: Transform, data: { pos: [2, 3, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
-  { component: PointLight, data: { colorR: 1, colorG: 0.6, colorB: 0.4, intensity: 5, range: 10 } },
+  { component: PointLight, data: { color: [1, 0.6, 0.4], intensity: 5, range: 10 } },
 ).unwrap();
 
 // SpotLight（Transform + 方向 + 锥角）
 world.spawn(
   { component: Transform, data: { pos: [0, 5, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
-  { component: SpotLight, data: { directionX: 0, directionY: -1, directionZ: 0,
-                                   colorR: 1, colorG: 1, colorB: 1, intensity: 8,
+  { component: SpotLight, data: { direction: [0, -1, 0],
+                                   color: [1, 1, 1], intensity: 8,
                                    range: 15, innerConeDeg: 12, outerConeDeg: 25 } },
 ).unwrap();
 ```
@@ -1245,7 +1242,7 @@ world.spawn(
 
 ## Shadow mapping
 
-> feat-20260613-csm-cascaded-shadow-maps-unique-shadow-path + feat-20260621 merge -- CSM (Cascaded Shadow Maps) is the **single** shadow path. The N-cascade tile atlas with `cascadeCount=1` degenerates to the same shape as the legacy single-shadow slice; there is no separate single-cascade fallback. Mesh occluders cast shadows via per-cascade depth-only passes; the standard PBR path samples the atlas with slope-scaled depth bias, 3x3 PCF (Percentage-Closer Filtering), and inter-cascade linear blending. Shadow parameters are **merged into `DirectionalLight`** via a `castShadow` boolean toggle (default `true`) -- a zero-config `world.spawn({ component: DirectionalLight, data: {} })` casts cascaded shadows by default. Setting `castShadow: false` skips the shadow pass silently (no error / no warn). There is no separate `DirectionalLightShadow` component; it was deleted (feat-20260621 M1-M6).
+> feat-20260613-csm-cascaded-shadow-maps-unique-shadow-path + feat-20260621 merge -- CSM (Cascaded Shadow Maps) is the **single** shadow path. The N-cascade tile atlas with `cascadeCount=1` degenerates to the same shape as the legacy single-shadow slice; there is no separate single-cascade fallback. Mesh occluders cast shadows via per-cascade depth-only passes; the standard PBR path samples the atlas with slope-scaled depth bias, 3x3 PCF (Percentage-Closer Filtering), and inter-cascade linear blending. Shadow parameters are **merged into `DirectionalLight`** via a `castShadow` boolean toggle (default `true`) -- a zero-config `world.spawn({ component: DirectionalLight, data: { direction: [0, -1, 0] } })` casts cascaded shadows by default. Setting `castShadow: false` skips the shadow pass silently (no error / no warn). There is no separate `DirectionalLightShadow` component; it was deleted (feat-20260621 M1-M6).
 
 ### Evolution
 
@@ -1259,14 +1256,14 @@ world.spawn(
 
 ### DirectionalLight shadow fields (merged, feat-20260621)
 
-Shadow parameters live **directly on `DirectionalLight`** -- no separate component. `castShadow` defaults to `true`: a zero-config `world.spawn({ component: DirectionalLight, data: {} })` casts 4-cascade CSM shadows with all defaults. Set `castShadow: false` to opt one light out of shadow rendering (shadow fields are still stored but validation is skipped). There is **no cardinality cap** -- the `DirectionalLight` component is first-hit-wins (same as before). Field validation failures (`castShadow === true` only) emit `ShadowInvalidConfigError` with `.code='shadow-invalid-config'` and `.detail.{field,value,min,max?}` for property-access narrowing (no string parsing).
+Shadow parameters live **directly on `DirectionalLight`** -- no separate component. `castShadow` defaults to `true`: a zero-config `world.spawn({ component: DirectionalLight, data: { direction: [0, -1, 0] } })` casts 4-cascade CSM shadows with all defaults. Set `castShadow: false` to opt one light out of shadow rendering (shadow fields are still stored but validation is skipped). There is **no cardinality cap** -- the `DirectionalLight` component is first-hit-wins (same as before). Field validation failures (`castShadow === true` only) emit `ShadowInvalidConfigError` with `.code='shadow-invalid-config'` and `.detail.{field,value,min,max?}` for property-access narrowing (no string parsing).
 
-**Light fields** (7 f32):
+**Light fields** (2 array columns + 1 f32):
 
 | Field | Default | Semantics |
 |:--|:--|:--|
-| `directionX/Y/Z` | 0, -1, 0 | Outgoing light direction (shader internally negates) |
-| `colorR/G/B` | 1, 1, 1 | Linear-space RGB |
+| `direction` | (no default; required) | Outgoing light direction `[x, y, z]` (shader internally negates); missing/zero-vector rejected spawn-time |
+| `color` | `[1, 1, 1]` | Linear-space RGB |
 | `intensity` | 1 | Light intensity multiplier |
 
 **Shadow fields** (1 bool gate + 8 f32, migrated from deleted `DirectionalLightShadow`; `nearPlane`/`farPlane` collapsed into `shadowDistance`):
@@ -1307,20 +1304,20 @@ import { DirectionalLight } from '@forgeax/engine-runtime';
 
 // Zero-config: 4-cascade CSM with all defaults (castShadow defaults to true)
 world.spawn({ component: DirectionalLight, data: {
-  directionX: 0.2, directionY: -0.98, directionZ: 0,
+  direction: [0.2, -0.98, 0],
 } }).unwrap();
 
 // Explicit config (all shadow fields on the same component):
 world.spawn({ component: DirectionalLight, data: {
-  directionX: 0.2, directionY: -0.98, directionZ: 0,
-  colorR: 1, colorG: 1, colorB: 1, intensity: 1,
+  direction: [0.2, -0.98, 0],
+  color: [1, 1, 1], intensity: 1,
   cascadeCount: 4, splitLambda: 0.75, cascadeBlend: 0.2,
   mapSize: 2048, shadowDistance: 200,
 } }).unwrap();
 
 // Opt out of shadows (still one component):
 world.spawn({ component: DirectionalLight, data: {
-  directionX: 0, directionY: -1, directionZ: 0,
+  direction: [0, -1, 0],
   castShadow: false,
 } }).unwrap();
 ```
@@ -1369,7 +1366,7 @@ import { PointLight, PointLightShadow } from '@forgeax/engine-runtime';
 // normalBias=0.05, nearPlane=0.1, farPlane=25, pcfKernelSize=3).
 world.spawn(
   { component: PointLight, data: { range: 25,
-                                    colorR: 1, colorG: 1, colorB: 1, intensity: 8 } },
+                                    color: [1, 1, 1], intensity: 8 } },
   { component: PointLightShadow, data: {} },
 ).unwrap();
 
@@ -2094,7 +2091,7 @@ The pre-refactor sprite material declared a sibling shape (`shadingModel:'sprite
 
 | Component | Schema | Role |
 |:--|:--|:--|
-| `Tilemap` | `cols / rows: u32`, `tileSizeX / tileSizeY: f32`, `tileset: handle<TilesetAsset>`, `chunkSize: u32` | Parent entity carrying the grid dimensions + tileset reference. One per scene typically. |
+| `Tilemap` | `cols / rows: u32`, `tileSize: array<f32, 2>` (`[width, height]`, default `[1, 1]`), `tileset: handle<TilesetAsset>`, `chunkSize: u32` | Parent entity carrying the grid dimensions + tileset reference. One per scene typically. |
 | `TileLayer` | `tiles: array<u32>`, `layerOrder: i32`, `dirty: u8` | Child entity (via `ChildOf parent=<tilemapEntity>`) carrying one dense `cols * rows` cell sheet. Cell value 0 = empty; non-zero encodes tile id + flip bits via `encodeTileBits(id, flipH, flipV, flipDiagonal, flipHex120)` — import `encodeTileBits` / `decodeTileBits` from `@forgeax/engine-graphics-extras` (moved out of runtime in feat-20260705; the `tilemapChunkExtractSystem` that consumes them stays here). |
 | `pickTile(world, tilemapEntity, worldX, worldY)` | helper (moved to `@forgeax/engine-picking`) | Returns `{ layerEntity, cellX, cellY, tileId } | null` for the topmost non-zero cell at a world coordinate. Import from `@forgeax/engine-picking` (extracted from runtime in feat-20260705). |
 
@@ -2134,7 +2131,7 @@ const tilesetRes = assets.register<TilesetAsset>({
 
 world.spawn(
   { component: Transform, data: {} },
-  { component: Tilemap, data: { cols: 8, rows: 8, tileSizeX: 1, tileSizeY: 1, tileset: tilesetRes.value } },
+  { component: Tilemap, data: { cols: 8, rows: 8, tileSize: [1, 1], tileset: tilesetRes.value } },
 );
 ```
 

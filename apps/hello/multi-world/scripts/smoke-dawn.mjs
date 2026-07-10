@@ -184,10 +184,7 @@ worldA
       component: Camera,
       data: {
         ...perspective({ fov: CAMERA_FOV, aspect: CAMERA_ASPECT }),
-        clearR: CLEAR.r,
-        clearG: CLEAR.g,
-        clearB: CLEAR.b,
-        clearA: CLEAR.a,
+        clearColor: [CLEAR.r, CLEAR.g, CLEAR.b, CLEAR.a],
       },
     },
   )
@@ -195,7 +192,7 @@ worldA
 worldA
   .spawn({
     component: DirectionalLight,
-    data: { directionX: -0.4, directionY: -0.7, directionZ: -1, colorR: 1, colorG: 1, colorB: 1, intensity: 1.4 },
+    data: { direction: [-0.4, -0.7, -1], color: [1, 1, 1], intensity: 1.4 },
   })
   .unwrap();
 

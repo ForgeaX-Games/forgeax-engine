@@ -1,6 +1,7 @@
 // @forgeax/engine-runtime - PointLight (omnidirectional point-light parameters).
 //
-// Schema: 5 f32 columns - color (rgb, linear space) + intensity + range.
+// Schema: color array<f32,3> + intensity f32 + range f32 (feat-20260709 M2:
+// color collapsed from 3 per-axis scalar columns to one inline array<f32,3>).
 // `position` comes from the Transform component; PointLight requires a
 // companion Transform on the same entity (ECS query: `[Transform, PointLight]`).
 // `range` units are meters; defaults to `10.0` (KHR_lights_punctual quartic
@@ -51,14 +52,14 @@ import { defineComponent, SpawnLightInvalidBoundsError } from '@forgeax/engine-e
  *     { component: Transform, data: { pos: [0, 1, 0] } },
  *     { component: PointLight, data: {} },
  *   );
- *   // resolves to colorR=colorG=colorB=1, intensity=1, range=10.0.
+ *   // resolves to color=[1, 1, 1], intensity=1, range=10.0.
  */
 export const PointLight = defineComponent(
   'PointLight',
   {
-    colorR: { type: 'f32', default: 1 },
-    colorG: { type: 'f32', default: 1 },
-    colorB: { type: 'f32', default: 1 },
+    // color carries an explicit layer-2 default [1,1,1] (white); the array
+    // layer-3 fallback is all-zero, so the default MUST be explicit (D-5).
+    color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
     intensity: { type: 'f32', default: 1 },
     range: { type: 'f32', default: 10.0 },
   },

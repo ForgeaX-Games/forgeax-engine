@@ -135,9 +135,7 @@ export function colliderShapeFromF32(n: number): ColliderShape {
  * | Field | Type | Default | Purpose |
  * |:--|:--|:--|:--|
  * | `shape` | `ColliderShape` | — | Shape discriminant |
- * | `halfExtentsX` | `number` | `0.5` | Cuboid half-width |
- * | `halfExtentsY` | `number` | `0.5` | Cuboid half-height |
- * | `halfExtentsZ` | `number` | `0.5` | Cuboid half-depth |
+ * | `halfExtents` | `[number, number, number]` | `[0.5, 0.5, 0.5]` | Cuboid half-width/height/depth |
  * | `radius` | `number` | `0.5` | Sphere / capsule radius |
  * | `halfHeight` | `number` | `0.5` | Capsule half-height |
  * | `friction` | `number` | `0.5` | Coulomb friction coefficient |
@@ -151,9 +149,12 @@ export const Collider = defineComponent(
   'Collider',
   {
     shape: { type: 'enum', default: 0 },
-    halfExtentsX: { type: 'f32', default: 0.5 },
-    halfExtentsY: { type: 'f32', default: 0.5 },
-    halfExtentsZ: { type: 'f32', default: 0.5 },
+    // feat-20260709 M4: cuboid half-extents collapsed from 3 per-axis scalar
+    // columns into one inline array<f32,3> column. Explicit layer-2 default
+    // (the array layer-3 fallback is all-zero, which would give a degenerate
+    // zero-size box). radius/halfHeight stay scalar (OOS-1: independent
+    // sphere/capsule params, not part of the cuboid vec).
+    halfExtents: { type: 'array<f32, 3>', default: new Float32Array([0.5, 0.5, 0.5]) },
     radius: { type: 'f32', default: 0.5 },
     halfHeight: { type: 'f32', default: 0.5 },
     friction: { type: 'f32', default: 0.5 },
@@ -206,7 +207,7 @@ export const CharacterController = defineComponent('CharacterController', {
   autoStepMaxHeight: { type: 'f32', default: 0.3 },
   autoStepMinWidth: { type: 'f32', default: 0.2 },
   snapToGroundDist: { type: 'f32', default: 0.2 },
-  grounded: { type: 'bool', default: false },
+  grounded: { type: 'bool', default: false, transient: true },
 });
 
 /**
@@ -221,6 +222,10 @@ export const CharacterController = defineComponent('CharacterController', {
  * one component query per frame exposes the full active contact set
  * (plan-strategy D-3: CollidingEntities set-query mode).
  */
-export const CollidingEntities = defineComponent('CollidingEntities', {
-  entities: { type: 'array<entity>' },
-});
+export const CollidingEntities = defineComponent(
+  'CollidingEntities',
+  {
+    entities: { type: 'array<entity>' },
+  },
+  { transient: true },
+);

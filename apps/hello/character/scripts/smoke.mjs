@@ -176,7 +176,7 @@ app.world.spawn(
   { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
   {
     component: Collider,
-    data: { shape: ColliderShapeValue.cuboid, halfExtentsX: 10, halfExtentsY: 0.5, halfExtentsZ: 10 },
+    data: { shape: ColliderShapeValue.cuboid, halfExtents: [10, 0.5, 10] },
   },
 );
 
@@ -202,7 +202,7 @@ app.world.spawn(
 );
 app.world.spawn({
   component: DirectionalLight,
-  data: { directionX: -0.4, directionY: -1, directionZ: -0.3, colorR: 1, colorG: 1, colorB: 1, intensity: 1 },
+  data: { direction: [-0.4, -1, -0.3], color: [1, 1, 1], intensity: 1 },
 });
 
 const onErrorEvents = [];

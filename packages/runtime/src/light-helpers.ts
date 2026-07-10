@@ -14,6 +14,8 @@
 // transparent to AI users) + D-S5 (Layer 1 host-side range = 0 ->
 // invRangeSquared = 1e8 protects the 0 * Infinity = NaN intermediate).
 
+import { SpawnLightInvalidBoundsError } from '@forgeax/engine-ecs';
+
 const RANGE_ZERO_FALLBACK_INV_R2 = 1e8;
 const DEG_TO_RAD = Math.PI / 180;
 
@@ -54,4 +56,27 @@ export function computeInvRangeSquared(range: number): number {
   if (range === Number.POSITIVE_INFINITY) return 0;
   if (range === 0) return RANGE_ZERO_FALLBACK_INV_R2;
   return 1 / (range * range);
+}
+
+/**
+ * feat-20260709 M2 / D-1: shared zero/missing-direction validate for
+ * DirectionalLight + SpotLight. `direction` has no layer-2 default, so an
+ * omitted direction lands the array layer-3 all-zero -- the same illegal state
+ * as an explicit zero vector. SSOT for the rejection so the two lights cannot
+ * drift. Returns the structured error to reject, or `null` when the direction
+ * is a valid non-zero vector.
+ */
+export function validateDirection(
+  componentName: 'DirectionalLight' | 'SpotLight',
+  direction: ArrayLike<number> | undefined,
+): SpawnLightInvalidBoundsError | null {
+  const dir = direction;
+  if (dir === undefined || ((dir[0] ?? 0) === 0 && (dir[1] ?? 0) === 0 && (dir[2] ?? 0) === 0)) {
+    return new SpawnLightInvalidBoundsError(
+      componentName,
+      'direction',
+      dir === undefined ? [0, 0, 0] : [dir[0] ?? 0, dir[1] ?? 0, dir[2] ?? 0],
+    );
+  }
+  return null;
 }

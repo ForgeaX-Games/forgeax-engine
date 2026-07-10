@@ -436,9 +436,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: PointLight,
       data: {
-        colorR: STRONG_LIGHT_COLOR[0],
-        colorG: STRONG_LIGHT_COLOR[1],
-        colorB: STRONG_LIGHT_COLOR[2],
+        color: [STRONG_LIGHT_COLOR[0], STRONG_LIGHT_COLOR[1], STRONG_LIGHT_COLOR[2]],
         intensity: STRONG_LIGHT_INTENSITY,
         range: STRONG_LIGHT_RANGE,
       },
@@ -482,9 +480,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       {
         component: PointLight,
         data: {
-          colorR: color[0],
-          colorG: color[1],
-          colorB: color[2],
+          color: [color[0], color[1], color[2]],
           intensity: WEAK_LIGHT_INTENSITY,
           range: WEAK_LIGHT_RANGE,
         },
