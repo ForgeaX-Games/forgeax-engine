@@ -39,7 +39,7 @@ import type {
   SkylightSnapshot,
   SpotLightSnapshot,
 } from '../render-system-extract';
-import { extractFrame } from '../render-system-extract';
+import { extractFrame, extractFrames } from '../render-system-extract';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -205,6 +205,14 @@ function simulateMerge(
         ? frames.find((f) => f.lights.directional !== undefined)?.lights.pcfKernelSize
         : undefined,
     pointShadow: frames.flatMap((f) => f.lights.pointShadow),
+    directionalCsmConfig:
+      directional !== undefined
+        ? frames.find((f) => f.lights.directional !== undefined)?.lights.directionalCsmConfig
+        : undefined,
+    directionalCsmDirection:
+      directional !== undefined
+        ? frames.find((f) => f.lights.directional !== undefined)?.lights.directionalCsmDirection
+        : undefined,
   };
 
   // AC-05: singletons from owner world only
@@ -575,5 +583,70 @@ describe('extractFrames merge semantics (m2-t1, AC-04/05/06)', () => {
     // Cameras, lights, etc. are identical to single-world extractFrame
     expect(merged.cameras.length).toBe(frameA.cameras.length);
     expect(merged.lights.directionalCount).toBe(frameA.lights.directionalCount);
+  });
+});
+
+// bug-20260710-editor-cross-world-shadow: directional CSM matrices must be
+// recomputed at the extractFrames merge layer using the SURFACED camera, even
+// when the camera and the directional light live in DIFFERENT worlds (the
+// editor editorWorld/sceneWorld super-composite). Before the fix, the light's
+// cameraless world produced all-zero lightViewProj matrices that the merge
+// carried verbatim → the WGSL shadow reader sampled a degenerate matrix
+// (0/0 = NaN) → "fully lit" → no shadow on any receiver. These tests drive the
+// REAL extractFrames (not simulateMerge) to lock the recompute.
+describe('extractFrames cross-world directional CSM (bug-20260710)', () => {
+  const isNonZeroMat = (m: Float32Array | undefined): boolean =>
+    m !== undefined && Array.from(m).some((x) => x !== 0);
+
+  it('camera in world A, castShadow directional in world B → lightViewProj is non-zero', () => {
+    const worldWithCamera = makeWorldWithCamera();
+    const worldWithLight = makeWorldWithDirectionalLight(); // castShadow defaults to true
+
+    // Split-owner form: cameras from world 0, resources from world 1 — the
+    // editor topology where the light's world (1) has no camera.
+    const frame = extractFrames([worldWithCamera as World, worldWithLight as World], {
+      cameraOwner: 0,
+      resourceOwner: 1,
+    });
+
+    expect(frame.lights.directional).toBeDefined();
+    const lvp = frame.lights.lightViewProj;
+    expect(lvp).toBeDefined();
+    expect(lvp?.length).toBe(4);
+    // The effective cascades (default cascadeCount=4) must all be non-zero —
+    // this is the exact assertion that failed before the merge-layer recompute.
+    for (let i = 0; i < (frame.lights.cascadeCount ?? 0); i++) {
+      expect(isNonZeroMat(lvp?.[i])).toBe(true);
+    }
+    // splitPlanes reach the component shadowDistance on the last cascade.
+    expect(frame.lights.splitPlanes).toBeDefined();
+  });
+
+  it('single world (camera + light together) still yields non-zero lightViewProj', () => {
+    // Regression guard: the merge-layer recompute must not break the common
+    // single-world case where light and camera share one world.
+    const world = new World();
+    world
+      .spawn(
+        { component: Transform, data: identityTransform() },
+        { component: Camera, data: { fov: Math.PI / 4, near: 0.1, far: 100, aspect: 1 } },
+      )
+      .unwrap();
+    world
+      .spawn(
+        { component: Transform, data: identityTransform() },
+        {
+          component: DirectionalLight,
+          data: { color: [1, 1, 1], intensity: 1, direction: [0.3, -1, 0.2] },
+        },
+      )
+      .unwrap();
+
+    const frame = extractFrames([world as World], 0);
+    const lvp = frame.lights.lightViewProj;
+    expect(lvp?.length).toBe(4);
+    for (let i = 0; i < (frame.lights.cascadeCount ?? 0); i++) {
+      expect(isNonZeroMat(lvp?.[i])).toBe(true);
+    }
   });
 });

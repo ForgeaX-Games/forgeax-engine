@@ -2645,20 +2645,14 @@ function makeStubGPU(): unknown {
   });
 }
 
-{
-  // --- from bindgroup-resize-invalidation.test.ts ---
-  describe('bindgroup resize invalidation (R-BGCACHE)', () => {
-    it.todo(
-      'after resize frame, bindgroup that sampled old transient RT is rebuilt with new physical texture',
-    );
-
-    it.todo('non-resize frame reuses cached bindgroup (no unnecessary rebuild)');
-
-    it.todo(
-      'bindgroup rebuild after resize uses the new physical texture identity, not the old one',
-    );
-  });
-}
+// R-BGCACHE (bindgroup resize invalidation) is covered by real pass-level
+// tests in ssao-passes.test.ts ('bindgroup resize invalidation (R-BGCACHE)'),
+// which drive the actual SSAO calc/blur closures through a simulated resize and
+// assert the bind group is rebuilt against the new physical TextureView
+// identity. Bloom (bright / blur H-V / composite), FXAA, and skybox share the
+// identical getOrCreateFromChain mechanism (frameState.postProcessBgCache), so
+// that coverage exercises the same code path. See feedback
+// 2026-07-10-render-graph-postprocess-bindgroups-retain-retired-texture-views.
 
 {
   // --- from builtin-guid-ssot.test.ts ---

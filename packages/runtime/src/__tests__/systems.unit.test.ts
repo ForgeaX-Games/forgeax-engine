@@ -754,7 +754,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         fxaaIntermediateView: fxaaPreAllocated ? { __role: 'fxaa-intermediate-view' } : null,
         fxaaIntermediateWidth: fxaaPreAllocated ? 800 : 0,
         fxaaIntermediateHeight: fxaaPreAllocated ? 600 : 0,
-        fxaaBindGroup: null,
         shadowTexture: null,
         shadowMapSize: 0,
         shadowCascadeCount: 0,
@@ -1049,7 +1048,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         fxaaIntermediateView: null,
         fxaaIntermediateWidth: 0,
         fxaaIntermediateHeight: 0,
-        fxaaBindGroup: null,
       };
       expect('fxaaPipeline' in state).toBe(true);
       expect('fxaaBindGroupLayout' in state).toBe(true);
@@ -1058,7 +1056,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect('fxaaIntermediateView' in state).toBe(true);
       expect('fxaaIntermediateWidth' in state).toBe(true);
       expect('fxaaIntermediateHeight' in state).toBe(true);
-      expect('fxaaBindGroup' in state).toBe(true);
       // All defaults are null or 0.
       expect(state.fxaaPipeline).toBeNull();
       expect(state.fxaaBindGroupLayout).toBeNull();
@@ -1067,7 +1064,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(state.fxaaIntermediateView).toBeNull();
       expect(state.fxaaIntermediateWidth).toBe(0);
       expect(state.fxaaIntermediateHeight).toBe(0);
-      expect(state.fxaaBindGroup).toBeNull();
     });
 
     it('D-3: intermediate texture format = swap-chain storage format (helper Channel 2 truth, copyTextureToTexture zero-conversion)', () => {

@@ -2,6 +2,7 @@ import type { ResolveContext } from '@forgeax/engine-render-graph';
 import type { RhiRenderPassEncoder, TextureView } from '@forgeax/engine-rhi';
 import { buildBeginRenderPassDescriptor } from '../pipeline-spec';
 import type { _InternalRenderPipelineContext } from '../render-pipeline-context';
+import { getOrCreateFromChain } from './mesh-ssbo';
 
 /**
  * feat-20260531-skybox-env-background M2 / w8: skybox pass recording stub.
@@ -58,44 +59,45 @@ export function recordSkyboxPass(c: _InternalRenderPipelineContext): void {
   const cubemapView = store.getCubemapGpuView(skyboxSnapshot.equirectHandle as any);
   if (cubemapView === undefined) return;
 
-  // Rebuild skybox BindGroup every frame. Unlike tonemap (whose HDR
-  // view only changes on resize), the cubemap GpuView is recreated
-  // on each internal equirect-to-cubemap projection (which may happen mid-app
-  // asynchronously). Cache invalidates when hdrColorView changes
-  // (resize), but otherwise rebuild per-frame is cheap (3 entries,
-  // no UBO write -- View UBO is shared with main pass).
-  if (
-    pipelineState.perPassResources.skyboxBindGroup === null ||
-    pipelineState.perPassResources.hdrTextureWidth !== c.targetW ||
-    pipelineState.perPassResources.hdrTextureHeight !== c.targetH
-  ) {
-    const skyboxBgRes = runtime.device.createBindGroup({
-      label: 'skybox-bg',
-      layout: skyboxBgl,
-      entries: [
-        {
-          binding: 0,
-          resource: { kind: 'textureView', value: cubemapView },
-        },
-        {
-          binding: 1,
-          resource: { kind: 'sampler', value: skyboxSampler },
-        },
-        {
-          binding: 2,
-          resource: {
-            kind: 'buffer',
-            value: { buffer: pipelineState.viewUniformBuffer },
+  // Identity-cached skybox BindGroup keyed on the cubemap GpuView. The only
+  // varying binding is the cubemap view (sampler + View UBO are stable); it is
+  // recreated on each internal equirect-to-cubemap projection (which may happen
+  // mid-app asynchronously), so keying on its identity rebuilds exactly when the
+  // cubemap changes. This supersedes the prior `hdrTextureWidth`/`Height`
+  // size-guard, which tracked the wrong resource (the skybox BindGroup never
+  // binds hdrColor -- it writes the color attachment) and missed cubemap
+  // re-projections that reused the old cached bind group.
+  const skyboxBg = getOrCreateFromChain(
+    c.frameState.postProcessBgCache,
+    [cubemapView as unknown as object],
+    'skybox',
+    () => {
+      const skyboxBgRes = runtime.device.createBindGroup({
+        label: 'skybox-bg',
+        layout: skyboxBgl,
+        entries: [
+          {
+            binding: 0,
+            resource: { kind: 'textureView', value: cubemapView },
           },
-        },
-      ],
-    });
-    if (!skyboxBgRes.ok) {
-      runtime.errorRegistry.fire(skyboxBgRes.error);
-      return;
-    }
-    pipelineState.perPassResources.skyboxBindGroup = skyboxBgRes.value;
-  }
+          {
+            binding: 1,
+            resource: { kind: 'sampler', value: skyboxSampler },
+          },
+          {
+            binding: 2,
+            resource: {
+              kind: 'buffer',
+              value: { buffer: pipelineState.viewUniformBuffer },
+            },
+          },
+        ],
+      });
+      if (!skyboxBgRes.ok) throw skyboxBgRes.error;
+      return skyboxBgRes.value;
+    },
+    c.bindGroupCounts,
+  );
 
   // Skybox pass: clear hdrColor (first pass writing to it),
   // draw fullscreen triangle, write cubemap colour.
@@ -112,7 +114,7 @@ export function recordSkyboxPass(c: _InternalRenderPipelineContext): void {
   );
 
   skyboxPass.setPipeline(skyboxPipeline);
-  skyboxPass.setBindGroup(0, pipelineState.perPassResources.skyboxBindGroup);
+  skyboxPass.setBindGroup(0, skyboxBg);
   skyboxPass.draw(3);
   skyboxPass.end();
 }
@@ -139,7 +141,8 @@ export function recordBloomBrightPass(
   _c: _InternalRenderPipelineContext,
   resolve?: ResolveContext,
 ): void {
-  const { runtime, pipelineState, encoder, camera, tonemapActive } = _c;
+  const { runtime, pipelineState, encoder, camera, tonemapActive, frameState, bindGroupCounts } =
+    _c;
   const pp = pipelineState.perPassResources;
 
   // Double gate: bloom=off => zero-overhead; tonemap=none => no HDR domain
@@ -157,6 +160,9 @@ export function recordBloomBrightPass(
   const bloomBrightView = resolve?.resolve('bloomBright') as TextureView | undefined;
   const hdrColorView = resolve?.resolve('hdrColor') as TextureView | undefined;
   if (!bloomBrightView || !hdrColorView) return;
+  const bglBright = pp.bloomBrightBindGroupLayout;
+  const bloomSampler = pp.bloomSampler;
+  const paramsBuffer = pp.bloomBrightParamsBuffer;
 
   // 2. Write threshold UBO (16 B std140: threshold f32 + 12 B pad).
   const brightParams = new Float32Array(4);
@@ -164,23 +170,31 @@ export function recordBloomBrightPass(
   brightParams[1] = 0;
   brightParams[2] = 0;
   brightParams[3] = 0;
-  const paramsWrite = runtime.device.queue.writeBuffer(pp.bloomBrightParamsBuffer, 0, brightParams);
+  const paramsWrite = runtime.device.queue.writeBuffer(paramsBuffer, 0, brightParams);
   if (!paramsWrite.ok) throw paramsWrite.error;
 
-  // 3. Lazy BindGroup (1 tex + 1 sampler + 1 UBO).
-  if (pp.bloomBrightBindGroup === null) {
-    const bgRes = runtime.device.createBindGroup({
-      label: 'bloom-bright-bg',
-      layout: pp.bloomBrightBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { kind: 'textureView', value: hdrColorView } },
-        { binding: 1, resource: { kind: 'sampler', value: pp.bloomSampler } },
-        { binding: 2, resource: { kind: 'buffer', value: { buffer: pp.bloomBrightParamsBuffer } } },
-      ],
-    });
-    if (!bgRes.ok) throw bgRes.error;
-    pp.bloomBrightBindGroup = bgRes.value;
-  }
+  // 3. Identity-cached BindGroup (1 tex + 1 sampler + 1 UBO). Keyed on the
+  // graph-resolved hdrColor TextureView: resize retires hdrColor and the new
+  // view yields a WeakMap miss -> rebuild referencing the live texture.
+  const bindGroup = getOrCreateFromChain(
+    frameState.postProcessBgCache,
+    [hdrColorView as unknown as object],
+    'bloom-bright',
+    () => {
+      const bgRes = runtime.device.createBindGroup({
+        label: 'bloom-bright-bg',
+        layout: bglBright,
+        entries: [
+          { binding: 0, resource: { kind: 'textureView', value: hdrColorView } },
+          { binding: 1, resource: { kind: 'sampler', value: bloomSampler } },
+          { binding: 2, resource: { kind: 'buffer', value: { buffer: paramsBuffer } } },
+        ],
+      });
+      if (!bgRes.ok) throw bgRes.error;
+      return bgRes.value;
+    },
+    bindGroupCounts,
+  );
 
   // 4. Render pass into the 1/2-res intermediate.
   const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
@@ -191,7 +205,7 @@ export function recordBloomBrightPass(
     ) as never,
   );
   pass.setPipeline(pp.bloomBrightPipeline);
-  pass.setBindGroup(0, pp.bloomBrightBindGroup);
+  pass.setBindGroup(0, bindGroup);
   pass.draw(3, 1, 0, 0);
   pass.end();
 }
@@ -200,7 +214,16 @@ export function recordBloomBlurHPass(
   _c: _InternalRenderPipelineContext,
   resolve?: ResolveContext,
 ): void {
-  const { runtime, pipelineState, encoder, camera, targetW, tonemapActive } = _c;
+  const {
+    runtime,
+    pipelineState,
+    encoder,
+    camera,
+    targetW,
+    tonemapActive,
+    frameState,
+    bindGroupCounts,
+  } = _c;
   const pp = pipelineState.perPassResources;
 
   if (camera.bloom !== 'on' || !tonemapActive) return;
@@ -217,6 +240,9 @@ export function recordBloomBlurHPass(
   const bloomBlurHView = resolve?.resolve('bloomBlurH') as TextureView | undefined;
   const bloomBrightView = resolve?.resolve('bloomBright') as TextureView | undefined;
   if (!bloomBlurHView || !bloomBrightView) return;
+  const bglBlur = pp.bloomBlurBindGroupLayout;
+  const bloomSampler = pp.bloomSampler;
+  const paramsBuffer = pp.bloomBlurHParamsBuffer;
 
   // 2. Write H-axis blur params into the H-only UBO (bug-20260625: a separate
   // buffer per axis so V's write cannot clobber H's before the GPU runs).
@@ -227,23 +253,30 @@ export function recordBloomBlurHPass(
   blurParams[1] = 0; // texelSize.y = 0 for H pass
   blurParams[2] = camera.bloomBlurRadius;
   blurParams[3] = 0;
-  const paramsWrite = runtime.device.queue.writeBuffer(pp.bloomBlurHParamsBuffer, 0, blurParams);
+  const paramsWrite = runtime.device.queue.writeBuffer(paramsBuffer, 0, blurParams);
   if (!paramsWrite.ok) throw paramsWrite.error;
 
-  // 3. Lazy BindGroup (reads bloomBright from graph).
-  if (pp.bloomBlurHBindGroup === null) {
-    const bgRes = runtime.device.createBindGroup({
-      label: 'bloom-blur-h-bg',
-      layout: pp.bloomBlurBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { kind: 'textureView', value: bloomBrightView } },
-        { binding: 1, resource: { kind: 'sampler', value: pp.bloomSampler } },
-        { binding: 2, resource: { kind: 'buffer', value: { buffer: pp.bloomBlurHParamsBuffer } } },
-      ],
-    });
-    if (!bgRes.ok) throw bgRes.error;
-    pp.bloomBlurHBindGroup = bgRes.value;
-  }
+  // 3. Identity-cached BindGroup (reads bloomBright from graph). Keyed on the
+  // graph-resolved bloomBright view so resize rebuilds against the new texture.
+  const bindGroup = getOrCreateFromChain(
+    frameState.postProcessBgCache,
+    [bloomBrightView as unknown as object],
+    'bloom-blur-h',
+    () => {
+      const bgRes = runtime.device.createBindGroup({
+        label: 'bloom-blur-h-bg',
+        layout: bglBlur,
+        entries: [
+          { binding: 0, resource: { kind: 'textureView', value: bloomBrightView } },
+          { binding: 1, resource: { kind: 'sampler', value: bloomSampler } },
+          { binding: 2, resource: { kind: 'buffer', value: { buffer: paramsBuffer } } },
+        ],
+      });
+      if (!bgRes.ok) throw bgRes.error;
+      return bgRes.value;
+    },
+    bindGroupCounts,
+  );
 
   // 4. Render pass into bloomBlurH intermediate (graph-owned).
   const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
@@ -254,7 +287,7 @@ export function recordBloomBlurHPass(
     ) as never,
   );
   pass.setPipeline(pp.bloomBlurHPipeline);
-  pass.setBindGroup(0, pp.bloomBlurHBindGroup);
+  pass.setBindGroup(0, bindGroup);
   pass.draw(3, 1, 0, 0);
   pass.end();
 }
@@ -263,7 +296,16 @@ export function recordBloomBlurVPass(
   _c: _InternalRenderPipelineContext,
   resolve?: ResolveContext,
 ): void {
-  const { runtime, pipelineState, encoder, camera, targetH, tonemapActive } = _c;
+  const {
+    runtime,
+    pipelineState,
+    encoder,
+    camera,
+    targetH,
+    tonemapActive,
+    frameState,
+    bindGroupCounts,
+  } = _c;
   const pp = pipelineState.perPassResources;
 
   if (camera.bloom !== 'on' || !tonemapActive) return;
@@ -280,6 +322,9 @@ export function recordBloomBlurVPass(
   const bloomBlurVView = resolve?.resolve('bloomBlurV') as TextureView | undefined;
   const bloomBlurHView = resolve?.resolve('bloomBlurH') as TextureView | undefined;
   if (!bloomBlurVView || !bloomBlurHView) return;
+  const bglBlur = pp.bloomBlurBindGroupLayout;
+  const bloomSampler = pp.bloomSampler;
+  const paramsBuffer = pp.bloomBlurVParamsBuffer;
 
   // 2. Write V-axis blur params into the V-only UBO (bug-20260625: separate
   // buffer per axis -- see the H pass comment).
@@ -290,23 +335,30 @@ export function recordBloomBlurVPass(
   blurParams[1] = bh > 0 ? 1.0 / bh : 1.0; // texelSize.y
   blurParams[2] = camera.bloomBlurRadius;
   blurParams[3] = 0;
-  const paramsWrite = runtime.device.queue.writeBuffer(pp.bloomBlurVParamsBuffer, 0, blurParams);
+  const paramsWrite = runtime.device.queue.writeBuffer(paramsBuffer, 0, blurParams);
   if (!paramsWrite.ok) throw paramsWrite.error;
 
-  // 3. Lazy BindGroup (reads bloomBlurH from graph).
-  if (pp.bloomBlurVBindGroup === null) {
-    const bgRes = runtime.device.createBindGroup({
-      label: 'bloom-blur-v-bg',
-      layout: pp.bloomBlurBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { kind: 'textureView', value: bloomBlurHView } },
-        { binding: 1, resource: { kind: 'sampler', value: pp.bloomSampler } },
-        { binding: 2, resource: { kind: 'buffer', value: { buffer: pp.bloomBlurVParamsBuffer } } },
-      ],
-    });
-    if (!bgRes.ok) throw bgRes.error;
-    pp.bloomBlurVBindGroup = bgRes.value;
-  }
+  // 3. Identity-cached BindGroup (reads bloomBlurH from graph). Keyed on the
+  // graph-resolved bloomBlurH view so resize rebuilds against the new texture.
+  const bindGroup = getOrCreateFromChain(
+    frameState.postProcessBgCache,
+    [bloomBlurHView as unknown as object],
+    'bloom-blur-v',
+    () => {
+      const bgRes = runtime.device.createBindGroup({
+        label: 'bloom-blur-v-bg',
+        layout: bglBlur,
+        entries: [
+          { binding: 0, resource: { kind: 'textureView', value: bloomBlurHView } },
+          { binding: 1, resource: { kind: 'sampler', value: bloomSampler } },
+          { binding: 2, resource: { kind: 'buffer', value: { buffer: paramsBuffer } } },
+        ],
+      });
+      if (!bgRes.ok) throw bgRes.error;
+      return bgRes.value;
+    },
+    bindGroupCounts,
+  );
 
   // 4. Render pass into bloomBlurV intermediate (graph-owned).
   const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
@@ -317,7 +369,7 @@ export function recordBloomBlurVPass(
     ) as never,
   );
   pass.setPipeline(pp.bloomBlurVPipeline);
-  pass.setBindGroup(0, pp.bloomBlurVBindGroup);
+  pass.setBindGroup(0, bindGroup);
   pass.draw(3, 1, 0, 0);
   pass.end();
 }
@@ -326,7 +378,8 @@ export function recordBloomCompositePass(
   _c: _InternalRenderPipelineContext,
   resolve?: ResolveContext,
 ): void {
-  const { runtime, pipelineState, encoder, camera, tonemapActive } = _c;
+  const { runtime, pipelineState, encoder, camera, tonemapActive, frameState, bindGroupCounts } =
+    _c;
   const pp = pipelineState.perPassResources;
 
   if (camera.bloom !== 'on' || !tonemapActive) return;
@@ -345,6 +398,9 @@ export function recordBloomCompositePass(
   const bloomBlurVView = resolve?.resolve('bloomBlurV') as TextureView | undefined;
   const hdrCompositedView = resolve?.resolve('hdrComposited') as TextureView | undefined;
   if (!hdrColorView || !bloomBlurVView || !hdrCompositedView) return;
+  const bglComposite = pp.bloomCompositeBindGroupLayout;
+  const bloomSampler = pp.bloomSampler;
+  const paramsBuffer = pp.bloomCompositeParamsBuffer;
 
   // 1. Write composite params UBO (16 B std140: intensity + 12 B pad).
   const compositeParams = new Float32Array(4);
@@ -352,31 +408,35 @@ export function recordBloomCompositePass(
   compositeParams[1] = 0;
   compositeParams[2] = 0;
   compositeParams[3] = 0;
-  const paramsWrite = runtime.device.queue.writeBuffer(
-    pp.bloomCompositeParamsBuffer,
-    0,
-    compositeParams,
-  );
+  const paramsWrite = runtime.device.queue.writeBuffer(paramsBuffer, 0, compositeParams);
   if (!paramsWrite.ok) throw paramsWrite.error;
 
-  // 2. Lazy BindGroup (2 tex: hdrColor + bloomBlurV, 1 sampler, 1 UBO).
-  if (pp.bloomCompositeBindGroup === null) {
-    const bgRes = runtime.device.createBindGroup({
-      label: 'bloom-composite-bg',
-      layout: pp.bloomCompositeBindGroupLayout,
-      entries: [
-        { binding: 0, resource: { kind: 'textureView', value: hdrColorView } },
-        { binding: 1, resource: { kind: 'textureView', value: bloomBlurVView } },
-        { binding: 2, resource: { kind: 'sampler', value: pp.bloomSampler } },
-        {
-          binding: 3,
-          resource: { kind: 'buffer', value: { buffer: pp.bloomCompositeParamsBuffer } },
-        },
-      ],
-    });
-    if (!bgRes.ok) throw bgRes.error;
-    pp.bloomCompositeBindGroup = bgRes.value;
-  }
+  // 2. Identity-cached BindGroup (2 tex: hdrColor + bloomBlurV, 1 sampler,
+  // 1 UBO). Keys on both sampled views: resize retires both hdrColor and
+  // bloomBlurV, so a two-node chain rebuilds when either identity changes.
+  const bindGroup = getOrCreateFromChain(
+    frameState.postProcessBgCache,
+    [hdrColorView as unknown as object, bloomBlurVView as unknown as object],
+    'bloom-composite',
+    () => {
+      const bgRes = runtime.device.createBindGroup({
+        label: 'bloom-composite-bg',
+        layout: bglComposite,
+        entries: [
+          { binding: 0, resource: { kind: 'textureView', value: hdrColorView } },
+          { binding: 1, resource: { kind: 'textureView', value: bloomBlurVView } },
+          { binding: 2, resource: { kind: 'sampler', value: bloomSampler } },
+          {
+            binding: 3,
+            resource: { kind: 'buffer', value: { buffer: paramsBuffer } },
+          },
+        ],
+      });
+      if (!bgRes.ok) throw bgRes.error;
+      return bgRes.value;
+    },
+    bindGroupCounts,
+  );
 
   // 3. Render pass: write the separate hdrComposited target (bug-20260625).
   // The fragment shader outputs the COMPLETE composited colour
@@ -392,7 +452,7 @@ export function recordBloomCompositePass(
     ) as never,
   );
   pass.setPipeline(pp.bloomCompositePipeline);
-  pass.setBindGroup(0, pp.bloomCompositeBindGroup);
+  pass.setBindGroup(0, bindGroup);
   pass.draw(3, 1, 0, 0);
   pass.end();
 }
@@ -430,34 +490,45 @@ export function recordFxaaPass(c: _InternalRenderPipelineContext): void {
       { width: targetW, height: targetH, depthOrArrayLayers: 1 },
     );
 
-    // Compose the 2-entry FXAA BindGroup (input texture + sampler) lazily.
-    // The primitive resolves both through the pre-built BGL/sampler stored
-    // in perPassResources (built once in createRenderer's ready phase).
-    // The bindgroup is cached per-frame and invalidated on resize when
-    // fxaaIntermediateView changes identity (D-3: physical texture identity
-    // self-check from bindgroup-resize-invalidation).
-    if (pipelineState.perPassResources.fxaaBindGroup === null) {
-      const fxaaBgRes = runtime.device.createBindGroup({
-        label: 'fxaa-bg',
-        layout: pipelineState.perPassResources.fxaaBindGroupLayout,
-        entries: [
-          {
-            binding: 0,
-            resource: {
-              kind: 'textureView',
-              value: pipelineState.perPassResources.fxaaIntermediateView,
+    // Compose the 2-entry FXAA BindGroup (input texture + sampler). The
+    // primitive resolves both through the pre-built BGL/sampler stored in
+    // perPassResources (built once in createRenderer's ready phase). The bind
+    // group is identity-cached on the graph-owned fxaaIntermediate view: on
+    // resize the graph retires the old intermediate texture and the writeback
+    // installs a new view, so the WeakMap key changes -> rebuild against the
+    // live texture (D-3: physical texture identity invalidation). The prior
+    // `=== null` single-slot cache never rebuilt and submitted a destroyed
+    // texture after resize.
+    const fxaaBglLayout = pipelineState.perPassResources.fxaaBindGroupLayout;
+    const fxaaSampler = pipelineState.perPassResources.fxaaSampler;
+    const fxaaIntermediateView = pipelineState.perPassResources.fxaaIntermediateView;
+    const fxaaBg = getOrCreateFromChain(
+      c.frameState.postProcessBgCache,
+      [fxaaIntermediateView as object],
+      'fxaa',
+      () => {
+        const fxaaBgRes = runtime.device.createBindGroup({
+          label: 'fxaa-bg',
+          layout: fxaaBglLayout,
+          entries: [
+            {
+              binding: 0,
+              resource: {
+                kind: 'textureView',
+                value: fxaaIntermediateView,
+              },
             },
-          },
-          {
-            binding: 1,
-            resource: { kind: 'sampler', value: pipelineState.perPassResources.fxaaSampler },
-          },
-        ],
-      });
-      if (!fxaaBgRes.ok) throw fxaaBgRes.error;
-      pipelineState.perPassResources.fxaaBindGroup = fxaaBgRes.value;
-    }
-    const fxaaBg = pipelineState.perPassResources.fxaaBindGroup;
+            {
+              binding: 1,
+              resource: { kind: 'sampler', value: fxaaSampler },
+            },
+          ],
+        });
+        if (!fxaaBgRes.ok) throw fxaaBgRes.error;
+        return fxaaBgRes.value;
+      },
+      c.bindGroupCounts,
+    );
 
     // R-COLORSPACE: write through the swap-chain's non-srgb storage view
     // (bgra8unorm). FXAA's source is ALREADY sRGB-encoded (verbatim copy

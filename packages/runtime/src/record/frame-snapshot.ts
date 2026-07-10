@@ -261,6 +261,22 @@ export interface RenderFrameState {
    */
   readonly singletonMaterialCache: Map<string, BindGroup>;
   /**
+   * Post-process bind group cache: nested WeakMap chain root shared by the
+   * built-in bloom (bright / blur-H / blur-V / composite), FXAA, and HDRP SSAO
+   * (calc / blur) fullscreen passes. Each of these passes samples graph-owned
+   * transient render targets (hdrColor / bloom* / fxaaIntermediate / ssaoRaw /
+   * gbuf0 / hdrDepth); on canvas resize the graph retires the old physical
+   * textures and allocates new ones, so the bind group must be rebuilt to
+   * reference the new TextureView identity. Keying the cache on the physical
+   * TextureView (or `::tex` texture handle for passes that recreate their bound
+   * view every frame) makes invalidation automatic: a resized target yields a
+   * new key object -> WeakMap miss -> factory rebuild, and dead views are GC'd
+   * (same identity-invalidation mechanism as view/mesh caches, D-3). Replaces
+   * the pre-fix `pp.*BindGroup === null` single-slot caches that never
+   * invalidated on resize and submitted destroyed textures.
+   */
+  readonly postProcessBgCache: WeakMap<object, unknown>;
+  /**
    * feat-20260601-customizable-render-pipeline-seam M1 / w7: the raw u32 handle of the
    * currently installed RenderPipelineAsset (0 = none installed). `installPipeline` sets
    * it; `draw` compares it against the handle the memoized `perFrameGraph` was last built

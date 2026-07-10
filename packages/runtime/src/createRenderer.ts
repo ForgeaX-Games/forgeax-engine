@@ -7112,7 +7112,6 @@ async function buildReadyWebGPU(
       fxaaIntermediateView: null,
       fxaaIntermediateWidth: 0,
       fxaaIntermediateHeight: 0,
-      fxaaBindGroup: null,
       // feat-20260604-learn-render-4.10-anti-aliasing-msaa M2 / w7: MSAA
       // attachment slots. All null/0 until the first antialias='msaa' frame.
       msaaColorTexture: null,
@@ -7129,7 +7128,6 @@ async function buildReadyWebGPU(
       skyboxPipelineMsaa: skyboxPipelineMsaaHandle,
       skyboxBindGroupLayout: skyboxBglHandle,
       skyboxSampler: skyboxSamplerHandle,
-      skyboxBindGroup: null,
       shadowTexture: null,
       shadowMapSize: 0,
       shadowCascadeCount: 0,
@@ -7167,10 +7165,6 @@ async function buildReadyWebGPU(
       bloomBlurVView: null,
       bloomBlurVWidth: 0,
       bloomBlurVHeight: 0,
-      bloomBrightBindGroup: null,
-      bloomBlurHBindGroup: null,
-      bloomBlurVBindGroup: null,
-      bloomCompositeBindGroup: null,
       // feat-20260612-hdrp-ssao M6 / w26 + M8 / w38: SSAO pipeline slots.
       ssaoCalcPipeline: ssaoCalcPipelineHandle,
       ssaoBlurPipeline: ssaoBlurPipelineHandle,
@@ -7181,8 +7175,6 @@ async function buildReadyWebGPU(
       ssaoFilteringSampler: null,
       ssaoDepthSampler: null,
       ssaoFallbackRawView: null,
-      ssaoCalcBindGroup: null,
-      ssaoBlurBindGroup: null,
     },
   };
 }

@@ -2430,13 +2430,16 @@ if (!meshRes.ok) console.error(meshRes.error.code);
 else { const handle = renderer.assets.register(meshRes.value).unwrap(); /* ... */ }
 ```
 
-## Frustum Culling (feat-20260528-frustum-culling)
+## Frustum Culling (feat-20260528-frustum-culling · bug-20260709 收口 HANDLE_QUAD)
 
-Every frame during the extract stage, the render system clips entities whose AABB falls entirely outside the view frustum. Culling is unconditional — there is no per-entity opt-out. Entities without a computed AABB (no `MeshFilter`, or mesh asset not yet registered) or with an inverted-infinity empty box are never culled (conservative pass-through), so built-ins and always-visible geometry stay visible by carrying no AABB.
+> [!IMPORTANT]
+> `HANDLE_QUAD` 与用户 `assets.register(meshAsset)` 得到的 handle 走**同一条** cull 通路。5 个 non-QUAD builtin 保留 `withoutAabb` 短路。
+
+Every frame during the extract stage, the render system clips entities whose AABB falls entirely outside the view frustum. Culling is unconditional — no per-entity opt-out flag (PR #652 removed `MeshRenderer.frustumCulled`). Entities without a computed AABB are never culled (conservative pass-through).
 
 The math layer provides the frustum namespace (`@forgeax/engine-math`): `frustum.fromViewProjection` extracts 6 planes from a camera's view-projection matrix; `frustum.intersectsBox` tests an AABB against the frustum.
 
-Runtime Inspector method `frustum.stats` returns `{ culled: number, total: number }` — the per-frame culling counters collected during the extract stage. AI users call this via the inspector wire to verify culling is active (P3 explicit failure: zero culled in a cluttered scene is the signal that something is wrong).
+Runtime Inspector method `frustum.stats` returns `{ culled: number, total: number }` — the per-frame culling counters collected during the extract stage. AI users call this via the inspector wire to verify culling is active (P3 explicit failure signals: `total === 0` in a cluttered scene = cull 通路根本没进入循环，即 bug-20260709 根因；`total > 0 && culled === 0` = cull 激活但当前视口全在包围盒内).
 
 ```ts
 import { frustum } from '@forgeax/engine-math';
@@ -2445,6 +2448,21 @@ if (!frustum.intersectsBox(f, entityAabb)) {
   // Entity entirely outside frustum — skip drawing
 }
 ```
+
+### 迁移：让 `HANDLE_QUAD` 恢复"永远可见"
+
+pre-bug-20260709 `HANDLE_QUAD` payload 走 `withoutAabb` → 第 2 门 pass-through，屏外仍进 dispatch。修复后 HANDLE_QUAD 加入第 3 门平面测试，屏外 entity 会被剔。旧代码若依赖"屏外仍可见"（少见，多为 test fixture / debug overlay），单点 opt-out：
+
+```ts
+world.spawn(
+  { component: Transform, data: { posX: 0, posY: 0, posZ: 0 } },
+  { component: MeshFilter, data: { assetHandle: HANDLE_QUAD } },
+  { component: MeshRenderer, data: { materials: [matHandle], frustumCulled: 0 } }, // opt out cull for this entity
+).unwrap();
+```
+
+> [!NOTE]
+> **Stage 2 承接指针**：5 个 non-QUAD builtin（`HANDLE_CUBE` / `HANDLE_TRIANGLE` / `HANDLE_SPHERE` / `HANDLE_CYLINDER` / `HANDLE_NINESLICE_QUAD`）保留 `withoutAabb` 短路，避免同期触发 shadow-caster / picking / UI 隐藏耦合（feat-20260703 R3 dawn regression 是入口证据）。恢复它们的 aabb 参与 cull 由独立 loop 承接（bug-20260709 OOS-1）。
 
 ## 演进契约
 

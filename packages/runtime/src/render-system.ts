@@ -19,7 +19,6 @@
 import { type AssetRegistry, HANDLE_CUBE, HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import type {
-  BindGroup,
   BindGroupLayout,
   Buffer,
   PipelineLayout,
@@ -1101,8 +1100,6 @@ export interface PerPassResources {
   fxaaIntermediateView: any | null;
   fxaaIntermediateWidth: number;
   fxaaIntermediateHeight: number;
-  /** Cached FXAA BindGroup, invalidated on resize. */
-  fxaaBindGroup: BindGroup | null;
 
   // ── feat-20260604-learn-render-4.10-anti-aliasing-msaa M2 / w7 ──────────
   //
@@ -1167,8 +1164,6 @@ export interface PerPassResources {
   readonly skyboxPipelineMsaa: RenderPipeline | null;
   readonly skyboxBindGroupLayout: BindGroupLayout | null;
   readonly skyboxSampler: Sampler | null;
-  /** Cached skybox BindGroup, rebuilt each frame when cubemap GpuView is fresh. */
-  skyboxBindGroup: BindGroup | null;
 
   // ── feat-20260520-directional-light-shadow-mapping M1c / w8 ────────────
   //
@@ -1213,9 +1208,10 @@ export interface PerPassResources {
   // Bloom post-processing chain: 4 passes (bright / blur-H / blur-V / composite)
   // operating in HDR rgba16float domain. Pipeline handles assembled at
   // buildReadyWebGPU (optional — legacy manifests without bloom.wgsl leave
-  // these null). Intermediate textures allocated lazily at 1/2-res in the
-  // execute closures via ensureLazyTexture; size-drift rebuild invalidates
-  // BindGroup caches.
+  // these null). Intermediate textures are graph-owned transient targets
+  // resolved per-frame; the bloom bind groups are identity-cached on those
+  // views (frameState.postProcessBgCache) and rebuild automatically when a
+  // resize retires the old textures.
   //
   // D-1: blur H/V share the same module, per-axis texelSize baked at UBO write.
   // D-4: 3 distinct BGL layouts (bright/blur: 1-tex+UBO, composite: 2-tex+UBO).
@@ -1259,15 +1255,6 @@ export interface PerPassResources {
   bloomBlurVWidth: number;
   bloomBlurVHeight: number;
 
-  /** Cached bloom-bright BindGroup, invalidated on resize. */
-  bloomBrightBindGroup: BindGroup | null;
-  /** Cached bloom-blur-H BindGroup, invalidated on resize. */
-  bloomBlurHBindGroup: BindGroup | null;
-  /** Cached bloom-blur-V BindGroup, invalidated on resize. */
-  bloomBlurVBindGroup: BindGroup | null;
-  /** Cached bloom-composite BindGroup, invalidated on resize. */
-  bloomCompositeBindGroup: BindGroup | null;
-
   // ── feat-20260612-hdrp-ssao M6 / w26 + M8 / w37 + w38 ───────────────────
   //
   // SSAO post-processing chain: 2 passes (calc + blur) operating on
@@ -1294,10 +1281,6 @@ export interface PerPassResources {
   /** 1x1 fallback view bound at ssaoRaw (binding 7) in the calc pass. */
   // biome-ignore lint/suspicious/noExplicitAny: opaque RHI handle
   ssaoFallbackRawView: any | null;
-  /** Cached calc-pass bind group (lazy on first frame; rebuilt if views drift). */
-  ssaoCalcBindGroup: BindGroup | null;
-  /** Cached blur-pass bind group (lazy on first frame; rebuilt if ssaoRaw view drifts). */
-  ssaoBlurBindGroup: BindGroup | null;
 }
 
 export interface MeshGpuHandles {
@@ -1433,6 +1416,9 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     materialBgShared: new Map(),
     // singleton material cache (flat Map<variant, BindGroup>; D-6).
     singletonMaterialCache: new Map(),
+    // post-process bind group cache (bloom / fxaa / ssao): identity-keyed
+    // WeakMap chain so resize-retired transient targets rebuild automatically.
+    postProcessBgCache: new WeakMap(),
     // feat-20260601-customizable-render-pipeline-seam M1 / w7: installed-pipeline state.
     // 0 = nothing installed yet (createRenderer dogfood installs the default before any
     // draw). activePipeline defaults to the built-in forward pipeline.

@@ -307,15 +307,41 @@ interface RecorderInternal {
   capturedDevice: RhiDevice | undefined;
 }
 
+/**
+ * @internal
+ * True while the recorder is in a state that appends events to the tape:
+ * Armed / Recording / Snapshotting. This is the SSOT recording predicate —
+ * `pushEvent` gates on it, and the proxy fast-path (writeBuffer / writeTexture /
+ * createCommandEncoder) short-circuits when it is false so an idle recorder
+ * (FORGEAX_ENGINE_RHI_DEBUG=1 but no capture in flight) pays no per-call
+ * event-object allocation, no storeBlob hash+copy, and no proxy-encoder wrapping.
+ *
+ * Deliberately ignores `_skipRecord`: that flag suppresses recorder-internal
+ * RHI calls (snapshot readback staging) DURING an active capture, which is a
+ * recording state. `shouldRecord` folds it in for the pushEvent gate.
+ */
+function isRecordingActive(s: RecorderInternal): boolean {
+  return (
+    s.state === RecorderState.Armed ||
+    s.state === RecorderState.Recording ||
+    s.state === RecorderState.Snapshotting
+  );
+}
+
+/**
+ * @internal
+ * The exact pushEvent gate as a predicate: record iff not suppressed AND in an
+ * active recording state. Proxy methods that do pre-pushEvent work (storeBlob,
+ * event-object construction) check this first to skip that work when it would
+ * be discarded — same-condition-as-pushEvent guarantees no behavioural drift
+ * (a call that would record still does all its work).
+ */
+function shouldRecord(s: RecorderInternal): boolean {
+  return !s._skipRecord && isRecordingActive(s);
+}
+
 function pushEvent(s: RecorderInternal, event: RhiCallEvent): void {
-  if (s._skipRecord) return;
-  if (
-    s.state !== RecorderState.Armed &&
-    s.state !== RecorderState.Recording &&
-    s.state !== RecorderState.Snapshotting
-  ) {
-    return;
-  }
+  if (!shouldRecord(s)) return;
   s.events.push(event);
 }
 
@@ -1401,6 +1427,13 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         dataOffset?: number,
         size?: number,
       ) {
+        // Idle fast-path: when not recording, skip getHandleId + slice + the
+        // storeBlob hash-and-double-copy entirely (they would only feed a
+        // pushEvent that the state gate drops, and blobPool is reset on arm()).
+        // Same-condition-as-pushEvent, so a recording call still records.
+        if (!shouldRecord(s)) {
+          return realQueue.writeBuffer(buffer, bufferOffset, data, dataOffset, size);
+        }
         const hId = getHandleId(s, buffer as unknown as object, 'buffer');
         const raw = ArrayBuffer.isView(data)
           ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
@@ -1420,6 +1453,11 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       },
 
       writeTexture(destination, data, dataLayout, copySize) {
+        // Idle fast-path (see writeBuffer): skip storeBlob hash+copy when the
+        // recorded event would be dropped anyway.
+        if (!shouldRecord(s)) {
+          return realQueue.writeTexture(destination, data, dataLayout, copySize);
+        }
         const hId = getHandleId(s, destination.texture as unknown as object, 'texture');
         const raw = ArrayBuffer.isView(data)
           ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
@@ -1446,6 +1484,9 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       },
 
       copyExternalImageToTexture(source, destination, copySize) {
+        if (!shouldRecord(s)) {
+          return realQueue.copyExternalImageToTexture(source, destination, copySize);
+        }
         const hId = getHandleId(s, destination.texture as unknown as object, 'texture');
         pushEvent(s, {
           kind: 'copyExternalImageToTexture',
@@ -1464,6 +1505,9 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       },
 
       submit(commandBuffers: readonly CommandBuffer[]) {
+        if (!shouldRecord(s)) {
+          return realQueue.submit(commandBuffers);
+        }
         const cmdHandleIds = commandBuffers.map((cb) =>
           getHandleId(s, cb as unknown as object, 'commandBuffer'),
         );
@@ -2272,19 +2316,65 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
 
       destroyBuffer(buf: Buffer) {
         const hId = s.handleMap.get(buf as unknown as object);
-        if (hId !== undefined) s.descriptorTable.delete(hId);
+        if (hId !== undefined) {
+          s.descriptorTable.delete(hId);
+          // Bound bootstrapCreates growth: an idle-destroyed resource can never
+          // be referenced by a future frame's events, so drop its create event.
+          // Only when NOT recording — mid-capture, an earlier frame event may
+          // still reference this handle, and the tape prefix needs its create
+          // event to stay self-contained (tape-handle-graph-broken otherwise).
+          //
+          // Known bounded residual: a resource destroyed DURING a capture keeps
+          // its bootstrapCreates entry forever — the entry is only ever revisited
+          // by another destroy* of the SAME handle, which can't recur after the
+          // resource is gone. This leaks one create event per resource that is
+          // both created and destroyed inside a recording window (a narrow set;
+          // most resources are long-lived). Fixing it needs a defer-delete list
+          // swept at the next arm() — deliberately not added: the extra state
+          // costs more than the leak it plugs (see PR discussion).
+          //
+          // Separate, wider residual: bootstrapCreates entries for
+          // textureView / bindGroup / pipeline / sampler are NEVER pruned,
+          // because RhiDevice exposes destroy only for buffer / texture -- a
+          // faithful mirror of WebGPU, whose spec puts .destroy() solely on
+          // GPUBuffer / GPUTexture (the objects holding large, eagerly-freeable
+          // backing memory); views / bind groups / pipelines / samplers are
+          // lightweight reference objects left to GC. So there is no destroy
+          // signal to hook for them. An app that rebuilds these per frame grows
+          // bootstrapCreates under a long idle run. The GC-aligned fix is a
+          // WeakRef + FinalizationRegistry over the create-event objects (same
+          // spirit as handleMap's WeakMap, but keyed by handleId so it needs the
+          // WeakRef wrapper) -- a finalization-semantics change, out of scope here.
+          if (!isRecordingActive(s)) s.bootstrapCreates.delete(hId);
+        }
         return realDevice.destroyBuffer(buf);
       },
 
       destroyTexture(tex: Texture) {
         const hId = s.handleMap.get(tex as unknown as object);
-        if (hId !== undefined) s.descriptorTable.delete(hId);
+        if (hId !== undefined) {
+          s.descriptorTable.delete(hId);
+          // Same gate + same bounded residual as destroyBuffer above.
+          if (!isRecordingActive(s)) s.bootstrapCreates.delete(hId);
+        }
         return realDevice.destroyTexture(tex);
       },
 
       createCommandEncoder(desc?: CommandEncoderDescriptor | undefined) {
         const res = realDevice.createCommandEncoder(desc);
         if (!res.ok) return res;
+        // Idle fast-path: return the real (un-proxied) encoder when not
+        // recording. One gate here elides the proxy wrapper AND every
+        // beginRenderPass/draw/setBindGroup/copy* call that would otherwise
+        // route through proxyCmdEncoder + proxyRenderPass only to be dropped
+        // by the pushEvent gate. Safe because a frame body runs synchronously
+        // in one rAF callback: createCommandEncoder -> passes -> queue.submit
+        // all observe the same recorder state (arm() only fires between frames),
+        // so an idle-created encoder's whole frame is consistently un-recorded,
+        // matching the now-gated queue.submit which skips its handle lookup.
+        if (!shouldRecord(s)) {
+          return res;
+        }
         const cmdId = allocHandleId('commandEncoder');
         pushEvent(s, {
           kind: 'createCommandEncoder',

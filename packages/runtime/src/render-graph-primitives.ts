@@ -98,6 +98,7 @@ import { PostProcessError } from './post-process-errors';
 import {
   computeProjectionMatrix,
   computeViewMatrix,
+  getOrCreateFromChain,
   recordBloomBlurHPass,
   recordBloomBlurVPass,
   recordBloomBrightPass,
@@ -756,6 +757,14 @@ function recordSsaoCalcPass(
   const hdrDepthView = resolveHdrDepthDepthOnlyView(_c, hdrDepthKey);
   if (hdrDepthView === null) return;
 
+  // Cache key: the graph's pooled hdrDepth view (stable object per size, new
+  // object on resize). The depth-only view above is created fresh every frame
+  // so it cannot key the cache; the pooled all-aspects view co-varies with it
+  // (both are views of the same transient hdrDepth texture) and changes exactly
+  // on resize. Used only as a WeakMap key, never bound.
+  const hdrDepthPooledView = resolveCtx.resolve(hdrDepthKey) as TextureView | undefined;
+  if (hdrDepthPooledView === undefined) return;
+
   const ssaoBufs = getOrCreateSsaoBuffers(runtime);
   if (ssaoBufs === null) return;
 
@@ -786,32 +795,43 @@ function recordSsaoCalcPass(
     return;
   }
 
-  // Lazy bind group: 9 entries mirror the BGL declared in createRenderer.
-  if (pp.ssaoCalcBindGroup === null) {
-    const bgRes = runtime.device.createBindGroup({
-      label: 'ssao-calc-bg',
-      layout: pp.ssaoBgl,
-      entries: [
-        { binding: 0, resource: { kind: 'buffer', value: { buffer: ssaoBufs.uniformBuffer } } },
-        { binding: 1, resource: { kind: 'buffer', value: { buffer: ssaoBufs.kernelBuffer } } },
-        { binding: 2, resource: { kind: 'textureView', value: noiseViewRes.value } },
-        {
-          binding: 3,
-          resource: { kind: 'sampler', value: companions.filteringSampler },
-        },
-        { binding: 4, resource: { kind: 'textureView', value: gbuf0View } },
-        { binding: 5, resource: { kind: 'textureView', value: hdrDepthView } },
-        { binding: 6, resource: { kind: 'sampler', value: companions.depthSampler } },
-        { binding: 7, resource: { kind: 'textureView', value: companions.fallbackRawView } },
-        { binding: 8, resource: { kind: 'sampler', value: companions.filteringSampler } },
-      ],
-    });
-    if (!bgRes.ok) {
-      runtime.errorRegistry.fire(bgRes.error);
-      return;
-    }
-    pp.ssaoCalcBindGroup = bgRes.value;
-  }
+  // Identity-cached bind group: 9 entries mirror the BGL declared in
+  // createRenderer. Keyed on the graph-pooled gbuf0 + hdrDepth views (both
+  // retire + reallocate on resize), so the WeakMap misses after a resize and
+  // rebuilds against the live textures. The noise / depth-only views bound
+  // below are created fresh each frame but back stable textures; keying on the
+  // resize-varying graph views is what makes invalidation correct. Replaces
+  // the prior `=== null` slot cache that submitted a destroyed gbuf0/hdrDepth
+  // after resize.
+  const ssaoBgl = pp.ssaoBgl;
+  const bindGroup = getOrCreateFromChain(
+    _c.frameState.postProcessBgCache,
+    [gbuf0View as unknown as object, hdrDepthPooledView as unknown as object],
+    'ssao-calc',
+    () => {
+      const bgRes = runtime.device.createBindGroup({
+        label: 'ssao-calc-bg',
+        layout: ssaoBgl,
+        entries: [
+          { binding: 0, resource: { kind: 'buffer', value: { buffer: ssaoBufs.uniformBuffer } } },
+          { binding: 1, resource: { kind: 'buffer', value: { buffer: ssaoBufs.kernelBuffer } } },
+          { binding: 2, resource: { kind: 'textureView', value: noiseViewRes.value } },
+          {
+            binding: 3,
+            resource: { kind: 'sampler', value: companions.filteringSampler },
+          },
+          { binding: 4, resource: { kind: 'textureView', value: gbuf0View } },
+          { binding: 5, resource: { kind: 'textureView', value: hdrDepthView } },
+          { binding: 6, resource: { kind: 'sampler', value: companions.depthSampler } },
+          { binding: 7, resource: { kind: 'textureView', value: companions.fallbackRawView } },
+          { binding: 8, resource: { kind: 'sampler', value: companions.filteringSampler } },
+        ],
+      });
+      if (!bgRes.ok) throw bgRes.error;
+      return bgRes.value;
+    },
+    _c.bindGroupCounts,
+  );
 
   const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
     buildBeginRenderPassDescriptor(
@@ -821,7 +841,7 @@ function recordSsaoCalcPass(
     ) as never,
   );
   pass.setPipeline(pp.ssaoCalcPipeline);
-  pass.setBindGroup(0, pp.ssaoCalcBindGroup);
+  pass.setBindGroup(0, bindGroup);
   pass.draw(3, 1, 0, 0);
   pass.end();
 }
@@ -857,6 +877,12 @@ function recordSsaoBlurPass(
   // hdrDepth depth-only view (see recordSsaoCalcPass).
   const hdrDepthView =
     hdrDepthKey !== undefined ? resolveHdrDepthDepthOnlyView(_c, hdrDepthKey) : null;
+  // Pooled hdrDepth view for the cache key (the depth-only view above is
+  // recreated every frame; see recordSsaoCalcPass).
+  const hdrDepthPooledView =
+    hdrDepthKey !== undefined
+      ? (resolveCtx.resolve(hdrDepthKey) as TextureView | undefined)
+      : undefined;
 
   const ssaoBufs = getOrCreateSsaoBuffers(runtime);
   if (ssaoBufs === null) return;
@@ -885,32 +911,43 @@ function recordSsaoBlurPass(
   // even when the active fragment entry does not statically reference it.
   // gbuf0 + hdr_depth views are resolved from the graph; they must exist
   // because addSsaoPasses declares them as `reads` on the blur node.
-  if (gbuf0View === undefined || hdrDepthView === null) return;
-  if (pp.ssaoBlurBindGroup === null) {
-    const bgRes = runtime.device.createBindGroup({
-      label: 'ssao-blur-bg',
-      layout: pp.ssaoBgl,
-      entries: [
-        { binding: 0, resource: { kind: 'buffer', value: { buffer: ssaoBufs.uniformBuffer } } },
-        { binding: 1, resource: { kind: 'buffer', value: { buffer: ssaoBufs.kernelBuffer } } },
-        { binding: 2, resource: { kind: 'textureView', value: noiseViewRes.value } },
-        {
-          binding: 3,
-          resource: { kind: 'sampler', value: companions.filteringSampler },
-        },
-        { binding: 4, resource: { kind: 'textureView', value: gbuf0View } },
-        { binding: 5, resource: { kind: 'textureView', value: hdrDepthView } },
-        { binding: 6, resource: { kind: 'sampler', value: companions.depthSampler } },
-        { binding: 7, resource: { kind: 'textureView', value: ssaoRawView } },
-        { binding: 8, resource: { kind: 'sampler', value: companions.filteringSampler } },
-      ],
-    });
-    if (!bgRes.ok) {
-      runtime.errorRegistry.fire(bgRes.error);
-      return;
-    }
-    pp.ssaoBlurBindGroup = bgRes.value;
-  }
+  if (gbuf0View === undefined || hdrDepthView === null || hdrDepthPooledView === undefined) return;
+  // Identity-cached bind group keyed on the graph-pooled ssaoRaw + gbuf0 +
+  // hdrDepth views (all retire + reallocate on resize). Replaces the prior
+  // `=== null` slot cache that submitted destroyed transients after resize.
+  const ssaoBgl = pp.ssaoBgl;
+  const bindGroup = getOrCreateFromChain(
+    _c.frameState.postProcessBgCache,
+    [
+      ssaoRawView as unknown as object,
+      gbuf0View as unknown as object,
+      hdrDepthPooledView as unknown as object,
+    ],
+    'ssao-blur',
+    () => {
+      const bgRes = runtime.device.createBindGroup({
+        label: 'ssao-blur-bg',
+        layout: ssaoBgl,
+        entries: [
+          { binding: 0, resource: { kind: 'buffer', value: { buffer: ssaoBufs.uniformBuffer } } },
+          { binding: 1, resource: { kind: 'buffer', value: { buffer: ssaoBufs.kernelBuffer } } },
+          { binding: 2, resource: { kind: 'textureView', value: noiseViewRes.value } },
+          {
+            binding: 3,
+            resource: { kind: 'sampler', value: companions.filteringSampler },
+          },
+          { binding: 4, resource: { kind: 'textureView', value: gbuf0View } },
+          { binding: 5, resource: { kind: 'textureView', value: hdrDepthView } },
+          { binding: 6, resource: { kind: 'sampler', value: companions.depthSampler } },
+          { binding: 7, resource: { kind: 'textureView', value: ssaoRawView } },
+          { binding: 8, resource: { kind: 'sampler', value: companions.filteringSampler } },
+        ],
+      });
+      if (!bgRes.ok) throw bgRes.error;
+      return bgRes.value;
+    },
+    _c.bindGroupCounts,
+  );
 
   const pass: RhiRenderPassEncoder = encoder.beginRenderPass(
     buildBeginRenderPassDescriptor(
@@ -920,7 +957,7 @@ function recordSsaoBlurPass(
     ) as never,
   );
   pass.setPipeline(pp.ssaoBlurPipeline);
-  pass.setBindGroup(0, pp.ssaoBlurBindGroup);
+  pass.setBindGroup(0, bindGroup);
   pass.draw(3, 1, 0, 0);
   pass.end();
 }

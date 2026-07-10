@@ -46,13 +46,19 @@ export { BUILTIN_BASE };
 export const BUILTIN_FLOATS_PER_VERTEX = 12;
 
 // ─── Builtin geometry data (12F: position + normal + uv + tangent) ──────────
-// Builtin meshes deliberately carry NO local-space AABB: pre-feat-20260614 the
-// builtin payloads were stored straight into the registry map (bypassing the
-// `withMeshAabb` pass that `register`/`catalog` ran for user assets), so the
-// cull + pick path treats them as always-visible. The procedural factories now
-// attach an `aabb` to their output (so user meshes minted via `allocSharedRef`
-// stay cullable/pickable); `withoutAabb` strips it back off for the builtins to
-// preserve that always-visible contract every demo/test was tuned to.
+// bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu (Stage 1,
+// carries PR #598 feat-20260703-builtin-mesh-aabb-opt-out): only
+// `BUILTIN_QUAD` aligns with user-imported `MeshAsset` (carries
+// `meshFromInterleaved` + `aabbFromPositions()` natural aabb) and funnels
+// through the same `render-system-extract.ts` frustum-cull three-gate branch.
+// The other 5 builtins (`BUILTIN_CUBE` / `BUILTIN_TRIANGLE` / `BUILTIN_SPHERE`
+// / `BUILTIN_CYLINDER` / `BUILTIN_NINESLICE_QUAD`) keep the pre-feat baseline:
+// the aabb-strip helper below erases their aabb so dispatch short-circuits
+// through the `aabb === undefined` gate (always visible). Stage 2 (explicit
+// opt-out migration for the 5 non-QUAD builtins) is deferred to a sibling
+// loop (entry evidence: shadow-opt-out AC-17 dawn regression). The Stage 1
+// HANDLE_QUAD migration path is `MeshRenderer { frustumCulled: 0 }` (see
+// runtime README §Frustum Culling).
 function withoutAabb(mesh: TypesMeshAsset): TypesMeshAsset {
   if (mesh.aabb === undefined) return mesh;
   const { aabb: _aabb, ...rest } = mesh;
@@ -95,13 +101,17 @@ export const BUILTIN_TRIANGLE: TypesMeshAsset = Object.freeze(
 // discriminator, AI users reason about UV / pivot semantics by reading
 // `packages/runtime/src/geometry/plane.ts` (charter P4 consistent
 // abstraction; feat-20260520 M-1 / w06).
+// bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu Stage 1:
+// this payload keeps its aabb (no aabb-strip helper wrap) so HANDLE_QUAD
+// funnels through the same frustum-cull branch as user-imported `MeshAsset`;
+// migration path = `MeshRenderer { frustumCulled: 0 }`.
 const builtinQuadRes = createPlaneGeometry(1, 1);
 if (!builtinQuadRes.ok) {
   throw new Error(
     `[builtin-asset-registry] createPlaneGeometry(1,1) failed: ${builtinQuadRes.error.code}`,
   );
 }
-export const BUILTIN_QUAD: TypesMeshAsset = Object.freeze(withoutAabb(builtinQuadRes.value));
+export const BUILTIN_QUAD: TypesMeshAsset = Object.freeze(builtinQuadRes.value);
 
 // BUILTIN_SPHERE: UV-sphere synthesised from createSphereGeometry(1, 16, 12).
 // Vertices are at exact radius-1 positions (sphere.ts:40-45) so the

@@ -465,6 +465,27 @@ export interface ExtractedLights {
    * AC-09; record stage skips atlas allocation + shadow pass dispatch).
    */
   readonly pointShadow: readonly PointShadowSnapshot[];
+  /**
+   * bug-20260710-editor-cross-world-shadow: the RAW directional-shadow config
+   * (cascadeCount / splitLambda / cascadeBlend / mapSize / shadowDistance) of
+   * the first-hit castShadow DirectionalLight, carried unconditionally of
+   * whether this world had a camera. The {@link extractFrames} merge layer
+   * re-runs {@link computeDirectionalCsm} with this config + the surfaced
+   * camera so directional shadows work when the light and camera live in
+   * DIFFERENT worlds (editor editorWorld/sceneWorld super-composite). Undefined
+   * when castShadow=false or no directional light. The `lightViewProj` /
+   * `splitPlanes` fields above remain the *computed* per-world outputs (correct
+   * for single-world; recomputed at merge for cross-world).
+   */
+  readonly directionalCsmConfig: DirectionalCsmConfig | undefined;
+  /**
+   * bug-20260710-editor-cross-world-shadow: the light-direction of the
+   * first-hit castShadow DirectionalLight, carried so the merge layer can
+   * rebuild the light-view matrix. Redundant with `directional.direction` but
+   * kept explicit so the CSM recompute reads a single config bundle. Undefined
+   * when castShadow=false or no directional light.
+   */
+  readonly directionalCsmDirection: Vec3 | undefined;
 }
 
 /**
@@ -1510,6 +1531,196 @@ export function buildPointShadowMatrices(lightPos: Vec3, near: number, far: numb
 }
 
 /**
+ * bug-20260710-editor-cross-world-shadow: the camera-frustum subset of
+ * {@link CameraSnapshot} that the directional-CSM matrix builder consumes.
+ * Extracted so the builder can run both inside {@link extractFrame} (single
+ * world) AND at the {@link extractFrames} merge layer, where the camera and the
+ * directional light may originate in DIFFERENT worlds (the editor
+ * editorWorld/sceneWorld super-composite). A cameraless world produces zero
+ * lightViewProj matrices, so the merge layer MUST recompute using the surfaced
+ * camera — see {@link computeDirectionalCsm}.
+ */
+export interface CsmCameraData {
+  readonly world: Float32Array;
+  readonly fov: number;
+  readonly aspect: number;
+  readonly near: number;
+  readonly far: number;
+  readonly projection: 'perspective' | 'orthographic';
+  readonly orthoLeft: number;
+  readonly orthoRight: number;
+  readonly orthoBottom: number;
+  readonly orthoTop: number;
+}
+
+/**
+ * bug-20260710-editor-cross-world-shadow: the raw directional-shadow config a
+ * DirectionalLight carries, threaded onto {@link ExtractedLights} so the merge
+ * layer can recompute CSM matrices against the surfaced camera. Distinct from
+ * the *computed* outputs (lightViewProj / splitPlanes) also on ExtractedLights.
+ */
+export interface DirectionalCsmConfig {
+  readonly cascadeCount: number;
+  readonly splitLambda: number;
+  readonly cascadeBlend: number;
+  readonly mapSize: number;
+  readonly shadowDistance: number;
+}
+
+/**
+ * bug-20260710-editor-cross-world-shadow: computed directional-CSM output —
+ * the per-cascade light-view-projection matrices plus the derived cascade
+ * metadata. Returned by {@link computeDirectionalCsm}; `undefined` when the
+ * config or camera is missing (caller leaves the fields undefined).
+ */
+export interface DirectionalCsmResult {
+  readonly lightViewProj: Float32Array[];
+  readonly splitPlanes: Float32Array;
+  readonly cascadeCount: number;
+  readonly cascadeBlend: number;
+  readonly shadowMapSize: number;
+}
+
+/**
+ * bug-20260710-editor-cross-world-shadow: pure directional-CSM matrix builder,
+ * extracted verbatim from the former inline block in {@link extractFrame} (the
+ * PSSM split + per-cascade frustum-slice AABB fit + orthographic light
+ * projection). It is now a free function so BOTH the per-world extract and the
+ * cross-world merge layer can call it — the merge layer is the only place that
+ * pairs the first-hit directional light of one world with the surfaced camera
+ * of another (editor super-composite). Returns `null` when there is no camera
+ * to fit against (a cameraless world's directional light yields no matrices —
+ * the caller leaves lightViewProj undefined rather than emitting zero matrices
+ * that the WGSL reader would sample as NaN → "fully lit").
+ *
+ * Byte-identical to the prior inline computation for the single-world case
+ * (same PSSM lambda, same toward-light Z reach RC-2 fix, same clip-space
+ * matrix / tile-placement-in-shader split).
+ */
+export function computeDirectionalCsm(
+  direction: Vec3,
+  config: DirectionalCsmConfig,
+  cameraData: CsmCameraData | undefined,
+): DirectionalCsmResult | null {
+  const cascadeCount = Math.round(config.cascadeCount);
+  // Coverage range: near from the active camera near (no separate near knob);
+  // far is the component's shadowDistance. Fallback near (0.1) only when no
+  // camera exists — but matrices are gated on cameraData below anyway.
+  const sNear = cameraData?.near ?? 0.1;
+  const sFar = config.shadowDistance;
+
+  // PSSM split planes: [camera near, shadowDistance], not the camera far.
+  const splits = pssmSplit(sNear, sFar, cascadeCount, config.splitLambda);
+  const paddedSplits = new Float32Array(4);
+  for (let i = 0; i < splits.length; i++) paddedSplits[i] = splits[i] ?? 0;
+
+  // Light view matrix: camera at origin, looking along the light direction.
+  const lightDirN = vec3.normalize(vec3.create(), direction);
+  const lightTarget = vec3.create(lightDirN[0] ?? 0, lightDirN[1] ?? 0, lightDirN[2] ?? 0);
+  const lightView = mat4.create();
+  mat4.lookAt(lightView, vec3.create(0, 0, 0), lightTarget, vec3.create(0, 1, 0));
+
+  // Camera view-projection for frustum-corner computation. Without a camera the
+  // frustum cannot be fit — bail so the caller emits no matrices (undefined),
+  // NOT zero matrices (which read as NaN in the shadow shader → no shadow).
+  if (cameraData === undefined) return null;
+  const camProj = mat4.create();
+  if (cameraData.projection === 'orthographic') {
+    mat4.orthographic(
+      camProj,
+      cameraData.orthoLeft,
+      cameraData.orthoRight,
+      cameraData.orthoBottom,
+      cameraData.orthoTop,
+      cameraData.near,
+      cameraData.far,
+    );
+  } else {
+    mat4.perspective(camProj, cameraData.fov, cameraData.aspect, cameraData.near, cameraData.far);
+  }
+  const camView = mat4.create();
+  mat4.invert(camView, cameraData.world as unknown as mat4.Mat4Like);
+  const cameraVP = mat4.create();
+  mat4.multiply(cameraVP, camProj, camView);
+
+  const resultLightViewProjs: Float32Array[] = [];
+
+  // bug-20260619 RC-2 (AC-05): toward-light Z reach. Extend the near (toward-
+  // light) bound of EVERY cascade to the toward-light extreme of the WHOLE
+  // shadow frustum (sNear..sFar) so casters between the light and a slice are
+  // admitted; X/Y stays per-cascade tight. Larger light-space z == closer to
+  // the light (lookAt forward = eye-target), so the full-frustum max-z is the
+  // toward-light reach used as -maxZ (the ortho near plane) per cascade.
+  let lightSpaceMaxZFull = -Infinity;
+  const fullCorners = computeFrustumCorners(
+    cameraVP,
+    cameraData.near,
+    cameraData.far,
+    sNear,
+    sFar,
+    cameraData.projection,
+  );
+  for (const ws of fullCorners) {
+    const ls = vec3.create();
+    mat4.transformVec3(ls, lightView, ws);
+    if ((ls[2] ?? 0) > lightSpaceMaxZFull) lightSpaceMaxZFull = ls[2] ?? 0;
+  }
+
+  // Pre-allocate 4-cascade array; fill in the effective cascades.
+  for (let cIdx = 0; cIdx < 4; cIdx++) {
+    if (cIdx >= cascadeCount) {
+      resultLightViewProjs.push(new Float32Array(16));
+      continue;
+    }
+    const cascadeNear = cIdx === 0 ? sNear : (splits[cIdx - 1] ?? sFar);
+    const cascadeFar = splits[cIdx] ?? sFar;
+    const corners = computeFrustumCorners(
+      cameraVP,
+      cameraData.near,
+      cameraData.far,
+      cascadeNear,
+      cascadeFar,
+      cameraData.projection,
+    );
+    const lightMVP = mat4.clone(lightView);
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const ws of corners) {
+      const ls = vec3.create();
+      mat4.transformVec3(ls, lightMVP, ws);
+      if ((ls[0] ?? 0) < minX) minX = ls[0] ?? 0;
+      if ((ls[0] ?? 0) > maxX) maxX = ls[0] ?? 0;
+      if ((ls[1] ?? 0) < minY) minY = ls[1] ?? 0;
+      if ((ls[1] ?? 0) > maxY) maxY = ls[1] ?? 0;
+      if ((ls[2] ?? 0) < minZ) minZ = ls[2] ?? 0;
+      if ((ls[2] ?? 0) > maxZ) maxZ = ls[2] ?? 0;
+    }
+    // Orthographic projection from light-space AABB. RC-2: whole-frustum
+    // toward-light extreme for the near bound; per-cascade far (minZ) + X/Y.
+    const nearZ = Math.max(maxZ, lightSpaceMaxZFull);
+    const orthoProj = mat4.create();
+    mat4.orthographic(orthoProj, minX, maxX, minY, maxY, -nearZ, -minZ);
+    // lightViewProj = orthoProj * lightView — pure clip-space [-1,1]. Atlas
+    // tile placement is handled by the per-cascade viewport + fragment-side UV
+    // math (evalDirectional), so shadow_caster.gl_Position stays clip-space.
+    void cIdx;
+    resultLightViewProjs.push(new Float32Array(mat4.multiply(mat4.create(), orthoProj, lightView)));
+  }
+
+  return {
+    lightViewProj: resultLightViewProjs,
+    splitPlanes: paddedSplits,
+    cascadeCount,
+    cascadeBlend: config.cascadeBlend,
+    shadowMapSize: config.mapSize,
+  };
+}
+
+/**
  * feat-20260709-editor-world-partition M1 / w4 (AC-08, plan-strategy §2 D-3):
  * the owner index that previously served BOTH cameras and singleton render
  * resources (skylight / skybox / postProcessParams) is split into two
@@ -1647,6 +1858,12 @@ export function extractFrames(
   let normalBias: number | undefined;
   let pcfKernelSize: number | undefined;
   const pointShadow: PointShadowSnapshot[] = [];
+  // bug-20260710-editor-cross-world-shadow: carry the raw CSM config +
+  // direction of the first-hit directional so the merge layer can recompute
+  // matrices against the SURFACED (cameraOwner) camera — the light and the
+  // camera may live in different worlds (editor super-composite).
+  let directionalCsmConfig: DirectionalCsmConfig | undefined;
+  let directionalCsmDirection: Vec3 | undefined;
   for (const f of succeededFrames) {
     for (const p of f.lights.point) point.push(p);
     for (const s of f.lights.spot) spot.push(s);
@@ -1662,9 +1879,67 @@ export function extractFrames(
       depthBias = f.lights.depthBias;
       normalBias = f.lights.normalBias;
       pcfKernelSize = f.lights.pcfKernelSize;
+      directionalCsmConfig = f.lights.directionalCsmConfig;
+      directionalCsmDirection = f.lights.directionalCsmDirection;
     }
     directionalCount += f.lights.directionalCount;
   }
+
+  // AC-05/06 + w4 owner split (D-3 / R-6): cameras come from the cameraOwner
+  // world; skylight / skybox / postProcessParams come from the resourceOwner
+  // world (holistic snapshot selection). Scan succeededIndices once to locate
+  // each owner's surviving frame. When cameraOwner === resourceOwner both
+  // resolve to the same frame — byte-identical to the pre-w4 single-owner path.
+  let cameraOwnerFrame: ExtractedFrame | undefined;
+  let resourceOwnerFrame: ExtractedFrame | undefined;
+  for (let fi = 0; fi < succeededFrames.length; fi++) {
+    if (succeededIndices[fi] === cameraOwner) cameraOwnerFrame = succeededFrames[fi];
+    if (succeededIndices[fi] === resourceOwner) resourceOwnerFrame = succeededFrames[fi];
+  }
+  const cameras = cameraOwnerFrame !== undefined ? [...cameraOwnerFrame.cameras] : [];
+
+  // bug-20260710-editor-cross-world-shadow: RECOMPUTE directional CSM matrices
+  // against the surfaced camera. In a single-world app the per-world extract
+  // already produced correct matrices (light+camera share the world), and this
+  // recompute reproduces them byte-identically (same config, same camera). In
+  // the editor super-composite the directional light's world has NO camera, so
+  // its per-world `lightViewProj` is undefined/degenerate; the surfaced camera
+  // lives in the cameraOwner world. Pairing them here is the ONLY place both
+  // are visible. Point/spot shadows are camera-independent (light-space only)
+  // and need no merge-layer fix-up.
+  const mergeCam = cameras[0];
+  if (directionalCsmConfig !== undefined && directionalCsmDirection !== undefined) {
+    const mergeCameraData: CsmCameraData | undefined =
+      mergeCam !== undefined
+        ? {
+            world: mergeCam.world,
+            fov: mergeCam.fov,
+            aspect: mergeCam.aspect,
+            near: mergeCam.near,
+            far: mergeCam.far,
+            projection: mergeCam.projection,
+            orthoLeft: mergeCam.orthoLeft,
+            orthoRight: mergeCam.orthoRight,
+            orthoBottom: mergeCam.orthoBottom,
+            orthoTop: mergeCam.orthoTop,
+          }
+        : undefined;
+    const csm = computeDirectionalCsm(
+      directionalCsmDirection,
+      directionalCsmConfig,
+      mergeCameraData,
+    );
+    if (csm !== null) {
+      lightViewProj = csm.lightViewProj;
+      splitPlanes = csm.splitPlanes;
+      cascadeCount = csm.cascadeCount;
+      cascadeBlend = csm.cascadeBlend;
+      shadowMapSize = csm.shadowMapSize;
+    }
+    // csm === null (no surfaced camera at all): keep the per-world carry —
+    // there is no better data, and a cameraless frame renders nothing anyway.
+  }
+
   const lights: ExtractedLights = {
     directional,
     directionalCount,
@@ -1679,20 +1954,9 @@ export function extractFrames(
     normalBias,
     pcfKernelSize,
     pointShadow,
+    directionalCsmConfig,
+    directionalCsmDirection,
   };
-
-  // AC-05/06 + w4 owner split (D-3 / R-6): cameras come from the cameraOwner
-  // world; skylight / skybox / postProcessParams come from the resourceOwner
-  // world (holistic snapshot selection). Scan succeededIndices once to locate
-  // each owner's surviving frame. When cameraOwner === resourceOwner both
-  // resolve to the same frame — byte-identical to the pre-w4 single-owner path.
-  let cameraOwnerFrame: ExtractedFrame | undefined;
-  let resourceOwnerFrame: ExtractedFrame | undefined;
-  for (let fi = 0; fi < succeededFrames.length; fi++) {
-    if (succeededIndices[fi] === cameraOwner) cameraOwnerFrame = succeededFrames[fi];
-    if (succeededIndices[fi] === resourceOwner) resourceOwnerFrame = succeededFrames[fi];
-  }
-  const cameras = cameraOwnerFrame !== undefined ? [...cameraOwnerFrame.cameras] : [];
   const skylight = resourceOwnerFrame?.skylight;
   const skylightCount = resourceOwnerFrame?.skylightCount ?? 0;
   const skybox = resourceOwnerFrame?.skybox;
@@ -2084,235 +2348,76 @@ export function extractFrame(
     }
   });
 
-  // feat-20260613-csm-cascaded-shadow-maps M2 / w9:
-  // Per-cascade CSM computation: PSSM splits + frustum-slice AABB fitting +
-  // orthographic projection + atlas tile UV inset baked into lightViewProj.
-  // Replaces the old single-cascade lightSpaceMatrix path (D-1 fixed-extent
-  // bound deleted; D-3 atlas tile 1px inset; D-8 nearPlane/farPlane from
-  // component).
-  //
-  // The old `lightSpaceMatrix` singleton is replaced by:
-  //   - lightViewProj: Float32Array[4] — one mat4 per cascade
-  //   - splitPlanes: Float32Array[4] — PSSM split depths (view-space z)
-  //   - cascadeCount: number — effective cascade count (1..4)
-  //   - cascadeBlend: number — blend width (0..0.5)
+  // bug-20260710-editor-cross-world-shadow: CSM matrices are computed by the
+  // shared pure {@link computeDirectionalCsm}, called here per-world with THIS
+  // world's own `cameras[0]`. In a single-world app the light and camera share
+  // the world, so this per-world result is final (byte-identical to the prior
+  // inline block). In the editor super-composite the light's world may have no
+  // camera → this yields no matrices; {@link extractFrames} then RECOMPUTES at
+  // the merge layer using the surfaced (cameraOwner) camera + the raw config
+  // carried on ExtractedLights. The raw config + direction are surfaced
+  // unconditionally so the merge layer can re-run the builder.
   let lightViewProj: Float32Array[] | undefined;
   let splitPlanes: Float32Array | undefined;
   let cascadeCount: number | undefined;
   let cascadeBlend: number | undefined;
   let shadowMapSize: number | undefined;
+  let directionalCsmConfig: DirectionalCsmConfig | undefined;
+  let directionalCsmDirection: Vec3 | undefined;
 
   // Camera data needed for frustum corner computation (first camera only;
-  // multi-camera CSM is OOS-1).
-  // feat-20260613 M6 / w20: carry the projection variant + ortho extents
-  // so the matrix builder below picks perspective vs orthographic. The
-  // prior shape only carried fov/aspect/near/far and silently corrupted
-  // ortho cameras (fov=0 -> degenerate perspective matrix -> empty atlas).
-  let cameraData:
-    | {
-        world: Float32Array;
-        fov: number;
-        aspect: number;
-        near: number;
-        far: number;
-        projection: 'perspective' | 'orthographic';
-        orthoLeft: number;
-        orthoRight: number;
-        orthoBottom: number;
-        orthoTop: number;
-      }
-    | undefined;
+  // multi-camera CSM is OOS-1). Undefined in a cameraless world.
   const cam0 = cameras[0];
-  if (cam0 !== undefined) {
-    const cam = cam0;
-    cameraData = {
-      world: cam.world,
-      fov: cam.fov,
-      aspect: cam.aspect,
-      near: cam.near,
-      far: cam.far,
-      projection: cam.projection,
-      orthoLeft: cam.orthoLeft,
-      orthoRight: cam.orthoRight,
-      orthoBottom: cam.orthoBottom,
-      orthoTop: cam.orthoTop,
-    };
-  }
+  const cameraData: CsmCameraData | undefined =
+    cam0 !== undefined
+      ? {
+          world: cam0.world,
+          fov: cam0.fov,
+          aspect: cam0.aspect,
+          near: cam0.near,
+          far: cam0.far,
+          projection: cam0.projection,
+          orthoLeft: cam0.orthoLeft,
+          orthoRight: cam0.orthoRight,
+          orthoBottom: cam0.orthoBottom,
+          orthoTop: cam0.orthoTop,
+        }
+      : undefined;
 
   // feat-20260621 M2: CSM computation gated on castShadow from the
   // merged DirectionalLight. castShadow defaults to true (first-hit-wins
-  // semantics, D-6 no cardinality cap). The independent shadowQuery and
-  // orphanShadowQuery are removed; shadow fields live on DirectionalLight.
+  // semantics, D-6 no cardinality cap).
   if (directional !== undefined && firstHitCastShadow !== false) {
     const dirSnapshot = directional;
     const sf = firstHitShadowFields;
     if (sf !== undefined) {
-      const mapSize = sf.mapSize;
-      const cc = sf.cascadeCount;
-      const sl = sf.splitLambda;
-      const cb = sf.cascadeBlend;
-      // Coverage range: near derives from the active camera near (no separate
-      // near knob — any value other than camera near drops near shadows or
-      // wastes cascade-0 resolution); far is the component's shadowDistance.
-      // Fallback camera near (0.1) only when no camera exists this frame; the
-      // CSM matrices below are gated on cameraData anyway.
-      const sNear = cameraData?.near ?? 0.1;
-      const sFar = sf.shadowDistance;
-      shadowMapSize = mapSize;
-      cascadeCount = Math.round(cc);
-      cascadeBlend = cb;
-
-      // PSSM split planes: [camera near, shadowDistance], not the camera far.
-      const splits = pssmSplit(sNear, sFar, cascadeCount, sl);
-      splitPlanes = splits;
-
-      // Light view matrix: camera positioned at origin, looking along light dir.
-      const lightDir = dirSnapshot.direction;
-      const lightDirN = vec3.normalize(vec3.create(), lightDir);
-      const lightTarget = vec3.create(lightDirN[0] ?? 0, lightDirN[1] ?? 0, lightDirN[2] ?? 0);
-      const lightPos = vec3.create(0, 0, 0);
-      const lightView = mat4.create();
-      mat4.lookAt(lightView, lightPos, lightTarget, vec3.create(0, 1, 0));
-
-      // Camera view-projection matrix for frustum corner computation.
-      // feat-20260613 M6 / w20: branch on projection variant so an
-      // orthographic camera (fov=0) is not silently corrupted by
-      // mat4.perspective. The frustum-corner unprojection downstream
-      // is variant-agnostic (it only inverts cameraVP), so swapping
-      // the projection matrix is the entire fix.
-      const camProj = mat4.create();
-      const camView = mat4.create();
-      let cameraVP: Mat4 | undefined;
-      if (cameraData !== undefined) {
-        if (cameraData.projection === 'orthographic') {
-          mat4.orthographic(
-            camProj,
-            cameraData.orthoLeft,
-            cameraData.orthoRight,
-            cameraData.orthoBottom,
-            cameraData.orthoTop,
-            cameraData.near,
-            cameraData.far,
-          );
-        } else {
-          mat4.perspective(
-            camProj,
-            cameraData.fov,
-            cameraData.aspect,
-            cameraData.near,
-            cameraData.far,
-          );
-        }
-        mat4.invert(camView, cameraData.world as unknown as mat4.Mat4Like);
-        cameraVP = mat4.create();
-        mat4.multiply(cameraVP, camProj, camView);
+      directionalCsmConfig = {
+        cascadeCount: sf.cascadeCount,
+        splitLambda: sf.splitLambda,
+        cascadeBlend: sf.cascadeBlend,
+        mapSize: sf.mapSize,
+        shadowDistance: sf.shadowDistance,
+      };
+      directionalCsmDirection = dirSnapshot.direction;
+      const csm = computeDirectionalCsm(dirSnapshot.direction, directionalCsmConfig, cameraData);
+      // Cascade metadata (splitPlanes / count / blend / mapSize) is available
+      // even without a camera (splitPlanes needs only near/far); the matrices
+      // need the camera. When csm is null (no camera) leave lightViewProj
+      // undefined — the merge layer recomputes. Still surface the split/count
+      // metadata so a single-world path keeps its prior fields.
+      cascadeCount = Math.round(sf.cascadeCount);
+      cascadeBlend = sf.cascadeBlend;
+      shadowMapSize = sf.mapSize;
+      if (csm !== null) {
+        lightViewProj = csm.lightViewProj;
+        splitPlanes = csm.splitPlanes;
+      } else {
+        const sNear = cameraData?.near ?? 0.1;
+        const splits = pssmSplit(sNear, sf.shadowDistance, cascadeCount, sf.splitLambda);
+        const padded = new Float32Array(4);
+        for (let i = 0; i < splits.length; i++) padded[i] = splits[i] ?? 0;
+        splitPlanes = padded;
       }
-
-      const resultLightViewProjs: Float32Array[] = [];
-
-      // bug-20260619 RC-2 (AC-05): toward-light Z reach. A per-cascade ortho
-      // whose near/far is fit to ONLY that cascade's visible slice corners
-      // clips out any caster sitting BETWEEN the light and the slice (it lands
-      // in front of the ortho near plane -> z < 0 -> never written to the
-      // depth tile -> the ground it should shadow reads "unoccluded"). The N=4
-      // case is worse than N=1 because thinner near slices give a tighter Z.
-      // Fix: extend the near (toward-light) bound of EVERY cascade to the
-      // toward-light extreme of the WHOLE shadow frustum (sNear..sFar), so any
-      // caster within the shadowed depth range is admitted; X/Y stays per
-      // cascade tight (no resolution loss) and the PSSM split is untouched.
-      // In this RH light view, larger light-space z == closer to the light (see
-      // lookAt forward = eye-target), so the full-frustum max-z is the toward-
-      // light reach used as -maxZ (the ortho near plane) for each cascade.
-      let lightSpaceMaxZFull = -Infinity;
-      if (cameraVP !== undefined && cameraData !== undefined) {
-        const fullCorners = computeFrustumCorners(
-          cameraVP,
-          cameraData.near,
-          cameraData.far,
-          sNear,
-          sFar,
-          cameraData.projection,
-        );
-        for (const ws of fullCorners) {
-          const ls = vec3.create();
-          mat4.transformVec3(ls, lightView, ws);
-          if ((ls[2] ?? 0) > lightSpaceMaxZFull) lightSpaceMaxZFull = ls[2] ?? 0;
-        }
-      }
-
-      // Pre-allocate 4-cascade array; fill in the effective cascades.
-      for (let cIdx = 0; cIdx < 4; cIdx++) {
-        if (cIdx >= cascadeCount || cameraVP === undefined || cameraData === undefined) {
-          // Unused cascade slot → zero matrix.
-          resultLightViewProjs.push(new Float32Array(16));
-          continue;
-        }
-
-        // Cascade depth range: near of first cascade = sNear, far of last = sFar.
-        const cascadeNear = cIdx === 0 ? sNear : (splits[cIdx - 1] ?? sFar);
-        const cascadeFar = splits[cIdx] ?? sFar;
-
-        // Frustum slice 8 corner points in world space. Pass projection
-        // variant so the NDC-z mapping uses the right formula (perspective
-        // is non-linear in viewZ; ortho is linear).
-        const corners = computeFrustumCorners(
-          cameraVP,
-          cameraData.near,
-          cameraData.far,
-          cascadeNear,
-          cascadeFar,
-          cameraData.projection,
-        );
-
-        // Transform corners to light space and compute AABB.
-        const lightMVP = mat4.clone(lightView);
-        let minX = Infinity;
-        let maxX = -Infinity;
-        let minY = Infinity;
-        let maxY = -Infinity;
-        let minZ = Infinity;
-        let maxZ = -Infinity;
-        for (const ws of corners) {
-          const ls = vec3.create();
-          mat4.transformVec3(ls, lightMVP, ws);
-          if ((ls[0] ?? 0) < minX) minX = ls[0] ?? 0;
-          if ((ls[0] ?? 0) > maxX) maxX = ls[0] ?? 0;
-          if ((ls[1] ?? 0) < minY) minY = ls[1] ?? 0;
-          if ((ls[1] ?? 0) > maxY) maxY = ls[1] ?? 0;
-          if ((ls[2] ?? 0) < minZ) minZ = ls[2] ?? 0;
-          if ((ls[2] ?? 0) > maxZ) maxZ = ls[2] ?? 0;
-        }
-
-        // Orthographic projection from light-space AABB. RC-2 (AC-05): use the
-        // whole-frustum toward-light extreme for the near (toward-light) bound
-        // so casters between the light and this slice are captured; keep the
-        // per-cascade far (minZ) and X/Y for tight depth precision/resolution.
-        const nearZ = Math.max(maxZ, lightSpaceMaxZFull);
-        const orthoProj = mat4.create();
-        mat4.orthographic(orthoProj, minX, maxX, minY, maxY, -nearZ, -minZ);
-
-        // lightViewProj = orthoProj * lightView -- pure clip-space [-1,1]
-        // matrix. The atlas tile placement is handled by the per-cascade
-        // viewport (urp-pipeline.ts addShadowPass viewport: { col*mapSize,
-        // row*mapSize, mapSize, mapSize }) so shadow_caster.gl_Position
-        // gets clip-space coords that rasterize into the right tile.
-        // evalDirectional applies a tile transform in fragment-space when
-        // sampling the atlas: uv_atlas = (ndc.xy * 0.5 + 0.5) / tilesPerSide
-        // + tileOrigin. Splitting the role (matrix = clip-space / shader =
-        // tile placement) keeps shadow_caster valid as a vertex transform
-        // and keeps evalDirectional's UV math closed-form readable.
-        // M5 / w28: removed texMat post-multiply that previously baked
-        // atlas-UV space into the matrix; that breaks shadow_caster's
-        // gl_Position contract (it expects clip-space).
-        // The cIdx / cascadeCount loop variable is retained for future
-        // per-cascade adjustments (e.g. depth-bias scaling per cascade).
-        void cIdx;
-        resultLightViewProjs.push(
-          new Float32Array(mat4.multiply(mat4.create(), orthoProj, lightView)),
-        );
-      }
-
-      lightViewProj = resultLightViewProjs;
     }
   }
 
@@ -2426,6 +2531,10 @@ export function extractFrame(
     normalBias: firstHitCastShadow !== false ? firstHitShadowFields?.normalBias : undefined,
     pcfKernelSize: firstHitCastShadow !== false ? firstHitShadowFields?.pcfKernelSize : undefined,
     pointShadow: pointShadowSnapshots,
+    // bug-20260710-editor-cross-world-shadow: raw CSM config + light direction
+    // so the merge layer can recompute matrices against the surfaced camera.
+    directionalCsmConfig,
+    directionalCsmDirection,
   };
 
   // feat-20260520-skylight-ibl-cubemap M4 / t26+t27: query Skylight entities.
@@ -2693,10 +2802,37 @@ export function extractFrame(
       }
     }
 
+    // bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu M2.5
+    // (carries PR #598 feat-20260703 D-7): copy the per-entity
+    // `pendingDispatch` entries into the shared `dispatch[]` list, rewriting
+    // each entry's `renderableIndex` to the slot the renderable actually
+    // landed in. Called at every renderable-push site below (three: instances
+    // fail-fast / instances success / non-instances) — same cull-passed
+    // branch — so a culled entity naturally discards its pending entries
+    // (out of scope on the next iteration). Pairs dispatch push with
+    // renderable push.
+    const flushPendingDispatch = (pending: readonly DispatchEntry[], slotIndex: number): void => {
+      for (const de of pending) {
+        dispatch.push({ ...de, renderableIndex: slotIndex });
+      }
+    };
+
     for (let i = 0; i < bundle.Entity.self.length; i++) {
       // feat-20260608 M2 / w11: read materials array via _getArrayView
       const entity = (entitySelf[i] ?? 0) as EntityHandle;
       const layerVal = (fLayerValue?.[i] ?? 0) as number;
+      // bug-20260709-builtin-quad-withoutaabb-disables-sprite-frustum-cu M2.5
+      // (carries PR #598 feat-20260703 D-7): dispatch entries for this entity
+      // are staged locally and flushed into the shared `dispatch[]` array
+      // ONLY when the entity survives the frustum-cull `continue` below —
+      // same cull-passed branch as the paired `renderables.push`. Prior to
+      // this fix the three `dispatch.push` sites ran before the cull check,
+      // so a culled entity left dangling entries whose `renderableIndex`
+      // aliased the slot a LATER visible entity occupied — surfacing as the
+      // pbr-mesh-array-bgl vs hdrp-unified-bgl-group2 BGL/PL mismatch on
+      // the deferred-shading smoke (PR #598 CI). Pure ordering fix; cull
+      // logic and MeshRenderer contract unchanged.
+      const pendingDispatch: DispatchEntry[] = [];
       const materialsView = worldInternal._getArrayView(
         entity,
         MeshRenderer as unknown as typeof Transform,
@@ -3152,7 +3288,12 @@ export function extractFrame(
             for (let pIdx = 0; pIdx < matchedPasses.length; pIdx++) {
               const pass = matchedPasses[pIdx];
               if (!pass) continue;
-              dispatch.push({
+              // M2.5: stage into pendingDispatch; flushed into the shared
+              // `dispatch[]` at the renderable push site below only when
+              // the entity survives frustum cull. `renderableIndex` is a
+              // placeholder here — the flush rewrites it to the actual slot
+              // (renderables.length at push time).
+              pendingDispatch.push({
                 entityIndex: i,
                 materialHandle: handleRaw,
                 renderableIndex: renderables.length,
@@ -3201,7 +3342,9 @@ export function extractFrame(
       if (isRenderable && handleRaw === 0) {
         const shadowCasterTags: Record<string, string> = { LightMode: 'ShadowCaster' };
         const nextRenderableIndex = renderables.length;
-        dispatch.push({
+        // M2.5: stage into pendingDispatch; flushed at the renderable push
+        // site below only when the entity survives cull.
+        pendingDispatch.push({
           entityIndex: i,
           materialHandle: 0,
           renderableIndex: nextRenderableIndex,
@@ -3219,7 +3362,7 @@ export function extractFrame(
         // Also add a Forward pass entry so the entity renders in the
         // main scene pass (mirrors Materials.unlit default).
         const forwardTags: Record<string, string> = { LightMode: 'Forward' };
-        dispatch.push({
+        pendingDispatch.push({
           entityIndex: i,
           materialHandle: 0,
           renderableIndex: nextRenderableIndex,
@@ -3546,6 +3689,7 @@ export function extractFrame(
           const entityKey = entity as unknown as number;
           const instRes = world.get(entity, Instances);
           if (!instRes.ok) {
+            flushPendingDispatch(pendingDispatch, renderables.length);
             renderables.push({ ...baseRenderable, entityKey });
           } else {
             const transforms = instRes.value.transforms;
@@ -3560,6 +3704,7 @@ export function extractFrame(
             }
             const snapshotCopy = new Float32Array(transforms);
             const instanceCount = Math.max(1, Math.floor(actualLength / 16));
+            flushPendingDispatch(pendingDispatch, renderables.length);
             renderables.push({
               ...baseRenderable,
               entityKey,
@@ -3573,6 +3718,7 @@ export function extractFrame(
           }
         } else {
           const entityKey = entity as unknown as number;
+          flushPendingDispatch(pendingDispatch, renderables.length);
           renderables.push({ ...baseRenderable, entityKey });
         }
       }

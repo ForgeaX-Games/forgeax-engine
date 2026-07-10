@@ -346,7 +346,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       if (!isPassableAt(built, nextX, curY)) nextX = curX;
       if (!isPassableAt(built, nextX, nextY)) nextY = curY;
 
-      world.set(playerEntity, Transform, { pos: [nextX, nextY, 0]});
+      // PR #656 vec-migration corrigendum: writing `pos` overwrites all three
+      // lanes atomically (no partial per-axis write on array<f32,3> columns).
+      // Player Z=0.1 (above terrain Z=0 for transparent sort tiebreak); must
+      // preserve at every movement tick or the sprite z-fights terrain.
+      world.set(playerEntity, Transform, { pos: [nextX, nextY, 0.1]});
 
       if (moving) {
         const frameDur = FRAME_DURATION_MS_MOVE / 1000;
@@ -371,7 +375,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         });
       }
 
-      world.set(cameraEntity, Transform, { pos: [nextX, nextY, 0]});
+      // PR #656 vec-migration corrigendum: camera Z=5 (spawn value); the array
+      // pos write is atomic-per-column, so hardcoding Z here (or the terrain
+      // orthographic frustum near=0.1 clips everything at Z<=0 → grey screen).
+      world.set(cameraEntity, Transform, { pos: [nextX, nextY, 5]});
 
       const tileX = Math.floor(nextX);
       const tileY = built.rows - 1 - Math.floor(nextY);
@@ -388,6 +395,31 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     reportAppError(startRes.error);
     return;
   }
+
+  // bug-20260709-builtin-quad-withoutaabb M3 / m3-1: expose a read-only
+  // view of renderer.frustumStats on globalThis.__forgeax.renderer so the
+  // Playwright probe (scripts/smoke-browser.mjs) can assert AC-04
+  // (total > 0 AND culled > 0) via page.evaluate. Extends the __forgeax
+  // namespace instead of overwriting it -- packages/app/create-app.ts
+  // mounts { captureFrame } on the same key under FORGEAX_ENGINE_RHI_DEBUG=1,
+  // and neither field should clobber the other. Getter form keeps the
+  // mount read-only: smoke code reads live stats, cannot mutate.
+  const forgeaxGlobal = globalThis as {
+    __forgeax?: {
+      renderer?: {
+        readonly frustumStats: { readonly culled: number; readonly total: number };
+      };
+    };
+  };
+  forgeaxGlobal.__forgeax = {
+    ...(forgeaxGlobal.__forgeax ?? {}),
+    renderer: {
+      get frustumStats() {
+        return app.renderer.frustumStats;
+      },
+    },
+  };
+
   console.warn(
     `[asi-world] running. backend=${app.renderer.backend} ` +
       `world=${built.cols}x${built.rows} layers=${built.layers.length} objects=${built.objects.length}`,

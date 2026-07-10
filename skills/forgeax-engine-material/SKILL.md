@@ -35,6 +35,14 @@ description: >-
 > [!CAUTION]
 > `MaterialAsset` 已经**没有** `shadingModel` 字段（feat-20260526 改成 pass-based）。AGENTS.md §Component naming 里残留的 `MaterialAsset.shadingModel: 'unlit' | 'standard'` 描述是过期的——别按那个字段写代码，用 `Materials.unlit` / `Materials.standard` 工厂区分。
 
+> **built-in handle × frustum cull × opt-out 迁移**（bug-20260709 收口；契约 SSOT 见 `packages/runtime/README.md` §Frustum Culling）
+
+| built-in handle | 参与 frustum cull？ | opt-out 迁移片段 |
+|:--|:--|:--|
+| `HANDLE_QUAD` | 是（`aabb` 非空 → 三重门第 3 门平面测试；与用户 `assets.register(mesh)` 一致） | 旧代码若依赖"屏外仍可见"→ `MeshRenderer.frustumCulled: 0` |
+| `HANDLE_CUBE` / `HANDLE_TRIANGLE` / `HANDLE_SPHERE` / `HANDLE_CYLINDER` / `HANDLE_NINESLICE_QUAD` | 否（`withoutAabb` 短路 → 第 2 门 pass-through） | 无需 opt-out；契约恢复由 Stage 2 独立 loop 承接（OOS-1） |
+| 用户 `assets.register(meshAsset)` handle | 是（asset 自带 aabb） | 需要"永远可见"→ `MeshRenderer.frustumCulled: 0` |
+
 ## 规范调用顺序
 
 ```mermaid

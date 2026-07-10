@@ -389,8 +389,6 @@ function makeDispatchSpyCtx(
       ssaoFilteringSampler: null,
       ssaoDepthSampler: null,
       ssaoFallbackRawView: null,
-      ssaoCalcBindGroup: null,
-      ssaoBlurBindGroup: null,
     },
   };
 
@@ -446,9 +444,12 @@ function makeDispatchSpyCtx(
       perFrameGraph: mockPerFrameGraph,
       isHdrpActive: true,
       installedPipelineConfig: { ssao: { enabled: true, intensity: 1.0 } },
+      // Post-process bind group identity cache (bloom / fxaa / ssao). Keyed on
+      // the graph-resolved views so resize rebuilds automatically.
+      postProcessBgCache: new WeakMap(),
     },
     dispatchCounts: {},
-    bindGroupCounts: {},
+    bindGroupCounts: { createBindGroup: 0, keys: [] },
     skylight: undefined,
     skylightCount: 0,
     skybox: undefined,
@@ -896,5 +897,134 @@ describe('recordSsaoCalcPass per-frame intensity write (M8 / w46 — RED)', () =
       return view.byteLength === 256;
     });
     expect(ssaoUniformWrites.length).toBe(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// R-BGCACHE: bind group resize invalidation (feedback 2026-07-10). The SSAO
+// calc/blur bind groups sample graph-owned transient targets (gbuf0 / hdrDepth
+// / ssaoRaw). On resize the render-graph retires those physical textures and
+// allocates new ones, so the resolved TextureView objects change identity. The
+// bind group MUST be rebuilt against the new views — the pre-fix `=== null`
+// slot cache reused a bind group referencing the destroyed texture and hit
+// `queue-submit-failed: Destroyed texture used in a submit`. These drive the
+// real pass closures through simulated resize and assert the cache is keyed on
+// physical view identity (bloom / fxaa share the identical getOrCreateFromChain
+// mechanism via frameState.postProcessBgCache).
+// ─────────────────────────────────────────────────────────────────────────
+describe('bindgroup resize invalidation (R-BGCACHE)', () => {
+  // A resolve function whose returned view objects can be swapped to simulate
+  // a resize (new physical texture identity for the same logical key).
+  function makeResolver(views: Record<string, { __label: string }>) {
+    return { resolve: (n: string) => views[n] };
+  }
+
+  it('after resize frame, bindgroup that sampled old transient RT is rebuilt with new physical texture', () => {
+    const { ctx, spy } = makeDispatchSpyCtx();
+    const graph = new RenderGraph<RenderPipelineContext>();
+    setupGraphForDispatch(graph);
+    addSsaoPasses(graph, {
+      gbuf0: 'gbuf0',
+      hdrDepth: 'hdrDepth',
+      ssaoRaw: 'ssaoRaw',
+      ssaoBlurred: 'ssaoBlurred',
+      ctx,
+    });
+    const execute = findPassExecute(graph, 'ssao-calc');
+    if (!execute) throw new Error('ssao-calc pass missing');
+
+    // Frame 1 (pre-resize): stable view identities.
+    const preViews = {
+      ssaoRaw: { __label: 'ssaoRawView-A' },
+      gbuf0: { __label: 'gbuf0View-A' },
+      hdrDepth: { __label: 'hdrDepthView-A' },
+    };
+    execute(ctx, makeResolver(preViews));
+    const createsAfterFrame1 = spy.bindGroupCreates.length;
+
+    // Frame 2 (resize): the graph reallocates gbuf0 + hdrDepth -> new view
+    // objects. The bind group must be rebuilt against the new identities.
+    const postViews = {
+      ssaoRaw: { __label: 'ssaoRawView-B' },
+      gbuf0: { __label: 'gbuf0View-B' },
+      hdrDepth: { __label: 'hdrDepthView-B' },
+    };
+    execute(ctx, makeResolver(postViews));
+    const createsAfterFrame2 = spy.bindGroupCreates.length;
+
+    // A new bind group was created on the resize frame (invalidation fired).
+    expect(createsAfterFrame2).toBe(createsAfterFrame1 + 1);
+    // The rebuilt bind group references the NEW gbuf0 view (binding 4), never
+    // the retired one.
+    const rebuilt = spy.bindGroupCreates[createsAfterFrame2 - 1];
+    const gbuf0Entry = rebuilt?.entries.find((e) => e.binding === 4);
+    expect(gbuf0Entry?.resource.value).toBe(postViews.gbuf0);
+  });
+
+  it('non-resize frame reuses cached bindgroup (no unnecessary rebuild)', () => {
+    const { ctx, spy } = makeDispatchSpyCtx();
+    const graph = new RenderGraph<RenderPipelineContext>();
+    setupGraphForDispatch(graph);
+    addSsaoPasses(graph, {
+      gbuf0: 'gbuf0',
+      hdrDepth: 'hdrDepth',
+      ssaoRaw: 'ssaoRaw',
+      ssaoBlurred: 'ssaoBlurred',
+      ctx,
+    });
+    const execute = findPassExecute(graph, 'ssao-calc');
+    if (!execute) throw new Error('ssao-calc pass missing');
+
+    // Same view identities across three frames (steady state, no resize).
+    const views = {
+      ssaoRaw: { __label: 'ssaoRawView' },
+      gbuf0: { __label: 'gbuf0View' },
+      hdrDepth: { __label: 'hdrDepthView' },
+    };
+    execute(ctx, makeResolver(views));
+    const createsAfterFrame1 = spy.bindGroupCreates.length;
+    execute(ctx, makeResolver(views));
+    execute(ctx, makeResolver(views));
+
+    // No additional createBindGroup after frame 1 — the cache hit on identity.
+    expect(spy.bindGroupCreates.length).toBe(createsAfterFrame1);
+  });
+
+  it('bindgroup rebuild after resize uses the new physical texture identity, not the old one', () => {
+    const { ctx, spy } = makeDispatchSpyCtx();
+    const graph = new RenderGraph<RenderPipelineContext>();
+    setupGraphForDispatch(graph);
+    addSsaoPasses(graph, {
+      gbuf0: 'gbuf0',
+      hdrDepth: 'hdrDepth',
+      ssaoRaw: 'ssaoRaw',
+      ssaoBlurred: 'ssaoBlurred',
+      ctx,
+    });
+    const execute = findPassExecute(graph, 'ssao-blur');
+    if (!execute) throw new Error('ssao-blur pass missing');
+
+    const preViews = {
+      ssaoRaw: { __label: 'ssaoRawView-A' },
+      ssaoBlurred: { __label: 'ssaoBlurredView-A' },
+      gbuf0: { __label: 'gbuf0View-A' },
+      hdrDepth: { __label: 'hdrDepthView-A' },
+    };
+    execute(ctx, makeResolver(preViews));
+
+    const postViews = {
+      ssaoRaw: { __label: 'ssaoRawView-B' },
+      ssaoBlurred: { __label: 'ssaoBlurredView-B' },
+      gbuf0: { __label: 'gbuf0View-B' },
+      hdrDepth: { __label: 'hdrDepthView-B' },
+    };
+    execute(ctx, makeResolver(postViews));
+
+    // The blur pass binds ssaoRaw at binding 7 (the read it actually samples).
+    // After resize it must reference the new ssaoRaw view, never the retired A.
+    const last = spy.bindGroupCreates[spy.bindGroupCreates.length - 1];
+    const ssaoRawEntry = last?.entries.find((e) => e.binding === 7);
+    expect(ssaoRawEntry?.resource.value).toBe(postViews.ssaoRaw);
+    expect(ssaoRawEntry?.resource.value).not.toBe(preViews.ssaoRaw);
   });
 });
