@@ -172,6 +172,64 @@ if (app.remote) {
 
 `RemoteHandle` 类型（`{ port: number; close(): Promise<void> }`）定义在 `@forgeax/engine-types`，host 类型面不静态引 `@forgeax/engine-remote`。
 
+## remote-live：驱动**运行中的浏览器**引擎（环回中继）
+
+> [!IMPORTANT]
+> **WS server 只在 Node/dawn-node 活。** `@forgeax/engine-remote/server` 靠 `ws.WebSocketServer`（Node 监听 socket）。**浏览器起不了监听 socket**——所以 `pnpm --filter <app> dev`（:5173）跑起来的真浏览器引擎，`app.remote` 恒 `undefined`，经典 `forgeax-engine-remote eval` CLI 无处可连。这就是"remote 不支持运行时"的真相。
+
+**解法（对齐 editor 的 gateway-live）**：浏览器页面只能**拨出**，没人能拨入。于是 `createApp` 在 dev 里让页面**拨出**一条 WS client 连到本机**环回中继**，中继再把 CLI 的 `POST /eval` 转发给页面，页面在自己的 realm 里跑 ws-free 的 eval 核（`@forgeax/engine-remote/execute`）打到活的 `world`/`renderer`/`assets`/`debugAdapter`。中继是两边都够得着的会合点。
+
+```
+ remote-live.mjs  --POST /eval-->  中继 (:5733, Node ws)  --WS /bridge-->  浏览器页面
+   (CLI)          <--{ok,value}--   HTTP + WS 会合点        <--{result}--   (拨出)
+                                                                           executeScript(...)
+```
+
+**opt-in（`VITE_FORGEAX_ENGINE_BRIDGE=1`）**：页面**只有**在 vite 见到该 flag 时才拨中继——`scripts/dev-live.mjs` 会注入它并同时起中继，所以 `node scripts/dev-live.mjs <app>` 一条命令即开。**为什么不默认开**：拨一个没起的中继会让**浏览器自己**往 console 打 `WebSocket connection failed`（JS `catch` 拦不住），踩爆所有 zero-console-error 浏览器 smoke（collectathon / hello-*）。所以裸 `pnpm --filter <app> dev` 和 CI 永远静默。production 整块 DCE（零注入）。中继起了、页面尚未连上时静默重连退避（1s→15s），不刷屏。
+
+**帧起始 drain（确定性）**：WS `message` 可能落在 rAF tick 任意相位，页面**不内联 eval**，而是入队、在 `app.registerUpdate`（帧起始）里 drain——每次 bridge 写都保证过这一帧的 systems，跨运行可复现。代价：回复延到那次 drain（亚毫秒）；**页面被切到后台 → rAF 暂停 → drain 停 → 30s 超时**，保持窗口前台。
+
+**安全**：中继给"任何能 POST 到 :5733 的东西"授予"在页面里跑任意 JS"。仅 loopback、仅 DEV、只由 dev 栈启动。**绝不**对 production / 公网暴露。
+
+### 用法
+
+```bash
+# 一条命令起中继 + 选定 app 的 vite（bridge 默认开，无需注入 env）：
+node scripts/dev-live.mjs @forgeax/remote-demo
+# → 中继 :5733 + vite :5173；浏览器打开 http://localhost:5173
+
+# 另一个终端，页面 boot 完后：
+node skills/forgeax-engine-cli/scripts/remote-live.mjs --health
+# → {"ok":true,"pageConnected":true}，exit 0
+
+# 读：从活的浏览器 world 发现 handle（真 queryRun callback 形态）
+node skills/forgeax-engine-cli/scripts/remote-live.mjs \
+  "let r; const {createQueryState,queryRun,Entity}=await _import('@forgeax/engine-ecs'); const st=createQueryState({with:[Entity]}); queryRun(st,world,b=>{r=Array.from(b.Entity.self)}); r"
+
+# 写：直接改活实体，屏幕立刻动（无 rebuild/refresh）
+node skills/forgeax-engine-cli/scripts/remote-live.mjs \
+  "world.set(<h>, (await _import('@forgeax/engine-runtime')).Transform, {pos:[5,0,0]})"
+
+# 从文件读脚本
+node skills/forgeax-engine-cli/scripts/remote-live.mjs --file snippet.js
+
+# 换端口（中继 + CLI 都读同一 env）
+FORGEAX_ENGINE_BRIDGE_PORT=6001 node scripts/dev-live.mjs @forgeax/remote-demo
+FORGEAX_ENGINE_BRIDGE_PORT=6001 node skills/forgeax-engine-cli/scripts/remote-live.mjs --health
+```
+
+`remote-live.mjs` 严格 flag 解析：只认 `--file` / `--health`；未声明 flag（如 `--settle`）loud 失败 exit 2，绝不把裸值漏进 code 串。错误码（中继层）：`PAGE_NOT_CONNECTED` / `EVAL_TIMEOUT` / `BAD_REQUEST` / `SEND_FAILED`；eval 层仍是 4 成员 `RemoteErrorCode`。
+
+| script | 角色 |
+|:--|:--|
+| `skills/forgeax-engine-cli/scripts/remote-bridge-server.mjs` | 环回中继（`GET /health` + `POST /eval` + WS `/bridge`），端口 `FORGEAX_ENGINE_BRIDGE_PORT ?? 5733` |
+| `skills/forgeax-engine-cli/scripts/remote-live.mjs` | CLI：`--health` / `--file` / positional snippet，POST 到中继 |
+| `skills/forgeax-engine-cli/scripts/remote-cli-common.mjs` | 严格 `parseArgs` / `readSnippet` / `printResult`（SSOT，防 flag 漏入 code） |
+| `scripts/dev-live.mjs` | 一条命令起中继 + `pnpm --filter <pkg> dev` |
+
+> [!NOTE]
+> **remote-live 与 WS server 正交**：浏览器用 remote-live（中继），Node/dawn-node 用 WS server（`FORGEAX_ENGINE_REMOTE_SERVE=1`）。两条路都收束到同一个 `executeScript` eval 核 + 同一 `RemoteError` 模型；`app.remote` 语义不变（浏览器里仍 `undefined`，bridge 与它无关）。
+
 ## RemoteErrorCode 闭集（4 成员）
 
 ```mermaid
@@ -239,7 +297,7 @@ forgeax-engine-remote-ecs entities --port 5731
 
 - **eval 内不能用裸 `import`**：脚本作用域不认 `import` 关键字——用注入的 `_import(specifier)` 函数做动态 ESM 引入。`const ecs = await _import('@forgeax/engine-ecs')`。
 - **`queryRun` 返回 `void`，结果在回调的 `bundle` 里**：`queryRun(state, world, callback)` 是 **batch-callback 形态**——参数顺序是 `(state, world, callback)`，不是链式 `.Entity.self`。把结果变量声明在回调外、回调内赋值。
-- **`app.remote` 为 `undefined`**：`createApp` 仅 dev 模式默认起 server。production / headless / dawn-node（无显式 env opt-in）下 `app.remote` 为 `undefined`。dawn-node 需要时设环境变量 `FORGEAX_REMOTE_SERVER=1`。
+- **`app.remote` 为 `undefined`（尤其浏览器里）**：`app.remote` 是 **Node WS server** 句柄。浏览器起不了监听 socket，`createApp` 尝试 `startServer` 会在 `ws` 浏览器 shim 上抛错并被静默吞掉 → 浏览器 dev 里 `app.remote` 恒为 `undefined`。想在**运行中的浏览器引擎**里 eval，用下面的 **remote-live** 环回中继（不是 `app.remote`）。dawn-node / headless 无 GUI 时才用 WS server：设环境变量 `FORGEAX_ENGINE_REMOTE_SERVE=1` opt-in（源码 SSOT：`packages/app/src/internal/remote-serve-flag.ts`）。
 - **plugin bin 找不到**：确认 `@forgeax/engine-{ecs,pack,font,gltf,state}` 已安装（`pnpm install`），bin 会自动出现在 `node_modules/.bin/`。
 
 ## 深入

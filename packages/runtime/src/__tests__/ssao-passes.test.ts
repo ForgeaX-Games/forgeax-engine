@@ -16,8 +16,19 @@
 import { RenderGraph } from '@forgeax/engine-render-graph';
 import type { RhiCaps, RhiDevice } from '@forgeax/engine-rhi';
 import { describe, expect, it, vi } from 'vitest';
+import {
+  recordBloomBlurHPass,
+  recordBloomBlurVPass,
+  recordBloomBrightPass,
+  recordBloomCompositePass,
+  recordFxaaPass,
+  recordSkyboxPass,
+} from '../record/skybox-post-pass';
 import { addSsaoPasses } from '../render-graph-primitives';
-import type { RenderPipelineContext } from '../render-pipeline-context';
+import type {
+  _InternalRenderPipelineContext,
+  RenderPipelineContext,
+} from '../render-pipeline-context';
 import type { RenderSystemRuntime } from '../render-system';
 
 function mockRuntime(capsOverride: Partial<RhiCaps> = {}): RenderSystemRuntime {
@@ -912,6 +923,155 @@ describe('recordSsaoCalcPass per-frame intensity write (M8 / w46 — RED)', () =
 // physical view identity (bloom / fxaa share the identical getOrCreateFromChain
 // mechanism via frameState.postProcessBgCache).
 // ─────────────────────────────────────────────────────────────────────────
+interface PostProcessBindGroupCreate {
+  label?: string;
+  entries: readonly { binding: number; resource: { kind: string; value: unknown } }[];
+}
+
+function makePostProcessRecordCtx(): {
+  ctx: _InternalRenderPipelineContext;
+  bindGroupCreates: PostProcessBindGroupCreate[];
+} {
+  const bindGroupCreates: PostProcessBindGroupCreate[] = [];
+  const pass = {
+    setPipeline: vi.fn(),
+    setBindGroup: vi.fn(),
+    draw: vi.fn(),
+    end: vi.fn(),
+  };
+  const device = {
+    createBindGroup: vi.fn((desc: PostProcessBindGroupCreate) => {
+      bindGroupCreates.push(desc);
+      return { ok: true, value: { label: `bg-${bindGroupCreates.length}` } };
+    }),
+    createTextureView: vi.fn(() => ({ ok: true, value: { label: 'fxaa-storage-view' } })),
+    queue: { writeBuffer: vi.fn(() => ({ ok: true, value: undefined })) },
+  };
+  const sampler = { label: 'postprocess-sampler' };
+  const ctx = {
+    runtime: {
+      device,
+      errorRegistry: { fire: vi.fn() },
+    },
+    store: { getCubemapGpuView: vi.fn() },
+    encoder: {
+      beginRenderPass: vi.fn(() => pass),
+      copyTextureToTexture: vi.fn(),
+    },
+    pipelineState: {
+      viewUniformBuffer: { label: 'view-uniform' },
+      perPassResources: {
+        hdrColorView: { label: 'hdr-color' },
+        hdrColorMsaaView: null,
+        skyboxPipeline: { label: 'skybox-pipeline' },
+        skyboxPipelineMsaa: null,
+        skyboxBindGroupLayout: { label: 'skybox-bgl' },
+        skyboxSampler: sampler,
+        bloomBrightPipeline: { label: 'bloom-bright-pipeline' },
+        bloomBrightBindGroupLayout: { label: 'bloom-bright-bgl' },
+        bloomBrightParamsBuffer: { label: 'bloom-bright-params' },
+        bloomBlurHPipeline: { label: 'bloom-blur-h-pipeline' },
+        bloomBlurVPipeline: { label: 'bloom-blur-v-pipeline' },
+        bloomBlurBindGroupLayout: { label: 'bloom-blur-bgl' },
+        bloomBlurHParamsBuffer: { label: 'bloom-blur-h-params' },
+        bloomBlurVParamsBuffer: { label: 'bloom-blur-v-params' },
+        bloomCompositePipeline: { label: 'bloom-composite-pipeline' },
+        bloomCompositeBindGroupLayout: { label: 'bloom-composite-bgl' },
+        bloomCompositeParamsBuffer: { label: 'bloom-composite-params' },
+        bloomSampler: sampler,
+        fxaaPipeline: { label: 'fxaa-pipeline' },
+        fxaaBindGroupLayout: { label: 'fxaa-bgl' },
+        fxaaSampler: sampler,
+        fxaaIntermediateTexture: { label: 'fxaa-intermediate-texture' },
+        fxaaIntermediateView: { label: 'fxaa-intermediate' },
+      },
+    },
+    frameState: { postProcessBgCache: new WeakMap() },
+    bindGroupCounts: { createBindGroup: 0, keys: [] },
+    camera: {
+      bloom: 'on',
+      bloomThreshold: 1,
+      bloomBlurRadius: 2,
+      bloomIntensity: 0.5,
+      antialias: 'fxaa',
+    },
+    tonemapActive: true,
+    skyboxActive: true,
+    skybox: { equirectHandle: 1 },
+    msaaActive: false,
+    targetW: 800,
+    targetH: 600,
+    currentTexture: { label: 'swapchain' },
+  } as unknown as _InternalRenderPipelineContext;
+  return { ctx, bindGroupCreates };
+}
+
+describe('post-process bindgroup identity cache (issue #670)', () => {
+  it('reuses live-view bindgroups and rebuilds changed-view bindings across postprocess paths', () => {
+    const { ctx, bindGroupCreates } = makePostProcessRecordCtx();
+    const views = {
+      hdrColor: { label: 'hdr-color' },
+      bloomBright: { label: 'bloom-bright' },
+      bloomBlurH: { label: 'bloom-blur-h' },
+      bloomBlurV: { label: 'bloom-blur-v' },
+      hdrComposited: { label: 'hdr-composited' },
+      cubemap: { label: 'cubemap' },
+    };
+    const resolve = { resolve: (name: string) => views[name as keyof typeof views] };
+    const store = ctx.store as unknown as { getCubemapGpuView: ReturnType<typeof vi.fn> };
+    store.getCubemapGpuView.mockImplementation(() => views.cubemap);
+
+    const recordAll = () => {
+      recordBloomBrightPass(ctx, resolve);
+      recordBloomBlurHPass(ctx, resolve);
+      recordBloomBlurVPass(ctx, resolve);
+      recordBloomCompositePass(ctx, resolve);
+      recordFxaaPass(ctx);
+      recordSkyboxPass(ctx);
+    };
+    recordAll();
+    expect(bindGroupCreates).toHaveLength(6);
+    expect(bindGroupCreates.map((create) => create.label)).toEqual([
+      'bloom-bright-bg',
+      'bloom-blur-h-bg',
+      'bloom-blur-v-bg',
+      'bloom-composite-bg',
+      'fxaa-bg',
+      'skybox-bg',
+    ]);
+    expect(bindGroupCreates[3]?.entries.map((entry) => entry.resource.value)).toContain(
+      views.bloomBlurV,
+    );
+    expect(bindGroupCreates[5]?.entries[0]?.resource.value).toBe(views.cubemap);
+
+    recordAll();
+    expect(bindGroupCreates).toHaveLength(6);
+
+    views.bloomBright = { label: 'bloom-bright-resized' };
+    views.bloomBlurH = { label: 'bloom-blur-h-resized' };
+    views.bloomBlurV = { label: 'bloom-blur-v-resized' };
+    views.hdrColor = { label: 'hdr-color-resized' };
+    views.cubemap = { label: 'cubemap-reprojected' };
+    (
+      ctx.pipelineState as { perPassResources: { fxaaIntermediateView: unknown } }
+    ).perPassResources.fxaaIntermediateView = {
+      label: 'fxaa-intermediate-resized',
+    };
+    recordAll();
+
+    expect(bindGroupCreates).toHaveLength(12);
+    expect(bindGroupCreates[6]?.entries[0]?.resource.value).toBe(views.hdrColor);
+    expect(bindGroupCreates[8]?.entries[0]?.resource.value).toBe(views.bloomBlurH);
+    expect(bindGroupCreates[9]?.entries.map((entry) => entry.resource.value)).toContain(
+      views.bloomBlurV,
+    );
+    expect(bindGroupCreates[10]?.entries[0]?.resource.value).toEqual({
+      label: 'fxaa-intermediate-resized',
+    });
+    expect(bindGroupCreates[11]?.entries[0]?.resource.value).toBe(views.cubemap);
+  });
+});
+
 describe('bindgroup resize invalidation (R-BGCACHE)', () => {
   // A resolve function whose returned view objects can be swapped to simulate
   // a resize (new physical texture identity for the same logical key).

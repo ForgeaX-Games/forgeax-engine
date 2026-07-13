@@ -18,6 +18,10 @@
       "types": "./dist/server.d.ts",
       "import": "./dist/server.mjs"
     },
+    "./execute": {
+      "types": "./dist/execute.d.ts",
+      "import": "./dist/execute.mjs"
+    },
     "./errors": {
       "types": "./dist/errors.d.ts",
       "import": "./dist/errors.mjs"

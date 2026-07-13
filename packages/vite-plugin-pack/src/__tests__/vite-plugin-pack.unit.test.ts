@@ -1435,6 +1435,42 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(pmcDecodeCallCount).toBeLessThanOrEqual(2);
       expect(pmcDecodeCallCount).toBeGreaterThan(0);
     });
+
+    it('(e) cooked sub-asset rows carry the derived display name (binary + non-binary arms)', async () => {
+      // Regression guard: startMetaImport rebuilds each imported PackIndexEntry
+      // field-by-field. Dropping `name` there made a lazy-cooked GLB's
+      // sub-assets show blank in the Content Browser while the un-cooked
+      // /pack-index.json still had the name. Both overlay arms (binary texture,
+      // non-binary mesh living in the pack body) must preserve buildCatalog's
+      // deriveAssetName result.
+      await writeFile(
+        join(assetsDir, 'textured.gltf.meta.json'),
+        pmcGltfMetaTextured([PMC_TEX_GUID_A]),
+      );
+      await writeFile(join(assetsDir, 'textured.gltf'), new Uint8Array([0]));
+
+      const mockImporter = makePmcMockGltfImporter();
+      const cap = makePmcServer();
+      const plugin = pluginPack({ roots: [assetsDir], importers: [mockImporter] });
+      plugin.configureServer(cap.server as never);
+      await new Promise((r) => setTimeout(r, 80));
+      const handler = cap.getHandler();
+      if (handler === undefined) throw new Error('handler not mounted');
+
+      // Binary arm: the texture declared name 'tex-0' in the meta, so
+      // deriveAssetName returns the stored name for a multi-asset package.
+      const texRes = await pmcPostImport(handler, PMC_TEX_GUID_A);
+      expect(texRes.statusCode).toBe(200);
+      const texEntries = JSON.parse(texRes.body) as PackIndexEntry[];
+      expect(texEntries[0]?.name).toBe('tex-0');
+
+      // Non-binary arm: the mesh declared no name, so deriveAssetName falls
+      // back to the source basename.
+      const meshRes = await pmcPostImport(handler, PMC_MESH_GUID);
+      expect(meshRes.statusCode).toBe(200);
+      const meshEntries = JSON.parse(meshRes.body) as PackIndexEntry[];
+      expect(meshEntries[0]?.name).toBe('textured.gltf');
+    });
   });
 }
 

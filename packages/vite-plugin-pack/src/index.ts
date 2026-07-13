@@ -611,6 +611,12 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           relativeUrl: `${raw.relativeUrl}${suffix}`,
           kind: raw.kind,
           sourcePath: raw.sourcePath,
+          // Carry the raw catalog row's derived display name (buildCatalog ->
+          // deriveAssetName: source basename for GLB sub-assets) into the
+          // imported row. Rebuilding the row field-by-field dropped it, so a
+          // lazy-cooked GLB's sub-assets showed blank in the Content Browser
+          // while the un-cooked /pack-index.json still had the name.
+          ...(raw.name !== undefined ? { name: raw.name } : {}),
           ...(overlaidMetadata !== undefined
             ? { metadata: overlaidMetadata }
             : raw.metadata !== undefined
@@ -646,6 +652,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
                 relativeUrl: packUrl,
                 kind: raw.kind,
                 sourcePath: raw.sourcePath,
+                // Same as the binary arm: preserve the derived display name the
+                // field-by-field rebuild would otherwise drop.
+                ...(raw.name !== undefined ? { name: raw.name } : {}),
                 ...(raw.metadata !== undefined ? { metadata: raw.metadata } : {}),
                 ...(nonBinAsset?.refs !== undefined ? { refs: nonBinAsset.refs } : {}),
               }

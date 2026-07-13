@@ -604,6 +604,54 @@ async function createAppFromCanvas(
       syncCameraAspect(world, canvas.width, canvas.height);
     });
 
+    // DEV-only browser remote bridge (remote-live). A browser cannot host the
+    // Node WS server that @forgeax/engine-remote/server needs, so the running
+    // engine would be unreachable from a CLI in a real dev browser. Instead the
+    // page dials OUT to a loopback relay and runs the ws-free eval core against
+    // the live world/renderer/assets/debugAdapter.
+    //
+    // OPT-IN via VITE_FORGEAX_ENGINE_BRIDGE=1 (set by scripts/dev-live.mjs), NOT
+    // on-by-default: a page that dials a relay which is not running makes the
+    // BROWSER itself log "WebSocket connection failed" to the console — noise a
+    // JS catch cannot suppress — which trips every zero-console-error browser
+    // smoke (collectathon / hello-*). So a plain `pnpm --filter <app> dev` (and
+    // CI) stays silent; only dev-live.mjs, which also launches the relay, turns
+    // it on. Production DCE's the whole block (import.meta.env.DEV === false).
+    // Additive: the Node startServer path above and app.remote are untouched.
+    if (
+      typeof import.meta !== 'undefined' &&
+      (import.meta as { env?: { DEV?: boolean; VITE_FORGEAX_ENGINE_BRIDGE?: string } }).env?.DEV ===
+        true &&
+      (import.meta as { env?: { VITE_FORGEAX_ENGINE_BRIDGE?: string } }).env
+        ?.VITE_FORGEAX_ENGINE_BRIDGE === '1'
+    ) {
+      const bridgePort =
+        (import.meta as { env?: { VITE_FORGEAX_ENGINE_BRIDGE_PORT?: string } }).env
+          ?.VITE_FORGEAX_ENGINE_BRIDGE_PORT ?? '5733';
+      const appHandle = built.value;
+      // installBrowserRemoteBridge self-registers its HMR teardown (via
+      // import.meta.hot inside browser-remote-bridge.ts) so this file carries no
+      // import.meta.hot reference — the rhi-debug guard gate (guard-gates.test.ts
+      // AC-08) requires every import.meta.hot in create-app.ts to sit inside the
+      // FORGEAX_ENGINE_RHI_DEBUG block, and the bridge is a separate concern.
+      void import('./internal/browser-remote-bridge')
+        .then((m) =>
+          m.installBrowserRemoteBridge({
+            registerUpdate: (fn) => appHandle.registerUpdate(fn),
+            world,
+            renderer,
+            assets: renderer.assets,
+            ...(_debugAdapter !== undefined ? { debugAdapter: _debugAdapter } : {}),
+            port: bridgePort,
+          }),
+        )
+        .catch(() => {
+          // Bridge install failed (relay module unresolved, WS unsupported) —
+          // the engine continues without remote-live; the relay simply never
+          // sees this page.
+        });
+    }
+
     // feat-20260619 M7: auto-register audio listener-sync system (D-7).
     // Runs as an ECS addSystem (after propagateTransforms) — NOT via
     // registerUpdate — so it reads the CURRENT frame's Transform.world

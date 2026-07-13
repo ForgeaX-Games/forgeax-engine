@@ -1,9 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 
 // Import the SSOT helpers from the shared lib + content-key module
 // (architecture-principles #1). Vitest can resolve .mjs relative imports; the
 // test runs in a Node ESM context.
-import { parseGitOrigin } from '../../../scripts/lib/fetch-wasm-lib.mjs';
+import { parseGitOrigin, authHeaders } from '../../../scripts/lib/fetch-wasm-lib.mjs';
 import { computeContentSha256, buildAssetName } from '../scripts/content-key.mjs';
 
 function contentSha8(): Promise<string> {
@@ -51,6 +51,29 @@ describe('fetch-wasm git origin parsing', () => {
     expect(result).toEqual({ owner: 'org', repo: 'repo' });
   });
 
+  // Regression: embedded credentials (git credential helper / Windows Git
+  // Credential Manager) must not be mistaken for the host — the "TOKEN@" prefix
+  // used to be captured into the host group, tripping E3_ORIGIN_UNSUPPORTED_HOST.
+  it('parses HTTPS origin with embedded token credential (TOKEN@github.com)', () => {
+    const result = parseGitOrigin(
+      'https://ghp_ABCDEF1234567890@github.com/ForgeaX-Games/forgeax-engine.git',
+    );
+    expect(result).toEqual({ owner: 'ForgeaX-Games', repo: 'forgeax-engine' });
+  });
+
+  it('parses HTTPS origin with embedded user:password credential', () => {
+    const result = parseGitOrigin(
+      'https://user:x-oauth-basic@github.com/some-org/my-repo.git',
+    );
+    expect(result).toEqual({ owner: 'some-org', repo: 'my-repo' });
+  });
+
+  it('still rejects non-GitHub host even with embedded credentials', () => {
+    expect(() =>
+      parseGitOrigin('https://token@gitlab.com/org/repo.git'),
+    ).toThrow(/Unsupported git host/);
+  });
+
   it('rejects non-GitHub SSH host with E3', () => {
     expect(() => parseGitOrigin('git@gitlab.com:org/repo.git')).toThrow(
       /Unsupported git host/,
@@ -79,6 +102,42 @@ describe('fetch-wasm git origin parsing', () => {
     expect(() => parseGitOrigin('https://github.com/only-one-part')).toThrow(
       /Cannot parse owner\/repo/,
     );
+  });
+});
+
+describe('fetch-wasm authHeaders token resolution', () => {
+  const saved = {
+    GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+    GH_TOKEN: process.env.GH_TOKEN,
+  };
+
+  afterEach(() => {
+    // Restore the original env so tests stay isolated (Fail Fast / no bleed).
+    for (const key of ['GITHUB_TOKEN', 'GH_TOKEN'] as const) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  it('uses GITHUB_TOKEN when set', () => {
+    process.env.GITHUB_TOKEN = 'gh-token-primary';
+    delete process.env.GH_TOKEN;
+    expect(authHeaders()).toEqual({ Authorization: 'Bearer gh-token-primary' });
+  });
+
+  // Regression: the official `gh` CLI and many CI systems set GH_TOKEN, not
+  // GITHUB_TOKEN. authHeaders() must fall back to it before shelling out to
+  // `gh auth token` (which can fail on PATH differences in bun/pnpm subprocs).
+  it('falls back to GH_TOKEN when GITHUB_TOKEN is unset', () => {
+    delete process.env.GITHUB_TOKEN;
+    process.env.GH_TOKEN = 'gh-token-secondary';
+    expect(authHeaders()).toEqual({ Authorization: 'Bearer gh-token-secondary' });
+  });
+
+  it('prefers GITHUB_TOKEN over GH_TOKEN when both are set', () => {
+    process.env.GITHUB_TOKEN = 'primary';
+    process.env.GH_TOKEN = 'secondary';
+    expect(authHeaders()).toEqual({ Authorization: 'Bearer primary' });
   });
 });
 

@@ -202,8 +202,11 @@ flowchart TD
 | Path | Method | Use Case |
 |:--|:--|:--|
 | In-process | `const result = await client.eval('world.inspect().entityCount')` | Host self-inspection; zero network cost |
-| WebSocket | `ws://localhost:5732` send `{"method":"eval","params":{"script":"..."}}` | External AI agents / CLI tools attaching to a running app |
+| WebSocket | `ws://localhost:5732` send `{"method":"eval","params":{"script":"..."}}` | External AI agents / CLI tools attaching to a running **Node / dawn-node** app |
 | CLI plugin bin | `forgeax-engine-remote-ecs entities` | Offline / out-of-process data tools; each bin is a standalone executable |
+| Browser loopback relay (**remote-live**) | `POST http://127.0.0.1:5733/eval {"code":"..."}` → page dials the relay | Driving a **live browser** engine (`pnpm --filter <app> dev`, :5173) where no WS server can bind |
+
+> **Browsers cannot host a WS server.** `startServer` uses `ws.WebSocketServer` (a Node listening socket), so it never starts in a browser — `createApp` catches the failure and `app.remote` stays `undefined`. To reach a running browser engine, `createApp` mounts a DEV-only bridge that dials OUT to a loopback relay and runs the ws-free eval core (`@forgeax/engine-remote/execute`) in the page realm. Start it with `node scripts/dev-live.mjs <app>` and drive it with `node skills/forgeax-engine-cli/scripts/remote-live.mjs "<code>"`. On by default in dev; opt out with `VITE_FORGEAX_ENGINE_BRIDGE=0`. Full recipe + security notes: the `forgeax-engine-cli` skill (§remote-live). This path is additive — it does not change the WS-server path or `app.remote` semantics.
 
 The wire protocol exposes **two** JSON-RPC methods: `eval` (the single capability above) and `introspect`. Send `{"method":"introspect"}` to get an OpenRPC L2 subset document listing the available methods (`eval` / `introspect`) and the eval-scope live roots — an AI agent can self-describe the surface without reading source. Recoverable failures map to JSON-RPC error codes `-32001..-32006` (the 4-member `RemoteErrorCode` union; see above).
 

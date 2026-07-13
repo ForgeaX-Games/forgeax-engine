@@ -35,8 +35,11 @@ export class FetchError extends Error {
 /**
  * Parse a git remote URL into { owner, repo }.
  * Supports SSH (git@github.com:OWNER/REPO.git) and HTTPS
- * (https://github.com/OWNER/REPO.git). Throws FetchError for non-GitHub
- * hosts or unparseable URLs.
+ * (https://github.com/OWNER/REPO.git), including HTTPS URLs that embed
+ * credentials (https://TOKEN@github.com/OWNER/REPO.git or
+ * https://USER:PASS@github.com/...) as written by git credential helpers /
+ * Windows Git Credential Manager. Throws FetchError for non-GitHub hosts or
+ * unparseable URLs.
  */
 export function parseGitOrigin(url) {
   // SSH: git@github.com:OWNER/REPO.git
@@ -44,8 +47,10 @@ export function parseGitOrigin(url) {
   if (sshMatch) {
     return assertGitHub(sshMatch[1], sshMatch[2]);
   }
-  // HTTPS: https://github.com/OWNER/REPO.git
-  const httpsMatch = url.match(/^https?:\/\/([^/]+)\/(.+?)(?:\.git)?$/);
+  // HTTPS: https://github.com/OWNER/REPO.git — the optional (?:[^@]+@)?
+  // non-capturing group skips embedded credentials (TOKEN@ or USER:PASS@)
+  // so the host capture is the bare hostname, not "TOKEN@github.com".
+  const httpsMatch = url.match(/^https?:\/\/(?:[^@]+@)?([^/]+)\/(.+?)(?:\.git)?$/);
   if (httpsMatch) {
     return assertGitHub(httpsMatch[1], httpsMatch[2]);
   }
@@ -99,10 +104,11 @@ export function getGitOrigin() {
 
 /**
  * Build the Authorization header for GitHub API requests.
- * Prefers GITHUB_TOKEN env var; falls back to `gh auth token` CLI.
+ * Prefers GITHUB_TOKEN, then GH_TOKEN (the name the official `gh` CLI and many
+ * CI systems set), then falls back to `gh auth token` CLI.
  */
 export function authHeaders() {
-  const token = process.env.GITHUB_TOKEN || resolveGhCliToken();
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || resolveGhCliToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
