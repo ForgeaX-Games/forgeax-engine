@@ -105,6 +105,42 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/bevy/camera-orbit": {
+      "name": "@forgeax/bevy-camera-orbit",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-input": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/bevy/camera-pan": {
+      "name": "@forgeax/bevy-camera-pan",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-input": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/bevy/cubic-splines": {
       "name": "@forgeax/bevy-cubic-splines",
       "version": "0.0.0",
@@ -156,6 +192,23 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/bevy/scale": {
+      "name": "@forgeax/bevy-scale",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/bevy/smooth-follow": {
       "name": "@forgeax/bevy-smooth-follow",
       "version": "0.0.0",
@@ -175,6 +228,23 @@
     },
     "apps/bevy/time-elapsed": {
       "name": "@forgeax/bevy-time-elapsed",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/bevy/transform": {
+      "name": "@forgeax/bevy-transform",
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
@@ -2118,6 +2188,7 @@
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-graphics-extras": "workspace:*",
+        "@forgeax/engine-image": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-rhi": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
@@ -2951,15 +3022,23 @@
 
     "@forgeax/bevy-axes": ["@forgeax/bevy-axes@workspace:apps/bevy/axes"],
 
+    "@forgeax/bevy-camera-orbit": ["@forgeax/bevy-camera-orbit@workspace:apps/bevy/camera-orbit"],
+
+    "@forgeax/bevy-camera-pan": ["@forgeax/bevy-camera-pan@workspace:apps/bevy/camera-pan"],
+
     "@forgeax/bevy-cubic-splines": ["@forgeax/bevy-cubic-splines@workspace:apps/bevy/cubic-splines"],
 
     "@forgeax/bevy-easing": ["@forgeax/bevy-easing@workspace:apps/bevy/easing"],
 
     "@forgeax/bevy-iter-combinations": ["@forgeax/bevy-iter-combinations@workspace:apps/bevy/iter-combinations"],
 
+    "@forgeax/bevy-scale": ["@forgeax/bevy-scale@workspace:apps/bevy/scale"],
+
     "@forgeax/bevy-smooth-follow": ["@forgeax/bevy-smooth-follow@workspace:apps/bevy/smooth-follow"],
 
     "@forgeax/bevy-time-elapsed": ["@forgeax/bevy-time-elapsed@workspace:apps/bevy/time-elapsed"],
+
+    "@forgeax/bevy-transform": ["@forgeax/bevy-transform@workspace:apps/bevy/transform"],
 
     "@forgeax/bevy-translation": ["@forgeax/bevy-translation@workspace:apps/bevy/translation"],
 

@@ -27,6 +27,8 @@ export {
   BUILTIN_TRIANGLE,
   BuiltinAssetRegistry,
 } from './builtin-asset-registry';
+// ─── Runtime image byte decoder (tweak-20260714 M1) ──────────────────────────
+export { decodeImageBytes } from './decode-image-bytes';
 // ─── Dynamic per-frame texture store ────────────────────────────────────────
 export { type DynamicTextureDevice, DynamicTextureStore } from './dynamic-texture-store';
 // ─── Asset cluster error model (closed union + classes) ─────────────────────

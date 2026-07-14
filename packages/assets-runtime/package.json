@@ -30,6 +30,7 @@
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-graphics-extras": "workspace:*",
+    "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",

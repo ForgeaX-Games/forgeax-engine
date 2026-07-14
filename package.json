@@ -75,6 +75,9 @@
     "dependabot:check-doc-anchor": "node scripts/dependabot/check-doc-anchor.mjs",
     "dup-check": "node scripts/dup-check.mjs",
     "bevy-coverage": "node scripts/bevy-coverage-audit.mjs",
+    "bevy:new-demo": "node scripts/bevy-demo.mjs new",
+    "bevy:validate": "node scripts/bevy-demo.mjs validate",
+    "bevy:smokes": "node scripts/bevy-demo.mjs smokes",
     "metrics:check": "node scripts/check-metrics-declared.mjs",
     "metrics:report": "node scripts/metrics/render-sticky.mjs",
     "metrics:run": "node scripts/metrics/run-all.mjs",
@@ -82,7 +85,7 @@
     "sync": "node scripts/sync.mjs",
     "sync:check": "node scripts/check-workspaces-equivalence.mjs",
     "harness:sync": "node scripts/sync-harness.mjs",
-    "postinstall": "node scripts/sync-harness.mjs && node scripts/ensure-wgpu-wasm-pkg.mjs",
+    "postinstall": "node scripts/sync-harness.mjs",
     "changeset": "changeset",
     "changeset:status": "changeset status",
     "changeset:version": "changeset version"

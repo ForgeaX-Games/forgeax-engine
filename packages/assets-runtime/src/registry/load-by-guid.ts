@@ -856,7 +856,7 @@ export async function transportOrFail<T = Asset>(
       if (registry.packIndexCache === undefined) registry.packIndexCache = new Map();
       for (const e of importedEntries) {
         registry.packIndexCache.set(e.guid.toLowerCase(), {
-          relativeUrl: e.relativeUrl,
+          relativeUrl: resolveCatalogAssetUrl(registry, e.relativeUrl),
           kind: e.kind,
           // Carry the transport's derived display name into the cache row.
           // buildCatalog already resolves it (deriveAssetName: basename of the
@@ -872,6 +872,13 @@ export async function transportOrFail<T = Asset>(
           // the next full pack-index refresh (feat: listCatalog refs).
           ...(e.refs !== undefined ? { refs: e.refs } : {}),
           ...(e.compression !== undefined ? { compression: e.compression } : {}),
+          // Carry sourcePath on the incremental patch path too (same red-line
+          // as refs above): an asset imported via POST /__import would
+          // otherwise expose no source-file path in listCatalog until the next
+          // full pack-index refresh, breaking editor CRUD sidecar lookup for
+          // freshly imported assets. `sourcePath` is a required PackIndexEntry
+          // field, so it is always present on the transport row.
+          ...(e.sourcePath !== undefined ? { sourcePath: e.sourcePath } : {}),
         });
       }
     });
@@ -929,6 +936,30 @@ export function registerParsedAsset<T = Asset>(
 /**
  * Fetch and parse pack-index.json into a Map<guidKey, {relativeUrl, kind}>.
  */
+/**
+ * Resolve a catalog entry URL against the configured pack-index URL.
+ *
+ * The pack index is the asset delivery boundary: a catalog may use relative
+ * paths, root-relative paths, or absolute URLs, but the registry must always
+ * fetch them from the host that supplied that index. In a browser, first
+ * canonicalize a host-relative index against the page URL. A non-absolute index
+ * in a non-browser host intentionally remains untouched.
+ */
+export function resolveCatalogAssetUrl(registry: AssetRegistry, relativeUrl: string): string {
+  const packIndexUrl = registry.packIndexUrl;
+  if (packIndexUrl === undefined) return relativeUrl;
+
+  try {
+    const baseUrl = new URL(packIndexUrl, globalThis.location?.href).href;
+    return new URL(relativeUrl, baseUrl).href;
+  } catch {
+    // Preserve the caller's URL only when neither the index nor the browser
+    // context can provide an absolute base (for example a Node unit test using
+    // `/pack-index.json`).
+    return relativeUrl;
+  }
+}
+
 export async function fetchPackIndex(registry: AssetRegistry): Promise<
   Result<
     Map<
@@ -940,6 +971,7 @@ export async function fetchPackIndex(registry: AssetRegistry): Promise<
         metadata?: ImageMetadata | undefined;
         refs?: readonly string[];
         compression?: AssetCompression;
+        sourcePath?: string;
       }
     >,
     AssetError
@@ -987,6 +1019,7 @@ export async function fetchPackIndex(registry: AssetRegistry): Promise<
       metadata?: ImageMetadata | undefined;
       refs?: readonly string[];
       compression?: AssetCompression;
+      sourcePath?: string;
     }
   >();
   for (const item of raw as Array<{
@@ -997,6 +1030,7 @@ export async function fetchPackIndex(registry: AssetRegistry): Promise<
     metadata?: unknown;
     refs?: unknown;
     compression?: unknown;
+    sourcePath?: unknown;
   }>) {
     if (
       typeof item.guid === 'string' &&
@@ -1020,12 +1054,20 @@ export async function fetchPackIndex(registry: AssetRegistry): Promise<
         metadata?: ImageMetadata | undefined;
         refs?: readonly string[];
         compression?: AssetCompression;
+        sourcePath?: string;
       } = {
-        relativeUrl: item.relativeUrl,
+        relativeUrl: resolveCatalogAssetUrl(registry, item.relativeUrl),
         kind: item.kind,
         metadata: item.metadata as ImageMetadata | undefined,
       };
       if (typeof item.name === 'string') row.name = item.name;
+      // sourcePath is the on-disk source-file location (pack-index required
+      // field, `PackIndexEntry.sourcePath`); the catalog builder always emits
+      // it. Preserve it so editors can locate the `.meta.json` sidecar for
+      // CRUD (delete/rename/duplicate) -- `relativeUrl` points at the runtime
+      // load artefact (DDC `.bin` / `.pack.json`) and cannot be reversed to
+      // the source path.
+      if (typeof item.sourcePath === 'string') row.sourcePath = item.sourcePath;
       // refs is the optional dependency-edge field (feat: listCatalog refs);
       // narrow to a string[] so a malformed pack-index row cannot inject
       // non-string edges into the catalog.

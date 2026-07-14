@@ -41,9 +41,28 @@ Three ECS systems run in order every frame (registered by `physicsPlugin` during
 |:--|:--|:--|:--|
 | 1. Sync | `physicsSyncBackend` | `propagateTransforms` | Iterates archetypes with (Transform, RigidBody, Collider); calls `ensureBody` to create Rapier bodies for new entities |
 | 2. Step | `physicsStepSimulation` | `physicsSyncBackend` | Reads `Time.dt` resource; calls `PhysicsWorld.step()` to advance simulation (skips when dt <= 0 or > 0.1s) |
-| 3. Writeback | `physicsWriteback` | `physicsStepSimulation` | Calls `writebackDynamicBodies()`; writes Rapier body positions back to ECS `Transform.pos` |
+| 3. Writeback | `physicsWriteback` | `physicsStepSimulation` | Calls `writebackDynamicBodies()`; writes dynamic-body pose back to ECS `Transform` |
 
 All three systems early-return safely when the `PhysicsWorld` resource is not yet available (WASM fire-and-forget load).
+
+### Transform Pose Projection
+
+`Transform` is the authoring source for a Collider's world-space pose. After
+`propagateTransforms`, the backend projects the resolved world translation,
+rotation, and scale into Rapier. This applies at creation and on every later
+sync for static and non-CharacterController kinematic bodies; dynamic bodies
+own their pose after creation and write it back through the physics step.
+
+| Shape | 3D scale projection | 2D scale projection |
+|:--|:--|:--|
+| `cuboid` | `halfExtents × abs(worldScale)` componentwise | `halfExtents.xy × abs(worldScale.xy)` |
+| `sphere` | `radius × max(abs(worldScale))` | `radius × max(abs(worldScale.xy))` |
+| `capsule` | Y-axis half-height × `abs(scaleY)`; radius × `max(abs(scaleX), abs(scaleZ))` | Y-axis half-height × `abs(scaleY)`; radius × `abs(scaleX)` |
+
+Negative scale is treated as its absolute magnitude; it does not mirror a
+Rapier collision shape. A parented Collider consumes the resolved world pose,
+not its local TRS. 2D projects the resolved Z-axis quaternion rotation to its
+Rapier angle; out-of-plane rotation is not represented by Rapier 2D.
 
 ## Enum Constants and Narrowing Helpers
 

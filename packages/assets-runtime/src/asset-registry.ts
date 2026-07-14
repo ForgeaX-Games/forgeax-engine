@@ -284,7 +284,7 @@ export class AssetRegistry {
   // ─── Prod pack-index fetch state (M4/w23) ──────────────────────────────
   // When packIndexUrl is configured, loadByGuid fetches pack-index.json on
   // first call, caches the parsed catalog in packIndexCache, then fetches
-  // the individual resource file and registers the asset.
+  // each resource URL resolved against that index and registers the asset.
   packIndexUrl: string | undefined = undefined;
   packIndexCache:
     | Map<
@@ -296,6 +296,7 @@ export class AssetRegistry {
           metadata?: ImageMetadata | undefined;
           refs?: readonly string[];
           compression?: AssetCompression;
+          sourcePath?: string;
         }
       >
     | undefined = undefined;
@@ -542,8 +543,11 @@ export class AssetRegistry {
    *
    * Call this once during engine initialization with the URL where
    * `pack-index.json` is served (emitted by `@forgeax/engine-vite-plugin-pack`
-   * during `vite build`). After configuration, `loadByGuid` will fetch
-   * the catalog on its first invocation and cache it for subsequent calls.
+   * during `vite build`). The index is also the canonical base URL for every
+   * catalog entry: relative, root-relative, and absolute entry URLs are resolved
+   * against it before the registry fetches a pack body. After configuration,
+   * `loadByGuid` will fetch the catalog on its first invocation and cache it for
+   * subsequent calls.
    *
    * @example
    * ```ts
@@ -1354,6 +1358,14 @@ export class AssetRegistry {
     refs?: readonly string[];
     /** Build-time compression strategy. `undefined` for legacy / uncompressed rows. */
     compression?: AssetCompression;
+    /**
+     * On-disk source-file path for external imported assets (FBX / GLB / HDR /
+     * audio / font), relative to the game root. Editors locate the
+     * `.meta.json` sidecar via `sourcePath + '.meta.json'` for CRUD; unlike
+     * `relativeUrl` (the runtime load artefact) it is stable across DDC cook
+     * state. `undefined` for inline / dev-path assets (no sidecar, no CRUD).
+     */
+    sourcePath?: string;
   }[] {
     const seen = new Set<string>();
     const result: {
@@ -1363,6 +1375,7 @@ export class AssetRegistry {
       relativeUrl: string;
       refs?: readonly string[];
       compression?: AssetCompression;
+      sourcePath?: string;
     }[] = [];
 
     // Prod entries: packIndexCache carries relativeUrl + optional name + refs.
@@ -1376,6 +1389,7 @@ export class AssetRegistry {
           relativeUrl: entry.relativeUrl,
           ...(entry.refs !== undefined ? { refs: entry.refs } : {}),
           ...(entry.compression !== undefined ? { compression: entry.compression } : {}),
+          ...(entry.sourcePath !== undefined ? { sourcePath: entry.sourcePath } : {}),
         });
       }
     }

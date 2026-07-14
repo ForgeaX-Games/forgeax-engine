@@ -102,7 +102,7 @@ export function recordShadowPass(
   viewport?: { readonly x: number; readonly y: number; readonly w: number; readonly h: number },
   cascadeIndex: number = 0,
 ): void {
-  const { runtime, pipelineState, validated, meshBindGroup, dispatch, frameState } = c;
+  const { runtime, pipelineState, validatedOrdered, meshBindGroup, dispatch, frameState } = c;
   // feat-20260613-csm-cascaded-shadow-maps M5 / w28: write the per-pass
   // cascade index to the shared shadowCasterCascadeBuffer. The shadow
   // pass below uses an INDEPENDENT command encoder + own queue.submit, so
@@ -164,7 +164,7 @@ export function recordShadowPass(
     }
   }
 
-  if (shadowPipeline !== null && shadowView !== null && validated.length > 0) {
+  if (shadowPipeline !== null && shadowView !== null && validatedOrdered.length > 0) {
     // feat-20260529-rendergraph-pass-abstraction M4 / w14 (RD-4 verification
     // point): this INDEPENDENT 'render-system-shadow' command encoder + its
     // own queue.submit below is the runtime-side manual barrier that splits
@@ -454,7 +454,7 @@ export function recordShadowPass(
 
 /**
  * feat-20260704 M3/w20: per-entity directional shadow-caster draw loop,
- * extracted verbatim from {@link recordShadowPass}. Walks `c.validated`,
+ * extracted verbatim from {@link recordShadowPass}. Walks `c.validatedOrdered`,
  * selects the per-entity shadow PSO (default vertex-only caster or a custom
  * cutout caster), binds the per-entity mesh dynamic-offset + instance buffer,
  * and issues the per-submesh depth draws. `shadowPass` view/material bind
@@ -472,7 +472,7 @@ function recordShadowCasterDraws(
   matchedIndices: Set<number> | null,
   shadowShaderByRenderableIdx: ReadonlyMap<number, string>,
 ): void {
-  const { runtime, pipelineState, validated } = c;
+  const { runtime, pipelineState, validatedOrdered } = c;
   // M-3 / w12: vertexBuffer/indexBuffer state locals migrate to GpuBuffer
   // (the wrapper) -- the de-dup compare uses wrapper identity (one wrapper
   // per RHI handle from gpuStore), and `.handle` is passed to the RHI
@@ -486,8 +486,8 @@ function recordShadowCasterDraws(
   // ShadowCaster PSO when a material supplies one.
   let shadowLastPipeline: RenderPipeline = shadowPipeline;
 
-  for (let i = 0; i < validated.length; i++) {
-    const entry = validated[i];
+  for (let i = 0; i < validatedOrdered.length; i++) {
+    const entry = validatedOrdered[i];
     if (entry === undefined) continue;
 
     // feat-20260609 M2: skip entities that don't match the pass selector.
@@ -712,7 +712,7 @@ function recordShadowCasterDraws(
  * be considered for a follow-on optimization milestone (`OOS-future`).
  */
 export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
-  const { runtime, frameState, validated, meshBindGroup, pipelineState } = c;
+  const { runtime, frameState, validatedOrdered, meshBindGroup, pipelineState } = c;
   const snapshots = frameState.pointShadowSnapshots;
   if (snapshots.length === 0) return;
   const atlas = frameState.pointShadowAtlas;
@@ -986,14 +986,14 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
       pass.setBindGroup(0, cachedShadowViewBg);
       pass.setBindGroup(1, cachedShadowMaterialBg, [0]);
 
-      // (3) Iterate the validated entries and emit one drawIndexed per
+      // (3) Iterate the mesh-SSBO slot order and emit one drawIndexed per
       // shadow-casting submesh. Same shape as the directional shadow loop;
       // the per-instance instance buffers built earlier this frame in
       // recordShadowPass are reused (cached on frameState.instanceBuffers).
       let lastVB: GpuBuffer | null = null;
       let lastIB: GpuBuffer | null = null;
-      for (let ei = 0; ei < validated.length; ei++) {
-        const entry = validated[ei];
+      for (let ei = 0; ei < validatedOrdered.length; ei++) {
+        const entry = validatedOrdered[ei];
         if (entry === undefined) continue;
         const submeshes = entry.mesh.submeshes;
         const hasTriangle = submeshes.some(
@@ -1429,7 +1429,7 @@ function recordSpotTile(
 }
 
 /**
- * Walk the validated renderables and emit shadow-caster draws for the current
+ * Walk the mesh-SSBO slot order and emit shadow-caster draws for the current
  * spot tile pass. Triangle topologies only (line/point meshes cast no shadow).
  * Reuses the per-entity instance BGs cached by recordShadowPass; falls back to
  * the identity instance buffer when none is cached.
@@ -1439,11 +1439,11 @@ function recordSpotShadowGeometry(
   pass: RhiRenderPassEncoder,
   meshBindGroup: BindGroup,
 ): void {
-  const { frameState, validated, pipelineState } = c;
+  const { frameState, validatedOrdered, pipelineState } = c;
   let lastVB: GpuBuffer | null = null;
   let lastIB: GpuBuffer | null = null;
-  for (let ei = 0; ei < validated.length; ei++) {
-    const entry = validated[ei];
+  for (let ei = 0; ei < validatedOrdered.length; ei++) {
+    const entry = validatedOrdered[ei];
     if (entry === undefined) continue;
     const submeshes = entry.mesh.submeshes;
     const hasTriangle = submeshes.some(

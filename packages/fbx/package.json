@@ -26,6 +26,7 @@
     "build:wasm": "node scripts/fetch-ufbx.mjs && node scripts/build-wasm.mjs",
     "fetch-ufbx": "node scripts/fetch-ufbx.mjs",
     "fetch-wasm": "node scripts/fetch-wasm.mjs",
+    "postinstall": "node scripts/ensure-wasm.mjs",
     "build": "tsup",
     "test": "vitest run"
   },

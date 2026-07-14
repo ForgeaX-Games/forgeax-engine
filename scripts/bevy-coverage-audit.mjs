@@ -24,6 +24,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
+import { validateDemoApps } from './bevy-demo.mjs';
 
 const argv = process.argv.slice(2);
 const args = { json: false };
@@ -67,6 +68,8 @@ function findAppPackageJsons(dir, acc = []) {
   }
   return acc;
 }
+
+validateDemoApps(root);
 
 const VALID_STATUS = new Set(['implemented', 'partial', 'shelved']);
 /** @type {{app:string, name:string, category?:string, status:string, shelvedFeedback?:string}[]} */
@@ -208,7 +211,7 @@ for (const ex of bevy.values()) {
   const c = cats.get(cat);
   c.total++;
   const decls = declaredByName.get(ex.name);
-  if (decls?.some((d) => d.status === 'implemented' || d.status === 'partial')) c.covered++;
+  if (decls?.some((d) => d.status === 'implemented')) c.covered++;
   else if (decls?.some((d) => d.status === 'shelved')) c.shelved++;
   else c.uncovered.push(ex.display ?? ex.name);
 }
@@ -224,6 +227,13 @@ if (args.json) {
 
 // --- 6. Human report ------------------------------------------------------
 const entries = [...cats].sort((a, b) => b[1].total - a[1].total);
+if (args.category && !cats.has(args.category)) {
+  fail(
+    'bevy-category-unknown',
+    `--category names a real Bevy category (${entries.map(([category]) => category).join(' / ')})`,
+    `got '${args.category}'; category names are title-cased exactly as Bevy Cargo.toml declares them`,
+  );
+}
 let gTotal = 0,
   gCovered = 0,
   gShelved = 0;

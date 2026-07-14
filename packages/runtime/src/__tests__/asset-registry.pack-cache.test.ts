@@ -132,6 +132,70 @@ describe('pack-file cache', () => {
     }
   });
 
+  it('resolves a relative catalog entry against an absolute pack-index URL', async () => {
+    const reg = makeRegistry();
+    const packIndexUrl = 'http://127.0.0.1:15173/preview/pack-index/cow-survivor.json';
+    const packUrl =
+      'http://127.0.0.1:15173/preview/.forgeax/games/cow-survivor/assets/shared.pack.json';
+    reg.configurePackIndex(packIndexUrl);
+
+    const packIndex = [
+      {
+        guid: MESH_A_GUID,
+        relativeUrl: '../.forgeax/games/cow-survivor/assets/shared.pack.json',
+        kind: 'mesh',
+      },
+    ];
+    const sharedPack = makeSharedPack();
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === packIndexUrl)
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      if (url === packUrl)
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(sharedPack) });
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      const result = await reg.loadByGuid<TypesMeshAsset>(parseGuid(MESH_A_GUID));
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([packIndexUrl, packUrl]);
+      expect(result.ok).toBe(true);
+      expect(fetchMock).toHaveBeenNthCalledWith(1, packIndexUrl);
+      expect(fetchMock).toHaveBeenNthCalledWith(2, packUrl);
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('keeps an absolute catalog entry URL authoritative', async () => {
+    const reg = makeRegistry();
+    const packIndexUrl = 'http://127.0.0.1:15173/preview/pack-index/cow-survivor.json';
+    const packUrl = 'https://cdn.example.test/cow/shared.pack.json';
+    reg.configurePackIndex(packIndexUrl);
+
+    const packIndex = [{ guid: MESH_A_GUID, relativeUrl: packUrl, kind: 'mesh' }];
+    const sharedPack = makeSharedPack();
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url === packIndexUrl)
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      if (url === packUrl)
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(sharedPack) });
+      return Promise.resolve({ ok: false, status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    try {
+      const result = await reg.loadByGuid<TypesMeshAsset>(parseGuid(MESH_A_GUID));
+      expect(result.ok).toBe(true);
+      expect(fetchMock).toHaveBeenNthCalledWith(1, packIndexUrl);
+      expect(fetchMock).toHaveBeenNthCalledWith(2, packUrl);
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
   it('AC-02 concurrent: two concurrent loadByGuid calls share one in-flight fetch', async () => {
     const reg = makeRegistry();
     reg.configurePackIndex('/pack-index.json');

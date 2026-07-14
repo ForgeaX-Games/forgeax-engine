@@ -13,7 +13,7 @@
 
 import type { Component, EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem, Entity as EntityComponent, resolveComponent } from '@forgeax/engine-ecs';
-import { quat, type Vec2, type Vec3Like, vec2 } from '@forgeax/engine-math';
+import { mat4, quat, type Vec2, type Vec3Like, vec2, vec3 } from '@forgeax/engine-math';
 import type { PhysicsWorld2D, RaycastHit2D } from '@forgeax/engine-physics';
 import {
   CharacterController,
@@ -30,6 +30,25 @@ import type { Rapier2DModule } from './wasm-loader';
 
 interface PhysicsEntityRecord {
   bodyHandle: number;
+}
+
+interface PhysicsTransform2D {
+  readonly position: { readonly x: number; readonly y: number };
+  readonly rotation: number;
+  readonly scale: { readonly x: number; readonly y: number };
+}
+
+interface PhysicsCollider2D {
+  readonly shape: number;
+  readonly halfExtents: readonly [number, number, number];
+  readonly radius: number;
+  readonly halfHeight: number;
+  readonly friction: number;
+  readonly restitution: number;
+  readonly density: number;
+  readonly isSensor: number;
+  readonly collisionGroups: number;
+  readonly solverGroups: number;
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: Rapier types from dynamically loaded module
@@ -403,14 +422,7 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
    */
   ensureBody(
     entity: number,
-    transform: {
-      posX: number;
-      posY: number;
-      quatX: number;
-      quatY: number;
-      quatZ: number;
-      quatW: number;
-    },
+    transform: PhysicsTransform2D,
     rigidBody: {
       type: number;
       mass: number;
@@ -419,18 +431,7 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
       gravityScale: number;
       ccdEnabled: number;
     },
-    collider: {
-      shape: number;
-      halfExtents: readonly [number, number, number];
-      radius: number;
-      halfHeight: number;
-      friction: number;
-      restitution: number;
-      density: number;
-      isSensor: number;
-      collisionGroups: number;
-      solverGroups: number;
-    },
+    collider: PhysicsCollider2D,
   ): void {
     if (this.entityMap.has(entity)) return;
 
@@ -443,7 +444,8 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
       case 'dynamic': {
         // biome-ignore lint/suspicious/noExplicitAny: Rapier RigidBodyDesc
         const desc = (RAPIER as any).RigidBodyDesc.dynamic()
-          .setTranslation(transform.posX, transform.posY)
+          .setTranslation(transform.position.x, transform.position.y)
+          .setRotation(transform.rotation)
           .setLinearDamping(rigidBody.linearDamping)
           .setAngularDamping(rigidBody.angularDamping)
           .setGravityScale(rigidBody.gravityScale);
@@ -459,20 +461,18 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
       }
       case 'static': {
         // biome-ignore lint/suspicious/noExplicitAny: Rapier RigidBodyDesc
-        const desc = (RAPIER as any).RigidBodyDesc.fixed().setTranslation(
-          transform.posX,
-          transform.posY,
-        );
+        const desc = (RAPIER as any).RigidBodyDesc.fixed()
+          .setTranslation(transform.position.x, transform.position.y)
+          .setRotation(transform.rotation);
         // biome-ignore lint/suspicious/noExplicitAny: Rapier World.createRigidBody
         body = (this.raw as any).createRigidBody(desc);
         break;
       }
       case 'kinematic': {
         // biome-ignore lint/suspicious/noExplicitAny: Rapier RigidBodyDesc
-        const desc = (RAPIER as any).RigidBodyDesc.kinematicPositionBased().setTranslation(
-          transform.posX,
-          transform.posY,
-        );
+        const desc = (RAPIER as any).RigidBodyDesc.kinematicPositionBased()
+          .setTranslation(transform.position.x, transform.position.y)
+          .setRotation(transform.rotation);
         // CCD sweeps the collider along its per-step kinematic translation so a
         // fast mover reliably contacts dynamics instead of tunneling through
         // them on discrete steps.
@@ -489,13 +489,15 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
     this.registerBody(entity, body.handle);
 
     // ── Create ColliderDesc (2D) ──
+    const scaleX = Math.abs(transform.scale.x);
+    const scaleY = Math.abs(transform.scale.y);
     const cShape = colliderShapeFromF32(collider.shape);
     switch (cShape) {
       case 'cuboid': {
         // biome-ignore lint/suspicious/noExplicitAny: Rapier ColliderDesc
         const desc = (RAPIER as any).ColliderDesc.cuboid(
-          collider.halfExtents[0],
-          collider.halfExtents[1],
+          collider.halfExtents[0] * scaleX,
+          collider.halfExtents[1] * scaleY,
         )
           .setFriction(collider.friction)
           .setRestitution(collider.restitution)
@@ -509,7 +511,7 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
       }
       case 'sphere': {
         // biome-ignore lint/suspicious/noExplicitAny: Rapier ColliderDesc
-        const desc = (RAPIER as any).ColliderDesc.ball(collider.radius)
+        const desc = (RAPIER as any).ColliderDesc.ball(collider.radius * Math.max(scaleX, scaleY))
           .setFriction(collider.friction)
           .setRestitution(collider.restitution)
           .setDensity(collider.density)
@@ -522,7 +524,10 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
       }
       case 'capsule': {
         // biome-ignore lint/suspicious/noExplicitAny: Rapier ColliderDesc
-        const desc = (RAPIER as any).ColliderDesc.capsule(collider.halfHeight, collider.radius)
+        const desc = (RAPIER as any).ColliderDesc.capsule(
+          collider.halfHeight * scaleY,
+          collider.radius * scaleX,
+        )
           .setFriction(collider.friction)
           .setRestitution(collider.restitution)
           .setDensity(collider.density)
@@ -533,6 +538,48 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
         (this.raw as any).createCollider(desc, body);
         break;
       }
+    }
+  }
+
+  /** Synchronize a static or kinematic Rapier body from its resolved 2D Transform pose. */
+  syncAuthoredPose(
+    entity: number,
+    transform: PhysicsTransform2D,
+    collider: PhysicsCollider2D,
+    bodyType: 'static' | 'kinematic',
+  ): void {
+    const record = this.entityMap.get(entity);
+    if (!record) return;
+    // biome-ignore lint/suspicious/noExplicitAny: Rapier bodies API needs any-cast
+    const body = (this.raw as any).bodies.get(record.bodyHandle) as RapierRigidBody2D | null;
+    if (!body) return;
+
+    if (bodyType === 'static') {
+      body.setTranslation(transform.position, true);
+      body.setRotation(transform.rotation, true);
+    } else {
+      body.setNextKinematicTranslation(transform.position);
+      body.setNextKinematicRotation(transform.rotation);
+    }
+
+    const rapierCollider = body.collider(0);
+    if (!rapierCollider) return;
+    const scaleX = Math.abs(transform.scale.x);
+    const scaleY = Math.abs(transform.scale.y);
+    switch (colliderShapeFromF32(collider.shape)) {
+      case 'cuboid':
+        rapierCollider.setHalfExtents({
+          x: collider.halfExtents[0] * scaleX,
+          y: collider.halfExtents[1] * scaleY,
+        });
+        break;
+      case 'sphere':
+        rapierCollider.setRadius(collider.radius * Math.max(scaleX, scaleY));
+        break;
+      case 'capsule':
+        rapierCollider.setHalfHeight(collider.halfHeight * scaleY);
+        rapierCollider.setRadius(collider.radius * scaleX);
+        break;
     }
   }
 
@@ -675,8 +722,31 @@ function readEntityAt(arch: ArchetypeLike, row: number): EntityHandle {
   return (selfCol?.[row] ?? 0) as EntityHandle;
 }
 
+function hasResolvedWorldPose(world: Float32Array | undefined, base: number): boolean {
+  if (!world) return false;
+  return (
+    world[base] !== 1 ||
+    world[base + 5] !== 1 ||
+    world[base + 10] !== 1 ||
+    world[base + 15] !== 1 ||
+    world[base + 1] !== 0 ||
+    world[base + 2] !== 0 ||
+    world[base + 4] !== 0 ||
+    world[base + 6] !== 0 ||
+    world[base + 8] !== 0 ||
+    world[base + 9] !== 0 ||
+    world[base + 12] !== 0 ||
+    world[base + 13] !== 0 ||
+    world[base + 14] !== 0
+  );
+}
+
 /** dt upper bound (plan-strategy D-4): skip step if dt exceeds this. */
 const PHYSICS_DT_MAX = 0.1;
+const poseScratchPosition2D = vec3.create();
+const poseScratchRotation2D = quat.create();
+const poseScratchScale2D = vec3.create();
+const poseScratchWorld2D = new Float32Array(16);
 
 // ─── Collider removal despawn-cleanup dispatch (plan-strategy D-3, 2D) ───
 //
@@ -818,6 +888,8 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
       // per-frame sync path (AC-08).
       const tfPos = tfCols.get('pos')?.view as Float32Array | undefined;
       const tfQuat = tfCols.get('quat')?.view as Float32Array | undefined;
+      const tfScale = tfCols.get('scale')?.view as Float32Array | undefined;
+      const tfWorld = tfCols.get('world')?.view as Float32Array | undefined;
 
       // rb* views are intentionally NOT guarded here: a bare-Collider archetype
       // has no RigidBody column, so they are legitimately undefined and the
@@ -834,7 +906,9 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
         !cSensor ||
         !cCGroups ||
         !cSGroups ||
-        !tfPos
+        !tfPos ||
+        !tfQuat ||
+        !tfScale
       ) {
         continue;
       }
@@ -842,13 +916,36 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
       for (let row = 0; row < arch.size; row++) {
         const entity = readEntityAt(arch, row);
 
-        const transform = {
-          posX: tfPos[row * 3] as number,
-          posY: tfPos[row * 3 + 1] as number,
-          quatX: (tfQuat?.[row * 4] as number) ?? 0,
-          quatY: (tfQuat?.[row * 4 + 1] as number) ?? 0,
-          quatZ: (tfQuat?.[row * 4 + 2] as number) ?? 0,
-          quatW: (tfQuat?.[row * 4 + 3] as number) ?? 1,
+        const localBase = row * 3;
+        const quatBase = row * 4;
+        const worldBase = row * 16;
+        const useWorldPose = hasResolvedWorldPose(tfWorld, worldBase);
+        if (useWorldPose && tfWorld) {
+          for (let lane = 0; lane < 16; lane++) {
+            poseScratchWorld2D[lane] = tfWorld[worldBase + lane] ?? 0;
+          }
+          mat4.decompose(
+            poseScratchPosition2D,
+            poseScratchRotation2D,
+            poseScratchScale2D,
+            poseScratchWorld2D,
+          );
+        } else {
+          poseScratchPosition2D[0] = tfPos[localBase] ?? 0;
+          poseScratchPosition2D[1] = tfPos[localBase + 1] ?? 0;
+          poseScratchPosition2D[2] = tfPos[localBase + 2] ?? 0;
+          poseScratchRotation2D[0] = tfQuat[quatBase] ?? 0;
+          poseScratchRotation2D[1] = tfQuat[quatBase + 1] ?? 0;
+          poseScratchRotation2D[2] = tfQuat[quatBase + 2] ?? 0;
+          poseScratchRotation2D[3] = tfQuat[quatBase + 3] ?? 1;
+          poseScratchScale2D[0] = tfScale[localBase] ?? 1;
+          poseScratchScale2D[1] = tfScale[localBase + 1] ?? 1;
+          poseScratchScale2D[2] = tfScale[localBase + 2] ?? 1;
+        }
+        const transform: PhysicsTransform2D = {
+          position: { x: poseScratchPosition2D[0] ?? 0, y: poseScratchPosition2D[1] ?? 0 },
+          rotation: 2 * Math.atan2(poseScratchRotation2D[2] ?? 0, poseScratchRotation2D[3] ?? 1),
+          scale: { x: poseScratchScale2D[0] ?? 1, y: poseScratchScale2D[1] ?? 1 },
         };
 
         // Bare-Collider (no RigidBody) → synthesize a STATIC body. The `static`
@@ -910,14 +1007,11 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
 
         pw.ensureBody(entity, transform, rigidBody, collider);
 
-        // Kinematic position sync (2D; D-5: skip character entities —
-        // moveAndSlide owns their kinematic body + Transform).
         const rbTypeVal = rigidBodyTypeFromF32(rigidBody.type);
-        if (rbTypeVal === 'kinematic' && !hasCharacterController) {
-          pw.setKinematicPosition(entity, {
-            x: transform.posX,
-            y: transform.posY,
-          });
+        if (rbTypeVal === 'static') {
+          pw.syncAuthoredPose(entity, transform, collider, 'static');
+        } else if (rbTypeVal === 'kinematic' && !hasCharacterController) {
+          pw.syncAuthoredPose(entity, transform, collider, 'kinematic');
         }
       }
     }

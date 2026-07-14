@@ -33,6 +33,13 @@
 //                 build-time-imported RGBA `.bin`. A static `engine-image`
 //                 edge in runtime would re-bundle the decoder (regressing
 //                 the bundle-size delta AC-16).
+//                 Exception (tweak-20260714 M1): a single exact-path
+//                 whitelist for `packages/assets-runtime/src/decode-image-
+//                 bytes.ts` -- the runtime-facing SDK wrapper around
+//                 `decodeImageInBrowser` (plan-strategy D-2). The
+//                 whitelist is a Set of one absolute path, NOT a glob or
+//                 directory softening; every other assets-runtime and
+//                 runtime file remains banned.
 //               (a.2-pos) `packages/image/src/image-importer.ts` MUST
 //                 statically import `parseImage` (the build-time decoder
 //                 it now holds). This anchors the new producer side: the
@@ -141,11 +148,25 @@ const engineImageImportRe =
   /^\s*import\b[\s\S]*?from\s+['"]@forgeax\/engine-image(?:\/[^'"]+)?['"]\s*;?/gm;
 const decoderStripFailures = [];
 
+// (a.2-anti-whitelist) tweak-20260714-runtime-image-bytes-decoder-add-
+// decodeimagebytes M1: `packages/assets-runtime/src/decode-image-bytes.ts`
+// is the SINGLE assets-runtime file allowed to statically import from
+// @forgeax/engine-image (plan-strategy D-2). It is the runtime-facing
+// wrapper around `decodeImageInBrowser`, and the whitelist is a single
+// exact-path exception -- NOT a glob or directory softening. Every other
+// file under packages/assets-runtime/src and every file under
+// packages/runtime/src remains banned so a stray static edge cannot
+// re-bundle the decoder (AC-16 bundle-size delta preserved).
+const engineImageImportWhitelist = new Set([
+  join(root, 'packages/assets-runtime/src/decode-image-bytes.ts'),
+]);
+
 // (a.2-anti) NO file under packages/runtime/src may statically import from
 // @forgeax/engine-image. The runtime carries no decoder after the M3 strip;
 // a static edge here would re-bundle it (regressing the AC-16 delta).
 for (const scanRoot of pathAScanRoots) {
   walk(scanRoot, (p, content) => {
+    if (engineImageImportWhitelist.has(p)) return;
     const importLines = content.match(engineImageImportRe) ?? [];
     for (const line of importLines) {
       decoderStripFailures.push(

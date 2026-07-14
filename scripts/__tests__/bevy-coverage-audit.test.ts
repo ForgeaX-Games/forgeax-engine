@@ -86,4 +86,14 @@ describe('bevy-coverage-audit.mjs', () => {
     expect(r.stderr).toContain('bevy-example-status-unknown');
     expect(r.stderr).toMatch(/implemented, partial, shelved/);
   });
+
+  it('(e) unknown category: fails instead of reporting a plausible empty 0/0 audit', () => {
+    const root = resolve(fx, 'happy');
+    const r = run(['--root', root, '--bevy', fixtureBevy, '--category', 'animation']);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('bevy-category-unknown');
+    expect(r.stderr).toContain('[reason]');
+    expect(r.stderr).toContain('[rerun]');
+    expect(r.stderr).toContain('[hint]');
+  });
 });

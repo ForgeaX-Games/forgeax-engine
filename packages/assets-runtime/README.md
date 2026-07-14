@@ -90,9 +90,145 @@ imports `@forgeax/engine-runtime` (the dependency direction is runtime ->
 assets-runtime; the post-spawn hook + audio/video loaders are injected downward
 at the `createRenderer` assembly point, D-1 / D-2).
 
+## Runtime image bytes decoder (`decodeImageBytes`)
+
+`decodeImageBytes(bytes, mime, opts?)` is the runtime SDK entry for AI users
+who already hold image bytes in memory (fetched from a URL, embedded as
+base64, produced by an out-of-tree decoder, etc.) and want to feed them into
+`world.allocSharedRef('TextureAsset', pod)` + `GpuResourceStore.ensureResident`
+without the disk-side importer / pack build pipeline in the loop. It is the
+runtime counterpart to the build-time `.bin` / `.ktx2` texture loaders --
+those stay authoritative for shipped assets; `decodeImageBytes` covers the
+"bytes only exist at runtime" case that static loaders cannot serve
+(tweak-20260714).
+
+### Signature
+
+```ts
+export async function decodeImageBytes(
+  bytes: Uint8Array | ArrayBuffer,
+  mime: string,
+  opts?: { colorSpace?: 'srgb' | 'linear'; mipmap?: boolean },
+): Promise<Result<TextureAsset, ImageError>>;
+```
+
+- `bytes` -- encoded image byte stream (PNG or JPEG). Both `Uint8Array` and
+  `ArrayBuffer` accepted; the function does not take ownership.
+- `mime` -- byte-stream mime type. v1 whitelist: `'image/png' | 'image/jpeg'`
+  (see boundaries below).
+- `opts.colorSpace` -- `'srgb'` (default) or `'linear'`. Derives POD `format`:
+  `srgb -> 'rgba8unorm-srgb'`, `linear -> 'rgba8unorm'` (mirrors the
+  build-time `packages/image/src/image-importer.ts` `colorSpaceToFormat`
+  rule -- one SSOT, no drift).
+- `opts.mipmap` -- `true` (default) or `false`. When `true`, `mipLevelCount`
+  is computed by the existing `numMipLevels({ width, height })`; when
+  `false`, `mipLevelCount === 1`.
+
+### v1 boundaries (explicit non-goals)
+
+The function is intentionally a thin bridge from bytes to a `TextureAsset`
+POD. What it does NOT do:
+
+- **No network I/O.** `decodeImageBytes` never `fetch`es; the caller supplies
+  bytes.
+- **No GPU upload.** The POD is fed into the existing
+  `world.allocSharedRef('TextureAsset', pod)` +
+  `GpuResourceStore.ensureResident` path -- the upload primitives are not
+  duplicated or replaced.
+- **v1 supports PNG / JPEG only.** GIF / WebP / SVG / AVIF / KTX2 / HDR
+  (`.hdr`) fall to `image-format-unsupported`; convert offline (or
+  reach for the build-time importer, which handles a wider set) rather
+  than expanding this API's mime table.
+- **Not a replacement for the static texture loader.** Shipped `.bin` /
+  `.ktx2` continue to flow through the pack pipeline (`loadByGuid`); this
+  API only covers the runtime-only-bytes case (progressive disclosure --
+  AI user sees the smaller, more focused surface).
+- **Not a Node / server-side decoder.** Requires an environment with
+  `createImageBitmap` + `OffscreenCanvas` (browser main thread or Worker).
+  Missing capability surfaces as a structured `image-decode-failed` error
+  (never a silent broken POD).
+
+### Error codes (closed union subset)
+
+`decodeImageBytes` only ever produces the four base `ImageErrorCode` members
+listed here; the other atlas / HDR members of the union are not reachable
+from this API. Every error object carries `.code` / `.expected` /
+`.hint` / `.detail`; `.detail` narrows per `.code` (discriminated union).
+Read the source, do not duplicate the member list --
+`packages/types/src/index.ts` (grep `export type ImageErrorCode`).
+
+| code | trigger | `.detail` narrows to |
+|:--|:--|:--|
+| `image-format-unsupported` | mime not in `['image/png', 'image/jpeg']` | `{ actualMime, path?, formatColorSpaceConflict? }` |
+| `image-decode-failed` | decoder rejected bytes, or env lacks `createImageBitmap` | `{ reason, path? }` |
+| `image-dimension-out-of-bounds` | reserved; transparent pass-through if the underlying decoder ever surfaces it | `{ requested: {width,height}, limit }` |
+| `image-meta-missing` | reserved; not raised by this API in v1 (kept in the union for a single grep-discoverable SSOT) | `{ sourcePath, expectedSidecarPath }` |
+
+### Error self-recovery paradigm
+
+Structured errors with copy-pastable hints -- AI users consume via property
+access, never by parsing `.message` (charter P3 explicit failure + P4
+consistent abstraction; AGENTS.md Error model). Exhaustive `switch
+(err.code)` needs no `default` -- TypeScript guards union completeness at
+compile time, so future minor adds to `ImageErrorCode` surface as a
+localised type error rather than a silent miss.
+
+```ts
+import { decodeImageBytes } from '@forgeax/engine-assets-runtime';
+
+const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+const result = await decodeImageBytes(bytes, 'image/png');
+if (!result.ok) {
+  const err = result.error;
+  // .hint carries an executable recovery instruction (see IMAGE_ERROR_HINTS
+  // SSOT in packages/types/src/index.ts); no string parsing needed.
+  console.error(err.code, err.hint);
+  // NOTE: switch on `err.detail.code`, not `err.code`. `ImageError` carries
+  // two independent discriminants (`.code` on the envelope, `.code` on the
+  // `.detail` variant); TS does not cross-narrow between them, so per-arm
+  // access to `err.detail.<field>` only compiles when the switch scrutinee
+  // is the same discriminant as the union being narrowed.
+  switch (err.detail.code) {
+    case 'image-format-unsupported':
+      // err.detail.actualMime -- rejected mime; convert offline
+      console.error('bad mime:', err.detail.actualMime);
+      break;
+    case 'image-decode-failed':
+      // err.detail.reason -- underlying decoder message (or "env lacks
+      // createImageBitmap" when the platform capability is missing)
+      console.error('decode reason:', err.detail.reason);
+      break;
+    case 'image-dimension-out-of-bounds':
+      console.error('too big:', err.detail.requested, err.detail.limit);
+      break;
+    case 'image-meta-missing':
+      console.error('missing sidecar:', err.detail.expectedSidecarPath);
+      break;
+  }
+  return;
+}
+
+// Bytes in, POD out -- charter P4 one abstraction, same POD shape as the
+// build-time texture loader emits, so downstream does not care about the
+// byte source (progressive disclosure: allocSharedRef + ensureResident is
+// the same call site as static assets).
+const handle = world.allocSharedRef('TextureAsset', result.value);
+```
+
+### Isolation gate boundary
+
+`decode-image-bytes.ts` is the SINGLE file in `@forgeax/engine-assets-runtime`
+allowed to statically import `@forgeax/engine-image`. The
+`scripts/check-image-pipeline-isolation.mjs` (a.2-anti) rule pins this
+exact path as its whitelist; the wider runtime and the rest of
+assets-runtime remain gated so a future accidental static import falls
+loud, not silent.
+
 ## Route map
 
 - Import images / glTF / fonts, wire `loadByGuid`, author sidecars: skill
   `forgeax-engine-assets`.
 - Full asset-chain narrative (sidecar -> import -> pack-index -> loadByGuid):
   `packages/pack/README.md` + `forgeax-engine-assets/README.md`.
+- Runtime image bytes decoding (this package, runtime-only-bytes case):
+  see the `decodeImageBytes` section above.

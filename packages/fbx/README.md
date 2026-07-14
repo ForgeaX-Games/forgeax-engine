@@ -96,9 +96,15 @@ dispatch errors -- `importer-not-registered`, `source-read-failed`,
 <details>
 <summary>Getting pre-built WASM (fetch-wasm)</summary>
 
-The `pkg/` directory is **not committed to git** (zero-binary invariant). On a
-fresh checkout you can fetch the pre-built WASM bundle from GitHub Releases
-instead of compiling locally:
+The `pkg/` directory is **not committed to git** (zero-binary invariant). A
+workspace `pnpm install` or `bun install` runs a package-local, best-effort
+postinstall hook that fetches the matching bundle when it is absent. The hook
+is idempotent and non-fatal: it skips a complete `pkg/`, and an unavailable
+release leaves installation successful with the explicit recovery command
+below. Set `FORGEAX_SKIP_FBX_WASM_FETCH=1` to opt out.
+
+To provision a fresh checkout explicitly, fetch the pre-built WASM bundle from
+GitHub Releases instead of compiling locally:
 
 ```bash
 pnpm -F @forgeax/engine-fbx fetch-wasm

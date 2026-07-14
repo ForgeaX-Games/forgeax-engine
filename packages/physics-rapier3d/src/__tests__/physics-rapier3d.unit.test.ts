@@ -597,6 +597,97 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
       });
     });
 
+    describe('rapier-authored-transform-pose.test.ts', () => {
+      it('applies authored rotation and scale to a static cuboid collider', async () => {
+        const RAPIER = await loadRapier3D();
+        if ('code' in RAPIER) {
+          expect(RAPIER.code).toBe('wasm-load-failed');
+          return;
+        }
+
+        const world = new World();
+        const pw = createRapier3DPhysicsWorld(RAPIER);
+        world.insertResource('PhysicsWorld', pw);
+        const obstacle = world
+          .spawn(
+            {
+              component: Transform as never,
+              data: {
+                quat: [0, 0, Math.SQRT1_2, Math.SQRT1_2],
+                scale: [2, 1, 1],
+              },
+            },
+            { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+            {
+              component: Collider as never,
+              data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 0.25, 0.25] },
+            },
+          )
+          .unwrap();
+        registerPropagateTransforms(world);
+        registerPhysicsSystems(world);
+        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
+        world.update();
+
+        const alongX = pw.raycast(
+          Float32Array.of(-5, 0, 0) as never,
+          Float32Array.of(1, 0, 0) as never,
+          10,
+        );
+        const alongY = pw.raycast(
+          Float32Array.of(0, -5, 0) as never,
+          Float32Array.of(0, 1, 0) as never,
+          10,
+        );
+        expect(alongX?.entity).toBe(obstacle);
+        expect(alongY?.entity).toBe(obstacle);
+        // Rotation swaps the local X/Y spans. Scale doubles the local-X span,
+        // so the world Y ray hits its near face at -2, not the unscaled -1.
+        expect(alongX?.timeOfImpact).toBeCloseTo(4.75, 1);
+        expect(alongY?.timeOfImpact).toBeCloseTo(3, 1);
+      });
+
+      it('updates a static collider when its authored Transform pose changes', async () => {
+        const RAPIER = await loadRapier3D();
+        if ('code' in RAPIER) {
+          expect(RAPIER.code).toBe('wasm-load-failed');
+          return;
+        }
+
+        const world = new World();
+        const pw = createRapier3DPhysicsWorld(RAPIER);
+        world.insertResource('PhysicsWorld', pw);
+        const obstacle = world
+          .spawn(
+            { component: Transform as never, data: { scale: [1, 1, 1] } },
+            { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+            {
+              component: Collider as never,
+              data: { shape: ColliderShapeValue.cuboid, halfExtents: [1, 0.25, 0.25] },
+            },
+          )
+          .unwrap();
+        registerPropagateTransforms(world);
+        registerPhysicsSystems(world);
+        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
+        world.update();
+        world.set(obstacle, Transform as never, {
+          quat: [0, 0, Math.SQRT1_2, Math.SQRT1_2],
+          scale: [2, 1, 1],
+        });
+        world.insertResource('Time', { dt: 1 / 60, elapsed: 2 / 60 });
+        world.update();
+
+        const alongY = pw.raycast(
+          Float32Array.of(0, -5, 0) as never,
+          Float32Array.of(0, 1, 0) as never,
+          10,
+        );
+        expect(alongY?.entity).toBe(obstacle);
+        expect(alongY?.timeOfImpact).toBeCloseTo(3, 1);
+      });
+    });
+
     describe('feat-20260709 M4 / w18 -- cuboid halfExtents array passes through the 3D bridge', () => {
       it('per-axis resting heights track halfExtents[1] (axis-order regression)', async () => {
         const RAPIER = await loadRapier3D();

@@ -8,11 +8,11 @@ description: >-
 
 # forgeax-engine-physics
 
-> **物理 = 给 entity 挂三件套（Transform + RigidBody + Collider），引擎每帧把模拟结果写回 `Transform`**。`@forgeax/engine-physics` 是**接口层**：定义 ECS 组件 schema（`RigidBody` / `Collider` / `CollidingEntities`）、`PhysicsWorld` / `PhysicsWorld2D` Resource 接口、`PhysicsErrorCode` 闭集，但不含实现。实现是两个 WASM 后端：`@forgeax/engine-physics-rapier2d` 与 `@forgeax/engine-physics-rapier3d`。开物理只需 `createApp(canvas, { plugins: [physicsPlugin('rapier-3d')] })`——`physicsPlugin` dynamic-import 对应 rapier 包、注册 `PhysicsWorld` Resource、装好三段式 tick 系统。聚合 `@forgeax/engine-physics`（接口）+ `physics-rapier2d` + `physics-rapier3d`（后端）。
+> **物理 = 给 entity 挂三件套（Transform + RigidBody + Collider）；静态/运动学 Collider 从已解析的 world TRS 同步，动态刚体把模拟姿态写回 `Transform`**。`@forgeax/engine-physics` 是**接口层**：定义 ECS 组件 schema（`RigidBody` / `Collider` / `CollidingEntities`）、`PhysicsWorld` / `PhysicsWorld2D` Resource 接口、`PhysicsErrorCode` 闭集，但不含实现。实现是两个 WASM 后端：`@forgeax/engine-physics-rapier2d` 与 `@forgeax/engine-physics-rapier3d`。开物理只需 `createApp(canvas, { plugins: [physicsPlugin('rapier-3d')] })`——`physicsPlugin` dynamic-import 对应 rapier 包、注册 `PhysicsWorld` Resource、装好三段式 tick 系统。聚合 `@forgeax/engine-physics`（接口）+ `physics-rapier2d` + `physics-rapier3d`（后端）。
 
 ## 心智模型
 
-物理是**组件驱动**的：你不调"创建刚体"API，而是给 entity 挂上组件，`physicsSyncBackend` 系统每帧扫描 `(Transform, RigidBody, Collider)` 原型、为新 entity 在 Rapier 侧 `ensureBody`，`physicsStepSimulation` 推进模拟，`physicsWriteback` 把刚体新位置写回 `Transform.pos`。后端选择经 `createApp` 的 `physics` 选项（`'rapier-2d' | 'rapier-3d'`），它把 `PhysicsWorld`（3D）/ `PhysicsWorld2D`（2D 接口）作为 World Resource 注入。`PhysicsWorld` Resource 未就绪时（WASM fire-and-forget 加载），三个系统都安全 early-return——不 fail，等下一帧。碰撞对经只读组件 `CollidingEntities` 读取。
+物理是**组件驱动**的：你不调"创建刚体"API，而是给 entity 挂上组件，`physicsSyncBackend` 系统每帧扫描 `(Transform, RigidBody, Collider)` 原型、为新 entity 在 Rapier 侧 `ensureBody`，`physicsStepSimulation` 推进模拟，`physicsWriteback` 把动态刚体的位置和旋转写回 `Transform`。`propagateTransforms` 后的 world TRS 是 static / 非 CharacterController kinematic Collider 的物理姿态来源：父子层级、旋转与缩放都投影到 Rapier；dynamic body 创建后由 Rapier 取得姿态所有权。后端选择经 `createApp` 的 `physics` 选项（`'rapier-2d' | 'rapier-3d'`），它把 `PhysicsWorld`（3D）/ `PhysicsWorld2D`（2D 接口）作为 World Resource 注入。`PhysicsWorld` Resource 未就绪时（WASM fire-and-forget 加载），三个系统都安全 early-return——不 fail，等下一帧。碰撞对经只读组件 `CollidingEntities` 读取。
 
 ## 核心 API / 组件速查
 
@@ -29,6 +29,10 @@ description: >-
 | `createRapier3DPhysicsWorld` | rapier3d | `async fn` | 手动建 3D PhysicsWorld（`createApp` 内部用） |
 | `createRapier2DPhysicsWorld` | rapier2d | `async fn` | 手动建 2D PhysicsWorld |
 | `PhysicsErrorCode` | physics（types SSOT） | 闭集 union（9 成员，勿抄） | 结构化失败码 |
+
+### Collider 的 Transform 投影
+
+物理边界消费 resolved world TRS，不是 local TRS：子 Collider 会跟随父节点的平移、旋转和缩放。`cuboid` 的 half-extents 按各轴绝对缩放；sphere 用最大绝对缩放保守地保持球形；capsule 沿 Y 轴缩放 half-height、横截面取 3D X/Z 最大值或 2D X 值。负缩放只取绝对值，不表示镜像碰撞形状。2D 只投影 Z 轴旋转到 Rapier 的标量 angle。
 
 > [!IMPORTANT]
 > 写 `RigidBody.type` / `Collider.shape` 用枚举常量（`RigidBodyTypeValue.dynamic` / `ColliderShapeValue.sphere`），不要塞裸数字。组件字段全集 + 默认值见 `packages/physics/README.md` §Component Schemas；`PhysicsErrorCode` 9 成员 SSOT 在 `packages/types/src/index.ts`，**勿抄**。

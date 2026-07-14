@@ -12,7 +12,7 @@
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MeshAsset } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeReg(): AssetRegistry {
@@ -101,5 +101,63 @@ describe('D-1 listCatalog() (TDD: red before w2 impl)', () => {
     // Snapshot identity: two calls return distinct array objects
     // (no internal Map reference leak — charter P4).
     expect(first).not.toBe(second);
+  });
+});
+
+// Prod path: sourcePath is only present on the pack-index (fetchPackIndex ->
+// packIndexCache), never on dev-path catalog() envelopes. Editors need it to
+// locate the `.meta.json` sidecar for external-asset CRUD; `relativeUrl`
+// points at the runtime load artefact (DDC `.bin` / `.pack.json`) and cannot
+// be reversed to the source path.
+describe('listCatalog() prod-path sourcePath (editor CRUD sidecar lookup)', () => {
+  const PACK_INDEX_URL = '/pack-index.json';
+  const MESH_GUID = 'a0000000-0000-4000-a000-000000000001';
+  const MESH_URL = '/assets/arrow_bow.fbx.a0000000.bin';
+  const MESH_SOURCE = 'games/marscraft/assets/arrow_bow.fbx';
+  // A row that omits sourcePath (legacy / malformed pack-index) must surface as
+  // undefined, not '', so consumers can distinguish "no source" from "empty".
+  const INLINE_GUID = 'a0000000-0000-4000-a000-000000000002';
+
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('surfaces sourcePath from the pack-index; omits it for rows that lack one', async () => {
+    const reg = makeReg();
+    reg.configurePackIndex(PACK_INDEX_URL);
+
+    const packIndex = [
+      { guid: MESH_GUID, relativeUrl: MESH_URL, kind: 'mesh', sourcePath: MESH_SOURCE },
+      { guid: INLINE_GUID, relativeUrl: '/assets/other.bin', kind: 'mesh' },
+    ];
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === PACK_INDEX_URL) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(packIndex) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    }) as typeof globalThis.fetch;
+
+    // Populate packIndexCache without needing the (missing) pack bodies:
+    // refreshCatalog fetches + parses the pack-index into packIndexCache, which
+    // is the source listCatalog reads for prod rows.
+    await reg.refreshCatalog();
+
+    const withSource = reg.listCatalog().find((e) => e.guid === MESH_GUID.toLowerCase());
+    expect(withSource?.sourcePath).toBe(MESH_SOURCE);
+
+    const withoutSource = reg.listCatalog().find((e) => e.guid === INLINE_GUID.toLowerCase());
+    expect(withoutSource).toBeDefined();
+    expect(withoutSource?.sourcePath).toBeUndefined();
   });
 });
