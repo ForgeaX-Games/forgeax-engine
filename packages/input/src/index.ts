@@ -42,6 +42,15 @@ export {
   type PointerLockProvider,
 } from './browser-backend';
 export {
+  type CanvasInputBoundary,
+  createCanvasInputBoundary,
+} from './canvas-input-boundary';
+export {
+  type CompositeBackendOptions,
+  type CompositeInputBackend,
+  makeCompositeBackend,
+} from './composite-backend';
+export {
   FRAME_START_SCAN_SYSTEM_NAME,
   INPUT_BACKEND_KEY,
   InputFrameStartScan,

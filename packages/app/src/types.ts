@@ -140,6 +140,12 @@ export interface AppAssembleArgs {
 export interface CreateAppOptions {
   /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
   readonly plugins?: Plugin[];
+  /**
+   * A host-owned input backend for this canvas. When supplied, createApp inserts
+   * it into the World instead of attaching a second browser listener set. The
+   * host retains its lifecycle; this app only consumes snapshots from the view.
+   */
+  readonly input?: InputBackend;
   /** Opaque schedule hook (typed unknown in M1; narrowed in later feat). */
   readonly schedule?: unknown;
   /** dt clamp ceiling override (defaults to MAX_DT_DEFAULT in M2). */

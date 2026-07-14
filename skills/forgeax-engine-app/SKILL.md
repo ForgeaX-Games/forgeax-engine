@@ -24,6 +24,8 @@ description: >-
 
 绝大多数游戏从 `createApp` 起步。`App` 是状态机：`start → (pause ⇄ resume) → stop`。输入不轮询——引擎在**帧起始**冻结成只读 `InputSnapshot` 资源，系统在 `world` 里读它。
 
+> **玩法输入铁律：** 游戏只消费 `InputSnapshot` / InputMap/action，绝不安装 `window`、`document`、`globalThis` 或裸 canvas 的 keyboard / mouse / pointer / wheel gameplay 监听，也不自建 pointer-lock 状态机。嵌入 host 可能让运行中的游戏保持未控制状态；只有用户显式激活 canvas 后 host 才把快照路由给游戏。`ctx.setPointerLockAllowed` 只是游戏的锁策略，仍受 host 控制权和可信 canvas 手势约束。
+
 gamepad 采集是「每帧轮询式」（`navigator.getGamepads()` 在 `sample()` 内调用——无 `gamepadconnected` 事件监听），touch 相位转换是「事件流」（pointerdown/pointermove/pointerup 在帧内积入队列），但 `InputSnapshot` 读写面完全一样：`snap.gamepad(0).button(b)` / `snap.pointer(id).x` / `snap.virtualAxis('move')`——charter P4 将采集差异隐藏在后端内部，AI 用户不需感知"轮询 vs 事件流"的区别。
 
 参数面分两层：`canvas`（必选）/ `opts?: CreateAppOptions`（app 行为：`plugins` / `maxDt`）/ `bundler?: BundlerOptions`（构建层：`shaderManifestUrl` + `importTransport`）。`clearColor` 不在参数里——已搬到 `Camera.clearColor`（`array<f32, 4>`）：渲染表现归 `Camera`，构建通道归 `bundler`，app 行为归 `opts`，三关注面分离。

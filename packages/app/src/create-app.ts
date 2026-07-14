@@ -457,20 +457,23 @@ async function createAppFromCanvas(
   // the sole owner is the plugin, so both createApp forms are correct for free.
   // transform + animation system registration lives in the plugins (default set).
 
-  // Input DOM attach (D-3 / C-5): attachBrowserInputBackend needs the canvas
-  // (a DOM surface only this path knows about), so the app attaches it and
-  // inserts the backend as the INPUT_BACKEND_KEY world resource. inputPlugin
-  // (default set) then registers the frame-start scan system, guarded by the
-  // resource presence. The cleanup funnel (detach + removeSystem) stays bound
-  // to stop / device-lost in the app layer (the plugin cannot own DOM
-  // lifetime). M3 (w15): input:false opt-out deleted — canvas form always
-  // attaches input; hosts that want to opt out use assemble form (D-6).
-  const inputHandle = attachInputAuto(canvas, world, {
-    ...(opts?.pointerLockAllowed ? { pointerLockAllowed: opts.pointerLockAllowed } : {}),
-    ...(opts?.virtualJoysticks ? { virtualJoysticks: opts.virtualJoysticks } : {}),
-    ...(opts?.inputMap ? { inputMap: opts.inputMap } : {}),
-    ...(opts?.lockProvider ? { lockProvider: opts.lockProvider } : {}),
-  });
+  // A normal canvas app owns its browser acquisition. An embedding host that
+  // shares this physical canvas with another world supplies its routed view via
+  // opts.input; createApp then consumes that one boundary instead of attaching a
+  // second listener set. The host owns the supplied backend's lifetime.
+  const inputHandle =
+    opts?.input === undefined
+      ? attachInputAuto(canvas, world, {
+          ...(opts?.pointerLockAllowed ? { pointerLockAllowed: opts.pointerLockAllowed } : {}),
+          ...(opts?.virtualJoysticks ? { virtualJoysticks: opts.virtualJoysticks } : {}),
+          ...(opts?.inputMap ? { inputMap: opts.inputMap } : {}),
+          ...(opts?.lockProvider ? { lockProvider: opts.lockProvider } : {}),
+        })
+      : undefined;
+  const inputBackend = opts?.input ?? inputHandle?.backend;
+  if (opts?.input !== undefined) {
+    world.insertResource(INPUT_BACKEND_KEY, opts.input);
+  }
 
   // Audio backend (D-4): auto-create the WebAudioBackend when the user listed
   // audioPlugin() in plugins[]. This preserves the M2 contract (audioPlugin
@@ -546,17 +549,19 @@ async function createAppFromCanvas(
     renderer,
     world,
     pluginRegistry: pluginResult.value,
-    inputBackend: inputHandle.backend,
-    cleanup: (onErrorDispatch: (err: AppError) => void) => {
-      inputHandle.cleanup({ onError: onErrorDispatch });
-    },
-    // M2 D-4: wire the input handle's setOnErrorDispatch so that onLockError
-    // signals from the backend reach the buildApp error fan-out. The dispatch
-    // function is created inside buildApp (after the ErrorFanoutRegistry is
-    // set up), so we use a callback to bridge the gap.
-    wireOnLockErrorDispatch: (dispatch: (err: AppError) => void) => {
-      inputHandle.setOnErrorDispatch(dispatch);
-    },
+    ...(inputBackend !== undefined ? { inputBackend } : {}),
+    ...(inputHandle !== undefined
+      ? {
+          cleanup: (onErrorDispatch: (err: AppError) => void) => {
+            inputHandle.cleanup({ onError: onErrorDispatch });
+          },
+          // The auto-attached backend's lock failures use app.onError. A supplied
+          // host backend owns its own failure/lifecycle channel.
+          wireOnLockErrorDispatch: (dispatch: (err: AppError) => void) => {
+            inputHandle.setOnErrorDispatch(dispatch);
+          },
+        }
+      : {}),
   };
   if (audioBackend !== undefined) {
     Object.assign(buildArgs, {

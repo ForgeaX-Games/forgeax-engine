@@ -234,7 +234,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         13
+         12
         ]
        }
       }
@@ -262,7 +262,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         13
+         12
         ]
        }
       }
@@ -290,7 +290,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         13
+         12
         ]
        }
       }
@@ -318,7 +318,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         13
+         12
         ]
        }
       }
@@ -346,7 +346,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         13
+         12
         ]
        }
       }
@@ -374,7 +374,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         13
+         12
         ]
        }
       }
@@ -402,7 +402,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         14
+         13
         ]
        }
       }
@@ -450,7 +450,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         11
+         10
         ]
        },
        "ChildOf": {
@@ -481,7 +481,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         10
+         9
         ]
        },
        "ChildOf": {
@@ -512,7 +512,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         10
+         9
         ]
        },
        "ChildOf": {
@@ -543,7 +543,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         10
+         9
         ]
        },
        "ChildOf": {
@@ -574,7 +574,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         12
+         11
         ]
        },
        "ChildOf": {
@@ -605,7 +605,7 @@
        },
        "MeshRenderer": {
         "materials": [
-         12
+         11
         ]
        },
        "ChildOf": {
@@ -620,7 +620,7 @@
         "value": "Skylight"
        },
        "Skylight": {
-        "equirect": 15,
+        "equirect": 14,
         "color": [
          1,
          1,
@@ -637,7 +637,7 @@
         "value": "Skybox"
        },
        "SkyboxBackground": {
-        "equirect": 15,
+        "equirect": 14,
         "mode": 0
        }
       }
@@ -654,7 +654,6 @@
     "f6205ca9-71c6-54b2-946c-45b3154931a4",
     "7d718b8e-9fac-5301-b5cb-e0bc940bae67",
     "65a4a1d4-2abf-535b-923e-bd066a9ab475",
-    "8f991880-b608-5d27-a46c-f6de2881fc15",
     "a1b2c3d4-0001-5000-8000-000000000001",
     "a1b2c3d4-0002-5000-8000-000000000002",
     "a1b2c3d4-0003-5000-8000-000000000003",
@@ -869,41 +868,6 @@
      ],
      "metallic": 0,
      "roughness": 0.6
-    }
-   },
-   "refs": []
-  },
-  {
-   "guid": "8f991880-b608-5d27-a46c-f6de2881fc15",
-   "kind": "material",
-   "payload": {
-    "passes": [
-     {
-      "name": "Forward",
-      "shader": "forgeax::default-standard-pbr",
-      "tags": {
-       "LightMode": "Forward"
-      },
-      "queue": 2000
-     },
-     {
-      "name": "ShadowCaster",
-      "shader": "forgeax::default-shadow-caster",
-      "tags": {
-       "LightMode": "ShadowCaster"
-      },
-      "passKind": "shadow-caster"
-     }
-    ],
-    "paramValues": {
-     "baseColor": [
-      1,
-      0.4745098039215686,
-      0.7764705882352941,
-      1
-     ],
-     "metallic": 0,
-     "roughness": 0.5
     }
    },
    "refs": []

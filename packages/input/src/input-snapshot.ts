@@ -352,6 +352,13 @@ export interface InputBackend {
    * Optional -- backends without pointer-lock support omit this method.
    */
   setPointerLockAllowed?(allowed: boolean): void;
+  /**
+   * Atomically discard acquired state without detaching listeners. A host calls
+   * this when it revokes a control lease so held keys/buttons, contacts, frame
+   * edges, deltas and pointer lock cannot bleed into a later consumer. Optional
+   * keeps synthetic backends source-compatible.
+   */
+  clear?(): void;
   /** Detach DOM listeners; called when the engine shuts down. */
   detach(): void;
 }

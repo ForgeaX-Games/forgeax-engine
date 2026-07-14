@@ -45,10 +45,10 @@
         "path": "dist/index.mjs",
         "compression": "gzip",
         "baseline": {
-          "source": "1f86361db",
-          "threshold": 9530
+          "source": "c6b1008b",
+          "threshold": 10570
         },
-        "reason": "Final M1-M5 surface measurement: dist/index.mjs = 8661 B gzip (35291 B raw, 34.5 KB). Threshold 9530 B = ~10% headroom over measured gzip. Includes: action-state.ts (deriveActionStates + getAxis/getVector), gesture-recognizer.ts (5 state machines), gamepad-frame.ts (DB remap), browser-backend.ts (recognizer wiring + lazy-load), input-snapshot.ts (action/gesture readpoints + PointerType narrowing), index.ts (barrel). The SDL controller DB sub-export (dist/controller-db.mjs, ~1.5 KB gzip) and data sub-export (dist/controller-db-data.mjs, ~45 KB gzip / 545 KB raw) are opt-in lazy dynamic-imports and are NOT in the main-entry path (path=dist/index.mjs)."
+        "reason": "dist/index.mjs = 9609 B gzip after adding composite-backend.ts (CompositeInputBackend — synthetic-input decorator layered over the human browser backend; see file header). Threshold 10570 B = ~10% headroom over measured gzip. Prior baseline 8661 B gzip @ 1f86361db (threshold 9530). Includes: action-state.ts (deriveActionStates + getAxis/getVector), gesture-recognizer.ts (5 state machines), gamepad-frame.ts (DB remap), browser-backend.ts (recognizer wiring + lazy-load), composite-backend.ts (per-key-yield merge decorator), input-snapshot.ts (action/gesture readpoints + PointerType narrowing), index.ts (barrel). The SDL controller DB sub-export (dist/controller-db.mjs, ~1.5 KB gzip) and data sub-export (dist/controller-db-data.mjs, ~45 KB gzip / 545 KB raw) are opt-in lazy dynamic-imports and are NOT in the main-entry path (path=dist/index.mjs)."
       },
       "fps": {
         "enabled": false,

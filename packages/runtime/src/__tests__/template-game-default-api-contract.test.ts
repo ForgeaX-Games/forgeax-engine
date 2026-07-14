@@ -305,6 +305,38 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
     expect(scanned).toBeGreaterThan(0);
   });
 
+  // The editor serializes inline materials only when they are reachable from a
+  // live MeshRenderer. An orphaned inline material therefore turns its
+  // load-time count floor into a false save rejection for every new game.
+  it('(e2) [regression] every inline template material is referenced by a MeshRenderer', () => {
+    const here = fileURLToPath(import.meta.url);
+    const repoRoot = resolve(here, '..', '..', '..', '..', '..');
+    const packPath = resolve(repoRoot, 'templates', 'game-default', 'assets', 'scene.pack.json');
+    const pack = JSON.parse(readFileSync(packPath, 'utf-8')) as {
+      assets: {
+        guid: string;
+        kind: string;
+        payload?: { entities?: { components: { MeshRenderer?: { materials?: number[] } } }[] };
+        refs?: string[];
+      }[];
+    };
+    const scene = pack.assets.find((asset) => asset.kind === 'scene');
+    expect(scene).toBeDefined();
+    if (scene === undefined) return;
+
+    const referencedMaterialGuids = new Set(
+      (scene.payload?.entities ?? []).flatMap((entity) =>
+        (entity.components.MeshRenderer?.materials ?? []).map((index) => scene.refs?.[index]),
+      ),
+    );
+    const orphanedMaterialGuids = pack.assets
+      .filter((asset) => asset.kind === 'material')
+      .map((asset) => asset.guid)
+      .filter((guid) => !referencedMaterialGuids.has(guid));
+
+    expect(orphanedMaterialGuids).toEqual([]);
+  });
+
   it('(d) loadByGuid returns the catalogued SceneAsset payload (identity)', async () => {
     const reg = new AssetRegistry(makeMockShaderRegistry());
     const sceneGuid = AssetGuid.parse(SCENE_GUID);

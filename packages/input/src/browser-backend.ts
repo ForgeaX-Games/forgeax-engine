@@ -494,15 +494,12 @@ export function attachBrowserInputBackend(
     }
   }
   function onBlur(): void {
-    // OOS-1 caveat: held-keys persist across focus loss (so users do
-    // not appear to release every key while alt-tabbing); up-edges are
-    // dropped because the matching down-events were never observed by
-    // this window.
+    // A standalone backend preserves its current-frame cancellation semantics.
+    // A host control boundary calls clear() separately on the same blur event so
+    // no state crosses a lease; the source itself still emits cancellation to its
+    // sole consumer as it did before ownership routing existed.
     upEdges.clear();
-    // w8 (D-1): release provider lock on blur (W3C path handles focus loss
-    // via browser pointerlockchange).
     releaseProviderLock();
-    // w16 (AC-10): clear active pointers and push cancel phase events.
     if (pointerMap.size > 0) {
       for (const [id, entry] of pointerMap) {
         phaseQueue.push({
@@ -516,10 +513,7 @@ export function attachBrowserInputBackend(
       }
       pointerMap.clear();
     }
-    // w16 (AC-10): reset gamepad edge state so next frame does not
-    // emit phantom justPressed/justReleased for stale slots.
     prevGamepadFrame.clear();
-    // w21: clear virtual joystick bindings on blur.
     vjBindState.clear();
   }
 
@@ -752,6 +746,29 @@ export function attachBrowserInputBackend(
     }
   }
 
+  function clear(): void {
+    heldKeys.clear();
+    upEdges.clear();
+    pointerMap.clear();
+    phaseQueue.length = 0;
+    prevGamepadFrame.clear();
+    vjBindState.clear();
+    recognizerState = createRecognizerState();
+    buttons[0] = false;
+    buttons[1] = false;
+    buttons[2] = false;
+    mvx = 0;
+    mvy = 0;
+    wheelAccum = 0;
+    if (typeof doc?.exitPointerLock === 'function' && doc.pointerLockElement === canvas) {
+      doc.exitPointerLock();
+    }
+    // `pointerlockchange` is asynchronous. The boundary must nevertheless
+    // publish an unlocked frame immediately after revocation.
+    w3cLocked = false;
+    releaseProviderLock();
+  }
+
   function detach(): void {
     if (detached) return;
     detached = true;
@@ -766,32 +783,14 @@ export function attachBrowserInputBackend(
     safeRemove(doc, 'visibilitychange', onVisibilityChange as EventListener);
     safeRemove(doc, 'pointerlockchange', onPointerLockChange as EventListener);
     safeRemove(canvas, 'click', onCanvasClick as EventListener);
-    // w8 (D-1): release provider lock on detach (symmetrical with W3C path).
-    releaseProviderLock();
-    // Best-effort exit of PointerLock; older specs require document.exitPointerLock.
-    if (doc?.pointerLockElement === canvas && typeof doc.exitPointerLock === 'function') {
-      doc.exitPointerLock();
-    }
+    clear();
     // D-5: restore original touch-action value.
     if (canvas.style && _prevTouchAction !== undefined) {
       canvas.style.touchAction = _prevTouchAction;
     }
-    heldKeys.clear();
-    upEdges.clear();
-    pointerMap.clear();
-    phaseQueue.length = 0;
-    prevGamepadFrame.clear();
-    vjBindState.clear();
-    recognizerState = createRecognizerState();
-    buttons[0] = false;
-    buttons[1] = false;
-    buttons[2] = false;
-    mvx = 0;
-    mvy = 0;
-    wheelAccum = 0;
   }
 
-  const backend: InputBackend = { sample, detach, setPointerLockAllowed };
+  const backend: InputBackend = { sample, clear, detach, setPointerLockAllowed };
 
   // Returned callable doubles as the InputBackend (detach + sample). AI
   // users see one symbol with both shapes, mirroring the
