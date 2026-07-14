@@ -1,7 +1,7 @@
 // quat.test-d.ts — branded return type + dimension-mix-up compile-time assertions (T-026)
 //
 // Locks quat.create / fromAxisAngle / fromEuler / slerp / nlerp / multiply / invert /
-// conjugate / normalize / fromRotationMatrix / fromUnitVectors to return Quat;
+// conjugate / normalize / fromRotationMatrix / fromLookAt / fromUnitVectors to return Quat;
 // dimension mix-ups (quat.multiply(out, vec3, vec3)) are ts-expect-error;
 // EulerOrder union is locked to 6 exhaustive values; fromEuler(_, _, _, _, 'INVALID') is ts-error.
 //
@@ -58,6 +58,12 @@ describe('quat — branded return-type locks', () => {
 
   it('quat.normalize returns Quat', () => {
     expectTypeOf(quat.normalize(quat.create(), quat.create())).toEqualTypeOf<Quat>();
+  });
+
+  it('quat.fromLookAt returns Quat', () => {
+    expectTypeOf(
+      quat.fromLookAt(quat.create(), [0, 0, 5], [0, 0, 0], [0, 1, 0]),
+    ).toEqualTypeOf<Quat>();
   });
 });
 

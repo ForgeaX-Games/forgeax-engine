@@ -471,6 +471,35 @@ Real-world consumer: `packages/runtime/src/render-system-extract.ts` Camera / Po
 | Optional component not registered in World | Treated as absent from all archetypes — `optionalIds` omits unresolved tokens; no crash, predictable behaviour (<https://github.com/bevyengine/bevy/issues/17578>) |
 | Empty `optional: []` | Equivalent to pure `with` query — no optional keys in bundle. `DirectionalLight` query keeps this form (OOS-5). |
 
+## Query — pairwise / K-combination iteration (`queryCombinations`)
+
+**`queryCombinations(state, world, k, callback)` visits every unordered K-combination of the matched entities**, invoking `callback` once per combination with a K-tuple of `EntityHandle`s. It is the combinatorial counterpart of `queryRun` (single entities) — the canonical use is **pairwise interaction**: N-body gravity, collision broadphase, flocking, where each unordered PAIR is processed exactly once.
+
+```ts
+const { createQueryState, queryCombinations, Entity, Transform } = await _import('@forgeax/engine-ecs');
+const Body = defineComponent('Body', { mass: 'f32' });
+const state = createQueryState({ with: [Body, Transform, Entity] });
+
+// Apply each pair's mutual gravitational force once (Bevy's interact_bodies):
+queryCombinations(state, world, 2, (pair) => {
+  const ta = world.get(pair[0], Transform);
+  const tb = world.get(pair[1], Transform);
+  if (!ta.ok || !tb.ok) return;
+  // ... compute force from (tb.pos - ta.pos), accumulate into both via world.set
+});
+```
+
+**Why it maps Bevy `Query::iter_combinations` but is simpler.** Bevy needs a special `iter_combinations_mut()` cursor because Rust's borrow checker forbids two `&mut` into the same query at once. forgeax reads/writes component data through handle-keyed `world.get` / `world.set`, so the helper only yields entity-handle *pairs* — no mutable-aliasing ceremony, no cursor type. The two entities in a pair are freely readable and writable via their handles.
+
+| Property | Behaviour |
+|:--|:--|
+| Ordering | Lexicographic over the matched-entity order (`i0 < i1 < ... < i(k-1)`): no self-pairs, no ordered duplicates. `C(N, k)` combinations for `N` matched entities. |
+| `k` default | `2` (the pair case) is the common call; a general `k` covers triple-wise interactions (`C(N, 3)` etc.). |
+| `k > N` or `N === 0` | Yields zero combinations (no callback). |
+| Filter | Respects the query's `with` / `without` — combinations are drawn only from matched entities. |
+| Tuple reuse | The handle tuple passed to `callback` is REUSED across invocations (no per-combination allocation). Destructure it or copy if you must retain it past the callback. |
+| `Entity` absent from `with` | **Fail-fast**: throws `EcsError(code='query-combinations-entity-required')` with `.hint` — the yielded unit is the entity handle (read from `bundle.Entity.self`), so `Entity` must be in `with`. |
+
 ## Name component
 
 > [!TIP]

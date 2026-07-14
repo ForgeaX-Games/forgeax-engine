@@ -13,6 +13,7 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
+    "bevyExample": { "name": "tonemapping", "category": "3D Rendering", "status": "implemented" },
     "smokeInvocation": "pnpm --filter @forgeax/hello-tonemap smoke",
     "_comment": "smokeInvocation = self-contained SSOT (mirrors hello-cube / hello-room). hello-tonemap exercises Camera tonemap='reinhard-extended' end-to-end (HDR rgba16float target -> fullscreen tonemap pass -> swap-chain) + AC-07 (no integer-white burn) + AC-08 (highlight readback in (0.3, 1.0)).",
     "metrics": {

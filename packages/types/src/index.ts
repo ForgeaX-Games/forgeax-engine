@@ -1484,26 +1484,41 @@ export interface SceneEntity {
 }
 
 /**
- * One field-level override applied to a mounted scene member at
- * mount-time (feat-20260608-scene-nesting-ecs-fication M1 / w7; AC-01,
- * AC-19).
+ * One per-member mount-time modification (add-or-patch) applied to a
+ * mounted scene member (feat-20260608-scene-nesting-ecs-fication M1 / w7;
+ * feat-20260713-mount-override-component-add-and-shared-ref-round M1 / w2;
+ * AC-01, AC-19).
  *
  * `localId` selects a member entity inside the mounted SceneAsset,
- * counted against the mount's `memberFirst` window. `comp` and `field`
- * name the component and the per-component field whose value is to be
- * overwritten at instantiate time; `value` carries the override payload
- * (typed `unknown` because the per-component schema vocab lives one
- * layer up — runtime fail-fast via 'scene-override-type-mismatch'
- * catches type drift, plan-strategy D-9).
+ * counted against the mount's `memberFirst` window. `comp` names the
+ * target component. `field` is a component-granular discriminant:
+ *   - present -> PATCH one field: `value` is that single field's value,
+ *     written over the member's existing component at instantiate time;
+ *   - absent  -> ADD/UPSERT the whole component: `value` is the per-field
+ *     value map for `comp`, merged onto (or creating) the member's
+ *     component.
+ * `value` stays `unknown` because the per-component schema vocab lives one
+ * layer up — runtime fail-fast via 'scene-override-type-mismatch' catches
+ * type drift (plan-strategy D-9 / D-1). The discriminant is carried by the
+ * shape itself (field present / absent), never a separate `op` tag, so no
+ * consumer branches on a `switch (op)` (requirements: consumers do not
+ * encode variant knowledge).
  *
- * Charter mapping: proposition 3 (machine-readable union, MountOverride
- * is a closed POD shape) + proposition 4 (explicit failure: runtime
- * apply path returns Result with structured error code).
+ * Boundary notes: add is upsert (an existing component is merged, not
+ * rejected); a NULL-sentinel entity value in the payload follows the same
+ * `entity` remap rules as SceneEntity.components; overrides apply in
+ * `mounts[].overrides[]` array order after the member's own authored
+ * components.
+ *
+ * Charter mapping: proposition 1 (single-entry import surface, three-tier
+ * progressive disclosure) + proposition 3 (machine-readable union,
+ * MountOverride is a closed POD shape) + proposition 4 (explicit failure:
+ * runtime apply path returns Result with structured error code).
  */
 export interface MountOverride {
   readonly localId: LocalEntityId;
   readonly comp: string;
-  readonly field: string;
+  readonly field?: string;
   readonly value: unknown;
 }
 

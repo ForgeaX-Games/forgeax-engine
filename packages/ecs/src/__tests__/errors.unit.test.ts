@@ -48,6 +48,7 @@ import {
   UniqueRefDoubleReleaseError,
   UniqueRefReleasedError,
 } from '../errors';
+import { World } from '../world';
 
 {
   // ─── from ac16-register-component-grep-gate.test.ts ───
@@ -561,6 +562,17 @@ import {
           // (charter F1: upstream lands must not trigger this feat's fence).
           'shared-ref-stale',
           'unique-ref-stale',
+          // solo bevy-examples round 20260713-194533 — queryCombinations
+          // Entity-required fail-fast. Minor evolution +1 per AGENTS.md
+          // §Error model evolution contract.
+          'query-combinations-entity-required',
+          // feat-20260713-mount-override-component-add-and-shared-ref-round
+          // M2 / w9 — P3 shared-field value gate. `shared-field-invalid-value`
+          // fails fast when a `shared<T>` / `array<shared<T>>` field is bound to
+          // a raw GUID / sidecar object (not a resolved numeric handle) instead
+          // of the pre-fix silent zeroing. Minor evolution +1 per AGENTS.md
+          // §Error model evolution contract.
+          'shared-field-invalid-value',
         ]);
 
         const added: string[] = [];
@@ -680,6 +692,13 @@ import {
             case 'sprite-instances-count-mismatch':
             case 'sprite-instances-requires-sprite-shader':
             case 'sprite-instances-mutually-exclusive-with-instances':
+            // solo bevy-examples round 20260713-194533 — queryCombinations
+            // Entity-required fail-fast case, keeps this switch exhaustive.
+            case 'query-combinations-entity-required':
+            // feat-20260713-mount-override-component-add-and-shared-ref-round
+            // M2 / w9 — shared-field value gate code. Required to keep this
+            // exhaustive switch over EcsErrorCode visually closed.
+            case 'shared-field-invalid-value':
               return code;
             default:
               return assertNever(code);
@@ -1387,6 +1406,153 @@ import {
         expect(shading).toBe(1);
         expect(mutex).toBe(1);
       });
+    });
+  });
+}
+
+{
+  // ─── feat-20260713 M2 / w7 — AC-09 shared-field illegal value fail-fast ───
+  //
+  // The P3 value gate: addComponent / spawn / set must reject an illegal value
+  // for a shared field (scalar `shared<T>` must be a number handle; array
+  // `array<shared<T>>` elements must all be numbers) with a structured EcsError
+  // (.code / .expected / .hint) instead of silently zeroing the column to
+  // `[0,0,0,0]`. AI users bind a shared reference by first resolving the GUID to
+  // a handle (loadByGuid + allocSharedRef); passing a raw GUID string / {guid}
+  // object / {kind} object bypasses that resolution and used to be swallowed.
+  //
+  // The three GUID forms feedback verified being zeroed:
+  //   (a) bare GUID string 'pack.material'
+  //   (b) { guid: '...' } object
+  //   (c) { kind: 'MaterialAsset', ... } object
+  //
+  // Zeroing repro guard: after a rejected write the column must NOT read back as
+  // the all-zero sentinel — the write is aborted so the field never lands.
+  describe('feat-20260713 M2 / w7 — shared-field illegal value fail-fast (AC-09)', () => {
+    const SHARED_INVALID_CODE = 'shared-field-invalid-value';
+
+    // Distinct component names per test (defineComponent global index is
+    // process-wide) — a scalar shared field + an array<shared<>> field.
+    function scalarComp(name: string) {
+      return defineComponent(name, { mat: { type: 'shared<MaterialAsset>' } });
+    }
+    function arrayComp(name: string) {
+      return defineComponent(name, { clips: { type: 'array<shared<AnimationClip>, 4>' } });
+    }
+
+    const GUID_FORMS: ReadonlyArray<{ label: string; value: unknown }> = [
+      { label: 'bare GUID string', value: 'pack.material' },
+      { label: '{ guid } object', value: { guid: 'pack.material' } },
+      { label: '{ kind } object', value: { kind: 'MaterialAsset', guid: 'pack.material' } },
+    ];
+
+    describe('scalar shared field', () => {
+      for (const form of GUID_FORMS) {
+        it(`addComponent rejects ${form.label} with structured EcsError (not zeroed)`, () => {
+          const world = new World();
+          const C = scalarComp(`W7Scalar_Add_${form.label.replace(/\W/g, '')}`);
+          const e = world.spawn().unwrap();
+          const add = world.addComponent(e, { component: C, data: { mat: form.value } as never });
+          expect(add.ok).toBe(false);
+          if (add.ok) return;
+          const err = add.error as unknown as { code: string; expected?: string; hint?: string };
+          expect(err.code).toBe(SHARED_INVALID_CODE);
+          expect((err.expected ?? '').length).toBeGreaterThan(0);
+          expect((err.hint ?? '').length).toBeGreaterThan(0);
+        });
+
+        it(`spawn rejects ${form.label} with structured EcsError (not zeroed)`, () => {
+          const world = new World();
+          const C = scalarComp(`W7Scalar_Spawn_${form.label.replace(/\W/g, '')}`);
+          const r = world.spawn({ component: C, data: { mat: form.value } as never });
+          expect(r.ok).toBe(false);
+          if (r.ok) return;
+          const err = r.error as unknown as { code: string; expected?: string; hint?: string };
+          expect(err.code).toBe(SHARED_INVALID_CODE);
+          expect((err.expected ?? '').length).toBeGreaterThan(0);
+          expect((err.hint ?? '').length).toBeGreaterThan(0);
+        });
+
+        it(`set rejects ${form.label} with structured EcsError (not zeroed)`, () => {
+          const world = new World();
+          const C = scalarComp(`W7Scalar_Set_${form.label.replace(/\W/g, '')}`);
+          const e = world.spawn({ component: C, data: {} }).unwrap();
+          const r = world.set(e, C, { mat: form.value } as never);
+          expect(r.ok).toBe(false);
+          if (r.ok) return;
+          const err = r.error as unknown as { code: string; expected?: string; hint?: string };
+          expect(err.code).toBe(SHARED_INVALID_CODE);
+          expect((err.expected ?? '').length).toBeGreaterThan(0);
+          expect((err.hint ?? '').length).toBeGreaterThan(0);
+          // Zeroing guard: the shared field must NOT have landed as 0. A
+          // rejected set aborts before the column write, so reading the field
+          // back yields the pre-write value (0 from spawn default IS the
+          // sentinel here, so instead assert the write was rejected — the
+          // observable contract is the structured error, not a post-write read).
+        });
+      }
+    });
+
+    describe('array<shared<T>> field', () => {
+      for (const form of GUID_FORMS) {
+        it(`spawn rejects clips:[${form.label}] with structured EcsError (not [0,0,0,0])`, () => {
+          const world = new World();
+          const C = arrayComp(`W7Array_Spawn_${form.label.replace(/\W/g, '')}`);
+          const r = world.spawn({ component: C, data: { clips: [form.value] } as never });
+          expect(r.ok).toBe(false);
+          if (r.ok) return;
+          const err = r.error as unknown as { code: string; expected?: string; hint?: string };
+          expect(err.code).toBe(SHARED_INVALID_CODE);
+          expect((err.expected ?? '').length).toBeGreaterThan(0);
+          expect((err.hint ?? '').length).toBeGreaterThan(0);
+        });
+
+        it(`addComponent rejects clips:[${form.label}] with structured EcsError`, () => {
+          const world = new World();
+          const C = arrayComp(`W7Array_Add_${form.label.replace(/\W/g, '')}`);
+          const e = world.spawn().unwrap();
+          const add = world.addComponent(e, {
+            component: C,
+            data: { clips: [form.value] } as never,
+          });
+          expect(add.ok).toBe(false);
+          if (add.ok) return;
+          expect((add.error as unknown as { code: string }).code).toBe(SHARED_INVALID_CODE);
+        });
+
+        it(`set rejects clips:[${form.label}] with structured EcsError`, () => {
+          const world = new World();
+          const C = arrayComp(`W7Array_Set_${form.label.replace(/\W/g, '')}`);
+          const e = world.spawn({ component: C, data: {} }).unwrap();
+          const r = world.set(e, C, { clips: [form.value] } as never);
+          expect(r.ok).toBe(false);
+          if (r.ok) return;
+          expect((r.error as unknown as { code: string }).code).toBe(SHARED_INVALID_CODE);
+        });
+      }
+    });
+
+    it('valid number handle for a scalar shared field is accepted (no false positive)', () => {
+      const world = new World();
+      const C = scalarComp('W7Scalar_ValidHandle');
+      const handle = world.allocSharedRef('MaterialAsset', {});
+      const r = world.spawn({ component: C, data: { mat: handle } as never });
+      expect(r.ok).toBe(true);
+    });
+
+    it('valid number handles for an array<shared<T>> field are accepted (no false positive)', () => {
+      const world = new World();
+      const C = arrayComp('W7Array_ValidHandles');
+      const h1 = world.allocSharedRef('AnimationClip', {});
+      const h2 = world.allocSharedRef('AnimationClip', {});
+      const r = world.spawn({ component: C, data: { clips: [h1, h2] } as never });
+      expect(r.ok).toBe(true);
+    });
+
+    it('SHARED_INVALID_CODE is a member of EcsErrorCode (exhaustive narrow)', () => {
+      const code: EcsErrorCode = 'shared-field-invalid-value';
+      expect(code).toBe('shared-field-invalid-value');
+      expectTypeOf<'shared-field-invalid-value'>().toMatchTypeOf<EcsErrorCode>();
     });
   });
 }

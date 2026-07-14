@@ -111,6 +111,7 @@ const mockCanvas = {
 const { ok: okResult, err: errResult, World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const {
+  AnimationPlayer,
   Camera,
   ChildOf,
   createRenderer,
@@ -187,7 +188,10 @@ const outerScene = {
     source: 0,
     memberFirst: 2,
     memberCount: 1,
-    overrides: [{ localId: 2, comp: 'Transform', field: 'pos', value: [1.0, 0, 0] }],
+    overrides: [
+      { localId: 2, comp: 'Transform', field: 'pos', value: [1.0, 0, 0] },
+      { localId: 2, comp: 'DirectionalLight', value: { direction: [0, -1, 0], color: [1, 0.5, 0.2], intensity: 1.0 } },
+    ],
   }],
 };
 
@@ -216,6 +220,33 @@ const instRes = world.instantiateScene(outerHandle);
 if (!instRes.ok) {
   console.error(`[smoke] FAIL - instantiateScene: ${instRes.error.code}`);
   process.exit(1);
+}
+
+// feat-20260713 M6 / w23: verify the component-add override (DirectionalLight without
+// `field`) took effect on the member entity. The member (localId=2) should now carry
+// DirectionalLight with the override values.
+const rootEntity = instRes.value.root;
+const sceneInst = world.get(rootEntity, SceneInstance);
+let addOverrideVerified = false;
+if (sceneInst.ok) {
+  const mapping = sceneInst.value.mapping;
+  const memberEntity = mapping[2];
+  if (memberEntity !== undefined && memberEntity !== 0) {
+    const dl = world.get(memberEntity, DirectionalLight);
+    if (dl.ok) {
+      const dlVal = dl.value;
+      const dirOk = Math.abs(dlVal.direction[0]) < 0.001 && Math.abs(dlVal.direction[1] + 1) < 0.001 && Math.abs(dlVal.direction[2]) < 0.001;
+      const colorOk = Math.abs(dlVal.color[0] - 1) < 0.001 && Math.abs(dlVal.color[1] - 0.5) < 0.001 && Math.abs(dlVal.color[2] - 0.2) < 0.001;
+      const intensityOk = Math.abs(dlVal.intensity - 1.0) < 0.001;
+      if (dirOk && colorOk && intensityOk) {
+        addOverrideVerified = true;
+      }
+    }
+  }
+}
+
+if (addOverrideVerified) {
+  console.log(`[smoke] add-override + field-patch override semantics verified`);
 }
 
 const errors = [];
@@ -347,6 +378,12 @@ if (consoleErrorRhiCount > 0) {
 if (failures.length > 0) {
   consoleErrorOriginal(`[smoke] FAIL - ${failures.length} criteria failed:`);
   for (const f of failures) consoleErrorOriginal(`  ${f}`);
+  await delay(0);
+  device.destroy?.();
+  process.exit(1);
+}
+if (!addOverrideVerified) {
+  consoleErrorOriginal(`[smoke] FAIL - (f) component-add override (DirectionalLight, no field) not verified on member entity`);
   await delay(0);
   device.destroy?.();
   process.exit(1);

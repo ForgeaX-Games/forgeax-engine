@@ -6,7 +6,6 @@
    "guid": "1036f6f0-d3c2-5f31-9593-3432942d4c93",
    "kind": "scene",
    "payload": {
-    "kind": "scene",
     "entities": [
      {
       "localId": 0,
@@ -668,7 +667,6 @@
    "guid": "4e3206e4-f2ac-5d05-b879-2c667168dc27",
    "kind": "material",
    "payload": {
-    "kind": "material",
     "passes": [
      {
       "name": "Forward",
@@ -704,7 +702,6 @@
    "guid": "423f2ea4-a8f2-504f-a1b5-323e3adf94d1",
    "kind": "material",
    "payload": {
-    "kind": "material",
     "passes": [
      {
       "name": "Forward",
@@ -740,7 +737,6 @@
    "guid": "4b077814-3cc4-51b5-8e76-e3d273dad53b",
    "kind": "material",
    "payload": {
-    "kind": "material",
     "passes": [
      {
       "name": "Forward",
@@ -776,7 +772,6 @@
    "guid": "f6205ca9-71c6-54b2-946c-45b3154931a4",
    "kind": "material",
    "payload": {
-    "kind": "material",
     "passes": [
      {
       "name": "Forward",
@@ -812,7 +807,6 @@
    "guid": "7d718b8e-9fac-5301-b5cb-e0bc940bae67",
    "kind": "material",
    "payload": {
-    "kind": "material",
     "passes": [
      {
       "name": "Forward",
@@ -848,7 +842,6 @@
    "guid": "65a4a1d4-2abf-535b-923e-bd066a9ab475",
    "kind": "material",
    "payload": {
-    "kind": "material",
     "passes": [
      {
       "name": "Forward",
@@ -884,7 +877,6 @@
    "guid": "8f991880-b608-5d27-a46c-f6de2881fc15",
    "kind": "material",
    "payload": {
-    "kind": "material",
     "passes": [
      {
       "name": "Forward",
@@ -920,7 +912,6 @@
    "guid": "a1b2c3d4-0001-5000-8000-000000000001",
    "kind": "material",
    "payload": {
-    "kind": "material",
     "passes": [
      {
       "name": "Forward",
@@ -956,7 +947,6 @@
    "guid": "a1b2c3d4-0002-5000-8000-000000000002",
    "kind": "material",
    "payload": {
-    "kind": "material",
     "passes": [
      {
       "name": "Forward",
@@ -992,7 +982,6 @@
    "guid": "a1b2c3d4-0003-5000-8000-000000000003",
    "kind": "material",
    "payload": {
-    "kind": "material",
     "passes": [
      {
       "name": "Forward",
@@ -1028,7 +1017,6 @@
    "guid": "c0a7e000-0001-5000-8000-0000000000c1",
    "kind": "material",
    "payload": {
-    "kind": "material",
     "passes": [
      {
       "name": "Forward",
@@ -1064,7 +1052,6 @@
    "guid": "c0a7e000-0002-5000-8000-0000000000c2",
    "kind": "material",
    "payload": {
-    "kind": "material",
     "passes": [
      {
       "name": "Forward",

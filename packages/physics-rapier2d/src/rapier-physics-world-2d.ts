@@ -21,6 +21,7 @@ import {
   colliderShapeFromF32,
   PHYSICS_ERROR_HINTS,
   PhysicsError,
+  RIGID_BODY_TYPE_STATIC,
   RigidBody,
   registerColliderRemoveListener,
   rigidBodyTypeFromF32,
@@ -177,7 +178,7 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
       undefined,
       filterMask,
     ) as {
-      collider: { parent(): number | null };
+      collider: { parent(): { userData: number } | null };
       timeOfImpact: number;
       normal: { x: number; y: number };
     } | null;
@@ -185,17 +186,13 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
     if (hit === null) return undefined;
 
     const point = ray.pointAt(hit.timeOfImpact);
+    // `hit.collider.parent()` already returns the owning RigidBody OBJECT (compat
+    // build), whose userData holds the ECS entity — read it directly. The prior
+    // code treated the object as a body HANDLE and re-resolved it via
+    // `bodies.get(...)`, which returned a DIFFERENT body → the wrong entity
+    // (identical bug + fix as the 3D backend, solo round-22).
     const colliderParentBody = hit.collider.parent();
-    let entity = 0;
-    if (colliderParentBody !== null) {
-      // biome-ignore lint/suspicious/noExplicitAny: Rapier bodies.get needs any-cast due to dynamic module type
-      const body = (this.raw as any).bodies.get(colliderParentBody) as {
-        userData: number;
-      } | null;
-      if (body !== null) {
-        entity = body.userData;
-      }
-    }
+    const entity = colliderParentBody !== null ? colliderParentBody.userData : 0;
 
     return {
       entity,
@@ -739,9 +736,12 @@ function resolveTransform(): Component | undefined {
 /**
  * `physicsSyncBackend2D` system token (M2 — full resource-ification, D-4).
  *
- * After propagateTransforms — query entities with (Transform, RigidBody,
- * Collider) and call ensureBody for each. The 2D suffix keeps the name
- * distinct from the 3D system in the shared SYSTEM_REGISTRY (D-5).
+ * After propagateTransforms — query entities with (Transform, Collider) and
+ * call ensureBody for each. `RigidBody` is OPTIONAL: an entity with a Collider
+ * but no RigidBody is treated as a STATIC collider (Rapier-native — a collider
+ * without a parent body is fixed), matching the Collider docstring and how
+ * static level geometry is authored. The 2D suffix keeps the name distinct from
+ * the 3D system in the shared SYSTEM_REGISTRY (D-5).
  */
 export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
   name: PHYSICS_SYNC_BACKEND_2D,
@@ -764,8 +764,12 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
 
     for (const arch of graph.archetypes) {
       if (!arch || arch.size === 0) continue;
+      // (Collider, Transform) are REQUIRED; RigidBody is OPTIONAL. A
+      // Collider-only entity is simulated as an implicit static collider (see
+      // the system doc + the Collider component docstring). Gating on RigidBody
+      // here — as the pre-fix filter did — silently dropped every bare-Collider
+      // static body from the simulation, contradicting the documented contract.
       if (
-        !arch.components.some((c) => c.id === RigidBody.id) ||
         !arch.components.some((c) => c.id === Collider.id) ||
         !arch.components.some((c) => c.id === transformComponent.id)
       ) {
@@ -778,17 +782,21 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
       // archetype — characters fall into a distinct archetype by component set.
       const hasCharacterController = arch.components.some((c) => c.id === CharacterController.id);
 
+      // RigidBody column is optional (bare-Collider archetypes have none). When
+      // absent, `rbCols` is undefined → every rb* view below is undefined → the
+      // per-row rigidBody is synthesized as a static default (the `static`
+      // ensureBody arm ignores mass/damping/gravity anyway).
       const rbCols = arch.columns.get(RigidBody.id);
       const cCols = arch.columns.get(Collider.id);
       const tfCols = arch.columns.get(transformComponent.id);
-      if (!rbCols || !cCols || !tfCols) continue;
+      if (!cCols || !tfCols) continue;
 
-      const rbType = rbCols.get('type')?.view as Uint32Array | undefined;
-      const rbMass = rbCols.get('mass')?.view as Float32Array | undefined;
-      const rbLinDamp = rbCols.get('linearDamping')?.view as Float32Array | undefined;
-      const rbAngDamp = rbCols.get('angularDamping')?.view as Float32Array | undefined;
-      const rbGravScale = rbCols.get('gravityScale')?.view as Float32Array | undefined;
-      const rbCcd = rbCols.get('ccdEnabled')?.view as Uint32Array | undefined;
+      const rbType = rbCols?.get('type')?.view as Uint32Array | undefined;
+      const rbMass = rbCols?.get('mass')?.view as Float32Array | undefined;
+      const rbLinDamp = rbCols?.get('linearDamping')?.view as Float32Array | undefined;
+      const rbAngDamp = rbCols?.get('angularDamping')?.view as Float32Array | undefined;
+      const rbGravScale = rbCols?.get('gravityScale')?.view as Float32Array | undefined;
+      const rbCcd = rbCols?.get('ccdEnabled')?.view as Uint32Array | undefined;
 
       const cShape = cCols.get('shape')?.view as Uint32Array | undefined;
       // feat-20260709 M4: halfExtents is one inline array<f32,3> column
@@ -811,13 +819,11 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
       const tfPos = tfCols.get('pos')?.view as Float32Array | undefined;
       const tfQuat = tfCols.get('quat')?.view as Float32Array | undefined;
 
+      // rb* views are intentionally NOT guarded here: a bare-Collider archetype
+      // has no RigidBody column, so they are legitimately undefined and the
+      // per-row rigidBody below falls back to a static default. Only the
+      // Collider + Transform columns are required.
       if (
-        !rbType ||
-        !rbMass ||
-        !rbLinDamp ||
-        !rbAngDamp ||
-        !rbGravScale ||
-        !rbCcd ||
         !cShape ||
         !cHalfExtents ||
         !cRadius ||
@@ -845,6 +851,10 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
           quatW: (tfQuat?.[row * 4 + 3] as number) ?? 1,
         };
 
+        // Bare-Collider (no RigidBody) → synthesize a STATIC body. The `static`
+        // ensureBody arm reads only `type`, so mass/damping/gravity/ccd defaults
+        // are inert; this matches Rapier's "collider without a parent body is
+        // fixed" semantics and the Collider component docstring.
         const rigidBody: {
           type: number;
           mass: number;
@@ -852,14 +862,23 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
           angularDamping: number;
           gravityScale: number;
           ccdEnabled: number;
-        } = {
-          type: rbType[row] as number,
-          mass: rbMass[row] as number,
-          linearDamping: rbLinDamp[row] as number,
-          angularDamping: rbAngDamp[row] as number,
-          gravityScale: rbGravScale[row] as number,
-          ccdEnabled: rbCcd[row] as number,
-        };
+        } = rbType
+          ? {
+              type: rbType[row] as number,
+              mass: (rbMass?.[row] ?? 0) as number,
+              linearDamping: (rbLinDamp?.[row] ?? 0) as number,
+              angularDamping: (rbAngDamp?.[row] ?? 0) as number,
+              gravityScale: (rbGravScale?.[row] ?? 1) as number,
+              ccdEnabled: (rbCcd?.[row] ?? 0) as number,
+            }
+          : {
+              type: RIGID_BODY_TYPE_STATIC,
+              mass: 0,
+              linearDamping: 0,
+              angularDamping: 0,
+              gravityScale: 1,
+              ccdEnabled: 0,
+            };
 
         const collider: {
           shape: number;

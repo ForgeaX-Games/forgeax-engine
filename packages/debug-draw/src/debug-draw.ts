@@ -30,6 +30,8 @@ import {
   viewProjRequired,
 } from './errors';
 import { aabbVertices } from './shapes/aabb';
+import { arrowVertices } from './shapes/arrow';
+import { axesArrowSets } from './shapes/axes';
 import { frustumVertices } from './shapes/frustum';
 import { lineVertices } from './shapes/line';
 import { sphereVertices } from './shapes/sphere';
@@ -354,6 +356,35 @@ export class DebugDraw implements DebugDrawInterface {
     this.ensureCapacity(this.stagingLen + verts.length);
     for (const [x, y, z] of verts) {
       this.pushVertex(x, y, z, r, g, bc, alpha);
+    }
+  }
+
+  arrow(start: Vec3, end: Vec3, color: ColorLike, tipLength?: number): void {
+    if (this.isDestroyed) {
+      this.postDestroyWarnOnce();
+      return;
+    }
+    const [r, g, bc, alpha] = this.colorToRGBA(color);
+    const verts = arrowVertices(start, end, tipLength);
+    this.ensureCapacity(this.stagingLen + verts.length);
+    for (const [x, y, z] of verts) {
+      this.pushVertex(x, y, z, r, g, bc, alpha);
+    }
+  }
+
+  axes(worldMat: Mat4, length: number): void {
+    if (this.isDestroyed) {
+      this.postDestroyWarnOnce();
+      return;
+    }
+    // Three arrows (X=red, Y=green, Z=blue) along the transform's local axes; each
+    // carries its own color, so they cannot share the single-color push path.
+    for (const { vertices, color } of axesArrowSets(worldMat, length)) {
+      const [r, g, bc, alpha] = this.colorToRGBA(color as unknown as ColorLike);
+      this.ensureCapacity(this.stagingLen + vertices.length);
+      for (const [x, y, z] of vertices) {
+        this.pushVertex(x, y, z, r, g, bc, alpha);
+      }
     }
   }
 

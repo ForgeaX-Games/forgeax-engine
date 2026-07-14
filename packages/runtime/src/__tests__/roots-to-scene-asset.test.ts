@@ -11,15 +11,20 @@
 import type { Asset } from '@forgeax/engine-assets-runtime';
 import {
   AssetRegistry,
+  resolveAssetHandle,
   SceneCollectAssetGuidUnresolvedError,
   SceneCollectEntityRefOutOfClosureError,
 } from '@forgeax/engine-assets-runtime';
 import { defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { rootsToSceneAsset } from '../collect-scene-asset';
+import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
+import '../components';
+import { AnimationPlayer } from '../components/animation-player';
 import { ChildOf } from '../components/child-of';
 import { Children } from '../components/children';
+import { SceneInstance } from '../components/scene-instance';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -587,5 +592,137 @@ describe('m2-t5: fail-fast error paths + exhaustive switch', () => {
         }
       }
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// w19 — AC-07: end-to-end round-trip value equivalence
+//
+// The runtime synthesis of D-2 (GUID domain closed in assets-runtime) + D-3
+// (collect fold) + D-4 (add-or-patch value gate). Mount a GLB-like child scene
+// under a parent, addComponent(AnimationPlayer, { clips: [clipHandle] }) on a
+// live member, save (rootsToSceneAsset + serialize), reopen (parse + instantiate),
+// and assert the reopened member holds AnimationPlayer whose clip is a VALID
+// handle that resolveAssetHandle retrieves to the SAME clip asset (value
+// equivalence, not merely length/presence).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const W19_CLIP = 'aa19aa19-1919-4191-8191-191919191919';
+const W19_CHILD = 'bb19bb19-1919-4191-8191-191919191919';
+const W19_PARENT = 'cc19cc19-1919-4191-8191-191919191919';
+const W19_SAVED = 'dd19dd19-1919-4191-8191-191919191919';
+
+function pgc(s: string): AssetGuid {
+  const r = AssetGuid.parse(s);
+  if (!r.ok) throw new Error(`bad GUID: ${s}`);
+  return r.value;
+}
+
+function accessParse(reg: AssetRegistry) {
+  const internal = reg as unknown as {
+    parseAssetPayload(kind: string, payload: Record<string, unknown>, refs?: string[]): unknown;
+  };
+  return (
+    kind: string,
+    payload: Record<string, unknown>,
+    refs?: readonly string[] | undefined,
+  ): SceneAsset => {
+    const r = internal.parseAssetPayload(kind, payload, refs as string[] | undefined);
+    if (r === undefined) throw new Error('parse returned undefined');
+    return r as SceneAsset;
+  };
+}
+
+function findMember(w: World, root: EntityHandle): EntityHandle {
+  for (const c of w.iterDescendants(root)) {
+    if (c === root) continue;
+    if (!w.get(c, SceneInstance).ok) continue;
+    const st = w.getSceneInstanceState(c);
+    if (!st.ok) continue;
+    for (const [member] of st.value.entityToLocalId) return member;
+  }
+  throw new Error('no mounted member');
+}
+
+describe('w19 — end-to-end round-trip value equivalence (AC-07)', () => {
+  it('mount + addComponent(AnimationPlayer) survives save/reopen with value-equal clip', () => {
+    const reg = makeRegistry();
+    const w = new World();
+
+    // Catalogue the clip asset that the AnimationPlayer will reference.
+    const clipAsset = { kind: 'animation-clip', duration: 1.5 } as unknown as Asset;
+    reg.catalog(pgc(W19_CLIP), clipAsset);
+
+    // Child (GLB-like) scene + parent scene that mounts it.
+    const child: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [1, 0, 0] } } }],
+    };
+    reg.catalog(pgc(W19_CHILD), child as Asset);
+    const parent: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: 0 as never, components: { Transform: { pos: [0, 0, 0] } } }],
+      mounts: [{ localId: 1 as never, source: W19_CHILD, memberFirst: 2 as never, memberCount: 1 }],
+    };
+    reg.catalog(pgc(W19_PARENT), parent as Asset);
+
+    const inst = reg.instantiate(
+      w.allocSharedRef('SceneAsset', parent) as Handle<'SceneAsset', 'shared'>,
+      w,
+    );
+    expect(inst.ok).toBe(true);
+    if (!inst.ok) return;
+    const root = inst.value;
+
+    // addComponent AnimationPlayer with a handle pointing at the catalogued clip.
+    const clipH = w.allocSharedRef('AnimationClip', clipAsset);
+    const member = findMember(w, root);
+    const add = w.addComponent(member, {
+      component: AnimationPlayer,
+      data: { clips: [clipH] } as never,
+    });
+    expect(add.ok).toBe(true);
+
+    // Save: collect (fold) + serialize.
+    const collect = rootsToSceneAsset(reg, w, [root]);
+    expect(collect.ok).toBe(true);
+    if (!collect.ok) return;
+    const ser = serializeSceneAssetToPack(collect.value, W19_SAVED);
+    expect(ser.ok).toBe(true);
+    if (!ser.ok) return;
+
+    // Reopen: parse + catalog + instantiate.
+    const assets = ser.value.assets as Array<Record<string, unknown>>;
+    const a0 = assets[0];
+    if (!a0) throw new Error('no asset');
+    const parsed = accessParse(reg)(
+      'scene',
+      a0.payload as Record<string, unknown>,
+      a0.refs as readonly string[] | undefined,
+    );
+    reg.catalog(pgc(W19_SAVED), parsed as Asset);
+    const inst2 = reg.instantiate(
+      w.allocSharedRef('SceneAsset', parsed) as Handle<'SceneAsset', 'shared'>,
+      w,
+    );
+    expect(inst2.ok).toBe(true);
+    if (!inst2.ok) return;
+    const root2 = inst2.value;
+
+    // Assert: reopened member holds AnimationPlayer with a valid, value-equal clip.
+    const member2 = findMember(w, root2);
+    const apRes = w.get(member2, AnimationPlayer);
+    expect(apRes.ok).toBe(true);
+    if (!apRes.ok) return;
+    const clips2 = Array.from((apRes.value as { clips: ArrayLike<number> }).clips);
+    // slot 0 is a valid (non-zero) handle.
+    expect(clips2[0]).toBeGreaterThan(0);
+    // resolveAssetHandle retrieves the SAME clip asset (value equivalence).
+    const resolved = resolveAssetHandle(w, clips2[0] as unknown as Handle<string, 'shared'>);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const retrieved = resolved.value as unknown as { kind: string; duration: number };
+    expect(retrieved.kind).toBe('animation-clip');
+    expect(retrieved.duration).toBe(1.5);
   });
 });

@@ -44,30 +44,6 @@ export function registerColliderRemoveListener(listener: ColliderRemoveListener)
 export type RigidBodyType = 'static' | 'dynamic' | 'kinematic';
 
 /**
- * ECS Component: rigid body physics properties.
- *
- * AI user entry point — spawn with `world.spawn(RigidBody({ type: 'dynamic' }))`
- * to opt an entity into physics simulation.
- *
- * | Field | Type | Default | Purpose |
- * |:--|:--|:--|:--|
- * | `type` | `RigidBodyType` | `'dynamic'` | Motion type discriminant |
- * | `mass` | `number` | `1.0` | Linear mass (> 0 for dynamic) |
- * | `linearDamping` | `number` | `0.0` | Velocity damping factor [0, 1] |
- * | `angularDamping` | `number` | `0.0` | Angular velocity damping [0, 1] |
- * | `gravityScale` | `number` | `1.0` | Per-body gravity multiplier |
- * | `ccdEnabled` | `boolean` | `false` | Continuous collision detection |
- */
-export const RigidBody = defineComponent('RigidBody', {
-  type: { type: 'enum', default: 1 },
-  mass: { type: 'f32', default: 1 },
-  linearDamping: { type: 'f32', default: 0 },
-  angularDamping: { type: 'f32', default: 0 },
-  gravityScale: { type: 'f32', default: 1 },
-  ccdEnabled: { type: 'bool', default: false },
-});
-
-/**
  * Collider shape discriminant — 3 AI-friendly shape names.
  *
  * `'cuboid'`: box shape defined by half-extents (x, y, z).
@@ -86,6 +62,11 @@ export type ColliderShape = 'cuboid' | 'sphere' | 'capsule';
 // (Uint32Array column); these constants let AI users write
 // `{ type: RigidBodyTypeValue.dynamic }` instead of bare magic numbers,
 // and the narrowing helpers let backends switch cleanly on the string union.
+//
+// Declared BEFORE the RigidBody / Collider components so each component's enum
+// field descriptor can reference the SAME `*Value` map as its `labels`
+// (Derive, don't Duplicate — one object is both the AI-facing const AND the
+// schema-projected label map that `describeComponent` surfaces).
 
 /** Numeric value for static rigid body (Rapier Fixed). */
 export const RIGID_BODY_TYPE_STATIC = 0;
@@ -126,11 +107,42 @@ export function colliderShapeFromF32(n: number): ColliderShape {
 }
 
 /**
+ * ECS Component: rigid body physics properties.
+ *
+ * AI user entry point — spawn with `world.spawn(RigidBody({ type: 'dynamic' }))`
+ * to opt an entity into physics simulation.
+ *
+ * | Field | Type | Default | Purpose |
+ * |:--|:--|:--|:--|
+ * | `type` | `RigidBodyType` | `'dynamic'` | Motion type discriminant |
+ * | `mass` | `number` | `1.0` | Linear mass (> 0 for dynamic) |
+ * | `linearDamping` | `number` | `0.0` | Velocity damping factor [0, 1] |
+ * | `angularDamping` | `number` | `0.0` | Angular velocity damping [0, 1] |
+ * | `gravityScale` | `number` | `1.0` | Per-body gravity multiplier |
+ * | `ccdEnabled` | `boolean` | `false` | Continuous collision detection |
+ *
+ * `type` declares `labels: RigidBodyTypeValue` so `describeComponent` projects
+ * the `static=0 / dynamic=1 / kinematic=2` map through the front door — an AI
+ * learns the legal variants from the schema, not from engine source.
+ */
+export const RigidBody = defineComponent('RigidBody', {
+  type: { type: 'enum', default: RIGID_BODY_TYPE_DYNAMIC, labels: RigidBodyTypeValue },
+  mass: { type: 'f32', default: 1 },
+  linearDamping: { type: 'f32', default: 0 },
+  angularDamping: { type: 'f32', default: 0 },
+  gravityScale: { type: 'f32', default: 1 },
+  ccdEnabled: { type: 'bool', default: false },
+});
+
+/**
  * ECS Component: collision geometry.
  *
  * Spawn alongside RigidBody to give an entity a collision shape. Entities
  * with Collider but no RigidBody are treated as static colliders (Rapier
- * native behavior — collider without parent body is fixed).
+ * native behavior — collider without parent body is fixed): `physicsSyncBackend`
+ * synthesizes an implicit static body for them, so a bare-Collider floor/wall is
+ * simulated as immovable level geometry — the natural way to author static
+ * scenery without a redundant `RigidBody{static}`.
  *
  * | Field | Type | Default | Purpose |
  * |:--|:--|:--|:--|
@@ -148,7 +160,7 @@ export function colliderShapeFromF32(n: number): ColliderShape {
 export const Collider = defineComponent(
   'Collider',
   {
-    shape: { type: 'enum', default: 0 },
+    shape: { type: 'enum', default: COLLIDER_SHAPE_CUBOID, labels: ColliderShapeValue },
     // feat-20260709 M4: cuboid half-extents collapsed from 3 per-axis scalar
     // columns into one inline array<f32,3> column. Explicit layer-2 default
     // (the array layer-3 fallback is all-zero, which would give a degenerate

@@ -6,7 +6,6 @@
       "guid": "019e4906-23d4-72f8-bca5-7f18f5465e9a",
       "kind": "material",
       "payload": {
-        "kind": "material",
         "passes": [
           {
             "name": "Forward",

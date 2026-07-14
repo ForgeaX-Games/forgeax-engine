@@ -8,10 +8,23 @@
 //          + GUID unresolved fail-fast (AC-14)
 //   m3-t2: unregistered component silently skipped, other components intact (AC-15)
 
-import { defineComponent } from '@forgeax/engine-ecs';
-import type { LocalEntityId, SceneAsset } from '@forgeax/engine-types';
+import type { Asset } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import {
+  type Component,
+  defineComponent,
+  type EntityHandle,
+  resolveComponent,
+  World,
+} from '@forgeax/engine-ecs';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
+import type { LocalEntityId, MountOverride, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { serializeSceneAssetToPack } from '../collect-scene-asset';
+import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
+import '../components';
+import { AnimationPlayer } from '../components/animation-player';
+import { SceneInstance } from '../components/scene-instance';
+import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -19,6 +32,39 @@ import { serializeSceneAssetToPack } from '../collect-scene-asset';
 
 function localId(n: number): LocalEntityId {
   return n as LocalEntityId;
+}
+
+function mkReg(): AssetRegistry {
+  return new AssetRegistry(makeMockShaderRegistry());
+}
+function pg(s: string): AssetGuid {
+  const r = AssetGuid.parse(s);
+  if (!r.ok) throw new Error(`bad GUID: ${s}`);
+  return r.value;
+}
+function catScene(reg: AssetRegistry, g: string, p: SceneAsset): void {
+  reg.catalog(pg(g), p as Asset);
+}
+function rs(w: World, a: SceneAsset) {
+  return w.allocSharedRef('SceneAsset', a);
+}
+function findMountedMember(w: World, rootA: EntityHandle): EntityHandle {
+  for (const c of w.iterDescendants(rootA)) {
+    if (c === rootA) continue;
+    if (!w.get(c, SceneInstance).ok) continue;
+    const st = w.getSceneInstanceState(c);
+    if (!st.ok) continue;
+    for (const [member] of st.value.entityToLocalId) return member;
+  }
+  throw new Error('no mounted member found');
+}
+function firstMountOverride(scene: SceneAsset, comp: string): MountOverride | undefined {
+  for (const m of scene.mounts ?? []) {
+    for (const ov of m.overrides ?? []) {
+      if (ov.comp === comp) return ov;
+    }
+  }
+  return undefined;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -292,5 +338,168 @@ describe('m3-t2: unregistered component silently skipped', () => {
 
     // Unregistered component passes through.
     expect(comps.Unreg_TestSkip2).toBeDefined();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// w18 — AC-05: collect-side handle→GUID two-state NULL-sentinel in override values
+//
+// Override values carry shared<T> fields (scalar) and array<shared<T>> fields
+// (positional SoA, e.g. AnimationPlayer.clips = [h, 0, 0, 0]). rootsToSceneAsset
+// folds an add-override, then serializes its shared fields by reverse-looking-up
+// each live handle to its catalogued GUID. The NULL-sentinel (handle 0) has two
+// distinct semantics that must survive round-trip (aligned to #640):
+//   - scalar shared handle 0  -> field omitted (deserialize restores slot-0 default)
+//   - array  shared handle 0  -> placeholder 0 kept (positional alignment w/ SoA)
+// A valid handle -> GUID string; a mixed array distinguishes the two per slot.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const W18_CLIP0 = 'a1a1a1a1-1111-4111-8111-111111111111';
+const W18_CLIP1 = 'b2b2b2b2-2222-4222-8222-222222222222';
+const W18_CHILD = 'c3c3c3c3-3333-4333-8333-333333333333';
+const W18_PARENT = 'd4d4d4d4-4444-4444-8444-444444444444';
+const W18_SCALAR = 'e5e5e5e5-5555-4555-8555-555555555555';
+
+// A component whose override value carries a scalar shared field, so the scalar
+// NULL-sentinel (omit) vs valid-handle (GUID) branch is exercised.
+const W18_ScalarShared = defineComponent('W18_ScalarShared', {
+  asset: { type: 'shared<TestAsset>' },
+  tag: 'f32',
+  // biome-ignore lint/suspicious/noExplicitAny: defineComponent constraint too strict for shared<>
+} as any) as Component;
+
+/**
+ * Mint a shared handle pointing at the SAME payload object that is catalogued
+ * under `guid`, so collect-side `_guidForAsset` reverse-resolves the handle back
+ * to `guid` (identity scan, asset-registry.ts _guidForAsset).
+ */
+function mintCatalogued(reg: AssetRegistry, w: World, guid: string, tag: number): number {
+  const payload = { kind: 'animation-clip', tag } as unknown as Asset;
+  reg.catalog(pg(guid), payload);
+  return w.allocSharedRef('AnimationClip', payload) as unknown as number;
+}
+
+/** Build parent scene mounting one bare child; instantiate; return root. */
+function mountOne(reg: AssetRegistry, w: World): EntityHandle {
+  const child: SceneAsset = {
+    kind: 'scene',
+    entities: [{ localId: localId(0), components: { Transform: { pos: [1, 0, 0] } } }],
+  };
+  catScene(reg, W18_CHILD, child);
+  const parent: SceneAsset = {
+    kind: 'scene',
+    entities: [{ localId: localId(0), components: { Transform: { pos: [0, 0, 0] } } }],
+    mounts: [{ localId: localId(1), source: W18_CHILD, memberFirst: localId(2), memberCount: 1 }],
+  };
+  catScene(reg, W18_PARENT, parent);
+  const inst = reg.instantiate(rs(w, parent), w);
+  if (!inst.ok) throw new Error('instantiate failed');
+  return inst.value;
+}
+
+describe('w18 — override-value shared handle→GUID two-state NULL-sentinel (AC-05)', () => {
+  it('(a) array<shared<>> mixed valid handle + NULL sentinel -> GUID string + placeholder 0', () => {
+    const reg = mkReg();
+    const w = new World();
+    const root = mountOne(reg, w);
+    const member = findMountedMember(w, root);
+
+    // clips = [validHandle, 0, 0, 0] — slot 0 active, slots 1-3 NULL sentinel.
+    const clipH = mintCatalogued(reg, w, W18_CLIP0, 0);
+    const add = w.addComponent(member, {
+      component: AnimationPlayer,
+      data: { clips: [clipH] } as never,
+    });
+    expect(add.ok).toBe(true);
+
+    const collect = rootsToSceneAsset(reg, w, [root]);
+    expect(collect.ok).toBe(true);
+    if (!collect.ok) return;
+    const ov = firstMountOverride(collect.value, 'AnimationPlayer');
+    expect(ov).toBeDefined();
+    if (!ov) return;
+    const clips = (ov.value as Record<string, unknown>).clips as unknown[];
+    expect(Array.isArray(clips)).toBe(true);
+    // slot 0 -> GUID string; slots 1-3 -> numeric 0 placeholder (positional).
+    expect(typeof clips[0]).toBe('string');
+    expect(clips[0]).toBe(W18_CLIP0);
+    expect(clips[1]).toBe(0);
+    expect(clips[2]).toBe(0);
+    expect(clips[3]).toBe(0);
+  });
+
+  it('(b) array<shared<>> two valid handles at slots 0 and 1 -> two distinct GUIDs', () => {
+    const reg = mkReg();
+    const w = new World();
+    const root = mountOne(reg, w);
+    const member = findMountedMember(w, root);
+
+    const h0 = mintCatalogued(reg, w, W18_CLIP0, 10);
+    const h1 = mintCatalogued(reg, w, W18_CLIP1, 11);
+    const add = w.addComponent(member, {
+      component: AnimationPlayer,
+      data: { clips: [h0, h1] } as never,
+    });
+    expect(add.ok).toBe(true);
+
+    const collect = rootsToSceneAsset(reg, w, [root]);
+    expect(collect.ok).toBe(true);
+    if (!collect.ok) return;
+    const ov = firstMountOverride(collect.value, 'AnimationPlayer');
+    expect(ov).toBeDefined();
+    if (!ov) return;
+    const clips = (ov.value as Record<string, unknown>).clips as unknown[];
+    expect(clips[0]).toBe(W18_CLIP0);
+    expect(clips[1]).toBe(W18_CLIP1);
+    expect(clips[2]).toBe(0);
+  });
+
+  it('(c) scalar shared<> valid handle -> GUID string (non-null branch)', () => {
+    expect(resolveComponent('W18_ScalarShared')).toBeDefined();
+    const reg = mkReg();
+    const w = new World();
+    const root = mountOne(reg, w);
+    const member = findMountedMember(w, root);
+
+    const h = mintCatalogued(reg, w, W18_SCALAR, 0);
+    const add = w.addComponent(member, {
+      component: W18_ScalarShared,
+      data: { asset: h, tag: 7 } as never,
+    });
+    expect(add.ok).toBe(true);
+
+    const collect = rootsToSceneAsset(reg, w, [root]);
+    expect(collect.ok).toBe(true);
+    if (!collect.ok) return;
+    const ov = firstMountOverride(collect.value, 'W18_ScalarShared');
+    expect(ov).toBeDefined();
+    if (!ov) return;
+    const val = ov.value as Record<string, unknown>;
+    expect(val.asset).toBe(W18_SCALAR); // valid handle -> GUID string
+    expect(val.tag).toBe(7);
+  });
+
+  it('(d) scalar shared<> handle 0 -> field omitted (NULL-sentinel branch)', () => {
+    const reg = mkReg();
+    const w = new World();
+    const root = mountOne(reg, w);
+    const member = findMountedMember(w, root);
+
+    const add = w.addComponent(member, {
+      component: W18_ScalarShared,
+      data: { asset: 0, tag: 3 } as never,
+    });
+    expect(add.ok).toBe(true);
+
+    const collect = rootsToSceneAsset(reg, w, [root]);
+    expect(collect.ok).toBe(true);
+    if (!collect.ok) return;
+    const ov = firstMountOverride(collect.value, 'W18_ScalarShared');
+    expect(ov).toBeDefined();
+    if (!ov) return;
+    const val = ov.value as Record<string, unknown>;
+    // scalar handle 0 -> field omitted (deserialize restores slot-0 default).
+    expect('asset' in val).toBe(false);
+    expect(val.tag).toBe(3);
   });
 });

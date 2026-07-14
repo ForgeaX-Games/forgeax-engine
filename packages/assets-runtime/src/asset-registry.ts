@@ -106,6 +106,7 @@ import {
   instantiateFlat as instantiateFlatImpl,
   instantiate as instantiateImpl,
   type PostSpawnHook,
+  resolveHandleGuid,
   resolveMountsRec,
 } from './registry/instantiate';
 import {
@@ -355,13 +356,26 @@ export class AssetRegistry {
   transcodeCaps: TranscodeCaps = { bc: false, etc2: false, astc: false };
 
   // feat-20260703-collect-nested-sceneinstance-to-mount-roundtrip M1 (D-1):
-  // origin reverse-index: resolved SceneAsset copy -> original catalog GUID.
-  // WeakMap so entries auto-GC when the world despawns and the copy is
-  // no longer held by sharedRefs. Only the instantiate path writes here;
+  // origin reverse-index: a payload object -> its catalog GUID, for payloads
+  // that are NOT the current catalog identity. WeakMap so entries auto-GC when
+  // the world despawns and the object is no longer held by sharedRefs.
   // _guidForAsset consults it after the catalog identity scan MISSes.
-  // SSOT for the copy provenance fact (architecture-principles #1).
+  // SSOT for the "payload-to-GUID provenance" fact (architecture-principles #1).
+  //
+  // Two writers populate it:
+  //   1. instantiate (registry/instantiate.ts): the resolved SceneAsset copy ->
+  //      its original catalog GUID (the deep-copied envelope is never the catalog
+  //      identity).
+  //   2. feat-20260713 M4 / w15 (D-6, root cause a): catalog() records the
+  //      SUPERSEDED payload here when re-cataloguing a GUID with a fresh object.
+  //      A handle minted before the override still points at the old object; this
+  //      keeps that object reverse-lookupable so save/collect resolves its GUID
+  //      instead of failing with a GUID-unresolved error (the 2026-07-06 crash).
+  //
+  // Key type is `object` (not `SceneAsset`) because both material and scene
+  // payloads are recorded (material payloads flow through writer 2).
   /** @internal */
-  _originIndex: WeakMap<SceneAsset, string> = new WeakMap();
+  _originIndex: WeakMap<object, string> = new WeakMap();
 
   /**
    * Construct a fresh registry pre-populated with the builtin cube + triangle
@@ -515,11 +529,12 @@ export class AssetRegistry {
         return key;
       }
     }
-    // feat-20260703 M1 (D-1): fallback to the origin reverse-index.
-    // _resolveSceneGuids produces a deep copy — identity (===) will never
-    // match the catalogued original — so after the catalog scan MISSes
-    // we check the WeakMap that the instantiate path populates.
-    return this._originIndex.get(asset as SceneAsset);
+    // feat-20260703 M1 (D-1): fallback to the origin reverse-index. Covers two
+    // MISS cases the catalog identity scan cannot: (1) _resolveSceneGuids deep
+    // copies — the copy is never the catalogued original; (2) feat-20260713 M4
+    // (D-6): a payload superseded by a catalog override, still live behind a
+    // handle minted before the override.
+    return this._originIndex.get(asset as object);
   }
 
   /**
@@ -801,44 +816,20 @@ export class AssetRegistry {
         const fieldPath =
           `${entry.componentName}.${entry.fieldName}` +
           (entry.arrayIndex !== undefined ? `[${entry.arrayIndex}]` : '');
-
-        const guidRes = AssetGuid.parse(entry.guidString);
-        if (!guidRes.ok) {
-          return err(
-            new AssetError({
-              code: 'asset-not-found',
-              expected: `valid GUID string for field ${fieldPath}`,
-              hint:
-                `GUID "${entry.guidString}" could not be parsed; ` +
-                `at node localId=${entry.entityLocalId}, field=${fieldPath}`,
-            }),
-          );
-        }
-        const envelope = this.assetCatalog.get(entry.guidString.toLowerCase());
-        if (envelope === undefined) {
-          return err(
-            new AssetError({
-              code: 'asset-not-found',
-              expected: `GUID ${entry.guidString} catalogued in AssetRegistry`,
-              hint:
-                `GUID ${entry.guidString} not catalogued; ` +
-                `call loadByGuid('${entry.guidString}') before instantiate; ` +
-                `at node localId=${entry.entityLocalId}, field=${fieldPath}`,
-            }),
-          );
-        }
-        const payload = envelope.payload;
-        const guidKey = entry.guidString.toLowerCase();
-        let resolvedSlot = guidToHandle.get(guidKey);
-        if (resolvedSlot === undefined) {
-          resolvedSlot = unwrapHandle(world.allocSharedRef(payload.kind, payload));
-          guidToHandle.set(guidKey, resolvedSlot);
-        }
+        const resolvedSlot = resolveHandleGuid(
+          this,
+          world,
+          entry.guidString,
+          guidToHandle,
+          fieldPath,
+          `node localId=${entry.entityLocalId}`,
+        );
+        if (!resolvedSlot.ok) return resolvedSlot;
 
         const key =
           `${entry.entityLocalId}|${entry.componentName}|${entry.fieldName}` +
           (entry.arrayIndex !== undefined ? `|${entry.arrayIndex}` : '|');
-        resolvedMap.set(key, resolvedSlot);
+        resolvedMap.set(key, resolvedSlot.value);
       }
     }
 
@@ -899,7 +890,15 @@ export class AssetRegistry {
     const mountVisited = _visitedMountGuids ?? new Set<string>();
     if (sceneGuidKey !== undefined) mountVisited.add(sceneGuidKey.toLowerCase());
     if (scene.mounts !== undefined && scene.mounts.length > 0) {
-      const resolvedMounts = resolveMountsRec(this, scene.mounts, world, mountVisited);
+      // feat-20260713 M3 / w13: share the entity-field dedup map so an override
+      // value GUID that also appears as an entity field mints one handle (D-15/D-17).
+      const resolvedMounts = resolveMountsRec(
+        this,
+        scene.mounts,
+        world,
+        mountVisited,
+        guidToHandle,
+      );
       if (sceneGuidKey !== undefined) mountVisited.delete(sceneGuidKey.toLowerCase());
       if (!resolvedMounts.ok) {
         // Cycle or child-resolution error: cast through as AssetError
@@ -985,9 +984,23 @@ export class AssetRegistry {
     // not yet been catalogued (prod disk path; D-6). Preserve a name already on
     // a prior envelope for this key (re-catalog of the same GUID).
     const pendingName = this.pendingNames.get(key);
-    const priorName = this.assetCatalog.get(key)?.name;
+    const priorEnvelope = this.assetCatalog.get(key);
+    const priorName = priorEnvelope?.name;
     const name = pendingName ?? priorName;
     this.pendingNames.delete(key);
+    // feat-20260713 M4 / w15 (D-6, root cause a): when this GUID is being
+    // re-catalogued with a DIFFERENT payload object, the prior object may still
+    // be live behind a handle minted before the override (asset-registry.ts:513
+    // identity scan would then MISS it). Record the superseded object -> GUID in
+    // the origin reverse-index so `_guidForAsset` keeps resolving it — save/
+    // collect of an owned entity holding that handle no longer fails with a
+    // GUID-unresolved error (the 2026-07-06 crash). Structurally-modified copies
+    // (a fresh object never catalogued) stay uncatalogued and correctly surface a
+    // structured error at collect (requirements edge case "modified payload judged
+    // as a new asset, not silently zeroed").
+    if (priorEnvelope !== undefined && priorEnvelope.payload !== stored) {
+      this._originIndex.set(priorEnvelope.payload, key);
+    }
     this.assetCatalog.set(key, {
       guid: key,
       kind,

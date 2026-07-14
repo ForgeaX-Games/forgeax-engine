@@ -37,14 +37,16 @@ export type {
 
 // === namespace re-export ===
 //
-// All 8 namespaces (cumulative across M1~M5):
-//   - vector family vec2 / vec3 / vec4 (M2 / T-013~T-015)
-//   - matrix family mat3 / mat4 (M3 / T-020~T-021)
-//   - rotation quat / euler (M4 / T-027~T-028)
-//   - color (M5 / T-032, 6 functions sRGB↔linear + hex parse/format)
+// Core 9 namespaces:
+//   - vector family vec2 / vec3 / vec4
+//   - matrix family mat3 / mat4
+//   - rotation quat / euler
+//   - color (sRGB↔linear + hex parse/format)
+//   - easing (scalar S-curve time remaps)
 
 export * as box3 from './box3';
 export * as color from './color';
+export * as easing from './easing';
 export * as euler from './euler';
 export * as halfFloat from './f32-to-f16-bytes';
 export * as frustum from './frustum';

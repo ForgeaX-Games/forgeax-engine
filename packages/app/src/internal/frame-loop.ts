@@ -219,6 +219,11 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
 
   let state: FrameState = 'idle';
   let lastTimestamp = 0;
+  // Accumulated clamped seconds since the loop started (Σ dt), projected onto the
+  // Time resource's `elapsed` field. Accumulated only inside tick() (which returns
+  // early when not running), so pause() naturally freezes it and resume() continues
+  // — matching Bevy's Time::elapsed. Never reset on resume; a fresh loop starts at 0.
+  let elapsed = 0;
   let pendingFrameId = 0;
   const updateCallbacks: UpdateCallback[] = [];
 
@@ -230,7 +235,8 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoopHandle {
     const rawDtSeconds = (t - lastTimestamp) / 1000;
     lastTimestamp = t;
     const dt = Math.min(Math.max(rawDtSeconds, 0), ceiling);
-    const time: TimeResource = { dt };
+    elapsed += dt;
+    const time: TimeResource = { dt, elapsed };
     world.insertResource(TIME_RESOURCE_KEY, time);
 
     // Execute user-registered update callbacks before world.update() so

@@ -19,12 +19,18 @@ description: >-
 | Namespace / 函数 | 形态 | 用途 |
 |:--|:--|:--|
 | `vec3.add/sub/scale/dot/cross/normalize/lerp(out, ...)` | out-param | 向量运算（`vec2`/`vec4` 同构） |
+| `vec3.smoothDamp(out, current, target, decayRate, dt)` | `=> Vec3` | 便捷组合：帧率无关的指数衰减平滑（`lerp(current, target, 1−exp(−decayRate·dt))`；对标 Bevy `Vec3::smooth_nudge` / three.js `MathUtils.damp`；`vec2`/`vec4` 同构）。平滑追踪/缓动别手写 `lerp(p, target, rate·dt)`——那是帧率**相关**的（30 vs 60 fps 行为不同，`rate·dt>1` 会过冲） |
+| `vec3.catmullRom(out, p0, p1, p2, p3, t)` | `=> Vec3` | 便捷组合：过控制点的 Catmull-Rom 样条采样（张力 0.5，`t=0`→`p1`/`t=1`→`p2`；`p0`/`p3` 是设端点切线的邻居点；对标 Bevy `CubicCardinalSpline::new_catmull_rom` / three.js `CatmullRomCurve3`；`vec2` 同构）。相机路径/动画缓动路径/程序曲线别手搓三次系数矩阵。整条折线：滑动 4 点窗口 `[pts[i-1..i+2]]` 逐段循环 |
 | `mat4.multiply/invert/lookAt/perspective/compose(out, ...)` | out-param | 矩阵运算 |
 | `mat4.getTranslation(out, m)` | `=> Vec3` | 从 world mat4 取位置（col 3） |
 | `mat4.getForward/getUp/getRight(out, m)` | `=> Vec3` | 取朝向基向量（forward = -Z） |
 | `mat4.unproject(out, ndcPoint, invVP)` | `=> Vec3` | NDC → 世界坐标 |
 | `quat.fromEuler/slerp/multiply/transformVec3(out, ...)` | out-param | 旋转 |
+| `quat.fromLookAt(out, eye, target, up)` | `=> Quat` | 便捷组合：物体朝向四元数（local -Z 指向 target；替代 `lookAt→invert→mat3→fromRotationMatrix` 手接链） |
+| `quat.rotateAxis(out, q, axis, angleRadians)` | `=> Quat` | 便捷组合：在 `q` 基础上绕世界轴 `axis` 增量旋转 `angle` 弧度并**重新归一化**——每帧自旋/动画的正确写法（对标 Bevy `Transform::rotate_y`/`rotate_axis`；delta 前乘 = 世界轴序）。别手写 `multiply(q, fromAxisAngle(...))` 循环：不归一化会累积漂移成非单位四元数 |
+| `quat.right/up/forward(out, q)` | `=> Vec3` | 取旋转的局部基向量（世界方向）：right=q·+X / up=q·+Y / forward=q·−Z（对标 `mat4.getRight/getUp/getForward` 与 Bevy `Transform::local_x`/`local_y`/`forward`）。沿"自身朝向"移动/瞄准时用它，别手写 `transformVec3(out, q, [0,0,-1])` + 记 −Z 手性；单位 `q` 入 → 单位向量出 |
 | `color.srgbToLinear/linearToSrgb/fromHex/toHex` | out-param / 值 | 颜色空间转换 |
+| `easing.smoothstep(t)` / `easing.smootherstep(t)` | `=> number` | 标量 S 曲线缓动：`t` 夹到 [0,1]，慢进慢出（`3t²−2t³` / `6t⁵−15t⁴+10t³`；对标 GLSL / Bevy `EaseFunction`）。动画/UI 过渡/相机缓动别手搓多项式；`easing` 是缓动族的可增长 namespace |
 | `screenToRay(out, sx, sy, vpW, vpH, view, proj, kind)` | `=> Ray` | 屏幕坐标 → 世界射线 |
 | `worldToScreen(out, worldPos, viewProj, canvasW, canvasH)` | `=> { onScreen, behind }` | 世界坐标 → 屏幕像素（screenToRay 对偶） |
 | `rayAabbIntersects(ray, aabb)` | `=> RayAabbResult` | 射线 / 包围盒求交 |
@@ -177,7 +183,7 @@ if (hit) {
 
 ## 深入
 
-- 8 namespace × 119 函数 quick-ref / 命名风格 / 退化策略表 / 三档 NDC 投影：见 `packages/math/README.md` §quick-ref · §退化策略 · §三档 NDC 投影示例
+- 9 namespace × 139 函数 quick-ref / 命名风格 / 退化策略表 / 三档 NDC 投影：见 `packages/math/README.md` §quick-ref · §退化策略 · §三档 NDC 投影示例（函数计数 SSOT 在 README + `count-math-exports.mjs`，本行随之更新）
 - pose 读取助手（`getTranslation/getForward/getUp/getRight`）：源码 SSOT `packages/math/src/mat4.ts`
 - 拾取（`screenToRay` / `rayAabbIntersects` / `rayTriangleIntersects` / `mat4.unproject` / `worldToScreen`）：源码 `packages/math/src/ray.ts` + `packages/math/src/mat4.ts`；runtime 侧封装 `pick(...)` 见 `packages/runtime/README.md` §Picking、`pickVertexOnEntity` / `pickVertex` 见 §Vertex Picking
 - `Transform.world` 派生契约：见 `packages/runtime/README.md` §Transform: local TRS + world mat4

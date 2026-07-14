@@ -3618,11 +3618,11 @@ import { handleNumeric } from './utils/handle-numeric';
     });
   });
 
-  describe('AC-05 — EcsErrorCode is a closed union of exactly 40 members', () => {
-    it('compile-time member count is 40 (feat-20260625 sprite-instances M1 w2 adds sprite-instances-{count-mismatch,requires-sprite-shading-model,mutually-exclusive-with-instances} +3; feat-20260623 M4 adds shared-ref-stale + unique-ref-stale +2; feat-20260614 M6 D-15 adds builtin-slot-not-owned +1; M3 added shared-ref-released + shared-ref-double-release +2; baseline 32 from bug-20260615 spawn-data-unknown-field-fail-fast)', () => {
+  describe('AC-05 — EcsErrorCode is a closed union of exactly 42 members', () => {
+    it('compile-time member count is 42 (feat-20260713 M2 w9 adds shared-field-invalid-value +1; solo bevy-examples round 20260713-194533 adds query-combinations-entity-required +1; feat-20260625 sprite-instances M1 w2 adds sprite-instances-{count-mismatch,requires-sprite-shading-model,mutually-exclusive-with-instances} +3; feat-20260623 M4 adds shared-ref-stale + unique-ref-stale +2; feat-20260614 M6 D-15 adds builtin-slot-not-owned +1; M3 added shared-ref-released + shared-ref-double-release +2; baseline 32 from bug-20260615 spawn-data-unknown-field-fail-fast)', () => {
       // Tuple-length type assertion: any drift in EcsErrorCode member count is a
-      // compile error here, falsifiable by changing the literal 40.
-      expectTypeOf<UnionLength<EcsErrorCode>>().toEqualTypeOf<40>();
+      // compile error here, falsifiable by changing the literal 42.
+      expectTypeOf<UnionLength<EcsErrorCode>>().toEqualTypeOf<42>();
     });
 
     it('the dropped register codes are not assignable to EcsErrorCode', () => {

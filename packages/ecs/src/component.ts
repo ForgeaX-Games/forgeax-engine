@@ -1038,12 +1038,24 @@ export interface ArrayMeta {
  *   world mat4) is excluded from serialization while its component's persisted
  *   fields still round-trip. Absent (the common case) means the field is
  *   serialized.
+ * - `labels` — for an `enum` field ONLY: the label→numeric-value map (e.g.
+ *   `{ static: 0, dynamic: 1, kinematic: 2 }`). An `enum` field stores a bare
+ *   `u32` variant index; the human-readable names historically lived in a
+ *   SEPARATE per-package const map (`RigidBodyTypeValue`) + comment table, so no
+ *   schema consumer could read them and the two could drift. Declaring `labels`
+ *   attaches that map to the field itself (SSOT-adjacent): it is aggregated into
+ *   `component.fields[field].labels` and surfaced by reflection consumers (the
+ *   editor's `describeComponent`, inspector UIs, validation hints) so a
+ *   docs-only user learns the legal variants + their integers from the schema
+ *   alone. Pass the EXISTING `*Value` const map here (Derive, don't Duplicate —
+ *   one object, two consumers). Absent for non-enum fields / enums that opt out.
  */
 export interface FieldDescriptor<T extends SchemaFieldType = SchemaFieldType> {
   readonly type: T;
   readonly default?: FieldValueType<T>;
   readonly meta?: Readonly<Record<string, unknown>>;
   readonly transient?: boolean;
+  readonly labels?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -1065,6 +1077,13 @@ export interface FieldReflection {
   readonly default?: unknown;
   readonly arrayMeta?: ArrayMeta;
   readonly transient?: boolean;
+  /**
+   * For an `enum` field: the label→numeric-value map declared on the field
+   * descriptor (see `FieldDescriptor.labels`). Lets a schema consumer resolve a
+   * variant name ↔ its stored `u32` index without a separate const map. Absent
+   * for non-enum fields / enums that did not declare labels.
+   */
+  readonly labels?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -1276,7 +1295,13 @@ export function defineComponent<const N extends string, const S extends FieldsIn
 
     // Per-field reflection row — only attach arrayMeta / default when present
     // (exactOptionalPropertyTypes: never set an explicit `undefined`).
-    const row: { type: string; default?: unknown; arrayMeta?: ArrayMeta; transient?: boolean } = {
+    const row: {
+      type: string;
+      default?: unknown;
+      arrayMeta?: ArrayMeta;
+      transient?: boolean;
+      labels?: Readonly<Record<string, number>>;
+    } = {
       type: fieldType,
     };
     if (typeof spec !== 'string') {
@@ -1290,6 +1315,9 @@ export function defineComponent<const N extends string, const S extends FieldsIn
       }
       // exactOptionalPropertyTypes: only attach `transient` when declared.
       if (desc.transient !== undefined) row.transient = desc.transient;
+      // enum label→value map (see FieldDescriptor.labels). Frozen so the
+      // reflected row exposes a stable read-only map. Only enum fields declare it.
+      if (desc.labels !== undefined) row.labels = Object.freeze({ ...desc.labels });
     }
     if (arrayMeta !== undefined) row.arrayMeta = arrayMeta;
     reflectedFields[fieldName] = Object.freeze(row) as FieldReflection;

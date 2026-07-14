@@ -13,6 +13,7 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
+    "bevyExample": { "name": "sprite", "category": "2D Rendering", "status": "implemented" },
     "assets": {
       "roots": [
         "./assets"

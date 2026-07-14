@@ -55,14 +55,19 @@ export function buildSceneAssetValidator(
   }
 
   // MountOverride schema (feat-20260608-scene-nesting-ecs-fication M1 / w11;
-  // requirements §S-10): validates each entry in mounts[].overrides[] —
-  // localId / comp / field / value (free-form). Field-level type validation
-  // (matching the schema vocab) is enforced at runtime via setSceneOverride
-  // (D-9 / EcsErrorCode 'scene-override-type-mismatch').
+  // feat-20260713-mount-override-component-add-and-shared-ref-round M1 / w3;
+  // requirements §S-10 / AC-03): validates each entry in mounts[].overrides[].
+  // `field` is optional — it is a component-granular add-or-patch discriminant
+  // (present -> patch one field with `value`; absent -> add/upsert the whole
+  // `comp` with `value` as its per-field map). `localId` / `comp` / `value`
+  // stay required; `additionalProperties: false` rejects any `op`-tag
+  // discriminant so downstream consumers never branch on it. Field-level type
+  // validation (matching the schema vocab) is enforced at runtime via
+  // setSceneOverride (D-9 / EcsErrorCode 'scene-override-type-mismatch').
   const mountOverrideSchema = {
     type: 'object',
     additionalProperties: false,
-    required: ['localId', 'comp', 'field', 'value'],
+    required: ['localId', 'comp', 'value'],
     properties: {
       localId: { type: 'integer', minimum: 0 },
       comp: { type: 'string', minLength: 1 },

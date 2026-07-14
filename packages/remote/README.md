@@ -40,6 +40,21 @@ sequenceDiagram
 
 ## Eval Recipes
 
+### Script contract
+
+**Your script is the body of an async function** with `world` / `renderer` / `assets` /
+`debugAdapter` / `_import` in scope. Concretely:
+
+- **A lone expression is auto-returned** — `renderer.backend` yields `"webgpu"` (a trailing
+  semicolon is fine).
+- **Top-level `await` is legal** — `await _import('@forgeax/engine-ecs')` works directly, no wrapper.
+- **Top-level `return` is legal** — `return world.inspect().entityCount`.
+- **A multi-statement script uses an explicit `return`** for its value (a statement list is not
+  auto-returned): `const m = await _import('@forgeax/engine-ecs'); return Object.keys(m)`.
+
+The historical `(async () => { ... })()` IIFE form still works (its returned Promise is awaited), but
+is no longer necessary. If a returned value is a Promise it is awaited before being sent back.
+
 ### Prerequisites
 
 Four live roots are always present in eval scope:

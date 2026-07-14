@@ -1,8 +1,8 @@
 // vec2.ts — 2D vector namespace (M2 / T-013)
 //
-// 17-function surface (≥ 14 lower bound; includes perp 2D 90° rotation, excludes cross):
+// 19-function surface (≥ 14 lower bound; includes perp 2D 90° rotation, excludes cross):
 //   create / clone / copy / set / equals / add / sub / scale / negate /
-//   dot / lengthSq / length / distance / normalize / lerp / min / max / perp
+//   dot / lengthSq / length / distance / normalize / lerp / smoothDamp / catmullRom / min / max / perp
 //
 // Design locks:
 //   - branded Float32Array storage (types.ts SSOT); `as Vec2` casts are funneled through factory
@@ -18,7 +18,7 @@
 //          wiki/gl-matrix-overview Out-param four ironclad rules + degenerate-semantics anchor.
 
 import { EPS_NORMALIZE } from './_internal/epsilon';
-import { lerp as scalarLerp } from './_internal/scalar';
+import { catmullRomScalar, lerp as scalarLerp, smoothDecayFactor } from './_internal/scalar';
 import type { Vec2, Vec2Like } from './types';
 
 /** Create a Vec2 (zero vector by default). */
@@ -158,6 +158,44 @@ export function lerp(out: Vec2, a: Vec2Like, b: Vec2Like, t: number): Vec2 {
   const by = b[1] as number;
   out[0] = scalarLerp(ax, bx, t);
   out[1] = scalarLerp(ay, by, t);
+  return out;
+}
+
+/**
+ * out = frame-rate-INDEPENDENT exponential smoothing of `current` toward `target`:
+ * `lerp(current, target, 1 − exp(−decayRate · dt))`. Semantics match Bevy
+ * `StableInterpolate::smooth_nudge` / three.js `MathUtils.damp` (1st-order decay, NOT Unity
+ * `SmoothDamp`'s 2nd-order spring). `dt=0` → out=current; large `decayRate·dt` → out≈target.
+ * Frame-rate independent by construction (one `dt` step = two composed `dt/2` steps). aliasing-safe.
+ * See vec3.smoothDamp for the full contract. */
+export function smoothDamp(
+  out: Vec2,
+  current: Vec2Like,
+  target: Vec2Like,
+  decayRate: number,
+  dt: number,
+): Vec2 {
+  return lerp(out, current, target, smoothDecayFactor(decayRate, dt));
+}
+
+/**
+ * out = Catmull-Rom spline point on the segment between `p1` and `p2`, with `p0` / `p3` the
+ * neighbor control points setting the endpoint tangents (tension 0.5 — the Bevy
+ * `CubicCardinalSpline::new_catmull_rom` / three.js default). Interpolates the control points
+ * (`t=0` → `p1`, `t=1` → `p2`). See vec3.catmullRom for the full contract + whole-polyline
+ * sampling. aliasing-safe. */
+export function catmullRom(
+  out: Vec2,
+  p0: Vec2Like,
+  p1: Vec2Like,
+  p2: Vec2Like,
+  p3: Vec2Like,
+  t: number,
+): Vec2 {
+  const x = catmullRomScalar(p0[0] as number, p1[0] as number, p2[0] as number, p3[0] as number, t);
+  const y = catmullRomScalar(p0[1] as number, p1[1] as number, p2[1] as number, p3[1] as number, t);
+  out[0] = x;
+  out[1] = y;
   return out;
 }
 

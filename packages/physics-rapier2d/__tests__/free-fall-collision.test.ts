@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { World } from '@forgeax/engine-ecs';
-import { Collider, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
+import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
 import { Transform } from '@forgeax/engine-runtime';
 import { loadRapier2D } from '../src/wasm-loader';
 import {
@@ -349,5 +349,136 @@ describe('feat-20260709 M4 / w18 -- cuboid halfExtents array passes through the 
     // ground top (2.0) + ball radius (0.5) = 2.5.
     expect(restY).toBeGreaterThan(2.2);
     expect(restY).toBeLessThan(2.8);
+  });
+});
+
+describe('bug-20260713 solo round-22 Rapier2D raycast entity resolution', () => {
+  // Same bug + fix as the 3D backend: raycast resolved hit.entity via
+  // `bodies.get(hit.collider.parent())`, but `.parent()` already returns the
+  // RigidBody OBJECT (compat build), so treating it as a handle returned a
+  // DIFFERENT body → the wrong entity. Drive the real PhysicsWorld2D.raycast()
+  // with two distinct entities and assert the one geometrically struck.
+  it('raycast: hit.entity is the entity actually struck (not another body)', async () => {
+    const RAPIER = await loadRapier2D();
+    if ('code' in RAPIER) {
+      expect(RAPIER.code).toBe('wasm-load-failed');
+      return;
+    }
+
+    const world = new World();
+    const pw = createRapier2DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+
+    // Ground: static cuboid, top at y=0.
+    const ground = world
+      .spawn(
+        { component: Transform as never, data: { pos: [0, -0.5, 0] } },
+        { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+        { component: Collider as never, data: { shape: 0, halfExtents: [10, 0.5] } },
+      )
+      .unwrap();
+
+    // Target: static cuboid centred at x=5 (near face x=4), above the ground.
+    const target = world
+      .spawn(
+        { component: Transform as never, data: { pos: [5, 1, 0] } },
+        { component: RigidBody as never, data: { type: RigidBodyTypeValue.static } },
+        { component: Collider as never, data: { shape: 0, halfExtents: [1, 1] } },
+      )
+      .unwrap();
+
+    registerPhysicsSystems2D(world);
+    for (let i = 0; i < 5; i++) {
+      world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
+      world.update();
+    }
+
+    // Ray at y=1 toward +X can only reach the target (ground tops out at y=0).
+    const toTarget = pw.raycast(Float32Array.of(0, 1) as never, Float32Array.of(1, 0) as never, 20);
+    expect(toTarget).toBeDefined();
+    expect(toTarget?.entity).toBe(target);
+    expect(toTarget?.timeOfImpact).toBeCloseTo(4, 1);
+
+    // Ray straight down from above the origin hits the ground, not the target.
+    const toGround = pw.raycast(Float32Array.of(0, 5) as never, Float32Array.of(0, -1) as never, 20);
+    expect(toGround).toBeDefined();
+    expect(toGround?.entity).toBe(ground);
+
+    // A ray past all geometry misses.
+    const miss = pw.raycast(Float32Array.of(0, 1) as never, Float32Array.of(0, 1) as never, 20);
+    expect(miss).toBeUndefined();
+  });
+});
+
+describe('bug-20260713 solo round-26 Rapier2D bare-Collider static floor', () => {
+  // Same fix as the 3D backend: physicsSyncBackend2D used to gate on a RigidBody
+  // column, so a bare Collider (no RigidBody) — the natural way to author static
+  // level geometry, promised as a static collider by the Collider docstring —
+  // was NEVER simulated and a dynamic ball fell through it. This locks the fix:
+  // the floor is synthesized as an implicit static body and the ball settles.
+  it('bare Collider (no RigidBody) acts as a static floor — dynamic ball settles, not falls through', async () => {
+    const RAPIER = await loadRapier2D();
+    if ('code' in RAPIER) {
+      expect(RAPIER.code).toBe('wasm-load-failed');
+      return;
+    }
+
+    const world = new World();
+    const pw = createRapier2DPhysicsWorld(RAPIER);
+    world.insertResource('PhysicsWorld', pw);
+
+    // Ball: dynamic body + circle collider dropped from y=5.
+    const ball = world
+      .spawn(
+        { component: Transform as never, data: { pos: [0, 5, 0] } },
+        {
+          component: RigidBody as never,
+          data: {
+            type: RigidBodyTypeValue.dynamic,
+            mass: 1,
+            linearDamping: 0,
+            angularDamping: 0,
+            gravityScale: 1,
+          },
+        },
+        {
+          component: Collider as never,
+          data: { shape: ColliderShapeValue.sphere, radius: 0.5, friction: 0.5, restitution: 0 },
+        },
+      )
+      .unwrap();
+
+    // Floor: a BARE Collider — NO RigidBody. Cuboid top at y = 0 + 0.5 = 0.5.
+    const floor = world
+      .spawn(
+        { component: Transform as never, data: { pos: [0, 0, 0] } },
+        {
+          component: Collider as never,
+          data: { shape: ColliderShapeValue.cuboid, halfExtents: [10, 0.5], friction: 0.5, restitution: 0 },
+        },
+      )
+      .unwrap();
+
+    // Sanity: the floor archetype genuinely has no RigidBody column.
+    expect(world.get(floor, RigidBody as never).ok).toBe(false);
+
+    registerPhysicsSystems2D(world);
+
+    for (let i = 0; i < 120; i++) {
+      world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
+      world.update();
+    }
+
+    const finalBall = world.get(ball, Transform as never);
+    expect(finalBall.ok).toBe(true);
+    if (!finalBall.ok) return;
+    const ballY = (finalBall.value as { pos: Float32Array }).pos[1] as number;
+    // Rests at floorTop (0.5) + radius (0.5) = ~1.0 — NOT fallen through to a
+    // large-negative y (the pre-fix behavior).
+    expect(ballY).toBeGreaterThan(0.6);
+    expect(ballY).toBeLessThan(1.4);
+
+    // Both bodies exist in the sim (the bare-Collider floor now gets a body).
+    expect(pw.getBodyCount()).toBe(2);
   });
 });

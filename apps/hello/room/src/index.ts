@@ -144,7 +144,7 @@ export async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     }
     const sceneEntry = (roomPack as { assets: Array<{
       kind: string;
-      payload: { kind: string; nodes: Array<{
+      payload: { nodes: Array<{
         localId: number;
         components: Record<string, Record<string, unknown>>;
       }> };

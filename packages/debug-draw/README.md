@@ -1,6 +1,6 @@
 # @forgeax/engine-debug-draw
 
-> Immediate-mode debug visualization layer: one-line `line()` / `sphere()` / `aabb()` / `frustum()` per frame, auto GPU flush. Wireframe overlay rendered on top of your scene -- no ECS, no component registration, no shader manifest.
+> Immediate-mode debug visualization layer: one-line `line()` / `sphere()` / `aabb()` / `frustum()` / `arrow()` / `axes()` per frame, auto GPU flush. Wireframe overlay rendered on top of your scene -- no ECS, no component registration, no shader manifest.
 
 [![npm](https://img.shields.io/badge/npm-%40forgeax%2Fengine--debug--draw-blue)](https://www.npmjs.com/package/@forgeax/engine-debug-draw)
 [![ESM-only](https://img.shields.io/badge/module-ESM%20only-brightgreen)](https://nodejs.org/api/esm.html)
@@ -81,6 +81,8 @@ All vertex accumulation is immediate (no deferred queue, no ECS component). Colo
 | `dd.sphere(center, radius, color, segments?)` | $3 \times 2 \times \text{segments}$ | Three orthogonal great-circle rings (XY / XZ / YZ planes); `segments` defaults to 16, yielding **96 vertices** |
 | `dd.aabb(min, max, color)` | 24 | 12 edges (4 along each axis) |
 | `dd.frustum(viewProj, color)` | 24 | Extracts 8 corner points from the view-projection matrix, draws 12 edges; near-singular VP triggers `console.warn` + no-op (no vertices pushed) |
+| `dd.arrow(start, end, color, tipLength?)` | 10 | Body segment + 4-line arrowhead at `end`, oriented along the arrow direction (`quat.fromUnitVectors`). `tipLength` defaults to `\|end − start\| / 10`; a zero-length arrow emits only the 2-vertex body. Maps Bevy `gizmos.arrow` |
+| `dd.axes(worldMat, length)` | 30 | A transform's local coordinate frame as three arrows — **X = red, Y = green, Z = blue** — originating at the world matrix's translation (col 3) and pointing `length` along its local X/Y/Z (columns 0/1/2, scale included). Maps Bevy `gizmos.axes` |
 
 > [!IMPORTANT]
 > All vertices are emitted as `line-list` topology. Wireframe spheres are not tessellated triangles -- they are three orthogonal circles made of line segments. This is a visual approximation, not a pixel-accurate sphere.

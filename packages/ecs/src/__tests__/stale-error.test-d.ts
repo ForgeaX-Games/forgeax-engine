@@ -197,6 +197,9 @@ describe('[w13] EcsErrorCode union completeness — stale codes present', () => 
         case 'sprite-instances-count-mismatch':
         case 'sprite-instances-requires-sprite-shader':
         case 'sprite-instances-mutually-exclusive-with-instances':
+        case 'query-combinations-entity-required':
+        // feat-20260713-mount-override-component-add-and-shared-ref-round M2 / w9
+        case 'shared-field-invalid-value':
           return code;
       }
     };

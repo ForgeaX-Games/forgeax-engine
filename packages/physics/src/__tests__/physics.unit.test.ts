@@ -143,6 +143,28 @@ import {
         const shapes = ['cuboid', 'sphere', 'capsule'] as const;
         expect(new Set(shapes).size).toBe(3);
       });
+
+      // solo round-24 (P7 residue): the enum fields project their label→value
+      // map through FieldReflection, sourced from the SAME `*Value` const map
+      // (Derive, don't Duplicate). This is what the editor's describeComponent
+      // surfaces so a docs-only AI learns static=0/dynamic=1/kinematic=2 without
+      // reading engine source. Revert-to-red: drop `labels:` from the descriptor.
+      it('RigidBody.type reflects labels === RigidBodyTypeValue', () => {
+        const reflection = RigidBody.fields.type as { readonly labels?: Record<string, number> };
+        expect(reflection.labels).toEqual({ ...RigidBodyTypeValue });
+        expect(reflection.labels).toEqual({ static: 0, dynamic: 1, kinematic: 2 });
+      });
+
+      it('Collider.shape reflects labels === ColliderShapeValue', () => {
+        const reflection = Collider.fields.shape as { readonly labels?: Record<string, number> };
+        expect(reflection.labels).toEqual({ ...ColliderShapeValue });
+        expect(reflection.labels).toEqual({ cuboid: 0, sphere: 1, capsule: 2 });
+      });
+
+      it('a non-enum field (RigidBody.mass) reflects no labels (control)', () => {
+        const reflection = RigidBody.fields.mass as { readonly labels?: Record<string, number> };
+        expect(reflection.labels).toBeUndefined();
+      });
     });
   });
 }

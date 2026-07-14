@@ -10,6 +10,7 @@
 import {
   computeTangentVec4,
   createBoxGeometry,
+  createCapsuleGeometry,
   createConeGeometry,
   createCylinderGeometry,
   createPlaneGeometry,
@@ -300,6 +301,34 @@ import { describe, expect, it } from 'vitest';
     });
   });
 
+  describe('createCapsuleGeometry tangent emit', () => {
+    it('emits tangent attribute of length vertexCount * 4 (normal)', () => {
+      const m = unwrap(createCapsuleGeometry(0.5, 1));
+      const tangent = asF32(m.attributes.tangent);
+      const position = asF32(m.attributes.position);
+      expect(tangent.length).toBe((position.length / 3) * 4);
+    });
+
+    it('sampled vertices have unit tangent perpendicular to normal (boundary)', () => {
+      const m = unwrap(createCapsuleGeometry(0.5, 1, 6, 16));
+      const tangent = asF32(m.attributes.tangent);
+      const normal = asF32(m.attributes.normal);
+      const vertexCount = normal.length / 3;
+      // Skip pole + seam vertices (row 0 north pole, ix=0 seam) by striding
+      // from an interior offset.
+      let sampled = 0;
+      for (let v = 20; v < vertexCount - 20; v += 5) {
+        const t = readVec3(tangent.subarray(v * 4, v * 4 + 3), 0);
+        const n = readVec3(normal, v);
+        expect(len3(t)).toBeCloseTo(1, 2);
+        expect(Math.abs(dot3(t, n))).toBeLessThan(5e-3);
+        expect(Math.abs(tangent[v * 4 + 3] ?? 0)).toBe(1);
+        sampled++;
+      }
+      expect(sampled).toBeGreaterThan(0);
+    });
+  });
+
   describe('createTorusGeometry tangent emit (M4 / w21)', () => {
     it('emits tangent attribute of length vertexCount * 4 (normal)', () => {
       const m = unwrap(createTorusGeometry(1, 0.4));
@@ -466,6 +495,14 @@ import { describe, expect, it } from 'vitest';
 
     it('createTorusGeometry: every triangle CCW from outside', () => {
       expectAllOutward('torus', unwrap(createTorusGeometry(1, 0.4)));
+    });
+
+    it('createCapsuleGeometry: every triangle CCW from outside', () => {
+      expectAllOutward('capsule', unwrap(createCapsuleGeometry(0.5, 1)));
+    });
+
+    it('createCapsuleGeometry: length=0 (sphere degenerate) keeps every triangle CCW outward', () => {
+      expectAllOutward('capsule (sphere)', unwrap(createCapsuleGeometry(0.75, 0)));
     });
 
     it('createPlaneGeometry: every triangle agrees with authored normal', () => {
@@ -694,6 +731,68 @@ import { describe, expect, it } from 'vitest';
     });
   });
 
+  describe('createCapsuleGeometry', () => {
+    it('idempotent: same inputs -> byte-identical vertex buffers (normal)', () => {
+      const a = unwrapMesh(createCapsuleGeometry(0.5, 1, 4, 8));
+      const b = unwrapMesh(createCapsuleGeometry(0.5, 1, 4, 8));
+      expect(arraysEqual(a.vertices, b.vertices)).toBe(true);
+    });
+
+    it('default segments produce a finite positive vertex + index count (normal)', () => {
+      const m = unwrapMesh(createCapsuleGeometry(0.5, 1));
+      expect(m.vertices.length).toBeGreaterThan(0);
+      expect(m.indices?.length ?? 0).toBeGreaterThan(0);
+    });
+
+    it('total height = length + 2*radius; extreme Y at +-(length/2 + radius) (boundary)', () => {
+      const radius = 0.5;
+      const length = 2;
+      const m = unwrapMesh(createCapsuleGeometry(radius, length, 6, 12));
+      const pos = m.attributes.position as Float32Array;
+      let maxY = -Infinity;
+      let minY = Infinity;
+      for (let i = 0; i + 2 < pos.length; i += 3) {
+        const y = pos[i + 1] ?? 0;
+        if (y > maxY) maxY = y;
+        if (y < minY) minY = y;
+      }
+      const expected = length / 2 + radius;
+      expect(Math.abs(maxY - expected)).toBeLessThan(1e-5);
+      expect(Math.abs(minY + expected)).toBeLessThan(1e-5);
+    });
+
+    it('length=0 collapses to a sphere of the given radius: all verts on |r| (boundary)', () => {
+      const radius = 0.75;
+      const m = unwrapMesh(createCapsuleGeometry(radius, 0, 6, 12));
+      const pos = m.attributes.position as Float32Array;
+      for (let i = 0; i + 2 < pos.length; i += 3) {
+        const h = Math.hypot(pos[i] ?? 0, pos[i + 1] ?? 0, pos[i + 2] ?? 0);
+        expect(Math.abs(h - radius)).toBeLessThan(1e-5);
+      }
+    });
+
+    it('degenerate (radius <= 0) -> asset-parse-failed (degenerate)', () => {
+      const r = createCapsuleGeometry(0, 1);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.code).toBe('asset-parse-failed');
+    });
+
+    it('degenerate (negative length) -> asset-parse-failed (degenerate)', () => {
+      const r = createCapsuleGeometry(0.5, -1);
+      expect(r.ok).toBe(false);
+    });
+
+    it('degenerate (radialSegments < 3) -> asset-parse-failed (degenerate)', () => {
+      const r = createCapsuleGeometry(0.5, 1, 4, 2);
+      expect(r.ok).toBe(false);
+    });
+
+    it('degenerate (capSegments < 1) -> asset-parse-failed (degenerate)', () => {
+      const r = createCapsuleGeometry(0.5, 1, 0, 8);
+      expect(r.ok).toBe(false);
+    });
+  });
+
   describe('VertexAttributeMap narrowing (AC-15)', () => {
     it('every factory returns a mesh whose attributes keys are a subset of the 6-key closed set', () => {
       const meshes = [
@@ -703,6 +802,7 @@ import { describe, expect, it } from 'vitest';
         unwrapMesh(createCylinderGeometry(1, 1, 2, 8)),
         unwrapMesh(createConeGeometry(1, 2, 8)),
         unwrapMesh(createTorusGeometry(1, 0.3, 8, 6)),
+        unwrapMesh(createCapsuleGeometry(0.5, 1, 4, 8)),
       ];
       const allowed = new Set(['position', 'normal', 'uv', 'tangent', 'skinIndex', 'skinWeight']);
       for (const m of meshes) {
@@ -802,9 +902,10 @@ import { describe, expect, it } from 'vitest';
   });
 
   describe('geometry barrel re-exports (VAIU-F1)', () => {
-    it('@forgeax/engine-geometry exposes all 6 factories', async () => {
+    it('@forgeax/engine-geometry exposes all 7 factories', async () => {
       const mod = await import('@forgeax/engine-geometry');
       expect(typeof mod.createBoxGeometry).toBe('function');
+      expect(typeof mod.createCapsuleGeometry).toBe('function');
       expect(typeof mod.createConeGeometry).toBe('function');
       expect(typeof mod.createCylinderGeometry).toBe('function');
       expect(typeof mod.createPlaneGeometry).toBe('function');

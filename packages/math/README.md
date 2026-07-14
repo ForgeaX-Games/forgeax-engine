@@ -6,7 +6,7 @@ Pure-function SoA-friendly Vec / Mat / Quat / Color / Euler math library for for
 ## 30-second self-introduction
 
 - **ABI**: `Float32Array & { readonly __<dim>: void }` 七件套（`Vec2 / Vec3 / Vec4 / Quat / Mat3 / Mat4 / Color`）+ `Euler` plain-object；branded 维度互斥（编译期）+ TypedArray 即时上传 GPU（运行期）。
-- **Surface**: 8 namespace × 119 函数（vec2:18 / vec3:19 / vec4:17 / mat3:10 / mat4:26 / quat:17 / euler:6 / color:6）；单 entry `import { Vec3, vec3, ... } from '@forgeax/engine-math'`。
+- **Surface**: 9 namespace × 139 函数（vec2:20 / vec3:21 / vec4:18 / mat3:10 / mat4:33 / quat:23 / euler:6 / color:6 / easing:2）；单 entry `import { Vec3, vec3, ... } from '@forgeax/engine-math'`。
 - **Style**: gl-matrix / wgpu-matrix 风纯函数 namespace + out-param-first（`func(out, ...args)`）；零分配；aliasing-safe（`add(v, v, v)` 合法）。
 - **Errors**: 全库静默回退（不抛错、不返回 `null`、不返回 `Result`、不 `console.warn`）；退化语义靠 JSDoc `@degrade` + 本 README §退化策略表 + `*.test-d.ts` 三层共担。
 
@@ -33,20 +33,21 @@ vec3.normalize(v, vec3.create(0, 0, 0));          // v = (0, 0, 0)
 
 > 上述代码覆盖 v0.1 PBR 渲染管线 90% 的典型 transform / projection / shader-uniform 准备路径——LLM 一次扫读即可拿到 "概念→签名→典型流程" 完整闭包（charter 命题 1）。
 
-## quick-ref：8 namespace × 119 函数
+## quick-ref：9 namespace × 139 函数
 
 每 namespace 内函数顺序粗略按 "构造 → 比较 → 算术 → 几何 → 高级" 分组。完整签名以 `.d.ts` JSDoc 为 SSOT。
 
 | Namespace | 函数 (n) |
 |:--|:--|
-| **`vec2`** (18) | `create / clone / copy / set / equals / add / sub / scale / negate / dot / lengthSq / length / distance / normalize / lerp / min / max / perp` |
-| **`vec3`** (19) | `create / clone / copy / set / equals / add / sub / scale / negate / dot / cross / lengthSq / length / distance / distanceSq / normalize / lerp / min / max` |
-| **`vec4`** (17) | `create / clone / copy / set / equals / add / sub / scale / negate / dot / lengthSq / length / distance / normalize / lerp / min / max` |
+| **`vec2`** (20) | `create / clone / copy / set / equals / add / sub / scale / negate / dot / lengthSq / length / distance / normalize / lerp / smoothDamp / catmullRom / min / max / perp` |
+| **`vec3`** (21) | `create / clone / copy / set / equals / add / sub / scale / negate / dot / cross / lengthSq / length / distance / distanceSq / normalize / lerp / smoothDamp / catmullRom / min / max` |
+| **`vec4`** (18) | `create / clone / copy / set / equals / add / sub / scale / negate / dot / lengthSq / length / distance / normalize / lerp / smoothDamp / min / max` |
 | **`mat3`** (10) | `create / clone / identity / equals / multiply / transpose / invert / scale / fromMat4 / normalMatrix` |
 | **`mat4`** (32) | `create / clone / identity / equals / multiply / transpose / invert / scale / translate / rotate / lookAt / compose / decompose / fromQuat / fromTranslation / fromScaling / fromRotation / perspective / perspectiveNO / perspectiveReverseZ / orthographic / orthographicNO / orthographicReverseZ / transformVec3 / transformPoint / transformDirection / getTranslation / getForward / getUp / getRight / unproject / projectPoint` |
-| **`quat`** (17) | `create / clone / identity / fromAxisAngle / fromEuler / fromRotationMatrix / fromUnitVectors / multiply / slerp / nlerp / invert / conjugate / dot / length / lengthSq / normalize / transformVec3` |
+| **`quat`** (23) | `create / clone / identity / fromAxisAngle / fromEuler / fromRotationMatrix / fromLookAt / fromUnitVectors / multiply / rotateAxis / slerp / nlerp / invert / conjugate / dot / length / lengthSq / normalize / transformVec3 / eulerY / right / up / forward` |
 | **`euler`** (6) | `create / clone / set / toQuat / fromQuat / fromRotationMatrix` |
 | **`color`** (6) | `create / clone / srgbToLinear / linearToSrgb / fromHex / toHex` |
+| **`easing`** (2) | `smoothstep / smootherstep` — scalar S-curve time-remaps (clamp t to [0,1]; GLSL / Bevy `EaseFunction`; slow-in/slow-out). Growable home for further ease variants |
 | **`frustum`** (4) | `create / fromViewProjection / intersectsBox / intersectsSphere` |
 
 > [!NOTE]
@@ -215,7 +216,7 @@ const projReverseZ = mat4.perspectiveReverseZ(mat4.create(), Math.PI / 4, 16 / 9
 
 | 版本 | 范围 |
 |:--|:--|
-| **v0.0 (本闭环)** | 8 namespace × 119 函数（含 mat4 / quat 反向 surface 跨类型 transform 4 函数）；branded ABI；3 档 NDC 投影；M1-M6 全 19 AC pass |
+| **v0.0 (本闭环)** | 9 namespace × 139 函数（含 mat4 / quat 反向 surface 跨类型 transform 4 函数，以及 easing 标量缓动）；branded ABI；3 档 NDC 投影；M1-M6 全 19 AC pass |
 | v0.1 (PBR 闭环) | `mat3.fromMat4Scale` 法线矩阵优化路径；`Color.linearToSRGB` GPU 上传专用变体；高级 PBR 工具 |
 | v0.2 (动画闭环) | `quat.squad` Catmull-Rom 球面插值；`euler.lookAt` 自然映射；动画系统消费方向定 |
 | v1.0 (稳定 ABI) | 不再 breaking ABI；coverage 阈值不退步；`@forgeax/engine-math` 正式 `npm publish` |

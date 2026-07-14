@@ -200,9 +200,18 @@ The `switch (err.code)` is exhaustive across 6 + 18 = 24 cases (`AppErrorCode | 
 
 </details>
 
+## `'Time'` resource — `{ dt, elapsed }`
+
+The frame-loop writes one `'Time'` record into the World before each `world.update()`, readable by any system via `world.getResource('Time')`:
+
+| Field | Meaning |
+|:--|:--|
+| `dt` | Clamped delta seconds for the current frame (`Math.min(Math.max(rawDt, 0), maxDt)`). Integrate it for per-frame motion. |
+| `elapsed` | Accumulated clamped seconds since the loop started (`Σ dt`), monotonic non-decreasing. Read it for **absolute-time-keyed** behavior — pulsing, `sin(elapsed·ω)` oscillation, an animation clock — instead of hand-accumulating `dt` in your own system. Maps Bevy `Time::elapsed_secs()`. Uses the same clamped `dt`, so a backgrounded tab advances `elapsed` by the clamped amount only (no time jump). |
+
 ## alt-tab / wall-clock drift note (R-3)
 
-`@forgeax/engine-app` does **not** subscribe to `document.visibilitychange`. After a long alt-tab in Chromium, `requestAnimationFrame` is throttled to ~1 Hz, accumulating wall-clock vs game-clock drift. The `dt` clamp (`MAX_DT_DEFAULT = 1/30s`) caps the per-tick advance, but cumulative drift over minutes can still surprise host business logic (e.g. a `tetris` drop timer perceiving "time stopped").
+`@forgeax/engine-app` does **not** subscribe to `document.visibilitychange`. After a long alt-tab in Chromium, `requestAnimationFrame` is throttled to ~1 Hz, accumulating wall-clock vs game-clock drift. The `dt` clamp (`MAX_DT_DEFAULT = 1/30s`) caps the per-tick advance, but cumulative drift over minutes can still surprise host business logic (e.g. a `tetris` drop timer perceiving "time stopped"). `Time.elapsed` shares the same clamp, so it too advances by clamped time only during a throttled tab.
 
 Hosts that care about wall-clock alignment should opt in via:
 
@@ -219,7 +228,7 @@ Not subscribing by default is a deliberate charter P3 boundary (host self-decide
 
 | OOS | What | Why |
 |:--|:--|:--|
-| OOS-1 | Fixed-timestep accumulator (`fixedDt` / `accumulated`) | `'Time'` Resource ships single field `{ dt }` only; fixed-timestep is a separate feat |
+| OOS-1 | Fixed-timestep accumulator (`fixedDt` / `accumulated`) | `'Time'` Resource ships `{ dt, elapsed }` (elapsed added solo round 20260713-212920); a fixed-timestep accumulator / `Time<Fixed>` is still a separate feat |
 | OOS-2 | `app.disposeWorld()` / explicit `device.destroy` | Lifecycle is host-driven; cleanup funnel covers detach + listener unsubscribe |
 | OOS-3 | `document.visibilitychange` subscription | See alt-tab note above; host self-decides |
 | OOS-4 | Schedule labels / scheduler API | `args.schedule` typed `unknown` until the schedule shape lands |

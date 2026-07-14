@@ -1,9 +1,10 @@
 // quat.ts — quaternion namespace (M4 / T-027)
 //
-// 16-function surface (≥ 16 lower bound):
+// 23-function surface (≥ 16 lower bound):
 //   create / clone / identity / fromAxisAngle / fromEuler / fromRotationMatrix /
-//   fromUnitVectors / multiply / slerp / nlerp / invert / conjugate / dot /
-//   length / lengthSq / normalize
+//   fromLookAt / fromUnitVectors / multiply / rotateAxis / slerp / nlerp / invert /
+//   conjugate / dot / length / lengthSq / transformVec3 / normalize / eulerY /
+//   right / up / forward
 //
 // Memory layout lock: Float32Array length 4 [x, y, z, w], **Hamilton convention**
 // (graphics mainstream: glm / Three.js / wgpu-matrix / DirectXMath / glam are all Hamilton (x,y,z,w)).
@@ -42,6 +43,12 @@ import { EPS_NORMALIZE, EPS_QUAT_PARALLEL, EPS_SLERP_DOT_LIMIT } from './_intern
 import type { EulerOrder, Mat3Like, Quat, QuatLike, Vec3, Vec3Like } from './types';
 
 export type { Quat, QuatLike };
+
+// Canonical axes for the local-basis accessors (right / up / forward). −Z is the
+// forward convention (RL-4), matching mat4.getForward and fromLookAt.
+const UNIT_X = [1, 0, 0] as const;
+const UNIT_Y = [0, 1, 0] as const;
+const UNIT_NEG_Z = [0, 0, -1] as const;
 
 /** Create a Quat (default all zero; callers usually call identity() right after). */
 export function create(): Quat {
@@ -238,6 +245,100 @@ export function fromRotationMatrix(out: Quat, m: Mat3Like): Quat {
 }
 
 /**
+ * out = orientation quaternion for an object placed at `eye` and facing `target`. Returns out.
+ *
+ * This is the ergonomic camera/look-at helper: it yields the WORLD-space orientation an entity's
+ * Transform.rotation needs so that its local -z axis points from `eye` toward `target` (the camera
+ * convention, matching `mat4.lookAt`). Use it instead of hand-wiring
+ * `mat4.lookAt → mat4.invert → mat3.fromMat4 → quat.fromRotationMatrix`; that chain is easy to get
+ * wrong (notably `fromRotationMatrix` takes a mat3, but `Mat4Like`≡`Mat3Like`≡`ArrayLike<number>`,
+ * so passing a mat4 typechecks and silently reads garbage → NaN → nothing renders).
+ *
+ * Convenience composition (like `mat4.computeViewProj`), not a primitive: it builds the same
+ * right/newUp/forward basis as `mat4.lookAt` and reuses `fromRotationMatrix` for the extraction.
+ *
+ * @degrade eye ≈ target (|eye-target| < EPS_NORMALIZE) → out = identity (same convention as
+ *          `mat4.lookAt` degenerate #4; no throw, AC-06).
+ * @degrade up collinear with the view direction → alternative up auto-selected (same as
+ *          `mat4.lookAt` #5).
+ *
+ * @example
+ * ```ts
+ * // aim a camera at the origin
+ * const q = quat.fromLookAt(quat.create(), [-2.5, 4.5, 9], [0, 0, 0], [0, 1, 0]);
+ * world.set(cameraEntity, Transform, { pos: [-2.5, 4.5, 9], rot: q });
+ * ```
+ */
+export function fromLookAt(out: Quat, eye: Vec3Like, target: Vec3Like, up: Vec3Like): Quat {
+  const ex = eye[0] as number;
+  const ey = eye[1] as number;
+  const ez = eye[2] as number;
+
+  // forward = normalize(eye - target): the object's local -z points at the target, so +z = eye - target
+  // (right-handed camera convention, identical to mat4.lookAt).
+  let fx = ex - (target[0] as number);
+  let fy = ey - (target[1] as number);
+  let fz = ez - (target[2] as number);
+  const fLenSq = fx * fx + fy * fy + fz * fz;
+  if (fLenSq < EPS_NORMALIZE) {
+    return identity(out);
+  }
+  const fInv = 1 / Math.sqrt(fLenSq);
+  fx *= fInv;
+  fy *= fInv;
+  fz *= fInv;
+
+  const upx = up[0] as number;
+  const upy = up[1] as number;
+  const upz = up[2] as number;
+
+  // right = normalize(cross(up, forward)); degrade path mirrors mat4.lookAt (#5 alternative up).
+  let rx = upy * fz - upz * fy;
+  let ry = upz * fx - upx * fz;
+  let rz = upx * fy - upy * fx;
+  let rLenSq = rx * rx + ry * ry + rz * rz;
+  if (rLenSq < EPS_NORMALIZE) {
+    // up collinear with forward: pick alternative up = (0, 0, 1); if still collinear pick (0, 1, 0)
+    rx = -fy;
+    ry = fx;
+    rz = 0;
+    rLenSq = rx * rx + ry * ry + rz * rz;
+    if (rLenSq < EPS_NORMALIZE) {
+      rx = 0;
+      ry = -fz;
+      rz = fy;
+      rLenSq = rx * rx + ry * ry + rz * rz;
+    }
+  }
+  const rInv = 1 / Math.sqrt(rLenSq);
+  rx *= rInv;
+  ry *= rInv;
+  rz *= rInv;
+
+  // newUp = cross(forward, right)
+  const ux = fy * rz - fz * ry;
+  const uy = fz * rx - fx * rz;
+  const uz = fx * ry - fy * rx;
+
+  // World rotation columns are the basis vectors themselves (col0=right, col1=up, col2=forward) —
+  // this is the transpose of mat4.lookAt's view rotation, i.e. the camera's world orientation.
+  // Pack column-major into a length-9 mat3 for fromRotationMatrix (SSOT for the Shepperd extraction).
+  // Per-call alloc mirrors mat4.computeViewProj's convenience-composition grain (camera orientation
+  // is set rarely; no module-scoped mutable state to reason about).
+  const m3 = new Float32Array(9);
+  m3[0] = rx;
+  m3[1] = ry;
+  m3[2] = rz;
+  m3[3] = ux;
+  m3[4] = uy;
+  m3[5] = uz;
+  m3[6] = fx;
+  m3[7] = fy;
+  m3[8] = fz;
+  return fromRotationMatrix(out, m3);
+}
+
+/**
  * out = quaternion that rotates the unit vector v to w (shortest arc). Returns out.
  *
  * Assumes v and w are normalized; if not, the caller is responsible.
@@ -332,6 +433,83 @@ export function multiply(out: Quat, a: QuatLike, b: QuatLike): Quat {
   out[1] = aw * by - ax * bz + ay * bw + az * bx;
   out[2] = aw * bz + ax * by - ay * bx + az * bw;
   out[3] = aw * bw - ax * bx - ay * by - az * bz;
+  return out;
+}
+
+/**
+ * out = the orientation `q` after rotating a further `angleRadians` about world-space `axis`,
+ * re-normalized. Returns out.
+ *
+ * This is the ergonomic *incremental rotate* helper — the per-frame spin/animation move. It folds
+ * the three steps every rotating demo otherwise hand-wires: build the delta quaternion
+ * (`fromAxisAngle`), **pre**-multiply it onto the current orientation (world-space axis, matching
+ * **Bevy `Transform::rotate(r)` = `r * self.rotation`** / `rotate_y(θ)`), and — the step that is
+ * silently omitted and makes the naive loop wrong — **normalize** to shed the floating-point error
+ * that accumulates over thousands of frames into a non-unit quaternion (skew / scale artefacts).
+ *
+ * Prefer this over hand-writing `quat.multiply(q, delta, q)` in an update system: that loop drifts,
+ * so demos work around it with an absolute-angle accumulator + `fromAxisAngle` (can't compose onto an
+ * existing orientation) or raw `sin/cos` quaternion literals. `rotateAxis` composes safely.
+ *
+ * Convenience composition (like `fromLookAt`), not a primitive: same result as
+ * `normalize(out, multiply(out, fromAxisAngle(tmp, axis, angleRadians), q))`, fused + aliasing-safe.
+ *
+ * @degrade `axis` zero-length → the delta is identity (degenerate registry #8), so out = normalize(q)
+ *          (no rotation applied; no throw, consistent with the sibling helpers).
+ *
+ * @example
+ * ```ts
+ * // in an Update system: spin a cube about +Y at `speed` rad/s using the frame delta
+ * const dt = world.getResource<{ dt: number }>('Time').dt;
+ * const t = world.get(entity, Transform).unwrap();
+ * quat.rotateAxis(t.quat, t.quat, [0, 1, 0], speed * dt); // in-place accumulate, no drift
+ * world.set(entity, Transform, t);
+ * ```
+ */
+export function rotateAxis(out: Quat, q: QuatLike, axis: Vec3Like, angleRadians: number): Quat {
+  // Read q into locals first (aliasing-safe: rotateAxis(q, q, ...) is the common per-frame call).
+  const qx = q[0] as number;
+  const qy = q[1] as number;
+  const qz = q[2] as number;
+  const qw = q[3] as number;
+
+  // Delta quaternion for `angleRadians` about `axis` (fromAxisAngle inline; 0-axis → identity, #8).
+  const ax = axis[0] as number;
+  const ay = axis[1] as number;
+  const az = axis[2] as number;
+  const axisLen = Math.sqrt(ax * ax + ay * ay + az * az);
+  let dx = 0;
+  let dy = 0;
+  let dz = 0;
+  let dw = 1;
+  if (axisLen >= EPS_NORMALIZE) {
+    const half = angleRadians * 0.5;
+    const s = Math.sin(half) / axisLen;
+    dx = ax * s;
+    dy = ay * s;
+    dz = az * s;
+    dw = Math.cos(half);
+  }
+
+  // Pre-multiply: out = delta * q (world-space axis; matches Bevy Transform::rotate order).
+  let rx = dw * qx + dx * qw + dy * qz - dz * qy;
+  let ry = dw * qy - dx * qz + dy * qw + dz * qx;
+  let rz = dw * qz + dx * qy - dy * qx + dz * qw;
+  let rw = dw * qw - dx * qx - dy * qy - dz * qz;
+
+  // Normalize to kill accumulation drift (the whole point of this helper).
+  const len = Math.sqrt(rx * rx + ry * ry + rz * rz + rw * rw);
+  if (len >= EPS_NORMALIZE) {
+    const inv = 1 / len;
+    rx *= inv;
+    ry *= inv;
+    rz *= inv;
+    rw *= inv;
+  }
+  out[0] = rx;
+  out[1] = ry;
+  out[2] = rz;
+  out[3] = rw;
   return out;
 }
 
@@ -630,4 +808,77 @@ export function normalize(out: Quat, a: QuatLike): Quat {
 export function eulerY(theta: number): Quat {
   const out = create();
   return fromEuler(out, 0, theta, 0, 'YXZ');
+}
+
+// ── Local basis accessors ─────────────────────────────────────────────────
+//
+// A rotation's three local basis vectors — the world-space directions its own
+// +X / +Y / −Z axes point after the rotation. They are exactly `q` applied to
+// the canonical axes: right = q·(1,0,0), up = q·(0,1,0), forward = q·(0,0,−1).
+//
+// The −Z forward convention matches `mat4.getForward` (RL-4) and the look
+// convention `fromLookAt` / `computeViewProj` use, so a camera/listener built
+// with `fromLookAt(eye, target)` has `forward(q)` ≈ normalize(target − eye).
+// These fold the transformVec3-with-a-magic-axis idiom (and the handedness a
+// caller would otherwise have to know) into a named accessor, mirroring the
+// mat4 getters so learning one basis form applies to both. Because `q` from the
+// quat surface is always unit-length, `transformVec3` returns a unit vector — no
+// separate normalize step (unlike the mat4 getters, which read possibly-scaled
+// basis columns and must normalize).
+
+/**
+ * Local right axis: the world-space direction the rotation's own +X axis points.
+ * `right(out, q) = quat.transformVec3(out, q, [1, 0, 0])`. Mirrors
+ * `mat4.getRight`; matches Bevy `Transform::local_x` / `Transform::right`.
+ *
+ * @degrade q must be unit-length (guaranteed by the quat surface); a unit q
+ *          yields a unit result. q = (0,0,0,0) → out = (1,0,0) (the natural
+ *          transformVec3 result; non-NaN, no throw).
+ *
+ * @example
+ * ```ts
+ * const q = quat.eulerY(Math.PI / 2); // 90° about +Y
+ * quat.right(vec3.create(), q); // → (0, 0, -1): +X yawed a quarter-turn
+ * ```
+ */
+export function right(out: Vec3, q: QuatLike): Vec3 {
+  return transformVec3(out, q, UNIT_X);
+}
+
+/**
+ * Local up axis: the world-space direction the rotation's own +Y axis points.
+ * `up(out, q) = quat.transformVec3(out, q, [0, 1, 0])`. Mirrors `mat4.getUp`;
+ * matches Bevy `Transform::local_y` / `Transform::up`.
+ *
+ * @degrade q must be unit-length (guaranteed by the quat surface); a unit q
+ *          yields a unit result. q = (0,0,0,0) → out = (0,1,0).
+ *
+ * @example
+ * ```ts
+ * const q = quat.fromAxisAngle(quat.create(), [1, 0, 0], Math.PI / 2); // pitch 90°
+ * quat.up(vec3.create(), q); // → (0, 0, 1): +Y pitched onto +Z
+ * ```
+ */
+export function up(out: Vec3, q: QuatLike): Vec3 {
+  return transformVec3(out, q, UNIT_Y);
+}
+
+/**
+ * Local forward axis: the world-space direction the rotation's own −Z axis
+ * points (−Z look convention, RL-4). `forward(out, q) =
+ * quat.transformVec3(out, q, [0, 0, -1])`. Mirrors `mat4.getForward`; matches
+ * Bevy `Transform::forward` (Bevy also uses −Z). A quat from `fromLookAt(eye,
+ * target, up)` has `forward(q)` ≈ normalize(target − eye).
+ *
+ * @degrade q must be unit-length (guaranteed by the quat surface); a unit q
+ *          yields a unit result. q = (0,0,0,0) → out = (0,0,-1).
+ *
+ * @example
+ * ```ts
+ * const q = quat.eulerY(Math.PI / 2); // 90° about +Y
+ * quat.forward(vec3.create(), q); // → (-1, 0, 0): -Z yawed a quarter-turn
+ * ```
+ */
+export function forward(out: Vec3, q: QuatLike): Vec3 {
+  return transformVec3(out, q, UNIT_NEG_Z);
 }

@@ -21,6 +21,7 @@
 //    edge no longer carries.
 
 import { resolveComponent } from '@forgeax/engine-ecs';
+import type { MountOverride } from '@forgeax/engine-types';
 
 /**
  * A single handle-field reference extracted from a SceneAsset entity.
@@ -88,34 +89,130 @@ export function extractSceneEntityHandleGuids(
       if (!comp) continue;
 
       for (const fieldName of Object.keys(rawFields)) {
-        const value = rawFields[fieldName];
-        const fieldType = comp.schema[fieldName];
-        if (fieldType === undefined || typeof fieldType !== 'string') continue;
-
-        if (fieldType.startsWith('shared<')) {
-          if (typeof value !== 'string') continue;
-          entries.push({
-            entityLocalId: node.localId,
-            componentName: compName,
-            fieldName,
-            guidString: value,
-          });
-        } else if (fieldType.startsWith('array<shared<') && Array.isArray(value)) {
-          for (let elemIdx = 0; elemIdx < value.length; elemIdx++) {
-            const elem = value[elemIdx];
-            if (typeof elem !== 'string') continue;
+        forEachHandleGuid(
+          comp.schema[fieldName],
+          rawFields[fieldName],
+          (guidString, arrayIndex) => {
             entries.push({
               entityLocalId: node.localId,
               componentName: compName,
               fieldName,
-              guidString: elem,
-              arrayIndex: elemIdx,
+              guidString,
+              ...(arrayIndex !== undefined ? { arrayIndex } : {}),
             });
-          }
-        }
+          },
+        );
       }
     }
   }
 
   return entries;
+}
+
+/**
+ * One handle-field GUID reference extracted from a {@link MountOverride}'s value
+ * (feat-20260713 M3 / w12). Mirrors {@link SceneHandleFieldEntry} but keys on the
+ * override's array index (there is no entity `localId` — an override targets a
+ * mount member by its own `localId`, resolved by the ecs apply loop, not here).
+ *
+ * `fieldName` is the schema field the GUID binds to: the override's own `field`
+ * for the patch form, or a key of the component-add value map for the add form.
+ */
+export interface MountOverrideHandleFieldEntry {
+  /** 0-based index into the `overrides[]` array passed to the extractor. */
+  readonly overrideIndex: number;
+  readonly componentName: string;
+  readonly fieldName: string;
+  readonly guidString: string;
+  /** 0-based index for `array<shared<T>>` elements; `undefined` for scalar `shared<T>`. */
+  readonly arrayIndex?: number;
+}
+
+/**
+ * Walk `overrides` and extract every GUID string bound to a `shared<...>` /
+ * `array<shared<...>>` schema field inside each override's value (feat-20260713
+ * M3 / w12, plan-strategy D-2). This is the apply-side counterpart to
+ * {@link extractSceneEntityHandleGuids}: it feeds `resolveMountsRec`'s
+ * GUID→handle down-drill so a `mounts[].overrides[].value` carrying a raw GUID
+ * (e.g. an `AnimationPlayer.clips` clip GUID) resolves to a live handle before
+ * the ecs apply loop, which only ever sees numeric handles (D-2: the GUID domain
+ * stays sealed in assets-runtime).
+ *
+ * The `{comp, field?, value}` discriminant is normalized to `(fieldName, value)`
+ * pairs: the patch form (`field` present) yields one pair; the component-add form
+ * (`field` absent, `value` is a per-field map) yields one pair per value key.
+ * Field type is judged from `resolveComponent(comp).schema[field]`, the same
+ * schema SSOT the entity walk uses. Unknown components / non-shared fields /
+ * non-string (already-resolved number) values are skipped (D-8 number pass-through).
+ *
+ * @internal Shared identification core; resolution lives in `resolveMountsRec`.
+ */
+export function extractMountOverrideHandleGuids(
+  overrides: ReadonlyArray<MountOverride>,
+): MountOverrideHandleFieldEntry[] {
+  const entries: MountOverrideHandleFieldEntry[] = [];
+
+  for (let overrideIndex = 0; overrideIndex < overrides.length; overrideIndex++) {
+    const ov = overrides[overrideIndex];
+    if (ov === undefined) continue;
+
+    const comp = resolveComponent(ov.comp);
+    if (!comp) continue;
+
+    for (const [fieldName, value] of normalizeOverrideFields(ov)) {
+      forEachHandleGuid(comp.schema[fieldName], value, (guidString, arrayIndex) => {
+        entries.push({
+          overrideIndex,
+          componentName: ov.comp,
+          fieldName,
+          guidString,
+          ...(arrayIndex !== undefined ? { arrayIndex } : {}),
+        });
+      });
+    }
+  }
+
+  return entries;
+}
+
+/**
+ * Normalize a {@link MountOverride}'s `{comp, field?, value}` shape into
+ * `(fieldName, value)` pairs (feat-20260713 M3 / w12). Patch form (`field`
+ * present) → one pair; component-add form (`field` absent, `value` a per-field
+ * map) → one pair per value key. A non-object add value yields no pairs.
+ */
+function normalizeOverrideFields(ov: MountOverride): ReadonlyArray<readonly [string, unknown]> {
+  if (ov.field !== undefined) return [[ov.field, ov.value]];
+  const value = ov.value;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+  const map = value as Record<string, unknown>;
+  return Object.keys(map).map((key) => [key, map[key]] as const);
+}
+
+/**
+ * Shared handle-GUID identification core (feat-20260713 M3 / w12 SSOT): given a
+ * schema `fieldType` and a `value`, invoke `sink(guidString, arrayIndex?)` for
+ * every GUID string the field binds — once for a `shared<T>` scalar string, once
+ * per string element of an `array<shared<T>>`. Non-shared fields, non-string
+ * scalars, and non-string array elements (already-resolved handle numbers, D-8)
+ * are skipped. Both the entity walk and the override walk route through here so
+ * the "is this a shared handle field + read its GUID" logic has one home
+ * (architecture-principles §1 SSOT).
+ */
+function forEachHandleGuid(
+  fieldType: string | undefined,
+  value: unknown,
+  sink: (guidString: string, arrayIndex?: number) => void,
+): void {
+  if (fieldType === undefined || typeof fieldType !== 'string') return;
+  if (fieldType.startsWith('shared<')) {
+    if (typeof value === 'string') sink(value);
+    return;
+  }
+  if (fieldType.startsWith('array<shared<') && Array.isArray(value)) {
+    for (let elemIdx = 0; elemIdx < value.length; elemIdx++) {
+      const elem = value[elemIdx];
+      if (typeof elem === 'string') sink(elem, elemIdx);
+    }
+  }
 }

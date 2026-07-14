@@ -156,7 +156,12 @@ describe('executeScript async - write (w2)', () => {
   it('write-then-read: push modifies state, persists across evals', async () => {
     const ctx = makeCtx();
 
-    const r1 = await executeScript('world.push(42); world.push(43); world.getList()', ctx);
+    // Contract (round 20260713-124956): the script is an async function body,
+    // so a MULTI-statement script uses an explicit `return` for its value (a
+    // lone trailing expression is auto-returned; a statement list is not). This
+    // replaces the prior indirect-eval completion-value behavior — the trade
+    // that buys legal top-level `return` + `await`, which the docs already show.
+    const r1 = await executeScript('world.push(42); world.push(43); return world.getList()', ctx);
     expect(r1.ok).toBe(true);
     if (r1.ok) {
       expect(r1.value).toEqual([42, 43]);
@@ -287,5 +292,77 @@ describe('executeScript async - _import (w3)', () => {
     if (result.ok) {
       expect(result.value).toBe(true);
     }
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Un-wrapped top-level return / await (solo round 20260713-124956):
+// the README + AGENTS.md recipes show top-level `return` and `await` WITHOUT
+// an async IIFE, but the old indirect-eval core (`return eval(script)`) threw
+// script-syntax-error on both. These pin the AsyncFunction-body contract so a
+// docs-following AI user's first, un-wrapped script works.
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('executeScript - un-wrapped top-level return / await', () => {
+  it('top-level `return <literal>` returns the value (no async IIFE)', async () => {
+    const ctx = makeCtx();
+    const result = await executeScript('return 42', ctx);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(42);
+  });
+
+  it('top-level `await <promise>` resolves (no async IIFE)', async () => {
+    const ctx = makeCtx();
+    const result = await executeScript('await Promise.resolve(7)', ctx);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(7);
+  });
+
+  it('bare expression still auto-returns its value', async () => {
+    const ctx = makeCtx();
+    const result = await executeScript('renderer.isReady', ctx);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(true);
+  });
+
+  it('bare expression with a trailing semicolon still returns its value', async () => {
+    const ctx = makeCtx();
+    const result = await executeScript('renderer.isReady;', ctx);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(true);
+  });
+
+  it('multi-statement: top-level await _import then return (the documented recipe, un-wrapped)', async () => {
+    const ctx = makeCtx();
+    const script = [
+      'const ecs = await _import("@forgeax/engine-ecs");',
+      'return typeof ecs.createQueryState;',
+    ].join('\n');
+    const result = await executeScript(script, ctx);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe('function');
+  });
+
+  it('the historical async-IIFE form still works (backward compatible)', async () => {
+    const ctx = makeCtx();
+    const result = await executeScript(aw('return 99;'), ctx);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(99);
+  });
+
+  it('genuine syntax error still surfaces script-syntax-error (both compile modes fail)', async () => {
+    const ctx = makeCtx();
+    const result = await executeScript('const = ;', ctx);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('script-syntax-error');
+  });
+
+  it('multi-statement WITHOUT return yields undefined (async-body contract, not eval completion value)', async () => {
+    const ctx = makeCtx();
+    // A statement list is not auto-returned; only a lone trailing expression is.
+    // This is the intentional trade for legal top-level return/await.
+    const result = await executeScript('const a = 1; a + 1', ctx);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBeUndefined();
   });
 });

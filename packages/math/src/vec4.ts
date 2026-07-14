@@ -1,8 +1,8 @@
 // vec4.ts — 4D vector / homogeneous coordinate namespace (M2 / T-015)
 //
-// 17-function surface (≥ 14 lower bound; same shape as vec2/vec3, no cross / perp):
+// 18-function surface (≥ 14 lower bound; same shape as vec2/vec3, no cross / perp):
 //   create / clone / copy / set / equals / add / sub / scale / negate /
-//   dot / lengthSq / length / distance / normalize / lerp / min / max
+//   dot / lengthSq / length / distance / normalize / lerp / smoothDamp / min / max
 //
 // Design locks:
 //   - branded Float32Array (types.ts SSOT); factory `as Vec4` casts are funneled (D-P15).
@@ -17,7 +17,7 @@
 //          wiki/gl-matrix-overview Out-param four ironclad rules.
 
 import { EPS_NORMALIZE } from './_internal/epsilon';
-import { lerp as scalarLerp } from './_internal/scalar';
+import { lerp as scalarLerp, smoothDecayFactor } from './_internal/scalar';
 import type { Vec4, Vec4Like } from './types';
 
 /** Create a Vec4 (zero vector by default). */
@@ -221,6 +221,23 @@ export function lerp(out: Vec4, a: Vec4Like, b: Vec4Like, t: number): Vec4 {
   out[2] = scalarLerp(az, bz, t);
   out[3] = scalarLerp(aw, bw, t);
   return out;
+}
+
+/**
+ * out = frame-rate-INDEPENDENT exponential smoothing of `current` toward `target`:
+ * `lerp(current, target, 1 − exp(−decayRate · dt))`. Semantics match Bevy
+ * `StableInterpolate::smooth_nudge` / three.js `MathUtils.damp` (1st-order decay, NOT Unity
+ * `SmoothDamp`'s 2nd-order spring). `dt=0` → out=current; large `decayRate·dt` → out≈target.
+ * Frame-rate independent by construction (one `dt` step = two composed `dt/2` steps). aliasing-safe.
+ * See vec3.smoothDamp for the full contract. */
+export function smoothDamp(
+  out: Vec4,
+  current: Vec4Like,
+  target: Vec4Like,
+  decayRate: number,
+  dt: number,
+): Vec4 {
+  return lerp(out, current, target, smoothDecayFactor(decayRate, dt));
 }
 
 /** Component-wise min. */

@@ -6,8 +6,9 @@
 //   (a) SceneInstanceMount POD interface exports with the required field
 //       set: localId / source / memberFirst / memberCount; and the
 //       optional fields parent / components / overrides.
-//   (b) MountOverride POD interface exports with localId / comp / field /
-//       value.
+//   (b) MountOverride POD interface exports with required localId / comp /
+//       value and optional field (feat-20260713 M1 / w2: field is the
+//       component-granular add-or-patch discriminant).
 //   (c) SceneAsset gains a top-level `mounts: readonly SceneInstanceMount[]`
 //       optional field; legacy SceneAsset values without `mounts` remain
 //       structurally assignable (back-compat: missing mounts === []).
@@ -42,10 +43,12 @@ describe('SceneInstanceMount POD shape (AC-01)', () => {
 });
 
 describe('MountOverride POD shape (AC-01 / AC-19)', () => {
-  it('declares the four required fields with correct types', () => {
+  it('declares localId / comp / value required and field optional (add-or-patch)', () => {
     expectTypeOf<MountOverride['localId']>().toEqualTypeOf<LocalEntityId>();
     expectTypeOf<MountOverride['comp']>().toEqualTypeOf<string>();
-    expectTypeOf<MountOverride['field']>().toEqualTypeOf<string>();
+    // feat-20260713 M1 / w2: `field` is now optional (component-granular
+    // discriminant: present -> patch one field, absent -> add whole component).
+    expectTypeOf<MountOverride['field']>().toEqualTypeOf<string | undefined>();
     expectTypeOf<MountOverride['value']>().toEqualTypeOf<unknown>();
   });
 });

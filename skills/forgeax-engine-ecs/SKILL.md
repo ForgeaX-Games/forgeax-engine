@@ -35,6 +35,7 @@ description: >-
 | `world.addSystem(systemHandle)` | 注册系统 token | `fn(world, queryResults, commands)`；DAG 拓扑序跑 |
 | `world.update()` | 跑一帧 schedule | 按依赖拓扑序执行全部系统 + flush commands |
 | `createQueryState(...) + queryRun(state, world, cb)` | 临时查询 | 系统外的一次性遍历 |
+| `queryCombinations(state, world, k, cb)` | 组合遍历 | 每个无序 K-组合调一次 `cb(handles)`（默认 k=2 成对）；成对交互（N-body/broadphase/flocking）别手写 `for i/for j=i+1`。对标 Bevy `iter_combinations`，但更简单：句柄对 + `world.get/set`，无可变别名约束。`Entity` 须在 `with`（否则 fail-fast `query-combinations-entity-required`） |
 | `world.getResource<T>(key) / insertResource<T>(key, value)` | 全局态 | 单例资源（如 InputSnapshot） |
 | `world.addChild(parent, child, ChildOf) / reparent(...) / removeChild(...)` | 层级 | relationship 同步维护反向 mirror 列 |
 | `C.id / C.fields[f] / C.meta / TYPE_METADATA` | 反射 | 三层只读自省 |
@@ -183,6 +184,7 @@ export const Transform = defineComponent('Transform', {
 - **Result 不 unwrap 就静默丢错**：`world.get` 等返回 `Result`；系统体内显式 `if (!r.ok) return r;` 或 `.unwrap()`（TS 无 `?` 运算符）。其余渲染/测试症状见 [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md)。
 - **`defineSystem` 同名静默覆盖**：第二次 `defineSystem({ name: 'X', ... })` 用同名会 `SYSTEM_REGISTRY.set` 覆盖旧 token，不抛错（对齐 `defineComponent` 行为）。`getRegisteredSystems()` 反映最新 token。
 - **`resources` 声明后缺失 → ParamValidation `'invalid'`**：`resources: ['SomeKey']` 但 `SomeKey` 未 insertResource → 系统不跑、ErrorHandler 被调用。不走 runIf 求值（runIf 只在 `tag==='ok'` 后触发）。
+- **shared 字段传入非法值 → `shared-field-invalid-value`**（feat-20260713 M2 / w9）：`world.spawn` / `world.addComponent` / `world.set` 对 `shared<T>` / `array<shared<T>>` 字段收到非 number 值（裸 GUID 字符串、`{guid}` 对象、`{kind}` 对象）→ 返回结构化 `EcsError({ code: 'shared-field-invalid-value', expected, hint, detail: { component, field, fieldType, actualValue, index? } })`（`fieldType` = schema 声明的类型字面量如 `shared<T>` / `array<shared<T>>`；`actualValue` = 触发的非法值；`index` 仅 array 形态携带元素下标），不再静默清零为 `[0,0,0,0]`。正确做法：先用 `loadByGuid + allocSharedRef` 将 GUID 解析为 handle，再将 handle 传入。
 
 ## Bool 列
 
@@ -256,6 +258,25 @@ if (r.ok) {
 > [!NOTE]
 > mount.overrides[].localId 在**父 SceneAsset 的命名空间**里（即 `memberFirst + offset`，不是子 SceneAsset 的局部 id）。R2/F-8 cement。
 
+### MountOverride add-or-patch 语义（feat-20260713 M2）
+
+`MountOverride` 的 `field` 字段是可选的（`field?: string`），隐式判别覆盖模式：
+
+| `field` | 语义 | 说明 |
+|:--|:--|:--|
+| 有值（`field: 'pos'`） | **patch 单字段** | 成员实体该字段覆盖为 `value`；其余字段保持源值 |
+| 无值（`field` 缺省） | **add/upsert 整组件** | 成员实体无此组件 → `addComponent`（schema 补缺省字段）；已存在 → `set` 全覆盖（upsert，不报 duplicate） |
+
+`value` 类型保持 `unknown`（不收窄为泛型）。判别规则收敛在 `field?` 形状自身，消费者不编码 variant 知识（不 switch op）。
+
+```ts
+// field-patch: 只改 pos
+{ localId: 2, comp: 'Transform', field: 'pos', value: [1.0, 0, 0] }
+
+// component-add: 整组件 upsert
+{ localId: 2, comp: 'DirectionalLight', value: { direction: [0, -1, 0], color: [1, 0.5, 0.2], intensity: 1.0 } }
+```
+
 ### SceneInstantiateDiagnostic — 结构化诊断通道
 
 `instantiateScene` 成功值随 `root` 附带 `diagnostics: readonly SceneInstantiateDiagnostic[]`——未知字段不再 abort 整场景，而是跳过该字段 + 记录诊断条目。属性访问消费（`d.component` / `d.field` / `d.localId`），不做字符串解析，非 NODE_ENV-gated（生产环境同样可观测）。
@@ -314,7 +335,6 @@ if (r.ok) {
 **round-trip 闭环**：`instantiateScene → rootsToSceneAsset → serializeSceneAssetToPack → loadByGuid → registry.instantiate → instantiateScene` 产出结构等价的 live 子树。等价基准是**二次 collect 不动点**（第二次 collect 产物与第一次结构等价）。
 
 **已知限制**：
-- **OOS-1**：`mount.overrides[]`（Layer-0 diff）在 collect 时不折叠——留后续 feat。
 - **D-9 形态 1 吸收**：mount 实体吸收仅在能证明时执行；无法证明时保留为 owned + `mount.components=undefined`，首次 reload 做一次性归一化。
 
 ### collectSubtree：可复用的层级遍历原语
@@ -416,7 +436,7 @@ world.spawn(
   { component: MeshFilter, data: { assetHandle: foxMesh } },
   { component: MeshRenderer, data: { materials: [foxMat] } },
   { component: Skin, data: { skeleton: foxSkeleton } },                          // joints 由 sceneInstances.instantiate auto-resolve
-  { component: AnimationPlayer, data: { clip: walkClip, speed: 1, looping: true } },
+  { component: AnimationPlayer, data: { clips: [walkClip, 0, 0, 0], speeds: [1, 1, 1, 1], looping: true } },
 ).unwrap();
 ```
 

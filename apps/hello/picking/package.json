@@ -13,6 +13,7 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
+    "bevyExample": { "name": "mesh_picking", "category": "Picking", "status": "implemented" },
     "smokeInvocation": "pnpm --filter @forgeax/hello-picking smoke",
     "metrics": {
       "bundle-size": {

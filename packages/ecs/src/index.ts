@@ -401,7 +401,7 @@ export { decodeEntity, encodeEntity } from './entity-handle';
 // Query engine utilities
 // ────────────────────────────────────────────────────────────────────────────
 
-export { createQueryState, queryRun } from './query';
+export { createQueryState, queryCombinations, queryRun } from './query';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Component internals (for advanced use: custom storage, tooling)
@@ -438,6 +438,14 @@ export {
   fillComponentDefaults,
   validateComponentDataKeys,
 } from './component-default-fallback';
+
+/**
+ * feat-20260713 M2 / w9 — P3 shared-field value gate. Validates that every
+ * `shared<T>` scalar / `array<shared<T>>` element in a raw payload is a
+ * resolved numeric Handle (not a raw GUID string / sidecar object). Consumed
+ * by all three World write entries (spawn / addComponent / set).
+ */
+export { validateSharedFieldValues } from './component-value-validate';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Column / storage internals (for advanced use: custom archetype tooling)
@@ -511,6 +519,7 @@ export {
   ResourceNotFoundError,
   ScheduleMutationError,
   SchemaUnsupportedFieldError,
+  SharedFieldInvalidValueError,
   SharedRefDoubleReleaseError,
   SharedRefReleasedError,
   SharedRefStaleError,

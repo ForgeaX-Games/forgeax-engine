@@ -1376,6 +1376,40 @@ export class QueryDescriptorOptionalConflictError extends Error {
 }
 
 /**
+ * Thrown by `queryCombinations` when the query state's `with` list omits the
+ * `Entity` component. Combinations yield entity-handle tuples (the caller reads
+ * each via `world.get`), so `Entity` must be in `with` — the same requirement
+ * `queryRun` documents for `bundle.Entity.self`. Fail-fast at the
+ * `queryCombinations` entry (mirrors QueryDescriptorOptionalConflictError's
+ * setup-time self-consistency shape).
+ *
+ * `.code = 'query-combinations-entity-required'`; `.detail.withNames` carries
+ * the declared component names.
+ */
+export class QueryCombinationsEntityRequiredError extends Error {
+  override readonly name = 'QueryCombinationsEntityRequiredError';
+  readonly code = 'query-combinations-entity-required' as const;
+  readonly hint: string;
+  readonly expected: string;
+  readonly detail: { readonly withNames: readonly string[] };
+
+  constructor(withNames: readonly string[]) {
+    const hint = `queryCombinations yields entity-handle tuples, so the query's \`with\` list must include the \`Entity\` component. Add \`Entity\` to \`with\` (currently: [${withNames.join(', ')}]).`;
+    const expectedStr = 'Entity component present in the query `with` list';
+    super(
+      `queryCombinations: Entity component required.\n` +
+        `  code: query-combinations-entity-required\n` +
+        `  with: [${withNames.join(', ')}]\n` +
+        `  expected: ${expectedStr}\n` +
+        `  hint: ${hint}`,
+    );
+    this.hint = hint;
+    this.expected = expectedStr;
+    this.detail = { withNames };
+  }
+}
+
+/**
  * Returned via `Result.err` from `world.removeComponent` when the caller tries
  * to remove an essential (undeletable) component
  * (feat-20260602-archetype-stores-full-packed-entity M1 / w3, plan-strategy
@@ -1497,6 +1531,69 @@ export class SpawnDataUnknownFieldError extends Error {
     this.hint = hint;
     this.expected = expected;
     this.detail = { component: componentName, field: fieldName, knownFields: sortedKnown };
+  }
+}
+
+/**
+ * feat-20260713-mount-override-component-add-and-shared-ref-round M2 / w9 —
+ * `.code = 'shared-field-invalid-value'`.
+ *
+ * A `shared<T>` scalar / `array<shared<T>>` element must be a resolved numeric
+ * Handle. A raw GUID string / `{ guid }` / `{ kind }` object (the
+ * pre-resolution shape a sidecar hands an AI user) used to be silently coerced
+ * to the all-zero sentinel by the column packer / scalar write path, so a
+ * mis-bound reference read back as `0` / `[0,0,0,0]` and rendered blank with no
+ * error. `validateComponentDataKeys` only checks key NAMES, not value types;
+ * this error closes the value-type gap at all three write entries
+ * (spawn / addComponent / set). `.detail.field` + `.detail.fieldType` name the
+ * offending field; `.detail.index` locates the array element (undefined for the
+ * scalar form).
+ *
+ * `.detail = { component, field, fieldType, actualValue, index? }`
+ * `.hint` — names the field and points at `loadByGuid + allocSharedRef`.
+ */
+export class SharedFieldInvalidValueError extends Error {
+  override readonly name = 'SharedFieldInvalidValueError';
+  readonly code = 'shared-field-invalid-value' as const;
+  readonly hint: string;
+  readonly expected: string;
+  readonly detail: {
+    readonly component: string;
+    readonly field: string;
+    readonly fieldType: string;
+    readonly actualValue: unknown;
+    readonly index?: number;
+  };
+
+  constructor(
+    componentName: string,
+    fieldName: string,
+    fieldType: string,
+    actualValue: unknown,
+    index?: number,
+  ) {
+    const at = index === undefined ? '' : `[${index}]`;
+    const expected = `a resolved numeric Handle for shared field '${fieldName}${at}'`;
+    const hint =
+      `'${fieldName}${at}' on '${componentName}' is a ${fieldType} reference; ` +
+      `got ${typeof actualValue} (${JSON.stringify(actualValue)}). ` +
+      `Resolve the GUID to a handle first: loadByGuid(...) then allocSharedRef(...), ` +
+      `and bind the returned numeric handle — not the raw GUID / sidecar object.`;
+    super(
+      `${componentName}.${fieldName}${at}: shared field bound to a non-handle value.\n` +
+        `  code: shared-field-invalid-value\n` +
+        `  component: ${componentName}\n` +
+        `  field: ${fieldName}${at}\n` +
+        `  fieldType: ${fieldType}\n` +
+        `  expected: ${expected}\n` +
+        `  hint: ${hint}`,
+    );
+    this.hint = hint;
+    this.expected = expected;
+    this.detail =
+      index === undefined
+        ? { component: componentName, field: fieldName, fieldType, actualValue }
+        : { component: componentName, field: fieldName, fieldType, actualValue, index };
   }
 }
 
@@ -1807,7 +1904,26 @@ export type EcsErrorCode =
   // ECS -> AssetRegistry reverse dep for the shader-id lookup.
   | 'sprite-instances-count-mismatch'
   | 'sprite-instances-requires-sprite-shader'
-  | 'sprite-instances-mutually-exclusive-with-instances';
+  | 'sprite-instances-mutually-exclusive-with-instances'
+  // solo bevy-examples round 20260713-194533 — queryCombinations requires the
+  // Entity component in the query's `with` list (the entity handle is the unit
+  // it yields per combination). Minor evolution +1 per AGENTS.md §Error model
+  // evolution contract; fail-fast at the queryCombinations entry (mirrors
+  // query-descriptor-with-optional-conflict's setup-time self-consistency shape).
+  | 'query-combinations-entity-required'
+  // feat-20260713-mount-override-component-add-and-shared-ref-round M2 / w9 —
+  // P3 shared-field value gate. A `shared<T>` scalar or `array<shared<T>>`
+  // element must be a resolved numeric Handle; a raw GUID string / `{ guid }` /
+  // `{ kind }` object (the pre-resolution shape an AI user gets from a sidecar)
+  // was silently coerced to the all-zero sentinel by the column packer
+  // (`typed[i] = typeof val === 'number' ? val : 0`) / scalar write, so a
+  // mis-bound reference read back as `0` / `[0,0,0,0]` and rendered blank with
+  // no error. `validateComponentDataKeys` only checks key names, not value
+  // types — this code closes the value-type gap at all three write entries
+  // (spawn / addComponent / set). AI users resolve a GUID via
+  // `loadByGuid + allocSharedRef` first; passing the raw GUID now fails fast.
+  // Minor evolution +1 per AGENTS.md §Error model evolution contract.
+  | 'shared-field-invalid-value';
 
 /**
  * Discriminated `.detail` payload per `.code`.
@@ -2024,6 +2140,31 @@ export type EcsErrorDetail =
   | {
       readonly code: 'sprite-instances-mutually-exclusive-with-instances';
       readonly entityId: number;
+    }
+  // solo bevy-examples round 20260713-194533 — queryCombinations called with a
+  // state whose `with` list omits the Entity component. `.detail.withNames`
+  // carries the descriptor's declared component names so the AI user sees what
+  // was passed and adds `Entity` to it.
+  | {
+      readonly code: 'query-combinations-entity-required';
+      readonly withNames: readonly string[];
+    }
+  // feat-20260713-mount-override-component-add-and-shared-ref-round M2 / w9 —
+  // shared-field value gate. `.detail.component` / `.detail.field` locate the
+  // shared reference field; `.detail.fieldType` is the schema-declared type
+  // literal (`shared<T>` scalar or `array<shared<T>>`); `.detail.actualValue`
+  // is the offending non-handle value (typed `unknown` — a raw GUID string /
+  // `{ guid }` / `{ kind }` object is not coerced, the fail-fast surfaces it);
+  // `.detail.index` is the array element index for the array form (undefined for
+  // the scalar form). AI users read `.detail.field` + `.detail.fieldType` to see
+  // which reference needs `loadByGuid + allocSharedRef` before binding.
+  | {
+      readonly code: 'shared-field-invalid-value';
+      readonly component: string;
+      readonly field: string;
+      readonly fieldType: string;
+      readonly actualValue: unknown;
+      readonly index?: number;
     };
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -24,6 +24,18 @@ const ChildOf = defineComponent('ChildOf', {
   parent: { type: 'entity' },
 });
 
+// feat-20260713 M2 / w5: a second single-semantic component used to exercise
+// the add-branch of add-or-patch MountOverride apply — a no-field override that
+// names a component the member does not yet carry adds the whole component
+// (schema defaults fill the fields the override omits). Registered by name
+// (referenced via 'Velocity' string in override records) so the const binding
+// is omitted (mirrors the SceneInstance registration below).
+defineComponent('Velocity', {
+  vx: { type: 'f32' },
+  vy: { type: 'f32' },
+  vz: { type: 'f32' },
+});
+
 // Register SceneInstance locally so instantiateScene can resolve it by name.
 // The component schema matches the runtime definition in
 // @forgeax/engine-runtime; state ref stores a SceneInstanceState payload.
@@ -367,6 +379,341 @@ describe('instantiateScene mount fail-fast (R2 verify fixups)', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect((r.error as unknown as { code: string }).code).toBe('pack-mount-localid-overlap');
+  });
+});
+
+// ─── feat-20260713 M2 / w5: AC-01 add-or-patch double-semantic apply ─────────
+//
+// A MountOverride with a `field` PATCHES one field on the member's existing
+// component (unchanged behaviour). A MountOverride WITHOUT a `field` ADD/UPSERTs
+// the whole component: `value` is the per-field value map; fields the map omits
+// fall back to the component schema defaults. Add is upsert — if the member
+// already carries the component the override overwrites the supplied fields
+// (never a duplicate error). The discriminant is the shape itself (`field?`),
+// never a separate `op` tag.
+describe('feat-20260713 M2 / w5 — add-or-patch apply double branch (AC-01)', () => {
+  // A child SceneAsset whose single member carries Transform only, so a
+  // no-field Velocity override exercises the pure add branch.
+  function childWithTransform(): SceneAsset {
+    return buildScene([
+      { localId: localId(0), components: { Transform: { posX: 1, posY: 2, posZ: 3 } } },
+    ]);
+  }
+
+  /** Read a component value off the member entity at mapping slot `slot`. */
+  function readMember(
+    world: World,
+    root: EntityHandle,
+    slot: number,
+    compName: string,
+  ): Record<string, unknown> | undefined {
+    const mapping = readMapping(world, root);
+    const memberRaw = mapping[slot];
+    if (memberRaw === undefined) return undefined;
+    const token = resolveComponent(compName);
+    if (token === undefined) throw new Error(`${compName} not registered`);
+    const r = world.get(memberRaw as unknown as EntityHandle, token);
+    if (!r.ok) return undefined;
+    return r.value as unknown as Record<string, unknown>;
+  }
+
+  it('add branch: no-field override adds the whole component with schema defaults for omitted fields', () => {
+    const world = new World();
+    const childHandle = registerSceneAsset(world, childWithTransform());
+    const outerAsset: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: localId(0),
+          source: 0,
+          memberFirst: localId(1),
+          memberCount: 1,
+          // No `field` -> component-add form: add Velocity with vx supplied,
+          // vy / vz omitted -> schema defaults (0).
+          overrides: [{ localId: localId(1), comp: 'Velocity', value: { vx: 5 } }],
+        },
+      ],
+    };
+    const outerHandle = registerSceneAsset(world, outerAsset);
+    world._setSceneAssetResolver(() => ok(childHandle));
+
+    const r = world.instantiateScene(outerHandle);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const vel = readMember(world, r.value.root, 1, 'Velocity');
+    expect(vel).toBeDefined();
+    expect(vel?.vx).toBe(5);
+    // vy / vz omitted from the value map -> schema default 0.
+    expect(vel?.vy).toBe(0);
+    expect(vel?.vz).toBe(0);
+  });
+
+  it('add branch: empty value map {} adds the component with all fields at schema defaults', () => {
+    const world = new World();
+    const childHandle = registerSceneAsset(world, childWithTransform());
+    const outerAsset: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: localId(0),
+          source: 0,
+          memberFirst: localId(1),
+          memberCount: 1,
+          overrides: [{ localId: localId(1), comp: 'Velocity', value: {} }],
+        },
+      ],
+    };
+    const outerHandle = registerSceneAsset(world, outerAsset);
+    world._setSceneAssetResolver(() => ok(childHandle));
+
+    const r = world.instantiateScene(outerHandle);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const vel = readMember(world, r.value.root, 1, 'Velocity');
+    expect(vel).toBeDefined();
+    expect(vel?.vx).toBe(0);
+    expect(vel?.vy).toBe(0);
+    expect(vel?.vz).toBe(0);
+  });
+
+  it('add branch is upsert: no-field override on an existing component overwrites supplied fields (no duplicate error)', () => {
+    const world = new World();
+    // Child member already carries Transform {1,2,3}; a no-field Transform
+    // override upserts posX -> 9 without a component-already-present error, and
+    // leaves posY / posZ at the member's authored values (omitted fields keep
+    // schema defaults for a fresh add, but for upsert the field the value map
+    // omits is filled with schema default too — the whole component is rewritten
+    // from the value map + defaults, matching add semantics).
+    const childHandle = registerSceneAsset(world, childWithTransform());
+    const outerAsset: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: localId(0),
+          source: 0,
+          memberFirst: localId(1),
+          memberCount: 1,
+          overrides: [{ localId: localId(1), comp: 'Transform', value: { posX: 9 } }],
+        },
+      ],
+    };
+    const outerHandle = registerSceneAsset(world, outerAsset);
+    world._setSceneAssetResolver(() => ok(childHandle));
+
+    const r = world.instantiateScene(outerHandle);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const tf = readMember(world, r.value.root, 1, 'Transform');
+    expect(tf).toBeDefined();
+    expect(tf?.posX).toBe(9);
+  });
+
+  it('patch branch: field override patches one field, other fields keep authored values (no regression)', () => {
+    const world = new World();
+    const childHandle = registerSceneAsset(world, childWithTransform());
+    const outerAsset: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: localId(0),
+          source: 0,
+          memberFirst: localId(1),
+          memberCount: 1,
+          overrides: [{ localId: localId(1), comp: 'Transform', field: 'posX', value: 42 }],
+        },
+      ],
+    };
+    const outerHandle = registerSceneAsset(world, outerAsset);
+    world._setSceneAssetResolver(() => ok(childHandle));
+
+    const r = world.instantiateScene(outerHandle);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const tf = readMember(world, r.value.root, 1, 'Transform');
+    expect(tf).toBeDefined();
+    // posX patched; posY / posZ keep the child's authored 2 / 3 (patch does NOT
+    // reset omitted fields to schema default).
+    expect(tf?.posX).toBe(42);
+    expect(tf?.posY).toBe(2);
+    expect(tf?.posZ).toBe(3);
+  });
+
+  it('mixed order: add then field-patch of the same comp -> final value = patch value (array-order apply)', () => {
+    const world = new World();
+    const childHandle = registerSceneAsset(world, childWithTransform());
+    const outerAsset: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: localId(0),
+          source: 0,
+          memberFirst: localId(1),
+          memberCount: 1,
+          overrides: [
+            // 1) add Velocity with vx=5
+            { localId: localId(1), comp: 'Velocity', value: { vx: 5 } },
+            // 2) then patch vx -> 11 (later array entry wins)
+            { localId: localId(1), comp: 'Velocity', field: 'vx', value: 11 },
+          ],
+        },
+      ],
+    };
+    const outerHandle = registerSceneAsset(world, outerAsset);
+    world._setSceneAssetResolver(() => ok(childHandle));
+
+    const r = world.instantiateScene(outerHandle);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const vel = readMember(world, r.value.root, 1, 'Velocity');
+    expect(vel).toBeDefined();
+    expect(vel?.vx).toBe(11);
+  });
+});
+
+// ─── feat-20260713 M2 / w6: AC-02 validation double branch fail-fast ─────────
+//
+// _validateMountOverrides validates BOTH override forms before any spawn so a
+// malformed override fails fast with no observable side effects (charter P3):
+//   - component-add form (no field): comp must be registered AND `value`'s keys
+//     must all be schema fields of comp (unknown field -> structured error);
+//   - field-patch form (field present): field-existence check + parent-namespace
+//     localId window check are retained unchanged (no regression).
+describe('feat-20260713 M2 / w6 — validation double branch fail-fast (AC-02)', () => {
+  function childScene(): SceneAsset {
+    return buildScene([
+      { localId: localId(0), components: { Transform: { posX: 0, posY: 0, posZ: 0 } } },
+    ]);
+  }
+
+  it('add form: unregistered comp -> component-not-defined EcsError, no member spawned', () => {
+    const world = new World();
+    const childHandle = registerSceneAsset(world, childScene());
+    const outerAsset: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: localId(0),
+          source: 0,
+          memberFirst: localId(1),
+          memberCount: 1,
+          overrides: [{ localId: localId(1), comp: 'NotARegisteredComponent', value: { x: 1 } }],
+        },
+      ],
+    };
+    const outerHandle = registerSceneAsset(world, outerAsset);
+    world._setSceneAssetResolver(() => ok(childHandle));
+
+    const r = world.instantiateScene(outerHandle);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect((r.error as unknown as { code: string }).code).toBe('component-not-defined');
+  });
+
+  it('add form: value carries a key not in comp schema -> pack-mount-override-unknown-field', () => {
+    const world = new World();
+    const childHandle = registerSceneAsset(world, childScene());
+    const outerAsset: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: localId(0),
+          source: 0,
+          memberFirst: localId(1),
+          memberCount: 1,
+          // Velocity schema = vx/vy/vz; `bogusField` is unknown.
+          overrides: [{ localId: localId(1), comp: 'Velocity', value: { vx: 1, bogusField: 2 } }],
+        },
+      ],
+    };
+    const outerHandle = registerSceneAsset(world, outerAsset);
+    world._setSceneAssetResolver(() => ok(childHandle));
+
+    const r = world.instantiateScene(outerHandle);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect((r.error as unknown as { code: string }).code).toBe('pack-mount-override-unknown-field');
+  });
+
+  it('add form: localId outside the member window -> pack-mount-override-localid-out-of-range', () => {
+    const world = new World();
+    const childHandle = registerSceneAsset(world, childScene());
+    const outerAsset: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: localId(0),
+          source: 0,
+          memberFirst: localId(1),
+          memberCount: 1, // valid window: [1, 2)
+          overrides: [{ localId: localId(99), comp: 'Velocity', value: { vx: 1 } }],
+        },
+      ],
+    };
+    const outerHandle = registerSceneAsset(world, outerAsset);
+    world._setSceneAssetResolver(() => ok(childHandle));
+
+    const r = world.instantiateScene(outerHandle);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect((r.error as unknown as { code: string }).code).toBe(
+      'pack-mount-override-localid-out-of-range',
+    );
+  });
+
+  it('patch form: unknown field still fails fast (no regression)', () => {
+    const world = new World();
+    const childHandle = registerSceneAsset(world, childScene());
+    const outerAsset: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: localId(0),
+          source: 0,
+          memberFirst: localId(1),
+          memberCount: 1,
+          overrides: [{ localId: localId(1), comp: 'Transform', field: 'noSuchField', value: 0 }],
+        },
+      ],
+    };
+    const outerHandle = registerSceneAsset(world, outerAsset);
+    world._setSceneAssetResolver(() => ok(childHandle));
+
+    const r = world.instantiateScene(outerHandle);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect((r.error as unknown as { code: string }).code).toBe('pack-mount-override-unknown-field');
+  });
+
+  it('add form: valid value with schema fields passes validation and applies', () => {
+    const world = new World();
+    const childHandle = registerSceneAsset(world, childScene());
+    const outerAsset: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: localId(0),
+          source: 0,
+          memberFirst: localId(1),
+          memberCount: 1,
+          overrides: [{ localId: localId(1), comp: 'Velocity', value: { vx: 1, vy: 2, vz: 3 } }],
+        },
+      ],
+    };
+    const outerHandle = registerSceneAsset(world, outerAsset);
+    world._setSceneAssetResolver(() => ok(childHandle));
+
+    const r = world.instantiateScene(outerHandle);
+    expect(r.ok).toBe(true);
   });
 });
 

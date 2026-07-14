@@ -1,7 +1,7 @@
 ---
 name: forgeax-engine-debug-draw
 description: >-
-  forgeax-engine immediate-mode 调试可视化层：line / sphere / aabb / frustum 线框 overlay，
+  forgeax-engine immediate-mode 调试可视化层：line / sphere / aabb / frustum / arrow / axes 线框 overlay，
   runtime 自动挂载 app.debugDraw（零配置），low path 手写 RHI flush（自定义 graph / 录帧脚本）。
   Use when visualizing positions, colliders, camera frustums, audio radii in gameplay code
   without creating ECS entities. 与 engine-math 同层级最底层 RHI 便利封装。
@@ -17,7 +17,7 @@ description: >-
 
 `@forgeax/engine-debug-draw` 是 **immediate-mode** 的 RHI 便利封装：
 
-- 每帧调用 shape API（`line` / `sphere` / `aabb` / `frustum`）**累积顶点**到 CPU staging
+- 每帧调用 shape API（`line` / `sphere` / `aabb` / `frustum` / `arrow` / `axes`）**累积顶点**到 CPU staging（`arrow`=body+4 线箭头,`tipLength` 缺省 `|end-start|/10`;`axes(worldMat,length)`=沿变换 local X/Y/Z 的 3 支 R/G/B 箭头,对标 Bevy `gizmos.axes`)
 - frame end 时 `flush(encoder, view, viewProj)` 将 CPU staging 上传到 GPU，起一次 draw call，然后**清空缓存**为下一帧准备
 - 无持久存储：上帧画的线框不会"留在"下一帧 -- 不调就不画
 - 不依赖 ECS / render-graph / shader-registry -- 包内自行编译 WGSL、自行建 PSO
@@ -48,6 +48,8 @@ app.debugDraw.line([0, 0, 0], [1, 1, 1], [1, 0, 0, 1]);   // red line
 app.debugDraw.sphere([0, 0, 0], 1, [0, 1, 0, 1]);          // green sphere
 app.debugDraw.aabb([-1, -1, -1], [1, 1, 1], [0, 0, 1, 1]); // blue box
 app.debugDraw.frustum(cameraViewProj, [1, 1, 0, 1]);        // yellow frustum
+app.debugDraw.arrow([0, 0, 0], [0, 2, 0], [1, 1, 1, 1]);    // arrow (body + head); tipLength optional
+app.debugDraw.axes(transform.world, 1);                     // local frame: X=red / Y=green / Z=blue arrows
 
 // No manual flush -- runtime appends a DebugOverlay pass at the end of the
 // URP/HDRP render graph (after tonemap), and auto-flushes every frame.

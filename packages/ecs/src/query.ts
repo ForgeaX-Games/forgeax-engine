@@ -14,7 +14,12 @@ import {
   isManagedField,
   type TypedArrayFor,
 } from './component';
-import { QueryDescriptorOptionalConflictError } from './errors';
+import { Entity } from './entity';
+import type { EntityHandle } from './entity-handle';
+import {
+  QueryCombinationsEntityRequiredError,
+  QueryDescriptorOptionalConflictError,
+} from './errors';
 
 /**
  * Runtime field-view union for `ColumnBundle` entries. POD / fixed-inline
@@ -457,5 +462,98 @@ export function queryRun<
       state.cachedBundles.set(archId, { bundle, version: arch.version, size: arch.size });
     }
     callback(bundle as unknown as NestedColumnBundle<NoInfer<Cs>, NoInfer<Os>>);
+  }
+}
+
+/**
+ * Visit every unordered K-combination of the entities matched by `state`,
+ * invoking `callback` once per combination with a K-tuple of `EntityHandle`s.
+ *
+ * This is the combinatorial counterpart of {@link queryRun} (single entities):
+ * the canonical use is pairwise interaction — N-body gravity, collision
+ * broadphase, flocking — where each unordered PAIR is processed exactly once.
+ * It maps Bevy's `Query::iter_combinations[_mut]`, but is simpler: forgeax reads
+ * and writes component data through handle-keyed `world.get` / `world.set`, so
+ * there is no mutable-aliasing constraint (Bevy's `iter_combinations_mut` cursor
+ * exists only to satisfy Rust's borrow checker — irrelevant here). The callback
+ * receives handles; read each entity's components with `world.get(handle, Comp)`.
+ *
+ * `k` defaults to `2` (the pair case). Ordering is lexicographic over the
+ * matched-entity order (ascending indices `i0 < i1 < ... < i(k-1)`); no self-
+ * pairs, no ordered duplicates. `C(N, k)` combinations are yielded for `N`
+ * matched entities; `k > N` (or `N === 0`) yields none. The `Entity` component
+ * MUST be in the query's `with` list (the handle is the unit yielded) — omitting
+ * it throws {@link QueryCombinationsEntityRequiredError} at the entry.
+ *
+ * The handle tuple passed to `callback` is REUSED across invocations (no per-
+ * combination allocation, matching the hot-path no-GC idiom). Destructure it
+ * (`([a, b]) => ...`) or copy it if you need to retain it past the callback.
+ *
+ * @param state The QueryState (mutable — caches are updated in place, same as queryRun).
+ * @param world The World instance (provides access to the archetype graph).
+ * @param k Combination size; defaults to 2.
+ * @param callback Called once per unordered K-combination with the handle tuple.
+ *
+ * @example
+ * ```ts
+ * import { defineComponent, Entity, World, createQueryState, queryCombinations } from '@forgeax/engine-ecs';
+ *
+ * const Body = defineComponent('Body', { mass: 'f32' });
+ * const state = createQueryState({ with: [Body, Transform, Entity] });
+ *
+ * // Apply each pair's mutual gravitational force once (Bevy's interact_bodies):
+ * queryCombinations(state, world, 2, ([a, b]) => {
+ *   const ta = world.get(a, Transform);
+ *   const tb = world.get(b, Transform);
+ *   if (!ta.ok || !tb.ok) return;
+ *   // ... compute force from (tb.pos - ta.pos), accumulate into both bodies via world.set
+ * });
+ * ```
+ */
+export function queryCombinations<
+  Cs extends ReadonlyArray<Component>,
+  Os extends ReadonlyArray<Component> = readonly [],
+>(
+  state: QueryState<Cs, Os>,
+  world: { /** @internal */ _getGraph(): ArchetypeGraph },
+  k: number,
+  callback: (handles: ReadonlyArray<EntityHandle>) => void,
+): void {
+  // Fail-fast: the yielded unit is the entity handle, read from bundle.Entity.self,
+  // so Entity must be in `with` (mirrors the queryRun `bundle.Entity.self` contract).
+  if (!state.descriptor.with.includes(Entity)) {
+    throw new QueryCombinationsEntityRequiredError(state.descriptor.with.map((c) => c.name));
+  }
+
+  // Collect matched entity handles once (reuses queryRun's archetype walk + cache;
+  // no duplicated matching logic — architecture-principles §1 SSOT). Entity is
+  // runtime-guaranteed present (fail-fast above), so the bundle carries the
+  // `Entity.self` column; the generic `Cs` can't prove it statically, hence the
+  // narrow cast to the always-present shape.
+  const handles: EntityHandle[] = [];
+  queryRun(state, world, (bundle) => {
+    const selfCol = (bundle as unknown as { Entity: { self: ArrayLike<number> } }).Entity.self;
+    for (let i = 0; i < selfCol.length; i++) {
+      handles.push((selfCol[i] ?? 0) as EntityHandle);
+    }
+  });
+
+  const n = handles.length;
+  if (k <= 0 || k > n) return;
+
+  // Emit unordered K-combinations by ascending index (i0 < i1 < ... < i(k-1)).
+  // An index-cursor walk — no per-combination allocation beyond the yielded tuple.
+  const idx = new Array<number>(k);
+  for (let j = 0; j < k; j++) idx[j] = j;
+  const tuple = new Array<EntityHandle>(k);
+  for (;;) {
+    for (let j = 0; j < k; j++) tuple[j] = handles[idx[j] as number] as EntityHandle;
+    callback(tuple);
+    // Advance the rightmost cursor that can still move (standard combination step).
+    let p = k - 1;
+    while (p >= 0 && (idx[p] as number) === n - k + p) p--;
+    if (p < 0) break;
+    idx[p] = (idx[p] as number) + 1;
+    for (let j = p + 1; j < k; j++) idx[j] = (idx[j - 1] as number) + 1;
   }
 }

@@ -1,9 +1,9 @@
 // vec3.ts — 3D vector namespace (M2 / T-014, rewritten from the M1 baseline of 8 functions)
 //
-// 19-function surface (≥ 18 lower bound): vec2 base (without perp) + cross + distanceSq.
+// 21-function surface (≥ 18 lower bound): vec2 base (without perp) + cross + distanceSq.
 //   create / clone / copy / set / equals / add / sub / scale / negate /
 //   dot / cross / lengthSq / length / distance / distanceSq /
-//   normalize / lerp / min / max
+//   normalize / lerp / smoothDamp / catmullRom / min / max
 //
 // Cross-type transforms are provided via the reverse surfaces of mat4 / quat (K-1/K-2 tore down
 // the Three.js-style promise; see plan-decisions §D-12): the three mat4 ns transform* functions
@@ -25,7 +25,7 @@
 // keep working (M2 does not force-update mat4 / quat import paths; that lands in M3).
 
 import { EPS_NORMALIZE } from './_internal/epsilon';
-import { lerp as scalarLerp } from './_internal/scalar';
+import { catmullRomScalar, lerp as scalarLerp, smoothDecayFactor } from './_internal/scalar';
 import type { Vec3, Vec3Like } from './types';
 
 export type { Vec3, Vec3Like };
@@ -225,6 +225,55 @@ export function lerp(out: Vec3, a: Vec3Like, b: Vec3Like, t: number): Vec3 {
   out[0] = scalarLerp(ax, bx, t);
   out[1] = scalarLerp(ay, by, t);
   out[2] = scalarLerp(az, bz, t);
+  return out;
+}
+
+/**
+ * out = frame-rate-INDEPENDENT exponential smoothing of `current` toward `target`:
+ * `lerp(current, target, 1 − exp(−decayRate · dt))`. Semantics match Bevy
+ * `StableInterpolate::smooth_nudge` / three.js `MathUtils.damp` — NOT Unity `Vector3.SmoothDamp`
+ * (which is a 2nd-order critically-damped spring needing a velocity ref; this is 1st-order decay).
+ *
+ * `decayRate` is the exponential decay constant (1/s), meant to stay fixed while `dt` is per-frame;
+ * a good anchor is `decayRate = ln(2)/halfLife`. `dt=0` → out=current (no move); large `decayRate·dt`
+ * → out≈target; `decayRate=0` → out=current. Frame-rate independent by construction: one step of `dt`
+ * equals two composed steps of `dt/2` — unlike the naive `lerp(current, target, rate·dt)`, which
+ * behaves differently per frame rate and overshoots when `rate·dt > 1`. aliasing-safe.
+ */
+export function smoothDamp(
+  out: Vec3,
+  current: Vec3Like,
+  target: Vec3Like,
+  decayRate: number,
+  dt: number,
+): Vec3 {
+  return lerp(out, current, target, smoothDecayFactor(decayRate, dt));
+}
+
+/**
+ * out = Catmull-Rom spline point on the segment between `p1` and `p2`, with `p0` / `p3` the
+ * neighbor control points setting the endpoint tangents (tension 0.5 — the Bevy
+ * `CubicCardinalSpline::new_catmull_rom` / three.js `CatmullRomCurve3` default). Interpolates
+ * the control points: `t=0` → `p1`, `t=1` → `p2`. Unlike `lerp` (a straight segment), this is
+ * the smooth cubic through the points — use it for camera paths, animation ease paths, or
+ * procedural curve geometry. To sample a whole polyline, loop the segments with a sliding
+ * 4-point window `[pts[i-1], pts[i], pts[i+1], pts[i+2]]` (clamp/duplicate ends). `t` is not
+ * clamped (extrapolation follows the same cubic). aliasing-safe.
+ */
+export function catmullRom(
+  out: Vec3,
+  p0: Vec3Like,
+  p1: Vec3Like,
+  p2: Vec3Like,
+  p3: Vec3Like,
+  t: number,
+): Vec3 {
+  const x = catmullRomScalar(p0[0] as number, p1[0] as number, p2[0] as number, p3[0] as number, t);
+  const y = catmullRomScalar(p0[1] as number, p1[1] as number, p2[1] as number, p3[1] as number, t);
+  const z = catmullRomScalar(p0[2] as number, p1[2] as number, p2[2] as number, p3[2] as number, t);
+  out[0] = x;
+  out[1] = y;
+  out[2] = z;
   return out;
 }
 

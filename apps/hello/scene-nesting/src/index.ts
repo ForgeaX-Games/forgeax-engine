@@ -4,7 +4,7 @@
 // via `() => import('../index.ts')` (onerror-gate pattern). The demo's
 // main.ts re-exports and self-calls bootstrap with the page's canvas.
 
-import { ok, World } from '@forgeax/engine-ecs';
+import { ok, World, type EntityHandle } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera,
@@ -108,6 +108,22 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   }
   console.log(`[hello-scene-nesting] active SceneInstance roots: ${instanceCount}`);
   console.log(`[hello-scene-nesting] demo ready; root=${root}`);
+
+  // feat-20260713 M6 / w23: verify the component-add override took effect on the
+  // member entity. The member (localId=2) should now carry DirectionalLight with
+  // the override values (direction [0,-1,0], color [1,0.5,0.2], intensity 1.0).
+  {
+    const inst = world.get(root, SceneInstance);
+    if (inst.ok) {
+      const memberEntity = inst.value.mapping[2] as EntityHandle | undefined;
+      if (memberEntity !== undefined && (memberEntity as unknown as number) !== 0) {
+        const dl = world.get(memberEntity, DirectionalLight);
+        if (dl.ok) {
+          console.log(`[hello-scene-nesting] add-override DirectionalLight verified on member entity`);
+        }
+      }
+    }
+  }
 
   // Wire renderer.onError for the browser smoke gate.
   renderer.onError((err) => {

@@ -7,12 +7,14 @@
 
 import type { EcsError, EntityHandle, World } from '@forgeax/engine-ecs';
 import type { PackError } from '@forgeax/engine-pack/errors';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { err, ok, type Result } from '@forgeax/engine-rhi';
 import {
   type Asset,
   type AssetEnvelope,
-  type AssetError,
+  AssetError,
   type Handle,
+  type MountOverride,
   PACK_ERROR_HINTS,
   type SceneAsset,
   type SceneInstanceMount,
@@ -23,7 +25,10 @@ import {
 } from '@forgeax/engine-types';
 import type { AssetRegistry } from '../asset-registry';
 import { resolveAssetHandle } from '../resolve-asset-handle';
-import { extractSceneEntityHandleGuids } from '../scene-handle-fields';
+import {
+  extractMountOverrideHandleGuids,
+  extractSceneEntityHandleGuids,
+} from '../scene-handle-fields';
 
 /**
  * Resolver contract consumed by {@link postSpawnResolveJoints} (D-1: relocated
@@ -310,12 +315,23 @@ export function instantiateFlat<T extends SceneAsset>(
  * m3-i2: Recursively resolve mounts[].source GUID strings.
  * Returns a PackError-shaped object on cycle (R-9) or AssetError
  * on child resolution failure.
+ *
+ * feat-20260713 M3 / w13: also down-drills `mounts[].overrides[].value`,
+ * resolving any GUID string bound to a `shared<...>` / `array<shared<...>>`
+ * schema field to a live handle (D-2). `guidToHandle` is the caller's per-scene
+ * dedup map (shared with the entity-field resolution in `_resolveSceneGuids`) so
+ * the same catalogued GUID mints exactly one user-tier handle across entity
+ * fields and override values (D-15/D-17 dedup contract); it defaults to a fresh
+ * map so standalone callers keep working. Override resolution runs for every
+ * mount regardless of `source` branch — an unresolvable GUID fail-fasts here,
+ * before any spawn (P3: no half-initialized member).
  */
 export function resolveMountsRec(
   registry: AssetRegistry,
   mounts: readonly SceneInstanceMount[],
   world: World,
   visited: Set<string>,
+  guidToHandle: Map<string, number> = new Map(),
 ): Result<
   SceneInstanceMount[],
   | AssetError
@@ -332,11 +348,20 @@ export function resolveMountsRec(
 > {
   const out: SceneInstanceMount[] = [];
   for (const m of mounts) {
+    // Resolve override value GUIDs first — applies to every mount regardless of
+    // the source branch below (a number-source mount can still carry overrides).
+    let overridePatch: { overrides: readonly MountOverride[] } | Record<string, never> = {};
+    if (m.overrides !== undefined && m.overrides.length > 0) {
+      const ro = resolveMountOverrides(registry, world, m.overrides, guidToHandle);
+      if (!ro.ok) return ro;
+      overridePatch = { overrides: ro.value };
+    }
+
     const src = m.source;
     // m3-i3: if source is already a number (live handle from a prior
     // resolution pass), pass through unchanged.
     if (typeof src === 'number') {
-      out.push({ ...m });
+      out.push({ ...m, ...overridePatch });
       continue;
     }
 
@@ -360,8 +385,8 @@ export function resolveMountsRec(
     // Look up child scene.
     const childEnv = registry.assetCatalog.get(guidKey);
     if (childEnv === undefined) {
-      // Not catalogued — pass through as-is.
-      out.push({ ...m });
+      // Not catalogued — pass through as-is (overrides still resolved above).
+      out.push({ ...m, ...overridePatch });
       continue;
     }
     const childPayload = childEnv.payload;
@@ -370,7 +395,7 @@ export function resolveMountsRec(
       childPayload === null ||
       (childPayload as Asset).kind !== 'scene'
     ) {
-      out.push({ ...m });
+      out.push({ ...m, ...overridePatch });
       continue;
     }
 
@@ -407,9 +432,174 @@ export function resolveMountsRec(
     out.push({
       ...m,
       source: chRaw,
+      ...overridePatch,
     } as SceneInstanceMount);
   }
   return ok(out);
+}
+
+/**
+ * Resolve one GUID string to a live user-tier handle (feat-20260713 M3 / w13
+ * SSOT). Parses the GUID, dedups through `guidToHandle` (D-15/D-17: one
+ * `allocSharedRef` per unique catalogued payload), and on a miss looks the
+ * envelope up in the catalog + mints a shared ref. An unparseable / uncatalogued
+ * GUID returns `AssetError(code='asset-not-found')` with a breadcrumb hint
+ * (`fieldPath` + `location`) for AI-user debuggability (P3). Shared by the
+ * entity-field fallback in `_resolveSceneGuids` and the override-value down-drill
+ * in {@link resolveMountOverrides} so the parse/dedup/lookup/mint idiom has one
+ * home (architecture-principles §1 SSOT).
+ */
+export function resolveHandleGuid(
+  registry: AssetRegistry,
+  world: World,
+  guidString: string,
+  guidToHandle: Map<string, number>,
+  fieldPath: string,
+  location: string,
+): Result<number, AssetError> {
+  const guidRes = AssetGuid.parse(guidString);
+  if (!guidRes.ok) {
+    return err(
+      new AssetError({
+        code: 'asset-not-found',
+        expected: `valid GUID string for field ${fieldPath}`,
+        hint: `GUID "${guidString}" could not be parsed; at ${location}, field=${fieldPath}`,
+      }),
+    );
+  }
+  const guidKey = guidString.toLowerCase();
+  let slot = guidToHandle.get(guidKey);
+  if (slot === undefined) {
+    const envelope = registry.assetCatalog.get(guidKey);
+    if (envelope === undefined) {
+      return err(
+        new AssetError({
+          code: 'asset-not-found',
+          expected: `GUID ${guidString} catalogued in AssetRegistry`,
+          hint:
+            `GUID ${guidString} not catalogued; ` +
+            `call loadByGuid('${guidString}') before instantiate; ` +
+            `at ${location}, field=${fieldPath}`,
+        }),
+      );
+    }
+    slot = unwrapHandle(world.allocSharedRef(envelope.payload.kind, envelope.payload));
+    guidToHandle.set(guidKey, slot);
+  }
+  return ok(slot);
+}
+
+/**
+ * feat-20260713 M3 / w13: resolve every GUID string inside a mount's
+ * `overrides[].value` to a live handle, returning a new overrides array whose
+ * shared fields hold numeric handles (D-2 — the ecs apply loop never sees a
+ * GUID). Identification is delegated to the shared w12 core
+ * ({@link extractMountOverrideHandleGuids}); resolution reuses the
+ * `envelope.payload → world.allocSharedRef` path with the caller's `guidToHandle`
+ * dedup map (D-15/D-17). Stop-on-first-error: an unparseable / uncatalogued GUID
+ * returns `AssetError(code='asset-not-found')` with a breadcrumb hint (P3),
+ * aborting before any spawn. Number elements pass through untouched (D-8).
+ */
+function resolveMountOverrides(
+  registry: AssetRegistry,
+  world: World,
+  overrides: readonly MountOverride[],
+  guidToHandle: Map<string, number>,
+): Result<MountOverride[], AssetError> {
+  const entries = extractMountOverrideHandleGuids(overrides);
+  if (entries.length === 0) return ok([...overrides]);
+
+  // resolvedMap key: `${overrideIndex}|${fieldName}|${arrayIndex ?? ''}`.
+  const resolvedMap = new Map<string, number>();
+  for (const entry of entries) {
+    const fieldPath =
+      `${entry.componentName}.${entry.fieldName}` +
+      (entry.arrayIndex !== undefined ? `[${entry.arrayIndex}]` : '');
+    const slot = resolveHandleGuid(
+      registry,
+      world,
+      entry.guidString,
+      guidToHandle,
+      fieldPath,
+      `mount override index=${entry.overrideIndex}`,
+    );
+    if (!slot.ok) return slot;
+    resolvedMap.set(
+      overrideFieldKey(entry.overrideIndex, entry.fieldName, entry.arrayIndex),
+      slot.value,
+    );
+  }
+
+  // Reconstruct: substitute resolved handles back into each override's value.
+  const out: MountOverride[] = [];
+  for (let ovIdx = 0; ovIdx < overrides.length; ovIdx++) {
+    out.push(reconstructOverride(overrides[ovIdx] as MountOverride, ovIdx, resolvedMap));
+  }
+  return ok(out);
+}
+
+/** resolvedMap key for a resolved override handle. */
+function overrideFieldKey(overrideIndex: number, fieldName: string, arrayIndex?: number): string {
+  return `${overrideIndex}|${fieldName}|${arrayIndex ?? ''}`;
+}
+
+/**
+ * Rebuild one override with its shared-field GUID strings replaced by resolved
+ * handles from `resolvedMap`. Preserves object identity when nothing resolved
+ * (no shared GUID in this override). Patch form substitutes the single `value`;
+ * add form substitutes each key of the value map.
+ */
+function reconstructOverride(
+  ov: MountOverride,
+  ovIdx: number,
+  resolvedMap: Map<string, number>,
+): MountOverride {
+  if (ov.field !== undefined) {
+    const nv = reconstructFieldValue(ovIdx, ov.field, ov.value, resolvedMap);
+    return nv === ov.value ? ov : { ...ov, value: nv };
+  }
+  const value = ov.value;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return ov;
+  const map = value as Record<string, unknown>;
+  let changed = false;
+  const next: Record<string, unknown> = {};
+  for (const key of Object.keys(map)) {
+    const nv = reconstructFieldValue(ovIdx, key, map[key], resolvedMap);
+    next[key] = nv;
+    if (nv !== map[key]) changed = true;
+  }
+  return changed ? { ...ov, value: next } : ov;
+}
+
+/**
+ * Resolve one field value: a scalar `shared<T>` string becomes its handle; an
+ * `array<shared<T>>` becomes an array with resolved handles substituted and
+ * already-numeric elements passed through (D-8). Non-shared / unresolved values
+ * pass through unchanged (identity preserved).
+ */
+function reconstructFieldValue(
+  ovIdx: number,
+  fieldName: string,
+  value: unknown,
+  resolvedMap: Map<string, number>,
+): unknown {
+  const scalar = resolvedMap.get(overrideFieldKey(ovIdx, fieldName));
+  if (scalar !== undefined) return scalar;
+  if (Array.isArray(value)) {
+    const arr: unknown[] = [];
+    let anyResolved = false;
+    for (let i = 0; i < value.length; i++) {
+      const resolved = resolvedMap.get(overrideFieldKey(ovIdx, fieldName, i));
+      if (resolved !== undefined) {
+        arr.push(resolved);
+        anyResolved = true;
+      } else {
+        arr.push(value[i]);
+      }
+    }
+    return anyResolved ? arr : value;
+  }
+  return value;
 }
 
 /**

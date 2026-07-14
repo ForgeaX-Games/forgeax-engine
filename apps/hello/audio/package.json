@@ -13,6 +13,7 @@
     "smoke": "node scripts/smoke.mjs"
   },
   "forgeax": {
+    "bevyExample": { "name": "play_sound_effect", "category": "Audio", "status": "implemented" },
     "assets": {
       "roots": []
     },

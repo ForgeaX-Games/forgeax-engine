@@ -686,6 +686,136 @@ const V1_WHITELIST = new Set([
       });
     });
   });
+
+  describe('mount-override-schema.test.ts', () => {
+    // feat-20260713-mount-override-component-add-and-shared-ref-round M1 / w1
+    // (AC-03). `mountOverrideSchema.field` is now optional so the override shape
+    // carries an implicit component-granular discriminant: an override WITH
+    // `field` patches one field (legacy 4-key), an override WITHOUT `field`
+    // adds/upserts the whole component (new 3-key). The schema accepts both;
+    // `localId` / `comp` / `value` stay required; `additionalProperties: false`
+    // rejects any op-tag discriminant (OOS: no `switch (op)` fan-out downstream).
+    function makeMountPayload(override: Record<string, unknown>): Record<string, unknown> {
+      return {
+        kind: 'scene',
+        entities: [{ localId: 0, components: { Transform: { pos: [0, 0, 0] } } }],
+        mounts: [
+          {
+            localId: 1,
+            source: 0,
+            memberFirst: 2,
+            memberCount: 1,
+            overrides: [override],
+          },
+        ],
+      };
+    }
+
+    it('accepts the 4-key patch shape (with field)', () => {
+      const ok = sceneValidate(
+        makeMountPayload({ localId: 2, comp: 'Transform', field: 'pos', value: [1, 2, 3] }),
+      );
+      expect(ok).toBe(true);
+      expect(sceneValidate.errors ?? []).toEqual([]);
+    });
+
+    it('accepts the 3-key add shape (without field)', () => {
+      const ok = sceneValidate(
+        makeMountPayload({ localId: 2, comp: 'Transform', value: { pos: [1, 2, 3] } }),
+      );
+      expect(ok).toBe(true);
+      expect(sceneValidate.errors ?? []).toEqual([]);
+    });
+
+    it('rejects an override missing localId', () => {
+      const ok = sceneValidate(makeMountPayload({ comp: 'Transform', value: [1, 2, 3] }));
+      expect(ok).toBe(false);
+      expect((sceneValidate.errors ?? []).length).toBeGreaterThan(0);
+    });
+
+    it('rejects an override missing comp', () => {
+      const ok = sceneValidate(makeMountPayload({ localId: 2, value: [1, 2, 3] }));
+      expect(ok).toBe(false);
+      expect((sceneValidate.errors ?? []).length).toBeGreaterThan(0);
+    });
+
+    it('rejects an override missing value', () => {
+      const ok = sceneValidate(makeMountPayload({ localId: 2, comp: 'Transform', field: 'pos' }));
+      expect(ok).toBe(false);
+      expect((sceneValidate.errors ?? []).length).toBeGreaterThan(0);
+    });
+
+    it('rejects an override carrying an op discriminant field (additionalProperties:false)', () => {
+      const ok = sceneValidate(
+        makeMountPayload({ localId: 2, comp: 'Transform', value: [1, 2, 3], op: 'add' }),
+      );
+      expect(ok).toBe(false);
+      const errors = sceneValidate.errors ?? [];
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors.some((e) => (e?.message ?? '').includes('additional properties'))).toBe(true);
+    });
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // w22 — AC-03 / D-9: serialize→validate round-trip on fold-produced overrides
+    //
+    // The M5 collect fold emits component-add overrides (no `field`) whose value
+    // is a per-field map that may carry shared<T> GUID strings (e.g. the added
+    // AnimationPlayer.clips = [GUID, 0, 0, 0]). ajv's mountOverrideSchema must
+    // accept that fold-produced shape, and a serialize→validate→deserialize
+    // round-trip must not drop the override data. The override value is a free-
+    // form object (`value: {}`) at the schema layer — runtime type checks live
+    // in the ecs apply path (setSceneOverride / _validateMountOverrides).
+    // ═════════════════════════════════════════════════════════════════════════
+
+    const W22_CLIP = 'f1e2d3c4-b5a6-4b7c-8d9e-0f1a2b3c4d5e';
+
+    it('(w22-a) accepts a fold-produced add-override with a shared-field GUID array value', () => {
+      const payload = makeMountPayload({
+        localId: 2,
+        comp: 'Transform',
+        // component-add form (no field); value carries a positional array with a
+        // GUID string at slot 0 and NULL-sentinel placeholders — the exact shape
+        // the fold + serialize wiring emits for AnimationPlayer.clips.
+        value: { clips: [W22_CLIP, 0, 0, 0] },
+      });
+      const ok = sceneValidate(payload);
+      expect(ok).toBe(true);
+      expect(sceneValidate.errors ?? []).toEqual([]);
+    });
+
+    it('(w22-b) accepts an add-override whose value has no shared field at all', () => {
+      // component-add with a plain scalar-only value map (the minimal add shape).
+      const ok = sceneValidate(
+        makeMountPayload({ localId: 2, comp: 'Transform', value: { pos: [9, 9, 9] } }),
+      );
+      expect(ok).toBe(true);
+      expect(sceneValidate.errors ?? []).toEqual([]);
+    });
+
+    it('(w22-c) round-trip: JSON serialize → validate → parse preserves override data', () => {
+      const override = {
+        localId: 2,
+        comp: 'Transform',
+        value: { clips: [W22_CLIP, 0, 0, 0], pos: [1, 2, 3] },
+      };
+      const payload = makeMountPayload(override);
+
+      // Simulate the on-disk pack path: JSON.stringify → fetch → JSON.parse.
+      const roundTripped = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
+      const ok = sceneValidate(roundTripped);
+      expect(ok).toBe(true);
+      expect(sceneValidate.errors ?? []).toEqual([]);
+
+      // No data lost: the override survives the round-trip byte-for-byte.
+      const mounts = roundTripped.mounts as Array<Record<string, unknown>>;
+      const overrides = mounts[0]?.overrides as Array<Record<string, unknown>>;
+      expect(overrides).toHaveLength(1);
+      expect(overrides[0]).toEqual(override);
+      const value = overrides[0]?.value as Record<string, unknown>;
+      expect(value.clips).toEqual([W22_CLIP, 0, 0, 0]);
+      expect(value.pos).toEqual([1, 2, 3]);
+    });
+  });
 }
 
 {

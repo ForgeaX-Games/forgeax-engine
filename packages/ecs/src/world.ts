@@ -62,6 +62,7 @@ import {
   TYPE_METADATA,
 } from './component';
 import { fillComponentDefaults, validateComponentDataKeys } from './component-default-fallback';
+import { validateSharedFieldValues } from './component-value-validate';
 // Value-space id=0 `Entity` component token, aliased to avoid clashing with the
 // type-space `Entity` handle imported below from `./entity`.
 import { Entity as EntityComponent } from './entity';
@@ -816,6 +817,14 @@ export class World {
       if (keyErr !== null) {
         return err(keyErr as unknown as EcsError);
       }
+      // feat-20260713 M2 / w9: P3 shared-field value gate — a `shared<T>` /
+      // `array<shared<T>>` field bound to a raw GUID / sidecar object (not a
+      // resolved numeric handle) fails fast here instead of being zeroed by the
+      // column packer / scalar write below.
+      const sharedErr = validateSharedFieldValues(cd.component, cd.data as Record<string, unknown>);
+      if (sharedErr !== null) {
+        return err(sharedErr as unknown as EcsError);
+      }
       const filled = fillComponentDefaults(cd.component, cd.data as Record<string, unknown>);
       filledData.push(filled as Record<string, unknown>);
       if (cd.component.validate !== undefined) {
@@ -1342,6 +1351,13 @@ export class World {
       // F-02: set on missing component returns err instead of silent ignore
       return err(new ComponentNotPresentError(entity as number, component.name));
     }
+    // feat-20260713 M2 / w9: P3 shared-field value gate (see _spawnCore). Runs
+    // before any column write so a mis-bound GUID aborts before the scalar /
+    // array packer would zero the field — the set never partially lands.
+    const sharedErr = validateSharedFieldValues(component, value as Record<string, unknown>);
+    if (sharedErr !== null) {
+      return err(sharedErr as unknown as EcsError);
+    }
     for (const fieldName of Object.keys(value)) {
       const col = fieldCols.get(fieldName);
       if (!col) {
@@ -1859,6 +1875,15 @@ export class World {
     );
     if (keyErr !== null) {
       return err(keyErr as unknown as EcsError);
+    }
+    // feat-20260713 M2 / w9: P3 shared-field value gate (see _spawnCore). Runs
+    // before archetype mutation so a mis-bound GUID aborts cleanly.
+    const sharedErr = validateSharedFieldValues(
+      componentData.component,
+      componentData.data as Record<string, unknown>,
+    );
+    if (sharedErr !== null) {
+      return err(sharedErr as unknown as EcsError);
     }
 
     // Check if entity already has this component (using World-local ID).
@@ -3986,26 +4011,26 @@ export class World {
     const overrides = new Map<LocalEntityId, Map<string, MountOverride>>();
     for (const mount of ownMounts) {
       for (const ov of mount.overrides ?? []) {
+        // feat-20260713 M2 / w8: `MountOverride.field` is optional (add-or-patch
+        // discriminant carried by the shape itself). Record the override into
+        // the SceneInstanceState map keyed by comp (no field) or comp:field
+        // (field-patch), then apply it to the live member column via the shared
+        // add-or-patch helper.
         const lid = ov.localId as unknown as LocalEntityId;
         let fieldMap = overrides.get(lid);
         if (fieldMap === undefined) {
           fieldMap = new Map();
           overrides.set(lid, fieldMap);
         }
-        fieldMap.set(`${ov.comp}:${ov.field}`, ov);
+        fieldMap.set(mountOverrideStateKey(ov), ov);
         // Apply override to the live member entity column.
         const memberEntityRaw = mapping[lid as unknown as number];
         if (memberEntityRaw !== undefined && memberEntityRaw !== ENTITY_NULL_RAW) {
           const memberEntity = memberEntityRaw as unknown as EntityHandle;
-          const ovToken = resolveComponent(ov.comp);
-          if (ovToken !== undefined) {
-            const setRes = this.set(memberEntity, ovToken, {
-              [ov.field]: ov.value,
-            } as never);
-            if (!setRes.ok) {
-              this.uniqueRefs.release(stateRef);
-              return setRes as Result<EntityHandle, EcsError>;
-            }
+          const applyRes = this._applyMountOverride(memberEntity, ov);
+          if (!applyRes.ok) {
+            this.uniqueRefs.release(stateRef);
+            return applyRes as Result<EntityHandle, EcsError>;
           }
         }
       }
@@ -4099,15 +4124,13 @@ export class World {
     // THIS scene); the nested prefab keeps its OWN anchor for round-trip.
     for (const mount of ownMounts) {
       for (const ov of mount.overrides ?? []) {
+        // feat-20260713 M2 / w8: add-or-patch apply in the flat path too (same
+        // shared helper as the anchor loop). Flat mode records no
+        // SceneInstanceState, so overrides only need to take live effect.
         const memberEntityRaw = mapping[ov.localId as unknown as number];
         if (memberEntityRaw !== undefined && memberEntityRaw !== ENTITY_NULL_RAW) {
-          const ovToken = resolveComponent(ov.comp);
-          if (ovToken !== undefined) {
-            const setRes = this.set(memberEntityRaw as unknown as EntityHandle, ovToken, {
-              [ov.field]: ov.value,
-            } as never);
-            if (!setRes.ok) return setRes as Result<EntityHandle[], EcsError>;
-          }
+          const applyRes = this._applyMountOverride(memberEntityRaw as unknown as EntityHandle, ov);
+          if (!applyRes.ok) return applyRes as Result<EntityHandle[], EcsError>;
         }
       }
     }
@@ -4198,6 +4221,49 @@ export class World {
   }
 
   /**
+   * @internal feat-20260713 M2 / w8: apply one MountOverride to a live member
+   * entity column. The `field?` shape is the add-or-patch discriminant:
+   *
+   *   - `field` present -> PATCH one field: `world.set(member, comp, {[field]:
+   *     value})`. Omitted fields keep their authored / existing values.
+   *   - `field` absent  -> ADD/UPSERT the whole component: `value` is the
+   *     per-field value map for `comp`. When the member already carries `comp`
+   *     it is upserted (set-over each supplied field + schema defaults for the
+   *     omitted ones — the whole component is rewritten from the value map +
+   *     defaults, never a `component-already-present` error). When absent it is
+   *     added fresh via `addComponent` (fillComponentDefaults fills omitted
+   *     fields). The value-map is fed through `fillComponentDefaults` so the
+   *     add and upsert paths write byte-identical rows.
+   *
+   * Component registration + value-key validation happened at
+   * `_validateMountOverrides` (fail-fast before any spawn); by this point the
+   * comp resolves and the value keys are schema-valid. `resolveComponent`
+   * still guards defensively (an unregistered comp is a no-op skip, matching
+   * the prior field-patch behaviour). Returns the underlying set / addComponent
+   * Result so a shared-field value gate (D-4) or any other write error
+   * propagates unchanged.
+   */
+  _applyMountOverride(member: EntityHandle, ov: MountOverride): Result<void, EcsError> {
+    const ovToken = resolveComponent(ov.comp);
+    if (ovToken === undefined) return ok(undefined);
+    if (ov.field !== undefined) {
+      // PATCH one field.
+      return this.set(member, ovToken, { [ov.field]: ov.value } as never);
+    }
+    // ADD/UPSERT the whole component. Fill omitted fields from the schema so
+    // add and upsert produce identical rows (upsert = full rewrite from the
+    // value map + defaults).
+    const rawValue = (ov.value ?? {}) as Record<string, unknown>;
+    const filled = fillComponentDefaults(ovToken as Component, rawValue);
+    const has = this.get(member, ovToken);
+    if (has.ok) {
+      // Already present -> upsert (set every filled field, no duplicate error).
+      return this.set(member, ovToken, filled as never);
+    }
+    return this.addComponent(member, { component: ovToken, data: filled as never });
+  }
+
+  /**
    * @internal R2/B-3 + R2/B-4: validate `mount.overrides[]` BEFORE any
    * spawn so a malformed override fails fast with no observable side
    * effects (charter P3 explicit-failure). Two checks:
@@ -4234,23 +4300,52 @@ export class World {
           } as PackErrorDetail,
         } as unknown as EcsError);
       }
-      // R2/B-4: field schema check — component must be defined and the
-      // override.field must exist in its schema.
+      // feat-20260713 M2 / w8: double-branch schema check.
+      //   - field-patch form (field present): the component (when registered)
+      //     must declare `override.field` in its schema (R2/B-4, unchanged).
+      //   - component-add form (field absent): the component MUST be registered
+      //     (component-not-defined otherwise) AND every key in the value map
+      //     must be a schema field (pack-mount-override-unknown-field).
       const ovToken = resolveComponent(ov.comp);
-      if (ovToken !== undefined) {
+      if (ov.field !== undefined) {
+        if (ovToken !== undefined) {
+          const schema = ovToken.schema as Record<string, unknown>;
+          if (!(ov.field in schema)) {
+            return err({
+              code: 'pack-mount-override-unknown-field' as PackErrorCode,
+              expected: `override.field defined on component '${ov.comp}'`,
+              hint: PACK_ERROR_HINTS['pack-mount-override-unknown-field'],
+              detail: {
+                code: 'pack-mount-override-unknown-field',
+                comp: ov.comp,
+                field: ov.field,
+                mountLocalId: mountLid,
+              } as PackErrorDetail,
+            } as unknown as EcsError);
+          }
+        }
+      } else {
+        // component-add form: comp must be registered so we can validate + apply
+        // the whole component (add/upsert needs the schema).
+        if (ovToken === undefined) {
+          return err(new ComponentNotDefinedError(ov.comp));
+        }
         const schema = ovToken.schema as Record<string, unknown>;
-        if (!(ov.field in schema)) {
-          return err({
-            code: 'pack-mount-override-unknown-field' as PackErrorCode,
-            expected: `override.field defined on component '${ov.comp}'`,
-            hint: PACK_ERROR_HINTS['pack-mount-override-unknown-field'],
-            detail: {
-              code: 'pack-mount-override-unknown-field',
-              comp: ov.comp,
-              field: ov.field,
-              mountLocalId: mountLid,
-            } as PackErrorDetail,
-          } as unknown as EcsError);
+        const valueMap = (ov.value ?? {}) as Record<string, unknown>;
+        for (const key of Object.keys(valueMap)) {
+          if (!(key in schema)) {
+            return err({
+              code: 'pack-mount-override-unknown-field' as PackErrorCode,
+              expected: `override.value keys defined on component '${ov.comp}'`,
+              hint: PACK_ERROR_HINTS['pack-mount-override-unknown-field'],
+              detail: {
+                code: 'pack-mount-override-unknown-field',
+                comp: ov.comp,
+                field: key,
+                mountLocalId: mountLid,
+              } as PackErrorDetail,
+            } as unknown as EcsError);
+          }
         }
       }
     }
@@ -4331,18 +4426,29 @@ export class World {
     return ok(r.value);
   }
 
-  /** @internal Convert mount.overrides Map shape to the SceneInstanceState shape. */
+  /** @internal Convert mount.overrides Map shape to the SceneInstanceState shape.
+   *
+   * feat-20260713 M1 / w4: `field` is optional (add-or-patch discriminant). In
+   * M1 only the field-patch form reaches this builder (the component-add form
+   * fails fast in the apply loops); the record type stays `field?: string` so
+   * the M2 add path can flow through untouched. `exactOptionalPropertyTypes`
+   * forbids writing an explicit `field: undefined`, so omit the key when absent.
+   */
   _mountOverridesToStateMap(
     src: Map<LocalEntityId, Map<string, MountOverride>>,
-  ): Map<LocalEntityId, Map<string, { comp: string; field: string; value: unknown }>> {
+  ): Map<LocalEntityId, Map<string, { comp: string; field?: string; value: unknown }>> {
     const out = new Map<
       LocalEntityId,
-      Map<string, { comp: string; field: string; value: unknown }>
+      Map<string, { comp: string; field?: string; value: unknown }>
     >();
     for (const [lid, fields] of src) {
-      const m = new Map<string, { comp: string; field: string; value: unknown }>();
+      const m = new Map<string, { comp: string; field?: string; value: unknown }>();
       for (const [k, v] of fields) {
-        m.set(k, { comp: v.comp, field: v.field, value: v.value });
+        m.set(k, {
+          comp: v.comp,
+          value: v.value,
+          ...(v.field !== undefined ? { field: v.field } : {}),
+        });
       }
       out.set(lid, m);
     }
@@ -4611,7 +4717,7 @@ interface SceneInstanceStatePayload {
   readonly detachedLocalIds: Set<LocalEntityId>;
   readonly overrides: Map<
     LocalEntityId,
-    Map<string, { readonly comp: string; readonly field: string; readonly value: unknown }>
+    Map<string, { readonly comp: string; readonly field?: string; readonly value: unknown }>
   >;
   readonly rootEntities: EntityHandle[];
   readonly totalSlots: number;
@@ -4671,6 +4777,18 @@ function sceneTopoSort(
     if (!order.includes(i) && nodes[i] !== undefined) order.push(i);
   }
   return order;
+}
+
+/**
+ * @internal feat-20260713 M2 / w8: SceneInstanceState map key for a
+ * MountOverride. Field-patch form keys by `comp:field` (one entry per patched
+ * field); component-add form keys by `comp` (one entry per added component). The
+ * two key shapes cannot collide because a field-patch always carries a `:field`
+ * suffix. Later array entries for the same key overwrite earlier ones, matching
+ * the array-order apply semantics.
+ */
+function mountOverrideStateKey(ov: MountOverride): string {
+  return ov.field !== undefined ? `${ov.comp}:${ov.field}` : ov.comp;
 }
 
 /** Schema field types that are JS primitives (typeof checkable). */

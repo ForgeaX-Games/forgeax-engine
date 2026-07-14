@@ -106,6 +106,21 @@ export interface DebugDraw {
   frustum(viewProj: Mat4, color: ColorLike): void;
 
   /**
+   * Push an arrow (body line + 4-line arrowhead = 10 vertices) from `start` to `end`.
+   * `tipLength` defaults to `|end - start| / 10` (Bevy's default). A zero-length arrow
+   * emits only the body segment. Maps Bevy `gizmos.arrow`.
+   */
+  arrow(start: Vec3, end: Vec3, color: ColorLike, tipLength?: number): void;
+
+  /**
+   * Push a transform's local coordinate frame as three colored arrows — X=red, Y=green,
+   * Z=blue — originating at the transform's translation and pointing `length` along its
+   * local X/Y/Z (the columns of the 16-float column-major `worldMat`, scale included).
+   * Maps Bevy `gizmos.axes(transform, length)`.
+   */
+  axes(worldMat: Mat4, length: number): void;
+
+  /**
    * Upload CPU staging to GPU vertex buffer, issue a single draw call,
    * and reset staging for the next frame.
    *

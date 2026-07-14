@@ -26,13 +26,25 @@ import { getRegisteredTokens } from './define-state';
 
 const SCOPED_COMPONENTS = new Map<string, ReturnType<typeof defineComponent>>();
 
+/** Fixed label→value map for the ScopedTo `mode` enum field (0=exit / 1=enter). */
+export const SCOPED_MODE_VALUE = { exit: 0, enter: 1 } as const;
+
 function getOrCreateScopedComponent(token: StateToken): ReturnType<typeof defineComponent> {
   const existing = SCOPED_COMPONENTS.get(token.name);
   if (existing) return existing;
 
+  // `value` is the token's variant index — derive its label→index map from
+  // `token.variants` so reflection (describeComponent) can name each variant;
+  // `mode` uses the fixed exit/enter map. Both attach labels to the enum field
+  // (Derive, don't Duplicate: the variant order IS the label source).
+  const valueLabels: Record<string, number> = {};
+  token.variants.forEach((v, i) => {
+    valueLabels[v] = i;
+  });
+
   const comp = defineComponent(`__scopedTo__${token.name}`, {
-    value: { type: 'enum', default: 0 },
-    mode: { type: 'enum', default: 0 },
+    value: { type: 'enum', default: 0, labels: valueLabels },
+    mode: { type: 'enum', default: 0, labels: SCOPED_MODE_VALUE },
   });
   SCOPED_COMPONENTS.set(token.name, comp);
   return comp;

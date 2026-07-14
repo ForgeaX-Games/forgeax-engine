@@ -58,7 +58,12 @@ import type { LocalEntityId, MountOverride } from '@forgeax/engine-types';
  */
 export interface SceneInstanceOverrideRecord {
   readonly comp: string;
-  readonly field: string;
+  /**
+   * Component-granular add-or-patch discriminant (feat-20260713 M1 / w4):
+   * present -> this record patches a single field; absent -> it adds/upserts
+   * the whole `comp` (M2 apply semantics). Mirrors `MountOverride.field`.
+   */
+  readonly field?: string;
   readonly value: unknown;
 }
 

@@ -13,6 +13,7 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
+    "bevyExample": { "name": "bloom_3d", "category": "3D Rendering", "status": "implemented" },
     "smokeInvocation": "pnpm --filter @forgeax/hello-bloom smoke",
     "_comment": "smokeInvocation = self-contained SSOT. hello-bloom exercises Camera bloom columns end-to-end (bright-pass -> blur-H -> blur-V -> composite -> tonemap).",
     "metrics": {

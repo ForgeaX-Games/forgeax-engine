@@ -7,9 +7,10 @@ imports the renderer, math, or RHI.
 
 ## 30-second self-introduction
 
-- **Surface**: 6 Three.js-r184-aligned procedural factories
-  (`createBoxGeometry` / `createConeGeometry` / `createCylinderGeometry` /
-  `createPlaneGeometry` / `createSphereGeometry` / `createTorusGeometry`),
+- **Surface**: 7 Three.js-r184-aligned procedural factories
+  (`createBoxGeometry` / `createCapsuleGeometry` / `createConeGeometry` /
+  `createCylinderGeometry` / `createPlaneGeometry` / `createSphereGeometry` /
+  `createTorusGeometry`),
   each returning `Result<MeshAsset, AssetError>`; the vertex-attribute-layout
   SSOT (`deriveVertexBufferLayout` / `buildMeshAttributeMapForUvSets` /
   `GpuVertexBufferLayoutEntry`); and the tangent + interleave helpers
@@ -41,13 +42,13 @@ const sphere = createSphereGeometry(1, 32, 24);
 // then hand the resulting Handle<MeshAsset> to MeshFilter.assetHandle.
 ```
 
-The 6 factories cover the most common procedural primitives. For an imported
+The 7 factories cover the most common procedural primitives. For an imported
 glTF / FBX mesh, use `@forgeax/engine-assets` (`loadByGuid` / sidecar pipeline)
 instead of this package.
 
 ## API surface
 
-### 6 procedural geometry factories
+### 7 procedural geometry factories
 
 Each returns `Result<MeshAsset, AssetError>`. Interleaved vertex layout:
 position (3xf32) + normal (3xf32) + uv (2xf32) = 8 floats/vertex at creation
@@ -57,6 +58,7 @@ time; expanded to the 12-float runtime layout (adds tangent vec4) by
 | Factory | Signature | Minimum segments |
 |:--|:--|:--|
 | `createBoxGeometry` | `(w, h, d, wSeg?, hSeg?, dSeg?)` | 1 / dim |
+| `createCapsuleGeometry` | `(radius, length, capSeg?, radSeg?)` | capSeg >= 1, radSeg >= 3; total height = length + 2*radius (Bevy `Capsule3d` convention) |
 | `createConeGeometry` | `(radius, height, radSeg?, hSeg?)` | radSeg=16; delegates to cylinder with top=0 |
 | `createCylinderGeometry` | `(rTop, rBottom, h, radSeg?, hSeg?)` | radSeg=16; at least one radius > 0 |
 | `createPlaneGeometry` | `(w, h, wSeg?, hSeg?)` | 1 / dim; XY plane, +Z normal |

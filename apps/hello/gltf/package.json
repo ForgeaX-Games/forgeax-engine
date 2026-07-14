@@ -13,6 +13,7 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
+    "bevyExample": { "name": "load_gltf", "category": "glTF", "status": "implemented" },
     "smokeInvocation": "pnpm --filter @forgeax/hello-gltf smoke",
     "_comment": "smokeInvocation = hello-gltf SSOT for AC-14. Literal `pnpm --filter @forgeax/hello-gltf smoke` must match byte-for-byte across apps/hello/gltf/package.json#forgeax.smokeInvocation + .github/workflows/ci.yml + AGENTS.md#Smoke-gate (charter P4 consistent abstraction; mirror of hello-room#forgeax.smokeInvocation).",
     "metrics": {

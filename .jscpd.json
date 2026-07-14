@@ -18,6 +18,83 @@
   "filePairIgnore": [
     {
       "files": [
+        "apps/bevy/3d-scene/scripts/smoke-dawn.mjs",
+        "apps/bevy/3d-shapes/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260713-153135: the two apps/bevy dawn-node smokes share the webgpu global injection + mock GPUCanvasContext + shared-device capture + N-frame loop + copyTextureToBuffer readback + PNG-dump boilerplate. Charter F1 grep-anchor: each demo smoke is a single self-contained driver an AI user reads without traversing a shared helper (same idiom as the hello-* / collectathon whitelists). Per-demo verdict + scene stay inline (3d-shapes: 7-shape gallery, capsule-at-center NDC check; scene logic itself IS deduped via the shared src/shapes.ts builder both files import)."
+    },
+    {
+      "files": [
+        "apps/bevy/3d-rotation/scripts/smoke-dawn.mjs",
+        "apps/bevy/3d-shapes/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260713-164916: the two apps/bevy dawn-node smokes share the webgpu global injection + mock GPUCanvasContext + shared-device capture + copyTextureToBuffer readback + PNG-dump boilerplate. Charter F1 grep-anchor: each demo smoke is a single self-contained driver an AI user reads without traversing a shared helper (same idiom as the 3d-scene <-> 3d-shapes whitelist above). 3d-rotation is unique where it matters: it drives stepSpin(world, dt) between draws and asserts a MOTION delta (face-on vs 45deg-corner-on frame) — the check the static demos structurally lack; scene + spin logic itself IS deduped via the shared src/rotation.ts builder both the app and this smoke import."
+    },
+    {
+      "files": [
+        "apps/bevy/translation/scripts/smoke-dawn.mjs",
+        "apps/bevy/3d-rotation/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260713-174912: the two apps/bevy MOTION dawn-node smokes share the webgpu global injection + mock GPUCanvasContext + shared-device capture + copyTextureToBuffer readback + capture-early/late + motion-delta + PNG-dump boilerplate. Charter F1 grep-anchor: each demo smoke is a single self-contained driver an AI user reads without traversing a shared helper (same idiom as the 3d-rotation <-> 3d-shapes whitelist above). translation is unique where it matters: it drives stepMove(world, dt) between draws and asserts the cube SLID along its local X (origin frame vs ~2-units-later frame) — a translation-motion delta, not the 3d-rotation spin delta; scene + move logic itself IS deduped via the shared src/translation.ts builder both the app and this smoke import."
+    },
+    {
+      "files": [
+        "apps/bevy/smooth-follow/scripts/smoke-dawn.mjs",
+        "apps/bevy/translation/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260713-183918: the two apps/bevy MOTION dawn-node smokes share the webgpu global injection + mock GPUCanvasContext + shared-device capture + copyTextureToBuffer readback + capture-early/late + motion-delta + PNG-dump boilerplate. Charter F1 grep-anchor: each demo smoke is a single self-contained driver an AI user reads without traversing a shared helper (same idiom as the translation <-> 3d-rotation whitelist above). smooth-follow is unique where it matters: it drives stepTarget+stepFollower(world, dt) between draws and asserts a CONVERGENCE delta (the follower's distance-to-target shrinks from the early to the late capture) — the smoothDamp chase proof, not the translation slide delta; scene + step logic itself IS deduped via the shared src/smooth-follow.ts builder both the app and this smoke import."
+    },
+    {
+      "files": [
+        "apps/bevy/iter-combinations/scripts/smoke-dawn.mjs",
+        "apps/bevy/smooth-follow/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260713-194533: the two apps/bevy MOTION dawn-node smokes share the webgpu global injection + mock GPUCanvasContext + shared-device capture + copyTextureToBuffer readback + capture-early/late + brightness/motion-delta + PNG-dump boilerplate. Charter F1 grep-anchor: each demo smoke is a single self-contained driver an AI user reads without traversing a shared helper (same idiom as the smooth-follow <-> translation whitelist above). iter-combinations is unique where it matters: it drives stepInteract+stepIntegrate(world) between draws and asserts a CLUMP delta (the bodies' spread — max distance from origin — shrinks from the early to the late capture) — the queryCombinations pairwise-gravity proof, not the smooth-follow convergence delta; scene + N-body step logic itself IS deduped via the shared src/iter-combinations.ts builder both the app and this smoke import. CAPTURE_LATE is relative to SMOKE_MIN_FRAMES (LESSONS L6)."
+    },
+    {
+      "files": [
+        "apps/bevy/cubic-splines/scripts/smoke-dawn.mjs",
+        "apps/bevy/smooth-follow/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260713-203432: the two apps/bevy dawn-node smokes share the webgpu global injection + mock GPUCanvasContext + shared-device capture + copyTextureToBuffer readback + brightness + PNG-dump boilerplate. Charter F1 grep-anchor: each demo smoke is a single self-contained driver an AI user reads without traversing a shared helper (same idiom as the iter-combinations <-> smooth-follow whitelist above). cubic-splines is unique where it matters: it is a STATIC demo (no motion criterion) that instead asserts a CURVE-SHAPE proof computed in-process from the shared sampleCurve — the curve PASSES THROUGH the control points (maxThroughDist) and is SMOOTH (maxTurnDeg below a kink ceiling), the vec3.catmullRom interpolation proof; scene + curve sampler itself IS deduped via the shared src/cubic-splines.ts builder both the app and this smoke import."
+    },
+    {
+      "files": [
+        "apps/bevy/cubic-splines/scripts/smoke-dawn.mjs",
+        "apps/bevy/translation/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260713-203432: same shared dawn-node harness boilerplate (webgpu shim + mock canvas + shared-device capture + readback + PNG dump) as the cubic-splines <-> smooth-follow whitelist above; the local dup-check pairs cubic-splines against translation specifically, so this pair is whitelisted too. cubic-splines' unique content is its in-process CURVE-SHAPE proof (maxThroughDist + maxTurnDeg over the shared sampleCurve), distinct from translation's local-X slide motion delta; both scenes are deduped via their respective shared src/*.ts builders."
+    },
+    {
+      "files": [
+        "apps/bevy/time-elapsed/scripts/smoke-dawn.mjs",
+        "apps/bevy/translation/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260713-212920: the two apps/bevy MOTION dawn-node smokes share the webgpu global injection + mock GPUCanvasContext + shared-device capture + copyTextureToBuffer readback + capture-early/late + motion-delta + PNG-dump boilerplate. Charter F1 grep-anchor: each demo smoke is a single self-contained driver an AI user reads without traversing a shared helper (same idiom as the cubic-splines <-> translation whitelist above). time-elapsed is unique where it matters: it accumulates elapsed itself and asserts an ELAPSED-KEYED delta (the cube's Transform.y equals the closed-form oscillatorY(elapsed) within EPS), the Time.elapsed proof — not translation's local-X slide; scene + step logic itself IS deduped via the shared src/time-elapsed.ts builder both the app and this smoke import. CAPTURE_LATE is relative to SMOKE_MIN_FRAMES (LESSONS L6)."
+    },
+    {
+      "files": [
+        "apps/bevy/axes/scripts/smoke-dawn.mjs",
+        "apps/bevy/cubic-splines/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260713-222551: the two apps/bevy STATIC-scene dawn-node smokes share the webgpu global injection + mock GPUCanvasContext + shared-device capture + copyTextureToBuffer readback + brightness + PNG-dump boilerplate. Charter F1 grep-anchor: each demo smoke is a single self-contained driver an AI user reads without traversing a shared helper (same idiom as the cubic-splines <-> translation whitelist above). axes is unique where it matters: it asserts an in-process GIZMO-CORRECTNESS proof via a capture stub (one debugDraw.axes() call per ShowAxes cube, each reading the cube's rotated LOCAL frame — >=2 non-world-aligned), distinct from cubic-splines' curve-shape proof; scene + draw logic itself IS deduped via the shared src/axes-demo.ts builder both the app and this smoke import."
+    },
+    {
+      "files": [
+        "apps/bevy/easing/scripts/smoke-dawn.mjs",
+        "apps/bevy/translation/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260713-233409: the two apps/bevy MOTION dawn-node smokes share the webgpu global injection + mock GPUCanvasContext + shared-device capture + copyTextureToBuffer readback + capture-early/late + motion-delta + PNG-dump boilerplate. Charter F1 grep-anchor: each demo smoke is a single self-contained driver an AI user reads without traversing a shared helper (same idiom as the cubic-splines <-> translation whitelist above). easing is unique where it matters: it drives stepEasing(world, u) with a swept u and asserts an EASE-SHAPE proof (the eased cube's x matches lerp(x0,x1,smoothstep(u)) AND lags the linear cube at u=0.25 / leads at u=0.75), distinct from translation's local-X slide; scene + step logic itself IS deduped via the shared src/easing-demo.ts builder both the app and this smoke import. CAPTURE_LATE is relative to SMOKE_MIN_FRAMES (LESSONS L6)."
+    },
+    {
+      "files": [
+        "apps/bevy/3d-shapes/scripts/smoke-dawn.mjs",
+        "apps/learn-render/4.advanced-opengl/7.advanced-glsl-ubo/scripts/smoke-dawn.mjs"
+      ],
+      "rationale": "solo bevy-examples round 20260713-153135: shared dawn-node loader + mock canvas + N-frame loop + onError tally boilerplate region. Charter F1 grep-anchor: each demo smoke is self-contained; per-demo verdict stays inline (same idiom as the collectathon <-> 10.anti-aliasing-msaa whitelist above)."
+    },
+    {
+      "files": [
         "apps/collectathon/scripts/smoke-dawn.mjs",
         "apps/hello/skin/scripts/smoke-dawn.mjs"
       ],

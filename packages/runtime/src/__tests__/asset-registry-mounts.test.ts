@@ -17,9 +17,27 @@
 //   (f) mounts.memberFirst / mounts.memberCount / mounts.parent (LocalEntityId)
 //       are NOT refs[] indices -- they are local entity ids preserved as-is.
 
-import { AssetRegistry, sceneLoader } from '@forgeax/engine-assets-runtime';
-import type { LoadContext, SceneAsset } from '@forgeax/engine-types';
+import {
+  type Asset,
+  AssetRegistry,
+  resolveAssetHandle,
+  sceneLoader,
+} from '@forgeax/engine-assets-runtime';
+import { type EntityHandle, World } from '@forgeax/engine-ecs';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
+import {
+  type AnimationClip,
+  BUILTIN_BASE,
+  type Handle,
+  type LoadContext,
+  type MeshAsset,
+  type SceneAsset,
+  unwrapHandle,
+} from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import '../components';
+import { AnimationPlayer } from '../components/animation-player';
+import { MeshFilter } from '../components/mesh-filter';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 /** Access the private parseAssetPayload method via structural view-cast. */
@@ -449,6 +467,310 @@ describe('integration: concurrent scene load via parseAssetPayload (F21 / AC-09 
       // feat-20260622 M4 / w12: parseAndReturnAsset returns { asset, refs }.
       expect((result.value as { asset: { kind: string } }).asset.kind).toBe('scene');
     }
+  });
+});
+
+// ── feat-20260713 M3 / w10 + w11 — apply-side override value GUID→handle
+//    down-drill (AC-06, plan-strategy D-2 / D-8) ───────────────────────────────
+//
+// M3 opens the fourth resolution input source: `mounts[].overrides[].value`.
+// Pre-M3 `resolveMountsRec` only `{...m}` shallow-copies each mount + resolves
+// `source`; the GUID strings inside an override value were never resolved, so the
+// ecs value gate (M2 / w9) rejected them as `shared-field-invalid-value` and the
+// whole instantiate errored. After M3 the override value's shared<...> /
+// array<shared<...>> GUID strings resolve to live handles in assets-runtime, so
+// the ecs apply loop only ever sees numeric handles.
+//
+// TDD red phase: these assert the GREEN behaviour (instantiate ok + resolved
+// handle read back on the member). They are RED until w12/w13 land because
+// pre-fix `reg.instantiate` returns err (M2 value gate rejects the GUID string).
+
+const SCENE_PARENT_GUID = '10000000-0000-4000-a000-000000000001';
+const SCENE_CHILD_GUID = '10000000-0000-4000-a000-000000000002';
+const OV_MESH_GUID = '10000000-0000-4000-a000-000000000003';
+const OV_CLIP_A_GUID = '10000000-0000-4000-a000-000000000004';
+const OV_CLIP_B_GUID = '10000000-0000-4000-a000-000000000005';
+const OV_UNCATALOGUED_GUID = '10000000-0000-4000-a000-00000000dead';
+
+function pgOv(s: string): AssetGuid {
+  const r = AssetGuid.parse(s);
+  if (!r.ok) throw new Error(`bad test GUID: ${s}`);
+  return r.value;
+}
+
+function mkMeshAsset(): MeshAsset {
+  return {
+    kind: 'mesh',
+    vertices: new Float32Array([
+      -0.5, 0, 0.5, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0.5, 0, 0.5, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0.5, 0, -0.5,
+      0, 1, 0, 1, 1, 1, 0, 0, 1,
+    ]),
+    indices: new Uint16Array([0, 1, 2]),
+    attributes: {},
+    submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+  };
+}
+
+function mkClipAsset(duration: number): AnimationClip {
+  return { kind: 'animation-clip', duration, channels: [] };
+}
+
+/** First descendant (excluding `root`) that carries `token`. */
+function firstMemberWith(
+  world: World,
+  root: EntityHandle,
+  token: typeof MeshFilter | typeof AnimationPlayer,
+): Record<string, unknown> | undefined {
+  for (const e of world.iterDescendants(root)) {
+    if (e === root) continue;
+    const r = world.get(e, token as never);
+    if (r.ok) return r.value as unknown as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+describe('feat-20260713 M3 / w10 — override value GUID→handle resolution (AC-06)', () => {
+  function mkReg(): AssetRegistry {
+    return new AssetRegistry(makeMockShaderRegistry());
+  }
+  function childScene(): SceneAsset {
+    // One member entity carrying Transform only (localId 0 in child namespace).
+    return { kind: 'scene', entities: [{ localId: 0 as never, components: { Transform: {} } }] };
+  }
+
+  it('scalar shared<> override value GUID resolves to a live handle on the member', () => {
+    const reg = mkReg();
+    const world = new World();
+    reg.catalog(pgOv(OV_MESH_GUID), mkMeshAsset());
+    reg.catalog(pgOv(SCENE_CHILD_GUID), childScene() as Asset);
+
+    // Parent: no owned entities; a mount of the child whose single member (parent
+    // namespace localId 2) gets a MeshFilter ADDED with a GUID-string assetHandle.
+    const parent: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: 1 as never,
+          source: SCENE_CHILD_GUID,
+          memberFirst: 2 as never,
+          memberCount: 1,
+          overrides: [
+            { localId: 2 as never, comp: 'MeshFilter', value: { assetHandle: OV_MESH_GUID } },
+          ],
+        },
+      ],
+    };
+    reg.catalog(pgOv(SCENE_PARENT_GUID), parent as Asset);
+
+    const handle = world.allocSharedRef('SceneAsset', parent);
+    const r = reg.instantiate(handle, world);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    const mf = firstMemberWith(world, r.value, MeshFilter);
+    expect(mf).toBeDefined();
+    const resolved = mf?.assetHandle as number;
+    // Not the sentinel 0, not a GUID string — a live user-tier handle.
+    expect(typeof resolved).toBe('number');
+    expect(resolved).toBeGreaterThanOrEqual(BUILTIN_BASE);
+    // And it resolves back to the catalogued mesh payload.
+    const payload = resolveAssetHandle<MeshAsset>(
+      world,
+      resolved as unknown as Handle<string, 'shared'>,
+    );
+    expect(payload.ok).toBe(true);
+    if (payload.ok) expect(payload.value.kind).toBe('mesh');
+  });
+
+  it('array<shared<>> override value GUID array resolves to a handle array; number elements pass through (D-8)', () => {
+    const reg = mkReg();
+    const world = new World();
+    reg.catalog(pgOv(OV_CLIP_A_GUID), mkClipAsset(1.5));
+    reg.catalog(pgOv(SCENE_CHILD_GUID), childScene() as Asset);
+
+    // A pre-resolved clip handle number that must pass through untouched (D-8).
+    const preHandle = unwrapHandle(world.allocSharedRef('AnimationClip', mkClipAsset(2.0)));
+
+    const parent: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: 1 as never,
+          source: SCENE_CHILD_GUID,
+          memberFirst: 2 as never,
+          memberCount: 1,
+          // clips[0] = GUID string (resolve); clips[1] = number (pass through).
+          overrides: [
+            {
+              localId: 2 as never,
+              comp: 'AnimationPlayer',
+              value: { clips: [OV_CLIP_A_GUID, preHandle] },
+            },
+          ],
+        },
+      ],
+    };
+    reg.catalog(pgOv(SCENE_PARENT_GUID), parent as Asset);
+
+    const handle = world.allocSharedRef('SceneAsset', parent);
+    const r = reg.instantiate(handle, world);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    const ap = firstMemberWith(world, r.value, AnimationPlayer);
+    expect(ap).toBeDefined();
+    const clips = ap?.clips as ArrayLike<number>;
+    // slot 0: resolved handle; slot 1: number passthrough.
+    expect(typeof clips[0]).toBe('number');
+    expect(clips[0]).toBeGreaterThanOrEqual(BUILTIN_BASE);
+    expect(clips[1]).toBe(preHandle);
+    const payload = resolveAssetHandle<AnimationClip>(
+      world,
+      clips[0] as unknown as Handle<string, 'shared'>,
+    );
+    expect(payload.ok).toBe(true);
+    if (payload.ok) expect(payload.value.duration).toBe(1.5);
+  });
+
+  it('unresolvable override value GUID → AssetError fail-fast, no half-initialized member', () => {
+    const reg = mkReg();
+    const world = new World();
+    reg.catalog(pgOv(SCENE_CHILD_GUID), childScene() as Asset);
+
+    const parent: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: 1 as never,
+          source: SCENE_CHILD_GUID,
+          memberFirst: 2 as never,
+          memberCount: 1,
+          overrides: [
+            {
+              localId: 2 as never,
+              comp: 'MeshFilter',
+              value: { assetHandle: OV_UNCATALOGUED_GUID },
+            },
+          ],
+        },
+      ],
+    };
+    reg.catalog(pgOv(SCENE_PARENT_GUID), parent as Asset);
+
+    const before = world.inspect().entityCount;
+    const handle = world.allocSharedRef('SceneAsset', parent);
+    const r = reg.instantiate(handle, world);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('asset-not-found');
+    // Fail-fast happens during _resolveSceneGuids (before any spawn): no entities
+    // were materialised.
+    expect(world.inspect().entityCount).toBe(before);
+  });
+
+  it('patch-form (field present) scalar shared<> override value GUID resolves too', () => {
+    const reg = mkReg();
+    const world = new World();
+    reg.catalog(pgOv(OV_MESH_GUID), mkMeshAsset());
+    // Child member already carries MeshFilter (patch replaces its assetHandle).
+    const child: SceneAsset = {
+      kind: 'scene',
+      entities: [
+        { localId: 0 as never, components: { Transform: {}, MeshFilter: { assetHandle: 0 } } },
+      ],
+    };
+    reg.catalog(pgOv(SCENE_CHILD_GUID), child as Asset);
+
+    const parent: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: 1 as never,
+          source: SCENE_CHILD_GUID,
+          memberFirst: 2 as never,
+          memberCount: 1,
+          // field present -> PATCH one field, value is that single field's value.
+          overrides: [
+            { localId: 2 as never, comp: 'MeshFilter', field: 'assetHandle', value: OV_MESH_GUID },
+          ],
+        },
+      ],
+    };
+    reg.catalog(pgOv(SCENE_PARENT_GUID), parent as Asset);
+
+    const handle = world.allocSharedRef('SceneAsset', parent);
+    const r = reg.instantiate(handle, world);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    const mf = firstMemberWith(world, r.value, MeshFilter);
+    expect(mf).toBeDefined();
+    const resolved = mf?.assetHandle as number;
+    expect(typeof resolved).toBe('number');
+    expect(resolved).toBeGreaterThanOrEqual(BUILTIN_BASE);
+  });
+});
+
+describe('feat-20260713 M3 / w11 — envelope-less scene override value resolution', () => {
+  function mkReg(): AssetRegistry {
+    return new AssetRegistry(makeMockShaderRegistry());
+  }
+
+  it('override value GUID resolves even when the PARENT scene has no catalogued envelope', () => {
+    const reg = mkReg();
+    const world = new World();
+    // Sub-asset + child scene are catalogued; the PARENT scene is NOT (built +
+    // allocSharedRef'd directly, no reg.catalog). sceneGuidKey is undefined so
+    // _resolveSceneGuids takes the entity-walk fallback branch; the override
+    // value must still resolve through resolveMountsRec's down-drill.
+    reg.catalog(pgOv(OV_CLIP_B_GUID), mkClipAsset(3.0));
+    reg.catalog(pgOv(SCENE_CHILD_GUID), {
+      kind: 'scene',
+      entities: [{ localId: 0 as never, components: { Transform: {} } }],
+    } as Asset);
+
+    const parent: SceneAsset = {
+      kind: 'scene',
+      entities: [],
+      mounts: [
+        {
+          localId: 1 as never,
+          source: SCENE_CHILD_GUID,
+          memberFirst: 2 as never,
+          memberCount: 1,
+          overrides: [
+            { localId: 2 as never, comp: 'AnimationPlayer', value: { clips: [OV_CLIP_B_GUID] } },
+          ],
+        },
+      ],
+    };
+
+    // Confirm the parent really is envelope-less (no _guidForAsset hit).
+    const guidForAsset = (
+      reg as unknown as { _guidForAsset(a: Asset): string | undefined }
+    )._guidForAsset(parent as Asset);
+    expect(guidForAsset).toBeUndefined();
+
+    const handle = world.allocSharedRef('SceneAsset', parent);
+    const r = reg.instantiate(handle, world);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    const ap = firstMemberWith(world, r.value, AnimationPlayer);
+    expect(ap).toBeDefined();
+    const clips = ap?.clips as ArrayLike<number>;
+    expect(typeof clips[0]).toBe('number');
+    expect(clips[0]).toBeGreaterThanOrEqual(BUILTIN_BASE);
+    const payload = resolveAssetHandle<AnimationClip>(
+      world,
+      clips[0] as unknown as Handle<string, 'shared'>,
+    );
+    expect(payload.ok).toBe(true);
+    if (payload.ok) expect(payload.value.duration).toBe(3.0);
   });
 });
 

@@ -64,12 +64,14 @@ import type {
   Asset,
   Handle,
   LocalEntityId,
+  MountOverride,
   SceneAsset,
   SceneEntity,
   SceneInstanceMount,
 } from '@forgeax/engine-types';
 import { SceneInstance } from './components/scene-instance';
 import { collectSubtree } from './scene-utils/collect-subtree';
+import { foldMountOverrides } from './scene-utils/mount-override-fold';
 
 // Shared helpers
 function _isArrayLike(value: unknown): value is ArrayLike<unknown> {
@@ -104,6 +106,135 @@ function classifyFieldSchema(fieldType: string | undefined): SchemaFieldClass | 
   return undefined;
 }
 
+// ── M5 (w21): override-value handle→GUID serialization ──
+//
+// Reverse-lookup one shared-field handle to its catalogued GUID string. Returns
+// `undefined` for the NULL sentinel (handle 0) so the caller applies the two
+// distinct sentinel semantics: scalar -> omit the field, array -> placeholder 0.
+// Any non-zero handle that fails to resolve is a fail-fast (D-2, no silent drop).
+// Shared kernel: both the owned-entity serialization loop (Step 4) and the M5
+// override-value serialization call this so the resolve/lookup/fail-fast idiom
+// lives in exactly one place; `field` names the failing field in the error.
+function _handleToGuid(
+  world: World,
+  registry: AssetRegistry,
+  handle: number,
+  field: string,
+): Result<string | undefined, SceneCollectAssetGuidUnresolvedError> {
+  if (handle === 0) return ok(undefined); // NULL sentinel
+  const assetRes = resolveAssetHandle(world, handle as unknown as Handle<string, 'shared'>);
+  if (!assetRes.ok) return err(new SceneCollectAssetGuidUnresolvedError(field, handle));
+  const guid = registry._guidForAsset(assetRes.value as Asset);
+  if (guid === undefined) return err(new SceneCollectAssetGuidUnresolvedError(field, handle));
+  return ok(guid);
+}
+
+// Convert one shared field value (scalar handle or array<handle>) from the live
+// handle domain to the serialized GUID domain, applying the two-state NULL
+// sentinel: scalar handle 0 -> undefined (caller omits the field); array handle
+// 0 -> numeric 0 kept in place (positional SoA alignment, #640). Non-shared
+// values pass through untouched.
+function _serializeSharedFieldValue(
+  world: World,
+  registry: AssetRegistry,
+  classification: SchemaFieldClass,
+  value: unknown,
+  field: string,
+): Result<unknown, SceneCollectAssetGuidUnresolvedError> {
+  if (classification.scalar) {
+    if (typeof value !== 'number') return ok(value);
+    return _handleToGuid(world, registry, value, field); // undefined -> caller omits
+  }
+  if (!Array.isArray(value)) return ok(value);
+  const mapped: Array<string | number> = [];
+  for (const elem of value as ReadonlyArray<unknown>) {
+    if (typeof elem !== 'number') {
+      mapped.push(elem as number);
+      continue;
+    }
+    const g = _handleToGuid(world, registry, elem, field);
+    if (!g.ok) return g;
+    mapped.push(g.value ?? 0); // NULL sentinel keeps positional 0
+  }
+  return ok(mapped);
+}
+
+// Convert an override's value from the live handle domain to the serialized GUID
+// domain (w21). Field-patch form (`ov.field` present) carries a single field
+// value; component-add form carries a per-field value map. Shared fields are
+// reverse-looked-up per {@link _serializeSharedFieldValue}; a scalar NULL
+// sentinel drops the key (component-add) or is kept as 0 (field-patch, where the
+// override IS that field so it cannot be omitted). Non-shared fields pass through.
+function _serializeOverrideValueHandles(
+  world: World,
+  registry: AssetRegistry,
+  ov: MountOverride,
+): Result<unknown, SceneCollectAssetGuidUnresolvedError> {
+  const comp = resolveComponent(ov.comp);
+  const schema = comp?.schema as Record<string, string> | undefined;
+  if (ov.field !== undefined) {
+    const classification = schema ? classifyFieldSchema(schema[ov.field]) : undefined;
+    if (!classification || classification.kind !== 'shared') return ok(ov.value);
+    const conv = _serializeSharedFieldValue(world, registry, classification, ov.value, ov.field);
+    if (!conv.ok) return conv;
+    // Field-patch: keep the field even at NULL sentinel (the override IS the
+    // field); undefined only arises for a scalar handle 0 -> emit 0.
+    return ok(conv.value ?? 0);
+  }
+  // component-add: value is a per-field map.
+  if (typeof ov.value !== 'object' || ov.value === null || Array.isArray(ov.value)) {
+    return ok(ov.value);
+  }
+  const src = ov.value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const fieldName of Object.keys(src)) {
+    const classification = schema ? classifyFieldSchema(schema[fieldName]) : undefined;
+    if (!classification || classification.kind !== 'shared') {
+      out[fieldName] = src[fieldName];
+      continue;
+    }
+    const conv = _serializeSharedFieldValue(
+      world,
+      registry,
+      classification,
+      src[fieldName],
+      fieldName,
+    );
+    if (!conv.ok) return conv;
+    if (classification.scalar && conv.value === undefined) continue; // scalar 0 -> omit
+    out[fieldName] = conv.value;
+  }
+  return ok(out);
+}
+
+// Collect the inline GUID strings from one override's shared fields into `set`
+// (M5 / w21 refs completeness). Field-patch form checks the single field;
+// component-add form checks each key of the value map. Non-shared / non-string
+// values are ignored.
+function _collectOverrideGuids(ov: MountOverride, set: Set<string>): void {
+  const comp = resolveComponent(ov.comp);
+  const schema = comp?.schema as Record<string, string> | undefined;
+  const addFromField = (fieldName: string, value: unknown): void => {
+    const classification = schema ? classifyFieldSchema(schema[fieldName]) : undefined;
+    if (!classification || classification.kind !== 'shared') return;
+    if (classification.scalar) {
+      if (typeof value === 'string') set.add(value);
+    } else if (Array.isArray(value)) {
+      for (const elem of value as ReadonlyArray<unknown>) {
+        if (typeof elem === 'string') set.add(elem);
+      }
+    }
+  };
+  if (ov.field !== undefined) {
+    addFromField(ov.field, ov.value);
+    return;
+  }
+  if (typeof ov.value === 'object' && ov.value !== null && !Array.isArray(ov.value)) {
+    const map = ov.value as Record<string, unknown>;
+    for (const fieldName of Object.keys(map)) addFromField(fieldName, map[fieldName]);
+  }
+}
+
 // serializeSceneAssetToPack — unchanged from original
 export function serializeSceneAssetToPack(
   sceneAsset: SceneAsset,
@@ -135,10 +266,16 @@ export function serializeSceneAssetToPack(
       }
     }
   }
-  // Phase 1.5: collect mounts[].source GUID strings into guidSet (m3-i1).
+  // Phase 1.5: collect mounts[].source GUID strings into guidSet (m3-i1) +
+  // mounts[].overrides[] shared-field GUID strings (M5 / w21) so the scene
+  // envelope's refs[] recursion source lists every asset a mount override
+  // references (loadByGuid preloads them before instantiate).
   if (sceneAsset.mounts !== undefined) {
     for (const m of sceneAsset.mounts) {
       if (typeof m.source === 'string') guidSet.add(m.source);
+      for (const ov of m.overrides ?? []) {
+        _collectOverrideGuids(ov, guidSet);
+      }
     }
   }
 
@@ -220,6 +357,14 @@ export function serializeSceneAssetToPack(
         sm.source = m.source as unknown as number;
       }
       if (m.parent !== undefined) sm.parent = m.parent as unknown as number;
+      // M5 / w21: pass mounts[].overrides[] through unchanged. Override shared
+      // fields already carry inline GUID strings (rootsToSceneAsset did the
+      // handle→GUID reverse-lookup); the deserialize + apply path reads those
+      // GUID strings directly (resolveMountOverrides / forEachHandleGuid), so
+      // unlike entity/source fields they are NOT rewritten to refs[] indices.
+      if (m.overrides !== undefined && m.overrides.length > 0) {
+        sm.overrides = m.overrides.map((ov) => ({ ...ov }));
+      }
       serializedMounts.push(sm);
     }
   }
@@ -498,6 +643,31 @@ export function rootsToSceneAsset(
         } as SceneInstanceMount['components'];
       }
     }
+    // ── M5 (w20 + w21): fold runtime-authored overrides into this mount ──
+    // foldMountOverrides emits child-namespace localIds in the LIVE handle
+    // domain; rebase each into the parent namespace (memberFirst + childLocalId)
+    // and reverse-lookup shared-field handles to GUID strings (two-state
+    // NULL-sentinel). Unresolvable handle -> SceneCollectAssetGuidUnresolvedError
+    // (D-2 fail-fast, no silent drop).
+    const memberFirst0 = nextMF;
+    let mountOverrides: MountOverride[] | undefined;
+    const foldStateRes = world.getSceneInstanceState(a.entityRaw as EntityHandle);
+    if (foldStateRes.ok) {
+      const rawOverrides = foldMountOverrides(world, foldStateRes.value);
+      if (rawOverrides.length > 0) {
+        mountOverrides = [];
+        for (const ov of rawOverrides) {
+          const convRes = _serializeOverrideValueHandles(world, registry, ov);
+          if (!convRes.ok) return convRes;
+          mountOverrides.push({
+            ...ov,
+            localId: (memberFirst0 + (ov.localId as unknown as number)) as LocalEntityId,
+            value: convRes.value,
+          });
+        }
+      }
+    }
+
     const mount: SceneInstanceMount = {
       localId: (ownedCount + outMounts.length) as LocalEntityId,
       source: a.sourceGuid,
@@ -505,6 +675,9 @@ export function rootsToSceneAsset(
       memberCount: a.totalSlots,
       ...(mp !== undefined ? { parent: mp as LocalEntityId } : {}),
       ...(mountComponents !== undefined ? { components: mountComponents } : {}),
+      ...(mountOverrides !== undefined && mountOverrides.length > 0
+        ? { overrides: mountOverrides }
+        : {}),
     };
     outMounts.push(mount);
     nextMF += a.totalSlots;
@@ -617,56 +790,23 @@ export function rootsToSceneAsset(
             fieldValues[fieldName] = mapped;
           }
         } else {
-          if (classification.scalar) {
-            const handle = rawValue as number;
-            // NULL sentinel: an unset shared<T> scalar defaults to slot 0 (ECS
-            // three-layer default; world.ts retain arms treat `!== 0` as the
-            // active-slot guard). Omit the field entirely — deserialize restores
-            // it to the same slot-0 default, so the round-trip is lossless.
-            // Emitting 0 here would be misread as refs index 0 by the pack
-            // deserialize path (parseScenePayload HANDLE_FIELD_NAMES).
-            if (handle === 0) continue;
-            const assetRes = resolveAssetHandle(
-              world,
-              handle as unknown as Handle<string, 'shared'>,
-            );
-            if (!assetRes.ok)
-              return err(new SceneCollectAssetGuidUnresolvedError(fieldName, handle));
-            const guid = registry._guidForAsset(assetRes.value as Asset);
-            if (guid === undefined)
-              return err(new SceneCollectAssetGuidUnresolvedError(fieldName, handle));
-            fieldValues[fieldName] = guid;
-          } else {
-            const arr = _isArrayLike(rawValue)
-              ? _normalizeArray(rawValue)
-              : (rawValue as unknown[]);
-            const mapped: Array<string | number> = [];
-            for (const elem of arr) {
-              const handle = elem as number;
-              // NULL sentinel: a slot in a positional shared array (e.g.
-              // AnimationPlayer.clips = [h, 0, 0, 0]) may be 0. These slots
-              // correlate positionally with paired SoA arrays (times / weights /
-              // speeds), so we preserve the slot as numeric 0 rather than
-              // dropping it — the schema-driven deserialize (_resolveSceneGuids /
-              // extractSceneEntityHandleGuids) skips non-string elements and
-              // keeps their position.
-              if (handle === 0) {
-                mapped.push(0);
-                continue;
-              }
-              const assetRes = resolveAssetHandle(
-                world,
-                handle as unknown as Handle<string, 'shared'>,
-              );
-              if (!assetRes.ok)
-                return err(new SceneCollectAssetGuidUnresolvedError(fieldName, handle));
-              const guid = registry._guidForAsset(assetRes.value as Asset);
-              if (guid === undefined)
-                return err(new SceneCollectAssetGuidUnresolvedError(fieldName, handle));
-              mapped.push(guid);
-            }
-            fieldValues[fieldName] = mapped;
-          }
+          // shared<T> field — reverse-lookup handle(s) to GUID(s) via the shared
+          // kernel (same two-state NULL-sentinel the M5 override serializer uses).
+          // scalar handle 0 -> undefined => omit the field (deserialize restores
+          // the slot-0 default; emitting 0 would be misread as refs index 0 by
+          // parseScenePayload HANDLE_FIELD_NAMES). array handle 0 -> positional 0
+          // kept (paired SoA alignment, e.g. AnimationPlayer.clips = [h,0,0,0]).
+          const normalized = _isArrayLike(rawValue) ? _normalizeArray(rawValue) : rawValue;
+          const conv = _serializeSharedFieldValue(
+            world,
+            registry,
+            classification,
+            normalized,
+            fieldName,
+          );
+          if (!conv.ok) return conv;
+          if (classification.scalar && conv.value === undefined) continue; // NULL sentinel -> omit
+          fieldValues[fieldName] = conv.value;
         }
       }
 

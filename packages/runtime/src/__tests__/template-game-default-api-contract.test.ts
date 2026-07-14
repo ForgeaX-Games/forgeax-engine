@@ -265,15 +265,18 @@ describe('templates/game-default API contract (regression for `world.sceneInstan
     const pack = JSON.parse(readFileSync(packPath, 'utf-8')) as {
       assets: {
         kind: string;
-        payload?: { kind?: string; entities?: SceneEntity[]; nodes?: SceneEntity[] };
+        payload?: { entities?: SceneEntity[]; nodes?: SceneEntity[] };
       }[];
     };
 
     const offenders: string[] = [];
     let scanned = 0;
     for (const asset of pack.assets) {
-      if (asset.payload?.kind !== 'scene') continue;
-      for (const node of asset.payload.entities ?? asset.payload.nodes ?? []) {
+      // The envelope `kind` is the authoritative asset discriminant; the payload
+      // no longer restates it (Derive, Don't Duplicate — the loader synthesises
+      // Asset.kind from the envelope on load).
+      if (asset.kind !== 'scene') continue;
+      for (const node of asset.payload?.entities ?? asset.payload?.nodes ?? []) {
         for (const [compName, data] of Object.entries(node.components)) {
           if (STRIP_COMPONENTS.has(compName)) continue;
           scanned++;
