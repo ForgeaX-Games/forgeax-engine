@@ -773,6 +773,17 @@ export interface Component<N extends string = string, S extends ComponentSchema 
    */
   readonly transient: boolean;
   /**
+   * Companion components auto-attached at `world.spawn` time when the caller
+   * omits them from the spawn bundle (tweak-20260714 M1). `undefined` for
+   * components that declare no companions. See
+   * {@link DefineComponentOptions.coAttach} for the declaration surface and
+   * chain-isolation contract.
+   */
+  readonly coAttach?: readonly {
+    readonly component: Component<string, ComponentSchema>;
+    readonly data: Readonly<Record<string, unknown>>;
+  }[];
+  /**
    * Component-level open namespace (feat-20260602 M1 / D-A3, AC-01 layer 1).
    * A frozen `Record<string, unknown>` map aggregating every field-level `meta`
    * sub-key declared in the field-descriptor input. The infra gives no key any
@@ -1185,6 +1196,27 @@ export interface DefineComponentOptions<S extends ComponentSchema = ComponentSch
    * rebuilt by the mirror hook after instantiateScene).
    */
   readonly transient?: boolean;
+  /**
+   * Companion components auto-attached at `world.spawn` time when the caller
+   * omits them from the spawn bundle
+   * (tweak-20260714-tilemap-layer-childed-render-entities M1 / plan-strategy
+   * D-1). Each entry names a `component` token and its `data` payload; if the
+   * spawn bundle already carries that component the caller's value wins
+   * (layer-1 preservation). Chain-isolated: auto-attached companions do NOT
+   * recursively trigger their own `coAttach` (charter P4 boundary — keeps
+   * archetype hash stable, prevents unbounded expansion).
+   *
+   * Canonical consumer: `TileLayer` declares
+   * `coAttach: [{ component: Transform, data: {} }]` so any spawn of
+   * `TileLayer` without a caller-supplied Transform lands identity TRS via
+   * Transform's field-level defaults — satisfying requirements AC-01
+   * (default identity Transform) + AC-09 (existing demo spawn code stays
+   * byte-identical).
+   */
+  readonly coAttach?: readonly {
+    readonly component: Component<string, ComponentSchema>;
+    readonly data: Readonly<Record<string, unknown>>;
+  }[];
 }
 
 /**
@@ -1358,6 +1390,18 @@ export function defineComponent<const N extends string, const S extends FieldsIn
       );
     }
   }
+  // coAttach declarations (tweak-20260714 M1): freeze the array + each entry
+  // so downstream consumers cannot mutate the metadata surface. `undefined`
+  // (not an empty array) means "no companions" — spawn-side skip is a
+  // property-existence check.
+  const coAttach =
+    options?.coAttach === undefined
+      ? undefined
+      : Object.freeze(
+          options.coAttach.map((entry) =>
+            Object.freeze({ component: entry.component, data: entry.data }),
+          ),
+        );
   const token = {
     name,
     schema: frozenSchema,
@@ -1369,6 +1413,7 @@ export function defineComponent<const N extends string, const S extends FieldsIn
     onInsert: options?.onInsert,
     onRemove: options?.onRemove,
     relationship,
+    coAttach,
     meta: frozenMeta,
     fields: frozenFields,
     toSchemaJSON(): string {

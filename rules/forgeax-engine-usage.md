@@ -3,7 +3,7 @@
 > 你是 forgeax 引擎的**主用户**（AGENTS.md §Core rule）。本 rule 是**常驻路由**——按任务名挑一个 `forgeax-engine-*` skill load 其正文；它**不教 API**，API 教学在各 skill 正文。
 
 > [!IMPORTANT]
-> **不要预先 load 全 12 个 skill。** 上下文有限。任务来时按下表选 1 个 load；自然跨域才 load 第 2 个。skill 名字+description 已常驻。
+> **不要预先 load 全 15 个 skill。** 上下文有限。任务来时按下表选 1 个 load；自然跨域才 load 第 2 个。skill 名字+description 已常驻。
 
 ## 任务 → skill 索引
 

@@ -4,7 +4,10 @@
 // dirty (or has never been extracted), purges its previously-spawned derived
 // per-cell entities and re-spawns one ECS entity per non-zero cell. Each
 // derived entity carries Transform + MeshFilter (HANDLE_QUAD) + MeshRenderer
-// + Layer. Derived entities are root entities (no ChildOf) so propagateTransforms
+// + Layer + ChildOf { parent: layerEntity }. The ChildOf edge lets
+// `world.despawn(tilemapEntity)` cascade-despawn the entire subtree
+// (Tilemap -> TileLayer -> derived render entities) via the engine's
+// default `linkedSpawn: true` (tweak-20260714 M2, requirements AC-02/03/04).
 //
 // M0 baseline: unit-cell 1x1 form, single-atlas, no UV inset.
 // M2 extension (plan-strategy §D-2 + §D-7 step 3):
@@ -68,6 +71,7 @@ import {
   CAMERA_PROJECTION_ORTHOGRAPHIC,
   Camera,
   ChildOf,
+  Children,
   decodeSortScope,
   Layer,
   MeshFilter,
@@ -100,9 +104,17 @@ import { worldEntityKey } from './record/frame-snapshot';
 //      placeholder is ignored at draw time.
 const atlasMaterialCache = new Map<string, number>();
 const atlasOnlyMaterialCache = new Map<string, number>();
-// Terrain (sortScope='layer') layers: one entry per layer, all entities.
-const layerDerivedEntities = new Map<number, number[]>();
-const layerEverBuilt = new Set<number>();
+// tweak-20260714 M3 (plan-strategy §2 D-3): the terrain (sortScope='layer')
+// derived-entity tracker Map + first-frame-heuristic Set that used to live
+// alongside these material caches were retired once every derived entity
+// was attached as `ChildOf` child of its TileLayer (M2). The reverse
+// mirror `Children.entities` on the TileLayer is now the SSOT for
+// "which derived entities belong to this layer" — engine-maintained on
+// `world.addComponent(ChildOf) / world.despawn`, deriving-not-duplicating
+// (architecture-principles §2). `purgeDerivedEntities` reads that mirror
+// directly; the "already built" gate uses `Children.entities.length > 0`,
+// which naturally handles both first frames (empty ⇒ rebuild) and steady
+// state (populated ⇒ skip) without a second parallel ledger.
 
 // ─── Chunk-streaming state for sortScope='per-cell' (object) layers ───────
 //
@@ -157,15 +169,46 @@ export function resetTilemapChunkExtractCache(): void {
 }
 
 /**
- * Flush the per-layer derived-entity tracker + the first-frame heuristic
- * set. Useful in test harnesses + when the World is re-created.
+ * Flush the per-cell streaming caches. Useful in test harnesses + when
+ * the World is re-created.
+ *
+ * Signature preserved (AC-08 hard constraint) after tweak-20260714 M3
+ * retired the terrain-side tracker Map + first-frame heuristic Set:
+ * terrain layers now derive their "already-built" state from
+ * `Children.entities` on the TileLayer (mirror of ChildOf, engine-
+ * maintained), so the tracker only needs to clear the 3 streaming
+ * caches (plan-strategy §2 D-3 + §2 D-5).
  */
 export function resetTilemapDerivedEntityTracker(): void {
-  layerDerivedEntities.clear();
-  layerEverBuilt.clear();
   layerStreamCache.clear();
   layerChunkStreamEntities.clear();
   layerChunkActive.clear();
+}
+
+/**
+ * @internal Test-only helper for AC-11 (tweak-20260714 M4). Returns the
+ * union of `layerKey`s currently referenced by the three per-cell
+ * streaming caches. Post-diff-cleanup, an evicted layerKey MUST NOT
+ * appear here; a slot subsequently reused for a fresh TileLayer sees
+ * empty caches and rebuilds from zero (plan-strategy §2 D-4).
+ *
+ * Parsing `layerChunkStreamEntities` key format `${worldId}:${layerKey}:
+ * ${chunkIdx}` is intentional so callers observe cleanup on all three
+ * maps without depending on the invariant `activeSet ↔ chunkStreamEntities
+ * keys are paired` — the test then also cross-checks that invariant.
+ */
+export function _peekPerCellStreamingLayerKeys(): readonly number[] {
+  const out = new Set<number>();
+  for (const layerKey of layerStreamCache.keys()) out.add(layerKey);
+  for (const layerKey of layerChunkActive.keys()) out.add(layerKey);
+  for (const key of layerChunkStreamEntities.keys()) {
+    const parts = key.split(':');
+    const middle = parts[1];
+    if (middle === undefined) continue;
+    const layerKey = Number(middle);
+    if (Number.isFinite(layerKey)) out.add(layerKey);
+  }
+  return Array.from(out);
 }
 
 /**
@@ -510,10 +553,18 @@ function computeTileTrs(
  * sortScope path (`sortScope='per-cell'`, object layers) where each cell
  * needs an independent Y-sort position to interleave with sprite entities
  * (e.g. player) at arbitrary Y positions.
+ *
+ * `layerEntity` becomes the derived entity's `ChildOf.parent`, so
+ * `world.despawn(layerEntity)` cascade-despawns every derived cell entity
+ * via the engine's `linkedSpawn: true` default (feat-20260616). Combined
+ * with the Tilemap -> TileLayer ChildOf edge, a single
+ * `world.despawn(tilemapEntity)` unwinds the entire subtree without a
+ * bespoke tilemap-scoped cleanup pass (requirements AC-02 / AC-03).
  */
 function spawnDerivedRenderEntities(
   world: World,
   tilemap: { tileSize: ArrayLike<number> },
+  layerEntity: EntityHandle,
   layerOrder: number,
   spec: DerivedSpawnSpec,
   packedTile: number,
@@ -539,6 +590,7 @@ function spawnDerivedRenderEntities(
         },
       },
       { component: Layer, data: { value: layerValue } },
+      { component: ChildOf, data: { parent: layerEntity } },
     )
     .unwrap();
 }
@@ -577,6 +629,7 @@ function spawnSpriteInstancesGroup(
   world: World,
   tilemap: { cols: number; tileSize: ArrayLike<number>; chunkSize: number },
   tileset: TilesetAsset,
+  layerEntity: EntityHandle,
   layerOrder: number,
   chunkIndex: number,
   atlasIndex: number,
@@ -690,6 +743,7 @@ function spawnSpriteInstancesGroup(
       },
       { component: SpriteInstances, data: { transforms, regions } },
       { component: Layer, data: { value: layerValue } },
+      { component: ChildOf, data: { parent: layerEntity } },
     )
     .unwrap();
 }
@@ -904,17 +958,108 @@ export function computeChunkStreamBounds(
   return [minX, minY, -1, maxX, maxY, 1] as unknown as box3.Box3Like;
 }
 
-function purgeDerivedEntities(world: World, layerEntity: EntityHandle, worldId: number): void {
-  const layerKey = worldEntityKey(
-    worldId,
-    unwrapHandle(layerEntity as unknown as Handle<string, 'shared'>),
-  );
-  const tracked = layerDerivedEntities.get(layerKey);
-  if (tracked === undefined) return;
-  for (const e of tracked) {
-    world.despawn(e as EntityHandle);
+/**
+ * Despawn every derived render entity currently attached to `layerEntity`.
+ *
+ * After tweak-20260714 M3 the terrain path locates its previously-spawned
+ * children via `Children.entities` on the TileLayer (mirror of ChildOf,
+ * engine-maintained via the relationship hook) rather than a module-level
+ * tracker Map — SSOT collapse per architecture-principles §2 (Derive,
+ * Don't Duplicate). The snapshot returned by
+ * `world.get(layerEntity, Children).entities` is a fresh read-only
+ * Uint32Array that is stable across the iteration even though each
+ * despawn prunes the mirror in place.
+ *
+ * Empty children (never-built layer, or already-purged) trivially
+ * short-circuits — this is the "empty array no-op" equivalence to the
+ * old first-frame-heuristic guard (plan-strategy §2 D-3 edge case 3).
+ */
+function purgeDerivedEntities(world: World, layerEntity: EntityHandle): void {
+  const r = world.get(layerEntity, Children);
+  if (!r.ok) return;
+  const snap = r.value.entities;
+  for (let i = 0; i < snap.length; i++) {
+    const e = snap[i];
+    if (e !== undefined) world.despawn(e as EntityHandle);
   }
-  layerDerivedEntities.delete(layerKey);
+}
+
+/**
+ * Snapshot of a single TileLayer's per-frame work item — populated by the
+ * main-loop query and consumed both by the per-cell diff-cleanup preamble
+ * (`evictDeadPerCellStreamingCaches`) and the per-layer processing branches.
+ */
+interface LayerWork {
+  readonly layerEntity: EntityHandle;
+  readonly parentEntity: EntityHandle;
+  readonly dirty: number;
+  readonly sortScopeRaw: number;
+}
+
+/**
+ * tweak-20260714 M4 diff-cleanup preamble (plan-strategy §2 D-4 +
+ * requirements §5 AC-11 + §8 edge case #4).
+ *
+ * The per-cell streaming caches (`layerStreamCache` / `layerChunkActive` /
+ * `layerChunkStreamEntities`) are module-scoped and outlive individual
+ * TileLayer entities. When a TileLayer is despawned (or cascade-collected
+ * via `world.despawn(tilemapEntity)`) the ECS mirrors clean up entities
+ * and `Children.entities`, but these three Maps retain the dead layer's
+ * entries indefinitely. On slot reuse (a fresh TileLayer landing on the
+ * same entity slot -> the same `layerKey = worldEntityKey(worldId, slot)`)
+ * the stale entries would corrupt rebuild: `activeSet` still lists old
+ * chunkIndexes, and the rebuild branch would attempt to despawn stale
+ * entity IDs before repopulating.
+ *
+ * Fix: at the top of each frame, diff "layerKeys currently in caches for
+ * this worldId" against "layerKeys the fresh query returned". The set
+ * difference names layers that vanished since the previous call; evict
+ * their entries from all three Maps. `activeSet` is the SSOT for "which
+ * chunkIndexes have entries under this layer" (each insertion / removal
+ * pairs a `layerChunkStreamEntities` set/delete with an `activeSet` add/
+ * delete), so cleanup iterates `activeSet` rather than prefix-scanning
+ * `layerChunkStreamEntities.keys()` — O(chunks-per-dead-layer) instead
+ * of O(total-cache-keys).
+ *
+ * Cross-world isolation: `layerKey = worldId * 2^32 + slot`
+ * (`worldEntityKey`, `record/frame-snapshot.ts`), so
+ * `Math.floor(layerKey / 2^32) === worldId` filters out entries that
+ * belong to a different world. Those other worlds run their own extract
+ * call and clean up their own dead layers there.
+ *
+ * Per-frame cost (OOS-3 invariant): the two `keys()` iterations scan
+ * O(cache_size) ≤ O(all-ever-seen-layers-for-this-worldId). Typical
+ * scenes have ≤ 10 layers so this is a handful of Map lookups; no
+ * matrix arithmetic. Actual eviction work only runs on frames where a
+ * layer vanished — steady-state frames pay only the diff scan.
+ */
+function evictDeadPerCellStreamingCaches(work: readonly LayerWork[], worldId: number): void {
+  const WORLDID_STRIDE = 4294967296; // 2^32
+  const aliveLayerKeys = new Set<number>();
+  for (const w of work) {
+    aliveLayerKeys.add(
+      worldEntityKey(worldId, unwrapHandle(w.layerEntity as unknown as Handle<string, 'shared'>)),
+    );
+  }
+  const deadLayerKeys = new Set<number>();
+  for (const layerKey of layerChunkActive.keys()) {
+    if (Math.floor(layerKey / WORLDID_STRIDE) !== worldId) continue;
+    if (!aliveLayerKeys.has(layerKey)) deadLayerKeys.add(layerKey);
+  }
+  for (const layerKey of layerStreamCache.keys()) {
+    if (Math.floor(layerKey / WORLDID_STRIDE) !== worldId) continue;
+    if (!aliveLayerKeys.has(layerKey)) deadLayerKeys.add(layerKey);
+  }
+  for (const deadKey of deadLayerKeys) {
+    const activeSet = layerChunkActive.get(deadKey);
+    if (activeSet !== undefined) {
+      for (const chunkIdx of activeSet) {
+        layerChunkStreamEntities.delete(`${worldId}:${deadKey}:${chunkIdx}`);
+      }
+      layerChunkActive.delete(deadKey);
+    }
+    layerStreamCache.delete(deadKey);
+  }
 }
 
 /**
@@ -938,12 +1083,6 @@ function purgeDerivedEntities(world: World, layerEntity: EntityHandle, worldId: 
  *     to visible tile count rather than total map tile count.
  */
 export function tilemapChunkExtractSystem(world: World, worldId: number): void {
-  type LayerWork = {
-    readonly layerEntity: EntityHandle;
-    readonly parentEntity: EntityHandle;
-    readonly dirty: number;
-    readonly sortScopeRaw: number;
-  };
   const work: LayerWork[] = [];
   const tileLayerQuery = createQueryState({ with: [TileLayer, ChildOf, Entity] });
   queryRun(tileLayerQuery, world, (bundle) => {
@@ -961,6 +1100,8 @@ export function tilemapChunkExtractSystem(world: World, worldId: number): void {
       });
     }
   });
+
+  evictDeadPerCellStreamingCaches(work, worldId);
 
   // Compute the camera frustum once per frame — only needed when at least
   // one streaming (per-cell) layer exists. Null = always-visible fallback.
@@ -982,18 +1123,23 @@ export function tilemapChunkExtractSystem(world: World, worldId: number): void {
       // ── Terrain batched path (sortScope='layer') ──────────────────────
       // Spawn once per dirty; entity AABB covers the chunk footprint for
       // entity-level frustum culling in render-system-extract.
-      const everBuilt = layerEverBuilt.has(layerKey);
-      if (everBuilt && w.dirty === 0) continue;
+      //
+      // "already built" is derived from Children.entities (mirror of
+      // ChildOf, engine-maintained). Empty children ⇒ never built (or
+      // just purged) ⇒ don't skip. Populated children + dirty=0 ⇒
+      // steady state ⇒ skip. Populated + dirty=1 ⇒ purge + rebuild.
+      // architecture-principles §2 (Derive, Don't Duplicate): the
+      // former module-level "ever-built" Set was a second copy of
+      // information that Children.entities already carries.
+      const childrenRes = world.get(w.layerEntity, Children);
+      const childCount = childrenRes.ok ? childrenRes.value.entities.length : 0;
+      if (childCount > 0 && w.dirty === 0) continue;
 
-      purgeDerivedEntities(world, w.layerEntity, worldId);
+      purgeDerivedEntities(world, w.layerEntity);
 
       const bucket = bucketTileLayer(world, w.layerEntity, w.parentEntity);
-      if (bucket === undefined) {
-        layerEverBuilt.add(layerKey);
-        continue;
-      }
+      if (bucket === undefined) continue;
 
-      const spawned: number[] = [];
       const byChunkAtlas = new Map<number, DerivedSpawnSpec[]>();
       for (const spec of bucket.specs) {
         const key = ((spec.chunkIndex & 0xfffff) << 16) | (spec.atlasIndex & 0xffff);
@@ -1007,22 +1153,18 @@ export function tilemapChunkExtractSystem(world: World, worldId: number): void {
       for (const groupSpecs of byChunkAtlas.values()) {
         const first = groupSpecs[0];
         if (first === undefined) continue;
-        const e = spawnSpriteInstancesGroup(
+        spawnSpriteInstancesGroup(
           world,
           bucket.tilemap,
           bucket.tileset,
+          w.layerEntity,
           bucket.layerOrder,
           first.chunkIndex,
           first.atlasIndex,
           first.materialHandle,
           groupSpecs,
         );
-        if (e !== undefined) {
-          spawned.push(unwrapHandle(e as unknown as Handle<string, 'shared'>));
-        }
       }
-      layerDerivedEntities.set(layerKey, spawned);
-      layerEverBuilt.add(layerKey);
       if (w.dirty !== 0) {
         world.set(w.layerEntity, TileLayer, { dirty: 0 }).unwrap();
       }
@@ -1108,6 +1250,7 @@ export function tilemapChunkExtractSystem(world: World, worldId: number): void {
           const e = spawnDerivedRenderEntities(
             world,
             tilemap,
+            w.layerEntity,
             cache.layerOrder,
             spec,
             spec.packedTile,

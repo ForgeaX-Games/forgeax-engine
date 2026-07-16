@@ -870,9 +870,9 @@ export class GpuResourceStore {
       // mip chain in `data` (offline-baked -- the GPU cannot generate compressed
       // mips). Upload each level with its own block-padded bytesPerRow /
       // rowsPerImage and mip-major byte offset (deriveMipUploadLayout, SSOT
-      // block math). A non-4-multiple size or a 1x1 / 2x2 tail pads up to a full
-      // block; the GPU samples only the valid texel region. queue.writeTexture
-      // avoids the 256 B copyBufferToTexture alignment trap.
+      // block math). Full-subresource copies retain their logical size, including
+      // non-block-aligned dimensions. queue.writeTexture avoids the 256 B
+      // copyBufferToTexture alignment trap.
       const layout = deriveMipUploadLayout(renderData.format, tex.width, tex.height, levels);
       for (const lvl of layout) {
         const slice = decoded.bytes.subarray(lvl.byteOffset, lvl.byteOffset + lvl.byteLength);
@@ -880,8 +880,6 @@ export class GpuResourceStore {
           { texture: gpuTexture, mipLevel: lvl.level, origin: { x: 0, y: 0, z: 0 } },
           slice,
           { offset: 0, bytesPerRow: lvl.bytesPerRow, rowsPerImage: lvl.rowsPerImage },
-          // Block-rounded copy extent (WebGPU compressed-copy rule): a sub-block
-          // tail mip uploads its full block extent, not the logical pixel size.
           { width: lvl.copyWidth, height: lvl.copyHeight, depthOrArrayLayers: 1 },
         );
         if (!writeRes.ok) return writeRes;

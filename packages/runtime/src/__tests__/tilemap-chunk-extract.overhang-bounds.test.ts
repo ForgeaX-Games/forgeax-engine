@@ -179,14 +179,17 @@ function makeOverhangScene(opts: OverhangSceneOpts = {}): Scene {
 function countDerivedPerCellEntities(world: World): number {
   let count = 0;
   for (const arch of world.inspect().archetypes) {
+    // Post tweak-20260714 M2 the derived per-cell archetype carries
+    // ChildOf { parent: layerEntity } so `world.despawn(tilemap)` can
+    // cascade-collect it; distinguish from the batched terrain / static
+    // instance archetypes via SpriteInstances / Instances absence.
     const isPerCell =
       arch.componentNames.includes('MeshFilter') &&
       arch.componentNames.includes('MeshRenderer') &&
       arch.componentNames.includes('Layer') &&
       arch.componentNames.includes('Transform') &&
       !arch.componentNames.includes('SpriteInstances') &&
-      !arch.componentNames.includes('Instances') &&
-      !arch.componentNames.includes('ChildOf');
+      !arch.componentNames.includes('Instances');
     if (!isPerCell) continue;
     count += arch.entityCount;
   }

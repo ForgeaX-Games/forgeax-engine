@@ -83,7 +83,7 @@ import type {
   VertexAttributeMap,
 } from '@forgeax/engine-types';
 import { derive, handleSlot } from '@forgeax/engine-types';
-import { audioLoaderPlaceholder } from './audio-loader-placeholder';
+import { audioLoader } from './audio-loader';
 import { classifyEnvErrorReason, composeEnvErrorHint } from './create-renderer-env-classify';
 import { createEngineMetrics } from './engine-metrics';
 import { EngineEnvironmentError } from './errors/environment';
@@ -146,12 +146,14 @@ import {
   AdvanceAnimationPlayer,
   ANIMATION_ASSET_RESOLVER_KEY,
   type AnimationAssetResolver,
+  AnimationSet,
   registerAdvanceAnimationPlayer,
 } from './systems/advance-animation-player';
 import {
   PROPAGATE_TRANSFORMS_SYSTEM,
   PropagateTransforms,
   registerPropagateTransforms,
+  TransformSet,
 } from './systems/propagate-transforms';
 import {
   createSkinPaletteAllocator,
@@ -167,10 +169,12 @@ export {
   ADVANCE_ANIMATION_PLAYER_SYSTEM,
   AdvanceAnimationPlayer,
   ANIMATION_ASSET_RESOLVER_KEY,
+  AnimationSet,
   PROPAGATE_TRANSFORMS_SYSTEM,
   PropagateTransforms,
   registerAdvanceAnimationPlayer,
   registerPropagateTransforms,
+  TransformSet,
 };
 
 // feat-20260611-fox-skinning-vertex-attribute-chain M4 / w16 (D-4): a single
@@ -1064,19 +1068,15 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // only single injection point (no setter, no illegal intermediate state).
   // feat-20260705-runtime-tier2-decomposition M1 / w10 (D-1 / D-2): the sole
   // production assembly point injects (a) the post-spawn hook
-  // `postSpawnResolveJoints` (auto-wire Skin.joints; D-1) and (b) the extra
-  // loader [audioLoaderPlaceholder] that wire-default-loaders does not import
-  // directly (D-2). M3 / w32 (D-2 terminal): videoLoader moved to
-  // @forgeax/engine-graphics-extras and is now statically imported by
-  // wire-default-loaders itself (assets-runtime -> graphics-extras forward
-  // edge), so it drops out of extraLoaders here; the wired set stays 11 kinds
-  // (10 from wire internals + audioLoaderPlaceholder). audioLoaderPlaceholder
-  // stays in runtime (OOS-9). This is the only `new AssetRegistry(...)` call in
-  // the repo (research F7 / F10).
+  // `postSpawnResolveJoints` (auto-wire Skin.joints; D-1) and the audio
+  // catalog-entry loader. The latter stays at this assembly boundary so
+  // assets-runtime remains independent of the concrete Web Audio backend.
+  // videoLoader is wired internally from graphics-extras; the full registry has
+  // 11 engine kinds. This is the only `new AssetRegistry(...)` call in the repo.
   const assets = new AssetRegistry(
     shaderRegistry,
     internals.importTransport,
-    [audioLoaderPlaceholder],
+    [audioLoader],
     postSpawnResolveJoints,
   );
   // feat-20260601-gpu-resource-store-extraction M1: the GPU residency layer

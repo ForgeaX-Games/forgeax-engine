@@ -3098,10 +3098,17 @@ import { handleNumeric } from './utils/handle-numeric';
       } catch (err) {
         expect(err).toBeInstanceOf(CyclicDependencyError);
         const msg = (err as CyclicDependencyError).message;
-        // Message should contain system names from the cycle
+        // Message should contain system names from the cycle (joined by ' -> ')
         expect(msg).toMatch(/X/);
         expect(msg).toMatch(/Y/);
         expect(msg).toMatch(/Z/);
+        // detail.cycle is structured array
+        const cycle = (err as CyclicDependencyError).detail.cycle;
+        expect(cycle).toBeInstanceOf(Array);
+        expect(cycle.length).toBeGreaterThanOrEqual(2);
+        expect(cycle).toContain('X');
+        expect(cycle).toContain('Y');
+        expect(cycle).toContain('Z');
       }
     });
 
@@ -3143,6 +3150,9 @@ import { handleNumeric } from './utils/handle-numeric';
         // Cycle involves A, B, C, D
         expect(msg).toMatch(/A/);
         expect(msg).toMatch(/B/);
+        const cycle = (err as CyclicDependencyError).detail.cycle;
+        expect(cycle).toBeInstanceOf(Array);
+        expect(cycle.length).toBeGreaterThanOrEqual(2);
       }
     });
 

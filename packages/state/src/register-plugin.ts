@@ -12,7 +12,7 @@
 // - plan-strategy D-6: schedule anchors 'input-frame-start-scan' -> 'transitionStates' -> 'propagateTransforms'
 // - plan-strategy D-4: insertResource initial values from token.defaultValue
 
-import { defineSystem, type SystemHandle, type World } from '@forgeax/engine-ecs';
+import { defineSystem, defineSystemSet, type SystemHandle, type World } from '@forgeax/engine-ecs';
 import { getRegisteredTokens } from './define-state';
 import { nextStateResourceKey, previousStateResourceKey, stateResourceKey } from './resources';
 import { registerScopedComponents } from './scoped-component';
@@ -25,6 +25,7 @@ const FRAME_START_SCAN_SYSTEM_NAME = 'input-frame-start-scan' as const;
 const PROPAGATE_TRANSFORMS_SYSTEM = 'propagateTransforms' as const;
 
 const TRANSITION_STATES_SYSTEM_NAME = 'transitionStates';
+export const StateSet = defineSystemSet({ name: 'state' });
 
 /**
  * The `transitionStates` system token (M2 — full resource-ification, D-4).
@@ -38,7 +39,6 @@ const TRANSITION_STATES_SYSTEM_NAME = 'transitionStates';
 export const TransitionStates: SystemHandle<readonly []> = defineSystem({
   name: TRANSITION_STATES_SYSTEM_NAME,
   queries: [],
-  labels: ['state'],
   after: [FRAME_START_SCAN_SYSTEM_NAME],
   before: [PROPAGATE_TRANSFORMS_SYSTEM],
   fn: (world) => {
@@ -83,5 +83,5 @@ export function registerStatesPlugin(world: World): void {
   }
 
   // Register the transition system.
-  world.addSystem(TransitionStates);
+  world.addSystems(StateSet, [TransitionStates]);
 }

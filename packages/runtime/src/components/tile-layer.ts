@@ -41,6 +41,7 @@
 
 import { defineComponent, type EcsError, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { Result } from '@forgeax/engine-types';
+import { Transform } from './transform';
 
 /**
  * Closed string-literal union for the TileLayer.sortScope field. AI users
@@ -135,12 +136,25 @@ export interface TileLayerData {
  * AI users supply the per-cell array at spawn time. To trigger a re-build
  * after mutating tiles in place, call `markTileLayerDirty(world, layer)`.
  */
-export const TileLayer = defineComponent('TileLayer', {
-  tiles: { type: 'array<u32>' },
-  layerOrder: { type: 'i32', default: 0 },
-  dirty: { type: 'u8', default: 0 },
-  sortScope: { type: 'u8', default: 0 },
-});
+export const TileLayer = defineComponent(
+  'TileLayer',
+  {
+    tiles: { type: 'array<u32>' },
+    layerOrder: { type: 'i32', default: 0 },
+    dirty: { type: 'u8', default: 0 },
+    sortScope: { type: 'u8', default: 0 },
+  },
+  {
+    // tweak-20260714-tilemap-layer-childed-render-entities M1 (AC-01 / AC-09):
+    // auto-attach an identity Transform on every TileLayer spawn so the layer
+    // entity's archetype enters propagateTransforms' liveMap. Transform's
+    // field-level defaults yield pos=[0,0,0] / quat=[0,0,0,1] / scale=[1,1,1]
+    // (identity TRS); demo spawn code stays byte-identical (AC-09). Callers
+    // that explicitly name Transform in their spawn bundle keep their value
+    // (layer-1 wins — see world._spawnCore expandCoAttach).
+    coAttach: [{ component: Transform, data: {} }],
+  },
+);
 
 /**
  * Mark a TileLayer entity dirty so the next `tilemapChunkExtractSystem`

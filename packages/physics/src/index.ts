@@ -33,3 +33,4 @@ export { PHYSICS_ERROR_HINTS, PhysicsError } from './errors';
 export type { PhysicsWorld, PhysicsWorld2D, RaycastHit, RaycastHit2D } from './physics-world';
 export type { PhysicsBackend } from './plugin-factory';
 export { physicsPlugin } from './plugin-factory';
+export { PhysicsSet } from './system-set';

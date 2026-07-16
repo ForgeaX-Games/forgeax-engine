@@ -186,17 +186,77 @@ export class ComponentNotPresentError extends Error {
  *
  * `.code = 'cyclic-dependency'`
  * `.hint` — includes the cycle path and suggests removing one constraint.
+ * `.detail` — `{ code: 'cyclic-dependency'; cycle: readonly string[] }` contains the
+ *    structured cycle path for programmatic consumption.
  */
 export class CyclicDependencyError extends Error {
   override readonly name = 'CyclicDependencyError';
   readonly code = 'cyclic-dependency' as const;
   readonly hint: string;
+  /** Structured cycle path — programmatic consumers read this, not the message. */
+  readonly detail: { readonly code: 'cyclic-dependency'; readonly cycle: readonly string[] };
 
-  constructor(cyclePath: string) {
-    const hint = `Cycle path: ${cyclePath}. Remove one ordering constraint to break the cycle.`;
-    super(`DAG Schedule has a cyclic dependency.\n  cycle: ${cyclePath}\n  hint: ${hint}`);
+  constructor(cycle: readonly string[]) {
+    const cycleStr = cycle.join(' -> ');
+    const hint = `Cycle path: ${cycleStr}. Remove one ordering constraint to break the cycle.`;
+    super(`DAG Schedule has a cyclic dependency.\n  cycle: ${cycleStr}\n  hint: ${hint}`);
     this.hint = hint;
+    this.detail = { code: 'cyclic-dependency' as const, cycle };
   }
+}
+
+/**
+ * Returned via `Result.err` from `world.addSystems` / `world.configureSets`
+ * when a SystemSet token fails identity validation against the global registry.
+ *
+ * The sole public invalid-token error type (D-2a). Covers all rejection
+ * scenarios: plain-object cast, unregistered name, stale token after
+ * overwrite, and cross-realm copies.
+ *
+ * `.code = 'system-set-not-registered'`
+ * `.expected` — the name of the unregistered token.
+ * `.hint` — suggests calling `getRegisteredSystemSets()` and re-importing the current token.
+ * `.detail` — `{ code, name, registered }` where `registered` is a deterministic snapshot
+ *    of the current registry keys.
+ */
+export class SystemSetNotRegisteredError extends Error {
+  override readonly name = 'SystemSetNotRegisteredError';
+  readonly code = 'system-set-not-registered' as const;
+  /** The name carried by the rejected token. */
+  readonly expected: string;
+  readonly hint: string;
+  /** Deterministic snapshot of the current registry for AI-user self-repair. */
+  readonly detail: {
+    readonly code: 'system-set-not-registered';
+    readonly name: string;
+    readonly registered: readonly string[];
+  };
+
+  constructor(name: string, registered: readonly string[]) {
+    const hint =
+      `SystemSet "${name}" is not in the current registry. ` +
+      `Call getRegisteredSystemSets() to enumerate valid sets, then re-import or re-define the token.`;
+    const message =
+      `SystemSet "${name}" is not registered.\n` +
+      `  expected: ${name}\n` +
+      `  registered: [${registered.join(', ')}]\n` +
+      `  hint: ${hint}`;
+    super(message);
+    this.expected = name;
+    this.hint = hint;
+    this.detail = { code: 'system-set-not-registered' as const, name, registered };
+  }
+}
+
+/**
+ * Factory for {@link SystemSetNotRegisteredError}. Consumed by
+ * {@link validateSystemSetTokens} (w4) and the two mutation entry points.
+ */
+export function systemSetNotRegistered(
+  name: string,
+  registered: readonly string[],
+): SystemSetNotRegisteredError {
+  return new SystemSetNotRegisteredError(name, registered);
 }
 
 /**
@@ -1923,7 +1983,12 @@ export type EcsErrorCode =
   // (spawn / addComponent / set). AI users resolve a GUID via
   // `loadByGuid + allocSharedRef` first; passing the raw GUID now fails fast.
   // Minor evolution +1 per AGENTS.md §Error model evolution contract.
-  | 'shared-field-invalid-value';
+  | 'shared-field-invalid-value'
+  // feat-20260714-bevy-style-system-sets M1 / w3 — sole invalid-SystemSet
+  // error code. Surfaced from world.addSystems / world.configureSets when a
+  // token fails identity validation (brand bypass + registry identity check).
+  // Minor evolution +1 per AGENTS.md §Error model evolution contract.
+  | 'system-set-not-registered';
 
 /**
  * Discriminated `.detail` payload per `.code`.
@@ -2165,6 +2230,21 @@ export type EcsErrorDetail =
       readonly fieldType: string;
       readonly actualValue: unknown;
       readonly index?: number;
+    }
+  // feat-20260714-bevy-style-system-sets M1 / w3 — invalid-SystemSet detail.
+  // `.detail.name` is the rejected token name; `.detail.registered` is a
+  // deterministic snapshot of the current registry keys.
+  | {
+      readonly code: 'system-set-not-registered';
+      readonly name: string;
+      readonly registered: readonly string[];
+    }
+  // feat-20260714-bevy-style-system-sets M2 / w12 — structured cyclic-dependency
+  // detail. `.detail.cycle` is the ordered cycle path array; consumers read
+  // this instead of parsing the message string.
+  | {
+      readonly code: 'cyclic-dependency';
+      readonly cycle: readonly string[];
     };
 
 // ────────────────────────────────────────────────────────────────────────────

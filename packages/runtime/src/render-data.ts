@@ -131,16 +131,9 @@ export interface MipUploadLevel {
   readonly width: number;
   /** Logical pixel height of this level (`baseHeight >> level`, min 1). */
   readonly height: number;
-  /**
-   * writeTexture `copySize.width`: the logical width rounded UP to a full block
-   * (`ceil(width / blockW) * blockW`). WebGPU requires a compressed-copy extent
-   * to be a multiple of the block width unless it exactly spans the subresource;
-   * a sub-block tail mip (width 1 or 2 for a 4-wide block) is therefore uploaded
-   * with the block-rounded extent (e.g. 4), not the logical size. Rounding never
-   * exceeds the physical block extent the GPU allocated for that mip.
-   */
+  /** Logical `writeTexture` copy width; full-subresource copies may end mid-block. */
   readonly copyWidth: number;
-  /** writeTexture `copySize.height`: logical height rounded up to a full block. */
+  /** Logical `writeTexture` copy height; full-subresource copies may end mid-block. */
   readonly copyHeight: number;
   /** Bytes per compressed row: `ceil(width / blockW) * bytesPerBlock`. */
   readonly bytesPerRow: number;
@@ -187,10 +180,8 @@ export function deriveMipUploadLayout(
       level,
       width,
       height,
-      // Block-round the copy extent so a sub-block tail mip (e.g. width 2 for a
-      // 4-wide block) satisfies the WebGPU compressed-copy block-multiple rule.
-      copyWidth: blockCols * params.blockW,
-      copyHeight: blockRows * params.blockH,
+      copyWidth: width,
+      copyHeight: height,
       bytesPerRow: rowBytes,
       rowsPerImage: blockRows,
       byteOffset,

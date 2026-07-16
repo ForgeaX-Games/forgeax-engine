@@ -8,17 +8,11 @@
 // research Finding 8). An AI user that has wired inspectors once recognises the
 // same form here at near-zero cost (requirements §AI User Affordances).
 //
-// D-2 (feat-20260705-runtime-tier2-decomposition): the two seed tables
-// INLINE_PACK_LOADERS + UPSTREAM_ENTRY_LOADERS are the SSOT here (imported from
-// the extracted loader modules created by w4). D-2 terminal (M3 / w32):
-// videoLoader now lives in @forgeax/engine-graphics-extras and is statically
-// imported + wired here (assets-runtime -> graphics-extras forward edge; ci.yml
-// builds graphics-extras before assets-runtime). Only the audio placeholder
-// stays caller-supplied via `extraLoaders` (OOS-9 -- its final home is coupled
-// with the audio unified import path). The sole production assembly site
-// (createRenderer, w10) passes `[audioLoaderPlaceholder]` to complete the
-// 11-kind set. This keeps the F4 reverse edge (wire -> audio loader) broken
-// while keeping registration behaviour equivalent.
+// The two seed tables INLINE_PACK_LOADERS + UPSTREAM_ENTRY_LOADERS are the
+// default set. videoLoader lives in graphics-extras and is wired here. The
+// renderer supplies its concrete Web Audio loader through `extraLoaders`, so
+// this package remains independent of the Web Audio backend while the
+// production registry still has all 11 engine kinds.
 //
 // Default set wired internally (10 kinds):
 //   inline pack-payload (6): mesh / scene / material / skeleton / skin /
@@ -41,8 +35,8 @@ import { UPSTREAM_ENTRY_LOADERS } from './loaders/upstream-entry';
  * texture + font + equirect + video) plus any `extraLoaders` onto `registry` in
  * one call. Returns the same `registry` for chaining (so `wireDefaultLoaders(new
  * LoaderRegistry())` is a one-expression wired registry). The `extraLoaders` are
- * appended after the defaults; the production assembly point (createRenderer)
- * passes `[audioLoaderPlaceholder]` to complete the 11-kind set.
+ * appended after the defaults; the production assembly point injects its
+ * concrete audio catalog-entry loader to complete the 11-kind set.
  *
  * @example
  * ```ts

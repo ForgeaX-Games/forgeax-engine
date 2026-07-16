@@ -54,6 +54,7 @@ interface LoaderEntry {
 /** texture loader — fetch bytes -> hdr / import / dev decode -> TextureAsset POD. */
 export const textureLoader: Loader = {
   kind: 'texture',
+  fromCatalogEntry: true,
   load(payload, _refs, ctx): Promise<LoaderAsyncResult> {
     const entry = payload as unknown as LoaderEntry;
     return loadTextureAsset(entry, ctx);
@@ -328,6 +329,7 @@ async function transcodeBasisTexture(
  */
 export const equirectLoader: Loader = {
   kind: 'equirect',
+  fromCatalogEntry: true,
   load(payload, _refs, ctx): Promise<LoaderAsyncResult> {
     const entry = payload as unknown as LoaderEntry;
     return loadEquirectAsset(entry, ctx);
@@ -389,6 +391,7 @@ async function loadEquirectAsset(entry: LoaderEntry, ctx: LoadContext): Promise<
 /** font loader — fetch pack JSON -> resolve atlas/sampler refs -> FontAsset POD. */
 export const fontLoader: Loader = {
   kind: 'font',
+  fromCatalogEntry: true,
   load(payload, _refs, ctx): Promise<LoaderAsyncResult> {
     const entry = payload as unknown as LoaderEntry;
     return loadFontAsset(entry, ctx);

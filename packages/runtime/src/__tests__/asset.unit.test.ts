@@ -92,7 +92,7 @@ import type {
 import { AssetError, toShared, toUnique, unwrapHandle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { deriveBuiltin } from '../../../pack/src/builtin';
-import { audioLoaderPlaceholder } from '../audio-loader-placeholder';
+import { audioLoader } from '../audio-loader';
 import { createDevImportTransport, type ImportTransport } from '../dev-import-transport';
 import { createEngineMetrics } from '../engine-metrics';
 import { GpuResourceStore } from '../gpu-resource-store';
@@ -738,19 +738,10 @@ function makeStubGPU(): unknown {
 
   const UNREGISTERED_STUBS = ['sampler', 'render-pipeline', 'shader'] as const;
 
-  describe('wireDefaultLoaders (w5; D-2 extraLoaders w8; D-2 terminal M3 / w32)', () => {
-    // feat-20260705-runtime-tier2-decomposition M3 / w32 (D-2 terminal):
-    // videoLoader now lives in @forgeax/engine-graphics-extras and is imported +
-    // wired internally by wireDefaultLoaders (assets-runtime -> graphics-extras
-    // forward edge). Only the audio placeholder stays caller-supplied via
-    // `extraLoaders` (OOS-9). Internal default set = 10 kinds (was 9); the
-    // createRenderer assembly point passes `[audioLoaderPlaceholder]` to complete
-    // the 11-kind set. Registration behaviour is equivalent -- the total wired
-    // set is unchanged; only the internal/injected split shifts by one
-    // (AC-05 allowed test attribution adjustment).
+  describe('wireDefaultLoaders', () => {
     it('registers the 10 engine loaders + extraLoader (audio) = 11 kinds', () => {
       const reg = new LoaderRegistry();
-      wireDefaultLoaders(reg, [audioLoaderPlaceholder]);
+      wireDefaultLoaders(reg, [audioLoader]);
       for (const kind of REGISTERED_KINDS) {
         expect(reg.get(kind), `expected loader for kind '${kind}'`).toBeDefined();
       }
@@ -767,33 +758,17 @@ function makeStubGPU(): unknown {
 
     it('does NOT register sampler / render-pipeline / shader (AC-02 exclusion)', () => {
       const reg = new LoaderRegistry();
-      wireDefaultLoaders(reg, [audioLoaderPlaceholder]);
+      wireDefaultLoaders(reg, [audioLoader]);
       for (const kind of UNREGISTERED_STUBS) {
         expect(reg.get(kind), `kind '${kind}' must stay unregistered`).toBeUndefined();
       }
     });
   });
 
-  describe('audio loader placeholder (w8 / D-3)', () => {
-    it('is registered under kind "audio"', () => {
-      expect(audioLoaderPlaceholder.kind).toBe('audio');
-    });
-
-    it('load returns a structured err(loader-not-registered) with a hint, never undefined', async () => {
-      const out = (await audioLoaderPlaceholder.load(
-        {},
-        undefined,
-        // ctx is unused by the placeholder.
-        undefined as never,
-      )) as LoaderAsyncResult;
-      expect(out.ok).toBe(false);
-      if (!out.ok) {
-        expect(out.error).toBeInstanceOf(AssetError);
-        const e = out.error as AssetError;
-        expect(e.code).toBe('loader-not-registered');
-        expect(e.hint.length).toBeGreaterThan(0);
-        expect(e.hint).toContain('loadAudioClipByGuid');
-      }
+  describe('audio loader', () => {
+    it('declares audio as a catalog-entry loader', () => {
+      expect(audioLoader.kind).toBe('audio');
+      expect(audioLoader.fromCatalogEntry).toBe(true);
     });
   });
 }

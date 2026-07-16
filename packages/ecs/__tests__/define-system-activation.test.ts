@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { defineComponent, getRegisteredComponents } from '../src/component';
-import { defineSystem, getRegisteredSystems } from '../src/index';
+import { defineSystem, defineSystemSet, getRegisteredSystems } from '../src/index';
 import { World } from '../src/world';
 
 describe('define-system-activation.test.ts', () => {
@@ -52,24 +52,27 @@ describe('define-system-activation.test.ts', () => {
 
   describe('AC-11: same-name silent overwrite (no throw)', () => {
     it('defineSystem second call overwrites in SYSTEM_REGISTRY without throw', () => {
+      const set = defineSystemSet({ name: 'w24-set' });
       const A = defineSystem({
         name: 'w24-dup',
         queries: [],
-        labels: ['first'],
         fn: () => {},
       });
       const B = defineSystem({
         name: 'w24-dup',
         queries: [],
-        labels: ['second'],
         fn: () => {},
       });
+      const world = new World();
+      world.addSystems(set, [B]);
 
       // No throw reached here -- defineSystem silently overwrites (OOS-3).
       // Registries are global singletons; the static import already resolved.
       const got = getRegisteredSystems().get('w24-dup');
       expect(got).toBe(B);
-      expect(got?.labels).toEqual(['second']);
+      expect(world.inspect().systems.find((system) => system.name === 'w24-dup')?.sets).toEqual([
+        'w24-set',
+      ]);
       expect(got).not.toBe(A);
     });
 

@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@forgeax/engine-assets-runtime": "workspace:*",
+    "@forgeax/engine-audio-webaudio": "workspace:*",
     "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-debug-draw": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
@@ -52,6 +53,7 @@
   "devDependencies": {
     "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-naga": "workspace:*",
+    "@forgeax/engine-state": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*"
   },
   "forgeax": {

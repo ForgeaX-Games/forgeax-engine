@@ -13,6 +13,7 @@
   ],
   "references": [
     { "path": "../assets-runtime" },
+    { "path": "../audio-webaudio" },
     { "path": "../codec" },
     { "path": "../debug-draw" },
     { "path": "../math" },
@@ -29,8 +30,8 @@
     { "path": "../render-graph" },
     { "path": "../pack" },
     { "path": "../plugin" },
+    { "path": "../state" },
     { "path": "../vite-plugin-shader" },
     { "path": "../import" }
   ]
 }
-

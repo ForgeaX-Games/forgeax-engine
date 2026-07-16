@@ -66,6 +66,7 @@ import {
   SpriteRegionOverride,
   skyboxModeFromF32,
   spritePlaybackModeFromU32,
+  TileLayer,
   Tilemap,
   TONEMAP_NONE,
   TONEMAP_REINHARD_EXTENDED,
@@ -2628,6 +2629,74 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         .unwrap();
       const row = world.get(e, Camera).unwrap();
       expect(Array.from(row.clearColor)).toEqual([Math.fround(0.4), Math.fround(0.6), 1, 1]);
+    });
+  });
+}
+
+{
+  // --- tweak-20260714-tilemap-layer-childed-render-entities M1 (AC-01) ---
+  //
+  // TileLayer.defineComponent declares coAttach: [{ Transform, {} }] so any
+  // spawn of TileLayer that omits Transform auto-attaches an identity
+  // Transform (pos=[0,0,0], quat=[0,0,0,1], scale=[1,1,1]). This satisfies
+  // requirements AC-01 (default identity Transform) and AC-09 (existing demo
+  // spawn code stays byte-identical). Detailed coAttach mechanics live in
+  // packages/ecs/src/__tests__/co-attach.test.ts; here we only pin the
+  // TileLayer surface.
+
+  describe('TileLayer default identity Transform via coAttach (AC-01)', () => {
+    it('TileLayer.coAttach declares Transform with identity payload', () => {
+      expect(TileLayer.coAttach).toBeDefined();
+      expect(TileLayer.coAttach?.length).toBe(1);
+      expect(TileLayer.coAttach?.[0]?.component).toBe(Transform);
+    });
+
+    it('spawn(TileLayer, ChildOf) without Transform auto-attaches identity Transform', () => {
+      const world = new World();
+      const parent = world.spawn().unwrap();
+      const layer = world
+        .spawn(
+          {
+            component: TileLayer,
+            data: {
+              tiles: new Uint32Array([0, 0, 0, 0]),
+              layerOrder: 0,
+              dirty: 1,
+            },
+          },
+          { component: ChildOf, data: { parent } },
+        )
+        .unwrap();
+
+      const t = world.get(layer, Transform).unwrap();
+      expect(Array.from(t.pos)).toEqual([0, 0, 0]);
+      expect(Array.from(t.quat)).toEqual([0, 0, 0, 1]);
+      expect(Array.from(t.scale)).toEqual([1, 1, 1]);
+    });
+
+    it('spawn(TileLayer + explicit Transform) preserves the caller-supplied Transform (layer-1 wins)', () => {
+      const world = new World();
+      const parent = world.spawn().unwrap();
+      const layer = world
+        .spawn(
+          {
+            component: TileLayer,
+            data: {
+              tiles: new Uint32Array([0]),
+              layerOrder: 0,
+              dirty: 0,
+            },
+          },
+          {
+            component: Transform,
+            data: { pos: [3, 4, 5], quat: [0, 0, 0, 1], scale: [1, 1, 1] },
+          },
+          { component: ChildOf, data: { parent } },
+        )
+        .unwrap();
+
+      const t = world.get(layer, Transform).unwrap();
+      expect(Array.from(t.pos)).toEqual([3, 4, 5]);
     });
   });
 }

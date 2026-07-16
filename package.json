@@ -33,6 +33,7 @@
     "test:browser:wgpu-wasm": "vitest run --project=browser packages/engine/__tests__/renderer-wgpu-wasm.browser.test.ts",
     "test:dawn": "pnpm -r build && vitest run --project=dawn",
     "test:browser-no-webgpu": "vitest run --project=browser-no-webgpu",
+    "test:perf": "vitest run --project=ecs-perf",
     "test:portability": "vitest run --project='@forgeax/engine-math' --project='@forgeax/engine-ecs'",
     "test:all": "pnpm test:unit && pnpm test:browser && pnpm test:dawn",
     "test:watch": "vitest",

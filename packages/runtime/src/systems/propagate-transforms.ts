@@ -60,6 +60,7 @@ import {
   type Component,
   type ComponentId,
   defineSystem,
+  defineSystemSet,
   Entity,
   type EntityHandle,
   err,
@@ -81,6 +82,7 @@ import { Transform } from '../components/transform';
  * on dependent systems.
  */
 export const PROPAGATE_TRANSFORMS_SYSTEM = 'propagateTransforms' as const;
+export const TransformSet = defineSystemSet({ name: 'transform' });
 
 interface GraphLike {
   readonly archetypes: ReadonlyArray<Archetype | undefined>;
@@ -380,7 +382,6 @@ function resolveEntity(
 export const PropagateTransforms: SystemHandle<readonly []> = defineSystem({
   name: PROPAGATE_TRANSFORMS_SYSTEM,
   queries: [],
-  labels: ['transform'],
   fn: (world) => {
     const r = propagateTransforms(world);
     if (!r.ok) {
@@ -422,14 +423,15 @@ export function registerPropagateTransforms(
     // Optional ordering edge: register a descriptor carrying the same name/fn
     // plus a `before` edge. The `before` (not `fn`) overlay keeps the real fn
     // intact (D-4: no spread-over-fn).
-    world.addSystem({
-      name: PROPAGATE_TRANSFORMS_SYSTEM,
-      queries: [],
-      labels: ['transform'],
-      fn: PropagateTransforms.fn,
-      before: [options.beforeSystemName],
-    });
+    world.addSystems(TransformSet, [
+      {
+        name: PROPAGATE_TRANSFORMS_SYSTEM,
+        queries: [],
+        fn: PropagateTransforms.fn,
+        before: [options.beforeSystemName],
+      },
+    ]);
     return;
   }
-  world.addSystem(PropagateTransforms);
+  world.addSystems(TransformSet, [PropagateTransforms]);
 }

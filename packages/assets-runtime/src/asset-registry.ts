@@ -395,12 +395,10 @@ export class AssetRegistry {
   // internally built by `createDefaultLoaderRegistry()` (public readonly field)
   // so host apps can reach `engine.assets.loaders.register(...)` without a
   // constructor-injection slot or a phantom passthrough wrapper.
-  // feat-20260705-runtime-tier2-decomposition M3 / w32 (D-2 terminal): the loader
-  // set is wired at construction from the 10 engine-owned defaults (incl.
-  // videoLoader, statically imported from @forgeax/engine-graphics-extras) plus
-  // the caller's `extraLoaders` (createRenderer injects [audioLoaderPlaceholder]
-  // to complete the 11-kind set). Assigned in the constructor so the optional
-  // `extraLoaders` option threads through to createDefaultLoaderRegistry.
+  // The loader set is wired at construction from the 10 engine-owned defaults
+  // (including videoLoader) plus caller-supplied loaders. createRenderer injects
+  // the concrete Web Audio catalog-entry loader to complete the 11-kind set.
+  // Assigned here so the optional loaders cannot appear after a load begins.
   readonly loaders: LoaderRegistry;
 
   // feat-20260603-asset-import-loader-injection M4 / w31 (AC-19 / AC-22):
@@ -430,11 +428,9 @@ export class AssetRegistry {
     // `@internal` tag would require a `_` prefix per D-internal R-internal-C).
     readonly shaderRegistry: ShaderRegistry,
     importTransport?: ImportTransport | undefined,
-    // feat-20260705-runtime-tier2-decomposition M3 / w32 (D-2 terminal):
-    // caller-supplied loaders appended after the 10 engine defaults (createRenderer
-    // passes the audio placeholder; videoLoader is now an engine default wired
-    // from graphics-extras; standalone/test registries omit extraLoaders and get
-    // the 10-kind default set).
+    // Caller-supplied loaders append after the 10 engine defaults. createRenderer
+    // supplies the Web Audio catalog-entry loader; standalone/test registries
+    // retain the 10-kind default set unless they choose a concrete extra loader.
     extraLoaders?: readonly Loader[] | undefined,
     // feat-20260705-runtime-tier2-decomposition M1 / w9 (D-1): optional
     // post-spawn hook; createRenderer injects `postSpawnResolveJoints`.

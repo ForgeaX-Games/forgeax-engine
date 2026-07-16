@@ -129,32 +129,26 @@ describe('deriveMipUploadLayout -- mip-major offset accumulation (w29)', () => {
   });
 });
 
-describe('deriveMipUploadLayout -- block-rounded copy extents (w36, WebGPU rule)', () => {
-  it('block-aligned levels keep copy extent == logical size', () => {
-    const layout = deriveMipUploadLayout('bc7-rgba-unorm', 8, 8, 2);
-    // 8x8 and 4x4 are both exact block multiples.
-    expect(layout[0]?.copyWidth).toBe(8);
-    expect(layout[0]?.copyHeight).toBe(8);
-    expect(layout[1]?.copyWidth).toBe(4);
-    expect(layout[1]?.copyHeight).toBe(4);
+describe('deriveMipUploadLayout -- logical full-subresource copy extents', () => {
+  it('retains non-block-aligned BC7 dimensions', () => {
+    const layout = deriveMipUploadLayout('bc7-rgba-unorm', 7, 5, 1);
+    expect(layout[0]?.copyWidth).toBe(7);
+    expect(layout[0]?.copyHeight).toBe(5);
   });
 
-  it('sub-block tail mips (2x2, 1x1) round copy extent up to the block (4x4)', () => {
-    // 8x8 BC7 4-level: 8x8, 4x4, 2x2, 1x1. The 2x2 and 1x1 tails must copy a
-    // full 4x4 block extent (WebGPU rejects a copySize below the block width).
+  it('retains sub-block tail mip dimensions', () => {
     const layout = deriveMipUploadLayout('bc7-rgba-unorm', 8, 8, 4);
     expect(layout[2]?.width).toBe(2);
-    expect(layout[2]?.copyWidth).toBe(4);
-    expect(layout[2]?.copyHeight).toBe(4);
+    expect(layout[2]?.copyWidth).toBe(2);
+    expect(layout[2]?.copyHeight).toBe(2);
     expect(layout[3]?.width).toBe(1);
-    expect(layout[3]?.copyWidth).toBe(4);
-    expect(layout[3]?.copyHeight).toBe(4);
+    expect(layout[3]?.copyWidth).toBe(1);
+    expect(layout[3]?.copyHeight).toBe(1);
   });
 
-  it('ASTC non-square block rounds copy extent to that block (8x5)', () => {
-    // astc-8x5: blockW=8 blockH=5. A 5x3 level rounds copy to 8x5.
+  it('retains non-square ASTC dimensions', () => {
     const layout = deriveMipUploadLayout('astc-8x5-unorm', 5, 3, 1);
-    expect(layout[0]?.copyWidth).toBe(8);
-    expect(layout[0]?.copyHeight).toBe(5);
+    expect(layout[0]?.copyWidth).toBe(5);
+    expect(layout[0]?.copyHeight).toBe(3);
   });
 });

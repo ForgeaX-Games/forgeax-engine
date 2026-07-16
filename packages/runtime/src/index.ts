@@ -263,10 +263,9 @@ export {
 // moved to @forgeax/engine-assets-runtime (AC-105).
 // feat-20260705-runtime-tier2-decomposition M1 / w14: AssetRegistry + the
 // HANDLE_* builtin mesh handles moved to @forgeax/engine-assets-runtime (AC-105).
-// feat-20260705-runtime-tier2-decomposition M1 / w8 (D-2): audioLoaderPlaceholder
-// + videoLoader are no longer re-exported from wire-default-loaders (that reverse
-// edge is severed); they re-export from their own runtime-side modules.
-export { audioLoaderPlaceholder } from './audio-loader-placeholder';
+// The audio catalog-entry loader belongs to the renderer assembly boundary:
+// assets-runtime stays independent of the concrete Web Audio implementation.
+export { audioLoader } from './audio-loader';
 // feat-20260705-runtime-tier2-decomposition M1 / w14: the process-static
 // BuiltinAssetRegistry tier (BUILTIN_* payloads + BUILTIN_FLOATS_PER_VERTEX)
 // moved to @forgeax/engine-assets-runtime (AC-105).
@@ -589,11 +588,13 @@ export {
   ADVANCE_ANIMATION_PLAYER_SYSTEM,
   AdvanceAnimationPlayer,
   ANIMATION_ASSET_RESOLVER_KEY,
+  AnimationSet,
   createAnimationAssetResolver,
   PROPAGATE_TRANSFORMS_SYSTEM,
   PropagateTransforms,
   registerAdvanceAnimationPlayer,
   registerPropagateTransforms,
+  TransformSet,
 } from './createRenderer';
 // ─── Plugin factories (M2 / w6 - feat-20260623-plugin-system-unify) ─────────
 export { animationPlugin, timePlugin, transformPlugin } from './plugin-factories';

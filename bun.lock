@@ -141,6 +141,24 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/bevy/camera-zoom": {
+      "name": "@forgeax/bevy-camera-zoom",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-input": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/bevy/cubic-splines": {
       "name": "@forgeax/bevy-cubic-splines",
       "version": "0.0.0",
@@ -175,8 +193,43 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/bevy/free-camera": {
+      "name": "@forgeax/bevy-free-camera",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-input": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/bevy/iter-combinations": {
       "name": "@forgeax/bevy-iter-combinations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/bevy/parenting": {
+      "name": "@forgeax/bevy-parenting",
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
@@ -2565,6 +2618,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
         "@forgeax/engine-codec": "workspace:*",
         "@forgeax/engine-debug-draw": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
@@ -2585,6 +2639,7 @@
       "devDependencies": {
         "@forgeax/engine-import": "workspace:*",
         "@forgeax/engine-naga": "workspace:*",
+        "@forgeax/engine-state": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
       },
     },
@@ -3026,11 +3081,17 @@
 
     "@forgeax/bevy-camera-pan": ["@forgeax/bevy-camera-pan@workspace:apps/bevy/camera-pan"],
 
+    "@forgeax/bevy-camera-zoom": ["@forgeax/bevy-camera-zoom@workspace:apps/bevy/camera-zoom"],
+
     "@forgeax/bevy-cubic-splines": ["@forgeax/bevy-cubic-splines@workspace:apps/bevy/cubic-splines"],
 
     "@forgeax/bevy-easing": ["@forgeax/bevy-easing@workspace:apps/bevy/easing"],
 
+    "@forgeax/bevy-free-camera": ["@forgeax/bevy-free-camera@workspace:apps/bevy/free-camera"],
+
     "@forgeax/bevy-iter-combinations": ["@forgeax/bevy-iter-combinations@workspace:apps/bevy/iter-combinations"],
+
+    "@forgeax/bevy-parenting": ["@forgeax/bevy-parenting@workspace:apps/bevy/parenting"],
 
     "@forgeax/bevy-scale": ["@forgeax/bevy-scale@workspace:apps/bevy/scale"],
 

@@ -5,10 +5,9 @@
 // the runtime resolves it into an HTMLVideoElement via the host-provided
 // `VideoElementProvider` World Resource (plan-strategy D-1).
 //
-// The loader returns the payload as VideoAsset synchronously — no fetch,
-// no decode, no fail-fast. Pattern: audioLoaderPlaceholder (same shape,
-// but videoLoader returns success instead of the placeholder's structured
-// error since video has a real runtime path via the host provider).
+// The loader returns the payload as VideoAsset synchronously — no fetch or
+// decode. Audio differs because its renderer-injected catalog-entry loader
+// fetches and decodes a Web Audio payload before cataloguing it.
 //
 // Registered in wireDefaultLoaders alongside the other 10 default kinds
 // (plan-strategy D-7: engine-own kind goes in the default set so AI users

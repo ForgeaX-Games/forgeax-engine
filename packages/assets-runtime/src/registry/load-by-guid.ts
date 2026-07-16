@@ -365,14 +365,11 @@ export async function ddcLoad<T = Asset>(
     componentField?: string;
   },
 ): Promise<Result<T, AssetError | ImageError | RhiError>> {
-  // feat-20260603-asset-import-loader-injection M1 / w6: the texture / font
-  // "upstream-branch" kinds (research Finding 2) are loaded straight from the
-  // catalog entry (no `.pack.json` payload detour) through their injected
-  // async loaders. Routing is data-driven off the loader set
-  // (`UPSTREAM_ENTRY_KINDS`), not a hardcoded `if (entry.kind === 'texture')`
-  // chain (AC-01). The loader produces the POD; `registerWithGuid` stays here
-  // (D-2).
-  if (UPSTREAM_ENTRY_KINDS.has(entry.kind)) {
+  // Engine-owned upstream-entry loaders retain their derived seed table. A
+  // caller-injected loader may opt into the same catalog-entry path, so audio
+  // reaches the Web Audio decoder without assets-runtime importing that backend.
+  const loader = registry.loaders.get(entry.kind);
+  if (UPSTREAM_ENTRY_KINDS.has(entry.kind) || loader?.fromCatalogEntry === true) {
     return loadFromUpstreamEntry<T>(registry, guidKey, entry);
   }
 

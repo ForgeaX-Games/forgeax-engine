@@ -18,7 +18,7 @@ pnpm --filter @forgeax/hello-audio dev
 |:--|:--|
 | **One-shot takeoff** | `createApp(canvas, { plugins: [audioPlugin()] })` -- `audioPlugin()` auto-attaches the WebAudioBackend; input is in the canvas-form default plugin set (parallel to `physicsPlugin('rapier-3d')`). |
 | **Declarative ECS audio** | `AudioSource({ clip, playing })` drives `audioTickSystem` edge detection -- no imperative `backend.play()` bypass (AC-07). |
-| **Pack-index asset loading** | SFX GUID resolved via vite-plugin-pack (`/__pack/lookup/:guid` in dev, `pack-index.json` at build time) -> `loadAudioClipByGuid` -> `registerWithGuid` -> `AudioSource.clip`. |
+| **Pack-index asset loading** | SFX GUID flows through `assets.loadByGuid<AudioClipAsset>`; the injected audio loader resolves the Vite catalog row and decodes it before the demo mints an `AudioSource.clip` shared ref. |
 | **Spatial panning** | `AudioSource.spatialBlend=1.0` creates a PannerNode; `syncListenerFromWorldMatrix(l, worldMatrix)` syncs the listener position/orientation each frame from the listener entity's `Transform.world` mat4. |
 | **Overlay readout** | Left/top overlay shows listener-emitter distance + L/R pan as text (charter F2: text anchors spatial audio verification). |
 
@@ -39,14 +39,12 @@ import { audioPlugin } from '@forgeax/engine-audio-webaudio';
 //    input is in the canvas-form default plugin set.
 const app = await createApp(canvas, { plugins: [audioPlugin()] });
 
-// 2. Load + register an audio clip via the pack-index pipeline.
-//    resolveUrlFromPackIndex(guid) -> loadAudioClipByGuid(guid, url)
-//    -> AssetGuid.parse(guid) -> assetRegistry.registerWithGuid(parsed, clip).
-//    The GUID string must pass through AssetGuid.parse() (returns a Result)
-//    before registerWithGuid -- it takes a parsed AssetGuid, not a raw string.
+// 2. Load an audio clip through the same GUID path used by generic bindings.
 const guidRes = AssetGuid.parse(SFX_GUID);
-if (!guidRes.ok) return; // PackError: malformed GUID string
-const clipHandle = assets.registerWithGuid(guidRes.value, clip);
+if (!guidRes.ok) return;
+const clipRes = await assets.loadByGuid<AudioClipAsset>(guidRes.value);
+if (!clipRes.ok) return;
+const clipHandle = world.allocSharedRef('AudioClipAsset', clipRes.value);
 
 // 3. Declarative spawn -- AudioSource with clip handle.
 const emitter = world.spawn(

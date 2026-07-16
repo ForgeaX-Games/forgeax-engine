@@ -324,8 +324,18 @@ export type { CommandBuffer } from './commands';
  * });
  * ```
  */
-export type { SystemDescriptor, SystemHandle } from './schedule';
-
+/**
+ * SystemSet nominal branded token type. Use {@link defineSystemSet} to create
+ * a token; never construct manually. The {@link SystemSet.__forgeaxSystemSet}
+ * brand prevents plain-object assignment.
+ *
+ * @example
+ * ```ts
+ * import type { SystemSet } from '@forgeax/engine-ecs';
+ * const set: SystemSet = defineSystemSet({ name: 'gameplay' });
+ * ```
+ */
+export type { SystemDescriptor, SystemHandle, SystemSet } from './schedule';
 /**
  * Define a system at module level + register it globally ("define ==
  * register"). Returns a {@link SystemHandle} token consumed directly by
@@ -342,7 +352,23 @@ export type { SystemDescriptor, SystemHandle } from './schedule';
  * world.addSystem(Move);
  * ```
  */
-export { defineSystem, getRegisteredSystems } from './schedule';
+/**
+ * Define a system set at module level. Returns a frozen branded token and
+ * records it in the global registry under its name. Duplicate names silently
+ * overwrite (matching `defineSystem` / `defineComponent` convention).
+ *
+ * @example
+ * ```ts
+ * const GameplaySet = defineSystemSet({ name: 'gameplay', runIf: (w) => !w.getResource<boolean>('paused') });
+ * const OrderedSet = defineSystemSet({ name: 'ordered', chained: true });
+ * ```
+ */
+export {
+  defineSystem,
+  defineSystemSet,
+  getRegisteredSystemSets,
+  getRegisteredSystems,
+} from './schedule';
 
 /**
  * Type alias for the `fn` field of `SystemDescriptor`. Lets typed console
@@ -533,6 +559,7 @@ export {
   SpriteInstancesMutuallyExclusiveWithInstancesError,
   SpriteInstancesRequiresSpriteShaderError,
   StaleEntityError,
+  SystemSetNotRegisteredError,
   UniqueRefDoubleReleaseError,
   UniqueRefReleasedError,
   UniqueRefStaleError,

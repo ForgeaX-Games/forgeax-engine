@@ -14,8 +14,8 @@ the task is "get an asset into the World".
   `rename` / `invalidate` / `invalidateAll` / `instantiate`. Post-D-17 it stores
   the PAYLOAD and mints no handles (column handles are minted on the World via
   `world.allocSharedRef('Kind', payload)`). `Renderer.assets` is an `AssetRegistry`
-  assembled by `createRenderer` (which injects the post-spawn hook + audio/video
-  loaders — see D-1 / D-2).
+  assembled by `createRenderer` (which injects the post-spawn hook and concrete
+  Web Audio loader; video is a default loader — see D-1 / D-2).
 - **`HANDLE_CUBE` / `HANDLE_TRIANGLE` / `HANDLE_QUAD` / `HANDLE_SPHERE` /
   `HANDLE_CYLINDER` / `HANDLE_NINESLICE_QUAD`** — process-static builtin mesh
   handles (reserved ids 1-6, `< BUILTIN_BASE`), resolved through
@@ -25,10 +25,10 @@ the task is "get an asset into the World".
   (`shared-ref-stale` / `shared-ref-released` / `asset-not-found`) so callers
   distinguish "re-acquire handle" from "re-load asset" from "check GUID".
 - **`LoaderRegistry` + `wireDefaultLoaders(registry, extraLoaders?)` +
-  `createDefaultLoaderRegistry(extraLoaders?)`** — the default set is the 9
-  engine-owned loader kinds (6 inline pack-payload + texture/font/equirect);
-  `extraLoaders` (audio placeholder + video loader) are injected by
-  `createRenderer` to complete the 11-kind set (D-2).
+  `createDefaultLoaderRegistry(extraLoaders?)`** — the default set is 10
+  engine-owned kinds (6 inline pack-payload + texture/font/equirect + video).
+  `createRenderer` injects the concrete Web Audio catalog-entry loader as the
+  eleventh kind, keeping this package independent of the audio backend.
 
 ### 30s hands-on example
 
@@ -57,7 +57,7 @@ const res = await assets.loadByGuid(guid); // -> Result<payload> (D-17: payload,
 | `BuiltinAssetRegistry` / `BUILTIN_*` / `BUILTIN_FLOATS_PER_VERTEX` / `BUILTIN_BASE` | const | process-static builtin payloads + vertex-layout SSOT |
 | `resolveAssetHandle` / `walkMaterialPassesOverSharedRefs` | fn | two-tier handle -> payload resolution |
 | `LoaderRegistry` | class | kind -> loader dispatch table |
-| `wireDefaultLoaders` / `createDefaultLoaderRegistry` | fn | wire the 9 engine loaders + caller `extraLoaders` |
+| `wireDefaultLoaders` / `createDefaultLoaderRegistry` | fn | wire 10 engine loaders + caller `extraLoaders` |
 | `DynamicTextureStore` / `DynamicTextureDevice` | class/type | per-frame dynamic texture upload store |
 | `unpackMeshBin` / `UnpackedMeshBin` | fn/type | `<guid>.bin` sidecar decode |
 | `validateTilesetPayload` / `TilesetValidateOptions` | fn/type | register-time tileset payload gate |
@@ -85,10 +85,9 @@ union, so a dropped arm is a compile error.
 
 ## Dependencies
 
-`@forgeax/engine-{codec, ecs, geometry, pack, rhi, shader, types}` only. Never
-imports `@forgeax/engine-runtime` (the dependency direction is runtime ->
-assets-runtime; the post-spawn hook + audio/video loaders are injected downward
-at the `createRenderer` assembly point, D-1 / D-2).
+`@forgeax/engine-{codec, ecs, geometry, graphics-extras, image, pack, rhi, shader, types}`.
+Never imports `@forgeax/engine-runtime` or an audio backend: runtime injects the
+post-spawn hook and concrete audio catalog-entry loader at `createRenderer`.
 
 ## Runtime image bytes decoder (`decodeImageBytes`)
 

@@ -41,6 +41,7 @@ import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import {
   createQueryState,
   defineSystem,
+  defineSystemSet,
   ENTITY_NULL_RAW,
   Entity,
   queryRun,
@@ -57,6 +58,7 @@ import { Transform } from '../components/transform';
  * declare `after: [ADVANCE_ANIMATION_PLAYER_SYSTEM]` on dependent systems.
  */
 export const ADVANCE_ANIMATION_PLAYER_SYSTEM = 'advanceAnimationPlayer' as const;
+export const AnimationSet = defineSystemSet({ name: 'animation' });
 
 /**
  * Resource key under which the {@link AnimationAssetResolver} is inserted
@@ -745,7 +747,6 @@ function sliceOutput(output: Float32Array, index: number, elementCount: number):
 export const AdvanceAnimationPlayer: SystemHandle<readonly []> = defineSystem({
   name: ADVANCE_ANIMATION_PLAYER_SYSTEM,
   queries: [],
-  labels: ['animation'],
   resources: [ANIMATION_ASSET_RESOLVER_KEY],
   before: ['propagateTransforms'],
   fn: (world) => {
@@ -767,5 +768,5 @@ export const AdvanceAnimationPlayer: SystemHandle<readonly []> = defineSystem({
  *   // ...system will run each world.update() before propagateTransforms...
  */
 export function registerAdvanceAnimationPlayer(world: World): void {
-  world.addSystem(AdvanceAnimationPlayer);
+  world.addSystems(AnimationSet, [AdvanceAnimationPlayer]);
 }

@@ -12,7 +12,7 @@
 //   1. const detach = attachBrowserInputBackend(canvas)
 //      -- detach is a callable () => void with .backend: InputBackend mounted.
 //   2. world.insertResource(INPUT_BACKEND_KEY, detach.backend) +
-//      world.addSystem(InputFrameStartScan)
+//      world.addSystems(InputSet, [InputFrameStartScan])
 //      -- registers the scan system whose stable name is
 //      FRAME_START_SCAN_SYSTEM_NAME ('input-frame-start-scan'). The system
 //      runs at frame-start each world.update() and writes the frozen

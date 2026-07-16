@@ -6,7 +6,12 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
 import type { CommandBuffer } from './commands';
 import type { Component } from './component';
-import { CyclicDependencyError, ScheduleMutationError } from './errors';
+import {
+  CyclicDependencyError,
+  ScheduleMutationError,
+  type SystemSetNotRegisteredError,
+  systemSetNotRegistered,
+} from './errors';
 import type { ColumnBundle, NestedColumnBundle, QueryDescriptor, QueryState } from './query';
 import { createQueryState, queryRun } from './query';
 // type-only import: erases at build time, carries no runtime edge (same
@@ -206,8 +211,6 @@ export interface SystemDescriptor<
    * (undefined) always runs the system.
    */
   readonly runIf?: (world: World) => boolean;
-  /** Free-form labels for grouping / filtering (e.g. 'physics', 'input'). */
-  readonly labels?: ReadonlyArray<string>;
 }
 
 /**
@@ -233,10 +236,29 @@ interface SystemRecord {
 // Schedule
 // ────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Per-set record in the Schedule. Created lazily on first addSystems /
+ * configureSets call for a given set name.
+ */
+export interface SetRecord {
+  /** Member system names (insertion-ordered, Set preserves add order). */
+  readonly members: Set<string>;
+  /** Names of sets that this set must run before. */
+  readonly before: Set<string>;
+  /** Names of sets that this set must run after. */
+  readonly after: Set<string>;
+  /** Snapshot of runIf from the defining token. */
+  readonly runIf: ((world: import('./world').World) => boolean) | undefined;
+  /** Snapshot of chained from the defining token. */
+  readonly chained: boolean;
+}
+
 /** The Schedule manages system registration, DAG sorting, and execution. */
 export interface Schedule {
   /** All registered systems by name. */
   systems: Map<string, SystemRecord>;
+  /** Set records keyed by set name. Created lazily. */
+  sets: Map<string, SetRecord>;
   /** Next registration index. */
   nextIndex: number;
   /** Whether the sorted order is stale. */
@@ -249,6 +271,7 @@ export interface Schedule {
 export function createSchedule(): Schedule {
   return {
     systems: new Map(),
+    sets: new Map(),
     nextIndex: 0,
     dirty: true,
     sortedOrder: [],
@@ -327,6 +350,107 @@ export function getRegisteredSystems(): ReadonlyMap<string, SystemHandle> {
   return SYSTEM_REGISTRY;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// SystemSet — nominal token + global registry (D-2c step 1, w2)
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Brand symbol for {@link SystemSet}. Declared (not runtime-initialised) so
+ * the token interface carries nominal identity without a runtime allocation.
+ * Mirrors the `FORGEAX_STATE_BRAND` pattern in `@forgeax/engine-state`. */
+declare const FORGEAX_SYSTEM_SET_BRAND: unique symbol;
+
+/**
+ * Opaque branded type for system-set tokens.
+ *
+ * Use {@link defineSystemSet} to create a token; never construct manually.
+ * The {@link __forgeaxSystemSet} brand prevents plain-object assignment and
+ * enables TypeScript narrowing at the two mutation entry points.
+ */
+export interface SystemSet {
+  /** Brand — prevents structural compatibility with plain objects. */
+  readonly __forgeaxSystemSet: typeof FORGEAX_SYSTEM_SET_BRAND;
+  /** The user-supplied set name. */
+  readonly name: string;
+  /** Optional per-frame run condition. Consumed by M3 condition gate. */
+  readonly runIf?: (world: import('./world').World) => boolean;
+  /** Whether this set forms a sequential chain (M2). */
+  readonly chained?: boolean;
+}
+
+/**
+ * Global registry of all defined system sets, keyed by set name.
+ *
+ * `defineSystemSet` writes here; `getRegisteredSystemSets` returns a read-only
+ * view. Mirrors the `SYSTEM_REGISTRY` / `STATE_REGISTRY` pattern.
+ */
+const SYSTEM_SET_REGISTRY = new Map<string, SystemSet>();
+
+/**
+ * Define a system set at module level. Returns a frozen branded token and
+ * records it in the global registry under its name.
+ *
+ * Duplicate names silently overwrite (SYSTEM_SET_REGISTRY.set, no guard),
+ * matching `defineSystem` / `defineComponent` (AGENTS.md §Component naming
+ * "silent overwrite" convention). The old token becomes stale — identity
+ * checks (`SYSTEM_SET_REGISTRY.get(name) === oldToken`) will reject it.
+ *
+ * @example
+ * ```ts
+ * const GameplaySet = defineSystemSet({ name: 'gameplay', runIf: (w) => !w.getResource<boolean>('paused') });
+ * const OrderedSet = defineSystemSet({ name: 'ordered', chained: true });
+ * ```
+ */
+export function defineSystemSet(opts: {
+  readonly name: string;
+  readonly runIf?: (world: import('./world').World) => boolean;
+  readonly chained?: boolean;
+}): SystemSet {
+  const token: Record<string, unknown> = {
+    __forgeaxSystemSet: undefined as unknown as typeof FORGEAX_SYSTEM_SET_BRAND,
+    name: opts.name,
+  };
+  if (opts.runIf !== undefined) {
+    token.runIf = opts.runIf;
+  }
+  if (opts.chained !== undefined) {
+    token.chained = opts.chained;
+  }
+  const frozen = Object.freeze(token) as unknown as SystemSet;
+  SYSTEM_SET_REGISTRY.set(opts.name, frozen);
+  return frozen;
+}
+
+/**
+ * Read-only snapshot of all system sets defined via {@link defineSystemSet},
+ * keyed by name. Returns the live map — callers should not mutate the
+ * returned reference.
+ */
+export function getRegisteredSystemSets(): ReadonlyMap<string, SystemSet> {
+  return SYSTEM_SET_REGISTRY;
+}
+
+/**
+ * Validate every token in `tokens` against the global registry via identity
+ * check (`SYSTEM_SET_REGISTRY.get(token.name) === token`). Returns `ok(undefined)`
+ * only when all tokens pass; the first failure produces a
+ * `SystemSetNotRegisteredError` with the rejected token name and a
+ * deterministic snapshot of current registry keys.
+ *
+ * Does not write any Schedule state — callers consume the `Result` and proceed
+ * only on `ok`.
+ */
+export function validateSystemSetTokens(
+  tokens: readonly SystemSet[],
+): Result<void, SystemSetNotRegisteredError> {
+  for (const token of tokens) {
+    const current = SYSTEM_SET_REGISTRY.get(token.name);
+    if (current !== token) {
+      return err(systemSetNotRegistered(token.name, Array.from(SYSTEM_SET_REGISTRY.keys())));
+    }
+  }
+  return ok(undefined);
+}
+
 /**
  * Remove a registered system by name (M2 — plan-strategy D-3).
  *
@@ -354,6 +478,10 @@ export function removeSystem(
     );
   }
   schedule.systems.delete(name);
+  // Prune set membership: remove this system name from every set's members (D-1).
+  for (const [, setRecord] of schedule.sets) {
+    setRecord.members.delete(name);
+  }
   schedule.dirty = true;
   return ok(undefined);
 }
@@ -388,6 +516,140 @@ export function replaceSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
   record.descriptor = descriptor as SystemDescriptor;
   // Reset cached query states — descriptor.queries may have changed shape.
   record.queryStates = null;
+  schedule.dirty = true;
+  return ok(undefined);
+}
+
+/**
+ * Batch-register systems to a set. Validates the set token before writing.
+ *
+ * - First call for a system name: registers via the existing `addSystem` path.
+ * - Subsequent calls: only adds the system name to the set's members (dedup).
+ * - `runIf` / `chained` are snapshotted from the token into the SetRecord on
+ *   first encounter.
+ *
+ * Returns `Result.err` with `SystemSetNotRegisteredError` if the set token
+ * fails identity validation.
+ */
+export function addSystems<const Qs extends ReadonlyArray<QueryDescriptor>>(
+  schedule: Schedule,
+  set: SystemSet,
+  systems: ReadonlyArray<SystemDescriptor<Qs>>,
+): Result<void, SystemSetNotRegisteredError> {
+  const validated = validateSystemSetTokens([set]);
+  if (!validated.ok) {
+    return err(validated.error);
+  }
+
+  const setName = set.name;
+  let record = schedule.sets.get(setName);
+  if (!record) {
+    record = {
+      members: new Set(),
+      before: new Set(),
+      after: new Set(),
+      runIf: set.runIf,
+      chained: set.chained ?? false,
+    };
+    schedule.sets.set(setName, record);
+  }
+
+  for (const system of systems) {
+    const name = system.name;
+    // Dedup: only register the system once in schedule.systems.
+    if (!schedule.systems.has(name)) {
+      addSystem(schedule, system);
+    }
+    // Always add membership — multi-belong is supported.
+    record.members.add(name);
+  }
+
+  schedule.dirty = true;
+  return ok(undefined);
+}
+
+/**
+ * Record set-level ordering constraints (M1 record layer only — no edge
+ * expansion until M2's buildSchedule).
+ *
+ * Validates all input tokens (main set + before/after members) before
+ * writing. On success, writes the before/after relationships into the
+ * per-set record and marks the schedule dirty. On failure, writes nothing
+ * (no partial record, no edges, no dirty).
+ *
+ * Returns `Result.err` with `SystemSetNotRegisteredError` if any token
+ * fails identity validation.
+ */
+export function configureSets(
+  schedule: Schedule,
+  set: SystemSet,
+  before?: readonly SystemSet[],
+  after?: readonly SystemSet[],
+): Result<void, SystemSetNotRegisteredError> {
+  // Collect all tokens to validate.
+  const allTokens: SystemSet[] = [set];
+  if (before) {
+    for (const b of before) allTokens.push(b);
+  }
+  if (after) {
+    for (const a of after) allTokens.push(a);
+  }
+
+  const validated = validateSystemSetTokens(allTokens);
+  if (!validated.ok) {
+    return err(validated.error);
+  }
+
+  // Ensure a record exists for the main set.
+  const setName = set.name;
+  let record = schedule.sets.get(setName);
+  if (!record) {
+    record = {
+      members: new Set(),
+      before: new Set(),
+      after: new Set(),
+      runIf: set.runIf,
+      chained: set.chained ?? false,
+    };
+    schedule.sets.set(setName, record);
+  }
+
+  // Record before/after edges (M1 only stores; M2 expands).
+  if (before) {
+    for (const b of before) {
+      record.before.add(b.name);
+      let targetRecord = schedule.sets.get(b.name);
+      if (!targetRecord) {
+        targetRecord = {
+          members: new Set(),
+          before: new Set(),
+          after: new Set(),
+          runIf: b.runIf,
+          chained: b.chained ?? false,
+        };
+        schedule.sets.set(b.name, targetRecord);
+      }
+      targetRecord.after.add(setName);
+    }
+  }
+  if (after) {
+    for (const a of after) {
+      record.after.add(a.name);
+      let targetRecord = schedule.sets.get(a.name);
+      if (!targetRecord) {
+        targetRecord = {
+          members: new Set(),
+          before: new Set(),
+          after: new Set(),
+          runIf: a.runIf,
+          chained: a.chained ?? false,
+        };
+        schedule.sets.set(a.name, targetRecord);
+      }
+      targetRecord.before.add(setName);
+    }
+  }
+
   schedule.dirty = true;
   return ok(undefined);
 }
@@ -430,6 +692,55 @@ export function buildSchedule(schedule: Schedule): string[] {
         if (!nameSet.has(target)) continue; // skip unknown systems
         adj.get(name)?.push(target);
         inDegree.set(target, (inDegree.get(target) ?? 0) + 1);
+      }
+    }
+  }
+
+  // ── Set-level edge expansion (M2) ──
+  // Expand set before/after edges and chain edges into system-level edges.
+  // This runs between the adjacency-list construction and Kahn's sort so the
+  // existing cycle detection and stable tie-breaking apply unchanged.
+  for (const [, setRecord] of schedule.sets) {
+    // 1. Expand setA-before-setB edges: each member of setA must run before each member of setB
+    for (const beforeName of setRecord.before) {
+      const targetRecord = schedule.sets.get(beforeName);
+      if (!targetRecord) continue; // skip unknown sets
+      for (const srcMember of setRecord.members) {
+        if (!nameSet.has(srcMember)) continue; // skip unknown systems
+        for (const tgtMember of targetRecord.members) {
+          if (!nameSet.has(tgtMember)) continue;
+          // srcMember → tgtMember (srcMember runs before tgtMember)
+          adj.get(srcMember)?.push(tgtMember);
+          inDegree.set(tgtMember, (inDegree.get(tgtMember) ?? 0) + 1);
+        }
+      }
+    }
+
+    // 2. Expand setA-after-setB edges: each member of setB must run before each member of setA
+    for (const afterName of setRecord.after) {
+      const targetRecord = schedule.sets.get(afterName);
+      if (!targetRecord) continue;
+      for (const tgtMember of targetRecord.members) {
+        if (!nameSet.has(tgtMember)) continue;
+        for (const srcMember of setRecord.members) {
+          if (!nameSet.has(srcMember)) continue;
+          // tgtMember → srcMember (tgtMember runs before srcMember)
+          adj.get(tgtMember)?.push(srcMember);
+          inDegree.set(srcMember, (inDegree.get(srcMember) ?? 0) + 1);
+        }
+      }
+    }
+
+    // 3. Chain expansion: each consecutive pair of members in insertion order
+    if (setRecord.chained) {
+      const members = [...setRecord.members];
+      for (let i = 0; i < members.length - 1; i++) {
+        const m1 = members[i];
+        const m2 = members[i + 1];
+        if (!m1 || !m2 || !nameSet.has(m1) || !nameSet.has(m2)) continue;
+        // m1 → m2 (m1 runs before m2)
+        adj.get(m1)?.push(m2);
+        inDegree.set(m2, (inDegree.get(m2) ?? 0) + 1);
       }
     }
   }
@@ -481,20 +792,21 @@ export function buildSchedule(schedule: Schedule): string[] {
 }
 
 /**
- * Find a cycle path string among the remaining (unprocessed) nodes.
+ * Find a cycle path among the remaining (unprocessed) nodes.
+ * Returns the cycle as a readonly array of node names.
  */
-function findCyclePath(remaining: string[], adj: Map<string, string[]>): string {
+function findCyclePath(remaining: string[], adj: Map<string, string[]>): readonly string[] {
   const remainSet = new Set(remaining);
   const visited = new Set<string>();
   const path: string[] = [];
 
-  function dfs(node: string): string | null {
+  function dfs(node: string): readonly string[] | null {
     if (visited.has(node)) {
       // Found cycle: extract cycle from path
       const cycleStart = path.indexOf(node);
       const cycle = path.slice(cycleStart);
       cycle.push(node);
-      return cycle.join(' -> ');
+      return cycle;
     }
     visited.add(node);
     path.push(node);
@@ -517,7 +829,7 @@ function findCyclePath(remaining: string[], adj: Map<string, string[]>): string 
   }
 
   /* istanbul ignore next -- fallback: DFS always finds cycle in remaining nodes */
-  return remaining.join(' -> ');
+  return remaining;
 }
 
 /** Interface for resource existence check (injected from World). */
@@ -543,6 +855,26 @@ export function runSchedule(
   if (schedule.dirty) {
     buildSchedule(schedule);
   }
+
+  // Build reverse map: system name → set names it belongs to (D-5).
+  // Rebuilt each frame so removeSystem / replaceSystem membership changes
+  // take effect on the next frame.
+  const systemToSets = new Map<string, string[]>();
+  for (const [setName, setRecord] of schedule.sets) {
+    for (const memberName of setRecord.members) {
+      if (schedule.systems.has(memberName)) {
+        let list = systemToSets.get(memberName);
+        if (!list) {
+          list = [];
+          systemToSets.set(memberName, list);
+        }
+        list.push(setName);
+      }
+    }
+  }
+
+  // Per-frame set runIf cache (D-5). Discarded at frame end — no cross-frame state.
+  const setRunIfCache = new Map<string, boolean>();
 
   for (const name of schedule.sortedOrder) {
     const record = schedule.systems.get(name);
@@ -570,6 +902,30 @@ export function runSchedule(
         });
       }
       continue;
+    }
+
+    // ── Set-level runIf AND gate (D-5) — evaluated after ParamValidation 'ok',
+    // before system-level runIf. Each set's runIf is lazily cached per frame. ──
+    const setNames = systemToSets.get(name);
+    let allSetConditionsPass = true;
+    if (setNames) {
+      for (const setName of setNames) {
+        const setRecord = schedule.sets.get(setName);
+        if (setRecord?.runIf) {
+          let cached = setRunIfCache.get(setName);
+          if (cached === undefined) {
+            cached = setRecord.runIf(world);
+            setRunIfCache.set(setName, cached);
+          }
+          if (!cached) {
+            allSetConditionsPass = false;
+            break;
+          }
+        }
+      }
+    }
+    if (!allSetConditionsPass) {
+      continue; // skip system: no system runIf, no queryRun, no fn
     }
 
     // ── Run condition (runIf) — evaluated after ParamValidation 'ok', before

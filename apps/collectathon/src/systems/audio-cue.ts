@@ -35,7 +35,8 @@
 import { AudioSource } from '@forgeax/engine-audio';
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem } from '@forgeax/engine-ecs';
-import type { Handle } from '@forgeax/engine-types';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
+import type { AudioClipAsset, Handle } from '@forgeax/engine-types';
 
 import { GAME_PROGRESS_KEY, type GameProgress } from '../resources';
 import { readDt } from './frame-time';
@@ -70,49 +71,20 @@ type ClipHandle = Handle<'AudioClipAsset', 'shared'>;
 const HANDLE_NONE = 0 as unknown as ClipHandle;
 
 interface AudioRegistry {
-  configurePackIndex(url: string): void;
+  loadByGuid<T>(guid: AssetGuid): Promise<{ ok: true; value: T } | { ok: false }>;
 }
 
 /**
- * Resolve a cue GUID to its pack-index relativeUrl, then decode it to an
- * AudioClipAsset and mint a user-tier shared ref. Returns HANDLE_NONE when the
- * asset is missing (Fail Fast at the call site logs which cue is silent rather
- * than crashing the whole game -- a missing cue degrades to silence, AC-21).
+ * Resolve an audio GUID through the shared asset registry and mint the World
+ * column handle consumed by AudioSource. A failed cue remains silent without
+ * making the whole game unplayable.
  */
-async function loadClip(
-  world: World,
-  guid: string,
-  resolveUrl: (guid: string) => Promise<string | undefined>,
-  decode: (guid: string, url: string) => Promise<{ ok: true; value: unknown } | { ok: false }>,
-): Promise<ClipHandle> {
-  const url = await resolveUrl(guid);
-  if (url === undefined) return HANDLE_NONE;
-  const res = await decode(guid, url);
-  if (!res.ok) return HANDLE_NONE;
-  return world.allocSharedRef('AudioClipAsset', res.value);
-}
-
-/**
- * Build a pack-index GUID->relativeUrl resolver bound to the live pack-index.
- * Mirrors apps/hello/audio's resolution: the flat PackIndexEntry array from
- * /pack-index.json (build) with a /__pack/lookup/:guid dev fallback.
- */
-export function createPackIndexResolver(
-  packIndexUrl: string,
-): (guid: string) => Promise<string | undefined> {
-  let cache: Array<{ guid: string; relativeUrl: string }> | null = null;
-  return async (guid: string) => {
-    if (cache === null) {
-      const res = await fetch(packIndexUrl);
-      cache = res.ok ? ((await res.json()) as Array<{ guid: string; relativeUrl: string }>) : [];
-    }
-    const target = guid.toLowerCase();
-    const hit = cache.find((e) => e.guid.toLowerCase() === target);
-    if (hit !== undefined) return hit.relativeUrl;
-    const dev = await fetch(`/__pack/lookup/${guid}`);
-    if (!dev.ok) return undefined;
-    return ((await dev.json()) as { relativeUrl: string }).relativeUrl;
-  };
+async function loadClip(world: World, assets: AudioRegistry, guid: string): Promise<ClipHandle> {
+  const parsed = AssetGuid.parse(guid);
+  if (!parsed.ok) return HANDLE_NONE;
+  const result = await assets.loadByGuid<AudioClipAsset>(parsed.value);
+  if (!result.ok) return HANDLE_NONE;
+  return world.allocSharedRef('AudioClipAsset', result.value);
 }
 
 /**
@@ -120,24 +92,18 @@ export function createPackIndexResolver(
  * / guardian are spatialBlend=1 (3D positional); bgm is spatialBlend=0 on the
  * music bus. Emitters start with playing=false; the cue system drives the edges.
  *
- * @param decode loadAudioClipByGuid (injected so the loader is unit-testable).
  */
 export async function loadAudioCues(
   world: World,
   assets: AudioRegistry,
-  packIndexUrl: string,
-  decode: (guid: string, url: string) => Promise<{ ok: true; value: unknown } | { ok: false }>,
 ): Promise<AudioCueEntities> {
-  assets.configurePackIndex(packIndexUrl);
-  const resolve = createPackIndexResolver(packIndexUrl);
-
   const footstepClips: ClipHandle[] = [];
-  for (const g of AUDIO_GUIDS.footstep) {
-    footstepClips.push(await loadClip(world, g, resolve, decode));
+  for (const guid of AUDIO_GUIDS.footstep) {
+    footstepClips.push(await loadClip(world, assets, guid));
   }
-  const pickupClip = await loadClip(world, AUDIO_GUIDS.pickup, resolve, decode);
-  const guardianClip = await loadClip(world, AUDIO_GUIDS.guardian, resolve, decode);
-  const bgmClip = await loadClip(world, AUDIO_GUIDS.bgm, resolve, decode);
+  const pickupClip = await loadClip(world, assets, AUDIO_GUIDS.pickup);
+  const guardianClip = await loadClip(world, assets, AUDIO_GUIDS.guardian);
+  const bgmClip = await loadClip(world, assets, AUDIO_GUIDS.bgm);
 
   const footstep = world
     .spawn({

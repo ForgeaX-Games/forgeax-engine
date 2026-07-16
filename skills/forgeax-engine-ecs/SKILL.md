@@ -3,7 +3,7 @@ name: forgeax-engine-ecs
 description: >-
   forgeax-engine 的 archetype ECS：defineComponent 定义 SoA 列、defineSystem token 直传激活系统、
   getRegisteredSystems/getRegisteredComponents 枚举注册表、
-  runIf 运行条件、labels 分组标签、
+  defineSystemSet/addSystems/configureSets 编排系统集合、runIf 运行条件、
   queryRun + addSystem 跑系统、Commands 延迟结构改动、Resource 存全局态、relationship 建层级、三层反射自省。
   Use when defining components, writing queries/systems, building entity hierarchies, or reflecting on component schemas.
 ---
@@ -18,7 +18,7 @@ description: >-
 
 系统定义也走"定义即注册"路径：`defineSystem({ name, queries, fn, ... })` 返回 `SystemHandle` token，`world.addSystem(token)` 直接激活——不经按名取回。`getRegisteredSystems()` 返回 `ReadonlyMap<string, SystemHandle>` 供辅路枚举；`getRegisteredComponents()` 同理，返回 `ReadonlyMap<string, Component>`。两组注册表独立、不互相污染。
 
-`SystemDescriptor.runIf?: (world) => boolean` 是运行条件：每帧 ParamValidation 通过后、queryRun 前求值，`false` → 静默跳过（不跑 query、不调 fn、不增状态）。`labels?: readonly string[]` 是自由分组标签（如 `'physics'`、`'input'`），供过滤/分组使用。
+SystemSet 是共享排序、条件和 chain 的纯分组 token：模块级 `defineSystemSet` 创建 token，`world.addSystems` 将系统归属到它，`world.configureSets` 声明 set 间顺序。set 展开为既有调度边，不增加同步边界或 command flush。`SystemDescriptor.runIf?: (world) => boolean` 是运行条件：每帧 ParamValidation 通过后、queryRun 前求值，`false` → 静默跳过（不跑 query、不调 fn、不增状态）。多个 set 归属时，所有 set 的 `runIf` 条件均须通过。
 
 ## 核心 API 速查
 
@@ -26,7 +26,10 @@ description: >-
 |:--|:--|:--|
 | `defineComponent(name, fields, options?)` | `=> Component` | 定义组件 schema；单 field-descriptor 签名，定义即全局可用。`options` 可带 `transient` / `relationship` / `cardinality` / `validate` / `onInsert` / `onRemove` |
 | `defineSystem({ name, queries, fn, ... })` | `=> SystemHandle<Qs>` | 定义系统 token；返回冻结 descriptor，`world.addSystem(token)` 直接激活 |
-| `getRegisteredSystems()` | `=> ReadonlyMap<string, SystemHandle>` | 枚举全部 defineSystem 注册的系统（按名取回） |
+| `defineSystemSet({ name, runIf?, chained? })` | `=> SystemSet` | 定义冻结的名义 set token；模块级同名定义会替换旧 token |
+| `getRegisteredSystems()` / `getRegisteredSystemSets()` | `=> ReadonlyMap<...>` | 枚举已定义的系统或 set token |
+| `world.addSystems(set, systems)` | `=> Result<void, SystemSetNotRegisteredError>` | 批量注册系统并写入 set 归属；已有系统不重复注册，允许多 set 归属 |
+| `world.configureSets({ set, before?, after? })` | `=> Result<void, SystemSetNotRegisteredError>` | 声明 set 间排序；空 set 是 no-op，`chained` set 按加入顺序串行 |
 | `getRegisteredComponents()` | `=> ReadonlyMap<string, Component>` | 枚举全部 defineComponent 注册的组件（按名取回） |
 | `new World()` | 构造 | 实体 / 组件 / 系统 / 资源容器 |
 | `world.spawn(...componentDatas)` | `=> Result<EntityHandle, EcsError>` | 创建实体 + 初始组件 |
@@ -101,7 +104,6 @@ world.update();
 | `before` | `ReadonlyArray<string>` | 否 | 在此系统名后运行 |
 | `resources` | `ReadonlyArray<string>` | 否 | 所需 resource key 列表；缺失 → ParamValidation `'invalid'`（走 ErrorHandler，不裸 throw） |
 | `runIf` | `(world: World) => boolean` | 否 | 运行条件：每帧 ParamValidation 通过后、queryRun 前求值；`false` → 静默跳过（不跑 query、不调 fn、不增状态）。缺省(=undefined) 每帧照跑 |
-| `labels` | `ReadonlyArray<string>` | 否 | 自由分组标签（如 `'physics'`、`'input'`）；用于过滤/分组，不参与调度 |
 
 ### runIf 运行条件
 
@@ -125,25 +127,38 @@ const MySystem = defineSystem({
 > [!IMPORTANT]
 > `runIf` 求值在 ParamValidation `tag==='ok'` 之后、queryRun 之前（requirements AC-07）。`tag==='invalid'` 时走 ErrorHandler 不触发 runIf。跳过是静默的——不暴露 skip 计数/诊断（OOS-6）。
 
-### labels 分组标签
+### SystemSet 分组与调度
 
 ```ts
-const SystemA = defineSystem({
-  name: 'phys-sync',
+import { defineSystem, defineSystemSet, World } from '@forgeax/engine-ecs';
+
+const PhysicsSet = defineSystemSet({ name: 'physics', chained: true });
+const GameplaySet = defineSystemSet({ name: 'gameplay' });
+
+const SyncPhysics = defineSystem({
+  name: 'physics-sync',
   queries: [],
-  labels: ['physics'],
-  fn: (world) => { ... },
+  fn: (world) => { /* synchronize physics */ },
 });
-// 按 label 过滤：getRegisteredSystems() 遍历 key，按 handle.labels 匹配
+
+const world = new World();
+world.addSystems(PhysicsSet, [SyncPhysics]).unwrap();
+world.configureSets({ set: PhysicsSet, after: [GameplaySet] }).unwrap();
 ```
+
+Set constraints expand into normal scheduler edges; they do not create a synchronization boundary or flush commands. Empty sets are no-ops. A system can join multiple sets, and every applicable set `runIf` condition must pass before the system-level condition is evaluated. `chained: true` preserves `addSystems` insertion order by adding adjacent member edges.
 
 关系（层级）用 `relationship` 元数据声明，反向 mirror 列由引擎自动维护：
 
 ```ts
 const ChildOf = defineComponent('ChildOf', { parent: { type: 'entity' } }, {
-  relationship: { mirror: 'Children', field: 'entities', exclusive: true, linkedSpawn: false },
+  relationship: { mirror: 'Children', field: 'entities', exclusive: true, linkedSpawn: true },
 });
 world.addChild(parent, child, ChildOf); // child gains ChildOf; parent.Children.entities auto-updated
+// linkedSpawn: true (default since feat-20260616) -- world.despawn(parent) cascades through the
+// whole ChildOf subtree in one call; consumers include engine-state (despawnOnExit / scopeDespawn),
+// tilemap (Tilemap -> TileLayer -> per-cell/instances subtree, tweak-20260714), and any user
+// subtree that wants integral lifetime coupling.
 ```
 
 ### transient — 运行时派生、collect 跳过
@@ -423,6 +438,32 @@ type TileLayer = {
 
 迁移：旧字段 `ySort: 0 | 1` 一刀切（Optimal > compatible）；TS exhaustive switch 在所有 sortScope 消费方守门。grep `sortScope` 命中点是迁移单一锚点（charter F1）。
 
+### TileLayer 子树完整化 (tweak-20260714)
+
+tilemap 子树在 spawn / despawn 两侧都收敛为「一个 tilemap = 一个可整体 despawn 的 `ChildOf` 子树」——AI 用户不需要理解「派生实体在幕后成子树」这一实现细节。
+
+**(a) `TileLayer` 默认 identity `Transform` 占位**——`TileLayer.defineComponent` 声明 `coAttach: [{ component: Transform, data: {} }]`，spawn 归位阶段引擎自动补齐 identity `Transform`（`pos=[0,0,0] / quat=[0,0,0,1] / scale=[1,1,1]`）；`TileLayer` archetype 因此固定含 `Transform` 列，进入 `propagateTransforms` liveMap。AI 用户 spawn 侧一行不改：
+
+```ts
+// 引擎注入 identity Transform；caller 不需要显式声明。
+world.spawn(
+  { component: TileLayer, data: { tiles, layerOrder: 0, sortScope: encodeSortScope('layer') } },
+  { component: ChildOf, data: { parent: tilemapEntity } },
+);
+```
+
+需要非 identity local TRS 时显式传 `{ component: Transform, data: { pos, quat, scale } }`，caller 的字段值 override `coAttach` 默认（layer-1 wins）。`coAttach` 是 `defineComponent` options 的通用扩展字段，任何组件均可声明；见 `packages/ecs/src/component.ts` §DefineComponentOptions.coAttach。
+
+**(b) 派生渲染实体挂 `ChildOf`**——`tilemap-chunk-extract-system` 的两条 spawn 位（`spawnSpriteInstancesGroup` terrain / `spawnDerivedRenderEntities` per-cell streaming）追加 `{ component: ChildOf, data: { parent: layerEntity } }`；派生实体成为 `TileLayer` 子代，整条链是 `Tilemap → TileLayer → 派生实体` 深度 3 `ChildOf` 子树。`ChildOf.relationship.linkedSpawn: true`（默认，见上）——`world.despawn(tilemap)` / `despawnOnExit(state)` 借既有级联一次性回收整棵子树，不需要显式遍历子代。
+
+**(c) 内部 tracker 拆除，签名不变**——`purgeDerivedEntities` 从模块级 `layerDerivedEntities` Map 迁到 `Children.entities` 反向镜像（SSOT 收敛，Derive Don't Duplicate）；`resetTilemapDerivedEntityTracker` / `resetTilemapChunkExtractCache` 公开符号 + 签名 **unchanged**——AI 用户调用位无需迁移。per-cell streaming 侧 `tilemapChunkExtractSystem` 主循环入口对比「已知 layerKey 集合 ↔ 本帧 query layerKey 集合」，差集 layerKey 触发 3 张 Map 主动清空，防止 layer despawn 后 slot 复用导致的误命中。
+
+### grep 落点（charter F1 单一锚点）
+
+- `TileLayer` 的完整心智模型（identity Transform 默认 + ChildOf 化派生实体 + 整体 despawn）落在本节；`packages/runtime/README.md` §Components 是 API SSOT。
+- `coAttach` 元数据的 defineComponent 侧契约：`packages/ecs/src/component.ts` §`coAttach?: readonly [{ component, data }]`。
+- 深度 3+ `ChildOf` 级联在 `_despawnCore` 的实现：`packages/ecs/src/world.ts` §linkedChildren 收集（feat-20260616 起 default 覆盖）。
+
 
 ## skinned animation (feat-20260612)
 
@@ -511,27 +552,28 @@ const handle = world.allocSharedRef('MeshAsset', payload);          // 在使用
 - 三层反射（`component.meta` / `component.fields[f]` / `TYPE_METADATA`）：见 `packages/ecs/README.md` §Component reflection；源码 `packages/ecs/src/component.ts`
 - SceneInstance 完整 surface（4-layer fallback / despawn destroy set / runtime-facing reference）：`packages/ecs/README.md` §SceneInstance lifecycle + `packages/runtime/README.md` §SceneInstance；源码 `packages/ecs/src/world.ts` `_instantiateSceneAsset`
 - `EcsErrorCode` 全集（SSOT 在源码，勿抄）：`packages/ecs/src/errors.ts`；反向锚点 `packages/ecs/README.md` §Error code reverse anchors
+- SystemSet 入口、built-in token root imports、`system-set-not-registered` 与 `CyclicDependencyError.detail.cycle`：`packages/ecs/README.md` §SystemSet scheduling；源码 `packages/ecs/src/schedule.ts`
 - `PackErrorCode` 4 个 mount-* 全集：`packages/types/src/index.ts`；hint 字符串 SSOT 同文件 PACK_ERROR_HINTS
 
-## 内置系统全表 + label 映射
+## 内置系统的 SystemSet 归属
 
-以下 10 个内置系统经 `defineSystem` 定义为模块顶层 token（零闭包、零占位 fn），各自挂 label 锚定。`getRegisteredSystems()` 可按名枚举全部 10 个。
+内置系统由模块级 `defineSystem` token 定义，生产 registrar 使用 `world.addSystems` 建立归属。通过 `world.inspect().systems` 的 `sets` 字段查看某个已注册系统的 set membership；全局 `getRegisteredSystems()` 只枚举定义 token，不表示某个 World 已激活或归属它。
 
-| 系统名 | 包 | label | 依赖资源 | before/after |
+| 系统名 | 包 | SystemSet | 依赖资源 | before/after |
 |:--|:--|:--|:--|:--|
-| `propagateTransforms` | `runtime` | `transform` | -- | -- |
-| `advanceAnimationPlayer` | `runtime` | `animation` | `'AnimationAssetResolver'` | `before: ['propagateTransforms']` |
-| `input-frame-start-scan` | `input` | `input` | `'InputBackend'` | -- |
-| `transitionStates` | `state` | `state` | -- | -- |
-| `physicsSyncBackend` | `physics-rapier3d` | `physics` | `'PhysicsWorld'` | `before: ['physicsStepSimulation']` |
-| `physicsStepSimulation` | `physics-rapier3d` | `physics` | `'PhysicsWorld'` | `after: ['physicsSyncBackend']` |
-| `physicsWriteback` | `physics-rapier3d` | `physics` | `'PhysicsWorld'` | `after: ['physicsStepSimulation']` |
-| `physicsSyncBackend2D` | `physics-rapier2d` | `physics` | `'PhysicsWorld'` | `before: ['physicsStepSimulation2D']` |
-| `physicsStepSimulation2D` | `physics-rapier2d` | `physics` | `'PhysicsWorld'` | `after: ['physicsSyncBackend2D']` |
-| `physicsWriteback2D` | `physics-rapier2d` | `physics` | `'PhysicsWorld'` | `after: ['physicsStepSimulation2D']` |
+| `propagateTransforms` | `runtime` | `TransformSet` | -- | -- |
+| `advanceAnimationPlayer` | `runtime` | `AnimationSet` | `'AnimationAssetResolver'` | `before: ['propagateTransforms']` |
+| `input-frame-start-scan` | `input` | `InputSet` | `'InputBackend'` | -- |
+| `transitionStates` | `state` | `StateSet` | -- | -- |
+| `physicsSyncBackend` | `physics-rapier3d` | `PhysicsSet` | `'PhysicsWorld'` | `before: ['physicsStepSimulation']` |
+| `physicsStepSimulation` | `physics-rapier3d` | `PhysicsSet` | `'PhysicsWorld'` | `after: ['physicsSyncBackend']` |
+| `physicsWriteback` | `physics-rapier3d` | `PhysicsSet` | `'PhysicsWorld'` | `after: ['physicsStepSimulation']` |
+| `physicsSyncBackend2D` | `physics-rapier2d` | `PhysicsSet` | `'PhysicsWorld'` | `before: ['physicsStepSimulation2D']` |
+| `physicsStepSimulation2D` | `physics-rapier2d` | `PhysicsSet` | `'PhysicsWorld'` | `after: ['physicsSyncBackend2D']` |
+| `physicsWriteback2D` | `physics-rapier2d` | `PhysicsSet` | `'PhysicsWorld'` | `after: ['physicsStepSimulation2D']` |
 
 > [!IMPORTANT]
-> 2D 物理三系统以 `2D` 后缀命名——与 3D 六系统共享全局 `SYSTEM_REGISTRY`，后缀避免同名碰撞（plan-strategy D-5）。`resolveComponent('Transform')` 在 fn 内直接取组件 token，不通过闭包捕获。
+> Import `TransformSet` / `AnimationSet` from `@forgeax/engine-runtime`, `InputSet` from `@forgeax/engine-input`, `StateSet` from `@forgeax/engine-state`, and `PhysicsSet` from `@forgeax/engine-physics`. The 2D names use a `2D` suffix to avoid collisions with the 3D systems in the global `SYSTEM_REGISTRY`. `resolveComponent('Transform')` in a system function reads the token directly without a closure capture.
 
 ## State-machine integration (zero-intrusion)
 

@@ -27,6 +27,7 @@ import {
   colliderShapeFromF32,
   PHYSICS_ERROR_HINTS,
   PhysicsError,
+  PhysicsSet,
   RIGID_BODY_TYPE_STATIC,
   RigidBody,
   registerColliderRemoveListener,
@@ -934,7 +935,6 @@ function resolveTransform(): Component | undefined {
 export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
   name: PHYSICS_SYNC_BACKEND,
   queries: [],
-  labels: ['physics'],
   after: ['propagateTransforms'],
   fn: (world) => {
     const transformComponent = resolveTransform();
@@ -1178,7 +1178,6 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
 export const PhysicsStepSimulation: SystemHandle<readonly []> = defineSystem({
   name: PHYSICS_STEP_SIMULATION,
   queries: [],
-  labels: ['physics'],
   after: [PHYSICS_SYNC_BACKEND],
   fn: (world) => {
     let pw: RapierPhysicsWorld3D;
@@ -1211,7 +1210,6 @@ export const PhysicsStepSimulation: SystemHandle<readonly []> = defineSystem({
 export const PhysicsWriteback: SystemHandle<readonly []> = defineSystem({
   name: PHYSICS_WRITEBACK,
   queries: [],
-  labels: ['physics'],
   after: [PHYSICS_STEP_SIMULATION],
   fn: (world) => {
     const transformComponent = resolveTransform();
@@ -1246,7 +1244,6 @@ export const PhysicsWriteback: SystemHandle<readonly []> = defineSystem({
 export const PhysicsCollisionSync: SystemHandle<readonly []> = defineSystem({
   name: PHYSICS_COLLISION_SYNC,
   queries: [],
-  labels: ['physics'],
   after: [PHYSICS_WRITEBACK],
   fn: (world) => {
     let pw: RapierPhysicsWorld3D;
@@ -1290,8 +1287,10 @@ export function registerPhysicsSystems(world: World): void {
     // CharacterController schema defaults until a later registration wires it.
   }
 
-  world.addSystem(PhysicsSyncBackend);
-  world.addSystem(PhysicsStepSimulation);
-  world.addSystem(PhysicsWriteback);
-  world.addSystem(PhysicsCollisionSync);
+  world.addSystems(PhysicsSet, [
+    PhysicsSyncBackend,
+    PhysicsStepSimulation,
+    PhysicsWriteback,
+    PhysicsCollisionSync,
+  ]);
 }

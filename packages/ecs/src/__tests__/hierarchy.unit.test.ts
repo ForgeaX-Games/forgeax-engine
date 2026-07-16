@@ -1916,6 +1916,31 @@ import { handleNumeric } from './utils/handle-numeric';
       world.despawn(parent).unwrap();
       expect(alive(world, Marker, child)).toBe(false);
     });
+
+    // tweak-20260714 M2 (plan-strategy §4 R-6): tilemap subtree
+    // (Tilemap -> TileLayer -> derived render entity) is depth 3, so
+    // the cascade must walk two levels of `linkedSpawn: true` mirror
+    // lists to collect grandchildren. Prior behaviour stopped at
+    // depth 1 because the recursive `_despawnCore` short-circuited
+    // linkedChildren collection on internal calls.
+    it('linkedSpawn:true depth-3: despawn(grandparent) cascades to grandchildren', () => {
+      const { world, Children, ChildOf, Marker } = setup({ linkedSpawn: true });
+      const grandparent = world.spawn({ component: Children, data: {} }).unwrap();
+      const parent = world
+        .spawn(
+          { component: Marker, data: { tag: 2 } },
+          { component: ChildOf, data: { parent: grandparent } },
+        )
+        .unwrap();
+      const child = world
+        .spawn({ component: Marker, data: { tag: 3 } }, { component: ChildOf, data: { parent } })
+        .unwrap();
+
+      world.despawn(grandparent).unwrap();
+
+      expect(alive(world, Marker, parent)).toBe(false);
+      expect(alive(world, Marker, child)).toBe(false);
+    });
   });
 }
 {
@@ -2707,7 +2732,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
       const snap = world.inspect();
       expect(Array.isArray(snap.systems)).toBe(true);
-      expect(snap.systems[0]).toEqual({ name: 'sysA' });
+      expect(snap.systems[0]).toEqual({ name: 'sysA', sets: [] });
     });
 
     it('keeps systemCount === systems.length as a derived invariant', () => {
@@ -3618,11 +3643,11 @@ import { handleNumeric } from './utils/handle-numeric';
     });
   });
 
-  describe('AC-05 — EcsErrorCode is a closed union of exactly 42 members', () => {
-    it('compile-time member count is 42 (feat-20260713 M2 w9 adds shared-field-invalid-value +1; solo bevy-examples round 20260713-194533 adds query-combinations-entity-required +1; feat-20260625 sprite-instances M1 w2 adds sprite-instances-{count-mismatch,requires-sprite-shading-model,mutually-exclusive-with-instances} +3; feat-20260623 M4 adds shared-ref-stale + unique-ref-stale +2; feat-20260614 M6 D-15 adds builtin-slot-not-owned +1; M3 added shared-ref-released + shared-ref-double-release +2; baseline 32 from bug-20260615 spawn-data-unknown-field-fail-fast)', () => {
+  describe('AC-05 — EcsErrorCode is a closed union of exactly 43 members', () => {
+    it('compile-time member count is 43 (feat-20260714-bevy-style-system-sets M1 w3 adds system-set-not-registered +1; feat-20260713 M2 w9 adds shared-field-invalid-value +1; solo bevy-examples round 20260713-194533 adds query-combinations-entity-required +1; feat-20260625 sprite-instances M1 w2 adds sprite-instances-{count-mismatch,requires-sprite-shading-model,mutually-exclusive-with-instances} +3; feat-20260623 M4 adds shared-ref-stale + unique-ref-stale +2; feat-20260614 M6 D-15 adds builtin-slot-not-owned +1; M3 added shared-ref-released + shared-ref-double-release +2; baseline 32 from bug-20260615 spawn-data-unknown-field-fail-fast)', () => {
       // Tuple-length type assertion: any drift in EcsErrorCode member count is a
-      // compile error here, falsifiable by changing the literal 42.
-      expectTypeOf<UnionLength<EcsErrorCode>>().toEqualTypeOf<42>();
+      // compile error here, falsifiable by changing the literal 43.
+      expectTypeOf<UnionLength<EcsErrorCode>>().toEqualTypeOf<43>();
     });
 
     it('the dropped register codes are not assignable to EcsErrorCode', () => {

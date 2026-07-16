@@ -88,6 +88,21 @@ export default defineConfig({
           passWithNoTests: true,
         },
       },
+      // -- ecs-perf: named performance project (D-1) --
+      //
+      // Sole owner of W5 (query-trs-flat-column-ratio.perf.test.ts) and
+      // W6 (query-light-extract-flat-column-ratio.perf.test.ts). The
+      // project name deliberately sits outside the @forgeax/* wildcard
+      // so wildcard scripts (test, test:unit, test:type) never select it.
+      // No passWithNoTests — an empty population must fail loudly rather
+      // than pass silently, so the validator can catch a missing include.
+      {
+        test: {
+          name: 'ecs-perf',
+          environment: 'node',
+          include: ['packages/ecs/src/**/*.perf.test.ts'],
+        },
+      },
       // -- browser layer: vitest browser mode (AC-05) --
       //
       // M5-followup (feat-20260518-pbr-direct-lighting-mvp): inject

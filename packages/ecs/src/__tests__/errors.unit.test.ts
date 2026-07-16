@@ -334,7 +334,7 @@ import { World } from '../world';
         },
         {
           label: 'CyclicDependencyError',
-          create: () => new CyclicDependencyError('A -> B -> A'),
+          create: () => new CyclicDependencyError(['A', 'B', 'A']),
           expectedCode: 'cyclic-dependency',
         },
         {
@@ -573,6 +573,10 @@ import { World } from '../world';
           // of the pre-fix silent zeroing. Minor evolution +1 per AGENTS.md
           // §Error model evolution contract.
           'shared-field-invalid-value',
+          // feat-20260714-bevy-style-system-sets M1 / w3 — sole invalid-SystemSet
+          // error code. Minor evolution +1 per AGENTS.md §Error model evolution
+          // contract.
+          'system-set-not-registered',
         ]);
 
         const added: string[] = [];
@@ -699,6 +703,11 @@ import { World } from '../world';
             // M2 / w9 — shared-field value gate code. Required to keep this
             // exhaustive switch over EcsErrorCode visually closed.
             case 'shared-field-invalid-value':
+              return code;
+            // feat-20260714-bevy-style-system-sets M1 / w3 — system-set-not-registered
+            // case. Required to keep this exhaustive switch over EcsErrorCode
+            // visually closed.
+            case 'system-set-not-registered':
               return code;
             default:
               return assertNever(code);

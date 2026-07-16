@@ -29,6 +29,24 @@ const app = await createApp({
 });
 ```
 
+## Asset loading
+
+The renderer injects this package's Web Audio decoder into `AssetRegistry`, so disk-backed clips use the ordinary GUID path. Configure the pack index, load the payload, then mint the World-owned shared ref consumed by `AudioSource.clip`:
+
+```ts
+import { AssetGuid } from '@forgeax/engine-pack/guid';
+import type { AudioClipAsset } from '@forgeax/engine-types';
+
+assets.configurePackIndex('/pack-index.json');
+const guid = AssetGuid.parse(clipGuid);
+if (!guid.ok) return;
+const loaded = await assets.loadByGuid<AudioClipAsset>(guid.value);
+if (!loaded.ok) return;
+const clip = world.allocSharedRef('AudioClipAsset', loaded.value);
+```
+
+Do not fetch a pack-index row or call `loadAudioClipByGuid` at app level. That function remains the decoder implementation used by the injected loader; its decode failure is surfaced by `loadByGuid` as `AssetError('asset-parse-failed')` with the original recovery hint.
+
 ## Tick system registration
 
 Both tick systems (audioTickSystem + audioListenerSync) are registered by `audioPlugin()` during `createApp`. When wiring the ECS World schedule manually (no app layer), register them directly. Note the seam difference: `audioTickSystem` has no frame-order constraint, but listener sync reads `Transform.world` (written by `propagateTransforms`), so it MUST run `after: [PROPAGATE_TRANSFORMS_SYSTEM]` or it reads a stale (one-frame-late) pose.

@@ -4,6 +4,66 @@ Archetype ECS for forgeax-engine — `World` / `Entity` / `Component` / `Query` 
 
 This README is the **per-package演进契约 anchor** for `Result<T, E>`. AGENTS.md keeps doc-brevity (the bare reference to "演进契约 / Per-feat breaking changes" lives there); concrete shape supersedes are logged here so AI users can `grep -rn '2026-05-11' packages/*/README.md` and locate every breaking change row in one pass.
 
+## SystemSet scheduling
+
+A `SystemSet` is a pure system-grouping token: it gives its members shared ordering, condition, and chaining declarations without introducing a synchronization boundary, frame phase, or command flush. Define tokens at module scope, assign systems through `world.addSystems`, and express relationships between groups through `world.configureSets`.
+
+| Entry | Shape | Use |
+|:--|:--|:--|
+| `defineSystemSet({ name, runIf?, chained? })` | `=> SystemSet` | Defines and globally registers a frozen, nominal set token. A duplicate name silently replaces the previous token, matching `defineSystem` and `defineComponent`. |
+| `getRegisteredSystemSets()` | `=> ReadonlyMap<string, SystemSet>` | Enumerates the currently registered set tokens by name. |
+| `world.addSystems(set, systems)` | `=> Result<void, SystemSetNotRegisteredError>` | Registers each descriptor if needed and adds its name to `set`. A system can belong to multiple sets; re-adding it preserves its original registration index. |
+| `world.configureSets({ set, before?, after? })` | `=> Result<void, SystemSetNotRegisteredError>` | Orders one set relative to other sets. At schedule rebuild, each set edge expands to member-system edges; empty sets are therefore a no-op. |
+
+```ts
+import {
+  defineSystem,
+  defineSystemSet,
+  World,
+} from '@forgeax/engine-ecs';
+
+const GameplaySet = defineSystemSet({ name: 'gameplay', chained: true });
+const RenderSet = defineSystemSet({ name: 'render' });
+
+const Move = defineSystem({
+  name: 'move',
+  queries: [],
+  fn: (world) => {
+    // Update gameplay state.
+  },
+});
+const Animate = defineSystem({
+  name: 'animate',
+  queries: [],
+  fn: (world) => {
+    // Advance animation state.
+  },
+});
+
+const world = new World();
+world.addSystems(GameplaySet, [Move, Animate]).unwrap();
+world.configureSets({ set: GameplaySet, before: [RenderSet] }).unwrap();
+world.update();
+```
+
+`chained: true` adds edges between consecutive members in their `addSystems` insertion order. A system that belongs to several sets runs only when every applicable set-level `runIf` condition is true; each set condition is evaluated at most once per frame. Set ordering expands into ordinary scheduling edges only: it does **not** make a barrier, add a flush, or serialize unrelated systems.
+
+### Built-in set tokens
+
+Import built-in set tokens from the package that owns their registration contract, not from `@forgeax/engine-ecs`:
+
+| Token | Root-entry import |
+|:--|:--|
+| `TransformSet`, `AnimationSet` | `@forgeax/engine-runtime` |
+| `InputSet` | `@forgeax/engine-input` |
+| `StateSet` | `@forgeax/engine-state` |
+| `PhysicsSet` | `@forgeax/engine-physics` |
+
+### SystemSet failure anchors
+
+- `system-set-not-registered` is reported as `SystemSetNotRegisteredError` when `addSystems` or `configureSets` receives a forged or stale token. Re-import the current token or inspect `getRegisteredSystemSets()`.
+- A set edge that combines with other ordering edges to form a cycle raises `CyclicDependencyError`. Read `error.detail.cycle` for the structured cycle path rather than parsing the message.
+
 ## Evolution log
 
 > Append-only registry of breaking-change rows for this package's public surface. Each row carries an ISO-date anchor (`YYYY-MM-DD`), the superseded shape, the new shape, a call-site upgrade diff, and the harness loop folder where the original decision lives. Per [AGENTS.md §Error model](../../AGENTS.md#error-model) the **Evolution contract** is: minor = add members only; major = rename / delete / reorder / narrow / deprecate. Rows below are all major edits.

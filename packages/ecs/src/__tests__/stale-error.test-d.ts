@@ -200,6 +200,8 @@ describe('[w13] EcsErrorCode union completeness — stale codes present', () => 
         case 'query-combinations-entity-required':
         // feat-20260713-mount-override-component-add-and-shared-ref-round M2 / w9
         case 'shared-field-invalid-value':
+        // feat-20260714-bevy-style-system-sets M1 / w3
+        case 'system-set-not-registered':
           return code;
       }
     };

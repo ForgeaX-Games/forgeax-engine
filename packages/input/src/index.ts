@@ -54,6 +54,7 @@ export {
   FRAME_START_SCAN_SYSTEM_NAME,
   INPUT_BACKEND_KEY,
   InputFrameStartScan,
+  InputSet,
 } from './frame-start-scan-system';
 export type {
   GestureEvent,

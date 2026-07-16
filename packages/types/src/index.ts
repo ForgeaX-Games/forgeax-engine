@@ -4514,6 +4514,13 @@ export interface LoadContext {
  */
 export interface Loader<P = Asset> {
   readonly kind: string;
+  /**
+   * `true` when `load` consumes the pack-index catalog entry rather than a
+   * parsed `.pack.json` payload. The registry supplies `guidKey` and
+   * `relativeUrl` in that entry and awaits this loader before cataloguing its
+   * resulting POD; omitted loaders consume a pack payload synchronously.
+   */
+  readonly fromCatalogEntry?: true;
   load(
     payload: Record<string, unknown>,
     refs: readonly string[] | undefined,

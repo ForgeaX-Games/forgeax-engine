@@ -20,7 +20,7 @@
 //       every capability plugin; the DOM-attach asymmetry stays in createApp.
 
 import { ok } from '@forgeax/engine-ecs';
-import { INPUT_BACKEND_KEY, InputFrameStartScan } from '@forgeax/engine-input';
+import { INPUT_BACKEND_KEY, InputFrameStartScan, InputSet } from '@forgeax/engine-input';
 import type { Plugin } from '@forgeax/engine-plugin';
 
 /**
@@ -28,7 +28,7 @@ import type { Plugin } from '@forgeax/engine-plugin';
  * InputBackend was injected into the World as the INPUT_BACKEND_KEY resource.
  *
  * Equivalent to the world-registration half of attachInputAuto
- * (input-attach.ts): `world.addSystem(InputFrameStartScan)`. The DOM attach
+ * (input-attach.ts): `world.addSystems(InputSet, [InputFrameStartScan])`. The DOM attach
  * + cleanup funnel stays in createApp (D-3 / C-5) -- this factory takes no
  * canvas and performs no DOM work.
  *
@@ -43,7 +43,7 @@ export function inputPlugin(): Plugin {
       if (!world.hasResource(INPUT_BACKEND_KEY)) {
         return ok(undefined);
       }
-      world.addSystem(InputFrameStartScan);
+      world.addSystems(InputSet, [InputFrameStartScan]);
       return ok(undefined);
     },
   };

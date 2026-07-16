@@ -13,7 +13,7 @@
 // routes through the structured ParamValidation 'invalid' path instead of a
 // raw throw.
 
-import { defineSystem, type SystemHandle } from '@forgeax/engine-ecs';
+import { defineSystem, defineSystemSet, type SystemHandle } from '@forgeax/engine-ecs';
 import {
   type ActionConfig,
   type ActionState,
@@ -34,6 +34,7 @@ import {
  * to ensure they observe the freshly written snapshot.
  */
 export const FRAME_START_SCAN_SYSTEM_NAME = 'input-frame-start-scan';
+export const InputSet = defineSystemSet({ name: 'input' });
 
 /**
  * Resource key under which the {@link InputBackend} producer is inserted
@@ -66,7 +67,6 @@ export const INPUT_BACKEND_KEY = 'InputBackend' as const;
 export const InputFrameStartScan: SystemHandle<readonly []> = defineSystem({
   name: FRAME_START_SCAN_SYSTEM_NAME,
   queries: [],
-  labels: ['input'],
   resources: [INPUT_BACKEND_KEY],
   fn: (world) => {
     const backend = world.getResource<InputBackend>(INPUT_BACKEND_KEY);

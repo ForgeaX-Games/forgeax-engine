@@ -14,7 +14,7 @@
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { createApp } from '@forgeax/engine-app';
 import { AudioListener } from '@forgeax/engine-audio';
-import { audioPlugin, loadAudioClipByGuid } from '@forgeax/engine-audio-webaudio';
+import { audioPlugin } from '@forgeax/engine-audio-webaudio';
 import {
   createQueryState,
   Entity,
@@ -188,7 +188,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // their emitter entities. The cue system drives playing edges each Play frame.
   // The emitters live for the app lifetime (not state-scoped) -- they carry no
   // gameplay state and re-arming on each replay is the cue system's job.
-  const cues = await loadAudioCues(world, assets, PACK_INDEX_URL, loadAudioClipByGuid);
+  const cues = await loadAudioCues(world, assets);
 
   // AC-12 MSDF font: register the shared sampler + load the pre-baked DejaVu
   // Sans Mono FontAsset. The sampler GUID must be catalogued before loadByGuid

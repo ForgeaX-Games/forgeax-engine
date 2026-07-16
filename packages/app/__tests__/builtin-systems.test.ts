@@ -24,7 +24,14 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getRegisteredSystems, World } from '@forgeax/engine-ecs';
-import { INPUT_BACKEND_KEY } from '@forgeax/engine-input';
+import { INPUT_BACKEND_KEY, InputFrameStartScan, InputSet } from '@forgeax/engine-input';
+import { PhysicsSet } from '@forgeax/engine-physics';
+import {
+  registerPhysicsSystems2D,
+} from '@forgeax/engine-physics-rapier2d';
+import {
+  registerPhysicsSystems,
+} from '@forgeax/engine-physics-rapier3d';
 // Side-effect imports: evaluating each module runs the top-level defineSystem
 // calls, registering the tokens in the global SYSTEM_REGISTRY (D-4 "define ==
 // register"). No register helper is called.
@@ -36,9 +43,10 @@ import {
   ANIMATION_ASSET_RESOLVER_KEY,
   type AnimationAssetResolver,
   registerAdvanceAnimationPlayer,
+  registerPropagateTransforms,
 } from '@forgeax/engine-runtime';
 import '@forgeax/engine-runtime';
-import '@forgeax/engine-state';
+import { registerStatesPlugin } from '@forgeax/engine-state';
 import { defineComponent } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 
@@ -187,35 +195,36 @@ describe('builtin-systems.test.ts', () => {
     });
   });
 
-  describe('w20 (AC-04): per-system label anchoring', () => {
-    it('AC-04: propagateTransforms has label "transform"', () => {
-      const h = getRegisteredSystems().get('propagateTransforms');
-      expect(h?.labels).toContain('transform');
-    });
-    it('AC-04: advanceAnimationPlayer has label "animation"', () => {
-      const h = getRegisteredSystems().get('advanceAnimationPlayer');
-      expect(h?.labels).toContain('animation');
-    });
-    it('AC-04: input-frame-start-scan has label "input"', () => {
-      const h = getRegisteredSystems().get('input-frame-start-scan');
-      expect(h?.labels).toContain('input');
-    });
-    it('AC-04: transitionStates has label "state"', () => {
-      const h = getRegisteredSystems().get('transitionStates');
-      expect(h?.labels).toContain('state');
-    });
-    it('AC-04: physics 3D systems have label "physics"', () => {
-      for (const n of ['physicsSyncBackend', 'physicsStepSimulation', 'physicsWriteback']) {
-        expect(getRegisteredSystems().get(n)?.labels).toContain('physics');
-      }
-    });
-    it('AC-04: physics 2D systems have label "physics"', () => {
-      for (const n of [
-        'physicsSyncBackend2D',
-        'physicsStepSimulation2D',
-        'physicsWriteback2D',
+  describe('SystemSet registration anchoring', () => {
+    it('records every builtin system under its production SystemSet', () => {
+      const world = new World();
+      world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, {
+        resolveAnimationClip: () => undefined,
+      } satisfies AnimationAssetResolver);
+      world.insertResource(INPUT_BACKEND_KEY, {} as never);
+
+      registerPropagateTransforms(world);
+      registerAdvanceAnimationPlayer(world);
+      world.addSystems(InputSet, [InputFrameStartScan]);
+      registerStatesPlugin(world);
+      registerPhysicsSystems(world);
+      registerPhysicsSystems2D(world);
+
+      const setsBySystem = new Map(world.inspect().systems.map((system) => [system.name, system.sets]));
+      for (const [name, set] of [
+        ['propagateTransforms', 'transform'],
+        ['advanceAnimationPlayer', 'animation'],
+        ['input-frame-start-scan', 'input'],
+        ['transitionStates', 'state'],
+        ['physicsSyncBackend', PhysicsSet.name],
+        ['physicsStepSimulation', PhysicsSet.name],
+        ['physicsWriteback', PhysicsSet.name],
+        ['physicsCollisionSync', PhysicsSet.name],
+        ['physicsSyncBackend2D', PhysicsSet.name],
+        ['physicsStepSimulation2D', PhysicsSet.name],
+        ['physicsWriteback2D', PhysicsSet.name],
       ]) {
-        expect(getRegisteredSystems().get(n)?.labels).toContain('physics');
+        expect(setsBySystem.get(name)).toContain(set);
       }
     });
   });

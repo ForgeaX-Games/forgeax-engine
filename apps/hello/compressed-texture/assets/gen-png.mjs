@@ -23,11 +23,10 @@ import { dirname, resolve } from 'node:path';
 
 const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
-// Texture geometry: 256x256 checkerboard, 32px cells (matches the demo's
-// smoke-dawn synthetic texture so the compressed/uncompressed render targets
-// share a ground-truth image).
-const TEX_W = 256;
-const TEX_H = 256;
+// Texture geometry deliberately crosses BC7's 4x4 block boundary. This keeps
+// the browser smoke on the full-subresource tail-copy path.
+const TEX_W = 257;
+const TEX_H = 259;
 const CHECK_SIZE = 32;
 
 // CRC-32 (PNG polynomial) over a chunk's type+data.

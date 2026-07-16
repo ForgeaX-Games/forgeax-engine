@@ -17,11 +17,11 @@
 // truth, `portability-bun` is the package-manager-drift verifier. See AGENTS.md
 // "Conventions > Dual lockfile".
 //
-// Zero npm deps; stdlib only. ≤ 200 LOC including the inline `--self-test`
-// fixtures. Designed to mirror scripts/check-workspaces-equivalence.mjs:
-// hand-rolled minimal YAML scan, fail-fast with structured hint on stderr.
+// Zero npm deps; stdlib only. Inline `--self-test` fixtures falsify the
+// alignment and ownership contracts. Uses a hand-rolled minimal YAML scan and
+// fails fast with structured hints on stderr.
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -248,195 +248,366 @@ function runAlignmentCheck(ciYamlText, rootDir) {
   return issues;
 }
 
+// --- ownership checks (D-5) -------------------------------------------------
+
+const W5_PATH = 'packages/ecs/src/__tests__/query-trs-flat-column-ratio.perf.test.ts';
+const W6_PATH = 'packages/ecs/src/__tests__/query-light-extract-flat-column-ratio.perf.test.ts';
+const EXPECTED_PERF_PATHS = [W5_PATH, W6_PATH].sort();
+
+function extractRootEcsPerfInclude(rootConfigText) {
+  const idx = rootConfigText.indexOf("name: 'ecs-perf'");
+  if (idx < 0) return null;
+  const after = rootConfigText.substring(idx);
+  const m = after.match(/include:\s*\[([^\]]*)\]/);
+  if (!m) return null;
+  const globs = [];
+  const re = /'([^']+)'/g;
+  for (const g of m[1].matchAll(re)) globs.push(g[1]);
+  return globs;
+}
+
+function globMatcher(glob) {
+  let pattern = '';
+  for (let i = 0; i < glob.length; i += 1) {
+    const char = glob[i];
+    if (char !== '*') {
+      pattern += /[.+^${}()|[\]\\]/.test(char) ? `\\${char}` : char;
+      continue;
+    }
+    if (glob[i + 1] === '*') {
+      i += 1;
+      if (glob[i + 1] === '/') {
+        i += 1;
+        pattern += '(?:.*/)?';
+      } else {
+        pattern += '.*';
+      }
+    } else {
+      pattern += '[^/]*';
+    }
+  }
+  return new RegExp(`^${pattern}$`);
+}
+
+function resolvePerfFiles(rootDir, includeGlobs) {
+  const matches = includeGlobs.map(globMatcher);
+  const files = [];
+  function walk(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!['node_modules', 'dist', '.git', '.worktrees'].includes(entry.name)) walk(full);
+      } else if (entry.name.endsWith('.perf.test.ts')) {
+        const file = path.relative(rootDir, full);
+        if (matches.some((match) => match.test(file))) files.push(file);
+      }
+    }
+  }
+  walk(rootDir);
+  return files;
+}
+
+function runOwnershipCheck({
+  ciYamlText,
+  rootDir,
+  _ecsConfigText,
+  _rootConfigText,
+  _pkgJsonText,
+  _perfFiles,
+}) {
+  const issues = [];
+  const ecsConf =
+    _ecsConfigText ?? readFileSync(path.join(rootDir, 'packages/ecs/vitest.config.ts'), 'utf8');
+  const rootConf = _rootConfigText ?? readFileSync(path.join(rootDir, 'vitest.config.ts'), 'utf8');
+  const pkgJson = JSON.parse(
+    _pkgJsonText ?? readFileSync(path.join(rootDir, 'package.json'), 'utf8'),
+  );
+
+  // (a) ecs config contains **/*.perf.test.ts exclude
+  if (!ecsConf.includes('**/*.perf.test.ts')) {
+    issues.push(
+      `[ownership] FAIL: @forgeax/engine-ecs does not exclude '**/*.perf.test.ts' (channel: primary-pnpm, portability-bun)\n` +
+        `  Project: ecs-perf\n` +
+        `  W5 (${W5_PATH}) and W6 (${W6_PATH}) would re-enter normal ECS selection.\n` +
+        `  Expected: exclude array in packages/ecs/vitest.config.ts contains '**/*.perf.test.ts'`,
+    );
+  }
+
+  // (b) root config registers ecs-perf whose include globs all end in .perf.test.ts
+  const incGlobs = extractRootEcsPerfInclude(rootConf);
+  if (!incGlobs) {
+    issues.push(
+      `[ownership] FAIL: ecs-perf project not found in root vitest.config.ts (channel: primary-pnpm)\n` +
+        `  Project: ecs-perf\n` +
+        `  W5 (${W5_PATH}) and W6 (${W6_PATH}) have no named performance owner.\n` +
+        `  Expected: named project 'ecs-perf' with include globs ending in '.perf.test.ts'`,
+    );
+  } else {
+    const nonPerf = incGlobs.filter((g) => !g.endsWith('.perf.test.ts'));
+    if (nonPerf.length > 0) {
+      issues.push(
+        `[ownership] FAIL: ecs-perf include globs not all '*.perf.test.ts' (channel: primary-pnpm)\n` +
+          `  Project: ecs-perf\n` +
+          `  W5: ${W5_PATH}\n` +
+          `  W6: ${W6_PATH}\n` +
+          `  Non-perf globs: ${nonPerf.join(', ')}\n` +
+          `  Expected: all include globs end in '.perf.test.ts' — ordinary ECS unit tests would enter ecs-perf`,
+      );
+    }
+  }
+
+  // (c) ecs-perf's include globs resolve exactly W5/W6
+  const perfFiles = _perfFiles ?? (incGlobs ? resolvePerfFiles(rootDir, incGlobs) : []);
+  const sorted = [...perfFiles].sort();
+  const eq =
+    sorted.length === EXPECTED_PERF_PATHS.length &&
+    sorted.every((f, i) => f === EXPECTED_PERF_PATHS[i]);
+  if (!eq) {
+    const missing = EXPECTED_PERF_PATHS.filter((f) => !sorted.includes(f));
+    const extra = sorted.filter((f) => !EXPECTED_PERF_PATHS.includes(f));
+    const parts = [];
+    if (missing.length) parts.push(`missing: ${missing.join(', ')}`);
+    if (extra.length) parts.push(`extra: ${extra.join(', ')}`);
+    issues.push(
+      `[ownership] FAIL: ecs-perf include population mismatch (channel: primary-pnpm)\n` +
+        `  Project: ecs-perf\n` +
+        `  W5: ${W5_PATH}\n` +
+        `  W6: ${W6_PATH}\n` +
+        `  Includes: ${incGlobs?.join(', ') || '(missing project)'}\n` +
+        `  ${parts.join('; ')}\n` +
+        `  Expected exactly: ${EXPECTED_PERF_PATHS.join(', ')}`,
+    );
+  }
+
+  // (d) package.json#test:portability does not select ecs-perf
+  const portScript = pkgJson.scripts?.['test:portability'] || '';
+  if (portScript.includes('ecs-perf')) {
+    issues.push(
+      `[ownership] FAIL: portability-bun selects ecs-perf project (channel: portability-bun)\n` +
+        `  test:portability = ${JSON.stringify(portScript)}\n` +
+        `  Expected: no 'ecs-perf' in test:portability — Bun canary must not discover W5/W6`,
+    );
+  }
+
+  // (e) both primary run literals contain --project=ecs-perf
+  const priBlock = extractJobBlock(ciYamlText, PRIMARY_JOB);
+  if (priBlock) {
+    const steps = extractStepRuns(priBlock);
+    const vitestSteps = steps.filter(
+      (s) => s.run.includes('vitest run') && s.run.includes('--typecheck'),
+    );
+    if (vitestSteps.length !== 2) {
+      issues.push(
+        `[ownership] FAIL: primary-pnpm has ${vitestSteps.length} vitest+typecheck command(s), expected exactly 2 (channel: primary-pnpm)\n` +
+          `  Project: primary-pnpm\n` +
+          `  W5: ${W5_PATH}\n` +
+          `  W6: ${W6_PATH}\n` +
+          `  Expected: 2 vitest run --typecheck commands (fork PR unit + same-repo coverage) — ` +
+          `deleting or rewriting both would silently drop W5/W6 from the primary channel`,
+      );
+    }
+    for (const s of vitestSteps) {
+      if (!s.run.includes('--project=ecs-perf')) {
+        issues.push(
+          `[ownership] FAIL: primary-pnpm vitest command missing --project=ecs-perf (channel: primary-pnpm)\n` +
+            `  Project: primary-pnpm\n` +
+            `  Step: ${s.name}\n` +
+            `  W5: ${W5_PATH}\n` +
+            `  W6: ${W6_PATH}\n` +
+            `  Expected: contains '--project=ecs-perf' — W5/W6 would leave the primary channel`,
+        );
+      }
+    }
+  }
+
+  // (f) portability job contains no perf-project or .perf.test.ts literal
+  const portBlock = extractJobBlock(ciYamlText, PORTABILITY_JOB);
+  if (portBlock) {
+    const steps = extractStepRuns(portBlock);
+    for (const s of steps) {
+      if (s.run.includes('ecs-perf')) {
+        issues.push(
+          `[ownership] FAIL: portability-bun contains 'ecs-perf' (channel: portability-bun)\n` +
+            `  Step: ${s.name}\n` +
+            `  Expected: no 'ecs-perf' in portability job — W5/W6 would re-enter Bun selection`,
+        );
+      }
+      if (s.run.includes('.perf.test.ts')) {
+        issues.push(
+          `[ownership] FAIL: portability-bun contains '.perf.test.ts' (channel: portability-bun)\n` +
+            `  Step: ${s.name}\n` +
+            `  Expected: no '.perf.test.ts' in portability job — W5/W6 would re-enter Bun selection`,
+        );
+      }
+    }
+  }
+
+  return issues;
+}
+
 // --- fixtures + self-test mode --------------------------------------------
 
-const FIX_ALIGNED = `name: ci
-on: [push]
-jobs:
-  primary-pnpm:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install (frozen)
-        run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Workspaces equivalence guard
-        run: pnpm run sync:check
-      - name: Biome ci
-        run: pnpm run lint
-      - name: English-only check
-        run: python scripts/forgeax/check_english_only.py --code packages/*/src
-      - name: R12 Lint (descriptor mirror)
-        run: pnpm r12-lint
-      - name: Vitest (unit + typecheck)
-        run: pnpm run test:type
-      - name: lint:internal
-        run: pnpm lint:internal
-      - name: check-engine-no-console-dep
-        run: node packages/console/scripts/check-engine-no-console-dep.mjs
-      - name: check-console-not-in-engine-bundle
-        run: node packages/console/scripts/check-console-not-in-engine-bundle.mjs
-      - name: ci:paths-check
-        run: pnpm ci:paths-check
-      - name: grep:single-exit
-        run: pnpm grep:single-exit
-      - name: grep:asset-registry-instanced-removed
-        run: pnpm grep:asset-registry-instanced-removed
-      - name: grep:no-entity-array-literal
-        run: pnpm grep:no-entity-array-literal
-      - name: grep:readme-array-vocab-mentioned
-        run: pnpm grep:readme-array-vocab-mentioned
-      - name: grep:readme-string-vocab-mentioned
-        run: pnpm grep:readme-string-vocab-mentioned
-      - name: grep:no-managed-array-view-import
-        run: pnpm grep:no-managed-array-view-import
-      - name: grep:no-array-stride-option
-        run: pnpm grep:no-array-stride-option
-      - name: grep:no-buffer-colon-keyword
-        run: pnpm grep:no-buffer-colon-keyword
-      - name: grep:no-managed-array-error-code
-        run: pnpm grep:no-managed-array-error-code
-      - name: grep:no-result-reproject-cast
-        run: pnpm grep:no-result-reproject-cast
-      - name: grep:no-string-view-import
-        run: pnpm grep:no-string-view-import
-      - name: grep:no-set-managed-ref-store
-        run: pnpm grep:no-set-managed-ref-store
-      - name: grep:no-binary-assets
-        run: pnpm grep:no-binary-assets
-      - name: Pnpm workspace build (mirror)
-        run: pnpm run --filter './packages/*' build
-      - name: Pnpm dist artefact probe (mirror)
-        run: |
-          for pkg in runtime types ecs vite-plugin-shader vite-plugin-pack; do
-            test -f "packages/$pkg/dist/index.mjs" || (echo "missing: $pkg" && exit 1)
-          done
-      - name: Pnpm dev server probe (mirror)
-        run: |
-          pnpm run --filter @forgeax/hello-room dev &
-          PID=$!
-          sleep 15
-          if curl --fail --max-time 5 http://localhost:5173/; then
-            rc=0
-          else
-            echo "dev server probe failed @ 5173"
-            rc=1
-          fi
-          kill $PID 2>/dev/null || true
-          exit $rc
-      - name: Hello-triangle headless smoke
-        run: pnpm --filter @forgeax/hello-triangle smoke
-  portability-bun:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install (frozen)
-        run: bun install --frozen-lockfile --ignore-scripts
-      - name: Workspaces equivalence guard
-        run: bun run sync:check
-      - name: Biome ci
-        run: bunx biome ci .
-      - name: English-only check
-        run: python scripts/forgeax/check_english_only.py --code packages/*/src
-      - name: R12 Lint (descriptor mirror)
-        run: bun run r12-lint
-      - name: Vitest (via bun run test:portability)
-        run: bun run test:portability
-      - name: lint:internal
-        run: bun run lint:internal
-      - name: check-engine-no-console-dep
-        run: bun run check-engine-no-console-dep
-      - name: check-console-not-in-engine-bundle
-        run: bun run check-console-not-in-engine-bundle
-      - name: ci:paths-check
-        run: bun run ci:paths-check
-      - name: grep:single-exit
-        run: bun run grep:single-exit
-      - name: grep:asset-registry-instanced-removed
-        run: bun run grep:asset-registry-instanced-removed
-      - name: grep:no-entity-array-literal
-        run: bun run grep:no-entity-array-literal
-      - name: grep:readme-array-vocab-mentioned
-        run: bun run grep:readme-array-vocab-mentioned
-      - name: grep:readme-string-vocab-mentioned
-        run: bun run grep:readme-string-vocab-mentioned
-      - name: grep:no-managed-array-view-import
-        run: bun run grep:no-managed-array-view-import
-      - name: grep:no-array-stride-option
-        run: bun run grep:no-array-stride-option
-      - name: grep:no-buffer-colon-keyword
-        run: bun run grep:no-buffer-colon-keyword
-      - name: grep:no-managed-array-error-code
-        run: bun run grep:no-managed-array-error-code
-      - name: grep:no-result-reproject-cast
-        run: bun run grep:no-result-reproject-cast
-      - name: grep:no-string-view-import
-        run: bun run grep:no-string-view-import
-      - name: grep:no-set-managed-ref-store
-        run: bun run grep:no-set-managed-ref-store
-      - name: grep:no-binary-assets
-        run: bun run grep:no-binary-assets
-      - name: Bun workspace build
-        run: bun run --filter './packages/*' build
-      - name: Bun dist artefact probe
-        run: |
-          for pkg in runtime types ecs vite-plugin-shader vite-plugin-pack; do
-            test -f "packages/$pkg/dist/index.mjs" || (echo "missing: $pkg" && exit 1)
-          done
-      - name: Bun dev server probe
-        run: |
-          bun run --cwd apps/hello/room dev &
-          PID=$!
-          sleep 15
-          if curl --fail --max-time 5 http://localhost:5173/; then
-            rc=0
-          else
-            echo "dev server probe failed @ 5173"
-            rc=1
-          fi
-          kill $PID 2>/dev/null || true
-          exit $rc
-`;
-const FIX_MISSING_PORTABILITY_R12 = FIX_ALIGNED.replace(
-  / {6}- name: R12 Lint \(descriptor mirror\)\n {8}run: bun run r12-lint\n/,
-  '',
-);
-const FIX_PRIMARY_ONLY_OK = FIX_ALIGNED; // primary-only smoke step already in aligned fixture
-
 function runSelfTest() {
-  let failed = 0;
+  const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const ciText = readFileSync(path.join(rootDir, '.github', 'workflows', 'ci.yml'), 'utf8');
   const cases = [
-    {
-      id: 'aligned',
-      text: FIX_ALIGNED,
-      expectIssues: false,
-    },
+    { id: 'aligned', text: ciText, expectIssues: false },
     {
       id: 'missing-in-portability',
-      text: FIX_MISSING_PORTABILITY_R12,
+      text: ciText.replace(
+        / {6}- name: R12 Lint \(descriptor mirror\)\n {8}run: bun run r12-lint\n/,
+        '',
+      ),
       expectIssues: true,
       expectMatch: 'r12-lint',
     },
-    {
-      id: 'primary-only-allowlist',
-      text: FIX_PRIMARY_ONLY_OK,
-      expectIssues: false,
-    },
+    { id: 'primary-only-allowlist', text: ciText, expectIssues: false },
   ];
+  let failed = 0;
   for (const c of cases) {
     const issues = runAlignmentCheck(c.text, null);
-    const hasIssues = issues.length > 0;
     const ok = c.expectIssues
-      ? hasIssues && (!c.expectMatch || issues.join('\n').includes(c.expectMatch))
-      : !hasIssues;
-    process.stdout.write(
-      `[self-test] case=${c.id} expectIssues=${c.expectIssues} actualIssues=${hasIssues} ${
-        ok ? 'PASS' : 'FAIL'
-      }\n`,
-    );
+      ? issues.length > 0 && (!c.expectMatch || issues.join('\n').includes(c.expectMatch))
+      : issues.length === 0;
+    process.stdout.write(`[self-test] case=${c.id} ${ok ? 'PASS' : 'FAIL'}\n`);
     if (!ok) {
       failed += 1;
-      for (const i of issues) process.stdout.write(`  issue: ${i}\n`);
+      for (const issue of issues) process.stdout.write(`  issue: ${issue}\n`);
     }
   }
   process.stdout.write(`[self-test] ${failed === 0 ? 'all PASS' : `${failed} FAIL`}\n`);
+  return failed === 0 ? 0 : 1;
+}
+
+// --- ownership self-test fixtures (D-5) ------------------------------------
+
+function runOwnershipSelfTest() {
+  let failed = 0;
+  const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const ciText = readFileSync(path.join(rootDir, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const rootConf = readFileSync(path.join(rootDir, 'vitest.config.ts'), 'utf8');
+  const ecsConf = readFileSync(path.join(rootDir, 'packages/ecs/vitest.config.ts'), 'utf8');
+  const pkgText = readFileSync(path.join(rootDir, 'package.json'), 'utf8');
+  const primaryWithoutPerf = ciText.replace(/ --project=ecs-perf/g, '');
+  // Remove BOTH vitest run --typecheck commands from primary-pnpm to exercise the
+  // zero-candidate guard (F-1: silently green when all primary ownership commands
+  // are deleted).
+  const zeroVitestTypecheck = ciText.replace(
+    /pnpm exec vitest run --typecheck /g,
+    'pnpm exec vitest run --no-typecheck ',
+  );
+  const portabilityMarker = 'run: bun run test:portability';
+  const portabilityWithProject = ciText.replace(
+    portabilityMarker,
+    `${portabilityMarker} --project=ecs-perf`,
+  );
+  const portabilityWithPath = ciText.replace(portabilityMarker, `${portabilityMarker} ${W5_PATH}`);
+  const cases = [
+    ['ownership-aligned', { ciYamlText: ciText, rootDir }, false],
+    [
+      'ownership-ecs-no-exclude',
+      {
+        ciYamlText: ciText,
+        rootDir,
+        _ecsConfigText: ecsConf.replace(
+          "exclude: [...configDefaults.exclude, '**/*.perf.test.ts'],\n",
+          '',
+        ),
+      },
+      true,
+      '**/*.perf.test.ts',
+    ],
+    [
+      'ownership-ecs-perf-nonperf-glob',
+      {
+        ciYamlText: ciText,
+        rootDir,
+        _rootConfigText: rootConf.replace('**/*.perf.test.ts', '**/*.test.ts'),
+      },
+      true,
+      'not all',
+    ],
+    [
+      'ownership-ecs-perf-unmatched-glob',
+      {
+        ciYamlText: ciText,
+        rootDir,
+        _rootConfigText: rootConf.replace('**/*.perf.test.ts', 'nope/**/*.perf.test.ts'),
+      },
+      true,
+      'include population mismatch',
+    ],
+    [
+      'ownership-ecs-perf-not-found',
+      {
+        ciYamlText: ciText,
+        rootDir,
+        _rootConfigText: rootConf.replace("name: 'ecs-perf'", "name: 'not-ecs-perf'"),
+      },
+      true,
+      'ecs-perf project not found',
+    ],
+    [
+      'ownership-perf-population-mismatch',
+      {
+        ciYamlText: ciText,
+        rootDir,
+        _perfFiles: [...EXPECTED_PERF_PATHS, 'packages/ecs/src/__tests__/extra.perf.test.ts'],
+      },
+      true,
+      'mismatch',
+    ],
+    [
+      'ownership-portability-selects-ecs-perf',
+      {
+        ciYamlText: ciText,
+        rootDir,
+        _pkgJsonText: pkgText.replace(
+          "'@forgeax/engine-ecs'",
+          "'@forgeax/engine-ecs' --project=ecs-perf",
+        ),
+      },
+      true,
+      'ecs-perf',
+    ],
+    [
+      'ownership-primary-missing-ecs-perf',
+      { ciYamlText: primaryWithoutPerf, rootDir },
+      true,
+      '--project=ecs-perf',
+    ],
+    [
+      'ownership-primary-zero-vitest-typecheck',
+      { ciYamlText: zeroVitestTypecheck, rootDir },
+      true,
+      'expected exactly 2',
+    ],
+    [
+      'ownership-portability-contains-ecs-perf',
+      { ciYamlText: portabilityWithProject, rootDir },
+      true,
+      'ecs-perf',
+    ],
+    [
+      'ownership-portability-contains-perf-test-ts',
+      { ciYamlText: portabilityWithPath, rootDir },
+      true,
+      '.perf.test.ts',
+    ],
+  ];
+
+  for (const [id, params, expectIssues, expectMatch] of cases) {
+    const issues = runOwnershipCheck(params);
+    const ok = expectIssues
+      ? issues.length > 0 && (!expectMatch || issues.join('\n').includes(expectMatch))
+      : issues.length === 0;
+    process.stdout.write(`[self-test] case=${id} ${ok ? 'PASS' : 'FAIL'}\n`);
+    if (!ok) {
+      failed += 1;
+      for (const issue of issues) process.stdout.write(`  issue: ${issue}\n`);
+    }
+  }
+  process.stdout.write(`[self-test] ownership ${failed === 0 ? 'all PASS' : `${failed} FAIL`}\n`);
   return failed === 0 ? 0 : 1;
 }
 
@@ -445,16 +616,20 @@ function runSelfTest() {
 function main() {
   const argv = process.argv.slice(2);
   if (argv.includes('--self-test')) {
-    process.exit(runSelfTest());
+    const rc1 = runSelfTest();
+    const rc2 = runOwnershipSelfTest();
+    process.exit(rc1 || rc2);
   }
   const here = path.dirname(fileURLToPath(import.meta.url));
   const rootDir = path.resolve(here, '..');
   const ciPath = path.join(rootDir, '.github', 'workflows', 'ci.yml');
   const text = readFileSync(ciPath, 'utf8');
   const issues = runAlignmentCheck(text, rootDir);
-  if (issues.length) {
+  const ownershipIssues = runOwnershipCheck({ ciYamlText: text, rootDir });
+  const allIssues = [...issues, ...ownershipIssues];
+  if (allIssues.length) {
     process.stderr.write('[ci-align-check] FAIL:\n');
-    for (const i of issues) process.stderr.write(`${i}\n`);
+    for (const i of allIssues) process.stderr.write(`${i}\n`);
     process.stderr.write(
       '\n  Hint: add the missing step to the offending job (mirror the other-channel form),\n' +
         '        or update ALIGNED_GATES / FORBIDDEN_IN_PORTABILITY in scripts/check-ci-channel-alignment.mjs.\n',

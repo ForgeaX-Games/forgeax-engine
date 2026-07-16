@@ -94,6 +94,7 @@ import {
   type ScheduleMutationError,
   type SpawnLightInvalidBoundsError,
   StaleEntityError,
+  type SystemSetNotRegisteredError,
   type UniqueRefDoubleReleaseError,
   type UniqueRefReleasedError,
 } from './errors';
@@ -115,7 +116,10 @@ import {
   type Schedule,
   Severity,
   type SystemDescriptor,
+  type SystemSet,
   addSystem as scheduleAddSystem,
+  addSystems as scheduleAddSystems,
+  configureSets as scheduleConfigureSets,
   removeSystem as scheduleRemoveSystem,
   replaceSystem as scheduleReplaceSystem,
 } from './schedule';
@@ -220,7 +224,8 @@ export type EcsError =
   | RelationshipMirrorFieldTypeMismatchError
   | RelationshipDetachMismatchError
   | ComponentNotDefinedError
-  | RemoveEssentialComponentError;
+  | RemoveEssentialComponentError
+  | SystemSetNotRegisteredError;
 
 /** Component data for spawn/addComponent: component token + initial values.
  *
@@ -305,12 +310,15 @@ export interface WorldInspection {
   /** Number of registered systems. Always equals `systems.length` (M2 derived invariant). */
   readonly systemCount: number;
   /**
-   * Minimal per-system summary (M2 — plan-strategy D-3). One entry per
+   * Per-system summary (M3 — plan-strategy D-8). One entry per
    * registered system, in registration order. The `systemCount` field is
    * preserved as a derived alias of `systems.length` so existing inspector
    * P0 e2e cases that read `systemCount` keep working.
+   *
+   * `sets` is the list of set names this system belongs to (empty array for
+   * systems registered via plain `addSystem` without `addSystems`).
    */
-  readonly systems: ReadonlyArray<{ readonly name: string }>;
+  readonly systems: ReadonlyArray<{ readonly name: string; readonly sets: readonly string[] }>;
   /** Keys of all inserted resources. */
   readonly resourceKeys: string[];
 }
@@ -498,6 +506,53 @@ export class World {
   }
 
   /**
+   * Batch-register systems to a set. Validates the set token before writing.
+   *
+   * - First call for a system name: registers it via the existing `addSystem` path.
+   * - Subsequent calls: only adds the system name to the set's members (dedup).
+   *
+   * Returns `Result.err` with `SystemSetNotRegisteredError` if the set token
+   * fails identity validation.
+   *
+   * @example
+   * ```ts
+   * const GameplaySet = defineSystemSet({ name: 'gameplay' });
+   * const world = new World();
+   * const r = world.addSystems(GameplaySet, [movement, collision]);
+   * if (!r.ok) console.error(r.error.code, r.error.hint);
+   * ```
+   */
+  addSystems<const Qs extends ReadonlyArray<QueryDescriptor>>(
+    set: SystemSet,
+    systems: ReadonlyArray<SystemDescriptor<Qs>>,
+  ): Result<void, SystemSetNotRegisteredError> {
+    return scheduleAddSystems(this.schedule, set, systems);
+  }
+
+  /**
+   * Record set-level ordering constraints (M1 record layer only).
+   *
+   * Validates all input tokens (main set + before/after members) before
+   * writing. Returns `Result.err` with `SystemSetNotRegisteredError` if any
+   * token fails identity validation.
+   *
+   * @example
+   * ```ts
+   * const setA = defineSystemSet({ name: 'a' });
+   * const setB = defineSystemSet({ name: 'b' });
+   * const r = world.configureSets({ set: setA, before: [setB] });
+   * if (!r.ok) console.error(r.error.code, r.error.hint);
+   * ```
+   */
+  configureSets(opts: {
+    readonly set: SystemSet;
+    readonly before?: readonly SystemSet[];
+    readonly after?: readonly SystemSet[];
+  }): Result<void, SystemSetNotRegisteredError> {
+    return scheduleConfigureSets(this.schedule, opts.set, opts.before, opts.after);
+  }
+
+  /**
    * Set a custom error handler for Layer 3 (ErrorHandler + Severity).
    * Default is `matchSeverity` (Panic → throw, Error → console.error, etc.).
    *
@@ -606,12 +661,26 @@ export class World {
     }
     const activeComponents = [...activeComponentSet];
 
-    // System count + per-system summary (M2 — plan-strategy D-3).
+    // System count + per-system summary (M3 — plan-strategy D-8).
     // systemCount is a derived alias of systems.length so existing inspector
     // P0 e2e cases that read systemCount keep working.
-    const systems: { readonly name: string }[] = [];
+    // Build reverse map: system name → set names it belongs to.
+    const systemToSets = new Map<string, string[]>();
+    for (const [setName, setRecord] of this.schedule.sets) {
+      for (const memberName of setRecord.members) {
+        if (this.schedule.systems.has(memberName)) {
+          let list = systemToSets.get(memberName);
+          if (!list) {
+            list = [];
+            systemToSets.set(memberName, list);
+          }
+          list.push(setName);
+        }
+      }
+    }
+    const systems: { readonly name: string; readonly sets: readonly string[] }[] = [];
     for (const name of this.schedule.systems.keys()) {
-      systems.push({ name });
+      systems.push({ name, sets: systemToSets.get(name) ?? [] });
     }
     const systemCount = systems.length;
 
@@ -811,6 +880,14 @@ export class World {
     // fillComponentDefaults, so a typo / unknown-key in the caller's raw
     // payload surfaces a SpawnDataUnknownFieldError instead of being silently
     // dropped (the fill helper iterates schema keys and never sees raw keys).
+    //
+    // tweak-20260714 M1 (coAttach): before the fill / validate loop, expand
+    // caller-supplied `componentDatas` with any coAttach companion that is
+    // not already named in the bundle. Chain-isolated: only the caller's
+    // components' coAttach lists are consulted; auto-added companions do NOT
+    // recursively contribute their own coAttach (charter P4 — keeps archetype
+    // hash deterministic on {caller bundle, declared companions}).
+    componentDatas = expandCoAttach(componentDatas);
     const filledData: Record<string, unknown>[] = [];
     for (const cd of componentDatas) {
       const keyErr = validateComponentDataKeys(cd.component, cd.data as Record<string, unknown>);
@@ -929,8 +1006,11 @@ export class World {
    * Core implementation of `despawn` with reentry guard.
    *
    * @param internal — `true` when called from within linkedSpawn cascade.
-   *   nested despawn skips relationship-linkedSpawn collection to prevent
-   *   unbounded recursion; user-declared onRemove callbacks still fire.
+   *   Nested despawn skips the `relationshipOnRemove` mirror-prune for
+   *   `linkedSpawn`-target components (the parent is already retired, so
+   *   pruning its Children list would fail); user-declared onRemove
+   *   callbacks still fire and the linkedSpawn collection still walks the
+   *   subtree so grandchildren cascade correctly (tweak-20260714 M2, R-6).
    * @internal
    */
   _despawnCore(entity: EntityHandle, internal: boolean): Result<void, EcsError> {
@@ -945,13 +1025,17 @@ export class World {
     // entity carries. Failures route to Layer 3 ErrorHandler and never
     // abort the despawn chain (charter: explicit-failure boundary).
     const arch = this.graph.archetypes[record.archetypeId];
-    // M2 linkedSpawn (D-1 skeleton): if this entity is the target of a
-    // linkedSpawn relationship, collect the holders to cascade-despawn AFTER
-    // this entity is fully retired. Read the mirror list now while the row is
-    // still live. Default ChildOf ships linkedSpawn=false, so this is empty
-    // for the standard hierarchy.
-    const linkedChildren: EntityHandle[] =
-      arch && !internal ? this.relationshipLinkedSpawnChildren(entity, arch) : [];
+    // M2 linkedSpawn cascade (feat-20260616 default flip + tweak-20260714
+    // R-6 deepening): collect holders of `linkedSpawn: true` relationships
+    // whose mirror lives on this entity's archetype so we can recursively
+    // despawn the whole subtree, not just direct children. Cycles bottom out
+    // via `recordIsLive` (already-retired handles are idempotent) and via
+    // the top-level `relationshipOnRemove` that prunes the reverse pointer
+    // before the target is retired. Reading the mirror list here (before
+    // row release) keeps it live for the walk.
+    const linkedChildren: EntityHandle[] = arch
+      ? this.relationshipLinkedSpawnChildren(entity, arch)
+      : [];
     if (arch) {
       for (const comp of arch.components) {
         // M1 hook framework: fire onRemove before column release (D-6, AC-04).
@@ -1122,13 +1206,15 @@ export class World {
   }
 
   /**
-   * linkedSpawn arm (D-1 skeleton): when `entity` (about to be despawned)
-   * carries a component that is the mirror of some `linkedSpawn: true`
-   * relationship, collect the holders listed in that mirror field and return
-   * them for recursive despawn. Read before the entity's row is removed so the
-   * mirror list is still live. ChildOf ships `linkedSpawn: false` by default,
-   * so this returns an empty list for the standard hierarchy; the branch
-   * exists so the default can be flipped (judgment gate) without a rewrite.
+   * linkedSpawn arm (feat-20260616 default flip + tweak-20260714 R-6
+   * deepening): when `entity` (about to be despawned) carries a component
+   * that is the mirror of some `linkedSpawn: true` relationship, collect
+   * the holders listed in that mirror field and return them for recursive
+   * despawn. Read before the entity's row is removed so the mirror list is
+   * still live. The caller (`_despawnCore`) invokes this on both the
+   * top-level despawn and every recursive step, so the cascade walks the
+   * full subtree; cycles bottom out via `recordIsLive` idempotency on
+   * already-retired handles.
    */
   private relationshipLinkedSpawnChildren(entity: EntityHandle, arch: Archetype): EntityHandle[] {
     const row = this.records[entityIndex(entity)]?.row ?? -1;
@@ -1584,8 +1670,17 @@ export class World {
       liveSlotId = allocR.value.id;
       col.view[rec.row] = liveSlotId;
     } else {
-      const growR = this.bufferPool.grow(liveSlotId, newByteLength);
-      if (!growR.ok) return err(growR.error);
+      // A previously-allocated slot may have drained below its high-water
+      // mark: swap-remove (`_removeArrayElementByValue`) and `pop` only lower
+      // the count column, never shrink the managed buffer. When the refilled
+      // length still fits inside the slot's current logical length, reuse the
+      // buffer in place -- routing through `grow` would hit the (correct, but
+      // here irrelevant) shrink-not-supported guard and strand the field
+      // (e.g. `Children.entities` never repopulating after a full drain).
+      if (newByteLength > this.bufferPool.view(liveSlotId).byteLength) {
+        const growR = this.bufferPool.grow(liveSlotId, newByteLength);
+        if (!growR.ok) return err(growR.error);
+      }
     }
     const liveBytes = this.bufferPool.view(liveSlotId);
     // Reinterpret the slot bytes as the element-typed view and write at the
@@ -4727,6 +4822,52 @@ interface SceneInstanceStatePayload {
 // ────────────────────────────────────────────────────────────────────────────
 // Scene-nesting standalone helpers (M2 / w24).
 // ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Expand a caller-supplied `world.spawn` bundle with any `coAttach` companion
+ * components declared on the caller's tokens
+ * (tweak-20260714-tilemap-layer-childed-render-entities M1). Layer-1 wins: if
+ * the caller already names a coAttach-declared component in the bundle, that
+ * caller entry is preserved and the coAttach entry is skipped. Chain-isolated:
+ * only the caller's original tokens contribute; auto-added companions do NOT
+ * recursively add their own coAttach (charter P4 — bounded expansion +
+ * deterministic archetype hash).
+ *
+ * @internal
+ */
+function expandCoAttach(componentDatas: ComponentData[]): ComponentData[] {
+  // Fast path: nothing declares coAttach → return caller bundle unchanged.
+  let hasCoAttach = false;
+  for (const cd of componentDatas) {
+    if ((cd.component as Component).coAttach !== undefined) {
+      hasCoAttach = true;
+      break;
+    }
+  }
+  if (!hasCoAttach) return componentDatas;
+
+  // Track which component ids the caller already supplied; layer-1 wins.
+  const present = new Set<number>();
+  for (const cd of componentDatas) {
+    present.add((cd.component as Component).id);
+  }
+
+  const expanded: ComponentData[] = componentDatas.slice();
+  for (const cd of componentDatas) {
+    const coAttach = (cd.component as Component).coAttach;
+    if (coAttach === undefined) continue;
+    for (const entry of coAttach) {
+      const compId = (entry.component as Component).id;
+      if (present.has(compId)) continue;
+      present.add(compId);
+      expanded.push({
+        component: entry.component as unknown as ComponentData['component'],
+        data: entry.data as unknown as ComponentData['data'],
+      });
+    }
+  }
+  return expanded;
+}
 
 /**
  * Topological sort over the implicit ChildOf graph (parents before children).

@@ -37,10 +37,11 @@ const SFX_GUID = '019e7535-5e5e-75fe-a328-0b08e3a72744';
 import type { App } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { AudioListener, AudioSource } from '@forgeax/engine-audio';
-import { audioPlugin, loadAudioClipByGuid } from '@forgeax/engine-audio-webaudio';
+import { audioPlugin } from '@forgeax/engine-audio-webaudio';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Camera, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
-import type { Handle } from '@forgeax/engine-types';
+import type { AudioClipAsset, Handle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
@@ -68,38 +69,11 @@ if (!ready.ok) {
   throw new Error('hello-audio: renderer.ready failed');
 }
 
-// Step 2: load the SFX asset through the pack-index pipeline.
-// D-7: Dev path resolves via vite-plugin-pack /__pack/lookup/:guid;
-// build path resolves via pack-index.json emitted at build time.
-
-// Resolve GUID -> relativeUrl via the pack-index.
-let sfxRelativeUrl: string | undefined;
-const packIndexRes = await fetch('/pack-index.json');
-if (packIndexRes.ok) {
-  // pack-index.json (and the dev `/__pack/index` route) serve a flat array
-  // of PackIndexEntry rows -- not a `{ entries: [...] }` envelope. GUID
-  // comparison is case-insensitive to mirror the dev `/__pack/lookup/:guid`
-  // route (vite-plugin-pack index.ts).
-  const indexData = (await packIndexRes.json()) as Array<{ guid: string; relativeUrl: string }>;
-  const target = SFX_GUID.toLowerCase();
-  const entry = Array.isArray(indexData)
-    ? indexData.find((e) => e.guid.toLowerCase() === target)
-    : undefined;
-  sfxRelativeUrl = entry?.relativeUrl;
-}
-if (!sfxRelativeUrl) {
-  // Dev-server fallback: vite-plugin-pack serves /__pack/lookup/:guid
-  const devLookupRes = await fetch(`/__pack/lookup/${SFX_GUID}`);
-  if (devLookupRes.ok) {
-    const lookupData = (await devLookupRes.json()) as { relativeUrl: string };
-    sfxRelativeUrl = lookupData.relativeUrl;
-  }
-}
-if (!sfxRelativeUrl) {
-  console.warn(
-    '[hello-audio] SFX GUID not found in pack-index; demo will be silent (missing --recurse-submodules or pack assets).',
-  );
-}
+// Step 2: point AssetRegistry at the Vite-emitted catalog. `loadByGuid` owns
+// both dev and build lookup plus Web Audio decoding; demos never inspect the
+// pack-index row or fetch the source URL themselves.
+const assets = app.renderer.assets;
+assets.configurePackIndex('/pack-index.json');
 
 const world = app.world;
 
@@ -149,15 +123,15 @@ const emitterEntity = world
   )
   .unwrap();
 
-// Step 2b: load the audio clip and register with the emitter.
+// Step 2b: the same GUID -> payload path used by generic editor bindings.
 let sfxClipHandle: Handle<'AudioClipAsset', 'shared'> = HANDLE_NONE;
-if (sfxRelativeUrl) {
-  const loadRes = await loadAudioClipByGuid(SFX_GUID, sfxRelativeUrl);
+const sfxGuid = AssetGuid.parse(SFX_GUID);
+if (!sfxGuid.ok) {
+  console.error('[hello-audio] invalid SFX GUID:', SFX_GUID);
+} else {
+  const loadRes = await assets.loadByGuid<AudioClipAsset>(sfxGuid.value);
   if (loadRes.ok) {
-    const clip = loadRes.value;
-    // Mint a user-tier shared ref for the loaded clip payload.
-    sfxClipHandle = world.allocSharedRef('AudioClipAsset', clip);
-    // Install the clip handle on the emitter's AudioSource.
+    sfxClipHandle = world.allocSharedRef('AudioClipAsset', loadRes.value);
     world.set(emitterEntity, AudioSource, {
       clip: sfxClipHandle,
       playing: false,
@@ -166,16 +140,8 @@ if (sfxRelativeUrl) {
     });
     console.warn('[hello-audio] SFX loaded and registered');
   } else {
-    console.error(
-      '[hello-audio] loadAudioClipByGuid failed:',
-      loadRes.error.code,
-      loadRes.error.hint,
-    );
+    console.error('[hello-audio] loadByGuid failed:', loadRes.error.code, loadRes.error.hint);
   }
-} else {
-  console.warn(
-    '[hello-audio] skipping audio load (no pack-index entry for SFX GUID; --recurse-submodules clone required)',
-  );
 }
 
 // Step 4: spacebar re-arm one-shot state machine (D-3).
@@ -184,7 +150,7 @@ if (sfxRelativeUrl) {
 //   - On spacebar up-edge: write AudioSource.playing=true
 //   - Next frame: write AudioSource.playing=false (re-arm for next press)
 let spacebarReArm = false;
-const sfxClipHandleLoaded = sfxClipHandle;
+const sfxClipHandleLoaded = () => sfxClipHandle;
 
 // Step 5-6: listener sync loop + overlay readout.
 // Runs inside the same registerUpdate callback.
@@ -197,7 +163,7 @@ const MOVE_SPEED = 5;
 
 app.registerUpdate((_dt: number) => {
   // Re-read clip handle in case asset loaded after boot.
-  const currentClip = sfxClipHandleLoaded;
+  const currentClip = sfxClipHandleLoaded();
 
   // --- Input ---
   const snap = app.renderer.input.snapshot(world);
