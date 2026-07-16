@@ -124,6 +124,19 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(entries[0]?.refs).toEqual([]);
     });
   });
+
+  it('indexes the DejaVu font sampler declared by the bundled font package', async () => {
+    const samplerGuid = '019eb276-4d96-7313-b4f0-f5d55536acd2';
+    const result = await buildCatalogStrict([
+      join(WORKTREE_ROOT, 'forgeax-engine-assets', 'dejavu-fonts'),
+    ]);
+
+    expect(result.errors).toEqual([]);
+    expect(result.catalog.find((entry) => entry.guid === samplerGuid)).toMatchObject({
+      kind: 'sampler',
+      refs: [],
+    });
+  });
 }
 
 {

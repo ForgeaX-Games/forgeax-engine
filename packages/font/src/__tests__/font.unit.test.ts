@@ -156,6 +156,7 @@ async function findRealTtf(): Promise<string | undefined> {
 
   const ATLAS_GUID = '019e3969-1d43-7610-8810-e80dbd491d90';
   const FONT_GUID = '019e3969-1d43-7610-8810-e80dbd491d91';
+  const SAMPLER_GUID = '019e3969-1d43-7610-8810-e80dbd491d92';
 
   function mockAtlas(): BakeAtlas {
     return {
@@ -209,9 +210,10 @@ async function findRealTtf(): Promise<string | undefined> {
     });
 
     describe('fontImporter bake mapping (AC-18)', () => {
-      it('maps the mock atlas onto the declared atlas + font sub-asset GUIDs', async () => {
+      it('maps the mock atlas onto declared atlas, sampler, and font sub-asset GUIDs', async () => {
         const ctx = makeCtx([
           { guid: ATLAS_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: SAMPLER_GUID, sourceIndex: 1, kind: 'sampler' },
           { guid: FONT_GUID, sourceIndex: 0, kind: 'font' },
         ]);
         const produced = await fontImporter.import(ctx);
@@ -221,13 +223,33 @@ async function findRealTtf(): Promise<string | undefined> {
 
         const font = produced.find((a) => a.guid === FONT_GUID);
         expect(font?.kind).toBe('font');
-        expect(font?.refs.map((r) => r.guid)).toContain(ATLAS_GUID);
+        expect(font?.refs.map((r) => r.guid)).toEqual([ATLAS_GUID, SAMPLER_GUID]);
+        expect(font?.payload).toMatchObject({
+          atlasGuid: ATLAS_GUID,
+          samplerGuid: SAMPLER_GUID,
+        });
+
+        expect(produced).toContainEqual({
+          guid: SAMPLER_GUID,
+          kind: 'sampler',
+          payload: {
+            kind: 'sampler',
+            addressModeU: 'clamp-to-edge',
+            addressModeV: 'clamp-to-edge',
+            addressModeW: 'clamp-to-edge',
+            magFilter: 'linear',
+            minFilter: 'linear',
+            mipmapFilter: 'nearest',
+          },
+          refs: [],
+        });
       });
 
       // P1: fontImporter atlas lookup uses s.kind === 'texture' instead of 'image'.
       it('P1: uses s.kind === "texture" to find atlas sub-asset', async () => {
         const ctx = makeCtx([
           { guid: ATLAS_GUID, sourceIndex: 0, kind: 'texture' },
+          { guid: SAMPLER_GUID, sourceIndex: 1, kind: 'sampler' },
           { guid: FONT_GUID, sourceIndex: 0, kind: 'font' },
         ]);
         const produced = await fontImporter.import(ctx);
@@ -237,7 +259,7 @@ async function findRealTtf(): Promise<string | undefined> {
 
         const font = produced.find((a) => a.guid === FONT_GUID);
         expect(font?.kind).toBe('font');
-        expect(font?.refs.map((r) => r.guid)).toContain(ATLAS_GUID);
+        expect(font?.refs.map((r) => r.guid)).toEqual([ATLAS_GUID, SAMPLER_GUID]);
       });
     });
   });

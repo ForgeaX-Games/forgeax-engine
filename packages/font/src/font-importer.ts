@@ -5,10 +5,11 @@
 // bake that previously lived only behind the `forgeax-engine-remote-font
 // bake` CLI: read the `.ttf` source -> @zappar/msdf-generator atlas ->
 // (a) one atlas `TextureAsset` ImportedAsset (the RGBA MSDF atlas, kind
-// 'texture') under the declared `kind: 'texture'` sub-asset GUID, and (b) one
-// font glyph-metrics ImportedAsset (kind 'font') under the declared
-// `kind: 'font'` sub-asset GUID, carrying the BMFont -> FontAsset glyph map +
-// the common block + an `atlasGuid` ref to the atlas sub-asset.
+// 'texture') under the declared `kind: 'texture'` sub-asset GUID, (b) one
+// sampler ImportedAsset under the declared `kind: 'sampler'` sub-asset GUID,
+// and (c) one font glyph-metrics ImportedAsset (kind 'font') under the
+// declared `kind: 'font'` sub-asset GUID. The font carries the BMFont ->
+// FontAsset glyph map + the common block + atlas/sampler GUID refs.
 //
 // Build-time-only boundary (AC-18 / requirements callout): @zappar/msdf-generator
 // is a generator dependency that MUST stay out of the runtime bundle. The
@@ -21,9 +22,9 @@
 // (M1 w6) reads an already-baked atlas DDC and has no bake dependency.
 //
 // GUID import-stable iron law: produced GUIDs come from `ctx.subAssets[]`. The
-// font sidecar declares a `kind: 'texture'` atlas sub-asset and a `kind: 'font'`
-// glyph-metrics sub-asset; this importer maps the bake output onto those two
-// declared GUIDs and stamps nothing of its own.
+// font sidecar declares `texture`, `sampler`, and `font` sub-assets; this
+// importer maps the bake output onto those declared GUIDs and stamps nothing
+// of its own.
 //
 // `ctx.importSettings` may inject a test `generatorFactory` (an
 // `() => Promise<MsdfGenerator>`) so unit tests drive the bake with a mock
@@ -36,6 +37,7 @@ import type {
   ImportContext,
   ImportedAsset,
   Importer,
+  SamplerAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
 import type { BakeAtlas, MsdfGenerator } from './cli-font.js';
@@ -85,6 +87,18 @@ function makeFontCommon(atlas: BakeAtlas): FontAsset['common'] {
   };
 }
 
+function makeAtlasSampler(): SamplerAsset {
+  return {
+    kind: 'sampler',
+    addressModeU: 'clamp-to-edge',
+    addressModeV: 'clamp-to-edge',
+    addressModeW: 'clamp-to-edge',
+    magFilter: 'linear',
+    minFilter: 'linear',
+    mipmapFilter: 'nearest',
+  };
+}
+
 async function importFont(ctx: ImportContext): Promise<readonly ImportedAsset[]> {
   const read = await ctx.readSource();
   if (!read.ok) {
@@ -105,11 +119,15 @@ async function importFont(ctx: ImportContext): Promise<readonly ImportedAsset[]>
   }
 
   const atlasSub = ctx.subAssets.find((s) => s.kind === 'texture');
+  const samplerSub = ctx.subAssets.find((s) => s.kind === 'sampler');
   const fontSub = ctx.subAssets.find((s) => s.kind === 'font');
 
   const out: ImportedAsset[] = [];
   if (atlasSub !== undefined) {
     out.push({ guid: atlasSub.guid, kind: 'texture', payload: makeAtlasTexture(atlas), refs: [] });
+  }
+  if (samplerSub !== undefined) {
+    out.push({ guid: samplerSub.guid, kind: 'sampler', payload: makeAtlasSampler(), refs: [] });
   }
   if (fontSub !== undefined) {
     // The runtime font loader reads atlasGuid / samplerGuid / glyphs / common
@@ -121,6 +139,7 @@ async function importFont(ctx: ImportContext): Promise<readonly ImportedAsset[]>
     const fontPayload = {
       kind: 'font',
       atlasGuid: atlasSub?.guid ?? '',
+      samplerGuid: samplerSub?.guid ?? '',
       glyphs: atlasGlyphsToMetrics(atlas),
       common: makeFontCommon(atlas),
     } as unknown as FontAsset;
@@ -128,7 +147,10 @@ async function importFont(ctx: ImportContext): Promise<readonly ImportedAsset[]>
       guid: fontSub.guid,
       kind: 'font',
       payload: fontPayload,
-      refs: atlasSub !== undefined ? [{ guid: atlasSub.guid }] : [],
+      refs: [
+        ...(atlasSub !== undefined ? [{ guid: atlasSub.guid }] : []),
+        ...(samplerSub !== undefined ? [{ guid: samplerSub.guid }] : []),
+      ],
     });
   }
   return out;

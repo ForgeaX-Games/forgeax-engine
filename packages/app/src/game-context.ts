@@ -31,6 +31,55 @@ import type { SceneAsset } from '@forgeax/engine-types';
 
 import type { App } from './types';
 
+/** JSON-shaped data a game may intentionally project through a host bridge. */
+export type GameProjectionValue =
+  | null
+  | boolean
+  | number
+  | string
+  | GameProjectionValue[]
+  | { [key: string]: GameProjectionValue };
+
+/** Lightweight, host-agnostic argument schema for a game-owned action. */
+export interface GameActionArgsSchema {
+  readonly type?: 'string' | 'number' | 'boolean' | 'object' | 'array';
+  readonly properties?: Record<string, GameActionArgsSchema>;
+  readonly required?: string[];
+  readonly enum?: GameProjectionValue[];
+  readonly items?: GameActionArgsSchema;
+  readonly nullable?: boolean;
+  readonly description?: string;
+}
+
+/**
+ * A Play-only capability owned by game code. The host may discover and invoke it,
+ * but never supplies its gameplay semantics or reaches into the game World.
+ */
+export interface GameActionDef {
+  readonly id: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly argsSchema?: GameActionArgsSchema;
+  readonly run: (args: GameProjectionValue) => void | Promise<void>;
+}
+
+/** A named, serializable Play-only read projection owned by game code. */
+export interface GameReadDef {
+  readonly id: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly read: () => GameProjectionValue | Promise<GameProjectionValue>;
+}
+
+/**
+ * Host-provided registration sink for one Play run. Games receive this only while
+ * bootstrapping the fresh transient world; registrations are discarded on Stop.
+ */
+export interface GameProjectionRegistrar {
+  registerAction(def: GameActionDef): () => void;
+  registerRead(def: GameReadDef): () => void;
+}
+
 /**
  * Narrow contract between preview host and game template entry point.
  *
@@ -125,6 +174,12 @@ export interface BootstrapContext {
    * that only runs top-down games).
    */
   readonly setPointerLockAllowed?: (allowed: boolean) => void;
+  /**
+   * Optional Play-only projection seam. A game registers its own action and read
+   * capabilities here; the host may only discover/invoke/read those closures. It
+   * is deliberately absent outside a host that can clear registrations on Stop.
+   */
+  readonly gameProjection?: GameProjectionRegistrar;
 }
 
 /**

@@ -61,7 +61,17 @@ export {
   AppError,
   isAppError,
 } from './errors';
-export type { BootstrapContext, BootstrapEntry, GameContext, GameEntry } from './game-context';
+export type {
+  BootstrapContext,
+  BootstrapEntry,
+  GameActionArgsSchema,
+  GameActionDef,
+  GameContext,
+  GameEntry,
+  GameProjectionRegistrar,
+  GameProjectionValue,
+  GameReadDef,
+} from './game-context';
 export { inputPlugin } from './plugin-factories';
 
 import {

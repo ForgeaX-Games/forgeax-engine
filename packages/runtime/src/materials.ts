@@ -73,6 +73,7 @@ const SHADOW_CASTER_PASS = {
 
 interface UnlitOpts {
   castShadow?: boolean;
+  baseColorTexture?: number;
 }
 
 /**
@@ -80,12 +81,14 @@ interface UnlitOpts {
  *
  * Returns a {@link MaterialAsset} with a Forward pass using
  * `forgeax::default-unlit` shader and `baseColor` in paramValues.
+ * Optionally accepts `baseColorTexture` (a `Handle<TextureAsset>` ID)
+ * which the unlit shader samples and multiplies with `baseColor`.
  * By default also includes a ShadowCaster pass so the entity casts
  * shadows.  Pass `{ castShadow: false }` to disable.
  *
  * @example
  * ```ts
- * const m = Materials.unlit([0.2, 0.6, 0.9, 1]);
+ * const m = Materials.unlit([1, 1, 1, 1], { baseColorTexture: texHandle });
  * assets.register<MaterialAsset>(m).unwrap();
  * ```
  */
@@ -102,10 +105,12 @@ function unlit(rgba: readonly [number, number, number, number], opts?: UnlitOpts
   if (opts?.castShadow !== false) {
     passes.push({ ...SHADOW_CASTER_PASS });
   }
+  const paramValues: Record<string, unknown> = { baseColor: rgba };
+  if (opts?.baseColorTexture !== undefined) paramValues.baseColorTexture = opts.baseColorTexture;
   return {
     kind: 'material',
     passes,
-    paramValues: { baseColor: rgba },
+    paramValues,
   };
 }
 

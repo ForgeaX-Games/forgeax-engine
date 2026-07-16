@@ -228,6 +228,22 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/bevy/orthographic": {
+      "name": "@forgeax/bevy-orthographic",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/bevy/parenting": {
       "name": "@forgeax/bevy-parenting",
       "version": "0.0.0",
@@ -271,6 +287,24 @@
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/bevy/texture": {
+      "name": "@forgeax/bevy-texture",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
@@ -3091,11 +3125,15 @@
 
     "@forgeax/bevy-iter-combinations": ["@forgeax/bevy-iter-combinations@workspace:apps/bevy/iter-combinations"],
 
+    "@forgeax/bevy-orthographic": ["@forgeax/bevy-orthographic@workspace:apps/bevy/orthographic"],
+
     "@forgeax/bevy-parenting": ["@forgeax/bevy-parenting@workspace:apps/bevy/parenting"],
 
     "@forgeax/bevy-scale": ["@forgeax/bevy-scale@workspace:apps/bevy/scale"],
 
     "@forgeax/bevy-smooth-follow": ["@forgeax/bevy-smooth-follow@workspace:apps/bevy/smooth-follow"],
+
+    "@forgeax/bevy-texture": ["@forgeax/bevy-texture@workspace:apps/bevy/texture"],
 
     "@forgeax/bevy-time-elapsed": ["@forgeax/bevy-time-elapsed@workspace:apps/bevy/time-elapsed"],
 
