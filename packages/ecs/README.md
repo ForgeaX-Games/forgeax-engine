@@ -4,6 +4,96 @@ Archetype ECS for forgeax-engine — `World` / `Entity` / `Component` / `Query` 
 
 This README is the **per-package演进契约 anchor** for `Result<T, E>`. AGENTS.md keeps doc-brevity (the bare reference to "演进契约 / Per-feat breaking changes" lives there); concrete shape supersedes are logged here so AI users can `grep -rn '2026-05-11' packages/*/README.md` and locate every breaking change row in one pass.
 
+## Time and scheduling
+
+`world.update(delta)` is the single host-neutral time entry point. Pass a measured frame delta (in seconds); the engine validates it, advances the `Time` resource, runs FixedUpdate iterations, and returns a `Result`.
+
+### One-shot takeoff
+
+```ts
+import { World, Update, Time, defineComponent, defineSystem } from '@forgeax/engine-ecs';
+
+const Position = defineComponent('Position', { x: 'f32', y: 'f32' });
+const Velocity = defineComponent('Velocity', { dx: 'f32', dy: 'f32' });
+
+const Move = defineSystem({
+  name: 'move',
+  queries: [{ with: [Position, Velocity] }],
+  fn: (world, queryResults) => {
+    for (const bundle of queryResults[0]) {
+      for (let i = 0; i < bundle.entityCount; i++) {
+        const h = bundle.Entity.self[i];
+        world.set(h, Position, {
+          x: bundle.Position.x[i] + bundle.Velocity.dx[i],
+          y: bundle.Position.y[i] + bundle.Velocity.dy[i],
+        });
+      }
+    }
+  },
+});
+
+const world = new World();
+world.spawn({ component: Position, data: { x: 0, y: 0 } }).unwrap();
+world.spawn({ component: Velocity, data: { dx: 1, dy: 0.5 } }).unwrap();
+world.addSystem(Update, Move).unwrap();
+
+const r = world.update(0.016); // ~60fps delta
+if (!r.ok) console.error(r.error.code, r.error.hint);
+```
+
+### Schedule tokens
+
+`Update` and `FixedUpdate` are frozen nominal schedule tokens exported from `@forgeax/engine-ecs`. Every registration API takes one as its explicit first argument:
+
+| API | Shape |
+|:--|:--|
+| `world.addSystem(Update, descriptor)` | Register a single system |
+| `world.addSystems(Update, set, systems)` | Batch-register systems to a set |
+| `world.configureSets(Update, { set, before?, after? })` | Order sets |
+| `world.removeSystem(Update, name)` | Remove by name |
+| `world.replaceSystem(Update, name, descriptor)` | Replace in-place |
+
+All five APIs require a schedule token as the first argument. There is no optional-schedule overload.
+
+### Time and FixedTime resources
+
+The engine owns two protected resources:
+
+| Resource | Fields | Description |
+|:--|:--|:--|
+| `Time` | `delta`, `elapsed`, `maxDeltaSeconds` | Variable-rate clock. `delta` is the measured frame delta capped by `maxDeltaSeconds`. `elapsed` is cumulative wall time. |
+| `FixedTime` | `delta`, `maxStepsPerUpdate`, `tick`, `droppedSeconds`, `droppedUpdates` | Fixed-rate clock. `delta` is 1/60 by default. `tick` increments each FixedUpdate iteration. |
+
+`Time` and `FixedTime` are protected — `world.insertResource` rejects them. Read them via `world.getResource(Time)` / `world.getResource(FixedTime)`.
+
+### Zero-delta
+
+`world.update(0)` runs Update schedules but does not advance `Time` or run FixedUpdate. Use this for headless stepping or deterministic trace replay.
+
+### Error codes
+
+`world.update(delta)` returns `Result<void, TimeDeltaInvalidError | TimeConfigInvalidError | ScheduleScopeMismatchError>`.
+
+| Error code | Trigger |
+|:--|:--|
+| `time-delta-invalid` | Negative, NaN, or Infinity delta |
+| `time-config-invalid` | Coherence violation: `maxDeltaSeconds < (maxStepsPerUpdate + 1) * fixedDeltaSeconds` |
+| `schedule-scope-mismatch` | Cross-schedule set/system reference (e.g., referencing a FixedUpdate set in Update's `configureSets`) |
+
+### Default config
+
+| Parameter | Default |
+|:--|:--|
+| `maxDeltaSeconds` | 0.1 |
+| `fixedDeltaSeconds` | 1/60 |
+| `maxStepsPerUpdate` | 4 |
+
+Pass `WorldOptions` to `new World()` to override:
+
+```ts
+const world = new World({ time: { fixedDeltaSeconds: 1 / 30, maxStepsPerUpdate: 2 } });
+```
+
 ## SystemSet scheduling
 
 A `SystemSet` is a pure system-grouping token: it gives its members shared ordering, condition, and chaining declarations without introducing a synchronization boundary, frame phase, or command flush. Define tokens at module scope, assign systems through `world.addSystems`, and express relationships between groups through `world.configureSets`.
@@ -12,13 +102,14 @@ A `SystemSet` is a pure system-grouping token: it gives its members shared order
 |:--|:--|:--|
 | `defineSystemSet({ name, runIf?, chained? })` | `=> SystemSet` | Defines and globally registers a frozen, nominal set token. A duplicate name silently replaces the previous token, matching `defineSystem` and `defineComponent`. |
 | `getRegisteredSystemSets()` | `=> ReadonlyMap<string, SystemSet>` | Enumerates the currently registered set tokens by name. |
-| `world.addSystems(set, systems)` | `=> Result<void, SystemSetNotRegisteredError>` | Registers each descriptor if needed and adds its name to `set`. A system can belong to multiple sets; re-adding it preserves its original registration index. |
-| `world.configureSets({ set, before?, after? })` | `=> Result<void, SystemSetNotRegisteredError>` | Orders one set relative to other sets. At schedule rebuild, each set edge expands to member-system edges; empty sets are therefore a no-op. |
+| `world.addSystems(Update, set, systems)` | `=> Result<void, SystemSetNotRegisteredError \| ScheduleScopeMismatchError>` | Registers each descriptor if needed and adds its name to `set`. A system can belong to multiple sets; re-adding it preserves its original registration index. |
+| `world.configureSets(Update, { set, before?, after? })` | `=> Result<void, SystemSetNotRegisteredError \| ScheduleScopeMismatchError>` | Orders one set relative to other sets. At schedule rebuild, each set edge expands to member-system edges; empty sets are therefore a no-op. |
 
 ```ts
 import {
   defineSystem,
   defineSystemSet,
+  Update,
   World,
 } from '@forgeax/engine-ecs';
 
@@ -41,9 +132,9 @@ const Animate = defineSystem({
 });
 
 const world = new World();
-world.addSystems(GameplaySet, [Move, Animate]).unwrap();
-world.configureSets({ set: GameplaySet, before: [RenderSet] }).unwrap();
-world.update();
+world.addSystems(Update, GameplaySet, [Move, Animate]).unwrap();
+world.configureSets(Update, { set: GameplaySet, before: [RenderSet] }).unwrap();
+world.update(0);
 ```
 
 `chained: true` adds edges between consecutive members in their `addSystems` insertion order. A system that belongs to several sets runs only when every applicable set-level `runIf` condition is true; each set condition is evaluated at most once per frame. Set ordering expands into ordinary scheduling edges only: it does **not** make a barrier, add a flush, or serialize unrelated systems.

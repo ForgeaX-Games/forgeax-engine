@@ -129,11 +129,16 @@ function extractStepRuns(block) {
     const stepStart = /^ {6}-\s+name:\s*(.+)$/.exec(stripped);
     if (stepStart) {
       if (cur) steps.push(cur);
-      cur = { name: stepStart[1].trim(), runLines: [] };
+      cur = { ifExpression: null, name: stepStart[1].trim(), runLines: [] };
       inRunBlock = false;
       continue;
     }
     if (!cur) continue;
+    const ifSingle = /^\s+if:\s*(\S.*)$/.exec(stripped);
+    if (ifSingle) {
+      cur.ifExpression = ifSingle[1].trim();
+      continue;
+    }
     if (inRunBlock) {
       // Continue collecting until indent drops below runIndent or new step starts.
       if (stripped === '' || /^\s/.test(raw)) {
@@ -159,7 +164,11 @@ function extractStepRuns(block) {
     }
   }
   if (cur) steps.push(cur);
-  return steps.map((s) => ({ name: s.name, run: s.runLines.join('\n') }));
+  return steps.map((s) => ({
+    ifExpression: s.ifExpression,
+    name: s.name,
+    run: s.runLines.join('\n'),
+  }));
 }
 
 function gateMatchesJob(gate, steps) {
@@ -389,21 +398,34 @@ function runOwnershipCheck({
     );
   }
 
-  // (e) both primary run literals contain --project=ecs-perf
+  // (e) the unified primary coverage run contains --project=ecs-perf
   const priBlock = extractJobBlock(ciYamlText, PRIMARY_JOB);
   if (priBlock) {
     const steps = extractStepRuns(priBlock);
     const vitestSteps = steps.filter(
       (s) => s.run.includes('vitest run') && s.run.includes('--typecheck'),
     );
-    if (vitestSteps.length !== 2) {
+    const isSingleOwner = vitestSteps.length === 1;
+    const hasForkSplitOwners =
+      vitestSteps.length === 2 &&
+      vitestSteps.some(
+        (s) =>
+          s.name.startsWith('Vitest unit (fork PR only)') &&
+          s.ifExpression === "env.IS_FORK_PR == 'true'",
+      ) &&
+      vitestSteps.some(
+        (s) =>
+          s.name.startsWith('Vitest coverage (v8) + typecheck') &&
+          s.ifExpression === "env.IS_FORK_PR != 'true'",
+      );
+    if (!isSingleOwner && !hasForkSplitOwners) {
       issues.push(
-        `[ownership] FAIL: primary-pnpm has ${vitestSteps.length} vitest+typecheck command(s), expected exactly 2 (channel: primary-pnpm)\n` +
+        `[ownership] FAIL: primary-pnpm has ${vitestSteps.length} non-exclusive vitest+typecheck command(s) (channel: primary-pnpm)\n` +
           `  Project: primary-pnpm\n` +
           `  W5: ${W5_PATH}\n` +
           `  W6: ${W6_PATH}\n` +
-          `  Expected: 2 vitest run --typecheck commands (fork PR unit + same-repo coverage) — ` +
-          `deleting or rewriting both would silently drop W5/W6 from the primary channel`,
+          `  Expected: one owner, or the exact fork/unit and same-repo/coverage mutually exclusive pair — ` +
+          `deleting either owner would silently drop W5/W6 from one channel`,
       );
     }
     for (const s of vitestSteps) {
@@ -496,6 +518,7 @@ function runOwnershipSelfTest() {
     /pnpm exec vitest run --typecheck /g,
     'pnpm exec vitest run --no-typecheck ',
   );
+  const duplicateVitestTypecheck = ciText.replace("if: env.IS_FORK_PR != 'true'", 'if: always()');
   const portabilityMarker = 'run: bun run test:portability';
   const portabilityWithProject = ciText.replace(
     portabilityMarker,
@@ -580,7 +603,13 @@ function runOwnershipSelfTest() {
       'ownership-primary-zero-vitest-typecheck',
       { ciYamlText: zeroVitestTypecheck, rootDir },
       true,
-      'expected exactly 2',
+      'non-exclusive vitest+typecheck',
+    ],
+    [
+      'ownership-primary-duplicate-vitest-typecheck',
+      { ciYamlText: duplicateVitestTypecheck, rootDir },
+      true,
+      'non-exclusive vitest+typecheck',
     ],
     [
       'ownership-portability-contains-ecs-perf',

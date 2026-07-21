@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // apps/hello/sprite -- 2D sprite + Layer + transparent-sort double-scene
 // demo (feat-20260520-2d-sprite-layer-mvp / M-4 / w29; AC-12).
 //
@@ -310,7 +311,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // The system runs after the engine-input frame-start scan so the
   // edges are fresh; charter P4 consistent abstraction -- same
   // `renderer.input.snapshot(world)` facade learn-render 1.7 consumes.
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'hello-sprite-scene-switcher',
     after: ['input-frame-start-scan'],
     queries: [],

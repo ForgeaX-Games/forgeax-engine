@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { Update } from '@forgeax/engine-ecs';
 // apps/learn-render/5.advanced-lighting/3.2.point-shadows/scripts/smoke.mjs
 // feat-20260621-learn-render-5-3-production-shadow-demos M3 / M3-T-SMOKE-DAWN.
 //
@@ -295,7 +296,7 @@ const cameraEntity = world.spawn(
 
 // Per-frame light orbit.
 let elapsed = 0;
-world.addSystem({
+world.addSystem(Update, {
   name: 'point-light-orbit-smoke',
   queries: [],
   fn: () => {

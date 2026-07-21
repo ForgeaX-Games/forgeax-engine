@@ -43,11 +43,13 @@ import {
   ok,
   queryRun,
   type Result,
+  Update,
   World,
 } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
 import { INPUT_BACKEND_KEY } from '@forgeax/engine-input';
 import type { Plugin } from '@forgeax/engine-plugin';
+import { runPlugins } from '@forgeax/engine-plugin';
 import type { RhiInstance } from '@forgeax/engine-rhi';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
 import type { CreateShaderModuleFn, DebugRhiInstance } from '@forgeax/engine-rhi-debug';
@@ -62,7 +64,6 @@ import {
   type Renderer,
   type RendererError,
   Transform,
-  timePlugin,
   transformPlugin,
 } from '@forgeax/engine-runtime';
 import { statePlugin } from '@forgeax/engine-state';
@@ -75,7 +76,6 @@ import { registerCaptureHmrListener } from './internal/hmr-capture-listener';
 import { attachInputAuto } from './internal/input-attach';
 import { resolveRemoteServeFlag } from './internal/remote-serve-flag';
 import { resolveRhiDebugFlag } from './internal/rhi-debug-flag';
-import { runPlugins } from './internal/run-plugins';
 import { inputPlugin } from './plugin-factories';
 import type {
   App,
@@ -444,7 +444,7 @@ async function createAppFromCanvas(
 
   // Step 3: new World() -- the canvas form owns world lifetime, in
   // contrast to the assemble form where the host owns it.
-  const world = new World();
+  const world = new World(opts?.time !== undefined ? { time: opts.time } : {});
 
   // Step 3.1 (M2 plugin-system-unify / D-4): app-layer side effects that the
   // plugins consume via pre-injected world resources.
@@ -487,20 +487,14 @@ async function createAppFromCanvas(
     world.insertResource(AUDIO_ENGINE_RESOURCE_KEY, audioBackend);
   }
 
-  // Step 3.2 (D-2): canvas form runs the full 5-plugin default set merged with
+  // Step 3.2 (D-2): canvas form runs the full default plugin set merged with
   // the user plugins. runPlugins is awaited BEFORE buildApp so a duplicate-plugin /
   // plugin-build-failed surfaces as Result.err before the frame loop is armed,
   // and so a physics WASM load completes before createApp resolves (AC-06: no
   // post-resolve timing gap). M3 (w15): legacy opts.physics / opts.audio bridges
   // deleted -- demos pass plugins directly; audio backend is auto-created above
   // when audioPlugin is detected in userPlugins.
-  const defaultSet: Plugin[] = [
-    transformPlugin(),
-    timePlugin(),
-    animationPlugin(),
-    statePlugin(),
-    inputPlugin(),
-  ];
+  const defaultSet: Plugin[] = [transformPlugin(), animationPlugin(), statePlugin(), inputPlugin()];
   const pluginResult = await runPlugins(world, defaultSet, userPlugins);
   if (!pluginResult.ok) {
     return err(pluginResult.error);
@@ -571,9 +565,6 @@ async function createAppFromCanvas(
       },
     });
   }
-  if (opts?.maxDt !== undefined) {
-    Object.assign(buildArgs, { maxDt: opts.maxDt });
-  }
   if (opts?.silenceUnhandledErrors !== undefined) {
     Object.assign(buildArgs, { silenceUnhandledErrors: opts.silenceUnhandledErrors });
   }
@@ -594,20 +585,19 @@ async function createAppFromCanvas(
     Object.assign(buildArgs, { remoteHandle });
   }
 
-  // feat-20260617-host-engine-contract-and-video-cutscene / M3 / w13 + D-6:
-  // the aspect-sync sidecar lives ONLY on the createApp(canvas) path -- the
-  // canvas is the host-owned DOM surface this path knows about, and the bare
-  // createRenderer / assemble paths intentionally never receive it (host-engine
-  // contract clause #3 / OOS-9). Registered through app.registerUpdate (the
-  // public per-frame seam) so buildApp's signature stays untouched. The
-  // closure captures the live canvas; syncCameraAspect reads its
-  // width / height each frame and writes Camera.aspect for perspective +
-  // autoAspect=true cameras (D-5: world.get, not the query bundle).
+  // The aspect-sync sidecar belongs to the canvas path because it owns the DOM
+  // canvas. It runs as an Update system so it shares World scheduling semantics.
   const built = await buildApp(buildArgs);
   if (built.ok) {
-    built.value.registerUpdate(() => {
-      syncCameraAspect(world, canvas.width, canvas.height);
-    });
+    world
+      .addSystem(Update, {
+        name: 'app-sync-camera-aspect',
+        queries: [],
+        fn: () => {
+          syncCameraAspect(world, canvas.width, canvas.height);
+        },
+      })
+      .unwrap();
 
     // DEV-only browser remote bridge (remote-live). A browser cannot host the
     // Node WS server that @forgeax/engine-remote/server needs, so the running
@@ -633,7 +623,6 @@ async function createAppFromCanvas(
       const bridgePort =
         (import.meta as { env?: { VITE_FORGEAX_ENGINE_BRIDGE_PORT?: string } }).env
           ?.VITE_FORGEAX_ENGINE_BRIDGE_PORT ?? '5733';
-      const appHandle = built.value;
       // installBrowserRemoteBridge self-registers its HMR teardown (via
       // import.meta.hot inside browser-remote-bridge.ts) so this file carries no
       // import.meta.hot reference — the rhi-debug guard gate (guard-gates.test.ts
@@ -642,7 +631,6 @@ async function createAppFromCanvas(
       void import('./internal/browser-remote-bridge')
         .then((m) =>
           m.installBrowserRemoteBridge({
-            registerUpdate: (fn) => appHandle.registerUpdate(fn),
             world,
             renderer,
             assets: renderer.assets,
@@ -659,11 +647,11 @@ async function createAppFromCanvas(
 
     // feat-20260619 M7: auto-register audio listener-sync system (D-7).
     // Runs as an ECS addSystem (after propagateTransforms) — NOT via
-    // registerUpdate — so it reads the CURRENT frame's Transform.world
+    // Update system — so it reads the CURRENT frame's Transform.world
     // mat4, not the previous frame. The audioTickSystem (D-2) has no
-    // frame-order constraint and uses registerUpdate; listener sync
+    // frame-order constraint and uses Update system; listener sync
     // MUST use the ECS DAG seam because Transform.world is written by
-    // propagateTransforms inside world.update().
+    // propagateTransforms inside world.update(1 / 60).unwrap().
     //
     // The closure lives in the app layer (D-8): audio-webaudio has no
     // dependency on runtime, so the query+world.get path must be
@@ -673,7 +661,7 @@ async function createAppFromCanvas(
     // structure (create-app.ts:524-538).
     if (audioBackend !== undefined && audioBackend instanceof WebAudioEngine) {
       const backend = audioBackend;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'audio-listener-sync',
         after: [PROPAGATE_TRANSFORMS_SYSTEM],
         queries: [],
@@ -786,9 +774,6 @@ async function createAppFromAssemble(
       audioBackend: args.world.getResource<AudioBackend>(AUDIO_ENGINE_RESOURCE_KEY),
     });
   }
-  if (args.maxDt !== undefined) {
-    Object.assign(buildArgs, { maxDt: args.maxDt });
-  }
   if (args.silenceUnhandledErrors !== undefined) {
     Object.assign(buildArgs, { silenceUnhandledErrors: args.silenceUnhandledErrors });
   }
@@ -815,7 +800,6 @@ interface BuildAppArgs {
   readonly wireOnLockErrorDispatch?: (dispatch: (err: AppError) => void) => void;
   readonly audioBackend?: AudioBackend;
   readonly cleanup?: (onErrorDispatch: (err: AppError) => void) => void;
-  readonly maxDt?: number;
   readonly silenceUnhandledErrors?: boolean;
   /**
    * feat-20260619-audio-resource-ownership-deterministic-reclaim / M1 / F23:
@@ -865,7 +849,6 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     audioBackend,
     cleanup,
     audioBackendDispose,
-    maxDt,
     silenceUnhandledErrors,
     debugRhi,
     debugAdapter,
@@ -927,9 +910,6 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
     renderer,
     onError: dispatch,
   };
-  if (maxDt !== undefined) {
-    Object.assign(loopOpts, { maxDt });
-  }
   // M2 / D-3: forward the optional draw-source pull into the frame-loop. Absent
   // => the loop keeps the legacy single-world draw path.
   if (args.drawSource !== undefined) {
@@ -1025,9 +1005,6 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
       | undefined {
       return readPhysicsWorld();
     },
-    registerUpdate(fn: (dt: number) => void): void {
-      loop.addUpdateCallback(fn);
-    },
     start(): Result<void, AppError> {
       // R-1: arm the rAF handle FIRST (loop.start schedules raf(tick))
       // and only THEN subscribe to renderer.onError. If the renderer
@@ -1092,7 +1069,7 @@ async function buildApp(args: BuildAppArgs): Promise<Result<App, AppError | RhiE
   // `if (!app.ok) reportError(app.error)` takeoff) instead of per-frame noise.
   // M2 plugin-system-unify (D-1 / D-4): the audio tick system is now registered
   // by audioPlugin (run by runPlugins before buildApp) as the 'audio-tick'
-  // world system, so there is no buildApp-side registerUpdate hook anymore.
+  // world system, so there is no buildApp-side Update system anymore.
   const readyResult = await renderer.ready;
   if (!readyResult.ok) {
     return err(readyResult.error);

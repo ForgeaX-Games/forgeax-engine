@@ -38,7 +38,7 @@
 //      RuntimeError material-skin-attr-missing -- the zero-error gate covers
 //      that regression.
 //   2. Multi-frame animation proof (AC-19 / E9): drive the AnimationPlayer over
-//      the run via world.update() (ticks advanceAnimationPlayer, which writes
+//      the run via world.update(1 / 60).unwrap() (ticks advanceAnimationPlayer, which writes
 //      the joint Transforms the SkinPaletteAllocator uploads each frame) and
 //      hash each per-frame skin-palette writeBuffer payload. Assert the joint
 //      palette takes on >=3 distinct values across the run: the pose is genuinely
@@ -47,7 +47,7 @@
 //      so its distinctness proves both that the skinned mesh is drawn AND that it
 //      animates.
 //   3. Falsification (plan-strategy §5.4): FALSIFY=static pauses the
-//      AnimationPlayer so world.update() cannot advance time. The joint palette
+//      AnimationPlayer so world.update(1 / 60).unwrap() cannot advance time. The joint palette
 //      is uploaded with the same t=0 pose every frame -> distinct-hash count
 //      collapses to 1, and the "pose animates" assertion trips -> non-zero exit.
 //      This proves the gate is sensitive to the animated pose (not vacuously
@@ -71,7 +71,7 @@ const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 
 const WIDTH = 200;
 const HEIGHT = 150;
 // Minimum distinct skin-palette write hashes across the run. The running clip
-// re-poses the joints every world.update(), so the uploaded palette differs
+// re-poses the joints every world.update(1 / 60).unwrap(), so the uploaded palette differs
 // frame to frame; a frozen pose (FALSIFY=static) repeats one hash. >=3 parallels
 // the apps/hello/skin smoke's 3-sample lower bound.
 const PALETTE_MIN_DISTINCT = 3;
@@ -362,16 +362,19 @@ const clipRes = await assets.loadByGuid(clipGuidRes.value);
 if (!clipRes.ok) { console.error(`[smoke] FAIL - loadByGuid(clip): ${clipRes.error.code}`); process.exit(1); }
 const clipHandle = world.allocSharedRef('AnimationClip', clipRes.value);
 
-// FALSIFY=static: pause the player so world.update() cannot advance time; the
+// FALSIFY=static: pause the player so world.update(1 / 60).unwrap() cannot advance time; the
 // joint palette is re-uploaded with the same t=0 pose every frame, so the
 // distinct-hash count collapses to 1 and the "pose animates" gate trips.
 world.addComponent(skinEnt, {
   component: AnimationPlayer,
   data: {
-    clips: [clipHandle, 0, 0, 0],
-    times: new Float32Array([0, 0, 0, 0]),
-    weights: new Float32Array([1, 0, 0, 0]),
-    speeds: new Float32Array([1, 1, 1, 1]),
+    // feat-20260713 M1 / w8: variable N-slot SoA. Single active slot -- all
+    // four parallel columns written length-synced at length 1 (D-5, no tail
+    // pad; speeds no longer defaults to [1,1,1,1] per D-6).
+    clips: [clipHandle],
+    times: new Float32Array([0]),
+    weights: new Float32Array([1]),
+    speeds: new Float32Array([1]),
     paused: FALSIFY === 'static',
     looping: true,
   },
@@ -387,7 +390,7 @@ world.spawn({
   data: { direction: [-0.5, -1, -0.3], color: [1, 1, 1], intensity: 1 },
 });
 
-// Wire the animation advance system so world.update() ticks the AnimationPlayer.
+// Wire the animation advance system so world.update(1 / 60).unwrap() ticks the AnimationPlayer.
 world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, createAnimationAssetResolver(assets));
 registerAdvanceAnimationPlayer(world);
 
@@ -401,12 +404,12 @@ const device = sharedDevice;
 if (!device) { console.error('[smoke] FAIL - no shared device captured'); process.exit(1); }
 
 // --- 6. Render loop: drive the animation, collect per-frame palette hashes ---
-// Each world.update() ticks advanceAnimationPlayer (moves joints), then
+// Each world.update(1 / 60).unwrap() ticks advanceAnimationPlayer (moves joints), then
 // renderer.draw builds + uploads the joint palette (hashed by the writeBuffer
 // hook) as part of the skinned-draw path.
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  world.update();
+  world.update(1 / 60).unwrap();
   const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) errors.push(r.error?.code ?? 'unknown');
   framesObserved++;

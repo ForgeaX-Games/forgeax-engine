@@ -34,7 +34,7 @@ import { createSphereGeometry } from '@forgeax/engine-geometry';
 type MatHandle = Handle<'MaterialAsset', 'shared'>;
 import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { defineSystem, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { defineSystem, Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from '@forgeax/engine-app';
 import {
   createInputSnapshot,
@@ -148,7 +148,7 @@ const PLAYER_Y = 0.75;
 //   Ground                        → static box (immovable floor)
 //   RedBox / BlueBall / YellowPillar → dynamic (fall, get shoved + knocked flying)
 //   TreeTrunk / TreeCanopy        → Collider ONLY = static obstacle, never simulated
-//                                   (树有碰撞体、无物理 — dynamic props bounce off it)
+//                                   (collider only, no physics body; dynamic props bounce off it)
 //   Player / Sun                  → skipped (Player becomes the kinematic box-man root)
 function attachScenePhysics(
   ctx: Ctx,
@@ -240,7 +240,7 @@ function setupPlayerRoot(ctx: Ctx, root: EntityHandle): void {
 }
 
 export async function bootstrap(world: World, ctx?: BootstrapContext) {
-  const { registerUpdate, registerCleanup } = ctx ?? {};
+  const { registerCleanup } = ctx ?? {};
 
   // No DOM listeners are registered in this template (AC-01). The engine input
   // backend (browser-backend.ts) handles all pointer/keyboard events via the
@@ -366,7 +366,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   //   the hit prop's feet (bug-20260610-glyph-mesh-cannot-opt-out-shadow-
   //   caster). DOM overlay sidesteps the shadow path entirely.
   //
-  //   spawnPopup runs from the registerUpdate callback (after hit detection),
+  //   spawnPopup runs from the Update system (after hit detection),
   //   projects (worldX, worldY, worldZ) to canvas-CSS-pixel screen coords
   //   inline using the camera's current Transform + a hardcoded perspective
   //   FOV (matches the Camera spawn above), and hands off to hud.floatScore
@@ -457,7 +457,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   setMode(mode);
 
   // World-space → canvas-CSS-pixel projection for the DOM "+N" popup. Reads
-  // the camera's CURRENT Transform (the registerUpdate callback that calls
+  // the camera's CURRENT Transform (the Update system that calls
   // spawnPopup runs AFTER the camera Transform write each frame, so values
   // are fresh). FOV / near match the Camera spawn above. Returns negative
   // coords for off-screen / behind-camera; floatScore tolerates that by just
@@ -519,7 +519,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   ];
   world.insertResource(INPUT_MAP_KEY, INPUT_MAP);
   // Frame-1 fallback: the scan system only writes the snapshot inside the first
-  // world.update(), which runs AFTER this frame's registerUpdate callbacks, so
+  // world.update(1 / 60).unwrap(), which runs AFTER this frame's Update systems, so
   // the resource is absent on the very first tick. createInputSnapshot() is the
   // empty snapshot (all readpoints false / zero) — read it until the real one
   // lands (charter P3: empty signal is the signal).
@@ -568,7 +568,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       hud.setLockStatus('🎮 Locked · mouse look · ESC releases');
     },
   });
-  world.addSystem(GameLook);
+  world.addSystem(Update, GameLook);
 
   // Pointer-lock is now handled entirely by the engine backend's onCanvasClick
   // (browser-backend.ts). The host (apps/preview) calls ctx.setPointerLockAllowed
@@ -616,7 +616,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       }
     },
   });
-  world.addSystem(GamePickShoot);
+  world.addSystem(Update, GamePickShoot);
 
   // Bullet material — EMISSIVE so it glows and drives the Camera.bloom bright-pass
   // (HDR emissive > bloomThreshold 1.0 → blooms). Showcases the post-processing path.
@@ -667,8 +667,13 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
 
   if (player !== undefined) {
     const root = player;
-    registerUpdate((dt: number) => {
-      const snap = readInput();
+    world
+      .addSystem(Update, {
+        name: 'game-update',
+        queries: [],
+        fn: () => {
+          const dt = world.getResource(Time).delta;
+          const snap = readInput();
       const arrowUp = snap.action('arrowUp').isPressed();
       const arrowDown = snap.action('arrowDown').isPressed();
       const arrowLeft = snap.action('arrowLeft').isPressed();
@@ -840,6 +845,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         camZ += (pz + TOP_DZ - camZ) * a;
         world.set(camera, Transform, { pos: [camX, TOP_DY, camZ], quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!]});
       }
-    });
+        },
+      })
+      .unwrap();
   }
 }

@@ -1,3 +1,4 @@
+import { Time, Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-physics-rapier3d — RapierPhysicsWorld3D class and three-phase
 // tick systems (syncBackend / stepSimulation / writeback).
 //
@@ -1173,7 +1174,7 @@ export const PhysicsSyncBackend: SystemHandle<readonly []> = defineSystem({
 /**
  * `physicsStepSimulation` system token (M2 — full resource-ification, D-4).
  *
- * After physicsSyncBackend — read Time.dt and call pw.step() with dt-gating.
+ * After physicsSyncBackend — read Time.delta and call pw.step() with dt-gating.
  */
 export const PhysicsStepSimulation: SystemHandle<readonly []> = defineSystem({
   name: PHYSICS_STEP_SIMULATION,
@@ -1187,15 +1188,8 @@ export const PhysicsStepSimulation: SystemHandle<readonly []> = defineSystem({
       return; // C-2: safe early out
     }
 
-    let time: { dt: number } | undefined;
-    try {
-      time = world.getResource<{ dt: number }>('Time');
-    } catch {
-      // Time resource not ready — skip
-    }
-
-    const dt = time?.dt ?? 0;
-    if (dt <= 0 || dt > PHYSICS_DT_MAX) return; // D-4: skip abnormal dt
+    const dt = world.getResource(Time).delta;
+    if (dt <= 0 || dt > PHYSICS_DT_MAX) return; // D-4: skip abnormal delta
 
     pw.step(dt);
   },
@@ -1287,7 +1281,7 @@ export function registerPhysicsSystems(world: World): void {
     // CharacterController schema defaults until a later registration wires it.
   }
 
-  world.addSystems(PhysicsSet, [
+  world.addSystems(Update, PhysicsSet, [
     PhysicsSyncBackend,
     PhysicsStepSimulation,
     PhysicsWriteback,

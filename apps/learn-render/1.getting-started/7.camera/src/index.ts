@@ -1,3 +1,4 @@
+import { Time, Update } from '@forgeax/engine-ecs';
 // apps/learn-render/1.getting-started/7.camera/src/index.ts
 // LearnOpenGL section 1.7 - Camera (forgeax first-person mapping with
 // WASD + mouse yaw/pitch + dt speed compensation + scroll-wheel FoV
@@ -349,7 +350,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const rightTmp = vec3.create();
   const FORWARD_LOCAL: Readonly<[number, number, number]> = [0, 0, -1];
   const RIGHT_LOCAL: Readonly<[number, number, number]> = [1, 0, 0];
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'learn-render-camera-first-person',
     after: ['input-frame-start-scan'],
     queries: [{ with: [Transform, Camera, Entity] }],
@@ -368,8 +369,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       void snap.gamepad(0).button(17);
       // @ts-expect-error: 4 is not assignable to GamepadAxisIndex
       void snap.gamepad(0).axis(4);
-      const time = world.getResource<{ readonly dt: number }>('Time');
-      const dt = time?.dt ?? 0;
+      const time = world.getResource(Time);
+      const dt = time.delta;
       const dx = snap.mouse.movementDelta.x;
       const dy = snap.mouse.movementDelta.y;
       yaw += dx * MOUSE_SENSITIVITY;
@@ -429,7 +430,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Scroll-wheel FoV zoom system.
   const scrollAcc = createScrollFovAccumulator();
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'learn-render-camera-scroll-fov',
     after: ['input-frame-start-scan'],
     queries: [{ with: [Camera, Entity] }],
@@ -523,7 +524,7 @@ function installCaptureHooks(
   };
   const renderer = app.renderer;
   win.__captureCamera = async (): Promise<Uint8Array> => {
-    world.update();
+    world.update(1 / 60).unwrap();
     renderer.draw([world], { owner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {
@@ -555,10 +556,7 @@ function installCaptureHooks(
         sd.addWheelDelta?.(dz);
       },
       tick: async (): Promise<CameraInputState> => {
-        if (sd.setDt === undefined) {
-          world.insertResource('Time', { dt: 1 / 60 });
-        }
-        world.update();
+        world.update(1 / 60).unwrap();
         renderer.draw([world], { owner: 0 });
         return readState();
       },

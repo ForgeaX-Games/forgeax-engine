@@ -1,3 +1,4 @@
+import { Update } from '../schedule-token';
 // feat-20260614-ecs-managed-lifecycle-ssot M4 / w10 (AC-08, AC-09):
 // Query bundle exposes ManagedColumnReader<T> for the 4 managed-vocab
 // keywords ('string' / `ref<T>` / variable 'buffer' / variable `array<T>`)
@@ -161,7 +162,7 @@ describe('w10 --- AC-08 negative: managed columns reject direct index write', ()
     world.spawn({ component: GlyphTextM4, data: { text: 'system', size: 8 } });
 
     let saw = false;
-    world.addSystem({
+    world.addSystem(Update, {
       name: 'm4-managed-reader',
       queries: [{ with: [GlyphTextM4, Entity] }],
       fn: (_world, results) => {

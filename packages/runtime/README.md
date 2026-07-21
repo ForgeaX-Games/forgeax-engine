@@ -41,7 +41,7 @@ const up = mat4.getUp(vec3.create(), worldMat);           // +Y basis
 const right = mat4.getRight(vec3.create(), worldMat);     // +X basis
 ```
 
-**Column convention fallback.** The world mat4 is column-major (the GPU / WGSL `mat4x4<f32>` layout): translation lives in column 3 (`world[12]`, `world[13]`, `world[14]`); the upper-left 3x3 is the rotation x scale basis. A freshly spawned `Transform` (`data: {}`) lands an identity local TRS and an identity world mat4 before the first propagate pass runs, so a read before `world.update()` / `renderer.draw([world], { owner: 0 })` returns identity, not stale garbage.
+**Column convention fallback.** The world mat4 is column-major (the GPU / WGSL `mat4x4<f32>` layout): translation lives in column 3 (`world[12]`, `world[13]`, `world[14]`); the upper-left 3x3 is the rotation x scale basis. A freshly spawned `Transform` (`data: {}`) lands an identity local TRS and an identity world mat4 before the first propagate pass runs, so a read before `world.update(1 / 60)` / `renderer.draw([world], { owner: 0 })` returns identity, not stale garbage.
 
 ## API 索引
 
@@ -1046,7 +1046,7 @@ world.spawn({ component: DirectionalLight, data: {
 import { Transform } from '@forgeax/engine-runtime';
 import { mat4, vec3 } from '@forgeax/engine-math';
 const e = world.spawn({ component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } }).unwrap();
-world.update(); // runs propagateTransforms; fills Transform.world
+world.update(1 / 60); // runs propagateTransforms; fills Transform.world
 const worldMat = world.get(e, Transform).unwrap().world; // Float32Array(16), column-major
 const worldPos = mat4.getTranslation(vec3.create(), worldMat);
 ```

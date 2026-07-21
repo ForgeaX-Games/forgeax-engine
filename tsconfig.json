@@ -94,6 +94,9 @@
     },
     {
       "path": "./packages/vite-plugin-rhi-debug"
+    },
+    {
+      "path": "./packages/net"
     }
   ]
 }

@@ -194,7 +194,7 @@ describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)'
     expectTypeOf<TagOf<RenderPipelineAsset>>().toEqualTypeOf<'RenderPipelineAsset'>();
   });
 
-  it('TagOf<Asset> distributes over the 15 members', () => {
+  it('TagOf<Asset> distributes over the 16 members', () => {
     expectTypeOf<TagOf<Asset>>().toEqualTypeOf<
       | 'MeshAsset'
       | 'TextureAsset'
@@ -206,6 +206,7 @@ describe('TagOf<T extends Asset> distributive conditional — 11+1 (never tail)'
       | 'SkinAsset'
       | 'SkeletonAsset'
       | 'AnimationClip'
+      | 'AnimationGraph'
       | 'ShaderAsset'
       | 'FontAsset'
       | 'RenderPipelineAsset'

@@ -22,6 +22,7 @@
 
 import type { App } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
+import { Time, Update } from '@forgeax/engine-ecs';
 import { quat } from '@forgeax/engine-math';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Camera, DirectionalLight, EngineEnvironmentError, Materials, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
@@ -102,14 +103,22 @@ world
 // visible spin and makes the pause/resume freeze observable.
 let angle = 0;
 const spin = quat.create();
-app.registerUpdate((dt: number) => {
-  angle += dt;
+world
+  .addSystem(Update, {
+    name: 'video-cutscene-spin',
+    queries: [],
+    fn: () => {
+      const dt = world.getResource(Time).delta;
+      angle += dt;
   quat.fromAxisAngle(spin, [0, 1, 0], angle);
   // spin is a length-4 Float32Array; noUncheckedIndexedAccess widens the reads
   // to number | undefined, so coalesce to keep the Transform set value typed.
-  world.set(cube, Transform, {
-    quat: [spin[0] ?? 0, spin[1] ?? 0, spin[2] ?? 0, spin[3] ?? 1],});
-});
+      world.set(cube, Transform, {
+        quat: [spin[0] ?? 0, spin[1] ?? 0, spin[2] ?? 0, spin[3] ?? 1],
+      });
+    },
+  })
+  .unwrap();
 
 // --- Cutscene: pause -> overlay -> resume (contract section 4.2) ---
 

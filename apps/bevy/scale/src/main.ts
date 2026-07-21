@@ -1,6 +1,7 @@
+import { Time, Update } from '@forgeax/engine-ecs';
 // apps/bevy/scale — reproduction of Bevy's `transforms/scale` example.
 // The shared src/scale.ts scene and step are the SSOT for this browser app and
-// the Dawn smoke. createApp owns the frame loop and auto-provides Time.dt.
+// the Dawn smoke. createApp owns the frame loop and auto-provides Time.delta.
 
 import { createApp } from '@forgeax/engine-app';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
@@ -27,11 +28,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const app = appResult.value;
   console.warn(`[bevy-scale] backend=${app.renderer.backend}`);
   buildScaleWorld(app.world);
-  app.world.addSystem({
+  app.world.addSystem(Update, {
     name: 'scale-cube',
     queries: [],
     fn: (world) => {
-      const dt = world.hasResource('Time') ? world.getResource<{ dt: number }>('Time').dt : 0;
+      const dt = world.hasResource('Time') ? world.getResource(Time).delta : 0;
       stepScale(world, dt);
     },
   });

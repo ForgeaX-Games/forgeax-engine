@@ -8,7 +8,7 @@
 // + light + visible mesh live ONLY in the injected world; the frame-loop's own
 // world is empty. So a non-zero draw count proves three things at once:
 //   1. drawSource is consumed (else the empty loop world is drawn -> 0 draws),
-//   2. the injected world was world.update()'d (propagate ran; extract finds the
+//   2. the injected world was world.update(1 / 60).unwrap()'d (propagate ran; extract finds the
 //      camera + resolved Transform.world),
 //   3. the full URP record path fired headlessly (bookkeeper counts draws).
 //

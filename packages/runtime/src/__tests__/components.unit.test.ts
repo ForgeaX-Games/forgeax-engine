@@ -1087,52 +1087,67 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 {
   // --- from animation-player.test.ts ---
   // feat-20260615-animation-player-crossfade-simple-transition M1 / w1 —
-  // AnimationPlayer SoA schema lock test (TDD red).
+  // AnimationPlayer SoA schema lock test.
   //
   // Old 5-field schema { clip, time, speed, paused, looping } replaced
-  // by 6-field SoA inline arrays:
-  //   clips:   'array<shared<AnimationClip>, 4>'   (default all-zero Uint32Array(4))
-  //   times:   'array<f32, 4>'                      (default all-zero Float32Array(4))
-  //   weights: 'array<f32, 4>'                      (default all-zero Float32Array(4))
-  //   speeds:  'array<f32, 4>'                      (layer-2 default [1,1,1,1] — every slot plays at 1x)
+  // by 6-field SoA variable arrays (feat-20260713 M1 / w4 dropped the fixed
+  // 4-slot cap; the columns are now variable `array<T>`), then extended to
+  // 10 fields by feat-20260713 M3 / w24 (plan D-3: a single component surface
+  // hosts both direct-write and graph-driven playback — no second peer
+  // component):
+  //   clips:   'array<shared<AnimationClip>>'   (default empty — no slot active)
+  //   times:   'array<f32>'                      (default empty Float32Array)
+  //   weights: 'array<f32>'                      (default empty Float32Array)
+  //   speeds:  'array<f32>'                      (default empty — consumers write
+  //                                               all four columns length-synced)
+  //   graph:       'shared<AnimationGraph>'      (default 0 — no graph attached)
+  //   nodeWeights: 'array<f32>'                  (default empty — per-node runtime knob)
+  //   nodeTimes:   'array<f32>'                  (default empty — per-node seek time)
+  //   nodeSpeeds:  'array<f32>'                  (default empty — per-node speed)
   //   paused:  'bool'                                (default false)
   //   looping: 'bool'                                (default true)
   //
-  // Anchors: requirements AC-01 (6 field names) + AC-02 (type-level error
-  // on old shape) + IS-1 (SoA inline arrays); plan-strategy D-6 (speeds
-  // default 0, not 1); plan-tasks.json w1.
+  // Anchors: requirements AC-01 (variable N-slot direct-write field set) + AC-02
+  // (type-level error on old shape) + IS-1 (SoA arrays); feat-20260713 M1
+  // plan D-1/D-6 (variable columns, speeds default []); M3 plan D-3 (graph
+  // handle + per-node runtime knobs extend the same component);
+  // plan-tasks.json w3/w4/w24.
 
-  describe('AnimationPlayer — SoA 6-field schema lock (M1 / w1 red)', () => {
-    it('AnimationPlayer is a registered component with name "AnimationPlayer" and 6 SoA schema fields', () => {
+  describe('AnimationPlayer — SoA 10-field schema lock (M1 / w3 + M3 / w24)', () => {
+    it('AnimationPlayer is a registered component with name "AnimationPlayer" and 10 SoA schema fields', () => {
       expect(AnimationPlayer.name).toBe('AnimationPlayer');
       const schema = AnimationPlayer.schema as Record<string, unknown>;
-      expect(Object.keys(schema).length).toBe(6);
+      expect(Object.keys(schema).length).toBe(10);
       expect(schema).toEqual({
-        clips: 'array<shared<AnimationClip>, 4>',
-        times: 'array<f32, 4>',
-        weights: 'array<f32, 4>',
-        speeds: 'array<f32, 4>',
+        clips: 'array<shared<AnimationClip>>',
+        times: 'array<f32>',
+        weights: 'array<f32>',
+        speeds: 'array<f32>',
+        graph: 'shared<AnimationGraph>',
+        nodeWeights: 'array<f32>',
+        nodeTimes: 'array<f32>',
+        nodeSpeeds: 'array<f32>',
         paused: 'bool',
         looping: 'bool',
       });
     });
 
-    it('AnimationPlayer.schema.clips is array<shared<AnimationClip>, 4> (SoA keyword)', () => {
+    it('AnimationPlayer.schema.clips is variable array<shared<AnimationClip>> (SoA keyword)', () => {
       expect((AnimationPlayer.schema as Record<string, unknown>).clips).toBe(
-        'array<shared<AnimationClip>, 4>',
+        'array<shared<AnimationClip>>',
       );
     });
 
-    it('AnimationPlayer.schema.times is array<f32, 4>', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).times).toBe('array<f32, 4>');
+    it('AnimationPlayer.schema.times is variable array<f32>', () => {
+      expect((AnimationPlayer.schema as Record<string, unknown>).times).toBe('array<f32>');
     });
 
-    it('AnimationPlayer.schema.weights is array<f32, 4>', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).weights).toBe('array<f32, 4>');
+    it('AnimationPlayer.schema.weights is variable array<f32>', () => {
+      expect((AnimationPlayer.schema as Record<string, unknown>).weights).toBe('array<f32>');
     });
 
-    it('AnimationPlayer.schema.speeds is array<f32, 4>', () => {
-      expect((AnimationPlayer.schema as Record<string, unknown>).speeds).toBe('array<f32, 4>');
+    it('AnimationPlayer.schema.speeds is variable array<f32>', () => {
+      expect((AnimationPlayer.schema as Record<string, unknown>).speeds).toBe('array<f32>');
     });
 
     it('AnimationPlayer.schema.paused is bool', () => {
@@ -1141,6 +1156,24 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 
     it('AnimationPlayer.schema.looping is bool', () => {
       expect((AnimationPlayer.schema as Record<string, unknown>).looping).toBe('bool');
+    });
+
+    it('AnimationPlayer.schema.graph is shared<AnimationGraph> (M3 / w24 graph handle)', () => {
+      expect((AnimationPlayer.schema as Record<string, unknown>).graph).toBe(
+        'shared<AnimationGraph>',
+      );
+    });
+
+    it('AnimationPlayer.schema.nodeWeights is variable array<f32> (M3 / w24 per-node knob)', () => {
+      expect((AnimationPlayer.schema as Record<string, unknown>).nodeWeights).toBe('array<f32>');
+    });
+
+    it('AnimationPlayer.schema.nodeTimes is variable array<f32> (M3 / w24 per-node seek time)', () => {
+      expect((AnimationPlayer.schema as Record<string, unknown>).nodeTimes).toBe('array<f32>');
+    });
+
+    it('AnimationPlayer.schema.nodeSpeeds is variable array<f32> (M3 / w24 per-node speed)', () => {
+      expect((AnimationPlayer.schema as Record<string, unknown>).nodeSpeeds).toBe('array<f32>');
     });
 
     it('old field clip is absent from schema (AC-02 type-level error)', () => {
@@ -1155,7 +1188,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(AnimationPlayer.schema).not.toHaveProperty('speed');
     });
 
-    it('AnimationPlayer spawn yields SoA default values: clips/times/weights all-zero, speeds=[1,1,1,1], paused=false, looping=true (tweak-20260616 retired plan D-6)', () => {
+    it('AnimationPlayer spawn yields variable SoA defaults: clips/times/weights/speeds all empty, paused=false, looping=true (M1 / w4 variable columns, speeds default [])', () => {
       const world = new World();
       const e = world
         .spawn({
@@ -1171,32 +1204,19 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         paused: boolean;
         looping: boolean;
       };
+      // Variable columns default to empty (no slot active). Consumers write all
+      // four columns length-synced when spawning an active player (M1 / w7).
       expect(ap.clips).toBeInstanceOf(Uint32Array);
-      expect(ap.clips.length).toBe(4);
-      expect(ap.clips[0]).toBe(0);
-      expect(ap.clips[1]).toBe(0);
-      expect(ap.clips[2]).toBe(0);
-      expect(ap.clips[3]).toBe(0);
+      expect(ap.clips.length).toBe(0);
       expect(ap.times).toBeInstanceOf(Float32Array);
-      expect(ap.times.length).toBe(4);
-      expect(ap.times[0]).toBe(0);
-      expect(ap.times[1]).toBe(0);
-      expect(ap.times[2]).toBe(0);
-      expect(ap.times[3]).toBe(0);
+      expect(ap.times.length).toBe(0);
       expect(ap.weights).toBeInstanceOf(Float32Array);
-      expect(ap.weights.length).toBe(4);
-      expect(ap.weights[0]).toBe(0);
-      expect(ap.weights[1]).toBe(0);
-      expect(ap.weights[2]).toBe(0);
-      expect(ap.weights[3]).toBe(0);
+      expect(ap.weights.length).toBe(0);
+      // speeds layer-2 default retired to [] (was [1,1,1,1]); a variable column
+      // cannot carry a fixed-width "play at 1x" default without desyncing from
+      // an empty clips column.
       expect(ap.speeds).toBeInstanceOf(Float32Array);
-      expect(ap.speeds.length).toBe(4);
-      // tweak-20260616: speeds layer-2 default is [1,1,1,1] — every slot plays
-      // at 1x when its clip is set (was all-zero, plan D-6 retired).
-      expect(ap.speeds[0]).toBe(1);
-      expect(ap.speeds[1]).toBe(1);
-      expect(ap.speeds[2]).toBe(1);
-      expect(ap.speeds[3]).toBe(1);
+      expect(ap.speeds.length).toBe(0);
       expect(ap.paused).toBe(false);
       expect(ap.looping).toBe(true);
     });

@@ -36,6 +36,7 @@ const SFX_GUID = '019e7535-5e5e-75fe-a328-0b08e3a72744';
 
 import type { App } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
+import { Time, Update } from '@forgeax/engine-ecs';
 import { AudioListener, AudioSource } from '@forgeax/engine-audio';
 import { audioPlugin } from '@forgeax/engine-audio-webaudio';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
@@ -145,7 +146,7 @@ if (!sfxGuid.ok) {
 }
 
 // Step 4: spacebar re-arm one-shot state machine (D-3).
-// Per-frame update callback registered via app.registerUpdate.
+// Per-frame update callback registered via world.addSystem(Update, ...).
 // The re-arm produces:
 //   - On spacebar up-edge: write AudioSource.playing=true
 //   - Next frame: write AudioSource.playing=false (re-arm for next press)
@@ -153,7 +154,7 @@ let spacebarReArm = false;
 const sfxClipHandleLoaded = () => sfxClipHandle;
 
 // Step 5-6: listener sync loop + overlay readout.
-// Runs inside the same registerUpdate callback.
+// Runs inside the same Update system.
 const overlayEl = document.querySelector<HTMLDivElement>('#overlay');
 const listenerEntity = cameraEntity;
 const emitterEntityId = emitterEntity;
@@ -161,8 +162,13 @@ const emitterEntityId = emitterEntity;
 // Camera movement speed (units/second).
 const MOVE_SPEED = 5;
 
-app.registerUpdate((_dt: number) => {
-  // Re-read clip handle in case asset loaded after boot.
+world
+  .addSystem(Update, {
+    name: 'hello-audio-frame',
+    queries: [],
+    fn: () => {
+      const _dt = world.getResource(Time).delta;
+      // Re-read clip handle in case asset loaded after boot.
   const currentClip = sfxClipHandleLoaded();
 
   // --- Input ---
@@ -237,7 +243,9 @@ app.registerUpdate((_dt: number) => {
       ].join('');
     }
   }
-});
+    },
+  })
+  .unwrap();
 
 const startRes = app.start();
 if (!startRes.ok) {

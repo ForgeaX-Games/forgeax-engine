@@ -64,6 +64,7 @@ flowchart TD
 
 ```ts
 import { createApp } from '@forgeax/engine-app';
+import { Update } from '@forgeax/engine-ecs';
 import { defineState, setNextState, getState, despawnOnExit, OnEnter, addOnEnter, inState } from '@forgeax/engine-state';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { defineSystem, Transform, MeshFilter, MeshRenderer, Camera, DirectionalLight } from '@forgeax/engine-runtime';
@@ -115,7 +116,7 @@ const GameplaySystem = defineSystem({
     // Only runs when GamePhase === 'Playing'
   },
 });
-world.addSystem(GameplaySystem);
+world.addSystem(Update, GameplaySystem);
 ```
 
 ## inState condition factory (system gating by game state)

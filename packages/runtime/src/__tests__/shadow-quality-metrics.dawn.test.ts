@@ -204,7 +204,7 @@ async function sample(
   const renderer = await getRenderer();
   const world = new World();
   buildScene(world, cfg);
-  world.update();
+  world.update(1 / 60).unwrap();
   const draw = renderer.draw([world], { owner: 0 });
   if (!draw.ok) throw new Error('draw failed');
   const res = await renderer.debugSampleShadowFactor?.(points);

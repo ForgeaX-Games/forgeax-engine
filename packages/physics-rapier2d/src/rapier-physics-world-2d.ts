@@ -1,3 +1,4 @@
+import { Time, Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-physics-rapier2d — RapierPhysicsWorld2D class and three-phase
 // tick systems (syncBackend / stepSimulation / writeback).
 //
@@ -777,7 +778,7 @@ function registerBackendForRemoveHook2D(pw: RapierPhysicsWorld2D): void {
  * (plan-strategy C-3 symmetry):
  *   - physicsSyncBackend2D:  after propagateTransforms — query (Transform,
  *     RigidBody, Collider) and call RapierPhysicsWorld2D.ensureBody for each.
- *   - physicsStepSimulation2D: after physicsSyncBackend2D — read Time.dt and
+ *   - physicsStepSimulation2D: after physicsSyncBackend2D — read Time.delta and
  *     call pw.step() with dt-gating.
  *   - physicsWriteback2D: after physicsStepSimulation2D — call
  *     pw.writebackDynamicBodies() and write positions + rotation back to ECS
@@ -1021,7 +1022,7 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
 /**
  * `physicsStepSimulation2D` system token (M2 — full resource-ification, D-4).
  *
- * After physicsSyncBackend2D — read Time.dt and call pw.step() with dt-gating.
+ * After physicsSyncBackend2D — read Time.delta and call pw.step() with dt-gating.
  */
 export const PhysicsStepSimulation2D: SystemHandle<readonly []> = defineSystem({
   name: PHYSICS_STEP_SIMULATION_2D,
@@ -1035,15 +1036,8 @@ export const PhysicsStepSimulation2D: SystemHandle<readonly []> = defineSystem({
       return; // C-2: safe early out
     }
 
-    let time: { dt: number } | undefined;
-    try {
-      time = world.getResource<{ dt: number }>('Time');
-    } catch {
-      // Time resource not ready — skip
-    }
-
-    const dt = time?.dt ?? 0;
-    if (dt <= 0 || dt > PHYSICS_DT_MAX) return; // D-4: skip abnormal dt
+    const dt = world.getResource(Time).delta;
+    if (dt <= 0 || dt > PHYSICS_DT_MAX) return; // D-4: skip abnormal delta
 
     pw.step(dt);
   },
@@ -1119,5 +1113,9 @@ export function registerPhysicsSystems2D(world: World): void {
     // CharacterController schema defaults until a later registration wires it.
   }
 
-  world.addSystems(PhysicsSet, [PhysicsSyncBackend2D, PhysicsStepSimulation2D, PhysicsWriteback2D]);
+  world.addSystems(Update, PhysicsSet, [
+    PhysicsSyncBackend2D,
+    PhysicsStepSimulation2D,
+    PhysicsWriteback2D,
+  ]);
 }

@@ -313,7 +313,13 @@ function commandSmokes(root, dryRun) {
     ]) {
       process.stdout.write(`[bevy-smoke] pnpm ${args.join(' ')}\n`);
       if (dryRun) continue;
-      const result = spawnSync('pnpm', args, { cwd: root, stdio: 'inherit' });
+      let result = spawnSync('pnpm', args, { cwd: root, stdio: 'inherit' });
+      if (result.status === 132 && args.at(-1) === 'build') {
+        process.stderr.write(
+          `[bevy-smoke] retrying ${pkg.name} build after native-tool exit 132\n`,
+        );
+        result = spawnSync('pnpm', args, { cwd: root, stdio: 'inherit' });
+      }
       if (result.status !== 0) process.exit(result.status ?? 1);
     }
   }

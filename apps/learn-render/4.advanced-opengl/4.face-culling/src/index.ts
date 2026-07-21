@@ -216,7 +216,7 @@ function installCaptureHook(app: App, world: App['world']): void {
   const win = window as unknown as { __captureFaceCulling?: CaptureHook };
   const renderer = app.renderer;
   win.__captureFaceCulling = async (): Promise<Uint8Array> => {
-    world.update();
+    world.update(1 / 60).unwrap();
     renderer.draw([world], { owner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {

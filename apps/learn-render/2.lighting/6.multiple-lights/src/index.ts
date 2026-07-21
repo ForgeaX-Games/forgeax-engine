@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // 1. engine usage
 import { Entity } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
@@ -326,7 +327,7 @@ function installCaptureHook(app: App, world: App['world']): void {
   const win = window as unknown as { __captureMultipleLights?: CaptureHook };
   const renderer = app.renderer;
   win.__captureMultipleLights = async (): Promise<Uint8Array> => {
-    world.update();
+    world.update(1 / 60).unwrap();
     renderer.draw([world], { owner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {
@@ -350,7 +351,7 @@ function readMaterialPackEntry(rawPack: unknown): MaterialPackEntry | null {
 
 function addScrollFovSystem(world: App['world'], renderer: App['renderer']): void {
   const scrollFov = createScrollFovAccumulator();
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'learn-render-multiple-lights-scroll-fov',
     after: ['input-frame-start-scan'],
     queries: [{ with: [Camera, Entity] }],

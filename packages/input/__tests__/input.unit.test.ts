@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
 // biome-ignore-all lint/complexity/noUselessLoneBlockStatements: scope isolation between merged source files
 //
@@ -813,7 +814,7 @@ function fixtureBackend(initial: {
         const world = new World();
         expect(InputFrameStartScan.name).toBe('input-frame-start-scan');
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
         const inspection = world.inspect();
         expect(inspection.systems.map((s) => s.name)).toContain('input-frame-start-scan');
       });
@@ -827,10 +828,10 @@ function fixtureBackend(initial: {
         });
         const world = new World();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
 
         expect(world.hasResource('InputSnapshot')).toBe(false);
-        world.update();
+        world.update(1 / 60).unwrap();
         expect(world.hasResource('InputSnapshot')).toBe(true);
         const snap = world.getResource<InputSnapshot>('InputSnapshot');
         expect(snap.keyboard.down('shift')).toBe(true);
@@ -838,15 +839,15 @@ function fixtureBackend(initial: {
         expect(snap.mouse.movementDelta).toEqual({ x: 3, y: -2 });
       });
 
-      it('calls backend.sample() exactly once per world.update()', () => {
+      it('calls backend.sample() exactly once per world.update(1 / 60).unwrap()', () => {
         const backend = fixtureBackend({});
         const world = new World();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
 
-        world.update();
-        world.update();
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
         expect(backend.sampleCalls).toBe(3);
       });
 
@@ -854,9 +855,9 @@ function fixtureBackend(initial: {
         const backend = fixtureBackend({ movementX: 9, movementY: 9 });
         const world = new World();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
 
-        world.update();
+        world.update(1 / 60).unwrap();
         const snap = world.getResource<InputSnapshot>('InputSnapshot');
         const before = snap.mouse.movementDelta;
         snap.mouse.button(1);
@@ -944,16 +945,16 @@ function fixtureBackend(initial: {
         const backend = createFakeBackend();
         const world = new World();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
 
         backend.pressKey('w');
-        world.update();
+        world.update(1 / 60).unwrap();
         const snap = world.getResource<InputSnapshot>('InputSnapshot');
         expect(snap.keyboard.down('w')).toBe(true);
         expect(snap.keyboard.down('a')).toBe(false);
 
         backend.releaseKey('w');
-        world.update();
+        world.update(1 / 60).unwrap();
         const snap2 = world.getResource<InputSnapshot>('InputSnapshot');
         expect(snap2.keyboard.down('w')).toBe(false);
       });
@@ -962,17 +963,17 @@ function fixtureBackend(initial: {
         const backend = createFakeBackend();
         const world = new World();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
 
         backend.pressKey('space');
-        world.update();
+        world.update(1 / 60).unwrap();
         expect(world.getResource<InputSnapshot>('InputSnapshot').keyboard.up('space')).toBe(false);
 
         backend.releaseKey('space');
-        world.update();
+        world.update(1 / 60).unwrap();
         expect(world.getResource<InputSnapshot>('InputSnapshot').keyboard.up('space')).toBe(true);
 
-        world.update();
+        world.update(1 / 60).unwrap();
         expect(world.getResource<InputSnapshot>('InputSnapshot').keyboard.up('space')).toBe(false);
       });
 
@@ -980,14 +981,14 @@ function fixtureBackend(initial: {
         const backend = createFakeBackend();
         const world = new World();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
 
         backend.addMovement(15, -7);
-        world.update();
+        world.update(1 / 60).unwrap();
         const snap = world.getResource<InputSnapshot>('InputSnapshot');
         expect(snap.mouse.movementDelta).toEqual({ x: 15, y: -7 });
 
-        world.update();
+        world.update(1 / 60).unwrap();
         const snap2 = world.getResource<InputSnapshot>('InputSnapshot');
         expect(snap2.mouse.movementDelta).toEqual({ x: 0, y: 0 });
       });
@@ -996,11 +997,11 @@ function fixtureBackend(initial: {
         const backend = createFakeBackend();
         const world = new World();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
 
         backend.pressButton(0);
         backend.pressButton(2);
-        world.update();
+        world.update(1 / 60).unwrap();
         const snap = world.getResource<InputSnapshot>('InputSnapshot');
         expect(snap.mouse.button(0)).toBe(true);
         expect(snap.mouse.button(1)).toBe(false);
@@ -1011,8 +1012,8 @@ function fixtureBackend(initial: {
         const backend = createFakeBackend();
         const world = new World();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
-        world.update();
+        world.addSystem(Update, InputFrameStartScan);
+        world.update(1 / 60).unwrap();
         expect(world.hasResource('InputSnapshot')).toBe(true);
         const snap = world.getResource<InputSnapshot>('InputSnapshot');
         expect(typeof snap.keyboard.down).toBe('function');
@@ -1035,18 +1036,18 @@ function fixtureBackend(initial: {
         const backend = createFakeBackend();
         const world = new World();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
 
         backend.pressKey('w');
-        world.update();
+        world.update(1 / 60).unwrap();
         expect(world.getResource<InputSnapshot>('InputSnapshot').keyboard.down('w')).toBe(true);
 
         backend.setFocus(false);
-        world.update();
+        world.update(1 / 60).unwrap();
         expect(world.getResource<InputSnapshot>('InputSnapshot').keyboard.down('w')).toBe(true);
 
         backend.setFocus(true);
-        world.update();
+        world.update(1 / 60).unwrap();
         expect(world.getResource<InputSnapshot>('InputSnapshot').keyboard.down('w')).toBe(true);
       });
 
@@ -1103,9 +1104,9 @@ function fixtureBackend(initial: {
         const world = new World();
         const backend = createWheelFakeBackend();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
         backend.setWheelDelta(1);
-        world.update();
+        world.update(1 / 60).unwrap();
         const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
         expect(snap?.mouse.wheelDelta).toBe(1);
       });
@@ -1114,9 +1115,9 @@ function fixtureBackend(initial: {
         const world = new World();
         const backend = createWheelFakeBackend();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
         backend.setWheelDelta(-2);
-        world.update();
+        world.update(1 / 60).unwrap();
         const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
         const r1 = snap?.mouse.wheelDelta;
         const r2 = snap?.mouse.wheelDelta;
@@ -1128,11 +1129,11 @@ function fixtureBackend(initial: {
         const world = new World();
         const backend = createWheelFakeBackend();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
         backend.setWheelDelta(3);
-        world.update();
+        world.update(1 / 60).unwrap();
         expect(world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)?.mouse.wheelDelta).toBe(3);
-        world.update();
+        world.update(1 / 60).unwrap();
         expect(world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)?.mouse.wheelDelta).toBe(0);
       });
 
@@ -1140,12 +1141,12 @@ function fixtureBackend(initial: {
         const world = new World();
         const backend = createWheelFakeBackend();
         world.insertResource(INPUT_BACKEND_KEY, backend);
-        world.addSystem(InputFrameStartScan);
+        world.addSystem(Update, InputFrameStartScan);
         backend.setWheelDelta(7);
-        world.update();
+        world.update(1 / 60).unwrap();
         expect(world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)?.mouse.wheelDelta).toBe(7);
         backend.setWheelDelta(-9);
-        world.update();
+        world.update(1 / 60).unwrap();
         expect(world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)?.mouse.wheelDelta).toBe(
           -9,
         );
@@ -1162,15 +1163,15 @@ function fixtureBackend(initial: {
       const world = new World();
       const backend = fixtureBackend({ gamepads: slots, capabilities: { gamepad: true, pointer: false } });
       world.insertResource(INPUT_BACKEND_KEY, backend);
-      world.addSystem(InputFrameStartScan);
-      world.update();
+      world.addSystem(Update, InputFrameStartScan);
+      world.update(1 / 60).unwrap();
       return world;
     }
 
     function makeSnap(slots: readonly GamepadSlotSample[]): InputSnapshot {
       const world = makeWorldWithGamepadSlots(slots);
       const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
-      if (!snap) throw new Error('InputSnapshot not found after world.update()');
+      if (!snap) throw new Error('InputSnapshot not found after world.update(1 / 60).unwrap()');
       return snap;
     }
 
@@ -1244,7 +1245,7 @@ function fixtureBackend(initial: {
       let backend: ReturnType<typeof fixtureBackend>;
       backend = fixtureBackend({ capabilities: { gamepad: true, pointer: false } });
       world.insertResource(INPUT_BACKEND_KEY, backend);
-      world.addSystem(InputFrameStartScan);
+      world.addSystem(Update, InputFrameStartScan);
 
       return {
         snap(): InputSnapshot {
@@ -1261,7 +1262,7 @@ function fixtureBackend(initial: {
             capabilities: caps ?? { gamepad: true, pointer: false },
           });
           world.insertResource(INPUT_BACKEND_KEY, b);
-          world.update();
+          world.update(1 / 60).unwrap();
           return this.snap();
         },
       };
@@ -1342,7 +1343,7 @@ function fixtureBackend(initial: {
       const world = new World();
       let backend = fixtureBackend({ capabilities: { gamepad: true, pointer: false } });
       world.insertResource(INPUT_BACKEND_KEY, backend);
-      world.addSystem(InputFrameStartScan);
+      world.addSystem(Update, InputFrameStartScan);
 
       return {
         snap(): InputSnapshot {
@@ -1356,7 +1357,7 @@ function fixtureBackend(initial: {
             capabilities: caps ?? { gamepad: true, pointer: false },
           });
           world.insertResource(INPUT_BACKEND_KEY, backend);
-          world.update();
+          world.update(1 / 60).unwrap();
           return this.snap();
         },
       };
@@ -1423,8 +1424,8 @@ function fixtureBackend(initial: {
       });
       const backend = fixtureBackend({ gamepads: [nonStandard], capabilities: { gamepad: true, pointer: false } });
       world.insertResource(INPUT_BACKEND_KEY, backend);
-      world.addSystem(InputFrameStartScan);
-      world.update();
+      world.addSystem(Update, InputFrameStartScan);
+      world.update(1 / 60).unwrap();
       const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (!snap) throw new Error('snap missing');
       const g = snap.gamepad(0);
@@ -1445,8 +1446,8 @@ function fixtureBackend(initial: {
       const world = new World();
       const backend = fixtureBackend({});
       world.insertResource(INPUT_BACKEND_KEY, backend);
-      world.addSystem(InputFrameStartScan);
-      world.update();
+      world.addSystem(Update, InputFrameStartScan);
+      world.update(1 / 60).unwrap();
       const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (!snap) throw new Error('snap missing');
       expect(snap.capabilities.gamepad).toBe(false);
@@ -1456,8 +1457,8 @@ function fixtureBackend(initial: {
       const world = new World();
       const backend = fixtureBackend({});
       world.insertResource(INPUT_BACKEND_KEY, backend);
-      world.addSystem(InputFrameStartScan);
-      world.update();
+      world.addSystem(Update, InputFrameStartScan);
+      world.update(1 / 60).unwrap();
       const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (!snap) throw new Error('snap missing');
       // All gamepad readpoints must be empty signal, no throw.
@@ -1478,8 +1479,8 @@ function fixtureBackend(initial: {
       const caps: Capabilities = { gamepad: false, pointer: true };
       const backend = fixtureBackend({ pointers: ptrs, capabilities: caps });
       world.insertResource(INPUT_BACKEND_KEY, backend);
-      world.addSystem(InputFrameStartScan);
-      world.update();
+      world.addSystem(Update, InputFrameStartScan);
+      world.update(1 / 60).unwrap();
       const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (!snap) throw new Error('snap missing');
       return snap;
@@ -1539,8 +1540,8 @@ function fixtureBackend(initial: {
       const world = new World();
       const backend = fixtureBackend({ capabilities: { gamepad: false, pointer: false } });
       world.insertResource(INPUT_BACKEND_KEY, backend);
-      world.addSystem(InputFrameStartScan);
-      world.update();
+      world.addSystem(Update, InputFrameStartScan);
+      world.update(1 / 60).unwrap();
       const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (!snap) throw new Error('snap missing');
       expect(snap.pointer(1).active).toBe(false);
@@ -1557,8 +1558,8 @@ function fixtureBackend(initial: {
       const caps: Capabilities = { gamepad: false, pointer: true };
       const backend = fixtureBackend({ pointerEvents: evts, capabilities: caps });
       world.insertResource(INPUT_BACKEND_KEY, backend);
-      world.addSystem(InputFrameStartScan);
-      world.update();
+      world.addSystem(Update, InputFrameStartScan);
+      world.update(1 / 60).unwrap();
       const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (!snap) throw new Error('snap missing');
       return snap;
@@ -1622,8 +1623,8 @@ function fixtureBackend(initial: {
       const caps: Capabilities = { gamepad: false, pointer: true };
       const backend = fixtureBackend({ pointers: ptrs, capabilities: caps });
       world.insertResource(INPUT_BACKEND_KEY, backend);
-      world.addSystem(InputFrameStartScan);
-      world.update();
+      world.addSystem(Update, InputFrameStartScan);
+      world.update(1 / 60).unwrap();
       const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (!snap) throw new Error('snap missing');
       return snap;
@@ -1680,8 +1681,8 @@ function fixtureBackend(initial: {
         focused: opts.focused ?? true,
       });
       world.insertResource(INPUT_BACKEND_KEY, backend);
-      world.addSystem(InputFrameStartScan);
-      world.update();
+      world.addSystem(Update, InputFrameStartScan);
+      world.update(1 / 60).unwrap();
       const snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       if (!snap) throw new Error('snap missing');
       return snap;

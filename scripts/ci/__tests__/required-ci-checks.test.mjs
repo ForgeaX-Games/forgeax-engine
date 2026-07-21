@@ -2,13 +2,17 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { pickLatestPullRequestRun, REQUIRED_CHECK_NAMES } from '../required-ci-checks.mjs';
 
 const scriptPath = fileURLToPath(new URL('../required-ci-checks.mjs', import.meta.url));
+const workflowPath = resolve(
+  fileURLToPath(new URL('../../..', import.meta.url)),
+  '.github/workflows/required-ci-checks.yml',
+);
 
 const run = (values) => ({
   event: 'pull_request',
@@ -52,9 +56,10 @@ function runWithFakeGitHub(runs) {
     fakeGh,
     [
       '#!/bin/sh',
-      'if [ "$1" = "run" ]; then printf "%s" "$GH_RUN_LIST_JSON"; exit 0; fi',
-      'printf "%s\\n" "$*" >> "$GH_CALL_LOG"',
-      'printf "{}"',
+      'case " $* " in *" --repo "*) exit 1;; esac',
+      'if [ "$1" = "api" ] && [ "$3" = "GET" ]; then printf "{\\"workflow_runs\\":%s}" "$GH_RUN_LIST_JSON"; exit 0; fi',
+      'if [ "$1" = "api" ] && [ "$3" = "POST" ]; then printf "%s\\n" "$*" >> "$GH_CALL_LOG"; printf "{}"; exit 0; fi',
+      'exit 1',
       '',
     ].join('\n'),
     { mode: 0o755 },
@@ -97,4 +102,68 @@ test('creates one passed direct context for every required check when ci.yml was
       `missing ${name}`,
     );
   }
+});
+
+test('installs the reporter prerequisites before running the required-context reporter', () => {
+  const workflow = readFileSync(workflowPath, 'utf8');
+  const setupNode = workflow.indexOf('uses: actions/setup-node@v5');
+  const setupPnpm = workflow.indexOf('uses: pnpm/action-setup@v5');
+  const installGh = workflow.indexOf('command -v gh >/dev/null');
+  const reporter = workflow.indexOf('run: node scripts/ci/required-ci-checks.mjs');
+
+  assert.equal(setupPnpm, -1, 'required-ci-checks must not install unused pnpm');
+  assert.ok(setupNode >= 0, 'required-ci-checks must install Node explicitly');
+  assert.ok(installGh >= 0, 'required-ci-checks must ensure gh is available explicitly');
+  assert.ok(reporter >= 0, 'required-ci-checks must run the reporter script');
+  assert.ok(setupNode < reporter, 'Node setup must precede the reporter script');
+  assert.ok(installGh < reporter, 'gh setup must precede the reporter script');
+  assert.match(
+    workflow,
+    /uses: actions\/setup-node@v5\s+with:\s+node-version-file: \.nvmrc\s+package-manager-cache: false/,
+    'the reporter-only Node setup must not save an unused pnpm cache',
+  );
+});
+
+test('validates PR-head workflows with pinned actionlint before synthetic passes', () => {
+  const workflow = readFileSync(workflowPath, 'utf8');
+  const checkoutHead = workflow.indexOf('name: Checkout PR-head workflow definitions');
+  const installActionlint = workflow.indexOf('name: Install pinned actionlint');
+  const runActionlint = workflow.indexOf('name: Validate PR-head workflow definitions');
+  const reporter = workflow.indexOf('run: node scripts/ci/required-ci-checks.mjs');
+
+  assert.ok(checkoutHead >= 0, 'admission must read workflow definitions from the PR head');
+  assert.match(
+    workflow,
+    /repository: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name \}\}/,
+  );
+  assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.match(workflow, /path: pr-head/);
+  assert.match(
+    workflow,
+    /sparse-checkout:\s+\|\s+\.github\/workflows\s+\.github\/actionlint\.yaml/,
+  );
+  assert.ok(
+    installActionlint > checkoutHead,
+    'pinned actionlint installs after the isolated checkout',
+  );
+  assert.match(workflow, /rhysd\/actionlint[^\n]*v1\.7\.12/);
+  assert.ok(runActionlint > installActionlint, 'actionlint runs after its pinned install');
+  assert.ok(reporter > runActionlint, 'synthetic required passes are impossible before actionlint');
+  assert.match(workflow, /working-directory: pr-head/);
+});
+
+// t7: don't-break — build-artifacts remains a required context name after M2
+test('t7: REQUIRED_CHECK_NAMES includes build-artifacts as required context', () => {
+  assert.ok(
+    REQUIRED_CHECK_NAMES.includes('build-artifacts'),
+    'build-artifacts must be in REQUIRED_CHECK_NAMES after M2 workflow split',
+  );
+});
+
+test('t7: REQUIRED_CHECK_NAMES count is unchanged (9 direct checks)', () => {
+  assert.strictEqual(
+    REQUIRED_CHECK_NAMES.length,
+    9,
+    'REQUIRED_CHECK_NAMES must have exactly 9 entries — no new jobs added, no existing jobs removed',
+  );
 });

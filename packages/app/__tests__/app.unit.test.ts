@@ -20,7 +20,6 @@ import { registerPropagateTransforms, Transform } from '@forgeax/engine-runtime'
 import type { Renderer } from '@forgeax/engine-runtime';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MAX_DT_DEFAULT } from '../src/constants';
 import { createApp } from '../src/create-app';
 import {
   APP_ERROR_HINTS,
@@ -55,7 +54,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
         expect(typeof registerPropagateTransforms).toBe('function');
       });
 
-      it('one world.update() derives a root entity Transform.world from its local Transform', () => {
+      it('one world.update(1 / 60).unwrap() derives a root entity Transform.world from its local Transform', () => {
         const world = new World();
         registerPropagateTransforms(world);
 
@@ -66,7 +65,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
           })
           .unwrap();
 
-        world.update();
+        world.update(1 / 60).unwrap();
 
         const t = world.get(root, Transform);
         expect(t.ok).toBe(true);
@@ -630,101 +629,6 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
   }
 
   describe('frame-loop.test.ts', () => {
-    describe('frame-loop dt clamp four-bucket coverage (AC-06)', () => {
-      let world: World;
-      let renderer: Renderer;
-
-      beforeEach(() => {
-        world = new World();
-        renderer = makeRendererStubFL().renderer;
-      });
-
-      afterEach(() => {
-        vi.restoreAllMocks();
-      });
-
-      it('rawDt < 0 clamps to 0 (negative-clock-skew bucket)', () => {
-        const now = makeNowFakeFL([1000, 999]);
-        const { raf, caf, pendingCallbacks } = makeRafFakeFL();
-        const observedDt: number[] = [];
-        const insertSpy = vi.spyOn(world, 'insertResource').mockImplementation((key, value) => {
-          if (key === 'Time') {
-            observedDt.push((value as { dt: number }).dt);
-          }
-        });
-        const loop = createFrameLoop({
-          world,
-          renderer,
-          now,
-          raf,
-          caf,
-          maxDt: 0.0333,
-        });
-        expect(loop.start().ok).toBe(true);
-        pendingCallbacks[0]?.(0);
-        expect(observedDt).toEqual([0]);
-        insertSpy.mockRestore();
-      });
-
-      it('rawDt > maxDt clamps to maxDt (long-stall bucket; injected maxDt = 0.05)', () => {
-        const now = makeNowFakeFL([0, 5000]);
-        const { raf, pendingCallbacks } = makeRafFakeFL();
-        const observedDt: number[] = [];
-        vi.spyOn(world, 'insertResource').mockImplementation((key, value) => {
-          if (key === 'Time') {
-            observedDt.push((value as { dt: number }).dt);
-          }
-        });
-        const loop = createFrameLoop({
-          world,
-          renderer,
-          now,
-          raf,
-          maxDt: 0.05,
-        });
-        loop.start();
-        pendingCallbacks[0]?.(0);
-        expect(observedDt).toEqual([0.05]);
-      });
-
-      it('rawDt within bounds passes unchanged (typical 25 ms bucket; maxDt 0.05 ceiling)', () => {
-        const now = makeNowFakeFL([0, 25]);
-        const { raf, pendingCallbacks } = makeRafFakeFL();
-        const observedDt: number[] = [];
-        vi.spyOn(world, 'insertResource').mockImplementation((key, value) => {
-          if (key === 'Time') {
-            observedDt.push((value as { dt: number }).dt);
-          }
-        });
-        const loop = createFrameLoop({
-          world,
-          renderer,
-          now,
-          raf,
-          maxDt: 0.05,
-        });
-        loop.start();
-        pendingCallbacks[0]?.(0);
-        expect(observedDt).toEqual([0.025]);
-      });
-
-      it('rawDt within default ceiling (typical 20 ms bucket; default maxDt = MAX_DT_DEFAULT)', () => {
-        const now = makeNowFakeFL([0, 20]);
-        const { raf, pendingCallbacks } = makeRafFakeFL();
-        const observedDt: number[] = [];
-        vi.spyOn(world, 'insertResource').mockImplementation((key, value) => {
-          if (key === 'Time') {
-            observedDt.push((value as { dt: number }).dt);
-          }
-        });
-        const loop = createFrameLoop({ world, renderer, now, raf });
-        loop.start();
-        pendingCallbacks[0]?.(0);
-        expect(observedDt).toEqual([0.02]);
-        expect(MAX_DT_DEFAULT).toBeCloseTo(1 / 30, 12);
-      });
-    });
-
     describe('frame-loop state matrix nine transitions (AC-03 / AC-07)', () => {
       let world: World;
       let renderer: Renderer;
@@ -823,7 +727,7 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
     });
 
     describe('frame-loop frame-order contract (AC-04)', () => {
-      it('rAF tick invokes world.update() then renderer.draw(world) in fixed sequence', () => {
+      it('rAF tick invokes world.update(1 / 60).unwrap() then renderer.draw(world) in fixed sequence', () => {
         const world = new World();
         const { renderer, drawCalls } = makeRendererStubFL();
         const updateSpy = vi.spyOn(world, 'update');
@@ -1054,204 +958,6 @@ import { LoadGameError, type LoadGameErrorCode } from '../src/load-game-errors';
         expect(result.ok).toBe(false);
         if (result.ok) return;
         expect(result.error).toBe(rhiError);
-      });
-    });
-  });
-}
-
-{
-  // ─── from register-update.test.ts ───
-
-  function makeRendererStubRU(): { renderer: Renderer; drawCalls: World[] } {
-    const drawCalls: World[] = [];
-    const renderer = {
-      draw(w: World): void {
-        drawCalls.push(w);
-      },
-    } as unknown as Renderer;
-    return { renderer, drawCalls };
-  }
-
-  function makeRafFakeRU(): {
-    raf: (cb: (t: number) => void) => number;
-    caf: (id: number) => void;
-    pendingCallbacks: Array<(t: number) => void>;
-    cancelled: number[];
-  } {
-    const pendingCallbacks: Array<(t: number) => void> = [];
-    const cancelled: number[] = [];
-    let nextId = 1;
-    return {
-      raf: (cb) => {
-        pendingCallbacks.push(cb);
-        return nextId++;
-      },
-      caf: (id) => {
-        cancelled.push(id);
-      },
-      pendingCallbacks,
-      cancelled,
-    };
-  }
-
-  function makeNowFakeRU(sequence: number[]): () => number {
-    let i = 0;
-    return () => {
-      const v = sequence[i] ?? sequence[sequence.length - 1] ?? 0;
-      i = Math.min(i + 1, sequence.length);
-      return v;
-    };
-  }
-
-  describe('register-update.test.ts', () => {
-    describe('registerUpdate callback dt>0 (AC-06)', () => {
-      it('registered callback receives dt>0 on the first frame tick', () => {
-        const world = new World();
-        const { renderer } = makeRendererStubRU();
-        const now = makeNowFakeRU([0, 16]);
-        const { raf, pendingCallbacks } = makeRafFakeRU();
-        const loop = createFrameLoop({ world, renderer, now, raf });
-
-        const received: number[] = [];
-        loop.addUpdateCallback((dt) => {
-          received.push(dt);
-        });
-
-        loop.start();
-        pendingCallbacks[0]?.(0);
-
-        expect(received.length).toBe(1);
-        expect(received[0]).toBeGreaterThan(0);
-        expect(received[0]).toBeCloseTo(0.016, 10);
-      });
-
-      it('registered callback is not invoked before start()', () => {
-        const world = new World();
-        const { renderer } = makeRendererStubRU();
-        const now = makeNowFakeRU([0, 16]);
-        const { raf } = makeRafFakeRU();
-        const loop = createFrameLoop({ world, renderer, now, raf });
-
-        let called = false;
-        loop.addUpdateCallback(() => {
-          called = true;
-        });
-
-        expect(called).toBe(false);
-      });
-    });
-
-    describe('registerUpdate multi-callback order (AC-06 / edge-case table)', () => {
-      it('multiple callbacks execute in registration order', () => {
-        const world = new World();
-        const { renderer } = makeRendererStubRU();
-        const now = makeNowFakeRU([0, 16]);
-        const { raf, pendingCallbacks } = makeRafFakeRU();
-        const loop = createFrameLoop({ world, renderer, now, raf });
-
-        const order: number[] = [];
-        loop.addUpdateCallback(() => { order.push(1); });
-        loop.addUpdateCallback(() => { order.push(2); });
-        loop.addUpdateCallback(() => { order.push(3); });
-
-        loop.start();
-        pendingCallbacks[0]?.(0);
-
-        expect(order).toEqual([1, 2, 3]);
-      });
-    });
-
-    describe('registerUpdate exception fan-out (AC-11)', () => {
-      it('callback throw dispatches app-system-update-failed to onError', () => {
-        const world = new World();
-        const { renderer } = makeRendererStubRU();
-        const now = makeNowFakeRU([0, 16]);
-        const { raf, pendingCallbacks } = makeRafFakeRU();
-
-        const errors: AppError[] = [];
-        const loop = createFrameLoop({
-          world,
-          renderer,
-          now,
-          raf,
-          onError: (e) => {
-            if ('code' in e && (e as AppError).code === 'app-system-update-failed') {
-              errors.push(e as AppError);
-            }
-          },
-        });
-
-        loop.addUpdateCallback(() => {
-          throw new Error('boom');
-        });
-
-        loop.start();
-        pendingCallbacks[0]?.(0);
-
-        expect(errors.length).toBe(1);
-        expect(errors[0]!.code).toBe('app-system-update-failed');
-        expect((errors[0]!.detail as { cause: unknown }).cause).toBeInstanceOf(Error);
-      });
-
-      it('throwing callback does not prevent other callbacks from executing in the same frame', () => {
-        const world = new World();
-        const { renderer } = makeRendererStubRU();
-        const now = makeNowFakeRU([0, 16]);
-        const { raf, pendingCallbacks } = makeRafFakeRU();
-
-        const callOrder: string[] = [];
-        let onErrorCalled = false;
-        const loop = createFrameLoop({
-          world,
-          renderer,
-          now,
-          raf,
-          onError: () => { onErrorCalled = true; },
-        });
-
-        loop.addUpdateCallback(() => {
-          callOrder.push('a');
-          throw new Error('boom-a');
-        });
-        loop.addUpdateCallback(() => {
-          callOrder.push('b');
-        });
-
-        loop.start();
-        pendingCallbacks[0]?.(0);
-
-        expect(callOrder).toEqual(['a', 'b']);
-        expect(onErrorCalled).toBe(true);
-      });
-
-      it('throwing callback is NOT unregistered -- subsequent frames still invoke it', () => {
-        const world = new World();
-        const { renderer } = makeRendererStubRU();
-        const now = makeNowFakeRU([0, 16, 32]);
-        const { raf, pendingCallbacks } = makeRafFakeRU();
-
-        const callCount: number[] = [];
-        let errorCount = 0;
-        const loop = createFrameLoop({
-          world,
-          renderer,
-          now,
-          raf,
-          onError: () => { errorCount++; },
-        });
-
-        loop.addUpdateCallback(() => {
-          callCount.push(1);
-          throw new Error('persistent-error');
-        });
-
-        loop.start();
-
-        pendingCallbacks[0]?.(0);
-        pendingCallbacks[1]?.(16);
-
-        expect(callCount).toEqual([1, 1]);
-        expect(errorCount).toBe(2);
       });
     });
   });

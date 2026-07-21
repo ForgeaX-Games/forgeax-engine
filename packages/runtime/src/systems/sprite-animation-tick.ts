@@ -1,7 +1,7 @@
 // @forgeax/engine-runtime - sprite-animation tick system (M4 / T-23).
 //
 // Walks every entity that carries `SpriteAnimation`, advances its dt
-// accumulator clock per Time.dt, and writes the current frame's UV slice
+// accumulator clock per Time.delta, and writes the current frame's UV slice
 // into the entity's `SpriteRegionOverride` column (auto-adding the
 // component on first observation when the entity does not yet carry it).
 // Designed to sit between `input` / `time` and `RenderSystem.extract` in
@@ -36,10 +36,10 @@
 // continue to advance regardless of an invalid sibling (T-19 second
 // it() block locks this).
 //
-// Time.dt sourcing: `world.getResource<TimeResource>('Time').dt`. When
+// Time.delta sourcing: `world.getResource(Time).delta`. When
 // the resource is missing (e.g. the tick system is invoked outside an
 // `App` rAF loop), dt defaults to 0 and the system runs as a no-op
-// schedule pass. Time.dt is already frame-loop clamped to a sane
+// schedule pass. Time.delta is already frame-loop clamped to a sane
 // ceiling by `@forgeax/engine-app frame-loop.ts`; the tick system MUST
 // NOT second-clamp (research F-3 + plan-strategy R-TIME-1). T-22 case
 // (1) feeds dt=30s directly to lock that contract.
@@ -64,18 +64,13 @@ import {
   ok,
   type Result,
   SpriteAnimationInvalidError,
+  Time,
   type World,
 } from '@forgeax/engine-ecs';
 
 import { SpriteAnimation } from '../components/sprite-animation';
 import { spritePlaybackModeFromU32 } from '../components/sprite-playback-mode';
 import { SpriteRegionOverride } from '../components/sprite-region-override';
-
-const TIME_RESOURCE_KEY = 'Time' as const;
-
-interface TimeResourceShape {
-  readonly dt: number;
-}
 
 // Engine-internal hooks the tick system uses to walk archetype rows and read
 // each row's full Entity handle from the essential id=0 `Entity` column —
@@ -141,9 +136,7 @@ interface WorldInternalView {
  * ```
  */
 export function spriteAnimationTickSystem(world: World): Result<void, SpriteAnimationInvalidError> {
-  const dt = world.hasResource(TIME_RESOURCE_KEY)
-    ? world.getResource<TimeResourceShape>(TIME_RESOURCE_KEY).dt
-    : 0;
+  const dt = world.getResource(Time).delta;
 
   const worldInternal = world as unknown as WorldInternalView;
   // `SpriteAnimation.id` is the global token.id. Archetypes lacking the
@@ -277,7 +270,7 @@ function tickEntity(
 /**
  * Advance `currentFrame` / `accumDt` per the dt accumulator clock model
  * (research F-3 + plan-strategy section 2 D-5). `dt` is the
- * already-frame-loop-clamped Time.dt; the inner while-loop drains
+ * already-frame-loop-clamped Time.delta; the inner while-loop drains
  * frameDuration units one at a time. The playbackMode discriminator
  * picks LOOP (wrap) vs CLAMP (halt at last frame) per-tick per-entity
  * (D-5).

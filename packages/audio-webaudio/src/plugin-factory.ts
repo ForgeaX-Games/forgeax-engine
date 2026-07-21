@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-audio-webaudio -- audioPlugin factory (M2 / w9, plan-strategy D-4 / D-9 / D-10).
 //
 // audioPlugin registers the per-frame audio tick system when an AudioBackend
@@ -54,7 +55,7 @@ export function audioPlugin(): Plugin {
         return ok(undefined);
       }
       const backend = world.getResource<AudioBackend>(AUDIO_ENGINE_RESOURCE_KEY);
-      world.addSystem({
+      world.addSystem(Update, {
         name: AUDIO_TICK_SYSTEM_NAME,
         queries: [],
         fn: () => {

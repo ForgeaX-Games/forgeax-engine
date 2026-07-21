@@ -41,20 +41,14 @@ function fetchRuns(repo, sha) {
   const output = execFileSync(
     'gh',
     [
-      'run',
-      'list',
-      '--repo',
-      repo,
-      '--workflow',
-      CI_WORKFLOW,
-      '--commit',
-      sha,
-      '--json',
-      'event,createdAt',
+      'api',
+      '--method',
+      'GET',
+      `repos/${repo}/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${sha}&event=pull_request&per_page=100`,
     ],
     { encoding: 'utf8' },
   );
-  return JSON.parse(output);
+  return JSON.parse(output).workflow_runs ?? [];
 }
 
 function createPassedCheck(repo, sha, name) {

@@ -355,7 +355,7 @@ export async function runIblSmoke(opts) {
   const frameStart = Date.now();
   let framesObserved = 0;
   for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-    world.update();
+    world.update(1 / 60).unwrap();
     const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
     framesObserved++;
@@ -376,7 +376,7 @@ export async function runIblSmoke(opts) {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   for (let i = 0; i < 32; i++) {
-    world.update();
+    world.update(1 / 60).unwrap();
     const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error(`[smoke] post-settle draw frame ${i} error: ${r.error.code}`);
     framesObserved++;

@@ -1,5 +1,6 @@
-// Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
 // biome-ignore-all lint/complexity/noUselessLoneBlockStatements: scope isolation between merged source files
+// Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
+import { Update } from '../schedule-token';
 //
 // Source files (N=25):
 //   - packages/ecs/__tests__/world-alloc-managed-ref.test.ts
@@ -235,7 +236,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const Pos = defineComponent('DfSpawnPos', { x: { type: 'f32' }, y: { type: 'f32' } });
       let entityCountDuringSystem = 0;
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'spawner',
         queries: [],
         fn: (_world, _queries, commands) => {
@@ -243,7 +244,7 @@ import { handleNumeric } from './utils/handle-numeric';
         },
       });
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'counter',
         queries: [{ with: [Pos, EntityComponent] }],
         fn: (_world, queryResults) => {
@@ -257,13 +258,14 @@ import { handleNumeric } from './utils/handle-numeric';
       });
 
       world.update();
-      // During the first frame, counter runs before flush — deferred spawn not visible
-      expect(entityCountDuringSystem).toBe(0);
+      // With edge-derived visibility, counter(after:spawner) sees spawner's deferred entity
+      expect(entityCountDuringSystem).toBe(1);
 
       // After flush, the entity should exist. Run another update to verify.
+      // spawner runs again on the second frame, adding a second entity.
       entityCountDuringSystem = 0;
       world.update();
-      expect(entityCountDuringSystem).toBe(1);
+      expect(entityCountDuringSystem).toBe(2);
     });
 
     it('despawn during system is deferred — entity still visible until flush', () => {
@@ -273,7 +275,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
       let entitySeenDuringSystem = false;
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'destroyer',
         queries: [],
         fn: (_world, _queries, commands) => {
@@ -281,7 +283,7 @@ import { handleNumeric } from './utils/handle-numeric';
         },
       });
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'checker',
         queries: [{ with: [Tag, EntityComponent] }],
         fn: (_world, queryResults) => {
@@ -297,8 +299,9 @@ import { handleNumeric } from './utils/handle-numeric';
       });
 
       world.update();
-      // Entity should still be visible during system execution (before flush)
-      expect(entitySeenDuringSystem).toBe(true);
+      // With edge-derived visibility, checker(after:destroyer) does NOT see
+      // the entity after destroyer's deferred despawn is applied
+      expect(entitySeenDuringSystem).toBe(false);
     });
 
     it('addComponent during system is deferred', () => {
@@ -307,7 +310,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const Vel = defineComponent('DfAddVel', { vx: { type: 'f32' } });
       const e = world.spawn({ component: Pos, data: { x: 1 } }).unwrap();
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'adder',
         queries: [],
         fn: (_world, _queries, commands) => {
@@ -329,7 +332,7 @@ import { handleNumeric } from './utils/handle-numeric';
         .spawn({ component: Pos, data: { x: 1 } }, { component: Vel, data: { vx: 5 } })
         .unwrap();
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'remover',
         queries: [],
         fn: (_world, _queries, commands) => {
@@ -349,7 +352,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const Pos = defineComponent('PendPos', { x: { type: 'f32' } });
       let pendingEntity: EntityHandle | undefined;
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'spawner',
         queries: [],
         fn: (_world, _queries, commands) => {
@@ -369,7 +372,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       const Pos = defineComponent('IsDfPos', { x: { type: 'f32' } });
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'checker',
         queries: [],
         fn: (_world, _queries, commands) => {
@@ -386,7 +389,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const Pos = defineComponent('PendGetPos', { x: { type: 'f32' } });
       let pendingEntity: EntityHandle | undefined;
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'spawner',
         queries: [],
         fn: (_world, _queries, commands) => {
@@ -409,7 +412,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const Tag = defineComponent('CascadeTag', { v: { type: 'i32' } });
 
       // Test that multiple commands in one frame all flush.
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'multiSpawner',
         queries: [],
         fn: (_world, _queries, commands) => {
@@ -423,7 +426,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
       // After flush, all 3 entities should exist
       let count = 0;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'counter',
         queries: [{ with: [Tag, EntityComponent] }],
         fn: (_world, queryResults) => {
@@ -446,7 +449,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const Pos = defineComponent('FlushQPos', { x: { type: 'f32' } });
 
       // First update: deferred spawn
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'spawner',
         queries: [],
         fn: (_world, _queries, commands) => {
@@ -459,7 +462,7 @@ import { handleNumeric } from './utils/handle-numeric';
       // Replace spawner with a no-op
       // Use a new system to count — the query should see the flushed entity
       let found = 0;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'verifier',
         queries: [{ with: [Pos, EntityComponent] }],
         fn: (_world, queryResults) => {
@@ -903,7 +906,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const Tag = defineTag('AC14_Pending');
       let pending: EntityHandle | undefined;
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'ac14-spawner',
         queries: [],
         fn: (_world, _queries, commands) => {
@@ -2664,7 +2667,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const A = defineComponent('PendA', { v: { type: 'f32' } });
 
       let pendingEntity: EntityHandle | undefined;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'deferSpawn',
         queries: [],
         fn: (_world, _results, commands) => {
@@ -2728,7 +2731,7 @@ import { handleNumeric } from './utils/handle-numeric';
   describe('world.inspect().systems (AC-05)', () => {
     it('exposes systems as Array<{ name: string }>', () => {
       const world = new World();
-      world.addSystem({ name: 'sysA', queries: [], fn: () => {} });
+      world.addSystem(Update, { name: 'sysA', queries: [], fn: () => {} });
 
       const snap = world.inspect();
       expect(Array.isArray(snap.systems)).toBe(true);
@@ -2739,9 +2742,9 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       expect(world.inspect().systems.length).toBe(world.inspect().systemCount);
 
-      world.addSystem({ name: 'sysA', queries: [], fn: () => {} });
-      world.addSystem({ name: 'sysB', queries: [], fn: () => {} });
-      world.addSystem({ name: 'sysC', queries: [], fn: () => {} });
+      world.addSystem(Update, { name: 'sysA', queries: [], fn: () => {} });
+      world.addSystem(Update, { name: 'sysB', queries: [], fn: () => {} });
+      world.addSystem(Update, { name: 'sysC', queries: [], fn: () => {} });
 
       const snap = world.inspect();
       expect(snap.systems.length).toBe(snap.systemCount);
@@ -2751,16 +2754,16 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       const baseline = world.inspect().systems.length;
 
-      world.addSystem({ name: 'sA', queries: [], fn: () => {} });
-      world.addSystem({ name: 'sB', queries: [], fn: () => {} });
+      world.addSystem(Update, { name: 'sA', queries: [], fn: () => {} });
+      world.addSystem(Update, { name: 'sB', queries: [], fn: () => {} });
 
       expect(world.inspect().systems.length).toBe(baseline + 2);
     });
 
     it('every system entry has a non-empty name', () => {
       const world = new World();
-      world.addSystem({ name: 'movement', queries: [], fn: () => {} });
-      world.addSystem({ name: 'render', queries: [], fn: () => {} });
+      world.addSystem(Update, { name: 'movement', queries: [], fn: () => {} });
+      world.addSystem(Update, { name: 'render', queries: [], fn: () => {} });
 
       const snap = world.inspect();
       for (const entry of snap.systems) {
@@ -2795,7 +2798,7 @@ import { handleNumeric } from './utils/handle-numeric';
         .unwrap();
 
       // Register a movement system that integrates velocity into position
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'movement',
         queries: [{ with: [Position, Velocity, EntityComponent] }],
         fn: (_world, queryResults) => {
@@ -2823,7 +2826,7 @@ import { handleNumeric } from './utils/handle-numeric';
       });
 
       // Register a system that deferred-despawns entities at x > 5
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'despawner',
         queries: [{ with: [Position] }],
         fn: (_world, _queryResults, commands) => {
@@ -2857,7 +2860,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
       // System that spawns an entity on first frame
       let frame = 0;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'spawner',
         queries: [],
         fn: (_world, _queries, commands) => {
@@ -2868,7 +2871,7 @@ import { handleNumeric } from './utils/handle-numeric';
         },
       });
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'counter',
         queries: [{ with: [Tag, EntityComponent] }],
         fn: (_world, queryResults) => {
@@ -2895,7 +2898,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       world.insertResource('frameCount', { count: 0 });
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'frameCounter',
         queries: [],
         fn: () => {
@@ -2934,7 +2937,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
       // Query for Position + Health (hot-table, Float32Array + Int32Array)
       const bundles: ColumnBundle[] = [];
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'mixedReader',
         queries: [{ with: [Position, Health, EntityComponent] }],
         fn: (_world, queryResults) => {
@@ -2993,7 +2996,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
       // Query With both: should match
       let matchCount = 0;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'tagQuery',
         queries: [{ with: [Position, Player, EntityComponent] }],
         fn: (_world, queryResults) => {
@@ -3013,7 +3016,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
       // Query Without Player: should NOT match
       let excludedCount = 0;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'excludeTag',
         queries: [{ with: [Position, EntityComponent], without: [Player] }],
         fn: (_world, queryResults) => {
@@ -3049,7 +3052,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
       // Query for Position+Velocity: should match 1
       let pvCount = 0;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'pvCounter',
         queries: [{ with: [Position, Velocity, EntityComponent] }],
         fn: (_world, queryResults) => {
@@ -3064,7 +3067,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
       // Query for Position+Velocity+Gravity: should match 0 initially
       let pvgCount = 0;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'pvgCounter',
         queries: [{ with: [Position, Velocity, Gravity, EntityComponent] }],
         fn: (_world, queryResults) => {
@@ -3111,7 +3114,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
       // Query With A, Without B: should initially have 0
       let aNotBCount = 0;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'aNotB',
         queries: [{ with: [A, EntityComponent], without: [B] }],
         fn: (_world, queryResults) => {
@@ -3161,7 +3164,7 @@ import { handleNumeric } from './utils/handle-numeric';
       let totalPosEntities = 0;
       let posValues: number[] = [];
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'posReader',
         queries: [{ with: [Pos, EntityComponent] }],
         fn: (_world, queryResults) => {
@@ -3187,7 +3190,7 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(posValues.sort()).toEqual([1, 2, 3]);
 
       // Deferred despawn e2, add Acc to e1
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'modifier',
         queries: [],
         fn: (_world, _q, commands) => {
@@ -3604,7 +3607,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       const Hp = defineComponent('DirectMatHp', { current: 'i32', max: 'i32' });
       let pending: EntityHandle | undefined;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'deferred-spawner',
         queries: [],
         fn: (_world, _q, commands) => {
@@ -3643,11 +3646,11 @@ import { handleNumeric } from './utils/handle-numeric';
     });
   });
 
-  describe('AC-05 — EcsErrorCode is a closed union of exactly 43 members', () => {
-    it('compile-time member count is 43 (feat-20260714-bevy-style-system-sets M1 w3 adds system-set-not-registered +1; feat-20260713 M2 w9 adds shared-field-invalid-value +1; solo bevy-examples round 20260713-194533 adds query-combinations-entity-required +1; feat-20260625 sprite-instances M1 w2 adds sprite-instances-{count-mismatch,requires-sprite-shading-model,mutually-exclusive-with-instances} +3; feat-20260623 M4 adds shared-ref-stale + unique-ref-stale +2; feat-20260614 M6 D-15 adds builtin-slot-not-owned +1; M3 added shared-ref-released + shared-ref-double-release +2; baseline 32 from bug-20260615 spawn-data-unknown-field-fail-fast)', () => {
+  describe('AC-05 — EcsErrorCode is a closed union of exactly 47 members', () => {
+    it('compile-time member count is 47 after the approved M2 +3 time/schedule scope extension + verify P3 hotfix', () => {
       // Tuple-length type assertion: any drift in EcsErrorCode member count is a
-      // compile error here, falsifiable by changing the literal 43.
-      expectTypeOf<UnionLength<EcsErrorCode>>().toEqualTypeOf<43>();
+      // compile error here, falsifiable by changing the literal 47.
+      expectTypeOf<UnionLength<EcsErrorCode>>().toEqualTypeOf<47>();
     });
 
     it('the dropped register codes are not assignable to EcsErrorCode', () => {
@@ -3891,7 +3894,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const { world, Children, ChildOf } = rsdSetup({ exclusive: true });
       const parent = world.spawn({ component: Children, data: {} }).unwrap();
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'rsd-spawner',
         queries: [],
         fn: (_world, _queries, commands) => {
@@ -3914,231 +3917,224 @@ import { handleNumeric } from './utils/handle-numeric';
       expect('relationshipSyncDepth' in world).toBe(false);
     });
   });
+  describe('feat-20260611 M-6 w12 recordIsLive liveness predicate', () => {
+    const Tag = defineComponent('Tag', {});
 
-  // ────────────────────────────────────────────────────────────────────────────
-  // feat-20260611-ecs-storage-naming-ssot M-6 w12: recordIsLive 7-state
-  // full coverage via derived expression (archetypeId !== -1, not pending field)
-  // ────────────────────────────────────────────────────────────────────────────
-  {
-    describe('feat-20260611 M-6 w12 recordIsLive liveness predicate', () => {
-      const Tag = defineComponent('Tag', {});
-
-      // State 1: live entity — record exists, generation matches, archetypeId !== -1
-      it('returns true for a live entity (gen match + archetypeId >= 0)', () => {
-        const world = new World();
-        const e = world.spawn({ component: Tag, data: {} }).unwrap();
-        // get internally uses recordIsLive → ok proves recordIsLive returned true
-        const r = world.get(e, Tag);
-        expect(r.ok).toBe(true);
-        expect(r.unwrap()).toEqual({});
-      });
-
-      // State 2: stale handle (despawned) — record exists but generation bumped
-      it('returns false when generation does not match (despawned entity)', () => {
-        const world = new World();
-        const e = world.spawn({ component: Tag, data: {} }).unwrap();
-        world.despawn(e).unwrap();
-        const r = world.get(e, Tag);
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.error.code).toBe('stale-entity');
-        }
-      });
-
-      // State 3: record undefined (out-of-bounds index, a made-up handle)
-      it('returns false when record is undefined (nonexistent slot)', () => {
-        const world = new World();
-        // encode a valid-looking handle for a slot that has no record
-        const bogus = encodeEntity(9999, 0) as EntityHandle;
-        const r = world.get(bogus, Tag);
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.error.code).toBe('stale-entity');
-        }
-      });
-
-      // State 4: deferred spawn pending (not yet materialized) —
-      // gen matches but archetypeId === -1
-      it('returns false for a pending deferred-spawn entity (archetypeId === -1)', () => {
-        const world = new World();
-
-        let pendingEntity: EntityHandle | undefined;
-        world.addSystem({
-          name: 'defer-spawn',
-          queries: [],
-          fn: (_world, _q, commands) => {
-            pendingEntity = commands.spawn({ component: Tag, data: {} });
-          },
-        });
-        world.update();
-        expect(pendingEntity).toBeDefined();
-
-        // After flush, the entity is live — get must succeed
-        // biome-ignore lint/style/noNonNullAssertion: confirmed defined by expect above
-        const r = world.get(pendingEntity!, Tag);
-        expect(r.ok).toBe(true);
-
-        // Before flush the entity is not live (pending).
-        // We verify this indirectly: during system execution, queries
-        // don't see the entity. After flush, get succeeds.
-        // The direct pending test uses the deferred-path inside a system:
-        let seenBeforeFlush = false;
-        world.addSystem({
-          name: 'check-pending',
-          queries: [{ with: [Tag] }],
-          fn: (_world, queries, commands) => {
-            const spawned = commands.spawn({ component: Tag, data: {} });
-            // Inside the system, before flush, the pending entity won't match a query
-            for (const _row of queries[0]) {
-              void _row;
-            }
-            // But commands.isDeferred reports it
-            expect(commands.isDeferred(spawned)).toBe(true);
-            seenBeforeFlush = true;
-          },
-        });
-        world.update();
-        expect(seenBeforeFlush).toBe(true);
-      });
-
-      // State 5: despawn-then-recycle — slot recycled with fresh gen,
-      // old handle's gen does not match new record's gen
-      it('returns false for a handle whose slot was recycled (gen mismatch on recycled slot)', () => {
-        const world = new World();
-        const e1 = world.spawn({ component: Tag, data: {} }).unwrap();
-        // Despawn → slot freed and gen bumped.
-        world.despawn(e1).unwrap();
-
-        // Next spawn may reuse the freed slot with a bumped gen.
-        // The old handle (e1) with pre-bump gen should be stale.
-        const e2 = world.spawn({ component: Tag, data: {} }).unwrap();
-        const r = world.get(e1, Tag);
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.error.code).toBe('stale-entity');
-        }
-        // The new entity is live at the same or different slot
-        expect(world.get(e2, Tag).ok).toBe(true);
-      });
-
-      // State 6: generation retired (gen > 255) — the slot is never recycled,
-      // the record still exists but any handle for it is stale
-      it('returns false for a handle whose slot generation was retired (> 255)', () => {
-        // This test exhausts the generation counter on one slot.
-        // We can't practically despawn 255 times in a unit test,
-        // so we verify the code path via direct record manipulation.
-        // Instead, we trust the generation-encoding math: encodeEntity forces
-        // gen into 8 bits. A gen > 255 cannot be encoded in a handle,
-        // so any handle for a retired slot always fails gen match.
-        // We test the boundary: gen=255 despawn bumps to 256 → retired.
-        const world = new World();
-        const e = world.spawn({ component: Tag, data: {} }).unwrap();
-        const slot = entityIndex(e);
-
-        // Despawn once — gen goes 0→1, slot recycled.
-        world.despawn(e).unwrap();
-
-        // The slot is back on freeIndices. Spawn reuses it with gen=1.
-        const fresh = world.spawn({ component: Tag, data: {} }).unwrap();
-        expect(entityIndex(fresh)).toBe(slot);
-        expect(entityGeneration(fresh)).toBe(1);
-
-        // The retired case: a handle with gen=0 for this slot must be stale.
-        const oldHandle = encodeEntity(slot, 0) as EntityHandle;
-        const r = world.get(oldHandle, Tag);
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.error.code).toBe('stale-entity');
-        }
-      });
-
-      // State 7: archetypeId === -1 with gen match (post-despawn before recycle)
-      // After despawn, record.archetypeId is set to -1, then gen is bumped.
-      // A handle matching the pre-bump gen has gen mismatch (State 2).
-      // A handle matching the post-bump gen: the slot is on freeIndices
-      // but not yet re-allocated → gen matches, archetypeId === -1.
-      it('returns false when archetypeId === -1 (despawned, pre-recycle)', () => {
-        const world = new World();
-        const e = world.spawn({ component: Tag, data: {} }).unwrap();
-        const slot = entityIndex(e);
-
-        world.despawn(e).unwrap();
-
-        // After despawn: archetypeId === -1, gen bumped by 1.
-        // The post-bump gen is what the slot carries now.
-        // But there is no public handle with the post-bump gen — the old
-        // handle has the pre-bump gen, and no new entity has been spawned.
-        // We construct the post-bump-gen handle to test the archetypeId === -1 path.
-        const postBumpGen = entityGeneration(e) + 1;
-        const postBumpHandle = encodeEntity(slot, postBumpGen) as EntityHandle;
-        const r = world.get(postBumpHandle, Tag);
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          // gen matches but archetypeId === -1 → stale
-          expect(r.error.code).toBe('stale-entity');
-        }
-      });
-
-      // Deferred flush full lifecycle: E-06 path
-      it('deferred entity: not live before flush, live after flush, stale after despawn', () => {
-        const world = new World();
-
-        let spawnedHandle: EntityHandle | undefined;
-        world.addSystem({
-          name: 'lifecycle-spawn',
-          queries: [],
-          fn: (_world, _q, commands) => {
-            spawnedHandle = commands.spawn({ component: Tag, data: {} });
-            // Pending: not yet live
-            expect(commands.isDeferred(spawnedHandle)).toBe(true);
-            // get on pending returns stale-entity
-            const beforeFlush = world.get(spawnedHandle, Tag);
-            expect(beforeFlush.ok).toBe(false);
-            if (!beforeFlush.ok) {
-              expect(beforeFlush.error.code).toBe('stale-entity');
-            }
-          },
-        });
-        world.update();
-
-        expect(spawnedHandle).toBeDefined();
-        // biome-ignore lint/style/noNonNullAssertion: confirmed defined by expect above
-        const e = spawnedHandle!;
-
-        // After flush: live
-        const afterFlush = world.get(e, Tag);
-        expect(afterFlush.ok).toBe(true);
-        expect(afterFlush.unwrap()).toEqual({});
-
-        // Despawn: stale again
-        world.despawn(e).unwrap();
-        const afterDespawn = world.get(e, Tag);
-        expect(afterDespawn.ok).toBe(false);
-        if (!afterDespawn.ok) {
-          expect(afterDespawn.error.code).toBe('stale-entity');
-        }
-      });
-
-      // Derived expression correctness: archetypeId === -1 gates liveness,
-      // not a separate pending flag.
-      it('derived expression: archetypeId !== -1 is the sole structural live gate', () => {
-        const world = new World();
-
-        // Synchronous spawn sets archetypeId immediately
-        const e = world.spawn({ component: Tag, data: {} }).unwrap();
-        const slot = entityIndex(e);
-        const gen = entityGeneration(e);
-
-        // Access internal records to verify the predicate
-        // biome-ignore lint/suspicious/noExplicitAny: access private members for white-box liveness test
-        const records = (world as any).records;
-        const record = records[slot];
-        expect(record).toBeDefined();
-        expect(record.generation).toBe(gen);
-        expect(record.archetypeId).toBeGreaterThanOrEqual(0);
-        // pending field must not exist (w13 will remove it; w12 is red phase)
-        expect('pending' in record).toBe(false);
-      });
+    // State 1: live entity — record exists, generation matches, archetypeId !== -1
+    it('returns true for a live entity (gen match + archetypeId >= 0)', () => {
+      const world = new World();
+      const e = world.spawn({ component: Tag, data: {} }).unwrap();
+      // get internally uses recordIsLive → ok proves recordIsLive returned true
+      const r = world.get(e, Tag);
+      expect(r.ok).toBe(true);
+      expect(r.unwrap()).toEqual({});
     });
-  }
+
+    // State 2: stale handle (despawned) — record exists but generation bumped
+    it('returns false when generation does not match (despawned entity)', () => {
+      const world = new World();
+      const e = world.spawn({ component: Tag, data: {} }).unwrap();
+      world.despawn(e).unwrap();
+      const r = world.get(e, Tag);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error.code).toBe('stale-entity');
+      }
+    });
+
+    // State 3: record undefined (out-of-bounds index, a made-up handle)
+    it('returns false when record is undefined (nonexistent slot)', () => {
+      const world = new World();
+      // encode a valid-looking handle for a slot that has no record
+      const bogus = encodeEntity(9999, 0) as EntityHandle;
+      const r = world.get(bogus, Tag);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error.code).toBe('stale-entity');
+      }
+    });
+
+    // State 4: deferred spawn pending (not yet materialized) —
+    // gen matches but archetypeId === -1
+    it('returns false for a pending deferred-spawn entity (archetypeId === -1)', () => {
+      const world = new World();
+
+      let pendingEntity: EntityHandle | undefined;
+      world.addSystem(Update, {
+        name: 'defer-spawn',
+        queries: [],
+        fn: (_world, _q, commands) => {
+          pendingEntity = commands.spawn({ component: Tag, data: {} });
+        },
+      });
+      world.update();
+      expect(pendingEntity).toBeDefined();
+
+      // After flush, the entity is live — get must succeed
+      // biome-ignore lint/style/noNonNullAssertion: confirmed defined by expect above
+      const r = world.get(pendingEntity!, Tag);
+      expect(r.ok).toBe(true);
+
+      // Before flush the entity is not live (pending).
+      // We verify this indirectly: during system execution, queries
+      // don't see the entity. After flush, get succeeds.
+      // The direct pending test uses the deferred-path inside a system:
+      let seenBeforeFlush = false;
+      world.addSystem(Update, {
+        name: 'check-pending',
+        queries: [{ with: [Tag] }],
+        fn: (_world, queries, commands) => {
+          const spawned = commands.spawn({ component: Tag, data: {} });
+          // Inside the system, before flush, the pending entity won't match a query
+          for (const _row of queries[0]) {
+            void _row;
+          }
+          // But commands.isDeferred reports it
+          expect(commands.isDeferred(spawned)).toBe(true);
+          seenBeforeFlush = true;
+        },
+      });
+      world.update();
+      expect(seenBeforeFlush).toBe(true);
+    });
+
+    // State 5: despawn-then-recycle — slot recycled with fresh gen,
+    // old handle's gen does not match new record's gen
+    it('returns false for a handle whose slot was recycled (gen mismatch on recycled slot)', () => {
+      const world = new World();
+      const e1 = world.spawn({ component: Tag, data: {} }).unwrap();
+      // Despawn → slot freed and gen bumped.
+      world.despawn(e1).unwrap();
+
+      // Next spawn may reuse the freed slot with a bumped gen.
+      // The old handle (e1) with pre-bump gen should be stale.
+      const e2 = world.spawn({ component: Tag, data: {} }).unwrap();
+      const r = world.get(e1, Tag);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error.code).toBe('stale-entity');
+      }
+      // The new entity is live at the same or different slot
+      expect(world.get(e2, Tag).ok).toBe(true);
+    });
+
+    // State 6: generation retired (gen > 255) — the slot is never recycled,
+    // the record still exists but any handle for it is stale
+    it('returns false for a handle whose slot generation was retired (> 255)', () => {
+      // This test exhausts the generation counter on one slot.
+      // We can't practically despawn 255 times in a unit test,
+      // so we verify the code path via direct record manipulation.
+      // Instead, we trust the generation-encoding math: encodeEntity forces
+      // gen into 8 bits. A gen > 255 cannot be encoded in a handle,
+      // so any handle for a retired slot always fails gen match.
+      // We test the boundary: gen=255 despawn bumps to 256 → retired.
+      const world = new World();
+      const e = world.spawn({ component: Tag, data: {} }).unwrap();
+      const slot = entityIndex(e);
+
+      // Despawn once — gen goes 0→1, slot recycled.
+      world.despawn(e).unwrap();
+
+      // The slot is back on freeIndices. Spawn reuses it with gen=1.
+      const fresh = world.spawn({ component: Tag, data: {} }).unwrap();
+      expect(entityIndex(fresh)).toBe(slot);
+      expect(entityGeneration(fresh)).toBe(1);
+
+      // The retired case: a handle with gen=0 for this slot must be stale.
+      const oldHandle = encodeEntity(slot, 0) as EntityHandle;
+      const r = world.get(oldHandle, Tag);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error.code).toBe('stale-entity');
+      }
+    });
+
+    // State 7: archetypeId === -1 with gen match (post-despawn before recycle)
+    // After despawn, record.archetypeId is set to -1, then gen is bumped.
+    // A handle matching the pre-bump gen has gen mismatch (State 2).
+    // A handle matching the post-bump gen: the slot is on freeIndices
+    // but not yet re-allocated → gen matches, archetypeId === -1.
+    it('returns false when archetypeId === -1 (despawned, pre-recycle)', () => {
+      const world = new World();
+      const e = world.spawn({ component: Tag, data: {} }).unwrap();
+      const slot = entityIndex(e);
+
+      world.despawn(e).unwrap();
+
+      // After despawn: archetypeId === -1, gen bumped by 1.
+      // The post-bump gen is what the slot carries now.
+      // But there is no public handle with the post-bump gen — the old
+      // handle has the pre-bump gen, and no new entity has been spawned.
+      // We construct the post-bump-gen handle to test the archetypeId === -1 path.
+      const postBumpGen = entityGeneration(e) + 1;
+      const postBumpHandle = encodeEntity(slot, postBumpGen) as EntityHandle;
+      const r = world.get(postBumpHandle, Tag);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        // gen matches but archetypeId === -1 → stale
+        expect(r.error.code).toBe('stale-entity');
+      }
+    });
+
+    // Deferred flush full lifecycle: E-06 path
+    it('deferred entity: not live before flush, live after flush, stale after despawn', () => {
+      const world = new World();
+
+      let spawnedHandle: EntityHandle | undefined;
+      world.addSystem(Update, {
+        name: 'lifecycle-spawn',
+        queries: [],
+        fn: (_world, _q, commands) => {
+          spawnedHandle = commands.spawn({ component: Tag, data: {} });
+          // Pending: not yet live
+          expect(commands.isDeferred(spawnedHandle)).toBe(true);
+          // get on pending returns stale-entity
+          const beforeFlush = world.get(spawnedHandle, Tag);
+          expect(beforeFlush.ok).toBe(false);
+          if (!beforeFlush.ok) {
+            expect(beforeFlush.error.code).toBe('stale-entity');
+          }
+        },
+      });
+      world.update();
+
+      expect(spawnedHandle).toBeDefined();
+      // biome-ignore lint/style/noNonNullAssertion: confirmed defined by expect above
+      const e = spawnedHandle!;
+
+      // After flush: live
+      const afterFlush = world.get(e, Tag);
+      expect(afterFlush.ok).toBe(true);
+      expect(afterFlush.unwrap()).toEqual({});
+
+      // Despawn: stale again
+      world.despawn(e).unwrap();
+      const afterDespawn = world.get(e, Tag);
+      expect(afterDespawn.ok).toBe(false);
+      if (!afterDespawn.ok) {
+        expect(afterDespawn.error.code).toBe('stale-entity');
+      }
+    });
+
+    // Derived expression correctness: archetypeId === -1 gates liveness,
+    // not a separate pending flag.
+    it('derived expression: archetypeId !== -1 is the sole structural live gate', () => {
+      const world = new World();
+
+      // Synchronous spawn sets archetypeId immediately
+      const e = world.spawn({ component: Tag, data: {} }).unwrap();
+      const slot = entityIndex(e);
+      const gen = entityGeneration(e);
+
+      // Access internal records to verify the predicate
+      // biome-ignore lint/suspicious/noExplicitAny: access private members for white-box liveness test
+      const records = (world as any).records;
+      const record = records[slot];
+      expect(record).toBeDefined();
+      expect(record.generation).toBe(gen);
+      expect(record.archetypeId).toBeGreaterThanOrEqual(0);
+      // pending field must not exist (w13 will remove it; w12 is red phase)
+      expect('pending' in record).toBe(false);
+    });
+  });
 }

@@ -12,14 +12,14 @@
 // that also no-op in that window. Returning a Result<number> would force the 8
 // callers to unwrap at every frame, which is heavier than the bug it prevents.
 
-import type { World } from '@forgeax/engine-ecs';
+import { Time, type World } from '@forgeax/engine-ecs';
 
 let warnedMissingTime = false;
 
 /** Clamped per-frame delta seconds from the 'Time' resource (60fps fallback). */
 export function readDt(world: World): number {
   try {
-    return world.getResource<{ dt: number }>('Time').dt;
+    return world.getResource(Time).delta;
   } catch {
     if (!warnedMissingTime) {
       console.warn(

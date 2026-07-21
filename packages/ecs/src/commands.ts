@@ -80,7 +80,7 @@ export interface WorldForCommands {
 // Implementation
 // ────────────────────────────────────────────────────────────────────────────
 
-interface CommandBufferImpl extends CommandBuffer {
+export interface CommandBufferImpl extends CommandBuffer {
   /** @internal */
   _queue: Command[];
   /** @internal */

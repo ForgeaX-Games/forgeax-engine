@@ -405,10 +405,12 @@ describe('w18 — override-value shared handle→GUID two-state NULL-sentinel (A
     const member = findMountedMember(w, root);
 
     // clips = [validHandle, 0, 0, 0] — slot 0 active, slots 1-3 NULL sentinel.
+    // M1 migration: AnimationPlayer.clips is now variable-length; we explicitly
+    // provide the 0-sentinel slots to test the NULL-sentinel round-trip.
     const clipH = mintCatalogued(reg, w, W18_CLIP0, 0);
     const add = w.addComponent(member, {
       component: AnimationPlayer,
-      data: { clips: [clipH] } as never,
+      data: { clips: [clipH, 0, 0, 0] } as never,
     });
     expect(add.ok).toBe(true);
 
@@ -449,9 +451,9 @@ describe('w18 — override-value shared handle→GUID two-state NULL-sentinel (A
     expect(ov).toBeDefined();
     if (!ov) return;
     const clips = (ov.value as Record<string, unknown>).clips as unknown[];
+    expect(clips.length).toBe(2);
     expect(clips[0]).toBe(W18_CLIP0);
     expect(clips[1]).toBe(W18_CLIP1);
-    expect(clips[2]).toBe(0);
   });
 
   it('(c) scalar shared<> valid handle -> GUID string (non-null branch)', () => {

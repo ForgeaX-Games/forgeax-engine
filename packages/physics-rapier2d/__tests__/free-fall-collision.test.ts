@@ -229,8 +229,8 @@ describe('rapier-authored-transform-pose.test.ts', () => {
       .unwrap();
     registerPropagateTransforms(world);
     registerPhysicsSystems2D(world);
-    world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-    world.update();
+    world.update(1 / 60).unwrap();
+    world.update(1 / 60).unwrap();
 
     const alongX = pw.raycast(Float32Array.of(-5, 0) as never, Float32Array.of(1, 0) as never, 10);
     const alongY = pw.raycast(Float32Array.of(0, -5) as never, Float32Array.of(0, 1) as never, 10);
@@ -308,8 +308,8 @@ describe('bug-20260529 M2 real ECS bridge (regression)', () => {
 
     // Run 60 frames at 60 fps.
     for (let i = 0; i < 60; i++) {
-      world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
     }
 
     // Dynamic entity should have fallen (posY < 4.5).
@@ -379,8 +379,8 @@ describe('feat-20260709 M4 / w18 -- cuboid halfExtents array passes through the 
 
     registerPhysicsSystems2D(world);
     for (let i = 0; i < 240; i++) {
-      world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
     }
 
     const finalBall = world.get(ball, Transform as never);
@@ -430,8 +430,8 @@ describe('bug-20260713 solo round-22 Rapier2D raycast entity resolution', () => 
 
     registerPhysicsSystems2D(world);
     for (let i = 0; i < 5; i++) {
-      world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
     }
 
     // Ray at y=1 toward +X can only reach the target (ground tops out at y=0).
@@ -506,8 +506,8 @@ describe('bug-20260713 solo round-26 Rapier2D bare-Collider static floor', () =>
     registerPhysicsSystems2D(world);
 
     for (let i = 0; i < 120; i++) {
-      world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
     }
 
     const finalBall = world.get(ball, Transform as never);

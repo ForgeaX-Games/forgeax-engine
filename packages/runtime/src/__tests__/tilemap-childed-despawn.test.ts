@@ -436,7 +436,7 @@ describe('despawnOnExit triggers the same cascade via state transition (AC-04)',
     // Move the state to 'playing' first so a later setNextState('menu')
     // exits 'playing' and fires the despawnOnExit hook.
     setNextState(world, GameState, 'playing');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const tilemap = spawnTilemap(world, 2, 2);
     const tiles = new Uint32Array(4).fill(1);
@@ -453,7 +453,7 @@ describe('despawnOnExit triggers the same cascade via state transition (AC-04)',
     // Trigger transition: leave 'playing' → transitionStatesSystem despawns
     // the tilemap, which linkedSpawn-cascades every layer + derived entity.
     setNextState(world, GameState, 'menu');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(isAlive(world, tilemap)).toBe(false);
     expect(isAlive(world, layer)).toBe(false);

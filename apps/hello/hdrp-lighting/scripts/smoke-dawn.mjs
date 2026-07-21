@@ -313,7 +313,7 @@ world.spawn(
 );
 
 const onErrorEvents = [];
-app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint }));
+app.onError((err) => onErrorEvents.push({ code: err.code, hint: err.hint, detail: err.detail }));
 
 const ready = await app.renderer.ready;
 if (!ready.ok) {
@@ -344,7 +344,6 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   if (i % 16 === 15) await delay(1);
 }
 
-globalThis.performance.now = realPerformanceNow;
 await delay(2000);
 
 // After warmup, drain any newly queued raf cbs so the post-warmup PSOs land
@@ -357,6 +356,8 @@ for (let i = 0; i < 32; i++) {
   totalFrames++;
   if (i % 8 === 7) await delay(1);
 }
+
+globalThis.performance.now = realPerformanceNow;
 
 console.log(`[smoke] frames observed=${totalFrames}`);
 

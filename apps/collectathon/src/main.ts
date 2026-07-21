@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // apps/collectathon — 3D third-person collectathon showcase game.
 //
 // Bootstrap: createApp(canvas, {plugins}, { ...bundler, importTransport })
@@ -86,7 +87,7 @@ export const GameState = defineState('GameState', ['Title', 'Play', 'Win', 'Lose
 
 // Title -> Play is two deferred setNextState hops (F-08): force-Title applies +
 // queues Play on update 1, Play applies + spawnCamera on update 2. bootstrap()
-// pumps world.update() up to this bound before app.start() so a Camera exists
+// pumps world.update(delta).unwrap() up to this bound before app.start() so a Camera exists
 // before the first frame draw (R-12). The bound is well above 2 so it drives the
 // transition to completion without risking an unbounded loop if a future state
 // rewire changes the hop count. Declared at module scope (not inside bootstrap)
@@ -239,18 +240,14 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // doubled the boot-window errors. But the built-in draw is unconditional, and
   // setNextState defers one frame each (F-08): Title OnEnter queues Play, Play
   // OnEnter spawns the Camera. So a plain start() would draw ~3 frames with no
-  // Camera and fire `render-system-no-camera` each. Instead, pump world.update()
+  // Camera and fire `render-system-no-camera` each. Instead, pump world.update(delta)
   // here until Play is live (Camera + full scene spawned) so the very first
-  // frame the loop draws already has a Camera. A Time resource is seeded so the
-  // pumped updates read a sane dt (avoids the readDt warn-once on the pump).
+  // frame the loop draws already has a Camera.
   void setNextStateForce(world, GameState, 'Title');
-  // 'Time' is the frame-loop's per-frame dt resource (same key frame-time.ts
-  // reads). Seed it so the pumped updates below read 1/60 instead of warning.
-  world.insertResource('Time', { dt: 1 / 60 });
   for (let i = 0; i < BOOT_TRANSITION_PUMP_LIMIT; i++) {
     const s = getState(world, GameState);
     if (s.ok && s.value === 'Play') break;
-    world.update();
+    world.update(1 / 60).unwrap();
   }
   app.start();
 }
@@ -378,11 +375,17 @@ function wireStates(
     // signal flows player-move -> player-anim (one-way producer).
     const signal = createPlayerMoveSignal();
     const playOnly = inState(GameState, 'Play');
-    w.addSystem({ ...createMoveSystem(app, player.parent, camera, signal), runIf: playOnly });
-    w.addSystem({ ...createAnimSystem(app, player.skin, signal), runIf: playOnly });
-    w.addSystem({ ...createSpinSystem(cores), runIf: playOnly });
-    w.addSystem({ ...createCollectSystem(player.parent), runIf: playOnly });
-    w.addSystem({ ...createPortalSystem(player.parent, portal, GameState), runIf: playOnly });
+    w.addSystem(Update, {
+      ...createMoveSystem(app, player.parent, camera, signal),
+      runIf: playOnly,
+    });
+    w.addSystem(Update, { ...createAnimSystem(app, player.skin, signal), runIf: playOnly });
+    w.addSystem(Update, { ...createSpinSystem(cores), runIf: playOnly });
+    w.addSystem(Update, { ...createCollectSystem(player.parent), runIf: playOnly });
+    w.addSystem(Update, {
+      ...createPortalSystem(player.parent, portal, GameState),
+      runIf: playOnly,
+    });
 
     // M4 fail-path systems: guardian-ai (per-entity sub-machine) -> guardian-hit
     // (Health--) -> win-lose-arbiter (single Win/Lose verdict), plus the debug
@@ -392,13 +395,16 @@ function wireStates(
       ...g,
       waypoints: guardianWaypoints(GUARDIAN_SPAWNS[i] ?? { x: 0, z: 0 }),
     }));
-    w.addSystem({
+    w.addSystem(Update, {
       ...createGuardianAISystem(app, guardianRuntime, player.parent),
       runIf: playOnly,
     });
-    w.addSystem({ ...createGuardianHitSystem(player.parent), runIf: playOnly });
-    w.addSystem({ ...createArbiterSystem(player.parent, portal, GameState), runIf: playOnly });
-    w.addSystem({
+    w.addSystem(Update, { ...createGuardianHitSystem(player.parent), runIf: playOnly });
+    w.addSystem(Update, {
+      ...createArbiterSystem(player.parent, portal, GameState),
+      runIf: playOnly,
+    });
+    w.addSystem(Update, {
       ...createDebugOverlaySystem(
         app,
         {
@@ -417,12 +423,12 @@ function wireStates(
     // AC-18); pickup-text spawns floating "+1" MSDF GlyphText on Core pickup
     // (AC-12, after core-collect); audio-cue drives the 3D spatial cue playing
     // edges off the move signal + score/health deltas (F-07 / AC-10).
-    w.addSystem({ ...createTimerSystem(), runIf: playOnly });
-    w.addSystem({ ...createHudSyncSystem(hud), runIf: playOnly });
+    w.addSystem(Update, { ...createTimerSystem(), runIf: playOnly });
+    w.addSystem(Update, { ...createHudSyncSystem(hud), runIf: playOnly });
     if (fontHandle !== undefined) {
-      w.addSystem({ ...createPickupTextSystem(fontHandle, GameState), runIf: playOnly });
+      w.addSystem(Update, { ...createPickupTextSystem(fontHandle, GameState), runIf: playOnly });
     }
-    w.addSystem({ ...createAudioCueSystem(cues, signal), runIf: playOnly });
+    w.addSystem(Update, { ...createAudioCueSystem(cues, signal), runIf: playOnly });
 
     // Dev-only verification hook deleted (M5 w24): createApp auto-wires
     // app.remote in dev mode — host reads player pose / fixes camera via

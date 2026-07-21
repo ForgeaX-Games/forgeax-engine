@@ -52,7 +52,7 @@ import { validateClusterGrid } from './hdrp-pipeline';
 import { disposeInstanceBuffers } from './instance-buffer-cache';
 import { PipelineError } from './pipeline-errors';
 import { PostProcessError } from './post-process-errors';
-import { type RenderFrameState, recordFrame } from './record';
+import { type RenderFrameState, recordFrame, retirePerFrameGraph } from './record';
 // The forgeax-concept RenderPipeline (registrable / installable unit) - aliased to avoid
 // the name collision with the RHI opaque `RenderPipeline` handle imported above. The RHI
 // handle stays internal (requirements line 155); this concept type is the public surface.
@@ -1377,6 +1377,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
   const frameState: RenderFrameState = {
     frameNumber: 0,
     perFrameGraph: null,
+    retiredPerFrameGraphs: new Set(),
     instanceBuffers: new Map(),
     warnedZeroLightStandard: false,
     warnedMultiLightDirectional: false,
@@ -1547,7 +1548,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         // brand-number compare is the cheap gate; the rebuild reuses the existing
         // perFrameGraph === null memoization path.
         if (frameState.installedPipelineHandle !== lastBuiltPipelineHandle) {
-          frameState.perFrameGraph = null;
+          retirePerFrameGraph(frameState);
           lastBuiltPipelineHandle = frameState.installedPipelineHandle;
         }
         dispatchCounts.unlit = 0;
@@ -1791,6 +1792,10 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
         graph.drain();
         frameState.perFrameGraph = null;
       }
+      for (const retiredGraph of frameState.retiredPerFrameGraphs) {
+        retiredGraph.drain();
+      }
+      frameState.retiredPerFrameGraphs.clear();
       // feat-20260619 M4 (D-6): pass errorRegistry to disposeInstanceBuffers
       // so destroy failures fire structured errors (unified per-frame +
       // dispose error strategy).
@@ -1812,6 +1817,10 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       // state minted by the lost device. (1) graph pendingDestroy (stale
       // handles, skip device.destroyTexture); no-op when no graph compiled yet.
       frameState.perFrameGraph?.clearPendingDestroy();
+      for (const retiredGraph of frameState.retiredPerFrameGraphs) {
+        retiredGraph.clearPendingDestroy();
+      }
+      frameState.retiredPerFrameGraphs.clear();
       // (2) post-process registry + eager param UBOs: the rebuild's
       // buildReadyWebGPU re-registers the engine tonemap, which would throw
       // `post-process-already-registered` against a populated registry; the

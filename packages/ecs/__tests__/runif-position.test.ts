@@ -1,3 +1,4 @@
+import { Update } from '../src/schedule-token';
 // feat-20260618-ecs-module-mechanism M1 / w4 (AC-07):
 // runIf is evaluated AFTER ParamValidation returns tag==='ok' and BEFORE
 // queryRun. When a required resource is missing, ParamValidation returns
@@ -34,7 +35,7 @@ describe('runif-position.test.ts', () => {
     world.setErrorHandler(() => {
       handledErrors += 1;
     });
-    world.addSystem(token);
+    world.addSystem(Update, token);
     world.update();
 
     expect(handledErrors).toBe(1);
@@ -60,7 +61,7 @@ describe('runif-position.test.ts', () => {
 
     const world = new World();
     world.spawn({ component: A, data: { x: 1 } });
-    world.addSystem(token);
+    world.addSystem(Update, token);
     world.update();
 
     // runIf must precede any query iteration and fn body.

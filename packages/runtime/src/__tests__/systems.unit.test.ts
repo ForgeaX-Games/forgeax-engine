@@ -66,6 +66,7 @@ import {
   queryRun,
   Severity,
   SpriteAnimationInvalidError,
+  Time,
   World,
 } from '@forgeax/engine-ecs';
 import { mat4, vec3 } from '@forgeax/engine-math';
@@ -6057,10 +6058,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 {
   // --- from sprite-animation-tick-boundary.test.ts ---
 
-  const TIME_RESOURCE_KEY = 'Time' as const;
-
   function setDt(world: World, dt: number): void {
-    world.insertResource(TIME_RESOURCE_KEY, { dt });
+    world.getResource(Time).delta = dt;
   }
 
   function expectRegion(
@@ -6084,7 +6083,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // frameCount=4 the loop wraps to (60 mod 4) = 0; accumDt residue
       // is 0 exactly. Picking f32-exact constants keeps the assertion
       // deterministic without weakening the "no second-clamp" detector
-      // — a regression that second-clamps Time.dt to e.g. 0.25 would
+      // — a regression that second-clamps Time.delta to e.g. 0.25 would
       // advance only floor(0.25 / 0.5) = 0 frames (currentFrame stays
       // at 0 but accumDt would be 0.25, not 0); a clamp to 0.5 would
       // advance 1 frame -> currentFrame === 1; either way the
@@ -6232,10 +6231,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 {
   // --- from sprite-animation-tick-clamp.test.ts ---
 
-  const TIME_RESOURCE_KEY = 'Time' as const;
-
   function setDt(world: World, dt: number): void {
-    world.insertResource(TIME_RESOURCE_KEY, { dt });
+    world.getResource(Time).delta = dt;
   }
 
   function makeRegions(): Float32Array {
@@ -6339,8 +6336,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 {
   // --- from sprite-animation-tick-frame-duration-negative.test.ts ---
 
-  const TIME_RESOURCE_KEY = 'Time' as const;
-
   describe('spriteAnimationTickSystem - AC-09(c) frameDuration<0 fail-fast (M4 T-21)', () => {
     it('returns Result.err with detail.field=frame-duration when frameDuration < 0', () => {
       const world = new World();
@@ -6358,7 +6353,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         })
         .unwrap();
 
-      world.insertResource(TIME_RESOURCE_KEY, { dt: 0.1 });
+      world.update(0.1).unwrap();
       const r = spriteAnimationTickSystem(world);
 
       expect(r.ok).toBe(false);
@@ -6409,7 +6404,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         })
         .unwrap();
 
-      world.insertResource(TIME_RESOURCE_KEY, { dt: 0.1 });
+      world.update(0.1).unwrap();
       const rZero = spriteAnimationTickSystem(world);
       expect(rZero.ok).toBe(false);
       if (rZero.ok) throw new Error('zero arm: expected Result.err');
@@ -6426,7 +6421,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         })
         .unwrap();
 
-      world2.insertResource(TIME_RESOURCE_KEY, { dt: 0.1 });
+      world2.update(0.1).unwrap();
       const rNeg = spriteAnimationTickSystem(world2);
       expect(rNeg.ok).toBe(false);
       if (rNeg.ok) throw new Error('negative arm: expected Result.err');
@@ -6439,8 +6434,6 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
   // --- from sprite-animation-tick-frame-duration-zero.test.ts ---
-
-  const TIME_RESOURCE_KEY = 'Time' as const;
 
   describe('spriteAnimationTickSystem - AC-09(b) frameDuration=0 fail-fast (M4 T-20)', () => {
     it('returns Result.err with detail.field=frame-duration when frameDuration === 0', () => {
@@ -6459,7 +6452,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         })
         .unwrap();
 
-      world.insertResource(TIME_RESOURCE_KEY, { dt: 0.1 });
+      world.update(0.1).unwrap();
       const r = spriteAnimationTickSystem(world);
 
       expect(r.ok).toBe(false);
@@ -6489,10 +6482,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 {
   // --- from sprite-animation-tick-loop.test.ts ---
 
-  const TIME_RESOURCE_KEY = 'Time' as const;
-
   function setDt(world: World, dt: number): void {
-    world.insertResource(TIME_RESOURCE_KEY, { dt });
+    world.getResource(Time).delta = dt;
   }
 
   function makeRegions(): Float32Array {
@@ -6637,10 +6628,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 {
   // --- from sprite-animation-tick-override-probe.test.ts ---
 
-  const TIME_RESOURCE_KEY = 'Time' as const;
-
   function setDt(world: World, dt: number): void {
-    world.insertResource(TIME_RESOURCE_KEY, { dt });
+    world.getResource(Time).delta = dt;
   }
 
   function makeRegions(): Float32Array {
@@ -6730,10 +6719,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 {
   // --- from sprite-animation-tick-regions-mismatch.test.ts ---
 
-  const TIME_RESOURCE_KEY = 'Time' as const;
-
   function setDt(world: World, dt: number): void {
-    world.insertResource(TIME_RESOURCE_KEY, { dt });
+    world.getResource(Time).delta = dt;
   }
 
   function spawnBadRegionsLength(world: World): EntityHandle {

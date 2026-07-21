@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-state -- transition-system unit tests (M3 / m3w3 + m3w5)
 //
 // Covers: AC-02 value transition (setNextState -> update -> getState returns new,
@@ -37,7 +38,7 @@ function makeWorld(): World {
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe('transitionStatesSystem', () => {
-  it('AC-02: setNextState -> world.update() -> getState returns new value, getPreviousState returns old', () => {
+  it('AC-02: setNextState -> world.update(1 / 60).unwrap() -> getState returns new value, getPreviousState returns old', () => {
     const world = makeWorld();
 
     // Initial: both State and PreviousState = default ('main-menu', idx 0)
@@ -56,7 +57,7 @@ describe('transitionStatesSystem', () => {
     expect(nsBefore).toBeDefined();
 
     // Run one frame — triggers transitionStatesSystem
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // After update: State = new, PreviousState = old, NextState cleared
     const sAfter = getState(world, LevelId);
@@ -77,7 +78,7 @@ describe('transitionStatesSystem', () => {
     const e2 = world.spawn().unwrap();
 
     // Run update with no pending transition
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // State unchanged
     const s = getState(world, LevelId);
@@ -104,7 +105,7 @@ describe('transitionStatesSystem', () => {
     // Request transition to the SAME value (main-menu -> main-menu)
     setNextState(world, LevelId, 'main-menu');
 
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // State unchanged
     const s = getState(world, LevelId);
@@ -130,7 +131,7 @@ describe('transitionStatesSystem', () => {
     // Force-flip to same state
     setNextStateForce(world, LevelId, 'main-menu');
 
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // State still 'main-menu' (flipped to same)
     const s = getState(world, LevelId);
@@ -161,7 +162,7 @@ describe('transitionStatesSystem', () => {
 
     // Transition to 'tutorial'
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Entity should be despawned
     const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
@@ -178,7 +179,7 @@ describe('transitionStatesSystem', () => {
 
     // Transition TO 'tutorial'
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Entity survives — we entered 'tutorial', not left it
     const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
@@ -195,7 +196,7 @@ describe('transitionStatesSystem', () => {
 
     // Transition to 'tutorial'
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Entity should be despawned
     const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
@@ -212,7 +213,7 @@ describe('transitionStatesSystem', () => {
 
     // Transition AWAY from 'tutorial' (to 'street-a')
     setNextState(world, LevelId, 'street-a');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Entity survives — we left 'main-menu' but scoped to 'tutorial'-enter
     const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
@@ -238,7 +239,7 @@ describe('transitionStatesSystem', () => {
 
     // Transition: main-menu -> tutorial
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
 
@@ -260,7 +261,7 @@ describe('transitionStatesSystem', () => {
     const world = makeWorld();
 
     setNextState(world, LevelId, 'street-a');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Post-transition: PreviousState must be the value BEFORE flip (main-menu)
     const ps = getPreviousState(world, LevelId);
@@ -275,7 +276,7 @@ describe('transitionStatesSystem', () => {
     const world = makeWorld();
 
     // No setNextState — run update
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const s = getState(world, LevelId);
     expect(s.ok && s.value).toBe('main-menu');
@@ -294,7 +295,7 @@ describe('transitionStatesSystem', () => {
     const ns = world.getResource<{ value: number; force: boolean } | undefined>(nsKey);
     expect(ns?.force).toBe(true);
 
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // After transition, NextState cleared — force consumed
     const nsAfter = world.getResource<{ value: number; force: boolean } | undefined>(nsKey);
@@ -314,7 +315,7 @@ describe('AC-18: multi-token independence', () => {
     setNextState(world, LevelId, 'tutorial');
     setNextState(world, GameMode, 'playing');
 
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Verify LevelId
     const s1 = getState(world, LevelId);
@@ -342,7 +343,7 @@ describe('AC-18: multi-token independence', () => {
 
     // Only transition LevelId, not GameMode
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
     const ModeScoped = resolveComponent('__scopedTo__GameMode')!;
@@ -360,7 +361,7 @@ describe('AC-18: multi-token independence', () => {
     setNextState(world, LevelId, 'tutorial');
     // No setNextState for GameMode
 
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const s1 = getState(world, LevelId);
     expect(s1.ok && s1.value).toBe('tutorial');
@@ -384,7 +385,7 @@ describe('AC-18: multi-token independence', () => {
     setNextState(world, LevelId, 'main-menu');
     setNextState(world, GameMode, 'menu');
 
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Entity survives — same-state no-op
     const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
@@ -482,7 +483,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
 
     // Transition main-menu -> tutorial.
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // State transitioned.
     expect(getState(world, LevelId).ok && getState(world, LevelId).value).toBe('tutorial');
@@ -531,7 +532,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
 
     // Transition.
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Root despawned.
     const EntityToken = resolveComponent('Entity')!;
@@ -572,7 +573,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
 
     // Transition main-menu -> tutorial.
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const EntityToken = resolveComponent('Entity')!;
 
@@ -591,7 +592,7 @@ describe('scoped-root linkedSpawn cascade-despawn (m5w1)', () => {
 
     // Transition back to main-menu.
     setNextState(world, LevelId, 'main-menu');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Root2 (tutorial scene) despawned.
     expect(world.get(root2, EntityToken).ok).toBe(false);
@@ -618,7 +619,7 @@ describe('AC-13: schedule anchors', () => {
 
     // Adding a user system that references 'transitionStates' as anchor
     // should not throw — the anchor name exists.
-    world.addSystem({
+    world.addSystem(Update, {
       name: 'user-before-transition',
       queries: [],
       fn: () => {},
@@ -634,7 +635,7 @@ describe('AC-13: schedule anchors', () => {
   it('user system with after:\'transitionStates\' anchor resolves (no error from addSystem)', () => {
     const world = makeWorld();
 
-    world.addSystem({
+    world.addSystem(Update, {
       name: 'user-after-transition',
       queries: [],
       fn: () => {},
@@ -725,7 +726,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
 
     // Trigger a state transition on an unrelated token
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // State transition completed
     expect(getState(world, LevelId).ok && getState(world, LevelId).value).toBe('tutorial');
@@ -753,7 +754,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     const root = r.value.root;
 
     setNextState(world, LevelId, 'street-a');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(getState(world, LevelId).ok && getState(world, LevelId).value).toBe('street-a');
 
@@ -781,7 +782,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
 
     // Force-flip to same value
     setNextStateForce(world, LevelId, 'main-menu');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const EntityToken = resolveComponent('Entity')!;
     for (let i = 0; i < mapping.length; i++) {
@@ -813,7 +814,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
 
     // Transition GameMode (not LevelId)
     setNextState(world, GameMode, 'playing');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // GameMode transitioned
     expect(getState(world, GameMode).ok && getState(world, GameMode).value).toBe('playing');
@@ -849,11 +850,11 @@ describe('SceneInstance transition survival (m5w1)', () => {
 
     // Transition back and forth multiple times
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
     setNextState(world, LevelId, 'street-a');
-    world.update();
+    world.update(1 / 60).unwrap();
     setNextState(world, LevelId, 'main-menu');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const EntityToken = resolveComponent('Entity')!;
     for (let i = 0; i < mapping.length; i++) {
@@ -883,7 +884,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
 
     // Trigger transition
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Mapping unchanged
     const mappingAfter = readMapping(world, root);
@@ -922,7 +923,7 @@ describe('SceneInstance transition survival (m5w1)', () => {
     expect(Array.from(dataBefore.pos)).toEqual([1, 2, 3]);
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Entity still alive and component data still readable
     const dataAfter = world.get(memberHandle, Transform).unwrap();
@@ -931,15 +932,15 @@ describe('SceneInstance transition survival (m5w1)', () => {
 
   // Regression (verify round 1, B2): a token defined AFTER registerStatesPlugin
   // has no Resources inserted. transitionStatesSystem must skip it via the
-  // hasResource guard, not crash world.update() with ResourceNotFoundError.
-  it('B2: defineState after registerStatesPlugin does not crash world.update()', () => {
+  // hasResource guard, not crash world.update(1 / 60).unwrap() with ResourceNotFoundError.
+  it('B2: defineState after registerStatesPlugin does not crash world.update(1 / 60).unwrap()', () => {
     const world = makeWorld();
     // Define a brand-new token only now — registerStatesPlugin already ran in
     // makeWorld, so no Resources exist for this token.
     const LateToken = defineState('LateTokenB2', ['a', 'b'] as const);
 
     // The unrelated late token must not abort the per-frame transition loop.
-    expect(() => world.update()).not.toThrow();
+    expect(world.update(1 / 60).ok).toBe(true);
 
     // And operating on the late token returns a structured error, not a throw.
     const r = setNextState(world, LateToken, 'b');
@@ -1009,7 +1010,7 @@ describe('scoped despawn cascades SceneInstance roots fully (regression)', () =>
 
     // Leave 'main-menu' -> the scoped root is torn down via despawnScene.
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const EntityToken = resolveComponent('Entity')!;
     // Root gone.
@@ -1048,7 +1049,7 @@ describe('scoped despawn cascades SceneInstance roots fully (regression)', () =>
     despawnOnExit(world, root, LevelId, 'main-menu');
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const EntityToken = resolveComponent('Entity')!;
     expect(world.get(kccParent, EntityToken).ok).toBe(false);

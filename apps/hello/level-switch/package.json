@@ -15,6 +15,27 @@
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-level-switch smoke",
+    "gauntletScenario": {
+      "id": "hello-level-switch-dawn",
+      "script": "smoke",
+      "domains": ["World and host contract", "Rendering and shader construction"],
+      "packages": [
+        "@forgeax/engine-assets-runtime",
+        "@forgeax/engine-ecs",
+        "@forgeax/engine-rhi-wgpu",
+        "@forgeax/engine-runtime",
+        "@forgeax/engine-state"
+      ],
+      "risks": ["baseline", "dynamic", "churn", "recovery", "gpu", "behavioral"],
+      "phaseInputs": ["baseline", "dynamic", "churn", "recovery"],
+      "oracle": {
+        "stdoutIncludes": [
+          "[smoke] GATE 2 PASS: playerCount === 1, player survived cross-state",
+          "[smoke] GATE 4/5 PASS: falsification check",
+          "[smoke] PASS - all gates GREEN: 10 switches perf OK"
+        ]
+      }
+    },
     "metrics": {
       "bundle-size": {
         "enabled": false,

@@ -60,6 +60,7 @@ export { LoaderRegistry } from './loader-registry';
 // ─── Default loader tables + individual loaders (pre-w14 consumer face) ──────
 export {
   animationClipLoader,
+  animationGraphLoader,
   INLINE_PACK_LOADERS,
   materialLoader,
   meshLoader,

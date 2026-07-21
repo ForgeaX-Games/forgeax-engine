@@ -61,7 +61,7 @@ import type { RhiError } from '@forgeax/engine-rhi/errors';
  * | `'app-already-running'` | second `start()` invocation against an already-running handle; the call is a no-op state-machine-wise (state preserved). |
  * | `'app-canvas-detached'` | `createApp(canvas)` thin wrapper found `canvas.isConnected === false` at entry. Detail carries optional `canvasId` so the host can surface the offending canvas in a multi-canvas page (D-2 minor). |
  * | `'app-paused-while-stop'` | `stop()` invoked while the rAF loop is `'paused'`. AI users must `resume()` then `stop()` (matches the React component-unmount-then-stop pattern). |
- * | `'app-system-update-failed'` | `world.update(...)` or `world.removeSystem(...)` (input-attach cleanup path) threw or returned `Result.err`; the original failure value is forwarded on `detail.cause` so AI users can two-level narrow (`detail.cause instanceof EcsError` etc.). `detail.systemName` is optional and present when the call site can name the offending system (e.g. input-attach reports `FRAME_START_SCAN_SYSTEM_NAME`). |
+ * | `'app-system-update-failed'` | `world.update(...)` or `world.removeSystem(Update, ...)` (input-attach cleanup path) threw or returned `Result.err`; the original failure value is forwarded on `detail.cause` so AI users can two-level narrow (`detail.cause instanceof EcsError` etc.). `detail.systemName` is optional and present when the call site can name the offending system (e.g. input-attach reports `FRAME_START_SCAN_SYSTEM_NAME`). |
  * | `'app-pointer-lock-failed'` | `attachInputAuto`'s `onLockError` callback received a lock failure from the input backend. `detail.path` carries `'w3c'` (W3C `requestPointerLock` rejection) or `'provider'` (host-injected `lockProvider.requestLock` throw/reject). `detail.cause` carries the original rejection value verbatim. The host recovers by remaining in unlocked state; the next trusted click will retry the lock request. |
  *
  * Plan-strategy D-4 locked the count at 6; device-lost rides RhiErrorCode.
@@ -300,7 +300,7 @@ export const APP_EXPECTED: Readonly<Record<AppErrorCode, string>> = {
   'app-paused-while-stop':
     'state must be "running" to stop; paused handles must resume() before stop()',
   'app-system-update-failed':
-    'world.update(world) and renderer.draw(world) complete synchronously each frame; world.removeSystem(name) returns Result.ok during cleanup',
+    'world.update(world) and renderer.draw(world) complete synchronously each frame; world.removeSystem(Update, name) returns Result.ok during cleanup',
   'app-pointer-lock-failed':
     'pointer-lock request (W3C requestPointerLock or host lockProvider.requestLock) to succeed; failure signals the browser rejected the lock or the host provider threw',
 };

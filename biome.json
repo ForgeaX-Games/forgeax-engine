@@ -14,6 +14,7 @@
       "*.ts",
       "*.mjs",
       "*.cjs",
+      "!shared-app-inputs/",
       "!scripts/__tests__/fixtures/metrics-decl-schema-malformed/forgeax-metrics.schema.json"
     ],
     "ignoreUnknown": true

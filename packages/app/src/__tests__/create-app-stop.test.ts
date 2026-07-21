@@ -138,9 +138,6 @@ function makeFrameLoopStub(): FrameLoopHandle {
     setStopped() {
       // no-op
     },
-    addUpdateCallback(_fn: (dt: number) => void) {
-      // no-op
-    },
   };
 }
 
@@ -463,7 +460,7 @@ describe('feat-20260619 M3: auto-register audioTickSystem', () => {
   // feat-20260623-plugin-system-unify (M2 / D-2 / D-4): the assemble form no
   // longer auto-wires audio; the host inserts AUDIO_ENGINE_RESOURCE_KEY and
   // passes audioPlugin() in plugins. The audio-tick system then runs inside
-  // world.update() each frame. Verification goes through the full consumption
+  // world.update(1 / 60).unwrap() each frame. Verification goes through the full consumption
   // path: createApp → app.start() → frames tick → AudioSource.playing edge
   // detected → backend.play triggered.
   //

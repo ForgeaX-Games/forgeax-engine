@@ -36,7 +36,7 @@
 //
 // dt accumulator clock model (requirements section 2.5 q6 + plan-strategy
 // section 2 D-5):
-//   accumDt += Time.dt
+//   accumDt += Time.delta
 //   while (accumDt >= frameDuration) { advance currentFrame; accumDt -= frameDuration }
 // The carry-over `accumDt` survives across ticks so frame timing stays
 // stable under jittery dt; M4 T-23 implements the loop. Per-frame UV

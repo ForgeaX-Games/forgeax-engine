@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { Update } from '@forgeax/engine-ecs';
 // apps/learn-render/1.getting-started/7.camera/scripts/smoke-dawn.mjs
 //
 // LearnOpenGL section 1.7 camera dawn-node smoke (M11 / T-M11-02 red ->
@@ -25,7 +26,7 @@
 //          input protocol (sample()/detach()) + drive a deterministic
 //          first-person sequence (WASD held + per-frame mouse delta).
 //      (d) insertResource INPUT_BACKEND_KEY + addSystem InputFrameStartScan so each
-//          world.update() refreshes the InputSnapshot Resource.
+//          world.update(1 / 60).unwrap() refreshes the InputSnapshot Resource.
 //      (e) Spawn cube + camera + first-person camera system that reads
 //          InputSnapshot from world.getResource('InputSnapshot') and
 //          accumulates yaw/pitch (+/-89 deg clamp) + reconstructs the
@@ -328,8 +329,8 @@ const world = new World();
 // MaterialAsset POD (M8 D-17). orange teaching colour (1, 0.5, 0.2).
 const matHandle = world.allocSharedRef('MaterialAsset', Materials.unlit([1.0, 0.5, 0.2, 1.0]));
 world.insertResource(INPUT_BACKEND_KEY, syntheticBackend);
-world.addSystem(InputFrameStartScan);
-world.addSystem(cameraSystem);
+world.addSystem(Update, InputFrameStartScan);
+world.addSystem(Update, cameraSystem);
 
 const cubeEntity = world
   .spawn(
@@ -378,9 +379,9 @@ for (let i = 0; i < TARGET_FRAMES; i++) {
   }
   if (i >= 60 && i < 120) mvxPending += 4;
   if (i >= 120 && i < 200) mvyPending += -2;
-  // Note: world.update() runs the frame-start scan system (refreshing
+  // Note: world.update(1 / 60).unwrap() runs the frame-start scan system (refreshing
   // InputSnapshot) + the camera system (consuming it) in DAG order.
-  world.update();
+  world.update(1 / 60).unwrap();
   const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;

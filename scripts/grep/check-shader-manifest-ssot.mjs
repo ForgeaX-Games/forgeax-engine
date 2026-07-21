@@ -3,14 +3,14 @@
 //
 // Assert that the slash-tolerant literal for 'shaders/manifest.json' (single
 // or double quoted, optional leading slash) appears in exactly one code line
-// of packages/vite-plugin-shader/src/index.ts: the constant definition of
+// of packages/vite-plugin-shader/src/shader-manifest-path.ts: the constant definition of
 // SHADER_MANIFEST_PATH.
 //
 // Invocation:
 //   node scripts/grep/check-shader-manifest-ssot.mjs
 //
 // Behaviour:
-//   - Read packages/vite-plugin-shader/src/index.ts.
+//   - Read packages/vite-plugin-shader/src/shader-manifest-path.ts.
 //   - Strip block comments (/* */) and inline comments (//) per line.
 //   - Grep for /['"]\/?shaders\/manifest\.json['"]/ in the remaining code-only text.
 //   - exit 0 if exactly 1 line matches and that line is the constant definition.
@@ -21,7 +21,13 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const TARGET = resolve(REPO_ROOT, 'packages', 'vite-plugin-shader', 'src', 'index.ts');
+const TARGET = resolve(
+  REPO_ROOT,
+  'packages',
+  'vite-plugin-shader',
+  'src',
+  'shader-manifest-path.ts',
+);
 
 const src = readFileSync(TARGET, 'utf8');
 

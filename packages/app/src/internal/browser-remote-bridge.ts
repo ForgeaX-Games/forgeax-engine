@@ -20,20 +20,25 @@
 // free of a runtime dep on @forgeax/engine-remote (same discipline as the
 // createApp startServer path).
 
+import { Update, type World } from '@forgeax/engine-ecs';
+
 type ExecuteResult = { ok: true; value: unknown } | { ok: false; error: unknown };
 
 type ExecuteModule = {
   executeScript: (
     script: string,
-    ctx: { world: unknown; renderer: unknown; assets: unknown; debugAdapter?: unknown },
+    ctx: {
+      world: unknown;
+      renderer: unknown;
+      assets: unknown;
+      debugAdapter?: unknown;
+      importModule?: (specifier: string) => Promise<unknown>;
+    },
   ) => Promise<ExecuteResult>;
 };
 
 export interface BrowserRemoteBridgeDeps {
-  /** Frame-start hook (App.registerUpdate) — the drain runs here so every bridge
-   *  write passes through that frame's systems (deterministic). */
-  readonly registerUpdate: (fn: (dt: number) => void) => void;
-  readonly world: unknown;
+  readonly world: World;
   readonly renderer: unknown;
   readonly assets: unknown;
   readonly debugAdapter?: unknown;
@@ -76,13 +81,17 @@ function serializeError(error: unknown): Record<string, unknown> {
 export async function installBrowserRemoteBridge(
   deps: BrowserRemoteBridgeDeps,
 ): Promise<() => void> {
-  const { registerUpdate, world, renderer, assets, debugAdapter, port } = deps;
+  const { world, renderer, assets, debugAdapter, port } = deps;
 
   // The ws-free eval core. Dynamic import keeps @forgeax/engine-app free of a
   // static @forgeax/engine-remote dependency (@vite-ignore mirrors the
   // startServer path in create-app.ts).
   const mod = (await import(/* @vite-ignore */ '@forgeax/engine-remote/execute')) as ExecuteModule;
   const executeScript = mod.executeScript;
+  const importModule = (specifier: string): Promise<unknown> => {
+    const browserSpecifier = specifier.startsWith('@') ? `/@id/${specifier}` : specifier;
+    return import(/* @vite-ignore */ browserSpecifier);
+  };
 
   let ws: WebSocket | null = null;
   let backoff = 1000;
@@ -90,7 +99,7 @@ export async function installBrowserRemoteBridge(
 
   // Frame-start eval queue: a WebSocket `message` fires at an arbitrary phase of
   // the rAF tick, so running eval inline would land world writes at an
-  // unpredictable phase. Enqueue instead and drain from registerUpdate (frame
+  // unpredictable phase. Enqueue instead and drain from Update system (frame
   // start) so every bridge write passes through this frame's systems.
   const evalQueue: Array<{ id: number; code: string }> = [];
 
@@ -112,7 +121,13 @@ export async function installBrowserRemoteBridge(
       void (async () => {
         let res: ExecuteResult;
         try {
-          res = await executeScript(job.code, { world, renderer, assets, debugAdapter });
+          res = await executeScript(job.code, {
+            world,
+            renderer,
+            assets,
+            debugAdapter,
+            importModule,
+          });
         } catch (e) {
           reply({
             ok: false,
@@ -134,7 +149,13 @@ export async function installBrowserRemoteBridge(
       })();
     }
   };
-  registerUpdate(drainEvalQueue);
+  world
+    .addSystem(Update, {
+      name: 'browser-remote-bridge-drain-eval-queue',
+      queries: [],
+      fn: drainEvalQueue,
+    })
+    .unwrap();
 
   const connect = (): void => {
     if (stopped) return;

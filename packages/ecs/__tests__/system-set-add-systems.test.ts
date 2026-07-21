@@ -1,3 +1,4 @@
+import { Update } from '../src/schedule-token';
 // @forgeax/engine-ecs — addSystems positive tests (w5, RED)
 //
 // TDD: world.addSystems API does not exist yet, so this file will fail to
@@ -32,7 +33,7 @@ describe('system-set-add-systems.test.ts', () => {
         fn: () => {},
       });
 
-      const result = world.addSystems(set, [sysA, sysB]);
+      const result = world.addSystems(Update, set, [sysA, sysB]);
       expect(result.ok).toBe(true);
 
       const snap = world.inspect();
@@ -53,9 +54,9 @@ describe('system-set-add-systems.test.ts', () => {
         fn: () => {},
       });
 
-      const r1 = world.addSystems(setA, [sys]);
+      const r1 = world.addSystems(Update, setA, [sys]);
       expect(r1.ok).toBe(true);
-      const r2 = world.addSystems(setB, [sys]);
+      const r2 = world.addSystems(Update, setB, [sys]);
       expect(r2.ok).toBe(true);
     });
   });
@@ -72,9 +73,9 @@ describe('system-set-add-systems.test.ts', () => {
         fn: () => {},
       });
 
-      world.addSystems(setA, [sys]);
+      world.addSystems(Update, setA, [sys]);
       // Second call adds to another set, does NOT re-register (no change to registrationIndex).
-      world.addSystems(setB, [sys]);
+      world.addSystems(Update, setB, [sys]);
 
       const snap = world.inspect();
       expect(snap.systemCount).toBe(1);
@@ -109,7 +110,7 @@ describe('system-set-add-systems.test.ts', () => {
           void world;
         },
       });
-      const r = world.addSystems(set, [sys]);
+      const r = world.addSystems(Update, set, [sys]);
       expect(r.ok).toBe(true);
     });
   });

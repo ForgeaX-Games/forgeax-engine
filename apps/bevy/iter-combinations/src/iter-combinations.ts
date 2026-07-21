@@ -20,7 +20,7 @@
 //                                   Rust's borrow checker).
 //   - Mass / Acceleration / LastPos -> user-defined components (game data in app)
 //   - verlet integrate              -> stepIntegrate (pure world+dt function)
-//   - Res<Time>                     -> world.getResource('Time').dt (auto by createApp)
+//   - Res<Time>                     -> world.getResource(Time).delta (auto by createApp)
 //
 // To keep the smoke deterministic (assert an exact clump), bodies start on a fixed
 // ring with a tangential drift — no RNG (Bevy seeds a PRNG; the interaction math is

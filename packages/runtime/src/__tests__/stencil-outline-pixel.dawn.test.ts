@@ -271,7 +271,7 @@ describe('bug-20260611 stencil-outline pixel-presence (dawn)', () => {
       },
     );
 
-    world.update();
+    world.update(1 / 60).unwrap();
     const drawn = renderer.draw([world], { owner: 0 });
     expect(drawn.ok).toBe(true);
     await device.queue.onSubmittedWorkDone();

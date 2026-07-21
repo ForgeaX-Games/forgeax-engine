@@ -55,9 +55,9 @@ Both tick systems (audioTickSystem + audioListenerSync) are registered by `audio
 import { audioTickSystem, syncListenerFromWorldMatrix } from '@forgeax/engine-audio-webaudio';
 import { PROPAGATE_TRANSFORMS_SYSTEM, Transform } from '@forgeax/engine-runtime';
 import { AudioListener } from '@forgeax/engine-audio';
-import { createQueryState, Entity, queryRun } from '@forgeax/engine-ecs';
+import { Update, createQueryState, Entity, queryRun } from '@forgeax/engine-ecs';
 
-world.addSystem({
+world.addSystem(Update, {
   name: 'audio-tick',
   fn: () => {
     const backend = world.getResource('AudioEngine');
@@ -69,7 +69,7 @@ world.addSystem({
 // write it to the backend's Web Audio listener. backend.listener is a lazy
 // getter (builds the AudioContext on first access) -- touch it only when an
 // AudioListener entity exists so a headless host never forces context creation.
-world.addSystem({
+world.addSystem(Update, {
   name: 'audio-listener-sync',
   after: [PROPAGATE_TRANSFORMS_SYSTEM],
   fn: () => {

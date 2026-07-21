@@ -13,6 +13,7 @@
 // smoke), so the two never drift.
 
 import { createApp } from '@forgeax/engine-app';
+import { Update } from '@forgeax/engine-ecs';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildEasingWorld, stepEasing } from './easing-demo';
@@ -46,7 +47,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   buildEasingWorld(app.world);
 
-  app.world.addSystem({
+  app.world.addSystem(Update, {
     name: 'ease-movers',
     queries: [],
     fn: (world) => {

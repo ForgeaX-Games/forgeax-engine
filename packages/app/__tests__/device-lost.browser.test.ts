@@ -24,7 +24,7 @@
 //   - P3 explicit failure: device-lost is a loud signal (host listener +
 //     state stopped + lastError captured) -- never silent.
 
-import { ScheduleMutationError, World, type Result } from '@forgeax/engine-ecs';
+import { ScheduleMutationError, Update, World, type Result } from '@forgeax/engine-ecs';
 import {
   FRAME_START_SCAN_SYSTEM_NAME,
   INPUT_BACKEND_KEY,
@@ -306,7 +306,7 @@ describe('device-lost path 4 -- cleanup central (R-4: detach + removeSystem)', (
         expect(stopResult.ok).toBe(true);
         // cleanup funnel reached removeSystem at least once with the
         // scan system name (R-4 cleanup proxy).
-        expect(removeSpy).toHaveBeenCalledWith(FRAME_START_SCAN_SYSTEM_NAME);
+        expect(removeSpy).toHaveBeenCalledWith(Update, FRAME_START_SCAN_SYSTEM_NAME);
       } finally {
         canvas.remove();
       }

@@ -28,6 +28,11 @@ const root = resolve(__dirname, '..');
 const DIR = resolve(root, '.forgeax-harness');
 const REPO = 'https://github.com/ForgeaX-Games/forgeax-engine-harness.git';
 
+if (existsSync(resolve(root, '.forgeax-public-distribution'))) {
+  process.stdout.write('[harness:sync] public distribution — skipped\n');
+  process.exit(0);
+}
+
 if (process.env.FORGEAX_SKIP_HARNESS_SYNC) {
   process.stdout.write('[harness:sync] FORGEAX_SKIP_HARNESS_SYNC set — skipped\n');
   process.exit(0);

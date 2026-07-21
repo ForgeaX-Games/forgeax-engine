@@ -45,6 +45,7 @@ export type ExecuteContext = {
   readonly renderer: unknown;
   readonly assets: unknown;
   readonly debugAdapter?: unknown;
+  readonly importModule?: (specifier: string) => Promise<unknown>;
 };
 
 export type ExecuteResult = { ok: true; value: unknown } | { ok: false; error: RemoteError };
@@ -94,7 +95,13 @@ export async function executeScript(script: string, ctx: ExecuteContext): Promis
     const fn = compile(script);
     // AsyncFunction always returns a Promise; await resolves the value and
     // surfaces any runtime throw into this catch.
-    const value: unknown = await fn(ctx.world, ctx.renderer, ctx.assets, ctx.debugAdapter, _import);
+    const value: unknown = await fn(
+      ctx.world,
+      ctx.renderer,
+      ctx.assets,
+      ctx.debugAdapter,
+      ctx.importModule ?? _import,
+    );
 
     return { ok: true, value };
   } catch (e) {

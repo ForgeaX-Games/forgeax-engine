@@ -47,7 +47,6 @@ assets.configurePackIndex('/pack-index.json');
 const ctx: BootstrapContext = {
   assets,
   app: app.value,
-  registerUpdate: (fn: (dt: number) => void) => app.value.registerUpdate(fn),
   // M2 D-9: wire the pointer-lock gate setter. The game template calls
   // setPointerLockAllowed(mode === 'fps') when switching modes; the
   // preview host delegates to the input backend's setPointerLockAllowed.

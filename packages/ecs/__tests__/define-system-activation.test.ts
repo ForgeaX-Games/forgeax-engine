@@ -1,5 +1,6 @@
+import { Update } from '../src/schedule-token';
 // feat-20260618-ecs-module-mechanism M1 / w1 (AC-01):
-// defineSystem(desc) returns a token; world.addSystem(token) activates it with
+// defineSystem(desc) returns a token; world.addSystem(Update, token) activates it with
 // zero modification; after update() the system fn is invoked exactly once. The
 // token is consumed directly -- NOT round-tripped through
 // getRegisteredSystems().get(name) (that is the AC-02 aux path).
@@ -27,7 +28,7 @@ describe('define-system-activation.test.ts', () => {
 
     const world = new World();
     world.spawn({ component: Marker, data: { v: 1 } });
-    world.addSystem(token);
+    world.addSystem(Update, token);
 
     expect(calls).toBe(0);
     world.update();
@@ -64,7 +65,7 @@ describe('define-system-activation.test.ts', () => {
         fn: () => {},
       });
       const world = new World();
-      world.addSystems(set, [B]);
+      world.addSystems(Update, set, [B]);
 
       // No throw reached here -- defineSystem silently overwrites (OOS-3).
       // Registries are global singletons; the static import already resolved.

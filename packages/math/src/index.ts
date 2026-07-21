@@ -43,6 +43,7 @@ export type {
 //   - rotation quat / euler
 //   - color (sRGB↔linear + hex parse/format)
 //   - easing (scalar S-curve time remaps)
+//   - noise (Perlin noise, growable home for further variants)
 
 export * as box3 from './box3';
 export * as color from './color';
@@ -52,6 +53,7 @@ export * as halfFloat from './f32-to-f16-bytes';
 export * as frustum from './frustum';
 export * as mat3 from './mat3';
 export * as mat4 from './mat4';
+export * as noise from './noise';
 export * as quat from './quat';
 export * as ray from './ray';
 export * as sphere from './sphere';

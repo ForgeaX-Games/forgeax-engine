@@ -591,7 +591,7 @@ let framesObserved = 0;
 // black scene; mirrors 5.1 advanced-lighting smoke header). Prerequisite for
 // the wall-pixel readback below to observe real geometry.
 for (let i = 0; i < PER_MODE_FRAMES; i++) {
-  world.update();
+  world.update(1 / 60).unwrap();
   const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] draw hdr frame ${i} error: ${r.error.code}`);
   framesObserved++;
@@ -628,7 +628,7 @@ if (!FALSIFY) {
 }
 
 for (let i = 0; i < PER_MODE_FRAMES; i++) {
-  world.update();
+  world.update(1 / 60).unwrap();
   const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] draw ldr frame ${i} error: ${r.error.code}`);
   framesObserved++;

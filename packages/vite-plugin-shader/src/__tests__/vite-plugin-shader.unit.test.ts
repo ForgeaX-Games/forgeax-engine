@@ -17,7 +17,7 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
@@ -26,7 +26,74 @@ import { compileFailed, compileShader } from '@forgeax/engine-shader-compiler';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { loadEngineImportsMap } from '../engine-imports-map.js';
 import { buildEngineShaderManifest, forgeaxShader } from '../index.js';
+import {
+  loadSharedEngineShaderManifest,
+  mergeSharedEngineShaderEntries,
+  projectShaderManifestEntries,
+} from '../shared-engine-inputs.js';
 import { toRollupLog } from '../wrap.js';
+
+{
+  describe('shared-engine-inputs.test.ts', () => {
+    it('merges producer engine entries without consuming them for a custom-only app', () => {
+      const custom = new Map([
+        ['app/custom.wgsl', { hash: 'custom', wgsl: 'custom', bindings: '[]' }],
+      ]);
+      const engine = [{ hash: 'engine', wgsl: 'engine', bindings: '[]' }];
+
+      expect(
+        [...mergeSharedEngineShaderEntries(custom, engine).values()].map((entry) => entry.hash),
+      ).toEqual(['engine', 'custom']);
+      expect([...mergeSharedEngineShaderEntries(custom).values()]).toEqual([...custom.values()]);
+    });
+
+    it('keeps the required glsl placeholder after manifest JSON serialization', () => {
+      const entries = projectShaderManifestEntries(
+        new Map([['engine.wgsl', { hash: 'engine', wgsl: 'engine', bindings: '[]' }]]),
+      );
+
+      expect(JSON.parse(JSON.stringify({ entries })).entries).toEqual([
+        { hash: 'engine', wgsl: 'engine', glsl: '', bindings: '[]' },
+      ]);
+    });
+
+    it('loads material shader metadata with the shared entries', () => {
+      const root = mkdtempSync(join(tmpdir(), 'shared-engine-inputs-'));
+      try {
+        mkdirSync(join(root, 'shared-app-inputs', 'shaders'), { recursive: true });
+        writeFileSync(
+          join(root, 'shared-app-inputs', 'manifest.json'),
+          JSON.stringify({
+            payload: { engineShaderManifest: 'shared-app-inputs/shaders/manifest.json' },
+          }),
+        );
+        writeFileSync(
+          join(root, 'shared-app-inputs', 'shaders', 'manifest.json'),
+          JSON.stringify({
+            entries: [{ hash: 'engine', wgsl: 'engine', bindings: '[]' }],
+            materialShaders: [
+              {
+                identifier: 'forgeax::default-unlit',
+                sourcePath: '/engine/unlit.wgsl',
+                composedWgsl: 'engine',
+                paramSchema: '[]',
+                variants: [],
+              },
+            ],
+          }),
+        );
+        expect(
+          loadSharedEngineShaderManifest(join(root, 'shared-app-inputs', 'manifest.json')),
+        ).toMatchObject({
+          entries: [{ hash: 'engine' }],
+          materialShaders: [{ identifier: 'forgeax::default-unlit' }],
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+}
 
 {
   // --- from dev-manifest.test.ts ---
@@ -43,7 +110,7 @@ import { toRollupLog } from '../wrap.js';
   //   state (transformRequest 0 calls).
   // - The dev manifest payload schema is byte-shape-equivalent to the prod
   //   generateBundle path: {schemaVersion: '1.0.0', entries: ManifestEntry[]}
-  //   with entry = {hash, wgsl, glsl: undefined, bindings} (II-4).
+  //   with entry = {hash, wgsl, glsl: '', bindings} (II-4).
   // - Errors propagate (no silent try/catch); a transform that throws surfaces to
   //   the caller so charter proposition 4 fail-fast is preserved (II-5).
   //
@@ -104,6 +171,7 @@ import { toRollupLog } from '../wrap.js';
     readonly transformRequest: ReturnType<typeof vi.fn>;
     readonly config: {
       readonly root: string;
+      readonly base: string;
       readonly build: { readonly rollupOptions: { readonly input: Record<string, string> } };
     };
   }
@@ -111,6 +179,7 @@ import { toRollupLog } from '../wrap.js';
   function createMockServer(opts: {
     readonly inputEntries: Record<string, string>;
     readonly transformImpl?: (id: string) => Promise<unknown>;
+    readonly base?: string;
   }): MockServer {
     const registry: Middleware[] = [];
     const use = vi.fn((mw: Middleware) => {
@@ -129,6 +198,7 @@ import { toRollupLog } from '../wrap.js';
       transformRequest,
       config: {
         root: '/abs/repo-root',
+        base: opts.base ?? '/',
         build: { rollupOptions: { input: opts.inputEntries } },
       },
     };
@@ -203,7 +273,7 @@ import { toRollupLog } from '../wrap.js';
         readonly entries: ReadonlyArray<{
           readonly hash: string;
           readonly wgsl: string;
-          readonly glsl: undefined | null;
+          readonly glsl: string;
           readonly bindings: string;
         }>;
       };
@@ -243,9 +313,7 @@ import { toRollupLog } from '../wrap.js';
         expect(dev.hash).toBe(prod.hash);
         expect(dev.wgsl).toBe(prod.wgsl);
         expect(dev.bindings).toBe(prod.bindings);
-        // glsl is undefined in both — JSON.stringify drops undefined keys, but the
-        // surviving body must not contain a non-empty glsl path string.
-        expect(dev.glsl === undefined || dev.glsl === null).toBe(true);
+        expect(dev.glsl).toBe('');
       }
     });
 
@@ -281,6 +349,31 @@ import { toRollupLog } from '../wrap.js';
 
       // Body parity across hits.
       expect(res2.bodyChunks.join('')).toBe(firstBody);
+    });
+
+    it('serves the manifest beneath the configured Vite base', async () => {
+      const plugin = forgeaxShader() as unknown as PluginShape;
+      const fixtureId = '/abs/repo-root/apps/hello/triangle/src/shaders/pbr.wgsl';
+      const server = createMockServer({
+        inputEntries: { pbr: fixtureId },
+        base: '/blending/',
+        transformImpl: async (id: string) => {
+          await plugin.transform.call(createMockPluginContext(), VALID_WGSL, id);
+        },
+      });
+      await plugin.configureServer?.(server);
+      const response = createMockResponse();
+      let nextCalled = false;
+      await findManifestMiddleware(server)(
+        { url: '/blending/shaders/manifest.json' },
+        response,
+        () => {
+          nextCalled = true;
+        },
+      );
+
+      expect(nextCalled).toBe(false);
+      expect(JSON.parse(response.bodyChunks.join('')).entries[0]?.glsl).toBe('');
     });
 
     it('case 3: middleware skips non-target URLs by calling next() (no header / body mutation)', async () => {
@@ -1119,6 +1212,22 @@ import { toRollupLog } from '../wrap.js';
         ms.identifier.toLowerCase().includes('bloom'),
       );
       expect(bloomAsMaterial, 'bloom must not appear in materialShaders[]').toBe(false);
+    });
+
+    it('buildEngineShaderManifest() preserves sprite instance-region variants', async () => {
+      const manifest = await buildEngineShaderManifest();
+      const sprite = manifest.materialShaders.find(
+        (entry) => entry.identifier === 'forgeax::sprite',
+      );
+      expect(sprite, 'sprite must be registered as a material shader').toBeDefined();
+      expect(sprite?.variants.some((variant) => variant.definesKey === '')).toBe(true);
+      expect(
+        sprite?.variants.some(
+          (variant) =>
+            variant.defines.PER_INSTANCE_REGION === false &&
+            variant.defines.STORAGE_BUFFER_AVAILABLE === true,
+        ),
+      ).toBe(true);
     });
   });
 }
@@ -2163,6 +2272,12 @@ struct UserParams { tint: vec4<f32> };
   // NOTE: test imports at top-level (merged import block).
 
   const INDEX_PATH = resolve(fileURLToPath(import.meta.url), '..', '..', 'index.ts');
+  const MANIFEST_PATH_PATH = resolve(
+    fileURLToPath(import.meta.url),
+    '..',
+    '..',
+    'shader-manifest-path.ts',
+  );
 
   function stripComments(src: string): string {
     return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
@@ -2185,18 +2300,31 @@ struct UserParams { tint: vec4<f32> };
 
   describe('shader-manifest-ssot.test.ts', () => {
     describe('C-R8 shader manifest SSOT grep gate', () => {
+      it('keeps the manifest path authority outside the Vite hook entrypoint', () => {
+        const manifestPathModule = resolve(
+          fileURLToPath(import.meta.url),
+          '..',
+          '..',
+          'shader-manifest-path.ts',
+        );
+        const src = readFileSync(manifestPathModule, 'utf8');
+        expect(src).toMatch(
+          /export const SHADER_MANIFEST_PATH\s*=\s*['"]shaders\/manifest\.json['"]/,
+        );
+      });
+
       it('AC-07: after fix, slash-tolerant grep for shaders/manifest.json in code lines hits exactly 1 line', () => {
         // Post-fix assertion: exactly 1 code line (constant definition).
         // Pre-fix: 3+ code lines (:743 constant, :1956 emit, :2038 middleware).
         // This test FAILS (red) until w27 consolidates all literals.
-        const src = readFileSync(INDEX_PATH, 'utf8');
+        const src = readFileSync(MANIFEST_PATH_PATH, 'utf8');
         const pat = /['"]\/?shaders\/manifest\.json['"]/;
         const hits = grepCodeLines(src, pat);
         expect(hits.length).toBe(1);
       });
 
       it('AC-07: after fix, the single SSOT line is a SHADER_MANIFEST_PATH constant definition (no leading /)', () => {
-        const src = readFileSync(INDEX_PATH, 'utf8');
+        const src = readFileSync(MANIFEST_PATH_PATH, 'utf8');
         const pat = /['"]\/?shaders\/manifest\.json['"]/;
         const hits = grepCodeLines(src, pat);
         // The lone hit must be the constant definition.

@@ -4,7 +4,7 @@
 // Same in-degree systems ordered by addSystem call order (stable tie-breaker, D-05).
 
 import { err, ok, type Result } from '@forgeax/engine-types';
-import type { CommandBuffer } from './commands';
+import { type CommandBuffer, createCommandBuffer, flushCommands } from './commands';
 import type { Component } from './component';
 import {
   CyclicDependencyError,
@@ -18,6 +18,7 @@ import { createQueryState, queryRun } from './query';
 // criterion as scripts/check-ecs-no-runtime-import.mjs). `world.ts` already
 // value-imports `schedule.ts`; this back-reference is type-space only so no
 // runtime cycle forms (plan-strategy D-1).
+import type { ScheduleToken } from './schedule-token';
 import type { World } from './world';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -127,7 +128,7 @@ export type ParamValidation =
  * const Velocity = defineComponent('Velocity', { dx: 'f32', dy: 'f32' });
  *
  * const world = new World();
- * world.addSystem({
+ * world.addSystem(Update, {
  *   name: 'movement',
  *   queries: [{ with: [Position, Velocity] }],
  *   fn: (_world, queryResults, _commands) => {
@@ -148,7 +149,7 @@ export type ParamValidation =
  * ```ts
  * // Multi-query system — each queryResults[i] keeps its own bundle shape.
  * const Health = defineComponent('Health', { hp: 'f32' });
- * world.addSystem({
+ * world.addSystem(Update, {
  *   name: 'multi',
  *   queries: [{ with: [Position] }, { with: [Health] }],
  *   fn: (_world, queryResults) => {
@@ -163,7 +164,7 @@ export type ParamValidation =
  * @example
  * ```ts
  * // Commands-only system — `queries: []` is a legal form; fn receives `[]`.
- * world.addSystem({
+ * world.addSystem(Update, {
  *   name: 'spawner',
  *   queries: [],
  *   fn: (_world, _queryResults, commands) => {
@@ -198,10 +199,10 @@ export interface SystemDescriptor<
     },
     commands: CommandBuffer,
   ) => void | unknown;
-  /** Run this system after the named systems. */
-  readonly after?: ReadonlyArray<string>;
-  /** Run this system before the named systems. */
-  readonly before?: ReadonlyArray<string>;
+  /** Run this system after named systems or the FixedUpdate anchor. */
+  readonly after?: ReadonlyArray<string | ScheduleToken>;
+  /** Run this system before named systems or the FixedUpdate anchor. */
+  readonly before?: ReadonlyArray<string | ScheduleToken>;
   /** Required resource keys. Missing resource triggers 'invalid' validation (Layer 2). */
   readonly resources?: ReadonlyArray<string>;
   /**
@@ -255,6 +256,8 @@ export interface SetRecord {
 
 /** The Schedule manages system registration, DAG sorting, and execution. */
 export interface Schedule {
+  /** Owning token for scope-aware diagnostics. */
+  readonly token: ScheduleToken;
   /** All registered systems by name. */
   systems: Map<string, SystemRecord>;
   /** Set records keyed by set name. Created lazily. */
@@ -265,16 +268,20 @@ export interface Schedule {
   dirty: boolean;
   /** Sorted system names after buildSchedule(). */
   sortedOrder: string[];
+  /** Direct predecessor names derived while the DAG is built. */
+  predecessors: Map<string, Set<string>>;
 }
 
 /** Create a fresh Schedule. */
-export function createSchedule(): Schedule {
+export function createSchedule(token: ScheduleToken): Schedule {
   return {
+    token,
     systems: new Map(),
     sets: new Map(),
     nextIndex: 0,
     dirty: true,
     sortedOrder: [],
+    predecessors: new Map(),
   };
 }
 
@@ -663,35 +670,46 @@ export function configureSets(
 export function buildSchedule(schedule: Schedule): string[] {
   const systems = schedule.systems;
   const names = [...systems.keys()];
+  if (schedule.token.name === 'Update') names.push('FixedUpdate');
   const nameSet = new Set(names);
 
   // Build adjacency list + in-degree map.
   const adj = new Map<string, string[]>(); // adj[a] = [b] means a → b (a must run before b)
   const inDegree = new Map<string, number>();
+  const predecessors = new Map<string, Set<string>>();
 
   for (const name of names) {
     adj.set(name, []);
     inDegree.set(name, 0);
+    predecessors.set(name, new Set());
   }
+
+  const addEdge = (source: string, target: string): void => {
+    adj.get(source)?.push(target);
+    predecessors.get(target)?.add(source);
+    inDegree.set(target, (inDegree.get(target) ?? 0) + 1);
+  };
+  const orderReferenceName = (reference: string | ScheduleToken): string =>
+    typeof reference === 'string' ? reference : reference.name;
 
   for (const [name, record] of systems) {
     const desc = record.descriptor;
 
     // "after" constraints: for each dep in after, dep → name (dep runs before name)
     if (desc.after) {
-      for (const dep of desc.after) {
-        if (!nameSet.has(dep)) continue; // skip unknown systems
-        adj.get(dep)?.push(name);
-        inDegree.set(name, (inDegree.get(name) ?? 0) + 1);
+      for (const reference of desc.after) {
+        const dep = orderReferenceName(reference);
+        if (!nameSet.has(dep)) continue; // scope validation handles cross-schedule references
+        addEdge(dep, name);
       }
     }
 
     // "before" constraints: for each target in before, name → target (name runs before target)
     if (desc.before) {
-      for (const target of desc.before) {
-        if (!nameSet.has(target)) continue; // skip unknown systems
-        adj.get(name)?.push(target);
-        inDegree.set(target, (inDegree.get(target) ?? 0) + 1);
+      for (const reference of desc.before) {
+        const target = orderReferenceName(reference);
+        if (!nameSet.has(target)) continue; // scope validation handles cross-schedule references
+        addEdge(name, target);
       }
     }
   }
@@ -710,8 +728,7 @@ export function buildSchedule(schedule: Schedule): string[] {
         for (const tgtMember of targetRecord.members) {
           if (!nameSet.has(tgtMember)) continue;
           // srcMember → tgtMember (srcMember runs before tgtMember)
-          adj.get(srcMember)?.push(tgtMember);
-          inDegree.set(tgtMember, (inDegree.get(tgtMember) ?? 0) + 1);
+          addEdge(srcMember, tgtMember);
         }
       }
     }
@@ -725,8 +742,7 @@ export function buildSchedule(schedule: Schedule): string[] {
         for (const srcMember of setRecord.members) {
           if (!nameSet.has(srcMember)) continue;
           // tgtMember → srcMember (tgtMember runs before srcMember)
-          adj.get(tgtMember)?.push(srcMember);
-          inDegree.set(srcMember, (inDegree.get(srcMember) ?? 0) + 1);
+          addEdge(tgtMember, srcMember);
         }
       }
     }
@@ -739,8 +755,7 @@ export function buildSchedule(schedule: Schedule): string[] {
         const m2 = members[i + 1];
         if (!m1 || !m2 || !nameSet.has(m1) || !nameSet.has(m2)) continue;
         // m1 → m2 (m1 runs before m2)
-        adj.get(m1)?.push(m2);
-        inDegree.set(m2, (inDegree.get(m2) ?? 0) + 1);
+        addEdge(m1, m2);
       }
     }
   }
@@ -753,9 +768,13 @@ export function buildSchedule(schedule: Schedule): string[] {
       queue.push(name);
     }
   }
-  // Sort initial queue by registration index
-  // biome-ignore lint/style/noNonNullAssertion: all names in queue are guaranteed to exist in systems map
-  queue.sort((a, b) => systems.get(a)!.registrationIndex - systems.get(b)!.registrationIndex);
+  // Sort initial queue by registration index. The fixed anchor is intrinsic and
+  // receives a deterministic slot after user systems with the same indegree.
+  queue.sort(
+    (a, b) =>
+      (systems.get(a)?.registrationIndex ?? Number.MAX_SAFE_INTEGER) -
+      (systems.get(b)?.registrationIndex ?? Number.MAX_SAFE_INTEGER),
+  );
 
   const sorted: string[] = [];
   while (queue.length > 0) {
@@ -773,8 +792,11 @@ export function buildSchedule(schedule: Schedule): string[] {
         freed.push(neighbor);
       }
     }
-    // biome-ignore lint/style/noNonNullAssertion: all names in freed are guaranteed to exist in systems map
-    freed.sort((a, b) => systems.get(a)!.registrationIndex - systems.get(b)!.registrationIndex);
+    freed.sort(
+      (a, b) =>
+        (systems.get(a)?.registrationIndex ?? Number.MAX_SAFE_INTEGER) -
+        (systems.get(b)?.registrationIndex ?? Number.MAX_SAFE_INTEGER),
+    );
     queue.push(...freed);
   }
 
@@ -787,6 +809,7 @@ export function buildSchedule(schedule: Schedule): string[] {
   }
 
   schedule.sortedOrder = sorted;
+  schedule.predecessors = predecessors;
   schedule.dirty = false;
   return sorted;
 }
@@ -849,12 +872,15 @@ export interface ResourceChecker {
 export function runSchedule(
   schedule: Schedule,
   world: World,
-  commands: CommandBuffer,
   errorHandler?: ErrorHandler,
+  selectedNames?: readonly string[],
+  commandsBySystem = new Map<string, ReturnType<typeof createCommandBuffer>>(),
+  finalDrain = true,
 ): void {
   if (schedule.dirty) {
     buildSchedule(schedule);
   }
+  const selected = selectedNames ? new Set(selectedNames) : undefined;
 
   // Build reverse map: system name → set names it belongs to (D-5).
   // Rebuilt each frame so removeSystem / replaceSystem membership changes
@@ -877,9 +903,16 @@ export function runSchedule(
   const setRunIfCache = new Map<string, boolean>();
 
   for (const name of schedule.sortedOrder) {
+    if (selected && !selected.has(name)) continue;
     const record = schedule.systems.get(name);
     /* istanbul ignore next -- defensive: sortedOrder comes from systems Map keys */
     if (!record) continue;
+
+    // Apply only buffers that have an explicit graph edge into this system.
+    for (const predecessor of schedule.predecessors.get(name) ?? []) {
+      const producerCommands = commandsBySystem.get(predecessor);
+      if (producerCommands) flushCommands(producerCommands, world);
+    }
 
     // Lazily initialize query states on first run (O-3: needs World for ID resolution).
     if (record.queryStates === null) {
@@ -944,6 +977,8 @@ export function runSchedule(
 
     // ── Layer 3: system execution + Result collection ──
     // trusted-cast: F-R2 single-direction; runtime correctness guaranteed by buildColumnBundle
+    const commands = createCommandBuffer(world);
+    commandsBySystem.set(name, commands);
     const returnValue = record.descriptor.fn(
       world,
       queryResults as Parameters<typeof record.descriptor.fn>[1],
@@ -963,6 +998,14 @@ export function runSchedule(
       }
     }
     // void return → treated as ok, ErrorHandler not called
+  }
+
+  if (finalDrain) {
+    // A schedule boundary drains every remaining buffer, including commands
+    // enqueued by lifecycle hooks while another command is being applied.
+    for (const commands of commandsBySystem.values()) {
+      flushCommands(commands, world);
+    }
   }
 }
 

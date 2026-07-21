@@ -248,6 +248,15 @@ export class UniqueRefStore {
     return ok(undefined);
   }
 
+  /** @internal Replace the payload of a live slot without changing its handle. */
+  _setPayload<Target extends string, T>(handle: Handle<Target, 'unique'>, payload: T): void {
+    const raw = unwrapHandle(handle);
+    if (!this.payloads.has(raw)) {
+      throw new Error(`UniqueRefStore: cannot replace released payload ${raw}.`);
+    }
+    this.payloads.set(raw, payload);
+  }
+
   /**
    * `true` if `handle` references a live slot - used by World's release loop
    * to decide whether to call `release` (skips sentinel + already-released).

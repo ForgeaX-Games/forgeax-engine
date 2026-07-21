@@ -1685,7 +1685,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 // --- tweak-20260701 M2 AC-02: zero-light warning polarity (shadingModel -> materialShaderId) ---
 {
   // AC-02: the zero-light black-screen warning must still fire for
-  // PBR/standard materials and remain silent for unlit / default
+  // PBR/standard materials and remain silent for unlit / sprite / default
   // materials. The pre-tweak condition was:
   //   materialShaderId !== undefined && shadingModel === undefined
   // Post-M1 shadingModel is deleted; the equivalent rewrite is:
@@ -1720,6 +1720,11 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 
     it('unlit material (materialShaderId === forgeax::default-unlit) -> not lit (no warn)', () => {
       const snap = makeSnap('forgeax::default-unlit');
+      expect(isLitMaterialSnapshot(snap)).toBe(false);
+    });
+
+    it('sprite material (materialShaderId === forgeax::sprite) -> not lit (no warn)', () => {
+      const snap = makeSnap('forgeax::sprite');
       expect(isLitMaterialSnapshot(snap)).toBe(false);
     });
 

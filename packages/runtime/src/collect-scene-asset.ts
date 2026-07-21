@@ -59,6 +59,7 @@ import {
   resolveComponent,
   type World,
 } from '@forgeax/engine-ecs';
+import { classifyEntityField } from '@forgeax/engine-ecs/externalization';
 import { err, ok, type Result } from '@forgeax/engine-rhi';
 import type {
   Asset,
@@ -90,7 +91,8 @@ function _normalizeArray(value: ArrayLike<unknown>): unknown[] {
   return Array.from(value);
 }
 
-// Schema-derived field classifier
+// Schema-derived field classifier — shared kernel now owns entity classification.
+// Keep the local shared<T> classifier because the kernel only handles entity fields.
 type SchemaFieldClass =
   | { kind: 'entity'; scalar: true }
   | { kind: 'entity'; scalar: false }
@@ -99,8 +101,6 @@ type SchemaFieldClass =
 
 function classifyFieldSchema(fieldType: string | undefined): SchemaFieldClass | undefined {
   if (fieldType === undefined) return undefined;
-  if (fieldType === 'entity') return { kind: 'entity', scalar: true };
-  if (fieldType === 'array<entity>') return { kind: 'entity', scalar: false };
   if (fieldType.startsWith('shared<')) return { kind: 'shared', scalar: true };
   if (fieldType.startsWith('array<shared<')) return { kind: 'shared', scalar: false };
   return undefined;
@@ -749,9 +749,12 @@ export function rootsToSceneAsset(
         // any component/field; no hardcoded component or field name.
         if (comp.fields[fieldName]?.transient) continue;
 
-        const classification = classifyFieldSchema(comp.schema[fieldName]);
+        const schemaFieldType = comp.schema[fieldName];
+        const entityKind = classifyEntityField(comp as EcsComponent, fieldName);
+        const sharedClass =
+          schemaFieldType !== undefined ? classifyFieldSchema(schemaFieldType) : undefined;
 
-        if (!classification) {
+        if (!entityKind && !sharedClass) {
           if (_isArrayLike(rawValue)) {
             fieldValues[fieldName] = _normalizeArray(rawValue);
           } else {
@@ -760,20 +763,9 @@ export function rootsToSceneAsset(
           continue;
         }
 
-        if (classification.kind === 'entity') {
-          if (classification.scalar) {
-            const lid2 = _rlid(rawValue as number);
-            if (lid2 === undefined) {
-              return err(
-                new SceneCollectEntityRefOutOfClosureError(
-                  entityRaw,
-                  fieldName,
-                  rawValue as number,
-                ),
-              );
-            }
-            fieldValues[fieldName] = lid2;
-          } else {
+        if (entityKind !== null) {
+          // Entity / array<entity> field — use shared kernel for remap
+          if (entityKind.isArray) {
             const arr = _isArrayLike(rawValue)
               ? _normalizeArray(rawValue)
               : (rawValue as unknown[]);
@@ -788,6 +780,18 @@ export function rootsToSceneAsset(
               mapped.push(lid2);
             }
             fieldValues[fieldName] = mapped;
+          } else {
+            const lid2 = _rlid(rawValue as number);
+            if (lid2 === undefined) {
+              return err(
+                new SceneCollectEntityRefOutOfClosureError(
+                  entityRaw,
+                  fieldName,
+                  rawValue as number,
+                ),
+              );
+            }
+            fieldValues[fieldName] = lid2;
           }
         } else {
           // shared<T> field — reverse-lookup handle(s) to GUID(s) via the shared
@@ -796,16 +800,23 @@ export function rootsToSceneAsset(
           // the slot-0 default; emitting 0 would be misread as refs index 0 by
           // parseScenePayload HANDLE_FIELD_NAMES). array handle 0 -> positional 0
           // kept (paired SoA alignment, e.g. AnimationPlayer.clips = [h,0,0,0]).
+          // AnimationPlayer.graph (shared<AnimationGraph> scalar, M4/w31) is
+          // handled generically here — no special case needed.
           const normalized = _isArrayLike(rawValue) ? _normalizeArray(rawValue) : rawValue;
+          if (sharedClass === undefined) {
+            // Fallback: non-entity, non-shared — pass through
+            fieldValues[fieldName] = normalized;
+            continue;
+          }
           const conv = _serializeSharedFieldValue(
             world,
             registry,
-            classification,
+            sharedClass,
             normalized,
             fieldName,
           );
           if (!conv.ok) return conv;
-          if (classification.scalar && conv.value === undefined) continue; // NULL sentinel -> omit
+          if (sharedClass.scalar && conv.value === undefined) continue; // NULL sentinel -> omit
           fieldValues[fieldName] = conv.value;
         }
       }

@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // apps/learn-render/5.advanced-lighting/3.2.point-shadows/src/main.ts
 // LearnOpenGL section 5.3.2 — point-light cube-map shadows.
 // Room scene: large cube (scale=5) viewed from inside with cullMode='none',
@@ -182,7 +183,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Per-frame orbit: light circles (x=sin(t)*3, z=cos(t)*3) at fixed y.
   let elapsed = 0;
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'point-light-orbit',
     queries: [],
     fn: () => {

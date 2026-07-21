@@ -25,7 +25,7 @@ import { resetToDefaultLayout, wireLayoutPersistence } from './layout-persistenc
 import { SelectionProvider } from './selection-context';
 import { loadStatusAnchor } from './selectors';
 import type { TapeLoadError } from './tape-source';
-import { loadTapeFromFiles } from './tape-source';
+import { loadTapeFromFiles, loadTapeFromUrls } from './tape-source';
 import { TapeContext, ViewModelContext } from './viewer-context';
 import type { ViewModel } from './viewer-model';
 import { buildViewModel } from './viewer-model';
@@ -75,11 +75,16 @@ export function App() {
   const apiRef = useRef<DockviewApi | null>(null);
   const persistDisposeRef = useRef<(() => void) | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // One monotonically increasing token owns the active load. A delayed URL
+  // handoff must never overwrite a file pair the user imported afterwards.
+  const loadGenerationRef = useRef(0);
 
   const handleFiles = useCallback(async (files: File[]) => {
+    const generation = ++loadGenerationRef.current;
     setState({ status: 'empty' });
 
     const result = await loadTapeFromFiles(files);
+    if (generation !== loadGenerationRef.current) return;
     if (!result.ok) {
       setState({ status: 'parse-error', error: result.error });
       return;
@@ -91,6 +96,35 @@ export function App() {
     (window as unknown as Record<string, unknown>).__forgeaxViewer = vm;
 
     setState({ status: 'loaded', viewModel: vm, tape });
+  }, []);
+
+  // The editor opens this page with a signed-by-shape, dev-only capture pair.
+  // Manual import remains available for saved captures and regular reviewer use.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tapeUrl = params.get('tapeUrl');
+    const reportUrl = params.get('reportUrl');
+    if (!tapeUrl || !reportUrl) return;
+
+    const generation = ++loadGenerationRef.current;
+
+    void (async () => {
+      setState({ status: 'empty' });
+      const result = await loadTapeFromUrls(tapeUrl, reportUrl);
+      if (generation !== loadGenerationRef.current) return;
+      if (!result.ok) {
+        setState({ status: 'parse-error', error: result.error });
+        return;
+      }
+      const tape = result.value;
+      const vm = buildViewModel(tape);
+      (window as unknown as Record<string, unknown>).__forgeaxViewer = vm;
+      setState({ status: 'loaded', viewModel: vm, tape });
+    })();
+
+    return () => {
+      if (loadGenerationRef.current === generation) loadGenerationRef.current++;
+    };
   }, []);
 
   const onReady = useCallback((event: DockviewReadyEvent) => {

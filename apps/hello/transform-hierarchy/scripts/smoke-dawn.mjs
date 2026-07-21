@@ -11,14 +11,14 @@
 //      demo main.ts: registerPropagateTransforms(world). Spawn a non-identity
 //      parent cube, a child cube carrying ChildOf{parent} + a local +Y offset,
 //      and a static reference sphere that is NOT in the hierarchy.
-//   4. Frame A (parent at rest): world.update() (runs propagateTransforms so
+//   4. Frame A (parent at rest): world.update(1 / 60).unwrap() (runs propagateTransforms so
 //      the child's Transform.world is composed) -> renderer.draw -> readback
 //      pixelsA.
-//   5. Stability re-render: world.update() + draw + readback pixelsAA WITHOUT
+//   5. Stability re-render: world.update(1 / 60).unwrap() + draw + readback pixelsAA WITHOUT
 //      moving the parent. Assert pixelsA ~= pixelsAA (parent-static reference
 //      frame is stable; AC-08 "parent stationary reference frame is stable").
 //   6. Frame B (parent moved): world.set(parent, Transform, { pos: [..., 0, 0]}) ->
-//      world.update() (re-runs propagate; child's Transform.world follows the
+//      world.update(1 / 60).unwrap() (re-runs propagate; child's Transform.world follows the
 //      parent) -> draw -> readback pixelsB.
 //   7. Diff A vs B: per-pixel byte comparison. Assert diffCount > 0.1% of
 //      total pixels -- this is the machine proof that moving the PARENT moved
@@ -353,7 +353,7 @@ renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
 
 // --- 7. Frame A (parent at rest) -------------------------------------------
 
-world.update(); // runs propagateTransforms so child Transform.world is composed
+world.update(1 / 60).unwrap(); // runs propagateTransforms so child Transform.world is composed
 const drawARes = renderer.draw([world], { owner: 0 });
 if (!drawARes.ok) {
   console.error(`[smoke] FAIL - draw (frame A) failed: ${drawARes.error.code}`);
@@ -364,7 +364,7 @@ const pixelsA = await doReadPixels();
 
 // --- 8. Stability re-render (parent still at rest) -------------------------
 
-world.update();
+world.update(1 / 60).unwrap();
 const drawAARes = renderer.draw([world], { owner: 0 });
 if (!drawAARes.ok) {
   console.error(`[smoke] FAIL - draw (stability frame) failed: ${drawAARes.error.code}`);
@@ -380,7 +380,7 @@ if (!setRes.ok) {
   console.error(`[smoke] FAIL - world.set(parent move) failed: ${setRes.error.code}`);
   process.exit(1);
 }
-world.update(); // re-runs propagateTransforms; child Transform.world follows parent
+world.update(1 / 60).unwrap(); // re-runs propagateTransforms; child Transform.world follows parent
 const drawBRes = renderer.draw([world], { owner: 0 });
 if (!drawBRes.ok) {
   console.error(`[smoke] FAIL - draw (frame B) failed: ${drawBRes.error.code}`);

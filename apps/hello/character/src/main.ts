@@ -15,7 +15,7 @@
 
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
-import type { World } from '@forgeax/engine-ecs';
+import { Time, Update, type World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
 import {
   CharacterController,
@@ -157,9 +157,12 @@ function driveCharacter(
   const hud = document.querySelector<HTMLPreElement>('#hud');
   let verticalVel = 0; // accumulated jump/gravity velocity (units/sec)
 
-  app.registerUpdate((dt: number) => {
-    // dt is already clamped by the frame loop (to maxDt, default 1/30s), so the
-    // first-frame spike cannot push the character through geometry here.
+  app.world
+    .addSystem(Update, {
+      name: 'character-drive',
+      queries: [],
+      fn: () => {
+        const dt = app.world.getResource(Time).delta;
 
     // Wait for the async Rapier WASM to insert the PhysicsWorld resource.
     let pw: PhysicsWorld;
@@ -215,7 +218,9 @@ function driveCharacter(
       const p = readPos(app.world, character);
       hud.textContent = `WASD move - Space jump\npos ${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}\ngrounded ${groundedNow}`;
     }
-  });
+      },
+    })
+    .unwrap();
 }
 
 function readGrounded(world: World, entity: number): boolean {

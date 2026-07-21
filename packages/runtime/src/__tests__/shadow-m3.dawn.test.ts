@@ -231,7 +231,7 @@ describe('shadow M3 dawn: merged DirectionalLight shadow params -> View UBO + va
 
       const world = new World();
       buildShadowScene(world, 7);
-      world.update();
+      world.update(1 / 60).unwrap();
       const draw = renderer.draw([world], { owner: 0 });
       expect(draw.ok).toBe(true);
       const device = getDevice();
@@ -272,7 +272,7 @@ describe('shadow M3 dawn: merged DirectionalLight shadow params -> View UBO + va
       for (const ks of [1, 3, 5, 9]) {
         const world = new World();
         buildShadowScene(world, ks);
-        world.update();
+        world.update(1 / 60).unwrap();
         const draw = renderer.draw([world], { owner: 0 });
         expect(draw.ok, `draw failed at pcfKernelSize=${ks}`).toBe(true);
         if (device !== undefined) await device.queue.onSubmittedWorkDone();

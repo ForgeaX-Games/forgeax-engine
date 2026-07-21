@@ -141,6 +141,8 @@ export interface RenderFrameState {
    * unchanged; only the topology build is hoisted out of the hot path.
    */
   perFrameGraph: RenderGraph<RenderPipelineContext> | null;
+  /** Graphs detached from the active pipeline while GPU work may still use them. */
+  readonly retiredPerFrameGraphs: Set<RenderGraph<RenderPipelineContext>>;
   readonly instanceBuffers: Map<number, InstanceBufferCacheEntry>;
   warnedZeroLightStandard: boolean;
   /**
@@ -361,6 +363,29 @@ export interface RenderFrameState {
    * shadow-casting spots means zero spot shadow passes (AC-03).
    */
   spotShadowSnapshots: readonly SpotLightSnapshot[];
+}
+
+/**
+ * Detach the active graph without losing ownership of textures referenced by
+ * submitted work. The graph retires its pools, then this state keeps it alive
+ * until its post-submit reclamation finishes. Teardown and device recovery
+ * retain explicit control over the set so they can respectively drain or drop
+ * the still-owned graphs.
+ *
+ * @internal
+ */
+export function retirePerFrameGraph(frameState: RenderFrameState): void {
+  const graph = frameState.perFrameGraph;
+  if (graph === null) return;
+  graph.retire();
+  frameState.perFrameGraph = null;
+  frameState.retiredPerFrameGraphs.add(graph);
+  graph
+    .reclaimRetiredTransients()
+    .catch(() => {})
+    .finally(() => {
+      frameState.retiredPerFrameGraphs.delete(graph);
+    });
 }
 
 /**

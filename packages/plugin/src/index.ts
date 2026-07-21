@@ -191,3 +191,12 @@ export const PLUGIN_ERROR_HINTS: Readonly<Record<PluginErrorCode, string>> = {
 export function isPluginError(err: unknown): err is PluginError {
   return err instanceof PluginErrorClass;
 }
+
+// ---------------------------------------------------------------------------
+// runPlugins -- host-neutral plugin assembly authority.
+//
+// The single seam that builds a World from a merged plugin set. App and
+// headless Node hosts both consume this same function. Exported from
+// @forgeax/engine-plugin so consumers do not depend on app internals.
+// ---------------------------------------------------------------------------
+export { runPlugins } from './run-plugins';

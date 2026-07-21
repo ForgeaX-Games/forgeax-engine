@@ -1,3 +1,4 @@
+import { Time, Update } from '@forgeax/engine-ecs';
 // apps/bevy/iter-combinations - reproduction of Bevy's `iter_combinations` example.
 //
 // Bevy source (references/repos/bevy/examples/ecs/iter_combinations.rs): an N-body
@@ -7,7 +8,7 @@
 //
 // forgeax mapping — an ECS-front-door MOTION demo:
 //   - createApp -> owns the frame loop AND auto-inserts the 'Time' resource
-//     (world.getResource('Time').dt) before each world.update().
+//     (world.getResource(Time).delta) before each world.update().
 //   - world.addSystem (x2, chained) -> stepInteract (pairwise force accumulation
 //     via the new queryCombinations) then stepIntegrate (verlet), mirroring Bevy's
 //     (interact_bodies, integrate) in FixedUpdate.
@@ -45,19 +46,19 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   buildIterCombinationsWorld(app.world);
 
   // Bevy: (interact_bodies, integrate) — accumulate pairwise forces first, then
-  // verlet-integrate, both off Time.dt.
-  app.world.addSystem({
+  // verlet-integrate, both off Time.delta.
+  app.world.addSystem(Update, {
     name: 'interact-bodies',
     queries: [],
     fn: (world) => {
       stepInteract(world);
     },
   });
-  app.world.addSystem({
+  app.world.addSystem(Update, {
     name: 'integrate',
     queries: [],
     fn: (world) => {
-      const dt = world.hasResource('Time') ? world.getResource<{ dt: number }>('Time').dt : 0;
+      const dt = world.hasResource('Time') ? world.getResource(Time).delta : 0;
       stepIntegrate(world, dt);
     },
   });

@@ -123,6 +123,8 @@ export interface AssetTagMap {
   skeleton: 'SkeletonAsset';
   /** feat-20260523-skin-skeleton-animation M0 */
   'animation-clip': 'AnimationClip';
+  /** feat-20260713-animation-state-machine-plugin M2 / w13 */
+  'animation-graph': 'AnimationGraph';
   /** feat-20260528-material-shader-registration-unification M1 / w1 */
   shader: 'ShaderAsset';
   /** feat-20260531-world-space-msdf-text-rendering M2 / w5 */

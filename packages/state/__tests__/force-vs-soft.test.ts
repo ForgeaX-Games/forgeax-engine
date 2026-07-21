@@ -48,7 +48,7 @@ describe('force vs soft same-state transitions', () => {
     });
 
     setNextStateForce(world, LevelId, 'main-menu');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(fired).toEqual(['exit-main-menu', 'enter-main-menu']);
   });
@@ -63,7 +63,7 @@ describe('force vs soft same-state transitions', () => {
     despawnOnEnter(world, eEnter, LevelId, 'main-menu');
 
     setNextStateForce(world, LevelId, 'main-menu');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
     expect(world.get(eExit, LevelScoped).ok).toBe(false);
@@ -74,7 +74,7 @@ describe('force vs soft same-state transitions', () => {
     const world = makeWorld();
 
     setNextStateForce(world, LevelId, 'main-menu');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Both PreviousState and State are 'main-menu' after force-same transition
     const s = getState(world, LevelId);
@@ -94,7 +94,7 @@ describe('force vs soft same-state transitions', () => {
     despawnOnExit(world, entity, LevelId, 'main-menu');
 
     setNextState(world, LevelId, 'main-menu');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(exitCount).toBe(0);
     expect(enterCount).toBe(0);
@@ -107,7 +107,7 @@ describe('force vs soft same-state transitions', () => {
     const world = makeWorld();
 
     setNextState(world, LevelId, 'main-menu');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // NextState should be cleared after same-state no-op
     const nsKey = nextStateResourceKey(LevelId);
@@ -132,7 +132,7 @@ describe('consecutive setNextState before transition', () => {
     setNextState(world, LevelId, 'tutorial');
     setNextState(world, LevelId, 'street-a');
 
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Only the last overwrite wins: exit main-menu, enter street-a
     expect(fired).toEqual(['exit-main-menu', 'enter-street-a']);
@@ -152,7 +152,7 @@ describe('consecutive setNextState before transition', () => {
     setNextState(world, LevelId, 'street-a');
     setNextState(world, LevelId, 'tutorial'); // last overwrites
 
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(fired).toEqual(['exit-main-menu', 'enter-tutorial']);
 
@@ -171,7 +171,7 @@ describe('consecutive setNextState before transition', () => {
 
     // After overwrite, NextState should have value=street-a, force=false
     // So this is a regular transition main-menu -> street-a
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Force flag from first call was overwritten
     // OnExit(main-menu) fires because we are leaving main-menu (not force scenario)
@@ -190,7 +190,7 @@ describe('consecutive setNextState before transition', () => {
     setNextState(world, LevelId, 'main-menu');
     setNextStateForce(world, LevelId, 'tutorial');
 
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Force flag set — even though different values, force means nothing special for different state
     expect(fired).toEqual(['exit']);
@@ -212,12 +212,12 @@ describe('force flag consumed per-transition', () => {
 
     // First transition: force to tutorial
     setNextStateForce(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
     expect(onEnterCount).toBe(1);
 
     // Second: soft same-state (tutorial -> tutorial) — no-op
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
     expect(onEnterCount).toBe(1); // unchanged — no callback
   });
 
@@ -228,7 +228,7 @@ describe('force flag consumed per-transition', () => {
     addOnEnter(LevelId, 'tutorial', () => fired.push('enter-tutorial'));
 
     setNextStateForce(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Different values — force flag irrelevant, same behavior as soft
     expect(fired).toEqual(['exit-main-menu', 'enter-tutorial']);
@@ -245,7 +245,7 @@ describe('force flag consumed per-transition', () => {
     addOnEnter(LevelId, 'main-menu', () => fired.push('enter-main-menu'));
 
     setNextStateForce(world, LevelId, 'main-menu');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(fired).toEqual(['exit-main-menu', 'enter-main-menu']);
   });
@@ -269,7 +269,7 @@ describe('force + scope despawn combined', () => {
     const eSurvivor = world.spawn().unwrap();
 
     setNextStateForce(world, LevelId, 'main-menu');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
 
@@ -290,7 +290,7 @@ describe('force + scope despawn combined', () => {
     const eSurvivor = world.spawn().unwrap();
 
     setNextState(world, LevelId, 'main-menu');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const LevelScoped = resolveComponent('__scopedTo__LevelId')!;
 

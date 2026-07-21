@@ -5,6 +5,37 @@
 // Each exposes a `.hint` readonly property for programmatic extraction.
 
 // ────────────────────────────────────────────────────────────────────────────
+// Re-exports from split error sub-files (w3-b — package cohesion split)
+// ────────────────────────────────────────────────────────────────────────────
+
+export {
+  ComponentNotDefinedError,
+  QueryCombinationsEntityRequiredError,
+  QueryDescriptorOptionalConflictError,
+  RemoveEssentialComponentError,
+  SpawnDataUnknownFieldError,
+} from './errors/query-and-component-errors';
+
+export {
+  RelationshipDetachMismatchError,
+  RelationshipMirrorComponentNotRegisteredError,
+  RelationshipMirrorFieldTypeMismatchError,
+  RelationshipSelfCycleError,
+} from './errors/relationship-errors';
+export {
+  SharedFieldInvalidValueError,
+  SpriteInstancesCountMismatchError,
+  SpriteInstancesMutuallyExclusiveWithInstancesError,
+  SpriteInstancesRequiresSpriteShaderError,
+} from './errors/sprite-and-shared-errors';
+export {
+  CardinalityExceededError,
+  ResourceInvalidValueError,
+  SpawnLightInvalidBoundsError,
+  SpriteAnimationInvalidError,
+} from './errors/validation-errors';
+
+// ────────────────────────────────────────────────────────────────────────────
 // Existing errors (carried from @forgeax/engine-ecs)
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -325,6 +356,38 @@ export class ResourceNotFoundError extends Error {
     const hint = `Resource "${key}" not found. Insert with world.insertResource() first.`;
     super(`Resource "${key}" not found.\n` + `  key: ${key}\n` + `  hint: ${hint}`);
     this.hint = hint;
+  }
+}
+
+/**
+ * Thrown when insertResource/removeResource is called on a World-owned
+ * protected resource (Time or FixedTime).
+ *
+ * `.code = 'resource-protected'`
+ * `.hint` — suggests using `world.update(delta)` or reading the resource.
+ * `.expected` — the resource name that was rejected.
+ */
+export class ProtectedResourceError extends Error {
+  override readonly name = 'ProtectedResourceError';
+  readonly code = 'resource-protected' as const;
+  readonly hint: string;
+  readonly expected: string;
+
+  constructor(resourceName: string, operation: 'insert' | 'remove') {
+    const hint =
+      operation === 'insert'
+        ? `"${resourceName}" is a World-owned protected resource. It is advanced by world.update(delta); read it via world.getResource(${resourceName}).`
+        : `"${resourceName}" is a World-owned protected resource. It is owned by the World scheduler and cannot be removed.`;
+    const expected = `a user-owned resource key (not ${resourceName})`;
+    super(
+      `Protected resource "${resourceName}" cannot be ${operation}ed.\n` +
+        `  code: resource-protected\n` +
+        `  resource: ${resourceName}\n` +
+        `  expected: ${expected}\n` +
+        `  hint: ${hint}`,
+    );
+    this.hint = hint;
+    this.expected = expected;
   }
 }
 
@@ -863,92 +926,6 @@ export class InstanceTransformsStrideMismatchError extends Error {
   }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// feat-20260519-light-casters-point-spot-pbr w2 — closed-union evolution +1.
-//
-// Adds 1 new member 'spawn-light-invalid-bounds' to EcsErrorCode (23 -> 24).
-// AGENTS.md section Error model evolution contract: minor (add member only).
-// Triggered by PointLight / SpotLight spawn-time payload validation
-// (plan-strategy D-S3 a). detail.field three-branch
-// ('range' | 'innerOuter' | 'outerNinety') keeps the four bound-violation
-// shapes under one error code so callers narrow first on `.code` then on
-// `.detail.field` (charter P3 progressive disclosure).
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Returned via `Result.err` from `world.spawn` when a PointLight or SpotLight
- * payload field is out of the documented bound. Four bound violations share
- * one `.code` and discriminate via `.detail.field`:
- *
- * - `range` — PointLight / SpotLight `range < 0` or `Number.isNaN(range)`.
- *   Use `Number.POSITIVE_INFINITY` for an unlimited range or a non-negative
- *   meter value.
- * - `innerOuter` — SpotLight `outerConeDeg <= innerConeDeg`. Inner cone is
- *   the saturated bright region; outer cone is the falloff edge.
- * - `outerNinety` — SpotLight `outerConeDeg > 90`. KHR_lights_punctual upper
- *   bound. A spot light cone wider than 90 degrees becomes a point light;
- *   use PointLight instead.
- * - `direction` — DirectionalLight / SpotLight `direction` is missing or a
- *   zero vector `[0, 0, 0]`. Direction has no default (there is no universal
- *   default direction): omitting it lands the array layer-3 all-zero, which is
- *   the same illegal state as an explicit zero vector. Supply a non-zero
- *   direction (feat-20260709 M2 / D-1, add-only union member).
- *
- * `.code = 'spawn-light-invalid-bounds'`
- * `.detail = { field: 'range' | 'innerOuter' | 'outerNinety' | 'direction';`
- * `            got: number | readonly number[] }`
- * `.hint` — names the offending field plus the valid replacement form.
- */
-export class SpawnLightInvalidBoundsError extends Error {
-  override readonly name = 'SpawnLightInvalidBoundsError';
-  readonly code = 'spawn-light-invalid-bounds' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: {
-    readonly field: 'range' | 'innerOuter' | 'outerNinety' | 'direction';
-    readonly got: number | readonly number[];
-  };
-
-  constructor(
-    componentName: string,
-    field: 'range' | 'innerOuter' | 'outerNinety' | 'direction',
-    got: number | readonly number[],
-  ) {
-    let hint: string;
-    let expectedStr: string;
-    switch (field) {
-      case 'range':
-        hint = `${componentName}.range = ${got} is invalid; use Number.POSITIVE_INFINITY for unlimited range, or a non-negative meter value`;
-        expectedStr = 'range >= 0 or Number.POSITIVE_INFINITY';
-        break;
-      case 'innerOuter':
-        hint = `${componentName}.outerConeDeg <= innerConeDeg (got ${got}); inner cone is the saturated bright region, outer cone is the falloff edge; outerConeDeg > innerConeDeg required`;
-        expectedStr = 'outerConeDeg > innerConeDeg';
-        break;
-      case 'outerNinety':
-        hint = `${componentName}.outerConeDeg = ${got} > 90; a spot light cone wider than 90 degrees becomes a point light; use PointLight instead`;
-        expectedStr = 'outerConeDeg <= 90 (KHR_lights_punctual upper bound)';
-        break;
-      case 'direction':
-        hint = `${componentName}.direction is missing or a zero vector (got ${JSON.stringify(got)}); direction has no default, provide a non-zero direction, e.g. [-0.5, -1, -0.3]`;
-        expectedStr = 'direction is a non-zero [x, y, z] vector';
-        break;
-    }
-    super(
-      `${componentName}: spawn payload bound violation.\n` +
-        `  code: spawn-light-invalid-bounds\n` +
-        `  component: ${componentName}\n` +
-        `  field: ${field}\n` +
-        `  got: ${got}\n` +
-        `  expected: ${expectedStr}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expectedStr;
-    this.detail = { field, got };
-  }
-}
-
 /**
  * Thrown by `defineComponent` when an `array<T>` / `array<T,N>` schema field
  * carries an element type outside the legal whitelist (scalars + entity).
@@ -990,843 +967,6 @@ export class ManagedArrayElementTypeNotAllowedError extends Error {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// feat-20260520-directional-light-shadow-mapping M1 / w1 — closed-union
-// evolution +1 (`'cardinality-exceeded'`). feat-20260520-2d-sprite-layer-mvp
-// M-2 w13 — closed-union evolution +1 (`'resource-invalid-value'`). Both
-// land as minor (add-member) per AGENTS.md §Error model evolution contract;
-// the unified count after merge is 24 -> 26.
-//
-// `'cardinality-exceeded'` is triggered when ECS spawn / addComponent
-// detects more than one entity carrying a cardinality=1 component such as
-// PointLightShadow (plan-strategy D-3). `.detail` carries
-// `{ componentName, count, max }` so AI users narrow on `.code` then read
-// `.detail` for the offending component name + the bound violated
-// (charter P3 progressive disclosure).
-//
-// `'resource-invalid-value'` sits in the spawn-* fail-fast kebab series
-// alongside `'spawn-light-invalid-bounds'` (feat-20260519). Triggered by
-// `setTransparentSortConfig(world, { mode, yzAlpha })` when
-// `mode \u2208/ {0, 1, 2}` (plan-strategy D-4). Generalisable to any future
-// world-level resource validator that fails on bound-mismatch payloads;
-// `.detail` carries `receivedMode` for the sort-config use case and accepts
-// an optional `receivedKey` slot for future resource validators sharing the
-// code.
-//
-// AGENTS.md table sync is deferred to a follow-up w33 (AC-16) so the doc +
-// code commits land together with the D-6 historical 23 -> 24 catch-up
-// (feat-20260519 missed the table bump). Plan-decisions D-3 + D-4 + D-6
-// reference this comment.
-// ───────────────────────────────────────────────────────────────────────
-
-/**
- * Thrown / returned via `Result.err` when an attempt is made to add or spawn
- * a second entity with a component declared cardinality = 1 on the World.
- * The canonical first consumer is `PointLightShadow` (at most 4 shadow-casting
- * point lights per scene, cardinality=4); other bounded components route through
- * the same code.
- *
- * `.code = 'cardinality-exceeded'`
- * `.detail = { componentName, count, max }`
- * `.hint` — names the offending component, the current count, and the bound.
- */
-export class CardinalityExceededError extends Error {
-  override readonly name = 'CardinalityExceededError';
-  readonly code = 'cardinality-exceeded' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: {
-    readonly componentName: string;
-    readonly count: number;
-    readonly max: number;
-  };
-
-  constructor(componentName: string, count: number, max: number) {
-    const hint = `Component "${componentName}" is declared cardinality=${max}; current count ${count} exceeds the bound. Despawn the extra entity or merge the data into a single carrier.`;
-    const expectedStr = `count <= ${max} for component "${componentName}"`;
-    super(
-      `Cardinality exceeded for component "${componentName}".\n` +
-        `  code: cardinality-exceeded\n` +
-        `  component: ${componentName}\n` +
-        `  count: ${count}\n` +
-        `  max: ${max}\n` +
-        `  expected: ${expectedStr}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expectedStr;
-    this.detail = { componentName, count, max };
-  }
-}
-
-/**
- * Returned via `Result.err` from resource-setter helpers (e.g.
- * `setTransparentSortConfig`) when a numeric payload field violates the
- * closed bound declared by the resource contract. The first consumer is
- * `TransparentSortConfig.mode \u2208 {0, 1, 2}` (plan-strategy D-4); future
- * resource validators with the same shape reuse this code by routing
- * through `.detail.receivedKey` to disambiguate which resource validator
- * surfaced the failure.
- *
- * Closed-set kebab code consistent with `spawn-light-invalid-bounds`
- * (feat-20260519 / w2); AI users consume via `switch (err.code)` exhaustive
- * narrows + `err.detail.receivedMode` (or `err.detail.receivedKey` /
- * `err.expected`) property access — never string-parse the message.
- *
- * `.code = 'resource-invalid-value'`
- * `.detail = { receivedMode: number; receivedKey?: string }`
- * `.hint` — direct copy-paste recovery (e.g. "0=layer-z, 1=layer-y,
- *   2=layer-yz" for the sort-config case).
- * `.expected` — the bound contract literal (e.g. "mode \u2208 {0, 1, 2}").
- *
- * @reuses RhiError structured shape — same `.code / .expected / .hint /
- *   .detail` quadruple AI users consume across rhi + ecs.
- */
-export class ResourceInvalidValueError extends Error {
-  override readonly name = 'ResourceInvalidValueError';
-  readonly code = 'resource-invalid-value' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly receivedMode: number; readonly receivedKey?: string };
-
-  constructor(
-    expected: string,
-    hint: string,
-    detail: { readonly receivedMode: number; readonly receivedKey?: string },
-  ) {
-    const keyClause = detail.receivedKey === undefined ? '' : `  key: ${detail.receivedKey}\n`;
-    super(
-      `resource: invalid value.\n` +
-        `  code: resource-invalid-value\n` +
-        keyClause +
-        `  receivedMode: ${detail.receivedMode}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = detail;
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// feat-20260521-sprite-atlas-animation M1 T-05 — closed-union evolution +1.
-//
-// Adds 1 new member 'sprite-animation-invalid' to EcsErrorCode (25 -> 26).
-// AGENTS.md §Error model evolution contract: minor (add member only).
-// Same-shape add-only mirror of SpawnLightInvalidBoundsError (feat-20260519
-// w2 line 736-776) and ResourceInvalidValueError (feat-20260520 w13 line
-// 862) — the kebab `'<noun>-invalid-...'` series keeps `switch (err.code)`
-// exhaustive narrows visually consistent (charter P4 consistent abstraction;
-// research F-7 candidate A).
-//
-// Triggered by `spriteAnimationTickSystem` (packages/runtime/src/systems/
-// sprite-animation-tick.ts, landed in M4 T-23) when an entity's
-// `SpriteAnimation` row violates one of two runtime invariants:
-//
-//   - field='regions-length' -> `regions.length !== frameCount * 4`
-//   - field='frame-duration' -> `frameDuration <= 0`
-//
-// `.detail.field` two-branch (charter P3: AI users branch once on
-// `err.code` and once on `err.detail.field` to reach the recovery hint
-// without parsing the message). Plan-strategy section 2 D-1 binds the
-// detail field shape; M4 T-19 / T-20 / T-21 cover the runtime fail-fast
-// paths end-to-end.
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Returned via `Result.err` from `spriteAnimationTickSystem` (M4 T-23) when
- * an entity's `SpriteAnimation` row violates a runtime invariant.
- * Two invariants share one `.code` and discriminate via `.detail.field`:
- *
- * - `regions-length` — `SpriteAnimation.regions.length !== frameCount * 4`.
- *   `regions` packs `[uMin, vMin, uW, vH]` per frame so the length must be
- *   exactly `frameCount * 4`. Detail carries the offending `regionsLength`
- *   alongside the declared `frameCount` so the hint can spell the exact
- *   delta in callsite-friendly numbers.
- * - `frame-duration` — `SpriteAnimation.frameDuration <= 0` (covers both
- *   `frameDuration === 0` and `frameDuration < 0`; T-21 binds the negative
- *   case to the same arm so AI users handle both via a single
- *   `if (err.detail.field === 'frame-duration')` branch — charter P4
- *   consistent abstraction).
- *
- * `.code = 'sprite-animation-invalid'`
- * `.detail = { field: 'regions-length', regionsLength, frameCount } |
- *            { field: 'frame-duration', frameDuration }`
- *
- * Two top-level detail variants give each `.field` branch its own
- * required sub-field shape so AI users get strong narrowing inside
- * `switch (err.detail.field)` without optional sub-fields bleeding
- * across branches (mirrors `SpawnLightInvalidBoundsError`'s shared
- * `got: number` shape but adapted because regions-length /
- * frame-duration carry different sub-field counts).
- *
- * `.hint` — names the offending invariant plus the valid replacement form.
- */
-export class SpriteAnimationInvalidError extends Error {
-  override readonly name = 'SpriteAnimationInvalidError';
-  readonly code = 'sprite-animation-invalid' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail:
-    | {
-        readonly field: 'regions-length';
-        readonly regionsLength: number;
-        readonly frameCount: number;
-      }
-    | {
-        readonly field: 'frame-duration';
-        readonly frameDuration: number;
-      };
-
-  constructor(
-    detail:
-      | { field: 'regions-length'; regionsLength: number; frameCount: number }
-      | { field: 'frame-duration'; frameDuration: number },
-  ) {
-    let hint: string;
-    let expectedStr: string;
-    switch (detail.field) {
-      case 'regions-length':
-        expectedStr = 'SpriteAnimation.regions.length === frameCount * 4';
-        hint = `SpriteAnimation.regions.length = ${detail.regionsLength} does not match frameCount * 4 = ${detail.frameCount * 4}; pack 4 floats [uMin, vMin, uW, vH] per frame (see <name>.atlas.meta.json sidecar 'regions' map)`;
-        break;
-      case 'frame-duration':
-        expectedStr = 'SpriteAnimation.frameDuration > 0';
-        hint = `SpriteAnimation.frameDuration = ${detail.frameDuration} is invalid; use a positive seconds-per-frame value (e.g. 0.1 = 10 fps)`;
-        break;
-    }
-    super(
-      `SpriteAnimation: invariant violated.\n` +
-        `  code: sprite-animation-invalid\n` +
-        `  field: ${detail.field}\n` +
-        `  expected: ${expectedStr}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expectedStr;
-    this.detail = detail;
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// feat-20260531-ecs-relationship-abstraction-bidirectional-sync M2 — closed-
-// union evolution +4 (plan-strategy D-5). Adds 4 `relationship-*` kebab codes
-// (27 -> 31, add-only minor per AGENTS.md Error model evolution contract):
-//
-//   - relationship-self-cycle                       (cycle / ancestor walk hit)
-//   - relationship-mirror-component-not-registered  (defineComponent gate a)
-//   - relationship-mirror-field-type-mismatch       (defineComponent gate b)
-//   - relationship-detach-mismatch                  (removeChild parent arg mismatch)
-//
-// `relationship-exclusive-violation` is intentionally NOT a member: exclusive
-// re-add is an automatic reparent (a success path, D-1 style), not an error.
-// Every detail object is a discriminated payload narrowed via EcsErrorDetail.
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Returned via `Result.err` from `world.addChild` / `world.reparent` (M3) when
- * a hierarchy write would form a cycle — either the child is its own parent
- * (self-loop) or the proposed parent is already a descendant of the child
- * (ancestor-walk hit). The `.detail` carries both the offending child entity
- * and the ancestor entity that closed the cycle so AI users can locate the
- * loop without re-walking the graph.
- *
- * `.code = 'relationship-self-cycle'`
- * `.detail = { component, entity, ancestor }`
- * `.hint` — names the child + ancestor that would close the cycle.
- */
-export class RelationshipSelfCycleError extends Error {
-  override readonly name = 'RelationshipSelfCycleError';
-  readonly code = 'relationship-self-cycle' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: {
-    readonly component: string;
-    readonly entity: number;
-    readonly ancestor: number;
-  };
-
-  constructor(component: string, entity: number, ancestor: number) {
-    const hint = `Linking entity ${entity} via "${component}" would close a cycle through ancestor ${ancestor}. Reparent to an entity that is not a descendant of ${entity}.`;
-    const expected = 'acyclic parent chain';
-    super(
-      `relationship: cycle detected.\n` +
-        `  code: relationship-self-cycle\n` +
-        `  component: ${component}\n` +
-        `  entity: ${entity}\n` +
-        `  ancestor: ${ancestor}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = { component, entity, ancestor };
-  }
-}
-
-/**
- * Thrown by `defineComponent` (feat-20260602 M2) when a component declares a
- * `relationship.mirror` naming a component that has not yet been defined
- * (AC-09). AI users defineComponent the mirror before the holder (mirror-then-
- * holder order).
- *
- * The `.code` literal `relationship-mirror-component-not-registered` is kept
- * unchanged across the M2 migration (deliberate terminology trade-off:
- * external `.code` stability over wording precision); only the `.hint` text
- * drops the register/registered phrasing in favour of defineComponent ordering
- * guidance.
- *
- * `.code = 'relationship-mirror-component-not-registered'`
- * `.detail = { component, mirror }`
- * `.hint` — names the holder + the undefined mirror component.
- */
-export class RelationshipMirrorComponentNotRegisteredError extends Error {
-  override readonly name = 'RelationshipMirrorComponentNotRegisteredError';
-  readonly code = 'relationship-mirror-component-not-registered' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly component: string; readonly mirror: string };
-
-  constructor(component: string, mirror: string) {
-    const hint = `Component "${component}" declares relationship.mirror = "${mirror}", but "${mirror}" has not been defined yet. defineComponent the mirror component before the holder (define them in mirror-then-holder order).`;
-    const expected = `mirror component "${mirror}" registered`;
-    super(
-      `relationship: mirror component not registered.\n` +
-        `  code: relationship-mirror-component-not-registered\n` +
-        `  component: ${component}\n` +
-        `  mirror: ${mirror}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = { component, mirror };
-  }
-}
-
-/**
- * Thrown by `defineComponent` (feat-20260602 M2) when the
- * `relationship.field` on the mirror component is missing or its schema type
- * is not the only legal back-reference storage shape `array<entity>`
- * (AC-11 b). AI users declare the mirror field as `'array<entity>'`.
- *
- * `.code = 'relationship-mirror-field-type-mismatch'`
- * `.detail = { component, mirror, field, actualType }`
- * `.hint` — names the holder + mirror field + the type observed.
- */
-export class RelationshipMirrorFieldTypeMismatchError extends Error {
-  override readonly name = 'RelationshipMirrorFieldTypeMismatchError';
-  readonly code = 'relationship-mirror-field-type-mismatch' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: {
-    readonly component: string;
-    readonly mirror: string;
-    readonly field: string;
-    readonly actualType: string;
-  };
-
-  constructor(component: string, mirror: string, field: string, actualType: string) {
-    const hint = `Component "${component}" mirror "${mirror}".${field} has type "${actualType}"; the reverse-list field must be declared as 'array<entity>'.`;
-    const expected = "mirror field type === 'array<entity>'";
-    super(
-      `relationship: mirror field type mismatch.\n` +
-        `  code: relationship-mirror-field-type-mismatch\n` +
-        `  component: ${component}\n` +
-        `  mirror: ${mirror}\n` +
-        `  field: ${field}\n` +
-        `  actualType: ${actualType}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = { component, mirror, field, actualType };
-  }
-}
-
-/**
- * Returned via `Result.err` from `world.removeChild` (M3) when the `parent`
- * argument does not match the child's current relationship parent (the child
- * lacks the relationship component, or it points at a different parent). The
- * `.detail` carries the expected (argument) parent + the actual current parent
- * so AI users can reconcile their model.
- *
- * `.code = 'relationship-detach-mismatch'`
- * `.detail = { component, child, expectedParent, actualParent }`
- *   `actualParent === ENTITY_NULL_RAW` (0) signals the child has no relationship.
- * `.hint` — names the child + the parent mismatch.
- */
-export class RelationshipDetachMismatchError extends Error {
-  override readonly name = 'RelationshipDetachMismatchError';
-  readonly code = 'relationship-detach-mismatch' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: {
-    readonly component: string;
-    readonly child: number;
-    readonly expectedParent: number;
-    readonly actualParent: number;
-  };
-
-  constructor(component: string, child: number, expectedParent: number, actualParent: number) {
-    const hint = `removeChild(${expectedParent}, ${child}) via "${component}": child's current parent is ${actualParent}, not ${expectedParent}. Detach from the actual parent or re-read the current relationship.`;
-    const expected = `child's "${component}" parent === ${expectedParent}`;
-    super(
-      `relationship: detach parent mismatch.\n` +
-        `  code: relationship-detach-mismatch\n` +
-        `  component: ${component}\n` +
-        `  child: ${child}\n` +
-        `  expectedParent: ${expectedParent}\n` +
-        `  actualParent: ${actualParent}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = { component, child, expectedParent, actualParent };
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// feat-20260531-query-optional-components M1 — closed-union evolution +1.
-//
-// Adds 1 new member 'query-descriptor-with-optional-conflict' to EcsErrorCode
-// (31 -> 32). AGENTS.md §Error model evolution contract: minor (add member
-// only). Same-shape add-only mirror of ScheduleMutationError — the kebab
-// `<noun>-<problem>` series keeps `switch (err.code)` exhaustive narrows
-// visually consistent (charter P4).
-//
-// Triggered by `createQueryState` when a component token appears in both
-// `with` and `optional` arrays — the two roles are contradictory (with =
-// must be present for matching; optional = may be absent, data-only).
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Thrown / returned via `Result.err` from `createQueryState` when the same
- * component token appears in both `with` and `optional` — the two roles are
- * contradictory. AI users remove the component from one of the two lists.
- *
- * `.code = 'query-descriptor-with-optional-conflict'`
- * `.detail = { tokenName }`
- * `.hint` — names the conflicting component + the resolution (remove from
- *   `with` or `optional`).
- */
-export class QueryDescriptorOptionalConflictError extends Error {
-  override readonly name = 'QueryDescriptorOptionalConflictError';
-  readonly code = 'query-descriptor-with-optional-conflict' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly tokenName: string };
-
-  constructor(tokenName: string) {
-    const hint = `Component "${tokenName}" appears in both \`with\` and \`optional\`. These roles conflict: \`with\` requires the component for matching, while \`optional\` is data-only. Remove "${tokenName}" from one of the two lists.`;
-    const expectedStr = 'disjoint with and optional component sets';
-    super(
-      `QueryDescriptor: with-optional conflict.\n` +
-        `  code: query-descriptor-with-optional-conflict\n` +
-        `  token: ${tokenName}\n` +
-        `  expected: ${expectedStr}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expectedStr;
-    this.detail = { tokenName };
-  }
-}
-
-/**
- * Thrown by `queryCombinations` when the query state's `with` list omits the
- * `Entity` component. Combinations yield entity-handle tuples (the caller reads
- * each via `world.get`), so `Entity` must be in `with` — the same requirement
- * `queryRun` documents for `bundle.Entity.self`. Fail-fast at the
- * `queryCombinations` entry (mirrors QueryDescriptorOptionalConflictError's
- * setup-time self-consistency shape).
- *
- * `.code = 'query-combinations-entity-required'`; `.detail.withNames` carries
- * the declared component names.
- */
-export class QueryCombinationsEntityRequiredError extends Error {
-  override readonly name = 'QueryCombinationsEntityRequiredError';
-  readonly code = 'query-combinations-entity-required' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly withNames: readonly string[] };
-
-  constructor(withNames: readonly string[]) {
-    const hint = `queryCombinations yields entity-handle tuples, so the query's \`with\` list must include the \`Entity\` component. Add \`Entity\` to \`with\` (currently: [${withNames.join(', ')}]).`;
-    const expectedStr = 'Entity component present in the query `with` list';
-    super(
-      `queryCombinations: Entity component required.\n` +
-        `  code: query-combinations-entity-required\n` +
-        `  with: [${withNames.join(', ')}]\n` +
-        `  expected: ${expectedStr}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expectedStr;
-    this.detail = { withNames };
-  }
-}
-
-/**
- * Returned via `Result.err` from `world.removeComponent` when the caller tries
- * to remove an essential (undeletable) component
- * (feat-20260602-archetype-stores-full-packed-entity M1 / w3, plan-strategy
- * D-3). The only essential component today is the id=0 `Entity` component: every
- * archetype carries it unconditionally as the row's own packed handle, so
- * removing it is structurally meaningless. The code name is deliberately
- * generic (`remove-essential-component`, not entity-specific) so a future second
- * essential component reuses it without a rename.
- *
- * `.code = 'remove-essential-component'`
- * `.detail = { componentName }`
- * `.hint` — names the essential component + states it cannot be removed.
- */
-export class RemoveEssentialComponentError extends Error {
-  override readonly name = 'RemoveEssentialComponentError';
-  readonly code = 'remove-essential-component' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly componentName: string };
-
-  constructor(componentName: string) {
-    const hint = `Component "${componentName}" is essential (every entity carries it unconditionally) and cannot be removed. Despawn the entity instead if you want to retire it.`;
-    const expected = 'non-essential component';
-    super(
-      `removeComponent: essential component cannot be removed.\n` +
-        `  code: remove-essential-component\n` +
-        `  component: ${componentName}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = { componentName };
-  }
-}
-
-/**
- * Returned via the `Result` err branch when `instantiate` encounters a
- * SceneAsset entity whose `components` map references a component name that was
- * never passed to `defineComponent`.
- *
- * `.code = 'component-not-defined'`
- * `.detail.name` — the offending component name.
- *
- * Promoting this to a class (rather than a bare object literal) keeps the
- * scene-instantiate failure surface inside the `EcsError` class union, so the
- * documented two-level narrow `cause instanceof EcsError` actually matches it
- * (docs/feedbacks/2026-06-03 §6.2 Tier 4.2). `expected` / `hint` accept
- * per-call overrides because the parent-passthrough (ChildOf) site needs a
- * distinct message from the generic entity-component site.
- */
-export class ComponentNotDefinedError extends Error {
-  override readonly name = 'ComponentNotDefinedError';
-  readonly code = 'component-not-defined' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: { readonly name: string };
-
-  constructor(componentName: string, opts?: { expected?: string; hint?: string }) {
-    const expected = opts?.expected ?? `component '${componentName}' defined before instantiate`;
-    const hint =
-      opts?.hint ??
-      `define the component via defineComponent('${componentName}', ...) before instantiating this SceneAsset`;
-    super(
-      `instantiate: component not defined.\n` +
-        `  code: component-not-defined\n` +
-        `  component: ${componentName}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = { name: componentName };
-  }
-}
-
-/**
- * Returned via `Result.err` from `world.spawn` / `world.addComponent` /
- * `world.instantiateScene` / `Commands.spawn` when the caller-supplied
- * data payload carries a key that is not declared in the target component's
- * schema. The pre-fix behaviour silently dropped unknown keys inside
- * `fillComponentDefaults` (which walked schema keys, never raw keys), so a
- * typo like `MeshRenderer { material: h }` (singular legacy field name; the
- * current schema has `materials: array<...>`) produced an empty-defaults row
- * + an invisible / mid-grey entity downstream. Surfacing the typo at the
- * spawn boundary collapses a class of "renders wrong, looks like a graphics
- * bug" reports into a single explicit error.
- *
- * `.code = 'spawn-data-unknown-field'`
- * `.detail = { component, field, knownFields }`
- * `.hint` — names the offending field and lists the schema's known fields.
- */
-export class SpawnDataUnknownFieldError extends Error {
-  override readonly name = 'SpawnDataUnknownFieldError';
-  readonly code = 'spawn-data-unknown-field' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: {
-    readonly component: string;
-    readonly field: string;
-    readonly knownFields: readonly string[];
-  };
-
-  constructor(componentName: string, fieldName: string, knownFields: readonly string[]) {
-    const sortedKnown = [...knownFields].sort();
-    const expected = `field name in {${sortedKnown.join(', ')}}`;
-    const hint =
-      `'${fieldName}' is not a schema field of '${componentName}'. ` +
-      `Known fields: ${sortedKnown.join(', ')}. ` +
-      `Check for a typo or a stale single-vs-plural rename (e.g. 'material' vs 'materials').`;
-    super(
-      `${componentName}: spawn data carries unknown field.\n` +
-        `  code: spawn-data-unknown-field\n` +
-        `  component: ${componentName}\n` +
-        `  field: ${fieldName}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = { component: componentName, field: fieldName, knownFields: sortedKnown };
-  }
-}
-
-/**
- * feat-20260713-mount-override-component-add-and-shared-ref-round M2 / w9 —
- * `.code = 'shared-field-invalid-value'`.
- *
- * A `shared<T>` scalar / `array<shared<T>>` element must be a resolved numeric
- * Handle. A raw GUID string / `{ guid }` / `{ kind }` object (the
- * pre-resolution shape a sidecar hands an AI user) used to be silently coerced
- * to the all-zero sentinel by the column packer / scalar write path, so a
- * mis-bound reference read back as `0` / `[0,0,0,0]` and rendered blank with no
- * error. `validateComponentDataKeys` only checks key NAMES, not value types;
- * this error closes the value-type gap at all three write entries
- * (spawn / addComponent / set). `.detail.field` + `.detail.fieldType` name the
- * offending field; `.detail.index` locates the array element (undefined for the
- * scalar form).
- *
- * `.detail = { component, field, fieldType, actualValue, index? }`
- * `.hint` — names the field and points at `loadByGuid + allocSharedRef`.
- */
-export class SharedFieldInvalidValueError extends Error {
-  override readonly name = 'SharedFieldInvalidValueError';
-  readonly code = 'shared-field-invalid-value' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: {
-    readonly component: string;
-    readonly field: string;
-    readonly fieldType: string;
-    readonly actualValue: unknown;
-    readonly index?: number;
-  };
-
-  constructor(
-    componentName: string,
-    fieldName: string,
-    fieldType: string,
-    actualValue: unknown,
-    index?: number,
-  ) {
-    const at = index === undefined ? '' : `[${index}]`;
-    const expected = `a resolved numeric Handle for shared field '${fieldName}${at}'`;
-    const hint =
-      `'${fieldName}${at}' on '${componentName}' is a ${fieldType} reference; ` +
-      `got ${typeof actualValue} (${JSON.stringify(actualValue)}). ` +
-      `Resolve the GUID to a handle first: loadByGuid(...) then allocSharedRef(...), ` +
-      `and bind the returned numeric handle — not the raw GUID / sidecar object.`;
-    super(
-      `${componentName}.${fieldName}${at}: shared field bound to a non-handle value.\n` +
-        `  code: shared-field-invalid-value\n` +
-        `  component: ${componentName}\n` +
-        `  field: ${fieldName}${at}\n` +
-        `  fieldType: ${fieldType}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail =
-      index === undefined
-        ? { component: componentName, field: fieldName, fieldType, actualValue }
-        : { component: componentName, field: fieldName, fieldType, actualValue, index };
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M1 / w2 —
-// closed-union evolution +3 for the SpriteInstances primitive + tilemap
-// terrain static-batch path. AGENTS.md §Error model evolution contract: minor
-// (add member only).
-//
-// All 3 codes are DECLARED here (M1) but FIRED at the render-system-extract
-// queryRun callback (M3 w13) — plan-strategy D-6 "fail-fast at the render
-// domain entry, not at ECS spawn-time (avoids reverse dep ECS -> AssetRegistry
-// to look up MaterialAsset.shadingModel)". M1 carries class declarations only;
-// the `_routeError` call sites land in M3.
-//
-// Three codes, three failure shapes:
-//   - 'sprite-instances-count-mismatch' — transforms.length / 16 !==
-//     regions.length / 4 (stride contract; cf. instance-transforms-stride-
-//     mismatch which guards Instances stride 16).
-//   - 'sprite-instances-requires-sprite-shader' — the entity's MaterialAsset's
-//     first pass shader is not 'forgeax::sprite' (extract-time check; AI users
-//     using SpriteInstances must pick a sprite-shaded material).
-//   - 'sprite-instances-mutually-exclusive-with-instances' — the same entity
-//     carries both Instances + SpriteInstances (the two primitives are peers;
-//     SpriteInstances supersedes Instances when per-instance UV region is
-//     needed).
-//
-// .hint follows charter P3: each contains the literal repair step AI users
-// can paste back into spawn code (transforms/regions stride math; shading
-// model field write; component removal).
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Thrown / returned via Layer-3 error route when `SpriteInstances.transforms`
- * (stride 16 — column-major mat4 per instance) and `SpriteInstances.regions`
- * (stride 4 — per-instance UV vec4) instance counts disagree at render-system-
- * extract entry.
- *
- * `.code = 'sprite-instances-count-mismatch'`
- * `.detail = { transformsLength, regionsLength, expectedStride: { transforms: 16, regions: 4 } }`
- * `.hint` — instructs the AI user to enforce
- *   `transforms.length / 16 === regions.length / 4`.
- */
-export class SpriteInstancesCountMismatchError extends Error {
-  override readonly name = 'SpriteInstancesCountMismatchError';
-  readonly code = 'sprite-instances-count-mismatch' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: {
-    readonly code: 'sprite-instances-count-mismatch';
-    readonly transformsLength: number;
-    readonly regionsLength: number;
-    readonly expectedStride: { readonly transforms: 16; readonly regions: 4 };
-  };
-
-  constructor(transformsLength: number, regionsLength: number) {
-    const hint =
-      'SpriteInstances.transforms (stride 16) and SpriteInstances.regions (stride 4) ' +
-      'must describe the same instance count: ensure transforms.length / 16 === regions.length / 4 ' +
-      'at the spawn / set site (resize both arrays together).';
-    const expected = 'transforms.length / 16 === regions.length / 4';
-    super(
-      `SpriteInstances: per-instance count mismatch between transforms and regions.\n` +
-        `  code: sprite-instances-count-mismatch\n` +
-        `  transformsLength: ${transformsLength} (count = ${transformsLength / 16})\n` +
-        `  regionsLength: ${regionsLength} (count = ${regionsLength / 4})\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = {
-      code: 'sprite-instances-count-mismatch',
-      transformsLength,
-      regionsLength,
-      expectedStride: { transforms: 16, regions: 4 },
-    };
-  }
-}
-
-/**
- * Thrown / returned via Layer-3 error route when an entity carrying
- * `SpriteInstances` references a MaterialAsset whose first pass shader is not
- * `'forgeax::sprite'`. Detected at render-system-extract entry (M3 w13).
- *
- * `.code = 'sprite-instances-requires-sprite-shader'`
- * `.detail = { entityId, observedMaterialShaderId }`
- * `.hint` — instructs the AI user to bind a MaterialAsset whose first pass
- *   `shader` is `'forgeax::sprite'` or `'forgeax::sprite-lit'`.
- *
- * feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / t6:
- * sprite-lit walks the same per-instance UV region vertex path as sprite
- * (VsOut byte-identical, paramSchema mirror); both shader ids are accepted.
- */
-export class SpriteInstancesRequiresSpriteShaderError extends Error {
-  override readonly name = 'SpriteInstancesRequiresSpriteShaderError';
-  readonly code = 'sprite-instances-requires-sprite-shader' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: {
-    readonly code: 'sprite-instances-requires-sprite-shader';
-    readonly entityId: number;
-    readonly observedMaterialShaderId: string;
-  };
-
-  constructor(entityId: number, observedMaterialShaderId: string) {
-    const hint =
-      "bind a MaterialAsset whose first pass `shader` is 'forgeax::sprite' " +
-      "or 'forgeax::sprite-lit' to this entity's MeshRenderer (SpriteInstances " +
-      'requires a sprite-family shader so the per-instance UV region is consumed ' +
-      'by the sprite vertex shader path).';
-    const expected =
-      "MaterialAsset.passes[0].shader === 'forgeax::sprite' || 'forgeax::sprite-lit'";
-    super(
-      `SpriteInstances: entity ${entityId} requires a sprite-shaded MaterialAsset.\n` +
-        `  code: sprite-instances-requires-sprite-shader\n` +
-        `  entityId: ${entityId}\n` +
-        `  observedMaterialShaderId: ${observedMaterialShaderId}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = {
-      code: 'sprite-instances-requires-sprite-shader',
-      entityId,
-      observedMaterialShaderId,
-    };
-  }
-}
-
-/**
- * Thrown / returned via Layer-3 error route when the same entity carries both
- * `Instances` (3D per-instance mat4) and `SpriteInstances` (2D per-instance
- * mat4 + UV region). The two primitives are peers — pick one. Detected at
- * render-system-extract entry (M3 w13).
- *
- * `.code = 'sprite-instances-mutually-exclusive-with-instances'`
- * `.detail = { entityId }`
- * `.hint` — instructs the AI user to remove one of the two components.
- */
-export class SpriteInstancesMutuallyExclusiveWithInstancesError extends Error {
-  override readonly name = 'SpriteInstancesMutuallyExclusiveWithInstancesError';
-  readonly code = 'sprite-instances-mutually-exclusive-with-instances' as const;
-  readonly hint: string;
-  readonly expected: string;
-  readonly detail: {
-    readonly code: 'sprite-instances-mutually-exclusive-with-instances';
-    readonly entityId: number;
-  };
-
-  constructor(entityId: number) {
-    const hint =
-      'remove Instances or replace with SpriteInstances; SpriteInstances supersedes ' +
-      'Instances when per-instance region is needed.';
-    const expected = 'entity carries Instances XOR SpriteInstances (not both)';
-    super(
-      `SpriteInstances: entity ${entityId} carries both Instances and SpriteInstances.\n` +
-        `  code: sprite-instances-mutually-exclusive-with-instances\n` +
-        `  entityId: ${entityId}\n` +
-        `  expected: ${expected}\n` +
-        `  hint: ${hint}`,
-    );
-    this.hint = hint;
-    this.expected = expected;
-    this.detail = {
-      code: 'sprite-instances-mutually-exclusive-with-instances',
-      entityId,
-    };
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
 // EcsErrorCode closed union (w5)
 //
 // Merges every `.code` literal across the EcsError family. Downstream
@@ -1836,6 +976,63 @@ export class SpriteInstancesMutuallyExclusiveWithInstancesError extends Error {
 // Order is grouped (legacy SCREAMING_SNAKE first, then closed-set kebab) but
 // not load-bearing — TS unions are unordered.
 // ────────────────────────────────────────────────────────────────────────────
+
+export class TimeDeltaInvalidError extends Error {
+  override readonly name = 'TimeDeltaInvalidError';
+  readonly code = 'time-delta-invalid' as const;
+  readonly expected = 'a finite delta greater than or equal to 0';
+  readonly hint = 'Call world.update(deltaSeconds) with a finite non-negative delta.';
+  readonly detail: { readonly received: number };
+
+  constructor(received: number) {
+    super(
+      `Invalid world.update delta: ${received}.\n  expected: a finite delta greater than or equal to 0\n  hint: Call world.update(deltaSeconds) with a finite non-negative delta.`,
+    );
+    this.detail = { received };
+  }
+}
+
+export class TimeConfigInvalidError extends Error {
+  override readonly name = 'TimeConfigInvalidError';
+  readonly code = 'time-config-invalid' as const;
+  readonly expected: string;
+  readonly hint = 'Increase maxDeltaSeconds or decrease maxStepsPerUpdate or fixedDeltaSeconds.';
+  readonly detail: {
+    readonly fixedDeltaSeconds: number;
+    readonly maxStepsPerUpdate: number;
+    readonly maxDeltaSeconds: number;
+  };
+
+  constructor(detail: TimeConfigInvalidError['detail']) {
+    const expected = 'maxDeltaSeconds >= (maxStepsPerUpdate + 1) * fixedDeltaSeconds';
+    super(
+      `Invalid World time policy.\n  expected: ${expected}\n  hint: Increase maxDeltaSeconds or decrease maxStepsPerUpdate or fixedDeltaSeconds.`,
+    );
+    this.expected = expected;
+    this.detail = detail;
+  }
+}
+
+export class ScheduleScopeMismatchError extends Error {
+  override readonly name = 'ScheduleScopeMismatchError';
+  readonly code = 'schedule-scope-mismatch' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: {
+    readonly sourceSchedule: string;
+    readonly targetSchedule: string;
+    readonly reference?: string;
+  };
+
+  constructor(sourceSchedule: string, targetSchedule: string, reference?: string) {
+    const expected = `a reference owned by ${sourceSchedule}`;
+    const hint = `The referenced item belongs to ${targetSchedule}; register and order it in ${sourceSchedule}.`;
+    super(`Schedule scope mismatch.\n  expected: ${expected}\n  hint: ${hint}`);
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = { sourceSchedule, targetSchedule, ...(reference ? { reference } : {}) };
+  }
+}
 
 /** Closed union of every `.code` literal carried by EcsError instances. */
 export type EcsErrorCode =
@@ -1849,6 +1046,11 @@ export type EcsErrorCode =
   | 'component-not-present'
   | 'cyclic-dependency'
   | 'resource-not-found'
+  // ECS time and schedule-scope errors (M2 w16, approved 43 -> 46 baseline; verify hotfix +1 → 47).
+  | 'time-delta-invalid'
+  | 'time-config-invalid'
+  | 'schedule-scope-mismatch'
+  | 'resource-protected'
   // ScheduleMutationError closed-set kebab codes (3).
   | ScheduleMutationErrorCode
   // w5 managed-* kebab codes (4).

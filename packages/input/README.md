@@ -5,7 +5,7 @@
 ## 4 步 recipe
 
 ```ts
-import { World } from '@forgeax/engine-ecs';
+import { Update, World } from '@forgeax/engine-ecs';
 import {
   attachBrowserInputBackend,
   INPUT_BACKEND_KEY,
@@ -35,12 +35,12 @@ world.insertResource(INPUT_MAP_KEY, [
   { action: 'moveDown',  bindings: [{ type: 'key', key: 's' }, { type: 'gamepadAxis', axis: 1, sign: 1 }] },
 ]);
 
-world.addSystem(InputFrameStartScan);
+world.addSystem(Update, InputFrameStartScan);
 
 // 3. user system reads the frozen snapshot via the standard Resource API;
 //    multi-device surface: keyboard + mouse + gamepad + pointer + virtualAxis
 //    + action + gesture
-world.addSystem({
+world.addSystem(Update, {
   name: 'first-person-camera',
   after: ['input-frame-start-scan'],
   queries: [],
@@ -269,4 +269,4 @@ Frozen into `snap.mouse.pointerLocked` at frame-start. Consumers read `if (snap.
 ## 相关包
 
 - [`@forgeax/engine-ecs`](../ecs) — 提供 `World` + Resource 存储 + Schedule（消费方契约依赖：`world.insertResource('InputSnapshot', frozenSnapshot)`）
-- [`@forgeax/engine-runtime`](../runtime) — 在 `Engine.create({ canvas })` 流水线里调用 `attachBrowserInputBackend(canvas)`、`world.insertResource(INPUT_BACKEND_KEY, backend)` 与 `world.addSystem(InputFrameStartScan)`，对 AI 用户屏蔽组装细节
+- [`@forgeax/engine-runtime`](../runtime) — 在 `Engine.create({ canvas })` 流水线里调用 `attachBrowserInputBackend(canvas)`、`world.insertResource(INPUT_BACKEND_KEY, backend)` 与 `world.addSystem(Update, InputFrameStartScan)`，对 AI 用户屏蔽组装细节

@@ -277,8 +277,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
 
         registerPhysicsSystems(world);
         for (let i = 0; i < 5; i++) {
-          world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
-          world.update();
+          world.update(1 / 60).unwrap();
+          world.update(1 / 60).unwrap();
         }
 
         // Ray at y=1 toward +X can only reach the target (ground tops out at y=0).
@@ -395,8 +395,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
           .unwrap();
 
         registerPhysicsSystems(world);
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         let ccdBodies = 0;
         pw.raw.forEachRigidBody((b: { isCcdEnabled(): boolean }) => {
@@ -489,8 +489,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         registerPhysicsSystems(world);
 
         for (let i = 0; i < 60; i++) {
-          world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
-          world.update();
+          world.update(1 / 60).unwrap();
+          world.update(1 / 60).unwrap();
         }
 
         const finalDynamic = world.get(dynamicEntity, Transform as never);
@@ -579,8 +579,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         registerPhysicsSystems(world);
 
         for (let i = 0; i < 90; i++) {
-          world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
-          world.update();
+          world.update(1 / 60).unwrap();
+          world.update(1 / 60).unwrap();
         }
 
         const finalBall = world.get(ball, Transform as never);
@@ -626,8 +626,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
           .unwrap();
         registerPropagateTransforms(world);
         registerPhysicsSystems(world);
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         const alongX = pw.raycast(
           Float32Array.of(-5, 0, 0) as never,
@@ -669,14 +669,14 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
           .unwrap();
         registerPropagateTransforms(world);
         registerPhysicsSystems(world);
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
         world.set(obstacle, Transform as never, {
           quat: [0, 0, Math.SQRT1_2, Math.SQRT1_2],
           scale: [2, 1, 1],
         });
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 2 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         const alongY = pw.raycast(
           Float32Array.of(0, -5, 0) as never,
@@ -730,8 +730,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
             .unwrap();
           registerPhysicsSystems(world);
           for (let i = 0; i < 300; i++) {
-            world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
-            world.update();
+            world.update(1 / 60).unwrap();
+            world.update(1 / 60).unwrap();
           }
           const r = world.get(ball, Transform as never);
           expect(r.ok).toBe(true);
@@ -829,8 +829,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         registerPropagateTransforms(world);
         registerPhysicsSystems(world);
         for (let i = 0; i < 5; i++) {
-          world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
-          world.update();
+          world.update(1 / 60).unwrap();
+          world.update(1 / 60).unwrap();
         }
 
         const colliding = world.get(sensor, CollidingEntities as never);
@@ -932,7 +932,7 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
 //
 // Shared scene builder: spawns a kinematic capsule character (RigidBody +
 // Collider + CharacterController) plus optional static geometry, drives one
-// world.update() to push the bodies into the Rapier world, then returns the
+// world.update(1 / 60).unwrap() to push the bodies into the Rapier world, then returns the
 // handles so each test can call pw.moveAndSlide(entity, delta) directly.
 
 {
@@ -1023,8 +1023,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnStaticBox(world, { pos: [0, -0.85, 0], halfExtents: [10, 0.5, 10] });
         const char = spawnCharacter(world, [0, 0, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         const actual = pw.moveAndSlide(char, Float32Array.of(1, 0, 0) as never);
         expect(actual[0]).toBeCloseTo(1, 1);
@@ -1046,8 +1046,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnStaticBox(world, { pos: [0.8, 0.5, 0], halfExtents: [0.1, 1, 2] });
         const char = spawnCharacter(world, [0, 0, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         const actual = pw.moveAndSlide(char, Float32Array.of(1, 0, 0) as never);
         expect(actual[0]).toBeLessThan(1);
@@ -1068,8 +1068,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnStaticBox(world, { pos: [0.8, 0.5, 0], halfExtents: [0.1, 1, 4] });
         const char = spawnCharacter(world, [0, 0, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         // Push diagonally into the wall: +x (blocked) and +z (tangential, free).
         const actual = pw.moveAndSlide(char, Float32Array.of(1, 0, 1) as never);
@@ -1098,16 +1098,16 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         const a = spawnCharacter(world, [0, 0, 0]);
         const b = spawnCharacter(world, [10, 0, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         // Drive both KCCs every frame, mirroring player-move + guardian-ai.
         const startA = tfPos(world, a).x;
         for (let i = 0; i < 5; i++) {
           pw.moveAndSlide(a, Float32Array.of(0.1, -0.01, 0) as never);
           pw.moveAndSlide(b, Float32Array.of(-0.1, -0.01, 0) as never);
-          world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 2) / 60 });
-          world.update();
+          world.update(1 / 60).unwrap();
+          world.update(1 / 60).unwrap();
         }
 
         // Character A must have advanced well past a single frame's step
@@ -1142,14 +1142,14 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
           )
           .unwrap();
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         const start = tfPos(world, char).x;
         for (let i = 0; i < 5; i++) {
           pw.moveAndSlide(char, Float32Array.of(0.1, -0.01, 0) as never);
-          world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 2) / 60 });
-          world.update();
+          world.update(1 / 60).unwrap();
+          world.update(1 / 60).unwrap();
         }
         // The character must slide through the sensor, not be walled by it.
         expect(tfPos(world, char).x - start).toBeGreaterThan(0.3);
@@ -1186,8 +1186,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnRawRamp(pw, RAPIER, [2, -0.85, 0], 30);
         const char = spawnCharacter(world, [0.7, 0.05, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
         // gravity pulse to settle onto the ramp surface.
         pw.moveAndSlide(char, Float32Array.of(0, -0.15, 0) as never);
 
@@ -1213,8 +1213,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnRawRamp(pw, RAPIER, [1.5, -0.85, 0], 60);
         const char = spawnCharacter(world, [0.7, 0.05, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
         pw.moveAndSlide(char, Float32Array.of(0, -0.15, 0) as never);
 
         let totalX = 0;
@@ -1246,8 +1246,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnStaticBox(world, { pos: [2, -0.45, 0], halfExtents: [1, 0.2, 4] });
         const char = spawnCharacter(world, [0, 0.45, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
         pw.moveAndSlide(char, Float32Array.of(0, -0.15, 0) as never);
 
         const before = tfPos(world, char).y;
@@ -1282,8 +1282,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnStaticBox(world, { pos: [2, -0.05, 0], halfExtents: [2, 0.5, 4] });
         const char = spawnCharacter(world, [0, 0, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         for (let i = 0; i < 25; i++) {
           pw.moveAndSlide(char, Float32Array.of(0.1, -0.05, 0) as never);
@@ -1304,8 +1304,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnStaticBox(world, { pos: [2, -0.45, 0], halfExtents: [2, 0.2, 4] });
         const char = spawnCharacter(world, [0, 0, 0], { autoStepMaxHeight: 0 });
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         for (let i = 0; i < 25; i++) {
           pw.moveAndSlide(char, Float32Array.of(0.1, -0.05, 0) as never);
@@ -1328,8 +1328,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnRawRamp(pw, RAPIER, [4, -1.0, 0], -20);
         const char = spawnCharacter(world, [0, 0.1, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
         // Establish ground contact first.
         pw.moveAndSlide(char, Float32Array.of(0, -0.1, 0) as never);
         const startY = tfPos(world, char).y;
@@ -1369,8 +1369,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnStaticBox(world, { pos: [-0.5, -0.5, 0], halfExtents: [1.5, 0.5, 4] });
         const char = spawnCharacter(world, [-1, 0.8, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
         // Settle on the platform first.
         pw.moveAndSlide(char, Float32Array.of(0, -0.1, 0) as never);
         expect(ccGrounded(world, char)).toBe(true);
@@ -1399,8 +1399,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnStaticBox(world, { pos: [0, -0.85, 0], halfExtents: [10, 0.5, 10] });
         const char = spawnCharacter(world, [0, 0, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
         pw.moveAndSlide(char, Float32Array.of(0, -0.1, 0) as never);
 
         const actual = pw.moveAndSlide(char, Float32Array.of(0.5, 0, 0) as never);
@@ -1420,8 +1420,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         registerPhysicsSystems(world);
 
         const char = spawnCharacter(world, [0, 0, 0], {}, RigidBodyTypeValue.dynamic);
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         let caught: unknown;
         try {
@@ -1448,8 +1448,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         registerPhysicsSystems(world);
 
         const char = spawnCharacter(world, [0, 0, 0], {}, RigidBodyTypeValue.static);
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         let caught: unknown;
         try {
@@ -1556,8 +1556,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         // Move the platform via Transform; syncBackend should mirror it.
         world.set(platform as never, Transform as never, { pos: [5, 2, 0] });
         for (let i = 0; i < 30; i++) {
-          world.insertResource('Time', { dt: 1 / 60, elapsed: (i + 1) / 60 });
-          world.update();
+          world.update(1 / 60).unwrap();
+          world.update(1 / 60).unwrap();
         }
 
         const pos = rapierBodyPos(pw, platform);
@@ -1578,8 +1578,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         const char = spawnCharacter(world, [0, 0, 0]);
 
         // First update creates the body at origin.
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         // moveAndSlide drives the character to ~x=1; syncBackend must not then
         // overwrite the Rapier body back to the (stale) Transform from a prior
@@ -1590,8 +1590,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
 
         world.set(char as never, Transform as never, { pos: [99, 99, 99] });
         // Run a tick: if the character row were mirrored, the body would target 99.
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 2 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
         for (let i = 0; i < 10; i++) pw.step(1 / 60);
 
         const pos = rapierBodyPos(pw, char);
@@ -1614,8 +1614,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnStaticBox(world, { pos: [0, -0.85, 0], halfExtents: [10, 0.5, 10] });
         const char = spawnCharacter(world, [0, 0, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         // moveAndSlide lazily builds + caches a KCC for this character.
         pw.moveAndSlide(char, Float32Array.of(1, 0, 0) as never);
@@ -1640,8 +1640,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         spawnStaticBox(world, { pos: [0, -0.85, 0], halfExtents: [10, 0.5, 10] });
         const char = spawnCharacter(world, [0, 0, 0]);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         // No moveAndSlide -> no cached KCC. Despawn must still clean the body.
         const before = pw.getBodyCount();
@@ -1665,8 +1665,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         registerPhysicsSystems(world);
         spawnStaticBox(world, { pos: [0, -0.85, 0], halfExtents: [10, 0.5, 10] });
         const char = spawnCharacter(world, [0, 0, 0]);
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
         const actual = pw.moveAndSlide(char, Float32Array.of(1, 0, 0) as never);
 
         expect(actual[0]).toBeCloseTo(1, 1);
@@ -1688,8 +1688,8 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         // Before the first physicsSyncBackend tick the body has not been built.
         expect(pw.hasBody(char)).toBe(false);
 
-        world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-        world.update();
+        world.update(1 / 60).unwrap();
+        world.update(1 / 60).unwrap();
 
         // After the tick, ensureBody has run and the body exists.
         expect(pw.hasBody(char)).toBe(true);
@@ -1752,9 +1752,9 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         )
         .unwrap();
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
+      world.update(1 / 60).unwrap();
       // A few ticks: tick 1 builds bodies (ensureBody), the next steps + drains.
-      for (let i = 0; i < 4; i++) world.update();
+      for (let i = 0; i < 4; i++) world.update(1 / 60).unwrap();
 
       const playerSet = world.get(player, CollidingEntities as never);
       const coreSet = world.get(core, CollidingEntities as never);
@@ -1796,15 +1796,15 @@ import { detectSimd3D, loadRapier3D } from '../wasm-loader';
         )
         .unwrap();
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      for (let i = 0; i < 4; i++) world.update();
+      world.update(1 / 60).unwrap();
+      for (let i = 0; i < 4; i++) world.update(1 / 60).unwrap();
       const before = world.get(player, CollidingEntities as never);
       expect(before.ok && Array.from(before.value.entities as Uint32Array)).toContain(
         core as number,
       );
 
       world.despawn(core);
-      for (let i = 0; i < 2; i++) world.update();
+      for (let i = 0; i < 2; i++) world.update(1 / 60).unwrap();
       const after = world.get(player, CollidingEntities as never);
       expect(after.ok).toBe(true);
       if (!after.ok) return;

@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-app -- app-layer plugin factories (M2 / w8, plan-strategy D-3 / D-8).
 //
 // inputPlugin lives in the app package (D-8) because its scan system is
@@ -28,7 +29,7 @@ import type { Plugin } from '@forgeax/engine-plugin';
  * InputBackend was injected into the World as the INPUT_BACKEND_KEY resource.
  *
  * Equivalent to the world-registration half of attachInputAuto
- * (input-attach.ts): `world.addSystems(InputSet, [InputFrameStartScan])`. The DOM attach
+ * (input-attach.ts): `world.addSystems(Update, InputSet, [InputFrameStartScan])`. The DOM attach
  * + cleanup funnel stays in createApp (D-3 / C-5) -- this factory takes no
  * canvas and performs no DOM work.
  *
@@ -43,7 +44,7 @@ export function inputPlugin(): Plugin {
       if (!world.hasResource(INPUT_BACKEND_KEY)) {
         return ok(undefined);
       }
-      world.addSystems(InputSet, [InputFrameStartScan]);
+      world.addSystems(Update, InputSet, [InputFrameStartScan]);
       return ok(undefined);
     },
   };

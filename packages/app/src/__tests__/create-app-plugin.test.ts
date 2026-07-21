@@ -33,14 +33,12 @@ import {
 import { err, type Result, World } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY } from '@forgeax/engine-input';
 import { physicsPlugin } from '@forgeax/engine-physics';
-import { type Plugin, PluginError } from '@forgeax/engine-plugin';
+import { type Plugin, PluginError, runPlugins } from '@forgeax/engine-plugin';
 import type { Renderer } from '@forgeax/engine-runtime';
-import { animationPlugin, timePlugin, transformPlugin } from '@forgeax/engine-runtime';
+import { animationPlugin, transformPlugin } from '@forgeax/engine-runtime';
 import { statePlugin } from '@forgeax/engine-state';
 import { beforeAll, describe, expect, it } from 'vitest';
-
 import { createApp } from '../create-app';
-import { runPlugins } from '../internal/run-plugins';
 import { inputPlugin } from '../plugin-factories';
 
 function makeRendererStub(): Renderer {
@@ -79,7 +77,7 @@ beforeAll(async () => {
 });
 
 describe('createApp plugin runner -- default set (AC-03)', () => {
-  it('the canvas default set is exactly 5 plugins (transform/time/animation/state/input)', async () => {
+  it('the canvas default set is transform/animation/state/input', async () => {
     // The canvas form's default set, run directly against a World (no renderer
     // needed). INPUT_BACKEND_KEY is pre-inserted so inputPlugin registers its
     // scan system (mirrors createApp's app-layer input attach).
@@ -87,7 +85,6 @@ describe('createApp plugin runner -- default set (AC-03)', () => {
     world.insertResource(INPUT_BACKEND_KEY, {} as never);
     const defaultSet: Plugin[] = [
       transformPlugin(),
-      timePlugin(),
       animationPlugin(),
       statePlugin(),
       inputPlugin(),
@@ -96,9 +93,9 @@ describe('createApp plugin runner -- default set (AC-03)', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect([...result.value.keys()]).toEqual(['transform', 'time', 'animation', 'state', 'input']);
+    expect([...result.value.keys()]).toEqual(['transform', 'animation', 'state', 'input']);
 
-    // World systems registered by the default set (time is a no-op placeholder).
+    // World systems registered by the default set.
     const names = systemNames(world);
     expect(names).toContain('propagateTransforms');
     expect(names).toContain('advanceAnimationPlayer');

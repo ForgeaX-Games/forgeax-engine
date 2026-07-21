@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // apps/learn-render/5.advanced-lighting/7.bloom/src/index.ts
 // LearnOpenGL section 5.7 - Bloom.
 //
@@ -312,7 +313,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // literal ' ' (NOT 'Space', which is ev.code).
   let prevSpace = false;
   let currentBloom: number = BLOOM_ENABLED;
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'learn-render-5.7-bloom-space-toggle',
     after: ['input-frame-start-scan'],
     queries: [],
@@ -364,7 +365,7 @@ function installCaptureHook(app: App, world: App['world']): void {
   const win = window as unknown as { __captureBloom?: CaptureHook };
   const renderer = app.renderer;
   win.__captureBloom = async (): Promise<Uint8Array> => {
-    world.update();
+    world.update(1 / 60).unwrap();
     renderer.draw([world], { owner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {

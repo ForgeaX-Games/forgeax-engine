@@ -292,7 +292,7 @@ world.spawn(
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
-  world.update();
+  world.update(1 / 60).unwrap();
   const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;

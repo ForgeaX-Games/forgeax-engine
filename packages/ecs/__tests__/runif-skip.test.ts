@@ -1,3 +1,4 @@
+import { Update } from '../src/schedule-token';
 // feat-20260618-ecs-module-mechanism M1 / w3 (AC-05):
 // runIf: () => false skips the system silently -- neither the query nor fn run
 // (fn call count = 0). runIf undefined (omitted) runs the system normally.
@@ -28,7 +29,7 @@ describe('runif-skip.test.ts', () => {
 
     const world = new World();
     world.spawn({ component: A, data: { x: 1 } });
-    world.addSystem(token);
+    world.addSystem(Update, token);
     world.update();
 
     expect(calls).toBe(0);
@@ -48,7 +49,7 @@ describe('runif-skip.test.ts', () => {
 
     const world = new World();
     world.spawn({ component: B, data: { x: 1 } });
-    world.addSystem(token);
+    world.addSystem(Update, token);
     world.update();
 
     expect(calls).toBe(1);
@@ -68,7 +69,7 @@ describe('runif-skip.test.ts', () => {
     });
 
     const world = new World();
-    world.addSystem(token);
+    world.addSystem(Update, token);
     world.update();
     expect(calls).toBe(0);
     gate = true;

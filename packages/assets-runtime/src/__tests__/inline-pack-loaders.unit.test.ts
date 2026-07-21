@@ -276,6 +276,6 @@ describe('wireDefaultLoaders / createDefaultLoaderRegistry', () => {
   it('createDefaultLoaderRegistry returns a fresh pre-wired registry', () => {
     const reg = createDefaultLoaderRegistry();
     expect(reg.get('mesh')).toBeDefined();
-    expect(INLINE_PACK_LOADERS.length).toBe(6);
+    expect(INLINE_PACK_LOADERS.length).toBe(7); // +1 animationGraphLoader (feat-20260713 M4/w30)
   });
 });

@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // hello-fbx-skin -- feat-20260615-fbx-importer-via-sdk M5 t51 R2 fixup #2.
 //
 // End-to-end declare-import-load via fbxImporter through the build-time
@@ -146,14 +147,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const clipIdx = i % Math.max(1, clipHandles.length);
       const clip = clipHandles[clipIdx];
       if (clip !== undefined) {
-        // Short-prefix init: writeArrayField pads slot tail with zeros and
-        // schema layer-2 defaults speeds=[1,1,1,1] / paused=false / looping=true.
+        // Variable N-slot init: all four parallel columns length-synced (D-5).
+        // A short write is not tail-padded and speeds no longer defaults to
+        // [1,1,1,1] (D-6), so speeds is written explicitly; paused/looping
+        // inherit the schema layer-2 defaults. Distinct times[0] per instance
+        // (i * 0.5) desyncs the three humanoids' poses (AC-16).
         world.addComponent(ent, {
           component: AnimationPlayer,
           data: {
             clips: [clip.handle],
             times: [i * 0.5],
             weights: [1],
+            speeds: [1],
           },
         });
       }
@@ -207,7 +212,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       '<span style="color:#8a90a8;">[1] run  [2] punch  [3] shot  [Space] Pause</span>';
   };
 
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'fbx-skin-clip-toggle',
     after: ['input-frame-start-scan'],
     queries: [],
@@ -222,12 +227,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           const newClip = clipHandles[i];
           if (newClip === undefined) continue;
           for (const ent of playerEnts) {
-            // Short-prefix re-init on toggle: world.set is partial — fields
-            // not passed (speeds, paused, looping) keep their current value.
+            // Toggle re-write to a single active slot: all four parallel
+            // columns are written length-synced at length 1 (D-5). speeds is
+            // re-supplied because a variable column write is a full replace,
+            // not a tail-preserving partial; paused/looping are untouched and
+            // keep their current value.
             world.set(ent, AnimationPlayer, {
               clips: [newClip.handle],
               times: [0],
               weights: [1],
+              speeds: [1],
             });
           }
           currentClipIndex = i;

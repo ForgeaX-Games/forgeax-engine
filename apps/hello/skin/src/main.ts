@@ -1,19 +1,22 @@
+import { Update } from '@forgeax/engine-ecs';
 // hello-skin -- Fox.glb + AnimationPlayer demo. Three clips (Survey / Walk /
 // Run) are sub-assets of the same gltf. Five keystroke paths exercise the
-// full N-way SoA schema (clips/times/weights/speeds inline arrays of arity 4
-// + paused/looping bool):
+// variable N-way SoA schema (clips/times/weights/speeds variable arrays +
+// paused/looping bool). Every write sets all four parallel columns
+// length-synced (feat-20260713 M1 / D-5 / D-6: a variable column is not
+// tail-padded and speeds no longer defaults to [1,1,1,1]):
 //
-//   Hard cuts (skin-clip-toggle system) -- single-slot write:
-//     [1] Survey  -> clips=[surveyH,0,0,0]  weights=[1,0,0,0]
-//     [2] Walk    -> clips=[walkH,  0,0,0]  weights=[1,0,0,0]
-//     [3] Run     -> clips=[runH,   0,0,0]  weights=[1,0,0,0]
+//   Hard cuts (skin-clip-toggle system) -- single-slot write (length 1):
+//     [1] Survey  -> clips=[surveyH]  weights=[1]  times=[0]  speeds=[1]
+//     [2] Walk    -> clips=[walkH]    weights=[1]  times=[0]  speeds=[1]
+//     [3] Run     -> clips=[runH]     weights=[1]  times=[0]  speeds=[1]
 //
 //   Soft blends (skin-blend-driver system, feat-20260615) -- multi-slot:
-//     [4] Walk -> Run 0.3s linear crossfade. weights[0..1] interpolate
-//                 (1-t, t), slots 2..3 zero. Time-driven write per frame
-//                 while in-flight; settles on weights=[0,1,0,0] (pure Run).
-//     [5] Walk + Survey + Run 3-way steady -- one-shot write:
-//                 weights=[1/3, 1/3, 1/3, 0], slots 0..2 active.
+//     [4] Walk -> Run 0.3s linear crossfade (length 2). weights[0..1]
+//                 interpolate (1-t, t). Time-driven write per frame while
+//                 in-flight; settles on weights=[0,1] (pure Run).
+//     [5] Walk + Survey + Run 3-way steady -- one-shot write (length 3):
+//                 weights=[1/3, 1/3, 1/3], slots 0..2 active.
 //
 //   [Space] toggle paused -- bypasses dt accumulation in advanceAnimationPlayer.
 //
@@ -168,12 +171,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     world.addComponent(ent, {
       component: AnimationPlayer,
       data: {
-        // Short-prefix init: writeArrayField pads slot 1..3 with zeros so the
-        // engine skip-iterates them. Single-slot weights[0]=1 reproduces the
-        // old single-clip blend (engine normalizes per channel by Σw).
-        // speeds defaults to [1,1,1,1] from the schema; paused/looping inherit.
+        // Variable N-slot init: all four parallel columns are written
+        // length-synced (D-5). A short write is NOT tail-padded and speeds no
+        // longer defaults to [1,1,1,1] (D-6), so times/speeds are written
+        // explicitly. Single active slot 0 plays Survey at speed 1; paused/
+        // looping inherit the schema layer-2 defaults.
         clips: [clipHandles[0]!.clip],
+        times: [0],
         weights: [1],
+        speeds: [1],
       },
     });
     playerEnt = ent;
@@ -259,13 +265,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       weights: Float32Array;
     };
     const state = currentPaused ? 'Paused' : 'Playing';
-    // 4-slot compact layout (D-4): one row per slot with all three SoA
+    // Variable N-slot compact layout (D-4): one row per slot with all three SoA
     // columns inline. Field literals `clips[i]=` / `weights[i]=` / `times[i]=`
-    // are the AC-09 grep targets. Inactive slots print `clips[i]=invalid` so
-    // the snapshot string ALWAYS contains all four `clips[i]=` literals
-    // regardless of mode (hardcut leaves slots 1..3 invalid).
+    // are the AC-09 grep targets. The row count follows the actual variable
+    // column length, but is floored at 4 so the AC-09 snapshot always carries
+    // the historical `clips[0..3]=` literals; rows past the active length print
+    // `clips[i]=invalid` (this demo's widest mode is the 3-way blend).
+    const slotCount = Math.max(4, ap.clips.length);
     const slotLines: string[] = [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < slotCount; i++) {
       const cid = Number(ap.clips[i] ?? 0);
       const cname = cid === 0 ? 'invalid' : (clipNameById.get(cid) ?? `?(${cid})`);
       const w = (ap.weights[i] ?? 0).toFixed(3);
@@ -278,7 +286,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       '<br /><span style="color:#8a90a8;">[1] Survey  [2] Walk  [3] Run  [4] Walk-&gt;Run blend  [5] 3-way  [Space] Pause</span>';
   };
 
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'skin-clip-toggle',
     after: ['input-frame-start-scan'],
     queries: [],
@@ -295,14 +303,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         const cur = snap.keyboard.down(key);
         if (cur && !prevDigit[key]) {
           const target = clipHandles[i]!;
-          // Hard-cut: rewrite slot 0 to the picked clip; writeArrayField pads
-          // slots 1..3 with zeros so they go silent. Short-prefix arrays cover
-          // both the variable demo intent and the column-store pad contract.
-          // Cancel any in-flight crossfade.
+          // Hard-cut: rewrite to a single active slot. All four parallel
+          // columns are written length-synced at length 1 (D-5) -- shrinking
+          // from a prior blend's 2/3-slot write is a full re-write, not a
+          // partial, so speeds must be re-supplied too. Cancels any crossfade.
           const setRes = world.set(playerEnt!, AnimationPlayer, {
             clips: [target.clip],
             times: [0],
             weights: [1],
+            speeds: [1],
           });
           if (setRes.ok) {
             currentMode = 'hardcut';
@@ -345,7 +354,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const walkHandle = findClip('Walk');
   const runHandle = findClip('Run');
 
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'skin-blend-driver',
     after: ['input-frame-start-scan'],
     queries: [],
@@ -360,12 +369,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const cur4 = snap.keyboard.down('4');
       if (cur4 && !prevDigit['4']) {
         crossfadeStart = performance.now() / 1000;
-        // Slot 0 = Walk, slot 1 = Run; tail slots 2..3 silenced via writeArray
-        // pad. Initial weights peg slot 0 at 1; the in-flight tick re-writes.
+        // Slot 0 = Walk, slot 1 = Run; variable columns length 2 (no tail pad).
+        // Initial weights peg slot 0 at 1; the in-flight tick re-writes weights.
         const setRes = world.set(playerEnt!, AnimationPlayer, {
           clips: [walkHandle, runHandle],
           times: [0, 0],
           weights: [1, 0],
+          speeds: [1, 1],
         });
         if (setRes.ok) {
           currentMode = 'crossfade';
@@ -381,11 +391,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const cur5 = snap.keyboard.down('5');
       if (cur5 && !prevDigit['5']) {
         const third = 1 / 3;
-        // Slots 0..2 active equally; slot 3 padded to silent by writeArrayField.
+        // Slots 0..2 active equally; variable columns length 3 (no tail pad).
         const setRes = world.set(playerEnt!, AnimationPlayer, {
           clips: [surveyHandle, walkHandle, runHandle],
           times: [0, 0, 0],
           weights: [third, third, third],
+          speeds: [1, 1, 1],
         });
         if (setRes.ok) {
           currentMode = '3way';
@@ -403,16 +414,18 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       if (crossfadeStart !== null) {
         const elapsed = performance.now() / 1000 - crossfadeStart;
         if (elapsed >= CROSSFADE_DURATION) {
-          // Settle on pure Run: weights=[0,1,0,0] keeps slot 1 (run) alone.
+          // Settle on pure Run: weights=[0,1] keeps slot 1 (run) alone. The
+          // partial set matches the length-2 clips written when the crossfade
+          // was armed (D-5 length guard).
           crossfadeStart = null;
           const setRes = world.set(playerEnt!, AnimationPlayer, {
-            weights: new Float32Array([0, 1, 0, 0]),
+            weights: new Float32Array([0, 1]),
           });
           if (setRes.ok) refreshHud();
         } else {
           const t = Math.max(0, Math.min(1, elapsed / CROSSFADE_DURATION));
           const setRes = world.set(playerEnt!, AnimationPlayer, {
-            weights: new Float32Array([1 - t, t, 0, 0]),
+            weights: new Float32Array([1 - t, t]),
           });
           if (setRes.ok) refreshHud();
         }

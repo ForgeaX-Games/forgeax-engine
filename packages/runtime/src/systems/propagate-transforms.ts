@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-runtime - propagateTransforms system (root-down world mat4 derivation).
 //
 // Triggered by `registerPropagateTransforms(world)` which binds the system
@@ -423,7 +424,7 @@ export function registerPropagateTransforms(
     // Optional ordering edge: register a descriptor carrying the same name/fn
     // plus a `before` edge. The `before` (not `fn`) overlay keeps the real fn
     // intact (D-4: no spread-over-fn).
-    world.addSystems(TransformSet, [
+    world.addSystems(Update, TransformSet, [
       {
         name: PROPAGATE_TRANSFORMS_SYSTEM,
         queries: [],
@@ -433,5 +434,5 @@ export function registerPropagateTransforms(
     ]);
     return;
   }
-  world.addSystems(TransformSet, [PropagateTransforms]);
+  world.addSystems(Update, TransformSet, [PropagateTransforms]);
 }

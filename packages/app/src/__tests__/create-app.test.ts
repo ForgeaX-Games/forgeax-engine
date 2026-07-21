@@ -96,7 +96,7 @@ describe('create-app.test.ts', () => {
   });
 
   // feat-20260617 M3 / w10: aspect-sync sidecar (createApp path only).
-  // syncCameraAspect is the per-frame body the createAppFromCanvas registerUpdate
+  // syncCameraAspect is the canvas-form per-frame Update system body
   // closure calls with the live canvas width/height. It walks Camera entities via
   // world.get (NOT the query bundle: a bool column read off the bundle returns a
   // raw 0/1 number, so `!== 0` is always true -- the

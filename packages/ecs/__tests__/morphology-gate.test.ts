@@ -1,3 +1,4 @@
+import { Update } from '../src/schedule-token';
 // feat-20260618-ecs-module-mechanism M4 / w26 (AC-14):
 // Falsifiable morphology gate for the addSystem/defineSystem `fn` signature.
 //
@@ -86,7 +87,7 @@ interface Callback {
 }
 
 const FN_PARAM = /\bfn\s*(?::\s*(?:async\s*)?)?\(([^)]*)\)\s*(?:=>|\{)/;
-const CALL_SITE = /\b(?:addSystem|defineSystem)\s*\(\s*\{/g;
+const CALL_SITE = /\b(?:addSystem|defineSystem)\s*\(\s*(?:\w+\s*,\s*)?\{/g;
 
 function collectCallbacks(): { all: Callback[]; violations: Callback[] } {
   const files: string[] = [];
@@ -144,7 +145,7 @@ describe('morphology-gate.test.ts (AC-14)', () => {
     // Mirror the production detector against an in-memory bad sample so a future
     // refactor that neuters the parser fails here instead of silently passing.
     const sample = stripComments(`
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'bad',
         queries: [],
         fn: (queryResults, commands) => { void queryResults; void commands; },

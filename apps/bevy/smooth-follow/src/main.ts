@@ -8,7 +8,7 @@
 // forgeax mapping — a MOTION demo over the managed motion front door (same shape as
 // apps/bevy/3d-rotation + translation):
 //   - createApp -> owns the frame loop AND auto-inserts the 'Time' resource
-//     (world.getResource('Time').dt) before each world.update().
+//     (world.getResource(Time).delta) before each world.update().
 //   - world.addSystem (x2, chained) -> stepTarget then stepFollower each frame,
 //     mirroring Bevy's `.add_systems(Update, (move_target, move_follower).chain())`.
 //   - stepFollower uses vec3.smoothDamp — the frame-rate-independent damping helper
@@ -18,6 +18,7 @@
 // AND the dawn smoke), so the two never drift.
 
 import { createApp } from '@forgeax/engine-app';
+import { Time, Update } from '@forgeax/engine-ecs';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildSmoothFollowWorld, stepFollower, stepTarget } from './smooth-follow';
@@ -45,20 +46,20 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   buildSmoothFollowWorld(app.world);
 
   // Bevy: `.add_systems(Update, (move_target, move_follower).chain())` — target moves
-  // first, then the follower damps toward the target's NEW position, both off Time.dt.
-  app.world.addSystem({
+  // first, then the follower damps toward the target's NEW position, both off Time.delta.
+  app.world.addSystem(Update, {
     name: 'move-target',
     queries: [],
     fn: (world) => {
-      const dt = world.hasResource('Time') ? world.getResource<{ dt: number }>('Time').dt : 0;
+      const dt = world.hasResource('Time') ? world.getResource(Time).delta : 0;
       stepTarget(world, dt);
     },
   });
-  app.world.addSystem({
+  app.world.addSystem(Update, {
     name: 'move-follower',
     queries: [],
     fn: (world) => {
-      const dt = world.hasResource('Time') ? world.getResource<{ dt: number }>('Time').dt : 0;
+      const dt = world.hasResource('Time') ? world.getResource(Time).delta : 0;
       stepFollower(world, dt);
     },
   });

@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // apps/hello/transform-hierarchy -- ChildOf hierarchy "parent moves, child
 // follows" visual exemplar
 // (feat-20260531-render-consume-global-transform-hierarchy / M3 / w12).
@@ -16,7 +17,7 @@
 //     The child's Transform.world = parent.world x child-local, so moving the
 //     parent at runtime drags the child across the screen.
 //   - Runtime parent move: a frame system slides the parent back and forth
-//     along +X via world.set(parent, Transform). The next world.update()
+//     along +X via world.set(parent, Transform). The next world.update(1 / 60).unwrap()
 //     runs propagateTransforms, the extract stage reads the child's refreshed
 //     Transform.world, and the child moves with the parent. The dual-frame
 //     smoke (scripts/smoke-dawn.mjs) is the machine-checkable proof of this;
@@ -162,7 +163,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const hudEl = document.getElementById('th-hud');
   let phase = 0;
 
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'transform-hierarchy-parent-slide',
     queries: [],
     fn: () => {
@@ -178,10 +179,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     },
   });
 
-  // Step 8: rAF loop. world.update() runs the schedule (propagateTransforms +
+  // Step 8: rAF loop. world.update(1 / 60).unwrap() runs the schedule (propagateTransforms +
   // the parent-slide system) before each draw.
   function frame(): void {
-    world.update();
+    world.update(1 / 60).unwrap();
     const draw = renderer.draw([world], { owner: 0 });
     if (!draw.ok) {
       console.error('[transform-hierarchy] draw failed:', draw.error.code);

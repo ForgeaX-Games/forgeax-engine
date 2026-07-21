@@ -111,7 +111,7 @@ describe('Play -> Title -> Play replay leaves no leftover entities (AC-11)', () 
     const world = makeWorld();
     // Enter Play (Title -> Play) so the scoped entities belong to the live state.
     setNextState(world, GameState, 'Play');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const scoped: EntityHandle[] = [];
     for (let i = 0; i < 5; i++) {
@@ -125,7 +125,7 @@ describe('Play -> Title -> Play replay leaves no leftover entities (AC-11)', () 
 
     // Leave Play (Play -> Title): transitionStatesSystem despawns them.
     setNextState(world, GameState, 'Title');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(scoped.some((e) => world.get(e, Scoped).ok)).toBe(false);
     expect(scoped.some((e) => world.get(e, PlayThing).ok)).toBe(false);
@@ -136,7 +136,7 @@ describe('Play -> Title -> Play replay leaves no leftover entities (AC-11)', () 
 
     // Run 1: enter Play, spawn scoped entities, reach Title again.
     setNextState(world, GameState, 'Play');
-    world.update();
+    world.update(1 / 60).unwrap();
     const run1: EntityHandle[] = [];
     for (let i = 0; i < 3; i++) {
       const e = world.spawn({ component: PlayThing, data: {} }).unwrap();
@@ -145,11 +145,11 @@ describe('Play -> Title -> Play replay leaves no leftover entities (AC-11)', () 
     }
     resetProgress(world, 3); // Title OnEnter would call this
     setNextState(world, GameState, 'Title');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // Run 2: enter Play again. The new run must see none of run1's entities.
     setNextState(world, GameState, 'Play');
-    world.update();
+    world.update(1 / 60).unwrap();
     const Scoped = scopedComponent();
     expect(run1.some((e) => world.get(e, Scoped).ok)).toBe(false);
 

@@ -1,5 +1,6 @@
-// Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
 // biome-ignore-all lint/complexity/noUselessLoneBlockStatements: scope isolation between merged source files
+// Consolidated by feat-20260609-test-pool-startup-reduction-merge-tiny-test-files
+import { Update } from '../schedule-token';
 //
 // Source files (N=29):
 //   - packages/ecs/__tests__/cli-ecs-scripts.test.ts
@@ -815,7 +816,8 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(info.archetypes).toEqual([]);
       expect(info.activeComponents).toEqual([]);
       expect(info.systemCount).toBe(0);
-      expect(info.resourceKeys).toEqual([]);
+      expect(info.resourceKeys).toContain('Time');
+      expect(info.resourceKeys).toContain('FixedTime');
     });
 
     it('entityCount reflects live entities after spawn and despawn', () => {
@@ -869,14 +871,14 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       expect(world.inspect().systemCount).toBe(0);
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'inspSys1',
         queries: [],
         fn: () => {},
       });
       expect(world.inspect().systemCount).toBe(1);
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'inspSys2',
         queries: [],
         fn: () => {},
@@ -889,13 +891,19 @@ import { handleNumeric } from './utils/handle-numeric';
       world.insertResource('timer', { elapsed: 0 });
       world.insertResource('config', { debug: true });
 
+      // World constructor registers protected Time and FixedTime resources
+      // which appear alongside user-inserted resources.
       const keys = world.inspect().resourceKeys;
       expect(keys).toContain('timer');
       expect(keys).toContain('config');
-      expect(keys.length).toBe(2);
+      expect(keys.length).toBe(4);
 
       world.removeResource('timer');
-      expect(world.inspect().resourceKeys).toEqual(['config']);
+      // Protected Time and FixedTime resources persist alongside user resources
+      const timeKeys = world.inspect().resourceKeys;
+      expect(timeKeys).toContain('Time');
+      expect(timeKeys).toContain('FixedTime');
+      expect(timeKeys).toContain('config');
     });
 
     it('archetype info componentNames matches spawned components', () => {
@@ -2835,10 +2843,10 @@ import { handleNumeric } from './utils/handle-numeric';
   describe('schedule.removeSystem (AC-04)', () => {
     it('removes a registered system; world.inspect() no longer lists it', () => {
       const world = new World();
-      world.addSystem({ name: 'sysA', queries: [], fn: () => {} });
-      world.addSystem({ name: 'sysB', queries: [], fn: () => {} });
+      world.addSystem(Update, { name: 'sysA', queries: [], fn: () => {} });
+      world.addSystem(Update, { name: 'sysB', queries: [], fn: () => {} });
 
-      const r = world.removeSystem('sysA');
+      const r = world.removeSystem(Update, 'sysA');
       expect(r.ok).toBe(true);
 
       const snap = world.inspect();
@@ -2849,9 +2857,9 @@ import { handleNumeric } from './utils/handle-numeric';
 
     it('returns Result.err with code system-before-unknown when name does not exist', () => {
       const world = new World();
-      world.addSystem({ name: 'sysA', queries: [], fn: () => {} });
+      world.addSystem(Update, { name: 'sysA', queries: [], fn: () => {} });
 
-      const r = world.removeSystem('nonexistent');
+      const r = world.removeSystem(Update, 'nonexistent');
       expect(r.ok).toBe(false);
       if (r.ok) return;
       expect(r.error.code).toBe('system-before-unknown');
@@ -2863,15 +2871,15 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       const log: string[] = [];
 
-      world.addSystem({ name: 'sysA', queries: [], fn: () => log.push('A-old') });
-      world.addSystem({
+      world.addSystem(Update, { name: 'sysA', queries: [], fn: () => log.push('A-old') });
+      world.addSystem(Update, {
         name: 'sysB',
         queries: [],
         fn: () => log.push('B'),
         after: ['sysA'],
       });
 
-      const r = world.replaceSystem('sysA', {
+      const r = world.replaceSystem(Update, 'sysA', {
         name: 'sysA',
         queries: [],
         fn: () => log.push('A-new'),
@@ -2886,7 +2894,7 @@ import { handleNumeric } from './utils/handle-numeric';
     it('returns Result.err with code system-before-unknown when target name not registered', () => {
       const world = new World();
 
-      const r = world.replaceSystem('nonexistent', {
+      const r = world.replaceSystem(Update, 'nonexistent', {
         name: 'nonexistent',
         queries: [],
         fn: () => {},
@@ -2905,7 +2913,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const Pos = defineComponent('SchedPos', { x: { type: 'f32' }, y: { type: 'f32' } });
       const log: string[] = [];
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'movement',
         queries: [{ with: [Pos] }],
         fn: () => {
@@ -2924,7 +2932,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
       let receivedBundleCount = 0;
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'reader',
         queries: [{ with: [Pos, Entity] }],
         fn: (_world, queryResults, _commands) => {
@@ -2947,13 +2955,13 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       const log: string[] = [];
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'sysA',
         queries: [],
         fn: () => log.push('A'),
       });
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'sysB',
         queries: [],
         fn: () => log.push('B'),
@@ -2969,13 +2977,13 @@ import { handleNumeric } from './utils/handle-numeric';
       const log: string[] = [];
 
       // Register B first, then A with before: ['sysB']
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'sysB',
         queries: [],
         fn: () => log.push('B'),
       });
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'sysA',
         queries: [],
         fn: () => log.push('A'),
@@ -2990,13 +2998,13 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       const log: string[] = [];
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'A',
         queries: [],
         fn: () => log.push('A'),
       });
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'B',
         queries: [],
         fn: () => log.push('B'),
@@ -3004,7 +3012,7 @@ import { handleNumeric } from './utils/handle-numeric';
         before: ['D'],
       });
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'C',
         queries: [],
         fn: () => log.push('C'),
@@ -3012,7 +3020,7 @@ import { handleNumeric } from './utils/handle-numeric';
         before: ['D'],
       });
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'D',
         queries: [],
         fn: () => log.push('D'),
@@ -3034,9 +3042,9 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       const log: string[] = [];
 
-      world.addSystem({ name: 'first', queries: [], fn: () => log.push('first') });
-      world.addSystem({ name: 'second', queries: [], fn: () => log.push('second') });
-      world.addSystem({ name: 'third', queries: [], fn: () => log.push('third') });
+      world.addSystem(Update, { name: 'first', queries: [], fn: () => log.push('first') });
+      world.addSystem(Update, { name: 'second', queries: [], fn: () => log.push('second') });
+      world.addSystem(Update, { name: 'third', queries: [], fn: () => log.push('third') });
 
       world.update();
       expect(log).toEqual(['first', 'second', 'third']);
@@ -3046,21 +3054,21 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       const log: string[] = [];
 
-      world.addSystem({ name: 'root', queries: [], fn: () => log.push('root') });
+      world.addSystem(Update, { name: 'root', queries: [], fn: () => log.push('root') });
       // Three systems all after 'root', no order among themselves
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'childC',
         queries: [],
         fn: () => log.push('childC'),
         after: ['root'],
       });
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'childA',
         queries: [],
         fn: () => log.push('childA'),
         after: ['root'],
       });
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'childB',
         queries: [],
         fn: () => log.push('childB'),
@@ -3078,9 +3086,9 @@ import { handleNumeric } from './utils/handle-numeric';
     it('cyclic dependency throws CyclicDependencyError', () => {
       const world = new World();
 
-      world.addSystem({ name: 'A', queries: [], fn: () => {}, after: ['C'] });
-      world.addSystem({ name: 'B', queries: [], fn: () => {}, after: ['A'] });
-      world.addSystem({ name: 'C', queries: [], fn: () => {}, after: ['B'] });
+      world.addSystem(Update, { name: 'A', queries: [], fn: () => {}, after: ['C'] });
+      world.addSystem(Update, { name: 'B', queries: [], fn: () => {}, after: ['A'] });
+      world.addSystem(Update, { name: 'C', queries: [], fn: () => {}, after: ['B'] });
 
       expect(() => world.update()).toThrow(CyclicDependencyError);
     });
@@ -3088,9 +3096,9 @@ import { handleNumeric } from './utils/handle-numeric';
     it('CyclicDependencyError message contains cycle path', () => {
       const world = new World();
 
-      world.addSystem({ name: 'X', queries: [], fn: () => {}, after: ['Z'] });
-      world.addSystem({ name: 'Y', queries: [], fn: () => {}, after: ['X'] });
-      world.addSystem({ name: 'Z', queries: [], fn: () => {}, after: ['Y'] });
+      world.addSystem(Update, { name: 'X', queries: [], fn: () => {}, after: ['Z'] });
+      world.addSystem(Update, { name: 'Y', queries: [], fn: () => {}, after: ['X'] });
+      world.addSystem(Update, { name: 'Z', queries: [], fn: () => {}, after: ['Y'] });
 
       try {
         world.update();
@@ -3117,8 +3125,8 @@ import { handleNumeric } from './utils/handle-numeric';
       const log: string[] = [];
 
       // Linear chain: free1 → free2 (no cycle)
-      world.addSystem({ name: 'free1', queries: [], fn: () => log.push('free1') });
-      world.addSystem({
+      world.addSystem(Update, { name: 'free1', queries: [], fn: () => log.push('free1') });
+      world.addSystem(Update, {
         name: 'free2',
         queries: [],
         fn: () => log.push('free2'),
@@ -3126,8 +3134,8 @@ import { handleNumeric } from './utils/handle-numeric';
       });
 
       // Cycle: cyc1 → cyc2 → cyc1
-      world.addSystem({ name: 'cyc1', queries: [], fn: () => {}, after: ['cyc2'] });
-      world.addSystem({ name: 'cyc2', queries: [], fn: () => {}, after: ['cyc1'] });
+      world.addSystem(Update, { name: 'cyc1', queries: [], fn: () => {}, after: ['cyc2'] });
+      world.addSystem(Update, { name: 'cyc2', queries: [], fn: () => {}, after: ['cyc1'] });
 
       expect(() => world.update()).toThrow(CyclicDependencyError);
     });
@@ -3135,11 +3143,11 @@ import { handleNumeric } from './utils/handle-numeric';
     it('4-node cycle: A→B→C→D→A with an uncycled system E', () => {
       const world = new World();
 
-      world.addSystem({ name: 'E', queries: [], fn: () => {} });
-      world.addSystem({ name: 'A', queries: [], fn: () => {}, after: ['D'] });
-      world.addSystem({ name: 'B', queries: [], fn: () => {}, after: ['A'] });
-      world.addSystem({ name: 'C', queries: [], fn: () => {}, after: ['B'] });
-      world.addSystem({ name: 'D', queries: [], fn: () => {}, after: ['C'] });
+      world.addSystem(Update, { name: 'E', queries: [], fn: () => {} });
+      world.addSystem(Update, { name: 'A', queries: [], fn: () => {}, after: ['D'] });
+      world.addSystem(Update, { name: 'B', queries: [], fn: () => {}, after: ['A'] });
+      world.addSystem(Update, { name: 'C', queries: [], fn: () => {}, after: ['B'] });
+      world.addSystem(Update, { name: 'D', queries: [], fn: () => {}, after: ['C'] });
 
       try {
         world.update();
@@ -3160,7 +3168,7 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       const log: string[] = [];
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'sys1',
         queries: [],
         fn: () => log.push('sys1'),
@@ -3191,8 +3199,8 @@ import { handleNumeric } from './utils/handle-numeric';
       const world = new World();
       const log: string[] = [];
 
-      world.addSystem({ name: 'A', queries: [], fn: () => log.push('A') });
-      world.addSystem({ name: 'B', queries: [], fn: () => log.push('B'), before: ['A'] });
+      world.addSystem(Update, { name: 'A', queries: [], fn: () => log.push('A') });
+      world.addSystem(Update, { name: 'B', queries: [], fn: () => log.push('B'), before: ['A'] });
 
       // First update builds schedule
       world.update();
@@ -3216,7 +3224,7 @@ import { handleNumeric } from './utils/handle-numeric';
       // No entities spawned — query will match nothing
 
       let bodyExecuted = false;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'emptyQuerySystem',
         queries: [{ with: [Pos] }],
         fn: () => {
@@ -3237,7 +3245,7 @@ import { handleNumeric } from './utils/handle-numeric';
       world.spawn({ component: Pos, data: { x: 1 } });
 
       let bodyExecuted = false;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'okSystem',
         queries: [{ with: [Pos] }],
         fn: () => {
@@ -3260,7 +3268,7 @@ import { handleNumeric } from './utils/handle-numeric';
 
       // System that needs a Resource that doesn't exist
       let bodyExecuted = false;
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'resourceSystem',
         queries: [],
         resources: ['missingResource'],
@@ -3359,7 +3367,7 @@ import { handleNumeric } from './utils/handle-numeric';
         errors.push(error);
       });
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'failingSystem',
         queries: [],
         fn: () => {
@@ -3379,7 +3387,7 @@ import { handleNumeric } from './utils/handle-numeric';
         errors.push(error);
       });
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'voidSystem',
         queries: [],
         fn: () => {

@@ -19,6 +19,31 @@
       ]
     },
     "smokeInvocation": "pnpm --filter @forgeax/hello-custom-importer smoke",
+    "gauntletScenario": {
+      "id": "hello-custom-importer-dawn",
+      "script": "smoke",
+      "domains": ["Asset schemas, import, and delivery", "Rendering and shader construction"],
+      "packages": [
+        "@forgeax/engine-assets-runtime",
+        "@forgeax/engine-ecs",
+        "@forgeax/engine-pack",
+        "@forgeax/engine-rhi-wgpu",
+        "@forgeax/engine-runtime",
+        "@forgeax/engine-vite-plugin-pack"
+      ],
+      "risks": ["baseline", "content", "build", "delivery", "fault", "recovery", "gpu", "behavioral"],
+      "phaseInputs": ["baseline", "content", "build", "delivery", "fault", "recovery"],
+      "oracle": {
+        "stdoutIncludes": [
+          "[hello-custom-importer] vite build (runs host importer + emits pack-index.json)",
+          "[smoke] pack-index reel-game-blob row=",
+          "[hello-custom-importer] loaded reel-game blob title=",
+          "[smoke] malformed GUID rejected: pack-guid-malformed; recovery load succeeded",
+          "[smoke] catalog miss rejected: asset-not-imported; recovery load succeeded",
+          "[smoke] PASS - 8 criteria GREEN:"
+        ]
+      }
+    },
     "_comment": "smokeInvocation = self-contained SSOT (mirrors hello-sprite / hello-cube). hello-custom-importer exercises the host self-declared fold contract end-to-end: the reel-game-blob importer is injected via pluginPack({ importers }) at vite build time, folded into a DDC .pack.json + pack-index row of kind 'reel-game-blob', then resolved at runtime through loadByGuid + a host-registered loader and used to drive the scene (AC-01 real load + real use; AC-07 no Importer.fold method; AC-09 in smoke fleet).",
     "metrics": {
       "bundle-size": {

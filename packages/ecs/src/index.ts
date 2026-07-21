@@ -103,6 +103,15 @@ export { err, ok, type Result } from '@forgeax/engine-types';
  * `: Entity` annotations.
  */
 export type { EntityHandle } from './entity-handle';
+export { FixedUpdate, type ScheduleToken, Update } from './schedule-token';
+export {
+  FixedTime,
+  type FixedTimeResource,
+  Time,
+  type TimePolicy,
+  type TimeResource,
+  type WorldOptions,
+} from './time';
 /**
  * Union of all EcsError types returned by World methods via Result.
  * Switch on `.code` for programmatic branching (e.g. `error.code === 'stale-entity'`).
@@ -217,6 +226,12 @@ export {
   resolveComponent,
 } from './component';
 export type { ManagedArrayErrorEnvelope } from './errors';
+export {
+  ProtectedResourceError,
+  ScheduleScopeMismatchError,
+  TimeConfigInvalidError,
+  TimeDeltaInvalidError,
+} from './errors';
 /**
  * Query descriptor for With/Without archetype filtering.
  *
@@ -317,7 +332,7 @@ export type { CommandBuffer } from './commands';
  *
  * @example
  * ```ts
- * world.addSystem({
+ * world.addSystem(Update, {
  *   name: 'movement',
  *   queries: [{ with: [Position, Velocity] }],
  *   fn: (world, results, commands) => { ... },
@@ -570,6 +585,23 @@ export {
 // ────────────────────────────────────────────────────────────────────────────
 
 export { ENTITY_MAX_GENERATION, ENTITY_MAX_INDEX, ENTITY_NULL_RAW } from './entity-handle';
+
+// ────────────────────────────────────────────────────────────────────────────
+// Externalization (shared projection/remap kernel)
+// ────────────────────────────────────────────────────────────────────────────
+
+export {
+  classifyEntityField,
+  createEntityRemap,
+  type EntityFieldKind,
+  isComponentFullyTransient,
+  isComponentPortable,
+  isFieldPortable,
+  type ProfileComponentError,
+  projectComponentData,
+  remapEntityFieldValue,
+  validateProfileComponents,
+} from './externalization/index';
 
 // w8: Inspector contributor (registerEcsInspector + RegisterEcsInspectorResult)
 // deleted — routing layer (Registry / sandbox) is removed; eval is the sole

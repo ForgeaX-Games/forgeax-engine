@@ -14,7 +14,7 @@
 // HTTP errors never enter DebugError (OOS-6 / D-9); illegal bodies and trigger
 // failures return a {error, hint} JSON envelope and write nothing (Fail Fast).
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { assembleReport, type PassOffset } from '@forgeax/engine-rhi-debug';
@@ -22,7 +22,13 @@ import type { Plugin, ViteDevServer } from 'vite';
 
 const TAPE_ROUTE = '/__forgeax-debug/tape';
 const TRIGGER_ROUTE = '/__forgeax-debug/trigger';
+const ARTIFACT_ROUTE = '/__forgeax-debug/artifact';
 const DEFINE_KEY = 'import.meta.env.FORGEAX_ENGINE_RHI_DEBUG';
+const RUN_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const CAPTURE_FILES = new Set(['frame-0.tape.bin', 'frame-0.report.json']);
+// `bun fx start --rhi-debug` serves the reviewer from this separate Vite origin.
+// Do not widen this to `*`: captures can contain game assets and shader sources.
+const REVIEWER_ORIGIN = 'http://localhost:15274';
 
 /** Validated shape of a POST /__forgeax-debug/tape body. */
 interface TapeBody {
@@ -134,6 +140,48 @@ function sendJson(res: MiddlewareRes, status: number, payload: unknown): void {
   res.end(JSON.stringify(payload));
 }
 
+/** Apply the reviewer-only CORS policy before every artifact response, including errors. */
+function allowReviewerOrigin(res: MiddlewareRes): void {
+  res.setHeader('Access-Control-Allow-Origin', REVIEWER_ORIGIN);
+  res.setHeader('Vary', 'Origin');
+}
+
+/**
+ * Serve only the two files belonging to one captured frame for the standalone
+ * reviewer.  The explicit allow-list deliberately prevents this dev endpoint
+ * from becoming a general file reader when the reviewer runs on another port.
+ */
+function serveCaptureArtifact(url: URL, res: MiddlewareRes): void {
+  allowReviewerOrigin(res);
+  const runId = url.searchParams.get('runId') ?? '';
+  const file = url.searchParams.get('file') ?? '';
+  if (!RUN_ID_PATTERN.test(runId) || !CAPTURE_FILES.has(file)) {
+    sendJson(res, 400, {
+      error: 'invalid-capture-artifact',
+      hint: 'runId and file must identify a captured frame artifact',
+    });
+    return;
+  }
+
+  const path = join('.forgeax-debug', runId, file);
+  if (!existsSync(path)) {
+    sendJson(res, 404, {
+      error: 'capture-artifact-not-found',
+      hint: 'the capture may have been removed; take a new frame and retry',
+    });
+    return;
+  }
+
+  res.statusCode = 200;
+  // The viewer is a separate Vite app in development (:15274), so it must be
+  // able to fetch the capture pair from the editor host without copying it.
+  res.setHeader(
+    'Content-Type',
+    file.endsWith('.json') ? 'application/json' : 'application/octet-stream',
+  );
+  res.end(readFileSync(path));
+}
+
 async function readBody(req: AsyncIterable<Uint8Array>): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(Buffer.from(chunk));
@@ -174,10 +222,26 @@ export function vitePluginRhiDebug(opts?: { triggerTimeoutMs?: number }): Plugin
 
       server.middlewares.use(async (req, res, next) => {
         const r = req as AsyncIterable<Uint8Array> & { url?: string; method?: string };
-        const url = r.url ?? '';
+        const requestUrl = r.url ?? '';
+        const url = new URL(requestUrl, 'http://localhost');
 
         // Route dispatch: trigger or tape, else pass through.
-        if (url === TRIGGER_ROUTE) {
+        if (url.pathname === ARTIFACT_ROUTE) {
+          const out = res as unknown as MiddlewareRes;
+          allowReviewerOrigin(out);
+          if (r.method !== 'GET') {
+            out.setHeader('Allow', 'GET');
+            sendJson(out, 405, {
+              error: 'method-not-allowed',
+              hint: `use GET to read a captured frame artifact via ${ARTIFACT_ROUTE}`,
+            });
+            return;
+          }
+          serveCaptureArtifact(url, out);
+          return;
+        }
+
+        if (url.pathname === TRIGGER_ROUTE) {
           const out = res as unknown as MiddlewareRes;
 
           if (r.method !== 'POST') {
@@ -263,7 +327,7 @@ export function vitePluginRhiDebug(opts?: { triggerTimeoutMs?: number }): Plugin
           return;
         }
 
-        if (url === TAPE_ROUTE) {
+        if (url.pathname === TAPE_ROUTE) {
           const out = res as unknown as MiddlewareRes;
           if (r.method !== 'POST') {
             out.setHeader('Allow', 'POST');

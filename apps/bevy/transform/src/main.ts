@@ -1,3 +1,4 @@
+import { Time, Update } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -16,10 +17,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   if (!appResult.ok) return console.error('[bevy-transform] createApp failed:', appResult.error);
   const app = appResult.value;
   buildTransformWorld(app.world);
-  app.world.addSystem({
+  app.world.addSystem(Update, {
     name: 'orbit-transform',
     queries: [],
-    fn: (world) => stepTransform(world, world.hasResource('Time') ? world.getResource<{ dt: number }>('Time').dt : 0),
+    fn: (world) => stepTransform(world, world.hasResource('Time') ? world.getResource(Time).delta : 0),
   });
   const started = app.start();
   if (!started.ok) console.error('[bevy-transform] app.start failed:', started.error);

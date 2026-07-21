@@ -1,3 +1,4 @@
+import { Time, Update } from '@forgeax/engine-ecs';
 // apps/learn-render/1.getting-started/5.transformations/src/index.ts
 // LearnOpenGL section 1.5 - Transformations (forgeax mapping with the
 // shared cube + wood-container texture from §1.4 + a system-fn that
@@ -52,7 +53,7 @@
 // MeshAsset POD types + 4 component schemas (Transform / Camera /
 // MeshFilter / MeshRenderer). The `Time` resource (key 'Time') is
 // populated by the engine-app frame-loop each tick (plan-decisions D-1);
-// the system fn reads `world.getResource<{dt:number}>('Time')?.dt`
+// the system fn reads `world.getResource(Time).delta`
 // for the elapsed delta -- no fn-signature extension to ECS surface.
 import { createApp } from '@forgeax/engine-app';
 import { Entity, type World } from '@forgeax/engine-ecs';
@@ -263,12 +264,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   let lastTickScaleX = 1;
   let lastTickScaleY = 1;
   let tickCount = 0;
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'transformations-animate-cube',
     queries: [{ with: [Transform, MeshFilter, Entity] }],
     fn: (world, queryResults) => {
-      const time = world.getResource<{ readonly dt: number }>('Time');
-      const dt = time?.dt ?? 0;
+      const time = world.getResource(Time);
+      const dt = time.delta;
       elapsedSec += dt;
       const fields = computeTransformAt(elapsedSec);
       for (const bundles of queryResults[0]) {
@@ -320,7 +321,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     cubeEntity: { ok: true, value: cubeSpawn } as unknown as ReturnType<World['spawn']>,
   });
   win.__captureTransformations = async (): Promise<Uint8Array> => {
-    world.update();
+    world.update(1 / 60).unwrap();
     renderer.draw([world], { owner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {

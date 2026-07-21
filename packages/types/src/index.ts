@@ -1107,6 +1107,7 @@ export interface RenderPipelineAsset {
  * | `'font'` | `FontAsset` (MSDF atlas handle + glyph metrics) |
  * | `'render-pipeline'` | `RenderPipelineAsset` (installable pipeline logic id + config) |
  * | `'video'` | `VideoAsset` (runtime-only `{ url }` descriptor, no width/height/duration) |
+ * | `'animation-graph'` | `AnimationGraph` (Clip/Blend/Add DAG + per-node static weights) |
  */
 export type Asset =
   | MeshAsset
@@ -1119,6 +1120,11 @@ export type Asset =
   | SkeletonAsset
   | SkinAsset
   | AnimationClip
+  // === 1 new variant (feat-20260713-animation-state-machine-plugin M2 / w13) ===
+  // AnimationGraph POD (Clip/Blend/Add DAG); GUID-addressable, serializable
+  // (AC-14 foundation). Closed node union (clip/blend/add), no reserved FSM/Mask
+  // fields (OOS-1..4).
+  | AnimationGraph
   | AudioClipAsset
   | FontAsset
   | RenderPipelineAsset
@@ -1652,6 +1658,94 @@ export interface AnimationClip {
   readonly kind: 'animation-clip';
   readonly duration: number;
   readonly channels: readonly AnimationChannel[];
+}
+
+// === AnimationGraph asset POD + node union (feat-20260713 M2 / w13) ==============
+//
+// Decision anchors:
+//   - requirements AC-02 (declarative Clip/Blend/Add + nesting graph carried as
+//     a shared<AnimationGraph> asset handle, multi-entity shared).
+//   - requirements AC-14 (AnimationGraph joins the closed `Asset` union, owns a
+//     GUID, and serializes into pack/scene round-trip — foundation landed here,
+//     the serialize/deserialize mechanism itself is M4).
+//   - requirements OOS-1/OOS-2/OOS-3/OOS-4 (node union is CLOSED at three
+//     variants — clip / blend / add. No FSM state/transition, no bone Mask, no
+//     built-in transition layer, no BlendSpace fields are reserved; deferred
+//     features add nodes in a future closed loop, not speculative fields now —
+//     charter F4 "no unvalidated abstraction").
+//   - requirements OOS-7 (POD carries only the topology of an engine-authored
+//     defineAnimationGraph graph; no DCC import metadata).
+//   - plan-strategy D-4 (POD + node union land in types/index.ts, the single-file
+//     SSOT for every Asset POD, alongside AnimationClip).
+//
+// The POD mirrors AnimationClip: no inline `guid` field — the GUID is assigned by
+// the AssetRegistry / shared-handle system when the graph is registered (like
+// AnimationClip / MaterialAsset / VideoAsset). Nodes are stored flat in `nodes[]`
+// and referenced by index; `root` is the index of the output node. Clip leaves
+// carry a `Handle<'AnimationClip', 'shared'>` (the same shared-handle abstraction
+// MeshRenderer.materials uses for MaterialAsset — charter P4); M4 serialization
+// rewrites those handles to GUIDs via the existing `refs` mechanism.
+
+/**
+ * Clip leaf node — samples a single `shared<AnimationClip>` at the node's
+ * runtime seek-time (M3 evaluation). `weight` is the node's STATIC weight; the
+ * effective weight is `runtime weight x static weight` (requirements AC-07
+ * orthogonal product).
+ */
+export interface AnimationGraphClipNode {
+  readonly type: 'clip';
+  readonly clip: Handle<'AnimationClip', 'shared'>;
+  readonly weight: number;
+}
+
+/**
+ * Blend node — normalizing lerp over its children (requirements AC-04). Child
+ * effective weights are normalized so they sum to 1 at evaluation. `children`
+ * are indices into the parent {@link AnimationGraph.nodes} array.
+ */
+export interface AnimationGraphBlendNode {
+  readonly type: 'blend';
+  readonly children: readonly number[];
+  readonly weight: number;
+}
+
+/**
+ * Add node — non-normalizing additive stack (requirements AC-05). The `base`
+ * child contributes its effective weight unchanged; each `additive` layer is
+ * added on top WITHOUT normalization (total may exceed 1). `base` and
+ * `additive` are indices into {@link AnimationGraph.nodes}.
+ */
+export interface AnimationGraphAddNode {
+  readonly type: 'add';
+  readonly base: number;
+  readonly additive: readonly number[];
+  readonly weight: number;
+}
+
+/**
+ * Closed node union — exactly three variants (clip / blend / add). AI users
+ * exhaustive `switch (node.type)` without default; TS guards completeness
+ * (charter P3). No FSM / Mask / transition / BlendSpace variants are reserved
+ * (OOS-1..4).
+ */
+export type AnimationGraphNode =
+  | AnimationGraphClipNode
+  | AnimationGraphBlendNode
+  | AnimationGraphAddNode;
+
+/**
+ * AnimationGraph asset POD — a Clip/Blend/Add DAG with per-node static weights.
+ *
+ * Joins the closed `Asset` union with `kind: 'animation-graph'` (AC-14); minted
+ * into a `Handle<'AnimationGraph', 'shared'>` via `world.allocSharedRef` /
+ * `AssetRegistry`, shared across multiple entities. Constructed via
+ * `defineAnimationGraph` (runtime), which validates topology (no out-of-range
+ * refs / cycles / invalid weights / empty graph) before a handle is minted.
+ */
+export interface AnimationGraph {
+  readonly kind: 'animation-graph';
+  readonly nodes: readonly AnimationGraphNode[];
+  readonly root: number;
 }
 
 /**

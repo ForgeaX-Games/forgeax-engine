@@ -11,7 +11,7 @@
 // `cameraSpeed = 2.5f * deltaTime` verbatim (LearnOpenGL/src/1.getting_
 // started/7.4.camera_class/camera_class.cpp ProcessKeyboard). forgeax
 // reproduces the SAME numeric SSOT (cameraSpeed = 2.5) and consumes dt
-// from `world.getResource<TimeResource>('Time').dt` (engine-app Time
+// from `world.getResource(Time).delta` (ECS-owned Time
 // resource is the dt SSOT, not an extra fn-callback parameter).
 //
 // Charter P5: this test does NOT bootstrap a renderer / canvas / WebGPU.

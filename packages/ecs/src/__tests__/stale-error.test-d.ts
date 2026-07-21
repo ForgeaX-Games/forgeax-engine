@@ -1,3 +1,4 @@
+import { Update } from '../schedule-token';
 // AC-L5 stale-error compile-assertion vehicle.
 //
 // Sediments 5 method-level `expectTypeOf` assertions (the 4 `lookupAlive`
@@ -117,7 +118,7 @@ describe('[w6] AC-L5 — world.addSystem<const Qs> method signature shape (simpl
     const Position = defineComponent('Position', { x: { type: 'f32' }, y: { type: 'f32' } });
 
     const world = new World();
-    const ret = world.addSystem({
+    const ret = world.addSystem(Update, {
       name: 'ac-l5-shape-probe',
       queries: [{ with: [Position] }],
       fn: (_world, queryResults, commands) => {
@@ -133,8 +134,8 @@ describe('[w6] AC-L5 — world.addSystem<const Qs> method signature shape (simpl
       },
     });
 
-    // Class-method `addSystem` returns void (registration side-effect only).
-    expectTypeOf(ret).toEqualTypeOf<void>();
+    // Class-method `addSystem` reports a structured schedule-scope result.
+    expectTypeOf(ret.ok).toEqualTypeOf<boolean>();
   });
 });
 
@@ -202,6 +203,10 @@ describe('[w13] EcsErrorCode union completeness — stale codes present', () => 
         case 'shared-field-invalid-value':
         // feat-20260714-bevy-style-system-sets M1 / w3
         case 'system-set-not-registered':
+        case 'time-delta-invalid':
+        case 'time-config-invalid':
+        case 'schedule-scope-mismatch':
+        case 'resource-protected':
           return code;
       }
     };

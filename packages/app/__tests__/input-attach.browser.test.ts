@@ -30,7 +30,7 @@
 //          addSystem(InputFrameStartScan)
 //       3. app.start drives one frame; world.getResource('InputSnapshot') is non-null
 //       4. app.stop calls detach() (DOM listener count returns to 0) +
-//          world.removeSystem(FRAME_START_SCAN_SYSTEM_NAME)
+//          world.removeSystem(Update, FRAME_START_SCAN_SYSTEM_NAME)
 //       5. removeSystem returning Result.err(ScheduleMutationError) is wrapped
 //          as AppError({code: 'app-system-update-failed', detail: { cause, systemName }})
 //          and dispatched via onError; app.stop still returns Result.ok(undefined)

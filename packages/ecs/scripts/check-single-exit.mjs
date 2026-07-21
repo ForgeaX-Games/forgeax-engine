@@ -15,7 +15,9 @@
 //
 // Gated symbol set (the new vocabulary added across this loop family):
 //   - Handle, SchemaFieldType, ManagedRefStore, EcsErrorCode,
-//     EcsErrorDetail, EcsError
+//     EcsErrorDetail, EcsError, ScheduleToken, Update, FixedUpdate, Time,
+//     FixedTime, TimeDeltaInvalidError, TimeConfigInvalidError,
+//     ScheduleScopeMismatchError
 //   - StringView, Name, isStringField (feat-20260515-ecs-name-component-and-
 //     string-schema M3 / w3-grep-gate-wire-ci)
 //   - TypedArrayFor (feat-20260515-buffer-array-vocab-collapse M1 / w4 — the
@@ -61,6 +63,14 @@ const GATED_SYMBOLS = [
   'EcsError',
   'Name',
   'TypedArrayFor',
+  'ScheduleToken',
+  'Update',
+  'FixedUpdate',
+  'Time',
+  'FixedTime',
+  'TimeDeltaInvalidError',
+  'TimeConfigInvalidError',
+  'ScheduleScopeMismatchError',
 ];
 
 // Freeze-list markers for AI users tracing the feat-20260515 cut.

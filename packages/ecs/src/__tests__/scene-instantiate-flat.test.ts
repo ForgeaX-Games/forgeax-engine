@@ -200,3 +200,27 @@ describe('instantiateSceneFlat', () => {
     expect(anchorCount).toBe(1);
   });
 });
+
+// ── m3-scene-kernel-parity (flat variant) ────────────────────────────────────
+
+import { projectComponentData } from '../externalization/index';
+
+describe('m3 — scene-flat kernel parity', () => {
+  it('(a) flat instantiation default fill matches kernel projection', () => {
+    const FlatParity = defineComponent('FlatParity', {
+      val: { type: 'u32', default: 99 },
+    });
+
+    const world = new World();
+    const asset: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: localId(0), components: { FlatParity: {} } }],
+    };
+    const handle = reg(world, asset);
+    const r = world.instantiateSceneFlat(handle as unknown as Handle<'SceneAsset', 'shared'>);
+    expect(r.ok).toBe(true);
+
+    const kernelResult = projectComponentData(FlatParity as Component, {});
+    expect(kernelResult.val).toBe(99);
+  });
+});

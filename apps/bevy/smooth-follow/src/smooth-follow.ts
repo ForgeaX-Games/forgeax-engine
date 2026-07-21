@@ -22,7 +22,7 @@
 //   - target's circular path      -> stepTarget (pure function of world + elapsed time)
 //   - DecayRate resource          -> DECAY_RATE constant (game tuning belongs in the app)
 //   - Query<&mut Transform, With<FollowingSphere>> -> tag components + queryRun
-//   - Res<Time>                   -> world.getResource('Time').dt (auto by createApp)
+//   - Res<Time>                   -> world.getResource(Time).delta (auto by createApp)
 //
 // Like 3d-rotation / translation this is a MOTION demo: stepTarget + stepFollower are
 // pure functions of (world, dt|elapsed) so the smoke drives them deterministically and

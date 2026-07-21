@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // apps/learn-render/2.lighting/2.basic-lighting/src/index.ts
 // LearnOpenGL section 2.lighting 2.1 basic_lighting_diffuse + 2.2 basic_lighting_specular (forgeax mapping).
 //
@@ -220,7 +221,7 @@ function installCaptureHook(
   const win = window as unknown as { __captureBasicLighting?: CaptureHook };
   const renderer = app.renderer;
   win.__captureBasicLighting = async (): Promise<Uint8Array> => {
-    world.update();
+    world.update(1 / 60).unwrap();
     renderer.draw([world], { owner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {
@@ -234,7 +235,7 @@ function installCaptureHook(
 
 function addScrollFovSystem(world: App['world'], renderer: App['renderer']): void {
   const scrollFov = createScrollFovAccumulator();
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'learn-render-basic-lighting-scroll-fov',
     after: ['input-frame-start-scan'],
     queries: [{ with: [Camera, Entity] }],

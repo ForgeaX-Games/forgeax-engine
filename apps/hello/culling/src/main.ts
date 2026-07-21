@@ -25,10 +25,12 @@ import {
   Transform,
 } from '@forgeax/engine-runtime';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
+import { quat } from '@forgeax/engine-math';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const GRID_SIZE = 46;
 const GRID_SPACING = 3;
+const CAMERA_TARGET: [number, number, number] = [GRID_SPACING / 2, 0, GRID_SPACING / 2];
 
 const world = new World();
 
@@ -105,7 +107,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     {
       component: Transform,
       data: {
-        pos: [0, 4, 6], quat: [0, 0, 0, 1], scale: [1, 1, 1],},
+        pos: [0, 4, 6],
+        quat: quat.fromLookAt(quat.create(), [0, 4, 6], CAMERA_TARGET, [0, 1, 0]),
+        scale: [1, 1, 1],
+      },
     },
     {
       component: Camera,
@@ -122,7 +127,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
     // Orbit camera around the grid
     world.set(cameraEntity, Transform, {
-      pos: [camX, 4, camZ], quat: [0, 0, 0, 1], scale: [1, 1, 1],});
+      pos: [camX, 4, camZ],
+      quat: quat.fromLookAt(quat.create(), [camX, 4, camZ], CAMERA_TARGET, [0, 1, 0]),
+      scale: [1, 1, 1],
+    });
 
     const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error('[culling] draw error:', r.error);

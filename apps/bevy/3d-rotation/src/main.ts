@@ -9,7 +9,7 @@
 // apps/bevy/3d-scene + 3d-shapes (which manual-rAF redraw an unchanging world),
 // this uses the managed motion front door:
 //   - createApp -> owns the frame loop AND auto-inserts the 'Time' resource
-//     (world.getResource('Time').dt) before each world.update().
+//     (world.getResource(Time).delta) before each world.update().
 //   - world.addSystem -> an Update system that spins the cube each frame via the
 //     shared stepSpin (which uses quat.rotateAxis — the ergonomic incremental
 //     rotate helper added in solo round 20260713-164916).
@@ -19,6 +19,7 @@
 // the dawn smoke), so the two never drift.
 
 import { createApp } from '@forgeax/engine-app';
+import { Time, Update } from '@forgeax/engine-ecs';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildRotationWorld, stepSpin } from './rotation';
@@ -46,13 +47,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   buildRotationWorld(app.world);
 
   // The Update system: spin every Rotatable each frame off the auto-provided
-  // Time.dt (Bevy's `add_systems(Update, rotate_cube)`).
-  app.world.addSystem({
+  // Time.delta (Bevy's `add_systems(Update, rotate_cube)`).
+  app.world.addSystem(Update, {
     name: 'rotate-cube',
     queries: [],
     fn: (world) => {
       const dt = world.hasResource('Time')
-        ? world.getResource<{ dt: number }>('Time').dt
+        ? world.getResource(Time).delta
         : 0;
       stepSpin(world, dt);
     },

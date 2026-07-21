@@ -34,7 +34,7 @@
 // principle 6). The output is *near*-deterministic: the LO 1.5 system
 // fn drives a time-based rotation + scale pulse, so exact pixel values
 // vary slightly run-to-run (within PIXEL_PARITY_THRESHOLD tolerance
-// epsilon <= 0.05). The capture hook re-issues a fresh world.update()
+// epsilon <= 0.05). The capture hook re-issues a fresh world.update(1 / 60).unwrap()
 // + draw + samples through createImageBitmap + OffscreenCanvas (same
 // shape as M7 shaders so any future regression surfaces in both
 // pipelines simultaneously).

@@ -176,6 +176,14 @@ if (!ready.ok) {
   process.exit(1);
 }
 
+// Monkey-patch performance.now BEFORE app.start() so the frame-loop's
+// initial lastTimestamp reads the fake value, not a large real timestamp.
+// Otherwise the first tick computes a negative delta and world.update()
+// returns time-delta-invalid (Result-based validation, not silent pass).
+let fakeNow = 0;
+const realPerformanceNow = globalThis.performance.now.bind(globalThis.performance);
+globalThis.performance.now = () => fakeNow;
+
 const startResult = app.start();
 if (!startResult.ok) {
   originalConsoleError(`[smoke] FAIL - app.start() returned err: ${startResult.error.code}`);
@@ -184,9 +192,6 @@ if (!startResult.ok) {
 
 const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
 let framesObserved = 0;
-let fakeNow = 0;
-const realPerformanceNow = globalThis.performance.now.bind(globalThis.performance);
-globalThis.performance.now = () => fakeNow;
 for (let i = 0; i < TARGET_FRAMES; i++) {
   const due = rafQueue.shift();
   if (!due) break;

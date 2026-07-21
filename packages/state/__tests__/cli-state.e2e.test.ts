@@ -103,7 +103,7 @@ describe('cli-state e2e: state list', () => {
   it('state list reflects current state after a transition', async () => {
     const world = makeWorldWithPlugin();
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const r = await runCommand(world, ['list']);
 
@@ -116,7 +116,7 @@ describe('cli-state e2e: state list', () => {
   it('state list shows current, previous and default per token (AC-15)', async () => {
     const world = makeWorldWithPlugin();
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const r = await runCommand(world, ['list']);
 
@@ -152,7 +152,7 @@ describe('cli-state e2e: state get', () => {
   it('state get <tokenName> reflects the current value after transition', async () => {
     const world = makeWorldWithPlugin();
     setNextState(world, LevelId, 'street-a');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const r = await runCommand(world, ['get', 'LevelId']);
 
@@ -188,7 +188,7 @@ describe('cli-state e2e: state get', () => {
   it('state get prints current/previous/default/variants (AC-15)', async () => {
     const world = makeWorldWithPlugin();
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const r = await runCommand(world, ['get', 'LevelId']);
 

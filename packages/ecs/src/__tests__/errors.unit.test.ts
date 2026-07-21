@@ -544,7 +544,13 @@ import { World } from '../world';
         // resolve / retain after the entity+asset shared isRetiredSlot
         // SSOT merge). Intentional add per the same minor-evolution
         // contract.
+        // M2 time and scheduling extends the 43-code baseline by exactly three
+        // approved codes. The relative fence rejects any additional drift.
         const INTENTIONAL_ADDS = new Set<string>([
+          'time-delta-invalid',
+          'time-config-invalid',
+          'schedule-scope-mismatch',
+          'resource-protected',
           'spawn-data-unknown-field',
           'shared-ref-released',
           'shared-ref-double-release',
@@ -708,6 +714,10 @@ import { World } from '../world';
             // case. Required to keep this exhaustive switch over EcsErrorCode
             // visually closed.
             case 'system-set-not-registered':
+            case 'time-delta-invalid':
+            case 'time-config-invalid':
+            case 'schedule-scope-mismatch':
+            case 'resource-protected':
               return code;
             default:
               return assertNever(code);

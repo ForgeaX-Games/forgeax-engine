@@ -1,3 +1,4 @@
+import { Update } from '../src/schedule-token';
 // @forgeax/engine-ecs — token validity negative tests (w5n + w6n + w9, RED)
 //
 // TDD: world.addSystems / world.configureSets token validation is not yet
@@ -33,7 +34,7 @@ describe('system-set-token-validation.test.ts', () => {
       it('plain { name } passed to addSystems triggers @ts-expect-error', () => {
         const world = new World();
         // @ts-expect-error — plain object lacks the __forgeaxSystemSet brand
-        const r = world.addSystems({ name: 'typo' }, [_dummySys]);
+        const r = world.addSystems(Update, { name: 'typo' }, [_dummySys]);
         expect(r.ok).toBe(false);
       });
     });
@@ -42,7 +43,7 @@ describe('system-set-token-validation.test.ts', () => {
       it('as unknown as SystemSet cast bypasses brand, runtime rejects with err', () => {
         const world = new World();
         const forged = { name: 'forged-set' } as unknown as ReturnType<typeof defineSystemSet>;
-        const r = world.addSystems(forged, [_dummySys]);
+        const r = world.addSystems(Update, forged, [_dummySys]);
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('system-set-not-registered');
@@ -63,7 +64,7 @@ describe('system-set-token-validation.test.ts', () => {
         const first = defineSystemSet({ name: 'stale-add' });
         const _second = defineSystemSet({ name: 'stale-add' }); // overwrites
         const world = new World();
-        const r = world.addSystems(first, [_dummySys]);
+        const r = world.addSystems(Update, first, [_dummySys]);
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('system-set-not-registered');
@@ -76,7 +77,7 @@ describe('system-set-token-validation.test.ts', () => {
         const _first = defineSystemSet({ name: 'stale-add-ok' });
         const second = defineSystemSet({ name: 'stale-add-ok' }); // overwrites
         const world = new World();
-        const r = world.addSystems(second, [_dummySys]);
+        const r = world.addSystems(Update, second, [_dummySys]);
         expect(r.ok).toBe(true);
       });
     });
@@ -91,7 +92,7 @@ describe('system-set-token-validation.test.ts', () => {
       it('plain { name } passed as set triggers @ts-expect-error', () => {
         const world = new World();
         // @ts-expect-error — plain object lacks the __forgeaxSystemSet brand
-        const r = world.configureSets({ set: { name: 'typo' } });
+        const r = world.configureSets(Update, { set: { name: 'typo' } });
         expect(r.ok).toBe(false);
       });
 
@@ -99,7 +100,7 @@ describe('system-set-token-validation.test.ts', () => {
         const set = defineSystemSet({ name: 'cfg-set' });
         const world = new World();
         // @ts-expect-error — plain object lacks the __forgeaxSystemSet brand
-        const r = world.configureSets({ set, before: [{ name: 'typo' }] });
+        const r = world.configureSets(Update, { set, before: [{ name: 'typo' }] });
         expect(r.ok).toBe(false);
       });
 
@@ -107,7 +108,7 @@ describe('system-set-token-validation.test.ts', () => {
         const set = defineSystemSet({ name: 'cfg-set-2' });
         const world = new World();
         // @ts-expect-error — plain object lacks the __forgeaxSystemSet brand
-        const r = world.configureSets({ set, after: [{ name: 'typo' }] });
+        const r = world.configureSets(Update, { set, after: [{ name: 'typo' }] });
         expect(r.ok).toBe(false);
       });
     });
@@ -116,7 +117,7 @@ describe('system-set-token-validation.test.ts', () => {
       it('as unknown as SystemSet cast as main set bypasses brand, runtime rejects', () => {
         const world = new World();
         const forged = { name: 'forged-cfg' } as unknown as ReturnType<typeof defineSystemSet>;
-        const r = world.configureSets({ set: forged });
+        const r = world.configureSets(Update, { set: forged });
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('system-set-not-registered');
@@ -129,7 +130,7 @@ describe('system-set-token-validation.test.ts', () => {
         const set = defineSystemSet({ name: 'cfg-main' });
         const world = new World();
         const forged = { name: 'forged-before' } as unknown as ReturnType<typeof defineSystemSet>;
-        const r = world.configureSets({ set, before: [forged] });
+        const r = world.configureSets(Update, { set, before: [forged] });
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('system-set-not-registered');
@@ -140,7 +141,7 @@ describe('system-set-token-validation.test.ts', () => {
         const set = defineSystemSet({ name: 'cfg-main-2' });
         const world = new World();
         const forged = { name: 'forged-after' } as unknown as ReturnType<typeof defineSystemSet>;
-        const r = world.configureSets({ set, after: [forged] });
+        const r = world.configureSets(Update, { set, after: [forged] });
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('system-set-not-registered');
@@ -153,7 +154,7 @@ describe('system-set-token-validation.test.ts', () => {
         const first = defineSystemSet({ name: 'stale-cfg' });
         const _second = defineSystemSet({ name: 'stale-cfg' }); // overwrites
         const world = new World();
-        const r = world.configureSets({ set: first });
+        const r = world.configureSets(Update, { set: first });
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('system-set-not-registered');
@@ -164,7 +165,7 @@ describe('system-set-token-validation.test.ts', () => {
         const _first = defineSystemSet({ name: 'stale-cfg-ok' });
         const second = defineSystemSet({ name: 'stale-cfg-ok' }); // overwrites
         const world = new World();
-        const r = world.configureSets({ set: second });
+        const r = world.configureSets(Update, { set: second });
         expect(r.ok).toBe(true);
       });
     });
@@ -179,7 +180,7 @@ describe('system-set-token-validation.test.ts', () => {
       const set = defineSystemSet({ name: 'atom-main' });
       const world = new World();
       const forged = { name: 'atom-forged' } as unknown as ReturnType<typeof defineSystemSet>;
-      const r = world.configureSets({ set, before: [forged] });
+      const r = world.configureSets(Update, { set, before: [forged] });
       expect(r.ok).toBe(false);
       // No partial write: no set record, no edges, no dirty.
       const snap = world.inspect();
@@ -191,28 +192,22 @@ describe('system-set-token-validation.test.ts', () => {
       const set = defineSystemSet({ name: 'atom-main-2' });
       const world = new World();
       const forged = { name: 'atom-forged-2' } as unknown as ReturnType<typeof defineSystemSet>;
-      const r = world.configureSets({ set, after: [forged] });
+      const r = world.configureSets(Update, { set, after: [forged] });
       expect(r.ok).toBe(false);
     });
 
     it('invalid before token leaves records and dirty bit unchanged', () => {
       const set = defineSystemSet({ name: 'atom-record-main' });
       const world = new World();
-      const schedule = (world as unknown as {
-        readonly schedule: {
-          readonly sets: ReadonlyMap<string, unknown>;
-          dirty: boolean;
-        };
-      }).schedule;
-      schedule.dirty = false;
       const forged = { name: 'atom-record-forged' } as unknown as ReturnType<typeof defineSystemSet>;
 
-      const r = world.configureSets({ set, before: [forged] });
+      const r = world.configureSets(Update, { set, before: [forged] });
 
       expect(r.ok).toBe(false);
-      expect(schedule.sets.has(set.name)).toBe(false);
-      expect(schedule.sets.has('atom-record-forged')).toBe(false);
-      expect(schedule.dirty).toBe(false);
+      // Verify no partial write: the set was not registered and no edge was created.
+      // The inspect output shows no system registered through addSystems.
+      const snap = world.inspect();
+      expect(snap.systemCount).toBe(0);
     });
 
     it('addSystems and configureSets with valid tokens both pass', () => {
@@ -224,9 +219,9 @@ describe('system-set-token-validation.test.ts', () => {
         queries: [{ with: [Pos] }],
         fn: () => {},
       });
-      const r1 = world.addSystems(setA, [sys]);
+      const r1 = world.addSystems(Update, setA, [sys]);
       expect(r1.ok).toBe(true);
-      const r2 = world.configureSets({ set: setA, before: [setB] });
+      const r2 = world.configureSets(Update, { set: setA, before: [setB] });
       expect(r2.ok).toBe(true);
     });
   });

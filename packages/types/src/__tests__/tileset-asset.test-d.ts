@@ -89,6 +89,8 @@ describe('TilesetAsset POD shape (M0 baseline)', () => {
           return 'skin';
         case 'animation-clip':
           return 'animation-clip';
+        case 'animation-graph':
+          return 'animation-graph';
         case 'audio':
           return 'audio';
         case 'font':

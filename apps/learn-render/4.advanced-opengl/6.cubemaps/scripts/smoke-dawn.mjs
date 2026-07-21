@@ -426,7 +426,7 @@ async function readbackPixels(device) {
 
 async function drawFrames(world, frames) {
   for (let i = 0; i < frames; i++) {
-    world.update();
+    world.update(1 / 60).unwrap();
     const r = renderer.draw([world], { owner: 0 });
     if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   }

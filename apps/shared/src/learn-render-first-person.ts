@@ -1,3 +1,4 @@
+import { Time, Update } from '@forgeax/engine-ecs';
 // learn-render-first-person.ts -- first-person camera controls SSOT for
 // apps/learn-render/2.lighting/ (1, 2, 3, 4, 5, 6). Exports addFirstPersonSystem
 // (with optional flashlight SpotLight narrowing), createFirstPersonControls
@@ -184,15 +185,15 @@ export function addFirstPersonSystem(
   };
 
   if (opts.flashlight) {
-    world.addSystem({
+    world.addSystem(Update, {
       name: opts.name,
       after: ['input-frame-start-scan'],
       queries: [{ with: [Transform, Camera, Entity] }, { with: [Transform, SpotLight, Entity] }],
       fn: (world, queryResults) => {
         const snapshot = renderer.input.snapshot(world);
         if (snapshot === undefined) return;
-        const time = world.getResource<{ readonly dt: number }>('Time');
-        const dt = time?.dt ?? 0;
+        const time = world.getResource(Time);
+        const dt = time.delta;
         const { forward, displacement } = tick(dt, snapshot);
 
         let camPosX = 0;
@@ -228,15 +229,15 @@ export function addFirstPersonSystem(
       },
     });
   } else {
-    world.addSystem({
+    world.addSystem(Update, {
       name: opts.name,
       after: ['input-frame-start-scan'],
       queries: [{ with: [Transform, Camera, Entity] }],
       fn: (world, queryResults) => {
         const snapshot = renderer.input.snapshot(world);
         if (snapshot === undefined) return;
-        const time = world.getResource<{ readonly dt: number }>('Time');
-        const dt = time?.dt ?? 0;
+        const time = world.getResource(Time);
+        const dt = time.delta;
         const { displacement } = tick(dt, snapshot);
 
         for (const bundles of queryResults[0]) {

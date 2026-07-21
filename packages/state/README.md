@@ -15,7 +15,7 @@
 | `setNextStateForce(world, token, variant)` | function | Like `setNextState` but `force=true` (re-fires even same-state) |
 | `getState(world, token)` | function | Read current state variant string; returns `Result<string, StateError>` |
 | `getPreviousState(world, token)` | function | Read previous-frame state variant string; returns `Result<string, StateError>` |
-| `registerStatesPlugin(world)` | function | Idempotent: inserts per-token Resources + registers `transitionStates` system |
+| `registerStatesPlugin(world)` | function | Idempotent: inserts per-token Resources + registers `transitionStates` on `Update` |
 | `despawnOnExit(world, entity, token, variant)` | function | Scope entity to auto-despawn when token leaves variant |
 | `despawnOnEnter(world, entity, token, variant)` | function | Scope entity to auto-despawn when token enters variant |
 | `OnEnter(token, variant)` | function | Return dispatch label string for enter callbacks |
@@ -54,7 +54,7 @@ Per-frame, per-token, the `transitionStatesSystem` (registered by `registerState
 7. Dispatch `OnEnter` callbacks for next variant (errors bubble -- see Constraints)
 8. Clear `NextState = undefined` (unless callbacks wrote a new payload)
 
-Schedule anchors: `after: ['input-frame-start-scan']`, `before: ['propagateTransforms']`.
+Schedule anchors are scoped to `Update`: `after: ['input-frame-start-scan']`, `before: ['propagateTransforms']`.
 
 ## Constraints
 

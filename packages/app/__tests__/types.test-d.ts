@@ -195,22 +195,3 @@ describe('dual-layer instanceof EngineEnvironmentError + switch pattern (D-6)', 
     expectTypeOf(consume).toBeFunction();
   });
 });
-
-describe('App.registerUpdate proxy method (AC-05 / M1 w3)', () => {
-  it('App interface has registerUpdate method with (fn: (dt: number) => void) => void', () => {
-    // This is a compile-time assertion: if App lacks registerUpdate or the
-    // parameter types are wrong, the destructure below will fail tsc.
-    // The test is red (compile error) before w6 implementation lands.
-    const _fn: App['registerUpdate'] = (cb: (dt: number) => void): void => {
-      void cb;
-    };
-    expectTypeOf(_fn).toBeFunction();
-  });
-
-  it('registerUpdate parameter fn receives a number (dt)', () => {
-    const _cb = (dt: number): void => {
-      void dt;
-    };
-    expectTypeOf(_cb).parameter(0).toMatchTypeOf<number>();
-  });
-});

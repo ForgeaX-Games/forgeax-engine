@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // camera-input.dawn.test.ts -- vitest dawn project (AC-04 + AC-07 +
 // plan-strategy section 7) reverse-case proof for the first-person
 // camera InputSnapshot frame-start scan semantics under the dawn-node
@@ -12,7 +13,7 @@
 //   (a) Frame-start scan: a synthetic InputBackend feeding the
 //       InputFrameStartScan system token reads INPUT_BACKEND_KEY and writes
 //       InputSnapshot under the well-known Resource key; the
-//       snapshot is fresh every world.update() (charter F2 minimal
+//       snapshot is fresh every world.update(1 / 60).unwrap() (charter F2 minimal
 //       surface + plan-strategy D-5 frame-start ordering).
 //   (b) WASD consumption shape: keyboard.down('w') / down('s') /
 //       down('a') / down('d') reads return true while the
@@ -90,14 +91,14 @@ function fixtureBackend(): InputBackend & {
 }
 
 describe('learn-render section 1.7 camera InputSnapshot frame-start scan (AC-07 + plan-strategy D-5)', () => {
-  it('AC-07 (a): InputFrameStartScan writes InputSnapshot Resource each world.update()', () => {
+  it('AC-07 (a): InputFrameStartScan writes InputSnapshot Resource each world.update(1 / 60).unwrap()', () => {
     const backend = fixtureBackend();
     const world = new World();
     world.insertResource(INPUT_BACKEND_KEY, backend);
-    world.addSystem(InputFrameStartScan);
+    world.addSystem(Update, InputFrameStartScan);
 
     expect(world.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY)).toBe(false);
-    world.update();
+    world.update(1 / 60).unwrap();
     expect(world.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY)).toBe(true);
   });
 
@@ -105,10 +106,10 @@ describe('learn-render section 1.7 camera InputSnapshot frame-start scan (AC-07 
     const backend = fixtureBackend();
     const world = new World();
     world.insertResource(INPUT_BACKEND_KEY, backend);
-    world.addSystem(InputFrameStartScan);
+    world.addSystem(Update, InputFrameStartScan);
 
     backend.setHeldKeys(['w', 'a']);
-    world.update();
+    world.update(1 / 60).unwrap();
     let snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
     expect(snap.keyboard.down('w')).toBe(true);
     expect(snap.keyboard.down('a')).toBe(true);
@@ -116,7 +117,7 @@ describe('learn-render section 1.7 camera InputSnapshot frame-start scan (AC-07 
     expect(snap.keyboard.down('d')).toBe(false);
 
     backend.setHeldKeys(['s', 'd']);
-    world.update();
+    world.update(1 / 60).unwrap();
     snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
     expect(snap.keyboard.down('w')).toBe(false);
     expect(snap.keyboard.down('s')).toBe(true);
@@ -127,23 +128,23 @@ describe('learn-render section 1.7 camera InputSnapshot frame-start scan (AC-07 
     const backend = fixtureBackend();
     const world = new World();
     world.insertResource(INPUT_BACKEND_KEY, backend);
-    world.addSystem(InputFrameStartScan);
+    world.addSystem(Update, InputFrameStartScan);
 
     backend.setMouseDelta(7, -3);
-    world.update();
+    world.update(1 / 60).unwrap();
     let snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
     expect(snap.mouse.movementDelta).toEqual({ x: 7, y: -3 });
 
     // Without any setMouseDelta call between updates, the next frame
     // delta is { 0, 0 } (the backend drained the accumulator).
-    world.update();
+    world.update(1 / 60).unwrap();
     snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
     expect(snap.mouse.movementDelta).toEqual({ x: 0, y: 0 });
 
     // Two events in one frame accumulate into a single slice.
     backend.setMouseDelta(1, 1);
     backend.setMouseDelta(2, 4);
-    world.update();
+    world.update(1 / 60).unwrap();
     snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
     expect(snap.mouse.movementDelta).toEqual({ x: 3, y: 5 });
   });
@@ -152,14 +153,14 @@ describe('learn-render section 1.7 camera InputSnapshot frame-start scan (AC-07 
     const backend = fixtureBackend();
     const world = new World();
     world.insertResource(INPUT_BACKEND_KEY, backend);
-    world.addSystem(InputFrameStartScan);
+    world.addSystem(Update, InputFrameStartScan);
 
     backend.setUpKeys(['Escape']);
-    world.update();
+    world.update(1 / 60).unwrap();
     let snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
     expect(snap.keyboard.up('Escape')).toBe(true);
 
-    world.update();
+    world.update(1 / 60).unwrap();
     snap = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
     expect(snap.keyboard.up('Escape')).toBe(false);
   });

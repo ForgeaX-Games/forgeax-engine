@@ -24,7 +24,7 @@
 //   - requirements §AC-05 / §AC-06 / §AC-09
 //   - plan-strategy §K-11 / §4.5 / §D-6
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
@@ -108,6 +108,15 @@ export function withTimeout(promise, ms, label) {
     timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+export function buildPreviewApp(appDir, run = spawnSync) {
+  const result = run('pnpm', ['exec', 'vite', 'build'], { cwd: appDir, stdio: 'inherit' });
+  if (result.status === 0) return { ok: true };
+  return {
+    ok: false,
+    message: `vite build failed with exit code ${result.status ?? 'unknown'}`,
+  };
 }
 
 // ----------------------------------------------------------------------------
@@ -197,6 +206,16 @@ async function runFpsCli() {
     };
     if (message) entry.details.message = message;
     return entry;
+  }
+
+  const appBuild = buildPreviewApp(appDir);
+  if (!appBuild.ok) {
+    writeReport(buildEntry('unavailable', null, [], appBuild.message));
+    failStructured(
+      'metric-status-not-ok',
+      `apps/${pkgShortName}.fps reports status === 'ok'`,
+      `build apps/${pkgShortName} before preview; inspect report/${pkgShortName}/fps.json`,
+    );
   }
 
   const preview = spawn(

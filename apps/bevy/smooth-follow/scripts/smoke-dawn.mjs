@@ -215,7 +215,7 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   }
   // Bevy's chained (move_target, move_follower): target moves first, then the
   // follower damps toward its NEW position. Then propagate local Transform → world
-  // matrix (the app gets this via createApp's world.update(); the direct-draw smoke
+  // matrix (the app gets this via createApp's world.update(1 / 60).unwrap(); the direct-draw smoke
   // must call it explicitly or the renderer reads stale world matrices — memory
   // transform-local-trs-world-mat4-unification + propagate-transforms-never-auto-registered).
   stepTarget(world, FIXED_DT);

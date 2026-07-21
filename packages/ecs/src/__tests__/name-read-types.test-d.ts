@@ -1,10 +1,11 @@
+import { Update } from '../schedule-token';
 // w7 --- 3-point AC-02: world.get(e, C).unwrap().value infers as `string`.
 //
 // Locks AC-02 from requirements: AI users see a native JS `string` value
 // (not StringView, not a wrapper) when reading a `'string'` schema-vocab
 // field at three application points:
 //
-//   (a) inside `world.addSystem({ fn })` callback;
+//   (a) inside `world.addSystem(Update, { fn })` callback;
 //   (b) inside a `queryRun` callback (Query.run iteration);
 //   (c) at top-level after a direct import.
 //
@@ -30,7 +31,7 @@ describe('w7 --- (a) inside world.addSystem fn callback (AC-02)', () => {
     const w = new World();
     const e = w.spawn({ component: TestName, data: { value: 'Player' } }).unwrap();
 
-    w.addSystem({
+    w.addSystem(Update, {
       name: 'reader',
       queries: [],
       fn: () => {
@@ -46,7 +47,7 @@ describe('w7 --- (b) inside queryRun callback (AC-02)', () => {
     const w = new World();
     const e = w.spawn({ component: TestName, data: { value: 'Boss' } }).unwrap();
 
-    w.addSystem({
+    w.addSystem(Update, {
       name: 'queryReader',
       queries: [{ with: [TestName] }],
       fn: (_world, results) => {

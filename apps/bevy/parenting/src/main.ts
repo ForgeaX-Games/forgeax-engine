@@ -16,6 +16,7 @@
 // app AND the dawn smoke).
 
 import { createApp } from '@forgeax/engine-app';
+import { Time, Update } from '@forgeax/engine-ecs';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildParentingWorld, stepRotate } from './parenting';
@@ -43,13 +44,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   buildParentingWorld(app.world);
 
   // The Update system: spin the parent each frame off the auto-provided
-  // Time.dt (Bevy's `add_systems(Update, rotator_system)`).
-  app.world.addSystem({
+  // Time.delta (Bevy's `add_systems(Update, rotator_system)`).
+  app.world.addSystem(Update, {
     name: 'rotate-parent',
     queries: [],
     fn: (world) => {
       const dt = world.hasResource('Time')
-        ? world.getResource<{ dt: number }>('Time').dt
+        ? world.getResource(Time).delta
         : 0;
       stepRotate(world, dt);
     },

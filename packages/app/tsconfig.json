@@ -13,7 +13,8 @@
       "DOM.Iterable"
     ],
     "types": [
-      "@webgpu/types"
+      "@webgpu/types",
+      "node"
     ]
   },
   "include": [

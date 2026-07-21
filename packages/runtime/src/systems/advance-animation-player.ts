@@ -1,11 +1,23 @@
-// @forgeax/engine-runtime — advanceAnimationPlayer system (M2 / N-way blend).
+import { Update } from '@forgeax/engine-ecs';
+// @forgeax/engine-runtime — advanceAnimationPlayer system (variable N-way blend).
 //
-// Per-tick: scans 4 SoA slots on AnimationPlayer; for each active slot
-// (clips[i] != 0), advances times[i] += dt * speeds[i] (paused gates the
-// whole entity), samples the AnimationClip channels, and accumulates a
+// Per-tick: scans the variable-length SoA columns on each AnimationPlayer; for
+// each active slot (clips[i] != 0), advances times[i] += dt * speeds[i] (paused
+// gates the whole entity), samples the AnimationClip channels, and accumulates a
 // weighted pose into per-joint TRS accumulators. Once all slots are
 // folded in, each joint receives a single `world.set(joint, Transform,
 // fullPose)` (research F-2 / F-7 / F-8 — single write per joint per tick).
+//
+// Variable N-slot (feat-20260713 M1 / w5): the fixed 4-slot cap is retired. The
+// four parallel columns (clips / times / weights / speeds) are variable
+// `array<T>` columns, so they surface in query bundles as read-only
+// `ManagedColumnReader` slot-id accessors — the flat-SoA row window used by the
+// retired fixed schema no longer applies. Each entity's columns are read back as
+// resolved TypedArrays via `world.get(entity, AnimationPlayer)` and the advanced
+// `times` column is written back via `world.set` (D-7: weights are never written
+// back; clamping is read-time only). The blend math (translation linear / scale
+// linear / rotation nlerp, per-channel sumW) is byte-for-byte unchanged from the
+// fixed schema — only the loop bound moved from a hard 4 to the column length.
 //
 // Blend math (plan-strategy D-1):
 //   - translation / scale: linear average — accumulator += w_i * v_i, then
@@ -51,6 +63,7 @@ import { AnimationPlayer } from '../components/animation-player';
 import { Name } from '../components/name';
 import { Skin } from '../components/skin';
 import { Transform } from '../components/transform';
+import { AnimationPlayerSlotLengthMismatchError } from '../errors/animation-player';
 
 /**
  * System name used when `registerAdvanceAnimationPlayer` installs the system
@@ -67,7 +80,7 @@ export const AnimationSet = defineSystemSet({ name: 'animation' });
  * structured ParamValidation 'invalid' path rather than a raw throw; the fn
  * body reads it back via `world.getResource(ANIMATION_ASSET_RESOLVER_KEY)`.
  *
- * Aligns with the `TIME_RESOURCE_KEY` / `AUDIO_ENGINE_RESOURCE_KEY` naming
+ * Aligns with the ECS `Time` resource and `AUDIO_ENGINE_RESOURCE_KEY` naming
  * convention. Consumers import the constant rather than the bare string so a
  * typo degrades to an import error (charter P3).
  */
@@ -76,8 +89,6 @@ export const ANIMATION_ASSET_RESOLVER_KEY = 'AnimationAssetResolver' as const;
 export interface AnimationAssetResolver {
   resolveAnimationClip(world: World, handleRaw: number): AnimationClip | undefined;
 }
-
-const SLOT_COUNT = 4 as const;
 
 // ────────────────────────────────────────────────────────────────────────────
 // Dev-mode warn throttle (plan-strategy D-2 / charter P3)
@@ -144,11 +155,15 @@ function isAnimDevMode(): boolean {
 }
 
 /**
- * Advance all AnimationPlayer components by dt, blend up to 4 clips per
+ * Advance all AnimationPlayer components by dt, blend the N active clips per
  * entity, and write one Transform per joint per tick. Returns void.
  *
  * Iteration walks every archetype carrying `[AnimationPlayer, Entity]` via
- * `queryRun` — D-3 retires the archetype graph hand-walk used in M1.
+ * `queryRun` (D-3). The variable SoA columns are read-only `ManagedColumnReader`
+ * accessors in the bundle, so the entity handles are collected first, then each
+ * entity's columns are resolved to TypedArrays via `world.get` and the advanced
+ * `times` written back via `world.set` (mutating the query bundle mid-walk would
+ * be a compile error against the reader shape).
  */
 export function advanceAnimationPlayer(
   world: World,
@@ -157,50 +172,91 @@ export function advanceAnimationPlayer(
 ): void {
   const state = createQueryState({ with: [AnimationPlayer, Entity] });
 
+  // Collect entity handles inside the walk (the Entity.self view is transient),
+  // then resolve + mutate each player outside it.
+  const entities: number[] = [];
   queryRun(state, world, (bundle) => {
-    const ap = bundle.AnimationPlayer;
     const entitySelf = bundle.Entity.self;
-    const ctx: RowContext = {
-      clipsView: ap.clips,
-      timesView: ap.times,
-      weightsView: ap.weights,
-      speedsView: ap.speeds,
-      pausedView: ap.paused,
-      loopingView: ap.looping,
-    };
-
     const rowCount = entitySelf.length;
     for (let row = 0; row < rowCount; row++) {
       // entitySelf carries the packed u32 handle (encodeEntity(index, gen)).
       // Index 0 + gen 0 encodes to handle 0 — a valid entity, NOT a sentinel
-      // (ENTITY_NULL_RAW = 0xffffffff). Treat any column read as authoritative.
-      const entityRaw = entitySelf[row] ?? 0;
-      const entity = entityRaw as EntityHandle;
-      const activeSlots = collectActiveSlotsAndAdvanceTimes(world, ctx, row, assetResolver, dt);
-      if (activeSlots.length === 0) continue;
-      tickEntityJoints(world, entity, entityRaw, activeSlots);
+      // (ENTITY_NULL_RAW = 0xffffffff). Treat every column read as authoritative.
+      entities.push(entitySelf[row] ?? 0);
     }
   });
+
+  for (const entityRaw of entities) {
+    advanceOnePlayer(world, entityRaw, assetResolver, dt);
+  }
 }
 
 /**
- * Per-row column views, kept in a single object so the inner helpers can
- * read SoA slots without re-extracting fields each call.
+ * Resolved per-entity AnimationPlayer columns (a `world.get` snapshot). Variable
+ * columns alias the BufferPool slot bytes; the advanced `times` is written back
+ * via `world.set`, never in place, so the snapshot is treated read-only here.
  */
-interface RowContext {
-  readonly clipsView: Uint32Array;
-  readonly timesView: Float32Array;
-  readonly weightsView: Float32Array;
-  readonly speedsView: Float32Array;
-  readonly pausedView: Uint8Array;
-  readonly loopingView: Uint8Array;
+interface PlayerColumns {
+  readonly clips: Uint32Array;
+  readonly times: Float32Array;
+  readonly weights: Float32Array;
+  readonly speeds: Float32Array;
+  readonly paused: boolean;
+  readonly looping: boolean;
 }
 
 /**
- * Walk the 4 SoA slots for `row`: skip `clips[i]==0` (AC-04, no resolver call),
- * skip resolver miss, advance `times[i] += speeds[i]*dt` (paused gates the
- * entity per AC-05), wrap / clamp by clip duration based on `looping`, and
- * keep the slot if `max(0, weights[i]) > 0` (D-7 clamp without write-back).
+ * Advance one entity's AnimationPlayer: validate the four parallel column
+ * lengths at the evaluation entry (the single length chokepoint, D-5), walk the
+ * N slots to collect the active set + advanced times, write the advanced `times`
+ * column back, and fold the active slots into the joint pose.
+ *
+ * Length guard (AC-11 / D-5): variable columns are set field-by-field, so a
+ * consumer that desyncs their lengths is rejected here with the structured
+ * `animation-player-slot-length-mismatch` error rather than silently padded or
+ * truncated.
+ */
+function advanceOnePlayer(
+  world: World,
+  entityRaw: number,
+  assetResolver: AnimationAssetResolver,
+  dt: number,
+): void {
+  const entity = entityRaw as EntityHandle;
+  const apRes = world.get(entity, AnimationPlayer);
+  if (!apRes.ok) return;
+  const ap = apRes.value as unknown as PlayerColumns;
+
+  const count = ap.clips.length;
+  if (ap.times.length !== count || ap.weights.length !== count || ap.speeds.length !== count) {
+    throw new AnimationPlayerSlotLengthMismatchError({
+      entity: entityRaw,
+      clips: count,
+      times: ap.times.length,
+      weights: ap.weights.length,
+      speeds: ap.speeds.length,
+    });
+  }
+  if (count === 0) return;
+
+  const newTimes = new Float32Array(ap.times);
+  const activeSlots = collectActiveSlotsAndAdvanceTimes(world, ap, newTimes, assetResolver, dt);
+
+  // Persist the advanced times column (D-7: weights are never written back —
+  // negative-weight clamping is read-time only). Only `times` is set, so the
+  // clips / weights / speeds slots are left untouched.
+  world.set(entity, AnimationPlayer, { times: newTimes });
+
+  if (activeSlots.length === 0) return;
+  tickEntityJoints(world, entity, entityRaw, activeSlots);
+}
+
+/**
+ * Walk the N SoA slots for one entity: skip `clips[i]==0` (AC-04, no resolver
+ * call), skip resolver miss, advance `times[i] += speeds[i]*dt` (paused gates
+ * the entity per AC-05) into `newTimes`, wrap / clamp by clip duration based on
+ * `looping`, and keep the slot if `max(0, weights[i]) > 0` (D-7 clamp without
+ * write-back).
  *
  * The negative-speed reverse case (D-9) falls out naturally — `newTime`
  * goes negative, the looping branch's `+= duration` re-anchors it; the
@@ -208,27 +264,24 @@ interface RowContext {
  */
 function collectActiveSlotsAndAdvanceTimes(
   world: World,
-  ctx: RowContext,
-  row: number,
+  ap: PlayerColumns,
+  newTimes: Float32Array,
   assetResolver: AnimationAssetResolver,
   dt: number,
 ): ActiveSlot[] {
-  const paused = (ctx.pausedView[row] ?? 0) !== 0;
-  const looping = (ctx.loopingView[row] ?? 0) !== 0;
-  const base = row * SLOT_COUNT;
+  const paused = ap.paused;
+  const looping = ap.looping;
+  const count = ap.clips.length;
   const activeSlots: ActiveSlot[] = [];
 
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    const slotOffset = base + i;
-    const clipHandleRaw = ctx.clipsView[slotOffset] ?? 0;
+  for (let i = 0; i < count; i++) {
+    const clipHandleRaw = ap.clips[i] ?? 0;
     if (clipHandleRaw === 0) continue;
     const clip = assetResolver.resolveAnimationClip(world, clipHandleRaw);
     if (clip === undefined) continue;
 
-    const speed = ctx.speedsView[slotOffset] ?? 0;
-    let newTime = paused
-      ? (ctx.timesView[slotOffset] ?? 0)
-      : (ctx.timesView[slotOffset] ?? 0) + speed * dt;
+    const speed = ap.speeds[i] ?? 0;
+    let newTime = paused ? (ap.times[i] ?? 0) : (ap.times[i] ?? 0) + speed * dt;
     const duration = clip.duration;
     if (duration > 0) {
       if (looping) {
@@ -240,9 +293,9 @@ function collectActiveSlotsAndAdvanceTimes(
         newTime = 0;
       }
     }
-    ctx.timesView[slotOffset] = newTime;
+    newTimes[i] = newTime;
 
-    const wRaw = ctx.weightsView[slotOffset] ?? 0;
+    const wRaw = ap.weights[i] ?? 0;
     const w = wRaw > 0 ? wRaw : 0;
     if (w === 0) continue;
 
@@ -768,5 +821,5 @@ export const AdvanceAnimationPlayer: SystemHandle<readonly []> = defineSystem({
  *   // ...system will run each world.update() before propagateTransforms...
  */
 export function registerAdvanceAnimationPlayer(world: World): void {
-  world.addSystems(AnimationSet, [AdvanceAnimationPlayer]);
+  world.addSystems(Update, AnimationSet, [AdvanceAnimationPlayer]);
 }

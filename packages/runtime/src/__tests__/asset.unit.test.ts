@@ -446,7 +446,9 @@ function makeStubGPU(): unknown {
   }
 
   describe('inline pack-payload loaders (w4)', () => {
-    it('INLINE_PACK_LOADERS covers the 6 inline kinds in order', () => {
+    it('INLINE_PACK_LOADERS covers the 7 inline kinds in order', () => {
+      // feat-20260713 M4 / w30: animationGraphLoader ('animation-graph') appends
+      // after the clip loader, taking the inline set from 6 -> 7 kinds.
       expect(INLINE_PACK_LOADERS.map((l) => l.kind)).toEqual([
         'mesh',
         'scene',
@@ -454,6 +456,7 @@ function makeStubGPU(): unknown {
         'skeleton',
         'skin',
         'animation-clip',
+        'animation-graph',
       ]);
     });
 
@@ -729,6 +732,7 @@ function makeStubGPU(): unknown {
     'skeleton',
     'skin',
     'animation-clip',
+    'animation-graph',
     'texture',
     'font',
     'equirect',
@@ -738,20 +742,33 @@ function makeStubGPU(): unknown {
 
   const UNREGISTERED_STUBS = ['sampler', 'render-pipeline', 'shader'] as const;
 
-  describe('wireDefaultLoaders', () => {
-    it('registers the 10 engine loaders + extraLoader (audio) = 11 kinds', () => {
+  describe('wireDefaultLoaders (w5; D-2 extraLoaders w8; D-2 terminal M3 / w32)', () => {
+    // feat-20260705-runtime-tier2-decomposition M3 / w32 (D-2 terminal):
+    // videoLoader now lives in @forgeax/engine-graphics-extras and is imported +
+    // wired internally by wireDefaultLoaders (assets-runtime -> graphics-extras
+    // forward edge). Only the audio placeholder stays caller-supplied via
+    // `extraLoaders` (OOS-9). Internal default set = 10 kinds (was 9); the
+    // createRenderer assembly point passes `[audioLoaderPlaceholder]` to complete
+    // the wired set. Registration behaviour is equivalent -- the total wired
+    // set is unchanged; only the internal/injected split shifts by one
+    // (AC-05 allowed test attribution adjustment).
+    //
+    // feat-20260713 M4 / w30: animationGraphLoader joins INLINE_PACK_LOADERS, so
+    // the internal default set is now 11 kinds (was 10) and the audio-injected
+    // full set is 12 kinds (was 11).
+    it('registers the 11 engine loaders + extraLoader (audio) = 12 kinds', () => {
       const reg = new LoaderRegistry();
       wireDefaultLoaders(reg, [audioLoader]);
       for (const kind of REGISTERED_KINDS) {
         expect(reg.get(kind), `expected loader for kind '${kind}'`).toBeDefined();
       }
-      expect(reg.registeredKinds()).toHaveLength(11);
+      expect(reg.registeredKinds()).toHaveLength(12);
     });
 
-    it('default set (no extraLoaders) is the 10 engine-owned kinds (incl. video)', () => {
+    it('default set (no extraLoaders) is the 11 engine-owned kinds (incl. video)', () => {
       const reg = new LoaderRegistry();
       wireDefaultLoaders(reg);
-      expect(reg.registeredKinds()).toHaveLength(10);
+      expect(reg.registeredKinds()).toHaveLength(11);
       expect(reg.get('video'), 'video is wired internally (graphics-extras)').toBeDefined();
       expect(reg.get('audio'), 'audio is injected, not default').toBeUndefined();
     });

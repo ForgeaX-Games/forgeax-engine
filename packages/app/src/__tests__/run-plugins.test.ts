@@ -8,10 +8,8 @@
 //       (.code / .detail), not a thrown value or silent skip.
 
 import { err, ok, type Result, World } from '@forgeax/engine-ecs';
-import { type Plugin, PluginError } from '@forgeax/engine-plugin';
+import { type Plugin, PluginError, runPlugins } from '@forgeax/engine-plugin';
 import { describe, expect, it } from 'vitest';
-
-import { runPlugins } from '../internal/run-plugins';
 
 function okPlugin(name: string, onBuild?: () => void): Plugin {
   return {
@@ -94,7 +92,10 @@ describe('runPlugins -- failure accumulation (AC-05 / D-7)', () => {
     // first failure is the readable one (AC-05 lower bound)
     expect(result.error.detail.pluginName).toBe('x');
     expect(result.error.detail.failures).toHaveLength(2);
-    expect(result.error.detail.failures?.map((f) => f.pluginName)).toEqual(['x', 'y']);
+    expect(result.error.detail.failures?.map((f: { pluginName: string }) => f.pluginName)).toEqual([
+      'x',
+      'y',
+    ]);
   });
 });
 

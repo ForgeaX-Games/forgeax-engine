@@ -1,0 +1,33 @@
+{
+  "name": "@forgeax/hello-cube",
+  "private": true,
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "forgeax": {
+    "gauntletScenario": {
+      "id": "hello-cube-dawn",
+      "script": "smoke",
+      "domains": [
+        "World and host contract",
+        "GPU abstraction and implementations"
+      ],
+      "packages": [
+        "@forgeax/engine-ecs",
+        "@forgeax/engine-runtime"
+      ],
+      "risks": [
+        "baseline",
+        "gpu"
+      ],
+      "phaseInputs": [
+        "baseline"
+      ],
+      "oracle": {
+        "stdoutIncludes": [
+          "[hello-cube] backend=webgpu"
+        ]
+      }
+    }
+  }
+}

@@ -217,7 +217,7 @@ function installCaptureHook(
   const win = window as unknown as { __captureIblSpecular?: CaptureHook };
   const renderer = app.renderer;
   win.__captureIblSpecular = async (): Promise<Uint8Array> => {
-    world.update();
+    world.update(1 / 60).unwrap();
     renderer.draw([world], { owner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {

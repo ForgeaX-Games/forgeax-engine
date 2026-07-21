@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // apps/learn-render/2.lighting/1.colors/src/index.ts
 // LearnOpenGL section 2.lighting 1.colors (forgeax mapping).
 //
@@ -190,7 +191,7 @@ function installCaptureHook(
   const win = window as unknown as { __captureColors?: CaptureHook };
   const renderer = app.renderer;
   win.__captureColors = async (): Promise<Uint8Array> => {
-    world.update();
+    world.update(1 / 60).unwrap();
     renderer.draw([world], { owner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {
@@ -204,7 +205,7 @@ function installCaptureHook(
 
 function addScrollFovSystem(world: App['world'], renderer: App['renderer']): void {
   const scrollFov = createScrollFovAccumulator();
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'learn-render-colors-scroll-fov',
     after: ['input-frame-start-scan'],
     queries: [{ with: [Camera, Entity] }],

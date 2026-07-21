@@ -612,3 +612,193 @@ describe('w4 -- old-shape scene JSON downgrade regression (research Finding 3)',
     expect(tf.scale).toEqual([1, 1, 1]);
   });
 });
+
+// ── m3-runtime-kernel-parity-test ────────────────────────────────────────────
+// These tests compare the runtime collector's output (projected/remapped scene
+// values) with the ECS externalization kernel output, ensuring the collector
+// consumes the shared reflection kernel rather than maintaining private
+// classification logic.
+
+import { classifyEntityField, projectComponentData } from '@forgeax/engine-ecs/externalization';
+
+describe('m3 — runtime collector kernel parity', () => {
+  it('(a) collector projection matches ECS kernel for portable scalar fields', () => {
+    // Define a component in the runtime test context
+    const CollectorParity = defineComponent('CollectorParity', {
+      count: { type: 'u32', default: 10 },
+      name: { type: 'string', default: 'default' },
+    });
+
+    const world = new World();
+    const asset: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: localId(0), components: { CollectorParity: { count: 42 } } }],
+    };
+    const handle = registerSceneAsset(world, asset);
+    const r = world.instantiateScene(handle);
+    expect(r.ok).toBe(true);
+
+    // Kernel projection with same input
+    // biome-ignore lint/suspicious/noExplicitAny: test component; generic erasure intentional for kernel test
+    const kernelResult = projectComponentData(CollectorParity as any, { count: 42 });
+    expect(kernelResult.count).toBe(42);
+    expect(kernelResult.name).toBe('default');
+  });
+
+  it('(b) collector correctly handles fixed entity arrays', () => {
+    const FixedEnt = defineComponent('FixedEnt_CollectorParity', {
+      // biome-ignore lint/suspicious/noExplicitAny: test component; generic erasure intentional
+      refs: { type: 'array<entity, 2>' } as any,
+    });
+
+    const world = new World();
+    const asset: SceneAsset = {
+      kind: 'scene',
+      entities: [
+        { localId: localId(0), components: { FixedEnt_CollectorParity: { refs: [0, 1] } } },
+        { localId: localId(1), components: {} },
+      ],
+    };
+    const handle = registerSceneAsset(world, asset);
+    const r = world.instantiateScene(handle);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const root = r.value.root;
+      // biome-ignore lint/suspicious/noExplicitAny: test component; world.get param type is restrictive for test-generated components
+      const comp = world.get(root, FixedEnt as any);
+      if (comp.ok) {
+        // biome-ignore lint/suspicious/noExplicitAny: ShapeOf<ComponentSchema> narrows to concrete shape for assertions
+        const v = comp.value as any as { refs: number[] };
+        expect(Array.isArray(v.refs)).toBe(true);
+      }
+    }
+  });
+
+  it('(c) entity field classification from kernel matches reflection arrayMeta', () => {
+    const EntComp = defineComponent('EntComp_CollectorParity', {
+      target: { type: 'entity' },
+      friends: { type: 'array<entity>', default: [] },
+    });
+
+    // biome-ignore lint/suspicious/noExplicitAny: test component; generic erasure intentional for kernel test
+    const targetKind = classifyEntityField(EntComp as any, 'target');
+    // biome-ignore lint/suspicious/noExplicitAny: test component; generic erasure intentional for kernel test
+    const friendsKind = classifyEntityField(EntComp as any, 'friends');
+
+    expect(targetKind).toEqual({ kind: 'entity', isArray: false });
+    expect(friendsKind).toEqual({ kind: 'entity', isArray: true });
+  });
+
+  it('(d) collector transient exclusion matches kernel', () => {
+    const TransientField = defineComponent('TransientField_CollectorParity', {
+      keep: { type: 'f32', default: 0 },
+      derived: { type: 'f32', default: 0, transient: true },
+    });
+
+    const world = new World();
+    const asset: SceneAsset = {
+      kind: 'scene',
+      entities: [
+        {
+          localId: localId(0),
+          components: { TransientField_CollectorParity: { keep: 5, derived: 99 } },
+        },
+      ],
+    };
+    const handle = registerSceneAsset(world, asset);
+    const r = world.instantiateScene(handle);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const root = r.value.root;
+      // biome-ignore lint/suspicious/noExplicitAny: test component; world.get param type is restrictive for test-generated components
+      const comp = world.get(root, TransientField as any);
+      if (comp.ok) {
+        const v = comp.value as { keep: number; derived: number };
+        expect(v.keep).toBe(5);
+        // `derived` is transient — should get default (0), not the input value 99
+        expect(v.derived).toBe(0);
+      }
+    }
+  });
+});
+
+// ── m3-runtime-kernel-parity supplemental: collector vs kernel identity ──────
+
+describe('m3 — runtime collector kernel parity supplemental', () => {
+  it('(e) collector entity classification uses kernel classifyEntityField', () => {
+    const CollectorEnt = defineComponent('CollectorEnt_Sup', {
+      target: { type: 'entity' },
+      friends: { type: 'array<entity>' },
+      // biome-ignore lint/suspicious/noExplicitAny: test component; generic erasure intentional
+    } as any);
+
+    // biome-ignore lint/suspicious/noExplicitAny: test component; generic erasure intentional for kernel test
+    const targetKind = classifyEntityField(CollectorEnt as any, 'target');
+    // biome-ignore lint/suspicious/noExplicitAny: test component; generic erasure intentional for kernel test
+    const friendsKind = classifyEntityField(CollectorEnt as any, 'friends');
+
+    expect(targetKind).toEqual({ kind: 'entity', isArray: false });
+    expect(friendsKind).toEqual({ kind: 'entity', isArray: true });
+  });
+
+  it('(f) collector handles fixed entity array through kernel', () => {
+    const FixedEntCol = defineComponent('FixedEntCol_Sup', {
+      refs: { type: 'array<entity, 4>' },
+      // biome-ignore lint/suspicious/noExplicitAny: test component; generic erasure intentional
+    } as any);
+
+    // biome-ignore lint/suspicious/noExplicitAny: test component; generic erasure intentional for kernel test
+    const kind = classifyEntityField(FixedEntCol as any, 'refs');
+    expect(kind).toEqual({ kind: 'entity', isArray: true });
+  });
+
+  it('(g) collector kernel projection matches scene instantiate round-trip', () => {
+    const RoundTripComp = defineComponent('RoundTripComp_Sup', {
+      val: { type: 'u32', default: 50 },
+    });
+
+    const world = new World();
+    const asset: SceneAsset = {
+      kind: 'scene',
+      entities: [{ localId: localId(0), components: { RoundTripComp_Sup: { val: 99 } } }],
+    };
+    const handle = registerSceneAsset(world, asset);
+    const r = world.instantiateScene(handle);
+    expect(r.ok).toBe(true);
+
+    // Kernel projection with same input
+    // biome-ignore lint/suspicious/noExplicitAny: test component; generic erasure intentional for kernel test
+    const kernelResult = projectComponentData(RoundTripComp as any, { val: 99 });
+    expect(kernelResult.val).toBe(99);
+  });
+
+  it('(h) collector transient field exclusion via kernel', () => {
+    const TransientFieldCol = defineComponent('TransientFieldCol_Sup', {
+      keep: { type: 'f32', default: 0 },
+      derived: { type: 'f32', default: 0, transient: true },
+    });
+
+    const world = new World();
+    const asset: SceneAsset = {
+      kind: 'scene',
+      entities: [
+        { localId: localId(0), components: { TransientFieldCol_Sup: { keep: 5, derived: 99 } } },
+      ],
+    };
+    const handle = registerSceneAsset(world, asset);
+    const r = world.instantiateScene(handle);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const root = r.value.root;
+      // biome-ignore lint/suspicious/noExplicitAny: test component; world.get param type is restrictive for test-generated components
+      const comp = world.get(root, TransientFieldCol as any);
+      if (comp.ok) {
+        // biome-ignore lint/suspicious/noExplicitAny: ShapeOf<ComponentSchema> narrows to concrete shape for assertions
+        const v = comp.value as any as { keep: number; derived: number };
+        expect(v.keep).toBe(5);
+        // derived is transient — should get default 0, not input 99
+        expect(v.derived).toBe(0);
+      }
+    }
+  });
+});

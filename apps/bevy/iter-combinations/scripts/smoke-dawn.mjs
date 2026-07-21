@@ -209,7 +209,7 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   }
   // Bevy's (interact_bodies, integrate): accumulate pairwise forces first, then
   // verlet-integrate. Then propagate local Transform → world matrix (the app gets
-  // this via createApp's world.update(); the direct-draw smoke must call it
+  // this via createApp's world.update(1 / 60).unwrap(); the direct-draw smoke must call it
   // explicitly or the renderer reads stale world matrices — memory
   // transform-local-trs-world-mat4-unification + propagate-transforms-never-auto-registered).
   stepInteract(world);

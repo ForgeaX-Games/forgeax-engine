@@ -10,6 +10,7 @@
 // Canvas: 256x256 (plan-strategy R-6 lavapipe soft-raster CI control)
 
 import { createDebugDraw } from '@forgeax/engine-debug-draw';
+import { Update } from '@forgeax/engine-ecs';
 import type { Mat4 } from '@forgeax/engine-math';
 import { mat4, vec3 } from '@forgeax/engine-math';
 import { createShaderModule, _internal_getRawDevice, rhi } from '@forgeax/engine-rhi-webgpu';
@@ -165,20 +166,26 @@ async function runRuntime(): Promise<void> {
   // at the tonemap suffix flushes them to the swap-chain.
   const ddRuntime = app.debugDraw;
   let drawn = false;
-  app.registerUpdate(() => {
-    if (drawn) return;
-    drawn = true;
-    ddRuntime.line(vec3.create(-1.5, -0.7, 0), vec3.create(1.5, -0.7, 0), [1, 0, 0, 1]);
-    ddRuntime.sphere(vec3.create(0, 0.5, 0), 0.6, [0, 1, 0, 1]);
-    ddRuntime.aabb(vec3.create(-0.4, -0.4, -0.4), vec3.create(0.4, 0.4, 0.4), [0, 0, 1, 1]);
-    const up = vec3.create(0, 1, 0);
-    const fcamPos = vec3.create(0, 1, 2);
-    const fcamTarget = vec3.create(0, 0, 0);
-    const fcamView = mat4.lookAt(mat4.create(), fcamPos, fcamTarget, up);
-    const fcamProj = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
-    const fcamViewProj = mat4.multiply(mat4.create(), fcamProj, fcamView);
-    ddRuntime.frustum(fcamViewProj, [1, 1, 0, 1]);
-  });
+  app.world
+    .addSystem(Update, {
+      name: 'debug-draw-runtime-shapes',
+      queries: [],
+      fn: () => {
+        if (drawn) return;
+        drawn = true;
+        ddRuntime.line(vec3.create(-1.5, -0.7, 0), vec3.create(1.5, -0.7, 0), [1, 0, 0, 1]);
+        ddRuntime.sphere(vec3.create(0, 0.5, 0), 0.6, [0, 1, 0, 1]);
+        ddRuntime.aabb(vec3.create(-0.4, -0.4, -0.4), vec3.create(0.4, 0.4, 0.4), [0, 0, 1, 1]);
+        const up = vec3.create(0, 1, 0);
+        const fcamPos = vec3.create(0, 1, 2);
+        const fcamTarget = vec3.create(0, 0, 0);
+        const fcamView = mat4.lookAt(mat4.create(), fcamPos, fcamTarget, up);
+        const fcamProj = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
+        const fcamViewProj = mat4.multiply(mat4.create(), fcamProj, fcamView);
+        ddRuntime.frustum(fcamViewProj, [1, 1, 0, 1]);
+      },
+    })
+    .unwrap();
 
   app.start();
   // Let it run a few frames, then stop
@@ -377,20 +384,26 @@ async function runHdrpTonemap(): Promise<void> {
   // >= 0.85 (AC-07).
   const ddHdrp = app.debugDraw;
   let drawn = false;
-  app.registerUpdate(() => {
-    if (drawn) return;
-    drawn = true;
-    ddHdrp.line(vec3.create(-1.5, -0.7, 0), vec3.create(1.5, -0.7, 0), [1, 0, 0, 1]);
-    ddHdrp.sphere(vec3.create(0, 0.5, 0), 0.6, [0, 1, 0, 1]);
-    ddHdrp.aabb(vec3.create(-0.4, -0.4, -0.4), vec3.create(0.4, 0.4, 0.4), [0, 0, 1, 1]);
-    const upH = vec3.create(0, 1, 0);
-    const fcamPosH = vec3.create(0, 1, 2);
-    const fcamTargetH = vec3.create(0, 0, 0);
-    const fcamViewH = mat4.lookAt(mat4.create(), fcamPosH, fcamTargetH, upH);
-    const fcamProjH = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
-    const fcamViewProjH = mat4.multiply(mat4.create(), fcamProjH, fcamViewH);
-    ddHdrp.frustum(fcamViewProjH, [1, 1, 0, 1]);
-  });
+  app.world
+    .addSystem(Update, {
+      name: 'debug-draw-hdrp-shapes',
+      queries: [],
+      fn: () => {
+        if (drawn) return;
+        drawn = true;
+        ddHdrp.line(vec3.create(-1.5, -0.7, 0), vec3.create(1.5, -0.7, 0), [1, 0, 0, 1]);
+        ddHdrp.sphere(vec3.create(0, 0.5, 0), 0.6, [0, 1, 0, 1]);
+        ddHdrp.aabb(vec3.create(-0.4, -0.4, -0.4), vec3.create(0.4, 0.4, 0.4), [0, 0, 1, 1]);
+        const upH = vec3.create(0, 1, 0);
+        const fcamPosH = vec3.create(0, 1, 2);
+        const fcamTargetH = vec3.create(0, 0, 0);
+        const fcamViewH = mat4.lookAt(mat4.create(), fcamPosH, fcamTargetH, upH);
+        const fcamProjH = mat4.perspective(mat4.create(), Math.PI / 3, 1, 0.5, 3);
+        const fcamViewProjH = mat4.multiply(mat4.create(), fcamProjH, fcamViewH);
+        ddHdrp.frustum(fcamViewProjH, [1, 1, 0, 1]);
+      },
+    })
+    .unwrap();
 
   app.start();
   await new Promise((resolve) => setTimeout(resolve, 100));

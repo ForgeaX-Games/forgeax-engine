@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // apps/hello/asi-world - ASI World scene + WASD-walking player demo
 // migrated onto the tilemap object-layer path (feat-20260608 M4 / m4-t2).
 //
@@ -311,7 +312,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   let lastIsMoving = false;
   let frameAccum = 0;
   let frameIndex = 0;
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'asi-world-player-move',
     after: ['input-frame-start-scan'],
     queries: [],

@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-app -- input attach + cleanup helper (M3 / w7).
 //
 // Public surface (consumed only by createApp -- this module lives under
@@ -12,10 +13,10 @@
 //   1. const detach = attachBrowserInputBackend(canvas)
 //      -- detach is a callable () => void with .backend: InputBackend mounted.
 //   2. world.insertResource(INPUT_BACKEND_KEY, detach.backend) +
-//      world.addSystems(InputSet, [InputFrameStartScan])
+//      world.addSystems(Update, InputSet, [InputFrameStartScan])
 //      -- registers the scan system whose stable name is
 //      FRAME_START_SCAN_SYSTEM_NAME ('input-frame-start-scan'). The system
-//      runs at frame-start each world.update() and writes the frozen
+//      runs at frame-start each world.update(1 / 60).unwrap() and writes the frozen
 //      InputSnapshot into world.getResource('InputSnapshot').
 //
 // Cleanup (R-4 -- stop / device-lost / exception triple-funnel):
@@ -23,7 +24,7 @@
 //   1. detach() -- removes DOM listeners + exits PointerLock + drops
 //      internal accumulators. Idempotent (calling twice is a no-op per the
 //      browser-backend contract).
-//   2. world.removeSystem(FRAME_START_SCAN_SYSTEM_NAME)
+//   2. world.removeSystem(Update, FRAME_START_SCAN_SYSTEM_NAME)
 //      -- returns Result<void, ScheduleMutationError>. On err, plan-strategy
 //      D-4 says: wrap as AppError({ code: 'app-system-update-failed', detail:
 //      { cause, systemName } }) and dispatch through onError. stop() still
@@ -203,11 +204,11 @@ export function attachInputAuto(
       // here so the removeSystem leg does not run twice (which would
       // otherwise emit a spurious 'system-before-unknown' wrap).
       detach();
-      const removeResult = world.removeSystem(FRAME_START_SCAN_SYSTEM_NAME);
+      const removeResult = world.removeSystem(Update, FRAME_START_SCAN_SYSTEM_NAME);
       if (!removeResult.ok) {
         const wrapped = makeAppError(
           'app-system-update-failed',
-          `world.removeSystem('${FRAME_START_SCAN_SYSTEM_NAME}') to succeed during input cleanup`,
+          `world.removeSystem(Update, '${FRAME_START_SCAN_SYSTEM_NAME}') to succeed during input cleanup`,
           'check that the scan system is still registered; if a host system removed it earlier, this signal is benign and can be ignored after onError dispatch',
           {
             cause: removeResult.error,

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { Update } from '@forgeax/engine-ecs';
 // apps/learn-render/2.lighting/3.materials/scripts/smoke-dawn.mjs
 //
 // LearnOpenGL section 2.lighting 3.materials dawn-node smoke.
@@ -241,7 +242,7 @@ const lightEntity = world
 let elapsed = 0;
 const DT = 0.016;
 const FREQ_R = 2.0, FREQ_G = 0.7, FREQ_B = 1.3;
-world.addSystem({
+world.addSystem(Update, {
   name: 'animated-light-color',
   queries: [],
   fn: () => {
@@ -272,7 +273,7 @@ const frameStart = Date.now();
 let framesObserved = 0;
 const TARGET_FRAMES = SMOKE_MIN_FRAMES;
 for (let i = 0; i < TARGET_FRAMES; i++) {
-  world.update();
+  world.update(1 / 60).unwrap();
   const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
   framesObserved++;

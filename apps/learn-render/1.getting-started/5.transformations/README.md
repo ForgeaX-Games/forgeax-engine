@@ -3,7 +3,7 @@
 > [!NOTE]
 > **对应 LO 原章节**：[LearnOpenGL §1.5 Transformations](https://learnopengl.com/Getting-started/Transformations)
 >
-> **对应引擎能力**：feat-20260515-learn-render-getting-started + feat-20260519 (createApp + textured cube + sin-pulse) — `@forgeax/engine-runtime` `Transform` 组件（`pos`/`quat`/`scale` 三条 array<f32,N> 列，quat 序 [x,y,z,w]）+ `@forgeax/engine-ecs` `world.addSystem` 注册的逐帧动画系统 + `@forgeax/engine-app` `createApp` shell（rAF + Time 资源）；引擎 `RenderSystem` 内部用 `@forgeax/engine-math` 把 TRS 列 compose 成 `worldFromLocal: mat4` 后上传 GPU（charter P4 一致抽象 + AC-04）。
+> **对应引擎能力**：feat-20260515-learn-render-getting-started + feat-20260519 (createApp + textured cube + sin-pulse) — `@forgeax/engine-runtime` `Transform` 组件（`pos`/`quat`/`scale` 三条 array<f32,N> 列，quat 序 [x,y,z,w]）+ `@forgeax/engine-ecs` `world.addSystem(Update, system)` 注册的逐帧动画系统 + `@forgeax/engine-app` `createApp` shell（rAF + Time 资源）；引擎 `RenderSystem` 内部用 `@forgeax/engine-math` 把 TRS 列 compose 成 `worldFromLocal: mat4` 后上传 GPU（charter P4 一致抽象 + AC-04）。
 
 ## LO §1.5 sub-example 命中度索引
 
@@ -18,10 +18,10 @@ LO §1.5 的核心论点是「在 CPU 端用 `glm::mat4` 累乘 translate / rota
 
 1. **磁盘 GUID-寻址 cube** — `assets/cube-mesh.stub.meta.json` (`kind=external-asset-package`，`subAssets[0]={kind:'mesh', sourceIndex:0, guid:UUIDv7}`) 把磁盘端的 GUID 映射到引擎内置 `HANDLE_CUBE` 程序化 cube；运行时通过 `loadByGuid<MeshAsset>(CUBE_MESH_GUID)` 单入口寻址（charter P5 producer / consumer split + AC-15 (c)）
 2. **ECS 实体 + Transform 数组列** — `world.spawn({Transform, MeshFilter{cube}, MeshRenderer{material}})`；`Transform` 是 `pos`/`quat`/`scale` 三条 array<f32,N> 列，LO `glm::mat4(1.0f)` 的 identity 基线对应 `pos=[0,0,0], quat=[0,0,0,1], scale=[1,1,1]`
-3. **逐帧 system fn 写 flat 列** — `world.addSystem({queries: [{with: [Transform, MeshFilter]}], fn: (queryResults) => { bundles.Transform.quat[i*4+2] = sin(angle/2); bundles.Transform.scale[i*3] = pulse; ... }})`；rAF 循环里调用 `world.update()` 触发该 system；引擎 `RenderSystem` 在 `draw(world)` 里读取最新的列并组装 `mat4`
+3. **逐帧 system fn 写 flat 列** — `world.addSystem(Update, {queries: [{with: [Transform, MeshFilter]}], fn: (queryResults) => { bundles.Transform.quat[i*4+2] = sin(angle/2); bundles.Transform.scale[i*3] = pulse; ... }})`；rAF 循环里调用 `world.update(deltaSeconds)` 触发该 system；引擎 `RenderSystem` 在 `draw(world)` 里读取最新的列并组装 `mat4`
 
 > [!IMPORTANT]
-> **forgeax 不暴露 `glm::translate / glm::rotate / glm::scale` 这类 CPU 端 mat4 累乘 API**；AI 用户写「我要让 cube 绕 Z 轴旋转 + 缩放脉动」就是注册一个 `world.addSystem` 让 fn body 写 `bundles.Transform.quat[i*4+2] / scale[i*3]`，引擎在 `RenderSystem.draw()` 内部把 quaternion + scale 重组成 mat4 后上传 GPU（charter P4 一致抽象）。AI 用户不直接拼 mat4，也不学 glm vec3 / mat4 操作词汇——`Transform` 组件的 pos/quat/scale 数组列是唯一对外 surface。
+> **forgeax 不暴露 `glm::translate / glm::rotate / glm::scale` 这类 CPU 端 mat4 累乘 API**；AI 用户写「我要让 cube 绕 Z 轴旋转 + 缩放脉动」就是注册一个 `world.addSystem(Update, system)` 让 fn body 写 `bundles.Transform.quat[i*4+2] / scale[i*3]`，引擎在 `RenderSystem.draw()` 内部把 quaternion + scale 重组成 mat4 后上传 GPU（charter P4 一致抽象）。AI 用户不直接拼 mat4，也不学 glm vec3 / mat4 操作词汇——`Transform` 组件的 pos/quat/scale 数组列是唯一对外 surface。
 
 ## 渲染流程
 
@@ -30,9 +30,9 @@ flowchart LR
   Disk["assets/cube-mesh.stub.meta.json<br/>(GUID -> HANDLE_CUBE)"] --> RT["loadByGuid<MeshAsset>"]
   RT --> Reg["AssetRegistry"]
   Reg --> Spawn["world.spawn<br/>Transform + MeshFilter + MeshRenderer"]
-  AddSys["world.addSystem<br/>fn: write quat / scale lanes"] --> Tick
+  AddSys["world.addSystem(Update, system)<br/>fn: write quat / scale lanes"] --> Tick
   Spawn --> Tick["rAF tick"]
-  Tick --> Update["world.update()<br/>schedule runs system fn"]
+  Tick --> Update["world.update(deltaSeconds)<br/>schedule runs system fn"]
   Update --> Draw["renderer.draw(world)"]
   Draw --> RS["RenderSystem extract<br/>read Transform SoA"]
   RS --> Compose["mat4 compose<br/>@forgeax/engine-math"]
@@ -45,7 +45,7 @@ flowchart LR
 // 来自 src/index.ts 的关键片段（三段式注释 AC-06）。
 
 // 1. engine usage - 引擎公开符号集
-import { World } from '@forgeax/engine-ecs';
+import { Update, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   Camera, Engine, EngineEnvironmentError, HANDLE_CUBE,
@@ -82,7 +82,7 @@ world.spawn(
 );
 
 // register per-frame Transform animation system (LO 1.5 GLM idiom -> forgeax ECS)
-world.addSystem({
+world.addSystem(Update, {
   name: 'transformations-animate-cube',
   queries: [{ with: [Transform, MeshFilter] }],
   fn: (queryResults) => {
@@ -106,8 +106,8 @@ world.addSystem({
 
 // rAF 主循环：每帧先跑 schedule（system fn 写 Transform SoA 列）再 draw
 const tick = (): void => {
-  world.update();
-  renderer.draw(world);
+  world.update(1 / 60);
+  renderer.draw([world], { owner: 0 });
   requestAnimationFrame(tick);
 };
 requestAnimationFrame(tick);
@@ -124,7 +124,7 @@ requestAnimationFrame(tick);
 | 缩放表示 | `glm::scale(trans, glm::vec3(0.5, 0.5, 0.5))` 累积到 mat4 | `bundles.Transform.scale[i*3] = pulse` 直接写 scale flat 列 |
 | 平移表示 | `glm::translate(trans, glm::vec3(0.5, -0.5, 0.0))` 累积到 mat4 | `bundles.Transform.pos[i*3] = 0.5; pos[i*3+1] = -0.5` 直接写 position flat 列 |
 | Uniform 上传 | `unsigned int loc = glGetUniformLocation(prog, "transform"); glUniformMatrix4fv(loc, 1, GL_FALSE, glm::value_ptr(trans));` 每帧手动绑 + 上传 | `renderer.draw(world)` 内部从 `Transform` 列读出后调 `queue.writeBuffer` 上传到 storage buffer；AI 用户不写 `glUniform*` 词汇 |
-| 每帧更新点 | 主循环 `while (!glfwWindowShouldClose)` 内 `glm::rotate(trans, (float)glfwGetTime(), ...)` 直接改 mat4 | `world.addSystem({ fn: ... })` 注册一次；rAF 里 `world.update()` 触发该 fn 写 SoA 列；引擎独立读列做 mat4 compose（charter P4 一致抽象） |
+| 每帧更新点 | 主循环 `while (!glfwWindowShouldClose)` 内 `glm::rotate(trans, (float)glfwGetTime(), ...)` 直接改 mat4 | `world.addSystem(Update, { fn: ... })` 注册一次；rAF 里 `world.update(deltaSeconds)` 触发该 fn 写 SoA 列；引擎独立读列做 mat4 compose（charter P4 一致抽象） |
 | 错误处理 | `glm` 默认无错误返回；上传失败仅 `glGetError` 全局状态轮询 | forgeax 用结构化错误（`err.code` 闭族 `RhiErrorCode 18` 成员 + `EcsErrorCode 23` 成员 + `err.expected` / `err.hint` / `err.detail`）；AI 用户 `switch (err.code)` exhaustive narrow，不解析 `err.message`（charter P3） |
 | Mesh 顶点 | `glVertexAttribPointer(0, 3, GL_FLOAT, ...) + glEnableVertexAttribArray(0)` 手布局 pos + uv | `MeshFilter { assetHandle: cubeHandle }` 引用引擎内置 cube；引擎自动绑定 `@location(0) pos` |
 | 数据流向 | CPU 端单线程顺序：算 mat4 -> upload uniform -> draw | ECS 数据流：system fn 写列（不依赖 mat4）-> RenderSystem 读列 compose mat4 -> draw；列存储天然 SIMD-friendly，未来批量动画无需重构 |
@@ -135,7 +135,7 @@ requestAnimationFrame(tick);
 
 | 文件 | 行数 | 角色 |
 |:--|---:|:--|
-| `src/index.ts` | ~340 | 三段式（引擎使用 + 示例胶水 + 启动）+ cube spawn + `world.addSystem` 动画 fn + capture hook |
+| `src/index.ts` | ~340 | 三段式（引擎使用 + 示例胶水 + 启动）+ cube spawn + `world.addSystem(Update, system)` 动画 fn + capture hook |
 | `assets/cube-mesh.stub.meta.json` | ~15 | cube 别名 sidecar（GUID 映射到引擎内置 HANDLE_CUBE） |
 | `src/__tests__/transformations.browser.test.ts` | ~140 | vitest browser e2e（AC-04 + AC-05 + AC-06 + AC-22 三段断言：3-section markers / cube-mesh.stub.meta.json schema / Engine WebGPU path） |
 | `scripts/bench-screenshot.mjs` | ~180 | playwright + chrome-beta 录制 round-5-transformations.png 入 forgeax-engine-assets/ submodule |

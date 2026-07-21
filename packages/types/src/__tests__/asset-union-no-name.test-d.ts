@@ -55,6 +55,8 @@ function exhaustiveAssetKindSwitch(asset: Asset): string {
       return 'SkinAsset';
     case 'animation-clip':
       return 'AnimationClip';
+    case 'animation-graph':
+      return 'AnimationGraph';
     case 'audio':
       return 'AudioClipAsset';
     case 'font':
@@ -84,6 +86,7 @@ const ASSET_MEMBER_NAMES = [
   'SkeletonAsset',
   'SkinAsset',
   'AnimationClip',
+  'AnimationGraph',
   'AudioClipAsset',
   'FontAsset',
   'RenderPipelineAsset',
@@ -143,8 +146,8 @@ function countNameFieldsPerAssetInterface(): Map<string, number> {
   return result;
 }
 
-describe('M1 Asset union cardinality grep gate (15 members, OOS-2 POD no-name)', () => {
-  it('(a) exhaustive switch over Asset.kind covers all 15 discriminants', () => {
+describe('M1 Asset union cardinality grep gate (16 members, OOS-2 POD no-name)', () => {
+  it('(a) exhaustive switch over Asset.kind covers all 16 discriminants', () => {
     const result = exhaustiveAssetKindSwitch({ kind: 'mesh' } as Asset);
     expect(typeof result).toBe('string');
   });

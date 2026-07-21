@@ -1,15 +1,8 @@
 // @forgeax/engine-runtime -- plugin factories (M2 / w6, plan-strategy D-9 / D-4 / D-10).
 //
-// transformPlugin / animationPlugin / timePlugin wrap the existing void
-// register functions into the unified Plugin shape. Each build(world) calls
-// the register function (if any) and signals success with ok(undefined)
-// (D-10: register functions keep their void signature; the plugin layer is the
-// only place the void->Result wrap happens).
-//
-// timePlugin is a no-op placeholder (D-4 / R5): Time is written every frame by
-// the frame-loop, so there is no register function to call. The plugin still
-// exists so the inspector lists 'time' and a same-name duplicate-plugin is
-// detected (it occupies a slot in the merged Map).
+// transformPlugin and animationPlugin wrap existing registration functions into
+// the unified Plugin shape. Each build(world) calls its registration function
+// and signals success with ok(undefined).
 //
 // Plugin / PluginError types come from @forgeax/engine-plugin (L1.5 thin
 // protocol package); ok comes from @forgeax/engine-ecs (same layer as the
@@ -22,6 +15,7 @@
 import { ok } from '@forgeax/engine-ecs';
 import type { Plugin } from '@forgeax/engine-plugin';
 
+import { registerEvaluateAnimationGraph } from './animation/evaluate-animation-graph';
 import {
   ANIMATION_ASSET_RESOLVER_KEY,
   createAnimationAssetResolver,
@@ -52,7 +46,7 @@ export function transformPlugin(): Plugin {
  *
  * SSOT (like physicsPlugin/statePlugin): the plugin OWNS its system's resource.
  * advanceAnimationPlayer declares `resources: [ANIMATION_ASSET_RESOLVER_KEY]`
- * UNCONDITIONALLY, so the resolver must exist before the first world.update().
+ * UNCONDITIONALLY, so the resolver must exist before the first world.update(1 / 60).unwrap().
  * By minting + inserting it here, BOTH createApp forms are correct for free —
  * the canvas form no longer hand-inserts it (was create-app.ts, the sole writer)
  * and the assemble form (host-owned world, e.g. the editor ▶ Play fork) gets it
@@ -64,6 +58,12 @@ export function transformPlugin(): Plugin {
  * SharedRefStore (createAnimationAssetResolver ignores its `assets` arg — the
  * AssetRegistry holds no handle map since feat-20260614 M8), so `null` is the
  * honest argument here; no registry dependency, no insertion-order coupling.
+ *
+ * feat-20260713 M3 / w26 (plan D-2, AC-09): the plugin also registers
+ * evaluateAnimationGraph (the graph→N-slot seam). It declares
+ * `before: [advanceAnimationPlayer]`, so listing the default animation capability
+ * puts DAG evaluation on the default path — no opt-in. Entities without a graph
+ * (graph == 0) flow through the untouched direct-write path.
  */
 export function animationPlugin(): Plugin {
   return {
@@ -72,24 +72,8 @@ export function animationPlugin(): Plugin {
       if (!world.hasResource(ANIMATION_ASSET_RESOLVER_KEY)) {
         world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, createAnimationAssetResolver(null));
       }
+      registerEvaluateAnimationGraph(world);
       registerAdvanceAnimationPlayer(world);
-      return ok(undefined);
-    },
-  };
-}
-
-/**
- * timePlugin -- no-op placeholder (D-4 / R5).
- *
- * Time is written every frame by the frame-loop, not by a registered system,
- * so build has nothing to register. The plugin exists only to occupy the
- * 'time' name in the default set (inspector enumeration + duplicate-plugin
- * detection).
- */
-export function timePlugin(): Plugin {
-  return {
-    name: 'time',
-    build() {
       return ok(undefined);
     },
   };

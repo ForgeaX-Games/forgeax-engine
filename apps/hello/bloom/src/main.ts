@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // apps/hello/bloom -- Bloom real-time comparison demo
 // (feat-20260531-bloom-first-declarative-render-graph-pass / M4 / w18).
 //
@@ -177,7 +178,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   const hudEl = document.getElementById('bloom-hud');
 
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'bloom-space-toggle',
     after: ['input-frame-start-scan'],
     queries: [],

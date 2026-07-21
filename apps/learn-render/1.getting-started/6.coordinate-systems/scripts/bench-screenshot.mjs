@@ -33,7 +33,7 @@
 // Idempotency: re-running this script overwrites the PNG (architecture
 // principle 6). The output is deterministic across runs (LO 1.6 chapter
 // is static -- 10 cubes do not animate). The capture hook re-issues a
-// fresh world.update() + draw + samples through createImageBitmap +
+// fresh world.update(1 / 60).unwrap() + draw + samples through createImageBitmap +
 // OffscreenCanvas (same shape as M7 / M8 / M9 so any future regression
 // surfaces in all pipelines simultaneously).
 

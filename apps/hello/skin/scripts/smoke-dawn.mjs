@@ -221,6 +221,7 @@ const mockCanvas = {
 
 const { World } = await import('@forgeax/engine-ecs');
 const {
+  ANIMATION_ASSET_RESOLVER_KEY,
   AnimationPlayer,
   Camera,
   ChildOf,
@@ -455,15 +456,16 @@ for (const { x, clip, label } of lineup) {
     console.error(`[smoke] FAIL - no Skin-bearing member in ${label} instance`);
     process.exit(1);
   }
-  // M2 / w7: SoA inline arrays. Single-clip path (slot 0 active, slots 1..3
-  // inactive) is the dawn-smoke equivalent of the legacy { clip, time, speed }
-  // shape; the AC-03 distinct-clips assertion below still holds because each
-  // instance writes a different handle into clips[0].
+  // feat-20260713 M1 / w8: variable N-slot SoA. Single active slot -- all four
+  // parallel columns written length-synced at length 1 (D-5, no tail pad;
+  // speeds no longer defaults to [1,1,1,1] per D-6). The AC-03 distinct-clips
+  // assertion below still holds because each instance writes a different handle
+  // into clips[0].
   world.set(skinned, AnimationPlayer, {
-    clips: [clip, 0, 0, 0],
-    times: new Float32Array([0, 0, 0, 0]),
-    weights: new Float32Array([1, 0, 0, 0]),
-    speeds: new Float32Array([1, 1, 1, 1]),
+    clips: [clip],
+    times: new Float32Array([0]),
+    weights: new Float32Array([1]),
+    speeds: new Float32Array([1]),
     paused: false,
     looping: true,
   });
@@ -518,8 +520,12 @@ world.spawn({
   data: { direction: [-0.5, -1, -0.3], color: [1, 1, 1], intensity: 1 },
 });
 
-const animResolver = createAnimationAssetResolver(assets);
-registerAdvanceAnimationPlayer(world, animResolver);
+// feat-20260713 M1 / w8: align to the production 1-arg signature. The resolver
+// is supplied via the World resource ({@link ANIMATION_ASSET_RESOLVER_KEY})
+// rather than as a positional argument (the retired 2-arg shape silently
+// bypassed the resource-backed advance system, research R-4).
+world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, createAnimationAssetResolver(assets));
+registerAdvanceAnimationPlayer(world);
 
 // --- 5. Render loop + pixel readback -------------------------------------------
 

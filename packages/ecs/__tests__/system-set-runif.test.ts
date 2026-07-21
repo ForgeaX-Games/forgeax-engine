@@ -1,3 +1,4 @@
+import { Update } from '../src/schedule-token';
 // @forgeax/engine-ecs — set-level runIf tests (w15, w16, RED)
 //
 // TDD: set-level runIf cache AND gate in runSchedule() does not exist yet, so all
@@ -41,7 +42,7 @@ describe('system-set-runif.test.ts', () => {
         fn: () => log.push('gameplay-b'),
       });
 
-      world.addSystems(GameplaySet, [sysA, sysB]);
+      world.addSystems(Update, GameplaySet, [sysA, sysB]);
 
       // Frame 1: condition is false — systems should not run
       conditionValue = false;
@@ -79,7 +80,7 @@ describe('system-set-runif.test.ts', () => {
         },
       });
 
-      world.addSystems(CheckSet, [sys]);
+      world.addSystems(Update, CheckSet, [sys]);
       world.update();
 
       // set runIf must fire before system runIf
@@ -106,7 +107,7 @@ describe('system-set-runif.test.ts', () => {
         runIf: () => false,
       });
 
-      world.addSystems(OffSet, [sys]);
+      world.addSystems(Update, OffSet, [sys]);
       world.update(); // should not throw — both conditions are false, fn skipped
     });
   });
@@ -131,8 +132,8 @@ describe('system-set-runif.test.ts', () => {
         fn: () => log.push('multi-sys'),
       });
 
-      world.addSystems(SetA, [sys]);
-      world.addSystems(SetB, [sys]);
+      world.addSystems(Update, SetA, [sys]);
+      world.addSystems(Update, SetB, [sys]);
 
       // Both true: system runs
       condA = true;
@@ -185,7 +186,7 @@ describe('system-set-runif.test.ts', () => {
         fn: () => {},
       });
 
-      world.addSystems(SpiedSet, [sys1, sys2]);
+      world.addSystems(Update, SpiedSet, [sys1, sys2]);
 
       evalCount = 0;
       world.update();
@@ -209,7 +210,7 @@ describe('system-set-runif.test.ts', () => {
         fn: () => log.push('toggle-sys'),
       });
 
-      world.addSystems(ToggleSet, [sys]);
+      world.addSystems(Update, ToggleSet, [sys]);
 
       // Frame 1: true
       conditionValue = true;

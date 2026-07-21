@@ -144,6 +144,7 @@ describe('transparent-sort 10k entities', () => {
   const worldZ = makeWorld(TRANSPARENT_SORT_MODE_LAYER_Z);
   const worldY = makeWorld(TRANSPARENT_SORT_MODE_LAYER_Y);
   const worldYZ = makeWorld(TRANSPARENT_SORT_MODE_LAYER_YZ);
+  const worldDist = makeWorld(3);
   // Sink pattern (wiki/vitest-bench section 7.1): forces JIT to keep the
   // sort result reachable; an unread return value is a dead-store
   // candidate and the optimiser may then short-circuit the comparator
@@ -191,7 +192,6 @@ describe('transparent-sort 10k entities', () => {
   bench(
     'mode=3 distance (back-to-front squared-distance)',
     () => {
-      const worldDist = makeWorld(3);
       const cameraPos: readonly [number, number, number] = [
         rngDist() * 100,
         rngDist() * 100,

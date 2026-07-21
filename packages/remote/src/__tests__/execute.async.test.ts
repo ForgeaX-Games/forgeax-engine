@@ -186,6 +186,23 @@ describe('executeScript async - write (w2)', () => {
 // ────────────────────────────────────────────────────────────────────────────
 
 describe('executeScript async - _import (w3)', () => {
+  it('uses the context import resolver when a host supplies one', async () => {
+    const imported: string[] = [];
+    const result = await executeScript(
+      'const ecs = await _import("@forgeax/engine-ecs"); return ecs.name;',
+      {
+        ...makeCtx(),
+        importModule: async (specifier: string) => {
+          imported.push(specifier);
+          return { name: 'browser-resolved-ecs' };
+        },
+      },
+    );
+
+    expect(result).toEqual({ ok: true, value: 'browser-resolved-ecs' });
+    expect(imported).toEqual(['@forgeax/engine-ecs']);
+  });
+
   it('_import(@forgeax/engine-ecs) resolves in eval', async () => {
     const ctx = makeCtx();
     const script = aw(

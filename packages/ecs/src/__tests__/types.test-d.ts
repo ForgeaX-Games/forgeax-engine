@@ -1,3 +1,4 @@
+import { Update } from '../schedule-token';
 // Compile-time type assertion tests for @forgeax/engine-ecs public API.
 //
 // Covers:
@@ -169,8 +170,12 @@ describe('SystemDescriptor type', () => {
       after: ['sysA'],
       before: ['sysB'],
     };
-    expectTypeOf(desc.after).toEqualTypeOf<readonly string[] | undefined>();
-    expectTypeOf(desc.before).toEqualTypeOf<readonly string[] | undefined>();
+    expectTypeOf(desc.after).toEqualTypeOf<
+      readonly (string | import('../schedule-token').ScheduleToken)[] | undefined
+    >();
+    expectTypeOf(desc.before).toEqualTypeOf<
+      readonly (string | import('../schedule-token').ScheduleToken)[] | undefined
+    >();
   });
 });
 
@@ -433,7 +438,7 @@ describe('[w13] T-4 — `without` components do not appear in bundle', () => {
 //
 // Validates AC-5 (requirements §5): the World class-method `addSystem<const Qs>`
 // boundary preserves per-query bundle inference inside `fn`. AI users calling
-// `world.addSystem({ queries: [...], fn })` must see `queryResults[0][0].Comp.x`
+// `world.addSystem(Update, { queries: [...], fn })` must see `queryResults[0][0].Comp.x`
 // inferred as a concrete TypedArray without `as` casts (KD-3, F-R5 path).
 
 describe('[w15] AC-5 — world.addSystem<const Qs> boundary inference', () => {
@@ -442,7 +447,7 @@ describe('[w15] AC-5 — world.addSystem<const Qs> boundary inference', () => {
     const Velocity = defineComponent('Velocity', { dx: { type: 'f32' }, dy: { type: 'f32' } });
 
     const world = new World();
-    world.addSystem({
+    world.addSystem(Update, {
       name: 'ac5-probe',
       queries: [{ with: [Position, Velocity] }],
       fn: (_world, queryResults, _commands) => {

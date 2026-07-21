@@ -99,6 +99,9 @@ apps/**/*.tsbuildinfo
 # superpowers local state (auth tokens, temp files)
 .superpowers/
 
+# CI shared producer artifact; self-hosted runners may retain it between jobs.
+shared-app-inputs/
+
 # M8 stray debug capture dirs from unit tests
 .forgeax-debug/
 packages/*/.forgeax-debug/

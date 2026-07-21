@@ -1,3 +1,4 @@
+import { Time, Update } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
@@ -17,11 +18,11 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   if (!appResult.ok) return console.error('[bevy-free-camera] createApp failed:', appResult.error);
   const app = appResult.value;
   buildFreeCameraWorld(app.world);
-  app.world.addSystem({
+  app.world.addSystem(Update, {
     name: 'free-camera',
     queries: [],
     fn: (world) => {
-      const dt = world.hasResource('Time') ? world.getResource<{ dt: number }>('Time').dt : 0;
+      const dt = world.hasResource('Time') ? world.getResource(Time).delta : 0;
       const snapshot = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
       stepFreeCamera(world, dt, snapshot);
     },

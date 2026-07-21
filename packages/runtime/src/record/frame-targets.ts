@@ -24,7 +24,7 @@ import type {
   SkylightSnapshot,
 } from '../render-system-extract';
 
-import type { RenderFrameState } from './frame-snapshot';
+import { type RenderFrameState, retirePerFrameGraph } from './frame-snapshot';
 
 /**
  * feat-20260704 M3/w18: resolve the geometry pass colour / depth / resolve /
@@ -244,6 +244,12 @@ export function writebackGraphViews(
       }
       pipelineState.perPassResources.shadowCsmLightViewProj = csmPack;
     }
+  } else {
+    pipelineState.perPassResources.shadowTexture = null;
+    pipelineState.perPassResources.shadowMapSize = 0;
+    pipelineState.perPassResources.shadowCascadeCount = 0;
+    pipelineState.perPassResources.shadowLightSpaceMatrix = null;
+    pipelineState.perPassResources.shadowCsmLightViewProj = null;
   }
   const graphFxaaView = frameState.perFrameGraph?.getColorTargetView('fxaaIntermediate') as
     | TextureView
@@ -401,7 +407,7 @@ export function ensurePerFrameGraph(
     (pipelineState.perPassResources.shadowMapSize !== (earlyShadowMapSize ?? 0) ||
       pipelineState.perPassResources.shadowCascadeCount !== (earlyCascadeCount ?? 0))
   ) {
-    frameState.perFrameGraph = null;
+    retirePerFrameGraph(frameState);
   }
   const earlyData: RenderPipelineData = {
     camera,

@@ -229,7 +229,8 @@ export function driveLazyEquirectProjection(
 export function isLitMaterialSnapshot(material: MaterialSnapshot): boolean {
   return (
     material.materialShaderId !== undefined &&
-    material.materialShaderId !== 'forgeax::default-unlit'
+    material.materialShaderId !== 'forgeax::default-unlit' &&
+    material.materialShaderId !== 'forgeax::sprite'
   );
 }
 

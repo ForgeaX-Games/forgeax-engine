@@ -1,3 +1,4 @@
+import { Update } from '../schedule-token';
 // AC-4 minimal-example compile-assertion vehicle.
 //
 // Pastes requirements §10.4 "30-second onboarding minimal example" into a
@@ -23,7 +24,7 @@ describe('[w14] AC-4 — 30-second onboarding minimal example', () => {
     const Velocity = defineComponent('Velocity', { dx: { type: 'f32' }, dy: { type: 'f32' } });
 
     const world = new World();
-    world.addSystem({
+    world.addSystem(Update, {
       name: 'movement',
       queries: [{ with: [Position, Velocity, Entity] }],
       fn: (_world, queryResults, _commands) => {

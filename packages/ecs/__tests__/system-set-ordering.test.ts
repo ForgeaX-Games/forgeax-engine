@@ -1,3 +1,4 @@
+import { Update } from '../src/schedule-token';
 // @forgeax/engine-ecs — set-level ordering + chain tests (w10, w11, RED)
 //
 // TDD: set-level edge expansion in buildSchedule() does not exist yet, so all
@@ -34,9 +35,9 @@ describe('system-set-ordering.test.ts', () => {
       // Register b-set first so natural registration order would put b1, b2
       // before a1, a2. Only the set edge expansion (setA before setB) can
       // reverse this — without it, the test is RED.
-      world.addSystems(setB, [b1, b2]);
-      world.addSystems(setA, [a1, a2]);
-      world.configureSets({ set: setA, before: [setB] });
+      world.addSystems(Update, setB, [b1, b2]);
+      world.addSystems(Update, setA, [a1, a2]);
+      world.configureSets(Update, { set: setA, before: [setB] });
 
       world.update();
 
@@ -67,13 +68,13 @@ describe('system-set-ordering.test.ts', () => {
       const b2 = defineSystem({ name: 'ov-b2', queries: [], fn: () => log.push('ov-b2') });
 
       // Free system z — no set
-      world.addSystem({ name: 'ov-z', queries: [], fn: () => log.push('ov-z') });
+      world.addSystem(Update, { name: 'ov-z', queries: [], fn: () => log.push('ov-z') });
 
       // Register b-set first so natural order is the reverse — only set edge
       // expansion makes a's come before b's
-      world.addSystems(setB, [b1, b2]);
-      world.addSystems(setA, [a1, a2]);
-      world.configureSets({ set: setA, before: [setB] });
+      world.addSystems(Update, setB, [b1, b2]);
+      world.addSystems(Update, setA, [a1, a2]);
+      world.configureSets(Update, { set: setA, before: [setB] });
 
       world.update();
 
@@ -101,9 +102,9 @@ describe('system-set-ordering.test.ts', () => {
         fn: () => log.push('active-sys'),
       });
 
-      world.addSystems(activeSet, [sys]);
+      world.addSystems(Update, activeSet, [sys]);
       // emptySet has no members — before reference should be a no-op
-      world.configureSets({ set: activeSet, before: [emptySet] });
+      world.configureSets(Update, { set: activeSet, before: [emptySet] });
 
       world.update();
 
@@ -122,8 +123,8 @@ describe('system-set-ordering.test.ts', () => {
         fn: () => log.push('after-sys'),
       });
 
-      world.addSystems(activeSet, [sys]);
-      world.configureSets({ set: activeSet, after: [emptySet] });
+      world.addSystems(Update, activeSet, [sys]);
+      world.configureSets(Update, { set: activeSet, after: [emptySet] });
 
       world.update();
 
@@ -145,7 +146,7 @@ describe('system-set-ordering.test.ts', () => {
       const c2 = defineSystem({ name: 'ch2', queries: [], fn: () => log.push('ch2') });
       const c3 = defineSystem({ name: 'ch3', queries: [], fn: () => log.push('ch3') });
 
-      world.addSystems(chainSet, [c1, c2, c3]);
+      world.addSystems(Update, chainSet, [c1, c2, c3]);
       world.update();
 
       expect(log).toEqual(['ch1', 'ch2', 'ch3']);
@@ -161,8 +162,8 @@ describe('system-set-ordering.test.ts', () => {
       const c3 = defineSystem({ name: 'ca3', queries: [], fn: () => log.push('ca3') });
       const c4 = defineSystem({ name: 'ca4', queries: [], fn: () => log.push('ca4') });
 
-      world.addSystems(chainSet, [c1, c2]);
-      world.addSystems(chainSet, [c3, c4]);
+      world.addSystems(Update, chainSet, [c1, c2]);
+      world.addSystems(Update, chainSet, [c3, c4]);
       world.update();
 
       // Members accumulate in insertion order: c1, c2, c3, c4
@@ -175,7 +176,7 @@ describe('system-set-ordering.test.ts', () => {
       const log: string[] = [];
 
       const c1 = defineSystem({ name: 'cs1', queries: [], fn: () => log.push('cs1') });
-      world.addSystems(chainSet, [c1]);
+      world.addSystems(Update, chainSet, [c1]);
       world.update();
 
       expect(log).toEqual(['cs1']);
@@ -193,7 +194,7 @@ describe('system-set-ordering.test.ts', () => {
       });
       const c2 = defineSystem({ name: 'cc2', queries: [], fn: () => {} });
 
-      world.addSystems(chainSet, [c1, c2]);
+      world.addSystems(Update, chainSet, [c1, c2]);
       expect(() => world.update()).toThrow(CyclicDependencyError);
     });
 
@@ -207,11 +208,11 @@ describe('system-set-ordering.test.ts', () => {
       const b1 = defineSystem({ name: 'cycl-b1', queries: [], fn: () => {} });
       const b2 = defineSystem({ name: 'cycl-b2', queries: [], fn: () => {} });
 
-      world.addSystems(setA, [a1, a2]);
-      world.addSystems(setB, [b1, b2]);
+      world.addSystems(Update, setA, [a1, a2]);
+      world.addSystems(Update, setB, [b1, b2]);
       // setA before setB, setB before setA → cycle
-      world.configureSets({ set: setA, before: [setB] });
-      world.configureSets({ set: setB, before: [setA] });
+      world.configureSets(Update, { set: setA, before: [setB] });
+      world.configureSets(Update, { set: setB, before: [setA] });
 
       expect(() => world.update()).toThrow(CyclicDependencyError);
     });
@@ -237,9 +238,9 @@ describe('system-set-ordering.test.ts', () => {
       const b1 = defineSystem({ name: 'dcyc-b1', queries: [], fn: () => {} });
       const b2 = defineSystem({ name: 'dcyc-b2', queries: [], fn: () => {} });
 
-      world.addSystems(setA, [a1, a2]);
-      world.addSystems(setB, [b1, b2]);
-      world.configureSets({ set: setA, before: [setB] });
+      world.addSystems(Update, setA, [a1, a2]);
+      world.addSystems(Update, setB, [b1, b2]);
+      world.configureSets(Update, { set: setA, before: [setB] });
 
       try {
         world.update();
@@ -261,9 +262,9 @@ describe('system-set-ordering.test.ts', () => {
     it('pure system-level cycle (no sets) → detail.cycle is string[]', () => {
       const world = new World();
 
-      world.addSystem({ name: 'pure-a', queries: [], fn: () => {}, after: ['pure-c'] });
-      world.addSystem({ name: 'pure-b', queries: [], fn: () => {}, after: ['pure-a'] });
-      world.addSystem({ name: 'pure-c', queries: [], fn: () => {}, after: ['pure-b'] });
+      world.addSystem(Update, { name: 'pure-a', queries: [], fn: () => {}, after: ['pure-c'] });
+      world.addSystem(Update, { name: 'pure-b', queries: [], fn: () => {}, after: ['pure-a'] });
+      world.addSystem(Update, { name: 'pure-c', queries: [], fn: () => {}, after: ['pure-b'] });
 
       try {
         world.update();
@@ -284,8 +285,8 @@ describe('system-set-ordering.test.ts', () => {
     it('detail.cycle is accessible as readonly property without message parsing', () => {
       const world = new World();
 
-      world.addSystem({ name: 'nomsg-a', queries: [], fn: () => {}, after: ['nomsg-b'] });
-      world.addSystem({ name: 'nomsg-b', queries: [], fn: () => {}, after: ['nomsg-a'] });
+      world.addSystem(Update, { name: 'nomsg-a', queries: [], fn: () => {}, after: ['nomsg-b'] });
+      world.addSystem(Update, { name: 'nomsg-b', queries: [], fn: () => {}, after: ['nomsg-a'] });
 
       try {
         world.update();

@@ -428,6 +428,37 @@ export class RenderGraph<Ctx = unknown> {
   }
 
   /**
+   * Relinquish every texture owned by this graph after its last frame has
+   * been submitted. Unlike {@link drain}, this does not synchronously destroy
+   * GPU resources: they join `pendingDestroy` and are released by
+   * `reclaimRetiredTransients()` only after `onSubmittedWorkDone` resolves.
+   *
+   * A retired graph is no longer executable. Runtime replaces a memoized
+   * per-frame graph through this entry when topology changes (rather than
+   * dropping the graph and its pools), while `drain()` remains the teardown
+   * path where immediate destruction is safe.
+   */
+  retire(): void {
+    const device = this.lastDevice;
+    if (device === null) {
+      this.transientPool.clear();
+      this.persistentTextures.clear();
+      this.pendingDestroy.length = 0;
+      this.compiled = null;
+      return;
+    }
+    for (const pooled of this.transientPool.values()) {
+      this.pendingDestroy.push(pooled);
+    }
+    this.transientPool.clear();
+    for (const pooled of this.persistentTextures.values()) {
+      this.pendingDestroy.push(pooled);
+    }
+    this.persistentTextures.clear();
+    this.compiled = null;
+  }
+
+  /**
    * Release every transient-pool texture while keeping persistentTextures
    * intact (AC-09: resize drain, plan-strategy D-4).
    *

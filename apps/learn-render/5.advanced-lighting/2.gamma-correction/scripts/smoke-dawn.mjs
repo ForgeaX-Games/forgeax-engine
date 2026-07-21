@@ -416,7 +416,7 @@ if (!installCorrect.ok) {
 const frameStart = Date.now();
 let framesObserved = 0;
 for (let i = 0; i < PER_STATE_FRAMES; i++) {
-  world.update();
+  world.update(1 / 60).unwrap();
   const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] draw correct frame ${i} error: ${r.error.code}`);
   framesObserved++;
@@ -434,7 +434,7 @@ if (!installWrong.ok) {
 }
 
 for (let i = 0; i < PER_STATE_FRAMES; i++) {
-  world.update();
+  world.update(1 / 60).unwrap();
   const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) console.error(`[smoke] draw wrong frame ${i} error: ${r.error.code}`);
   framesObserved++;

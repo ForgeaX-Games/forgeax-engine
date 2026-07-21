@@ -14,7 +14,7 @@
 // prose-only). Gates:
 //   1. createApp + start succeed; frames advance while running.
 //   2. pause() freezes the world: the rotating cube's rAF stops being armed,
-//      so the registerUpdate callback does NOT fire while paused (frame count
+//      so the Update system does NOT fire while paused (frame count
 //      stalls). resume() continues the loop (frame count advances again).
 //   3. dt baseline reset: the first frame AFTER resume has a small dt (<= 16ms),
 //      NOT the multi-second pause gap nor the clamp ceiling (1/30s). This is
@@ -135,6 +135,7 @@ const runtime = await import('@forgeax/engine-runtime');
 const { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, Transform } = runtime;
 const { HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
 const { quat } = await import('@forgeax/engine-math');
+const { Time, Update } = await import('@forgeax/engine-ecs');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
@@ -173,21 +174,29 @@ world.spawn(
   { component: Camera, data: perspective({ fov: Math.PI / 3, aspect: WIDTH / HEIGHT }) },
 );
 
-// Track frames + per-frame dt via registerUpdate (same hook the demo rotates
+// Track frames + per-frame dt via Update system (same hook the demo rotates
 // the cube with). The callback fires only when a frame ticks, so frameCount is
 // the structural witness of "world running vs frozen".
 let frameCount = 0;
 let lastDt = 0;
 const spin = quat.create();
 let angle = 0;
-app.registerUpdate((dt) => {
-  frameCount += 1;
-  lastDt = dt;
-  angle += dt;
-  quat.fromAxisAngle(spin, [0, 1, 0], angle);
-  world.set(cube, Transform, {
-    quat: [spin[0] ?? 0, spin[1] ?? 0, spin[2] ?? 0, spin[3] ?? 1],});
-});
+world
+  .addSystem(Update, {
+    name: 'video-cutscene-smoke-spin',
+    queries: [],
+    fn: () => {
+      const dt = world.getResource(Time).delta;
+      frameCount += 1;
+      lastDt = dt;
+      angle += dt;
+      quat.fromAxisAngle(spin, [0, 1, 0], angle);
+      world.set(cube, Transform, {
+        quat: [spin[0] ?? 0, spin[1] ?? 0, spin[2] ?? 0, spin[3] ?? 1],
+      });
+    },
+  })
+  .unwrap();
 
 const onErrorEvents = [];
 app.onError((err) => onErrorEvents.push({ code: err.code }));

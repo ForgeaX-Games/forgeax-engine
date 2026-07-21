@@ -42,12 +42,12 @@ describe('OnEnter / OnExit callbacks', () => {
     });
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(count).toBe(1);
 
     // Second frame with no new transition — callback does NOT fire again
-    world.update();
+    world.update(1 / 60).unwrap();
     expect(count).toBe(1);
 
     unsub();
@@ -62,12 +62,12 @@ describe('OnEnter / OnExit callbacks', () => {
 
     // Transition away from main-menu -> tutorial
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(count).toBe(1);
 
     // Second frame — no new transition away from main-menu, callback does NOT fire
-    world.update();
+    world.update(1 / 60).unwrap();
     expect(count).toBe(1);
 
     unsub();
@@ -82,7 +82,7 @@ describe('OnEnter / OnExit callbacks', () => {
 
     // Transition TO tutorial (from main-menu) — OnExit(tutorial) should NOT fire
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(exitCount).toBe(0);
   });
@@ -96,7 +96,7 @@ describe('OnEnter / OnExit callbacks', () => {
 
     // Transition AWAY from tutorial (to street-a)
     setNextState(world, LevelId, 'street-a');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(enterCount).toBe(0);
   });
@@ -108,7 +108,7 @@ describe('OnEnter / OnExit callbacks', () => {
     addOnEnter(LevelId, 'tutorial', () => calls.push('enter-tutorial'));
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(calls).toEqual(['exit-main-menu', 'enter-tutorial']);
   });
@@ -126,7 +126,7 @@ describe('callback ordering', () => {
     addOnEnter(LevelId, 'tutorial', () => order.push('enter-tutorial'));
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(order).toEqual(['exit-main-menu', 'enter-tutorial']);
   });
@@ -139,7 +139,7 @@ describe('callback ordering', () => {
     addOnExit(LevelId, 'main-menu', () => order.push('exit-3'));
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(order).toEqual(['exit-1', 'exit-2', 'exit-3']);
   });
@@ -151,7 +151,7 @@ describe('callback ordering', () => {
     addOnEnter(LevelId, 'tutorial', () => order.push('enter-2'));
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(order).toEqual(['enter-1', 'enter-2']);
   });
@@ -166,7 +166,7 @@ describe('callback ordering', () => {
 
     // Transition main-menu -> tutorial. Only exit-main-menu + enter-tutorial fire.
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(fired).toEqual(['exit-main-menu', 'enter-tutorial']);
   });
@@ -186,7 +186,7 @@ describe('getState / getPreviousState inside callbacks', () => {
     });
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(capturedState).toBe('tutorial');
   });
@@ -200,7 +200,7 @@ describe('getState / getPreviousState inside callbacks', () => {
     });
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(capturedPrevious).toBe('main-menu');
   });
@@ -214,7 +214,7 @@ describe('getState / getPreviousState inside callbacks', () => {
     });
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(capturedPrevious).toBe('main-menu');
   });
@@ -232,7 +232,7 @@ describe('unsubscribe', () => {
     unsub();
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(count).toBe(0);
   });
@@ -245,7 +245,7 @@ describe('unsubscribe', () => {
     unsub1();
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(fired).toEqual(['b']);
   });
@@ -259,7 +259,7 @@ describe('unsubscribe', () => {
     addOnEnter(LevelId, 'tutorial', () => count++);
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(count).toBe(1);
   });
@@ -278,7 +278,7 @@ describe('OnEnter/OnExit label distinction', () => {
 
     // Transition main-menu -> tutorial. Only OnExit(main-menu) fires.
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(fired).toEqual(['exit']);
   });
@@ -291,7 +291,7 @@ describe('OnEnter/OnExit label distinction', () => {
     addOnEnter(LevelId, 'street-a', () => enterStreetA++);
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(enterTutorial).toBe(1);
     expect(enterStreetA).toBe(0);
@@ -305,7 +305,7 @@ describe('OnEnter/OnExit label distinction', () => {
     addOnExit(LevelId, 'tutorial', () => exitTutorial++);
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(exitMainMenu).toBe(1);
     expect(exitTutorial).toBe(0);
@@ -352,14 +352,14 @@ describe('nested setNextState inside OnEnter', () => {
 
     // Frame 1: main-menu -> tutorial
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // After frame 1: state should be 'tutorial' (new NextState for next frame)
     const s1 = getState(world, LevelId);
     expect(s1.ok && s1.value).toBe('tutorial');
 
     // Frame 2: tutorial -> street-a (the deferred setNextState takes effect)
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const s2 = getState(world, LevelId);
     expect(s2.ok && s2.value).toBe('street-a');
@@ -376,14 +376,14 @@ describe('nested setNextState inside OnEnter', () => {
     });
 
     setNextState(world, LevelId, 'tutorial');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     // State still 'tutorial' after frame 1
     const s1 = getState(world, LevelId);
     expect(s1.ok && s1.value).toBe('tutorial');
 
     // Frame 2: last setNextState wins -> back to 'main-menu'
-    world.update();
+    world.update(1 / 60).unwrap();
 
     const s2 = getState(world, LevelId);
     expect(s2.ok && s2.value).toBe('main-menu');
@@ -402,7 +402,7 @@ const ErrPropB = defineState('ErrPropB', ['idle', 'target'] as const);
 const ErrPropC = defineState('ErrPropC', ['idle', 'target'] as const);
 
 describe('callback error propagation', () => {
-  it('OnExit callback throw bubbles to world.update() call stack', () => {
+  it('OnExit callback throw bubbles to world.update(1 / 60).unwrap() call stack', () => {
     const world = new World();
     registerStatesPlugin(world);
     let enterFired = false;
@@ -414,11 +414,11 @@ describe('callback error propagation', () => {
     });
 
     setNextState(world, ErrPropA, 'target');
-    expect(() => world.update()).toThrow('on-exit-fault');
+    expect(() => world.update(1 / 60).unwrap()).toThrow('on-exit-fault');
     expect(enterFired).toBe(false);
   });
 
-  it('OnEnter callback throw bubbles to world.update() call stack', () => {
+  it('OnEnter callback throw bubbles to world.update(1 / 60).unwrap() call stack', () => {
     const world = new World();
     registerStatesPlugin(world);
     let exitFired = false;
@@ -430,7 +430,7 @@ describe('callback error propagation', () => {
     });
 
     setNextState(world, ErrPropB, 'target');
-    expect(() => world.update()).toThrow('on-enter-fault');
+    expect(() => world.update(1 / 60).unwrap()).toThrow('on-enter-fault');
     expect(exitFired).toBe(true);
   });
 
@@ -443,7 +443,7 @@ describe('callback error propagation', () => {
     addOnEnter(ErrPropC, 'target', () => { enterFired = true; });
 
     setNextState(world, ErrPropC, 'target');
-    world.update();
+    world.update(1 / 60).unwrap();
 
     expect(exitFired).toBe(true);
     expect(enterFired).toBe(true);

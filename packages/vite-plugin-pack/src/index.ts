@@ -3,7 +3,7 @@
 // Two modes:
 //   configureServer(server) — dev mode: scan(roots), expose /__pack/lookup/:guid +
 //     /__pack/index routes via server.middlewares.use, watch
-//     .meta.json / .pack.json / .jpg / .jpeg / .png / .gltf changes with
+//     sidecar and source-file changes with
 //     node:fs.watch and emit `server.ws.send({ type: 'full-reload' })`
 //     to broadcast HMR full-page reloads (AC-11).
 //   generateBundle(this) — build mode: scan(roots) → import each `kind: 'texture'`
@@ -20,9 +20,9 @@
 //   users at sub-second rates — polling-style invalidation on next request is
 //   also acceptable as a fallback.
 
-import { watch as fsWatch } from 'node:fs';
+import { watch as fsWatch, readFileSync } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import {
   IMPORT_ERROR_HINTS,
   ImportError,
@@ -38,6 +38,12 @@ import type { ImageMetadata, Importer, PackIndexEntry } from '@forgeax/engine-ty
 import { buildCatalog } from './build-catalog.js';
 import { compressArtifact } from './compress-artifact.js';
 import { importTextureEntry } from './import-texture.js';
+import {
+  loadSharedPackInput,
+  projectPackIndexUrl,
+  projectSharedPackCatalog,
+  resolvePackBuildInputs,
+} from './shared-build-inputs.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -180,19 +186,6 @@ export interface PluginPackOptions {
 }
 
 // ─── Config loading ──────────────────────────────────────────────────────────
-
-function resolveRoots(opts: PluginPackOptions): string[] {
-  const cwd = process.cwd();
-
-  if (opts.roots !== undefined) {
-    // Explicit empty roots array means "don't scan anything" (test / no-op use).
-    return opts.roots.map((r) => (resolve(r) === r ? r : join(cwd, r)));
-  }
-
-  // Delegate to loadAssetConfig (SSOT for package.json#forgeax.assets).
-  const config = loadAssetConfig(cwd);
-  return config.roots as string[];
-}
 
 // ─── Catalog builder ────────────────────────────────────────────────────────
 // buildCatalog is extracted into ./build-catalog.ts so its 2 arms
@@ -776,7 +769,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
 
   function configureServer(server: ViteDevServerLike): void {
     // Async startup: scan roots to build the initial catalog.
-    const roots = resolveRoots(opts);
+    const { roots } = resolvePackBuildInputs(opts);
     Promise.all([buildCatalog(roots, opts.base, registeredImporterKeys), buildGuidToMetaMap(roots)])
       .then(([rawEntries, g2m]) => {
         // The dev catalog passes the discoverable bare-source texture rows
@@ -791,18 +784,15 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         urlToAbs = buildUrlToAbs(catalog);
         catalogReady = true;
 
-        // Watch .meta.json + .pack.json + .jpg / .jpeg / .png / .gltf via
+        // Watch sidecars and every source file via
         // node:fs.watch. fs.watch is non-recursive on Linux; for dev
         // HMR precision we watch each root directory tree individually
         // by relying on the recursive option (available on macOS and
         // Windows, and polyfilled by the Node 22+ watcher on Linux).
         //
-        // 6-suffix list (D-3 + feat-20260523 M3): sidecar / pack-index
-        // changes rebuild the catalog AND emit `full-reload` (AC-11
-        // widens the existing rebuild branch); JPG / JPEG / PNG / glTF
-        // source changes skip the catalog rebuild (catalog rows are
-        // produced from sidecars, not from source bytes) and only emit
-        // `full-reload` so the browser fetches the new bytes.
+        // Sidecar / pack-index changes rebuild the catalog. Every other source
+        // file only emits `full-reload`: its bytes may feed an engine importer
+        // or a host-defined importer, while catalog rows come from sidecars.
         //
         // Debounce + dedup (feedback 2026-07-06): a single file write on
         // Windows fans out into N `fs.watch` events; each one previously
@@ -811,19 +801,19 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         // We coalesce all events in a WATCH_DEBOUNCE_MS window into ONE
         // catalog rebuild + ONE `full-reload` + one consolidated log, and
         // drop events whose file content (sidecar) or mtime:size signature
-        // (image source) is unchanged since the last flush -- byte-identical
+        // (source) is unchanged since the last flush -- byte-identical
         // rewrites and `touch`es no longer reload the page.
         const pendingSidecars = new Map<string, { filename: string; eventType: string }>();
-        const pendingImages = new Map<string, { filename: string; eventType: string }>();
+        const pendingSources = new Map<string, { filename: string; eventType: string }>();
         const lastSidecarContent = new Map<string, string>();
-        const lastImageSig = new Map<string, string>();
+        const lastSourceSig = new Map<string, string>();
         let flushTimer: ReturnType<typeof setTimeout> | undefined;
 
         const flush = async (): Promise<void> => {
           const sidecars = [...pendingSidecars.entries()];
-          const images = [...pendingImages.entries()];
+          const sources = [...pendingSources.entries()];
           pendingSidecars.clear();
-          pendingImages.clear();
+          pendingSources.clear();
 
           // Content dedup for sidecars: skip a rewrite whose bytes match the
           // last-seen content. A read failure (the file was deleted) clears the
@@ -844,26 +834,26 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             changedSidecars.push(info);
           }
 
-          // mtime:size dedup for image / glTF sources: catalog rows are produced
+          // mtime:size dedup for sources: catalog rows are produced
           // from sidecars, not source bytes, so we only need to know whether the
           // bytes actually changed before asking the browser to re-fetch them.
-          const changedImages: Array<{ filename: string; eventType: string }> = [];
-          for (const [abs, info] of images) {
+          const changedSources: Array<{ filename: string; eventType: string }> = [];
+          for (const [abs, info] of sources) {
             let sig: string | undefined;
             try {
               const s = await stat(abs);
               sig = `${s.mtimeMs}:${s.size}`;
             } catch {
-              lastImageSig.delete(abs);
-              changedImages.push(info);
+              lastSourceSig.delete(abs);
+              changedSources.push(info);
               continue;
             }
-            if (lastImageSig.get(abs) === sig) continue;
-            lastImageSig.set(abs, sig);
-            changedImages.push(info);
+            if (lastSourceSig.get(abs) === sig) continue;
+            lastSourceSig.set(abs, sig);
+            changedSources.push(info);
           }
 
-          if (changedSidecars.length === 0 && changedImages.length === 0) return;
+          if (changedSidecars.length === 0 && changedSources.length === 0) return;
 
           // Rebuild the catalog once (only when a sidecar actually changed) so
           // the browser's first post-reload fetch lands on the new state.
@@ -888,13 +878,13 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           for (const info of changedSidecars) {
             emitAssetChanged(server, info.filename, info.eventType, 'sidecar');
           }
-          for (const info of changedImages) {
+          for (const info of changedSources) {
             emitAssetChanged(server, info.filename, info.eventType, 'source');
           }
 
           const parts: string[] = [];
           if (changedSidecars.length > 0) parts.push(`${changedSidecars.length} sidecar`);
-          if (changedImages.length > 0) parts.push(`${changedImages.length} source`);
+          if (changedSources.length > 0) parts.push(`${changedSources.length} source`);
           console.warn(`[forgeax-pack] assets changed: ${parts.join(', ')} (reloaded)`);
         };
 
@@ -913,16 +903,11 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             const watcher = fsWatch(root, { recursive: true }, (eventType, filename) => {
               if (filename === null) return;
               const isSidecar = filename.endsWith('.meta.json') || filename.endsWith('.pack.json');
-              const isImage =
-                filename.endsWith('.jpg') ||
-                filename.endsWith('.jpeg') ||
-                filename.endsWith('.png') ||
-                filename.endsWith('.gltf');
-              if (!isSidecar && !isImage) return;
+              const isSource = !isSidecar;
 
               const abs = resolve(root, filename);
               if (isSidecar) pendingSidecars.set(abs, { filename, eventType });
-              else pendingImages.set(abs, { filename, eventType });
+              else if (isSource) pendingSources.set(abs, { filename, eventType });
               scheduleFlush();
             });
             watcher.unref();
@@ -1202,10 +1187,30 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
 
   async function generateBundle(this: MinimalPluginContext): Promise<void> {
     const cwd = process.cwd();
-    const roots = resolveRoots(opts);
+    const { roots, basePrefix } = resolvePackBuildInputs(opts);
+    const sharedManifest = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+    if (sharedManifest !== undefined) {
+      const shared = loadSharedPackInput(sharedManifest);
+      const emitted = new Set<string>();
+      for (const entry of shared.catalog) {
+        const outputPath = entry.relativeUrl.replace(/^\/+/, '');
+        if (emitted.has(outputPath)) continue;
+        emitted.add(outputPath);
+        this.emitFile({
+          type: 'asset',
+          fileName: outputPath,
+          source: readFileSync(resolve(shared.payloadRoot, outputPath)),
+        });
+      }
+      this.emitFile({
+        type: 'asset',
+        fileName: 'pack-index.json',
+        source: JSON.stringify(projectSharedPackCatalog(shared.catalog, opts.base)),
+      });
+      return;
+    }
     const { paths } = loadAssetConfig(cwd);
     const entries = await buildCatalog(roots, opts.base, registeredImporterKeys);
-    const basePrefix = (opts.base ?? '/').replace(/\/$/, '');
 
     // Import step (M3 / w28, AC-21): the image import no longer inlines
     // `parseImage` here. It routes through the build-time `imageImporter`
@@ -1284,7 +1289,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       const hashedPath = this.getFileName(refId);
       importedEntries.push({
         guid: entry.guid,
-        relativeUrl: `${basePrefix}/${hashedPath}`,
+        relativeUrl: projectPackIndexUrl(basePrefix, hashedPath),
         kind: entry.kind,
         sourcePath: entry.sourcePath,
         metadata: imported.metadata,
@@ -1437,7 +1442,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
               );
               importedEntries[idx] = {
                 ...existing,
-                relativeUrl: `${basePrefix}/${hashedPackPath}`,
+                relativeUrl: projectPackIndexUrl(basePrefix, hashedPackPath),
                 ...(ddcAsset?.refs !== undefined ? { refs: ddcAsset.refs } : {}),
               };
             }
@@ -1529,7 +1534,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
               }
               importedEntries[texIdx] = {
                 ...existing,
-                relativeUrl: `${basePrefix}/${hashedBinPath}`,
+                relativeUrl: projectPackIndexUrl(basePrefix, hashedBinPath),
                 ...(overlaidMetadata !== undefined
                   ? { metadata: overlaidMetadata }
                   : existing.metadata !== undefined

@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "capture-motion-evidence": "node scripts/capture-motion-evidence.mjs",
+    "falsify-motion-freeze": "node scripts/falsify-motion-freeze.mjs"
   },
   "dependencies": {
     "@forgeax/engine-app": "workspace:*",

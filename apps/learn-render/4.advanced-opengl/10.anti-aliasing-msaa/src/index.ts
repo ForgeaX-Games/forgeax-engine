@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // apps/learn-render/4.advanced-opengl/10.anti-aliasing-msaa -- MSAA hardware
 // multisample anti-aliasing OFF/ON comparison demo with Space toggle.
 // (feat-20260604-learn-render-4-10-anti-aliasing-msaa-engine-wiring / M3).
@@ -162,7 +163,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // the Camera.antialias value so AI users can read state from DOM.
   const hudEl = document.getElementById('msaa-hud');
 
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'msaa-space-toggle',
     after: ['input-frame-start-scan'],
     queries: [],
@@ -213,7 +214,7 @@ function installCaptureHook(app: App, world: App['world']): void {
   const win = window as unknown as { __captureAntiAliasingMsaa?: CaptureHook };
   const renderer = app.renderer;
   win.__captureAntiAliasingMsaa = async (): Promise<Uint8Array> => {
-    world.update();
+    world.update(1 / 60).unwrap();
     renderer.draw([world], { owner: 0 });
     const r = await renderer.readPixels();
     if (!r.ok) {

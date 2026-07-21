@@ -15,6 +15,17 @@
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-cube smoke",
+    "gauntletScenario": {
+      "id": "hello-cube-dawn",
+      "script": "smoke",
+      "domains": ["World and host contract", "GPU abstraction and implementations"],
+      "packages": ["@forgeax/engine-ecs", "@forgeax/engine-runtime", "@forgeax/engine-rhi-wgpu"],
+      "risks": ["baseline", "gpu", "behavioral"],
+      "phaseInputs": ["baseline"],
+      "oracle": {
+        "stdoutIncludes": ["[hello-cube] backend=webgpu", "[smoke] frames observed="]
+      }
+    },
     "_comment": "smokeInvocation = self-contained SSOT for AC-12b (D-S10 / OQ-5 close): hello-cube smoke literal lives in apps/hello/cube/package.json#forgeax.smokeInvocation + .github/workflows/ci.yml only; not byte-for-byte aligned with hello-triangle (each app owns its own SSOT, K-12 stance preserved separately for AC-12a).",
     "metrics": {
       "bundle-size": {

@@ -25,7 +25,7 @@
 //   - Query<(&mut Transform, &mut Movable)> -> createQueryState + queryRun over
 //                                   the two components, entity handle from
 //                                   bundle.Entity
-//   - Res<Time>                  -> world.getResource('Time').dt (auto-provided
+//   - Res<Time>                  -> world.getResource(Time).delta (auto-provided
 //                                   each frame by createApp's frame-loop)
 //
 // Like 3d-rotation this is a MOTION demo: the move step (stepMove) is a pure

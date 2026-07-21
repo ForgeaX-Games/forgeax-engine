@@ -10,7 +10,7 @@
 //   - children![child]            -> ChildOf { parent: rootEntity }
 //   - propagateTransforms         -> auto-registered by createApp
 //
-// The motion front door (createApp + auto-Time.dt + world.addSystem) is reused
+// The motion front door (createApp + auto-Time.delta + world.addSystem) is reused
 // from the 3d-rotation demo (solo round 20260713-164916).
 
 import {

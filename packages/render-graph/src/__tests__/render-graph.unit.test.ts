@@ -24,6 +24,89 @@ import { err, ok, RenderGraphError, type RenderGraphErrorCode } from '../errors.
 import { RenderGraph } from '../graph.js';
 
 {
+  describe('whole-graph retirement', () => {
+    it('relinquishes transient and persistent targets before GPU completion, then reclaims both', async () => {
+      const destroyed: object[] = [];
+      let resolveSubmittedWork: (() => void) | undefined;
+      const submittedWork = new Promise<void>((resolve) => {
+        resolveSubmittedWork = resolve;
+      });
+      const device = {
+        createTexture: () => ({ ok: true as const, value: { id: 'transient' } }),
+        createTextureView: () => ({ ok: true as const, value: { id: 'view' } }),
+        destroyTexture: (texture: object) => {
+          destroyed.push(texture);
+          return { ok: true as const, value: undefined };
+        },
+        queue: { onSubmittedWorkDone: () => submittedWork },
+      };
+      const g = new RenderGraph();
+      g.addColorTarget('transient', {
+        format: 'rgba16float',
+        size: 'swapchain',
+        sample: 1,
+        usage: 0,
+      });
+      g.addPass('main', { reads: [], writes: ['transient'] });
+      const compiled = g.compile({
+        backendKind: 'webgpu',
+        caps: {
+          backendKind: 'webgpu',
+          compute: true,
+          storageBuffer: true,
+          storageTexture: false,
+          timestampQuery: false,
+          indirectDrawing: false,
+          textureCompressionBc: false,
+          textureCompressionEtc2: false,
+          textureCompressionAstc: false,
+          multiDrawIndirect: false,
+          pushConstants: false,
+          textureBindingArray: false,
+          samplerAliasing: true,
+          firstInstanceIndirect: false,
+          rgba16floatRenderable: false,
+          rg11b10ufloatRenderable: false,
+          float32Filterable: false,
+          maxColorAttachments: 8,
+        },
+        // biome-ignore lint/suspicious/noExplicitAny: opaque mock device surface
+        device: device as any,
+      });
+      expect(compiled.ok).toBe(true);
+
+      const persistentTexture = { id: 'persistent' };
+      const graphInternals = g as unknown as {
+        persistentTextures: Map<string, { texture: object; view: object }>;
+        transientPool: Map<string, { texture: object; view: object }>;
+        retire?: () => void;
+      };
+      graphInternals.persistentTextures.set('persistent', {
+        texture: persistentTexture,
+        view: { id: 'persistent-view' },
+      });
+
+      expect(graphInternals.retire).toBeTypeOf('function');
+      if (graphInternals.retire === undefined) return;
+      graphInternals.retire();
+
+      expect(graphInternals.transientPool).toHaveLength(0);
+      expect(graphInternals.persistentTextures).toHaveLength(0);
+      expect(destroyed).toEqual([]);
+
+      const reclaimed = g.reclaimRetiredTransients();
+      await Promise.resolve();
+      expect(destroyed).toEqual([]);
+      resolveSubmittedWork?.();
+      await reclaimed;
+
+      expect(destroyed).toHaveLength(2);
+      expect(destroyed).toContain(persistentTexture);
+    });
+  });
+}
+
+{
   // --- from barrier-backend-kind.test.ts ---
   // ── Helpers ──────────────────────────────────────────────────────
 

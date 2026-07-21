@@ -11,7 +11,7 @@
 
 import type { AudioBackend } from '@forgeax/engine-audio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
-import type { Result, World } from '@forgeax/engine-ecs';
+import type { Result, TimePolicy, World } from '@forgeax/engine-ecs';
 import type {
   ActionConfig,
   InputBackend,
@@ -83,7 +83,7 @@ export interface DrawSourceResult {
  *     the App's own world (the single-world AI-user default). A host that wires
  *     the seam but has nothing multi-world to inject this frame returns
  *     `undefined`.
- *   - Returns a {@link DrawSourceResult} → the frame-loop runs `world.update()`
+ *   - Returns a {@link DrawSourceResult} → the frame-loop runs `world.update(1 / 60).unwrap()`
  *     on EVERY returned world (so transform propagation writes each world's
  *     derived `Transform.world` mat4 before extract reads it — no stale matrix),
  *     then calls `renderer.draw(worlds, { cameraOwner, resourceOwner })`.
@@ -101,9 +101,6 @@ export type DrawSource = () => DrawSourceResult | undefined;
  *   - world:    caller-owned World (host already invoked new World()).
  *   - input:    InputBackend handle the host-side attached. When omitted the
  *               assemble entry skips input attach (caller manages input).
- *   - schedule: opaque hook for advanced scheduling (typed unknown in M1;
- *               narrowed in a later feat once the schedule shape lands).
- *   - maxDt:    dt clamp ceiling override (defaults to MAX_DT_DEFAULT in M2).
  *   - silenceUnhandledErrors: when true, suppresses the console.error
  *               fallback inside the error fan-out (M4).
  */
@@ -112,8 +109,6 @@ export interface AppAssembleArgs {
   readonly world: World;
   /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
   readonly plugins?: Plugin[];
-  readonly schedule?: unknown;
-  readonly maxDt?: number;
   readonly silenceUnhandledErrors?: boolean;
   /**
    * Per-frame draw-source injection seam (M2 / D-3). When supplied, the
@@ -129,8 +124,8 @@ export interface AppAssembleArgs {
  *
  * feat-20260608-create-app-param-surface-trim / M2 / D-3: self-describing
  * surface -- no longer `extends RendererOptions`. The 7 app-only fields
- * (input / audio / physics / schedule / maxDt / silenceUnhandledErrors) plus
- * the 2 RHI escape-hatch fields (rhi / rawDeviceForContextConfigure) are
+ * (input / audio / physics / silenceUnhandledErrors) plus the 2 RHI escape-hatch
+ * fields (rhi / rawDeviceForContextConfigure) are
  * listed inline, so IDE autocomplete shows AI users a clean surface
  * without inheriting now-disallowed slots like clearColor (M1, on Camera)
  * and shaderManifestUrl (M2, on BundlerOptions / 3rd arg). The escape
@@ -146,10 +141,11 @@ export interface CreateAppOptions {
    * host retains its lifecycle; this app only consumes snapshots from the view.
    */
   readonly input?: InputBackend;
-  /** Opaque schedule hook (typed unknown in M1; narrowed in later feat). */
-  readonly schedule?: unknown;
-  /** dt clamp ceiling override (defaults to MAX_DT_DEFAULT in M2). */
-  readonly maxDt?: number;
+  /**
+   * World-owned time policy supplied to the canvas-form World constructor.
+   * Assemble-form callers retain their pre-existing World policy.
+   */
+  readonly time?: TimePolicy;
   /**
    * When true, suppresses the console.error fallback inside the error
    * fan-out for hosts that prefer total silence (M4 default: false).
@@ -360,15 +356,6 @@ export interface App {
    * AI users get the latest signal, not the first one.
    */
   readonly lastError?: AppDispatchError | undefined;
-  /**
-   * Register a per-frame update callback. The callback receives dt
-   * (clamped delta-time in seconds) and executes between Time resource
-   * injection and world.update() every frame (plan-strategy D-1).
-   *
-   * Thin proxy over FrameLoopHandle.addUpdateCallback (plan-strategy
-   * D-2). GameContext.registerUpdate delegates through this method.
-   */
-  registerUpdate(fn: (dt: number) => void): void;
   /**
    * @internal
    * Live `DebugRhiInstance` recorder proxy when `FORGEAX_ENGINE_RHI_DEBUG=1` is set;

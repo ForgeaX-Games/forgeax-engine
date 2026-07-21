@@ -28,9 +28,32 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildCatalogStrict } from '../build-catalog.js';
 import { importTextureEntry } from '../import-texture.js';
 import { ASSET_CHANGED_EVENT, type AssetChangedPayload, pluginPack } from '../index.js';
+import { projectSharedPackCatalog } from '../shared-build-inputs.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
+
+{
+  describe('shared-build-inputs.test.ts', () => {
+    it('projects producer payload paths into each app base without scanning source roots', () => {
+      const catalog = [
+        {
+          guid: 'a',
+          kind: 'texture',
+          sourcePath: 'learn-opengl/container.jpg',
+          relativeUrl: '/assets/a.bin',
+        },
+      ];
+
+      expect(projectSharedPackCatalog(catalog, '/preview/')).toEqual([
+        {
+          ...catalog[0],
+          relativeUrl: '/preview/assets/a.bin',
+        },
+      ]);
+    });
+  });
+}
 
 {
   // ─── from audio-pack-index.test.ts ───
@@ -350,7 +373,21 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(server.ws.calls.some((c) => c.type === 'full-reload')).toBe(true);
     });
 
-    it('(e) sidecar change also pushes a structured forgeax:asset-changed event', async () => {
+    it('(e) host importer source extension emits server.ws.send full-reload', async () => {
+      await writeFile(join(hmrAssetsDir, 'level.reel.json'), '{"version":1}');
+
+      const server = makeHmrMockServer();
+      const plugin = pluginPack({ roots: [hmrAssetsDir] });
+      plugin.configureServer(server);
+
+      await new Promise((r) => setTimeout(r, 50));
+      await writeFile(join(hmrAssetsDir, 'level.reel.json'), '{"version":2}');
+
+      await waitFor(() => server.ws.calls.some((c) => c.type === 'full-reload'));
+      expect(server.ws.calls.some((c) => c.type === 'full-reload')).toBe(true);
+    });
+
+    it('(f) sidecar change also pushes a structured forgeax:asset-changed event', async () => {
       // P2: alongside `full-reload` (for the running game), the dev server pushes
       // a custom catalog-change event so a tooling subscriber (editor Content
       // Browser) can re-query `/__pack/index` instead of polling the filesystem.
@@ -1891,6 +1928,23 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       const result = await pdSimulateRequest(middleware, '/something-else');
       expect(result.statusCode).toBe(404);
       expect(result.body).toBe('');
+    });
+
+    it('keeps the app-local pack index when a non-root base has no shared input', async () => {
+      const plugin = pluginPack({ roots: [], base: '/preview/' }) as unknown as PdPluginLike;
+      const emitted: Array<{ type: string; fileName: string; source: string }> = [];
+
+      await plugin.generateBundle?.call({
+        emitFile(asset) {
+          emitted.push(asset);
+          return asset.fileName;
+        },
+      });
+
+      expect(emitted).toContainEqual({ type: 'asset', fileName: 'pack-index.json', source: '[]' });
+      const { middleware } = pdCaptureMiddleware(plugin);
+      const result = await pdSimulateRequest(middleware, '/__pack/index');
+      expect(JSON.parse(result.body)).toEqual([]);
     });
 
     it('watcher is registered via server.watcher.on', () => {

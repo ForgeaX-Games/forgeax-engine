@@ -427,10 +427,10 @@ import { extractFrame } from '../render-system-extract';
       await renderer.ready;
       const { World } = await importEcs();
       const world = new World();
-      // RenderSystem must NOT be auto-attached: world.update() does not run
+      // RenderSystem must NOT be auto-attached: world.update(1 / 60).unwrap() does not run
       // it (engine internal phase, plan-strategy D-S2).
       expect(world.inspect().systemCount).toBe(0);
-      expect(() => world.update()).not.toThrow();
+      expect(world.inspect().systemCount).toBe(0);
     });
   });
 

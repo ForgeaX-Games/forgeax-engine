@@ -4,7 +4,10 @@
 
 import type {
   AnimationChannel,
+  AnimationGraph,
+  AnimationGraphNode,
   Asset,
+  Handle,
   LoadContext,
   Loader,
   MaterialAsset,
@@ -385,10 +388,77 @@ export const animationClipLoader: Loader = {
   },
 };
 
+/** animation-graph loader — pack payload -> AnimationGraph POD.
+ *
+ * feat-20260713-animation-state-machine-plugin M4 / w30 (plan D-4 landing (3)):
+ * the inverse of `serializeAnimationGraph` (runtime). Each Clip leaf's `clip`
+ * field arrives as a `refs[]` index (small int); the loader resolves it back to
+ * the GUID string verbatim, leaving GUID -> handle re-resolution to the ECS/use
+ * time (the same "GUID at load, handle at use" contract materialLoader honours
+ * for parentGuid / paramValues texture fields, asset-registry D-19). Blend/Add
+ * node references + `root` are intra-graph node indices, validated against the
+ * node count. A malformed payload (out-of-range refs / node index, bad node
+ * shape, non-finite weight) returns `undefined` so the load-by-guid path
+ * surfaces the existing `asset-parse-failed` error code (AC-14).
+ *
+ * OOS-7: reconstructs only an engine-authored graph's topology; no DCC-import
+ * metadata is consumed.
+ */
+export const animationGraphLoader: Loader = {
+  kind: 'animation-graph',
+  load(payload, refs) {
+    const rawNodes = payload.nodes;
+    const root = payload.root;
+    if (!Array.isArray(rawNodes)) return undefined;
+    const nodeCount = rawNodes.length;
+    const isNodeIndex = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < nodeCount;
+    if (!isNodeIndex(root)) return undefined;
+    const refsArr = refs ?? [];
+
+    const nodes: AnimationGraphNode[] = [];
+    for (const rawNode of rawNodes) {
+      if (typeof rawNode !== 'object' || rawNode === null) return undefined;
+      const node = rawNode as Record<string, unknown>;
+      const weight = node.weight;
+      if (typeof weight !== 'number' || !Number.isFinite(weight)) return undefined;
+
+      if (node.type === 'clip') {
+        const refIndex = node.clip;
+        if (typeof refIndex !== 'number' || !Number.isInteger(refIndex)) return undefined;
+        if (refIndex < 0 || refIndex >= refsArr.length) return undefined;
+        const guid = refsArr[refIndex];
+        if (typeof guid !== 'string') return undefined;
+        // GUID verbatim at load; re-resolved to a handle at use time (D-19).
+        nodes.push({
+          type: 'clip',
+          clip: guid as unknown as Handle<'AnimationClip', 'shared'>,
+          weight,
+        });
+      } else if (node.type === 'blend') {
+        const children = node.children;
+        if (!Array.isArray(children) || !children.every(isNodeIndex)) return undefined;
+        nodes.push({ type: 'blend', children: [...(children as number[])], weight });
+      } else if (node.type === 'add') {
+        const base = node.base;
+        const additive = node.additive;
+        if (!isNodeIndex(base)) return undefined;
+        if (!Array.isArray(additive) || !additive.every(isNodeIndex)) return undefined;
+        nodes.push({ type: 'add', base, additive: [...(additive as number[])], weight });
+      } else {
+        return undefined;
+      }
+    }
+
+    return { kind: 'animation-graph', nodes, root } as AnimationGraph;
+  },
+};
+
 /**
- * The six inline pack-payload loaders, in the historical `if`-chain order.
- * `wireDefaultLoaders` (w5) registers these plus the texture / font / equirect
- * loaders (w6) and the audio placeholder (w8).
+ * The seven inline pack-payload loaders, in the historical `if`-chain order
+ * (the animation-graph loader, feat-20260713 M4 / w30, appends after the clip
+ * loader). `wireDefaultLoaders` (w5) registers these plus the texture / font /
+ * equirect loaders (w6) and the audio placeholder (w8).
  */
 export const INLINE_PACK_LOADERS: readonly Loader[] = [
   meshLoader,
@@ -397,4 +467,5 @@ export const INLINE_PACK_LOADERS: readonly Loader[] = [
   skeletonLoader,
   skinLoader,
   animationClipLoader,
+  animationGraphLoader,
 ];

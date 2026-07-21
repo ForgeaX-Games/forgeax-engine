@@ -171,3 +171,30 @@ export async function loadTapeFromFiles(
   // when consumers check `error.code` (DebugError) or `error.kind` (TapeSourceError).
   return result as unknown as Result<Tape, TapeLoadError>;
 }
+
+/** Load the paired capture artifacts that the editor opens in the reviewer. */
+export async function loadTapeFromUrls(
+  tapeUrl: string,
+  reportUrl: string,
+): Promise<Result<Tape, TapeLoadError>> {
+  try {
+    const [tapeResponse, reportResponse] = await Promise.all([fetch(tapeUrl), fetch(reportUrl)]);
+    if (!tapeResponse.ok || !reportResponse.ok) {
+      return err({
+        kind: 'read-failure' as const,
+        message: `Failed to fetch capture artifacts (${tapeResponse.status}/${reportResponse.status})`,
+      });
+    }
+
+    const [tape, report] = await Promise.all([tapeResponse.blob(), reportResponse.blob()]);
+    return loadTapeFromFiles([
+      new File([tape], 'frame-0.tape.bin'),
+      new File([report], 'frame-0.report.json', { type: 'application/json' }),
+    ]);
+  } catch {
+    return err({
+      kind: 'read-failure' as const,
+      message: 'Failed to fetch capture artifacts. Confirm the editor dev server is still running.',
+    });
+  }
+}

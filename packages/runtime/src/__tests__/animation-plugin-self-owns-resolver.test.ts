@@ -9,7 +9,7 @@
 // of createApp used to hand-insert the resolver before running plugins; the
 // assemble form (host-owned world — the editor ▶ Play world fork) did NOT, so a
 // host that listed animationPlugin() but forgot the manual insert crashed on the
-// first world.update() with:
+// first world.update(1 / 60).unwrap() with:
 //   AppError[app-system-update-failed] … Required resource "AnimationAssetResolver"
 //   not found for system "advanceAnimationPlayer".
 // Collapsing ownership INTO the plugin makes both createApp forms correct for
@@ -42,7 +42,7 @@ describe('animationPlugin — self-owns AnimationAssetResolver (SSOT)', () => {
     world.setErrorHandler((error) => {
       captured = error;
     });
-    world.update();
+    world.update(1 / 60).unwrap();
     expect(captured).toBeUndefined();
   });
 

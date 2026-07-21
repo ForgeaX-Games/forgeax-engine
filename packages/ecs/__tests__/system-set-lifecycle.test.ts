@@ -1,3 +1,4 @@
+import { Update } from '../src/schedule-token';
 // @forgeax/engine-ecs — lifecycle consistency + inspect tests (w17, RED)
 //
 // TDD: removeSystem/replaceSystem membership pruning and inspect().systems[].sets
@@ -34,10 +35,10 @@ describe('system-set-lifecycle.test.ts', () => {
         fn: () => log.push('life-b'),
       });
 
-      world.addSystems(GameplaySet, [sysA, sysB]);
+      world.addSystems(Update, GameplaySet, [sysA, sysB]);
 
       // Remove sysA
-      const r = world.removeSystem('life-a');
+      const r = world.removeSystem(Update, 'life-a');
       expect(r.ok).toBe(true);
 
       // sysA is gone, sysB should still run
@@ -56,13 +57,13 @@ describe('system-set-lifecycle.test.ts', () => {
         fn: () => {},
       });
 
-      world.addSystems(TagSet, [sys]);
+      world.addSystems(Update, TagSet, [sys]);
 
       // Remove
-      world.removeSystem('tag-sys');
+      world.removeSystem(Update, 'tag-sys');
 
       // Re-add via addSystem (not addSystems) — system is back but not in set
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'tag-sys',
         queries: [],
         fn: () => {},
@@ -90,10 +91,10 @@ describe('system-set-lifecycle.test.ts', () => {
         fn: () => log.push('logic-old'),
       });
 
-      world.addSystems(LogicSet, [sys]);
+      world.addSystems(Update, LogicSet, [sys]);
 
       // Replace with new fn
-      const r = world.replaceSystem('logic-sys', {
+      const r = world.replaceSystem(Update, 'logic-sys', {
         name: 'logic-sys',
         queries: [],
         fn: () => log.push('logic-new'),
@@ -134,9 +135,9 @@ describe('system-set-lifecycle.test.ts', () => {
         fn: () => {},
       });
 
-      world.addSystems(SetA, [sys1]);
-      world.addSystems(SetB, [sys1]); // sys1 in both sets
-      world.addSystems(SetB, [sys2]);
+      world.addSystems(Update, SetA, [sys1]);
+      world.addSystems(Update, SetB, [sys1]); // sys1 in both sets
+      world.addSystems(Update, SetB, [sys2]);
 
       // RED: sets field not yet present on inspect entry — will GREEN after w19
       const snap = world.inspect();
@@ -154,7 +155,7 @@ describe('system-set-lifecycle.test.ts', () => {
     it('systems without set membership: sets is an empty array', () => {
       const world = new World();
 
-      world.addSystem({
+      world.addSystem(Update, {
         name: 'free-sys',
         queries: [],
         fn: () => {},

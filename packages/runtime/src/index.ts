@@ -584,6 +584,17 @@ export { Materials, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
 
 // ─── Animation system wiring (M1 / T-19 - feat-20260523-skin-skeleton-animation) ──
 
+// ─── AnimationGraph builder + introspection (feat-20260713 M2 / w14 / w15) ──
+export type {
+  AnimationGraphBuilder,
+  AnimationGraphNodeRef,
+} from './animation/define-animation-graph';
+export { defineAnimationGraph } from './animation/define-animation-graph';
+export type {
+  AnimationGraphDescription,
+  AnimationGraphNodeDescription,
+} from './animation/describe-animation-graph';
+export { describeAnimationGraph } from './animation/describe-animation-graph';
 export {
   ADVANCE_ANIMATION_PLAYER_SYSTEM,
   AdvanceAnimationPlayer,
@@ -596,8 +607,27 @@ export {
   registerPropagateTransforms,
   TransformSet,
 } from './createRenderer';
+// feat-20260713 verify round 1 / V-2: re-export the AnimationGraph structured
+// error cluster (closed AnimationGraphErrorCode + AnimationGraphError union +
+// each class + detail interfaces) so AI users `switch (err.code)` exhaustively
+// AND `instanceof`/reuse the classes — peer convention to SkinError etc.
+export type {
+  AnimationGraphClipMissingDetail,
+  AnimationGraphCycleDetail,
+  AnimationGraphError,
+  AnimationGraphErrorCode,
+  AnimationGraphNodeOutOfRangeDetail,
+  AnimationGraphNodeWeightInvalidDetail,
+} from './errors/animation-graph';
+export {
+  AnimationGraphClipMissingError,
+  AnimationGraphCycleError,
+  AnimationGraphEmptyError,
+  AnimationGraphNodeOutOfRangeError,
+  AnimationGraphNodeWeightInvalidError,
+} from './errors/animation-graph';
 // ─── Plugin factories (M2 / w6 - feat-20260623-plugin-system-unify) ─────────
-export { animationPlugin, timePlugin, transformPlugin } from './plugin-factories';
+export { animationPlugin, transformPlugin } from './plugin-factories';
 // feat-20260705-runtime-tier2-decomposition M2 / w25: the imperative
 // propagateTransforms(world) driver — required by the @forgeax/engine-picking
 // vertex/AABB pick contract (D-9: callers must resolve Transform.world before

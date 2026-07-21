@@ -66,11 +66,7 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     const assets = app.renderer.assets;
     assets.configurePackIndex('/pack-index.json');
 
-    const ctx: BootstrapContext = {
-      assets,
-      app,
-      registerUpdate: (fn: (dt: number) => void) => app.registerUpdate(fn),
-    };
+    const ctx: BootstrapContext = { assets, app };
 
     // bootstrap(world, ctx) awaits the scene loadByGuid<SceneAsset> +
     // instantiate; a throw here is a real failure (stale pack schema, missing

@@ -25,7 +25,7 @@
 // even on a contributor machine without emsdk.
 
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,15 +36,13 @@ import { importTextureEntry } from '../import-texture.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
-const FIXTURE_PNG_SRC = join(
-  WORKTREE_ROOT,
-  'forgeax-engine-assets',
-  'learn-opengl',
-  'textures',
-  'wood.png',
-);
 const ENCODER_GLUE = join(WORKTREE_ROOT, 'packages', 'codec', 'pkg', 'encode', 'basis_encoder.mjs');
 const pkgBuilt = existsSync(ENCODER_GLUE);
+
+const FIXTURE_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==',
+  'base64',
+);
 
 const GUID = '019e3969-1d48-7c3b-ac24-6d68f457065f';
 
@@ -88,9 +86,8 @@ describe('ddc-import-texture-regression.test.ts (R-9 / w38-a)', () => {
     tmpRoot = await mkdtemp(join(tmpdir(), 'forgeax-ddc-regr-'));
     process.chdir(tmpRoot);
     await mkdir(join(tmpRoot, 'assets'), { recursive: true });
-    const png = await readFile(FIXTURE_PNG_SRC);
     sourceRel = relative(tmpRoot, join(tmpRoot, 'assets', 'wood.png'));
-    await writeFile(join(tmpRoot, sourceRel), png);
+    await writeFile(join(tmpRoot, sourceRel), FIXTURE_PNG);
     // Spy through (no mockImplementation): observe the decode+encode seam without
     // altering it. A DDC hit returns before this is reached, so the call count is
     // the direct witness of hit vs miss.

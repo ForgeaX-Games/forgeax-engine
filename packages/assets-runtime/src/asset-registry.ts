@@ -137,6 +137,7 @@ export {
 } from './handles';
 export {
   animationClipLoader,
+  animationGraphLoader,
   INLINE_PACK_LOADERS,
   materialLoader,
   meshLoader,

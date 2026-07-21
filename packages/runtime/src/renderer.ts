@@ -501,7 +501,10 @@ export interface Renderer {
    * copyTextureToBuffer + mapAsync, computes lightSpaceMatrix * pos, UV remap,
    * and currentDepth <= storedDepth comparison (matches pbr.wgsl naive lookup).
    *
-   * Returns null when no shadow RT is allocated or lightSpaceMatrix is absent.
+   * Returns null when the probe pipeline is not compiled (empty shader
+   * manifest). When no shadow caster is active (lightSpaceMatrix absent),
+   * returns all-1.0 (fully lit) — the caller can distinguish "no shadow
+   * data" from "probe unavailable".
    * Each result carries { shadowFactor: number } where 1 = lit, 0 = fully
    * shadowed. M2 intentionally does not smooth (M3 adds PCF).
    */

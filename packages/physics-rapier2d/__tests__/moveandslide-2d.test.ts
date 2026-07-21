@@ -124,8 +124,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
       spawnStaticBox(world, [0, -0.85], [10, 0.5]);
       const char = spawnCharacter(world, [0, 0.45]);
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
       const actual = pw.moveAndSlide(char, Float32Array.of(1, 0) as never);
 
       expect(actual[0]).toBeGreaterThan(0.9);
@@ -147,8 +147,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
       spawnStaticBox(world, [0.8, 0.5], [0.1, 1]);
       const char = spawnCharacter(world, [0, 0.45]);
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
       pw.moveAndSlide(char, Float32Array.of(0, -0.1) as never);
 
       let totalX = 0;
@@ -174,8 +174,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
       spawnStaticBox(world, [1.4, 0.5], [1, 2]);
       const char = spawnCharacter(world, [0.1, 0.45]);
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
       // Press into the wall so the character settles flush against it.
       pw.moveAndSlide(char, Float32Array.of(0.3, 0) as never);
 
@@ -199,8 +199,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
       spawnRawRamp(pw, RAPIER, [2, -0.85], 30);
       const char = spawnCharacter(world, [0.7, 0.05]);
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
       pw.moveAndSlide(char, Float32Array.of(0, -0.15) as never);
 
       const before = tfPos(world, char).y;
@@ -224,8 +224,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
       spawnRawRamp(pw, RAPIER, [1.5, -0.85], 60);
       const char = spawnCharacter(world, [0.7, 0.05]);
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
       pw.moveAndSlide(char, Float32Array.of(0, -0.15) as never);
 
       let totalX = 0;
@@ -252,8 +252,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
       spawnStaticBox(world, [2, -0.45], [1, 0.2]);
       const char = spawnCharacter(world, [0, 0.45]);
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
       pw.moveAndSlide(char, Float32Array.of(0, -0.15) as never);
 
       const before = tfPos(world, char).y;
@@ -281,8 +281,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
       spawnStaticBox(world, [2, -0.05], [2, 0.5]); // 0.5m-tall ledge top
       const char = spawnCharacter(world, [0, 0.45]);
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
       pw.moveAndSlide(char, Float32Array.of(0, -0.15) as never);
 
       for (let i = 0; i < 25; i++) {
@@ -303,8 +303,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
       spawnRawRamp(pw, RAPIER, [4, -1.0], -20);
       const char = spawnCharacter(world, [0, 0.1]);
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
       pw.moveAndSlide(char, Float32Array.of(0, -0.1) as never);
       const startY = tfPos(world, char).y;
 
@@ -330,8 +330,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
       spawnStaticBox(world, [-0.5, -0.5], [1.5, 0.5]);
       const char = spawnCharacter(world, [-1, 0.8]);
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
       pw.moveAndSlide(char, Float32Array.of(0, -0.1) as never);
       expect(ccGrounded(world, char)).toBe(true);
 
@@ -358,8 +358,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
 
       spawnStaticBox(world, [0, -0.85], [10, 0.5]);
       const char = spawnCharacter(world, [0, 0.45], {}, RigidBodyTypeValue.dynamic);
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
 
       try {
         pw.moveAndSlide(char, Float32Array.of(0.1, 0) as never);
@@ -406,8 +406,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
         )
         .unwrap() as unknown as number;
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
 
       const record = (pw as unknown as { entityMap: Map<number, { bodyHandle: number }> }).entityMap.get(
         platform,
@@ -430,8 +430,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
 
       spawnStaticBox(world, [0, -0.85], [10, 0.5]);
       const char = spawnCharacter(world, [0, 0.45]);
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
       pw.moveAndSlide(char, Float32Array.of(0.1, 0) as never);
 
       expect(pw.kccCache.size).toBe(1);
@@ -453,8 +453,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
 
       spawnStaticBox(world, [0, -0.85], [10, 0.5]);
       const char = spawnCharacter(world, [0, 0.45]);
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
       pw.moveAndSlide(char, Float32Array.of(0, -0.1) as never);
 
       // The self-exclude predicate omits the character's own collider, so a
@@ -479,8 +479,8 @@ describe('moveAndSlide 2D (AC-12)', () => {
       // Before the first physicsSyncBackend tick the body has not been built.
       expect(pw.hasBody(char)).toBe(false);
 
-      world.insertResource('Time', { dt: 1 / 60, elapsed: 1 / 60 });
-      world.update();
+      world.update(1 / 60).unwrap();
+      world.update(1 / 60).unwrap();
 
       // After the tick, ensureBody has run and the body exists.
       expect(pw.hasBody(char)).toBe(true);

@@ -2443,7 +2443,12 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       const csmPack = state.perPassResources.shadowCsmLightViewProj;
       const cascadeCount = state.perPassResources.shadowCascadeCount;
       const lsm = state.perPassResources.shadowLightSpaceMatrix;
-      if (csmPack === null && lsm === null) return null;
+      // No shadow caster → all points are fully lit (1.0). Return identity
+      // values so callers (e.g. shadow-quality-metrics falsify probe) can
+      // distinguish "no shadow" from "probe not compiled".
+      if (csmPack === null && lsm === null) {
+        return worldPositions.slice(0, PROBE_MAX_COUNT).map(() => ({ shadowFactor: 1 }));
+      }
       // M5-T2: shadow texture view resolved via render-graph getter
       // (`renderSystem.getCurrentShadowView()` -> graph
       // `addColorTarget('shadowDepth', ...)`); the ECS-managed

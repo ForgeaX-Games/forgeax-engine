@@ -17,7 +17,7 @@
 //                                   NOT accumulate float drift into a skewed quat.
 //   - Query<(&mut Transform, &Rotatable)> -> createQueryState + queryRun over the
 //                                   two components, entity handle from bundle.Entity
-//   - Res<Time>                  -> world.getResource('Time').dt (auto-provided
+//   - Res<Time>                  -> world.getResource(Time).delta (auto-provided
 //                                   each frame by createApp's frame-loop)
 //
 // This is the loop's first MOTION demo — every prior bevy demo built a static

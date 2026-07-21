@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // apps/hello/fxaa -- FXAA real-time comparison demo
 // (feat-20260529-fxaa-demo-real-antialiasing-comparison-runtime-tog / M2).
 //
@@ -158,7 +159,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // the Camera.antialias value so AI users can read state from DOM.
   const hudEl = document.getElementById('fxaa-hud');
 
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'fxaa-space-toggle',
     after: ['input-frame-start-scan'],
     queries: [],

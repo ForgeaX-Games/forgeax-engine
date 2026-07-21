@@ -1,21 +1,21 @@
 // feat-20260709-editor-world-partition-editorworld-super-composite / M2 / w9
 // (RED — impl lands in w12). Contract test: a world injected through drawSource
-// MUST be world.update()'d by the frame-loop in the SAME frame it is drawn, so
+// MUST be world.update(1 / 60).unwrap()'d by the frame-loop in the SAME frame it is drawn, so
 // the renderer reads a freshly-propagated Transform.world mat4 — never a stale
 // one.
 //
 // Why this matters (Strategist D-3, not covered by research): the renderer's
 // extract stage reads the DERIVED `Transform.world` column, whose sole writer is
 // the propagateTransforms system (plugin-factories.ts / systems/propagate-
-// transforms.ts). That writer only runs inside `world.update()`. If drawSource
+// transforms.ts). That writer only runs inside `world.update(1 / 60).unwrap()`. If drawSource
 // merely fed injected worlds into `renderer.draw(worlds, ...)` WITHOUT the
-// frame-loop running `world.update()` on them first, the renderer would read the
+// frame-loop running `world.update(1 / 60).unwrap()` on them first, the renderer would read the
 // injected world's Transform.world at its previous (or default identity) value —
 // a stale-matrix bug that renders the injected world one frame behind (or at the
 // origin on the first frame).
 //
 // This test spawns an entity in the injected world with a DISTINGUISHING
-// non-identity translation and never calls world.update() on that world itself.
+// non-identity translation and never calls world.update(1 / 60).unwrap() on that world itself.
 // The spy renderer reads `Transform.world` at draw time. A frame-loop that
 // updates injected worlds surfaces the translation in the mat4's column-major
 // [12]/[13]/[14] slots; a draw-only frame-loop surfaces the identity default

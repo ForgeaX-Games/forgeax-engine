@@ -19,7 +19,33 @@
 //   - plan-tasks.json#T-M4-1 acceptanceCheck (>=3 P95 cases, >=2 compareKey paths)
 
 import { describe, expect, it } from 'vitest';
-import { computeP95, median, resolveFpsStatus, withTimeout } from '../run-fps.mjs';
+import { buildPreviewApp, computeP95, median, resolveFpsStatus, withTimeout } from '../run-fps.mjs';
+
+describe('buildPreviewApp (self-contained preview input)', () => {
+  it('materializes the selected app before vite preview', () => {
+    const calls = [];
+    const result = buildPreviewApp('/repo/apps/example', (command, args, options) => {
+      calls.push({ command, args, options });
+      return { status: 0 };
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(calls).toEqual([
+      {
+        command: 'pnpm',
+        args: ['exec', 'vite', 'build'],
+        options: { cwd: '/repo/apps/example', stdio: 'inherit' },
+      },
+    ]);
+  });
+
+  it('exposes a failed build without starting preview', () => {
+    expect(buildPreviewApp('/repo/apps/example', () => ({ status: 23 }))).toEqual({
+      ok: false,
+      message: 'vite build failed with exit code 23',
+    });
+  });
+});
 
 describe('computeP95 (T-M4-1)', () => {
   it('returns 0 for empty input (sentinel matches median())', () => {

@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // apps/hello/hdrp-lighting -- HDRP cluster-forward 256-light demo
 // (feat-20260608-cluster-lighting / M7 / w25).
 //
@@ -250,7 +251,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // frame. The orbit is small (radius 0.5) so the rough pixel pattern
   // stays close to the smoke baseline (deterministic readback target).
   let elapsed = 0;
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'hdrp-light-orbit',
     queries: [],
     fn: () => {

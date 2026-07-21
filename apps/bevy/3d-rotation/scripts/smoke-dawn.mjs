@@ -202,7 +202,7 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   if (i === CAPTURE_EARLY) earlyFrame = await capture(sharedDevice);
   if (i === CAPTURE_LATE) lateFrame = await capture(sharedDevice);
   // Advance the spin, then propagate local Transform → world matrix (the app
-  // gets this via createApp's world.update() each frame; the direct-draw smoke
+  // gets this via createApp's world.update(1 / 60).unwrap() each frame; the direct-draw smoke
   // must call it explicitly or the renderer reads stale world matrices and the
   // cube never moves — memory transform-local-trs-world-mat4-unification +
   // propagate-transforms-never-auto-registered).

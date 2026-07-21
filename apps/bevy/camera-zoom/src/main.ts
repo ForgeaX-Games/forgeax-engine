@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import { INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
@@ -17,7 +18,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   if (!appResult.ok) return console.error('[bevy-camera-zoom] createApp failed:', appResult.error);
   const app = appResult.value;
   buildCameraZoomWorld(app.world);
-  app.world.addSystem({
+  app.world.addSystem(Update, {
     name: 'zoom-camera',
     queries: [],
     fn: (world) => {

@@ -7,7 +7,7 @@
 // forgeax mapping — a debug-draw-front-door demo:
 //   - createApp -> owns the frame loop AND auto-attaches app.debugDraw (immediate-mode gizmo
 //     overlay, flushed at the end of the frame).
-//   - app.registerUpdate -> each frame, draw every ShowAxes cube's local axes via the new
+//   - world.addSystem(Update, ...) -> each frame, draw every ShowAxes cube's local axes via the new
 //     app.debugDraw.axes(transform.world, length) primitive (solo round 20260713-222551).
 //   - app.start() -> the cubes render with their R/G/B local-axis gizmos overlaid.
 //
@@ -15,6 +15,7 @@
 // smoke), so the two never drift.
 
 import { createApp } from '@forgeax/engine-app';
+import { Update } from '@forgeax/engine-ecs';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildAxesWorld, drawAxesForEntities } from './axes-demo';
@@ -48,9 +49,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   buildAxesWorld(app.world);
 
   // Bevy's draw_axes: each frame, draw every ShowAxes entity's local coordinate frame.
-  app.registerUpdate(() => {
-    drawAxesForEntities(app.world, debugDraw);
-  });
+  app.world
+    .addSystem(Update, {
+      name: 'bevy-axes-draw',
+      queries: [],
+      fn: () => drawAxesForEntities(app.world, debugDraw),
+    })
+    .unwrap();
 
   const started = app.start();
   if (!started.ok) console.error('[bevy-axes] app.start failed:', started.error);

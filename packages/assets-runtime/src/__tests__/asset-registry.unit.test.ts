@@ -177,6 +177,20 @@ describe('inspect / listCatalog', () => {
     const rows = reg.listCatalog();
     expect(rows.some((r) => r.guid === GUID_A.toLowerCase() && r.kind === 'mesh')).toBe(true);
   });
+
+  it('listCatalog includes a catalogued AnimationGraph with kind=animation-graph', () => {
+    const reg = makeRegistry();
+    const graph = {
+      kind: 'animation-graph' as const,
+      nodes: [{ type: 'clip' as const, clip: 0 as never, weight: 1 }],
+      root: 0,
+    };
+    reg.catalog(GUID_B, graph);
+    const rows = reg.listCatalog();
+    expect(rows.some((r) => r.guid === GUID_B.toLowerCase() && r.kind === 'animation-graph')).toBe(
+      true,
+    );
+  });
 });
 
 describe('configuration setters + payload parse delegation', () => {

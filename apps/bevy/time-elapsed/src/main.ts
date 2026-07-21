@@ -13,6 +13,7 @@
 // dawn smoke), so the two never drift.
 
 import { createApp } from '@forgeax/engine-app';
+import { Update } from '@forgeax/engine-ecs';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildTimeElapsedWorld, stepByElapsed } from './time-elapsed';
@@ -41,7 +42,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   // Update system: drive the cube from the ABSOLUTE elapsed clock (Bevy's
   // Time::elapsed), not by integrating dt. Reads Time.elapsed straight off the resource.
-  app.world.addSystem({
+  app.world.addSystem(Update, {
     name: 'oscillate-by-elapsed',
     queries: [],
     fn: (world) => {

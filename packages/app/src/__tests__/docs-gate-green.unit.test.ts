@@ -1,0 +1,63 @@
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+
+const repoRoot = resolve(fileURLToPath(new URL('../../../..', import.meta.url)));
+const docsGate = resolve(repoRoot, 'scripts/forgeax/check-token-first-docs.mjs');
+
+function runDocsGate(): { readonly status: number; readonly output: string } {
+  try {
+    const output = execFileSync(process.execPath, [docsGate], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { status: 0, output };
+  } catch (error: unknown) {
+    const result = error as {
+      readonly status?: number;
+      readonly stdout?: string;
+      readonly stderr?: string;
+    };
+    return {
+      status: result.status ?? 1,
+      output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
+    };
+  }
+}
+
+describe('M5 active-documentation token-first gate', () => {
+  it('keeps the documented active surface and historical allowlist present', () => {
+    for (const path of [
+      'packages/ecs/README.md',
+      'packages/app/README.md',
+      'packages/audio-webaudio/README.md',
+      'packages/input/README.md',
+      'packages/runtime/README.md',
+      'packages/state/README.md',
+      'skills/forgeax-engine-ecs/SKILL.md',
+      'skills/forgeax-engine-app/SKILL.md',
+      'skills/forgeax-engine-audio/SKILL.md',
+      'skills/forgeax-engine-state/SKILL.md',
+      'apps/hello/sprite-atlas/README.md',
+      'apps/learn-render/1.getting-started/5.transformations/README.md',
+      'apps/learn-render/1.getting-started/7.camera/README.md',
+      'apps/learn-render/2.lighting/3.materials/README.md',
+      'packages/ecs/CHANGELOG.md',
+      'docs/roadmaps/2026-06-08-ecs-multithreading-roadmap.md',
+      'docs/roadmaps/2026-06-19-engine-self-stability-roadmap.md',
+      'docs/specs/2026-06-16-engine-state-and-state-scoped-entities-design.md',
+      'docs/specs/2026-06-23-plugin-system-design.md',
+    ]) {
+      expect(existsSync(resolve(repoRoot, path)), path).toBe(true);
+    }
+  });
+
+  it('accepts only token-first registration and explicit-delta update examples', () => {
+    const result = runDocsGate();
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('Active-documentation token-first gate passed');
+  });
+});

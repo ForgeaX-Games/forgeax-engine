@@ -1,3 +1,4 @@
+import { Update } from '../src/schedule-token';
 // @forgeax/engine-ecs — configureSets positive tests (w6, RED)
 //
 // TDD: world.configureSets API does not exist yet, so this file will fail to
@@ -17,7 +18,7 @@ describe('system-set-configure.test.ts', () => {
       const setA = defineSystemSet({ name: 'cfg-set-a' });
       const setB = defineSystemSet({ name: 'cfg-set-b' });
       const world = new World();
-      const r = world.configureSets({ set: setA, before: [setB] });
+      const r = world.configureSets(Update, { set: setA, before: [setB] });
       expect(r.ok).toBe(true);
     });
 
@@ -25,7 +26,7 @@ describe('system-set-configure.test.ts', () => {
       const setA = defineSystemSet({ name: 'cfg-set-c' });
       const setB = defineSystemSet({ name: 'cfg-set-d' });
       const world = new World();
-      const r = world.configureSets({ set: setA, after: [setB] });
+      const r = world.configureSets(Update, { set: setA, after: [setB] });
       expect(r.ok).toBe(true);
     });
 
@@ -34,7 +35,7 @@ describe('system-set-configure.test.ts', () => {
       const setB = defineSystemSet({ name: 'cfg-set-f' });
       const setC = defineSystemSet({ name: 'cfg-set-g' });
       const world = new World();
-      const r = world.configureSets({ set: setA, before: [setB], after: [setC] });
+      const r = world.configureSets(Update, { set: setA, before: [setB], after: [setC] });
       expect(r.ok).toBe(true);
     });
   });
@@ -46,9 +47,9 @@ describe('system-set-configure.test.ts', () => {
       const setC = defineSystemSet({ name: 'cumul-set-c' });
       const world = new World();
       // First call adds before edge.
-      world.configureSets({ set: setA, before: [setB] });
+      world.configureSets(Update, { set: setA, before: [setB] });
       // Second call adds after edge — accumulates, does not overwrite.
-      const r = world.configureSets({ set: setA, after: [setC] });
+      const r = world.configureSets(Update, { set: setA, after: [setC] });
       expect(r.ok).toBe(true);
     });
   });
@@ -59,7 +60,7 @@ describe('system-set-configure.test.ts', () => {
       const setB = defineSystemSet({ name: 'empty-ref-b' });
       const world = new World();
       // setB has no members — configureSets still returns ok (M2 expands to no-op).
-      const r = world.configureSets({ set: setA, before: [setB] });
+      const r = world.configureSets(Update, { set: setA, before: [setB] });
       expect(r.ok).toBe(true);
     });
 
@@ -67,7 +68,7 @@ describe('system-set-configure.test.ts', () => {
       const setA = defineSystemSet({ name: 'empty-ref-c' });
       const setB = defineSystemSet({ name: 'empty-ref-d' });
       const world = new World();
-      const r = world.configureSets({ set: setA, after: [setB] });
+      const r = world.configureSets(Update, { set: setA, after: [setB] });
       expect(r.ok).toBe(true);
     });
   });

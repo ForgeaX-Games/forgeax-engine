@@ -3,7 +3,7 @@
 > [!NOTE]
 > **LO original chapter**: [LearnOpenGL 2.lighting 3.1 Materials](https://learnopengl.com/Lighting/Materials)
 >
-> **Engine surface**: `createApp` + ECS components (`Transform`, `Camera`, `MeshFilter`, `MeshRenderer`, `PointLight`) + `MaterialAsset` (`shadingModel: 'standard'` / `'unlit'`) + `world.addSystem` for frame-level light animation + builtin `HANDLE_CUBE` mesh.
+> **Engine surface**: `createApp` + ECS components (`Transform`, `Camera`, `MeshFilter`, `MeshRenderer`, `PointLight`) + `MaterialAsset` (`shadingModel: 'standard'` / `'unlit'`) + `world.addSystem(Update, system)` for frame-level light animation + builtin `HANDLE_CUBE` mesh.
 
 ## What this example shows
 
@@ -48,7 +48,7 @@ pnpm --filter "@forgeax/app-learn-render-2-lighting-3-materials" preview
 | Camera | `Camera(glm::vec3(0.0f, 0.0f, 3.0f))` with Zoom=45 deg + WASD movement | Static `Transform` at `(0, 0, 3)` + `Camera` with `fov = π/4` |
 | Window + render loop | `glfwCreateWindow` + `while(!glfwWindowShouldClose)` | `createApp(canvas, opts)` from `@forgeax/engine-app` |
 | Vertex data | Manual `float vertices[]` with position + normal | Built-in `HANDLE_CUBE` procedural geometry |
-| Per-frame light update | `lightingShader.setVec3("light.diffuse", ...)` in C++ loop | `world.addSystem({ name: 'animated-light-color', fn, queries: [] })` |
+| Per-frame light update | `lightingShader.setVec3("light.diffuse", ...)` in C++ loop | `world.addSystem(Update, { name: 'animated-light-color', fn, queries: [] })` |
 
 ## Differences from the LearnOpenGL original
 

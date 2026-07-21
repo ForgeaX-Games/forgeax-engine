@@ -1,3 +1,4 @@
+import { Update } from '../src/schedule-token';
 // feat-20260618-ecs-module-mechanism M1 / w2 (AC-02):
 // After defineSystem, getRegisteredSystems() enumerates the descriptor by name
 // and the returned handle carries every descriptor field: queries / fn / after /
@@ -39,7 +40,7 @@ describe('define-system-registry.test.ts', () => {
 
     const world = new World();
     const set = defineSystemSet({ name: 'w2-set' });
-    world.addSystems(set, [handle]);
+    world.addSystems(Update, set, [handle]);
     expect(world.inspect().systems.find((system) => system.name === 'w2-full')?.sets).toEqual([
       'w2-set',
     ]);

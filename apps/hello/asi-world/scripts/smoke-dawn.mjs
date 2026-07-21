@@ -4,14 +4,9 @@
 //
 // What this smoke proves (structural-only; pixel-parity baseline regen
 // is verify-stage SSOT per plan-strategy §5.1 charter P5):
-//   1. A non-y-sort tilemap (mode 0 fold-eligible) collapses N per-cell
-//      entities into chunk-level instanced drawIndexed calls. The fold
-//      operator (M1 / w4) groups by (Layer.value, pos z, materialHandle)
-//      where Layer.value already encodes chunkIndex (research F-2).
-//   2. drawIndexed call count per frame falls dramatically below
-//      per-cell entity count (i.e. fold engaged; AC-02 lower-bound).
-//   3. `renderer.metrics.snapshot()['render.instancing.foldedDraws']`
-//      monotonically advances at >= 1/frame (M3 / w13 metric).
+//   1. A terrain tilemap produces chunk-level SpriteInstances entities.
+//   2. The SpriteInstances pipeline selects its per-instance-region shader
+//      variant and reaches a non-black framebuffer pixel.
 //
 // AC-02 anchor: requirements §4 AC-02 expects "non-y-sort draw count
 // approximately equals chunk count" for a 256x256 tilemap. The strict
@@ -26,8 +21,7 @@
 //   3. Synthesise a 32x32 RGBA tile atlas + register a TilesetAsset.
 //   4. Spawn one Tilemap (cols=64 rows=64 chunkSize=16 -> 16 chunks)
 //      with a single non-y-sort terrain TileLayer; every cell is
-//      filled so the chunk-extract system spawns 4096 per-cell
-//      entities. Fold target: 16 buckets per material -> ~16 draws.
+//      filled so the chunk-extract system spawns 16 chunk entities.
 //   5. Drive 120 frames; assert structural counters; report fold
 //      ratio.
 //
@@ -84,7 +78,7 @@ Object.defineProperty(globalThis.navigator, 'gpu', {
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
 
 let sharedDevice;
-let drawIndexedCallsThisFrame = 0;
+let drawCallsThisFrame = 0;
 
 function patchDeviceForRhiStats(dev) {
   const origCreateCommandEncoder = dev.createCommandEncoder.bind(dev);
@@ -95,8 +89,13 @@ function patchDeviceForRhiStats(dev) {
       const pass = origBeginRenderPass(passDesc);
       const origDrawIndexed = pass.drawIndexed.bind(pass);
       pass.drawIndexed = (...args) => {
-        drawIndexedCallsThisFrame++;
+        drawCallsThisFrame++;
         return origDrawIndexed(...args);
+      };
+      const origDraw = pass.draw.bind(pass);
+      pass.draw = (...args) => {
+        drawCallsThisFrame++;
+        return origDraw(...args);
       };
       return pass;
     };
@@ -198,8 +197,6 @@ if (!ready.ok) {
   await deferred(`renderer.ready failed: ${ready.error.code}`);
 }
 
-const assets = renderer.assets;
-
 // Synthetic 32x32 RGBA tile atlas (4 quadrants of 16x16). Registered via
 // the same handle path as the real asi-world demo.
 function buildSyntheticTileAtlas() {
@@ -268,12 +265,7 @@ const tileset = {
   ],
   tiles: [{ regionIndex: 0 }, { regionIndex: 1 }, { regionIndex: 2 }, { regionIndex: 3 }],
 };
-const tilesetResult = assets.register(tileset);
-if (!tilesetResult.ok) {
-  console.error(`[hello-asi-world smoke] tileset register failed: ${tilesetResult.error.code}`);
-  process.exit(1);
-}
-const tilesetHandle = tilesetResult.value;
+const tilesetHandle = world.allocSharedRef('TilesetAsset', tileset);
 
 const tilemap = world
   .spawn(
@@ -330,15 +322,16 @@ let framesDrawn = 0;
 let firstFrameDrawCount = 0;
 let lastFrameDrawCount = 0;
 for (let f = 0; f < TARGET_FRAMES; f++) {
-  drawIndexedCallsThisFrame = 0;
+  drawCallsThisFrame = 0;
   const r = renderer.draw([world], { owner: 0 });
   if (!r.ok) {
     console.error(`[hello-asi-world smoke] draw frame ${f}: ${r.error.code}`);
     process.exit(1);
   }
-  if (f === 0) firstFrameDrawCount = drawIndexedCallsThisFrame;
-  lastFrameDrawCount = drawIndexedCallsThisFrame;
+  if (f === 0) firstFrameDrawCount = drawCallsThisFrame;
+  lastFrameDrawCount = drawCallsThisFrame;
   framesDrawn += 1;
+  await delay(0);
 }
 
 const device = sharedDevice;
@@ -360,20 +353,42 @@ for (const arch of world.inspect().archetypes) {
   }
 }
 
-const metricsSnap = renderer.metrics.snapshot();
-const foldedDraws = metricsSnap['render.instancing.foldedDraws'] ?? 0;
+async function readCenterPixel() {
+  const bytesPerPixel = 4;
+  const bytesPerRow = Math.ceil((WIDTH * bytesPerPixel) / 256) * 256;
+  const readback = device.createBuffer({
+    size: bytesPerRow * HEIGHT,
+    usage: 0x01 | 0x08,
+  });
+  const encoder = device.createCommandEncoder();
+  encoder.copyTextureToBuffer(
+    { texture: renderTarget },
+    { buffer: readback, bytesPerRow, rowsPerImage: HEIGHT },
+    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+  );
+  device.queue.submit([encoder.finish()]);
+  await readback.mapAsync(0x01);
+  const bytes = new Uint8Array(readback.getMappedRange());
+  const offset = Math.floor(HEIGHT / 2) * bytesPerRow + Math.floor(WIDTH / 2) * bytesPerPixel;
+  const pixel = [bytes[offset] ?? 0, bytes[offset + 1] ?? 0, bytes[offset + 2] ?? 0];
+  readback.unmap();
+  readback.destroy();
+  return pixel;
+}
+
+const centerPixel = await readCenterPixel();
 
 console.log(`[hello-asi-world smoke] frames=${framesDrawn}`);
 console.log(`[hello-asi-world smoke] derivedPerCellEntities=${derivedCount} (expected ~${CELL_COUNT})`);
 console.log(
   `[hello-asi-world smoke] drawIndexed: first-frame=${firstFrameDrawCount} last-frame=${lastFrameDrawCount}`,
 );
-console.log(`[hello-asi-world smoke] foldedDraws metric=${foldedDraws}`);
+console.log(`[hello-asi-world smoke] centerPixel=${centerPixel.join(',')}`);
 
 const failures = [];
 if (framesDrawn < TARGET_FRAMES) failures.push(`(a) frames=${framesDrawn} < ${TARGET_FRAMES}`);
-if (derivedCount < CELL_COUNT)
-  failures.push(`(b) derived per-cell entity count=${derivedCount} < expected ${CELL_COUNT}`);
+if (derivedCount !== TOTAL_CHUNKS)
+  failures.push(`(b) derived chunk entity count=${derivedCount} !== expected ${TOTAL_CHUNKS}`);
 if (errors.length > 0) {
   const codes = errors.map((e) => e.code).join(',');
   failures.push(`(c) Renderer.onError fired ${errors.length} times: [${codes}]`);
@@ -383,27 +398,9 @@ if (errors.length > 0) {
 // count" assertion (that one is verify-stage SSOT once a real GPU
 // runner can produce stable counts); this gate just proves fold did
 // not bypass and did not collapse to zero draws.
-if (lastFrameDrawCount < 1) failures.push(`(d) lastFrameDrawCount=${lastFrameDrawCount} < 1`);
-if (lastFrameDrawCount >= derivedCount) {
-  failures.push(
-    `(e) lastFrameDrawCount=${lastFrameDrawCount} >= derived entity count=${derivedCount}; fold did not engage`,
-  );
-}
-// AC-06 smoke surface: foldedDraws metric must have advanced at least
-// once per frame (>=1 head bucket per frame, accumulated over loop).
-if (foldedDraws < framesDrawn) {
-  failures.push(
-    `(f) foldedDraws=${foldedDraws} < frames=${framesDrawn}; metric did not advance once per frame`,
-  );
-}
-// AC-02 informational only — log expected-vs-observed chunk ratio so
-// the verifier subagent can spot regressions without forcing a strict
-// equality (chunk-count varies with engine internals: padding chunks,
-// empty chunks, multi-material splits).
+if (Math.max(...centerPixel) < 16) failures.push(`(d) center pixel is black: ${centerPixel.join(',')}`);
 console.log(
-  `[hello-asi-world smoke] AC-02 informational: TOTAL_CHUNKS=${TOTAL_CHUNKS} ` +
-    `lastFrameDrawCount=${lastFrameDrawCount} ` +
-    `(fold ratio ~${(derivedCount / Math.max(1, lastFrameDrawCount)).toFixed(1)}x reduction)`,
+  `[hello-asi-world smoke] chunks=${TOTAL_CHUNKS} visible-draws=${lastFrameDrawCount}`,
 );
 
 if (failures.length > 0) {
@@ -414,8 +411,8 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[hello-asi-world smoke] PASS - ${derivedCount} per-cell entities folded to ` +
-    `${lastFrameDrawCount} draws/frame, foldedDraws=${foldedDraws}/${framesDrawn} frames`,
+  `[hello-asi-world smoke] PASS - ${derivedCount} chunk entities rendered in ` +
+    `${framesDrawn} frames`,
 );
 device.destroy?.();
 process.exit(0);

@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // feat-20260618-ecs-module-mechanism M2 / w9 (AC-15) + w10 (AC-16):
 //
 // After importing the 10 builtin systems (across 5 packages: runtime / input /
@@ -100,7 +101,7 @@ describe('builtin-systems.test.ts', () => {
     });
 
     it('register helpers add tokens without spread-over-fn (fn identity preserved)', () => {
-      // The migrated register fns call world.addSystem(Token) -- the schedule
+      // The migrated register fns call world.addSystem(Update, Token) -- the schedule
       // record's descriptor.fn must be the SAME function object as the
       // registry handle's fn (no {...handle, fn: closure} overlay).
       const registry = getRegisteredSystems();
@@ -133,7 +134,7 @@ describe('builtin-systems.test.ts', () => {
       registerAdvanceAnimationPlayer(world);
       // No AnimationPlayer entities -> queryRun yields nothing, resolver not
       // called, but the system runs (no throw) -- behaviour-unchanged baseline.
-      expect(() => world.update()).not.toThrow();
+      expect(world.update(1 / 60).ok).toBe(true);
       expect(resolverCalls).toBe(0);
     });
 
@@ -160,9 +161,9 @@ describe('builtin-systems.test.ts', () => {
         detach: () => {},
       });
       // token is non-generic in the aux path; addSystem consumes it directly.
-      world.addSystem(token as Parameters<World['addSystem']>[0]);
+      world.addSystem(Update, token as Parameters<World['addSystem']>[0]);
       expect(world.hasResource('InputSnapshot')).toBe(false);
-      world.update();
+      world.update(1 / 60).unwrap();
       expect(world.hasResource('InputSnapshot')).toBe(true);
       expect(sampleCalls).toBe(1);
     });
@@ -205,7 +206,7 @@ describe('builtin-systems.test.ts', () => {
 
       registerPropagateTransforms(world);
       registerAdvanceAnimationPlayer(world);
-      world.addSystems(InputSet, [InputFrameStartScan]);
+      world.addSystems(Update, InputSet, [InputFrameStartScan]);
       registerStatesPlugin(world);
       registerPhysicsSystems(world);
       registerPhysicsSystems2D(world);
@@ -276,7 +277,7 @@ describe('builtin-systems.test.ts', () => {
       world.setErrorHandler((error) => {
         captured = error;
       });
-      world.update();
+      world.update(1 / 60).unwrap();
       expect(captured).toBeInstanceOf(Error);
       expect((captured as Error).message).toContain(ANIMATION_ASSET_RESOLVER_KEY);
     });

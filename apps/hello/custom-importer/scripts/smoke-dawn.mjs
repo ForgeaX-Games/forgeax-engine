@@ -27,6 +27,8 @@
 //   (d) loadByGuid returned the typed blob (title + 3 reels) -- REAL load
 //   (e) NDC-region pixel distance to black > eps -- REAL use (cubes rendered)
 //   (f) Renderer.onError RhiError count == 0
+//   (g) malformed GUID is rejected before a known GUID loads in the same process
+//   (h) catalog-miss loadByGuid failure recovers to a known GUID in the same process
 //
 // AC-07 (no Importer.fold) is enforced by a separate grep gate in the w15
 // acceptanceCheck, not here.
@@ -290,7 +292,19 @@ if (assets === null || assets === undefined) {
 assets.loaders.register(reelGameBlobLoader());
 assets.configurePackIndex('/pack-index.json');
 
-// Step 4 (d): REAL load through the production fetch chain
+// Step 4: an adjacent malformed GUID must fail without poisoning the registry
+const malformedGuid = AssetGuid.parse('not-a-guid');
+const malformedGuidOk = !malformedGuid.ok && malformedGuid.error.code === 'pack-guid-malformed';
+
+// Step 5: a well-formed GUID missing from the production catalog must fail at load time.
+const catalogMissGuid = AssetGuid.parse('00000000-0000-4000-8000-000000000000');
+const catalogMissLoad = catalogMissGuid.ok
+  ? await assets.loadByGuid(catalogMissGuid.value)
+  : undefined;
+const catalogMissOk =
+  catalogMissGuid.ok && !catalogMissLoad?.ok && catalogMissLoad.error.code === 'asset-not-imported';
+
+// Step 6 (d): REAL recovery load through the production fetch chain
 const guidRes = AssetGuid.parse(REEL_GAME_LEVEL_1_GUID);
 if (!guidRes.ok) {
   console.error(`[smoke] FAIL - GUID parse failed: ${guidRes.error.code}`);
@@ -314,6 +328,17 @@ const loadOk =
   typeof blob.title === 'string' &&
   Array.isArray(blob.reels) &&
   blob.reels.length === 3;
+const recoveryOk = malformedGuidOk && catalogMissOk && loadOk;
+if (recoveryOk) {
+  console.log('[smoke] malformed GUID rejected: pack-guid-malformed; recovery load succeeded');
+  console.log('[smoke] catalog miss rejected: asset-not-imported; recovery load succeeded');
+} else {
+  console.error(
+    `[smoke] fault/recovery failed: malformed=${
+      malformedGuid.ok ? 'accepted' : malformedGuid.error.code
+    }, catalogMiss=${catalogMissLoad?.ok ? 'accepted' : catalogMissLoad?.error.code ?? 'parse-failed'}, recoveryLoad=${loadOk ? 'succeeded' : 'failed'}`,
+  );
+}
 
 // REAL use (e): spawn one cube per reel from the loaded blob
 const world = new World();
@@ -429,6 +454,9 @@ if (!structuralOk) {
 if (!loadOk) {
   failures.push('(d) loadByGuid did not return a typed reel-game blob with title + 3 reels (REAL load)');
 }
+if (!recoveryOk) {
+  failures.push('(g/h) malformed GUID or catalog-miss rejection did not recover to the known-GUID load in the same process');
+}
 if (maxDist <= SMOKE_PIXEL_THRESHOLD) {
   failures.push(
     `(e) all grid samples too close to black (maxDist ${maxDist.toFixed(4)} <= ${SMOKE_PIXEL_THRESHOLD}) -- scene not rendered from blob (REAL use)`,
@@ -449,7 +477,7 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `[smoke] PASS - 6 criteria GREEN: backend=webgpu, frames=${framesObserved}, pack-index reel-game-blob row present, loadByGuid returned typed blob (title + 3 reels), scene rendered (maxDist=${maxDist.toFixed(4)}), RhiError count=0`,
+  `[smoke] PASS - 8 criteria GREEN: backend=webgpu, frames=${framesObserved}, pack-index reel-game-blob row present, malformed GUID and catalog miss rejected then loadByGuid returned typed blob (title + 3 reels), scene rendered (maxDist=${maxDist.toFixed(4)}), RhiError count=0`,
 );
 
 device.destroy?.();

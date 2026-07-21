@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // feat-20260618-ecs-module-mechanism M3 / w21 (AC-06):
 // inState(token, variant) integration test -- defines a state token, builds a
 // system with runIf: inState(...), drives update(), and verifies the system
@@ -79,11 +80,11 @@ describe('conditions.test.ts', () => {
       const world = new World();
       registerStatesPlugin(world);
       setNextState(world, GameState, 'Playing');
-      world.update(); // First update: transitionStates applies setNextState.
-      world.addSystem(PlaySystem);
+      world.update(1 / 60).unwrap(); // First update: transitionStates applies setNextState.
+      world.addSystem(Update, PlaySystem);
 
       // Now Playing is active. Drive one more update -- the system should run.
-      world.update();
+      world.update(1 / 60).unwrap();
       expect(calls).toBe(1);
     });
 
@@ -101,8 +102,8 @@ describe('conditions.test.ts', () => {
       const world = new World();
       registerStatesPlugin(world);
       // Default state is 'Idle' -- not 'Active'.
-      world.addSystem(ActiveSystem);
-      world.update();
+      world.addSystem(Update, ActiveSystem);
+      world.update(1 / 60).unwrap();
 
       // runIf returns false, system body never executes.
       expect(calls).toBe(0);

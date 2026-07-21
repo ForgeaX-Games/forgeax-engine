@@ -1,3 +1,4 @@
+import { Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-state -- registerStatesPlugin (M2 / m2w2, M3 / m3w4)
 //
 // Idempotent plugin that inserts per-token Resources (State / NextState /
@@ -83,5 +84,5 @@ export function registerStatesPlugin(world: World): void {
   }
 
   // Register the transition system.
-  world.addSystems(StateSet, [TransitionStates]);
+  world.addSystems(Update, StateSet, [TransitionStates]);
 }

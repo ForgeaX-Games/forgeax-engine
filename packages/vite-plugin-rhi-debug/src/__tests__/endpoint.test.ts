@@ -5,7 +5,7 @@
 //   D-3 / AC-05).
 // w11: illegal body -> {error, hint} envelope, NO disk write (Fail Fast / AC-06).
 
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -177,6 +177,70 @@ describe('POST /__forgeax-debug/tape legal body (w10)', () => {
 
     expect(res.statusCode).toBe(200);
     expect(existsSync(join('.forgeax-debug', runId, 'frame-0.tape.bin'))).toBe(true);
+  });
+});
+
+// ─── reviewer artifact handoff ───────────────────────────────────────────────
+
+describe('GET /__forgeax-debug/artifact (viewport reviewer handoff)', () => {
+  it('serves only the requested capture artifact with CORS for the separate reviewer app', async () => {
+    const runId = 'reviewer-capture-1';
+    const outDir = join('.forgeax-debug', runId);
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(join(outDir, 'frame-0.tape.bin'), 'tape-data');
+    writeFileSync(join(outDir, 'frame-0.report.json'), '{"header":{},"events":[]}');
+
+    const handler = mountHandler();
+    const res = makeRes();
+    await handler(
+      makeReq({
+        url: `/__forgeax-debug/artifact?runId=${runId}&file=frame-0.tape.bin`,
+        method: 'GET',
+      }),
+      res,
+      () => {},
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['access-control-allow-origin']).toBe('http://localhost:15274');
+    expect(res.headers['content-type']).toBe('application/octet-stream');
+    expect(res.body).toBe('tape-data');
+  });
+
+  it('rejects traversal-shaped run IDs and non-capture files', async () => {
+    const handler = mountHandler();
+    const res = makeRes();
+    await handler(
+      makeReq({
+        url: '/__forgeax-debug/artifact?runId=../../secret&file=package.json',
+        method: 'GET',
+      }),
+      res,
+      () => {},
+    );
+
+    expect(res.statusCode).toBe(400);
+    // The reviewer is cross-origin, so it must be able to read the structured
+    // error instead of receiving an opaque browser CORS failure.
+    expect(res.headers['access-control-allow-origin']).toBe('http://localhost:15274');
+    expect(JSON.parse(res.body).error).toBe('invalid-capture-artifact');
+  });
+
+  it('keeps CORS on a missing capture so the reviewer receives the 404 envelope', async () => {
+    const handler = mountHandler();
+    const res = makeRes();
+    await handler(
+      makeReq({
+        url: '/__forgeax-debug/artifact?runId=missing-capture&file=frame-0.report.json',
+        method: 'GET',
+      }),
+      res,
+      () => {},
+    );
+
+    expect(res.statusCode).toBe(404);
+    expect(res.headers['access-control-allow-origin']).toBe('http://localhost:15274');
+    expect(JSON.parse(res.body).error).toBe('capture-artifact-not-found');
   });
 });
 

@@ -19,6 +19,7 @@
     "noUnusedParameters": true,
     "useDefineForClassFields": true,
     "resolveJsonModule": true,
+    "declaration": true,
     "emitDeclarationOnly": true
   }
 }

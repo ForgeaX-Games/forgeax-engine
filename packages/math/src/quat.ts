@@ -460,7 +460,7 @@ export function multiply(out: Quat, a: QuatLike, b: QuatLike): Quat {
  * @example
  * ```ts
  * // in an Update system: spin a cube about +Y at `speed` rad/s using the frame delta
- * const dt = world.getResource<{ dt: number }>('Time').dt;
+ * const dt = world.getResource(Time).delta;
  * const t = world.get(entity, Transform).unwrap();
  * quat.rotateAxis(t.quat, t.quat, [0, 1, 0], speed * dt); // in-place accumulate, no drift
  * world.set(entity, Transform, t);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { Update } from '@forgeax/engine-ecs';
 // apps/remote-demo/scripts/e2e-motion.mjs
 //
 // AC-13 end-to-end motion data assertion test
@@ -74,7 +75,7 @@ async function main() {
   logCase('spawn-entity', true, {});
 
   // Add a system that increments pos x each frame.
-  world.addSystem({
+  world.addSystem(Update, {
     name: 'move-x',
     queries: [],
     fn: () => {
@@ -87,7 +88,7 @@ async function main() {
   });
 
   // Advance 1 frame, verify pos x changed.
-  world.update();
+  world.update(1 / 60).unwrap();
   const afterOne = world.get(entityHandle, Transform);
   const pos1 = afterOne.ok ? afterOne.value.pos[0] : null;
   logCase('frame-advance-local', pos1 === 1, { px: pos1 });
@@ -160,7 +161,7 @@ async function main() {
   logCase('read-pos-n', posN !== null, { px: posN });
 
   // 6. Advance another frame.
-  world.update();
+  world.update(1 / 60).unwrap();
 
   // 7. Read position at frame N+1.
   let posN1 = null;

@@ -102,8 +102,8 @@ import { worldEntityKey } from './record/frame-snapshot';
 //      The shader's PER_INSTANCE_REGION=true variant reads per-instance
 //      UV from the instance buffer, not from the material UBO, so the
 //      placeholder is ignored at draw time.
-const atlasMaterialCache = new Map<string, number>();
-const atlasOnlyMaterialCache = new Map<string, number>();
+let atlasMaterialCache = new WeakMap<World, Map<string, number>>();
+let atlasOnlyMaterialCache = new WeakMap<World, Map<string, number>>();
 // tweak-20260714 M3 (plan-strategy §2 D-3): the terrain (sortScope='layer')
 // derived-entity tracker Map + first-frame-heuristic Set that used to live
 // alongside these material caches were retired once every derived entity
@@ -164,8 +164,8 @@ const layerChunkActive = new Map<number, Set<number>>();
  * TilesetAsset reload.
  */
 export function resetTilemapChunkExtractCache(): void {
-  atlasMaterialCache.clear();
-  atlasOnlyMaterialCache.clear();
+  atlasMaterialCache = new WeakMap<World, Map<string, number>>();
+  atlasOnlyMaterialCache = new WeakMap<World, Map<string, number>>();
 }
 
 /**
@@ -274,7 +274,9 @@ function resolveTilesetMaterial(world: World, tileset: TilesetAsset, regionIndex
   if (atlasHandle === undefined) return 0;
   const atlasId = unwrapHandle(atlasHandle as unknown as Handle<'TextureAsset', 'shared'>);
   const cacheKey = `${atlasId}|${regionIndex}`;
-  const cached = atlasMaterialCache.get(cacheKey);
+  const cache = atlasMaterialCache.get(world) ?? new Map<string, number>();
+  atlasMaterialCache.set(world, cache);
+  const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
 
   // Atlas-space rectangle -> normalised UV. M2 adds a half-texel inset
@@ -323,7 +325,7 @@ function resolveTilesetMaterial(world: World, tileset: TilesetAsset, regionIndex
     matPayload,
   );
   const id = unwrapHandle(matHandle);
-  atlasMaterialCache.set(cacheKey, id);
+  cache.set(cacheKey, id);
   return id;
 }
 
@@ -348,7 +350,9 @@ function resolveAtlasOnlyMaterial(world: World, tileset: TilesetAsset, atlasInde
   if (atlasHandle === undefined) return 0;
   const atlasId = unwrapHandle(atlasHandle as unknown as Handle<'TextureAsset', 'shared'>);
   const cacheKey = String(atlasId);
-  const cached = atlasOnlyMaterialCache.get(cacheKey);
+  const cache = atlasOnlyMaterialCache.get(world) ?? new Map<string, number>();
+  atlasOnlyMaterialCache.set(world, cache);
+  const cached = cache.get(cacheKey);
   if (cached !== undefined) return cached;
 
   const matPayload: MaterialAsset = {
@@ -375,7 +379,7 @@ function resolveAtlasOnlyMaterial(world: World, tileset: TilesetAsset, atlasInde
     matPayload,
   );
   const id = unwrapHandle(matHandle);
-  atlasOnlyMaterialCache.set(cacheKey, id);
+  cache.set(cacheKey, id);
   return id;
 }
 

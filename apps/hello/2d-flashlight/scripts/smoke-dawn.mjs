@@ -149,6 +149,7 @@ const {
   MeshFilter,
   MeshRenderer,
   PointLight,
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
   SpotLight,
   TONEMAP_NONE,
   Transform,
@@ -251,6 +252,7 @@ function allocMaterial(world, tint, texHandle, samplerHandle) {
         shader: 'forgeax::sprite-lit',
         tags: { LightMode: 'Forward' },
         queue: 3000,
+        renderState: { blend: SPRITE_PREMULTIPLIED_ALPHA_BLEND },
       },
     ],
     // paramValues field names align with sprite-lit.wgsl.meta.json paramSchema

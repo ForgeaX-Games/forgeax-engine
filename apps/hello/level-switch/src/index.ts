@@ -10,6 +10,7 @@
 //   7. HUD div shows the current state variant name
 
 import { createApp } from '@forgeax/engine-app';
+import { Update } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import type { MaterialAsset, SceneAsset } from '@forgeax/engine-types';
@@ -214,9 +215,13 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     __forgeax_level_switch_hud__: () => hud.textContent ?? '',
   });
 
-  app.registerUpdate(() => {
-    refreshHud();
-  });
+  world
+    .addSystem(Update, {
+      name: 'level-switch-refresh-hud',
+      queries: [],
+      fn: refreshHud,
+    })
+    .unwrap();
 
   // Keyboard handler: 1 -> tutorial, 2 -> street-a, 3 -> main-menu.
   // The map values are typed as the LevelId variant union, so a typo here is

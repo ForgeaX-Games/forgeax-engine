@@ -193,7 +193,7 @@ for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   if (i === CAPTURE_EARLY) earlyFrame = await capture(sharedDevice);
   if (i === CAPTURE_LATE) lateFrame = await capture(sharedDevice);
   // Advance scale, then propagate local Transform → world matrix. The app gets
-  // this through createApp's world.update(); the direct-draw smoke does it
+  // this through createApp's world.update(1 / 60).unwrap(); the direct-draw smoke does it
   // explicitly so extraction cannot read stale matrices.
   stepScale(world, FIXED_DT);
   propagateTransforms(world);

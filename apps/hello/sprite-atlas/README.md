@@ -5,11 +5,13 @@
 ## 4-step recipe (charter F1 progressive disclosure)
 
 ```ts
+import { Update } from '@forgeax/engine-ecs';
+
 // Step 1: createApp(canvas, opts) -- one-screen takeoff
 const appRes = await createApp(target, { clearColor: [0.07, 0.07, 0.09, 1] });
 
 // Step 2: add the sprite animation tick system to the schedule
-world.addSystem({
+world.addSystem(Update, {
   name: 'sprite-animation-tick',
   after: ['input-frame-start-scan'],
   queries: [],
@@ -167,7 +169,7 @@ git add -f apps/hello/sprite-atlas/scripts/reference-dawn-walk-frame-0.png
 
 - **`SpriteAnimation` is a 6-field ECS component** with dt-accumulator frame-advance and loop/clamp playback modes. AI users discover the 6-field shape through IDE autocomplete at the `world.spawn({ component: SpriteAnimation, data: { ... } })` call site (charter F1, AC-08).
 - **`SpriteRegionOverride` is a 1-field per-entity UV override** written by `spriteAnimationTickSystem` each frame. The shader computes `uv * region.zw + region.xy` -- a single float4 write replaces an entire material rebind per frame.
-- **`spriteAnimationTickSystem` is a standalone system function** (not a class method) that reads `SpriteAnimation + Time` and writes `SpriteRegionOverride`. Consumption pattern: `world.addSystem({ name: 'sprite-animation-tick', fn: () => spriteAnimationTickSystem(world) })`.
+- **`spriteAnimationTickSystem` is a standalone system function** (not a class method) that reads `SpriteAnimation + Time` and writes `SpriteRegionOverride`. Consumption pattern: `world.addSystem(Update, { name: 'sprite-animation-tick', fn: () => spriteAnimationTickSystem(world) })`.
 - **100 sprite instances share 1 atlas texture** via the `Instances` component (flat Float32Array of 100 mat4 transforms). RenderSystem emits 1 `drawIndexed` call per frame (charter P4 consistent abstraction).
 - **Atlas sidecar is a first-class text channel** (charter F2: text over image). Regions are defined in `walk.atlas.meta.json` as `{ name, uMin, vMin, uW, vH }`. If the atlas is regenerated upstream, the demo picks up new regions without source code edits.
 

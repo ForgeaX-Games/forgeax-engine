@@ -32,6 +32,11 @@ import {
 } from '@forgeax/engine-shader-compiler';
 import type { BindGroupLayoutDescriptor, ParamSchemaEntry } from '@forgeax/engine-types';
 import { loadEngineImportsMap } from './engine-imports-map.js';
+import { SHADER_MANIFEST_PATH } from './shader-manifest-path.js';
+import {
+  loadSharedEngineShaderManifest,
+  projectShaderManifestEntries,
+} from './shared-engine-inputs.js';
 import { toRollupLog } from './wrap.js';
 
 export type { ForgeaXShaderRollupLog } from './wrap.js';
@@ -52,20 +57,24 @@ export { toRollupLog } from './wrap.js';
  */
 export async function buildEngineShaderManifest(): Promise<{
   schemaVersion: string;
-  entries: Array<{ hash: string; wgsl: string; glsl: undefined; bindings: string }>;
+  entries: Array<{ hash: string; wgsl: string; glsl: ''; bindings: string }>;
   materialShaders: Array<{
     identifier: string;
     sourcePath: string;
     composedWgsl: string;
     paramSchema: string;
-    variants: readonly [];
+    variants: readonly {
+      definesKey: string;
+      defines: Record<string, boolean>;
+      composedWgsl: string;
+    }[];
   }>;
 }> {
   const eng = await loadEngineShaderEntries();
   const entries: Array<{
     hash: string;
     wgsl: string;
-    glsl: undefined;
+    glsl: '';
     bindings: string;
     uvSetCount: number;
   }> = [];
@@ -74,7 +83,11 @@ export async function buildEngineShaderManifest(): Promise<{
     sourcePath: string;
     composedWgsl: string;
     paramSchema: string;
-    variants: readonly [];
+    variants: readonly {
+      definesKey: string;
+      defines: Record<string, boolean>;
+      composedWgsl: string;
+    }[];
   }> = [];
   for (const file of [
     eng.defaultStandardPbr,
@@ -83,6 +96,7 @@ export async function buildEngineShaderManifest(): Promise<{
     eng.tonemap,
     eng.shadowCaster,
     eng.sprite,
+    eng.spriteLit,
     eng.msdfText,
     eng.iblEquirectToCube,
     eng.iblIrradiance,
@@ -102,36 +116,71 @@ export async function buildEngineShaderManifest(): Promise<{
     eng.bloomBlur,
     eng.bloomComposite,
   ]) {
-    const r = await compileShader(stripPragmas(file.source), {
-      id: file.id,
-      imports: eng.imports,
-      // POINT_SHADOW_AVAILABLE: turns on the @group(0) @binding(5) cube_array
-      // shadow atlas + binding(6) shadowParams uniform declarations in
-      // common.wgsl. The runtime PBR view BGL (buildPbrViewBglEntries) emits
-      // matching entries unconditionally; lit pipelines always include the
-      // bindings -- a 1x1x6 depth cube_array fallback (shadowAtlasFallbackView)
-      // is bound when no PointLightShadow snapshots are active so the cube
-      // sample returns 1.0 (fully lit) and AC-09 zero-shadow zero-allocation
-      // is preserved (the atlas itself is still lazy-allocated by ShadowAtlas).
-      defines: {
+    const axes = scanVariantAxes(file.source);
+    const variantDefines = axes.length === 0 ? [undefined] : cartesianDefines(axes);
+    const compiled = [] as Array<{
+      definesKey: string;
+      defines: Record<string, boolean>;
+      composedWgsl: string;
+      manifestEntry: { hash: string; wgsl: string; bindings: string | unknown };
+      uvSetCount: number;
+    }>;
+    for (const defines of variantDefines) {
+      const effectiveDefines = {
         STORAGE_BUFFER_AVAILABLE: true,
         POINT_SHADOW_AVAILABLE: true,
         PER_INSTANCE_REGION: false,
-      },
-    });
-    if (!r.ok) {
-      throw Object.assign(new Error(r.error.message), toRollupLog(r.error));
+        ...defines,
+      };
+      const r = await compileShader(
+        defines === undefined
+          ? stripPragmas(file.source)
+          : stripFalseImports(stripPragmas(file.source), defines),
+        {
+          id:
+            defines === undefined || buildVariantKey(defines) === ''
+              ? file.id
+              : `${file.id}#${buildVariantKey(defines)}`,
+          imports:
+            defines === undefined
+              ? eng.imports
+              : filterImportsByDefines(
+                  extractTransitiveImports(stripPragmas(file.source), eng.imports),
+                  stripPragmas(file.source),
+                  defines,
+                  axes,
+                ),
+          defines: effectiveDefines,
+        },
+      );
+      if (!r.ok) {
+        throw Object.assign(new Error(r.error.message), toRollupLog(r.error));
+      }
+      compiled.push({
+        definesKey: defines === undefined ? '' : buildVariantKey(defines),
+        defines: defines ?? {},
+        composedWgsl: r.value.manifestEntry.wgsl,
+        manifestEntry: r.value.manifestEntry,
+        uvSetCount: r.value.uvSetCount,
+      });
     }
-    const { manifestEntry } = r.value;
+    const baseVariantKey = axes.includes('PER_INSTANCE_REGION')
+      ? buildVariantKey(
+          Object.fromEntries(axes.map((axis) => [axis, axis !== 'PER_INSTANCE_REGION'])),
+        )
+      : buildEntryVariantKey(axes);
+    const primary = compiled.find((candidate) => candidate.definesKey === baseVariantKey);
+    if (primary === undefined) throw new Error(`no shader variant compiled for ${file.id}`);
+    const { manifestEntry } = primary;
     const bindingsJson =
       typeof manifestEntry.bindings === 'string'
         ? manifestEntry.bindings
         : JSON.stringify(manifestEntry.bindings);
-    const engineUvSetCount = r.value.uvSetCount;
+    const engineUvSetCount = primary.uvSetCount;
     entries.push({
       hash: manifestEntry.hash,
       wgsl: manifestEntry.wgsl,
-      glsl: undefined,
+      glsl: '',
       bindings: bindingsJson,
       uvSetCount: engineUvSetCount,
     });
@@ -152,7 +201,11 @@ export async function buildEngineShaderManifest(): Promise<{
         sourcePath: file.id,
         composedWgsl: manifestEntry.wgsl,
         paramSchema: paramSchemaJson,
-        variants: [],
+        variants: compiled.map(({ definesKey, defines, composedWgsl }) => ({
+          definesKey,
+          defines,
+          composedWgsl,
+        })),
       });
     }
   }
@@ -198,7 +251,7 @@ fn fullscreen_triangle(vertex_index : u32) -> FullscreenOutput {
     entries.push({
       hash,
       wgsl: composed,
-      glsl: undefined,
+      glsl: '',
       bindings: '[]',
       uvSetCount: 0,
     });
@@ -708,6 +761,7 @@ interface ViteDevServerLike {
   transformRequest(url: string): Promise<unknown>;
   readonly config?:
     | {
+        readonly base?: string | undefined;
         readonly build?:
           | {
               readonly rollupOptions?:
@@ -771,8 +825,6 @@ const VIRTUAL_BUNDLER_ID = 'virtual:forgeax/bundler';
  *   - configureServer middleware: '/' + SHADER_MANIFEST_PATH
  * (AC-12; plan-strategy D-4 q7-A SSOT).
  */
-const SHADER_MANIFEST_PATH = 'shaders/manifest.json';
-
 /**
  * Inline source returned by the `load` hook for `virtual:forgeax/bundler`.
  * The factory function `forgeaxBundlerAdapter` returns a plain object that is
@@ -1631,6 +1683,15 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
     // skip).
     async buildStart(this: MinimalPluginContext): Promise<void> {
       if (!wantEngineEntries) return;
+      const sharedManifest = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+      if (sharedManifest !== undefined) {
+        const shared = loadSharedEngineShaderManifest(sharedManifest);
+        for (const entry of shared.entries) {
+          state.entries.set(`shared:${entry.hash}`, { ...entry, uvSetCount: 0 });
+        }
+        state.materialShaders.push(...shared.materialShaders);
+        return;
+      }
       const eng = await loadEngineShaderEntries();
       // feat-20260523-shader-template-instance-split M5 / T09: pbr.wgsl is
       // retired; default-standard-pbr.wgsl is the engine PBR entry. The
@@ -1996,20 +2057,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
     //     the transform hook (independent assets convenient for human debugging);
     //     the manifest no longer repeats path fields.
     generateBundle(this: MinimalPluginContext): void {
-      const entries: Array<{
-        readonly hash: string;
-        readonly wgsl: string;
-        readonly glsl: undefined;
-        readonly bindings: string;
-      }> = [];
-      for (const [, entry] of state.entries) {
-        entries.push({
-          hash: entry.hash,
-          wgsl: entry.wgsl,
-          glsl: undefined,
-          bindings: entry.bindings,
-        });
-      }
+      const entries = projectShaderManifestEntries(state.entries);
       // Emit composed wgsl sidecar for each material-shader entry + its variants
       for (const ms of state.materialShaders) {
         // Default variant
@@ -2129,7 +2177,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
     //   4 fail-fast — the user sees a structured ShaderError rather than an
     //   empty manifest (II-5).
     configureServer(server: ViteDevServerLike): void {
-      const manifestUrl = `/${SHADER_MANIFEST_PATH}`;
+      const manifestUrl = `${server.config?.base ?? '/'}${SHADER_MANIFEST_PATH}`;
       server.middlewares.use(async (req, res, next) => {
         if (req.url !== manifestUrl) {
           next();
@@ -2143,20 +2191,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
           }
         }
 
-        const entries: Array<{
-          readonly hash: string;
-          readonly wgsl: string;
-          readonly glsl: undefined;
-          readonly bindings: string;
-        }> = [];
-        for (const [, entry] of state.entries) {
-          entries.push({
-            hash: entry.hash,
-            wgsl: entry.wgsl,
-            glsl: undefined,
-            bindings: entry.bindings,
-          });
-        }
+        const entries = projectShaderManifestEntries(state.entries);
         const payload = {
           schemaVersion: '1.0.0',
           entries,

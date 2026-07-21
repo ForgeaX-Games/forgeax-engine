@@ -6,7 +6,7 @@
 // spawnCamera on update 2 -- while the frame loop draws unconditionally every
 // frame. So the first ~2 frames drew with no Camera entity and fired the error.
 //
-// main.ts's fix (m6-2): after setNextStateForce(Title), pump world.update() until
+// main.ts's fix (m6-2): after setNextStateForce(Title), pump world.update(1 / 60).unwrap() until
 // Play is live (Camera spawned) BEFORE app.start(), so the very first drawn frame
 // already has a Camera. createApp's frame loop owns the draw, and there is no GPU
 // in a unit test, so this test cannot drive the real bootstrap end-to-end.
@@ -88,12 +88,11 @@ function cameraCount(world: World): number {
 // Play is live or the bound is hit. Returns the number of updates performed.
 function pumpBoot(world: World, state: BootState): number {
   void setNextStateForce(world, state, 'Title');
-  world.insertResource('Time', { dt: 1 / 60 });
   let updates = 0;
   for (let i = 0; i < BOOT_TRANSITION_PUMP_LIMIT; i++) {
     const s = getState(world, state);
     if (s.ok && s.value === 'Play') break;
-    world.update();
+    world.update(1 / 60).unwrap();
     updates += 1;
   }
   return updates;
@@ -110,8 +109,7 @@ describe('R-12 boot camera readiness (m6-6)', () => {
     // Play). The camera is not spawned yet -- this is exactly the window the
     // unconditional frame-loop draw fell into.
     void setNextStateForce(world, state, 'Title');
-    world.insertResource('Time', { dt: 1 / 60 });
-    world.update();
+    world.update(1 / 60).unwrap();
     expect(currentState(world, state)).toBe('Title' satisfies string);
     expect(cameraCount(world)).toBe(0);
   });

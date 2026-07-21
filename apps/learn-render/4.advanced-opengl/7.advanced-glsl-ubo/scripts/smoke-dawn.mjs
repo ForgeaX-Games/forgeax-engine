@@ -252,6 +252,14 @@ world.spawn(
 // rAF callback (createFrameLoop), so we drain the queue manually with a faked
 // monotonic clock. This exercises the real createApp frame path (NOT a manual
 // world.update + renderer.draw bypass).
+// Monkey-patch performance.now BEFORE app.start() so the frame-loop's initial
+// lastTimestamp reads the fake value, not a large real timestamp.
+// Otherwise the first tick computes a negative delta and world.update()
+// returns time-delta-invalid.
+let fakeNow = 0;
+const realPerformanceNow = globalThis.performance.now.bind(globalThis.performance);
+globalThis.performance.now = () => fakeNow;
+
 let crashed = false;
 const startRes = app.start();
 if (!startRes.ok) {
@@ -260,9 +268,6 @@ if (!startRes.ok) {
 }
 
 let framesObserved = 0;
-let fakeNow = 0;
-const realPerformanceNow = globalThis.performance.now.bind(globalThis.performance);
-globalThis.performance.now = () => fakeNow;
 try {
   for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
     const due = rafQueue.shift();

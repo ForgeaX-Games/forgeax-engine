@@ -1,9 +1,8 @@
 // @forgeax/engine-app -- GameContext / BootstrapContext + GameEntry / BootstrapEntry type aliases.
 //
 // GameContext is the narrow contract between the preview host (apps/preview/)
-// and game templates (templates/game-default/). It exposes exactly 4 readonly
-// fields: the ECS World, the AssetRegistry, the App handle, and a
-// registerUpdate callback registration method.
+// and game templates (templates/game-default/). It exposes the ECS World,
+// AssetRegistry, and App handle; per-frame work belongs to Update systems.
 //
 // BootstrapContext is the wider contract for the bootstrap(world, ctx?) entry
 // hook (D-2: world as first-class parameter, ctx carries non-world startup
@@ -95,15 +94,6 @@ export interface GameContext {
   /** The App handle for lifecycle introspection (e.g. app.onError). */
   readonly app: App;
   /**
-   * Register a per-frame update callback. The callback receives dt (the
-   * clamped delta-time in seconds) and executes between Time resource
-   * injection and world.update() every frame (plan-strategy D-1).
-   *
-   * Delegates to FrameLoopHandle.addUpdateCallback through the App proxy
-   * (plan-strategy D-2).
-   */
-  readonly registerUpdate: (fn: (dt: number) => void) => void;
-  /**
    * Controlled UI container for this run. Games must mount their DOM UI here
    * (`(ctx.uiRoot ?? document.body).appendChild(el)`) instead of appending
    * directly to `document.body`. In the embedded editor viewport the host
@@ -128,9 +118,9 @@ export interface GameContext {
  * world is the first parameter of bootstrap — not a field of this context.
  * The remaining surface is everything a game needs from the host after the
  * world already carries the defaultScene entities: the Renderer (optional,
- * some hosts may not provide it), the AssetRegistry, the App handle, and a
- * registerUpdate callback. Optional defaultSceneRoot / defaultScene fields
- * carry the host-instantiated scene when a defaultScene exists in forge.json.
+ * some hosts may not provide it), the AssetRegistry, and the App handle.
+ * Optional defaultSceneRoot / defaultScene fields carry the host-instantiated
+ * scene when a defaultScene exists in forge.json.
  */
 export interface BootstrapContext {
   /** The WebGPU Renderer (optional — some hosts may not expose it). */
@@ -139,8 +129,6 @@ export interface BootstrapContext {
   readonly assets: AssetRegistry;
   /** The App handle for lifecycle introspection. */
   readonly app: App;
-  /** Register a per-frame update callback (delegates to FrameLoopHandle). */
-  readonly registerUpdate: (fn: (dt: number) => void) => void;
   /** Synthetic root entity of the host-instantiated defaultScene. Carries the
    * SceneInstance component. Absent when the game has no defaultScene. */
   readonly defaultSceneRoot?: EntityHandle;

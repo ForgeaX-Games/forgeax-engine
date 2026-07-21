@@ -1,3 +1,4 @@
+import { Update } from '../schedule-token';
 // feat-20260614-ecs-shared-component-and-unique-rename M3 — SharedRefStore
 // red-green-refactor unit tests.
 //
@@ -240,7 +241,7 @@ describe('w8 World.allocSharedRef: facade + AC-16 type inference', () => {
     const e = world.spawn({ component: Material, data: { asset: handle } }).unwrap();
 
     let observedType: 'matched' | 'unmatched' = 'unmatched';
-    world.addSystem({
+    world.addSystem(Update, {
       name: 'shared-bundle-reader',
       queries: [{ with: [Material] }],
       fn: () => {

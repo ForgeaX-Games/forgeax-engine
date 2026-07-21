@@ -9,7 +9,7 @@
 // forgeax mapping — a MOTION demo over the managed motion front door (same shape
 // as apps/bevy/3d-rotation):
 //   - createApp -> owns the frame loop AND auto-inserts the 'Time' resource
-//     (world.getResource('Time').dt) before each world.update().
+//     (world.getResource(Time).delta) before each world.update().
 //   - world.addSystem -> an Update system that slides the cube each frame via the
 //     shared stepMove (which uses quat.right — the ergonomic local-basis accessor
 //     added in solo round 20260713-174912, mapping Bevy's transform.local_x()).
@@ -19,6 +19,7 @@
 // AND the dawn smoke), so the two never drift.
 
 import { createApp } from '@forgeax/engine-app';
+import { Time, Update } from '@forgeax/engine-ecs';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildTranslationWorld, stepMove } from './translation';
@@ -46,13 +47,13 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   buildTranslationWorld(app.world);
 
   // The Update system: slide every Movable each frame off the auto-provided
-  // Time.dt (Bevy's `add_systems(Update, move_cube)`).
-  app.world.addSystem({
+  // Time.delta (Bevy's `add_systems(Update, move_cube)`).
+  app.world.addSystem(Update, {
     name: 'move-cube',
     queries: [],
     fn: (world) => {
       const dt = world.hasResource('Time')
-        ? world.getResource<{ dt: number }>('Time').dt
+        ? world.getResource(Time).delta
         : 0;
       stepMove(world, dt);
     },

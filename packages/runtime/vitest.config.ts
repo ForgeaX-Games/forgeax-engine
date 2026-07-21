@@ -14,6 +14,10 @@ export default defineProject({
   test: {
     environment: 'node',
     name: '@forgeax/engine-runtime',
+    // Runtime unit files install incompatible WebGL/WASM module doubles. Keeping
+    // them in one process preserves Vitest's per-file isolation while preventing
+    // a real wgpu-wasm initialization from observing another file's mock canvas.
+    fileParallelism: false,
     // Exclude `*.browser.test.ts` / `*.dawn.test.ts` — those are owned by the
     // root `browser` / `dawn` vitest projects (K-3 split stance, root vitest.config.ts
     // §projects). Without this, per-package project's default include glob picks
