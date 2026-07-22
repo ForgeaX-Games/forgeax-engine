@@ -8,13 +8,26 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import type { Asset, ImportContext, ImportedAsset, Importer } from '@forgeax/engine-types';
+import type {
+  Asset,
+  ImportContext,
+  ImportedAsset,
+  Importer,
+  ImportResult,
+} from '@forgeax/engine-types';
+import { IMPORT_ERROR_HINTS, ImportError } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { type RunImportMeta, runImport } from '../import-runner.js';
 import { ImporterRegistry } from '../importer-registry.js';
 
 function stubImporter(key: string): Importer {
-  return { key, import: (_ctx: ImportContext): readonly ImportedAsset[] => [] };
+  return {
+    key,
+    import: (_ctx: ImportContext): ImportResult => ({
+      ok: true,
+      value: { assets: [], artifacts: [], sourceDependencies: [] },
+    }),
+  };
 }
 
 {
@@ -56,7 +69,13 @@ function stubImporter(key: string): Importer {
     impl: (ctx: ImportContext) => readonly ImportedAsset[] | Promise<readonly ImportedAsset[]>,
   ): ImporterRegistry {
     const reg = new ImporterRegistry();
-    reg.register({ key, import: impl });
+    reg.register({
+      key,
+      import: async (ctx) => ({
+        ok: true,
+        value: { assets: await impl(ctx), artifacts: [], sourceDependencies: [] },
+      }),
+    });
     return reg;
   }
 
@@ -111,7 +130,13 @@ function stubImporter(key: string): Importer {
 
       it('(e) importer-not-registered: no importer for meta.importer', async () => {
         const reg = new ImporterRegistry();
-        reg.register({ key: 'image', import: () => [] });
+        reg.register({
+          key: 'image',
+          import: () => ({
+            ok: true,
+            value: { assets: [], artifacts: [], sourceDependencies: [] },
+          }),
+        });
         const res = await runImport(meta('gltf', [GUID_A]), reg, okFs());
         expect(res.ok).toBe(false);
         if (!res.ok) {
@@ -163,18 +188,66 @@ function stubImporter(key: string): Importer {
           key: 'gltf',
           import: () => {
             invoked = 'gltf';
-            return [{ guid: GUID_A, kind: 'mesh', payload: MESH_POD, refs: [] }];
+            return {
+              ok: true,
+              value: {
+                assets: [{ guid: GUID_A, kind: 'mesh', payload: MESH_POD, refs: [] }],
+                artifacts: [],
+                sourceDependencies: [],
+              },
+            };
           },
         });
         reg.register({
           key: 'image',
           import: () => {
             invoked = 'image';
-            return [{ guid: GUID_A, kind: 'texture', payload: MESH_POD, refs: [] }];
+            return {
+              ok: true,
+              value: {
+                assets: [{ guid: GUID_A, kind: 'texture', payload: MESH_POD, refs: [] }],
+                artifacts: [],
+                sourceDependencies: [],
+              },
+            };
           },
         });
         await runImport(meta('image', [GUID_A]), reg, okFs());
         expect(invoked).toBe('image');
+      });
+
+      it('(j) importer failures preserve structured code and actionable hint', async () => {
+        const reg = new ImporterRegistry();
+        reg.register({
+          key: 'gltf',
+          import: () => ({
+            ok: false,
+            error: new ImportError({
+              code: 'source-read-failed',
+              expected: 'a readable source',
+              hint: IMPORT_ERROR_HINTS['source-read-failed'],
+              detail: { source: 'model.gltf', reason: 'ENOENT' },
+            }),
+          }),
+        });
+        const result = await runImport(meta('gltf', [GUID_A]), reg, okFs());
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.code).toBe('source-read-failed');
+          expect(result.error.hint).toContain('check the path');
+          expect(result.error.detail).toMatchObject({ source: 'model.gltf' });
+        }
+      });
+
+      it('(k) malformed importer results become structured internal errors', async () => {
+        const reg = new ImporterRegistry();
+        reg.register({ key: 'gltf', import: () => ({ ok: true }) as never });
+        const result = await runImport(meta('gltf', [GUID_A]), reg, okFs());
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.code).toBe('import-internal-error');
+          expect(result.error.hint).toContain('branch on err.detail');
+        }
       });
     });
   });
@@ -216,7 +289,15 @@ function stubImporter(key: string): Importer {
 
       it('fail-fast: register throws on empty key', () => {
         const reg = new ImporterRegistry();
-        expect(() => reg.register({ key: '', import: () => [] })).toThrow(TypeError);
+        expect(() =>
+          reg.register({
+            key: '',
+            import: () => ({
+              ok: true,
+              value: { assets: [], artifacts: [], sourceDependencies: [] },
+            }),
+          }),
+        ).toThrow(TypeError);
       });
 
       it('fail-fast: register throws when import is not a function', () => {

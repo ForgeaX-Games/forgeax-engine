@@ -133,6 +133,8 @@ export interface AppAssembleArgs {
  * default noise, but reachable when the AI user scrolls the type).
  */
 export interface CreateAppOptions {
+  /** Host-owned UI root whose events do not enter gameplay input. */
+  readonly uiRoot?: Node;
   /** Unified plugin list (M1 feat-20260623-plugin-system-unify-build-world-protocol). */
   readonly plugins?: Plugin[];
   /**

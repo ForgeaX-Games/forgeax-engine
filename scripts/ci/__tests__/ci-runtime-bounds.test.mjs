@@ -13,11 +13,11 @@ const uploadOptionalArtifact = readFileSync(
   'utf8',
 );
 
-test('primary coverage bounds Vitest workers on the shared self-hosted machine', () => {
+test('coverage-pnpm bounds Vitest workers on the shared self-hosted machine', () => {
   assert.match(workflow, /pnpm exec vitest run --maxWorkers=4 --typecheck --coverage/);
 });
 
-test('primary coverage uploads diagnostics only after a failed test run', () => {
+test('coverage-pnpm uploads diagnostics only after a failed test run', () => {
   assert.match(
     workflow,
     /- name: Upload coverage diagnostics on failure[\s\S]*?if: failure\(\)[\s\S]*?uses: \.\/\.github\/actions\/upload-optional-artifact/,

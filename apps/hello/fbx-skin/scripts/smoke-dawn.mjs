@@ -248,9 +248,15 @@ try {
 // through the inline meshLoader path; every loader accepts the typed arrays the
 // importer produced because the pack bytes are served in-memory (no JSON.stringify
 // round-trip flattens them).
+if (!imported.ok) {
+  console.error(`[smoke] FAIL - fbxImporter failed: ${imported.error.code}`);
+  process.exit(1);
+}
+
+const importedAssets = imported.value.assets;
 const PACK_URL = '/humanoid.pack.json';
 const PACK_INDEX_URL = '/pack-index.json';
-const packIndex = imported.map((a) => ({
+const packIndex = importedAssets.map((a) => ({
   guid: a.guid,
   relativeUrl: PACK_URL,
   kind: a.kind,
@@ -260,7 +266,7 @@ const packIndex = imported.map((a) => ({
 const packBody = {
   schemaVersion: 1,
   kind: 'external-asset-package',
-  assets: imported.map((a) => ({
+  assets: importedAssets.map((a) => ({
     guid: a.guid,
     kind: a.kind,
     payload: a.payload,

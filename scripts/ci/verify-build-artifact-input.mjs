@@ -316,7 +316,10 @@ function main() {
           'Rebuild shared-app-inputs so its serialized pack and compiled engine shader payload match the contract.',
         );
       }
-      if (!Array.isArray(manifest.payloadInventory)) {
+      if (
+        shared.payload.assetPayloadRoot !== undefined &&
+        !Array.isArray(manifest.payloadInventory)
+      ) {
         failShared(
           'ci-shared-input-payload-inventory-missing',
           'a serialized payload inventory array',
@@ -324,9 +327,10 @@ function main() {
           'Rebuild shared-app-inputs so consumers can project payloads without source rescans or shader compilation.',
         );
       }
-      const missingPayload = manifest.payloadInventory.find(
-        (path) => !existsSync(join(root, path)),
-      );
+      const missingPayload =
+        shared.payload.assetPayloadRoot === undefined
+          ? undefined
+          : manifest.payloadInventory.find((path) => !existsSync(join(root, path)));
       if (missingPayload !== undefined) {
         failShared(
           'ci-shared-input-payload-missing',

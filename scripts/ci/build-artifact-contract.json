@@ -66,6 +66,16 @@
         "app-dist-2"
       ]
     },
+    "coverage-pnpm": {
+      "description": "Vitest coverage and typecheck gate with perf-budget evidence",
+      "requiredArtifactClasses": [
+        "engine-dist",
+        "wasm-runtime",
+        "app-dist-0",
+        "app-dist-1",
+        "app-dist-2"
+      ]
+    },
     "vitest-browser": {
       "description": "Browser-based vitest tests (chromium WebGPU)",
       "requiredArtifactClasses": [
@@ -76,8 +86,28 @@
         "app-dist-2"
       ]
     },
+    "shared-inputs-browser": {
+      "description": "Preview asset catalog and Vite shader HMR browser probe",
+      "requiredArtifactClasses": [
+        "engine-dist",
+        "wasm-runtime",
+        "app-dist-0",
+        "app-dist-1",
+        "app-dist-2"
+      ]
+    },
     "smoke-fleet": {
       "description": "Dawn-node headless smoke tests (~50 demos)",
+      "requiredArtifactClasses": [
+        "engine-dist",
+        "wasm-runtime",
+        "app-dist-0",
+        "app-dist-1",
+        "app-dist-2"
+      ]
+    },
+    "bevy-smoke-fleet": {
+      "description": "Bevy Dawn-node build and smoke pairs",
       "requiredArtifactClasses": [
         "engine-dist",
         "wasm-runtime",
@@ -181,7 +211,43 @@
       "allowedNonArtifactPrerequisites": ["post-merge-gate"]
     },
     {
+      "jobIdentity": "shared-inputs-browser",
+      "requiredArtifactClasses": [
+        "engine-dist",
+        "wasm-runtime",
+        "app-dist-0",
+        "app-dist-1",
+        "app-dist-2"
+      ],
+      "artifactProvider": "build-artifacts",
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+    },
+    {
       "jobIdentity": "smoke-fleet",
+      "requiredArtifactClasses": [
+        "engine-dist",
+        "wasm-runtime",
+        "app-dist-0",
+        "app-dist-1",
+        "app-dist-2"
+      ],
+      "artifactProvider": "build-artifacts",
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+    },
+    {
+      "jobIdentity": "bevy-smoke-fleet",
+      "requiredArtifactClasses": [
+        "engine-dist",
+        "wasm-runtime",
+        "app-dist-0",
+        "app-dist-1",
+        "app-dist-2"
+      ],
+      "artifactProvider": "build-artifacts",
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+    },
+    {
+      "jobIdentity": "coverage-pnpm",
       "requiredArtifactClasses": [
         "engine-dist",
         "wasm-runtime",
@@ -297,7 +363,6 @@
     ],
     "payload": {
       "assetCatalog": "shared-app-inputs/assets/catalog.json",
-      "assetPayloadRoot": "shared-app-inputs/assets/payload",
       "engineShaderManifest": "shared-app-inputs/shaders/manifest.json"
     },
     "payloadClasses": ["shared-asset-pack", "shared-engine-shaders"]
@@ -307,8 +372,11 @@
     "shared-app-inputs",
     "build-artifacts",
     "primary-pnpm",
+    "coverage-pnpm",
     "vitest-browser",
+    "shared-inputs-browser",
     "smoke-fleet",
+    "bevy-smoke-fleet",
     "vitest-dawn",
     "webkit-fallback",
     "portability-bun",

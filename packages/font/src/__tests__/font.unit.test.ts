@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ImporterRegistry } from '@forgeax/engine-import';
-import type { ImportContext, ImportSubAsset } from '@forgeax/engine-types';
+import type { ImportContext, ImportedAsset, ImportSubAsset } from '@forgeax/engine-types';
 import { FontError } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type BakeAtlas, bakeFont, type MsdfGenerator, runCliFont } from '../cli-font.js';
@@ -216,7 +216,9 @@ async function findRealTtf(): Promise<string | undefined> {
           { guid: SAMPLER_GUID, sourceIndex: 1, kind: 'sampler' },
           { guid: FONT_GUID, sourceIndex: 0, kind: 'font' },
         ]);
-        const produced = await fontImporter.import(ctx);
+        const result = await fontImporter.import(ctx);
+        expect(result.ok).toBe(true);
+        const produced: readonly ImportedAsset[] = result.ok ? result.value.assets : [];
 
         const atlas = produced.find((a) => a.guid === ATLAS_GUID);
         expect(atlas?.kind).toBe('texture');
@@ -252,7 +254,9 @@ async function findRealTtf(): Promise<string | undefined> {
           { guid: SAMPLER_GUID, sourceIndex: 1, kind: 'sampler' },
           { guid: FONT_GUID, sourceIndex: 0, kind: 'font' },
         ]);
-        const produced = await fontImporter.import(ctx);
+        const result = await fontImporter.import(ctx);
+        expect(result.ok).toBe(true);
+        const produced: readonly ImportedAsset[] = result.ok ? result.value.assets : [];
 
         const atlas = produced.find((a) => a.guid === ATLAS_GUID);
         expect(atlas?.kind).toBe('texture');

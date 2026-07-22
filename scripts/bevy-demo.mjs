@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 // bevy-demo.mjs — create Bevy demo app shells and derive their CI smoke membership.
 //
 // An app's package.json#forgeax.bevyExample + smokeInvocation is the one per-example
@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join, relative, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { runnerResources, workspaceConcurrency } from './lib/runner-resources.mjs';
 
 const VALID_STATUS = new Set(['partial', 'implemented', 'shelved']);
 
@@ -304,34 +305,94 @@ function commandValidate(root) {
   process.stdout.write(`[ok] ${apps.length} Bevy demo package specs are valid\n`);
 }
 
-function commandSmokes(root, dryRun) {
+function parseConcurrency(value) {
+  if (value === 'auto') {
+    const { cpus, memoryBytes, containerized } = runnerResources();
+    const concurrency = Math.min(
+      4,
+      workspaceConcurrency({ cpus, memoryBytes, reserveGB: 2, workerGB: 2 }),
+    );
+    process.stderr.write(
+      `[bevy-smoke] auto concurrency=${concurrency} (${cpus} cpu, ${Math.ceil(memoryBytes / 1024 ** 3)}GB, ${containerized ? 'cgroup' : 'host'})\n`,
+    );
+    return concurrency;
+  }
+  const concurrency = Number(value);
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) {
+    fail(
+      'bevy-demo-concurrency-invalid',
+      'smoke concurrency is an integer from 1 to 16',
+      `got ${JSON.stringify(value)}`,
+    );
+  }
+  return concurrency;
+}
+
+function runPnpm(root, args) {
+  return new Promise((resolveRun) => {
+    const child = spawn('pnpm', args, { cwd: root, stdio: 'inherit' });
+    child.once('error', (error) => resolveRun({ status: null, error }));
+    child.once('exit', (code, signal) => resolveRun({ status: code, signal }));
+  });
+}
+
+async function runSmokePair(root, pkg) {
+  const args = ['--filter', pkg.name, 'build'];
+  process.stdout.write(`[bevy-smoke] pnpm ${args.join(' ')}\n`);
+  let result = await runPnpm(root, args);
+  if (result.status === 132) {
+    process.stderr.write(`[bevy-smoke] retrying ${pkg.name} build after native-tool exit 132\n`);
+    result = await runPnpm(root, args);
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `[bevy-smoke] ${pkg.name} build failed with ${result.error?.message ?? result.signal ?? result.status}`,
+    );
+  }
+  const smokeArgs = ['--filter', pkg.name, 'smoke'];
+  process.stdout.write(`[bevy-smoke] pnpm ${smokeArgs.join(' ')}\n`);
+  result = await runPnpm(root, smokeArgs);
+  if (result.status !== 0) {
+    throw new Error(
+      `[bevy-smoke] ${pkg.name} smoke failed with ${result.error?.message ?? result.signal ?? result.status}`,
+    );
+  }
+}
+
+async function commandSmokes(root, dryRun, concurrency) {
   const apps = validateDemoApps(root).filter((app) => app.spec.status === 'implemented');
-  for (const { pkg } of apps) {
-    for (const args of [
-      ['--filter', pkg.name, 'build'],
-      ['--filter', pkg.name, 'smoke'],
-    ]) {
-      process.stdout.write(`[bevy-smoke] pnpm ${args.join(' ')}\n`);
-      if (dryRun) continue;
-      let result = spawnSync('pnpm', args, { cwd: root, stdio: 'inherit' });
-      if (result.status === 132 && args.at(-1) === 'build') {
-        process.stderr.write(
-          `[bevy-smoke] retrying ${pkg.name} build after native-tool exit 132\n`,
-        );
-        result = spawnSync('pnpm', args, { cwd: root, stdio: 'inherit' });
-      }
-      if (result.status !== 0) process.exit(result.status ?? 1);
+  if (dryRun) {
+    for (const { pkg } of apps) {
+      process.stdout.write(`[bevy-smoke] pnpm --filter ${pkg.name} build\n`);
+      process.stdout.write(`[bevy-smoke] pnpm --filter ${pkg.name} smoke\n`);
     }
+  } else {
+    let next = 0;
+    let firstError;
+    async function worker() {
+      while (firstError === undefined) {
+        const app = apps[next++];
+        if (app === undefined) return;
+        try {
+          await runSmokePair(root, app.pkg);
+        } catch (error) {
+          firstError = error;
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, apps.length) }, () => worker()));
+    if (firstError !== undefined) throw firstError;
   }
   process.stdout.write(
-    `[ok] ${apps.length} implemented Bevy demo smoke entries completed${dryRun ? ' (dry run)' : ''}\n`,
+    `[ok] ${apps.length} implemented Bevy demo smoke entries completed${dryRun ? ' (dry run)' : ''} with concurrency=${concurrency}\n`,
   );
 }
 
-function main() {
+async function main() {
   const argv = process.argv.slice(2).filter((argument) => argument !== '--');
   let root = process.cwd();
   let dryRun = false;
+  let concurrency = 1;
   for (let i = 0; i < argv.length; ) {
     if (argv[i] === '--root') {
       const value = argv[i + 1];
@@ -342,6 +403,16 @@ function main() {
     } else if (argv[i] === '--dry-run') {
       dryRun = true;
       argv.splice(i, 1);
+    } else if (argv[i] === '--concurrency') {
+      const value = argv[i + 1];
+      if (value === undefined)
+        fail(
+          'bevy-demo-concurrency-required',
+          '--concurrency has a value',
+          'pass --concurrency <N>',
+        );
+      concurrency = parseConcurrency(value);
+      argv.splice(i, 2);
     } else {
       i++;
     }
@@ -349,7 +420,7 @@ function main() {
   const [command, argument] = argv;
   if (command === 'new') commandNew(root, argument);
   else if (command === 'validate') commandValidate(root);
-  else if (command === 'smokes') commandSmokes(root, dryRun);
+  else if (command === 'smokes') await commandSmokes(root, dryRun, concurrency);
   else
     fail(
       'bevy-demo-command-unknown',
@@ -360,7 +431,7 @@ function main() {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    main();
+    await main();
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

@@ -22,8 +22,8 @@
 //     resource bundle (active or fallback), returns the merged 14-entry
 //     array suitable for `device.createBindGroup`. Charter P5 minimal
 //     surface: this helper does NOT allocate samplers/textures itself.
-//   - createSkylightFallback(device, queue): allocate the 1x1-zero
-//     texture_cube * 2 + 1x1-zero rg16float brdfLut + intensity=0 uniform
+//   - createSkylightFallback(device, queue): allocate a 1x1 white
+//     irradiance/prefilter cube pair + a 1x1 BRDF approximation + intensity=0 uniform
 //     buffer + a shared linear/clamp sampler. Returns the resource bundle
 //     so createRenderer can wire it into PipelineState.skylightFallback;
 //     no stand-alone bindGroup is created (that was the round-2 shape).
@@ -327,8 +327,8 @@ export function assembleMaterialWithSkylightEntries(
 
 /**
  * Allocate the fallback Skylight resource bundle: 1x1 WHITE rgba16float
- * irradiance texture_cube + 1x1 all-zero rgba16float prefilter texture_cube +
- * 1x1 all-zero rg16float brdfLut + a 16-byte uniform buffer + a single
+ * irradiance/prefilter texture_cube pair + 1x1 rg16float BRDF approximation
+ * `[1, 0]` + a 16-byte uniform buffer + a single
  * linear / clamp-to-edge sampler reused across all three texture slots.
  *
  * Two regimes share this bundle (the per-frame Skylight uniform selects):
@@ -337,9 +337,9 @@ export function assembleMaterialWithSkylightEntries(
  *     -- physically black, no `if (hasSkylight)` shader branch (D-5 round-4).
  *   - Skylight with NO cubemap (downstream integration #4): record writes the
  *     user's intensity + color, so the WHITE irradiance gives an instant
- *     solid-color diffuse ambient with no async precompute. Specular stays 0
- *     (zero prefilter + brdfLut). A real cubemap swaps in the IBL views and
- *     this bundle is bypassed.
+ *     solid-color ambient and a neutral white specular reflection with no
+ *     async precompute. The 1x1 BRDF approximation is intentionally roughness
+ *     independent; a real cubemap swaps in the prefiltered IBL views and LUT.
  *
  * No stand-alone BindGroupLayout / BindGroup is created here -- those
  * roles moved into the PBR material BGL factory (D-5 round-4). The
@@ -385,8 +385,9 @@ export function createSkylightFallback(
   if (!irradianceTexResult.ok) throw irradianceTexResult.error;
   const irradianceTexture = irradianceTexResult.value;
 
-  // 1x1 all-zero rgba16float cube (prefilter fallback, mip0 only -- D-5
-  // permits a 1-mip stand-in because intensity=0 muzzles the result).
+  // 1x1 white rgba16float cube (prefilter fallback). A Skylight without an
+  // equirect is still a white environment, so its specular input must not be
+  // black just because the full prefilter bake is unavailable.
   const prefilterTexResult = device.createTexture({
     label: 'skylight-fallback-prefilter-cube',
     size: { width: 1, height: 1, depthOrArrayLayers: 6 },
@@ -401,7 +402,9 @@ export function createSkylightFallback(
   if (!prefilterTexResult.ok) throw prefilterTexResult.error;
   const prefilterTexture = prefilterTexResult.value;
 
-  // 1x1 all-zero rg16float brdfLut (2D, plan-strategy D-5).
+  // 1x1 rg16float BRDF approximation (A=1, B=0). This keeps the split-sum
+  // specular response non-zero for the white-environment fallback; a real IBL
+  // bake replaces it with the roughness/NdotV-dependent LUT.
   const brdfLutTexResult = device.createTexture({
     label: 'skylight-fallback-brdf-lut',
     size: { width: 1, height: 1, depthOrArrayLayers: 1 },
@@ -421,15 +424,11 @@ export function createSkylightFallback(
   // (matches the fallback-white pattern in createRenderer.ts). Destination
   // stays 1x1; only the row stride is padded.
   //
-  // downstream integration #4: the IRRADIANCE fallback is WHITE (half-float
-  // 1.0 = 0x3c00 per RGBA channel), not zero. A Skylight with no cubemap then
-  // samples flat white irradiance, so `ambient = kD * albedo * color *
-  // intensity` -- an instant solid-color ambient with no async precompute. The
-  // prefilter + brdfLut fallbacks stay ZERO (solid-color ambient is
-  // diffuse-only; no specular term). Crucially this does NOT light scenes that
-  // lack a Skylight: the per-frame Skylight uniform writes intensity 0 when no
-  // Skylight entity exists (render-system-record), and intensity 0 muzzles the
-  // white irradiance back to ambient 0.
+  // A Skylight with no cubemap represents a flat white environment. Both
+  // irradiance and prefilter are therefore white (half-float 1.0 = 0x3c00),
+  // while the BRDF fallback approximates `A=1, B=0`. Crucially this does NOT
+  // light scenes that lack a Skylight: the per-frame Skylight uniform writes
+  // intensity 0 when no Skylight entity exists (render-system-record).
   const whitePixel = new Uint8Array(FALLBACK_BYTES_PER_ROW);
   {
     const dv = new DataView(whitePixel.buffer);
@@ -439,8 +438,9 @@ export function createSkylightFallback(
     dv.setUint16(4, 0x3c00, true);
     dv.setUint16(6, 0x3c00, true);
   }
+  const brdfApproxPixel = new Uint8Array(FALLBACK_BYTES_PER_ROW);
+  new DataView(brdfApproxPixel.buffer).setUint16(0, 0x3c00, true);
   for (const face of [0, 1, 2, 3, 4, 5]) {
-    const zeroData = new Uint8Array(FALLBACK_BYTES_PER_ROW);
     queue.writeTexture(
       {
         texture: irradianceTexture as unknown,
@@ -457,24 +457,21 @@ export function createSkylightFallback(
         mipLevel: 0,
         origin: { x: 0, y: 0, z: face },
       },
-      zeroData,
+      whitePixel,
       { offset: 0, bytesPerRow: FALLBACK_BYTES_PER_ROW, rowsPerImage: 1 },
       { width: 1, height: 1, depthOrArrayLayers: 1 },
     );
   }
-  {
-    const data = new Uint8Array(FALLBACK_BYTES_PER_ROW);
-    queue.writeTexture(
-      {
-        texture: brdfLutTexture as unknown,
-        mipLevel: 0,
-        origin: { x: 0, y: 0, z: 0 },
-      },
-      data,
-      { offset: 0, bytesPerRow: FALLBACK_BYTES_PER_ROW, rowsPerImage: 1 },
-      { width: 1, height: 1, depthOrArrayLayers: 1 },
-    );
-  }
+  queue.writeTexture(
+    {
+      texture: brdfLutTexture as unknown,
+      mipLevel: 0,
+      origin: { x: 0, y: 0, z: 0 },
+    },
+    brdfApproxPixel,
+    { offset: 0, bytesPerRow: FALLBACK_BYTES_PER_ROW, rowsPerImage: 1 },
+    { width: 1, height: 1, depthOrArrayLayers: 1 },
+  );
 
   // Cube views over the depthOrArrayLayers=6 textures so the @group(1)
   // @binding(7,9) texture_cube bindings can sample them.

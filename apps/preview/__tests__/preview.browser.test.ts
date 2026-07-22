@@ -30,6 +30,8 @@ import { Camera, createDevImportTransport } from '@forgeax/engine-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { bootstrap } from '../../../templates/game-default/main';
+import { HUD_UI_GUID } from '../../../templates/game-default/src/hud';
+import { SETTINGS_UI_GUID } from '../../../templates/game-default/src/settings';
 
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -37,19 +39,25 @@ function nextFrame(): Promise<void> {
 
 describe('apps/preview e2e -- templates/game-default loads + renders error-free', () => {
   let canvas: HTMLCanvasElement;
+  let viewport: HTMLDivElement;
 
   beforeEach(() => {
     // The template reads `document.querySelector('#app')` and its
     // clientWidth/Height, so the canvas must be connected with a layout box.
+    viewport = document.createElement('div');
+    viewport.style.position = 'relative';
+    viewport.style.width = '320px';
+    viewport.style.height = '240px';
     canvas = document.createElement('canvas');
     canvas.id = 'app';
     canvas.style.width = '320px';
     canvas.style.height = '240px';
-    document.body.appendChild(canvas);
+    viewport.appendChild(canvas);
+    document.body.appendChild(viewport);
   });
 
   afterEach(() => {
-    canvas.remove();
+    viewport.remove();
   });
 
   it('createApp + bootstrap + 10 frames instantiates the scene, a Camera, and zero renderer errors', async () => {
@@ -59,6 +67,13 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     const app = appRes.value;
 
     const errors: string[] = [];
+    const uiFailures: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      const text = args.map(String).join(' ');
+      if (text.includes('UI load failed')) uiFailures.push(text);
+      originalError(...args);
+    };
     app.onError((e: { code?: string }) => {
       errors.push(e.code ?? '<unknown>');
     });
@@ -66,12 +81,44 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     const assets = app.renderer.assets;
     assets.configurePackIndex('/pack-index.json');
 
-    const ctx: BootstrapContext = { assets, app };
+    const uiRoot = document.createElement('div');
+    uiRoot.dataset.testUiRoot = 'preview-bootstrap';
+    viewport.appendChild(uiRoot);
+    const ctx: BootstrapContext = { assets, app, uiRoot };
 
     // bootstrap(world, ctx) awaits the scene loadByGuid<SceneAsset> +
     // instantiate; a throw here is a real failure (stale pack schema, missing
     // asset, broken instantiate).
-    await bootstrap(app.world, ctx);
+    try {
+      await bootstrap(app.world, ctx);
+    } finally {
+      console.error = originalError;
+    }
+    expect(uiFailures, `template UI load failures: ${uiFailures.join('; ')}`).toEqual([]);
+
+    const hudHost = uiRoot.querySelector<HTMLElement>(`[data-ui-asset="${HUD_UI_GUID}"]`);
+    const settingsHost = uiRoot.querySelector<HTMLElement>(`[data-ui-asset="${SETTINGS_UI_GUID}"]`);
+    expect(hudHost, 'bootstrap must mount the HUD UiAsset').not.toBeNull();
+    expect(settingsHost, 'bootstrap must mount the settings UiAsset').not.toBeNull();
+    const hudShadow = hudHost?.shadowRoot;
+    const settingsShadow = settingsHost?.shadowRoot;
+    expect(hudShadow, 'HUD mount must expose an open ShadowRoot').not.toBeNull();
+    expect(settingsShadow, 'settings mount must expose an open ShadowRoot').not.toBeNull();
+    expect(hudShadow?.querySelector('[data-ui-slot="score"]')?.textContent).toContain('Score');
+    expect(hudShadow?.querySelector('[data-ui-slot="hint"]')).not.toBeNull();
+    expect(hudShadow?.querySelector('[data-ui-action="open-settings"]')?.textContent).toContain('Settings');
+    const dialog = settingsShadow?.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog?.getAttribute('aria-labelledby')).toBe('settings-title');
+    expect(settingsShadow?.querySelector('[data-ui-setting="music"]')).not.toBeNull();
+    expect(settingsShadow?.querySelector('[data-ui-setting="high-contrast"]')).not.toBeNull();
+    const openSettings = hudShadow?.querySelector<HTMLButtonElement>('[data-ui-action="open-settings"]');
+    expect(openSettings).not.toBeNull();
+    openSettings?.click();
+    expect(dialog?.hidden).toBe(false);
+    const closeSettings = settingsShadow?.querySelector<HTMLButtonElement>('[data-ui-action="close-settings"]');
+    expect(closeSettings).not.toBeNull();
+    closeSettings?.click();
+    expect(dialog?.hidden).toBe(true);
 
     const startRes = app.start();
     expect(startRes.ok).toBe(true);
@@ -115,4 +162,5 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     const sutErrors = errors.filter((c) => SUT_ATTRIBUTABLE_CODES.has(c));
     expect(sutErrors, `SUT renderer errors: ${sutErrors.join(', ')}`).toEqual([]);
   });
+
 });

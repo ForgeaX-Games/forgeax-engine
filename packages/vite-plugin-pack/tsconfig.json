@@ -17,6 +17,7 @@
     { "path": "../image" },
     { "path": "../pack" },
     { "path": "../types" },
-    { "path": "../import" }
+    { "path": "../import" },
+    { "path": "../ui" }
   ]
 }

@@ -506,6 +506,25 @@ async function processMetaSidecar(
     }
   }
 
+  // importer === 'ui': UI author sources are imported lazily in dev and
+  // emitted as finalized JSON assets in builds. Keep each declared UiAsset
+  // discoverable in the catalog so the runtime can resolve its GUID and the
+  // dev transport can upgrade the row after POST /__import/:guid.
+  if (meta.importer === 'ui') {
+    const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
+    const normalizedUrl = withBase(base, sourceRel);
+    for (const sub of meta.subAssets) {
+      if (sub.kind !== 'ui') continue;
+      out.push({
+        guid: sub.guid,
+        relativeUrl: normalizedUrl,
+        kind: 'ui',
+        sourcePath: sourceRel,
+        name: subName(sub),
+      });
+    }
+  }
+
   // Host importer arm (P2 / feat-20260629 D-3/D-4): any importer key that is
   // not an engine built-in is a host importer. Fold is registry-driven --
   //   - registered (host wired it via `pluginPack({ importers })`): default

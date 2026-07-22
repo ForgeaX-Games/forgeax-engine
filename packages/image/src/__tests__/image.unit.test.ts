@@ -24,9 +24,18 @@ import type {
   EquirectAsset,
   ImageMeta,
   ImportContext,
+  ImportedAsset,
   ImportSubAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
+
+function unwrap(result: {
+  readonly ok: boolean;
+  readonly value?: { readonly assets: readonly ImportedAsset[] };
+}): readonly ImportedAsset[] {
+  return result.ok && result.value !== undefined ? result.value.assets : [];
+}
+
 import { describe, expect, it } from 'vitest';
 import { decodeImageFromFile } from '../decode-image-from-file.js';
 import { decodeHdr } from '../hdr-decoder.js';
@@ -494,7 +503,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
           },
         );
 
-        const produced = await imageImporter.import(ctx);
+        const produced = unwrap(await imageImporter.import(ctx));
         expect(produced.length).toBe(1);
         const asset = produced[0];
         expect(asset?.guid).toBe(BINS_GUID);
@@ -619,7 +628,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
           { guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' },
         ]);
 
-        const produced = await imageImporter.import(ctx);
+        const produced = unwrap(await imageImporter.import(ctx));
         expect(produced.length).toBe(1);
         const asset = produced[0];
         expect(asset?.guid).toBe(HDR_GUID);
@@ -641,7 +650,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
           { guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' },
         ]);
 
-        const produced = await imageImporter.import(ctx);
+        const produced = unwrap(await imageImporter.import(ctx));
         const payload = (produced[0] as { payload: EquirectAsset })?.payload;
         expect(payload.data.length).toBe(width * height * 4 * 2);
       });
@@ -651,7 +660,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         const ctx = makeHdrCtx('env.hdr', hdr, [
           { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
         ]);
-        const produced = await imageImporter.import(ctx);
+        const produced = unwrap(await imageImporter.import(ctx));
         expect(produced.length).toBe(0);
       });
 
@@ -694,7 +703,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         const ctx = makeHdrCtx('ENV.HDR', hdr, [
           { guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' },
         ]);
-        const produced = await imageImporter.import(ctx);
+        const produced = unwrap(await imageImporter.import(ctx));
         expect(produced.length).toBe(1);
         expect(produced[0]?.guid).toBe(HDR_GUID);
       });
@@ -750,7 +759,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
           },
         );
 
-        const produced = await imageImporter.import(ctx);
+        const produced = unwrap(await imageImporter.import(ctx));
         expect(produced.length).toBe(1);
         const asset = produced[0];
         expect(asset?.guid).toBe(IMP_GUID);
@@ -776,7 +785,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
             mipmap: 'none',
           },
         );
-        const produced = await imageImporter.import(ctx);
+        const produced = unwrap(await imageImporter.import(ctx));
         const payload = produced[0]?.payload as TextureAsset;
         expect(payload.format).toBe('rgba8unorm');
         expect(payload.colorSpace).toBe('linear');
@@ -787,7 +796,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
         const ctx = makeImpCtx('env.png', png, [
           { guid: IMP_GUID, sourceIndex: 0, kind: 'equirect' },
         ]);
-        const produced = await imageImporter.import(ctx);
+        const produced = unwrap(await imageImporter.import(ctx));
         expect(produced.length).toBe(0);
       });
     });

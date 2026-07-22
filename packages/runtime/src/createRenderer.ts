@@ -5496,7 +5496,7 @@ async function buildReadyWebGPU(
   // feat-20260520-skylight-ibl-cubemap M2 round-4 / t40 amend
   // (plan-strategy D-5 round-4 REVISED): allocate the fallback Skylight
   // identity resource bundle -- 1x1 all-zero rgba16float texture_cube * 2
-  // (irradiance + prefilter) + 1x1 all-zero rg16float brdfLut +
+  // (irradiance + prefilter) + 1x1 approximate rg16float brdfLut +
   // intensity=0 uniform buffer + a single linear/clamp sampler reused
   // across the three texture slots. No stand-alone BindGroupLayout /
   // BindGroup is allocated -- those roles moved into the PBR material

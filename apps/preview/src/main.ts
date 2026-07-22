@@ -20,9 +20,12 @@ import {
   loadGame,
 } from '@forgeax/engine-app';
 import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { createPreviewUiRun } from './ui-root';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('preview: missing <canvas id="app"> in index.html');
+
+const previewRun = createPreviewUiRun(canvas.parentElement ?? document.body);
 
 // Wire dev-mode ImportTransport so loadByGuid for raw-source assets in
 // templates/<slug>/scene.pack.json (and the engine-assets submodule's
@@ -30,13 +33,14 @@ if (!canvas) throw new Error('preview: missing <canvas id="app"> in index.html')
 // Absent transport => any DDC miss fails fast with 'asset-not-imported'.
 const app = await createApp(
   canvas,
-  {},
+  { uiRoot: previewRun.uiRoot },
   {
     ...forgeaxBundlerAdapter(),
     importTransport: createDevImportTransport(),
   },
 );
 if (!app.ok) {
+  previewRun.cleanup();
   reportCreateError(app.error);
   throw new Error('preview: createApp failed');
 }
@@ -52,6 +56,8 @@ const ctx: BootstrapContext = {
   // preview host delegates to the input backend's setPointerLockAllowed.
   // No lockProvider is injected — Web host goes W3C path.
   setPointerLockAllowed: (allowed: boolean) => app.value.input?.setPointerLockAllowed?.(allowed),
+  uiRoot: previewRun.uiRoot,
+  registerCleanup: previewRun.registerCleanup,
 };
 
 const slug = new URLSearchParams(window.location.search).get('game') ?? 'game-default';
@@ -67,6 +73,7 @@ const loaded = await loadGame(slug, (s) => {
   return loader();
 });
 if (!loaded.ok) {
+  previewRun.cleanup();
   reportLoadError(loaded.error);
   throw new Error('preview: loadGame failed');
 }
@@ -75,6 +82,7 @@ const entry: BootstrapEntry = loaded.value;
 try {
   await entry(app.value.world, ctx);
 } catch (e: unknown) {
+  previewRun.cleanup();
   console.error('[preview] bootstrap rejected:', e);
   throw e;
 }
@@ -88,6 +96,7 @@ const gracefulDispose = (): void => {
   disposed = true;
   app.value.stop();
   app.value.renderer.dispose();
+  previewRun.cleanup();
 };
 window.addEventListener('message', (ev) => {
   if ((ev.data as { type?: string } | null)?.type === 'VAG_PREVIEW_DISPOSE') {

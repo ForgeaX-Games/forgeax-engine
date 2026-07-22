@@ -198,6 +198,7 @@ function validContract(overrides = {}) {
       'post-merge-gate',
       'build-artifacts',
       'primary-pnpm',
+      'coverage-pnpm',
       'vitest-browser',
       'smoke-fleet',
       'vitest-dawn',

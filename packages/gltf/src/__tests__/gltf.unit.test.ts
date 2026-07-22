@@ -47,9 +47,17 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type {
   ImportContext,
   ImportError as ImportErrorType,
+  ImportedAsset,
   ImportSubAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
+
+function unwrap(result: {
+  readonly ok: boolean;
+  readonly value?: { readonly assets: readonly ImportedAsset[] };
+}): readonly ImportedAsset[] {
+  return result.ok && result.value !== undefined ? result.value.assets : [];
+}
 
 import { meshIrToMeshAsset, toMaterialAsset } from '../bridge.js';
 import { checkExtensions, EXTENSION_ALLOWLIST } from '../check-extensions.js';
@@ -1166,7 +1174,7 @@ import {
           decodeCalls: calls,
         });
 
-        const produced = await gltfImporter.import(ctx);
+        const produced = unwrap(await gltfImporter.import(ctx));
         expect(calls.length).toBe(1);
         expect(calls[0]?.mimeType).toBe('image/png');
 
@@ -1276,7 +1284,7 @@ import {
           decodeCalls: decCalls,
         });
 
-        const produced = await gltfImporter.import(ctx);
+        const produced = unwrap(await gltfImporter.import(ctx));
         const sibUris = sibCalls.map((c) => c.uri);
         expect(sibUris).toContain('CesiumLogoFlat.png');
         expect(sibUris).toContain('BoxTextured0.bin');
@@ -1378,7 +1386,7 @@ import {
           decodeCalls: calls,
         });
 
-        const produced = await gltfImporter.import(ctx);
+        const produced = unwrap(await gltfImporter.import(ctx));
         const tex = produced.find((p) => p.guid === TEX_GUID);
         expect(tex).toBeDefined();
         expect(tex?.kind).toBe('texture');
@@ -1410,7 +1418,7 @@ import {
         ],
         decodeCalls: [],
       });
-      const produced = await gltfImporter.import(ctx);
+      const produced = unwrap(await gltfImporter.import(ctx));
       const scene = produced.find((p) => p.guid === SCENE_GUID);
       expect(scene).toBeDefined();
       const meshRefs = scene?.refs.filter((r) => r.guid === MESH_GUID);
@@ -1445,7 +1453,7 @@ import {
         ],
         decodeCalls: [],
       });
-      const produced = await gltfImporter.import(ctx);
+      const produced = unwrap(await gltfImporter.import(ctx));
       const scene = produced.find((p) => p.guid === SCENE_GUID);
       expect(scene).toBeDefined();
       const meshRef = scene?.refs.find((r) => r.guid === MESH_GUID);
@@ -1469,7 +1477,7 @@ import {
         ],
         decodeCalls: [],
       });
-      const produced = await gltfImporter.import(ctx);
+      const produced = unwrap(await gltfImporter.import(ctx));
       const scene = produced.find((p) => p.guid === SCENE_GUID);
       expect(scene).toBeDefined();
       const texRef = scene?.refs.find((r) => r.guid === TEX_GUID);
@@ -1495,7 +1503,7 @@ import {
         ],
         decodeCalls: [],
       });
-      const produced = await gltfImporter.import(ctx);
+      const produced = unwrap(await gltfImporter.import(ctx));
       const mat = produced.find((p) => p.guid === MAT_GUID);
       expect(mat).toBeDefined();
       const parentRefs = mat?.refs.filter((r) => r.sourceField?.fieldName === 'parent');
@@ -1519,7 +1527,7 @@ import {
         ],
         decodeCalls: [],
       });
-      const produced = await gltfImporter.import(ctx);
+      const produced = unwrap(await gltfImporter.import(ctx));
       const mat = produced.find((p) => p.guid === MAT_GUID);
       expect(mat).toBeDefined();
       const texRef = mat?.refs.find((r) => r.guid === TEX_GUID);
@@ -1546,7 +1554,7 @@ import {
         ],
         decodeCalls: [],
       });
-      const produced = await gltfImporter.import(ctx);
+      const produced = unwrap(await gltfImporter.import(ctx));
       const scene = produced.find((p) => p.guid === SCENE_GUID);
       expect(scene).toBeDefined();
       for (const ref of scene?.refs ?? []) {

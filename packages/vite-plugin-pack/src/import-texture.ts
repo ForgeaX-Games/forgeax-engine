@@ -202,7 +202,14 @@ export async function importTextureEntry(
   };
   let produced: readonly { guid: string; payload: unknown }[];
   try {
-    produced = await imageImporter.import(ctx);
+    const importedResult = await imageImporter.import(ctx);
+    if (!importedResult.ok) {
+      return {
+        skipped: `failed to import texture ${entry.sourcePath}: ${importedResult.error.hint}`,
+        real: true,
+      };
+    }
+    produced = importedResult.value.assets;
   } catch (e) {
     return {
       skipped: `failed to import texture ${entry.sourcePath}: ${

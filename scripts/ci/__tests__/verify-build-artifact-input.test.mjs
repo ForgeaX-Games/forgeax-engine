@@ -425,6 +425,37 @@ test('w6: app shard accepts a complete compatible shared input manifest', () => 
   }
 });
 
+test('w6: app shard accepts catalog-only shared inputs without serialized payload', () => {
+  const { root, contractPath, manifestPath } = sharedInputFixture();
+  try {
+    const contract = JSON.parse(readFileSync(contractPath, 'utf8'));
+    contract.sharedInputs.payload = {
+      assetCatalog: 'shared-app-inputs/assets/catalog.json',
+      engineShaderManifest: 'shared-app-inputs/shaders/manifest.json',
+    };
+    writeFileSync(contractPath, JSON.stringify(contract), 'utf8');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifest.payload = contract.sharedInputs.payload;
+    delete manifest.payloadInventory;
+    writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+    const result = runVerifier([
+      '--consumer',
+      'app-shard',
+      '--root',
+      root,
+      '--contract',
+      contractPath,
+      '--shared-input-manifest',
+      manifestPath,
+      '--input-fingerprint',
+      'fixture-fingerprint',
+    ]);
+    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('w6: app shard rejects missing, stale, or mismatched shared input provenance', () => {
   for (const mutate of [
     (manifest) => delete manifest.inventory,

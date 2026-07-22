@@ -39,6 +39,9 @@
       "path": "./packages/pack"
     },
     {
+      "path": "./packages/ui"
+    },
+    {
       "path": "./packages/vite-plugin-pack"
     },
     {

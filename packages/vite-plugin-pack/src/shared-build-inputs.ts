@@ -11,6 +11,10 @@ export interface PackBuildInputOptions {
 export const SHARED_ASSET_PACK_CLASS = 'shared-asset-pack';
 export const SHARED_ASSET_PACK_CATALOG = 'shared-app-inputs/assets/catalog.json';
 
+function normalizeBasePrefix(base: string | undefined): string {
+  return (base ?? '/').replace(/\/$/, '');
+}
+
 /**
  * App-neutral pack inputs. The Vite plugin owns hook timing; this adapter owns
  * the configured source boundary and the app-local URL projection rule.
@@ -24,18 +28,18 @@ export function resolvePackBuildInputs(options: PackBuildInputOptions): {
     options.roots === undefined
       ? loadAssetConfig(cwd).roots
       : options.roots.map((root) => (resolve(root) === root ? root : join(cwd, root)));
-  return { roots, basePrefix: (options.base ?? '/').replace(/\/$/, '') };
+  return { roots, basePrefix: normalizeBasePrefix(options.base) };
 }
 
 export function projectPackIndexUrl(basePrefix: string, relativeUrl: string): string {
-  return `${basePrefix}/${relativeUrl}`;
+  return `${basePrefix}/${relativeUrl.replace(/^\/+/, '')}`;
 }
 
 export function projectSharedPackCatalog(
   catalog: readonly PackIndexEntry[],
   base: string | undefined,
 ): PackIndexEntry[] {
-  const basePrefix = (base ?? '/').replace(/\/$/, '');
+  const basePrefix = normalizeBasePrefix(base);
   return catalog.map((entry) => ({
     ...entry,
     relativeUrl: projectPackIndexUrl(basePrefix, entry.relativeUrl.replace(/^\/+/, '')),
@@ -44,15 +48,15 @@ export function projectSharedPackCatalog(
 
 export function loadSharedPackInput(manifestPath: string): {
   readonly catalog: readonly PackIndexEntry[];
-  readonly payloadRoot: string;
+  readonly payloadRoot: string | undefined;
 } {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
     readonly payload?: { readonly assetCatalog?: string; readonly assetPayloadRoot?: string };
   };
   const assetCatalog = manifest.payload?.assetCatalog;
   const assetPayloadRoot = manifest.payload?.assetPayloadRoot;
-  if (assetCatalog === undefined || assetPayloadRoot === undefined) {
-    throw new Error(`shared pack manifest lacks serialized payload: ${manifestPath}`);
+  if (assetCatalog === undefined) {
+    throw new Error(`shared pack manifest lacks asset catalog: ${manifestPath}`);
   }
   const artifactRoot = dirname(manifestPath);
   const repositoryRoot = dirname(artifactRoot);
@@ -60,6 +64,7 @@ export function loadSharedPackInput(manifestPath: string): {
     catalog: JSON.parse(
       readFileSync(resolve(repositoryRoot, assetCatalog), 'utf8'),
     ) as PackIndexEntry[],
-    payloadRoot: resolve(repositoryRoot, assetPayloadRoot),
+    payloadRoot:
+      assetPayloadRoot === undefined ? undefined : resolve(repositoryRoot, assetPayloadRoot),
   };
 }

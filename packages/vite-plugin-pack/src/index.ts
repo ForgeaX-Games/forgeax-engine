@@ -35,8 +35,14 @@ import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
 import { scan } from '@forgeax/engine-pack/scanner';
 import type { ImageMetadata, Importer, PackIndexEntry } from '@forgeax/engine-types';
+import { createUiImporter } from '@forgeax/engine-ui/importer';
 import { buildCatalog } from './build-catalog.js';
 import { compressArtifact } from './compress-artifact.js';
+import {
+  productAssetByGuid,
+  productAssetsByGuid,
+  projectUiBuildArtifacts,
+} from './import-products.js';
 import { importTextureEntry } from './import-texture.js';
 import {
   loadSharedPackInput,
@@ -44,6 +50,7 @@ import {
   projectSharedPackCatalog,
   resolvePackBuildInputs,
 } from './shared-build-inputs.js';
+import { dedupeFinalizedUiEntries, finalizeUiArtifact } from './ui-artifact-finalizer.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -372,6 +379,8 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   // undefined, and `loadByGuid` failed `asset-not-found` on the first scene /
   // mesh / material lookup.
   const metaPackBodies: Map<string, string> = new Map();
+  const uiArtifactBodies: Map<string, { readonly bytes: Uint8Array; readonly mimeType: string }> =
+    new Map();
   const DEV_PACK_PREFIX = '/__forgeax-ddc/';
 
   // Overlay the persistent imported rows over a freshly scanned raw catalog,
@@ -535,6 +544,58 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     if (!runResult.ok) throw runResult.error;
     if ('skipped' in runResult.value) return [];
 
+    if (meta.importer === 'ui') {
+      const guid = meta.subAssets[0]?.guid;
+      if (guid === undefined) return [];
+      const finalized = finalizeUiArtifact(runResult.value.product as never, {
+        artifactUrl: (artifact) => `/__ui/${guid}/${artifact.path}`,
+      });
+      if (!finalized.ok)
+        throw new ImportError({
+          code: 'import-internal-error',
+          expected: finalized.error.expected,
+          hint: finalized.error.hint,
+          detail: { reason: finalized.error.detail.token ?? finalized.error.code },
+        });
+      const htmlUrl = `/__ui/${guid}/index.html`;
+      uiArtifactBodies.set(htmlUrl, {
+        bytes: new TextEncoder().encode(finalized.value.asset.html),
+        mimeType: 'text/html',
+      });
+      uiArtifactBodies.set(`/__ui/${guid}/style.css`, {
+        bytes: new TextEncoder().encode(finalized.value.asset.css),
+        mimeType: 'text/css',
+      });
+      for (const artifact of runResult.value.product.artifacts) {
+        uiArtifactBodies.set(`/__ui/${guid}/${artifact.path}`, {
+          bytes: artifact.bytes,
+          mimeType: artifact.mimeType,
+        });
+      }
+      const uiRow = catalog.find((entry) => entry.guid.toLowerCase() === guid.toLowerCase());
+      if (uiRow !== undefined) {
+        // Runtime pack loading expects a JSON DDC body containing the typed
+        // asset payload. Keep the finalized HTML/CSS artifact routes for
+        // referenced resources, but point the catalog row at a dev pack body
+        // so loadByGuid can parse and register the UiAsset itself.
+        const packUrl = `${DEV_PACK_PREFIX}${guid.toLowerCase()}.pack.json`;
+        metaPackBodies.set(
+          packUrl,
+          JSON.stringify({
+            schemaVersion: '1.0.0',
+            kind: 'internal-text-package',
+            assets: [{ guid, kind: 'ui', payload: finalized.value.asset, refs: [] }],
+          }),
+        );
+        const updated = { ...uiRow, relativeUrl: packUrl };
+        importedRows.set(guid.toLowerCase(), updated);
+        const index = catalog.findIndex((entry) => entry.guid.toLowerCase() === guid.toLowerCase());
+        if (index >= 0) catalog[index] = updated;
+        return [updated];
+      }
+      return [];
+    }
+
     const { pack, bins } = runResult.value;
     const allEntries: PackIndexEntry[] = [];
 
@@ -578,7 +639,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         // from the imported TextureAsset payload so dev pack-index reflects
         // per-image truth (catalog default 'linear' is wrong for srgb
         // baseColors). Mirrors the generateBundle build-mode arm.
-        const importedAsset = pack.assets.find((a) => a.guid.toLowerCase() === guidLower);
+        const importedAsset = productAssetByGuid(runResult.value.product, guidLower);
         const importedPayload = importedAsset?.payload as
           | {
               colorSpace?: 'srgb' | 'linear';
@@ -618,7 +679,9 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           // Carry the DDC's outgoing dependency edges into the catalog row so
           // the Content Browser dependency graph sees them without re-fetching
           // the .pack.json body (feat: listCatalog refs).
-          ...(importedAsset?.refs !== undefined ? { refs: importedAsset.refs } : {}),
+          ...(importedAsset?.refs !== undefined
+            ? { refs: importedAsset.refs.map((ref) => ref.guid) }
+            : {}),
           compression: compressedBin.compression,
         };
         importedRows.set(guidLower, importedRow);
@@ -637,7 +700,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         // Carry the DDC's outgoing dependency edges (e.g. material -> texture,
         // scene -> mesh) into the catalog row so the Content Browser dependency
         // graph sees them without re-fetching the .pack.json body.
-        const nonBinAsset = pack.assets.find((a) => a.guid.toLowerCase() === guidLower);
+        const nonBinAsset = productAssetByGuid(runResult.value.product, guidLower);
         const importedRow: PackIndexEntry =
           packUrl !== undefined
             ? {
@@ -649,10 +712,12 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
                 // field-by-field rebuild would otherwise drop.
                 ...(raw.name !== undefined ? { name: raw.name } : {}),
                 ...(raw.metadata !== undefined ? { metadata: raw.metadata } : {}),
-                ...(nonBinAsset?.refs !== undefined ? { refs: nonBinAsset.refs } : {}),
+                ...(nonBinAsset?.refs !== undefined
+                  ? { refs: nonBinAsset.refs.map((ref) => ref.guid) }
+                  : {}),
               }
             : nonBinAsset?.refs !== undefined
-              ? { ...raw, refs: nonBinAsset.refs }
+              ? { ...raw, refs: nonBinAsset.refs.map((ref) => ref.guid) }
               : raw;
         importedRows.set(guidLower, importedRow);
         const idx = catalog.findIndex((e) => e.guid.toLowerCase() === guidLower);
@@ -688,6 +753,13 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   const importers = opts.importers ?? [];
   for (const imp of importers) {
     importerRegistry.register(imp);
+  }
+  // UiAsset author sources are a first-party pack product. Register the
+  // importer at the plugin boundary so every dev/build transport path shares
+  // the same registry even when an app only declares pluginPack({ roots }).
+  // Explicit host wiring may still replace it by key for tests or extensions.
+  if (importerRegistry.get('ui') === undefined) {
+    importerRegistry.register({ key: 'ui', ...createUiImporter() });
   }
   // P2 (feat-20260629 D-3): the host importer key set the catalog fold layer
   // uses to drive default passthrough vs raw-source rows. Engine built-in arms
@@ -903,10 +975,16 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             const watcher = fsWatch(root, { recursive: true }, (eventType, filename) => {
               if (filename === null) return;
               const isSidecar = filename.endsWith('.meta.json') || filename.endsWith('.pack.json');
-              const isSource = !isSidecar;
+              const isUi =
+                filename.endsWith('.ui.html') ||
+                filename.endsWith('.ui.css') ||
+                filename.endsWith('.woff2') ||
+                filename.endsWith('.webp') ||
+                filename.endsWith('.svg');
+              const isSource = !isSidecar && !isUi;
 
               const abs = resolve(root, filename);
-              if (isSidecar) pendingSidecars.set(abs, { filename, eventType });
+              if (isSidecar || isUi) pendingSidecars.set(abs, { filename, eventType });
               else if (isSource) pendingSources.set(abs, { filename, eventType });
               scheduleFlush();
             });
@@ -1053,7 +1131,14 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             const metaRaw = JSON.parse(await readFile(metaPath, 'utf-8')) as {
               importer?: string;
             };
-            isMultiAssetMeta = metaRaw.importer === 'gltf' || metaRaw.importer === 'fbx';
+            // UI author sources are products with companion artifacts. They
+            // must use the per-meta importer path so startMetaImport can
+            // finalize HTML/CSS and publish the in-memory /__ui payloads;
+            // treating them as textures returns an empty result (422).
+            isMultiAssetMeta =
+              metaRaw.importer === 'gltf' ||
+              metaRaw.importer === 'fbx' ||
+              metaRaw.importer === 'ui';
           } catch {
             // Unreadable meta — fall through to per-asset.
           }
@@ -1137,6 +1222,14 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       // `relativeUrl`; without this route the request would fall through to
       // Vite's default 404 (or, worse, hit the raw `.gltf` URL when the row
       // was not rewritten and serve gltf JSON, which has no `assets[]`).
+      const uiBody = uiArtifactBodies.get(url);
+      if (uiBody !== undefined) {
+        res.statusCode = 200;
+        res.setHeader('Content-Type', uiBody.mimeType);
+        res.end(uiBody.bytes);
+        return;
+      }
+
       if (url.startsWith(DEV_PACK_PREFIX)) {
         const body = metaPackBodies.get(url);
         if (body === undefined) {
@@ -1191,16 +1284,21 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     const sharedManifest = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
     if (sharedManifest !== undefined) {
       const shared = loadSharedPackInput(sharedManifest);
-      const emitted = new Set<string>();
-      for (const entry of shared.catalog) {
-        const outputPath = entry.relativeUrl.replace(/^\/+/, '');
-        if (emitted.has(outputPath)) continue;
-        emitted.add(outputPath);
-        this.emitFile({
-          type: 'asset',
-          fileName: outputPath,
-          source: readFileSync(resolve(shared.payloadRoot, outputPath)),
-        });
+      if (process.env.FORGEAX_SHARED_APP_INPUTS_MODE !== 'catalog-only') {
+        if (shared.payloadRoot === undefined) {
+          throw new Error(`shared pack manifest lacks payload for full mode: ${sharedManifest}`);
+        }
+        const emitted = new Set<string>();
+        for (const entry of shared.catalog) {
+          const outputPath = entry.relativeUrl.replace(/^\/+/, '');
+          if (emitted.has(outputPath)) continue;
+          emitted.add(outputPath);
+          this.emitFile({
+            type: 'asset',
+            fileName: outputPath,
+            source: readFileSync(resolve(shared.payloadRoot, outputPath)),
+          });
+        }
       }
       this.emitFile({
         type: 'asset',
@@ -1313,6 +1411,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     // each entry's GUID. Group entries by their declaring meta so we call
     // `runImport` once per meta (one pass produces all sub-assets).
     const guidSeen = new Set<string>();
+    const finalizedUiUrls = new Map<string, string>();
 
     for (const entry of importedEntries) {
       if (guidSeen.has(entry.guid.toLowerCase())) continue;
@@ -1410,12 +1509,56 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         continue;
       }
 
+      if (meta.importer === 'ui') {
+        const uiGuid = meta.subAssets[0]?.guid;
+        if (uiGuid === undefined) continue;
+        const artifactPaths = new Map<string, string>();
+        const transportArtifacts = projectUiBuildArtifacts(
+          runResult.value.product.artifacts,
+          (artifact) => artifact.path,
+        );
+        for (const artifact of transportArtifacts) {
+          const ref = this.emitFile({
+            type: 'asset',
+            name: artifact.path,
+            originalFileName: artifact.path,
+            source: artifact.bytes,
+          });
+          artifactPaths.set(artifact.path, this.getFileName(ref));
+        }
+        const finalized = finalizeUiArtifact(runResult.value.product as never, {
+          artifactUrl: (artifact) =>
+            projectPackIndexUrl(basePrefix, artifactPaths.get(artifact.path) ?? artifact.path),
+        });
+        if (!finalized.ok) {
+          throw new Error(
+            `[forgeax-pack] UI finalizer failed for ${metaPath}: ${finalized.error.code}`,
+          );
+        }
+        const uiRef = this.emitFile({
+          type: 'asset',
+          name: `${uiGuid}.ui.json`,
+          originalFileName: metaPath,
+          source: JSON.stringify(finalized.value.asset),
+        });
+        const uiPath = projectPackIndexUrl(basePrefix, this.getFileName(uiRef));
+        finalizedUiUrls.set(uiGuid.toLowerCase(), uiPath);
+        const rowIndex = importedEntries.findIndex(
+          (entry) => entry.guid.toLowerCase() === uiGuid.toLowerCase(),
+        );
+        if (rowIndex >= 0 && importedEntries[rowIndex] !== undefined) {
+          importedEntries[rowIndex] = { ...importedEntries[rowIndex], relativeUrl: uiPath };
+        }
+        continue;
+      }
+
       // Emit the .pack.json DDC as a Rollup asset. Use the same name-based
       // emit pattern as the image import step so Rollup assigns a hashed asset
       // path. The pack is a JSON string; we fold the binary (.bin) emission
       // into the same loop when `bins` is present (multi-bin, keyed by
       // lowercased GUID).
       const { pack, bins } = runResult.value;
+      const productByGuid = productAssetsByGuid(runResult.value.product);
       if ('pack' in runResult.value) {
         const packJson = JSON.stringify(pack);
         const packRefId = this.emitFile({
@@ -1437,13 +1580,13 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
               // Carry the DDC's outgoing dependency edges into the shipped
               // pack-index row so the prod Content Browser dependency graph
               // sees them without re-fetching the .pack.json body.
-              const ddcAsset = pack.assets.find(
-                (a) => a.guid.toLowerCase() === sub.guid.toLowerCase(),
-              );
+              const ddcAsset = productByGuid.get(sub.guid.toLowerCase());
               importedEntries[idx] = {
                 ...existing,
                 relativeUrl: projectPackIndexUrl(basePrefix, hashedPackPath),
-                ...(ddcAsset?.refs !== undefined ? { refs: ddcAsset.refs } : {}),
+                ...(ddcAsset?.refs !== undefined
+                  ? { refs: ddcAsset.refs.map((ref) => ref.guid) }
+                  : {}),
               };
             }
           }
@@ -1492,7 +1635,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           // Look up the imported texture's payload colorSpace + format from
           // the produced pack so the row metadata reflects per-image truth
           // rather than the catalog's safe-default fallback.
-          const importedAsset = pack.assets.find((a) => a.guid.toLowerCase() === guidLower);
+          const importedAsset = productByGuid.get(guidLower);
           const importedPayload = importedAsset?.payload as
             | {
                 colorSpace?: 'srgb' | 'linear';
@@ -1548,10 +1691,11 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       }
     }
 
+    const productionCatalog = dedupeFinalizedUiEntries(importedEntries, finalizedUiUrls);
     this.emitFile({
       type: 'asset',
       fileName: 'pack-index.json',
-      source: JSON.stringify(importedEntries),
+      source: JSON.stringify(productionCatalog),
     });
   }
 

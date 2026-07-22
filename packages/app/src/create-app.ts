@@ -464,6 +464,7 @@ async function createAppFromCanvas(
   const inputHandle =
     opts?.input === undefined
       ? attachInputAuto(canvas, world, {
+          ...(opts?.uiRoot ? { uiRoot: opts.uiRoot } : {}),
           ...(opts?.pointerLockAllowed ? { pointerLockAllowed: opts.pointerLockAllowed } : {}),
           ...(opts?.virtualJoysticks ? { virtualJoysticks: opts.virtualJoysticks } : {}),
           ...(opts?.inputMap ? { inputMap: opts.inputMap } : {}),

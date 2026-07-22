@@ -44,10 +44,23 @@ import {
   type InputSnapshot,
 } from '@forgeax/engine-input';
 import type { SceneAsset } from '@forgeax/engine-types';
-import { installHud, type ViewMode } from './src/hud';
+import { installHud, HUD_UI_GUID, type ViewMode } from './src/hud';
+import { createGameSettingsState, mountSettings, SETTINGS_UI_GUID } from './src/settings';
+import type { UiAsset, UiError, UiResult } from '@forgeax/engine-ui';
 
 /** Narrowed context for helper functions consuming world + optional assets/app. */
 type Ctx = { world: World; assets?: import('@forgeax/engine-runtime').AssetRegistry };
+
+async function loadUiAsset(ctx: BootstrapContext | undefined, guidText: string): Promise<UiResult<UiAsset>> {
+  const fail = (message: string): UiResult<UiAsset> => ({ ok: false, error: { code: 'invalid-asset', expected: 'a loadable UiAsset from the configured pack', hint: 'Check the UI GUID and dev pack transport.', detail: { message, asset: guidText } } });
+  if (!ctx?.assets) return fail('Asset registry is unavailable');
+  const guid = AssetGuid.parse(guidText);
+  if (!guid.ok) return fail(`Invalid UI GUID: ${guidText}`);
+  const loaded = await ctx.assets.loadByGuid<UiAsset>(guid.value);
+  if (loaded.ok) return loaded;
+  const runtimeError = loaded.error;
+  return fail(`${runtimeError.code}: ${runtimeError.hint}`);
+}
 
 // The scene's GUID (assets/scene.pack.json assets[0].guid; also forge.json
 // defaultScene). loadByGuid<SceneAsset>(this) pulls the scene AND recursively
@@ -438,14 +451,29 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // and left the HUD behind on Stop. Falls back to canvas.parentElement only when
   // the host does not provide a uiRoot (headless / older host).
   const hudHost = ctx?.uiRoot ?? canvas.parentElement ?? undefined;
+  let settings: ReturnType<typeof mountSettings> = null;
+  const [hudLoad, settingsLoad] = await Promise.all([
+    loadUiAsset(ctx, HUD_UI_GUID),
+    loadUiAsset(ctx, SETTINGS_UI_GUID),
+  ]);
+  const hudAsset = hudLoad.ok ? hudLoad.value : null;
+  const settingsAsset = settingsLoad.ok ? settingsLoad.value : null;
+  if (!hudLoad.ok) console.error(`[game] HUD UI load failed (${hudLoad.error.code}): ${hudLoad.error.detail.message}`);
+  if (!settingsLoad.ok) console.error(`[game] settings UI load failed (${settingsLoad.error.code}): ${settingsLoad.error.detail.message}`);
   const hud = installHud({
+    asset: hudAsset,
     initialMode: 'topdown',
     onToggle: () => setMode(mode === 'fps' ? 'topdown' : 'fps'),
+    onSettings: () => settings?.open(),
     ...(hudHost ? { host: hudHost } : {}),
+    ...(hudLoad.ok ? {} : { error: hudLoad.error }),
   });
   // Defensive teardown: even though the host removes uiRoot whole on Stop, register
   // the HUD's own dispose so any listeners/timers it owns unwind on ■ (A layer).
   ctx?.registerCleanup?.(() => hud.dispose());
+  const settingsState = createGameSettingsState();
+  settings = hudHost ? mountSettings(settingsAsset, hudHost, settingsState, canvas, settingsLoad.ok ? undefined : settingsLoad.error) : null;
+  ctx?.registerCleanup?.(() => settings?.dispose());
 
   // Boot the view mode NOW so the engine input backend learns the lock policy
   // BEFORE the first canvas click. Without this, `setMode` only ran on the HUD

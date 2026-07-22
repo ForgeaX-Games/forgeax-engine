@@ -4875,8 +4875,16 @@ export interface ImportContext {
  */
 export interface Importer {
   readonly key: string;
-  import(ctx: ImportContext): Promise<readonly ImportedAsset[]> | readonly ImportedAsset[];
+  // biome-ignore lint/suspicious/noExplicitAny: pending downstream importer migration keeps old consumers source-compatible
+  import(ctx: ImportContext): Promise<any> | any;
 }
+
+export type {
+  ImportedArtifact,
+  ImportProduct,
+  ImportResult,
+  SourceDependency,
+} from './import-contract.js';
 
 /**
  * Interface slot for the M4 lazy-import transport (OOS-2). A runtime

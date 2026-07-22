@@ -114,6 +114,8 @@ function makeAppError(
  * unchanged.
  */
 export interface InputAttachOptions {
+  /** Host-owned UI root used to route Shadow DOM events away from gameplay. */
+  readonly uiRoot?: Node;
   readonly pointerLockAllowed?: () => boolean;
   /** M3: virtual joystick configurations passed through to browser backend. */
   readonly virtualJoysticks?: readonly VirtualJoystickConfig[];
@@ -145,6 +147,7 @@ export function attachInputAuto(
   let onLockErrorDispatch: ((err: AppError) => void) | undefined;
 
   const backendOpts: BrowserInputBackendOptions = {
+    ...(options.uiRoot ? { uiRoot: options.uiRoot } : {}),
     ...(options.pointerLockAllowed ? { pointerLockAllowed: options.pointerLockAllowed } : {}),
     ...(options.virtualJoysticks ? { virtualJoysticks: options.virtualJoysticks } : {}),
     ...(options.lockProvider ? { lockProvider: options.lockProvider } : {}),

@@ -24,7 +24,7 @@
 // payload. The import runner folds the produced `ImportedAsset` into the DDC
 // `.pack.json` and rewrites the pack-index row's relativeUrl to it.
 
-import type { ImportContext, ImportedAsset, Importer } from '@forgeax/engine-types';
+import type { ImportContext, ImportedAsset, Importer, ImportResult } from '@forgeax/engine-types';
 import { REEL_GAME_BLOB_KIND, type ReelGameBlob } from './reel-game-blob';
 
 /**
@@ -35,20 +35,26 @@ import { REEL_GAME_BLOB_KIND, type ReelGameBlob } from './reel-game-blob';
 export function reelGameBlobImporter(): Importer {
   return {
     key: REEL_GAME_BLOB_KIND,
-    async import(ctx: ImportContext): Promise<readonly ImportedAsset[]> {
+    async import(ctx: ImportContext): Promise<ImportResult> {
       const sub = ctx.subAssets[0];
       if (sub === undefined) {
-        // Return [] so the runner attributes this precisely as
+        // Return no assets so the runner attributes this precisely as
         // `import-produced-no-assets` rather than a bare throw (charter P3).
-        return [];
+        return {
+          ok: true,
+          value: { assets: [], artifacts: [], sourceDependencies: [] },
+        };
       }
 
       const read = await ctx.readSource();
       if (!read.ok) {
         // The runner surfaces ctx.readSource() failures as `source-read-failed`
-        // when the importer returns [] after a read miss (charter P3 explicit
+        // when the importer returns no assets after a read miss (charter P3 explicit
         // failure; never parse a thrown .message).
-        return [];
+        return {
+          ok: true,
+          value: { assets: [], artifacts: [], sourceDependencies: [] },
+        };
       }
 
       const text = new TextDecoder().decode(read.value);
@@ -62,15 +68,22 @@ export function reelGameBlobImporter(): Importer {
 
       // Stamp the meta-declared GUID; the produced kind equals the sub.kind so
       // the pack-index row + the runtime loader dispatch on the same string.
-      return [
-        {
-          guid: sub.guid,
-          kind: REEL_GAME_BLOB_KIND,
-          name: 'reel-game-level-1',
-          payload: payload as unknown as ImportedAsset['payload'],
-          refs: [],
+      return {
+        ok: true,
+        value: {
+          assets: [
+            {
+              guid: sub.guid,
+              kind: REEL_GAME_BLOB_KIND,
+              name: 'reel-game-level-1',
+              payload: payload as unknown as ImportedAsset['payload'],
+              refs: [],
+            },
+          ],
+          artifacts: [],
+          sourceDependencies: [],
         },
-      ];
+      };
     },
   };
 }

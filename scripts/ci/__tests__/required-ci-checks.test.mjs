@@ -24,8 +24,14 @@ test('lists the exact direct CI contexts selected for the ruleset', () => {
   assert.deepEqual(REQUIRED_CHECK_NAMES, [
     'build-artifacts',
     'primary-pnpm',
+    'coverage-pnpm',
     'vitest-browser',
+    'shared-inputs-browser',
     'smoke-fleet',
+    'smoke-fleet-0',
+    'smoke-fleet-1',
+    'smoke-fleet-2',
+    'bevy-smoke-fleet',
     'vitest-dawn',
     'webkit-fallback',
     'portability-bun',
@@ -160,10 +166,10 @@ test('t7: REQUIRED_CHECK_NAMES includes build-artifacts as required context', ()
   );
 });
 
-test('t7: REQUIRED_CHECK_NAMES count is unchanged (9 direct checks)', () => {
+test('t7: REQUIRED_CHECK_NAMES includes every direct CI gate', () => {
   assert.strictEqual(
     REQUIRED_CHECK_NAMES.length,
-    9,
-    'REQUIRED_CHECK_NAMES must have exactly 9 entries — no new jobs added, no existing jobs removed',
+    15,
+    'REQUIRED_CHECK_NAMES must include the legacy smoke aggregate and matrix gates',
   );
 });

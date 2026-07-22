@@ -19,7 +19,8 @@ import { build } from 'vite';
 
 const HELP = `Build the shared app-neutral LearnOpenGL inputs for CI app shards.
 
-Shared scope: one asset catalog/payload and one engine built-in shader manifest.
+Shared scope: one asset catalog and one engine built-in shader manifest. The optional
+catalog-only mode intentionally omits serialized asset payload bytes for CI app shards.
 App boundary: each app still owns its final pack-index, deployment base, dev server,
 HMR, and custom shader entries. This command does not build an app deployment.
 
@@ -36,6 +37,7 @@ Options:
   --out <dir>          Output directory (default: shared-app-inputs)
   --asset-root <dir>   LearnOpenGL source root
   --shader-root <dir>  Engine shader source root
+  --catalog-only       Emit catalog metadata without serialized asset payload bytes
   --github-output <p>  Write the trusted producer fingerprint to this output file
 `;
 
@@ -54,6 +56,7 @@ const output = resolve(root, option('--out', 'shared-app-inputs'));
 const assetRoot = resolve(root, option('--asset-root', 'forgeax-engine-assets/learn-opengl'));
 const shaderRoot = resolve(root, option('--shader-root', 'packages/shader/src'));
 const githubOutput = option('--github-output', null);
+const catalogOnly = process.argv.includes('--catalog-only');
 const staging = join(output, '.build');
 const VIRTUAL_ENTRY = 'virtual:forgeax/shared-app-inputs-entry';
 const productionStartedAt = performance.now();
@@ -134,9 +137,11 @@ if (!statSync(catalogPath).isFile() || !statSync(shaderManifestPath).isFile()) {
 mkdirSync(join(output, 'assets'), { recursive: true });
 mkdirSync(join(output, 'shaders'), { recursive: true });
 cpSync(catalogPath, join(output, 'assets', 'catalog.json'));
-const payloadRoot = join(output, 'assets', 'payload');
-cpSync(assetRoot, join(payloadRoot, assetRootRelative), { recursive: true });
-cpSync(join(staging, 'assets'), join(payloadRoot, 'assets'), { recursive: true });
+if (!catalogOnly) {
+  const payloadRoot = join(output, 'assets', 'payload');
+  cpSync(assetRoot, join(payloadRoot, assetRootRelative), { recursive: true });
+  cpSync(join(staging, 'assets'), join(payloadRoot, 'assets'), { recursive: true });
+}
 cpSync(join(staging, 'shaders'), join(output, 'shaders'), { recursive: true });
 rmSync(staging, { recursive: true, force: true });
 
@@ -150,10 +155,14 @@ const manifest = {
   inventory: ['shared-app-inputs/assets/catalog.json', 'shared-app-inputs/shaders/manifest.json'],
   payload: {
     assetCatalog: 'shared-app-inputs/assets/catalog.json',
-    assetPayloadRoot: 'shared-app-inputs/assets/payload',
+    ...(catalogOnly ? {} : { assetPayloadRoot: 'shared-app-inputs/assets/payload' }),
     engineShaderManifest: 'shared-app-inputs/shaders/manifest.json',
   },
-  payloadInventory: inventory,
+  ...(catalogOnly
+    ? {}
+    : {
+        payloadInventory: inventory,
+      }),
 };
 writeFileSync(join(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 // These counters describe work this producer actually performed. Compressed artifact
@@ -164,9 +173,10 @@ const productionFacts = {
   producer: manifest.producer,
   inputFingerprint: manifest.inputFingerprint,
   cacheState: 'cold',
+  payloadMode: catalogOnly ? 'catalog-only' : 'full',
   sourceScanCount: 1,
   sourceFileCount: files(assetRoot).length,
-  payloadEmitCount: 2,
+  payloadEmitCount: catalogOnly ? 0 : 2,
   engineCompileCount: 1,
   buildDurationSeconds: Number(((performance.now() - productionStartedAt) / 1000).toFixed(3)),
 };

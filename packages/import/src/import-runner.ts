@@ -27,7 +27,7 @@ import type {
   ImageError,
   ImportContext,
   ImportError as ImportErrorType,
-  ImportedAsset,
+  ImportProduct,
   TextureAsset,
 } from '@forgeax/engine-types';
 import { IMPORT_ERROR_HINTS, ImportError } from '@forgeax/engine-types';
@@ -116,6 +116,7 @@ export type RunImportResult =
 export type RunImportOk =
   | { readonly skipped: 'shader' }
   | {
+      readonly product: ImportProduct;
       readonly pack: DdcPack;
       readonly bins?: ReadonlyMap<string, Uint8Array>;
     };
@@ -200,6 +201,20 @@ function joinSiblingPath(sourcePath: string, uri: string): string {
   return `${dir}${uri}`;
 }
 
+function normalizeDependencyPath(path: string): string {
+  const slash = path.replaceAll('\\', '/');
+  const parts: string[] = [];
+  for (const part of slash.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      parts.pop();
+    } else {
+      parts.push(part);
+    }
+  }
+  return parts.join('/');
+}
+
 function errResult(error: ImportErrorType): {
   readonly ok: false;
   readonly error: ImportErrorType;
@@ -240,15 +255,28 @@ export async function runImport(
     );
   }
 
+  const dependencies = new Set<string>();
+  const readSource = async (sourcePath: string) => {
+    dependencies.add(normalizeDependencyPath(sourcePath));
+    return fs.readSource(sourcePath);
+  };
+
   const readSibling = async (
     uri: string,
   ): Promise<
     | { readonly ok: true; readonly value: Uint8Array }
     | { readonly ok: false; readonly error: ImportErrorType }
   > => {
-    const inner = fs.readSibling
-      ? await fs.readSibling(meta.source, uri)
-      : await fs.readSource(joinSiblingPath(meta.source, uri));
+    let inner:
+      | { readonly ok: true; readonly value: Uint8Array }
+      | { readonly ok: false; readonly error: unknown }
+      | { readonly ok: false; readonly error: ImportErrorType };
+    if (fs.readSibling) {
+      dependencies.add(normalizeDependencyPath(joinSiblingPath(meta.source, uri)));
+      inner = await fs.readSibling(meta.source, uri);
+    } else {
+      inner = await readSource(joinSiblingPath(meta.source, uri));
+    }
     if (inner.ok) {
       return { ok: true, value: inner.value };
     }
@@ -286,7 +314,7 @@ export async function runImport(
 
   const ctx: ImportContext = {
     source: meta.source,
-    readSource: () => fs.readSource(meta.source),
+    readSource: () => readSource(meta.source),
     readSibling,
     decodeImage,
     subAssets: meta.subAssets,
@@ -296,7 +324,7 @@ export async function runImport(
   // Probe the source once up-front so a missing/unreadable source surfaces as
   // source-read-failed rather than as an opaque import-internal-error inside
   // the importer (charter P3 precise attribution).
-  const sourceProbe = await fs.readSource(meta.source);
+  const sourceProbe = await readSource(meta.source);
   if (!sourceProbe.ok) {
     return errResult(
       new ImportError({
@@ -314,9 +342,47 @@ export async function runImport(
     );
   }
 
-  let produced: readonly ImportedAsset[];
+  let product: ImportProduct;
   try {
-    produced = await importer.import(ctx);
+    const imported = (await importer.import(ctx)) as
+      | { readonly ok: boolean; readonly value?: ImportProduct; readonly error?: ImportErrorType }
+      | undefined;
+    if (
+      imported === undefined ||
+      imported === null ||
+      typeof imported !== 'object' ||
+      !('ok' in imported)
+    ) {
+      throw new Error(
+        'importer returned a legacy or malformed result; expected ImportResult<ImportProduct>',
+      );
+    } else {
+      if (!imported.ok) {
+        if (imported.error === undefined)
+          throw new Error('importer returned an invalid failure result');
+        if (imported.error instanceof ImportError) return errResult(imported.error);
+        return errResult(
+          new ImportError({
+            code: 'import-internal-error',
+            expected: `importer "${meta.importer}" to return a structured ImportError`,
+            hint: IMPORT_ERROR_HINTS['import-internal-error'],
+            detail: { reason: String(imported.error) },
+          }),
+        );
+      }
+      if (imported.value === undefined)
+        throw new Error('importer returned an invalid success result');
+      const value = imported.value;
+      if (
+        value === undefined ||
+        !Array.isArray(value.assets) ||
+        !Array.isArray(value.artifacts) ||
+        !Array.isArray(value.sourceDependencies)
+      ) {
+        throw new Error('importer returned an invalid ImportProduct');
+      }
+      product = value;
+    }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     // D-5: a module-LOAD failure rides `.detail.loadError`; a conversion THROW
@@ -341,6 +407,8 @@ export async function runImport(
       }),
     );
   }
+
+  const produced = product.assets;
 
   // GUID import-stable iron law: the produced GUID set must be a superset of
   // the declared set, and must not contain any GUID the meta never declared.
@@ -453,6 +521,10 @@ export async function runImport(
   return {
     ok: true,
     value: {
+      product: {
+        ...product,
+        sourceDependencies: [...dependencies],
+      },
       pack,
       ...(bins.size > 0 ? { bins } : {}),
     },

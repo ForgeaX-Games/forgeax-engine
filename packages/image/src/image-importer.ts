@@ -38,6 +38,7 @@ import type {
   ImportContext,
   ImportedAsset,
   Importer,
+  ImportResult,
   TextureAsset,
 } from '@forgeax/engine-types';
 import type { CompressionMode } from './ktx2-encode.js';
@@ -111,7 +112,7 @@ async function maybeEncodeTextureBytes(
   return result.value.ktx2;
 }
 
-async function importImage(ctx: ImportContext): Promise<readonly ImportedAsset[]> {
+async function importImage(ctx: ImportContext): Promise<ImportResult> {
   const read = await ctx.readSource();
   if (!read.ok) {
     throw new Error(
@@ -162,7 +163,7 @@ async function importImage(ctx: ImportContext): Promise<readonly ImportedAsset[]
       };
       out.push({ guid: sub.guid, kind: 'equirect', payload, refs: [] });
     }
-    return out;
+    return { ok: true, value: { assets: out, artifacts: [], sourceDependencies: [] } };
   }
 
   // --- Standard PNG/JPEG path ---
@@ -208,7 +209,7 @@ async function importImage(ctx: ImportContext): Promise<readonly ImportedAsset[]
     };
     out.push({ guid: sub.guid, kind: 'texture', payload, refs: [] });
   }
-  return out;
+  return { ok: true, value: { assets: out, artifacts: [], sourceDependencies: [] } };
 }
 
 /**

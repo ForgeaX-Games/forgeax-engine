@@ -2565,6 +2565,7 @@
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-input": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
       },
       "devDependencies": {
@@ -3196,6 +3197,17 @@
         "ws",
       ],
     },
+    "packages/ui": {
+      "name": "@forgeax/engine-ui",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^20.14.0",
+        "jsdom": "^26.0.0",
+      },
+    },
     "packages/vite-plugin-pack": {
       "name": "@forgeax/engine-vite-plugin-pack",
       "version": "0.0.0",
@@ -3203,6 +3215,7 @@
         "@forgeax/engine-codec": "workspace:*",
         "@forgeax/engine-image": "workspace:*",
         "@forgeax/engine-import": "workspace:*",
+        "@forgeax/engine-ui": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/engine-pack": "workspace:*",
@@ -3265,6 +3278,7 @@
         "@forgeax/engine-picking": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
+        "@forgeax/engine-ui": "workspace:*",
       },
       "devDependencies": {
         "@webgpu/types": "^0.1.71",
@@ -3737,6 +3751,8 @@
     "@forgeax/engine-state": ["@forgeax/engine-state@workspace:packages/state"],
 
     "@forgeax/engine-types": ["@forgeax/engine-types@workspace:packages/types"],
+
+    "@forgeax/engine-ui": ["@forgeax/engine-ui@workspace:packages/ui"],
 
     "@forgeax/engine-vite-plugin-pack": ["@forgeax/engine-vite-plugin-pack@workspace:packages/vite-plugin-pack"],
 

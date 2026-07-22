@@ -37,6 +37,7 @@ import type {
   ImportContext,
   ImportedAsset,
   Importer,
+  ImportResult,
   SamplerAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
@@ -99,7 +100,7 @@ function makeAtlasSampler(): SamplerAsset {
   };
 }
 
-async function importFont(ctx: ImportContext): Promise<readonly ImportedAsset[]> {
+async function importFont(ctx: ImportContext): Promise<ImportResult> {
   const read = await ctx.readSource();
   if (!read.ok) {
     throw new Error(
@@ -153,7 +154,7 @@ async function importFont(ctx: ImportContext): Promise<readonly ImportedAsset[]>
       ],
     });
   }
-  return out;
+  return { ok: true, value: { assets: out, artifacts: [], sourceDependencies: [] } };
 }
 
 /**

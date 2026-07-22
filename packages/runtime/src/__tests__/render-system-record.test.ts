@@ -1079,6 +1079,30 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(new Uint8Array(candidate)).toEqual(new Uint8Array(baseline));
     });
 
+    it('overlays non-opaque standard-PBR baseColor alpha over the opaque baseline', () => {
+      if (typeof mod.applyParamSnapshotToUbo !== 'function') {
+        throw new Error('helper not exported yet (red phase)');
+      }
+      if (typeof mod.buildPbrMaterialUboPayload !== 'function') {
+        throw new Error('buildPbrMaterialUboPayload missing -- baseline broken');
+      }
+      const material = {
+        baseColor: [0.5, 0.6, 0.7, 0.5],
+        metallic: 0,
+        roughness: 0.5,
+        materialShaderId: 'forgeax::default-standard-pbr',
+        paramSnapshot: undefined,
+      } as unknown as MaterialSnapshot;
+      const payload = mod.buildPbrMaterialUboPayload(material);
+      // The explicit baseline is intentionally opaque; importer-supplied
+      // paramSnapshot values must overwrite all four baseColor components.
+      expect(new Float32Array(payload)[3]).toBe(1);
+      mod.applyParamSnapshotToUbo(payload, STANDARD_PBR_SCHEMA, {
+        baseColor: [0.5, 0.6, 0.7, 0.5],
+      });
+      expect(new Float32Array(payload)[3]).toBe(0.5);
+    });
+
     it('honours f32 slot offsets independently (slot 1 width = 4 floats from metallic..extraChannel)', () => {
       if (typeof mod.applyParamSnapshotToUbo !== 'function') {
         throw new Error('helper not exported yet (red phase)');

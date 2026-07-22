@@ -1,6 +1,6 @@
 // fbx-importer.ts — TS wrapper around the ufbx WASM parser.
 
-import type { ImportContext, ImportedAsset, Importer } from '@forgeax/engine-types';
+import type { ImportContext, Importer, ImportResult } from '@forgeax/engine-types';
 import { fbxErr } from './errors.js';
 import { initFbxWasm, parseFbx } from './index.js';
 import { type FbxRawAnimDoc, parseAnimationClips } from './parse-animation-clip.js';
@@ -15,7 +15,7 @@ import { toAssetPack } from './to-asset-pack.js';
 export const fbxImporter: Importer = {
   key: 'fbx',
 
-  async import(ctx: ImportContext): Promise<readonly ImportedAsset[]> {
+  async import(ctx: ImportContext): Promise<ImportResult> {
     // ufbx WASM path: read raw FBX bytes via the import context (browser +
     // Node both resolve through readSource), then parse in-memory. No native
     // addon / SDK build step (the WASM module self-loads its .wasm).
@@ -73,15 +73,22 @@ export const fbxImporter: Importer = {
     const skin = parseSkin(doc);
     const animationClips = parseAnimationClips(doc);
 
-    return toAssetPack({
-      meshes,
-      scene,
-      materials,
-      textures,
-      skeleton,
-      skin,
-      animationClips,
-      subAssets: ctx.subAssets,
-    });
+    return {
+      ok: true,
+      value: {
+        assets: toAssetPack({
+          meshes,
+          scene,
+          materials,
+          textures,
+          skeleton,
+          skin,
+          animationClips,
+          subAssets: ctx.subAssets,
+        }),
+        artifacts: [],
+        sourceDependencies: [],
+      },
+    };
   },
 };

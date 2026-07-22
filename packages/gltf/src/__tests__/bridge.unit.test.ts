@@ -415,7 +415,7 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         }
       });
 
-      it('PBR material baseColor is RGB (3 elements), not RGBA', () => {
+      it('PBR material preserves RGBA baseColor, including blend opacity', () => {
         const samplerHandles = new Map([[0, FAKE_SAMPLER_HANDLE]]);
         const asset = toMaterialAsset(STANDARD_MATERIAL, {
           textureHandles: new Map(),
@@ -423,8 +423,22 @@ const STANDARD_MATERIAL: GltfMaterialIr = {
         });
 
         const baseColor = asset.paramValues?.baseColor as number[];
-        expect(baseColor).toHaveLength(3);
-        expect(baseColor).toEqual([0.8, 0.2, 0.1]);
+        expect(baseColor).toHaveLength(4);
+        expect(baseColor).toEqual([0.8, 0.2, 0.1, 1]);
+      });
+
+      it('BLEND material preserves baseColor alpha for the standard-PBR UBO overlay', () => {
+        const mat: GltfMaterialIr = {
+          ...STANDARD_MATERIAL,
+          baseColorFactor: [0.041667, 0.041667, 0.041667, 0.5],
+          alphaMode: 'BLEND',
+        };
+        const asset = toMaterialAsset(mat, {
+          textureHandles: new Map(),
+          samplerHandles: new Map(),
+        });
+
+        expect(asset.paramValues?.baseColor).toEqual([0.041667, 0.041667, 0.041667, 0.5]);
       });
 
       // feat-city-glb multi-UV tiling: baseColorTexture.texCoord -> uvSet param.

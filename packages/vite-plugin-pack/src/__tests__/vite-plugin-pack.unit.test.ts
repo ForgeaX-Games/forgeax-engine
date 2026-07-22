@@ -1253,7 +1253,14 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
           }
         }
 
-        return result;
+        return {
+          ok: true,
+          value: {
+            assets: result,
+            artifacts: [],
+            sourceDependencies: [],
+          },
+        };
       },
     };
   }

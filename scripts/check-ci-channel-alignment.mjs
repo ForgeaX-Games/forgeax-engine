@@ -220,17 +220,20 @@ function checkPnpmVersionFile(rootDir) {
 function runAlignmentCheck(ciYamlText, rootDir) {
   const issues = [];
   const primaryBlock = extractJobBlock(ciYamlText, PRIMARY_JOB);
+  const coverageBlock = extractJobBlock(ciYamlText, 'coverage-pnpm');
   const portabilityBlock = extractJobBlock(ciYamlText, PORTABILITY_JOB);
   if (!primaryBlock) issues.push(`jobs.${PRIMARY_JOB} block not found in ci.yml`);
   if (!portabilityBlock) issues.push(`jobs.${PORTABILITY_JOB} block not found in ci.yml`);
   if (issues.length) return issues;
   const primarySteps = extractStepRuns(primaryBlock);
+  const coverageSteps = coverageBlock ? extractStepRuns(coverageBlock) : [];
+  const primaryChannelSteps = [...primarySteps, ...coverageSteps];
   const portabilitySteps = extractStepRuns(portabilityBlock);
   const missingInPortability = [];
   const missingInPrimary = [];
   for (const gate of ALIGNED_GATES) {
     if (!gateMatchesJob(gate, portabilitySteps)) missingInPortability.push(gate.id);
-    if (!gateMatchesJob(gate, primarySteps)) missingInPrimary.push(gate.id);
+    if (!gateMatchesJob(gate, primaryChannelSteps)) missingInPrimary.push(gate.id);
   }
   const forbidden = findForbidden(portabilitySteps);
   if (missingInPortability.length) {
@@ -240,7 +243,7 @@ function runAlignmentCheck(ciYamlText, rootDir) {
   }
   if (missingInPrimary.length) {
     issues.push(
-      `Missing in jobs.${PRIMARY_JOB} (expected per AC-01 alignment): ${missingInPrimary.join(', ')}`,
+      `Missing in jobs.${PRIMARY_JOB}/coverage-pnpm (expected per AC-01 alignment): ${missingInPrimary.join(', ')}`,
     );
   }
   if (forbidden.length) {
@@ -400,8 +403,12 @@ function runOwnershipCheck({
 
   // (e) the unified primary coverage run contains --project=ecs-perf
   const priBlock = extractJobBlock(ciYamlText, PRIMARY_JOB);
+  const coverageBlock = extractJobBlock(ciYamlText, 'coverage-pnpm');
   if (priBlock) {
-    const steps = extractStepRuns(priBlock);
+    const steps = [
+      ...extractStepRuns(priBlock),
+      ...(coverageBlock ? extractStepRuns(coverageBlock) : []),
+    ];
     const vitestSteps = steps.filter(
       (s) => s.run.includes('vitest run') && s.run.includes('--typecheck'),
     );
@@ -416,15 +423,15 @@ function runOwnershipCheck({
       vitestSteps.some(
         (s) =>
           s.name.startsWith('Vitest coverage (v8) + typecheck') &&
-          s.ifExpression === "env.IS_FORK_PR != 'true'",
+          (s.ifExpression === "env.IS_FORK_PR != 'true'" || Boolean(coverageBlock)),
       );
     if (!isSingleOwner && !hasForkSplitOwners) {
       issues.push(
-        `[ownership] FAIL: primary-pnpm has ${vitestSteps.length} non-exclusive vitest+typecheck command(s) (channel: primary-pnpm)\n` +
-          `  Project: primary-pnpm\n` +
+        `[ownership] FAIL: primary-pnpm/coverage-pnpm has ${vitestSteps.length} non-exclusive vitest+typecheck command(s) (channel: primary-pnpm)\n` +
+          `  Project: primary-pnpm/coverage-pnpm\n` +
           `  W5: ${W5_PATH}\n` +
           `  W6: ${W6_PATH}\n` +
-          `  Expected: one owner, or the exact fork/unit and same-repo/coverage mutually exclusive pair — ` +
+          `  Expected: one owner across primary-pnpm/coverage-pnpm, or the exact fork/unit and same-repo/coverage mutually exclusive pair — ` +
           `deleting either owner would silently drop W5/W6 from one channel`,
       );
     }

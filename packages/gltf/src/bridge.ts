@@ -672,7 +672,7 @@ export interface MaterialBridgeContext {
  */
 export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext): MaterialAsset {
   const paramValues: Record<string, unknown> = {
-    baseColor: mat.baseColorFactor.slice(0, 3) as [number, number, number],
+    baseColor: mat.baseColorFactor,
     metallic: mat.metallicFactor,
     roughness: mat.roughnessFactor,
   };

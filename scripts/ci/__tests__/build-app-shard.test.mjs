@@ -388,8 +388,10 @@ test('repair: every build-artifact consumer uses the verified retry transport', 
   const workflow = readFileSync(workflowPath, 'utf8');
   for (const [job, output] of [
     ['primary-pnpm', 'artifact_ids'],
+    ['coverage-pnpm', 'artifact_ids'],
     ['vitest-browser', 'artifact_ids'],
     ['smoke-fleet', 'artifact_ids'],
+    ['bevy-smoke-fleet', 'artifact_ids'],
     ['portability-bun', 'artifact_ids'],
     ['metrics-validate', 'artifact_ids'],
     ['collectathon-boot-e2e', 'artifact_ids'],

@@ -6,6 +6,7 @@
 // synthetic/replay input composition.
 
 import type { InputBackend, InputBackendSample } from './input-snapshot';
+import { isUiOwnedEvent } from './ui-ownership';
 
 export interface CanvasInputBoundary {
   readonly editor: InputBackend;
@@ -13,6 +14,8 @@ export interface CanvasInputBoundary {
   owner(): 'editor' | 'game';
   grantGame(): void;
   revokeGame(): void;
+  /** Clear the active consumer when an event originated in the host UI. */
+  handleUiEvent(event: Event, host: Node): boolean;
   detach(): void;
 }
 
@@ -71,6 +74,11 @@ export function createCanvasInputBoundary(source: InputBackend): CanvasInputBoun
     owner: () => active,
     grantGame,
     revokeGame,
+    handleUiEvent: (event, host) => {
+      if (!isUiOwnedEvent(event, host)) return false;
+      clear();
+      return true;
+    },
     detach: () => source.detach(),
   };
 }

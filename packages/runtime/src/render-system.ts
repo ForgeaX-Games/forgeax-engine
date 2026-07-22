@@ -933,7 +933,7 @@ export interface PipelineState {
   /**
    * Fallback Skylight resource bundle (feat-20260520-skylight-ibl-cubemap
    * M2 round-2 / t40, plan-strategy D-5). 1x1 all-zero rgba16float
-   * texture_cube * 2 (irradiance + prefilter) + 1x1 all-zero rg16float
+   * texture_cube * 2 (irradiance + prefilter) + 1x1 approximate rg16float
    * brdfLut + intensity=0 16 B uniform buffer + 7-entry BindGroup compose
    * the @group(4) skylight binding for the "no Skylight ECS entity"
    * branch. The M4 round-2 recordFrame branch binds `bindGroup` when

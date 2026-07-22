@@ -90,3 +90,11 @@ export {
   INPUT_SNAPSHOT_RESOURCE_KEY,
   snapshotFromSample,
 } from './input-snapshot';
+export {
+  createUiInputResetBoundary,
+  isUiOwnedEvent,
+  resolveUiOwnership,
+  type UiInputResetBoundary,
+  type UiInputResetBoundaryOptions,
+  type UiOwnershipResult,
+} from './ui-ownership';

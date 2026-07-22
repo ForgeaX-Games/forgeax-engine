@@ -30,7 +30,8 @@
   "dependencies": {
     "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-image": "workspace:*",
-    "@forgeax/engine-import": "workspace:*"
+    "@forgeax/engine-import": "workspace:*",
+    "@forgeax/engine-ui": "workspace:*"
   },
   "peerDependencies": {
     "@forgeax/engine-pack": "workspace:*",

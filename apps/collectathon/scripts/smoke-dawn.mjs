@@ -208,11 +208,17 @@ try {
   process.exit(1);
 }
 
-const hasSkeleton = fbxResults.some((a) => a.kind === 'skeleton');
-const hasSkin = fbxResults.some((a) => a.kind === 'skin');
-const hasAnimation = fbxResults.some((a) => a.kind === 'animation-clip');
-const meshAsset = fbxResults.find((a) => a.kind === 'mesh');
-const matAsset = fbxResults.find((a) => a.kind === 'material');
+if (!fbxResults.ok) {
+  console.error(`[smoke] FAIL - fbxImporter failed: ${fbxResults.error.code}`);
+  process.exit(1);
+}
+
+const importedAssets = fbxResults.value.assets;
+const hasSkeleton = importedAssets.some((a) => a.kind === 'skeleton');
+const hasSkin = importedAssets.some((a) => a.kind === 'skin');
+const hasAnimation = importedAssets.some((a) => a.kind === 'animation-clip');
+const meshAsset = importedAssets.find((a) => a.kind === 'mesh');
+const matAsset = importedAssets.find((a) => a.kind === 'material');
 console.log(`[smoke] humanoid skeleton=${hasSkeleton} skin=${hasSkin} animation=${hasAnimation}`);
 
 // Parent: kinematic capsule + CharacterController (KCC physics writer).
@@ -237,7 +243,7 @@ const playerParent = parentSpawn.value;
 // skeleton resolution. Mesh/material handles prove the parsed assets mint.
 const meshHandle = meshAsset ? world.allocSharedRef('MeshAsset', meshAsset.payload) : 0;
 const matHandle = matAsset ? world.allocSharedRef('MaterialAsset', matAsset.payload) : 0;
-const clipAsset = fbxResults.find((a) => a.kind === 'animation-clip');
+const clipAsset = importedAssets.find((a) => a.kind === 'animation-clip');
 const clipHandle = clipAsset ? world.allocSharedRef('AnimationClip', clipAsset.payload) : 0;
 const childSpawn = world.spawn(
   { component: Transform, data: { pos: [0, -0.8, 0], scale: [1 / 90, 1 / 90, 1 / 90]} },

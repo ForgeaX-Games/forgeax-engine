@@ -182,8 +182,13 @@ try {
   process.exit(1);
 }
 
-const meshAsset = results.find((a) => a.kind === 'mesh');
-const matAsset = results.find((a) => a.kind === 'material');
+if (!results.ok) {
+  console.error(`[smoke] FAIL - fbxImporter failed: ${results.error.code}`);
+  process.exit(1);
+}
+
+const meshAsset = results.value.assets.find((a) => a.kind === 'mesh');
+const matAsset = results.value.assets.find((a) => a.kind === 'material');
 if (!meshAsset || !matAsset) {
   console.error('[smoke] FAIL - fbxImporter did not produce mesh/material');
   process.exit(1);

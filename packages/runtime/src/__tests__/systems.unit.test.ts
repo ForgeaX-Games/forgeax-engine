@@ -2496,10 +2496,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   });
 
   // ─── Assertion (c): fallback texture_cube depthOrArrayLayers=6 + white
-  // irradiance / zero prefilter+brdfLut (downstream integration #4) ───
+  // irradiance / prefilter + BRDF fallback data ───
 
-  describe('t40 round-4 (c) fallback cube texture geometry + white irradiance data', () => {
-    it('fallback cube texture is depthOrArrayLayers=6; irradiance is white (6 faces), prefilter+brdfLut are zero', () => {
+  describe('t40 round-4 (c) fallback cube texture geometry + white-environment data', () => {
+    it('fallback cube texture is depthOrArrayLayers=6; irradiance+prefilter are white and BRDF is [1, 0]', () => {
       const device = makeMockDevice();
       const queue = makeMockQueue();
       createSkylightFallback(
@@ -2517,15 +2517,11 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
         expect(desc.size.height).toBe(1);
       }
 
-      // The white irradiance pixel is half-float RGBA 1.0 = 0x3c00 per channel
-      // in the first 8 bytes (the rest of the 256B-padded row is zero). The
-      // zero payloads (prefilter cube * 6 faces + brdfLut * 1) are all-zero.
-      // We can't distinguish textures by identity (the mock returns one shared
-      // texture object), so we classify each writeTexture payload by content
-      // and count: exactly 6 white (irradiance faces) + 7 zero (prefilter
-      // 6 faces + brdfLut 1).
+      // Both cube maps carry six white faces. The 1x1 BRDF fallback stores the
+      // split-sum approximation A=1 / B=0 as rg16float. The mock returns one
+      // shared texture object, so classify writes by payload bytes instead.
       let whiteCount = 0;
-      let zeroCount = 0;
+      let brdfApproxCount = 0;
       expect(queue.writeTexture.mock.calls.length).toBeGreaterThan(0);
       for (const call of queue.writeTexture.mock.calls) {
         const dataArg = call[1] as ArrayBufferView | undefined;
@@ -2537,16 +2533,18 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
           dv.getUint16(2, true) === 0x3c00 &&
           dv.getUint16(4, true) === 0x3c00 &&
           dv.getUint16(6, true) === 0x3c00;
+        const isBrdfApprox =
+          dv.getUint16(0, true) === 0x3c00 && dv.getUint16(2, true) === 0x0000 && !isWhiteHead;
         if (isWhiteHead) {
           whiteCount += 1;
+        } else if (isBrdfApprox) {
+          brdfApproxCount += 1;
         } else {
-          // non-white head must be fully zero (prefilter / brdfLut fallback)
-          for (const b of bytes) expect(b).toBe(0);
-          zeroCount += 1;
+          expect.fail('unexpected Skylight fallback texture payload');
         }
       }
-      expect(whiteCount).toBe(6);
-      expect(zeroCount).toBe(7);
+      expect(whiteCount).toBe(12);
+      expect(brdfApproxCount).toBe(1);
     });
 
     it('createSkylightFallback allocates exactly one sampler (reused across the 3 texture slots)', () => {

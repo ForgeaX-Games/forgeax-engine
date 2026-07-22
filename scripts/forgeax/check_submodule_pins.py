@@ -91,7 +91,18 @@ def _resolve_main_ref(sub_repo: Path) -> str | None:
     fresh checkout) the submodule sits in detached HEAD and any local `main` is
     absent or stale; the just-fetched origin/main is the remote source of truth.
     """
-    _git(sub_repo, "fetch", "origin", "main", "--quiet")
+    # `git fetch origin main` updates FETCH_HEAD only; it intentionally does
+    # not guarantee that refs/remotes/origin/main moves. That distinction is
+    # observable in CI's detached, shallow submodule checkouts: the subsequent
+    # ancestry check can inspect a stale origin/main and reject a pin which has
+    # already landed on the remote main branch. Update the exact ref we inspect.
+    _git(
+        sub_repo,
+        "fetch",
+        "--quiet",
+        "origin",
+        "+refs/heads/main:refs/remotes/origin/main",
+    )
     if _git(sub_repo, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main").returncode == 0:
         return "origin/main"
     if _git(sub_repo, "rev-parse", "--verify", "--quiet", "refs/heads/main").returncode == 0:

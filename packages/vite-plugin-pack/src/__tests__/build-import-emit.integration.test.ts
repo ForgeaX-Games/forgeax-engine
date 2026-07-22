@@ -436,12 +436,19 @@ describe('w10 - build-time import emit integration (vite build end-to-end)', () 
     const reelImporter = {
       key: 'reel-game',
       import(ctx: { subAssets: readonly { guid: string; kind: string }[] }) {
-        return ctx.subAssets.map((s) => ({
-          guid: s.guid,
-          kind: s.kind,
-          payload: { kind: s.kind } as never,
-          refs: [],
-        }));
+        return {
+          ok: true,
+          value: {
+            assets: ctx.subAssets.map((s) => ({
+              guid: s.guid,
+              kind: s.kind,
+              payload: { kind: s.kind } as never,
+              refs: [],
+            })),
+            artifacts: [],
+            sourceDependencies: [],
+          },
+        };
       },
     };
 

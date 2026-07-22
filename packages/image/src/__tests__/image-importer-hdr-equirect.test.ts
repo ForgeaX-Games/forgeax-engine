@@ -7,11 +7,23 @@
 // 'texture' sub-asset. research F-10 + plan-strategy D-9; orchestrator
 // adjudication: equirect produces a build-time .bin (2D rgba16float image).
 
-import type { EquirectAsset, ImportContext, ImportSubAsset } from '@forgeax/engine-types';
+import type {
+  EquirectAsset,
+  ImportContext,
+  ImportedAsset,
+  ImportSubAsset,
+} from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { imageImporter } from '../image-importer.js';
 
 const HDR_GUID = '019e3969-1d43-7610-8810-e80dbd491d91';
+
+function unwrap(result: {
+  readonly ok: boolean;
+  readonly value?: { readonly assets: readonly ImportedAsset[] };
+}): readonly ImportedAsset[] {
+  return result.ok && result.value !== undefined ? result.value.assets : [];
+}
 
 function makeHdrFixture(width: number, height: number): Uint8Array {
   const header = `#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y ${height} +X ${width}\n`;
@@ -71,7 +83,7 @@ describe('imageImporter HDR arm produces EquirectAsset (w1)', () => {
       { guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' },
     ]);
 
-    const produced = await imageImporter.import(ctx);
+    const produced = unwrap(await imageImporter.import(ctx));
     expect(produced.length).toBe(1);
     const asset = produced[0];
     expect(asset?.guid).toBe(HDR_GUID);
@@ -92,7 +104,7 @@ describe('imageImporter HDR arm produces EquirectAsset (w1)', () => {
       { guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' },
     ]);
 
-    const produced = await imageImporter.import(ctx);
+    const produced = unwrap(await imageImporter.import(ctx));
     const payload = (produced[0] as { payload: EquirectAsset })?.payload;
     expect(payload.data.length).toBe(width * height * 4 * 2);
   });
@@ -101,7 +113,7 @@ describe('imageImporter HDR arm produces EquirectAsset (w1)', () => {
     const ctx = makeHdrCtx('env.hdr', makeHdrFixture(8, 4), [
       { guid: HDR_GUID, sourceIndex: 0, kind: 'texture' },
     ]);
-    const produced = await imageImporter.import(ctx);
+    const produced = unwrap(await imageImporter.import(ctx));
     expect(produced.length).toBe(0);
   });
 
@@ -109,7 +121,7 @@ describe('imageImporter HDR arm produces EquirectAsset (w1)', () => {
     const ctx = makeHdrCtx('ENV.HDR', makeHdrFixture(8, 2), [
       { guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' },
     ]);
-    const produced = await imageImporter.import(ctx);
+    const produced = unwrap(await imageImporter.import(ctx));
     expect(produced.length).toBe(1);
     expect(produced[0]?.kind).toBe('equirect');
   });
@@ -145,7 +157,7 @@ describe('imageImporter HDR equirect is never block-compressed (feat-20260707 fi
       { colorSpace: 'linear', mipmap: 'none', compressionMode: 'auto' },
     );
 
-    const produced = await imageImporter.import(ctx);
+    const produced = unwrap(await imageImporter.import(ctx));
     const payload = (produced[0] as { payload: EquirectAsset })?.payload;
     // Raw rgba16float byte count (w*h*8) and NOT a KTX2 container.
     expect(payload.data.length).toBe(width * height * 4 * 2);
@@ -162,7 +174,7 @@ describe('imageImporter HDR equirect is never block-compressed (feat-20260707 fi
       [{ guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' }],
       { colorSpace: 'linear', mipmap: 'none', compressionMode: 'uastc' },
     );
-    const produced = await imageImporter.import(ctx);
+    const produced = unwrap(await imageImporter.import(ctx));
     const payload = (produced[0] as { payload: EquirectAsset })?.payload;
     expect(payload.data.length).toBe(width * height * 4 * 2);
     expect(Array.from(payload.data.subarray(0, 12))).not.toEqual(Array.from(KTX2_IDENTIFIER));
@@ -177,7 +189,7 @@ describe('imageImporter HDR equirect is never block-compressed (feat-20260707 fi
       [{ guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' }],
       { colorSpace: 'linear', mipmap: 'none', compressionMode: 'none' },
     );
-    const produced = await imageImporter.import(ctx);
+    const produced = unwrap(await imageImporter.import(ctx));
     const payload = (produced[0] as { payload: EquirectAsset })?.payload;
     expect(payload.data.length).toBe(width * height * 4 * 2);
     expect(Array.from(payload.data.subarray(0, 12))).not.toEqual(Array.from(KTX2_IDENTIFIER));
@@ -191,8 +203,10 @@ describe('imageImporter HDR equirect is never block-compressed (feat-20260707 fi
         [{ guid: HDR_GUID, sourceIndex: 0, kind: 'equirect' }],
         { colorSpace: 'linear', mipmap: 'none', compressionMode: 'auto' },
       );
-    const a = ((await imageImporter.import(mk()))[0] as { payload: EquirectAsset }).payload.data;
-    const b = ((await imageImporter.import(mk()))[0] as { payload: EquirectAsset }).payload.data;
+    const a = (unwrap(await imageImporter.import(mk()))[0] as { payload: EquirectAsset }).payload
+      .data;
+    const b = (unwrap(await imageImporter.import(mk()))[0] as { payload: EquirectAsset }).payload
+      .data;
     expect(Array.from(a)).toEqual(Array.from(b));
   });
 });

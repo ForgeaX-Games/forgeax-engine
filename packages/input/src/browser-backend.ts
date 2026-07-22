@@ -40,6 +40,7 @@ import type {
   VirtualAxisSample,
   VirtualJoystickConfig,
 } from './input-snapshot';
+import { isUiOwnedEvent } from './ui-ownership';
 import { type BindState, deriveVirtualAxes, handleVirtualJoystickUnbind } from './virtual-joystick';
 
 // D-5: normalize W3C PointerEvent.pointerType to the canonical 3-literal union.
@@ -56,6 +57,8 @@ export function coercePointerType(raw: string): PointerType {
  * Options accepted by `attachBrowserInputBackend`.
  */
 export interface BrowserInputBackendOptions {
+  /** Optional host-owned UI root. Events in this root never reach gameplay. */
+  readonly uiRoot?: Node;
   /**
    * Optional document handle (testing override). Defaults to `document`.
    * Plan-strategy section 9 row 7 (`document.hasFocus()` semantics)
@@ -176,6 +179,9 @@ export function attachBrowserInputBackend(
   let mvy = 0;
   let wheelAccum = 0;
   let detached = false;
+
+  const isUiEvent = (event: Event): boolean =>
+    options.uiRoot !== undefined && isUiOwnedEvent(event, options.uiRoot);
 
   // w6: merged pointer-lock state tracking (D-1).
   // w3cLocked is driven by document-level pointerlockchange events,
@@ -329,6 +335,10 @@ export function attachBrowserInputBackend(
   }
 
   function onKeyDown(ev: KeyboardEvent): void {
+    if (isUiEvent(ev)) {
+      clear();
+      return;
+    }
     heldKeys.add(ev.key);
     upEdges.delete(ev.key);
     // w8 (D-1): ESC releases provider lock (W3C path handles ESC via browser
@@ -338,12 +348,17 @@ export function attachBrowserInputBackend(
     }
   }
   function onKeyUp(ev: KeyboardEvent): void {
+    if (isUiEvent(ev)) return;
     heldKeys.delete(ev.key);
     if (isFocused()) {
       upEdges.add(ev.key);
     }
   }
   function onPointerDown(ev: PointerEvent): void {
+    if (isUiEvent(ev)) {
+      clear();
+      return;
+    }
     // Only mouse-type pointers affect the mouse button cluster (D-3).
     if (ev.pointerType === 'mouse') {
       if (ev.button === 0 || ev.button === 1 || ev.button === 2) {
@@ -414,6 +429,7 @@ export function attachBrowserInputBackend(
     }
   }
   function onPointerUp(ev: PointerEvent): void {
+    if (isUiEvent(ev)) return;
     if (ev.pointerType === 'mouse') {
       if (ev.button === 0 || ev.button === 1 || ev.button === 2) {
         buttons[ev.button] = false;
@@ -437,6 +453,7 @@ export function attachBrowserInputBackend(
     }
   }
   function onPointerMove(ev: PointerEvent): void {
+    if (isUiEvent(ev)) return;
     // D-3: movementDelta from pointermove (PointerEvent extends MouseEvent).
     if (ev.pointerType === 'mouse') {
       mvx += ev.movementX;
@@ -461,6 +478,7 @@ export function attachBrowserInputBackend(
     }
   }
   function onPointerCancel(ev: PointerEvent): void {
+    if (isUiEvent(ev)) return;
     const entry = pointerMap.get(ev.pointerId);
     if (entry) {
       phaseQueue.push({
@@ -484,6 +502,10 @@ export function attachBrowserInputBackend(
     }
   }
   function onWheel(ev: WheelEvent): void {
+    if (isUiEvent(ev)) {
+      clear();
+      return;
+    }
     // plan-strategy D-5 sign-discrete normalization: collapse `WheelEvent`
     // across the three `deltaMode` units (PIXEL / LINE / PAGE) by taking
     // `Math.sign(deltaY)` per event. Trade-off documented at the
@@ -499,6 +521,13 @@ export function attachBrowserInputBackend(
     // no state crosses a lease; the source itself still emits cancellation to its
     // sole consumer as it did before ownership routing existed.
     upEdges.clear();
+    heldKeys.clear();
+    buttons[0] = false;
+    buttons[1] = false;
+    buttons[2] = false;
+    mvx = 0;
+    mvy = 0;
+    wheelAccum = 0;
     releaseProviderLock();
     if (pointerMap.size > 0) {
       for (const [id, entry] of pointerMap) {

@@ -38,6 +38,7 @@ import type {
   ImportContext,
   ImportedAsset,
   Importer,
+  ImportResult,
 } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { gltfDocToSceneAsset, meshIrToMeshAsset, toMaterialAsset } from './bridge.js';
@@ -211,7 +212,7 @@ function materialTextureRefs(
   return refs;
 }
 
-async function importGltf(ctx: ImportContext): Promise<readonly ImportedAsset[]> {
+async function importGltf(ctx: ImportContext): Promise<ImportResult> {
   const read = await ctx.readSource();
   if (!read.ok) {
     throw new Error(
@@ -612,7 +613,7 @@ async function importGltf(ctx: ImportContext): Promise<readonly ImportedAsset[]>
       out.push({ guid: sub.guid, kind: 'animation-clip', payload, refs: [] });
     }
   }
-  return out;
+  return { ok: true, value: { assets: out, artifacts: [], sourceDependencies: [] } };
 }
 
 /**

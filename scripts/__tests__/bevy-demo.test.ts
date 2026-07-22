@@ -136,4 +136,45 @@ describe('bevy-demo.mjs', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('bevy-demo-scaffold-status-invalid');
   });
+
+  it('accepts bounded smoke concurrency in a dry run', () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'bevy', 'tiny-demo');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(
+      join(app, 'package.json'),
+      JSON.stringify({
+        name: '@forgeax/bevy-tiny-demo',
+        forgeax: {
+          bevyExample: { name: 'tiny_demo', category: 'Animation', status: 'implemented' },
+          smokeInvocation: 'pnpm --filter @forgeax/bevy-tiny-demo smoke',
+          metrics: { gate: { command: 'pnpm --filter @forgeax/bevy-tiny-demo smoke' } },
+        },
+      }),
+    );
+    const result = run(root, 'smokes', '--concurrency', '4', '--dry-run');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('completed (dry run) with concurrency=4');
+  });
+
+  it('derives smoke concurrency from runner resources', () => {
+    const root = tempRoot();
+    const app = join(root, 'apps', 'bevy', 'tiny-demo');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(
+      join(app, 'package.json'),
+      JSON.stringify({
+        name: '@forgeax/bevy-tiny-demo',
+        forgeax: {
+          bevyExample: { name: 'tiny_demo', category: 'Animation', status: 'implemented' },
+          smokeInvocation: 'pnpm --filter @forgeax/bevy-tiny-demo smoke',
+          metrics: { gate: { command: 'pnpm --filter @forgeax/bevy-tiny-demo smoke' } },
+        },
+      }),
+    );
+    const result = run(root, 'smokes', '--concurrency', 'auto', '--dry-run');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toMatch(/auto concurrency=\d+/);
+    expect(result.stdout).toMatch(/completed \(dry run\) with concurrency=\d+/);
+  });
 });
