@@ -19,7 +19,9 @@ function errorText(error) {
 export function isRetryableTransportError(error) {
   const text = errorText(error);
   return (
-    /ECONNRESET|Failed to GetSignedArtifactURL|socket hang up/i.test(text) ||
+    /ECONNRESET|Failed to GetSignedArtifactURL|socket hang up|HTTP (?:408|429|5\d\d) /i.test(
+      text,
+    ) ||
     (error instanceof TypeError && /fetch failed/i.test(text))
   );
 }
@@ -112,7 +114,7 @@ async function hydrateArtifact(repository, artifactId, path) {
     const hydrated = await retryArtifact(
       async () => {
         const bytes = await downloadArtifact(repository, artifactId, archive);
-        execFileSync('unzip', ['-q', archive, '-d', path], { stdio: 'inherit' });
+        execFileSync('unzip', ['-q', '-o', archive, '-d', path], { stdio: 'inherit' });
         return bytes;
       },
       {

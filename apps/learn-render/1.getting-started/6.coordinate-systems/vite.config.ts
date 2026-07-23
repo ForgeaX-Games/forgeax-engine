@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
 // learn-render section-1.6 coordinate-systems vite config.
@@ -23,6 +23,7 @@ export default defineConfig({
   plugins: [
     forgeaxShader() as never,
     pluginPack({
+      refresh: reloadAssetHost(),
       roots: [
         resolve(here, 'assets'),
         resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),

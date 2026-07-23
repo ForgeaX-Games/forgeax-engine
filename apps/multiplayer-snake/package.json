@@ -1,0 +1,58 @@
+{
+  "name": "@forgeax/multiplayer-snake",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prebuild": "pnpm --filter @forgeax/engine-assets-runtime build",
+    "predev": "pnpm --filter @forgeax/engine-assets-runtime build",
+    "build": "vite build",
+    "dev": "vite",
+    "server": "bun scripts/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:process-e2e": "vitest run src/__tests__/process-e2e.test.ts",
+    "e2e:browser": "FORGEAX_ENGINE_RHI_DEBUG=1 node scripts/browser-e2e.mjs"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "E2E proof app bundle shape is not a performance baseline"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "E2E proof app, not a performance benchmark"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "no performance benchmarks"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm -F @forgeax/multiplayer-snake test"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike package"
+      }
+    }
+  },
+  "dependencies": {
+    "@forgeax/engine-app": "workspace:*",
+    "@forgeax/engine-assets-runtime": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
+    "@forgeax/engine-net": "workspace:*",
+    "@forgeax/engine-net-websocket": "workspace:*",
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
+    "@webgpu/types": "^0.1.71",
+    "esbuild": "^0.27.2",
+    "vite": "8.0.10",
+    "vitest": "4.1.5"
+  }
+}

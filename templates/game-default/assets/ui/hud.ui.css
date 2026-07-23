@@ -1,0 +1,9 @@
+:host { display: block; color: #fff; font: 600 14px ui-sans-serif, system-ui, sans-serif; user-select: none; }
+.hud { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+[data-ui-slot="score"] { position: absolute; top: 12px; left: 14px; padding: 4px 10px; background: rgb(0 0 0 / 45%); border-radius: 8px; }
+button { position: absolute; top: 12px; right: 14px; pointer-events: auto; padding: 6px 12px; color: #fff; background: rgb(20 28 48 / 78%); border: 1px solid rgb(255 255 255 / 25%); border-radius: 8px; font: inherit; }
+.settings-action { right: 150px; }
+[data-ui-slot="crosshair"] { position: absolute; inset: 50% auto auto 50%; display: none; font-size: 24px; transform: translate(-50%, -50%); }
+[data-ui-slot="hint"] { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); }
+[data-ui-slot="lock-status"] { position: absolute; top: 46px; left: 14px; }
+.score-popup { color: #ffec80; font-size: 22px; }

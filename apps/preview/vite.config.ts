@@ -1,6 +1,6 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { defineConfig } from 'vite';
 
@@ -16,6 +16,7 @@ export default defineConfig({
   plugins: [
     forgeaxShader() as never,
     pluginPack({
+      refresh: reloadAssetHost(),
       roots: [
         // game-default/assets/ holds the entry SceneAsset (scene.pack.json,
         // GUID-discoverable via forge.json.defaultScene) + material packs;

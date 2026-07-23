@@ -30,7 +30,7 @@ export class NetSession {
   #rawMessages: RawMessage[] = [];
   readonly #maxRawMessages: number;
   #authority: AuthorityCoordinator | undefined;
-  #pendingFull = false;
+  readonly #pendingFullPeers = new Set<PeerId>();
   #replica:
     | { readonly coordinator: ReplicaCoordinator; readonly limits: ReplicationLimits }
     | undefined;
@@ -45,9 +45,13 @@ export class NetSession {
     for (const event of this.#endpoint.poll()) {
       if (event.kind === 'peer-connected') {
         this.#peerIds.add(event.peerId);
-        this.#pendingFull = true;
+        // Transport admission must not imply application admission, but every
+        // newly connected replica still needs the generic replication baseline.
+        this.#pendingFullPeers.add(event.peerId);
       } else if (event.kind === 'peer-disconnected') {
         this.#peerIds.delete(event.peerId);
+        this.#pendingFullPeers.delete(event.peerId);
+        this.#replica?.coordinator.clear();
       } else {
         if (this.#replica !== undefined) {
           const result = decodeAndApplyReplicaBatch(
@@ -82,19 +86,33 @@ export class NetSession {
     this.#authority = authority;
   }
 
+  requestFullBaseline(peerId: PeerId): void {
+    if (this.#peerIds.has(peerId)) this.#pendingFullPeers.add(peerId);
+  }
+
   attachReplica(coordinator: ReplicaCoordinator, limits: ReplicationLimits): void {
     this.#replica = { coordinator, limits };
   }
 
   publish(): Result<void, NetError | EndpointError> {
     if (this.#authority === undefined) return ok(undefined);
-    const published = this.#pendingFull ? this.#authority.publishFull() : this.#authority.publish();
+    if (this.#pendingFullPeers.size > 0) {
+      const published = this.#authority.publishFull();
+      if (!published.ok) return err(published.error);
+      for (const peerId of this.#pendingFullPeers) {
+        if (this.#peerIds.has(peerId)) {
+          const sent = this.#endpoint.send(peerId, published.value.bytes);
+          if (!sent.ok) return err(sent.error);
+        }
+      }
+      this.#pendingFullPeers.clear();
+    }
+    const published = this.#authority.publish();
     if (!published.ok) return err(published.error);
     for (const peerId of this.#peerIds) {
       const sent = this.#endpoint.send(peerId, published.value.bytes);
       if (!sent.ok) return err(sent.error);
     }
-    if (this.#pendingFull) this.#pendingFull = false;
     return ok(undefined);
   }
 }

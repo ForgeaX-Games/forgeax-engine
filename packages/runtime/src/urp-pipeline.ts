@@ -221,28 +221,33 @@ export const urpPipeline: RenderPipeline = {
       usage: 0x10 | 0x04,
     });
 
-    // MSAA targets (count=4). The geometry pass writes hdrColorMsaa /
-    // hdrDepthMsaa when antialias === 'msaa'; the LDR MSAA path uses
-    // msaaColor / msaaDepth with rgba8unorm storage + rgba8unorm-srgb view
-    // (post-v18 swap-chain unification).
-    graph.addColorTarget('hdrColorMsaa', {
-      format: 'rgba16float',
-      size: 'swapchain',
-      sample: 4,
-      usage: 0x10,
-    });
+    // MSAA targets (count=4). The WebGL2 fallback reports its concrete
+    // capability at the RHI boundary; it cannot allocate multisample texture
+    // storage, so omit these targets entirely and let the runtime select the
+    // single-sample route. Native/WebGPU retain the existing MSAA resources.
+    const msaaSupported = runtime.device.caps.backendKind !== 'wgpu-webgl2';
+    if (msaaSupported) {
+      graph.addColorTarget('hdrColorMsaa', {
+        format: 'rgba16float',
+        size: 'swapchain',
+        sample: 4,
+        usage: 0x10,
+      });
+    }
     graph.addColorTarget('hdrDepth', {
       format: 'depth24plus-stencil8',
       size: 'swapchain',
       sample: 1,
       usage: 0x10,
     });
-    graph.addColorTarget('hdrDepthMsaa', {
-      format: 'depth24plus-stencil8',
-      size: 'swapchain',
-      sample: 4,
-      usage: 0x10,
-    });
+    if (msaaSupported) {
+      graph.addColorTarget('hdrDepthMsaa', {
+        format: 'depth24plus-stencil8',
+        size: 'swapchain',
+        sample: 4,
+        usage: 0x10,
+      });
+    }
     // bug-20260610: aligned with createRenderer's RGBA swap-chain switch
     // (BGRA isn't supported on wgpu's GLES backend). Match the swap-chain
     // storage/view layout so the MSAA resolve target (=swap-chain texture,
@@ -260,20 +265,22 @@ export const urpPipeline: RenderPipeline = {
     // (resolve requires identical formats). Hard-coded rgba8unorm broke the
     // resolve on bgra8unorm backends (Metal/D3D/Vulkan via Channel 2). Derive
     // both the storage format and the srgb view format from the swap-chain SSOT.
-    const supportsViewFormats = runtime.device.caps.storageBuffer;
-    graph.addColorTarget('msaaColor', {
-      format: swapChainStorageFormat,
-      size: 'swapchain',
-      sample: 4,
-      usage: 0x10,
-      ...(supportsViewFormats ? { viewFormats: [swapChainViewFormat] } : {}),
-    });
-    graph.addColorTarget('msaaDepth', {
-      format: 'depth24plus-stencil8',
-      size: 'swapchain',
-      sample: 4,
-      usage: 0x10,
-    });
+    if (msaaSupported) {
+      const supportsViewFormats = runtime.device.caps.storageBuffer;
+      graph.addColorTarget('msaaColor', {
+        format: swapChainStorageFormat,
+        size: 'swapchain',
+        sample: 4,
+        usage: 0x10,
+        ...(supportsViewFormats ? { viewFormats: [swapChainViewFormat] } : {}),
+      });
+      graph.addColorTarget('msaaDepth', {
+        format: 'depth24plus-stencil8',
+        size: 'swapchain',
+        sample: 4,
+        usage: 0x10,
+      });
+    }
 
     // ── PASS CHAIN (9 passes in canonical order, R-PERFPASS) ────────────────
 
@@ -377,7 +384,12 @@ export const urpPipeline: RenderPipeline = {
     // unchanged and the effects layer on top. AUGMENT, not REPLACE: a shadow
     // demo keeps its shadows while adding a debug overlay. `undefined`/`[]` adds
     // zero passes (default frame byte-identical, no scratch target declared).
-    const postEffects = data.config?.postEffects ?? [];
+    // Composite-over-swapchain requires COPY_SRC on the surface plus a
+    // non-srgb reinterpretation view. The WebGL2 fallback exposes neither;
+    // its capability is explicit at the RHI boundary, so omit optional URP
+    // post effects while preserving the built-in shadow/tonemap chain.
+    const postEffects =
+      runtime.device.caps.backendKind === 'wgpu-webgl2' ? [] : (data.config?.postEffects ?? []);
     for (let i = 0; i < postEffects.length; i++) {
       const effectId = postEffects[i] as string;
       // One scratch target per effect (mirrors fxaaIntermediate). It is the

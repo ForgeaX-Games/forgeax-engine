@@ -94,6 +94,30 @@ function mockData(config: RenderPipelineData['config']): RenderPipelineData {
 }
 
 describe('feat-20260621 M4′: URP config.postEffects topology (AUGMENT, not REPLACE)', () => {
+  it('WebGL2 capability omits multisample targets instead of allocating unsupported storage', () => {
+    const graph = urpPipeline.buildGraph(
+      mockCtx(mockRuntime({ backendKind: 'wgpu-webgl2' })),
+      mockData(undefined),
+    );
+    expect(graph).not.toBeNull();
+    if (!graph) return;
+    const resources = graph.listResources().map((resource) => resource.key);
+    expect(resources.some((key) => key.includes('msaa'))).toBe(false);
+  });
+
+  it('WebGL2 capability omits composite-over-swapchain post effects', () => {
+    const graph = urpPipeline.buildGraph(
+      mockCtx(mockRuntime({ backendKind: 'wgpu-webgl2' })),
+      mockData({ postEffects: ['pkg::overlay'] }),
+    );
+    expect(graph).not.toBeNull();
+    if (!graph) return;
+    const names = graph.listPasses().map((p) => p.name);
+    expect(names.some((name) => name.startsWith('post-effect-'))).toBe(false);
+    expect(names).toContain('shadowCascade0');
+    expect(names).toContain('main');
+  });
+
   it('config=undefined -> zero post-effect passes (default frame unchanged)', () => {
     const graph = urpPipeline.buildGraph(mockCtx(mockRuntime()), mockData(undefined));
     expect(graph).not.toBeNull();

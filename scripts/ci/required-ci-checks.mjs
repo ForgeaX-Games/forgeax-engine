@@ -9,27 +9,28 @@
 // workflow scheduling decision is the SSOT.
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import process from 'node:process';
 
 const CI_WORKFLOW = 'ci.yml';
 
-export const REQUIRED_CHECK_NAMES = [
-  'build-artifacts',
-  'primary-pnpm',
-  'coverage-pnpm',
-  'vitest-browser',
-  'shared-inputs-browser',
-  'smoke-fleet',
-  'smoke-fleet-0',
-  'smoke-fleet-1',
-  'smoke-fleet-2',
-  'bevy-smoke-fleet',
-  'vitest-dawn',
-  'webkit-fallback',
-  'portability-bun',
-  'metrics-validate',
-  'collectathon-boot-e2e',
-];
+// This manifest is the repository projection of the active Protect ruleset.
+// Keep the external ruleset derived from this file; do not hand-maintain a
+// second list in the fallback reporter or workflow comments.
+const requiredCheckManifest = JSON.parse(
+  readFileSync(new URL('./required-ci-checks.json', import.meta.url), 'utf8'),
+);
+
+if (
+  !Array.isArray(requiredCheckManifest) ||
+  requiredCheckManifest.length === 0 ||
+  requiredCheckManifest.some((name) => typeof name !== 'string' || name.length === 0) ||
+  new Set(requiredCheckManifest).size !== requiredCheckManifest.length
+) {
+  throw new Error('required-ci-checks.json must be a non-empty array of unique check names');
+}
+
+export const REQUIRED_CHECK_NAMES = requiredCheckManifest;
 
 /**
  * @param {Array<{event:string, createdAt?:string}>} runs

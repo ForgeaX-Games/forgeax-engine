@@ -183,6 +183,14 @@ These three features are explicitly out of scope for the current shader pipeline
 
 > AI user writes a new `.wgsl` material shader and renders it via the schema-driven path. Two consumer surfaces: (a) `ShaderRegistry.registerMaterialShader(id, entry)` registers the wgsl source + paramSchema under a path identifier (`forgeax::*` reserved for engine builtins; user shaders use sidecar GUID); (b) `assets.registerMaterialAsset({ materialShader, paramSchema, paramValues })` registers the material asset whose `materialShader` field references the shader by identifier. The runtime per-MaterialShader pipeline cache lazily builds the pipeline on first reference.
 
+When a material imports `forgeax_view::common::{..., meshes}`, the build-time
+shader plugin automatically compiles the `STORAGE_BUFFER_AVAILABLE` capability
+axis. The WebGL2 runtime then selects the uniform `meshes` variant while native
+WebGPU keeps the storage-buffer variant; authors do not need to repeat a pragma
+just to make the shared mesh binding portable. Other backend-specific source
+branches remain explicit with `#pragma variant_axis` (for example
+`WEBGL2_COMPAT` around `textureSampleLevel`).
+
 > [!NOTE]
 > **`bindingLayout` is gone (feat-20260613-material-paramschema-driven-binding M3 / w13).** `MaterialShaderEntry` no longer carries a separate `bindingLayout` field — `derive(paramSchema)` is the single source for BGL entries. Existing `registerMaterialShader` callers that previously passed a hand-rolled `bindingLayout` array drop the field outright; the runtime calls `derive` once and feeds the result into both BGL build and per-entity UBO write.
 

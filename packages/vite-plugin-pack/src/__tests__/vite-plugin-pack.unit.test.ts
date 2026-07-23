@@ -22,12 +22,18 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
-import type { Asset, AssetRef, Importer, PackIndexEntry } from '@forgeax/engine-types';
+import type {
+  Asset,
+  AssetRef,
+  CatalogDelta,
+  Importer,
+  PackIndexEntry,
+} from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildCatalogStrict } from '../build-catalog.js';
 import { importTextureEntry } from '../import-texture.js';
-import { ASSET_CHANGED_EVENT, type AssetChangedPayload, pluginPack } from '../index.js';
+import { CATALOG_DELTA_EVENT, pluginPack, reloadAssetHost } from '../index.js';
 import { projectSharedPackCatalog } from '../shared-build-inputs.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -307,7 +313,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       await writeFile(join(hmrAssetsDir, 'wood-container.meta.json'), hmrWoodImageMeta());
 
       const server = makeHmrMockServer();
-      const plugin = pluginPack({ roots: [hmrAssetsDir] });
+      const plugin = pluginPack({ roots: [hmrAssetsDir], refresh: reloadAssetHost() });
       plugin.configureServer(server);
 
       await new Promise((r) => setTimeout(r, 50));
@@ -325,7 +331,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       await writeFile(join(hmrAssetsDir, 'wood-container.meta.json'), hmrWoodImageMeta());
 
       const server = makeHmrMockServer();
-      const plugin = pluginPack({ roots: [hmrAssetsDir] });
+      const plugin = pluginPack({ roots: [hmrAssetsDir], refresh: reloadAssetHost() });
       plugin.configureServer(server);
 
       await new Promise((r) => setTimeout(r, 50));
@@ -342,7 +348,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       await writeFile(join(hmrAssetsDir, 'legacy.pack.json'), HMR_PACK_JSON_FIXTURE);
 
       const server = makeHmrMockServer();
-      const plugin = pluginPack({ roots: [hmrAssetsDir] });
+      const plugin = pluginPack({ roots: [hmrAssetsDir], refresh: reloadAssetHost() });
       plugin.configureServer(server);
 
       await new Promise((r) => setTimeout(r, 50));
@@ -360,7 +366,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       await writeFile(join(hmrAssetsDir, 'model.gltf'), GLTF_MINIMAL);
 
       const server = makeHmrMockServer();
-      const plugin = pluginPack({ roots: [hmrAssetsDir] });
+      const plugin = pluginPack({ roots: [hmrAssetsDir], refresh: reloadAssetHost() });
       plugin.configureServer(server);
 
       await new Promise((r) => setTimeout(r, 50));
@@ -377,7 +383,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       await writeFile(join(hmrAssetsDir, 'level.reel.json'), '{"version":1}');
 
       const server = makeHmrMockServer();
-      const plugin = pluginPack({ roots: [hmrAssetsDir] });
+      const plugin = pluginPack({ roots: [hmrAssetsDir], refresh: reloadAssetHost() });
       plugin.configureServer(server);
 
       await new Promise((r) => setTimeout(r, 50));
@@ -387,12 +393,14 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(server.ws.calls.some((c) => c.type === 'full-reload')).toBe(true);
     });
 
-    it('(f) sidecar change also pushes a structured forgeax:asset-changed event', async () => {
-      // P2: alongside `full-reload` (for the running game), the dev server pushes
-      // a custom catalog-change event so a tooling subscriber (editor Content
-      // Browser) can re-query `/__pack/index` instead of polling the filesystem.
+    it('(f) sidecar change also pushes a structured forgeax:catalog-delta event', async () => {
+      // The producer sends a catalog delta without selecting the host policy.
       await writeFile(join(hmrAssetsDir, 'wood-container.jpg'), HMR_ONE_BYTE_JPG);
-      await writeFile(join(hmrAssetsDir, 'wood-container.meta.json'), hmrWoodImageMeta());
+      await writeFile(join(hmrAssetsDir, 'wood-next.jpg'), HMR_ONE_BYTE_JPG);
+      await writeFile(
+        join(hmrAssetsDir, 'wood-container.meta.json'),
+        hmrWoodImageMeta().replace('wood-container.jpg', 'wood-next.jpg'),
+      );
 
       const server = makeHmrMockServer();
       const plugin = pluginPack({ roots: [hmrAssetsDir] });
@@ -404,18 +412,21 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
 
       const isSidecarChanged = (c: RecordedWsSend): boolean => {
         if (c.type !== 'custom') return false;
-        const p = c.payload as { event?: string; data?: AssetChangedPayload };
-        return p.event === ASSET_CHANGED_EVENT && p.data?.kind === 'sidecar';
+        const p = c.payload as { event?: string; data?: CatalogDelta };
+        return p.event === CATALOG_DELTA_EVENT && p.data !== undefined;
       };
 
       await waitFor(() => server.ws.calls.some(isSidecarChanged));
 
       const custom = server.ws.calls.find(isSidecarChanged);
       expect(custom).toBeDefined();
-      const data = (custom?.payload as { data?: AssetChangedPayload }).data;
-      expect(data?.kind).toBe('sidecar');
-      expect(data?.file).toContain('wood-container.meta.json');
-      expect(typeof data?.event).toBe('string');
+      const data = (custom?.payload as { data?: CatalogDelta }).data;
+      expect(data).toMatchObject({
+        added: expect.any(Array),
+        changed: expect.any(Array),
+        removed: expect.any(Array),
+      });
+      expect(server.ws.calls.some((call) => call.type === 'full-reload')).toBe(false);
     });
   });
 }
@@ -533,7 +544,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
 
     it('(AC-01) a meta-only / no-DDC image asset stays a bare-source kind:texture row', async () => {
       const cap = makeDiscoverServer();
-      const plugin = pluginPack({ roots: [assetsDir] });
+      const plugin = pluginPack({ roots: [assetsDir], refresh: reloadAssetHost() });
       plugin.configureServer(cap.server as never);
 
       await new Promise((r) => setTimeout(r, 80));
@@ -553,7 +564,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
 
     it('(AC-01) /__pack/lookup/:guid resolves the bare-source row', async () => {
       const cap = makeDiscoverServer();
-      const plugin = pluginPack({ roots: [assetsDir] });
+      const plugin = pluginPack({ roots: [assetsDir], refresh: reloadAssetHost() });
       plugin.configureServer(cap.server as never);
 
       await new Promise((r) => setTimeout(r, 80));
@@ -747,7 +758,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(body.hint).toContain('not an importable texture');
     });
 
-    it('(c) a REAL cook failure (corrupt source) 422s with a structured code + reason', async () => {
+    it('(c) a REAL cook failure (corrupt source) 422s with a structured code + detail', async () => {
       // A `.png`-extension source whose bytes are not a decodable PNG: the
       // per-asset path's importTextureEntry throws -> importOneTexture rethrows
       // a structured ImportError -> the route surfaces code + reason (not the
@@ -778,14 +789,55 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       const body = JSON.parse(res.body) as {
         error: string;
         code?: string;
-        reason?: string;
+        detail?: { reason?: string };
       };
       expect(body.error).toBe('import-failed');
       // Structured cause, aligned with the per-meta (gltf/fbx) path: a real
-      // failure carries `code` + the underlying `reason`, not just a hint.
+      // failure carries `code` + the original error detail, not just a hint.
       expect(body.code).toBe('import-internal-error');
-      expect(typeof body.reason).toBe('string');
-      expect(body.reason?.length ?? 0).toBeGreaterThan(0);
+      expect(typeof body.detail?.reason).toBe('string');
+      expect(body.detail?.reason?.length ?? 0).toBeGreaterThan(0);
+    });
+
+    it('(d) a UI source-validation failure preserves source-located diagnostics', async () => {
+      const UI_GUID = '019e3969-1d50-7c3b-ac24-6d68f457065f';
+      await writeFile(join(assetsDir, 'hud.ui.html'), '<script>run()</script>');
+      await writeFile(join(assetsDir, 'hud.ui.css'), '');
+      await writeFile(
+        join(assetsDir, 'hud.ui.html.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'ui',
+          source: 'hud.ui.html',
+          importSettings: {},
+          subAssets: [{ guid: UI_GUID, sourceIndex: 0, kind: 'ui' }],
+        }),
+      );
+
+      const cap = makeDihServer();
+      const plugin = pluginPack({ roots: [assetsDir] });
+      plugin.configureServer(cap.server as never);
+      await new Promise((r) => setTimeout(r, 80));
+      const handler = cap.getHandler();
+      if (handler === undefined) throw new Error('handler not mounted');
+
+      const res = await dihPostImport(handler, UI_GUID);
+      expect(res.statusCode).toBe(422);
+      const body = JSON.parse(res.body) as {
+        error: string;
+        code?: string;
+        detail?: { diagnostics?: readonly { sourcePath: string; sourceRange: unknown }[] };
+      };
+      expect(body.error).toBe('import-failed');
+      expect(body.code).toBe('source-validation-failed');
+      expect(body.detail?.diagnostics?.[0]?.sourcePath).toBe(join(assetsDir, 'hud.ui.html'));
+      expect(body.detail?.diagnostics?.[0]?.sourceRange).toEqual({
+        start: 0,
+        end: 8,
+        line: 1,
+        column: 1,
+      });
     });
   });
 }
@@ -802,7 +854,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
     'wood.png',
   );
 
-  function ditWoodImageMeta(): string {
+  function ditWoodImageMeta(guid = DIT_WOOD_GUID): string {
     return JSON.stringify({
       schemaVersion: '1.0.0',
       kind: 'external-asset-package',
@@ -814,7 +866,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
         addressMode: 'repeat',
         filterMode: 'linear',
       },
-      subAssets: [{ guid: DIT_WOOD_GUID, sourceIndex: 0, kind: 'texture' }],
+      subAssets: [{ guid, sourceIndex: 0, kind: 'texture' }],
     });
   }
 
@@ -870,7 +922,10 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
     return res;
   }
 
-  describe('dev-import-texture.test.ts', () => {
+  // Lazy image import includes the real decoder and DDC write. Keep its
+  // budget explicit so self-hosted CPU contention cannot turn a valid
+  // integration test into a false CI failure while genuine hangs still fail.
+  describe('dev-import-texture.test.ts', { timeout: 15_000 }, () => {
     let originalCwd: string;
     let tmpRoot: string;
     let assetsDir: string;
@@ -948,6 +1003,26 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       const rows = catalog.filter((e) => e.guid.toLowerCase() === DIT_WOOD_GUID);
       expect(rows.length).toBe(1);
       expect(rows[0]?.relativeUrl.endsWith('.bin')).toBe(true);
+    });
+
+    it('imports a just-written sidecar before the watcher has rebuilt the catalog', async () => {
+      const justWrittenGuid = '019e3969-1d48-7c3b-ac24-6d68f4570660';
+      const cap = makeDitServer();
+      const plugin = pluginPack({ roots: [assetsDir], importers: [imageImporter] });
+      plugin.configureServer(cap.server as never);
+      await new Promise((r) => setTimeout(r, 80));
+      const handler = cap.getHandler();
+      if (handler === undefined) throw new Error('handler not mounted');
+
+      await writeFile(
+        join(assetsDir, 'just-written.png.meta.json'),
+        ditWoodImageMeta(justWrittenGuid),
+      );
+
+      const res = await ditPostImport(handler, justWrittenGuid);
+      expect(res.statusCode).toBe(200);
+      const rows = JSON.parse(res.body) as PackIndexEntry[];
+      expect(rows.some((row) => row.guid.toLowerCase() === justWrittenGuid)).toBe(true);
     });
   });
 }
@@ -2179,7 +2254,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
 
     it('(a) never registers a `change` listener on server.watcher (no leak)', async () => {
       const server = makeWatchMockServer();
-      const plugin = pluginPack({ roots: [assetsDir] });
+      const plugin = pluginPack({ roots: [assetsDir], refresh: reloadAssetHost() });
       plugin.configureServer(server as never);
       await new Promise((r) => setTimeout(r, 50));
 
@@ -2196,7 +2271,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
 
     it('(b) a burst of rapid writes coalesces into a single full-reload', async () => {
       const server = makeWatchMockServer();
-      const plugin = pluginPack({ roots: [assetsDir] });
+      const plugin = pluginPack({ roots: [assetsDir], refresh: reloadAssetHost() });
       plugin.configureServer(server as never);
       await new Promise((r) => setTimeout(r, 50));
 
@@ -2215,7 +2290,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
 
     it('(c) a byte-identical sidecar rewrite after the first reload is deduped', async () => {
       const server = makeWatchMockServer();
-      const plugin = pluginPack({ roots: [assetsDir] });
+      const plugin = pluginPack({ roots: [assetsDir], refresh: reloadAssetHost() });
       plugin.configureServer(server as never);
       await new Promise((r) => setTimeout(r, 50));
 
@@ -2234,7 +2309,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
 
     it('(d) a genuine content change after a deduped write still reloads', async () => {
       const server = makeWatchMockServer();
-      const plugin = pluginPack({ roots: [assetsDir] });
+      const plugin = pluginPack({ roots: [assetsDir], refresh: reloadAssetHost() });
       plugin.configureServer(server as never);
       await new Promise((r) => setTimeout(r, 50));
 

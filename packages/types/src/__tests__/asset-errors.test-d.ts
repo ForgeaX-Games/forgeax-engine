@@ -50,6 +50,8 @@ describe('AssetErrorCode closed union - 22 members (feat-20260608 M0 +tileset-re
           return 'format-unsupported';
         case 'asset-fetch-failed':
           return 'fetch-failed';
+        case 'catalog-source-unconfigured':
+          return 'catalog-source-unconfigured';
         case 'asset-invalid-value':
           return 'invalid-value';
         case 'cubemap-handle-missing':

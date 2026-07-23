@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
 // learn-render city-glb: loads the UE5 city_Sample_512.glb through the
@@ -20,6 +20,7 @@ export default defineConfig({
   plugins: [
     forgeaxShader() as never,
     pluginPack({
+      refresh: reloadAssetHost(),
       roots: [resolve(here, 'local-assets')],
       importers: [imageImporter, gltfImporter],
     }),

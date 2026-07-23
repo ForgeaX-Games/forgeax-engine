@@ -11,6 +11,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
     },
+    "./catalog-client": {
+      "types": "./dist/catalog-client.d.ts",
+      "import": "./dist/catalog-client.mjs"
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",

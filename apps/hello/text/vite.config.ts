@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
 // hello-text vite config (feat-20260531 + tweak-20260610).
@@ -21,7 +21,7 @@ const dejavuFonts = resolve(monorepoRoot, 'forgeax-engine-assets', 'dejavu-fonts
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({ roots: [dejavuFonts] }),
+    pluginPack({ roots: [dejavuFonts] , refresh: reloadAssetHost() }),
   ],
   server: {
     fs: {

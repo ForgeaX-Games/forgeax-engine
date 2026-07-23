@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { ensurePerFrameGraph, writebackGraphViews } from './record/frame-targets';
+import {
+  ensurePerFrameGraph,
+  resolveShadowMapSize,
+  writebackGraphViews,
+} from './record/frame-targets';
 
 describe('frame targets shadow removal', () => {
   it('clears every shadow slot when the final caster disappears', () => {
@@ -101,5 +105,29 @@ describe('frame targets shadow removal', () => {
     );
 
     expect(buildGraph).toHaveBeenCalledTimes(1);
+  });
+
+  it('fits a cascaded shadow atlas within the device texture limit', () => {
+    const internals = {
+      device: { limits: { maxTextureDimension2D: 2048 } },
+    };
+    const lights = { shadowMapSize: 2048, cascadeCount: 4 };
+
+    expect(resolveShadowMapSize(internals as never, lights as never)).toBe(1024);
+    expect(resolveShadowMapSize(internals as never, { ...lights, cascadeCount: 1 } as never)).toBe(
+      2048,
+    );
+  });
+
+  it('reserves the WebGL2 depth-texture ceiling below the generic texture limit', () => {
+    const internals = {
+      device: {
+        caps: { backendKind: 'wgpu-webgl2' },
+        limits: { maxTextureDimension2D: 2048 },
+      },
+    };
+    const lights = { shadowMapSize: 2048, cascadeCount: 1 };
+
+    expect(resolveShadowMapSize(internals as never, lights as never)).toBe(1024);
   });
 });

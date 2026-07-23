@@ -75,7 +75,7 @@ const mockCanvas = {
 };
 
 const { World } = await import('@forgeax/engine-ecs');
-const { Camera, perspective, Transform, createRenderer } = await import('@forgeax/engine-runtime');
+const { createRenderer } = await import('@forgeax/engine-runtime');
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
@@ -99,16 +99,8 @@ if (!ready.ok) {
 }
 
 const { buildFixedTimestepWorld } = await import(resolve(here, '..', 'src', 'fixed-timestep.ts'));
-const { quat } = await import('@forgeax/engine-math');
-
 const world = new World();
 const { getState } = buildFixedTimestepWorld(world);
-
-const eye = [-2, 2.5, 5];
-world.spawn(
-  { component: Transform, data: { pos: eye, quat: quat.fromLookAt(quat.create(), eye, [0, 0, 0], [0, 1, 0]), scale: [1, 1, 1] } },
-  { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },
-);
 
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   world.update(0.016);

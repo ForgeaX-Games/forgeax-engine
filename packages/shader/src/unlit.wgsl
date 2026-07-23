@@ -1,4 +1,4 @@
-#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances}
+#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, sampleMaterialTexture}
 
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
 
@@ -56,6 +56,12 @@ struct Material {
   baseColor : vec4<f32>,
   metallic  : f32,
   roughness : f32,
+  textureScalePadding : array<vec4<f32>, 3>,
+  baseColorUvScale : vec2<f32>,
+  metallicRoughnessUvScale : vec2<f32>,
+  normalUvScale : vec2<f32>,
+  emissiveUvScale : vec2<f32>,
+  occlusionUvScale : vec2<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -65,6 +71,12 @@ struct Material {
 @group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
 @group(1) @binding(5) var normalSampler : sampler;
 @group(1) @binding(6) var normalTexture : texture_2d<f32>;
+
+// Preserve filtering reflection for the bound texture passed to the helper.
+fn materialTextureFilteringWitness() {
+  let base = baseColorTexture;
+  let baseWitness = textureSample(base, baseColorSampler, vec2<f32>(0.0));
+}
 
 struct VsIn {
   @location(0) pos     : vec3<f32>,
@@ -92,6 +104,6 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let texSample = textureSample(baseColorTexture, baseColorSampler, in.uv);
+  let texSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv, material.baseColorUvScale);
   return vec4<f32>(material.baseColor.rgb * texSample.rgb, material.baseColor.a * texSample.a);
 }

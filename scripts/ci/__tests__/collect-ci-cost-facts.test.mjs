@@ -13,6 +13,11 @@ const contract = JSON.parse(
   readFileSync(join(root, 'scripts', 'ci', 'build-artifact-contract.json'), 'utf8'),
 );
 
+test('uses non-interactive overwrite mode when expanding duplicate artifact paths', () => {
+  const source = readFileSync(script, 'utf8');
+  assert.match(source, /execFileSync\('unzip', \['-q', '-o', archive, '-d', destination\]\)/);
+});
+
 function fixture() {
   const payloadClasses = contract.provenance.payloadClasses;
   const artifacts = payloadClasses.map((_className, index) => ({
@@ -89,13 +94,15 @@ function fixture() {
       cacheState: 'cold',
       producer: 'shared-app-inputs',
       inputFingerprint: 'shared-input-fingerprint',
-      artifactClasses: ['shared-asset-pack', 'shared-engine-shaders'],
       sourceScanCount: 1,
       payloadEmitCount: 2,
       engineCompileCount: 1,
       buildDurationSeconds: 10,
     },
     sharedEvidence: {
+      schemaVersion: 1,
+      producer: 'shared-evidence-probe',
+      inputFingerprint: 'shared-input-fingerprint',
       baseline: { sourceScanCount: 3, payloadEmitCount: 4, engineCompileCount: 3 },
       samples: [
         { cacheState: 'cold', sourceScanCount: 1, payloadEmitCount: 2, engineCompileCount: 1 },
@@ -244,8 +251,49 @@ test('t19: classifies timing records as pass, fail, invalidSample, and notApplic
   assert.equal(
     prerequisiteResult.facts.ac06.perConsumer.find(
       (consumer) => consumer.jobIdentity === 'vitest-dawn',
-    ).code,
-    'ci-cost-non-artifact-prerequisite-after-ready',
+    ).status,
+    'pass',
+  );
+  assert.equal(
+    prerequisiteResult.facts.ac06.perConsumer.find(
+      (consumer) => consumer.jobIdentity === 'vitest-dawn',
+    ).effectiveReadyAt,
+    '2026-07-16T00:00:08Z',
+  );
+});
+
+test('w22: derives matrix consumer timing from the earliest real child, not its compatibility aggregate', () => {
+  const input = fixture();
+  const aggregate = input.jobPages[0].jobs.find((job) => job.name === 'smoke-fleet');
+  aggregate.started_at = '2026-07-16T00:02:00Z';
+  aggregate.completed_at = '2026-07-16T00:02:30Z';
+  input.jobPages[0].jobs.push(
+    {
+      name: 'smoke-fleet-0',
+      started_at: '2026-07-16T00:00:20Z',
+      completed_at: '2026-07-16T00:01:00Z',
+      conclusion: 'success',
+      run_attempt: 1,
+    },
+    {
+      name: 'smoke-fleet-1',
+      started_at: '2026-07-16T00:00:30Z',
+      completed_at: '2026-07-16T00:01:00Z',
+      conclusion: 'success',
+      run_attempt: 1,
+    },
+  );
+  input.jobPages[0].total_count += 2;
+  const result = run(input);
+  assert.equal(result.exitCode, 0, result.stdout);
+  const timing = result.facts.ac06.perConsumer.find(
+    (consumer) => consumer.jobIdentity === 'smoke-fleet',
+  );
+  assert.equal(timing.status, 'pass');
+  assert.equal(timing.observedJobStartedAt, '2026-07-16T00:00:20Z');
+  assert.equal(
+    result.facts.consumers.find((consumer) => consumer.name === 'smoke-fleet').startedAt,
+    '2026-07-16T00:00:20Z',
   );
 });
 
@@ -270,7 +318,10 @@ test('w19: records provenance-bound cold and warm shared production facts withou
   for (const mutate of [
     (input) => delete input.sharedProduction,
     (input) => delete input.sharedProduction.engineCompileCount,
-    (input) => (input.sharedProduction.artifactClasses = ['shared-asset-pack']),
+    (input) =>
+      (input.mergedProvenance.artifacts.find(
+        (artifact) => artifact.class === 'shared-asset-pack',
+      ).producer = 'core-build'),
     (input) => (input.sharedProduction.producer = 'cache-key'),
   ]) {
     const input = fixture();
@@ -305,6 +356,21 @@ test('repair: retains invalid AC-06 evidence until cold, warm, and baseline reco
     (input) => delete input.sharedEvidence,
     (input) => input.sharedEvidence.samples.pop(),
     (input) => (input.sharedEvidence.baseline.engineCompileCount = 1),
+  ]) {
+    const input = fixture();
+    mutate(input);
+    const result = run(input);
+    assert.equal(result.exitCode, 0, result.stdout);
+    assert.equal(result.facts.ac06.status, 'invalid');
+    assert.equal(result.facts.ac06.sharedEvidence.status, 'invalidEvidence');
+  }
+});
+
+test('repair: rejects shared evidence without its declared producer contract', () => {
+  for (const mutate of [
+    (input) => (input.sharedEvidence.producer = 'shared-app-inputs'),
+    (input) => delete input.sharedEvidence.inputFingerprint,
+    (input) => (input.sharedEvidence.schemaVersion = 2),
   ]) {
     const input = fixture();
     mutate(input);

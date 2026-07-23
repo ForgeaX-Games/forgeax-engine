@@ -1,4 +1,4 @@
-#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, PointLight, SpotLight, pointLightsBuffer, spotLightsBuffer, shadowMap, shadowSampler}
+#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, PointLight, SpotLight, pointLightsBuffer, spotLightsBuffer, shadowMap, shadowSampler, sampleMaterialTexture}
 #import forgeax_pbr::brdf::{f_schlick, v_smith, d_ggx}
 #import forgeax_pbr::ibl_sampling::{sampleIblDiffuse, sampleIblSpecular}
 #import forgeax_pbr::tbn::{decodeTangentSpaceNormalRg, applyTBN}
@@ -109,6 +109,12 @@ struct Material {
   // the struct still rounds to 80 B (alignUp(72,16)=80), so the material UBO /
   // BGL minBindingSize is byte-stable versus the pre-selector layout.
   uvSet              : f32,
+  textureScalePad    : vec2<f32>,
+  baseColorUvScale          : vec2<f32>,
+  metallicRoughnessUvScale  : vec2<f32>,
+  normalUvScale             : vec2<f32>,
+  emissiveUvScale           : vec2<f32>,
+  occlusionUvScale          : vec2<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -118,6 +124,22 @@ struct Material {
 @group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
 @group(1) @binding(5) var normalSampler : sampler;
 @group(1) @binding(6) var normalTexture : texture_2d<f32>;
+
+// Naga reflection does not retain filtering usage through the generic shared
+// helper. These compile-time-only witnesses retain the binding contract while
+// every runtime material sample still goes through sampleMaterialTexture.
+fn materialTextureFilteringWitness() {
+  let base = baseColorTexture;
+  let metallicRoughness = metallicRoughnessTexture;
+  let normal = normalTexture;
+  let emissive = emissiveTexture;
+  let occlusion = occlusionTexture;
+  let baseWitness = textureSample(base, baseColorSampler, vec2<f32>(0.0));
+  let metallicRoughnessWitness = textureSample(metallicRoughness, metallicRoughnessSampler, vec2<f32>(0.0));
+  let normalWitness = textureSample(normal, normalSampler, vec2<f32>(0.0));
+  let emissiveWitness = textureSample(emissive, emissiveSampler, vec2<f32>(0.0));
+  let occlusionWitness = textureSample(occlusion, occlusionSampler, vec2<f32>(0.0));
+}
 
 // Skylight bindings merged into the PBR material BGL
 // (feat-20260520-skylight-ibl-cubemap M3 / t48 round-4 amend per D-5
@@ -291,7 +313,7 @@ fn selectUv(in : VsOut) -> vec2<f32> {
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let uv = selectUv(in);
-  let baseSample = textureSample(baseColorTexture, baseColorSampler, uv);
+  let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, uv, material.baseColorUvScale);
   let albedo = material.baseColor.rgb * baseSample.rgb;
 
   // Metallic-roughness texture sampling with per-field channel selectors
@@ -299,7 +321,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // encoded by the host as 4 independent f32 selectors in the merged UBO
   // (metallicChannel/roughnessChannel/aoChannel/extraChannel). Cast to u32
   // at the pick_channel call site; values stay in {0,1,2,3}.
-  let mrSample = textureSample(metallicRoughnessTexture, metallicRoughnessSampler, uv);
+  let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, uv, material.metallicRoughnessUvScale);
   let metallic = material.metallic * pick_channel(mrSample, u32(material.metallicChannel));
   let roughnessTex = pick_channel(mrSample, u32(material.roughnessChannel));
 
@@ -317,7 +339,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // TBN basis composed via forgeax_pbr::tbn helpers; default fallback
   // (defaultNormalTextureView) RG=(128,128) -> tangent (0,0,1) -> world n
   // unchanged.
-  let normSampleRg = textureSample(normalTexture, normalSampler, uv).rg;
+  let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, uv, material.normalUvScale).rg;
   let normTangent = decodeTangentSpaceNormalRg(normSampleRg);
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 
@@ -360,7 +382,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     n, v, iblRoughness, f0,
     prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
   );
-  let aoSample = textureSample(occlusionTexture, occlusionSampler, uv);
+  let aoSample = sampleMaterialTexture(occlusionTexture, occlusionSampler, uv, material.occlusionUvScale);
   let ao = mix(1.0, aoSample.r, material.occlusionStrength);
   // feat-20260612-hdrp-ssao M7 round-2: `var` (mutable) so the
   // CLUSTER_FORWARD_AVAILABLE branch below can `ambient *=` the SSAO
@@ -450,7 +472,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     }
   }
 #endif // CLUSTER_FORWARD_AVAILABLE
-  let emissiveSample = textureSample(emissiveTexture, emissiveSampler, uv).rgb;
+  let emissiveSample = sampleMaterialTexture(emissiveTexture, emissiveSampler, uv, material.emissiveUvScale).rgb;
   color = color + material.emissive * material.emissiveIntensity * emissiveSample;
   return vec4<f32>(color, material.baseColor.a * baseSample.a);
 }
@@ -484,24 +506,24 @@ struct GBufferOutput {
 @fragment
 fn fs_gbuffer(in : VsOut) -> GBufferOutput {
   let uv = selectUv(in);
-  let baseSample = textureSample(baseColorTexture, baseColorSampler, uv);
+  let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, uv, material.baseColorUvScale);
   let albedo = material.baseColor.rgb * baseSample.rgb;
 
-  let mrSample = textureSample(metallicRoughnessTexture, metallicRoughnessSampler, uv);
+  let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, uv, material.metallicRoughnessUvScale);
   let metallic = material.metallic * pick_channel(mrSample, u32(material.metallicChannel));
   let roughnessTex = pick_channel(mrSample, u32(material.roughnessChannel));
 
   var a = max(material.roughness, 0.04);
   a = a * roughnessTex;
 
-  let normSampleRg = textureSample(normalTexture, normalSampler, uv).rg;
+  let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, uv, material.normalUvScale).rg;
   let normTangent = decodeTangentSpaceNormalRg(normSampleRg);
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 
-  let emissiveSample = textureSample(emissiveTexture, emissiveSampler, uv).rgb;
+  let emissiveSample = sampleMaterialTexture(emissiveTexture, emissiveSampler, uv, material.emissiveUvScale).rgb;
   let emissive = material.emissive * material.emissiveIntensity * emissiveSample;
 
-  let aoSample = textureSample(occlusionTexture, occlusionSampler, uv);
+  let aoSample = sampleMaterialTexture(occlusionTexture, occlusionSampler, uv, material.occlusionUvScale);
   let ao = mix(1.0, aoSample.r, material.occlusionStrength);
 
   var out : GBufferOutput;

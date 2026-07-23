@@ -151,17 +151,14 @@ export function warnMultiSkybox(
  * SkyboxBackground's when no Skylight cubemap is present -- both reuse one
  * handle). Implements the plan-strategy D-4 state machine:
  *
- *   undefined (no entry) + caps OK -> resolve POD + fire-and-forget projection
+ *   undefined (no entry) -> resolve POD + fire-and-forget projection; the
+ *                                    store selects rgba8 output on WebGL2
  *                                     (the store writes status:'pending'
  *                                     synchronously, so this launches once)
  *   pending                        -> in flight; bind white fallback (no fire)
  *   ready                          -> bound by recordMainPass's IBL cache check
  *   failed                         -> fire EquirectProjectionFailedError ONCE
  *                                     per handle (R-2/AC-09 no retry)
- *   caps.rgba16floatRenderable
- *     === false                    -> never project; permanent white fallback
- *                                     (AC-06: the only IBL gate, no UA guard)
- *
  * Fire-and-forget: `_uploadCubemapFromEquirect` is invoked WITHOUT await so the
  * record stay synchronous; the store mutates its own status map and (on
  * success) the per-device IblPipelineCache, which recordMainPass reads on a
@@ -192,12 +189,6 @@ export function driveLazyEquirectProjection(
   // 'pending' and 'ready' are both handled downstream (white fallback while
   // pending; real IBL once ready). Only the first sight ('undefined') launches.
   if (status !== undefined) return;
-
-  // caps gate (AC-06): rgba16float must be renderable for the HDR cubemap path.
-  // When unavailable, never launch -- the white fallback is permanent. No entry
-  // is written, so this re-checks cheaply each frame (a later device with the
-  // cap could then project). No UA guard -- caps is the only signal.
-  if (internals.device.caps.rgba16floatRenderable === false) return;
 
   // First sight: resolve the equirect POD and fire-and-forget the projection.
   const podRes = resolveAssetHandle<EquirectAsset>(world, handle);

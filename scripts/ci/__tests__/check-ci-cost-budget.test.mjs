@@ -37,7 +37,6 @@ function facts() {
     sharedProduction: {
       cacheState: 'cold',
       producer: 'shared-app-inputs',
-      artifactClasses: ['shared-asset-pack', 'shared-engine-shaders'],
       sourceScanCount: 1,
       payloadEmitCount: 2,
       engineCompileCount: 1,
@@ -151,12 +150,11 @@ test('t20: enforces AC-06 per consumer and rejects invalid evidence', () => {
   assert.match(invalidResult.stdout, /ci-cost-job-start-missing/);
 });
 
-test('w20: accepts shared cost facts only when they name the shared classes and provenance producer', () => {
+test('w20: accepts shared cost facts when provenance owns the declared classes', () => {
   const complete = facts();
   complete.sharedProduction = {
     cacheState: 'warm',
     producer: 'shared-app-inputs',
-    artifactClasses: ['shared-asset-pack', 'shared-engine-shaders'],
     sourceScanCount: 1,
     payloadEmitCount: 2,
     engineCompileCount: 1,

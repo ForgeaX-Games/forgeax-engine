@@ -19,14 +19,15 @@ import type { EndpointEvent, PeerId } from '../src/endpoint/endpoint';
 // ---------------------------------------------------------------------------
 
 describe('EndpointError closed union', () => {
-  it('has exactly 4 error codes', () => {
+  it('has exactly 5 error codes', () => {
     const codes: EndpointErrorCode[] = [
       'peer-not-found',
       'connection-closed',
       'send-failed',
       'already-closed',
+      'connection-failed',
     ];
-    expect(codes).toHaveLength(4);
+    expect(codes).toHaveLength(5);
   });
 
   it('all codes have non-empty expected and hint', () => {
@@ -35,6 +36,7 @@ describe('EndpointError closed union', () => {
       'connection-closed',
       'send-failed',
       'already-closed',
+      'connection-failed',
     ];
     for (const code of codes) {
       expect(ENDPOINT_EXPECTED[code]).toBeTypeOf('string');
@@ -84,6 +86,17 @@ describe('EndpointError closed union', () => {
     });
     expect(e4.code).toBe('already-closed');
     expect(e4.detail.cause).toBe('endpoint was closed');
+
+    const e5 = new EndpointError({
+      code: 'connection-failed',
+      expected: ENDPOINT_EXPECTED['connection-failed'],
+      hint: ENDPOINT_ERROR_HINTS['connection-failed'],
+      detail: { address: 'ws://127.0.0.1:43100', cause: 'ECONNREFUSED' },
+    });
+    expect(e5.code).toBe('connection-failed');
+    expect(e5.detail.address).toBe('ws://127.0.0.1:43100');
+    expect(e5.detail.cause).toBe('ECONNREFUSED');
+    expect(isEndpointError(e5)).toBe(true);
   });
 
   it('supports exhaustive switch on error code', () => {
@@ -97,6 +110,8 @@ describe('EndpointError closed union', () => {
           return `send failed to ${err.detail.peerId}: ${err.detail.cause}`;
         case 'already-closed':
           return `already closed: ${err.detail.cause}`;
+        case 'connection-failed':
+          return `connection failed: ${err.detail.address} (${err.detail.cause})`;
       }
     }
 

@@ -165,7 +165,7 @@ if (!cutoutEntry.ok) {
   for (const entry of shader.materialShaderManifestEntries()) {
     if (entry.identifier === CUTOUT_SHADER_PATH) {
       shader.registerMaterialShader(CUTOUT_SHADER_PATH, {
-        source: entry.source,
+        source: entry.composedWgsl,
         paramSchema: [{ name: 'baseColor', type: 'color' }],
         bindingLayout: [],
       });

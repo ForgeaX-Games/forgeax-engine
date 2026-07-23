@@ -29,7 +29,7 @@ function runDocsGate(): { readonly status: number; readonly output: string } {
 }
 
 describe('M5 active-documentation token-first gate', () => {
-  it('keeps the documented active surface and historical allowlist present', () => {
+  it('keeps the engine-owned active documentation surface present', () => {
     for (const path of [
       'packages/ecs/README.md',
       'packages/app/README.md',
@@ -46,10 +46,6 @@ describe('M5 active-documentation token-first gate', () => {
       'apps/learn-render/1.getting-started/7.camera/README.md',
       'apps/learn-render/2.lighting/3.materials/README.md',
       'packages/ecs/CHANGELOG.md',
-      'docs/roadmaps/2026-06-08-ecs-multithreading-roadmap.md',
-      'docs/roadmaps/2026-06-19-engine-self-stability-roadmap.md',
-      'docs/specs/2026-06-16-engine-state-and-state-scoped-entities-design.md',
-      'docs/specs/2026-06-23-plugin-system-design.md',
     ]) {
       expect(existsSync(resolve(repoRoot, path)), path).toBe(true);
     }

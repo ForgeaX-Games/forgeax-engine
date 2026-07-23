@@ -853,7 +853,11 @@ export class GpuResourceStore {
 
     const createTexRes = device.createTexture({
       label: `texture-${id}`,
-      size: { width: tex.width, height: tex.height, depthOrArrayLayers: 1 },
+      size: {
+        width: renderData.physicalExtent.width,
+        height: renderData.physicalExtent.height,
+        depthOrArrayLayers: 1,
+      },
       mipLevelCount: levels,
       sampleCount: 1,
       dimension: '2d',
@@ -981,16 +985,6 @@ export class GpuResourceStore {
       );
     }
 
-    if (this.caps !== undefined && this.caps.rgba16floatRenderable === false) {
-      return recordFailed(
-        new RhiError({
-          code: 'feature-not-enabled',
-          expected: 'caps.rgba16floatRenderable === true',
-          hint: 'AI users check device.caps.rgba16floatRenderable; only true allows the HDR cubemap path',
-        }),
-      );
-    }
-
     if (sourcePod.kind !== 'equirect') {
       return recordFailed(
         makeAssetError({
@@ -1073,6 +1067,11 @@ export class GpuResourceStore {
       : sourceTex;
 
     const cubeFaceSize = projected.cubeFaceSize;
+    // The source equirect stays float for filtering, but WebGL2 cannot render
+    // rgba16float attachments. Downlevel only the precompute outputs to the
+    // universally renderable rgba8 path; the same format is threaded through
+    // the cubemap and all three IBL side textures by IblPipelineCache.
+    const outputFormat = this.caps?.rgba16floatRenderable === false ? 'rgba8unorm' : tex.format;
 
     // Lazy projection runs from the record arm, where the device is always
     // wired (research R-5). The device-not-wired queue + placeholder cube path
@@ -1121,7 +1120,7 @@ export class GpuResourceStore {
       mipLevelCount: 1,
       sampleCount: 1,
       dimension: '2d',
-      format: tex.format,
+      format: outputFormat,
       usage: projected.cubeUsage,
       viewFormats: [],
     });
@@ -1220,7 +1219,7 @@ export class GpuResourceStore {
         ipDevice,
         // biome-ignore lint/suspicious/noExplicitAny: factory signatures are interoperable; device shim is structural
         this.asyncCreateShaderModule as any,
-        tex.format,
+        outputFormat,
       );
       if (pipelinesRes.ok) {
         // biome-ignore lint/suspicious/noExplicitAny: device shim

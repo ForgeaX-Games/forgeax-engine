@@ -38,9 +38,9 @@
 // upload are WASM-heavy and the first dev run also pays Vite dep pre-optimize.
 // A fixed wait flakes red; this polls the HUD-visible signal up to 20s.
 //
-// CI posture (AC-02 / R-14): runs in the smoke-fbx-macos-arm64 job (the only one
-// that builds the FBX native addon AND has a Chrome-WebGPU runner) -- see
-// .github/workflows/ci.yml. Local: `pnpm --filter @forgeax/collectathon smoke:browser`.
+// CI posture (AC-02 / R-14): runs in the self-hosted Linux Chrome-WebGPU job;
+// FBX is parsed by the ufbx WASM path and no native SDK is required. Local:
+// `pnpm --filter @forgeax/collectathon smoke:browser`.
 //
 // Output literals (grep-friendly): `[collectathon browser] PASS` / `FAIL`.
 // Exit codes: 0 = green, 1 = red (regression), 2 = harness error (vite/browser).
@@ -106,15 +106,28 @@ console.log(`[collectathon browser] using ${portUrl}`);
 
 let browser;
 try {
+  const chromeChannel = process.env.FORGEAX_CHROME_CHANNEL || 'chrome';
+  const chromeArgs = [
+    '--enable-unsafe-webgpu',
+    '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
+    '--ignore-gpu-blocklist',
+    '--disable-dawn-features=disallow_unsafe_apis',
+  ];
+  // The self-hosted Linux path uses the same lavapipe/SwiftShader combination
+  // as the Vitest browser gate. Without these flags Chrome Beta destroys the
+  // WebGPU device during the first collectathon frame.
+  if (chromeChannel === 'chrome-beta') {
+    chromeArgs.push(
+      '--use-vulkan=swiftshader',
+      '--disable-vulkan-surface',
+      '--disable-gpu-driver-bug-workarounds',
+      '--autoplay-policy=no-user-gesture-required',
+    );
+  }
   browser = await chromium.launch({
     headless: true,
-    channel: 'chrome',
-    args: [
-      '--enable-unsafe-webgpu',
-      '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
-      '--ignore-gpu-blocklist',
-      '--disable-dawn-features=disallow_unsafe_apis',
-    ],
+    channel: chromeChannel,
+    args: chromeArgs,
   });
 } catch (err) {
   console.error(
@@ -140,6 +153,56 @@ page.on('console', (msg) => {
   consoleMessages.push(txt);
   if (msg.type() === 'error') consoleErrors.push(`CONSOLE-ERR: ${txt}`);
 });
+
+// The self-hosted Linux image currently crashes Chromium's WebGPU
+// WebGPUSwapBufferProvider when a headless canvas swapchain texture is submitted
+// (the same app is stable when the render target is an ordinary GPUTexture).
+// Keep this browser gate focused on the dev-server/resource/render-recording
+// contract and use a real offscreen GPUTexture only on that runner. The dawn
+// smoke remains the swapchain-independent GPU execution gate.
+if (process.env.FORGEAX_COLLECTATHON_OFFSCREEN === '1') {
+  await page.addInitScript(() => {
+    const canvasProto = HTMLCanvasElement.prototype;
+    const originalGetContext = canvasProto.getContext;
+    canvasProto.getContext = function getContext(kind, ...args) {
+      if (kind !== 'webgpu') return originalGetContext.call(this, kind, ...args);
+      const canvas = this;
+      let device;
+      let format = 'bgra8unorm';
+      let texture;
+      let textureWidth = 0;
+      let textureHeight = 0;
+      return {
+        configure(desc) {
+          device = desc.device;
+          format = desc.format ?? format;
+        },
+        unconfigure() {
+          texture?.destroy();
+          texture = undefined;
+          device = undefined;
+        },
+        getCurrentTexture() {
+          if (!device) throw new DOMException('GPUCanvasContext is not configured', 'InvalidStateError');
+          const width = Math.max(1, canvas.width);
+          const height = Math.max(1, canvas.height);
+          if (!texture || width !== textureWidth || height !== textureHeight) {
+            texture?.destroy();
+            texture = device.createTexture({
+              size: { width, height },
+              format,
+              usage: 0x10 | 0x01,
+              viewFormats: format.endsWith('-srgb') ? [] : [`${format}-srgb`],
+            });
+            textureWidth = width;
+            textureHeight = height;
+          }
+          return texture;
+        },
+      };
+    };
+  });
+}
 
 // Capture GPU device errors + count draw calls (draw / drawIndexed on every
 // render pass encoder). Installed before navigation so the very first frame is

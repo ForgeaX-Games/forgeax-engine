@@ -224,15 +224,12 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       float32Filterable: probeFloat32Filterable(raw, rawFeatures),
     };
     this.caps = {
-      // R-6: wgpu-wasm currently runs against a single wasm bundle that
-      // handles both native-desktop and WebGL2 paths; the runtime cannot
-      // distinguish them because the wgpu crate does not expose adapter-info
-      // backend type to JS. The primary deployment path is wgpu native
-      // desktop (Tauri / native runtime), so default to 'wgpu-native'.
-      // When the wgpu-wasm crate exposes backend-kind info (or a downstream
-      // use case requires it), the WebGL2 sub-path should switch this to
-      // 'wgpu-webgl2' at the appropriate fill point.
-      backendKind: 'wgpu-native' as const,
+      // rhi-wgpu owns the wasm GL fallback path; navigator.gpu is selected by
+      // rhi-webgpu before this package is reached. Reporting the concrete
+      // backend here lets runtime capability routing disable GL-incompatible
+      // multisample targets instead of discovering the limitation as a panic
+      // during render-graph texture allocation.
+      backendKind: 'wgpu-webgl2' as const,
       compute: true,
       timestampQuery: hasFeature('timestamp-query'),
       indirectDrawing: true,
@@ -244,7 +241,11 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       textureBindingArray: false,
       samplerAliasing: true,
       firstInstanceIndirect: hasFeature('indirect-first-instance'),
-      storageBuffer: (rawLimits.maxStorageBuffersPerShaderStage ?? 0) > 0,
+      // The wgpu GLES/WebGL2 downlevel may expose a non-zero translated
+      // limit, but shader-storage buffers are not a usable WebGL2 contract.
+      // Report the capability at the engine boundary rather than leaking the
+      // raw adapter limit into layout/variant selection.
+      storageBuffer: false,
       storageTexture: (rawLimits.maxStorageTexturesPerShaderStage ?? 0) > 0,
       // HDR / filterable caps (feat-20260608 M1):
       ...hdrCaps,

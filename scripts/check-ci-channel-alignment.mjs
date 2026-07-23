@@ -401,7 +401,9 @@ function runOwnershipCheck({
     );
   }
 
-  // (e) the unified primary coverage run contains --project=ecs-perf
+  // (e) perf ratios run exactly once per CI channel without coverage
+  // instrumentation. Instrumentation changes the relative cost of the two
+  // compared loops, so a coverage run is not valid evidence for this gate.
   const priBlock = extractJobBlock(ciYamlText, PRIMARY_JOB);
   const coverageBlock = extractJobBlock(ciYamlText, 'coverage-pnpm');
   if (priBlock) {
@@ -412,40 +414,31 @@ function runOwnershipCheck({
     const vitestSteps = steps.filter(
       (s) => s.run.includes('vitest run') && s.run.includes('--typecheck'),
     );
-    const isSingleOwner = vitestSteps.length === 1;
-    const hasForkSplitOwners =
-      vitestSteps.length === 2 &&
-      vitestSteps.some(
-        (s) =>
-          s.name.startsWith('Vitest unit (fork PR only)') &&
-          s.ifExpression === "env.IS_FORK_PR == 'true'",
-      ) &&
-      vitestSteps.some(
-        (s) =>
-          s.name.startsWith('Vitest coverage (v8) + typecheck') &&
-          (s.ifExpression === "env.IS_FORK_PR != 'true'" || Boolean(coverageBlock)),
-      );
-    if (!isSingleOwner && !hasForkSplitOwners) {
+    const isSingleOwner = vitestSteps.length === 1 && Boolean(coverageBlock);
+    if (!isSingleOwner) {
       issues.push(
-        `[ownership] FAIL: primary-pnpm/coverage-pnpm has ${vitestSteps.length} non-exclusive vitest+typecheck command(s) (channel: primary-pnpm)\n` +
+        `[ownership] FAIL: coverage-pnpm must own exactly one vitest+typecheck command (found ${vitestSteps.length})\n` +
           `  Project: primary-pnpm/coverage-pnpm\n` +
           `  W5: ${W5_PATH}\n` +
           `  W6: ${W6_PATH}\n` +
-          `  Expected: one owner across primary-pnpm/coverage-pnpm, or the exact fork/unit and same-repo/coverage mutually exclusive pair — ` +
-          `deleting either owner would silently drop W5/W6 from one channel`,
+          `  Expected: one coverage/typecheck owner in coverage-pnpm; primary-pnpm must not carry an event-specific duplicate`,
       );
     }
-    for (const s of vitestSteps) {
-      if (!s.run.includes('--project=ecs-perf')) {
-        issues.push(
-          `[ownership] FAIL: primary-pnpm vitest command missing --project=ecs-perf (channel: primary-pnpm)\n` +
-            `  Project: primary-pnpm\n` +
-            `  Step: ${s.name}\n` +
-            `  W5: ${W5_PATH}\n` +
-            `  W6: ${W6_PATH}\n` +
-            `  Expected: contains '--project=ecs-perf' — W5/W6 would leave the primary channel`,
-        );
-      }
+    const perfSteps = steps.filter(
+      (s) => s.run.includes('vitest run') && s.run.includes('--project=ecs-perf'),
+    );
+    const uninstrumentedPerfSteps = perfSteps.filter((s) => !s.run.includes('--coverage'));
+    const hasCoverageOwnedPerf = uninstrumentedPerfSteps.some(
+      (s) => s.name === 'ECS performance ratio gates (uninstrumented)',
+    );
+    if (perfSteps.length !== 1 || !hasCoverageOwnedPerf || uninstrumentedPerfSteps.length !== 1) {
+      issues.push(
+        `[ownership] FAIL: coverage-pnpm must have one uninstrumented ecs-perf owner\n` +
+          `  Project: ecs-perf\n` +
+          `  W5: ${W5_PATH}\n` +
+          `  W6: ${W6_PATH}\n` +
+          `  Expected: one 'ECS performance ratio gates (uninstrumented)' step in coverage-pnpm, with no coverage instrumentation`,
+      );
     }
   }
 
@@ -521,11 +514,13 @@ function runOwnershipSelfTest() {
   // Remove BOTH vitest run --typecheck commands from primary-pnpm to exercise the
   // zero-candidate guard (F-1: silently green when all primary ownership commands
   // are deleted).
-  const zeroVitestTypecheck = ciText.replace(
-    /pnpm exec vitest run --typecheck /g,
-    'pnpm exec vitest run --no-typecheck ',
+  const zeroVitestTypecheck = ciText.replace(/--typecheck/g, '--no-typecheck');
+  const duplicateVitestTypecheck = ciText.replace(
+    '      - name: Vitest coverage (v8) + typecheck (feat-20260608-ci-time-cut)\n',
+    '      - name: Duplicate coverage owner\n' +
+      '        run: pnpm exec vitest run --typecheck --coverage\n' +
+      '      - name: Vitest coverage (v8) + typecheck (feat-20260608-ci-time-cut)\n',
   );
-  const duplicateVitestTypecheck = ciText.replace("if: env.IS_FORK_PR != 'true'", 'if: always()');
   const portabilityMarker = 'run: bun run test:portability';
   const portabilityWithProject = ciText.replace(
     portabilityMarker,
@@ -604,19 +599,19 @@ function runOwnershipSelfTest() {
       'ownership-primary-missing-ecs-perf',
       { ciYamlText: primaryWithoutPerf, rootDir },
       true,
-      '--project=ecs-perf',
+      'coverage-pnpm must have one uninstrumented ecs-perf owner',
     ],
     [
       'ownership-primary-zero-vitest-typecheck',
       { ciYamlText: zeroVitestTypecheck, rootDir },
       true,
-      'non-exclusive vitest+typecheck',
+      'coverage-pnpm must own exactly one',
     ],
     [
       'ownership-primary-duplicate-vitest-typecheck',
       { ciYamlText: duplicateVitestTypecheck, rootDir },
       true,
-      'non-exclusive vitest+typecheck',
+      'coverage-pnpm must own exactly one',
     ],
     [
       'ownership-portability-contains-ecs-perf',

@@ -15,7 +15,8 @@ export type EndpointErrorCode =
   | 'peer-not-found'
   | 'connection-closed'
   | 'send-failed'
-  | 'already-closed';
+  | 'already-closed'
+  | 'connection-failed';
 
 // ---------------------------------------------------------------------------
 // Per-code detail payloads
@@ -38,6 +39,11 @@ export interface EndpointDetailAlreadyClosed {
   readonly cause: string;
 }
 
+export interface EndpointDetailConnectionFailed {
+  readonly address: string;
+  readonly cause: string;
+}
+
 // ---------------------------------------------------------------------------
 // Conditional resolver
 // ---------------------------------------------------------------------------
@@ -50,14 +56,17 @@ export type EndpointErrorDetailFor<C extends EndpointErrorCode> = C extends 'pee
       ? EndpointDetailSendFailed
       : C extends 'already-closed'
         ? EndpointDetailAlreadyClosed
-        : never;
+        : C extends 'connection-failed'
+          ? EndpointDetailConnectionFailed
+          : never;
 
 /** Tagged union of all endpoint error detail variants. */
 export type EndpointErrorDetail =
   | EndpointDetailPeerNotFound
   | EndpointDetailConnectionClosed
   | EndpointDetailSendFailed
-  | EndpointDetailAlreadyClosed;
+  | EndpointDetailAlreadyClosed
+  | EndpointDetailConnectionFailed;
 
 // ---------------------------------------------------------------------------
 // Error class
@@ -88,6 +97,9 @@ class EndpointErrorClass extends Error {
     } else if (args.code === 'already-closed') {
       const d = args.detail as EndpointDetailAlreadyClosed;
       suffix = ` (cause=${d.cause})`;
+    } else if (args.code === 'connection-failed') {
+      const d = args.detail as EndpointDetailConnectionFailed;
+      suffix = ` (address=${d.address}, cause=${d.cause})`;
     }
     super(`[EndpointError ${args.code}] expected: ${args.expected}; hint: ${args.hint}${suffix}`);
     this.name = 'EndpointError';
@@ -107,7 +119,8 @@ export type EndpointError =
   | EndpointErrorVariant<'peer-not-found'>
   | EndpointErrorVariant<'connection-closed'>
   | EndpointErrorVariant<'send-failed'>
-  | EndpointErrorVariant<'already-closed'>;
+  | EndpointErrorVariant<'already-closed'>
+  | EndpointErrorVariant<'connection-failed'>;
 
 interface EndpointErrorConstructor {
   new <C extends EndpointErrorCode>(args: {
@@ -128,6 +141,8 @@ export const ENDPOINT_EXPECTED: Readonly<Record<EndpointErrorCode, string>> = {
   'connection-closed': 'the peer connection must be alive for the operation',
   'send-failed': 'message bytes must be delivered to the target peer or the connection must fail',
   'already-closed': 'the endpoint must be open for any operation',
+  'connection-failed':
+    'the endpoint factory must successfully establish a connection or bind to the listen address',
 };
 
 /** Actionable hint table per error code. */
@@ -139,6 +154,8 @@ export const ENDPOINT_ERROR_HINTS: Readonly<Record<EndpointErrorCode, string>> =
   'send-failed':
     'the memory connection is broken; the peer may have disconnected or the buffer is full',
   'already-closed': 'the endpoint is closed; create a new endpoint pair for further communication',
+  'connection-failed':
+    'the initial connection or bind failed; verify the address is reachable and the port is not in use, then retry',
 };
 
 /** Type guard for narrowing unknown to EndpointError. */

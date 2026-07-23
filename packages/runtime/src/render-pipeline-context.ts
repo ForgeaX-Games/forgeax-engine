@@ -132,12 +132,12 @@ export interface RenderPipelineContext {
 
   // ── MSAA (feat-20260604-learn-render-4.10-anti-aliasing-msaa M2 / w9-w10) ──
   /**
-   * True when the active camera carries `antialias === 'msaa'`. Derived from
-   * `camera.antialias`, never stored separately (C-9 / D-6). When true the
-   * geometry pass writes a count=4 multisample colour target and resolves to a
-   * single-sample output; the record stage selects the `*Msaa` pipeline
-   * variants. When false every attachment / pipeline is single-sample (the
-   * pre-MSAA path is byte-for-byte unchanged).
+   * True when the active camera requests MSAA and the RHI reports a compatible
+   * backend. Derived from `camera.antialias` plus the device capability, never
+   * stored separately (C-9 / D-6). When true the geometry pass writes a count=4
+   * multisample colour target and resolves to a single-sample output; when
+   * false every attachment / pipeline is single-sample (including the
+   * capability-accurate WebGL2 fallback route).
    */
   readonly msaaActive: boolean;
   /**

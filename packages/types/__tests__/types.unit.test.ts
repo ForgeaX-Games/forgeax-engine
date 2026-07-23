@@ -1944,16 +1944,16 @@ describe('Submesh interface', () => {
   });
 });
 
-describe('AssetErrorCode — 25 members', () => {
-  it('ASSET_ERROR_HINTS has exactly 25 keys (runtime guard, not hardcoded)', () => {
+describe('AssetErrorCode — 26 members', () => {
+  it('ASSET_ERROR_HINTS has exactly 26 keys (runtime guard, not hardcoded)', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
-    expect(keys).toHaveLength(25);
+    expect(keys).toHaveLength(26);
   });
 
-  it('all 25 codes are distinct', () => {
+  it('all 26 codes are distinct', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
     const set = new Set(keys);
-    expect(set.size).toBe(25);
+    expect(set.size).toBe(26);
   });
 
   it('three new codes (feat-20260608 M1 w2) are present with hint strings', () => {
@@ -1985,7 +1985,7 @@ describe('AssetErrorCode — 25 members', () => {
     expect(ASSET_ERROR_HINTS['source-not-imported'].length).toBeGreaterThan(0);
   });
 
-  it('all 25 codes have non-empty hint strings', () => {
+  it('all 26 codes have non-empty hint strings', () => {
     for (const [code, hint] of Object.entries(ASSET_ERROR_HINTS)) {
       expect(hint.length, `hint for ${code} must be non-empty`).toBeGreaterThan(0);
     }
@@ -1994,7 +1994,7 @@ describe('AssetErrorCode — 25 members', () => {
   // Type-level: verify exhaustive switch on 22-member AssetErrorCode compiles
   // without default case. TS compiler validates union completeness at compile
   // time — this function exists solely for tsc type-checking.
-  it('switch on AssetErrorCode with all 25 cases compiles without default', () => {
+  it('switch on AssetErrorCode with all 26 cases compiles without default', () => {
     function describe(code: AssetErrorCode): string {
       switch (code) {
         case 'asset-not-found':
@@ -2005,6 +2005,8 @@ describe('AssetErrorCode — 25 members', () => {
           return 'unsupported';
         case 'asset-fetch-failed':
           return 'fetch failed';
+        case 'catalog-source-unconfigured':
+          return 'catalog source unconfigured';
         case 'asset-invalid-value':
           return 'invalid value';
         case 'cubemap-handle-missing':

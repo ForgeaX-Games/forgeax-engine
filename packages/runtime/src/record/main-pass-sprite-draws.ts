@@ -97,7 +97,7 @@ export function recordSpritePass(
           // `'bgra8unorm'` here broke Channel 3 / dawn-node where the
           // storage format is `rgba8unorm` (Attachment state mismatch fired
           // every frame: PSO target rgba8unorm-srgb vs encoder bgra8unorm).
-          colorFormats: [pipelineState.format as unknown as GPUTextureFormat],
+          colorFormats: [transparentPassColorFormat(c) as unknown as GPUTextureFormat],
           depthFormat: 'depth24plus-stencil8',
           sampleCount: msaaActive ? 4 : 1,
         },
@@ -183,7 +183,7 @@ export function recordSpritePass(
         // compatible". Threading `pipelineState.format` (storage,
         // non-sRGB) here keeps PSO + encoder in sync (bug-20260527-
         // sprite-pipeline-bgra8unorm-srgb-not-blendable parity).
-        pipelineState.format as unknown as GPUTextureFormat,
+        transparentPassColorFormat(c, pipelineState) as unknown as GPUTextureFormat,
       ) ?? null;
     const spritePH_withRegion =
       runtime.getMaterialShaderPipeline?.(
@@ -196,7 +196,7 @@ export function recordSpritePass(
         'forward',
         undefined,
         msaaActive ? 4 : 1,
-        pipelineState.format as unknown as GPUTextureFormat,
+        transparentPassColorFormat(c) as unknown as GPUTextureFormat,
       ) ?? null;
 
     // bug-20260629: spritePH===null check moved OUTSIDE the entity loop so the
@@ -239,7 +239,7 @@ export function recordSpritePass(
         'forward',
         undefined,
         msaaActive ? 4 : 1,
-        pipelineState.format as unknown as GPUTextureFormat,
+        transparentPassColorFormat(c) as unknown as GPUTextureFormat,
       ) ?? null;
 
     recordSpriteEntityDraws(
@@ -404,7 +404,7 @@ function recordSpriteTransparentPbrDraws(
           subMeshUvAttributes,
           sampleCount,
           // Non-sRGB blend view (same override the sprite path uses).
-          pipelineState.format as unknown as GPUTextureFormat,
+          transparentPassColorFormat(c) as unknown as GPUTextureFormat,
         ) ?? null;
       if (subPipeline === null) continue;
 
@@ -981,4 +981,13 @@ function resolveSpriteInstancesBuffer(
     }
   }
   return { buffer, count };
+}
+
+function transparentPassColorFormat(
+  c: _InternalRenderPipelineContext,
+  pipelineState: _InternalRenderPipelineContext['pipelineState'] = c.pipelineState,
+): string {
+  return c.runtime.device.caps.storageBuffer
+    ? pipelineState.format
+    : pipelineState.colorAttachmentFormat;
 }

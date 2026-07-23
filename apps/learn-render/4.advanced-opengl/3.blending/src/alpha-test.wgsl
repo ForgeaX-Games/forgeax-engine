@@ -1,5 +1,8 @@
 #define_import_path learn_render::alpha_test
 
+#pragma variant_axis WEBGL2_COMPAT
+#pragma variant_axis STORAGE_BUFFER_AVAILABLE
+
 #import forgeax_view::common::{View, Mesh, view, meshes}
 
 // alpha-test.wgsl - LearnOpenGL section 4.3 blending demo.
@@ -49,7 +52,14 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
+#ifdef WEBGL2_COMPAT
+  // wgpu GLES/WebGL2 needs an explicit LOD for this filtered sample. The
+  // shared shader manifest compiles both branches; the runtime selects this
+  // one from the backend capability while WebGPU keeps implicit derivatives.
+  let texSample = textureSampleLevel(baseColorTexture, baseColorSampler, in.uv, 0.0);
+#else
   let texSample = textureSample(baseColorTexture, baseColorSampler, in.uv);
+#endif
   let alpha = material.baseColor.a * texSample.a;
   if (alpha < 0.1) {
     discard;

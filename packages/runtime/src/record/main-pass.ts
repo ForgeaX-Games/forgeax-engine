@@ -9,6 +9,7 @@ import { STANDARD_PBR_UBO_SIZE } from '../render-system';
 import type { MaterialSnapshot } from '../render-system-extract';
 import { recordGeometryDraws } from './main-pass-geometry';
 import {
+  applyMaterialTextureUvScales,
   applyParamSnapshotToUbo,
   buildPbrMaterialUboPayload,
   buildPerSubmeshMaterialBg as buildPerSubmeshMaterialBgImpl,
@@ -392,6 +393,7 @@ export function recordMainPass(c: _InternalRenderPipelineContext, selector?: Pas
         const schema =
           materialShaderId !== undefined ? runtime.getParamSchema?.(materialShaderId) : undefined;
         applyParamSnapshotToUbo(slotPayload, schema, mat.paramSnapshot);
+        applyMaterialTextureUvScales(slotPayload, mat, world);
 
         // Missing-texture detection: structural debug-pink fallback overrides
         // the baseColor/colorTint slot when a bound baseColorTexture handle

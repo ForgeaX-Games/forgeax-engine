@@ -305,6 +305,30 @@ function commandValidate(root) {
   process.stdout.write(`[ok] ${apps.length} Bevy demo package specs are valid\n`);
 }
 
+function parseGroups(value) {
+  const groups = Number(value);
+  if (!Number.isInteger(groups) || groups < 1 || groups > 16) {
+    fail(
+      'bevy-demo-groups-invalid',
+      'smoke groups is an integer from 1 to 16',
+      `got ${JSON.stringify(value)}`,
+    );
+  }
+  return groups;
+}
+
+function parseGroup(value, groups) {
+  const group = Number(value);
+  if (!Number.isInteger(group) || group < 0 || group >= groups) {
+    fail(
+      'bevy-demo-group-invalid',
+      `smoke group is an integer from 0 to ${groups - 1}`,
+      `got ${JSON.stringify(value)}`,
+    );
+  }
+  return group;
+}
+
 function parseConcurrency(value) {
   if (value === 'auto') {
     const { cpus, memoryBytes, containerized } = runnerResources();
@@ -359,8 +383,9 @@ async function runSmokePair(root, pkg) {
   }
 }
 
-async function commandSmokes(root, dryRun, concurrency) {
-  const apps = validateDemoApps(root).filter((app) => app.spec.status === 'implemented');
+async function commandSmokes(root, dryRun, concurrency, group, groups) {
+  const allApps = validateDemoApps(root).filter((app) => app.spec.status === 'implemented');
+  const apps = allApps.filter((_, index) => index % groups === group);
   if (dryRun) {
     for (const { pkg } of apps) {
       process.stdout.write(`[bevy-smoke] pnpm --filter ${pkg.name} build\n`);
@@ -384,7 +409,7 @@ async function commandSmokes(root, dryRun, concurrency) {
     if (firstError !== undefined) throw firstError;
   }
   process.stdout.write(
-    `[ok] ${apps.length} implemented Bevy demo smoke entries completed${dryRun ? ' (dry run)' : ''} with concurrency=${concurrency}\n`,
+    `[ok] ${apps.length}/${allApps.length} implemented Bevy demo smoke entries completed${dryRun ? ' (dry run)' : ''} with concurrency=${concurrency} group=${group}/${groups}\n`,
   );
 }
 
@@ -393,6 +418,8 @@ async function main() {
   let root = process.cwd();
   let dryRun = false;
   let concurrency = 1;
+  let groupValue = '0';
+  let groupsValue = '1';
   for (let i = 0; i < argv.length; ) {
     if (argv[i] === '--root') {
       const value = argv[i + 1];
@@ -413,14 +440,28 @@ async function main() {
         );
       concurrency = parseConcurrency(value);
       argv.splice(i, 2);
+    } else if (argv[i] === '--group') {
+      const value = argv[i + 1];
+      if (value === undefined)
+        fail('bevy-demo-group-required', '--group has a value', 'pass --group <N>');
+      groupValue = value;
+      argv.splice(i, 2);
+    } else if (argv[i] === '--groups') {
+      const value = argv[i + 1];
+      if (value === undefined)
+        fail('bevy-demo-groups-required', '--groups has a value', 'pass --groups <N>');
+      groupsValue = value;
+      argv.splice(i, 2);
     } else {
       i++;
     }
   }
+  const groups = parseGroups(groupsValue);
+  const group = parseGroup(groupValue, groups);
   const [command, argument] = argv;
   if (command === 'new') commandNew(root, argument);
   else if (command === 'validate') commandValidate(root);
-  else if (command === 'smokes') await commandSmokes(root, dryRun, concurrency);
+  else if (command === 'smokes') await commandSmokes(root, dryRun, concurrency, group, groups);
   else
     fail(
       'bevy-demo-command-unknown',

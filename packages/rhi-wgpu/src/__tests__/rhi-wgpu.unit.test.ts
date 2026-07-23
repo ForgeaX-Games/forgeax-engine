@@ -158,6 +158,16 @@ function setNavigatorGpu(gpu: unknown): void {
           usage: 0x10,
         });
         expect(cfgResult.ok).toBe(true);
+
+        const textureResult = ctx.getCurrentTexture();
+        expect(textureResult.ok).toBe(true);
+        if (textureResult.ok) {
+          const texture = textureResult.value as unknown as Record<string, unknown>;
+          expect(texture.width).toBe(800);
+          expect(texture.height).toBe(600);
+          expect(texture.format).toBe('bgra8unorm');
+          expect(texture.usage).toBe(0x10);
+        }
       });
 
       test('returned RhiCanvasContext.getConfiguration delegates to wasm surface', async () => {
@@ -356,7 +366,7 @@ function setNavigatorGpu(gpu: unknown): void {
         };
         const { device } = makeRd(raw);
         expect(device.caps.backendKind).toBeDefined();
-        expect(['wgpu-native', 'wgpu-webgl2']).toContain(device.caps.backendKind);
+        expect(device.caps.backendKind).toBe('wgpu-webgl2');
       });
     });
   });

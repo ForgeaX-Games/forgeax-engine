@@ -93,7 +93,15 @@ export function defineReplication(
   const limits: ReplicationLimits = { ...DEFAULT_LIMITS, ...options.limits };
   const signature = JSON.stringify({
     name: options.name,
-    query: options.entities,
+    query: {
+      with: options.entities.with.map((component) => component.name),
+      ...(options.entities.without === undefined
+        ? {}
+        : { without: options.entities.without.map((component) => component.name) }),
+      ...(options.entities.optional === undefined
+        ? {}
+        : { optional: options.entities.optional.map((component) => component.name) }),
+    },
     components: options.components.map((component) => ({
       name: component.name,
       schema: component.schema,

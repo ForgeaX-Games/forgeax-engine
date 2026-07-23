@@ -1,5 +1,7 @@
 import { type ImageError, ImportError } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { profileCorpus } from '../authoring/__tests__/fixtures/profile-corpus.js';
+import { validateUiAuthoring } from '../authoring/index.js';
 import { createUiImporter, importUiSource } from '../importer/index.js';
 import { createUiLoader, mountUi } from '../index.js';
 
@@ -79,5 +81,35 @@ describe('engine-ui dual entry', () => {
     expect(result.value.artifacts[0]?.path).toBe('icons/panel.png');
     expect(result.value.assets[0]?.payload.html).toContain('ui-token:icons/panel.png');
     expect(result.value.assets[0]?.payload.css).toContain('ui-token:icons/panel.png');
+  });
+
+  it('keeps validator and importer blocking conclusions identical across the shared corpus', async () => {
+    for (const entry of profileCorpus) {
+      const source = { guid: `corpus-${entry.name}`, html: entry.html, css: entry.css };
+      const validated = await validateUiAuthoring({
+        sourcePath: `${source.guid}.ui.html`,
+        html: source.html,
+        css: source.css,
+      });
+      const imported = importUiSource(source);
+      expect(imported.ok).toBe(validated.ok);
+      if (!validated.ok && !imported.ok) {
+        expect(imported.error.code).toBe('source-validation-failed');
+        expect('diagnostics' in imported.error.detail).toBe(true);
+        if ('diagnostics' in imported.error.detail)
+          expect(imported.error.detail.diagnostics.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('accepts established game-default slot and setting hooks', async () => {
+    const result = await validateUiAuthoring({
+      sourcePath: 'game-default.ui.html',
+      html: '<section><span data-ui-slot="score">Score</span><input data-ui-setting="music" /></section>',
+      css: '[data-ui-slot="score"] { color: red; }',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
   });
 });

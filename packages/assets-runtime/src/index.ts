@@ -27,6 +27,7 @@ export {
   BUILTIN_TRIANGLE,
   BuiltinAssetRegistry,
 } from './builtin-asset-registry';
+export { type CatalogListener, type CatalogSource, createCatalogSource } from './catalog-source';
 // ─── Runtime image byte decoder (tweak-20260714 M1) ──────────────────────────
 export { decodeImageBytes } from './decode-image-bytes';
 // ─── Dynamic per-frame texture store ────────────────────────────────────────

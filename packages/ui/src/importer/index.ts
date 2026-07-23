@@ -5,8 +5,9 @@ import {
   type ImportResult,
 } from '@forgeax/engine-types';
 import type { UiAsset } from '../asset.js';
-import { cssAssetUrls, validateCssSource } from './css.js';
-import { htmlAssetUrls, validateHtmlSource } from './html.js';
+import { classifyUiAuthoring, validateUiAuthoring } from '../authoring/validate.js';
+import { cssAssetUrls } from './css.js';
+import { htmlAssetUrls } from './html.js';
 
 export { cssAssetUrls, validateCssSource } from './css.js';
 export { htmlAssetUrls, validateHtmlSource } from './html.js';
@@ -25,6 +26,20 @@ function importFailure(reason: string): ImportResult<UiAsset> {
       expected: 'a valid UI author source and readable local companions',
       hint: 'Fix the UI source or add the referenced companion file.',
       detail: { reason },
+    }),
+  };
+}
+
+function validationFailure(
+  diagnostics: readonly import('@forgeax/engine-types').ImportDiagnostic[],
+): ImportResult<UiAsset> {
+  return {
+    ok: false,
+    error: new ImportError({
+      code: 'source-validation-failed',
+      expected: 'HTML, CSS, and companions within the UiAuthoringProfile',
+      hint: 'Inspect err.detail.diagnostics and fix each source-located error.',
+      detail: { diagnostics },
     }),
   };
 }
@@ -56,16 +71,12 @@ function mimeType(path: string): string {
 }
 
 export function importUiSource(source: UiSource): ImportResult<UiAsset> {
-  const html = validateHtmlSource(source.html);
-  if (!html.ok)
-    return importFailure(
-      `${html.error.message} at ${html.error.location.line}:${html.error.location.column}`,
-    );
-  const css = validateCssSource(source.css);
-  if (!css.ok)
-    return importFailure(
-      `${css.error.message} at ${css.error.location.line}:${css.error.location.column}`,
-    );
+  const classification = classifyUiAuthoring({
+    sourcePath: `${source.guid}.ui.html`,
+    html: source.html,
+    css: source.css,
+  });
+  if (classification.blocking) return validationFailure(classification.diagnostics);
   return {
     ok: true,
     value: {
@@ -73,7 +84,7 @@ export function importUiSource(source: UiSource): ImportResult<UiAsset> {
         {
           guid: source.guid,
           kind: 'ui',
-          payload: { guid: source.guid, html: html.value, css: css.value.css },
+          payload: { guid: source.guid, html: source.html, css: source.css },
           refs: [],
         },
       ],
@@ -92,29 +103,38 @@ export function createUiImporter(): {
       const htmlText = new TextDecoder().decode(source.value);
       const guid = context.subAssets[0]?.guid;
       if (guid === undefined) return importFailure('meta.subAssets must declare one UI GUID');
-      const html = validateHtmlSource(htmlText);
-      if (!html.ok)
-        return importFailure(
-          `${html.error.message} at ${html.error.location.line}:${html.error.location.column}`,
-        );
-
       const fileName = context.source.slice(context.source.lastIndexOf('/') + 1);
       const cssPath = fileName.replace(/\.ui\.html$/i, '.ui.css');
       const cssRead = await context.readSibling(cssPath);
       if (!cssRead.ok) return importFailure(`missing UI stylesheet companion: ${cssPath}`);
       const cssText = new TextDecoder().decode(cssRead.value);
-      const css = validateCssSource(cssText);
-      if (!css.ok)
-        return importFailure(
-          `${css.error.message} at ${css.error.location.line}:${css.error.location.column}`,
-        );
-
-      const references = [...htmlAssetUrls(html.value), ...cssAssetUrls(css.value.css)];
+      const validation = await validateUiAuthoring({
+        sourcePath: context.source,
+        html: htmlText,
+        css: cssText,
+        readCompanion: async (path) => {
+          const read = await context.readSibling(path);
+          return read.ok
+            ? { ok: true as const }
+            : {
+                ok: false as const,
+                path,
+                reason:
+                  'reason' in read.error.detail ? read.error.detail.reason : read.error.message,
+              };
+        },
+      });
+      if (!validation.ok) {
+        if ('diagnostics' in validation.error.detail)
+          return validationFailure(validation.error.detail.diagnostics);
+        return importFailure(validation.error.message);
+      }
+      const references = [...htmlAssetUrls(htmlText), ...cssAssetUrls(cssText)];
       const unique = [...new Set(references)];
       const artifacts: ImportedArtifact[] = [];
       const dependencies = [context.source, cssPath];
-      let htmlOut = html.value;
-      let cssOut = css.value.css;
+      let htmlOut = htmlText;
+      let cssOut = cssText;
       for (const reference of unique) {
         const path = relativePath(reference);
         if (path === undefined) return importFailure(`unsafe UI companion URL: ${reference}`);

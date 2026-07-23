@@ -70,6 +70,71 @@ pipeline lives in `packages/assets-runtime/src/registry/load-by-guid.ts`; the
 instantiate cluster + hook types in `registry/instantiate.ts`; material
 validation in `registry/validate-material.ts`.
 
+## Catalog source: enumerate first-class asset rows, then observe row changes
+
+> [!IMPORTANT]
+> A catalog is an enumerable complete row set plus subscribable row changes.
+> Wire the source, **subscribe before enumerating**, then keep the local view
+> keyed by GUID. `CatalogDelta` reports facts only; it never chooses a page
+> reload or an editor update policy.
+
+`CatalogSource` is the runtime boundary between `AssetRegistry` and a concrete
+catalog transport. Its two operations are `enumerate()` and `subscribe()`;
+the public row and delta shapes are `CatalogEntry` and `CatalogDelta` from
+`@forgeax/engine-types`. Read those exported types for their complete fields
+instead of copying a second schema into a consumer.
+
+```ts
+const unsubscribe = assets.subscribeCatalog((delta) => {
+  // Delete first, then replace added/changed rows by their stable GUID.
+  for (const guid of delta.removed) rowsByGuid.delete(guid.toLowerCase());
+  for (const row of [...delta.added, ...delta.changed]) {
+    rowsByGuid.set(row.guid.toLowerCase(), row);
+  }
+});
+
+const snapshot = await assets.enumerateCatalog();
+if (!snapshot.ok) {
+  console.error(snapshot.error.code, snapshot.error.hint);
+  // Fix the source configuration or catalog endpoint, then call enumerateCatalog() again.
+} else {
+  for (const row of snapshot.value) rowsByGuid.set(row.guid.toLowerCase(), row);
+}
+
+// Safe to call more than once.
+unsubscribe();
+unsubscribe();
+```
+
+### Delta and refresh ownership
+
+| Delta set | Carries | Consumer action |
+|:--|:--|:--|
+| `added` | complete new `CatalogEntry` rows | insert/replace by lowercase GUID |
+| `changed` | complete replacement `CatalogEntry` rows | replace by lowercase GUID |
+| `removed` | stable GUID strings | remove by lowercase GUID |
+
+The producer emits no delta when its final catalog projection is unchanged.
+Source-only byte changes likewise are not forged into a row change. A browser
+host that needs those bytes to refresh explicitly selects its own policy (for
+the Vite adapter, `reloadAssetHost()`); an editor can instead merge the delta
+without recreating its realm. The registry does not import Vite or infer either
+policy.
+
+### Recovery and static sources
+
+Call `setCatalogSource(source)` before enumeration. Without a source,
+`enumerateCatalog()` returns the structured `catalog-source-unconfigured`
+error; endpoint and parse failures remain structured results as well. Inspect
+`.code` and `.hint`, repair the external condition, then enumerate again — a
+failed enumeration is not a permanent result.
+
+Subscribe before the first enumeration to avoid the consumer-side missed-event
+window. If a consumer subscribed late or needs to resynchronise after a
+transport interruption, enumerate again and merge the returned complete rows
+by GUID. A static source may safely return an idempotent no-op unsubscribe: it
+has no continuing change transport and must not manufacture deltas.
+
 ## Error model
 
 `AssetRuntimeErrorCode` is the package's closed error-code SSOT (exhaustive

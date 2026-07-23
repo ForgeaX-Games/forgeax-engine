@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
 // hello-skin vite config (tweak-20260611-skin-fox-3clip-and-kb-sample-assets M6).
@@ -25,6 +25,7 @@ export default defineConfig({
   plugins: [
     forgeaxShader() as never,
     pluginPack({
+      refresh: reloadAssetHost(),
       roots: [resolve(monorepoRoot, 'forgeax-engine-assets/khronos-gltf-samples/Fox')],
       importers: [imageImporter, gltfImporter],
     }),

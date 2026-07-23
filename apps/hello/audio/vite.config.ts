@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
 // hello-audio vite config (feat-20260529-hello-audio-demo-with-spacebar-one-shot-sfx-playba).
@@ -27,7 +27,7 @@ const sfxDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'sfx');
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({ roots: [sfxDir] }),
+    pluginPack({ roots: [sfxDir] , refresh: reloadAssetHost() }),
   ],
   server: {
     port: 5195,

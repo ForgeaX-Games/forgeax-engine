@@ -177,4 +177,40 @@ describe('bevy-demo.mjs', () => {
     expect(result.stderr).toMatch(/auto concurrency=\d+/);
     expect(result.stdout).toMatch(/completed \(dry run\) with concurrency=\d+/);
   });
+
+  it('selects one deterministic group without changing package order', () => {
+    const root = tempRoot();
+    for (const id of ['a-demo', 'b-demo', 'c-demo', 'd-demo', 'e-demo']) {
+      const app = join(root, 'apps', 'bevy', id);
+      mkdirSync(app, { recursive: true });
+      writeFileSync(
+        join(app, 'package.json'),
+        JSON.stringify({
+          name: `@forgeax/bevy-${id}`,
+          forgeax: {
+            bevyExample: {
+              name: id.replace('-', '_'),
+              category: 'Animation',
+              status: 'implemented',
+            },
+            smokeInvocation: `pnpm --filter @forgeax/bevy-${id} smoke`,
+            metrics: { gate: { command: `pnpm --filter @forgeax/bevy-${id} smoke` } },
+          },
+        }),
+      );
+    }
+    const result = run(root, 'smokes', '--group', '1', '--groups', '2', '--dry-run');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('@forgeax/bevy-b-demo');
+    expect(result.stdout).toContain('@forgeax/bevy-d-demo');
+    expect(result.stdout).not.toContain('@forgeax/bevy-a-demo');
+    expect(result.stdout).toContain('2/5 implemented Bevy demo smoke entries');
+  });
+
+  it('rejects a group outside the configured matrix', () => {
+    const root = tempRoot();
+    const result = run(root, 'smokes', '--group', '3', '--groups', '3', '--dry-run');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('bevy-demo-group-invalid');
+  });
 });

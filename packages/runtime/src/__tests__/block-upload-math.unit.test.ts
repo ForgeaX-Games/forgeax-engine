@@ -17,7 +17,7 @@
 //   - pure node unit, no browser / dawn dependency
 
 import { describe, expect, it } from 'vitest';
-import { deriveMipUploadLayout, type MipUploadLevel } from '../render-data';
+import { deriveMipUploadLayout, deriveTextureExtent, type MipUploadLevel } from '../render-data';
 
 /** Sum of every level's byte length -- the total block-byte buffer size. */
 function totalBytes(layout: readonly MipUploadLevel[]): number {
@@ -129,26 +129,60 @@ describe('deriveMipUploadLayout -- mip-major offset accumulation (w29)', () => {
   });
 });
 
-describe('deriveMipUploadLayout -- logical full-subresource copy extents', () => {
-  it('retains non-block-aligned BC7 dimensions', () => {
+describe('deriveMipUploadLayout -- physical full-subresource copy extents', () => {
+  it('aligns non-block-aligned BC7 copies to physical storage', () => {
     const layout = deriveMipUploadLayout('bc7-rgba-unorm', 7, 5, 1);
-    expect(layout[0]?.copyWidth).toBe(7);
-    expect(layout[0]?.copyHeight).toBe(5);
+    expect(layout[0]?.copyWidth).toBe(8);
+    expect(layout[0]?.copyHeight).toBe(8);
   });
 
-  it('retains sub-block tail mip dimensions', () => {
+  it('aligns sub-block tail mip copies independently', () => {
     const layout = deriveMipUploadLayout('bc7-rgba-unorm', 8, 8, 4);
     expect(layout[2]?.width).toBe(2);
-    expect(layout[2]?.copyWidth).toBe(2);
-    expect(layout[2]?.copyHeight).toBe(2);
+    expect(layout[2]?.copyWidth).toBe(4);
+    expect(layout[2]?.copyHeight).toBe(4);
     expect(layout[3]?.width).toBe(1);
-    expect(layout[3]?.copyWidth).toBe(1);
-    expect(layout[3]?.copyHeight).toBe(1);
+    expect(layout[3]?.copyWidth).toBe(4);
+    expect(layout[3]?.copyHeight).toBe(4);
   });
 
-  it('retains non-square ASTC dimensions', () => {
+  it('aligns non-square ASTC copies with its own block dimensions', () => {
     const layout = deriveMipUploadLayout('astc-8x5-unorm', 5, 3, 1);
-    expect(layout[0]?.copyWidth).toBe(5);
-    expect(layout[0]?.copyHeight).toBe(3);
+    expect(layout[0]?.copyWidth).toBe(8);
+    expect(layout[0]?.copyHeight).toBe(5);
+  });
+});
+
+describe('deriveTextureExtent -- logical asset extent to physical storage extent (w35)', () => {
+  it('derives BC7 physical storage and a logical UV scale without changing logical metadata', () => {
+    expect(deriveTextureExtent('bc7-rgba-unorm', 2085, 1573)).toEqual({
+      logicalExtent: { width: 2085, height: 1573 },
+      physicalExtent: { width: 2088, height: 1576 },
+      uvScale: [2085 / 2088, 1573 / 1576],
+    });
+  });
+
+  it('derives each 4x4 tail mip independently', () => {
+    expect(deriveTextureExtent('bc7-rgba-unorm', 2, 1)).toEqual({
+      logicalExtent: { width: 2, height: 1 },
+      physicalExtent: { width: 4, height: 4 },
+      uvScale: [0.5, 0.25],
+    });
+  });
+
+  it('uses the codec block-format table for a non-4x4 format', () => {
+    expect(deriveTextureExtent('astc-6x6-unorm', 7, 8)).toEqual({
+      logicalExtent: { width: 7, height: 8 },
+      physicalExtent: { width: 12, height: 12 },
+      uvScale: [7 / 12, 8 / 12],
+    });
+  });
+
+  it('keeps uncompressed textures at identity extent and scale', () => {
+    expect(deriveTextureExtent('rgba8unorm', 17, 9)).toEqual({
+      logicalExtent: { width: 17, height: 9 },
+      physicalExtent: { width: 17, height: 9 },
+      uvScale: [1, 1],
+    });
   });
 });

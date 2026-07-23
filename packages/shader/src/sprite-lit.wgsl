@@ -1,6 +1,6 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
 
-#import forgeax_view::common::{View, Mesh, InstanceData, PointLight, SpotLight, view, meshes, instances, pointLightsBuffer, spotLightsBuffer}
+#import forgeax_view::common::{View, Mesh, InstanceData, PointLight, SpotLight, view, meshes, instances, pointLightsBuffer, spotLightsBuffer, sampleMaterialTexture}
 
 // @forgeax/engine-shader - sprite-lit.wgsl
 // (tweak-20260701-sprite-lit-flat-default-drop-ndotl-for-2d).
@@ -62,6 +62,12 @@ struct Material {
   region        : vec4<f32>,
   pivotAndSize  : vec4<f32>,
   slicesAndMode : vec4<f32>,
+  textureScalePadding : vec4<f32>,
+  baseColorUvScale : vec2<f32>,
+  metallicRoughnessUvScale : vec2<f32>,
+  normalUvScale : vec2<f32>,
+  emissiveUvScale : vec2<f32>,
+  occlusionUvScale : vec2<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -76,6 +82,12 @@ struct Material {
 @group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
 @group(1) @binding(5) var normalSampler : sampler;
 @group(1) @binding(6) var normalTexture : texture_2d<f32>;
+
+// Preserve filtering reflection for the bound texture passed to the helper.
+fn materialTextureFilteringWitness() {
+  let base = baseColorTexture;
+  let baseWitness = textureSample(base, baseColorSampler, vec2<f32>(0.0));
+}
 
 struct VsIn {
   @location(0) pos     : vec3<f32>,
@@ -214,7 +226,7 @@ fn spriteLitShadeAccum(albedo : vec3<f32>, worldPos : vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let texel = textureSample(baseColorTexture, baseColorSampler, in.uv_atlas);
+  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorUvScale);
   let albedo4 = texel * material.colorTint;
   let lit = spriteLitShadeAccum(albedo4.rgb, in.worldPos);
   // Strict clamp 0..1 before premultiplied alpha multiply keeps the LDR
@@ -232,7 +244,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_main_hdr(in : VsOut) -> @location(0) vec4<f32> {
-  let texel = textureSample(baseColorTexture, baseColorSampler, in.uv_atlas);
+  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorUvScale);
   let albedo4 = texel * material.colorTint;
   let lit = spriteLitShadeAccum(albedo4.rgb, in.worldPos);
   // HDR variant: do NOT clamp the lit output to [0, 1]; let the tonemap

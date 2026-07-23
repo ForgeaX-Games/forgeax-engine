@@ -143,10 +143,10 @@ const manifestParsed = JSON.parse(manifestRaw);
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(manifestRaw)}`;
 
 const matShaderEntry = (manifestParsed.materialShaders ?? []).find(
-  (m) => m && typeof m.identifier === 'string' && m.identifier.includes('fractal_pyramid'),
+  (m) => m && m.identifier === 'shadertoy::fractal-pyramid',
 );
 if (!matShaderEntry) {
-  console.error('[smoke] FAIL - manifest.materialShaders[] missing fractal_pyramid entry');
+  console.error('[smoke] FAIL - manifest.materialShaders[] missing shadertoy::fractal-pyramid entry');
   process.exit(1);
 }
 let composedWgsl;

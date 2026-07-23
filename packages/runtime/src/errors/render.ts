@@ -126,8 +126,8 @@ export interface EquirectProjectionFailedDetail {
  *   - `.code = 'equirect-projection-failed'` (closed RuntimeErrorCode)
  *   - `.expected` — equirect-to-cubemap projection + IBL precompute succeeds
  *   - `.hint` — declare `Skylight{equirect}` with a valid HDR equirect source;
- *     check `device.caps.rgba16floatRenderable`. The projection is internal —
- *     there is no user upload call to retry
+ *     check the source format and device caps (WebGL2 uses an rgba8 precompute
+ *     fallback). The projection is internal — there is no user upload call to retry
  *   - `.detail = { handle }` — the numeric equirect handle id for diagnostics
  */
 export class EquirectProjectionFailedError extends Error {
@@ -140,7 +140,7 @@ export class EquirectProjectionFailedError extends Error {
     const expected = `equirect handle ${handle} projects to a GPU cubemap + IBL precompute`;
     const hint =
       `equirect handle ${handle} referenced by Skylight/SkyboxBackground failed projection; ` +
-      `declare Skylight{equirect} with a valid HDR equirect source and check device.caps.rgba16floatRenderable. ` +
+      `declare Skylight{equirect} with a valid HDR equirect source and check the source format/device caps (WebGL2 uses an rgba8 precompute fallback). ` +
       `The projection is internal (no user upload call); the record arm does not retry`;
     super(`equirect handle ${handle} cubemap projection failed`);
     this.name = 'EquirectProjectionFailedError';

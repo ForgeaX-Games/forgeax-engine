@@ -667,6 +667,14 @@ pnpm metrics:run-fps -- --app apps/parity/instancing-static
 
 ---
 
+## 复制实体引用导致派生渲染漏体
+
+**信号**：公开 replica state 显示 `bodyLength > 1`，但 canvas 只有蛇头；local render entity map 的数量也小于所有蛇的 body length 之和。
+
+**判定**：先以浏览器 E2E 驱动一次增长，再同时读取公开 state 和 `data-render-entity-count`。两者不等时，录一帧 RHI tape 并 inspect RT，确认不是 UI/截图层遗漏。不要只断言 `SnakeBody.segments.length`：replica 中的 `array<entity>` 可表现为索引对象，且 entity reference 不等于 replica row ID。
+
+**修法**：渲染归属使用稳定、可复制的业务 identity（例如 `playerNetworkId`），让每个派生 segment 自带该值；`SnakeBody.segments` 只用于长度和顺序。对每条 segment 用业务 identity 选 body material，避免用 remapped entity handle 反查 owner。回归测试必须断言 `renderEntityCount == sum(bodyLength)`，并以 RHI RT PNG 证明身体段实际画出。
+
 ## RHI tape 录制 (frame record + replay + offline inspect)
 
 > RHI 帧录制 / replay / 离线 per-draw inspect（capture -> inspect -> dispose 工作流 + `DebugErrorCode` + 跨后端确定性）见 [`forgeax-engine-rhi-debug`](../forgeax-engine-rhi-debug/SKILL.md)（SSOT）。渲染症状（black/grey-screen / wrong-texture / wrong-binding）的 tape-driven 定位流程在那里的 §症状 -> tape -> inspect 决策流。

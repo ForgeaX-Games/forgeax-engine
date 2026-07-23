@@ -60,7 +60,10 @@ function selectedAttempt(index) {
 }
 function latestReportPath(prefix, index, code) {
   const selected = selectedAttempt(index);
-  if (selected !== null) return join(reportsDir, `${prefix}-${index}-a${selected}.json`);
+  if (selected !== null) {
+    const selectedPath = join(reportsDir, `${prefix}-${index}-a${selected}.json`);
+    if (existsSync(selectedPath)) return selectedPath;
+  }
   const legacy = join(reportsDir, `${prefix}-${index}.json`);
   if (existsSync(legacy)) return legacy;
   const matches = readdirSync(reportsDir)

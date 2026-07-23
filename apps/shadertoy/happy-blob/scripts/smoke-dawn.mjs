@@ -143,10 +143,10 @@ const manifestParsed = JSON.parse(manifestRaw);
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(manifestRaw)}`;
 
 const matShaderEntry = (manifestParsed.materialShaders ?? []).find(
-  (m) => m && typeof m.identifier === 'string' && m.identifier.includes('happy_blob'),
+  (m) => m && m.identifier === 'shadertoy::happy-blob',
 );
 if (!matShaderEntry) {
-  console.error('[smoke] FAIL - manifest.materialShaders[] missing happy_blob entry');
+  console.error('[smoke] FAIL - manifest.materialShaders[] missing shadertoy::happy-blob entry');
   process.exit(1);
 }
 let composedWgsl;

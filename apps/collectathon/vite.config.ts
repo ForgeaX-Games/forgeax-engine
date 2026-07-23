@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fbxImporter } from '@forgeax/engine-fbx';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
 // collectathon vite config: 3D third-person collectathon showcase.
@@ -23,6 +23,7 @@ export default defineConfig({
   plugins: [
     forgeaxShader() as never,
     pluginPack({
+      refresh: reloadAssetHost(),
       roots: [
         resolve(monorepoRoot, 'forgeax-engine-assets/vendor/fbx-test'),
         resolve(monorepoRoot, 'forgeax-engine-assets/demo-assets/template-game-default'),

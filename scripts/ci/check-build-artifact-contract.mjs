@@ -7,8 +7,8 @@
 //     step references a declared artifact name and every declared artifact has
 //     a corresponding upload step
 // (d) Validates timingRoster section: jobIdentity matches workflow job name,
-//     requiredArtifactClasses subset of declared artifact classes, notApplicable
-//     consumers have no download-artifact step in the PR path
+//     each entry projects its requiredArtifactClasses from one declared consumer,
+//     and notApplicable consumers have no download-artifact step in the PR path
 // (e) F-1 bidirectional needs check: for each timing consumer, parse the
 //     workflow YAML to extract actual direct needs array and verify against
 //     allowedNonArtifactPrerequisites
@@ -181,6 +181,16 @@ function parseWorkflowYaml(text) {
   return jobs;
 }
 
+function timingConsumer(contract, entry) {
+  const name = entry?.consumer;
+  return typeof name === 'string' ? (contract.consumers?.[name] ?? null) : null;
+}
+
+function timingRequiredArtifactClasses(contract, entry) {
+  if (entry?.notApplicable) return [];
+  return timingConsumer(contract, entry)?.requiredArtifactClasses ?? null;
+}
+
 function getIndent(line) {
   const match = line.match(/^(\s*)/);
   return match ? match[1].length : 0;
@@ -278,7 +288,9 @@ function validateContract(contract) {
   // Validate artifact classes
   const classNames = Object.keys(contract.artifactClasses);
   const workflowClasses = new Set(
-    (contract.timingRoster ?? []).flatMap((entry) => entry.requiredArtifactClasses ?? []),
+    Object.values(contract.consumers ?? {}).flatMap(
+      (consumer) => consumer.requiredArtifactClasses ?? [],
+    ),
   );
   for (const className of classNames.filter((name) => workflowClasses.has(name))) {
     const def = contract.artifactClasses[className];
@@ -389,11 +401,38 @@ function validateTimingRoster(contract) {
     }
     seenIdentities.add(entry.jobIdentity);
 
-    if (!entry.requiredArtifactClasses || !Array.isArray(entry.requiredArtifactClasses)) {
+    if (typeof entry.consumer !== 'string' || !entry.consumer) {
       errors.push({
         code: 'ci-artifact-contract-timing-roster-invalid',
-        actual: `missing requiredArtifactClasses for "${entry.jobIdentity}"`,
-        expected: 'array of artifact class names',
+        actual: `missing consumer for "${entry.jobIdentity}"`,
+        expected: 'consumer name declared in consumers',
+      });
+      continue;
+    }
+
+    if (Object.hasOwn(entry, 'requiredArtifactClasses')) {
+      errors.push({
+        code: 'ci-artifact-contract-timing-roster-duplicate-projection',
+        actual: `timing roster "${entry.jobIdentity}" carries requiredArtifactClasses directly`,
+        expected: 'timing entries reference consumers; artifact classes belong only to consumers',
+      });
+    }
+
+    const consumer = timingConsumer(contract, entry);
+    if (!consumer) {
+      errors.push({
+        code: 'ci-artifact-contract-timing-roster-unknown-consumer',
+        actual: `timing roster "${entry.jobIdentity}" references unknown consumer "${entry.consumer}"`,
+        expected: `one of: ${Object.keys(contract.consumers ?? {}).join(', ')}`,
+      });
+      continue;
+    }
+    const requiredArtifactClasses = timingRequiredArtifactClasses(contract, entry);
+    if (!Array.isArray(requiredArtifactClasses)) {
+      errors.push({
+        code: 'ci-artifact-contract-timing-roster-invalid',
+        actual: `consumer "${entry.consumer}" has no requiredArtifactClasses`,
+        expected: 'consumer projection with an artifact class array',
       });
       continue;
     }
@@ -429,7 +468,7 @@ function validateTimingRoster(contract) {
       });
     }
 
-    for (const className of entry.requiredArtifactClasses) {
+    for (const className of requiredArtifactClasses) {
       if (!contract.artifactClasses?.[className]) {
         errors.push({
           code: 'ci-artifact-contract-timing-roster-unknown-class',
@@ -442,7 +481,7 @@ function validateTimingRoster(contract) {
     // Check allowedNonArtifactPrerequisites doesn't overlap with requiredArtifactClasses
     if (entry.allowedNonArtifactPrerequisites) {
       for (const prereq of entry.allowedNonArtifactPrerequisites) {
-        if (entry.requiredArtifactClasses.includes(prereq) || classNames.includes(prereq)) {
+        if (requiredArtifactClasses.includes(prereq) || classNames.includes(prereq)) {
           errors.push({
             code: 'ci-artifact-contract-timing-roster-overlap',
             actual: `"${entry.jobIdentity}" has "${prereq}" in both requiredArtifactClasses and allowedNonArtifactPrerequisites`,
@@ -817,11 +856,12 @@ function validateWorkflow(contract, workflowPath) {
       if (entry.artifactProvider === shared?.producer) {
         for (const className of sharedClasses) {
           const outputName =
-            className === 'shared-asset-pack'
+            shared?.artifactOutput ??
+            (className === 'shared-asset-pack'
               ? 'asset_artifact_id'
               : className === 'shared-engine-shaders'
                 ? 'shader_artifact_id'
-                : null;
+                : null);
           const downloaded = [...(downloadedArtifactNames.get(jobId) ?? [])].some(
             (reference) =>
               reference === className ||

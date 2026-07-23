@@ -45,7 +45,7 @@ import { parseImage } from '@forgeax/engine-image/parse-image';
 import type { PackIndexEntry } from '@forgeax/engine-types';
 import { build as viteBuild } from 'vite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { pluginPack } from '../index.js';
+import { pluginPack, reloadAssetHost } from '../index.js';
 
 // --- fixture scaffolding ----------------------------------------------------
 
@@ -158,6 +158,25 @@ async function readPackIndex(): Promise<PackIndexEntry[]> {
 // --- cases ------------------------------------------------------------------
 
 describe('w10 - build-time import emit integration (vite build end-to-end)', () => {
+  it('keeps the build catalog independent from an app refresh policy', async () => {
+    await viteBuild({
+      root: tmpRoot,
+      logLevel: 'silent',
+      configFile: false,
+      build: {
+        outDir: distDir,
+        emptyOutDir: true,
+        write: true,
+        rollupOptions: { input: { main: 'main.js' } },
+      },
+      plugins: [pluginPack({ roots: [assetsDir], refresh: reloadAssetHost() })],
+    });
+
+    expect(await readPackIndex()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ guid: WOOD_GUID })]),
+    );
+  });
+
   it('(a) emits dist/assets/<guid>-<hash>.bin as Rollup hashed asset', async () => {
     await viteBuild({
       root: tmpRoot,

@@ -13,6 +13,12 @@ const workflowPath = resolve(
   fileURLToPath(new URL('../../..', import.meta.url)),
   '.github/workflows/required-ci-checks.yml',
 );
+const manifest = JSON.parse(
+  readFileSync(
+    resolve(fileURLToPath(new URL('../required-ci-checks.json', import.meta.url))),
+    'utf8',
+  ),
+);
 
 const run = (values) => ({
   event: 'pull_request',
@@ -21,23 +27,14 @@ const run = (values) => ({
 });
 
 test('lists the exact direct CI contexts selected for the ruleset', () => {
-  assert.deepEqual(REQUIRED_CHECK_NAMES, [
-    'build-artifacts',
-    'primary-pnpm',
-    'coverage-pnpm',
-    'vitest-browser',
-    'shared-inputs-browser',
-    'smoke-fleet',
-    'smoke-fleet-0',
-    'smoke-fleet-1',
-    'smoke-fleet-2',
-    'bevy-smoke-fleet',
-    'vitest-dawn',
-    'webkit-fallback',
-    'portability-bun',
-    'metrics-validate',
-    'collectathon-boot-e2e',
-  ]);
+  assert.deepEqual(REQUIRED_CHECK_NAMES, manifest);
+  assert.equal(new Set(manifest).size, manifest.length);
+});
+
+test('required-context workflow projects the manifest count instead of a stale list', () => {
+  const workflow = readFileSync(workflowPath, 'utf8');
+  assert.match(workflow, /same 18 contexts/);
+  assert.doesNotMatch(workflow, /same nine contexts/);
 });
 
 test('returns null when ci.yml has no pull request run for the head SHA', () => {
@@ -135,6 +132,7 @@ test('validates PR-head workflows with pinned actionlint before synthetic passes
   const checkoutHead = workflow.indexOf('name: Checkout PR-head workflow definitions');
   const installActionlint = workflow.indexOf('name: Install pinned actionlint');
   const runActionlint = workflow.indexOf('name: Validate PR-head workflow definitions');
+  const verifyRuleset = workflow.indexOf('name: Verify required-check ruleset');
   const reporter = workflow.indexOf('run: node scripts/ci/required-ci-checks.mjs');
 
   assert.ok(checkoutHead >= 0, 'admission must read workflow definitions from the PR head');
@@ -154,7 +152,18 @@ test('validates PR-head workflows with pinned actionlint before synthetic passes
   );
   assert.match(workflow, /rhysd\/actionlint[^\n]*v1\.7\.12/);
   assert.ok(runActionlint > installActionlint, 'actionlint runs after its pinned install');
-  assert.ok(reporter > runActionlint, 'synthetic required passes are impossible before actionlint');
+  assert.ok(
+    verifyRuleset > runActionlint,
+    'ruleset drift must be checked after workflow validation',
+  );
+  assert.match(
+    workflow,
+    /name: Verify required-check ruleset[\s\S]*?GH_TOKEN: \$\{\{ github\.token \}\}[\s\S]*?GITHUB_REPOSITORY: \$\{\{ github\.repository \}\}[\s\S]*?run: node scripts\/ci\/audit-required-checks-ruleset\.mjs/,
+  );
+  assert.ok(
+    reporter > verifyRuleset,
+    'synthetic required passes are impossible before workflow and ruleset validation',
+  );
   assert.match(workflow, /working-directory: pr-head/);
 });
 
@@ -169,7 +178,7 @@ test('t7: REQUIRED_CHECK_NAMES includes build-artifacts as required context', ()
 test('t7: REQUIRED_CHECK_NAMES includes every direct CI gate', () => {
   assert.strictEqual(
     REQUIRED_CHECK_NAMES.length,
-    15,
-    'REQUIRED_CHECK_NAMES must include the legacy smoke aggregate and matrix gates',
+    18,
+    'REQUIRED_CHECK_NAMES must include the legacy smoke aggregates and matrix gates',
   );
 });

@@ -365,6 +365,15 @@ import {
     });
   });
 
+  describe('WebGL2 uniform alignment', () => {
+    it('pads ibl-prefilter PrefilterUniforms to a 16-byte block', () => {
+      const src = readSource('ibl-prefilter.wgsl');
+      expect(src).toMatch(
+        /struct\s+PrefilterUniforms\s*\{[\s\S]*?roughness:\s*f32,[\s\S]*?faceSize:\s*f32,[\s\S]*?_pad0:\s*f32,[\s\S]*?_pad1:\s*f32,/,
+      );
+    });
+  });
+
   describe('t41 (a) -- ibl-sampling exports sampleIblDiffuse + sampleIblSpecular', () => {
     it('declares the two runtime sampling helpers consumed by pbr.wgsl', () => {
       const src = readSource('ibl-sampling.wgsl');

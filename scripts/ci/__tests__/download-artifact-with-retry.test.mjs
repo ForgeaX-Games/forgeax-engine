@@ -30,6 +30,10 @@ test('retries only bounded artifact transport failures', () => {
     'read ECONNRESET',
     'Failed to GetSignedArtifactURL: request failed',
     'fetch failed: socket hang up',
+    'HTTP 408 while reading artifact service',
+    'HTTP 429 while reading artifact service',
+    'HTTP 502 while reading artifact service',
+    'HTTP 503 while reading artifact service',
   ]) {
     assert.equal(isRetryableTransportError(new Error(message)), true, message);
   }

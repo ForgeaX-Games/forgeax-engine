@@ -1648,6 +1648,53 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // m4-w3: auto-filled from naga reflection when caller passes undefined.
     shaderUvSetCount?: number,
   ): RenderPipeline | null => {
+    // User material shaders may opt into the WEBGL2_COMPAT variant axis when
+    // their authored WGSL needs a backend-specific operation (for example an
+    // explicit texture LOD for the wgpu GLES/WebGL2 downlevel path). Resolve
+    // that axis here, at the shared PSO seam, so direct
+    // `registerMaterialShader({ source })` callers do not need to know the
+    // backend and WebGPU keeps the authored implicit-derivative variant.
+    let effectiveVariantSet = variantSet;
+    let manifestEntry: import('@forgeax/engine-shader').MaterialShaderManifestEntry | undefined;
+    for (const candidate of getShader().materialShaderManifestEntries()) {
+      if (candidate.identifier === materialShaderId) {
+        manifestEntry = candidate;
+        break;
+      }
+    }
+    const declaredAxes = new Set(
+      manifestEntry?.variants.flatMap((variant) => Object.keys(variant.defines)) ?? [],
+    );
+    const declaresCapabilityVariants =
+      declaredAxes.has('WEBGL2_COMPAT') || declaredAxes.has('STORAGE_BUFFER_AVAILABLE');
+    if (declaresCapabilityVariants) {
+      // Record-stage callers may pass the built-in PBR variant string for a
+      // custom material. Filter that string to axes the custom manifest
+      // actually declares, then inject the backend-owned WEBGL2 axis.
+      const requested: Record<string, boolean> = {};
+      for (const part of variantSet?.split('+') ?? []) {
+        const separator = part.indexOf('=');
+        if (separator > 0) {
+          requested[part.slice(0, separator)] = part.slice(separator + 1) === 'true';
+        }
+      }
+      const filtered: Record<string, boolean> = {};
+      for (const axis of declaredAxes) {
+        filtered[axis] =
+          axis === 'WEBGL2_COMPAT'
+            ? internals.device.caps.backendKind === 'wgpu-webgl2'
+            : axis === 'STORAGE_BUFFER_AVAILABLE'
+              ? internals.device.caps.backendKind !== 'wgpu-webgl2' &&
+                internals.device.caps.storageBuffer
+              : (requested[axis] ?? true);
+      }
+      const sorted = Object.entries(filtered).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+      effectiveVariantSet = sorted.every(([, value]) => value)
+        ? variantSet === ''
+          ? ''
+          : undefined
+        : sorted.map(([name, value]) => `${name}=${value}`).join('+');
+    }
     // feat-20260629 M4: auto-fill shaderUvSetCount from naga reflection
     // (stored in materialShaderUvSetCounts during prepareMaterialShaders).
     const resolvedUvSetCount = shaderUvSetCount ?? materialShaderUvSetCounts.get(materialShaderId);
@@ -1674,7 +1721,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
           ? ('rgba16float' as unknown as GPUTextureFormat)
           : ldrColorFormat;
     const spec: PipelineSpec = {
-      shader: { id: materialShaderId, passKind, variantSet },
+      shader: { id: materialShaderId, passKind, variantSet: effectiveVariantSet },
       attachments: {
         colorFormats: passKind === 'shadow-caster' ? [] : [colorFormat],
         depthFormat:
@@ -1729,7 +1776,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         // M4.5 / w37 (D-10): the fallback path also threads variantSet so the
         // layout selector picks HDRP layout when an HDRP caller falls into
         // this branch (registered shader id missing).
-        variantSet,
+        effectiveVariantSet,
         // feat-20260609 / T-002: passKind threaded through the fallback path
         // for parity with the main path; default 'forward' keeps every prior
         // fallback caller byte-identical.
@@ -1777,11 +1824,11 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     // path) and MUST hit the manifest variant lookup -- treat it as a
     // first-class variant request, not a falsy "no variant" signal.
     // Use `!== undefined` so the empty-string case enters the lookup.
-    if (variantSet !== undefined) {
+    if (effectiveVariantSet !== undefined) {
       const registry = getShader();
       for (const msEntry of registry.materialShaderManifestEntries()) {
         if (msEntry.identifier === materialShaderId) {
-          const variant = findVariantByKey(msEntry, variantSet);
+          const variant = findVariantByKey(msEntry, effectiveVariantSet);
           if (variant) {
             // M3 / w12-w13: variant substitution carries the same source +
             // paramSchema as the boot-registered entry; the binding layout
@@ -1819,8 +1866,8 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       // case is intentional (parallel to the cache key's `:variant:`
       // empty-tail segment); module identity stays a function of the
       // exact variantSet string.
-      variantSet !== undefined
-        ? `module-${materialShaderId}#${variantSet}`
+      effectiveVariantSet !== undefined
+        ? `module-${materialShaderId}#${effectiveVariantSet}`
         : `module-${materialShaderId}`,
       isHdr,
       renderState,
@@ -1829,7 +1876,7 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
       // M4.5 / w37 (D-10): main path threads variantSet so HDRP-variant PSO
       // builds against `hdrpPbrPipelineLayout` (7-slot group(2) BGL) and URP
       // builds against `pbrPipelineLayout` (1-slot group(2) BGL).
-      variantSet,
+      effectiveVariantSet,
       // feat-20260609 / T-002: passKind selects createRenderPipeline
       // attachment shape (forward color+DS vs shadow-caster depth32float
       // no-color). Orthogonal to variantSet (which selects the BGL chain).
@@ -3735,11 +3782,12 @@ async function prepareMaterialShaders(
   // ── Step 0: storage-buffer cap gate ───────────────────────────────────────
   const capValue = (rhiDevice.limits as Readonly<Record<string, number>>)
     .maxStorageBuffersPerShaderStage;
-  let storageBufferCapable = true;
+  const webgl2Downlevel = rhiDevice.caps.backendKind === 'wgpu-webgl2';
+  let storageBufferCapable = !webgl2Downlevel;
   if (typeof capValue === 'number') {
     const capCheck = assertStorageBufferCap(capValue);
     if (!capCheck.ok) throw capCheck.error;
-    storageBufferCapable = capCheck.value;
+    storageBufferCapable = !webgl2Downlevel && capCheck.value;
   }
 
   // ── Step 1: manifest load ─────────────────────────────────────────────────
@@ -3762,6 +3810,9 @@ async function prepareMaterialShaders(
     // They use the `forgeax::engine-` prefix and are consumed by Step 2's
     // engine-entry compile path, NOT by registerMaterialShader.
     if (msEntry.identifier.startsWith('forgeax::engine-')) continue;
+    // User material shaders are registered explicitly by the application.
+    // Keep manifest rows as variant metadata without claiming their IDs.
+    if (!msEntry.identifier.startsWith('forgeax::')) continue;
     // buildVariantKey logic: sorted key=value pairs joined with +; all-true = ''.
     const variantDefines: Record<string, boolean> = {
       STORAGE_BUFFER_AVAILABLE: storageBufferCapable,
@@ -3937,10 +3988,11 @@ async function buildReadyWebGPU(
   // wgpu-wasm WebGL2 backend (downlevel_webgl2_defaults).
   const capValue = (rhiDevice.limits as Readonly<Record<string, number>>)
     .maxStorageBuffersPerShaderStage;
-  let storageBufferCapable = true;
+  const webgl2Downlevel = rhiDevice.caps.backendKind === 'wgpu-webgl2';
+  let storageBufferCapable = !webgl2Downlevel;
   if (typeof capValue === 'number') {
     const capCheck = assertStorageBufferCap(capValue);
-    storageBufferCapable = capCheck.ok ? capCheck.value : true;
+    storageBufferCapable = capCheck.ok ? !webgl2Downlevel && capCheck.value : !webgl2Downlevel;
   }
 
   // bug-20260612: choose swap-chain storage / view formats by backend.

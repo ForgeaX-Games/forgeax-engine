@@ -48,6 +48,7 @@ import {
   type AssetEnvelope,
   AssetError,
   type AssetRef,
+  type CatalogEntry,
   type EngineMetrics,
   type Handle,
   handleSlot,
@@ -92,6 +93,7 @@ import { createDefaultLoaderRegistry } from './wire-default-loaders';
 // is preserved via the `export ... from` re-export block below (pre-w14 shim,
 // removed when consumers repoint in w14/w15).
 import { withMeshAabb } from './aabb';
+import type { CatalogListener, CatalogSource } from './catalog-source';
 import {
   BUILTIN_MESH_GUIDS,
   HANDLE_CUBE,
@@ -102,6 +104,7 @@ import {
   HANDLE_TRIANGLE,
 } from './handles';
 import { inferAtlasExtent, validateMeshPayload, validateTilesetPayload } from './payload-validate';
+import { fetchPackIndex } from './registry/catalog';
 import {
   instantiateFlat as instantiateFlatImpl,
   instantiate as instantiateImpl,
@@ -110,7 +113,6 @@ import {
   resolveMountsRec,
 } from './registry/instantiate';
 import {
-  fetchPackIndex,
   loadByGuid as loadByGuidImpl,
   parseAndReturnAsset as parseAndReturnAssetImpl,
   parseAssetPayload as parseAssetPayloadImpl,
@@ -244,6 +246,10 @@ export interface ParsedPackFile {
 }
 
 export class AssetRegistry {
+  private catalogSource: CatalogSource | undefined;
+  private catalogEnumerating: Promise<Result<readonly CatalogEntry[], AssetError>> | undefined;
+  private readonly catalogListeners = new Set<CatalogListener>();
+  private catalogSourceDispose: (() => void) | undefined;
   // feat-20260614 M8 (D-15 / D-17 / D-19): the registry is a GUID -> payload
   // catalogue. It holds NO handle concept -- it cannot mint a column handle
   // (it has no World). `loadByGuid` returns the PAYLOAD; column minting
@@ -651,6 +657,52 @@ export class AssetRegistry {
     this.packIndexCache = result.value;
     registerPackagesFromIndex(this, this.packIndexCache);
     return true;
+  }
+
+  setCatalogSource(source: CatalogSource): void {
+    this.catalogSourceDispose?.();
+    this.catalogSource = source;
+    this.catalogEnumerating = undefined;
+    this.catalogSourceDispose = source.subscribe((delta) => {
+      for (const listener of [...this.catalogListeners]) {
+        try {
+          listener(delta);
+        } catch {
+          // One host listener cannot prevent the remaining listeners from seeing a fact.
+        }
+      }
+    });
+  }
+
+  enumerateCatalog(): Promise<Result<readonly CatalogEntry[], AssetError>> {
+    if (this.catalogEnumerating !== undefined) return this.catalogEnumerating;
+    if (this.catalogSource === undefined) {
+      return Promise.resolve(
+        err(
+          new AssetError({
+            code: 'catalog-source-unconfigured',
+            expected: 'a configured catalog source',
+            hint: ASSET_ERROR_HINTS['catalog-source-unconfigured'],
+          }),
+        ),
+      );
+    }
+    const promise = this.catalogSource.enumerate().then((result) => {
+      if (result.ok) return ok([...result.value].sort((a, b) => a.guid.localeCompare(b.guid)));
+      return result;
+    });
+    this.catalogEnumerating = promise;
+    void promise.then(() => {
+      this.catalogEnumerating = undefined;
+    });
+    return promise;
+  }
+
+  subscribeCatalog(listener: CatalogListener): () => void {
+    this.catalogListeners.add(listener);
+    return () => {
+      this.catalogListeners.delete(listener);
+    };
   }
 
   /**

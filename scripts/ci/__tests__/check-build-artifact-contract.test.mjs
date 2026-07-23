@@ -126,61 +126,61 @@ function validContract(overrides = {}) {
     timingRoster: [
       {
         jobIdentity: 'primary-pnpm',
-        requiredArtifactClasses: ['engine-dist', 'wasm-runtime', 'app-dist'],
+        consumer: 'primary-pnpm',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'vitest-browser',
-        requiredArtifactClasses: ['engine-dist', 'wasm-runtime', 'app-dist'],
+        consumer: 'vitest-browser',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'smoke-fleet',
-        requiredArtifactClasses: ['engine-dist', 'wasm-runtime', 'app-dist'],
+        consumer: 'smoke-fleet',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'vitest-dawn',
-        requiredArtifactClasses: ['engine-dist', 'wasm-runtime'],
+        consumer: 'vitest-dawn',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'webkit-fallback',
-        requiredArtifactClasses: ['engine-dist', 'wasm-runtime'],
+        consumer: 'webkit-fallback',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'portability-bun',
-        requiredArtifactClasses: ['engine-dist', 'wasm-runtime', 'app-dist'],
+        consumer: 'portability-bun',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'metrics-validate',
-        requiredArtifactClasses: ['engine-dist', 'wasm-runtime', 'app-dist'],
+        consumer: 'metrics-validate',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'collectathon-boot-e2e',
-        requiredArtifactClasses: ['engine-dist', 'wasm-runtime', 'app-dist'],
+        consumer: 'collectathon-boot-e2e',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
       {
         jobIdentity: 'publish-fbx-wasm-release',
-        requiredArtifactClasses: [],
+        consumer: 'publish-fbx-wasm-release',
         allowedNonArtifactPrerequisites: [],
         notApplicable: true,
         notApplicableReason: 'PR run only',
       },
       {
         jobIdentity: 'publish-wgpu-wasm-release',
-        requiredArtifactClasses: [],
+        consumer: 'publish-wgpu-wasm-release',
         allowedNonArtifactPrerequisites: [],
         notApplicable: true,
         notApplicableReason: 'PR run only',
       },
       {
         jobIdentity: 'publish-basis-wasm-release',
-        requiredArtifactClasses: [],
+        consumer: 'publish-basis-wasm-release',
         allowedNonArtifactPrerequisites: [],
         notApplicable: true,
         notApplicableReason: 'PR run only',
@@ -241,7 +241,7 @@ function minimalContract(overrides = {}) {
     timingRoster: [
       {
         jobIdentity: 'primary-pnpm',
-        requiredArtifactClasses: ['engine-dist', 'wasm-runtime', 'app-dist'],
+        consumer: 'primary-pnpm',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
     ],
@@ -358,6 +358,20 @@ test('t1: missing consumers produces structured error', async () => {
   }
 });
 
+test('t1: timing roster projects artifact classes from consumer SSOT', async () => {
+  const c = validContract();
+  c.timingRoster[0].requiredArtifactClasses = ['engine-dist'];
+  const { dir, fp } = tmpContract(c);
+  try {
+    const r = runChecker([fp]);
+    assert.notStrictEqual(r.exitCode, 0, 'should reject duplicated timing projection');
+    const parsed = JSON.parse(r.stdout);
+    assert.strictEqual(parsed.code, 'ci-artifact-contract-timing-roster-duplicate-projection');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // -- Unknown consumer name --
 test('t1: consumer referencing unknown artifact class produces structured error', async () => {
   const c = validContract();
@@ -431,7 +445,7 @@ test('t1: missing timingRoster section produces structured error', async () => {
 // -- AC-06 timing roster: undeclared artifact class --
 test('t1: timing consumer referencing undeclared artifact class produces structured error', async () => {
   const c = validContract();
-  c.timingRoster[0].requiredArtifactClasses = ['nonexistent-class'];
+  c.consumers['primary-pnpm'].requiredArtifactClasses = ['nonexistent-class'];
   const { dir, fp } = tmpContract(c);
   try {
     const r = runChecker([fp]);
@@ -462,14 +476,14 @@ test('t1: timing consumer missing jobIdentity produces structured error', async 
   }
 });
 
-// -- AC-06 timing roster: missing requiredArtifactClasses --
-test('t1: timing consumer missing requiredArtifactClasses produces structured error', async () => {
+// -- AC-06 timing roster: missing consumer projection --
+test('t1: timing consumer missing consumer projection produces structured error', async () => {
   const c = validContract();
-  delete c.timingRoster[0].requiredArtifactClasses;
+  delete c.timingRoster[0].consumer;
   const { dir, fp } = tmpContract(c);
   try {
     const r = runChecker([fp]);
-    assert.notStrictEqual(r.exitCode, 0, 'should fail on missing requiredArtifactClasses');
+    assert.notStrictEqual(r.exitCode, 0, 'should fail on missing consumer projection');
     const parsed = JSON.parse(r.stdout);
     assert.strictEqual(typeof parsed.code, 'string', 'should have code field');
   } finally {
@@ -483,7 +497,7 @@ test('t1: release consumer in timing roster without notApplicable declaration pr
   // Add a release consumer without notApplicable
   c.timingRoster.push({
     jobIdentity: 'publish-something-release',
-    requiredArtifactClasses: [],
+    consumer: 'publish-fbx-wasm-release',
     allowedNonArtifactPrerequisites: [],
   });
   const { dir, fp } = tmpContract(c);
@@ -746,7 +760,7 @@ test('t2: timing roster jobIdentity not in workflow produces structured error', 
 // -- Timing roster: requiredArtifactClasses not in contract --
 test('t2: timing roster requiredArtifactClasses not in contract produces structured error', async () => {
   const c = validContract();
-  c.timingRoster[0].requiredArtifactClasses = ['nonexistent-class'];
+  c.consumers['primary-pnpm'].requiredArtifactClasses = ['nonexistent-class'];
   const { dir: cDir, fp: cFp } = tmpContract(c);
   const { dir: wDir, fp: wFp } = tmpWorkflow(minimalWorkflowYaml());
   try {
@@ -846,7 +860,7 @@ test('t2: a single-producer consumer waits on that producer instead of the merge
   c.timingRoster = [
     {
       jobIdentity: 'vitest-dawn',
-      requiredArtifactClasses: ['engine-dist', 'wasm-runtime'],
+      consumer: 'vitest-dawn',
       artifactProvider: 'core-build',
       allowedNonArtifactPrerequisites: ['post-merge-gate'],
     },
@@ -1333,7 +1347,7 @@ function postM2Contract(overrides = {}) {
     timingRoster: [
       {
         jobIdentity: 'primary-pnpm',
-        requiredArtifactClasses: ['engine-dist', 'wasm-runtime', 'app-dist'],
+        consumer: 'primary-pnpm',
         allowedNonArtifactPrerequisites: ['post-merge-gate'],
       },
     ],
@@ -1406,10 +1420,12 @@ function sharedInputsContract(overrides = {}) {
   contract.artifactClasses['shared-asset-pack'] = {
     description: 'Shared LearnOpenGL asset pack produced once per CI run',
     fileClasses: ['shared-app-inputs/assets'],
+    transferArtifact: 'shared-app-inputs',
   };
   contract.artifactClasses['shared-engine-shaders'] = {
     description: 'Shared engine shader payload produced once per CI run',
     fileClasses: ['shared-app-inputs/shaders'],
+    transferArtifact: 'shared-app-inputs',
   };
   contract.consumers['app-shard'] = {
     requiredArtifactClasses: [
@@ -1430,6 +1446,15 @@ function sharedInputsContract(overrides = {}) {
   ];
   contract.provenance.payloadClasses.push('shared-asset-pack', 'shared-engine-shaders');
   contract.timingRoster = [];
+  contract.sharedInputs = {
+    producer: 'shared-app-inputs',
+    consumer: 'app-shard',
+    schemaVersion: 1,
+    manifestPath: 'shared-app-inputs/manifest.json',
+    inventory: ['shared-app-inputs/assets/catalog.json', 'shared-app-inputs/shaders/manifest.json'],
+    payloadClasses: ['shared-asset-pack', 'shared-engine-shaders'],
+  };
+  contract.sharedInputs.artifactOutput = 'shared_artifact_id';
   return { ...contract, ...overrides };
 }
 
@@ -1474,7 +1499,7 @@ test('w5: app shard workflow must download every declared shared class', () => {
     timingRoster: [
       {
         jobIdentity: 'app-shard-0',
-        requiredArtifactClasses: ['shared-asset-pack', 'shared-engine-shaders'],
+        consumer: 'app-shard',
         artifactProvider: 'shared-app-inputs',
         allowedNonArtifactPrerequisites: ['core-build'],
       },
@@ -1501,17 +1526,11 @@ test('w5: app shard workflow must download every declared shared class', () => {
           name: app-dist-a1
       - uses: actions/upload-artifact@v6
         with:
-          name: shared-asset-pack-a1
-      - uses: actions/upload-artifact@v6
-        with:
-          name: shared-engine-shaders-a1
+          name: shared-app-inputs-a1
   app-shard-0:
     needs: [core-build, shared-app-inputs]
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v7
-        with:
-          name: shared-asset-pack-a1
+    steps: []
 `;
   const { dir: contractDir, fp: contractPath } = tmpContract(contract);
   const { dir: workflowDir, fp: workflowPath } = tmpWorkflow(workflow);
@@ -1533,7 +1552,7 @@ test('w5: app shard may hydrate declared shared classes through the verified ret
     timingRoster: [
       {
         jobIdentity: 'app-shard-0',
-        requiredArtifactClasses: ['shared-asset-pack', 'shared-engine-shaders'],
+        consumer: 'app-shard',
         artifactProvider: 'shared-app-inputs',
         allowedNonArtifactPrerequisites: ['core-build'],
       },
@@ -1560,23 +1579,15 @@ test('w5: app shard may hydrate declared shared classes through the verified ret
           name: app-dist-a1
       - uses: actions/upload-artifact@v6
         with:
-          name: shared-asset-pack-a1
-      - uses: actions/upload-artifact@v6
-        with:
-          name: shared-engine-shaders-a1
+          name: shared-app-inputs-a1
   app-shard-0:
     needs: [core-build, shared-app-inputs]
     runs-on: ubuntu-latest
     steps:
-      - name: Hydrate shared asset pack
+      - name: Hydrate shared app inputs
         run: >-
           node scripts/ci/download-artifact-with-retry.mjs
-          --artifact-ids "\${{ needs.shared-app-inputs.outputs.asset_artifact_id }}"
-          --path shared-app-inputs/assets
-      - name: Hydrate shared engine shaders
-        run: >-
-          node scripts/ci/download-artifact-with-retry.mjs
-          --artifact-ids "\${{ needs.shared-app-inputs.outputs.shader_artifact_id }}"
+          --artifact-ids "\${{ needs.shared-app-inputs.outputs.shared_artifact_id }}"
           --path shared-app-inputs
 `;
   const { dir: contractDir, fp: contractPath } = tmpContract(contract);

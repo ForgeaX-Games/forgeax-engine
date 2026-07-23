@@ -54,6 +54,11 @@ describe('resolveCommand', () => {
       command: 'clean',
       args: ['-x'],
     });
+    expect(resolveCommand(['ci', '--group', 'smoke-fleet-1'])).toEqual({
+      type: 'internal',
+      command: 'ci',
+      args: ['--group', 'smoke-fleet-1'],
+    });
   });
 
   it('defaults empty argv to help', () => {

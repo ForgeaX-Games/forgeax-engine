@@ -1,4 +1,4 @@
-#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, PointLight, SpotLight, pointLightsBuffer, spotLightsBuffer, shadowMap, shadowSampler}
+#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, PointLight, SpotLight, pointLightsBuffer, spotLightsBuffer, shadowMap, shadowSampler, sampleMaterialTexture}
 #import forgeax_pbr::brdf::{f_schlick, v_smith, d_ggx}
 #import forgeax_pbr::ibl_sampling::{sampleIblDiffuse, sampleIblSpecular}
 #import forgeax_pbr::tbn::{decodeTangentSpaceNormalRg, applyTBN}
@@ -82,6 +82,12 @@ struct Material {
   // default-standard-pbr.wgsl SSOT). 0.0 -> set 0 (in.uv), >=0.5 -> set 1
   // (in.uv1). Offset 68; struct still rounds to 80 B.
   uvSet              : f32,
+  textureScalePad    : vec2<f32>,
+  baseColorUvScale          : vec2<f32>,
+  metallicRoughnessUvScale  : vec2<f32>,
+  normalUvScale             : vec2<f32>,
+  emissiveUvScale           : vec2<f32>,
+  occlusionUvScale          : vec2<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -91,6 +97,16 @@ struct Material {
 @group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
 @group(1) @binding(5) var normalSampler : sampler;
 @group(1) @binding(6) var normalTexture : texture_2d<f32>;
+
+// Preserve filtering reflection for resources passed to the shared sampler.
+fn materialTextureFilteringWitness() {
+  let base = baseColorTexture;
+  let metallicRoughness = metallicRoughnessTexture;
+  let normal = normalTexture;
+  let baseWitness = textureSample(base, baseColorSampler, vec2<f32>(0.0));
+  let metallicRoughnessWitness = textureSample(metallicRoughness, metallicRoughnessSampler, vec2<f32>(0.0));
+  let normalWitness = textureSample(normal, normalSampler, vec2<f32>(0.0));
+}
 
 struct SkylightUniforms {
   intensity : f32,
@@ -229,10 +245,10 @@ fn selectUv(in : VsOut) -> vec2<f32> {
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let uv = selectUv(in);
-  let baseSample = textureSample(baseColorTexture, baseColorSampler, uv);
+  let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, uv, material.baseColorUvScale);
   let albedo = material.baseColor.rgb * baseSample.rgb;
 
-  let mrSample = textureSample(metallicRoughnessTexture, metallicRoughnessSampler, uv);
+  let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, uv, material.metallicRoughnessUvScale);
   let metallic = material.metallic * pick_channel(mrSample, u32(material.metallicChannel));
   let roughnessTex = pick_channel(mrSample, u32(material.roughnessChannel));
 
@@ -240,7 +256,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   a = a * roughnessTex;
   a = a * a;
 
-  let normSampleRg = textureSample(normalTexture, normalSampler, uv).rg;
+  let normSampleRg = sampleMaterialTexture(normalTexture, normalSampler, uv, material.normalUvScale).rg;
   let normTangent = decodeTangentSpaceNormalRg(normSampleRg);
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 

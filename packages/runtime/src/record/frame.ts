@@ -58,6 +58,7 @@ import {
   ensurePerFrameGraph,
   executeFrameGraph,
   resolveGeometryTargetViews,
+  resolveShadowMapSize,
   writebackGraphViews,
 } from './frame-targets';
 import { driveLazyEquirectProjection, warnMultiSkybox, warnMultiSkylight } from './helpers';
@@ -259,6 +260,7 @@ export function recordFrame(
     // to ensurePerFrameGraph (M3/w18); returns null on unrecoverable state
     // (buildGraph produced null, or recompile-on-resize failed), in which case
     // recordFrame bails after the finally-block frame advance.
+    const effectiveShadowMapSize = resolveShadowMapSize(internals, lights);
     const perFrameGraph = ensurePerFrameGraph(
       internals,
       frameState,
@@ -270,6 +272,7 @@ export function recordFrame(
       skybox,
       targetW,
       targetH,
+      effectiveShadowMapSize,
     );
     if (perFrameGraph === null) return;
 
@@ -305,7 +308,7 @@ export function recordFrame(
     // The graph's compile phase allocates a depth32float texture; recordFrame reads
     // the resolved TextureView each frame. When shadowMapSize is 0/undefined the
     // shadow pass is skipped entirely (recordShadowPass gates on shadowView).
-    const shadowMs = lights.shadowMapSize;
+    const shadowMs = effectiveShadowMapSize;
     const shadowView: TextureView | null =
       shadowMs !== undefined && shadowMs > 0
         ? ((frameState.perFrameGraph?.getColorTargetView('shadowDepth') as TextureView) ?? null)
@@ -554,7 +557,7 @@ export function recordFrame(
       config: frameState.installedPipelineConfig,
       // w7-fix (round 3): ECS-driven shadow map size for the urp
       // pipeline's shadowDepth color target sizing.
-      shadowMapSize: lights.shadowMapSize,
+      shadowMapSize: effectiveShadowMapSize,
       // M3 / w12: cascade count for atlas sizing + N-pass loop.
       cascadeCount: lights.cascadeCount,
     };

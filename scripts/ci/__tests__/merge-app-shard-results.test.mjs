@@ -48,11 +48,18 @@ function validReports() {
   ];
 }
 
-function run(root, reportsDir) {
+function run(root, reportsDir, selectionPath = null) {
   try {
     const stdout = execFileSync(
       process.execPath,
-      [mergerPath, '--root', root, '--reports-dir', reportsDir],
+      [
+        mergerPath,
+        '--root',
+        root,
+        '--reports-dir',
+        reportsDir,
+        ...(selectionPath ? ['--selection', selectionPath] : []),
+      ],
       {
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -67,6 +74,33 @@ function run(root, reportsDir) {
     };
   }
 }
+
+test('retry provenance: falls back to the only downloaded shard attempt when aggregate attempt is newer', () => {
+  const reports = validReports();
+  const { root, reportsDir } = fixture({
+    reports,
+    inventories: reports.map((report) => paths(report.apps)),
+  });
+  const selectionPath = join(root, 'selection.json');
+  writeFileSync(
+    selectionPath,
+    JSON.stringify({ producerAttempts: { 'app-shard-0': 2, 'app-shard-1': 2, 'app-shard-2': 2 } }),
+  );
+  for (const [index, report] of reports.entries()) {
+    writeFileSync(join(reportsDir, `coverage-${index}-a1.json`), JSON.stringify(report));
+    writeFileSync(
+      join(reportsDir, `artifact-inventory-${index}-a1.json`),
+      JSON.stringify(paths(report.apps)),
+    );
+  }
+  try {
+    const result = run(root, reportsDir, selectionPath);
+    assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+    assert.equal(JSON.parse(result.stdout).status, 'success');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('t13: merges three successful exact-once coverage reports', () => {
   const reports = validReports();

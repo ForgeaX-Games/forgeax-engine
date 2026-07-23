@@ -5,7 +5,95 @@
 // (parseImage -> raw RGBA bytes -> emitFile hashed `<guid>-[hash].bin`),
 // rewrites `relativeUrl` to the hashed path, and emits `pack-index.json`.
 
-# Pack-index entry shape (5 fields, SSOT: `PackIndexEntry` in `@forgeax/engine-types`)
+# Catalog transport and host refresh
+
+> [!IMPORTANT]
+> `pluginPack` publishes the neutral `forgeax:catalog-delta` transport. A
+> `CatalogDelta` says which rows were added, changed, or removed; it does not
+> decide whether a host reloads. Hosts that need a reload opt in explicitly.
+
+The browser adapter is `createCatalogClient(enumerate, import.meta.hot)`. It
+provides the browser-side transport pair. Adapt it with `createCatalogSource`
+and give that source to an `AssetRegistry`; subscribe and enumerate through the
+registry, so application code has one catalog owner and the registry never
+imports Vite. Subscribe before requesting the initial snapshot, then merge
+`added`, `changed`, and `removed` by stable GUID. Consult the exported
+`CatalogEntry` and `CatalogDelta` types in `@forgeax/engine-types` for the
+schema rather than reproducing it here.
+
+```ts
+import type { CatalogDelta, CatalogEntry } from '@forgeax/engine-types';
+import { createCatalogClient } from '@forgeax/engine-vite-plugin-pack/catalog-client';
+import { createCatalogSource } from '@forgeax/engine-assets-runtime';
+
+const rowsByGuid = new Map<string, CatalogEntry>();
+
+function mergeRows(rows: readonly CatalogEntry[]): void {
+  for (const row of rows) rowsByGuid.set(row.guid.toLowerCase(), row);
+}
+
+function mergeDelta(delta: CatalogDelta): void {
+  for (const guid of delta.removed) rowsByGuid.delete(guid.toLowerCase());
+  mergeRows(delta.added);
+  mergeRows(delta.changed);
+}
+
+async function readCatalogRows(): Promise<readonly CatalogEntry[]> {
+  const response = await fetch('/__pack/index');
+  if (!response.ok) throw new Error(`catalog request failed: ${response.status}`);
+  return (await response.json()) as readonly CatalogEntry[];
+}
+
+const client = createCatalogClient(readCatalogRows, import.meta.hot);
+assets.setCatalogSource(
+  createCatalogSource({ url: '/__pack/index', subscribe: client.subscribe }),
+);
+
+const stop = assets.subscribeCatalog(mergeDelta);
+
+async function reconcileCatalog(): Promise<void> {
+  const snapshot = await assets.enumerateCatalog();
+  if (!snapshot.ok) {
+    console.error(snapshot.error.code, snapshot.error.hint);
+    return;
+  }
+  mergeRows(snapshot.value);
+}
+
+await reconcileCatalog();
+// Call reconcileCatalog() again after a late subscription or transport interruption.
+
+// Call from the host's teardown / unmount path, not after setup.
+function disposeCatalog(): void {
+  stop();
+}
+```
+
+`createCatalogSource` owns the registry-facing snapshot and its structured
+failure result. The Vite client contributes the HMR subscription; its
+`enumerate()` helper remains available to Vite-specific hosts. The application
+keeps only its derived `rowsByGuid` view: apply every delta as removals followed
+by complete row replacements, and merge each successful snapshot into that same
+view. On a late subscription or interrupted transport, call `reconcileCatalog()`
+again rather than relying on an event replay guarantee. Keep the subscription
+alive until the host's teardown or unmount path calls `disposeCatalog()`.
+
+Engine app composition roots that require a full refresh for watched asset
+content declare that choice directly:
+
+```ts
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
+
+pluginPack({ roots: ['assets'], refresh: reloadAssetHost() });
+```
+
+This policy also covers source-only byte changes, which deliberately do not
+become fake catalog-row changes. A static build has no HMR stream: enumeration
+still works from its catalog, while subscription is a safe no-op. If a client
+subscribed late or reconnects, re-enumerate and reconcile by GUID rather than
+inventing a Vite replay guarantee.
+
+# Pack-index entry shape (SSOT: `PackIndexEntry` in `@forgeax/engine-types`)
 
 Each row in `pack-index.json` (build) or `/__pack/index` (dev) carries:
 

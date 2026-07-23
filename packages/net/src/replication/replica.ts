@@ -44,8 +44,16 @@ export class ReplicaCoordinator {
   disconnect(): void {
     this.#endpoint?.close();
   }
+  /** Remove the last replica baseline when the authority connection closes. */
+  clear(): void {
+    for (const entity of this.#entities.values()) this.#world.despawn(entity).unwrap();
+    this.#entities.clear();
+  }
   get stopped(): boolean {
     return this.#stopped;
+  }
+  get tick(): number {
+    return this.#lastTick;
   }
   #entityReferences(value: unknown): readonly unknown[] {
     if (Array.isArray(value) || ArrayBuffer.isView(value)) {

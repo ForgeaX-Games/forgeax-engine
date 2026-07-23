@@ -11,7 +11,7 @@
 // @group(0) layout (dual uniform -- the (b3) compose test in the round-2
 // dawn suite exercises this ordering):
 //   binding(0) = CubemapFaceUniforms { viewProj }      (per-face)
-//   binding(1) = PrefilterUniforms   { roughness, faceSize }  (per-mip)
+//   binding(1) = PrefilterUniforms   { roughness, faceSize, _pad0, _pad1 }
 // @group(1) = env cubemap + sampler. Same shape as ibl-irradiance, but
 //             physically isolated -- both bind @binding(0) to a texture_cube
 //             inside *their own* module without colliding because round-2
@@ -36,6 +36,9 @@ struct CubemapFaceUniforms {
 struct PrefilterUniforms {
   roughness: f32,
   faceSize: f32,
+  // Keep the uniform block 16-byte aligned on WebGL2 downlevel backends.
+  _pad0: f32,
+  _pad1: f32,
 };
 
 @group(0) @binding(0) var<uniform> faceUniforms: CubemapFaceUniforms;

@@ -93,7 +93,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(typeof mod.buildPbrMaterialUboPayload).toBe('function');
     });
 
-    it('80 B payload size + standard PBR slot layout (baseline)', () => {
+    it('128 B payload size + standard PBR slot layout (baseline)', () => {
       if (typeof mod.buildPbrMaterialUboPayload !== 'function') {
         throw new Error('helper not exported yet');
       }
@@ -106,7 +106,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         occlusionStrength: 1,
       });
       const buf = mod.buildPbrMaterialUboPayload(snap);
-      expect(buf.byteLength).toBe(80);
+      expect(buf.byteLength).toBe(128);
       const f32 = new Float32Array(buf);
       // feat-20260613 fix-issue-1 (D-8 channelMap split): the 4 channelMap
       // u32 slots collapse into 4 independent f32 channel selectors at

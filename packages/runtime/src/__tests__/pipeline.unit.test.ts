@@ -1562,7 +1562,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   // Minimal mock device covering the cubemap upload surface.
   // biome-ignore lint/suspicious/noExplicitAny: opaque mock device surface
-  function makeMockDevice(submitProbe?: { count: number }): any {
+  function makeMockDevice(submitProbe?: { count?: number; formats?: string[] }): any {
     const mockOpaque = { __mock: 'opaque' };
     const makePass = () => ({
       setPipeline: () => {},
@@ -1579,7 +1579,12 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       createRenderPipeline: () => okShim(mockOpaque),
       createBindGroup: () => okShim(mockOpaque),
       createBuffer: () => okShim(mockOpaque),
-      createTexture: () => okShim(mockOpaque),
+      createTexture: (desc: { format?: string }) => {
+        if (submitProbe?.formats !== undefined && desc.format !== undefined) {
+          submitProbe.formats.push(desc.format);
+        }
+        return okShim(mockOpaque);
+      },
       createTextureView: () => okShim(mockOpaque),
       createCommandEncoder: () =>
         okShim({
@@ -1590,7 +1595,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         writeBuffer: () => okShim(undefined),
         writeTexture: () => okShim(undefined),
         submit: () => {
-          if (submitProbe) submitProbe.count += 1;
+          if (submitProbe?.count !== undefined) submitProbe.count += 1;
           return okShim(undefined);
         },
       },
@@ -1620,10 +1625,11 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   }
 
   describe('equirect-to-cubemap projection caps guard (M2)', () => {
-    it('1. caps=false guard: returns feature-not-enabled with expected + hint', async () => {
+    it('1. caps=false selects a renderable rgba8 precompute output', async () => {
+      const formatProbe: { formats: string[] } = { formats: [] };
       const store = new GpuResourceStore();
       store.configureGpuDevice(
-        makeMockDevice(),
+        makeMockDevice(formatProbe),
         shaderFactory,
         makeRegisterCube(),
         capsCubemapDisabled,
@@ -1637,14 +1643,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         makeEquirectSource(),
       );
 
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('feature-not-enabled');
-        // The error is a RhiError (not AssetError) because caps is an RHI-layer concern.
-        expect(result.error).toBeInstanceOf(RhiError);
-        expect(result.error.expected).toContain('rgba16floatRenderable');
-        expect(result.error.hint.length).toBeGreaterThan(0);
-      }
+      expect(result.ok).toBe(true);
+      expect(formatProbe.formats).toContain('rgba8unorm');
     });
 
     it('2. caps=true goes through the normal path (derives cubemap data)', async () => {

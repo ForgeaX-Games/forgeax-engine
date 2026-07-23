@@ -59,11 +59,17 @@ export class AuthorityCoordinator {
       ...this.#profile.entities,
       with: [...(this.#profile.entities.with ?? []), Entity],
     });
+    // Allocate every visible entity id before projecting any component data.
+    // queryRun visits archetype chunks independently, so projecting while
+    // discovering ids can encode references to a later chunk as zero.
     queryRun(state, this.#world, (bundle) => {
       const entities = bundle.Entity.self as unknown as readonly EntityHandle[];
       for (const entity of entities) {
         if (!candidateIds.has(entity)) candidateIds.set(entity, candidateNextId++);
       }
+    });
+    queryRun(state, this.#world, (bundle) => {
+      const entities = bundle.Entity.self as unknown as readonly EntityHandle[];
       for (const entity of entities) {
         const components: ReplicationComponentRecord[] = [];
         for (const component of this.#profile.components) {
@@ -102,9 +108,13 @@ export class AuthorityCoordinator {
       if (full || prior === undefined || components.length > 0)
         entities.push({ id: entry.id, kind: 'upsert', components });
     }
-    for (const [entity, prior] of this.#known) {
-      if (!current.has(entity)) entities.push({ id: prior.id, kind: 'despawn', components: [] });
-    }
+    // A full baseline is consumed by a fresh replica, so it must describe
+    // only live entities. Despawn records refer to the previous authority
+    // baseline and would be unknown identities on a late-joining replica.
+    if (!full)
+      for (const [entity, prior] of this.#known) {
+        if (!current.has(entity)) entities.push({ id: prior.id, kind: 'despawn', components: [] });
+      }
 
     const candidateKnown = new Map<EntityHandle, KnownEntity>();
     for (const [entity, entry] of current) {

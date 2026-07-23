@@ -9,7 +9,7 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "tsBuildInfoFile": "./dist/.tsbuildinfo",
-    "types": ["@webgpu/types"]
+    "types": ["@webgpu/types", "node"]
   },
   "include": ["src/**/*.ts", "src/**/*.json"],
   "references": [

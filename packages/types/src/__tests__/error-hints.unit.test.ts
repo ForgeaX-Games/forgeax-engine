@@ -89,7 +89,7 @@ describe('ImportErrorDetail load-vs-conversion layering (feat-20260629 D-5 / w10
     }
   });
 
-  it('ImportErrorCode union stays 5 members (load failure rides .detail, no new code)', () => {
+  it('ImportErrorCode union includes authoring validation failures', () => {
     type ImportCode = import('../index').ImportErrorCode;
     expectTypeOf<ImportCode>().toEqualTypeOf<
       | 'importer-not-registered'
@@ -97,6 +97,7 @@ describe('ImportErrorDetail load-vs-conversion layering (feat-20260629 D-5 / w10
       | 'import-produced-no-assets'
       | 'guid-mismatch'
       | 'import-internal-error'
+      | 'source-validation-failed'
     >();
   });
 });

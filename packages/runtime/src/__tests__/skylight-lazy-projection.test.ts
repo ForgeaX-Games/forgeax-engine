@@ -5,8 +5,8 @@
 //
 // Covers the full driveLazyEquirectProjection state machine (the single
 // per-frame trigger added in w18):
-//   - caps insufficient (rgba16floatRenderable=false) -> NEVER project, no
-//     error, permanent white fallback (AC-06, the WebKit path)
+//   - caps insufficient (rgba16floatRenderable=false) -> project through the
+//     renderable rgba8 precompute output (the WebKit path)
 //   - first sight (status undefined) + caps OK -> fire-and-forget launch; the
 //     store records status:'pending' synchronously, then 'ready' once the
 //     async projection completes
@@ -160,7 +160,7 @@ describe('driveLazyEquirectProjection — lazy projection state machine (M3 / w2
     vi.restoreAllMocks();
   });
 
-  it('caps insufficient (rgba16floatRenderable=false) -> never projects, no error fired (AC-06)', () => {
+  it('caps insufficient (rgba16floatRenderable=false) -> projects through rgba8 output', () => {
     const probe: DeviceProbe = { textures: 0 };
     const store = configuredStore(makeReadyDevice(probe), capsNotRenderable);
     const world = new World();
@@ -177,9 +177,8 @@ describe('driveLazyEquirectProjection — lazy projection state machine (M3 / w2
       handle as unknown as number,
     );
 
-    // No projection launched (no texture minted), no entry written, no error.
-    expect(probe.textures).toBe(0);
-    expect(store.getCubemapStatus(handle)).toBeUndefined();
+    expect(probe.textures).toBeGreaterThan(0);
+    expect(store.getCubemapStatus(handle)).toBe('ready');
     expect(seen).toEqual([]);
   });
 

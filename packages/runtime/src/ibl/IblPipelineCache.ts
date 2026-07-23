@@ -43,6 +43,8 @@ export type IblShaderModuleFactory = (
  * (idempotent).
  */
 export interface IblPipelineCachePerDevice {
+  /** Color format shared by all precompute outputs for this device. */
+  outputFormat?: string;
   /** Equirectangular-to-cubemap pipeline. */
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU pipeline handle
   equirectToCubePipeline?: any;
@@ -69,7 +71,7 @@ export interface IblPipelineCachePerDevice {
   // biome-ignore lint/suspicious/noExplicitAny: opaque BGL
   prefilterGroup0Bgl?: any;
 
-  /** Irradiance cubemap texture (32x32 rgba16float, cube). */
+  /** Irradiance cubemap texture (32x32; outputFormat, cube). */
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture
   irradianceTexture?: any;
   /** Irradiance cubemap view (dimension:cube). */
@@ -87,7 +89,7 @@ export interface IblPipelineCachePerDevice {
   /** Per-face 2D views per mip for prefilter (5 mips x 6 faces). */
   // biome-ignore lint/suspicious/noExplicitAny: nested mip x face views
   prefilterFaceViewsByMip?: ReadonlyArray<ReadonlyArray<any>>;
-  /** BRDF LUT (256x256 rgba16float). */
+  /** BRDF LUT (256x256; outputFormat). */
   // biome-ignore lint/suspicious/noExplicitAny: opaque GPU texture
   brdfLutTexture?: any;
   /** BRDF LUT view. */
@@ -454,6 +456,11 @@ export async function createIblPipelines(
       },
     };
   }
+  // Keep the output format on the per-device cache so the four pipelines and
+  // their lazily-created side textures cannot drift. WebGL2 may need the
+  // renderable rgba8 fallback even when the source equirect remains float.
+  const outputFormat = cubeOutputFormat;
+  cache.outputFormat = outputFormat;
 
   const composed = iblComposedShadersCache;
   // Mock-device path: factory returns synthetic modules. Both production
@@ -712,6 +719,7 @@ export function runIblPrecompute(
   | { ok: false; error: { code: string; expected: string; hint: string } } {
   const { device } = opts;
   const cache = getOrCreateIblCache(device);
+  const outputFormat = cache.outputFormat ?? 'rgba16float';
 
   // M5-amend Bug 1: support both rhi-shim path (Result<T, RhiError>) and raw
   // GPUDevice path (returns value directly). The shim returns
@@ -844,7 +852,7 @@ export function runIblPrecompute(
       mipLevelCount: 1,
       sampleCount: 1,
       dimension: '2d',
-      format: 'rgba16float',
+      format: outputFormat,
       usage: TEXTURE_BINDING | RENDER_ATTACHMENT | COPY_DST | COPY_SRC,
       viewFormats: [],
     });
@@ -880,7 +888,7 @@ export function runIblPrecompute(
       mipLevelCount: PREFILTER_MIP_LEVELS,
       sampleCount: 1,
       dimension: '2d',
-      format: 'rgba16float',
+      format: outputFormat,
       usage: TEXTURE_BINDING | RENDER_ATTACHMENT | COPY_DST | COPY_SRC,
       viewFormats: [],
     });
@@ -925,7 +933,7 @@ export function runIblPrecompute(
       mipLevelCount: 1,
       sampleCount: 1,
       dimension: '2d',
-      format: 'rgba16float',
+      format: outputFormat,
       usage: TEXTURE_BINDING | RENDER_ATTACHMENT | COPY_DST | COPY_SRC,
       viewFormats: [],
     });
@@ -997,7 +1005,7 @@ export function runIblPrecompute(
       colorAttachments: [
         {
           view: cubeFaceViews[face],
-          clearValue: [0, 0, 0, 1],
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
           loadOp: 'clear',
           storeOp: 'store',
         },
@@ -1042,7 +1050,7 @@ export function runIblPrecompute(
       colorAttachments: [
         {
           view: irrFaceViews[face],
-          clearValue: [0, 0, 0, 1],
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
           loadOp: 'clear',
           storeOp: 'store',
         },
@@ -1089,7 +1097,7 @@ export function runIblPrecompute(
         colorAttachments: [
           {
             view: mipFaceViews[face],
-            clearValue: [0, 0, 0, 1],
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
             loadOp: 'clear',
             storeOp: 'store',
           },
@@ -1144,7 +1152,7 @@ export function runIblPrecompute(
       colorAttachments: [
         {
           view: cache.brdfLutView,
-          clearValue: [0, 0, 0, 1],
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
           loadOp: 'clear',
           storeOp: 'store',
         },

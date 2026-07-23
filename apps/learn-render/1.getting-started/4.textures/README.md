@@ -112,13 +112,13 @@ requestAnimationFrame(function tick() { renderer.draw(world); requestAnimationFr
 
 ## HMR manual verification
 
-The `@forgeax/engine-vite-plugin-pack` `configureServer` middleware watches the asset directory tree with five file-extension suffixes (`.meta.json`, `.pack.json`, `.jpg`, `.jpeg`, `.png`) and emits `server.ws.send({ type: 'full-reload' })` on every change (D-3 sidecar / pack-index / image-content matrix). The runtime has no incremental GPU upload path in v1 (OOS-5); the integer-second reload window is the v1 invalidation cushion.
+The `@forgeax/engine-vite-plugin-pack` `configureServer` middleware watches the asset directory tree with five file-extension suffixes (`.meta.json`, `.pack.json`, `.jpg`, `.jpeg`, `.png`) and publishes the neutral catalog change. This app explicitly chooses `refresh: reloadAssetHost()` in `vite.config.ts`, so its host requests Vite `full-reload` after a watched change. The runtime has no incremental GPU upload path in v1 (OOS-5); the integer-second reload window is the v1 invalidation cushion.
 
 | Trigger | File | Observed effect |
 |:--|:--|:--|
 | (1) sidecar `importSettings` change | `assets/wood-container.meta.json` (e.g. flip `mipmap: "auto"` <-> `mipmap: "none"`) | Plugin rebuilds the catalog; browser reloads; the rendered cube reflects the new sampler / mipmap state. |
 | (2) pack-index indirect change | rename / delete a `.pack.json` or `.meta.json` entry | Plugin rebuilds the catalog; browser reloads; `loadByGuid` against the changed GUID resolves the new payload. |
-| (3) JPG content change | `assets/wood-container.jpg` (e.g. re-export from imagemagick + same path) | Plugin emits `full-reload` directly (no catalog rebuild needed; rows derive from sidecars, not bytes); browser reloads; the rendered cube shows the new pixels. |
+| (3) JPG content change | `assets/wood-container.jpg` (e.g. re-export from imagemagick + same path) | No catalog row changes because rows derive from sidecars, not bytes; this app's explicit host refresh requests browser reload, then the rendered cube shows the new pixels. |
 
 To exercise manually:
 

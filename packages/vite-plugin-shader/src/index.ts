@@ -418,6 +418,106 @@ interface ManifestEntries {
   readonly variantWgsl: Map<string, string>;
 }
 
+interface CompiledUserMaterialVariant {
+  readonly definesKey: string;
+  readonly defines: Record<string, boolean>;
+  readonly manifestEntry: ManifestEntryValue;
+  readonly bindings: readonly BindGroupLayoutDescriptor[];
+  readonly bindingsJson: string;
+  readonly uvSetCount: number;
+}
+
+/**
+ * Compile a user material shader once per declared boolean variant axis.
+ *
+ * Engine entries already use this Cartesian path in `compileEngineEntry`, but
+ * the user-material transform historically compiled exactly one source and
+ * emitted `variants: []`. Keeping the same compiler defaults and import
+ * filtering here makes a capability axis an authored shader contract rather
+ * than a demo-side source rewrite.
+ */
+async function compileUserMaterialVariants(
+  source: string,
+  id: string,
+  imports: Record<string, string>,
+): Promise<{
+  readonly primary: CompiledUserMaterialVariant;
+  readonly variants: readonly CompiledUserMaterialVariant[];
+}> {
+  // `forgeax_view::common` owns the shared mesh binding. Any user material
+  // that imports its `meshes` symbol therefore needs the same storage/uniform
+  // capability pair as the engine shaders, even when the author did not write
+  // the pragma. Infer that axis at the compiler seam so a fresh custom shader
+  // cannot silently ship a storage WGSL source against the WebGL2 uniform
+  // pipeline layout (the old failure surfaced only at queue submit).
+  const axes = scanUserMaterialVariantAxes(source);
+  const combinations = axes.length > 0 ? cartesianDefines(axes) : [undefined];
+  const cleanSource = stripPragmas(source);
+  const transitiveImports =
+    axes.length > 0 ? extractTransitiveImports(cleanSource, imports) : imports;
+  const compiled: CompiledUserMaterialVariant[] = [];
+
+  for (const defines of combinations) {
+    const definesKey = defines === undefined ? '' : buildVariantKey(defines);
+    const effectiveDefines = {
+      STORAGE_BUFFER_AVAILABLE: true,
+      POINT_SHADOW_AVAILABLE: true,
+      PER_INSTANCE_REGION: false,
+      ...(defines ?? {}),
+    };
+    const variantSource =
+      defines === undefined ? cleanSource : stripFalseImports(cleanSource, defines);
+    const variantImports =
+      defines === undefined
+        ? imports
+        : filterImportsByDefines(transitiveImports, cleanSource, defines, axes);
+    const r = await compileShader(variantSource, {
+      id: definesKey === '' ? id : `${id}#${definesKey}`,
+      imports: variantImports,
+      defines: effectiveDefines,
+    });
+    if (!r.ok) {
+      throw Object.assign(new Error(r.error.message), toRollupLog(r.error));
+    }
+    const { manifestEntry, uvSetCount } = r.value;
+    const bindingsJson =
+      typeof manifestEntry.bindings === 'string'
+        ? manifestEntry.bindings
+        : JSON.stringify(manifestEntry.bindings);
+    compiled.push({
+      definesKey,
+      defines: defines ?? {},
+      manifestEntry: {
+        hash: manifestEntry.hash,
+        wgsl: manifestEntry.wgsl,
+        bindings: bindingsJson,
+        uvSetCount,
+      },
+      bindings: r.value.bindings,
+      bindingsJson,
+      uvSetCount,
+    });
+  }
+
+  const primary = compiled[0];
+  if (primary === undefined) {
+    throw new Error(`no user material shader variant compiled for ${id}`);
+  }
+  return {
+    primary,
+    variants: axes.length > 0 ? compiled : [],
+  };
+}
+
+function scanUserMaterialVariantAxes(source: string): string[] {
+  const axes = scanVariantAxes(source);
+  const importsMeshes = /#import\s+forgeax_view::common::\{[^}]*\bmeshes\b[^}]*\}/m.test(source);
+  if (importsMeshes && !axes.includes('STORAGE_BUFFER_AVAILABLE')) {
+    axes.push('STORAGE_BUFFER_AVAILABLE');
+  }
+  return axes;
+}
+
 // === reverseDeps: cross-file HMR propagation (plan-strategy §2 D-10, T-16) =========
 //
 // `reverseDeps: Map<depFilePath, Set<importerFilePath>>` is the inverse of the
@@ -707,6 +807,7 @@ interface MinimalPluginContext {
  */
 interface HmrModuleNodeLike {
   readonly file?: string | null;
+  readonly importedModules?: ReadonlySet<HmrModuleNodeLike> | undefined;
 }
 type HmrGetModulesByFile = (file: string) => Set<HmrModuleNodeLike> | undefined;
 interface HmrServerLike {
@@ -759,6 +860,7 @@ type ConnectMiddleware = (
 interface ViteDevServerLike {
   readonly middlewares: { use(handler: ConnectMiddleware): unknown };
   transformRequest(url: string): Promise<unknown>;
+  readonly moduleGraph?: HmrServerLike['moduleGraph'] | undefined;
   readonly config?:
     | {
         readonly base?: string | undefined;
@@ -1784,6 +1886,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       // sidecar is also the paramSchema SSOT -- if a material-shader sidecar
       // is present, paramSchema MUST be declared there (requirements E4).
       let isMaterialShader = false;
+      let materialShaderIdentifier: string | undefined;
       const metaPath = `${id}.meta.json`;
       let engineImports: Record<string, string> = {};
       let userParamSchema: Array<{ name: string; type: string }> = [];
@@ -1845,6 +1948,15 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
           }
           userParamSchema = paramSchema as Array<{ name: string; type: string }>;
           isMaterialShader = true;
+          const importSettings = metaObj.importSettings;
+          if (
+            importSettings !== null &&
+            typeof importSettings === 'object' &&
+            typeof (importSettings as Record<string, unknown>).materialShaderIdentifier === 'string'
+          ) {
+            materialShaderIdentifier = (importSettings as Record<string, unknown>)
+              .materialShaderIdentifier as string;
+          }
 
           // AC-03: reject #define (boolean) directives in material-shader entries.
           // v1 assembly mechanism is #import + direct call only (plan-strategy
@@ -1899,34 +2011,17 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         imports = { ...imports, ...engineImports };
       }
 
-      const r = await compileShader(stripPragmas(code), {
-        id,
-        imports,
-        defines: {
-          STORAGE_BUFFER_AVAILABLE: true,
-          POINT_SHADOW_AVAILABLE: true,
-          PER_INSTANCE_REGION: false,
-        },
-      });
-      if (!r.ok) {
-        // bug-20260512-rolldown-this-error-wasm-crash: rolldown@1.0.0-rc.17
-        // crashes with "WebAssembly.Table.grow(): failed to grow table by 4"
-        // when this.error() is called from an async transform hook
-        // (TransformPluginContextImpl.error goes through the native Rust WASM
-        // binding and overflows the function table — known rolldown rc17 bug).
-        // Throw directly instead: rolldown surfaces plugin-thrown errors
-        // correctly without hitting the native binding path. The §S-7 hint
-        // double-surface contract is preserved via Object.assign which merges
-        // toRollupLog fields (hint / meta / loc) onto the plain Error instance.
-        throw Object.assign(new Error(r.error.message), toRollupLog(r.error));
-      }
-
-      const { manifestEntry, bindings, uvSetCount } = r.value;
+      const compiledMaterial = await compileUserMaterialVariants(code, id, imports);
+      const { primary, variants: compiledVariants } = compiledMaterial;
+      const { manifestEntry, bindingsJson, uvSetCount } = primary;
+      // Keep schema/BGL validation anchored to the non-downlevel branch when
+      // present. `textureSampleLevel` legitimately reflects a non-filtering
+      // sampler in naga, while the authored `texture2d` param remains the
+      // filtering sampler contract shared by both backends.
+      const validationVariant =
+        compiledVariants.find((variant) => variant.defines.WEBGL2_COMPAT === false) ?? primary;
+      const bindings = validationVariant.bindings;
       const hash = manifestEntry.hash;
-      const bindingsJson =
-        typeof manifestEntry.bindings === 'string'
-          ? manifestEntry.bindings
-          : JSON.stringify(manifestEntry.bindings);
       // feat-20260523-shader-template-instance-split M9-T05 (incidental fix):
       // store the post-naga_oil composed source from `manifestEntry.wgsl`,
       // not the raw `code` (which still carries #import directives the WGSL
@@ -1934,6 +2029,18 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       // `compileEngineEntry` line 621; user-shader transform now matches
       // (charter P4 consistent abstraction across the two compile paths).
       state.entries.set(id, { hash, wgsl: manifestEntry.wgsl, bindings: bindingsJson, uvSetCount });
+      for (const variant of compiledVariants) {
+        state.variantWgsl.set(`${id}#${variant.definesKey}`, variant.manifestEntry.wgsl);
+        if (!isServeMode && variant.definesKey !== '') {
+          emitShaderTriplet(
+            this,
+            variant.manifestEntry.hash,
+            variant.manifestEntry.wgsl,
+            variant.bindingsJson,
+            isServeMode,
+          );
+        }
+      }
 
       // T-16 / D-10: seed reverseDeps from this source's #import directives so
       // handleHotUpdate can fan out to the downstream Vite ModuleNodes when a
@@ -1985,11 +2092,15 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         // emitted as a sidecar file in generateBundle.
         const composedWgslPath = `./${hash}.composed.wgsl`;
         state.materialShaders.push({
-          identifier: extractDefineImportPath(code) ?? hash,
+          identifier: materialShaderIdentifier ?? extractDefineImportPath(code) ?? hash,
           sourcePath: id,
           composedWgsl: composedWgslPath,
           paramSchema: JSON.stringify(paramSchema),
-          variants: [],
+          variants: compiledVariants.map((variant) => ({
+            definesKey: variant.definesKey,
+            defines: variant.defines,
+            composedWgsl: `./${variant.manifestEntry.hash}.composed.wgsl`,
+          })),
           uvSetCount,
         });
       }
@@ -2184,11 +2295,22 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
           return;
         }
 
-        if (state.entries.size === 0) {
-          for (const wgslId of resolveWgslEntries(server)) {
-            // Errors surface out of the await — no silent try/catch (II-5).
-            await server.transformRequest(wgslId);
+        // The app entry can request the manifest before a lazily imported
+        // custom WGSL module has reached this plugin's transform hook. Walk
+        // Vite's already-loaded module graph so producer and consumer observe
+        // one complete manifest in the same request; the old input-only prime
+        // missed exactly this race for custom material shaders.
+        const devWgslEntries = resolveDevWgslEntries(server);
+        for (const wgslId of devWgslEntries) {
+          // buildStart already owns engine WGSL compilation. A Vite graph
+          // walk can surface the same files through the runtime bundle under
+          // a symlinked node_modules path; re-transforming them would replace
+          // the URP storage-fallback entry with the all-true source.
+          if (state.entries.has(wgslId) || isEngineShaderPath(wgslId, engineShaderRoots)) {
+            continue;
           }
+          // Errors surface out of the await — no silent try/catch (II-5).
+          await server.transformRequest(wgslId);
         }
 
         const entries = projectShaderManifestEntries(state.entries);
@@ -2224,18 +2346,55 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
  * misleading `manifest-malformed`).
  */
 function resolveWgslEntries(server: ViteDevServerLike): readonly string[] {
+  return resolveRollupInputEntries(server).filter((id) => id.endsWith('.wgsl'));
+}
+
+function resolveRollupInputEntries(server: ViteDevServerLike): readonly string[] {
   const input = server.config?.build?.rollupOptions?.input;
   if (input === undefined) return [];
   if (typeof input === 'string') {
-    return input.endsWith('.wgsl') ? [input] : [];
+    return [input];
   }
   if (Array.isArray(input)) {
-    return input.filter((id): id is string => typeof id === 'string' && id.endsWith('.wgsl'));
+    return input.filter((id): id is string => typeof id === 'string');
   }
-  // Object form: pick values ending in .wgsl. The `input` key may be the
-  // hello-triangle "main" entry (index.html) which we ignore.
+  // Object form: pick every entry; the graph walk below filters to WGSL.
   const values = Object.values(input as Record<string, string>);
-  return values.filter((id) => typeof id === 'string' && id.endsWith('.wgsl'));
+  return values.filter((id): id is string => typeof id === 'string');
+}
+
+/**
+ * Return build-input WGSL plus every WGSL node already reachable from those
+ * inputs in Vite's module graph. The graph is a consumer-side observation only
+ * — transformation remains owned by `server.transformRequest`.
+ */
+function resolveDevWgslEntries(server: ViteDevServerLike): readonly string[] {
+  const out = new Set(resolveWgslEntries(server));
+  const moduleGraph = server.moduleGraph;
+  if (moduleGraph === undefined) return [...out];
+
+  const seen = new Set<HmrModuleNodeLike>();
+  const pending: HmrModuleNodeLike[] = [];
+  for (const root of resolveRollupInputEntries(server)) {
+    for (const node of moduleGraph.getModulesByFile(root) ?? []) pending.push(node);
+  }
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (node === undefined || seen.has(node)) continue;
+    seen.add(node);
+    const file = node.file;
+    if (file?.endsWith('.wgsl')) out.add(file);
+    for (const imported of node.importedModules ?? []) pending.push(imported);
+  }
+  return [...out];
+}
+
+function isEngineShaderPath(id: string, roots: readonly string[]): boolean {
+  return (
+    roots.some((root) => id === root || id.startsWith(`${root}/`)) ||
+    id.includes('/packages/shader/src/') ||
+    id.includes('/node_modules/@forgeax/engine-shader/src/')
+  );
 }
 
 /** Package version string (debug tag). */

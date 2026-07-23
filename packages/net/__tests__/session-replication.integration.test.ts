@@ -84,6 +84,10 @@ describe('NetSession replication integration', () => {
     lateReplicaSession.attachReplica(lateReplica, replication.limits);
     lateAuthoritySession.receiveEvents();
     lateReplicaSession.receiveEvents();
+    const latePeer = lateAuthoritySession.getPeerSnapshot().peerIds[0];
+    expect(latePeer).toBeDefined();
+    if (latePeer === undefined) return;
+    lateAuthoritySession.requestFullBaseline(latePeer);
 
     expect(lateAuthoritySession.publish().ok).toBe(true);
     expect(lateReplicaSession.receiveEvents()).toEqual([]);

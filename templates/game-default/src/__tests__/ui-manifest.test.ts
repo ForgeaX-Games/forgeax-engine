@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const assetRoot = resolve(process.cwd(), 'forgeax-engine-assets/demo-assets/template-game-default/ui');
+const assetRoot = resolve(process.cwd(), 'templates/game-default/assets/ui');
 
 async function readMeta(name: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(resolve(assetRoot, name), 'utf8')) as Record<string, unknown>;

@@ -32,4 +32,17 @@ test('coverage-pnpm uploads diagnostics only after a failed test run', () => {
     /id: upload[\s\S]*?continue-on-error: true[\s\S]*?if: steps\.upload\.outcome == 'failure'/,
   );
   assert.equal(uploadWithRetry.match(/continue-on-error: true/g)?.length, 2);
+  assert.equal(uploadWithRetry.match(/ACTIONS_ARTIFACT_UPLOAD_TIMEOUT_MS: '60000'/g)?.length, 3);
+  assert.equal(
+    (workflow.match(/uses: \.\/\.github\/actions\/upload-optional-artifact/g) ?? []).length,
+    4,
+  );
+  assert.equal(
+    (
+      workflow.match(
+        /uses: \.\/\.github\/actions\/upload-optional-artifact\n\s+timeout-minutes: 2/g,
+      ) ?? []
+    ).length,
+    4,
+  );
 });

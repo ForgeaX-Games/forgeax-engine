@@ -56,7 +56,12 @@ export function resolveGeometryTargetViews(
   geometryColorResolveView: TextureView | null;
   ldrSpriteColorView: TextureView | null;
 } {
-  const msaaActive = camera.antialias === 'msaa';
+  // The wasm GL fallback cannot allocate multisample texture storage. Keep
+  // the capability decision at the RHI boundary: an MSAA request degrades to
+  // the single-sample route on that backend, while WebGPU/native retain the
+  // existing 4x path.
+  const msaaActive =
+    camera.antialias === 'msaa' && internals.device.caps.backendKind !== 'wgpu-webgl2';
   let geometryColorView: TextureView | null = view;
   let geometryDepthView: TextureView | null = depthView;
   // Single-sample resolve out for the main colour pass (LDR: swap-chain
@@ -392,9 +397,10 @@ export function ensurePerFrameGraph(
   skybox: SkyboxSnapshot | undefined,
   targetW: number,
   targetH: number,
+  shadowMapSizeOverride?: number,
 ): RenderGraph<RenderPipelineContext> | null {
   const earlyTonemapActive = camera.tonemap !== 'none';
-  const earlyShadowMapSize = lights.shadowMapSize;
+  const earlyShadowMapSize = shadowMapSizeOverride ?? lights.shadowMapSize;
   const earlyCascadeCount = lights.cascadeCount;
   // Drift-rebuild: if the installed shadow map size or cascade count has
   // changed since the last buildGraph, null perFrameGraph so the next
@@ -475,6 +481,31 @@ export function ensurePerFrameGraph(
     }
   }
   return perFrameGraph;
+}
+
+/**
+ * Fit the shadow atlas to the device's texture-dimension capability while
+ * preserving the authored cascade count. The same effective size is threaded
+ * through graph allocation and pass metadata. The wgpu GLES/WebGL2 fallback
+ * reports a 2048px generic texture limit, but its depth32float render/sample
+ * path is only reliable up to 1024px; reserve the backend's other half for
+ * that depth-format limitation instead of creating an invalid bind group.
+ */
+export function resolveShadowMapSize(
+  internals: RenderSystemInternals,
+  lights: ExtractedLights,
+): number | undefined {
+  const requested = lights.shadowMapSize;
+  if (!(requested !== undefined && requested > 0)) return requested;
+  const cascades = Math.max(1, Math.min(4, Math.round(lights.cascadeCount ?? 1)));
+  const tilesPerSide = Math.ceil(Math.sqrt(cascades));
+  const maxDimension = internals.device.limits.maxTextureDimension2D;
+  if (!(maxDimension > 0)) return Math.floor(requested);
+  const backendKind = internals.device.caps?.backendKind;
+  const depthTextureDimension =
+    backendKind === 'wgpu-webgl2' ? Math.max(1, Math.floor(maxDimension / 2)) : maxDimension;
+  const maxPerTile = Math.max(1, Math.floor(depthTextureDimension / tilesPerSide));
+  return Math.max(1, Math.min(Math.floor(requested), maxPerTile));
 }
 
 /**

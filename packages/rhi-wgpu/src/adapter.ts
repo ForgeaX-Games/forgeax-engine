@@ -146,6 +146,40 @@ export function makeCanvasContext(
   // SurfaceTexture wrapper — see getCurrentTexture below for the
   // auto-present hook.
   let pendingSurfaceTexture: { present: () => void } | null = null;
+  let surfaceDescriptor: { format?: unknown; usage?: unknown } = {};
+
+  // wasm-bindgen texture handles are intentionally opaque, so their browser
+  // runtime properties (width/height/format/usage) are not readable by the
+  // RHI-debug recorder. Preserve the facts already known at the surface seam
+  // as non-enumerable metadata without wrapping the handle (wrapping would
+  // break wasm-bindgen class checks in createTextureView).
+  function annotateSurfaceTexture(texture: unknown): void {
+    if (texture === null || typeof texture !== 'object') return;
+    const target = texture as Record<string, unknown>;
+    const metadata: Record<string, unknown> = {
+      width: canvas?.width,
+      height: canvas?.height,
+      depthOrArrayLayers: 1,
+      format: surfaceDescriptor.format,
+      usage: surfaceDescriptor.usage,
+    };
+    for (const [key, value] of Object.entries(metadata)) {
+      if (value === undefined) continue;
+      try {
+        if (target[key] === undefined) {
+          Object.defineProperty(target, key, {
+            configurable: true,
+            enumerable: false,
+            value,
+          });
+        }
+      } catch {
+        // Some wasm-bindgen versions expose non-extensible handles. Keep the
+        // handle usable; recorder diagnostics remain fail-fast in that case.
+      }
+    }
+  }
+
   return {
     configure(desc: CanvasConfiguration): Result<void, RhiError> {
       try {
@@ -185,6 +219,7 @@ export function makeCanvasContext(
           }
         }
         rawContext.configure(mirrored as unknown as GPUCanvasConfiguration);
+        surfaceDescriptor = { format: mirrored.format, usage: mirrored.usage };
         return ok(undefined);
       } catch (e) {
         return webgpuRuntimeError(e);
@@ -235,8 +270,11 @@ export function makeCanvasContext(
           if (typeof raw.present === 'function') {
             pendingSurfaceTexture = raw as { present: () => void };
           }
-          return ok(raw.getTexture() as unknown as Texture);
+          const texture = raw.getTexture() as unknown as Texture;
+          annotateSurfaceTexture(texture);
+          return ok(texture);
         }
+        annotateSurfaceTexture(raw);
         return ok(raw as unknown as Texture);
       } catch (e) {
         return webgpuRuntimeError(e);

@@ -7,6 +7,7 @@ import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
+import { websocketListenerCommands } from './packages/net-websocket/__tests__/support/ws-listener-commands';
 
 // Monorepo-root anchor for pluginPack roots (see browser project below).
 // `new URL('.', import.meta.url)` already yields this file's directory
@@ -182,6 +183,7 @@ export default defineConfig({
           ],
           browser: {
             enabled: true,
+            commands: websocketListenerCommands,
             // playwright provider launchOptions: channel = 'chrome-beta'
             // picks the system Chrome Beta binary (full WebGPU build, unlike
             // the bundled chromium_headless_shell which strips WebGPU).
@@ -295,6 +297,7 @@ export default defineConfig({
           exclude: [
             '**/node_modules/**',
             '**/dist/**',
+            '**/.forgeax-harness/**',
             '**/.worktrees/**',
             '**/.claude/worktrees/**',
           ],

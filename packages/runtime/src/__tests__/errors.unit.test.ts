@@ -763,6 +763,8 @@ import { RhiErrorListenerRegistry } from '../renderer';
               return 'format unsupported';
             case 'asset-fetch-failed':
               return 'fetch failed';
+            case 'catalog-source-unconfigured':
+              return 'catalog source unconfigured';
             case 'asset-invalid-value':
               return 'invalid value';
             case 'cubemap-handle-missing':

@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import type {
-  ImportedArtifact,
-  ImportProduct,
-  ImportResult,
-  SourceDependency,
-} from '../import-contract.js';
+import {
+  IMPORT_ERROR_HINTS as DIRECT_IMPORT_ERROR_HINTS,
+  ImportError as DirectImportError,
+} from '../import.js';
+import type { ImportedArtifact, ImportProduct, ImportResult, SourceDependency } from '../index.js';
 import { IMPORT_ERROR_HINTS, ImportError } from '../index.js';
 
 describe('generic import contract', () => {
+  it('keeps the main entry and import module on one runtime contract', () => {
+    expect(ImportError).toBe(DirectImportError);
+    expect(IMPORT_ERROR_HINTS).toBe(DIRECT_IMPORT_ERROR_HINTS);
+  });
+
   it('models a product with assets, artifacts, and normalized source dependencies', () => {
     const product: ImportProduct = {
       assets: [],

@@ -22,11 +22,31 @@ const alphaPath = resolve(appRoot, 'src/alpha-test.wgsl');
 const require = createRequire(import.meta.url);
 const shaderRoot = resolve(dirname(require.resolve('@forgeax/engine-shader/package.json')), 'src');
 
-async function build(sharedRoot) {
-  const manifest = resolve(sharedRoot, 'manifest.json');
-  const env = { ...process.env, FORGEAX_SHARED_APP_INPUTS_MANIFEST: manifest };
+async function buildSharedInputs(sharedRoot) {
   const { execa } = await import('execa');
-  await execa('node', ['scripts/ci/build-shared-app-inputs.mjs', '--out', sharedRoot, '--shader-root', shaderRoot], { cwd: repoRoot, stdio: 'inherit' });
+  await execa(
+    'node',
+    [
+      'scripts/ci/build-shared-app-inputs.mjs',
+      '--out',
+      sharedRoot,
+      '--shader-root',
+      shaderRoot,
+      '--catalog-only',
+    ],
+    { cwd: repoRoot, stdio: 'inherit' },
+  );
+  return resolve(sharedRoot, 'manifest.json');
+}
+
+async function buildApp(manifest) {
+  // The shared-inputs producer job owns full payload generation; this probe only needs catalog/manifest data.
+  const env = {
+    ...process.env,
+    FORGEAX_SHARED_APP_INPUTS_MANIFEST: manifest,
+    FORGEAX_SHARED_APP_INPUTS_MODE: 'catalog-only',
+  };
+  const { execa } = await import('execa');
   await execa('pnpm', ['-F', packageName, 'exec', 'vite', 'build', '--base', '/blending/'], { cwd: repoRoot, env, stdio: 'inherit' });
 }
 
@@ -93,7 +113,8 @@ async function main() {
   const tempRoot = await mkdtemp(resolve(tmpdir(), 'forgeax-blending-probe-'));
   try {
     const sharedRoot = resolve(tempRoot, 'shared-app-inputs');
-    await build(sharedRoot);
+    const manifest = await buildSharedInputs(sharedRoot);
+    await buildApp(manifest);
     await withServerLifecycle(startViteServer({ mode: 'preview', root: appRoot, base: '/blending/', port: 0 }), async ({ origin, server }) => {
       await pollHttpReady(`${origin}/blending/`, { stage: 'preview-readiness' });
       await browserCheck(origin);

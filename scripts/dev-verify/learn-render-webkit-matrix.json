@@ -1,0 +1,50 @@
+{
+  "core": [
+    "1.getting-started/4.textures",
+    "1.getting-started/6.coordinate-systems",
+    "2.lighting/4.lighting-maps",
+    "2.lighting/6.multiple-lights",
+    "4.advanced-opengl/3.blending",
+    "4.advanced-opengl/5.framebuffers",
+    "4.advanced-opengl/6.cubemaps",
+    "5.advanced-lighting/7.bloom",
+    "5.advanced-lighting/8.deferred-shading",
+    "6.pbr/3.ibl-specular"
+  ],
+  "oracles": {
+    "4.advanced-opengl/6.cubemaps": {
+      "kind": "region-contrast",
+      "region": { "x": 0, "y": 0, "width": 1, "height": 0.12 },
+      "minLumaRange": 8,
+      "reason": "the visible cubemap background must vary across the upper canvas"
+    },
+    "6.pbr/3.ibl-specular": {
+      "kind": "point-contrast",
+      "points": [
+        [0.225, 0.225],
+        [0.5, 0.225],
+        [0.775, 0.225],
+        [0.225, 0.5],
+        [0.5, 0.5],
+        [0.775, 0.5],
+        [0.225, 0.775],
+        [0.5, 0.775],
+        [0.775, 0.775]
+      ],
+      "minLumaRange": 16,
+      "reason": "the IBL sphere grid must expose roughness/metallic contrast"
+    }
+  },
+  "readiness": {
+    "3.model-loading/1.model-loading": {
+      "kind": "window-flag",
+      "name": "__sponzaSceneReady",
+      "timeoutMs": 30000
+    },
+    "3.model-loading/2.city-glb": {
+      "kind": "window-flag",
+      "name": "__citySceneReady",
+      "timeoutMs": 30000
+    }
+  }
+}

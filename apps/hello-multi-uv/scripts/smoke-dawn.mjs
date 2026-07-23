@@ -303,10 +303,10 @@ try {
 // Locate the multi-uv-demo material shader entry + read its composed wgsl
 // (the browser app does this via `import './multi-uv-demo.wgsl'`).
 const demoShaderEntry = (manifestParsed.materialShaders ?? []).find(
-  (m) => m && typeof m.identifier === 'string' && m.identifier.includes('multi_uv_demo'),
+  (m) => m && m.identifier === 'hello-multi-uv::multi-uv-demo',
 );
 if (!demoShaderEntry) {
-  console.error('[smoke] FAIL - manifest.materialShaders[] missing multi_uv_demo entry');
+  console.error('[smoke] FAIL - manifest.materialShaders[] missing hello-multi-uv::multi-uv-demo entry');
   process.exit(1);
 }
 let demoComposedWgsl;

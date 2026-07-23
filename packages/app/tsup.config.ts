@@ -5,6 +5,12 @@ export default defineConfig({
   ...baseTsupConfig,
   entry: ['src/index.ts'],
   external: [
+    // Keep the renderer package boundary intact. The app shell must not inline
+    // runtime -> rhi-wgpu -> engine-wgpu-wasm, because the wasm owner resolves
+    // its sibling `pkg/` asset relative to its own dist entry.
+    '@forgeax/engine-runtime',
+    '@forgeax/engine-rhi-webgpu',
+    '@forgeax/engine-rhi-wgpu',
     // @forgeax/engine-rhi-debug is imported via dynamic import() only
     // (FORGEAX_ENGINE_RHI_DEBUG=1 path). Its barrel carries Node.js built-in imports
     // (fs, path, crypto) that are unavailable in browser/neutral platform

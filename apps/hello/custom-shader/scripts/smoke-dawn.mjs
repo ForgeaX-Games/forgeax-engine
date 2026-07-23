@@ -174,10 +174,10 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(manifestRaw)}`;
 // Locate the materialShaders[] entry for pulse-material + read its composed
 // wgsl from the sibling sidecar file.
 const matShaderEntry = (manifestParsed.materialShaders ?? []).find(
-  (m) => m && typeof m.identifier === 'string' && m.identifier.includes('pulse_material'),
+  (m) => m && m.identifier === 'my-game::pulse-material',
 );
 if (!matShaderEntry) {
-  console.error('[smoke] FAIL - manifest.materialShaders[] missing pulse_material entry');
+  console.error('[smoke] FAIL - manifest.materialShaders[] missing my-game::pulse-material entry');
   process.exit(1);
 }
 let composedWgsl;

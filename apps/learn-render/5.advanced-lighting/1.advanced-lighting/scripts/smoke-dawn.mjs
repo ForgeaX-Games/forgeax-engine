@@ -224,7 +224,7 @@ if (!existsSync(DEMO_MANIFEST_PATH)) {
 }
 const demoManifest = JSON.parse(readFileSync(DEMO_MANIFEST_PATH, 'utf8'));
 const blinnPhongEntry = (demoManifest.materialShaders ?? []).find(
-  (m) => m && typeof m.identifier === 'string' && m.identifier.includes('5_1_blinn_phong'),
+  (m) => m && m.identifier === 'learn-render::5-1-blinn-phong',
 );
 if (!blinnPhongEntry) {
   console.error('[smoke] FAIL - manifest.materialShaders[] missing 5_1_blinn_phong entry');

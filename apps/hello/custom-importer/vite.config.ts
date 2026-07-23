@@ -1,6 +1,6 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { defineConfig } from 'vite';
 
@@ -33,7 +33,7 @@ const localAssets = resolve(here, 'assets');
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
-    pluginPack({ roots: [localAssets], importers: [reelGameBlobImporter()] }),
+    pluginPack({ roots: [localAssets], importers: [reelGameBlobImporter()] , refresh: reloadAssetHost() }),
   ],
   server: {
     port: 5196,

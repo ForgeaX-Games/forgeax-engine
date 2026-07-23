@@ -241,8 +241,15 @@ const STANDARD_PBR_SIDECAR_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'occlusionStrength', type: 'f32' },
 ];
 
-/** Per-entity material slice size (80 B; derived from the sidecar paramSchema). */
-export const STANDARD_PBR_UBO_SIZE = derive(STANDARD_PBR_SIDECAR_SCHEMA).uboLayout.totalBytes;
+/**
+ * Per-entity material slice size. The authored parameter schema owns the
+ * leading 80-byte material payload; the engine-owned texture UV scales occupy
+ * its 80..120 byte tail, rounded to a 128-byte bind window.
+ */
+export const STANDARD_PBR_UBO_SIZE = Math.max(
+  derive(STANDARD_PBR_SIDECAR_SCHEMA).uboLayout.totalBytes,
+  128,
+);
 
 /**
  * Engine-internal Extract / Prepare / Record driver; constructed by createRenderer.

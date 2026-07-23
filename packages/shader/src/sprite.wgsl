@@ -1,7 +1,7 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
 #pragma variant_axis PER_INSTANCE_REGION
 
-#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances}
+#import forgeax_view::common::{View, Mesh, InstanceData, view, meshes, instances, sampleMaterialTexture}
 
 // @forgeax/engine-shader - sprite.wgsl (feat-20260520-2d-sprite-layer-mvp /
 // M-3 / w19). 2D sprite material — third variant of the MaterialAsset
@@ -118,6 +118,12 @@ struct Material {
   // because slicesAndMode is never sampled in the vertex / fragment paths
   // when slices=[0,0,0,0] (zero-branch GPU path).
   slicesAndMode : vec4<f32>,
+  textureScalePadding : vec4<f32>,
+  baseColorUvScale : vec2<f32>,
+  metallicRoughnessUvScale : vec2<f32>,
+  normalUvScale : vec2<f32>,
+  emissiveUvScale : vec2<f32>,
+  occlusionUvScale : vec2<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -133,6 +139,12 @@ struct Material {
 @group(1) @binding(5) var normalSampler : sampler;
 @group(1) @binding(6) var normalTexture : texture_2d<f32>;
 
+// Preserve filtering reflection for the bound texture passed to the helper.
+fn materialTextureFilteringWitness() {
+  let base = baseColorTexture;
+  let baseWitness = textureSample(base, baseColorSampler, vec2<f32>(0.0));
+}
+
 struct VsIn {
   @location(0) pos     : vec3<f32>,
   @location(1) normal  : vec3<f32>,
@@ -143,8 +155,8 @@ struct VsIn {
 struct VsOut {
   @builtin(position) clip     : vec4<f32>,
   // Atlas-space UV: already folded through region origin + size by the
-  // vertex stage so the fragment can `textureSample(baseColorTexture,
-  // baseColorSampler, in.uv_atlas)` directly without any host-side region
+  // vertex stage so the fragment can sample the bound material texture at
+  // `in.uv_atlas` without any host-side region
   // re-write per draw.
   @location(0) uv_atlas       : vec2<f32>,
 };
@@ -279,7 +291,7 @@ fn linear_to_srgb(linear : f32) -> f32 {
 
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let texel = textureSample(baseColorTexture, baseColorSampler, in.uv_atlas);
+  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorUvScale);
   // R6 mitigation: strict clamp 0..1 before premultiplied alpha multiply.
   let rgba = clamp(texel * material.colorTint, vec4<f32>(0.0), vec4<f32>(1.0));
   // Premultiplied alpha: rgb pre-multiplied by alpha for srcFactor='one' /
@@ -300,7 +312,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 // offscreen target; the tonemap fullscreen pass handles sRGB encoding.
 @fragment
 fn fs_main_hdr(in : VsOut) -> @location(0) vec4<f32> {
-  let texel = textureSample(baseColorTexture, baseColorSampler, in.uv_atlas);
+  let texel = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv_atlas, material.baseColorUvScale);
   // R6 mitigation: strict clamp 0..1 before premultiplied alpha multiply.
   let rgba = clamp(texel * material.colorTint, vec4<f32>(0.0), vec4<f32>(1.0));
   return vec4<f32>(rgba.rgb * rgba.a, rgba.a);

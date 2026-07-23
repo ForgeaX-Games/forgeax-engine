@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { parseGhPages } from './parse-gh-pages.mjs';
 
 const maxDelaySeconds = 60;
 
@@ -32,9 +33,9 @@ function flattenPages(pages, key) {
   return values;
 }
 function ghPages(endpoint, key) {
-  const text = execFileSync('gh', ['api', '--paginate', '--slurp', endpoint], { encoding: 'utf8' });
+  const text = execFileSync('gh', ['api', '--paginate', endpoint], { encoding: 'utf8' });
   try {
-    return flattenPages(JSON.parse(text), key);
+    return flattenPages(parseGhPages(text), key);
   } catch {
     fail('ci-cost-rest-pagination-invalid', { expected: key });
   }
@@ -45,6 +46,16 @@ function dateSeconds(value) {
 }
 function timestamp(value) {
   return typeof value === 'string' && dateSeconds(value) !== null ? value : null;
+}
+function requiredArtifactClasses(contract, timingEntry) {
+  if (timingEntry.notApplicable) return [];
+  const classes = contract.consumers?.[timingEntry.consumer]?.requiredArtifactClasses;
+  if (!Array.isArray(classes))
+    fail('ci-cost-timing-consumer-invalid', {
+      jobIdentity: timingEntry.jobIdentity,
+      consumer: timingEntry.consumer,
+    });
+  return classes;
 }
 function measureExpandedBytes(artifacts) {
   const root = mkdtempSync(join(tmpdir(), 'ci-artifact-expanded-'));
@@ -59,7 +70,10 @@ function measureExpandedBytes(artifacts) {
           { encoding: 'buffer', maxBuffer: 1024 * 1024 * 1024 },
         );
         writeFileSync(archive, bytes);
-        execFileSync('unzip', ['-q', archive, '-d', destination]);
+        // Artifact ZIPs can contain duplicate paths when producers merge outputs.
+        // Cost collection is a read-only measurement, so overwrite deterministically
+        // instead of letting unzip prompt on a non-interactive runner.
+        execFileSync('unzip', ['-q', '-o', archive, '-d', destination]);
         const diskUsage = execFileSync('du', ['-sk', destination], { encoding: 'utf8' });
         const kibibytes = Number(diskUsage.trim().split(/\s+/)[0]);
         if (!Number.isFinite(kibibytes))
@@ -109,15 +123,15 @@ function sharedProductionFacts(value, merged, contract, mapping, artifactsById, 
       expected: shared.producer,
       detail: value.producer,
     });
+  // The merged provenance mapping is the SSOT for class ownership; producer facts only measure production.
   if (
-    !Array.isArray(value.artifactClasses) ||
-    value.artifactClasses.length !== shared.payloadClasses.length ||
-    shared.payloadClasses.some((className) => !value.artifactClasses.includes(className)) ||
     shared.payloadClasses.some((className) => mapping.get(className)?.producer !== shared.producer)
   )
     return invalid('ci-cost-shared-provenance-class-uncovered', {
       expected: shared.payloadClasses,
-      detail: value.artifactClasses,
+      detail: shared.payloadClasses.filter(
+        (className) => mapping.get(className)?.producer !== shared.producer,
+      ),
     });
   for (const field of [
     'sourceScanCount',
@@ -141,7 +155,9 @@ function sharedProductionFacts(value, merged, contract, mapping, artifactsById, 
   if (started === null || completed === null || completed < started)
     return invalid('ci-cost-shared-job-duration-missing');
   const transferConsumerCount = contract.timingRoster.filter((consumer) =>
-    shared.payloadClasses.some((className) => consumer.requiredArtifactClasses.includes(className)),
+    shared.payloadClasses.some((className) =>
+      requiredArtifactClasses(contract, consumer).includes(className),
+    ),
   ).length;
   return {
     ...value,
@@ -159,6 +175,10 @@ function sharedProductionFacts(value, merged, contract, mapping, artifactsById, 
 function sharedEvidenceFacts(value) {
   const invalid = (code, detail = {}) => ({ status: 'invalidEvidence', code, ...detail });
   if (!value || typeof value !== 'object') return invalid('ci-cost-shared-samples-missing');
+  if (value.schemaVersion !== 1 || value.producer !== 'shared-evidence-probe')
+    return invalid('ci-cost-shared-evidence-producer-invalid');
+  if (typeof value.inputFingerprint !== 'string' || value.inputFingerprint.length === 0)
+    return invalid('ci-cost-shared-evidence-fingerprint-missing');
   const baseline = value.baseline;
   const samples = value.samples;
   if (!baseline || !Array.isArray(samples)) return invalid('ci-cost-shared-samples-invalid');
@@ -187,9 +207,22 @@ function jobForIdentity(jobs, identity) {
   const matches = jobs.filter((job) => job.name === identity);
   return matches.length === 1 ? matches[0] : null;
 }
-function classifyConsumer(consumer, mapping, artifactsById, jobs) {
+function timingJobForIdentity(jobs, identity) {
+  const matrixJobs = jobs.filter((job) => job.name.startsWith(`${identity}-`));
+  const candidates =
+    matrixJobs.length > 0 ? matrixJobs : jobs.filter((job) => job.name === identity);
+  return (
+    candidates
+      .filter((job) => timestamp(job.started_at))
+      .sort((left, right) => dateSeconds(left.started_at) - dateSeconds(right.started_at))[0] ??
+    null
+  );
+}
+function classifyConsumer(consumer, contract, mapping, artifactsById, jobs) {
   if (consumer.notApplicable) return { jobIdentity: consumer.jobIdentity, status: 'notApplicable' };
-  const records = consumer.requiredArtifactClasses.map((className) => mapping.get(className));
+  const records = requiredArtifactClasses(contract, consumer).map((className) =>
+    mapping.get(className),
+  );
   if (records.some((record) => !record?.artifactId))
     return {
       jobIdentity: consumer.jobIdentity,
@@ -203,16 +236,17 @@ function classifyConsumer(consumer, mapping, artifactsById, jobs) {
       status: 'invalidSample',
       code: 'ci-cost-artifact-fact-missing',
     };
-  const ready = selected.reduce((latest, artifact) =>
+  const artifactReady = selected.reduce((latest, artifact) =>
     dateSeconds(artifact.created_at) > dateSeconds(latest.created_at) ? artifact : latest,
   );
-  const job = jobForIdentity(jobs, consumer.jobIdentity);
+  const job = timingJobForIdentity(jobs, consumer.jobIdentity);
   if (!job || ['skipped', 'cancelled'].includes(job.conclusion) || !timestamp(job.started_at))
     return {
       jobIdentity: consumer.jobIdentity,
       status: 'invalidSample',
       code: 'ci-cost-job-start-missing',
     };
+  let effectiveReadyAt = artifactReady.created_at;
   for (const prerequisite of consumer.allowedNonArtifactPrerequisites ?? []) {
     const prerequisiteJob = jobForIdentity(jobs, prerequisite);
     if (!prerequisiteJob || !timestamp(prerequisiteJob.completed_at))
@@ -221,21 +255,20 @@ function classifyConsumer(consumer, mapping, artifactsById, jobs) {
         status: 'invalidSample',
         code: 'ci-cost-non-artifact-prerequisite-missing',
       };
-    if (dateSeconds(prerequisiteJob.completed_at) > dateSeconds(ready.created_at))
-      return {
-        jobIdentity: consumer.jobIdentity,
-        status: 'invalidSample',
-        code: 'ci-cost-non-artifact-prerequisite-after-ready',
-      };
+    if (dateSeconds(prerequisiteJob.completed_at) > dateSeconds(effectiveReadyAt))
+      effectiveReadyAt = prerequisiteJob.completed_at;
   }
-  const actualSeconds = dateSeconds(job.started_at) - dateSeconds(ready.created_at);
+  const actualSeconds = dateSeconds(job.started_at) - dateSeconds(effectiveReadyAt);
   const detail = {
     jobIdentity: consumer.jobIdentity,
     artifactIds: selected.map((artifact) => artifact.id),
     producerAttempts: records.map((record) => record.producerAttempt),
-    lastRequiredArtifactReadyAt: ready.created_at,
+    lastRequiredArtifactReadyAt: artifactReady.created_at,
+    lastPrerequisiteReadyAt: effectiveReadyAt,
+    effectiveReadyAt,
     observedJobStartedAt: job.started_at,
-    observedArtifactReadyToJobStartDelaySeconds: actualSeconds,
+    observedArtifactReadyToJobStartDelaySeconds:
+      dateSeconds(job.started_at) - dateSeconds(artifactReady.created_at),
     unattributedStartDelaySeconds: actualSeconds,
     actualSeconds,
     expectedSeconds: maxDelaySeconds,
@@ -348,7 +381,7 @@ const factsArtifacts = [...mapping.values()].map((record) => {
   };
 });
 const perConsumer = contract.timingRoster.map((consumer) =>
-  classifyConsumer(consumer, mapping, artifactsById, jobs),
+  classifyConsumer(consumer, contract, mapping, artifactsById, jobs),
 );
 const ac06Status =
   sharedProduction.status === 'invalidEvidence' || sharedEvidence.status === 'invalidEvidence'
@@ -384,15 +417,13 @@ const totalExpandedBytes = factsArtifacts.reduce(
 );
 const consumers = contract.timingRoster.map((consumer) => {
   const timing = perConsumer.find((entry) => entry.jobIdentity === consumer.jobIdentity);
+  const classes = requiredArtifactClasses(contract, consumer);
   return {
     name: consumer.jobIdentity,
     downloadedBytes: consumer.notApplicable
       ? 0
-      : consumer.requiredArtifactClasses.reduce(
-          (sum, className) => sum + (artifactBytes.get(className) ?? 0),
-          0,
-        ),
-    startedAt: jobForIdentity(jobs, consumer.jobIdentity)?.started_at ?? null,
+      : classes.reduce((sum, className) => sum + (artifactBytes.get(className) ?? 0), 0),
+    startedAt: timingJobForIdentity(jobs, consumer.jobIdentity)?.started_at ?? null,
     lastRequiredArtifactReadyAt: timing?.lastRequiredArtifactReadyAt ?? null,
   };
 });

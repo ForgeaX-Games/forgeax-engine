@@ -206,10 +206,10 @@ if (!existsSync(DEMO_MANIFEST_PATH)) {
 }
 const demoManifest = JSON.parse(readFileSync(DEMO_MANIFEST_PATH, 'utf8'));
 const parallaxEntry = (demoManifest.materialShaders ?? []).find(
-  (m) => m && typeof m.identifier === 'string' && m.identifier.includes('5_5_parallax'),
+  (m) => m && m.identifier === 'learn-render::5-5-parallax',
 );
 if (!parallaxEntry) {
-  console.error('[smoke] FAIL - manifest.materialShaders[] missing 5_5_parallax entry');
+  console.error('[smoke] FAIL - manifest.materialShaders[] missing learn-render::5-5-parallax entry');
   process.exit(1);
 }
 shader.registerMaterialShader('learn-render::5-5-parallax', {

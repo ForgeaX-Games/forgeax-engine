@@ -4,7 +4,7 @@
 >
 > Start at `NetEndpoint`; add `NetSession` to bind a transport to a World; then declare one `defineReplication` profile and attach `AuthorityCoordinator` / `ReplicaCoordinator`. `NetEntityId` is the only cross-World identity. Local ECS handles never cross the boundary.
 
-`@forgeax/engine-net` depends on `@forgeax/engine-ecs`, `@forgeax/engine-plugin`, and `@forgeax/engine-types`. It has no WebSocket, browser, app, or runtime dependency.
+`@forgeax/engine-net` depends on `@forgeax/engine-ecs`, `@forgeax/engine-plugin`, and `@forgeax/engine-types`. WebSocket transport is provided separately by `@forgeax/engine-net-websocket`.
 
 ## 1. Endpoint: complete bytes and lifecycle
 
@@ -118,7 +118,8 @@ This package deliberately does **not** provide:
 
 | Capability | Status |
 |:--|:--|
-| WebSocket, Node listener, browser/process E2E, or gameplay/Snake surface | Not implemented |
+| WebSocket transport, Node listener, and browser/process E2E | See `@forgeax/engine-net-websocket` |
+| Gameplay/Snake surface | Not implemented |
 | Reconnect, ACK ledger, resync, packet-loss recovery, pending unresolved-reference queue | Not implemented |
 | Client prediction, interpolation, rollback, or lockstep | Not implemented |
 | Per-entity authority, ownership, or authority transfer | Not implemented |

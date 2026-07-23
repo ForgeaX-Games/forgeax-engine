@@ -38,7 +38,9 @@ const args = process.argv.slice(2);
 if (args.join(' ') === 'repo view --json nameWithOwner --jq .nameWithOwner') {
   process.stdout.write('ForgeaX-Games/forgeax-engine\\n');
 } else if (args.at(-1) === 'repos/ForgeaX-Games/forgeax-engine/actions/caches') {
-  process.stdout.write(JSON.stringify([{ total_count: 1, actions_caches: [{ id: 7, key: 'ddc-app', size_in_bytes: 42 }] }]));
+  if (args.includes('--slurp')) process.exit(3);
+  process.stdout.write(JSON.stringify({ total_count: 2, actions_caches: [{ id: 7, key: 'ddc-app', size_in_bytes: 42 }] }));
+  process.stdout.write(JSON.stringify({ total_count: 2, actions_caches: [{ id: 8, key: 'ddc-editor', size_in_bytes: 24 }] }));
 } else {
   process.stderr.write(JSON.stringify(args));
   process.exit(2);
@@ -59,6 +61,92 @@ if (args.join(' ') === 'repo view --json nameWithOwner --jq .nameWithOwner') {
     rmSync(temp, { recursive: true, force: true });
   }
 }
+
+function runLiveWithTransientCacheApiFailure() {
+  const temp = mkdtempSync(join(tmpdir(), 'ci-cache-audit-retry-'));
+  const bin = join(temp, 'bin');
+  const gh = join(bin, 'gh');
+  const state = join(temp, 'attempts');
+  mkdirSync(bin);
+  writeFileSync(
+    gh,
+    `#!/usr/bin/env node
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+if (args.join(' ') === 'repo view --json nameWithOwner --jq .nameWithOwner') {
+  process.stdout.write('ForgeaX-Games/forgeax-engine\\n');
+} else if (args.at(-1) === 'repos/ForgeaX-Games/forgeax-engine/actions/caches') {
+  const attempts = existsSync(process.env.CI_CACHE_AUDIT_STATE)
+    ? Number(readFileSync(process.env.CI_CACHE_AUDIT_STATE, 'utf8'))
+    : 0;
+  writeFileSync(process.env.CI_CACHE_AUDIT_STATE, String(attempts + 1));
+  if (attempts < 2) {
+    process.stderr.write('gh: Server Error (HTTP 502)\\n');
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify([{ total_count: 1, actions_caches: [{ id: 7, key: 'ddc-app', size_in_bytes: 42 }] }]));
+} else {
+  process.stderr.write(JSON.stringify(args));
+  process.exit(2);
+}
+`,
+  );
+  chmodSync(gh, 0o755);
+  try {
+    const env = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH ?? ''}`,
+      CI_CACHE_AUDIT_STATE: state,
+    };
+    delete env.GITHUB_REPOSITORY;
+    const stdout = execFileSync(process.execPath, [script], {
+      encoding: 'utf8',
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return JSON.parse(stdout);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+test('live key shape: parses concatenated paginated GitHub cache responses', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'ci-cache-audit-pages-'));
+  const bin = join(temp, 'bin');
+  const gh = join(bin, 'gh');
+  mkdirSync(bin);
+  writeFileSync(
+    gh,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.join(' ') === 'repo view --json nameWithOwner --jq .nameWithOwner') {
+  process.stdout.write('ForgeaX-Games/forgeax-engine\\n');
+} else if (args.at(-1) === 'repos/ForgeaX-Games/forgeax-engine/actions/caches') {
+  process.stdout.write(
+    JSON.stringify({ total_count: 2, actions_caches: [{ id: 7, key: 'ddc-app', size_in_bytes: 42 }] }) +
+      JSON.stringify({ total_count: 2, actions_caches: [{ id: 8, key: 'tsbuildinfo', size_in_bytes: 8 }] }),
+  );
+} else {
+  process.stderr.write(JSON.stringify(args));
+  process.exit(2);
+}
+`,
+  );
+  chmodSync(gh, 0o755);
+  try {
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` };
+    delete env.GITHUB_REPOSITORY;
+    const stdout = execFileSync(process.execPath, [script], {
+      encoding: 'utf8',
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const report = JSON.parse(stdout);
+    assert.equal(report.entries.length, 2);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
 
 test('t21: enumerates cache pages and computes before and after active bytes', () => {
   const report = run({
@@ -143,8 +231,14 @@ test('local front door: infers the authenticated repository outside GitHub Actio
   assert.equal(report.repository, 'ForgeaX-Games/forgeax-engine');
   assert.deepEqual(
     report.entries.map((entry) => entry.key),
-    ['ddc-app'],
+    ['ddc-app', 'ddc-editor'],
   );
+});
+
+test('reliability: retries transient cache API failures before failing the audit', () => {
+  const report = runLiveWithTransientCacheApiFailure();
+  assert.equal(report.repository, 'ForgeaX-Games/forgeax-engine');
+  assert.equal(report.entries[0].key, 'ddc-app');
 });
 
 test('repair: cache audit has read-only cache and repository permissions', () => {

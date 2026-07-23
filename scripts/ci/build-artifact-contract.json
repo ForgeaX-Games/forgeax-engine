@@ -25,11 +25,13 @@
     },
     "shared-asset-pack": {
       "description": "App-neutral LearnOpenGL pack payload produced once by shared-app-inputs",
-      "fileClasses": ["shared-app-inputs/assets/catalog.json"]
+      "fileClasses": ["shared-app-inputs/assets/catalog.json"],
+      "transferArtifact": "shared-app-inputs"
     },
     "shared-engine-shaders": {
       "description": "Engine built-in shader payload produced once by shared-app-inputs",
-      "fileClasses": ["shared-app-inputs/shaders/manifest.json"]
+      "fileClasses": ["shared-app-inputs/shaders/manifest.json"],
+      "transferArtifact": "shared-app-inputs"
     },
     "app-dist-0": {
       "description": "App shader manifests produced by app-shard-0; payload membership is proven by its artifact inventory.",
@@ -170,162 +172,108 @@
   "timingRoster": [
     {
       "jobIdentity": "app-shard-0",
-      "requiredArtifactClasses": ["shared-asset-pack", "shared-engine-shaders"],
       "artifactProvider": "shared-app-inputs",
-      "allowedNonArtifactPrerequisites": ["core-build"]
+      "allowedNonArtifactPrerequisites": ["core-build"],
+      "consumer": "app-shard"
     },
     {
       "jobIdentity": "app-shard-1",
-      "requiredArtifactClasses": ["shared-asset-pack", "shared-engine-shaders"],
       "artifactProvider": "shared-app-inputs",
-      "allowedNonArtifactPrerequisites": ["core-build"]
+      "allowedNonArtifactPrerequisites": ["core-build"],
+      "consumer": "app-shard"
     },
     {
       "jobIdentity": "app-shard-2",
-      "requiredArtifactClasses": ["shared-asset-pack", "shared-engine-shaders"],
       "artifactProvider": "shared-app-inputs",
-      "allowedNonArtifactPrerequisites": ["core-build"]
+      "allowedNonArtifactPrerequisites": ["core-build"],
+      "consumer": "app-shard"
     },
     {
       "jobIdentity": "primary-pnpm",
-      "requiredArtifactClasses": [
-        "engine-dist",
-        "wasm-runtime",
-        "app-dist-0",
-        "app-dist-1",
-        "app-dist-2"
-      ],
       "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "consumer": "primary-pnpm"
     },
     {
       "jobIdentity": "vitest-browser",
-      "requiredArtifactClasses": [
-        "engine-dist",
-        "wasm-runtime",
-        "app-dist-0",
-        "app-dist-1",
-        "app-dist-2"
-      ],
       "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "consumer": "vitest-browser"
     },
     {
       "jobIdentity": "shared-inputs-browser",
-      "requiredArtifactClasses": [
-        "engine-dist",
-        "wasm-runtime",
-        "app-dist-0",
-        "app-dist-1",
-        "app-dist-2"
-      ],
       "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "consumer": "shared-inputs-browser"
     },
     {
       "jobIdentity": "smoke-fleet",
-      "requiredArtifactClasses": [
-        "engine-dist",
-        "wasm-runtime",
-        "app-dist-0",
-        "app-dist-1",
-        "app-dist-2"
-      ],
       "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "consumer": "smoke-fleet"
     },
     {
       "jobIdentity": "bevy-smoke-fleet",
-      "requiredArtifactClasses": [
-        "engine-dist",
-        "wasm-runtime",
-        "app-dist-0",
-        "app-dist-1",
-        "app-dist-2"
-      ],
       "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "consumer": "bevy-smoke-fleet"
     },
     {
       "jobIdentity": "coverage-pnpm",
-      "requiredArtifactClasses": [
-        "engine-dist",
-        "wasm-runtime",
-        "app-dist-0",
-        "app-dist-1",
-        "app-dist-2"
-      ],
       "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "consumer": "coverage-pnpm"
     },
     {
       "jobIdentity": "vitest-dawn",
-      "requiredArtifactClasses": ["engine-dist", "wasm-runtime"],
       "artifactProvider": "core-build",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "consumer": "vitest-dawn"
     },
     {
       "jobIdentity": "webkit-fallback",
-      "requiredArtifactClasses": ["engine-dist", "wasm-runtime"],
       "artifactProvider": "core-build",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "consumer": "webkit-fallback"
     },
     {
       "jobIdentity": "portability-bun",
-      "requiredArtifactClasses": [
-        "engine-dist",
-        "wasm-runtime",
-        "app-dist-0",
-        "app-dist-1",
-        "app-dist-2"
-      ],
       "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "consumer": "portability-bun"
     },
     {
       "jobIdentity": "metrics-validate",
-      "requiredArtifactClasses": [
-        "engine-dist",
-        "wasm-runtime",
-        "app-dist-0",
-        "app-dist-1",
-        "app-dist-2"
-      ],
       "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "consumer": "metrics-validate"
     },
     {
       "jobIdentity": "collectathon-boot-e2e",
-      "requiredArtifactClasses": [
-        "engine-dist",
-        "wasm-runtime",
-        "app-dist-0",
-        "app-dist-1",
-        "app-dist-2"
-      ],
       "artifactProvider": "build-artifacts",
-      "allowedNonArtifactPrerequisites": ["post-merge-gate"]
+      "allowedNonArtifactPrerequisites": ["post-merge-gate"],
+      "consumer": "collectathon-boot-e2e"
     },
     {
       "jobIdentity": "publish-fbx-wasm-release",
-      "requiredArtifactClasses": [],
       "allowedNonArtifactPrerequisites": [],
       "notApplicable": true,
-      "notApplicableReason": "PR timing window only; this publisher runs on main pushes"
+      "notApplicableReason": "PR timing window only; this publisher runs on main pushes",
+      "consumer": "publish-fbx-wasm-release"
     },
     {
       "jobIdentity": "publish-wgpu-wasm-release",
-      "requiredArtifactClasses": [],
       "allowedNonArtifactPrerequisites": [],
       "notApplicable": true,
-      "notApplicableReason": "PR timing window only; this publisher runs on main pushes"
+      "notApplicableReason": "PR timing window only; this publisher runs on main pushes",
+      "consumer": "publish-wgpu-wasm-release"
     },
     {
       "jobIdentity": "publish-basis-wasm-release",
-      "requiredArtifactClasses": [],
       "allowedNonArtifactPrerequisites": [],
       "notApplicable": true,
-      "notApplicableReason": "PR timing window only; this publisher runs on main pushes"
+      "notApplicableReason": "PR timing window only; this publisher runs on main pushes",
+      "consumer": "publish-basis-wasm-release"
     }
   ],
   "provenance": {
@@ -365,7 +313,8 @@
       "assetCatalog": "shared-app-inputs/assets/catalog.json",
       "engineShaderManifest": "shared-app-inputs/shaders/manifest.json"
     },
-    "payloadClasses": ["shared-asset-pack", "shared-engine-shaders"]
+    "payloadClasses": ["shared-asset-pack", "shared-engine-shaders"],
+    "artifactOutput": "shared_artifact_id"
   },
   "requiredCIJobRoster": [
     "post-merge-gate",

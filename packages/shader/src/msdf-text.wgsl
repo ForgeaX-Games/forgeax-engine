@@ -1,6 +1,6 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
 
-#import forgeax_view::common::{View, Mesh, view, meshes}
+#import forgeax_view::common::{View, Mesh, view, meshes, sampleMaterialTexture}
 
 // @forgeax/engine-shader - msdf-text.wgsl
 // (feat-20260531-world-space-msdf-text-rendering M5 / w20).
@@ -69,6 +69,12 @@ struct Material {
   // dimensions so screenPxRange can convert atlas units to screen pixels.
   // distanceRange in .x; atlasSize in .yz; .w padding (std140 vec4 align).
   distanceRange : vec4<f32>,
+  textureScalePadding : array<vec4<f32>, 3>,
+  baseColorUvScale : vec2<f32>,
+  metallicRoughnessUvScale : vec2<f32>,
+  normalUvScale : vec2<f32>,
+  emissiveUvScale : vec2<f32>,
+  occlusionUvScale : vec2<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material : Material;
@@ -83,6 +89,12 @@ struct Material {
 @group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
 @group(1) @binding(5) var normalSampler : sampler;
 @group(1) @binding(6) var normalTexture : texture_2d<f32>;
+
+// Preserve filtering reflection for the bound texture passed to the helper.
+fn materialTextureFilteringWitness() {
+  let base = baseColorTexture;
+  let baseWitness = textureSample(base, baseColorSampler, vec2<f32>(0.0));
+}
 
 struct VsIn {
   @location(0) pos     : vec3<f32>,
@@ -154,7 +166,7 @@ fn screen_px_range(uv : vec2<f32>) -> f32 {
 // encoding; writing hdrColor lets the bloom bright-pass catch the text.
 @fragment
 fn fs_main_hdr(in : VsOut) -> @location(0) vec4<f32> {
-  let msd = textureSample(baseColorTexture, baseColorSampler, in.uv).rgb;
+  let msd = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv, material.baseColorUvScale).rgb;
   let sd = median(msd.r, msd.g, msd.b);
   // wiki section 3.3: opacity = clamp((sd - 0.5) * screenPxRange + 0.5, 0, 1)
   // (linear ramp; equivalent to smoothstep(0.5 - delta, 0.5 + delta, sd) at
@@ -179,7 +191,7 @@ fn linear_to_srgb(linear : f32) -> f32 {
 // is not hardware-sRGB-encoded), alpha stays linear through the blend.
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-  let msd = textureSample(baseColorTexture, baseColorSampler, in.uv).rgb;
+  let msd = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv, material.baseColorUvScale).rgb;
   let sd = median(msd.r, msd.g, msd.b);
   let dist = (sd - 0.5) * screen_px_range(in.uv);
   let alpha = clamp(dist + 0.5, 0.0, 1.0) * material.tintColor.a;

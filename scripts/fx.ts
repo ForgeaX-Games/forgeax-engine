@@ -46,7 +46,7 @@ export type StepResult = {
 
 type RunGitOptions = { dryRun?: boolean; inherit?: boolean };
 
-const BUILTIN_COMMANDS = new Set(['setup', 'update', 'clean', 'help', '--help', '-h']);
+const BUILTIN_COMMANDS = new Set(['setup', 'update', 'clean', 'ci', 'help', '--help', '-h']);
 
 // ── pure helpers (exported, unit-tested) ─────────────────────────────────────
 
@@ -581,6 +581,17 @@ function clean(args: string[]): never {
   process.exit(results.some((r) => r.result === 'failed') ? 1 : 0);
 }
 
+// ci — run the required PR surface straight from ci.yml. Artifact downloads are
+// deliberately replaced with this source checkout; runner prerequisites remain
+// visible in the plan rather than being silently skipped.
+function ci(args: string[]): never {
+  const result = spawnSync('node', ['scripts/ci/local-verify.mjs', ...args], {
+    cwd: ROOT,
+    stdio: 'inherit',
+  });
+  process.exit(result.status ?? 1);
+}
+
 function usage(): void {
   console.log(`ForgeaX Engine developer CLI
 
@@ -602,6 +613,11 @@ Commands:
                         --deep/-x      also wipe root gitignored artefacts
                                        (node_modules/dist) — re-run setup after
                         --dry-run/-n   preview without deleting anything
+  ci [flags]             Execute the required PR CI projection from ci.yml.
+                        --list          print every projected shell step
+                        --dry-run       print the steps without running them
+                        --group <name>  run one PR CI target (for example,
+                                        smoke-fleet-1)
   help                  Show this text
 
 Examples:
@@ -609,6 +625,7 @@ Examples:
   bun fx update --dry-run
   bun fx clean --dry-run
   bun fx clean --deep
+  bun fx ci --list
 `);
 }
 
@@ -634,6 +651,9 @@ function main(): void {
         break;
       case 'clean':
         clean(plan.args);
+        break;
+      case 'ci':
+        ci(plan.args);
         break;
       default:
         console.error(`[fx] unhandled command: ${plan.command}`);

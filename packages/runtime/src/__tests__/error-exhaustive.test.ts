@@ -23,7 +23,7 @@ import {
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
-describe('ASSET_ERROR_HINTS runtime guard (23-member key set)', () => {
+describe('ASSET_ERROR_HINTS runtime guard (26-member key set)', () => {
   it('ASSET_ERROR_HINTS includes the tileset-tile-entry-malformed key with non-empty hint', () => {
     expect(ASSET_ERROR_HINTS).toHaveProperty('tileset-tile-entry-malformed');
     const hint: string = ASSET_ERROR_HINTS['tileset-tile-entry-malformed'];
@@ -45,9 +45,9 @@ describe('ASSET_ERROR_HINTS runtime guard (23-member key set)', () => {
     expect(hint.length).toBeGreaterThan(0);
   });
 
-  it('Object.keys(ASSET_ERROR_HINTS) length is 25 (M0 baseline 20 + M1 +1 + feat-20260621 +1 + feat-20260629 +1 + perf-20260706 +1 source-not-imported + feat-20260707 +1 mipgen-unsupported-compressed-format)', () => {
+  it('Object.keys(ASSET_ERROR_HINTS) length is 26 (M0 baseline 20 + M1 +1 + feat-20260621 +1 + feat-20260629 +1 + perf-20260706 +1 source-not-imported + feat-20260707 +1 mipgen-unsupported-compressed-format + F2 catalog-source-unconfigured +1)', () => {
     const keys = Object.keys(ASSET_ERROR_HINTS);
-    expect(keys.length).toBe(25);
+    expect(keys.length).toBe(26);
   });
 
   it('hint contains >= 3 of the 7 .detail.field tokens', () => {
@@ -66,8 +66,8 @@ describe('ASSET_ERROR_HINTS runtime guard (23-member key set)', () => {
   });
 });
 
-describe('AssetErrorCode 23-member exhaustive switch (M1 +tileset-tile-entry-malformed; feat-20260621 +asset-invalidated; feat-20260629 +mesh-bin-contract-violation)', () => {
-  it('exhaustive switch over the 23 members compiles without a default branch', () => {
+describe('AssetErrorCode 26-member exhaustive switch (M1 +tileset-tile-entry-malformed; feat-20260621 +asset-invalidated; feat-20260629 +mesh-bin-contract-violation; F2 +catalog-source-unconfigured)', () => {
+  it('exhaustive switch over the 26 members compiles without a default branch', () => {
     function classify(code: AssetErrorCode): string {
       switch (code) {
         case 'asset-not-found':
@@ -78,6 +78,8 @@ describe('AssetErrorCode 23-member exhaustive switch (M1 +tileset-tile-entry-mal
           return 'format-unsupported';
         case 'asset-fetch-failed':
           return 'fetch-failed';
+        case 'catalog-source-unconfigured':
+          return 'catalog-source-unconfigured';
         case 'asset-invalid-value':
           return 'invalid-value';
         case 'cubemap-handle-missing':

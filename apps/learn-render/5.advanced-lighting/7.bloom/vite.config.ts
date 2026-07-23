@@ -1,6 +1,6 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
+import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
 
 // RHI-debug frame capture wired via the shared preset (forgeaxShader +
@@ -17,6 +17,7 @@ export default withRhiDebug({
   keepBinExternal: true,
   extraPlugins: [
     pluginPack({
+      refresh: reloadAssetHost(),
       roots: [resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures')],
     }),
   ],

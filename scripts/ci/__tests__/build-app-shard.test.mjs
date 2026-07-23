@@ -344,11 +344,14 @@ test('repair: shards verify shared inputs against the producer output and build-
   const workflow = readFileSync(workflowPath, 'utf8');
   assert.match(
     workflow,
-    /shared-app-inputs:[\s\S]*?outputs:[\s\S]*?input_fingerprint: \$\{\{ steps\.build-shared-inputs\.outputs\.input_fingerprint \}\}[\s\S]*?asset_artifact_id: \$\{\{ steps\.upload-shared-asset-pack\.outputs\.artifact-id \}\}[\s\S]*?shader_artifact_id: \$\{\{ steps\.upload-shared-engine-shaders\.outputs\.artifact-id \}\}/,
+    /shared-app-inputs:[\s\S]*?outputs:[\s\S]*?input_fingerprint: \$\{\{ steps\.build-shared-inputs\.outputs\.input_fingerprint \}\}[\s\S]*?shared_artifact_id: \$\{\{ steps\.upload-shared-inputs\.outputs\.artifact-id \}\}/,
   );
   assert.match(workflow, /--github-output "\$GITHUB_OUTPUT"/);
-  assert.match(workflow, /id: upload-shared-asset-pack/);
-  assert.match(workflow, /id: upload-shared-engine-shaders/);
+  assert.match(workflow, /id: upload-shared-inputs/);
+  assert.equal(
+    (workflow.match(/name: shared-app-inputs-a\$\{\{ github\.run_attempt \}\}/g) ?? []).length,
+    1,
+  );
   assert.match(workflow, /name: provenance-shared-app-inputs-a\$\{\{ github\.run_attempt \}\}/);
   assert.match(
     workflow,
@@ -368,14 +371,9 @@ test('repair: shards verify shared inputs against the producer output and build-
     );
     assert.match(
       shard,
-      /download-artifact-with-retry\.mjs[\s\S]*?--artifact-ids "\$\{\{ needs\.shared-app-inputs\.outputs\.asset_artifact_id \}\}"[\s\S]*?--path shared-app-inputs\/assets/,
+      /download-artifact-with-retry\.mjs[\s\S]*?--artifact-ids "\$\{\{ needs\.shared-app-inputs\.outputs\.shared_artifact_id \}\}"[\s\S]*?--path shared-app-inputs/,
     );
-    assert.match(
-      shard,
-      /download-artifact-with-retry\.mjs[\s\S]*?--artifact-ids "\$\{\{ needs\.shared-app-inputs\.outputs\.shader_artifact_id \}\}"[\s\S]*?--path shared-app-inputs/,
-    );
-    assert.match(shard, /Hydrate declared shared asset pack/);
-    assert.match(shard, /Hydrate declared shared engine shaders/);
+    assert.match(shard, /Hydrate declared shared app inputs/);
     assert.match(shard, /download-artifact-with-retry\.mjs/);
     assert.doesNotMatch(
       shard,
@@ -410,6 +408,49 @@ test('repair: every build-artifact consumer uses the verified retry transport', 
     assert.match(section, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
     assert.match(section, /permissions:\n {6}actions: read\n {6}contents: read/);
   }
+});
+
+test('repair: aggregate producers use exact artifact IDs with bounded retry transport', () => {
+  const workflow = readFileSync(workflowPath, 'utf8');
+  const sections = [
+    {
+      job: 'build-artifacts',
+      ids: 'needs\\.app-shard-0\\.outputs\\.app_dist_artifact_id.*needs\\.app-shard-1\\.outputs\\.app_dist_artifact_id.*needs\\.app-shard-2\\.outputs\\.app_dist_artifact_id',
+      path: 'shard-reports',
+    },
+    {
+      job: 'cache-warm',
+      ids: 'needs\\.app-shard-0\\.outputs\\.app_dist_artifact_id.*needs\\.app-shard-1\\.outputs\\.app_dist_artifact_id.*needs\\.app-shard-2\\.outputs\\.app_dist_artifact_id',
+      path: 'ddc-snapshots',
+    },
+  ];
+  for (const { job, ids, path } of sections) {
+    const start = workflow.indexOf(`  ${job}:`);
+    const remaining = workflow.slice(start);
+    const nextJob = remaining.slice(1).search(/\n {2}[a-z][\w-]+:/);
+    const section = remaining.slice(0, nextJob === -1 ? undefined : nextJob + 1);
+    assert.match(section, /permissions:\n {6}actions: read\n {6}contents: read/);
+    assert.match(section, /node scripts\/ci\/download-artifact-with-retry\.mjs/);
+    assert.match(section, new RegExp(ids), `${job} must list every shard producer ID`);
+    assert.match(section, new RegExp(`--path ${path}`));
+    assert.doesNotMatch(section, /actions\/download-artifact/);
+  }
+});
+
+test('repair: trusted coverage owns the perf ratio gate outside instrumentation', () => {
+  const workflow = readFileSync(workflowPath, 'utf8');
+  const start = workflow.indexOf('  coverage-pnpm:');
+  const remaining = workflow.slice(start);
+  const nextJob = remaining.slice(1).search(/\n {2}[a-z][\w-]+:/);
+  const section = remaining.slice(0, nextJob === -1 ? undefined : nextJob + 1);
+  assert.match(section, /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64"\]'\) \}\}/);
+  assert.doesNotMatch(section, /github\.event\.pull_request\.head\.repo/);
+  assert.match(
+    section,
+    /--coverage --project='@forgeax\/\*' --project=hello-triangle --project=unit/,
+  );
+  assert.match(section, /name: ECS performance ratio gates \(uninstrumented\)/);
+  assert.match(section, /--project=ecs-perf/);
 });
 
 test('repair: core-only consumers hydrate exact IDs without the app aggregate barrier', () => {

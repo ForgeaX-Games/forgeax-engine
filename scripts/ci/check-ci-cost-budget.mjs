@@ -100,17 +100,6 @@ function checkSharedProduction(errors, facts) {
         expected: 'shared-app-inputs',
       }),
     );
-  const expected = ['shared-asset-pack', 'shared-engine-shaders'];
-  if (
-    !Array.isArray(value.artifactClasses) ||
-    expected.some((className) => !value.artifactClasses.includes(className))
-  )
-    errors.push(
-      error('ci-cost-shared-provenance-class-uncovered', {
-        actual: value.artifactClasses,
-        expected,
-      }),
-    );
   for (const field of [
     'sourceScanCount',
     'payloadEmitCount',

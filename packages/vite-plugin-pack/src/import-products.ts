@@ -1,5 +1,73 @@
 import type { ImportedAsset, ImportProduct } from '@forgeax/engine-types';
 
+export const UI_DEPENDENCY_CONSUMER_CHANNELS = [
+  'typescript-import',
+  'script-literal',
+  'json-pack-manifest',
+] as const;
+
+export type UiDependencyConsumerChannel = (typeof UI_DEPENDENCY_CONSUMER_CHANNELS)[number];
+
+export type UiDependencyKind = 'html' | 'css' | 'companion';
+
+export interface UiDependencyConsumer {
+  readonly channel: UiDependencyConsumerChannel;
+  readonly path: string;
+  readonly kind: UiDependencyKind;
+}
+
+export interface UiDependencyConsumerInputs {
+  readonly typescriptImports?: readonly string[];
+  readonly scriptLiterals?: readonly string[];
+  readonly manifestEntries?: readonly string[];
+}
+
+function dependencyKind(path: string): UiDependencyKind | undefined {
+  const lower = path.toLowerCase().split(/[?#]/, 1)[0] ?? '';
+  if (lower.endsWith('.ui.html') || lower.endsWith('.html')) return 'html';
+  if (lower.endsWith('.ui.css') || lower.endsWith('.css')) return 'css';
+  if (
+    lower.endsWith('.png') ||
+    lower.endsWith('.jpg') ||
+    lower.endsWith('.jpeg') ||
+    lower.endsWith('.webp') ||
+    lower.endsWith('.svg') ||
+    lower.endsWith('.woff') ||
+    lower.endsWith('.woff2')
+  ) {
+    return 'companion';
+  }
+  return undefined;
+}
+
+/**
+ * Enumerate every source consumer channel that can carry a UI dependency.
+ * The importer/product channel is represented by the manifest list because
+ * it is the serialized pack form consumed by the runtime.
+ */
+export function enumerateUiDependencyConsumers(
+  inputs: UiDependencyConsumerInputs,
+): readonly UiDependencyConsumer[] {
+  const groups: readonly [UiDependencyConsumerChannel, readonly string[] | undefined][] = [
+    ['typescript-import', inputs.typescriptImports],
+    ['script-literal', inputs.scriptLiterals],
+    ['json-pack-manifest', inputs.manifestEntries],
+  ];
+  const seen = new Set<string>();
+  const consumers: UiDependencyConsumer[] = [];
+  for (const [channel, paths] of groups) {
+    for (const path of paths ?? []) {
+      const kind = dependencyKind(path);
+      if (kind === undefined) continue;
+      const key = `${channel}\0${path}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      consumers.push({ channel, path, kind });
+    }
+  }
+  return consumers;
+}
+
 export interface TransportArtifact {
   readonly path: string;
   readonly mimeType: string;

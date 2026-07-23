@@ -1,0 +1,8 @@
+{
+  "kind": "external-asset-package",
+  "importer": "ui",
+  "schemaVersion": "1.0.0",
+  "source": "settings.ui.html",
+  "importSettings": {},
+  "subAssets": [{"guid": "019f8354-6386-4387-849d-f2ab4b9622a0", "sourceIndex": 0, "kind": "ui"}]
+}

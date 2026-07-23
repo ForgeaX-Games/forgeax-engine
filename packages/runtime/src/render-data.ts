@@ -106,8 +106,16 @@ export interface MeshRenderData {
 
 /** Descriptor for a 2D texture's GPU resource (projected from POD). */
 export interface TextureRenderData {
+  /** Logical width retained for existing projection consumers. */
   readonly width: number;
+  /** Logical height retained for existing projection consumers. */
   readonly height: number;
+  /** Authored content extent; TextureAsset remains the logical asset SSOT. */
+  readonly logicalExtent: TextureExtent;
+  /** GPU allocation extent, derived from format + logicalExtent. */
+  readonly physicalExtent: TextureExtent;
+  /** Maps logical UVs away from block padding. */
+  readonly uvScale: readonly [number, number];
   readonly format: GPUTextureFormat;
   readonly mipLevelCount: number;
   readonly usage: number;
@@ -123,6 +131,36 @@ export interface TextureRenderData {
   readonly compressed: boolean;
 }
 
+export interface TextureExtent {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The sole logical-content to physical-storage projection for a texture.
+ * Block sizes come from codec's format table; no physical dimensions are
+ * authored or serialized with TextureAsset.
+ */
+export function deriveTextureExtent(
+  format: GPUTextureFormat,
+  width: number,
+  height: number,
+): {
+  readonly logicalExtent: TextureExtent;
+  readonly physicalExtent: TextureExtent;
+  readonly uvScale: readonly [number, number];
+} {
+  const params = blockParamsForFormat(format);
+  const physicalWidth = params === null ? width : Math.ceil(width / params.blockW) * params.blockW;
+  const physicalHeight =
+    params === null ? height : Math.ceil(height / params.blockH) * params.blockH;
+  return {
+    logicalExtent: { width, height },
+    physicalExtent: { width: physicalWidth, height: physicalHeight },
+    uvScale: [width / physicalWidth, height / physicalHeight],
+  };
+}
+
 /** One mip level's GPU-upload layout (feat-20260707 M5 / w35, AC-08). */
 export interface MipUploadLevel {
   /** Mip level index (0 = base / largest). */
@@ -131,6 +169,9 @@ export interface MipUploadLevel {
   readonly width: number;
   /** Logical pixel height of this level (`baseHeight >> level`, min 1). */
   readonly height: number;
+  /** Block-aligned storage dimensions for this logical mip. */
+  readonly physicalWidth: number;
+  readonly physicalHeight: number;
   /** Logical `writeTexture` copy width; full-subresource copies may end mid-block. */
   readonly copyWidth: number;
   /** Logical `writeTexture` copy height; full-subresource copies may end mid-block. */
@@ -180,8 +221,10 @@ export function deriveMipUploadLayout(
       level,
       width,
       height,
-      copyWidth: width,
-      copyHeight: height,
+      physicalWidth: blockCols * params.blockW,
+      physicalHeight: blockRows * params.blockH,
+      copyWidth: blockCols * params.blockW,
+      copyHeight: blockRows * params.blockH,
       bytesPerRow: rowBytes,
       rowsPerImage: blockRows,
       byteOffset,
@@ -302,6 +345,7 @@ export function deriveRenderDataTexture(tex: TextureAsset): Result<TextureRender
   return ok({
     width: tex.width,
     height: tex.height,
+    ...deriveTextureExtent(tex.format, tex.width, tex.height),
     format: tex.format,
     mipLevelCount,
     usage,

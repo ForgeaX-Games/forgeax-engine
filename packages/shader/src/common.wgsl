@@ -1,5 +1,14 @@
 #define_import_path forgeax_view::common
 
+fn sampleMaterialTexture(
+  texture : texture_2d<f32>,
+  textureSampler : sampler,
+  uv : vec2<f32>,
+  uvScale : vec2<f32>,
+) -> vec4<f32> {
+  return textureSample(texture, textureSampler, uv * uvScale);
+}
+
 // @forgeax/engine-shader - common.wgsl (M5 T-18 feat-20260512-naga-oil-composition-hmr).
 //
 // Shared view + mesh structs extracted from pbr.wgsl + unlit.wgsl via

@@ -7,9 +7,11 @@
   "description": "Minimal Vite host that loads a GameEntry template and renders it in-browser (createApp + loadGame). Local smoke host for templates/game-default.",
   "scripts": {
     "dev": "vite",
+    "test:catalog-refresh": "pnpm --filter @forgeax/engine-physics build && node scripts/catalog-host-refresh.browser.mjs",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "smoke:ui-authoring": "node scripts/smoke-ui-authoring.mjs"
   },
   "forgeax": {
     "metrics": {
@@ -39,7 +41,8 @@
     "@forgeax/engine-app": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-input": "workspace:*",
-    "@forgeax/engine-runtime": "workspace:*"
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-ui": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",

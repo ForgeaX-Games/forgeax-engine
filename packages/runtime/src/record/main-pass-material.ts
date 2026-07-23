@@ -32,6 +32,7 @@ import {
   type EmissiveAoBindGroupResources,
   type SkylightBindGroupResources,
 } from '../ibl/skylight-bind-group';
+import { deriveTextureExtent } from '../render-data';
 import {
   type PipelineState,
   type RenderSystemRuntime,
@@ -333,6 +334,57 @@ export const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
   'metallicRoughnessTexture',
   'normalTexture',
 ];
+
+const MATERIAL_TEXTURE_SCALE_OFFSET = 80;
+const MATERIAL_TEXTURE_SCALE_FIELDS = [
+  'baseColorTexture',
+  'metallicRoughnessTexture',
+  'normalTexture',
+  'emissiveTexture',
+  'occlusionTexture',
+] as const;
+
+/** Derives the logical-content UV scale for an uploaded material texture. */
+export function materialTextureUvScale(
+  texture: Pick<TextureAsset, 'width' | 'height' | 'format'> | undefined,
+): readonly [number, number] {
+  if (texture === undefined) return [1, 1];
+  return deriveTextureExtent(texture.format, texture.width, texture.height).uvScale;
+}
+
+function materialTextureForField(
+  material: MaterialSnapshot,
+  field: (typeof MATERIAL_TEXTURE_SCALE_FIELDS)[number],
+): Handle<'TextureAsset', 'shared'> | undefined {
+  if (field === 'emissiveTexture') return material.emissiveTexture;
+  if (field === 'occlusionTexture') return material.occlusionTexture;
+  return material.textureHandles?.get(field);
+}
+
+/**
+ * Appends the engine-owned scale for every built-in material texture binding.
+ * Asset dimensions remain logical; this is the sole record-stage projection
+ * from a bound texture asset to its shader sampling coordinates.
+ */
+export function applyMaterialTextureUvScales(
+  payload: ArrayBuffer,
+  material: MaterialSnapshot,
+  world: World,
+): void {
+  const f32 = new Float32Array(payload);
+  for (let index = 0; index < MATERIAL_TEXTURE_SCALE_FIELDS.length; index++) {
+    const field = MATERIAL_TEXTURE_SCALE_FIELDS[index];
+    if (field === undefined) continue;
+    const handle = materialTextureForField(material, field);
+    const resolved =
+      handle === undefined ? undefined : resolveAssetHandle<TextureAsset>(world, handle);
+    const texture = resolved?.ok === true ? resolved.value : undefined;
+    const [u, v] = materialTextureUvScale(texture);
+    const offset = MATERIAL_TEXTURE_SCALE_OFFSET / 4 + index * 2;
+    f32[offset] = u;
+    f32[offset + 1] = v;
+  }
+}
 
 /**
  * feat-20260621-learn-render-5-5-parallax M2 / w8 (D-3): ordered user-region
