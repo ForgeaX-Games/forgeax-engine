@@ -13,13 +13,15 @@
         border-radius: 6px; line-height: 1.4; pointer-events: none;
       }
       .hint b { color: #ffe57c; }
+      #asset-status { color: #9fffc0; }
     </style>
   </head>
   <body>
     <canvas id="app"></canvas>
     <div class="hint">
       host importer <b>reel-game-blob</b> -> pack-index -> loadByGuid<br />
-      one cube per reel; scene driven entirely by the host loader
+      one cube per reel; scene driven entirely by the host loader<br />
+      <span id="asset-status">asset: loading</span>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -11,7 +11,7 @@
 //   (c) imports fullscreen_triangle + FullscreenOutput from common.wgsl
 //   (d) calc output is @location(0) f32 (R8 scalar)
 //   (e) SSAO uniform group (@group(0)) with 3 mat4 fields
-//   (f) kernel storage buffer @binding
+//   (f) kernel uniform buffer @binding
 //   (g) noise texture + depth + normal texture bindings
 //   (h) blur @location(0) output is f32 (R8 scalar)
 //
@@ -106,10 +106,10 @@ describe('hdrp-ssao.wgsl structural compile test (M2 / w7)', () => {
     expect(codeOnly).toMatch(/@group\(0\)\s*@binding\(0\)\s+var<uniform>\s+\w+_uniform/);
   });
 
-  it('(f) kernel storage buffer is declared (array<vec3<f32>>)', () => {
+  it('(f) kernel uniform buffer is declared (array<vec4<f32>>)', () => {
     const codeOnly = stripComments(ssaoSource);
-    expect(codeOnly).toMatch(/@group\(0\)\s*@binding\(1\)\s+var<storage,\s*read>\s+\w+/);
-    expect(codeOnly).toMatch(/array<vec3<f32>,\s*64>/);
+    expect(codeOnly).toMatch(/@group\(0\)\s*@binding\(1\)\s+var<uniform>\s+\w+/);
+    expect(codeOnly).toMatch(/array<vec4<f32>,\s*64>/);
   });
 
   it('(g1) noise texture binding is present (@binding(2) texture_2d<f32>)', () => {

@@ -22,6 +22,10 @@
       "packages": ["@forgeax/engine-ecs", "@forgeax/engine-runtime", "@forgeax/engine-rhi-wgpu"],
       "risks": ["baseline", "gpu", "behavioral"],
       "phaseInputs": ["baseline"],
+      "evidence": {
+        "frontDoors": ["dawn-node"],
+        "legs": ["semantic", "gpu"]
+      },
       "oracle": {
         "stdoutIncludes": ["[hello-cube] backend=webgpu", "[smoke] frames observed="]
       }

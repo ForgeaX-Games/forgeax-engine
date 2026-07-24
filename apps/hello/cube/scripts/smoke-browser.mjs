@@ -167,6 +167,7 @@ if (!existsSync(reportAbs)) {
   console.error(`\n[smoke-browser] RED -- reportPath does not exist on disk: ${reportAbs}`);
   process.exit(1);
 }
+console.log(`[smoke-browser] capture-artifacts: tape=${tapeAbs} report=${reportAbs}`);
 let report;
 try {
   report = JSON.parse(readFileSync(reportAbs, 'utf-8'));

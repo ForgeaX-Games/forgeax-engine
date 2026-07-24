@@ -103,30 +103,37 @@ if (realpathSync(shaderRoot) !== realpathSync(engineShaderRoot)) {
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 
-await build({
-  configFile: false,
-  root,
-  logLevel: 'warn',
-  plugins: [
-    {
-      name: 'forgeax:shared-app-inputs-entry',
-      resolveId(id) {
-        return id === VIRTUAL_ENTRY ? id : null;
+const previousSharedMode = process.env.FORGEAX_SHARED_APP_INPUTS_MODE;
+if (catalogOnly) process.env.FORGEAX_SHARED_APP_INPUTS_MODE = 'catalog-only';
+try {
+  await build({
+    configFile: false,
+    root,
+    logLevel: 'warn',
+    plugins: [
+      {
+        name: 'forgeax:shared-app-inputs-entry',
+        resolveId(id) {
+          return id === VIRTUAL_ENTRY ? id : null;
+        },
+        load(id) {
+          return id === VIRTUAL_ENTRY ? 'export {};' : null;
+        },
       },
-      load(id) {
-        return id === VIRTUAL_ENTRY ? 'export {};' : null;
-      },
+      forgeaxShader(),
+      pluginPack({ roots: [assetRoot], base: '' }),
+    ],
+    build: {
+      emptyOutDir: true,
+      outDir: staging,
+      assetsInlineLimit: 0,
+      rollupOptions: { input: VIRTUAL_ENTRY },
     },
-    forgeaxShader(),
-    pluginPack({ roots: [assetRoot], base: '' }),
-  ],
-  build: {
-    emptyOutDir: true,
-    outDir: staging,
-    assetsInlineLimit: 0,
-    rollupOptions: { input: VIRTUAL_ENTRY },
-  },
-});
+  });
+} finally {
+  if (previousSharedMode === undefined) delete process.env.FORGEAX_SHARED_APP_INPUTS_MODE;
+  else process.env.FORGEAX_SHARED_APP_INPUTS_MODE = previousSharedMode;
+}
 
 const catalogPath = join(staging, 'pack-index.json');
 const shaderManifestPath = join(staging, 'shaders', 'manifest.json');

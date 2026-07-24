@@ -707,11 +707,11 @@ export {
   specsEqual,
   validateSpec,
 } from './pipeline-spec';
-// Round-2 [F-3] feat-20260612-hdrp-ssao: PostProcessError surfaces SSAO
-// failures (storageBuffer-unavailable / radius-non-positive / bias-negative)
+// feat-20260612-hdrp-ssao: PostProcessError surfaces SSAO parameter
+// failures (radius-non-positive / bias-negative)
 // alongside the existing fullscreen post-process register / not-found /
 // reads-not-found codes. AI users `switch (err.code)` over the closed
-// 6-member union without `default`; .detail narrows per-code per charter P3.
+// closed union without `default`; .detail narrows per-code per charter P3.
 export type {
   FullscreenInputNotFoundDetail,
   PostProcessErrorCode,
@@ -720,7 +720,6 @@ export type {
   PostProcessPreviouslyRegisteredDetail,
   SsaoBiasNegativeDetail,
   SsaoRadiusNonPositiveDetail,
-  SsaoStorageBufferUnavailableDetail,
 } from './post-process-errors';
 export { PostProcessError } from './post-process-errors';
 // feat-20260604 M3 / w19: render-graph-primitives — the public AI-user vocabulary

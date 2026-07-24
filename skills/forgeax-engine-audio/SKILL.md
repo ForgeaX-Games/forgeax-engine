@@ -105,7 +105,7 @@ app.start();
 
 ## 踩坑
 
-- **`playing: true` 但没声**：(a) `playing` 是边沿——若一开始就 true 且从未翻过 false 可能错过沿；一次性音需 re-arm（true->false->true）。(b) AudioContext 被浏览器 suspend，必须在用户手势（click/keydown）后才能 resume（错误码 `context-suspended`）。
+- **`playing: true` 但没声**：(a) 先确认 clip handle 已解析且 AudioContext 已在用户手势（click/keydown）后 resume；(b) 一次性音重播时需先写回 false 再翻 true（re-arm）。
 - **3D 音不空间化**：`spatialBlend` 默认 0（2D，直连 bus）；要 PannerNode 空间化必须设 1，且 World 里要有 `AudioListener`。
 - **多个 `AudioListener` 只有一个生效**：sync 系统只同步 World 中第一个 `AudioListener` entity 的 `Transform.world`。
 - **bus 名写错**：只有 `'sfx'` / `'music'` 两条（固定拓扑，不支持自定义 bus），越界报 `bus-not-found`。

@@ -2677,8 +2677,8 @@ import { World } from '../world';
         const url = await import('node:url');
         const here = url.fileURLToPath(new URL('.', import.meta.url));
         const src = await fs.readFile(path.resolve(here, '..', 'entity.ts'), 'utf8');
-        // `export const Entity = defineComponent('Entity', ...)` survives
-        expect(/^export const Entity = defineComponent\('Entity'/m.test(src)).toBe(true);
+        // The value-space token survives; Biome may wrap the call across lines.
+        expect(/^export const Entity = defineComponent\(\s*['"]Entity['"]/m.test(src)).toBe(true);
       });
 
       it('does not re-export `type Entity` alias (type-space lives in entity-handle.ts as EntityHandle)', async () => {

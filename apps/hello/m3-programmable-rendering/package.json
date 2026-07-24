@@ -1,0 +1,71 @@
+{
+  "name": "@forgeax/hello-m3-programmable-rendering",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "M3 programmable rendering composition front door for custom material shaders, RenderGraph pipelines, and depth-aware post-processing.",
+  "scripts": {
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "forgeax": {
+    "smokeInvocation": "pnpm --filter @forgeax/hello-m3-programmable-rendering smoke",
+    "gauntletScenario": {
+      "id": "hello-m3-programmable-rendering",
+      "script": "smoke",
+      "domains": [
+        "Rendering and shader construction",
+        "Inspection, debugging, and development bridges"
+      ],
+      "packages": [
+        "@forgeax/engine-runtime",
+        "@forgeax/engine-shader",
+        "@forgeax/engine-shader-compiler",
+        "@forgeax/engine-render-graph",
+        "@forgeax/engine-vite-plugin-shader",
+        "@forgeax/engine-rhi-debug"
+      ],
+      "risks": ["baseline", "dynamic", "live", "fault", "recovery", "behavioral", "visual"],
+      "phaseInputs": ["baseline", "dynamic", "live", "fault", "recovery"],
+      "evidence": {
+        "frontDoors": ["node-app", "shader-build", "render-graph", "post-process", "multi-uv", "browser-webgpu", "rhi-debug"],
+        "legs": ["live", "gpu", "behavioral", "recovery"]
+      },
+      "oracle": {
+        "stdoutIncludes": [
+          "[m3-programmable] custom material pixel: PASS",
+          "[m3-programmable] render graph seam: PASS",
+          "[m3-programmable] depth-aware URP overlay: PASS",
+          "[m3-programmable] fake-depth falsifier: PASS",
+          "[m3-programmable] multi-UV Dawn: PASS",
+          "[m3-programmable] multi-UV falsifier: PASS",
+          "[m3-programmable] multi-UV variant: PASS",
+          "[m3-programmable] browser live pipeline: PASS",
+          "[m3-programmable] PASS - M3 programmable rendering gates GREEN"
+        ]
+      }
+    },
+    "metrics": {
+      "bundle-size": {
+        "enabled": false,
+        "reason": "composition smoke delegates bundle shape to the existing shader and CSM app gates"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "fixed frame budgets are rendering correctness evidence, not an FPS benchmark"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "programmable rendering composition is covered by GPU and pixel gates"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-m3-programmable-rendering smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app"
+      }
+    }
+  }
+}

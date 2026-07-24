@@ -21,12 +21,18 @@ import {
   COPY_DST_USAGE,
   getOrCreateFromChain,
   getOrCreatePerEntity,
+  INSTANCE_UBO_FULL_ARRAY_BYTES,
   MAX_UNIFORM_INSTANCES,
   MESH_SSBO_BYTES,
   MESH_UBO_FULL_ARRAY_BYTES,
   STORAGE_USAGE,
   UNIFORM_USAGE,
 } from './mesh-ssbo';
+
+type GeometryInstanceDraw = {
+  readonly instanceBuffer: Buffer;
+  readonly instanceCount: number;
+};
 
 /**
  * feat-20260704 M3/w19: per-entity geometry (main colour) draw loop, extracted
@@ -139,41 +145,9 @@ export function recordGeometryDraws(
     // length instead.
     if (pipelineTag === 'unlit') dispatchCounts.unlit += 1;
 
-    const _instRes = resolveGeometryInstanceBuffer(c, pass, entry);
+    const _instRes = resolveGeometryInstanceBuffer(c, entry);
     if (_instRes.drawn) continue;
-    const instanceBuffer = _instRes.instanceBuffer;
-    const instanceCount = _instRes.instanceCount;
-
-    // feat-20260531-per-frame-bind-group-cache M3 / w12: per-entity
-    // instances bind group cache lookup (D-2 handle-set key).
-    // Key = 'instances' + entityKey + instanceBuffer handle id.
-    // The instanceBuffers cache already handles archVersion/byteLength
-    // invalidation (handle changes on buffer rebuild); the BG cache
-    // naturally misses when the underlying handle id differs.
-    const instancesBindGroup: BindGroup = getOrCreatePerEntity(
-      frameState.instancesBgPerEntity,
-      worldEntityKey(entry.source.worldId, entry.source.entityKey),
-      [instanceBuffer],
-      'instances',
-      () => {
-        const result = runtime.device.createBindGroup({
-          label: 'pbr-instances-bg',
-          layout: pipelineState.instancesBindGroupLayout,
-          entries: [
-            {
-              binding: 0,
-              resource: {
-                kind: 'buffer',
-                value: { buffer: instanceBuffer },
-              },
-            },
-          ],
-        });
-        if (!result.ok) throw result.error;
-        return result.value;
-      },
-      bindGroupCounts,
-    );
+    const instanceDraws = _instRes.draws;
 
     // feat-20260611 R2 / M8 / w28 (IS-14): skin entries need a 2-binding
     // group(2) BG matching `pbr-skin-pl` (binding 0 mesh-array UBO +
@@ -377,7 +351,6 @@ export function recordGeometryDraws(
     // — the same placeholders the unlit path already used. The generic
     // branch below builds the per-submesh BG.
     let perSubmeshBg: BindGroup | null = null;
-    pass.setBindGroup(3, instancesBindGroup);
     // feat-20260608 M4 / w16: per-submesh pipeline selection + draw loop.
     // Each submesh carries its own topology, so pipeline selection is per-submesh.
     // Vertex/index buffers and bind groups are set once (shared across all submeshes).
@@ -524,39 +497,64 @@ export function recordGeometryDraws(
         lastPipelineHandle = smPipelineHandle;
       }
 
-      if (entry.mesh.indexed) {
-        pass.drawIndexed(sm.indexCount, instanceCount, sm.indexOffset, 0, 0);
-      } else {
-        pass.draw(sm.vertexCount, instanceCount, 0, 0);
+      for (const instanceDraw of instanceDraws) {
+        // The WebGL2 uniform fallback has no dynamic offset on this binding,
+        // so each <=128-instance chunk owns its own UBO and bind group.
+        const instancesBindGroup: BindGroup = getOrCreatePerEntity(
+          frameState.instancesBgPerEntity,
+          worldEntityKey(entry.source.worldId, entry.source.entityKey),
+          [instanceDraw.instanceBuffer],
+          'instances',
+          () => {
+            const result = runtime.device.createBindGroup({
+              label: 'pbr-instances-bg',
+              layout: pipelineState.instancesBindGroupLayout,
+              entries: [
+                {
+                  binding: 0,
+                  resource: {
+                    kind: 'buffer',
+                    value: { buffer: instanceDraw.instanceBuffer },
+                  },
+                },
+              ],
+            });
+            if (!result.ok) throw result.error;
+            return result.value;
+          },
+          bindGroupCounts,
+        );
+        pass.setBindGroup(3, instancesBindGroup);
+        if (entry.mesh.indexed) {
+          pass.drawIndexed(sm.indexCount, instanceDraw.instanceCount, sm.indexOffset, 0, 0);
+        } else {
+          pass.draw(sm.vertexCount, instanceDraw.instanceCount, 0, 0);
+        }
       }
     }
   }
 }
 
 /**
- * feat-20260704 M3/w19: resolve the per-entity @group(3) instance buffer for
- * the geometry pass, extracted verbatim from recordGeometryDraws. Returns the
- * ECS-managed instance buffer + instanceCount (identity fallback when the entity
- * has no Instances). On the WebGL2 uniform-fallback over-cap path it fires the
- * structured limit-exceeded error, binds the identity BG, issues the per-submesh
- * draw itself, and returns `{ drawn: true }` so the caller skips its own draw
- * (continue).
+ * Resolve the per-entity @group(3) instance buffers for the geometry pass.
  *
  * @internal
  */
 function resolveGeometryInstanceBuffer(
   c: _InternalRenderPipelineContext,
-  pass: RhiRenderPassEncoder,
   entry: _InternalRenderPipelineContext['validatedOrdered'][number],
-): { drawn: true } | { drawn: false; instanceBuffer: Buffer; instanceCount: number } {
+): { drawn: true } | { drawn: false; draws: readonly GeometryInstanceDraw[] } {
   const { runtime, pipelineState, frameState } = c;
-  // Resolve the per-instance buffer: ECS-managed array<f32> snapshot
-  // when `Instances` present, identity fallback otherwise (consistent-
-  // abstraction single branch — both paths bind something at @group(3)).
+  const inst = entry.source.instances;
+  if (inst === undefined) {
+    return {
+      drawn: false,
+      draws: [{ instanceBuffer: pipelineState.identityInstanceBuffer, instanceCount: 1 }],
+    };
+  }
   let instanceBuffer: Buffer = pipelineState.identityInstanceBuffer;
   let instanceCount = 1;
-  const inst = entry.source.instances;
-  if (inst !== undefined) {
+  {
     // feat-20260526-pbr-uniform-fallback-no-storage-buffer M3 / w13:
     // caps.storageBuffer===false -> uniform fallback with 128-instance
     // cap (128 * 64B = 8192B < WebGL2 min 16384B UBO limit).
@@ -564,56 +562,43 @@ function resolveGeometryInstanceBuffer(
     const uniformFallback = runtime.device.caps.storageBuffer === false;
     let instanceBufferUsage = STORAGE_USAGE | COPY_DST_USAGE;
 
-    if (uniformFallback) {
-      if (inst.instanceCount > MAX_UNIFORM_INSTANCES) {
-        runtime.errorRegistry.fire(
-          new RhiError({
-            code: 'limit-exceeded',
-            expected: `instance count <= ${MAX_UNIFORM_INSTANCES} (uniform fallback cap)`,
-            hint: `reduce instance count to ${MAX_UNIFORM_INSTANCES} or use a WebGPU-capable backend`,
-            detail: {
-              maxStorageBufferBindingSize: MAX_UNIFORM_INSTANCES * 64,
-              requestedBytes: inst.instanceCount * 64,
-            },
-          }),
-        );
-        instanceCount = inst.instanceCount;
-        instanceBuffer = pipelineState.identityInstanceBuffer;
-        const setBgResult = runtime.device.createBindGroup({
-          label: 'pbr-instances-bg',
-          layout: pipelineState.instancesBindGroupLayout,
-          entries: [
-            {
-              binding: 0,
-              resource: {
-                kind: 'buffer',
-                value: { buffer: instanceBuffer },
-              },
-            },
-          ],
-          // biome-ignore lint/suspicious/noExplicitAny: dynamic buffer map key
-        }) as any;
-        if (!setBgResult.ok) throw setBgResult.error;
-        pass.setBindGroup(3, setBgResult.value as BindGroup);
-        // feat-20260608 M4 / w16: per-submesh draw loop (uniform fallback path).
-        for (const sm of entry.mesh.submeshes) {
-          if (entry.mesh.indexed) {
-            pass.drawIndexed(sm.indexCount, instanceCount, sm.indexOffset, 0, 0);
-          } else {
-            pass.draw(sm.vertexCount, instanceCount, 0, 0);
-          }
+    if (uniformFallback && inst.instanceCount > MAX_UNIFORM_INSTANCES) {
+      const draws: GeometryInstanceDraw[] = [];
+      for (let start = 0; start < inst.instanceCount; start += MAX_UNIFORM_INSTANCES) {
+        const count = Math.min(MAX_UNIFORM_INSTANCES, inst.instanceCount - start);
+        const chunk = inst.transforms.subarray(start * 16, (start + count) * 16);
+        const bufRes = runtime.device.createBuffer({
+          size: INSTANCE_UBO_FULL_ARRAY_BYTES,
+          usage: UNIFORM_USAGE | COPY_DST_USAGE,
+          mappedAtCreation: false,
+        });
+        if (!bufRes.ok) {
+          runtime.errorRegistry.fire(bufRes.error);
+          return { drawn: true };
         }
-        return { drawn: true };
+        const buffer = new GpuBuffer(runtime.device, bufRes.value);
+        frameState.transientInstanceBuffers.push({
+          buffer,
+          uploadedArchVersion: inst.archVersion,
+          uploadedByteLength: chunk.byteLength,
+        });
+        const writeRes = runtime.device.queue.writeBuffer(buffer.handle, 0, chunk);
+        if (!writeRes.ok) {
+          runtime.errorRegistry.fire(writeRes.error);
+          return { drawn: true };
+        }
+        draws.push({ instanceBuffer: buffer.handle, instanceCount: count });
       }
-      instanceBufferUsage = UNIFORM_USAGE | COPY_DST_USAGE;
+      return { drawn: false, draws };
     }
+    if (uniformFallback) instanceBufferUsage = UNIFORM_USAGE | COPY_DST_USAGE;
 
     {
       // Cap-gate (LimitExceededDetail single emit point — feat-20260514
       // M3 / w15 anchor): `requestedBytes <= maxStorageBufferBindingSize`.
       const requestedBytes = inst.transforms.byteLength;
       const cap = runtime.device.limits.maxStorageBufferBindingSize;
-      if (typeof cap === 'number' && requestedBytes > cap) {
+      if (!uniformFallback && typeof cap === 'number' && cap > 0 && requestedBytes > cap) {
         runtime.errorRegistry.fire(
           new RhiError({
             code: 'limit-exceeded',
@@ -625,6 +610,7 @@ function resolveGeometryInstanceBuffer(
             },
           }),
         );
+        return { drawn: true };
       } else {
         // Look up the cached GPU buffer or create a fresh one when the
         // archetype version bumped or the byte length changed.
@@ -640,7 +626,7 @@ function resolveGeometryInstanceBuffer(
           active = cached;
         } else if (requestedBytes > 0) {
           const bufRes = runtime.device.createBuffer({
-            size: requestedBytes,
+            size: uniformFallback ? INSTANCE_UBO_FULL_ARRAY_BYTES : requestedBytes,
             usage: instanceBufferUsage,
             mappedAtCreation: false,
           });
@@ -679,7 +665,12 @@ function resolveGeometryInstanceBuffer(
           }
         }
       }
+      // The cache write above is keyed by worldEntityKey(worldId, cacheKey)
+      // so separate worlds cannot alias their instance buffers.
     }
   }
-  return { drawn: false, instanceBuffer, instanceCount };
+  return {
+    drawn: false,
+    draws: [{ instanceBuffer, instanceCount }],
+  };
 }

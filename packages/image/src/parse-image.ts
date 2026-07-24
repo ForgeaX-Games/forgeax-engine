@@ -7,6 +7,7 @@ import * as jpeg from 'jpeg-js';
 // plan-strategy section 3.3).
 import * as UPNG from 'upng-js';
 import { imageError } from './errors.js';
+import { downscaleRgba } from './resize-image.js';
 import type { Result } from './result.js';
 import { err, ok } from './result.js';
 
@@ -18,6 +19,9 @@ export interface ParseImageOptions {
    * values to exercise the bounds-check code path with tiny fixtures.
    */
   readonly maxDimension?: number;
+
+  /** Optional asset-owned cooked-payload target; source bytes remain unchanged. */
+  readonly downscaleMaxDimension?: number;
 
   /**
    * Sidecar `colorSpace` carried over to the DecodedImage POD. Defaults to
@@ -140,6 +144,14 @@ export function parseImage(
         ...(opts.path !== undefined ? { path: opts.path } : {}),
       }),
     );
+  }
+
+  const downscaleLimit = opts.downscaleMaxDimension;
+  if (downscaleLimit !== undefined && Number.isInteger(downscaleLimit) && downscaleLimit > 0) {
+    const downscaled = downscaleRgba(rgba, width, height, downscaleLimit);
+    rgba = downscaled.bytes;
+    width = downscaled.width;
+    height = downscaled.height;
   }
 
   const limit = opts.maxDimension ?? DEFAULT_MAX_DIMENSION;

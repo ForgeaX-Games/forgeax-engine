@@ -95,6 +95,7 @@ interface ExternalAssetMetaJson {
     // sidecar opt-out (`'none'`, the R-9 per-fixture escape hatch) or the
     // 'auto' default flip. Absent -> importTextureEntry defaults to 'auto'.
     readonly compressionMode?: 'auto' | 'etc1s' | 'uastc' | 'none';
+    readonly downscaleMaxDimension?: number;
   };
   readonly subAssets: ReadonlyArray<{
     readonly guid: string;
@@ -172,6 +173,7 @@ function colorSpaceToFormat(colorSpace: 'srgb' | 'linear' | undefined): GPUTextu
 function buildImageMetadata(meta: ExternalAssetMetaJson): ImageMetadata {
   const colorSpace: 'srgb' | 'linear' = meta.importSettings.colorSpace ?? 'linear';
   const compressionMode = meta.importSettings.compressionMode;
+  const downscaleMaxDimension = meta.importSettings.downscaleMaxDimension;
   return {
     kind: 'texture',
     format: colorSpaceToFormat(colorSpace),
@@ -181,6 +183,7 @@ function buildImageMetadata(meta: ExternalAssetMetaJson): ImageMetadata {
     // importer's default flip ('auto') and the R-9 per-fixture 'none' opt-out
     // both take effect. Omitted when absent (importTextureEntry defaults 'auto').
     ...(compressionMode !== undefined ? { compressionMode } : {}),
+    ...(downscaleMaxDimension !== undefined ? { downscaleMaxDimension } : {}),
   };
 }
 
@@ -406,6 +409,9 @@ async function processMetaSidecar(
             format: 'rgba8unorm',
             colorSpace: 'linear',
             mipmap: false,
+            ...(meta.importSettings.downscaleMaxDimension !== undefined
+              ? { downscaleMaxDimension: meta.importSettings.downscaleMaxDimension }
+              : {}),
           };
         }
         out.push({

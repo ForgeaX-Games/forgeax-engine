@@ -2738,6 +2738,8 @@ export interface ImageMeta {
   readonly mipmap: 'auto' | 'none';
   readonly addressMode: 'repeat' | 'clamp-to-edge' | 'mirror-repeat';
   readonly filterMode: 'nearest' | 'linear';
+  /** Optional asset-owned cooked-payload target dimension. */
+  readonly downscaleMaxDimension?: number;
 }
 
 /**
@@ -4374,6 +4376,8 @@ export interface ImageMetadata {
    * The `'auto'` default semantics activate in M5; M3 keeps the default `'none'`.
    */
   readonly compressionMode?: 'auto' | 'etc1s' | 'uastc' | 'none';
+  /** Optional asset-owned cooked-payload target dimension. */
+  readonly downscaleMaxDimension?: number;
 }
 
 /**

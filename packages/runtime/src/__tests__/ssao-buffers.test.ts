@@ -1,12 +1,11 @@
 // ssao-buffers.test.ts — M1 / w3: SSAO buffer lazy-alloc test (TDD red phase).
 //
 // Asserts:
-//  - getOrCreateSsaoBuffers first call creates kernel SSBO + noise texture
+//  - getOrCreateSsaoBuffers first call creates kernel UBO + noise texture
 //    + SSAO uniform UBO (at least 3 createBuffer/createTexture calls).
 //  - Second call returns same cached instance (0 new device calls).
 //  - Labels match /^hdrp-ssao-/.
-//  - storageBuffer=false path fires PostProcessError with code
-//    'ssao-storage-buffer-unavailable' and returns null.
+//  - storageBuffer=false still allocates the uniform-backed kernel.
 //
 // AC-05 anchor: lazy alloc + hdrp-ssao-* labels + call-count assertions.
 
@@ -67,10 +66,10 @@ function makeMockRuntime(capsOverride: Partial<RhiCaps> = {}): {
 }
 
 describe('getOrCreateSsaoBuffers', () => {
-  it('first call creates kernel SSBO + noise texture + uniform UBO (>=3 GPU resources)', () => {
+  it('first call creates kernel UBO + noise texture + uniform UBO (>=3 GPU resources)', () => {
     const { runtime, createBuffer, createTexture } = makeMockRuntime();
 
-    // The first call may createBuffer (kernel SSBO + uniform UBO)
+    // The first call creates two UBOs (kernel + per-frame uniform)
     // + createTexture (noise), plus potentially a staging buffer
     const bufs = getOrCreateSsaoBuffers(runtime);
 
@@ -81,7 +80,7 @@ describe('getOrCreateSsaoBuffers', () => {
     expect(bufs?.uniformBuffer).toBeDefined();
     expect(bufs?.uniformBytes).toBeGreaterThan(0);
 
-    // At least 3 GPU resource creations: kernel SSBO, noise tex, uniform UBO.
+    // At least 3 GPU resource creations: kernel UBO, noise tex, uniform UBO.
     // Note: noise texture upload may require a staging buffer (extra createBuffer).
     const totalCalls = createBuffer.mock.calls.length + createTexture.mock.calls.length;
     expect(totalCalls).toBeGreaterThanOrEqual(3);
@@ -187,36 +186,26 @@ describe('getOrCreateSsaoBuffers', () => {
     expect(uniformCall?.size).toBe(256);
   });
 
-  it('storageBuffer=false fires ssao-storage-buffer-unavailable error and returns null', () => {
+  it('storageBuffer=false still allocates the uniform-backed kernel', () => {
     const { runtime, createBuffer, createTexture } = makeMockRuntime({
       storageBuffer: false,
     });
 
     const bufs = getOrCreateSsaoBuffers(runtime);
 
-    expect(bufs).toBeNull();
-    // No GPU resources allocated
-    expect(createBuffer.mock.calls.length).toBe(0);
-    expect(createTexture.mock.calls.length).toBe(0);
-    // Round-2 [F-3]: storageBuffer=false fires PostProcessError exactly once
-    // per runtime (warn-once). Reverts w16's silent-null-return regression
-    // that violated requirements boundary case 4 + plan D-4 + charter P3.
-    expect(runtime.errorRegistry.fire).toHaveBeenCalledTimes(1);
-    const fired = (runtime.errorRegistry.fire as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
-      | { code?: string; detail?: { missingCap?: string } }
-      | undefined;
-    expect(fired?.code).toBe('ssao-storage-buffer-unavailable');
-    expect(fired?.detail?.missingCap).toBe('storageBuffer');
+    expect(bufs).not.toBeNull();
+    expect(createBuffer.mock.calls.length).toBe(2);
+    expect(createTexture.mock.calls.length).toBe(1);
+    expect(runtime.errorRegistry.fire).not.toHaveBeenCalled();
   });
 
-  it('storageBuffer=false subsequent calls do NOT re-fire (warn-once)', () => {
+  it('storageBuffer=false subsequent calls reuse the same uniform-backed resources', () => {
     const { runtime } = makeMockRuntime({ storageBuffer: false });
 
-    expect(getOrCreateSsaoBuffers(runtime)).toBeNull();
-    expect(getOrCreateSsaoBuffers(runtime)).toBeNull();
-    expect(getOrCreateSsaoBuffers(runtime)).toBeNull();
+    const first = getOrCreateSsaoBuffers(runtime);
+    expect(getOrCreateSsaoBuffers(runtime)).toBe(first);
+    expect(getOrCreateSsaoBuffers(runtime)).toBe(first);
 
-    // warn-once: first call fires, subsequent calls do not re-fire.
-    expect(runtime.errorRegistry.fire).toHaveBeenCalledTimes(1);
+    expect(runtime.errorRegistry.fire).not.toHaveBeenCalled();
   });
 });

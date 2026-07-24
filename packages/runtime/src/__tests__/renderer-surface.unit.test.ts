@@ -177,6 +177,7 @@ function makeFrameState(): MockObj {
     frameNumber: 1,
     perFrameGraph: null,
     instanceBuffers: new Map(),
+    transientInstanceBuffers: [],
     warnedZeroLightStandard: false,
     warnedMultiLightDirectional: false,
     warnedMultiLightPoint: false,

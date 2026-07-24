@@ -1,7 +1,7 @@
 # forgeax-engine -- Hello Audio
 
-Spacebar one-shot SFX + movable 3D listener --
-`createApp({ plugins: [audioPlugin()] })` declarative ECS example
+Spacebar one-shot SFX + movable 3D listener + collision-triggered cleanup --
+`createApp({ plugins: [audioPlugin(), physicsPlugin('rapier-3d')] })` declarative ECS example
 (input is in the canvas-form default plugin set).
 
 ## Quickstart
@@ -12,14 +12,27 @@ pnpm --filter @forgeax/hello-audio dev
 # Press spacebar to play the SFX, WASD to move the listener.
 ```
 
+The browser gate is also runnable directly:
+
+```bash
+pnpm --filter @forgeax/hello-audio smoke:browser
+```
+
+It launches Chrome with WebGPU and real Web Audio, checks the loaded MP3
+through `AudioContext` state and active-source evidence after a spacebar
+gesture, waits for a falling Rapier body to trigger spatial audio, verifies
+despawn cleanup, then checks listener movement from center pan to right pan.
+It saves before/after PNG evidence under `apps/hello/audio/.forgeax-audio/browser/`.
+
 ## What this demo exercises
 
 | Surface | Details |
 |:--|:--|
-| **One-shot takeoff** | `createApp(canvas, { plugins: [audioPlugin()] })` -- `audioPlugin()` auto-attaches the WebAudioBackend; input is in the canvas-form default plugin set (parallel to `physicsPlugin('rapier-3d')`). |
+| **One-shot takeoff** | `createApp(canvas, { plugins: [audioPlugin(), physicsPlugin('rapier-3d')] })` -- both capabilities are assembled through the app plugin seam. |
 | **Declarative ECS audio** | `AudioSource({ clip, playing })` drives `audioTickSystem` edge detection -- no imperative `backend.play()` bypass (AC-07). |
 | **Pack-index asset loading** | SFX GUID flows through `assets.loadByGuid<AudioClipAsset>`; the injected audio loader resolves the Vite catalog row and decodes it before the demo mints an `AudioSource.clip` shared ref. |
 | **Spatial panning** | `AudioSource.spatialBlend=1.0` creates a PannerNode; `syncListenerFromWorldMatrix(l, worldMatrix)` syncs the listener position/orientation each frame from the listener entity's `Transform.world` mat4. |
+| **Collision cleanup** | A dynamic ECS actor reads `CollidingEntities`, starts its own spatial `AudioSource` on contact, then `world.despawn()` removes the Collider and audio source; the browser gate verifies `activeSourceCount` returns to zero. |
 | **Overlay readout** | Left/top overlay shows listener-emitter distance + L/R pan as text (charter F2: text anchors spatial audio verification). |
 
 ## Controls
@@ -34,10 +47,11 @@ pnpm --filter @forgeax/hello-audio dev
 
 ```ts
 import { audioPlugin } from '@forgeax/engine-audio-webaudio';
+import { physicsPlugin } from '@forgeax/engine-physics';
 
 // 1. One-shot takeoff -- audioPlugin() auto-attaches the WebAudioBackend;
 //    input is in the canvas-form default plugin set.
-const app = await createApp(canvas, { plugins: [audioPlugin()] });
+const app = await createApp(canvas, { plugins: [audioPlugin(), physicsPlugin('rapier-3d')] });
 
 // 2. Load an audio clip through the same GUID path used by generic bindings.
 const guidRes = AssetGuid.parse(SFX_GUID);

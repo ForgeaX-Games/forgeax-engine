@@ -1591,6 +1591,102 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(meshEntries[0]?.name).toBe('textured.gltf');
     });
   });
+
+  describe('registered-host-importer-dev-route.test.ts', () => {
+    const HOST_GUID = '01900000-0000-7000-8000-ffffffffffff';
+    let originalCwd: string;
+    let tmpRoot: string;
+    let assetsDir: string;
+
+    beforeEach(async () => {
+      originalCwd = process.cwd();
+      tmpRoot = await mkdtemp(join(tmpdir(), 'forgeax-vpp-host-dev-'));
+      assetsDir = join(tmpRoot, 'assets');
+      process.chdir(tmpRoot);
+      await mkdir(assetsDir, { recursive: true });
+      await writeFile(join(assetsDir, 'level.reel.json'), '{"title":"before"}');
+      await writeFile(
+        join(assetsDir, 'level.reel.json.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'reel-game-blob',
+          source: 'level.reel.json',
+          importSettings: {},
+          subAssets: [{ guid: HOST_GUID, sourceIndex: 0, kind: 'reel-game-blob' }],
+        }),
+      );
+    });
+
+    afterEach(async () => {
+      process.chdir(originalCwd);
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('dispatches a registered host importer through the generic per-meta DDC path', async () => {
+      let importCalls = 0;
+      const hostImporter: Importer = {
+        key: 'reel-game-blob',
+        async import(ctx) {
+          importCalls++;
+          const source = await ctx.readSource();
+          if (!source.ok) throw new Error('source was not readable');
+          return {
+            ok: true,
+            value: {
+              assets: [
+                {
+                  guid: HOST_GUID,
+                  kind: 'reel-game-blob',
+                  payload: { title: new TextDecoder().decode(source.value) } as never,
+                  refs: [],
+                },
+              ],
+              artifacts: [],
+              sourceDependencies: [],
+            },
+          };
+        },
+      };
+      const cap = makePmcServer();
+      const plugin = pluginPack({ roots: [assetsDir], importers: [hostImporter] });
+      plugin.configureServer(cap.server as never);
+      await new Promise((r) => setTimeout(r, 80));
+      const handler = cap.getHandler();
+      if (handler === undefined) throw new Error('handler not mounted');
+
+      const first = await pmcPostImport(handler, HOST_GUID);
+      expect(first.statusCode).toBe(200);
+      expect(importCalls).toBe(1);
+      const entries = JSON.parse(first.body) as PackIndexEntry[];
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.kind).toBe('reel-game-blob');
+      expect(entries[0]?.relativeUrl).toMatch(/^\/__forgeax-ddc\//);
+
+      const packRes = makePmcRes();
+      await handler({ url: entries[0]?.relativeUrl, method: 'GET' }, packRes, () => {});
+      expect(packRes.statusCode).toBe(200);
+      expect(JSON.parse(packRes.body)).toMatchObject({
+        assets: [{ guid: HOST_GUID, kind: 'reel-game-blob' }],
+      });
+
+      const second = await pmcPostImport(handler, HOST_GUID);
+      expect(second.statusCode).toBe(200);
+      expect(importCalls).toBe(1);
+
+      await writeFile(join(assetsDir, 'level.reel.json'), '{"title":"after"}');
+      await new Promise((r) => setTimeout(r, 300));
+      const third = await pmcPostImport(handler, HOST_GUID);
+      expect(third.statusCode).toBe(200);
+      expect(importCalls).toBe(2);
+      const refreshed = JSON.parse(third.body) as PackIndexEntry[];
+      const refreshedPack = makePmcRes();
+      await handler({ url: refreshed[0]?.relativeUrl, method: 'GET' }, refreshedPack, () => {});
+      expect(JSON.parse(refreshedPack.body)).toMatchObject({
+        assets: [{ payload: { title: '{"title":"after"}' } }],
+      });
+    });
+  });
 }
 
 {

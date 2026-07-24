@@ -29,6 +29,13 @@ export const MESH_SSBO_BYTES = 112;
 // variant requires the whole 14336-B range visible to the shader.
 export const MESH_UBO_FULL_ARRAY_BYTES = 112 * 128;
 
+// bug-20260723-webgl2-instancing-uniform-range: the WebGL2 fallback shader
+// declares `array<InstanceData, 128>` in the instances bind group. Even when
+// a draw carries fewer transforms, the buffer binding must expose the full
+// array range or wgpu rejects the draw at submit time with a late
+// min-binding-size mismatch.
+export const INSTANCE_UBO_FULL_ARRAY_BYTES = 64 * 128;
+
 // W3C WebGPU §3.6 GPUBufferUsage flags used by the per-entity instance
 // transform buffer (STORAGE | COPY_DST = 128 | 8).
 export const STORAGE_USAGE = 128;

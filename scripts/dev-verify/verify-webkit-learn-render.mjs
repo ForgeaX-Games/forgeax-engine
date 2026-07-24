@@ -21,6 +21,10 @@ const args = process.argv.slice(2);
 const tier = argumentValue('--tier') ?? 'core';
 const demoArg = argumentValue('--demo');
 const timeoutMs = Number(process.env.TIMEOUT_MS ?? 30_000);
+const demoTimeoutMs = Number(process.env.DEMO_TIMEOUT_MS ?? 120_000);
+const MAX_CAPTURED_LOGS = 2_048;
+const DECISIVE_LOG_PATTERN =
+  /asset-not-imported|asset-not-registered|loadByGuid failed|HTTP 404|image-dimension-out-of-bounds|maxTextureDimension2D|Validation Error|EngineEnvironmentError|webgpu-runtime-error|rhi-not-available|createApp failed|WebAssembly\.Module doesn't parse|(?:Hdrp)?CapsInsufficientError|caps insufficient/i;
 const artifactRoot = resolve(
   argumentValue('--artifacts') ?? join('/tmp', `forgeax-webkit-learn-render-${Date.now()}`),
 );
@@ -29,6 +33,7 @@ const execution = {
   commit: git('rev-parse', 'HEAD'),
   matrix: { path: relative(ROOT, MATRIX_PATH), sha256: sha256(readFileSync(MATRIX_PATH)) },
   webkit: null,
+  demoTimeoutMs,
 };
 
 if (args.includes('--help')) {
@@ -100,6 +105,18 @@ async function freePort() {
 
 function stripAnsi(value) {
   return value.replace(new RegExp(`${String.fromCodePoint(0x1b)}\\[[0-?]*[ -/]*[@-~]`, 'g'), '');
+}
+
+export function appendCapturedLog(logs, entry) {
+  if (DECISIVE_LOG_PATTERN.test(entry) && logs.includes(entry)) return;
+  if (logs.length < MAX_CAPTURED_LOGS) {
+    logs.push(entry);
+    return;
+  }
+  if (logs.length === MAX_CAPTURED_LOGS) {
+    logs.push(`warning: log capture capped at ${MAX_CAPTURED_LOGS} entries`);
+  }
+  if (DECISIVE_LOG_PATTERN.test(entry)) logs.push(entry);
 }
 
 async function startVite(demo) {
@@ -196,6 +213,12 @@ export function readinessWaitBudget(readiness, timeoutMs) {
   return Math.min(timeoutMs, readiness?.timeoutMs ?? 8_000);
 }
 
+export async function waitForVisualSettle(page) {
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+}
+
 async function screenshotOracle(page, path, contract) {
   await page.screenshot({ path, type: 'png' });
   const stats = await page.evaluate(
@@ -265,6 +288,10 @@ export function classify({ vite, channel, logs, wasm, oracle, runtimeError, read
     /asset-not-imported|loadByGuid failed|HTTP 404/i.test(text),
   );
   if (assetDelivery) return { class: 'delivery', detail: assetDelivery };
+  const assetCapability = logs.find((text) =>
+    /image-dimension-out-of-bounds|maxTextureDimension2D/i.test(text),
+  );
+  if (assetCapability) return { class: 'capability', detail: assetCapability };
   const crash = detectWasmCrash(logs.map((text) => ({ text })));
   const fatal = logs.find((text) =>
     /Validation Error|EngineEnvironmentError|webgpu-runtime-error|rhi-not-available|createApp failed|WebAssembly\.Module doesn't parse/i.test(
@@ -272,10 +299,12 @@ export function classify({ vite, channel, logs, wasm, oracle, runtimeError, read
     ),
   );
   const capability = logs.find((text) =>
-    /(?:Hdrp)?CapsInsufficientError|caps insufficient/i.test(text),
+    /(?:Hdrp)?CapsInsufficientError|caps insufficient|limit-exceeded/i.test(text),
   );
   if (capability && channel?.webgl2 && !channel?.hasGpu)
     return { class: 'capability', detail: capability };
+  const assetRuntime = logs.find((text) => /asset-not-registered/i.test(text));
+  if (assetRuntime) return { class: 'init', detail: assetRuntime };
   if (crash || fatal || !channel?.webgl2 || channel?.hasGpu)
     return { class: 'init', detail: crash ?? fatal ?? 'fallback channel was not WebKit WebGL2' };
   if (readiness?.declared && !readiness.observed)
@@ -315,17 +344,29 @@ async function verifyDemo(demo) {
     passed: false,
   };
   let vite;
+  let browser;
+  let timedOut = false;
+  const timeoutDetail = `demo '${demo}' exceeded ${demoTimeoutMs}ms`;
+  const demoTimer = setTimeout(() => {
+    timedOut = true;
+    void browser?.close().catch(() => {});
+    vite?.child.kill('SIGTERM');
+  }, demoTimeoutMs);
   try {
     vite = await startVite(demo);
     const url = await vite.url;
     result.fresh.vite = { ready: true, url, port: vite.port, pid: vite.child.pid };
-    const browser = await webkit.launch({ headless: true });
+    browser = await webkit.launch({ headless: true });
     try {
       execution.webkit ??= browser.version();
       result.fresh.webkit = { freshProcess: true, version: browser.version() };
       const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-      page.on('console', (message) => result.logs.push(`${message.type()}: ${message.text()}`));
-      page.on('pageerror', (error) => result.logs.push(`pageerror: ${error.message}`));
+      page.on('console', (message) =>
+        appendCapturedLog(result.logs, `${message.type()}: ${message.text()}`),
+      );
+      page.on('pageerror', (error) =>
+        appendCapturedLog(result.logs, `pageerror: ${error.message}`),
+      );
       const wasmReads = [];
       page.on('response', (response) => {
         if (!new URL(response.url()).pathname.endsWith('.wasm')) return;
@@ -377,6 +418,8 @@ async function verifyDemo(demo) {
           waitMs: Date.now() - startedAt,
         };
       }
+      // A declared asset-ready flag can be raised before the first frame uploads and presents it.
+      await waitForVisualSettle(page);
       result.channel = await page.evaluate(() => ({
         hasGpu: !!navigator.gpu,
         webgl2: !!document.createElement('canvas').getContext('webgl2'),
@@ -391,17 +434,27 @@ async function verifyDemo(demo) {
     if (result.fresh.vite) result.runtimeError = detail;
     else result.fresh.vite = { ready: false, error: detail };
   } finally {
+    clearTimeout(demoTimer);
     if (vite) await stop(vite.child);
   }
-  result.firstDecisiveFailure = classify({
+  const classified = classify({
     vite: result.fresh.vite ?? { ready: false },
     channel: result.channel,
     logs: result.logs,
     wasm: result.wasm,
     oracle: result.oracle,
-    runtimeError: result.runtimeError,
+    runtimeError: timedOut ? null : result.runtimeError,
     readiness: result.readiness,
   });
+  const timeoutHasOwnerEvidence = result.logs.some((text) =>
+    /asset-not-imported|asset-not-registered|image-dimension-out-of-bounds|maxTextureDimension2D|(?:Hdrp)?CapsInsufficientError|caps insufficient/i.test(
+      text,
+    ),
+  );
+  result.firstDecisiveFailure =
+    timedOut && !timeoutHasOwnerEvidence
+      ? { class: 'control-plane', detail: timeoutDetail }
+      : classified;
   result.passed = result.firstDecisiveFailure === null;
   writeJson(resultPath, result);
   process.stdout.write(

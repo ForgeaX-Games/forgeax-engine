@@ -2,15 +2,15 @@
 // Exhaustive switch test for SSAO PostProcessErrorCode extension (M2 / w9).
 // feat-20260612-hdrp-ssao.
 //
-// plan-strategy D-3: extend PostProcessErrorCode union with 3 SSAO codes.
+// plan-strategy D-3: radius and bias remain explicit SSAO error codes; the
+// kernel is now uniform-backed and has no storage-capability error.
 // requirements AC-06: closed union, exhaustive switch without default.
 //
 // Tests:
-//   (a) PostProcessErrorCode union now has 6 members (3 original + 3 SSAO)
+//   (a) PostProcessErrorCode union keeps the 2 parameter-validation SSAO codes
 //   (b) Exhaustive switch on PostProcessErrorCode compiles without default branch
-//   (c) Each SSAO code has expected/hint/detail fields
-//   (d) detail narrowing works per code (paramName+value for radius/bias;
-//       missingCap for storage-buffer)
+//   (c) Each SSAO validation code has expected/hint/detail fields
+//   (d) detail narrowing works through paramName+value
 //   (e) new PostProcessError({ code: 'ssao-radius-non-positive', detail: ... })
 //       narrows the return type correctly
 //
@@ -21,9 +21,9 @@ import { describe, expect, it } from 'vitest';
 import { PostProcessError } from '../post-process-errors.js';
 
 describe('SSAO PostProcessErrorCode exhaustive switch (M2 / w9)', () => {
-  it('(a) PostProcessErrorCode union has exactly 6 members (3 original + 3 SSAO)', () => {
+  it('(a) PostProcessErrorCode union has the 2 SSAO validation members', () => {
     // This test verifies the union members via switch exhaustiveness.
-    // When w10 adds the 3 SSAO codes, the switch below must handle all 6.
+    // The switch below must handle both SSAO validation codes.
     // If a code is missing, TypeScript will error at compile time.
     //
     // We construct a dummy code variable of type PostProcessErrorCode and
@@ -34,10 +34,9 @@ describe('SSAO PostProcessErrorCode exhaustive switch (M2 / w9)', () => {
         { code: 'post-process-already-registered' },
         { code: 'post-process-not-found' },
         { code: 'fullscreen-input-not-found' },
-        // SSAO 3 (added by w10)
+        // SSAO validation 2
         { code: 'ssao-radius-non-positive', paramName: 'radius', value: -1 },
         { code: 'ssao-bias-negative', paramName: 'bias', value: -0.01 },
-        { code: 'ssao-storage-buffer-unavailable', missingCap: 'storageBuffer' },
       ];
 
     for (const item of codes) {
@@ -53,20 +52,18 @@ describe('SSAO PostProcessErrorCode exhaustive switch (M2 / w9)', () => {
                 ? { paramName: item.paramName ?? 'radius', value: item.value ?? 0 }
                 : item.code === 'ssao-bias-negative'
                   ? { paramName: item.paramName ?? 'bias', value: item.value ?? 0 }
-                  : item.code === 'ssao-storage-buffer-unavailable'
-                    ? { missingCap: item.missingCap ?? 'storageBuffer' }
-                    : (() => {
-                        // Exhaustiveness fallback: codes array covers all 6 members.
-                        // TypeScript can't narrow item.code through ternary chain
-                        // since item.code is typed as string.
-                        return { id: 'fallback' };
-                      })();
+                  : (() => {
+                      // Exhaustiveness fallback: codes array covers all 5 members.
+                      // TypeScript can't narrow item.code through ternary chain
+                      // since item.code is typed as string.
+                      return { id: 'fallback' };
+                    })();
 
       const err = new PostProcessError({ code: item.code as never, detail: detail as never });
       expect(err.code).toBe(item.code);
     }
 
-    expect(codes).toHaveLength(6);
+    expect(codes).toHaveLength(5);
   });
 
   it('(b1) ssao-radius-non-positive error has expected + hint + detail.paramName + detail.value', () => {
@@ -104,27 +101,12 @@ describe('SSAO PostProcessErrorCode exhaustive switch (M2 / w9)', () => {
     expect(d.value).toBe(-0.01);
   });
 
-  it('(b3) ssao-storage-buffer-unavailable error has expected + hint + detail.missingCap', () => {
-    const err = new PostProcessError({
-      code: 'ssao-storage-buffer-unavailable' as never,
-      detail: { missingCap: 'storageBuffer' } as never,
-    });
-    expect(err.code).toBe('ssao-storage-buffer-unavailable');
-    expect(typeof err.expected).toBe('string');
-    expect(err.expected.length).toBeGreaterThan(0);
-    expect(typeof err.hint).toBe('string');
-    expect(err.hint.length).toBeGreaterThan(0);
-    expect(err.hint).toMatch(/storage/i);
-    const d = err.detail as { missingCap: string };
-    expect(d.missingCap).toBe('storageBuffer');
-  });
-
   it('(c) switch(PostProcessErrorCode) compiles with no default branch', () => {
     // Type-level assertion: if PostProcessErrorCode has members not covered
     // by this switch, TypeScript will error. We test this by switching on
     // every literal member explicitly.
     function exhaustiveSwitch(code: string): string {
-      // We cover all 6 codes. TS will error if any is missing.
+      // We cover all current codes. TS will error if any is missing.
       switch (code) {
         case 'post-process-already-registered':
           return 'already-registered';
@@ -136,13 +118,11 @@ describe('SSAO PostProcessErrorCode exhaustive switch (M2 / w9)', () => {
           return 'radius';
         case 'ssao-bias-negative':
           return 'bias';
-        case 'ssao-storage-buffer-unavailable':
-          return 'storage';
         default: {
           // This default exists ONLY because the parameter is `string`, not
           // `PostProcessErrorCode`. The real compiler-enforced exhaustive
           // switch happens when TypeScript narrows the code literal union.
-          // This test case documents the 6 expected members.
+          // This test case documents the current expected members.
           const _exhaustive: never = code as never;
           void _exhaustive;
           return 'unknown';
@@ -152,13 +132,12 @@ describe('SSAO PostProcessErrorCode exhaustive switch (M2 / w9)', () => {
 
     expect(exhaustiveSwitch('ssao-radius-non-positive')).toBe('radius');
     expect(exhaustiveSwitch('ssao-bias-negative')).toBe('bias');
-    expect(exhaustiveSwitch('ssao-storage-buffer-unavailable')).toBe('storage');
     expect(exhaustiveSwitch('post-process-already-registered')).toBe('already-registered');
     expect(exhaustiveSwitch('post-process-not-found')).toBe('not-found');
     expect(exhaustiveSwitch('fullscreen-input-not-found')).toBe('input-not-found');
   });
 
-  it('(d) original 3 error codes still work after SSAO extension', () => {
+  it('(d) original 3 error codes still work beside SSAO validation', () => {
     // Verify the original PostProcessError codes are unaffected.
     const err1 = new PostProcessError({
       code: 'post-process-already-registered' as never,

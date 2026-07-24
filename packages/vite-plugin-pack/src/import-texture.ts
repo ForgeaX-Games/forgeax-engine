@@ -163,6 +163,9 @@ export async function importTextureEntry(
     colorSpace: meta.colorSpace,
     mipmap: meta.mipmap,
     compressionMode,
+    ...(meta.downscaleMaxDimension !== undefined
+      ? { downscaleMaxDimension: meta.downscaleMaxDimension }
+      : {}),
   };
 
   // Build-time DDC (D-1): the decode is deterministic for a given
@@ -259,6 +262,9 @@ export async function importTextureEntry(
     mipmap: meta.mipmap,
     compressionMode,
     compression,
+    ...(meta.downscaleMaxDimension !== undefined
+      ? { downscaleMaxDimension: meta.downscaleMaxDimension }
+      : {}),
   };
   // Populate the build DDC so the next build with identical (source, settings)
   // hits and skips this decode (D-1). Fail-open inside ddcWrite.

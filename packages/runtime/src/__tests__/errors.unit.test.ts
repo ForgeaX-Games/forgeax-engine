@@ -1537,8 +1537,6 @@ import { RhiErrorListenerRegistry } from '../renderer';
               return 'radius';
             case 'ssao-bias-negative':
               return 'bias';
-            case 'ssao-storage-buffer-unavailable':
-              return 'storage';
             case 'params-size-mismatch':
               return 'params';
             case 'params-update-size-mismatch':

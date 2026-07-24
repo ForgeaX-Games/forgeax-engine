@@ -3,7 +3,7 @@
 //
 // Locks the closed PostProcessErrorCode union after the 2 new params codes
 // (`params-size-mismatch` register-time + `params-update-size-mismatch`
-// write-time) join it (6 -> 8 members, D-4). Asserts:
+// write-time) join it. Asserts:
 //   (1) an exhaustive `switch (err.code)` over the REAL union compiles with NO
 //       default branch -- the `const _exhaustive: never = code` arm is the
 //       compile-time completeness guard (TS errors if a member is missing).
@@ -34,8 +34,6 @@ function classify(code: PostProcessErrorCode): string {
       return 'ssao-radius';
     case 'ssao-bias-negative':
       return 'ssao-bias';
-    case 'ssao-storage-buffer-unavailable':
-      return 'ssao-storage';
     case 'params-size-mismatch':
       return 'params-size';
     case 'params-update-size-mismatch':
@@ -47,15 +45,14 @@ function classify(code: PostProcessErrorCode): string {
   }
 }
 
-describe('M-A4 w17: PostProcessErrorCode closed union (8 members, exhaustive)', () => {
-  it('classify covers all 8 members with no default fall-through', () => {
+describe('M-A4 w17: PostProcessErrorCode closed union (7 members, exhaustive)', () => {
+  it('classify covers all 7 members with no default fall-through', () => {
     const all: PostProcessErrorCode[] = [
       'post-process-already-registered',
       'post-process-not-found',
       'fullscreen-input-not-found',
       'ssao-radius-non-positive',
       'ssao-bias-negative',
-      'ssao-storage-buffer-unavailable',
       'params-size-mismatch',
       'params-update-size-mismatch',
     ];
@@ -65,11 +62,10 @@ describe('M-A4 w17: PostProcessErrorCode closed union (8 members, exhaustive)', 
       'input-not-found',
       'ssao-radius',
       'ssao-bias',
-      'ssao-storage',
       'params-size',
       'params-update',
     ]);
-    expect(all.length).toBe(8);
+    expect(all.length).toBe(7);
   });
 });
 
@@ -144,11 +140,10 @@ describe('feat-20260702 M3 w9: fullscreen-input-not-found hint covers depth read
       'fullscreen-input-not-found',
       'ssao-radius-non-positive',
       'ssao-bias-negative',
-      'ssao-storage-buffer-unavailable',
       'params-size-mismatch',
       'params-update-size-mismatch',
     ];
-    expect(all.length).toBe(8);
+    expect(all.length).toBe(7);
     // classify covers all (compile-time check from above).
     expect(all.map(classify)).toEqual([
       'registered',
@@ -156,7 +151,6 @@ describe('feat-20260702 M3 w9: fullscreen-input-not-found hint covers depth read
       'input-not-found',
       'ssao-radius',
       'ssao-bias',
-      'ssao-storage',
       'params-size',
       'params-update',
     ]);

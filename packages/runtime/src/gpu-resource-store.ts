@@ -113,6 +113,8 @@ function makeAssetError(fields: {
 const IMAGE_ERROR_EXPECTED_LOCAL: Readonly<Record<string, string>> = {
   'image-decode-failed': 'PNG / JPG byte stream decodes successfully',
   'image-format-unsupported': "format ends in '-srgb' iff colorSpace is 'srgb' (linear otherwise)",
+  'image-dimension-out-of-bounds':
+    'width and height fall under device caps maxTextureDimension2D (or 16384 hard cap)',
 };
 
 class RuntimeImageError extends Error implements ImageError {
@@ -849,6 +851,24 @@ export class GpuResourceStore {
     const device = this.gpuDevice;
     if (device === undefined) {
       return ok({ id, tex, levels, gpuTexture: undefined });
+    }
+
+    // WebGL2/wgpu exposes texture limits that are lower than many source
+    // images (for example the 2085px LearnOpenGL Mars texture). Reject the
+    // upload before allocating a handle; binding a texture that the backend
+    // accepted syntactically but cannot use later surfaces only as a generic
+    // invalid-bind-group submit error.
+    const maxDimension =
+      (device as unknown as { readonly limits?: { readonly maxTextureDimension2D?: number } })
+        .limits?.maxTextureDimension2D ?? 16_384;
+    if (tex.width > maxDimension || tex.height > maxDimension) {
+      return err(
+        makeImageError({
+          code: 'image-dimension-out-of-bounds',
+          requested: { width: tex.width, height: tex.height },
+          limit: maxDimension,
+        }),
+      );
     }
 
     const createTexRes = device.createTexture({

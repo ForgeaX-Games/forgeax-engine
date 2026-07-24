@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
-    "smoke": "node scripts/smoke-dawn.mjs"
+    "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
     "assets": {
@@ -33,6 +34,10 @@
       ],
       "risks": ["baseline", "content", "build", "delivery", "fault", "recovery", "gpu", "behavioral"],
       "phaseInputs": ["baseline", "content", "build", "delivery", "fault", "recovery"],
+      "evidence": {
+        "frontDoors": ["dawn-node", "vite-pack"],
+        "legs": ["semantic", "recovery"]
+      },
       "oracle": {
         "stdoutIncludes": [
           "[hello-custom-importer] vite build (runs host importer + emits pack-index.json)",

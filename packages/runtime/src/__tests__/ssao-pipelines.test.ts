@@ -37,7 +37,9 @@ function extractSssaoBindings(wgsl: string): BindingDecl[] {
     const rest = m[2] ?? '';
     const typeStr = m[3];
     let type: BindingDecl['type'];
-    if (typeStr?.startsWith('array<')) {
+    if (rest.includes('uniform')) {
+      type = 'uniform';
+    } else if (typeStr?.startsWith('array<')) {
       type = 'storage';
     } else if (typeStr === 'texture_depth_2d') {
       type = 'texture_depth_2d';
@@ -47,8 +49,6 @@ function extractSssaoBindings(wgsl: string): BindingDecl[] {
       type = 'sampler';
     } else if (typeStr === 'sampler_comparison') {
       type = 'sampler_comparison';
-    } else if (rest.includes('uniform')) {
-      type = 'uniform';
     } else {
       type = 'uniform';
     }
@@ -98,11 +98,11 @@ describe('SSAO RenderPipeline PSO descriptor assertions (w24 — RED)', () => {
     expect(b0?.type).toBe('uniform');
   });
 
-  it('(g) binding 1 is storage (kernel SSBO)', () => {
+  it('(g) binding 1 is uniform (kernel UBO)', () => {
     const bindings = extractSssaoBindings(wgsl);
     const b1 = bindings.find((b) => b.binding === 1);
     expect(b1).toBeDefined();
-    expect(b1?.type).toBe('storage');
+    expect(b1?.type).toBe('uniform');
   });
 
   it('(h) binding 2 is texture_2d<f32> (noise)', () => {
@@ -217,10 +217,10 @@ describe('SSAO dedicated BGL shape assertions (w42 — RED)', () => {
     expect(b?.type).toBe('uniform');
   });
 
-  it('(s) binding 1 = storage (ssao_kernel — array<vec3<f32>,64>)', () => {
+  it('(s) binding 1 = uniform (ssao_kernel — array<vec4<f32>,64>)', () => {
     const bindings = extractSssaoBindings(wgsl);
     const b = bindings.find((e) => e.binding === 1);
-    expect(b?.type).toBe('storage');
+    expect(b?.type).toBe('uniform');
   });
 
   it('(t) binding 2 = texture_2d (ssao_noise_texture)', () => {

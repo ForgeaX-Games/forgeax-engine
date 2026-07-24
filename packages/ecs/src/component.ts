@@ -785,13 +785,18 @@ export interface Component<N extends string = string, S extends ComponentSchema 
   }[];
   /**
    * Component-level open namespace (feat-20260602 M1 / D-A3, AC-01 layer 1).
-   * A frozen `Record<string, unknown>` map aggregating every field-level `meta`
-   * sub-key declared in the field-descriptor input. The infra gives no key any
+   * A mutable `Record<string, unknown>` map aggregating every field-level `meta`
+   * sub-key declared in the field-descriptor input. Component definitions may
+   * also seed it through `DefineComponentOptions.meta`, and higher-level
+   * consumers may extend it after registration. The infra gives no key any
    * special meaning (open namespace, OOS-1) — aligned with the
    * `PackIndexEntry.metadata` precedent. Querying an absent key returns
    * `undefined` (charter P3: explicit signal, never a silent default).
+   *
+   * The component token remains frozen, but this metadata map is intentionally
+   * not frozen so consumers can register their own namespaced annotations.
    */
-  readonly meta: Readonly<Record<string, unknown>>;
+  readonly meta: Record<string, unknown>;
   /**
    * Per-field pre-parsed reflection (feat-20260602 M1 / D-A3, AC-01 layer 3).
    * `fields[fieldName]` carries the field `type`, its `default` (if any), and —
@@ -1217,6 +1222,13 @@ export interface DefineComponentOptions<S extends ComponentSchema = ComponentSch
     readonly component: Component<string, ComponentSchema>;
     readonly data: Readonly<Record<string, unknown>>;
   }[];
+  /**
+   * Component-level open metadata namespace. Entries are copied into
+   * `Component.meta` at registration; the ECS core assigns no meaning to any
+   * key. Component-level entries win over field-level entries with the same
+   * key, and consumers may extend the mutable map after registration.
+   */
+  readonly meta?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -1365,9 +1377,14 @@ export function defineComponent<const N extends string, const S extends FieldsIn
       ? undefined
       : (Object.freeze(collectedDefaults) as Readonly<Partial<ShapeOf<SchemaOf<S>>>>);
 
+  // Keep the component token immutable while leaving its open metadata map
+  // extensible for higher-level consumers after registration.
+  if (options?.meta !== undefined) {
+    Object.assign(collectedMeta, options.meta);
+  }
   const frozenSchema = Object.freeze(schema);
   const frozenFields = Object.freeze(reflectedFields);
-  const frozenMeta = Object.freeze(collectedMeta);
+  const meta = collectedMeta;
   const relationship =
     options?.relationship === undefined
       ? undefined
@@ -1414,7 +1431,7 @@ export function defineComponent<const N extends string, const S extends FieldsIn
     onRemove: options?.onRemove,
     relationship,
     coAttach,
-    meta: frozenMeta,
+    meta,
     fields: frozenFields,
     toSchemaJSON(): string {
       return JSON.stringify(frozenSchema);

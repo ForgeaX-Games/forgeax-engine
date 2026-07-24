@@ -6,6 +6,7 @@ import type { World } from '@forgeax/engine-ecs';
 import { type RhiCommandEncoder, RhiError, type TextureView } from '@forgeax/engine-rhi';
 import type { MaterialRenderState, MeshAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
+import { disposeTransientInstanceBuffers } from '../instance-buffer-cache';
 import type {
   _InternalRenderPipelineContext,
   RenderPipelineData,
@@ -921,6 +922,9 @@ function cleanPerFrameCaches(
   frameState: RenderFrameState,
   validated: readonly ValidatedRenderable[],
 ): void {
+  if (frameState.transientInstanceBuffers !== undefined) {
+    disposeTransientInstanceBuffers(frameState.transientInstanceBuffers, internals.errorRegistry);
+  }
   // Build a Set<number> of worldEntityKey composites from the validated
   // renderables. D-1a #4: validatedEntityKeys are worldEntityKey(worldId, entityKey)
   // composites matching the write-side keys of #1-#3 — cross-world false eviction

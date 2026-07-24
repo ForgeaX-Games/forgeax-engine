@@ -5,9 +5,9 @@
 // data structure: per-cluster light index lists pre-binned by the CPU binner.
 //
 // BGL layout (slot 3..6, physically isolated from URP slots 0..2, plan D-1):
-//   @group(2) @binding(3) var<storage> light_data: array<LightSlot, 256>;
-//   @group(2) @binding(4) var<storage> cluster_grid: array<u32>;
-//   @group(2) @binding(5) var<storage> light_index_list: array<u32>;
+//   STORAGE_BUFFER_AVAILABLE=true: bindings 3..5 are the clustered SSBOs.
+//   STORAGE_BUFFER_AVAILABLE=false: binding 3 is a 128-LightSlot uniform list;
+//   bindings 4..5 remain declared by the shared HDRP BGL as uniform pads.
 //   @group(2) @binding(6) var<uniform> cluster_uniform: ClusterUniform;
 //
 // LightSlot 64B std430 layout (byte-frozen, AC-11 double-sided lock):
@@ -31,7 +31,8 @@
 // static_assert(sizeof(LightSlot) == 64) — AC-11 WGSL side lock.
 //
 // Cluster uniform fields (std140, 32 bytes):
-//   gridX, gridY, gridZ (u32) + pad (u32), near, far, logFarOverNear (f32) + pad (u32)
+//   gridX, gridY, gridZ (u32) + lightCount (u32), near, far,
+//   logFarOverNear (f32) + ssaoIntensity (f32)
 //
 // Import flow: main PBR shader #imports this module for cluster evaluation.
 // This file does NOT declare @fragment — the caller's fragment entry does.
@@ -95,9 +96,16 @@ struct ClusterUniform {
 // ── binding declarations ─────────────────────────────────────────────────────
 
 #ifdef CLUSTER_FORWARD_AVAILABLE
+#if STORAGE_BUFFER_AVAILABLE == true
 @group(2) @binding(3) var<storage, read> light_data      : array<LightSlot, 256>;
 @group(2) @binding(4) var<storage, read> cluster_grid     : array<u32>;
 @group(2) @binding(5) var<storage, read> light_index_list : array<u32>;
+#else
+// WebGL2 has no storage-buffer slots. The host writes the same LightSlot POD
+// into a bounded uniform array, preserving the HDRP pipeline and all lights
+// in the catalogue scenes (the cluster grid/index list are not needed here).
+@group(2) @binding(3) var<uniform> light_data_uniform : array<LightSlot, 128>;
+#endif
 @group(2) @binding(6) var<uniform>        cluster_uniform : ClusterUniform;
 #endif
 
@@ -324,6 +332,9 @@ fn evaluate_cluster_lights(
   let far = cluster_uniform.near_far_log.y;
   let log_far = cluster_uniform.near_far_log.z;
 
+  var total_radiance = vec3(0.0);
+
+#if STORAGE_BUFFER_AVAILABLE == true
   let cluster_idx = ndc_position_to_cluster(ndc, view_z, gx, gy, gz, near, far, log_far);
   let cluster_linear = cluster_idx.z * gy * gx + cluster_idx.y * gx + cluster_idx.x;
 
@@ -331,8 +342,6 @@ fn evaluate_cluster_lights(
   let grid_offset = cluster_linear * 2u;
   let list_offset = cluster_grid[grid_offset];
   let list_count  = cluster_grid[grid_offset + 1u];
-
-  var total_radiance = vec3(0.0);
 
   for (var i = 0u; i < list_count; i = i + 1u) {
     let light_idx = light_index_list[list_offset + i];
@@ -345,6 +354,24 @@ fn evaluate_cluster_lights(
       total_radiance += evaluate_spot_light(light, world_pos, N, V, base_color, metallic, roughness);
     }
   }
+#else
+  // Uniform downlevel: evaluate the packed light list directly. grid.w is
+  // the host-written count, capped to the array length; zero-filled lanes
+  // never enter the loop.
+  let light_count = min(cluster_uniform.grid.w, 128u);
+  for (var i = 0u; i < 128u; i = i + 1u) {
+    if (i >= light_count) {
+      break;
+    }
+    let light = light_data_uniform[i];
+    let kind = light.kind_and_pad.x;
+    if (kind == KIND_POINT) {
+      total_radiance += evaluate_point_light(light, world_pos, N, V, base_color, metallic, roughness);
+    } else {
+      total_radiance += evaluate_spot_light(light, world_pos, N, V, base_color, metallic, roughness);
+    }
+  }
+#endif
 
   return total_radiance;
 }

@@ -83,3 +83,13 @@ test('CI preserves in-flight evidence across newer commits', () => {
     assert.match(source, /cancel-in-progress:\s*false/, `${name} must declare preserve semantics`);
   }
 });
+
+test('post-merge issue lookup retries transient GitHub API transport failures', () => {
+  const start = postMergeMonitor.indexOf('  - name: List existing open post-merge issues');
+  assert.notEqual(start, -1, 'missing post-merge issue lookup step');
+  const section = postMergeMonitor.slice(start);
+  const nextStep = section.slice(1).search(/\n {6}- name:/);
+  const lookup = section.slice(0, nextStep === -1 ? undefined : nextStep + 1);
+  assert.match(lookup, /retries: 3/);
+  assert.match(lookup, /retry-exempt-status-codes: 400,401,403,404,422/);
+});

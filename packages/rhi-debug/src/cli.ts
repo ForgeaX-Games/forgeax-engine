@@ -476,9 +476,25 @@ async function loadDawnDevice(): Promise<DawnDevicePack | undefined> {
     const adapterRes = await rhi.requestAdapter();
     if (!adapterRes.ok) return undefined;
     const adapter = adapterRes.value as {
-      requestDevice(): Promise<{ ok: boolean; value: RhiDevice }>;
+      features?: ReadonlySet<string>;
+      requestDevice(opts?: { requiredFeatures?: readonly string[] }): Promise<{
+        ok: boolean;
+        value: RhiDevice;
+      }>;
     };
-    const devRes = await adapter.requestDevice();
+    // Offline replay creates a fresh device, so request the compression
+    // features that this adapter actually exposes before it recreates any
+    // recorded texture. This mirrors runtime/createRenderer.ts and keeps
+    // BC7/ETC2/ASTC asset tapes replayable without blindly requesting a
+    // feature an adapter does not support.
+    const compressionFeatures = [
+      'texture-compression-bc',
+      'texture-compression-etc2',
+      'texture-compression-astc',
+    ].filter((feature) => adapter.features?.has(feature) ?? false);
+    const devRes = await adapter.requestDevice(
+      compressionFeatures.length > 0 ? { requiredFeatures: compressionFeatures } : undefined,
+    );
     if (!devRes.ok) return undefined;
     return {
       device: devRes.value,

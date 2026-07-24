@@ -488,9 +488,12 @@ import { handleNumeric } from './utils/handle-numeric';
       expect(typeof C.meta).toBe('object');
     });
 
-    it('component.meta is frozen (read-only)', () => {
-      const C = defineComponent('MetaFrozen', { x: 'f32' });
-      expect(Object.isFrozen(C.meta)).toBe(true);
+    it('freezes the token but keeps component.meta extensible', () => {
+      const C = defineComponent('MetaMutable', { x: 'f32' });
+      expect(Object.isFrozen(C)).toBe(true);
+      expect(Object.isFrozen(C.meta)).toBe(false);
+      C.meta.consumer = { enabled: true };
+      expect(C.meta.consumer).toEqual({ enabled: true });
     });
 
     it('aggregates per-field meta sub-keys into the component-level namespace', () => {
@@ -501,6 +504,17 @@ import { handleNumeric } from './utils/handle-numeric';
         x: { type: 'f32', default: 0, meta: { priority: 7 } },
       });
       expect(C.meta).toMatchObject({ priority: 7 });
+    });
+
+    it('merges component-level meta after field-level meta', () => {
+      const C = defineComponent(
+        'MetaComponentOptions',
+        {
+          x: { type: 'f32', meta: { source: 'field', priority: 1 } },
+        },
+        { meta: { source: 'component', enabled: true } },
+      );
+      expect(C.meta).toEqual({ source: 'component', priority: 1, enabled: true });
     });
   });
 

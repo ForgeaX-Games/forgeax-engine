@@ -353,6 +353,24 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/bevy/fog": {
+      "name": "@forgeax/bevy-fog",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/bevy/free-camera": {
       "name": "@forgeax/bevy-free-camera",
       "version": "0.0.0",
@@ -629,6 +647,28 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/bevy/skybox": {
+      "name": "@forgeax/bevy-skybox",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-image": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -955,6 +995,7 @@
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-math": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-physics": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
@@ -1113,6 +1154,7 @@
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
@@ -1256,6 +1298,56 @@
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
+    },
+    "apps/hello/m1-composition": {
+      "name": "@forgeax/hello-m1-composition",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-input": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-plugin": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-state": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "vite": "8.0.10",
+      },
+      "devDependencies": {
+        "@webgpu/types": "^0.1.71",
+      },
+    },
+    "apps/hello/m2-content-pipeline": {
+      "name": "@forgeax/hello-m2-content-pipeline",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-codec": "workspace:*",
+        "@forgeax/engine-fbx": "workspace:*",
+        "@forgeax/engine-image": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-project": "workspace:*",
+      },
+    },
+    "apps/hello/m3-programmable-rendering": {
+      "name": "@forgeax/hello-m3-programmable-rendering",
+      "version": "0.0.0",
+    },
+    "apps/hello/m4-interactive-simulation": {
+      "name": "@forgeax/hello-m4-interactive-simulation",
+      "version": "0.0.0",
+    },
+    "apps/hello/m5-interaction-media": {
+      "name": "@forgeax/hello-m5-interaction-media",
+      "version": "0.0.0",
+    },
+    "apps/hello/m6-inspection-forensics": {
+      "name": "@forgeax/hello-m6-inspection-forensics",
+      "version": "0.0.0",
+    },
+    "apps/hello/m7-backend-recovery": {
+      "name": "@forgeax/hello-m7-backend-recovery",
+      "version": "0.0.0",
     },
     "apps/hello/multi-material": {
       "name": "@forgeax/hello-multi-material",
@@ -2161,6 +2253,7 @@
       },
       "devDependencies": {
         "@forgeax/apps-shared": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -2613,6 +2706,8 @@
         "@forgeax/engine-runtime": "workspace:*",
       },
       "devDependencies": {
+        "@forgeax/engine-rhi-debug": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "vite": "8.0.10",
@@ -3660,6 +3755,8 @@
 
     "@forgeax/bevy-fixed-timestep": ["@forgeax/bevy-fixed-timestep@workspace:apps/bevy/fixed-timestep"],
 
+    "@forgeax/bevy-fog": ["@forgeax/bevy-fog@workspace:apps/bevy/fog"],
+
     "@forgeax/bevy-free-camera": ["@forgeax/bevy-free-camera@workspace:apps/bevy/free-camera"],
 
     "@forgeax/bevy-generate-custom-mesh": ["@forgeax/bevy-generate-custom-mesh@workspace:apps/bevy/generate-custom-mesh"],
@@ -3691,6 +3788,8 @@
     "@forgeax/bevy-shadow-biases": ["@forgeax/bevy-shadow-biases@workspace:apps/bevy/shadow-biases"],
 
     "@forgeax/bevy-shadow-caster-receiver": ["@forgeax/bevy-shadow-caster-receiver@workspace:apps/bevy/shadow-caster-receiver"],
+
+    "@forgeax/bevy-skybox": ["@forgeax/bevy-skybox@workspace:apps/bevy/skybox"],
 
     "@forgeax/bevy-smooth-follow": ["@forgeax/bevy-smooth-follow@workspace:apps/bevy/smooth-follow"],
 
@@ -3841,6 +3940,20 @@
     "@forgeax/hello-hdrp-lighting": ["@forgeax/hello-hdrp-lighting@workspace:apps/hello/hdrp-lighting"],
 
     "@forgeax/hello-level-switch": ["@forgeax/hello-level-switch@workspace:apps/hello/level-switch"],
+
+    "@forgeax/hello-m1-composition": ["@forgeax/hello-m1-composition@workspace:apps/hello/m1-composition"],
+
+    "@forgeax/hello-m2-content-pipeline": ["@forgeax/hello-m2-content-pipeline@workspace:apps/hello/m2-content-pipeline"],
+
+    "@forgeax/hello-m3-programmable-rendering": ["@forgeax/hello-m3-programmable-rendering@workspace:apps/hello/m3-programmable-rendering"],
+
+    "@forgeax/hello-m4-interactive-simulation": ["@forgeax/hello-m4-interactive-simulation@workspace:apps/hello/m4-interactive-simulation"],
+
+    "@forgeax/hello-m5-interaction-media": ["@forgeax/hello-m5-interaction-media@workspace:apps/hello/m5-interaction-media"],
+
+    "@forgeax/hello-m6-inspection-forensics": ["@forgeax/hello-m6-inspection-forensics@workspace:apps/hello/m6-inspection-forensics"],
+
+    "@forgeax/hello-m7-backend-recovery": ["@forgeax/hello-m7-backend-recovery@workspace:apps/hello/m7-backend-recovery"],
 
     "@forgeax/hello-multi-material": ["@forgeax/hello-multi-material@workspace:apps/hello/multi-material"],
 

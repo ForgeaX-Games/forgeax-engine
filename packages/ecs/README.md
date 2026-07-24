@@ -750,9 +750,9 @@ C.schema['dim'];  // 'buffer<1024>'
 
 Inspection helpers (`isManagedRefField` / `isManagedBufferField` / `isEntityField` / `isSchemaVocabKeyword`, all re-exported from `@forgeax/engine-ecs`) accept plain `string` so the runtime release loop in `World` calls them on the erased runtime schema map without a cast — same probe surface for AI-user runtime code and engine-internal code (charter proposition 5: one consistent abstraction).
 
-## Component reflection — three-layer read-only introspection (feat-20260602)
+## Component reflection — three-layer introspection (feat-20260602)
 
-`defineComponent` now accepts a **field-descriptor object** form that aggregates `type` + `default` + field-level `meta` at each field declaration site. At registration time the engine pre-parses this input into **three read-only reflection layers** on the frozen component token. This eliminates the 12 scattered type-intrinsic structures (`FIELD_SIZE_BYTES` / `VIEW_CTORS` / `SUPPORTED_FIELD_TYPES` / `storageFieldType` / `isSchemaVocabKeyword` etc.) — all converged into one global `TYPE_METADATA` table.
+`defineComponent` now accepts a **field-descriptor object** form that aggregates `type` + `default` + field-level `meta` at each field declaration site. At registration time the engine pre-parses this input into three reflection layers on the frozen component token: `schema` and `fields` are read-only projections, while `meta` is an open extension map. This eliminates the 12 scattered type-intrinsic structures (`FIELD_SIZE_BYTES` / `VIEW_CTORS` / `SUPPORTED_FIELD_TYPES` / `storageFieldType` / `isSchemaVocabKeyword` etc.) — all converged into one global `TYPE_METADATA` table.
 
 ### Input signature
 
@@ -769,7 +769,7 @@ The second argument is a `FieldsInput` (map of field-name to `FieldSpec` — eit
 
 ### Layer 1: `component.meta` — component-level open namespace
 
-A `Record<string, unknown>` frozen map aggregating every field's `meta` sub-keys into a single component-level namespace. AI users read it to discover subsystem annotations without enumerating per-field sources:
+A `Record<string, unknown>` open map aggregating every field's `meta` sub-keys into a single component-level namespace. Component definitions may seed it with `DefineComponentOptions.meta`, and higher-level consumers may extend it after registration. The ECS assigns no meaning to any key:
 
 ```ts
 const C = defineComponent('C', {
@@ -782,6 +782,8 @@ C.meta.noSuchKey; // undefined (charter P3 — no silent default)
 ```
 
 The infra **zero-interprets** any key — no special handling for `priority` / `blend` / etc. Downstream subsystems are expected to carve out their own key space via convention (e.g. prefix `volume.` / `blend.`), matching the `PackIndexEntry.metadata` "open namespace" precedent.
+
+The component token itself is frozen, but `component.meta` is intentionally mutable so a higher-level consumer can register namespaced annotations without changing the engine's component definition.
 
 ### Layer 2: `component.fields[fieldName]` — per-field pre-parsed reflection
 

@@ -23,6 +23,16 @@ function fail(code, expected, hint) {
   process.exit(1);
 }
 
+const EVIDENCE_LEGS = new Set(['semantic', 'live', 'gpu', 'behavioral', 'recovery']);
+
+function isNonEmptyStringArray(value) {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => typeof item === 'string' && item.length > 0)
+  );
+}
+
 function findPackageJsons(dir, acc = []) {
   let entries;
   try {
@@ -56,13 +66,25 @@ function scenarios() {
       !Array.isArray(scenario.packages) ||
       !Array.isArray(scenario.risks) ||
       !Array.isArray(scenario.phaseInputs) ||
+      !scenario.evidence ||
+      !isNonEmptyStringArray(scenario.evidence.frontDoors) ||
+      !isNonEmptyStringArray(scenario.evidence.legs) ||
       !Array.isArray(scenario.oracle?.stdoutIncludes)
     ) {
       fail(
         'gauntlet-scenario-malformed',
         `${relative(root, packagePath)} has a complete forgeax.gauntletScenario declaration`,
-        'declare id, script, domains, packages, risks, phaseInputs, and oracle.stdoutIncludes',
+        'declare id, script, domains, packages, risks, phaseInputs, evidence, and oracle.stdoutIncludes',
       );
+    }
+    for (const leg of scenario.evidence.legs) {
+      if (typeof leg !== 'string' || !EVIDENCE_LEGS.has(leg)) {
+        fail(
+          'gauntlet-evidence-leg-unknown',
+          `${relative(root, packagePath)} declares one of ${[...EVIDENCE_LEGS].join(', ')}`,
+          'use the roadmap evidence-leg names: semantic, live, gpu, behavioral, recovery',
+        );
+      }
     }
     found.push({ ...scenario, packageDir: resolve(packagePath, '..') });
   }
@@ -70,16 +92,18 @@ function scenarios() {
 }
 
 function coverage(items) {
-  const count = (key) => {
+  const count = (select) => {
     const out = {};
-    for (const item of items) for (const value of item[key]) out[value] = (out[value] ?? 0) + 1;
+    for (const item of items) for (const value of select(item)) out[value] = (out[value] ?? 0) + 1;
     return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
   };
   return {
     scenarios: items.map((item) => item.id).sort(),
-    domains: count('domains'),
-    packages: count('packages'),
-    risks: count('risks'),
+    domains: count((item) => item.domains),
+    packages: count((item) => item.packages),
+    risks: count((item) => item.risks),
+    frontDoors: count((item) => item.evidence.frontDoors),
+    evidenceLegs: count((item) => item.evidence.legs),
   };
 }
 
@@ -123,6 +147,7 @@ const result = {
   scenarioId: scenario.id,
   environment: { node: process.version, platform: process.platform, arch: process.arch },
   phaseInputs: scenario.phaseInputs,
+  evidence: scenario.evidence,
   oracle: { passed, exitCode: child.status, missingStdout: missing },
 };
 writeFileSync(join(artifactDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);

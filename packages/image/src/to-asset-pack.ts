@@ -28,6 +28,7 @@ export interface ImageImportSettings extends Readonly<Record<string, unknown>> {
   readonly mipmap: ImageMeta['mipmap'];
   readonly addressMode: ImageMeta['addressMode'];
   readonly filterMode: ImageMeta['filterMode'];
+  readonly downscaleMaxDimension?: number;
   /**
    * Explicit per-asset compression override (AC-01: importSettings carries
    * compression intent). When omitted, the build-time compression strategy
@@ -79,6 +80,9 @@ export function toAssetPack(decoded: DecodedImage, meta: ImageMeta): ExternalAss
       mipmap: meta.mipmap,
       addressMode: meta.addressMode,
       filterMode: meta.filterMode,
+      ...(meta.downscaleMaxDimension !== undefined
+        ? { downscaleMaxDimension: meta.downscaleMaxDimension }
+        : {}),
     },
     subAssets: [
       {

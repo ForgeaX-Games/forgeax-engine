@@ -14,7 +14,7 @@
 //
 // BGL layout (@group(0), SSAO-dedicated; w37 expansion for D-A/D-D + dawn fix):
 //   @binding(0) var<uniform> ssao_uniform : SsaoUniform   (256 B UBO)
-//   @binding(1) var<storage, read> ssao_kernel : array<vec3<f32>,64>  (1024 B SSBO)
+//   @binding(1) var<uniform> ssao_kernel : array<vec4<f32>,64>  (1024 B UBO)
 //   @binding(2) var ssao_noise_texture : texture_2d<f32>  (4x4 rgba32float)
 //   @binding(3) var ssao_noise_sampler : sampler          (filtering, for noise tile)
 //   @binding(4) var gbuffer_normal : texture_2d<f32>      (RT0, packed world normal)
@@ -65,7 +65,7 @@ struct SsaoUniform {
 // ── SSAO binding declarations (@group(2)) ───────────────────────────────────
 
 @group(0) @binding(0) var<uniform> ssao_uniform      : SsaoUniform;
-@group(0) @binding(1) var<storage, read> ssao_kernel  : array<vec3<f32>, 64>;
+@group(0) @binding(1) var<uniform> ssao_kernel  : array<vec4<f32>, 64>;
 @group(0) @binding(2) var ssao_noise_texture          : texture_2d<f32>;
 @group(0) @binding(3) var ssao_noise_sampler          : sampler;
 @group(0) @binding(4) var gbuffer_normal              : texture_2d<f32>;
@@ -131,7 +131,7 @@ fn fs_ssao_calc(in : SsaoVsOut) -> @location(0) f32 {
   var occlusion = 0.0;
   for (var i = 0u; i < 64u; i = i + 1u) {
     // Tangent-space sample -> view-space via TBN.
-    let sampleTangent = ssao_kernel[i];
+    let sampleTangent = ssao_kernel[i].xyz;
     var sampleView = TBN * sampleTangent;
     sampleView = viewPos + sampleView * RADIUS;
 

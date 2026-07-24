@@ -91,7 +91,7 @@ function makeMockCanvas(): HTMLCanvasElement {
   return canvas as Partial<HTMLCanvasElement> as HTMLCanvasElement;
 }
 
-function makeMockGPUDevice(spies: DeviceSpies): { device: unknown } {
+function makeMockGPUDevice(spies: DeviceSpies, maxTextureDimension2D = 8192): { device: unknown } {
   const lost = new Promise<unknown>(() => undefined);
   let nextTextureId = 0;
   let nextBindGroupId = 0;
@@ -99,7 +99,7 @@ function makeMockGPUDevice(spies: DeviceSpies): { device: unknown } {
     __mockTag: 'gpu-device',
     lost,
     features: new Set(),
-    limits: {},
+    limits: { maxTextureDimension2D },
     queue: {
       submit: () => undefined,
       writeBuffer: () => undefined,
@@ -303,8 +303,11 @@ function threeSubmeshMesh(): MeshAsset {
 
 // ─── Setup helpers ──────────────────────────────────────────────────────────
 
-async function setupRenderer(spies: DeviceSpies): Promise<{ renderer: RendererLike }> {
-  const { device } = makeMockGPUDevice(spies);
+async function setupRenderer(
+  spies: DeviceSpies,
+  maxTextureDimension2D = 8192,
+): Promise<{ renderer: RendererLike }> {
+  const { device } = makeMockGPUDevice(spies, maxTextureDimension2D);
   vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
   const { createRenderer } = await importEngine();
   const renderer = await createRenderer(
@@ -494,18 +497,18 @@ async function spawnPbrMissingTextureScene(): Promise<unknown> {
 
   // A baseColorTexture handle that IS a registered TextureAsset (so it survives
   // extract's kind==='texture' check and is carried onto the snapshot) but whose
-  // GPU view can never become resident: the srgb-format/linear-colorSpace
-  // mismatch makes deriveRenderDataTexture -> ensureResident fail, so
-  // residentTextureView returns undefined. This is the exact "handle present,
-  // GPU view missing" condition the record-stage telemetry guards -- previously
-  // a silent white-fallback (flat render), now warn-once + RhiError + debug pink.
+  // GPU view can never become resident: the mock WebGPU device exposes a
+  // maxTextureDimension2D of 1 while this texture is 2x2. This is the exact
+  // "handle present, GPU capability refusal" condition the record-stage
+  // telemetry guards -- the structured ImageError must survive alongside the
+  // existing debug-pink fallback.
   const unresidentTexture = {
     kind: 'texture',
     width: 2,
     height: 2,
     format: 'rgba8unorm-srgb',
     data: new Uint8Array(2 * 2 * 4),
-    colorSpace: 'linear',
+    colorSpace: 'srgb',
     mipmap: false,
   } as unknown as TextureAsset;
   const badTexHandle = world.allocSharedRef('TextureAsset', unresidentTexture) as unknown as Handle<
@@ -572,7 +575,7 @@ describe('record: PBR missing baseColorTexture telemetry (feat-future-pbr-missin
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const spies = makeSpies();
-      const { renderer } = await setupRenderer(spies);
+      const { renderer } = await setupRenderer(spies, 1);
       const errors: Array<{ code: string; detail?: unknown }> = [];
       renderer.onError((e) => errors.push(e as { code: string; detail?: unknown }));
 
@@ -592,6 +595,7 @@ describe('record: PBR missing baseColorTexture telemetry (feat-future-pbr-missin
       expect((missing[0]?.detail as { assetHandle?: number } | undefined)?.assetHandle).toBe(
         badTexHandleId,
       );
+      expect(errors.some((e) => e.code === 'image-dimension-out-of-bounds')).toBe(true);
 
       const baseColorWarns = warnSpy.mock.calls.filter((c) =>
         String(c[0]).includes('baseColor texture'),

@@ -4,7 +4,7 @@
 //
 // Owner of 3 SSAO GPU resources, lazily allocated per RenderSystemRuntime,
 // following the getOrCreateHdrpBuffers WeakMap pattern (research F12):
-//   (1) kernel SSBO  — 64 vec3 storage buffer (1024 B), label hdrp-ssao-kernel
+//   (1) kernel UBO  — 64 padded vec4 samples (1024 B), label hdrp-ssao-kernel
 //   (2) noise texture — 4x4 rgba32float, label hdrp-ssao-noise, NEAREST/REPEAT
 //   (3) uniform UBO   — 3 mat4 + vec4 intensityPad (256 B aligned),
 //                       label hdrp-ssao-uniform
@@ -12,11 +12,11 @@
 // plan-strategy D-1: uniform carries view + projection + inverseProjection.
 // plan-strategy D-C: intensity scalar carried at offset 192 (vec4 pad slot)
 //   so the lighting shader can mix(1.0, ssao*ao, intensity) without a new UBO.
-// plan-strategy D-4: storageBuffer=false fires structured error + returns null.
-// requirements OOS-5: no UBO fallback for kernel.
+// The kernel uses a uniform buffer on every backend. 1024 B is below the
+// WebGL2 minimum fragment UBO size, so SSAO does not need a storage-buffer
+// capability gate.
 
 import type { Buffer, Texture } from '@forgeax/engine-rhi';
-import { PostProcessError } from './post-process-errors';
 import type { RenderSystemRuntime } from './render-system';
 import { generateSsaoKernel, generateSsaoNoise } from './ssao-data';
 
@@ -41,7 +41,6 @@ export const SSAO_UNIFORM_INTENSITY_OFFSET = UNIFORM_INTENSITY_OFFSET_BYTES;
 export const SSAO_UNIFORM_BYTES = UNIFORM_BYTES;
 
 // WebGPU buffer-usage flag values (mirrors hdrp-buffers.ts constants).
-const GPU_BUFFER_USAGE_STORAGE = 0x80;
 const GPU_BUFFER_USAGE_UNIFORM = 0x40;
 const GPU_BUFFER_USAGE_COPY_DST = 0x08;
 
@@ -56,7 +55,7 @@ const GPU_TEXTURE_USAGE_TEXTURE_BINDING = 0x04;
  * Fields are readonly per charter P5: one resource, one owner.
  */
 export interface SsaoBuffers {
-  /** 64-vec3 storage buffer for hemisphere samples. */
+  /** 64 padded vec4 uniform buffer for hemisphere samples. */
   readonly kernelBuffer: Buffer;
   readonly kernelBytes: number;
   /** 4x4 rgba32float noise texture for per-pixel TBN rotation. */
@@ -68,12 +67,6 @@ export interface SsaoBuffers {
 
 const cache = new WeakMap<RenderSystemRuntime, SsaoBuffers>();
 
-// Round-2 [F-3]: warn-once tracking per-runtime so the storage-buffer
-// unavailable error fires exactly once (per-frame buildGraph re-entry would
-// otherwise spam errorRegistry / console). WeakSet so a disposed runtime
-// stops anchoring its slot.
-const storageUnavailableFired = new WeakSet<RenderSystemRuntime>();
-
 /**
  * Lazily allocate the 3 SSAO GPU resources for `runtime`. Returns the
  * same `SsaoBuffers` object on subsequent calls (per-RenderSystem
@@ -82,12 +75,7 @@ const storageUnavailableFired = new WeakSet<RenderSystemRuntime>();
  * On `device.createBuffer` / `device.createTexture` failure, fires a
  * structured error on the runtime's error registry and returns `null`.
  *
- * When `runtime.device.caps.storageBuffer === false`, fires a structured
- * error with code `'ssao-storage-buffer-unavailable'` and returns `null`
- * (plan-strategy D-4; OOS-5: no UBO fallback).
- *
- * @returns SsaoBuffers on success, null if any allocation fails or
- *   storage buffer is unavailable.
+ * @returns SsaoBuffers on success, null if any allocation fails.
  */
 export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffers | null {
   const cached = cache.get(runtime);
@@ -95,29 +83,7 @@ export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffer
 
   const device = runtime.device;
 
-  // plan-strategy D-4 + Round-2 [F-3]: storageBuffer cap gate.
-  // Returns null when storage buffers are unavailable. addSsaoPasses sees
-  // null and performs a graph-level skip (no pass wiring). To honour the
-  // requirements `boundary case 4` + AC-07 + charter P3 explicit-failure
-  // contract (no silent-skip on cap miss), fire a structured PostProcessError to
-  // runtime.errorRegistry exactly once per runtime (warn-once via
-  // module-scoped WeakSet). Subsequent calls keep returning null but no
-  // longer re-fire — the buildGraph re-entry path runs every frame, and
-  // per-frame errorRegistry spam would drown other diagnostics.
-  if (!device.caps.storageBuffer) {
-    if (!storageUnavailableFired.has(runtime)) {
-      storageUnavailableFired.add(runtime);
-      runtime.errorRegistry.fire(
-        new PostProcessError({
-          code: 'ssao-storage-buffer-unavailable',
-          detail: { missingCap: 'storageBuffer' },
-        }),
-      );
-    }
-    return null;
-  }
-
-  // (1) Kernel SSBO — 64 vec3 storage buffer (1024 B).
+  // (1) Kernel UBO — 64 padded vec4 samples (1024 B).
   const kernelSamples = generateSsaoKernel();
   const kernelData = new Float32Array(KERNEL_SAMPLE_COUNT * 4); // 4 floats per padded vec3
   for (let i = 0; i < KERNEL_SAMPLE_COUNT; i++) {
@@ -132,7 +98,7 @@ export function getOrCreateSsaoBuffers(runtime: RenderSystemRuntime): SsaoBuffer
   const kernelBufferRes = device.createBuffer({
     label: 'hdrp-ssao-kernel',
     size: KERNEL_SAMPLE_COUNT * BYTES_PER_KERNEL_ELEMENT,
-    usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST,
+    usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST,
     mappedAtCreation: false,
   });
   if (!kernelBufferRes.ok) {

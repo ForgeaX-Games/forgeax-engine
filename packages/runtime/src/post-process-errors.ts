@@ -3,9 +3,7 @@
 //  feat-20260609-learn-render-4-5-framebuffers-demo-offscreen-rt-an M1 / T-2
 //  added 'fullscreen-input-not-found').
 //
-// Closed 8-member PostProcessErrorCode union + PostProcessError discriminated-union class.
-// Six failure channels split by error nature (charter P3 + plan-strategy D-4):
-// (feat-20260612-hdrp-ssao M2 / w10: +3 SSAO codes — plan-strategy D-3)
+// Closed 7-member PostProcessErrorCode union + PostProcessError discriminated-union class.
 //   - 'post-process-already-registered' (programmer error) -> postProcess.register THROWS a
 //     PostProcessError, mirroring ShaderRegistry.registerMaterialShader's Map.has -> throw
 //     fail-fast (research Finding M2-4). A second register under the same id is a coding
@@ -21,15 +19,6 @@
 //     SSAO radius parameter <= 0; fires when config.ssao.radius value is non-positive.
 //   - 'ssao-bias-negative' (runtime path, feat-20260612-hdrp-ssao M2 / w10) ->
 //     SSAO bias parameter < 0; fires when config.ssao.bias value is negative.
-//   - 'ssao-storage-buffer-unavailable' (runtime path, feat-20260612-hdrp-ssao M2 / w10) ->
-//     device.caps.storageBuffer is false; SSAO kernel requires storage buffers.
-//     graph resource key that the per-pass resolve context cannot resolve (typo /
-//     unregistered colorTarget / mis-ordered addColorTarget vs addFullscreenPass).
-//     A separate code (rather than folding into 'post-process-not-found' + detail.kind)
-//     keeps the failure semantics distinct: the FORMER is "shader id not registered",
-//     the LATTER is "graph resource key not declared". An AI user reading the error
-//     code jumps directly to the right fix (charter P3); detail.readsKey / detail.passName
-//     give them the specific key + pass to wire (charter P4 property access).
 //
 // D-1: a NEW independent union rather than folding into RuntimeErrorCode /
 // PipelineErrorCode (plan-strategy D-9). RuntimeErrorCode's members are render / skin /
@@ -50,7 +39,7 @@
 /**
  * Closed union of fullscreen post-process error codes.
  *
- * Exactly 8 members; AI users perform exhaustive `switch (err.code)` without a default
+ * Exactly 7 members; AI users perform exhaustive `switch (err.code)` without a default
  * and TS guards completeness (AC-08).
  *
  * | code | channel | trigger |
@@ -60,7 +49,6 @@
  * | `'fullscreen-input-not-found'` | throw | `addFullscreenPass({reads: [key]})` where `key` is not a graph-declared color target, or a depth key missing TEXTURE_BINDING (D-4) |
  * | `'ssao-radius-non-positive'` | throw | SSAO `radius <= 0` |
  * | `'ssao-bias-negative'` | throw | SSAO `bias < 0` |
- * | `'ssao-storage-buffer-unavailable'` | throw | device lacks storage-buffer support for the SSAO pass |
  * | `'params-size-mismatch'` | throw | `postProcess.register({params})` with `byteSize < 16` or `defaultValue.length !== byteSize` (feat-20260621 M-A4 / D-4) |
  * | `'params-update-size-mismatch'` | throw | per-frame data-driven write where `PostProcessParams.data` byteLength !== registered `params.byteSize` (feat-20260621 M-A4 / D-4) |
  */
@@ -70,7 +58,6 @@ export type PostProcessErrorCode =
   | 'fullscreen-input-not-found'
   | 'ssao-radius-non-positive'
   | 'ssao-bias-negative'
-  | 'ssao-storage-buffer-unavailable'
   | 'params-size-mismatch'
   | 'params-update-size-mismatch';
 
@@ -123,14 +110,6 @@ export interface SsaoBiasNegativeDetail {
 }
 
 /**
- * Detail for `'ssao-storage-buffer-unavailable'`: the device lacks storage buffer
- * capability required by SSAO kernel storage. AI consumers read `.detail.missingCap`.
- */
-export interface SsaoStorageBufferUnavailableDetail {
-  readonly missingCap: string;
-}
-
-/**
  * Detail for `'params-size-mismatch'`: the register call's byteSize / defaultValue.length
  * is invalid. Carries `byteSize` (the declared size) and `actualLength` (defaultValue.length).
  * AI consumers read `.detail.byteSize` / `.detail.actualLength` after the code guard.
@@ -173,13 +152,11 @@ export type PostProcessErrorDetailFor<C extends PostProcessErrorCode> =
           ? SsaoRadiusNonPositiveDetail
           : C extends 'ssao-bias-negative'
             ? SsaoBiasNegativeDetail
-            : C extends 'ssao-storage-buffer-unavailable'
-              ? SsaoStorageBufferUnavailableDetail
-              : C extends 'params-size-mismatch'
-                ? PostProcessParamsSizeMismatchDetail
-                : C extends 'params-update-size-mismatch'
-                  ? PostProcessParamsUpdateSizeMismatchDetail
-                  : never;
+            : C extends 'params-size-mismatch'
+              ? PostProcessParamsSizeMismatchDetail
+              : C extends 'params-update-size-mismatch'
+                ? PostProcessParamsUpdateSizeMismatchDetail
+                : never;
 
 /**
  * Tagged union of `.detail` payloads. The variants are unique by structural fields
@@ -193,7 +170,6 @@ export type PostProcessErrorDetail =
   | FullscreenInputNotFoundDetail
   | SsaoRadiusNonPositiveDetail
   | SsaoBiasNegativeDetail
-  | SsaoStorageBufferUnavailableDetail
   | PostProcessParamsSizeMismatchDetail
   | PostProcessParamsUpdateSizeMismatchDetail;
 
@@ -204,7 +180,6 @@ const POST_PROCESS_EXPECTED: { readonly [C in PostProcessErrorCode]: string } = 
     'reads key must be a graph-declared colorTarget with TEXTURE_BINDING',
   'ssao-radius-non-positive': 'SSAO radius must be > 0',
   'ssao-bias-negative': 'SSAO bias must be >= 0',
-  'ssao-storage-buffer-unavailable': 'device supports storage buffers',
   'params-size-mismatch': 'params.byteSize >= 16 and defaultValue.length === byteSize',
   'params-update-size-mismatch': 'PostProcessParams.data byteLength === registered params.byteSize',
 };
@@ -246,14 +221,6 @@ function postProcessHint(code: PostProcessErrorCode, detail: PostProcessErrorDet
       return (
         `SSAO parameter '${d.paramName}' is ${d.value}, must be >= 0. ` +
         `Set config.ssao.${d.paramName} to a non-negative value (default 0.025) or disable SSAO.`
-      );
-    }
-    case 'ssao-storage-buffer-unavailable': {
-      const d = detail as SsaoStorageBufferUnavailableDetail;
-      return (
-        `SSAO requires '${d.missingCap}' device capability. This device does not support ` +
-        'storage buffers. Remove config.ssao or run on a device with storage buffer support ' +
-        '(WebGPU: StorageBufferBindingAccess feature; WebGL2: unavailable).'
       );
     }
     case 'params-size-mismatch': {
@@ -307,7 +274,7 @@ type PostProcessErrorVariant<C extends PostProcessErrorCode> = PostProcessErrorC
 };
 
 /**
- * Public PostProcessError type - discriminated union of the 8 variants.
+ * Public PostProcessError type - discriminated union of the 7 variants.
  *
  * ```ts
  * function recover(err: PostProcessError): string {
@@ -325,7 +292,6 @@ export type PostProcessError =
   | PostProcessErrorVariant<'fullscreen-input-not-found'>
   | PostProcessErrorVariant<'ssao-radius-non-positive'>
   | PostProcessErrorVariant<'ssao-bias-negative'>
-  | PostProcessErrorVariant<'ssao-storage-buffer-unavailable'>
   | PostProcessErrorVariant<'params-size-mismatch'>
   | PostProcessErrorVariant<'params-update-size-mismatch'>;
 

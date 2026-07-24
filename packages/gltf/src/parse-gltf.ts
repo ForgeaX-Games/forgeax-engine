@@ -1159,6 +1159,9 @@ export function toAssetPack(
     subAssets: reuse.subAssets,
     importSettings: {
       defaultSceneIndex: doc.defaultSceneIndex,
+      ...(existingMeta?.importSettings.downscaleMaxDimension !== undefined
+        ? { downscaleMaxDimension: existingMeta.importSettings.downscaleMaxDimension }
+        : {}),
       diagnostics: {
         nodeNames: doc.diagnostics.nodeNames,
         unsupportedExtensions: doc.diagnostics.unsupportedExtensions,

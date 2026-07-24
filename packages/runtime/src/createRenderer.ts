@@ -2184,10 +2184,19 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         return ok(undefined);
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
+        const innerError =
+          cause instanceof RhiError
+            ? cause
+            : {
+                code: 'unknown' as const,
+                message,
+                ...(cause instanceof Error ? { name: cause.name } : {}),
+              };
         const e = new RhiError({
           code: 'webgpu-runtime-error',
           expected: 'renderSystem.draw(worlds, { owner }) completes without throwing',
           hint: `RenderSystem internal error: ${message}`,
+          detail: { error: innerError },
         });
         internals.errorRegistry.fire(e);
         return err(e);
@@ -6795,7 +6804,7 @@ async function buildReadyWebGPU(
     if (ssaoModule !== null) {
       // Dedicated SSAO BGL: 9 entries (bindings 0-8 per current WGSL).
       //   0 = uniform (SsaoUniform 256B)
-      //   1 = storage (kernel SSBO)
+      //   1 = uniform (kernel UBO; 64 padded vec4 samples, 1024 B)
       //   2 = texture_2d (noise)
       //   3 = sampler (filtering, for noise / normal float textures)
       //   4 = texture_2d (gbuffer_normal)
@@ -6816,7 +6825,7 @@ async function buildReadyWebGPU(
               {
                 binding: 1,
                 visibility: GPU_SHADER_STAGE_FRAGMENT,
-                buffer: { type: 'read-only-storage' },
+                buffer: { type: 'uniform' },
               },
               {
                 binding: 2,

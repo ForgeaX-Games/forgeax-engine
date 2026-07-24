@@ -74,7 +74,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- 1. spawn the Vite dev server ---------------------------------------------
 
-const viteProc = spawn('npx', ['vite', '--host', '127.0.0.1', '--clearScreen', 'false'], {
+const viteProc = spawn('pnpm', ['exec', 'vite', '--host', '127.0.0.1', '--clearScreen', 'false'], {
   cwd: appDir,
   env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
 });

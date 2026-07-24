@@ -465,8 +465,8 @@ export interface AddSsaoPassesOptions {
  *   writes ssaoRaw (half-res r8unorm).
  * ssao-blur: reads ssaoRaw, writes ssaoBlurred (half-res r8unorm).
  *
- * Fail-fast: when SSAO buffers are unavailable (storageBuffer=false,
- * g-buffer not declared, or kernel/noise generation fails), the
+ * Fail-fast: when SSAO buffers are unavailable (g-buffer not declared or
+ * kernel/noise generation fails), the
  * function returns without wiring any pass nodes (graph-level skip).
  * Param validation happens in the record closure (w16 boundary impl).
  */
@@ -485,7 +485,8 @@ export function addSsaoPasses(
     return;
   }
 
-  // Check SSAO buffers are available (storageBuffer cap gate + allocation).
+  // Check SSAO buffers are available (allocation only; the kernel is a UBO so
+  // this path is valid on WebGL2).
   const ssaoBufs = getOrCreateSsaoBuffers(ctx.runtime);
   if (ssaoBufs === null) {
     return;
@@ -516,7 +517,6 @@ export function addSsaoPasses(
   graph.addPass('ssao-calc', {
     reads: [opts.gbuf0, opts.hdrDepth],
     writes: [opts.ssaoRaw],
-    storageBuffer: true,
     execute: (_c: RenderPipelineContext, resolveCtx?: ResolveContext) => {
       const internalCtx = _c as _InternalRenderPipelineContext;
       recordSsaoCalcPass(internalCtx, resolveCtx, opts.ssaoRaw, opts.gbuf0, opts.hdrDepth);
@@ -723,7 +723,7 @@ function buildSsaoUniformPayload(internals: _InternalRenderPipelineContext): Flo
  * Bind group entries (must match the 9-entry SSAO BGL declared in
  * createRenderer.ts; see hdrp-ssao.wgsl §BGL layout):
  *   0 ssao_uniform UBO            5 hdr_depth view
- *   1 ssao_kernel SSBO            6 ssao_depth_sampler (non-filtering)
+ *   1 ssao_kernel UBO             6 ssao_depth_sampler (non-filtering)
  *   2 ssao_noise_texture          7 fallback ssaoRaw view (calc never samples)
  *   3 ssao_noise_sampler          8 ssaoSampler (unused by calc, BGL slot)
  *   4 gbuffer_normal view

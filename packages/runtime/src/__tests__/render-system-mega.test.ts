@@ -878,6 +878,34 @@ import { extractFrame } from '../render-system-extract';
       expect(typeof runtimeErr?.detail?.error?.message).toBe('string');
       expect(runtimeErr?.detail?.error?.message).toContain('writeBuffer');
     });
+
+    it('renderer facade preserves detail.error when a pre-render stage throws', async () => {
+      const { createRenderer } = await setupWebGPU();
+      const canvas = makeMockCanvas({ webgl2: 'context', webgpu: 'context' });
+      const renderer = await createRenderer(
+        canvas,
+        {},
+        { shaderManifestUrl: buildManifestDataUrl() },
+      );
+      await renderer.ready;
+
+      const errors: {
+        code: string;
+        detail?: { error?: { code: string; message: string; name?: string } };
+      }[] = [];
+      renderer.onError((e) => errors.push(e as never));
+
+      // A malformed World reaches the documented draw entry, then throws in
+      // the pre-render glyph walk. This exercises createRenderer.draw's
+      // facade catch rather than RenderSystem.recordFrame's inner catch.
+      renderer.draw([{}], { owner: 0 });
+
+      const runtimeErr = errors.find((e) => e.code === 'webgpu-runtime-error');
+      expect(runtimeErr).toBeDefined();
+      expect(runtimeErr?.detail?.error?.code).toBe('unknown');
+      expect(runtimeErr?.detail?.error?.message).toContain('_getGraph');
+      expect(runtimeErr?.detail?.error?.name).toBe('TypeError');
+    });
   });
 
   describe('RenderSystem mat4 worldFromLocal baseline (AC-02)', () => {

@@ -1821,6 +1821,20 @@ ${MINIMAL_WGSL.trim()}
       if (r.ok) expect(r.value.wgsl.length).toBeGreaterThan(0);
     });
 
+    it('(a.1) HDRP uniform downlevel compiles with storage buffers unavailable', async () => {
+      const r = await compileShader(stripPragmas(readSrc('default-standard-pbr.wgsl')), {
+        id: 'pbr#cfw-uniform-downlevel',
+        imports: IMPORTS,
+        defines: {
+          PER_INSTANCE_REGION: false,
+          STORAGE_BUFFER_AVAILABLE: false,
+          CLUSTER_FORWARD_AVAILABLE: true,
+        },
+      });
+      expect(r.ok, r.ok ? '' : r.error.message).toBe(true);
+      if (r.ok) expect(r.value.wgsl.length).toBeGreaterThan(0);
+    });
+
     it('(b) CLUSTER_FORWARD_AVAILABLE=false compiles without error', async () => {
       const r = await compileShader(stripPragmas(readSrc('default-standard-pbr.wgsl')), {
         id: 'pbr#cfw-false',

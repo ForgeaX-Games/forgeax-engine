@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { gltfImporter } from '@forgeax/engine-gltf';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
@@ -12,9 +14,9 @@ export default defineConfig({
     forgeaxShader() as never,
     pluginPack({
       refresh: reloadAssetHost(),
+      importers: [imageImporter, gltfImporter],
       roots: [
         resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
-        resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'meshes'),
         resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'objects'),
       ],
     }),

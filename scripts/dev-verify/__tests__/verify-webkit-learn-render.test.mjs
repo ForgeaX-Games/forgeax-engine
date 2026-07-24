@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  appendCapturedLog,
   classify,
   evaluatePixelOracle,
   readinessForDemo,
   readinessWaitBudget,
+  waitForVisualSettle,
 } from '../verify-webkit-learn-render.mjs';
 
 const base = {
@@ -15,6 +17,74 @@ const base = {
   oracle: { passed: true },
   runtimeError: null,
 };
+
+test('bounded log capture preserves decisive failures after repetitive noise', () => {
+  const logs = [];
+  for (let index = 0; index < 3_000; index += 1)
+    appendCapturedLog(logs, `error: repeated-${index}`);
+  appendCapturedLog(logs, 'error: webgpu-runtime-error inspect detail.error');
+  assert.equal(logs.length < 2_100, true);
+  assert.equal(logs.at(-1), 'error: webgpu-runtime-error inspect detail.error');
+});
+
+test('bounded log capture deduplicates a decisive per-frame error flood', () => {
+  const logs = [];
+  for (let index = 0; index < 3_000; index += 1)
+    appendCapturedLog(logs, 'error: RhiError: asset-not-registered texture=1107');
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0], 'error: RhiError: asset-not-registered texture=1107');
+});
+
+test('classify preserves asset capability and residency boundaries', () => {
+  assert.deepEqual(
+    classify({
+      ...base,
+      logs: ['error: image-dimension-out-of-bounds requested=4096 limit=2048'],
+      oracle: { passed: false },
+    }),
+    {
+      class: 'capability',
+      detail: 'error: image-dimension-out-of-bounds requested=4096 limit=2048',
+    },
+  );
+  assert.deepEqual(
+    classify({
+      ...base,
+      logs: ['error: RhiError: asset-not-registered texture=1107'],
+      oracle: { passed: false },
+    }),
+    {
+      class: 'init',
+      detail: 'error: RhiError: asset-not-registered texture=1107',
+    },
+  );
+  assert.deepEqual(
+    classify({
+      ...base,
+      channel: null,
+      logs: ['error: ImageError: image-dimension-out-of-bounds requested=4096 limit=2048'],
+      oracle: { passed: false },
+    }),
+    {
+      class: 'capability',
+      detail: 'error: ImageError: image-dimension-out-of-bounds requested=4096 limit=2048',
+    },
+  );
+  assert.deepEqual(
+    classify({
+      ...base,
+      logs: [
+        'error: app.onError: asset-not-registered texture=1025',
+        'error: app.onError: limit-exceeded reduce instance count to 128',
+      ],
+      oracle: { passed: false },
+    }),
+    {
+      class: 'capability',
+      detail: 'error: app.onError: limit-exceeded reduce instance count to 128',
+    },
+  );
+});
 
 test('classify preserves the first failure boundary in matrix evidence', () => {
   assert.deepEqual(classify({ ...base, vite: { ready: false, error: 'port unavailable' } }), {
@@ -123,4 +193,21 @@ test('readiness contracts wait for slow asset consumers without changing unconfi
       detail: "readiness flag '__sponzaSceneReady' was not observed within 30000ms",
     },
   );
+});
+
+test('visual settle waits for two animation frames after readiness', async () => {
+  const calls = [];
+  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (callback) => {
+    calls.push(true);
+    callback();
+    return 1;
+  };
+  try {
+    await waitForVisualSettle({ evaluate: (callback) => callback() });
+  } finally {
+    if (originalRequestAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+  }
+  assert.equal(calls.length, 2);
 });

@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
-    "smoke": "node scripts/smoke-dawn.mjs"
+    "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
     "metrics": {
@@ -47,6 +48,7 @@
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "vite": "8.0.10",
     "webgpu": "^0.4.0",
     "@webgpu/types": "^0.1.71"

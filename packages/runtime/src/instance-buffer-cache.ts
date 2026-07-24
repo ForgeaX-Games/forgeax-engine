@@ -31,6 +31,17 @@ export interface InstanceBufferCacheEntry {
   readonly uploadedArchVersion: number;
 }
 
+function destroyInstanceBufferEntries(
+  entries: Iterable<InstanceBufferCacheEntry>,
+  errorRegistry?: InstanceBufferCacheErrorSink,
+): void {
+  for (const entry of entries) {
+    if (entry.buffer.isDestroyed) continue;
+    const r = entry.buffer.destroy();
+    if (!r.ok && errorRegistry) errorRegistry.fire(r.error);
+  }
+}
+
 /**
  * Minimal error-registry surface accepted by disposeInstanceBuffers —
  * only needs `fire`, matching RhiErrorListenerRegistry (feat-20260619 D-6).
@@ -70,11 +81,15 @@ export function disposeInstanceBuffers(
   map: Map<number, InstanceBufferCacheEntry>,
   errorRegistry?: InstanceBufferCacheErrorSink,
 ): void {
-  for (const entry of map.values()) {
-    if (!entry.buffer.isDestroyed) {
-      const r = entry.buffer.destroy();
-      if (!r.ok && errorRegistry) errorRegistry.fire(r.error);
-    }
-  }
+  destroyInstanceBufferEntries(map.values(), errorRegistry);
   map.clear();
+}
+
+/** Destroy transient uniform-fallback chunks allocated for the previous frame. */
+export function disposeTransientInstanceBuffers(
+  entries: InstanceBufferCacheEntry[],
+  errorRegistry?: InstanceBufferCacheErrorSink,
+): void {
+  destroyInstanceBufferEntries(entries, errorRegistry);
+  entries.length = 0;
 }

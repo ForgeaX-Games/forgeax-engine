@@ -699,7 +699,17 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           ? importSettings.colorSpace
           : 'linear';
       const mipmap = importSettings.mipmap === true;
-      const decoded = parseImage(bytes, mimeType, { colorSpace, mipmap });
+      const downscaleMaxDimension =
+        typeof importSettings.downscaleMaxDimension === 'number' &&
+        Number.isInteger(importSettings.downscaleMaxDimension) &&
+        importSettings.downscaleMaxDimension > 0
+          ? importSettings.downscaleMaxDimension
+          : undefined;
+      const decoded = parseImage(bytes, mimeType, {
+        colorSpace,
+        mipmap,
+        ...(downscaleMaxDimension !== undefined ? { downscaleMaxDimension } : {}),
+      });
       if (!decoded.ok) return decoded;
       const tex = decoded.value;
       // bug-20260610: format MUST agree with colorSpace (sRGB textures need
@@ -754,7 +764,27 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           roots,
           onBatch: async ({ sidecars, sources }) => {
             let catalogChanged = false;
-            if (sidecars.length > 0) {
+            // A source edit invalidates the dev DDC overlay for rows whose
+            // declaring source changed. Without this, the full-reload signal
+            // reaches the browser but POST /__import returns the stale
+            // imported row from `importedRows` before the importer runs again.
+            // Resolve both watcher-relative filenames and catalog-relative
+            // source paths against their owning roots/cwd so this remains
+            // correct for roots outside the Vite project directory.
+            const changedSourcePaths = new Set<string>();
+            for (const info of sources) {
+              changedSourcePaths.add(resolve(info.filename));
+              for (const root of roots) changedSourcePaths.add(resolve(root, info.filename));
+            }
+            let importedRowsInvalidated = false;
+            for (const [guid, row] of importedRows) {
+              if (!changedSourcePaths.has(resolve(process.cwd(), row.sourcePath))) continue;
+              importedRows.delete(guid);
+              importedRowsInvalidated = true;
+            }
+            if (importedRowsInvalidated) metaPackBodies.clear();
+
+            if (sidecars.length > 0 || importedRowsInvalidated) {
               const previousCatalog = catalog;
               try {
                 const [rawEntries2, g2m2] = await Promise.all([
@@ -953,12 +983,19 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         const metaPath = guidToMeta.get(guidLower);
         let resultEntries: PackIndexEntry[];
 
-        // Only route through per-meta for gltf / fbx importers; image/audio/font
-        // sidecars produce a single sub-asset row and the per-asset path
-        // (importOneTexture) is the right verb. fbx behaves like gltf — single
-        // .fbx source file produces multiple sub-asset rows (mesh / material /
-        // scene / texture / skeleton / skin / animation-clip) that need to be
-        // imported together via runImport (feat-20260615-fbx-importer-via-sdk).
+        // Route registered non-image importers through the per-meta runner.
+        // gltf / fbx / ui are engine products with explicit multi-asset
+        // handling, while a registered host importer has the same contract:
+        // one source + meta sidecar produces a DDC pack that cannot be
+        // reconstructed by the texture-only path. The registry is the SSOT
+        // for whether a host importer is wired; an unregistered key still
+        // falls through to the raw-source catalog behavior. `image` remains
+        // on the per-asset path because its texture importer has a dedicated
+        // binary delivery arm and must not be re-run through a pack body.
+        // fbx behaves like gltf — a single .fbx source file produces multiple
+        // sub-asset rows (mesh / material / scene / texture / skeleton / skin /
+        // animation-clip) that need to be imported together via runImport
+        // (feat-20260615-fbx-importer-via-sdk).
         let isMultiAssetMeta = false;
         if (metaPath !== undefined) {
           try {
@@ -972,7 +1009,10 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             isMultiAssetMeta =
               metaRaw.importer === 'gltf' ||
               metaRaw.importer === 'fbx' ||
-              metaRaw.importer === 'ui';
+              metaRaw.importer === 'ui' ||
+              (metaRaw.importer !== 'image' &&
+                metaRaw.importer !== undefined &&
+                importerRegistry.get(metaRaw.importer) !== undefined);
           } catch {
             // Unreadable meta — fall through to per-asset.
           }
@@ -1143,6 +1183,27 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     }
     const { paths } = loadAssetConfig(cwd);
     const entries = await buildCatalog(roots, opts.base, registeredImporterKeys);
+
+    if (process.env.FORGEAX_SHARED_APP_INPUTS_MODE === 'catalog-only') {
+      // Catalog probes validate metadata and browser/HMR wiring; the producer job owns full payload import.
+      const catalog = projectSharedPackCatalog(entries, opts.base).map((entry) =>
+        entry.relativeUrl.startsWith('/assets/')
+          ? entry
+          : {
+              ...entry,
+              relativeUrl: projectPackIndexUrl(
+                basePrefix,
+                `assets/${entry.guid.toLowerCase()}.bin`,
+              ),
+            },
+      );
+      this.emitFile({
+        type: 'asset',
+        fileName: 'pack-index.json',
+        source: JSON.stringify(catalog),
+      });
+      return;
+    }
 
     // Import step (M3 / w28, AC-21): the image import no longer inlines
     // `parseImage` here. It routes through the build-time `imageImporter`

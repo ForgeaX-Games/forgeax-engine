@@ -120,6 +120,7 @@ function makeMockRuntime(capsOverride: Partial<RhiCaps> = {}): {
 
 function fakeHdrpBuffers(): HdrpBuffers {
   return {
+    storageBuffer: true,
     lightDataBuffer: mockBuffer('hdrp-light-data'),
     lightDataBytes: 16384,
     clusterGridBuffer: mockBuffer('hdrp-cluster-grid'),

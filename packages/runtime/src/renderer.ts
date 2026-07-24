@@ -16,7 +16,7 @@ import type { World } from '@forgeax/engine-ecs';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import type { Result, RhiDevice, RhiError, RhiInstance } from '@forgeax/engine-rhi';
 import type { ShaderRegistry } from '@forgeax/engine-shader';
-import type { RenderPipelineAsset } from '@forgeax/engine-types';
+import type { ImageError, RenderPipelineAsset } from '@forgeax/engine-types';
 import type { EngineMetrics } from './engine-metrics';
 import type { RecoverError } from './errors/recover';
 import type { RenderError } from './errors/render';
@@ -85,18 +85,19 @@ export type RendererLostListener = (info: RendererLostInfo) => void;
  * As such it is an external wire alias (AGENTS.md Change stance add-only wire
  * exception), NOT the eliminated cross-cluster `RuntimeError` SSOT (D-3).
  *
- * Composition = `RhiError | RenderError | AssetRuntimeError | SkinError |
- * PostProcessError`. This equals the pre-decomposition
- * `RhiError | RuntimeError | PostProcessError` exactly: `RuntimeError` was
- * `RenderError | AssetRuntimeError | SkinError` (27 classes). `RecoverError`
- * and `EngineEnvironmentError` are intentionally excluded — neither is ever
- * fired through `onError` (`RecoverError` returns from `recover()`,
- * `EngineEnvironmentError` throws at construction), matching the original
- * `RuntimeError` union which excluded both (OOS-3 behavior equivalence).
+ * Composition = `RhiError | ImageError | RenderError | AssetRuntimeError | SkinError |
+ * PostProcessError`. `RuntimeError` was previously the composed
+ * `RenderError | AssetRuntimeError | SkinError` (27 classes); `ImageError` is
+ * now included so asset-capability refusals remain visible at this boundary.
+ * `RecoverError` and `EngineEnvironmentError` are intentionally excluded —
+ * neither is ever fired through `onError` (`RecoverError` returns from
+ * `recover()`, `EngineEnvironmentError` throws at construction), matching the
+ * original `RuntimeError` union which excluded both (OOS-3 behavior
+ * equivalence).
  *
  * AI consumers do `switch (err.code)` over the union: the disjoint
- * `RhiErrorCode` / `RenderErrorCode` / `AssetRuntimeErrorCode` / `SkinErrorCode`
- * / `PostProcessErrorCode` literal sets let TS narrow each arm to the concrete
+ * `RhiErrorCode` / `ImageErrorCode` / `RenderErrorCode` / `AssetRuntimeErrorCode`
+ * / `SkinErrorCode` / `PostProcessErrorCode` literal sets let TS narrow each arm to the concrete
  * class (charter P3 union discoverability — every fan-out member is reachable
  * in an exhaustive switch, no `as any` escape). Example:
  *
@@ -114,6 +115,7 @@ export type RendererLostListener = (info: RendererLostInfo) => void;
  */
 export type RendererError =
   | RhiError
+  | ImageError
   | RenderError
   | AssetRuntimeError
   | SkinError

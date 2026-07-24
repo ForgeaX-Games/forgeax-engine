@@ -369,7 +369,12 @@ export async function generateMipmaps(
     const pass = encoder.beginRenderPass({
       label: `mipmap-pass-${i}`,
       colorAttachments: [
-        { view: dstViewRes.value, clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store' },
+        {
+          view: dstViewRes.value,
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        },
       ],
     });
     pass.setPipeline(pipelineRes.value);
@@ -462,7 +467,12 @@ export function blitMipmapsSync(
     const pass = encoder.beginRenderPass({
       label: `mipmap-pass-${i}`,
       colorAttachments: [
-        { view: dstViewRes.value, clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store' },
+        {
+          view: dstViewRes.value,
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        },
       ],
     });
     pass.setPipeline(pipeline);

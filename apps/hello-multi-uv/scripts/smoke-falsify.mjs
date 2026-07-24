@@ -2,20 +2,18 @@
 // smoke-falsify.mjs -- feat-20260629-multi-uv-set-support m5-w4
 //
 // Visual falsification variant for AC-10. Constructs the same 2-UV-set
-// procedural plane but swaps uv1 = uv0 in the interleaved buffer,
-// effectively replacing every checkerboard uv1 value with the uniform
-// grid uv0. The expected outcome is that the visual differentiation
-// (maxDiff across quad samples) drops below the threshold -- confirming
-// that the AC-10 smoke signal genuinely comes from uv1 data, not from
-// unrelated rendering noise.
+// procedural plane but replaces uv1 with a constant value. The expected
+// outcome is that the visual differentiation (maxDiff across quad samples)
+// drops below the threshold -- confirming that the AC-10 smoke signal
+// genuinely comes from uv1 data, not from unrelated rendering noise.
 //
 // This script does NOT run in CI (plan-strategy §5.4). It is executed
 // manually during M5 implement to verify falsification sensitivity.
 //
 // Accepted outcomes:
-//   (a) FAIL_WITH_LOW_DIFF: maxDiff < 0.03 -- uv1 swap killed the
+//   (a) FAIL_WITH_LOW_DIFF: maxDiff < 0.03 -- constant uv1 killed the
 //       checkerboard variation; AC-10 smoke is falsifiable. CORRECT.
-//   (b) PASS_WITH_HIGH_DIFF: maxDiff >= 0.03 despite the swap -- means
+//   (b) PASS_WITH_HIGH_DIFF: maxDiff >= 0.03 despite the collapse -- means
 //       the checkerboard difference was not from uv1 data; AC-10
 //       must be arbitrated by human Read(image). DEGENERATE.
 
@@ -140,9 +138,9 @@ for (let iy = 0, vi = 0; iy < VY; iy++) {
     vertices[b + 9] = 0;
     vertices[b + 10] = 0;
     vertices[b + 11] = 1;
-    // FALSIFICATION: swap uv1 = uv0 (instead of checkerboard)
-    vertices[b + 12] = gridU;
-    vertices[b + 13] = gridV;
+    // FALSIFICATION: collapse uv1 to a constant instead of the checkerboard.
+    vertices[b + 12] = 0;
+    vertices[b + 13] = 0;
   }
 }
 
@@ -184,7 +182,7 @@ for (let i = 0; i < vertexCount; i++) {
   uv1[i * 2 + 1] = vertices[b + 13];
 }
 
-console.log('[falsify-smoke] uv1 data swapped to uv0 values -- checkerboard should vanish');
+console.log('[falsify-smoke] uv1 data collapsed to zero -- checkerboard should vanish');
 
 // --- drive engine ---
 
@@ -193,11 +191,26 @@ const enginePkg = await import('@forgeax/engine-runtime');
 const { Camera, createRenderer, DirectionalLight, MeshFilter, MeshRenderer, Transform } = enginePkg;
 
 const world = new World();
-const __MESH_ID = 100;
+const DEMO_MATERIAL_SHADER_PATH = 'hello-multi-uv::multi-uv-demo';
+const meshAsset = {
+  kind: 'mesh',
+  vertices,
+  indices,
+  attributes: { position: positions, normal: normals, uv: uvs, tangent: tangents, uv1 },
+  submeshes: [{ indexOffset: 0, indexCount: indices.length, vertexCount, topology: 'triangle-list' }],
+  aabb: new Float32Array([-HALF_W, -HALF_H, -0.01, HALF_W, HALF_H, 0.01]),
+};
+const materialAsset = {
+  kind: 'material',
+  passes: [{ name: 'Forward', shader: DEMO_MATERIAL_SHADER_PATH, tags: { LightMode: 'Forward' }, queue: 2000 }],
+  paramValues: { baseColor: [0.7, 0.7, 0.7] },
+};
+const meshHandle = world.allocSharedRef('MeshAsset', meshAsset);
+const matHandle = world.allocSharedRef('MaterialAsset', materialAsset);
 world.spawn(
-  { component: Transform, data: { pos: [0, 0, 0.5], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
-  { component: MeshFilter, data: { assetHandle: __MESH_ID } },
-  { component: MeshRenderer, data: {} },
+  { component: Transform, data: { pos: [0, 0, 0.5], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
+  { component: MeshFilter, data: { assetHandle: meshHandle } },
+  { component: MeshRenderer, data: { materials: [matHandle] } },
 );
 world.spawn(
   { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1]} },
@@ -211,8 +224,11 @@ world.spawn({
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 let MANIFEST_URL;
+let manifestParsed;
 try {
-  MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MANIFEST_PATH, 'utf8'))}`;
+  const manifestRaw = readFileSync(MANIFEST_PATH, 'utf8');
+  MANIFEST_URL = `data:application/json,${encodeURIComponent(manifestRaw)}`;
+  manifestParsed = JSON.parse(manifestRaw);
 } catch {
   console.error('[falsify-smoke] FAIL - manifest.json not found. Run: pnpm --filter @forgeax/hello-multi-uv build first');
   process.exit(1);
@@ -234,19 +250,30 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-renderer.assets.catalog('guid:0a0a0a0a-0000-0000-0000-0a0a0a0a0a0a', {
-  kind: 'mesh',
-  vertices,
-  indices,
-  attributes: { position: positions, normal: normals, uv: uvs, tangent: tangents, uv1 },
-  submeshes: [{ indexOffset: 0, indexCount: indices.length, vertexCount, topology: 'triangle-list' }],
-  aabb: new Float32Array([-HALF_W, -HALF_H, -0.01, HALF_W, HALF_H, 0.01]),
+const errors = [];
+renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+
+const demoShaderEntry = (manifestParsed.materialShaders ?? []).find(
+  (entry) => entry?.identifier === DEMO_MATERIAL_SHADER_PATH,
+);
+if (!demoShaderEntry) {
+  console.error(`[falsify-smoke] FAIL - manifest missing ${DEMO_MATERIAL_SHADER_PATH}`);
+  process.exit(1);
+}
+const demoComposedWgsl = demoShaderEntry.composedWgsl.includes('\n')
+  ? demoShaderEntry.composedWgsl
+  : readFileSync(resolve(here, '..', 'dist', 'shaders', demoShaderEntry.composedWgsl.replace(/^\.\//, '')), 'utf8');
+renderer.shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
+  source: demoComposedWgsl,
+  paramSchema: [{ name: 'baseColor', type: 'color' }],
+  bindingLayout: [],
 });
-renderer.assets.catalog('guid:1b1b1b1b-0000-0000-0000-1b1b1b1b1b1b', {
-  kind: 'material',
-  passes: [{ name: 'Forward', shader: 'forgeax::default-standard-pbr', tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues: { baseColor: [0.7, 0.7, 0.7], metallic: 0, roughness: 0.8 },
-});
+
+const yieldTick = () => new Promise((resolve) => setTimeout(resolve, 0));
+for (let warm = 0; warm < 16; warm++) {
+  renderer.draw([world], { owner: 0 });
+  await yieldTick();
+}
 
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
   const r = renderer.draw([world], { owner: 0 });
@@ -299,15 +326,19 @@ console.log(`[falsify-smoke] maxDiff=${maxDiff.toFixed(4)}`);
 sharedDevice.destroy?.();
 delete globalThis.navigator.gpu;
 
-// Falsification verdict: when uv1==uv0, the PBR shader multiplies albedo by
-// (uv1*0.5+0.5) = (uv0*0.5+0.5) -- a modulation based solely on the uniform
-// grid uv0. The checkerboard pattern is gone, so pixel variance across grid
-// regions should be very low.
+if (errors.length > 0) {
+  console.error(`[falsify-smoke] FAIL - renderer errors: ${errors.map((error) => error.code).join(', ')}`);
+  process.exit(1);
+}
+
+// Falsification verdict: the custom multi-UV shader paints uv1 directly. With
+// uv1 collapsed to zero, every covered sample has the same shader input and
+// the checkerboard variance must disappear.
 if (maxDiff < 0.03) {
-  console.log('[falsify-smoke] PASS_FALSIFY - uv1 swap killed checkerboard variance (maxDiff < 0.03). AC-10 smoke is falsifiable.');
+  console.log('[falsify-smoke] PASS_FALSIFY - constant uv1 killed checkerboard variance (maxDiff < 0.03). AC-10 smoke is falsifiable.');
   process.exit(0);
 } else {
-  console.log(`[falsify-smoke] FAIL_FALSIFY - uv1 swap did NOT kill checkerboard variance (maxDiff=${maxDiff.toFixed(4)} >= 0.03).`);
+  console.log(`[falsify-smoke] FAIL_FALSIFY - constant uv1 did NOT kill checkerboard variance (maxDiff=${maxDiff.toFixed(4)} >= 0.03).`);
   console.log('[falsify-smoke] AC-10 smoke signal is NOT sensitive to uv1 data. Human Read(image) arbitration required.');
   process.exit(1);
 }

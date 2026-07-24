@@ -53,6 +53,7 @@ import { runPlugins } from '@forgeax/engine-plugin';
 import type { RhiInstance } from '@forgeax/engine-rhi';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
 import type { CreateShaderModuleFn, DebugRhiInstance } from '@forgeax/engine-rhi-debug';
+import * as engineRuntimeModule from '@forgeax/engine-runtime';
 import {
   animationPlugin,
   CAMERA_PROJECTION_PERSPECTIVE,
@@ -224,14 +225,13 @@ async function createAppFromCanvas(
   const processEnv = (globalThis as { process?: { env?: { FORGEAX_ENGINE_RHI_DEBUG?: string } } })
     .process?.env;
   const rhiDebugFlag = resolveRhiDebugFlag(importMetaEnv, processEnv);
+  const nav: { gpu?: unknown } | undefined =
+    typeof globalThis !== 'undefined'
+      ? (globalThis as { navigator?: { gpu?: unknown } }).navigator
+      : undefined;
+  const hasWebGPU = nav !== undefined && 'gpu' in nav && nav.gpu !== undefined;
   if (rhiDebugFlag === '1') {
     // Select backend: same auto-detect logic as createRenderer's loadBackendPack.
-    const nav: { gpu?: unknown } | undefined =
-      typeof globalThis !== 'undefined'
-        ? (globalThis as { navigator?: { gpu?: unknown } }).navigator
-        : undefined;
-    const hasWebGPU = nav !== undefined && 'gpu' in nav && nav.gpu !== undefined;
-
     let realBackend: Record<string, unknown>;
     // Literal import specifiers per branch (not a computed `backendPkg`
     // variable). vite's import-analysis can only resolve a string-literal
@@ -399,16 +399,45 @@ async function createAppFromCanvas(
     };
     const capturedDevice = debugInstWithDevice._getCapturedDevice();
     if (capturedDevice !== undefined) {
-      const adapterMod = (await import(
-        /* @vite-ignore */ '@forgeax/engine-rhi-debug/adapter'
-      )) as unknown as {
-        createDebugRhiAdapter: (args: { debugInst: DebugRhiInstance; device: unknown }) => unknown;
-      };
-      _debugAdapter = adapterMod.createDebugRhiAdapter({
-        debugInst: _debugInst,
-        // biome-ignore lint/suspicious/noExplicitAny: RhiDevice opaque branded type round-trips through unknown
-        device: capturedDevice as any,
-      });
+      if (hasWebGPU) {
+        // The Node adapter owns fs/path-backed replay and cannot run in a
+        // browser bundle. Keep the same DebugRhiAdapter capture shape, but use
+        // the browser-safe in-memory capture + dev-server upload seam here.
+        const captureMod = await import('@forgeax/engine-rhi-debug/capture-browser');
+        _debugAdapter = {
+          captureFrames: async (frames: number, label?: string) => {
+            const uploaded = await captureMod.captureAndUpload(_debugInst, frames, label);
+            return {
+              tapes: [
+                {
+                  frameIdx: 0,
+                  runId: uploaded.runId,
+                  tapePath: uploaded.tapePath,
+                  reportPath: uploaded.reportPath,
+                },
+              ],
+            };
+          },
+          inspectAt: async () => {
+            throw new Error('browser debug adapter does not expose Node-only replay inspection');
+          },
+          replayDispose: async () => ({ ok: true }),
+        };
+      } else {
+        const adapterMod = (await import(
+          /* @vite-ignore */ '@forgeax/engine-rhi-debug/adapter'
+        )) as unknown as {
+          createDebugRhiAdapter: (args: {
+            debugInst: DebugRhiInstance;
+            device: unknown;
+          }) => unknown;
+        };
+        _debugAdapter = adapterMod.createDebugRhiAdapter({
+          debugInst: _debugInst,
+          // biome-ignore lint/suspicious/noExplicitAny: RhiDevice opaque branded type round-trips through unknown
+          device: capturedDevice as any,
+        });
+      }
     }
   }
 
@@ -635,6 +664,7 @@ async function createAppFromCanvas(
             world,
             renderer,
             assets: renderer.assets,
+            runtimeModule: engineRuntimeModule,
             ...(_debugAdapter !== undefined ? { debugAdapter: _debugAdapter } : {}),
             port: bridgePort,
           }),

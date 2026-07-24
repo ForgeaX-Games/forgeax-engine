@@ -49,6 +49,8 @@ describe('bevy-demo.mjs', () => {
     expect(pkg.forgeax.smokeInvocation).toBeUndefined();
     expect(pkg.forgeax.metrics.gate).toMatchObject({ enabled: false });
     expect(readFileSync(join(dir, 'vite.config.ts'), 'utf8')).toContain('forgeaxShader');
+    expect(readFileSync(join(dir, 'vite.config.ts'), 'utf8')).toContain('vitePluginRhiDebug');
+    expect(pkg.devDependencies['@forgeax/engine-vite-plugin-rhi-debug']).toBe('workspace:*');
     expect(readFileSync(join(dir, 'src', 'vite-env.d.ts'), 'utf8')).toContain(
       "declare module 'virtual:forgeax/bundler'",
     );

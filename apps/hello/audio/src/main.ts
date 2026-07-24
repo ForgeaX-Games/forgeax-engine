@@ -1,4 +1,5 @@
-// apps/hello/audio -- spacebar one-shot SFX + movable 3D listener demo
+// apps/hello/audio -- spacebar one-shot SFX + movable 3D listener + collision
+// cleanup demo
 // (feat-20260529-hello-audio-demo-with-spacebar-one-shot-sfx-playba / M3 / w15,
 //  updated feat-20260619 M3 w15: audioTickSystem is now auto-registered).
 //
@@ -38,8 +39,16 @@ import type { App } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { Time, Update } from '@forgeax/engine-ecs';
 import { AudioListener, AudioSource } from '@forgeax/engine-audio';
-import { audioPlugin } from '@forgeax/engine-audio-webaudio';
+import { audioPlugin, WebAudioEngine } from '@forgeax/engine-audio-webaudio';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import {
+  Collider,
+  ColliderShapeValue,
+  CollidingEntities,
+  physicsPlugin,
+  RigidBody,
+  RigidBodyTypeValue,
+} from '@forgeax/engine-physics';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { Camera, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
 import type { AudioClipAsset, Handle } from '@forgeax/engine-types';
@@ -51,7 +60,7 @@ if (!canvas) throw new Error('hello-audio: missing <canvas id="app"> in index.ht
 // M3 (w16): input is now in the canvas-form default set (D-2); audioPlugin()
 // signals the app layer to auto-create the WebAudioBackend before runPlugins.
 const appRes = await createApp(canvas, {
-  plugins: [audioPlugin()],
+  plugins: [audioPlugin(), physicsPlugin('rapier-3d')],
 }, forgeaxBundlerAdapter());
 if (!appRes.ok) {
   if (appRes.error instanceof EngineEnvironmentError) {
@@ -124,6 +133,22 @@ const emitterEntity = world
   )
   .unwrap();
 
+// Static floor for the post-gesture collision/audio journey. It is deliberately
+// authored as normal ECS physics data so the demo exercises the same collision
+// boundary as a consumer game, rather than calling the backend directly.
+world
+  .spawn(
+    { component: Transform, data: { pos: [0, -1, 0], scale: [8, 0.5, 8] } },
+    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+    { component: MeshRenderer, data: {} },
+    { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
+    {
+      component: Collider,
+      data: { shape: ColliderShapeValue.cuboid, halfExtents: [0.5, 0.5, 0.5] },
+    },
+  )
+  .unwrap();
+
 // Step 2b: the same GUID -> payload path used by generic editor bindings.
 let sfxClipHandle: Handle<'AudioClipAsset', 'shared'> = HANDLE_NONE;
 const sfxGuid = AssetGuid.parse(SFX_GUID);
@@ -158,6 +183,14 @@ const sfxClipHandleLoaded = () => sfxClipHandle;
 const overlayEl = document.querySelector<HTMLDivElement>('#overlay');
 const listenerEntity = cameraEntity;
 const emitterEntityId = emitterEntity;
+const audioEngine = world.getResource<WebAudioEngine>('AudioEngine');
+let previousActiveSourceCount = 0;
+let audioStarts = 0;
+let collisionDetected = false;
+let collisionAudioStarted = false;
+let collisionCleanup = false;
+let collisionActor: import('@forgeax/engine-ecs').EntityHandle | undefined;
+let collisionAudioAge = 0;
 
 // Camera movement speed (units/second).
 const MOVE_SPEED = 5;
@@ -168,6 +201,11 @@ world
     queries: [],
     fn: () => {
       const _dt = world.getResource(Time).delta;
+      const audioState = audioEngine.getState();
+      if (audioState.activeSourceCount > previousActiveSourceCount) {
+        audioStarts += audioState.activeSourceCount - previousActiveSourceCount;
+      }
+      previousActiveSourceCount = audioState.activeSourceCount;
       // Re-read clip handle in case asset loaded after boot.
   const currentClip = sfxClipHandleLoaded();
 
@@ -216,6 +254,70 @@ world
         bus: 'sfx',
       });
       spacebarReArm = true;
+
+      // The same user gesture also starts the physics leg. The actor owns its
+      // AudioSource so despawning it proves both Collider and audio cleanup.
+      if (collisionActor === undefined) {
+        collisionActor = world
+          .spawn(
+            { component: Transform, data: { pos: [0, 3, 0] } },
+            { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+            { component: MeshRenderer, data: {} },
+            {
+              component: RigidBody,
+              data: { type: RigidBodyTypeValue.dynamic, mass: 1, linearDamping: 0.01 },
+            },
+            {
+              component: Collider,
+              data: {
+                shape: ColliderShapeValue.sphere,
+                radius: 0.5,
+                restitution: 0,
+                friction: 0.5,
+              },
+            },
+            { component: CollidingEntities, data: { entities: [] } },
+            {
+              component: AudioSource,
+              data: {
+                clip: currentClip,
+                playing: false,
+                spatialBlend: 1.0,
+                bus: 'sfx',
+              },
+            },
+          )
+          .unwrap();
+        collisionAudioAge = 0;
+      }
+    }
+  }
+
+  // --- Collision -> spatial audio -> entity cleanup journey ---
+  if (collisionActor !== undefined) {
+    const contacts = world.get(collisionActor, CollidingEntities);
+    const overlaps = contacts.ok ? Array.from(contacts.value.entities as ArrayLike<number>) : [];
+    if (overlaps.length > 0) {
+      collisionDetected = true;
+      if (!collisionAudioStarted) {
+        world.set(collisionActor, AudioSource, {
+          clip: currentClip,
+          playing: true,
+          spatialBlend: 1.0,
+          bus: 'sfx',
+        });
+        collisionAudioStarted = true;
+        collisionAudioAge = 0;
+      }
+    }
+    // Give audioTickSystem a few frames to observe the true edge, then use the
+    // normal ECS despawn path. Audio cleanup is intentionally inferred from the
+    // backend active-source count below, not from a backend-specific call.
+    if (collisionAudioStarted) collisionAudioAge += 1;
+    if (collisionAudioStarted && collisionAudioAge > 8) {
+      world.despawn(collisionActor);
+      collisionActor = undefined;
+      collisionCleanup = true;
     }
   }
 
@@ -239,7 +341,9 @@ world
       overlayEl.innerHTML = [
         '<b>spacebar</b> = one-shot SFX &amp; resume AudioContext<br />',
         '<b>WASD</b> = move listener<br />',
-        `distance = ${distance} | pan = ${pan}`,
+        `distance = ${distance} | pan = ${pan}<br />`,
+        `<span id="physics-status">collision=${collisionDetected ? 1 : 0} | cleanup=${collisionCleanup ? 1 : 0}</span><br />`,
+        `<span id="audio-status">audio=${audioState.contextState} | active=${audioState.activeSourceCount} | starts=${audioStarts}</span>`,
       ].join('');
     }
   }

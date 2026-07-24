@@ -18,6 +18,7 @@ import type {
   // @ts-expect-error - StartConsoleOptions must not be exported from @forgeax/engine-runtime
   StartConsoleOptions as _StartConsoleOptionsRemoved,
 } from '@forgeax/engine-runtime';
+import type { ImageError } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
 import type { EquirectProjectionFailedError, RenderError } from '../errors/render';
 import type { SkinError } from '../errors/skin';
@@ -50,14 +51,14 @@ describe('w5td runtime surface - Renderer.startConsole literally absent (AC-11)'
   });
 });
 
-describe('onError channel widened to RhiError | RuntimeError | PostProcessError (Round-2 [F-3])', () => {
+describe('onError channel includes concrete image capability errors', () => {
   it('RendererErrorListener parameter is the RhiError | RuntimeError | PostProcessError union', () => {
     // The listener parameter must accept all three error families so the
-    // 'equirect-projection-failed' RuntimeError + 'ssao-storage-buffer-unavailable'
+    // 'equirect-projection-failed' RuntimeError
     // PostProcessError fan out with no `as any` cast.
     expectTypeOf<RendererErrorListener>()
       .parameter(0)
-      .toEqualTypeOf<RhiError | RuntimeLayerError | PostProcessError>();
+      .toEqualTypeOf<RhiError | ImageError | RuntimeLayerError | PostProcessError>();
   });
 
   it('exhaustive switch narrows RuntimeError arms to the concrete class', () => {

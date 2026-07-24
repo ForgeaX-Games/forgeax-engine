@@ -772,6 +772,62 @@ import { WebAudioEngine } from '../web-audio-engine';
       engine.destroy();
     });
 
+    it('plays an initially-true source once on its first observation', () => {
+      const buffer = makeMockAudioBuffer();
+      const engine = new WebAudioEngine();
+      const playSpy = vi.spyOn(engine, 'play');
+      const entity = encodeEntity(0, 0);
+      const mockRegistry = {
+        get: vi.fn().mockReturnValue({ ok: true, value: { kind: 'audio', buffer } }),
+      };
+      const mockWorld = buildMockWorld(
+        entity,
+        () => true,
+        42,
+        mockRegistry,
+        // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type cast for unit test
+      ) as any;
+
+      audioTickSystem(mockWorld, engine);
+      audioTickSystem(mockWorld, engine);
+
+      expect(playSpy).toHaveBeenCalledTimes(1);
+      engine.destroy();
+    });
+
+    it('retries an initially-true source after its clip becomes ready', () => {
+      const buffer = makeMockAudioBuffer();
+      const engine = new WebAudioEngine();
+      const playSpy = vi.spyOn(engine, 'play');
+      const entity = encodeEntity(0, 0);
+      let clipReady = false;
+      const mockRegistry = {
+        get: vi
+          .fn()
+          .mockImplementation(() =>
+            clipReady
+              ? { ok: true, value: { kind: 'audio', buffer } }
+              : { ok: false, error: { code: 'asset-not-found' } },
+          ),
+      };
+      const mockWorld = buildMockWorld(
+        entity,
+        () => true,
+        42,
+        mockRegistry,
+        // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type cast for unit test
+      ) as any;
+
+      audioTickSystem(mockWorld, engine);
+      expect(playSpy).not.toHaveBeenCalled();
+
+      clipReady = true;
+      audioTickSystem(mockWorld, engine);
+
+      expect(playSpy).toHaveBeenCalledTimes(1);
+      engine.destroy();
+    });
+
     it('passes the === registered AudioBuffer as second argument to backend.play', () => {
       const buffer = makeMockAudioBuffer();
 
@@ -2298,23 +2354,15 @@ import { WebAudioEngine } from '../web-audio-engine';
         audioTickSystem(worldA, engineA);
         expect(engineA.getActiveSourceCount()).toBe(1);
 
-        // Phase 3: A tick, playing=false -> true->false edge -> stop
-        // This stores prevPlaying=false for entityId in tick state.
-        playingA = false;
-        audioTickSystem(worldA, engineA);
-        expect(engineA.getActiveSourceCount()).toBe(0);
-
-        // Phase 4: B FIRST tick, entity playing=true.
-        // Instance-scoped (desired): engineB.tickStates empty -> first obs
-        //   returns prev=current=true -> no edge -> no play.
-        // Module-shared (current): module tickStates[entityId].prevPlaying=false
-        //   -> false->true edge -> play called.
+        // Phase 3: B FIRST tick, entity playing=true.
+        // Instance-scoped: engineB has no history, so initial true is a
+        // play-start edge even though engineA has already observed this id.
         playingB = true;
         audioTickSystem(worldB, engineB);
 
-        // DESIRED assertion (will FAIL with module singleton):
-        // B has no prior tick history -> no play triggered.
-        expect(engineB.getActiveSourceCount()).toBe(0);
+        expect(engineB.getActiveSourceCount()).toBe(1);
+        engineA.destroy();
+        engineB.destroy();
       });
 
       it('module top-level does not expose tickStates/prevFrameEntities', async () => {
@@ -2340,7 +2388,7 @@ import { WebAudioEngine } from '../web-audio-engine';
 
         // Engine A: build tick history then destroy
         const engineA = new WebAudioEngine();
-        let playingA = true;
+        const playingA = true;
         const worldA = buildTickTestWorld(
           entityId,
           () => playingA,
@@ -2349,15 +2397,11 @@ import { WebAudioEngine } from '../web-audio-engine';
           // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type for unit test
         ) as any;
 
-        // Tick A-1: first observation, playing=true -> no edge, prev=true stored
+        // Tick A-1: first observation, playing=true -> initial play-start edge
         audioTickSystem(worldA, engineA);
-        expect(engineA.getActiveSourceCount()).toBe(0);
+        expect(engineA.getActiveSourceCount()).toBe(1);
 
-        // Tick A-2: playing=false -> true->false edge -> stop, prev=false stored
-        playingA = false;
-        audioTickSystem(worldA, engineA);
-
-        // Destroy engine A (module singleton tickStates persists!)
+        // Destroy engine A; its instance-scoped tick state must not affect B.
         engineA.destroy();
 
         // Engine B: fresh instance
@@ -2371,15 +2415,11 @@ import { WebAudioEngine } from '../web-audio-engine';
           // biome-ignore lint/suspicious/noExplicitAny: mock World duck-type for unit test
         ) as any;
 
-        // B FIRST tick, entity playing=true.
-        // Instance-scoped (desired): engineB.tickStates empty -> first obs
-        //   returns prev=current=true -> no edge -> no play.
-        // Module-shared (current): module tickStates[entityId].prevPlaying=false
-        //   -> false->true edge -> play called.
+        // B FIRST tick, entity playing=true -> initial play-start edge.
         audioTickSystem(worldB, engineB);
 
-        // DESIRED: B starts clean, no false->true edge misdetection.
-        expect(engineB.getActiveSourceCount()).toBe(0);
+        expect(engineB.getActiveSourceCount()).toBe(1);
+        engineB.destroy();
       });
     });
 
@@ -2414,7 +2454,7 @@ import { WebAudioEngine } from '../web-audio-engine';
         audioTickSystem(worldA, engineA);
         expect(engineA.getActiveSourceCount()).toBe(0);
 
-        // Tick B-1: entityB playing=true, first obs -> no edge
+        // Tick B-1: entityB playing=true, first obs -> initial play-start edge
         // BUT cleanupDespawnedEntities sees prevFrameEntities={entityA} from A
         // and currentEntityIds=[entityB].
         // removed=[entityA] -> calls engineB.stop(entityA) (no-op on B)

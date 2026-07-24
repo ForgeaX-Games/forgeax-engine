@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 const repoRoot = resolve(__dirname, '..', '..');
 const runner = resolve(repoRoot, 'scripts/gauntlet.mjs');
 const fixtureRoot = resolve(__dirname, 'fixtures/gauntlet/happy');
+const invalidEvidenceRoot = resolve(__dirname, 'fixtures/gauntlet/invalid-evidence');
 const artifactRoots: string[] = [];
 
 afterEach(() => {
@@ -33,6 +34,10 @@ describe('gauntlet runner', () => {
     expect(evidence.oracle.passed).toBe(true);
     expect(evidence.environment.node).toMatch(/^v/);
     expect(evidence.phaseInputs).toEqual(['baseline']);
+    expect(evidence.evidence).toEqual({
+      frontDoors: ['dawn-node'],
+      legs: ['semantic', 'gpu'],
+    });
     expect(readFileSync(resolve(artifacts, 'hello-cube-dawn', 'stdout.log'), 'utf8')).toContain(
       '[hello-cube] backend=webgpu',
     );
@@ -50,6 +55,15 @@ describe('gauntlet runner', () => {
     });
     expect(audit.packages).toEqual({ '@forgeax/engine-ecs': 1, '@forgeax/engine-runtime': 1 });
     expect(audit.risks).toEqual({ baseline: 1, gpu: 1 });
+    expect(audit.frontDoors).toEqual({ 'dawn-node': 1 });
+    expect(audit.evidenceLegs).toEqual({ gpu: 1, semantic: 1 });
+  });
+
+  it('rejects evidence legs outside the roadmap contract', () => {
+    const result = run(['audit', '--root', invalidEvidenceRoot, '--json']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('gauntlet-evidence-leg-unknown');
   });
 
   it('selects the level-switch lifecycle journey and exposes its pressure phases', () => {

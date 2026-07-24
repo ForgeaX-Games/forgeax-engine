@@ -3,13 +3,14 @@
 // feat-20260612-hdrp-ssao.
 //
 // requirements AC-07: 4 boundary cases must be tested.
-// plan-strategy D-4: g-buffer missing = graph-level skip; storageBuffer=false fires error.
+// plan-strategy D-4: g-buffer missing = graph-level skip; the kernel is
+// uniform-backed so the WebGL2 capability boundary is not a skip.
 // TDD: RED before w15+w16 (addSsaoPasses + boundary guards not yet implemented).
 //
 // Cases:
 //   (1) g-buffer missing -> addSsaoPasses silently skips (no pass wiring, no crash)
 //   (2) non-HDRP pipeline -> config.ssao is ignored (URP with config.ssao produces no SSAO pass)
-//   (3) storageBuffer=false -> PostProcessError('ssao-storage-buffer-unavailable') fired
+//   (3) storageBuffer=false -> SSAO buffers still allocate through UBOs
 //   (4) config.ssao.enabled=false -> zero ssao-* passes + zero allocation
 
 import { RenderGraph } from '@forgeax/engine-render-graph';
@@ -182,28 +183,16 @@ describe('SSAO boundary behavior (M3 / w14)', () => {
     expect(ssaoPassNames).toHaveLength(0);
   });
 
-  it('(3) storageBuffer=false -> fires PostProcessError + returns null (graph-level skip)', () => {
+  it('(3) storageBuffer=false -> allocates SSAO buffers through UBOs', () => {
     const { runtime, createBuffer, createTexture } = makeMockRuntime({
       storageBuffer: false,
     });
 
     const result = getOrCreateSsaoBuffers(runtime);
-    expect(result).toBeNull();
-
-    // No GPU resources allocated
-    expect(createBuffer.mock.calls.length).toBe(0);
-    expect(createTexture.mock.calls.length).toBe(0);
-
-    // Round-2 [F-3]: getOrCreateSsaoBuffers fires a structured PostProcessError
-    // with code 'ssao-storage-buffer-unavailable' (warn-once per runtime),
-    // honouring requirements boundary case 4 + plan D-4 + AC-07 + charter P3.
-    // The null return is still the graph-level skip signal; the fired error
-    // is the AI-user-facing diagnostic that says "this device cannot run SSAO".
-    expect(runtime.errorRegistry.fire).toHaveBeenCalledTimes(1);
-    const fired = (runtime.errorRegistry.fire as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
-      | { code?: string }
-      | undefined;
-    expect(fired?.code).toBe('ssao-storage-buffer-unavailable');
+    expect(result).not.toBeNull();
+    expect(createBuffer).toHaveBeenCalledTimes(2);
+    expect(createTexture).toHaveBeenCalledTimes(1);
+    expect(runtime.errorRegistry.fire).not.toHaveBeenCalled();
   });
 
   it('(4) config.ssao.enabled=false -> zero ssao-* passes (caller-level skip)', () => {

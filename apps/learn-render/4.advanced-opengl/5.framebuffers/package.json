@@ -11,7 +11,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "smoke": "node scripts/smoke-dawn.mjs",
-    "smoke:browser": "node scripts/smoke-browser.mjs"
+    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "smoke:browser-live": "node scripts/smoke-browser-live.mjs"
   },
   "forgeax": {
     "metrics": {

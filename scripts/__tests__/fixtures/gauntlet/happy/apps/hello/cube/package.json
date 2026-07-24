@@ -23,6 +23,15 @@
       "phaseInputs": [
         "baseline"
       ],
+      "evidence": {
+        "frontDoors": [
+          "dawn-node"
+        ],
+        "legs": [
+          "semantic",
+          "gpu"
+        ]
+      },
       "oracle": {
         "stdoutIncludes": [
           "[hello-cube] backend=webgpu"

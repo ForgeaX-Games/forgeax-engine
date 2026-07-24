@@ -48,6 +48,7 @@
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",
+    "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",
     "vite": "8.0.10"

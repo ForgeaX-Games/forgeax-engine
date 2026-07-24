@@ -39,11 +39,18 @@ if (!canvas) {
   throw new Error('[custom-importer] missing <canvas id="app"> in index.html');
 }
 
+function setAssetStatus(status: string): void {
+  const element = document.querySelector<HTMLElement>('#asset-status');
+  if (element) element.textContent = `asset: ${status}`;
+}
+
 bootstrap(canvas).catch((err: unknown) => {
+  setAssetStatus('bootstrap failed');
   console.error('[custom-importer] bootstrap error:', err);
 });
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
+  setAssetStatus('loading');
   const appRes = await createApp(
     target,
     {},
@@ -80,8 +87,10 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // into the engine's closed union.
   const blob = await loadReelGameBlob(assets);
   if (blob === undefined) {
+    setAssetStatus('load failed');
     console.error('[custom-importer] reel-game blob did not load; scene will be empty');
   } else {
+    setAssetStatus(`loaded title=${blob.title} reels=${blob.reels.length}`);
     console.warn(
       `[custom-importer] loaded reel-game blob title=${JSON.stringify(blob.title)} reels=${blob.reels.length}`,
     );

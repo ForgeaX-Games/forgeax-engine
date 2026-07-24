@@ -480,19 +480,18 @@ renderer.installPipeline(hdrpAsset).unwrap();   // D-17: POD directly, no regist
 **边界行为**：
 
 - `config.ssao.enabled === false` 或 `config.ssao` 缺省 → 零 ssao-* pass 加进 graph，零 GPU allocation（`getOrCreateSsaoBuffers` 不触发；HDRP unified BGL 仍把 binding 7/8 接到 1×1 white fallback，主机往 cluster UBO `.near_far_log.w` 写 `0`）
-- `Device.caps.storageBuffer === false` → `getOrCreateSsaoBuffers` 返回 null，SSAO 不可用但无 crash（graph-level skip）
+- `Device.caps.storageBuffer === false` → SSAO 仍使用 uniform-backed kernel，不触发 capability skip
 - g-buffer 未声明 → `addSsaoPasses` 静默跳过（graph-level skip）
 - URP pipeline 忽略 `config.ssao`（shared-config 模式，同 clusterGrid；URP 不消费该字段）
 
 **SsaoUniform 字节布局**（host SSOT：`SSAO_UNIFORM_BYTES = 256`、`SSAO_UNIFORM_INTENSITY_OFFSET = 192`）：3 mat4 (192 B) + vec4 intensityPad (16 B) + 48 B 末尾 padding，per-frame `writeBuffer` 一次性更新整块；这条 UBO 只挂在 SSAO compute pipelines 的 group(0) 上（compute shader 不读 intensityPad，但写仍保留以维持 256 B 对齐与单次 transfer）。lighting 路径上的 intensity 来源已迁到 `cluster_uniform.near_far_log.w`（见上方 binding 6 表格行）。
 
-**错误码**（`PostProcessErrorCode` closed union，8 成员；SSOT `packages/runtime/src/post-process-errors.ts`）：
+**错误码**（`PostProcessErrorCode` closed union，7 成员；SSOT `packages/runtime/src/post-process-errors.ts`）：
 
 | code | detail | 触发条件 |
 |:--|:--|:--|
 | `ssao-radius-non-positive` | `{ paramName: 'radius', value: number }` | `radius <= 0` |
 | `ssao-bias-negative` | `{ paramName: 'bias', value: number }` | `bias < 0` |
-| `ssao-storage-buffer-unavailable` | `{ missingCap: 'storageBuffer' }` | `Device.caps.storageBuffer === false` |
 | `params-size-mismatch` | `{ byteSize, actualLength }` | `postProcess.register({params})` 时 `byteSize < 16`（`.hint` 含最小 16 B 指引）或 `defaultValue.length !== byteSize`——register 阶段 fail-fast（feat-20260621 D-4） |
 | `params-update-size-mismatch` | `{ byteSize, actualLength }` | 数据驱动每帧写入时 `PostProcessParams.data` 的 byteLength !== 注册 `params.byteSize`——`dispatchFullscreenPass` 写入前 fail-fast（feat-20260621 D-4） |
 | `fullscreen-input-not-found` | `{ readsKey, passName }` | `reads` 中 key（彩色或深度）在 graph 中未声明为 color target，或声明了但缺 `TEXTURE_BINDING` usage（深度 key）。`.hint` 含 `TEXTURE_BINDING` 指引 + pipeline 切换建议——AI 用户经 `detail.readsKey` 定位未解析的 key、`detail.passName` 定位失败 pass（feat-20260702 M4） |

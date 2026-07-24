@@ -110,6 +110,8 @@ async function hmrCheck(origin, original) {
 }
 
 async function main() {
+  const previousSharedMode = process.env.FORGEAX_SHARED_APP_INPUTS_MODE;
+  process.env.FORGEAX_SHARED_APP_INPUTS_MODE = 'catalog-only';
   const tempRoot = await mkdtemp(resolve(tmpdir(), 'forgeax-blending-probe-'));
   try {
     const sharedRoot = resolve(tempRoot, 'shared-app-inputs');
@@ -129,6 +131,8 @@ async function main() {
     process.stdout.write('shared-input browser probe passed\n');
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
+    if (previousSharedMode === undefined) delete process.env.FORGEAX_SHARED_APP_INPUTS_MODE;
+    else process.env.FORGEAX_SHARED_APP_INPUTS_MODE = previousSharedMode;
   }
 }
 

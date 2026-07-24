@@ -18,6 +18,7 @@ import {
 } from '@forgeax/engine-rhi';
 import type {
   Handle,
+  ImageError,
   MaterialRenderState,
   ParamSchemaEntry,
   PassKind,
@@ -242,6 +243,12 @@ export const BUILTIN_MESH_ID_MAX = 5;
 // `slices`. Mirrors the literal in `asset-registry.ts:HANDLE_NINESLICE_QUAD`.
 export const NINESLICE_QUAD_RAW_ID = 5;
 
+function isImageError(error: unknown): error is ImageError {
+  if (typeof error !== 'object' || error === null) return false;
+  const code = (error as { readonly code?: unknown }).code;
+  return typeof code === 'string' && code.startsWith('image-');
+}
+
 export function residentTextureView(
   world: World,
   store: GpuResourceStore,
@@ -253,10 +260,13 @@ export function residentTextureView(
   if (!podRes.ok) return undefined;
   const residentRes = store.ensureResident(handle, podRes.value);
   if (!residentRes.ok) {
-    // Only RhiError fans out to the onError channel (RhiError | RuntimeError);
-    // a registered TextureAsset POD is format/colorSpace-consistent so the
-    // ImageError consistency arm never fires here. Degrade to placeholder.
-    if (residentRes.error instanceof RhiError) runtime.errorRegistry.fire(residentRes.error);
+    // Preserve the concrete asset-capability boundary on the renderer error
+    // channel. In particular, WebGL2 texture-dimension refusal must not
+    // collapse into the later debug-pink asset-not-registered fallback.
+    if (residentRes.error instanceof RhiError || isImageError(residentRes.error)) {
+      runtime.errorRegistry.fire(residentRes.error);
+    }
+    // Degrade to the placeholder view after the structured error is surfaced.
     return undefined;
   }
   return store.getTextureGpuView(handle);

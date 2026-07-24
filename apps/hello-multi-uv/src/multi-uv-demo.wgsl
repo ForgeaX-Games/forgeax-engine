@@ -1,4 +1,5 @@
 #define_import_path hello_multi_uv::multi_uv_demo
+#pragma variant_axis M3_MULTI_UV_VARIANT
 
 #import forgeax_view::common::{view, meshes, instances}
 
@@ -69,5 +70,10 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // surface colour; the demo plane's (0,0)/(1,1) checkerboard renders as
   // alternating dark / bright cells modulated by the base tint.
   let pattern = vec3<f32>(in.uv1, 0.5);
-  return vec4<f32>(demo.baseColor.rgb * pattern, demo.baseColor.a);
+#if M3_MULTI_UV_VARIANT == true
+  let variantTint = vec3<f32>(1.0, 1.0, 1.0);
+#else
+  let variantTint = vec3<f32>(0.85, 1.0, 0.85);
+#endif
+  return vec4<f32>(demo.baseColor.rgb * pattern * variantTint, demo.baseColor.a);
 }

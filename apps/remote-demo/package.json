@@ -47,6 +47,8 @@
     "@forgeax/engine-gltf": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-rhi-debug": "workspace:*",
+    "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "vite": "8.0.10",
     "@webgpu/types": "^0.1.71"

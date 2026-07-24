@@ -159,6 +159,10 @@ export function audioTickSystem(world: World, backend: AudioBackend): void {
           };
           const eid = entity as number;
           backend.play(eid, clipBuffer, opts);
+        } else {
+          // Keep the edge pending until the asynchronously loaded clip is ready.
+          const state = engine._tickStates.get(entity as number);
+          if (state) state.prevPlaying = false;
         }
       } else if (edge === 'play-stop') {
         backend.stop(entity as number);
@@ -189,7 +193,7 @@ function getPrevState(engine: WebAudioEngine, entity: EntityHandle, current: boo
   const entry = engine._tickStates.get(eid);
   if (!entry) {
     engine._tickStates.set(eid, { prevPlaying: current });
-    return current; // first observation: no edge
+    return false; // initial playing:true is a play-start edge
   }
   const prev = entry.prevPlaying;
   entry.prevPlaying = current;

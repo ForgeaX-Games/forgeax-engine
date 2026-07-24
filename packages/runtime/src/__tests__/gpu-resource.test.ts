@@ -169,7 +169,7 @@ function freshProbe(): DeviceProbe {
 const okShim = <T>(v: T) => ({ ok: true as const, value: v });
 
 // biome-ignore lint/suspicious/noExplicitAny: opaque mock GPU device surface
-function makeStoreMockDevice(probe: DeviceProbe): any {
+function makeStoreMockDevice(probe: DeviceProbe, maxTextureDimension2D = 16_384): any {
   const destroyedBufs = new WeakSet<object>();
   const destroyedTexs = new WeakSet<object>();
   return {
@@ -191,6 +191,7 @@ function makeStoreMockDevice(probe: DeviceProbe): any {
       probe.views += 1;
       return okShim({ __mock: `view-${probe.views}` });
     },
+    limits: { maxTextureDimension2D },
     destroyBuffer(buf: object): Result<void, RhiError> {
       if (destroyedBufs.has(buf)) {
         return err(
@@ -259,10 +260,10 @@ function makeRegisterCube(): (
 const shaderFactory = async (_d: any, desc: { code: string; label?: string }) =>
   ok({ __mock: 'shader', label: desc.label ?? '' }) as never;
 
-function configuredStore(probe: DeviceProbe): GpuResourceStore {
+function configuredStore(probe: DeviceProbe, maxTextureDimension2D = 16_384): GpuResourceStore {
   const store = new GpuResourceStore();
   store.configureGpuDevice(
-    makeStoreMockDevice(probe),
+    makeStoreMockDevice(probe, maxTextureDimension2D),
     shaderFactory,
     makeRegisterCube() as never,
     mockCaps,
@@ -340,6 +341,27 @@ describe('GpuResourceStore handle map narrowing (feat-20260612 M3 / w9, AC-05)',
     // narrowing applies to the texture-side entry, exercised via the public
     // destroyAll path in w10 (the texture field is private to the entry).
     expect(store.getTextureGpuView(handle)).toBeDefined();
+  });
+
+  it('rejects a texture over maxTextureDimension2D before creating a GPU handle', () => {
+    const probe = freshProbe();
+    const store = configuredStore(probe, 2048);
+    const handle = toShared<'TextureAsset'>(2049);
+
+    const res = store.ensureResident(handle, {
+      ...texturePodFixture(),
+      width: 2085,
+      height: 1573,
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.code).toBe('image-dimension-out-of-bounds');
+    const detail = res.error.detail;
+    if (detail === undefined || !('requested' in detail) || !('limit' in detail)) return;
+    expect(detail.requested).toEqual({ width: 2085, height: 1573 });
+    expect(detail.limit).toBe(2048);
+    expect(probe.textures).toBe(0);
   });
 });
 

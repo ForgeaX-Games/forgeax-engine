@@ -49,7 +49,7 @@ import {
 import type { GpuBuffer } from './gpu-resource';
 import type { GpuResourceStore } from './gpu-resource-store';
 import { validateClusterGrid } from './hdrp-pipeline';
-import { disposeInstanceBuffers } from './instance-buffer-cache';
+import { disposeInstanceBuffers, disposeTransientInstanceBuffers } from './instance-buffer-cache';
 import { PipelineError } from './pipeline-errors';
 import { PostProcessError } from './post-process-errors';
 import { type RenderFrameState, recordFrame, retirePerFrameGraph } from './record';
@@ -1386,6 +1386,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     perFrameGraph: null,
     retiredPerFrameGraphs: new Set(),
     instanceBuffers: new Map(),
+    transientInstanceBuffers: [],
     warnedZeroLightStandard: false,
     warnedMultiLightDirectional: false,
     warnedMultiLightPoint: false,
@@ -1698,12 +1699,14 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       // (NOT in RuntimeErrorCode; synchronous install-time config error).
       //
       // feat-20260608-cluster-lighting M5 / w20: HDRP caps gate.
-      // Before grid validation, check device.caps.maxStorageBuffersPerShaderStage >= 4.
-      // Caps insufficient throws HdrpCapsInsufficientError (RuntimeErrorCode member,
-      // synchronously at install time).
+      // A zero storage-buffer ceiling is the supported WebGL2 downlevel path:
+      // HDRP's cluster light list is transported through a bounded uniform
+      // array. Partial storage support (1..3 slots) is still unsupported
+      // because it cannot satisfy either the clustered or the complete
+      // uniform fallback contract.
       if (asset.pipelineId === 'forgeax::hdrp') {
         const storageBuffersCap = internals.device.limits.maxStorageBuffersPerShaderStage;
-        if (storageBuffersCap < 4) {
+        if (storageBuffersCap > 0 && storageBuffersCap < 4) {
           throw new HdrpCapsInsufficientError(
             'maxStorageBuffersPerShaderStage',
             storageBuffersCap,
@@ -1807,6 +1810,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
       // so destroy failures fire structured errors (unified per-frame +
       // dispose error strategy).
       disposeInstanceBuffers(frameState.instanceBuffers, internals.errorRegistry);
+      disposeTransientInstanceBuffers(frameState.transientInstanceBuffers, internals.errorRegistry);
       // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-2: dispose the
       // cube_array shadow atlas owned by the RenderSystem closure. The atlas
       // is per-RenderSystem (= per Renderer) and is shared transparently

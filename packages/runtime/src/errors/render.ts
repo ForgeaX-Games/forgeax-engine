@@ -155,7 +155,9 @@ export class EquirectProjectionFailedError extends Error {
 /**
  * Detail for `RuntimeErrorCode 'hdrp-caps-insufficient'`.
  *
- * Emitted at install time when `device.caps.maxStorageBuffersPerShaderStage < 4`.
+ * Emitted at install time when `device.caps.maxStorageBuffersPerShaderStage`
+ * is between 1 and 3. A value of 0 selects HDRP's uniform light-list
+ * downlevel path instead.
  */
 export interface HdrpCapsInsufficientDetail {
   readonly capName: string;
@@ -169,7 +171,7 @@ export interface HdrpCapsInsufficientDetail {
  * Emitted at `installPipeline(hdrpAsset)` time — synchronous throw.
  *   - `.code = 'hdrp-caps-insufficient'` (closed RuntimeErrorCode)
  *   - `.expected` — describes the required capability
- *   - `.hint` — 'fall back to URP by not calling installPipeline'
+ *   - `.hint` — explains the unsupported partial-storage range
  *   - `.detail = { capName, actual, required }`
  */
 export class HdrpCapsInsufficientError extends Error {
@@ -182,7 +184,7 @@ export class HdrpCapsInsufficientError extends Error {
     const expected = `${capName} >= ${required}`;
     const hint =
       `${capName} = ${actual} (need >= ${required}); ` +
-      'this device does not have enough storage buffer slots for HDRP cluster-forward rendering. ' +
+      'this device has partial storage-buffer support, which HDRP cannot use for its clustered or uniform light-list layouts. ' +
       'Fall back to URP by not calling installPipeline(hdrpAsset)';
     super(`HDRP caps insufficient: ${capName} = ${actual} (need >= ${required})`);
     this.name = 'HdrpCapsInsufficientError';

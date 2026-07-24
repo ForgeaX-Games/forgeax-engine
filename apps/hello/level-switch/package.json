@@ -28,6 +28,10 @@
       ],
       "risks": ["baseline", "dynamic", "churn", "recovery", "gpu", "behavioral"],
       "phaseInputs": ["baseline", "dynamic", "churn", "recovery"],
+      "evidence": {
+        "frontDoors": ["dawn-node"],
+        "legs": ["semantic", "recovery"]
+      },
       "oracle": {
         "stdoutIncludes": [
           "[smoke] GATE 2 PASS: playerCount === 1, player survived cross-state",

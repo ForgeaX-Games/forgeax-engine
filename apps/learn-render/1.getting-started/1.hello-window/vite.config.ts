@@ -1,11 +1,11 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 
-// learn-render section-1.1 hello-window vite config (M4 placeholder).
-// Mirrors apps/hello/cube vite shape minus the forgeaxShader plugin (1.1
-// covers Engine.create + clearColor only, no custom shader). M5 milestone
-// fills src/index.ts with the actual three-line createRenderer demo.
+// learn-render section-1.1 hello-window vite config.
+// Engine.create still loads the built-in shader manifest during backend
+// initialization, so this smallest consumer must serve the shared manifest.
 //
 // Dev port 5180 is reserved for this app; strictPort prevents collision
 // with hello-triangle (default 5173) and the parity-* fleet (4173-4175).
@@ -14,6 +14,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
 
 export default defineConfig({
+  plugins: [forgeaxShader() as never],
   server: {
     port: 5180,
     strictPort: true,

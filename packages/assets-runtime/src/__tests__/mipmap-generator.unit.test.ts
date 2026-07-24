@@ -23,7 +23,7 @@ function ok<T>(value: T) {
   return { ok: true as const, value };
 }
 
-function makeBlitDevice(): MipmapBlitDevice {
+function makeBlitDevice(renderPasses?: unknown[]): MipmapBlitDevice {
   const pass = {
     setPipeline: () => {},
     setBindGroup: () => {},
@@ -31,7 +31,10 @@ function makeBlitDevice(): MipmapBlitDevice {
     end: () => {},
   };
   const encoder = {
-    beginRenderPass: () => pass,
+    beginRenderPass: (desc: unknown) => {
+      renderPasses?.push(desc);
+      return pass;
+    },
     finish: () => ok({ tag: `cmdbuf-${nextId++}` }),
   };
   return {
@@ -122,6 +125,37 @@ describe('generateMipmaps (async build path)', () => {
     );
     expect(res.ok).toBe(true);
     expect(mipmapCacheSize(device)).toBe(1);
+  });
+
+  it('uses the WebGPU GPUColor object shape for clear values', async () => {
+    const renderPasses: unknown[] = [];
+    const device = makeBlitDevice(renderPasses);
+    const res = await generateMipmaps(
+      device,
+      { tag: 'tex' },
+      { format: 'rgba8unorm', width: 4, height: 4 },
+      stubShaderFactory,
+    );
+    expect(res.ok).toBe(true);
+    expect(renderPasses).toHaveLength(2);
+    for (const pass of renderPasses) {
+      const clearValue = (pass as { colorAttachments: Array<{ clearValue: unknown }> })
+        .colorAttachments[0]?.clearValue;
+      expect(clearValue).toEqual({ r: 0, g: 0, b: 0, a: 1 });
+    }
+
+    const syncPasses: unknown[] = [];
+    const syncDevice = makeBlitDevice(syncPasses);
+    const prewarm = await getOrCreateMipmapPipeline(syncDevice, 'rgba8unorm', stubShaderFactory);
+    expect(prewarm.ok).toBe(true);
+    expect(
+      blitMipmapsSync(syncDevice, { tag: 'tex' }, { format: 'rgba8unorm', width: 4, height: 4 }).ok,
+    ).toBe(true);
+    for (const pass of syncPasses) {
+      const clearValue = (pass as { colorAttachments: Array<{ clearValue: unknown }> })
+        .colorAttachments[0]?.clearValue;
+      expect(clearValue).toEqual({ r: 0, g: 0, b: 0, a: 1 });
+    }
   });
 });
 

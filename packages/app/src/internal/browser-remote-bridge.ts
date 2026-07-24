@@ -37,10 +37,40 @@ type ExecuteModule = {
   ) => Promise<ExecuteResult>;
 };
 
+type ComponentLike = { readonly name: string };
+
+/**
+ * Project component exports onto the tokens already stored by this World.
+ *
+ * WHY: Vite may evaluate a workspace package once through the host package's
+ * dist graph and once through a source graph. Component ids are process-local,
+ * so equal `{ name, schema }` objects are not interchangeable with World
+ * access. The bridge is the one place that can reconcile the public module
+ * recipe with the live World's archetype SSOT.
+ */
+function canonicalRuntimeModule(moduleValue: unknown, world: World): unknown {
+  if (moduleValue === null || typeof moduleValue !== 'object') return moduleValue;
+  const componentsByName = new Map<string, ComponentLike>();
+  for (const archetype of world._getGraph().archetypes) {
+    for (const component of archetype.components) {
+      if (!componentsByName.has(component.name)) componentsByName.set(component.name, component);
+    }
+  }
+  const projected: Record<string, unknown> = { ...(moduleValue as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(projected)) {
+    if (value === null || typeof value !== 'object' || !('name' in value)) continue;
+    const canonical = componentsByName.get((value as ComponentLike).name);
+    if (canonical !== undefined) projected[key] = canonical;
+  }
+  return projected;
+}
+
 export interface BrowserRemoteBridgeDeps {
   readonly world: World;
   readonly renderer: unknown;
   readonly assets: unknown;
+  /** The host's already-loaded runtime namespace; preserves component-token identity. */
+  readonly runtimeModule: unknown;
   readonly debugAdapter?: unknown;
   /** Relay port. */
   readonly port: string;
@@ -89,6 +119,12 @@ export async function installBrowserRemoteBridge(
   const mod = (await import(/* @vite-ignore */ '@forgeax/engine-remote/execute')) as ExecuteModule;
   const executeScript = mod.executeScript;
   const importModule = (specifier: string): Promise<unknown> => {
+    // The host app and the bridge must share the same component-token objects.
+    // Vite can otherwise serve `/@id/@forgeax/engine-runtime` as a second
+    // module graph entry, so `world.get(entity, Transform)` sees a different
+    // Component id even though the token has the same name and schema.
+    if (specifier === '@forgeax/engine-runtime')
+      return Promise.resolve(canonicalRuntimeModule(deps.runtimeModule, world));
     const browserSpecifier = specifier.startsWith('@') ? `/@id/${specifier}` : specifier;
     return import(/* @vite-ignore */ browserSpecifier);
   };

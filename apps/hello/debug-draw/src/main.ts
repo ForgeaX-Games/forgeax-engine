@@ -14,9 +14,12 @@ import { Update } from '@forgeax/engine-ecs';
 import type { Mat4 } from '@forgeax/engine-math';
 import { mat4, vec3 } from '@forgeax/engine-math';
 import { createShaderModule, _internal_getRawDevice, rhi } from '@forgeax/engine-rhi-webgpu';
+import { Camera, perspective, Transform } from '@forgeax/engine-runtime';
+import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const params = new URLSearchParams(window.location.search);
 const mode = params.get('mode') ?? 'low';
+const falsify = params.get('falsify') === '1';
 
 const canvas = document.getElementById('app') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('Canvas #app not found');
@@ -155,24 +158,29 @@ async function runRuntime(): Promise<void> {
   // Use the canvas-form createApp which auto-creates debug-draw via
   // createDebugDrawOnReady and attaches it to app.debugDraw.
   const { createApp } = await import('@forgeax/engine-app');
-  const appResult = await createApp(canvas!);
+  const appResult = await createApp(canvas!, {}, forgeaxBundlerAdapter());
   if (!appResult.ok) throw appResult.error;
   const app = appResult.value;
 
   if (!app.debugDraw) throw new Error('app.debugDraw missing — debug-draw auto-attach failed');
 
-  // Register an update callback that draws the four shapes once (first frame).
-  // The shapes are drawn each frame; the auto-attached debug-overlay pass
-  // at the tonemap suffix flushes them to the swap-chain.
+  app.world
+    .spawn(
+      { component: Transform, data: { pos: [0, 2, 5] } },
+      { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: canvas!.width / canvas!.height }) },
+    )
+    .unwrap();
+
+  // Register an update callback that draws the four shapes every frame.
+  // DebugDraw is immediate-mode: the auto-attached debug-overlay pass flushes
+  // the current staging buffer and clears it at the end of each frame.
   const ddRuntime = app.debugDraw;
-  let drawn = false;
   app.world
     .addSystem(Update, {
       name: 'debug-draw-runtime-shapes',
       queries: [],
       fn: () => {
-        if (drawn) return;
-        drawn = true;
+        if (falsify) return;
         ddRuntime.line(vec3.create(-1.5, -0.7, 0), vec3.create(1.5, -0.7, 0), [1, 0, 0, 1]);
         ddRuntime.sphere(vec3.create(0, 0.5, 0), 0.6, [0, 1, 0, 1]);
         ddRuntime.aabb(vec3.create(-0.4, -0.4, -0.4), vec3.create(0.4, 0.4, 0.4), [0, 0, 1, 1]);
@@ -188,9 +196,8 @@ async function runRuntime(): Promise<void> {
     .unwrap();
 
   app.start();
-  // Let it run a few frames, then stop
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  app.stop();
+  // Keep the canvas loop alive: the browser front door observes the live
+  // overlay, and the page owns teardown when it is closed.
 }
 
 // ---------------------------------------------------------------------------

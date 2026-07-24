@@ -144,6 +144,7 @@ export interface RenderFrameState {
   /** Graphs detached from the active pipeline while GPU work may still use them. */
   readonly retiredPerFrameGraphs: Set<RenderGraph<RenderPipelineContext>>;
   readonly instanceBuffers: Map<number, InstanceBufferCacheEntry>;
+  readonly transientInstanceBuffers: InstanceBufferCacheEntry[];
   warnedZeroLightStandard: boolean;
   /**
    * feax-20260608-multi-light-warn-once M3: once-warn latch for multi-light

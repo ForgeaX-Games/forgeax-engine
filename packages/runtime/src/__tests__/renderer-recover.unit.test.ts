@@ -16,8 +16,10 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { World } from '@forgeax/engine-ecs';
 import type { Result } from '@forgeax/engine-rhi';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Camera, Transform } from '../components';
 import { RecoverError, type RecoverErrorCode } from '../errors/recover';
 import type { HealthSnapshot } from '../renderer';
 
@@ -265,6 +267,7 @@ const RECOVER_TEST_MANIFEST_URL = (() => {
 })();
 
 type TestRenderer = {
+  draw: (worlds: World[], options: { owner: number }) => Result<void, unknown>;
   recover: () => Promise<Result<void, RecoverError>>;
   health: () => HealthSnapshot;
   store: { destroyAll: () => void };
@@ -341,6 +344,31 @@ describe('recover() single idempotent rebuild (M3)', () => {
       expect(recoverMock.requestDeviceCalls).toBeGreaterThan(deviceCallsBefore);
       // pipeline rebuild completes; subsequent ready resolves ok.
       await renderer.ready;
+    },
+    RECOVER_BOOT_TIMEOUT_MS,
+  );
+
+  it(
+    'w10c: recovered renderer draws the same World again',
+    async () => {
+      const renderer = await makeRenderer();
+      await renderer.ready;
+      const world = new World();
+      world.spawn(
+        { component: Transform, data: {} },
+        { component: Camera, data: { fov: 60, near: 0.1, far: 1000 } },
+      );
+
+      const before = renderer.draw([world], { owner: 0 });
+      expect(before.ok).toBe(true);
+
+      await driveDeviceLost(renderer);
+      const recovered = await renderer.recover();
+      expect(recovered.ok).toBe(true);
+      expect(renderer.health().reason).toBe('alive');
+
+      const after = renderer.draw([world], { owner: 0 });
+      expect(after.ok).toBe(true);
     },
     RECOVER_BOOT_TIMEOUT_MS,
   );

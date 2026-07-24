@@ -14,6 +14,7 @@ import {
 import {
   createHdrpUnifiedBindGroup,
   getOrCreateHdrpBuffers,
+  HDRP_UNIFORM_LIGHT_CAPACITY,
   packClusterUniform,
 } from '../hdrp-buffers';
 import { LIGHT_INDEX_LIST_CAPACITY } from '../hdrp-pipeline';
@@ -682,10 +683,11 @@ export function writeHdrpClusterAndSsaoBuffers(
 
   const hdrpBuffers = getOrCreateHdrpBuffers(internals, clusterGrid);
   if (hdrpBuffers !== null) {
-    const lightDataPayload = new Float32Array(256 * 16);
+    const lightCapacity = hdrpBuffers.storageBuffer ? 256 : HDRP_UNIFORM_LIGHT_CAPACITY;
+    const lightDataPayload = new Float32Array(lightCapacity * 16);
     let slotIdx = 0;
     for (const pl of effectivePointLights) {
-      if (slotIdx >= 256) break;
+      if (slotIdx >= lightCapacity) break;
       // feat-20260612-point-light-shadows-urp-hdrp M4 / T-M4-4
       // (plan-strategy §D-8): thread the optional shadow info through
       // packLightSlot. PointLightSnapshot.shadowAtlasLayer is set by
@@ -707,7 +709,7 @@ export function writeHdrpClusterAndSsaoBuffers(
       slotIdx += 1;
     }
     for (const sl of effectiveSpotLights) {
-      if (slotIdx >= 256) break;
+      if (slotIdx >= lightCapacity) break;
       const packed = packLightSlot(sl);
       lightDataPayload.set(packed, slotIdx * 16);
       slotIdx += 1;
@@ -719,19 +721,21 @@ export function writeHdrpClusterAndSsaoBuffers(
     );
     if (!lightDataUpload.ok) internals.errorRegistry.fire(lightDataUpload.error);
 
-    const clusterGridUpload = internals.device.queue.writeBuffer(
-      hdrpBuffers.clusterGridBuffer,
-      0,
-      clusterGridBuf,
-    );
-    if (!clusterGridUpload.ok) internals.errorRegistry.fire(clusterGridUpload.error);
+    if (hdrpBuffers.storageBuffer) {
+      const clusterGridUpload = internals.device.queue.writeBuffer(
+        hdrpBuffers.clusterGridBuffer,
+        0,
+        clusterGridBuf,
+      );
+      if (!clusterGridUpload.ok) internals.errorRegistry.fire(clusterGridUpload.error);
 
-    const lightIndexListUpload = internals.device.queue.writeBuffer(
-      hdrpBuffers.lightIndexListBuffer,
-      0,
-      lightIndexListBuf,
-    );
-    if (!lightIndexListUpload.ok) internals.errorRegistry.fire(lightIndexListUpload.error);
+      const lightIndexListUpload = internals.device.queue.writeBuffer(
+        hdrpBuffers.lightIndexListBuffer,
+        0,
+        lightIndexListBuf,
+      );
+      if (!lightIndexListUpload.ok) internals.errorRegistry.fire(lightIndexListUpload.error);
+    }
 
     // scope-amend-webgl2-ubo: SSAO intensity is folded into the
     // cluster_uniform .w lane (formerly pad), removing the dedicated
@@ -749,6 +753,7 @@ export function writeHdrpClusterAndSsaoBuffers(
       camera.near,
       camera.far,
       clusterSsaoIntensity,
+      Math.min(effectivePointLights.length + effectiveSpotLights.length, lightCapacity),
     );
     const clusterUniformUpload = internals.device.queue.writeBuffer(
       hdrpBuffers.clusterUniformBuffer,

@@ -20,6 +20,7 @@ test('shared-inputs browser probe uses catalog-only inputs', async () => {
   const source = await readFile(smokeScript, 'utf8');
   assert.match(source, /['"]--catalog-only['"]/);
   assert.match(source, /FORGEAX_SHARED_APP_INPUTS_MODE:\s*['"]catalog-only['"]/);
+  assert.match(source, /process\.env\.FORGEAX_SHARED_APP_INPUTS_MODE = ['"]catalog-only['"]/);
 });
 
 test('application bootstrap rejects structured application errors', () => {

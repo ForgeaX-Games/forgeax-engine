@@ -52,6 +52,7 @@ import {
 } from './hdrp-pipeline';
 import { BYTES_PER_LIGHT_SLOT } from './light-buffer-layout';
 import { buildBindGroupLayoutDescriptor, type PipelineSpec } from './pipeline-spec';
+import { MESH_UBO_FULL_ARRAY_BYTES } from './record/mesh-ssbo';
 import type { RenderSystemRuntime } from './render-system';
 
 // Stub PipelineSpec for the HDRP BGL site. The dispatcher's 'hdrp-7-slot'
@@ -80,6 +81,14 @@ const GPU_SHADER_STAGE_FRAGMENT = 0x2;
 // ssao-buffers.ts; re-declared locally to keep the module decoupled.
 const GPU_TEXTURE_USAGE_COPY_DST = 0x02;
 const GPU_TEXTURE_USAGE_TEXTURE_BINDING = 0x04;
+
+/**
+ * WebGL2 HDRP downlevel light-list capacity. 128 x 64 B = 8 KiB, below the
+ * WebGL2 minimum uniform-buffer binding size of 16 KiB. The storage path
+ * keeps the full MAX_LIGHTS budget; the uniform path uses the same LightSlot
+ * POD and only changes the transport.
+ */
+export const HDRP_UNIFORM_LIGHT_CAPACITY = 128;
 
 /**
  * Build the unified BGL descriptor for HDRP group(2). Round-2 (M7) extends
@@ -281,7 +290,9 @@ export function getOrCreateSsaoFallbackTexture(
  * cluster 4 buffer).
  */
 export interface HdrpBuffers {
-  /** light_data SSBO -- 256 x 64 B = 16 KiB, BGL slot 3. */
+  /** Whether bindings 3..5 carry storage buffers or uniform-buffer fallback data. */
+  readonly storageBuffer: boolean;
+  /** light_data -- 256 x 64 B on storage, 128 x 64 B on uniform fallback. */
   readonly lightDataBuffer: Buffer;
   readonly lightDataBytes: number;
   /** cluster_grid SSBO -- gridX*gridY*gridZ * 2 u32, BGL slot 4. */
@@ -323,16 +334,22 @@ export function getOrCreateHdrpBuffers(
   if (cached !== undefined) return cached;
 
   const device = runtime.device;
-  const lightDataBytes = MAX_LIGHTS * BYTES_PER_LIGHT_SLOT;
-  const clusterCells = grid.x * grid.y * grid.z;
-  const clusterGridBytes = clusterCells * CLUSTER_GRID_STRIDE_U32 * 4;
-  const lightIndexListBytes = LIGHT_INDEX_LIST_CAPACITY * 4;
+  const storageBuffer = runtime.device.caps.storageBuffer;
   const clusterUniformBytes = 32;
+  const lightDataBytes =
+    (storageBuffer ? MAX_LIGHTS : HDRP_UNIFORM_LIGHT_CAPACITY) * BYTES_PER_LIGHT_SLOT;
+  const clusterCells = grid.x * grid.y * grid.z;
+  const clusterGridBytes = storageBuffer
+    ? clusterCells * CLUSTER_GRID_STRIDE_U32 * 4
+    : clusterUniformBytes;
+  const lightIndexListBytes = storageBuffer ? LIGHT_INDEX_LIST_CAPACITY * 4 : clusterUniformBytes;
 
   const lightData = device.createBuffer({
     label: 'hdrp-light-data',
     size: lightDataBytes,
-    usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST,
+    usage:
+      (storageBuffer ? GPU_BUFFER_USAGE_STORAGE : GPU_BUFFER_USAGE_UNIFORM) |
+      GPU_BUFFER_USAGE_COPY_DST,
     mappedAtCreation: false,
   });
   if (!lightData.ok) {
@@ -342,7 +359,9 @@ export function getOrCreateHdrpBuffers(
   const clusterGrid = device.createBuffer({
     label: 'hdrp-cluster-grid',
     size: clusterGridBytes,
-    usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST,
+    usage:
+      (storageBuffer ? GPU_BUFFER_USAGE_STORAGE : GPU_BUFFER_USAGE_UNIFORM) |
+      GPU_BUFFER_USAGE_COPY_DST,
     mappedAtCreation: false,
   });
   if (!clusterGrid.ok) {
@@ -352,7 +371,9 @@ export function getOrCreateHdrpBuffers(
   const lightIndexList = device.createBuffer({
     label: 'hdrp-light-index-list',
     size: lightIndexListBytes,
-    usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_DST,
+    usage:
+      (storageBuffer ? GPU_BUFFER_USAGE_STORAGE : GPU_BUFFER_USAGE_UNIFORM) |
+      GPU_BUFFER_USAGE_COPY_DST,
     mappedAtCreation: false,
   });
   if (!lightIndexList.ok) {
@@ -387,6 +408,7 @@ export function getOrCreateHdrpBuffers(
   }
 
   const buffers: HdrpBuffers = {
+    storageBuffer,
     lightDataBuffer: lightData.value,
     lightDataBytes,
     clusterGridBuffer: clusterGrid.value,
@@ -428,6 +450,7 @@ export function packClusterUniform(
   near: number,
   far: number,
   ssaoIntensity: number = 0,
+  lightCount: number = 0,
 ): ArrayBuffer {
   const buf = new ArrayBuffer(32);
   const u32 = new Uint32Array(buf);
@@ -435,7 +458,7 @@ export function packClusterUniform(
   u32[0] = grid.x >>> 0;
   u32[1] = grid.y >>> 0;
   u32[2] = grid.z >>> 0;
-  // u32[3] = 0 (zero-init)
+  u32[3] = Math.min(Math.max(lightCount, 0), HDRP_UNIFORM_LIGHT_CAPACITY) >>> 0;
   f32[4] = near;
   f32[5] = far;
   // logFarOverNear: log(far/near) used by the shader for log-z slice mapping.
@@ -534,7 +557,9 @@ export function createHdrpUnifiedBindGroup(
           value: {
             buffer: meshStorageBuffer,
             offset: 0,
-            size: MESH_SSBO_PER_ENTITY_STRIDE,
+            size: hdrpBuffers.storageBuffer
+              ? MESH_SSBO_PER_ENTITY_STRIDE
+              : MESH_UBO_FULL_ARRAY_BYTES,
           },
         },
       },

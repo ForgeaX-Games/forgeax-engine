@@ -176,8 +176,18 @@ async function importImage(ctx: ImportContext): Promise<ImportResult> {
   const colorSpace: ImageColorSpace = ctx.importSettings.colorSpace === 'srgb' ? 'srgb' : 'linear';
   const mipmap = mipmapTokenToBoolean(ctx.importSettings.mipmap);
   const compressionMode = compressionModeToken(ctx.importSettings.compressionMode);
+  const downscaleMaxDimension =
+    typeof ctx.importSettings.downscaleMaxDimension === 'number' &&
+    Number.isInteger(ctx.importSettings.downscaleMaxDimension) &&
+    ctx.importSettings.downscaleMaxDimension > 0
+      ? ctx.importSettings.downscaleMaxDimension
+      : undefined;
 
-  const decoded = parseImage(read.value, mime, { colorSpace, mipmap });
+  const decoded = parseImage(read.value, mime, {
+    colorSpace,
+    mipmap,
+    ...(downscaleMaxDimension !== undefined ? { downscaleMaxDimension } : {}),
+  });
   if (!decoded.ok) {
     throw new Error(`imageImporter: parseImage failed: ${decoded.error.code}`);
   }
