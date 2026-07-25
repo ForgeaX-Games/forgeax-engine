@@ -8,8 +8,8 @@ const repoRoot = resolve(here, '..', '..', '..');
 
 const schedulerSources = [
   'packages/ecs/src/schedule.ts',
-  'packages/runtime/src/systems/propagate-transforms.ts',
-  'packages/runtime/src/systems/advance-animation-player.ts',
+  'packages/scene/src/systems/propagate-transforms.ts',
+  'packages/animation/src/systems/advance-animation-player.ts',
   'packages/input/src/frame-start-scan-system.ts',
   'packages/state/src/register-plugin.ts',
   'packages/physics-rapier2d/src/rapier-physics-world-2d.ts',

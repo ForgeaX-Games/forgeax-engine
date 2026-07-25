@@ -101,8 +101,8 @@ async function capture(w, h) {
 // --- build ---
 const { World } = await import('@forgeax/engine-ecs');
 const { createRenderer } = await import('@forgeax/engine-runtime');
-const { Camera } = await import('@forgeax/engine-runtime');
-const { CAMERA_PROJECTION_PERSPECTIVE } = await import('@forgeax/engine-runtime');
+const { Camera } = await import('@forgeax/engine-render');
+const { CAMERA_PROJECTION_PERSPECTIVE } = await import('@forgeax/engine-render');
 const { queryRun, createQueryState, Entity: EcsEntity } = await import('@forgeax/engine-ecs');
 
 const here = dirname(fileURLToPath(import.meta.url));

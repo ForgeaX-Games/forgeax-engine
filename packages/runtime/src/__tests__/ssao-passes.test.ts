@@ -13,23 +13,23 @@
 //   (e) graph compiles without errors with valid caps + g-buffer producer
 //   (f) ssao-calc comes before ssao-blur in topological order
 
-import { RenderGraph } from '@forgeax/engine-render-graph';
-import type { RhiCaps, RhiDevice } from '@forgeax/engine-rhi';
-import { describe, expect, it, vi } from 'vitest';
+import type {
+  _InternalRenderPipelineContext,
+  RenderPipelineContext,
+  RenderSystemRuntime,
+} from '@forgeax/engine-render/internal';
 import {
+  addSsaoPasses,
   recordBloomBlurHPass,
   recordBloomBlurVPass,
   recordBloomBrightPass,
   recordBloomCompositePass,
   recordFxaaPass,
   recordSkyboxPass,
-} from '../record/skybox-post-pass';
-import { addSsaoPasses } from '../render-graph-primitives';
-import type {
-  _InternalRenderPipelineContext,
-  RenderPipelineContext,
-} from '../render-pipeline-context';
-import type { RenderSystemRuntime } from '../render-system';
+} from '@forgeax/engine-render/internal';
+import { RenderGraph } from '@forgeax/engine-render-graph';
+import type { RhiCaps, RhiDevice } from '@forgeax/engine-rhi';
+import { describe, expect, it, vi } from 'vitest';
 
 function mockRuntime(capsOverride: Partial<RhiCaps> = {}): RenderSystemRuntime {
   const errorRegistry = {
@@ -967,6 +967,7 @@ function makePostProcessRecordCtx(): {
         skyboxPipelineMsaa: null,
         skyboxBindGroupLayout: { label: 'skybox-bgl' },
         skyboxSampler: sampler,
+        skyboxRotationBuffer: { label: 'skybox-rotation' },
         bloomBrightPipeline: { label: 'bloom-bright-pipeline' },
         bloomBrightBindGroupLayout: { label: 'bloom-bright-bgl' },
         bloomBrightParamsBuffer: { label: 'bloom-bright-params' },
@@ -997,7 +998,7 @@ function makePostProcessRecordCtx(): {
     },
     tonemapActive: true,
     skyboxActive: true,
-    skybox: { equirectHandle: 1 },
+    skybox: { equirectHandle: 1, rotation: [0, 0, 0, 1] },
     msaaActive: false,
     targetW: 800,
     targetH: 600,

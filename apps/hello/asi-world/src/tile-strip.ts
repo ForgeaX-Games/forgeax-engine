@@ -11,17 +11,14 @@
 import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
-import {
-  CAMERA_PROJECTION_ORTHOGRAPHIC,
-  Camera,
-  ChildOf,
-  EngineEnvironmentError,
-  setTransparentSortConfig,
-  Tilemap,
-  TileLayer,
-  Transform,
-  TRANSPARENT_SORT_MODE_LAYER_Y,
-} from '@forgeax/engine-runtime';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+
+import { CAMERA_PROJECTION_ORTHOGRAPHIC } from '@forgeax/engine-render';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { setTransparentSortConfig, TRANSPARENT_SORT_MODE_LAYER_Y } from '@forgeax/engine-render/internal';
+import { Tilemap, TileLayer } from '@forgeax/engine-render/authoring';
+import { Camera } from '@forgeax/engine-render';
+
 import type {
   Handle,
   SamplerAsset,

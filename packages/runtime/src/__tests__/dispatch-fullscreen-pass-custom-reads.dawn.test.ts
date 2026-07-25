@@ -25,10 +25,10 @@
 // (no real GPU calls fire), but the dawn project is the canonical home for
 // per-frame-execute integration tests.
 
+import type { RenderPipelineContext } from '@forgeax/engine-render/internal';
+import { addFullscreenPass } from '@forgeax/engine-render/internal';
 import { RenderGraph } from '@forgeax/engine-render-graph';
 import { describe, expect, it } from 'vitest';
-import { addFullscreenPass } from '../render-graph-primitives';
-import type { RenderPipelineContext } from '../render-pipeline-context';
 
 interface BindGroupEntry {
   readonly binding: number;

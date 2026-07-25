@@ -8,10 +8,9 @@
 // TDD phase "red": collect-subtree.ts does not exist yet.
 
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
+import { collectSubtree } from '@forgeax/engine-render/internal';
+import { Children, Name } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { Children } from '../components/children';
-import { Name } from '../components/name';
-import { collectSubtree } from '../scene-utils/collect-subtree';
 
 // Build a chain of N entities linked by Children.
 // Returns the array of entity raw IDs from root down.

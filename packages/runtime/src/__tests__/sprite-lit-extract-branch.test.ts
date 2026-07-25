@@ -25,8 +25,9 @@
 //   - render-system-extract.ts MaterialSnapshot (no shadingModel field)
 //   - requirements AC-01 / AC-02 (post-rewrite)
 
+import { fileURLToPath } from 'node:url';
+import type { MaterialSnapshot } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import type { MaterialSnapshot } from '../render-system-extract';
 
 describe('sprite-lit extract branch (D-9 remap, AC-02 + AC-01)', () => {
   describe('sprite-lit routes via materialShaderId (AC-01 D-10 remap)', () => {
@@ -103,17 +104,11 @@ describe('sprite-lit extract branch (D-9 remap, AC-02 + AC-01)', () => {
       // identifies via materialShaderId string only. (Post tweak-20260701
       // M1 the shadingModel field is gone, so this is trivially true, but
       // the guard stays to catch a reintroduction.)
-      const fsId = 'node:fs';
-      const moduleId = 'node:module';
-      const fs = (await import(fsId)) as { readFileSync(p: string, e: string): string };
-      const mod = (await import(moduleId)) as {
-        createRequire(u: string | URL): (id: string) => string;
-      };
-      const require = mod.createRequire(import.meta.url);
-      const resolved = require as unknown as { resolve(id: string): string };
-      const pkgJson = resolved.resolve('@forgeax/engine-runtime/package.json');
-      const srcDir = pkgJson.replace(/package\.json$/, 'src');
-      const src = fs.readFileSync(`${srcDir}/render-system-extract.ts`, 'utf8');
+      const fs = await import('node:fs');
+      const src = fs.readFileSync(
+        fileURLToPath(new URL('../../../render/src/render-system-extract.ts', import.meta.url)),
+        'utf8',
+      );
       // The narrowing point must not check shadingModel against a string
       // literal 'sprite-lit'.
       expect(/shadingModel\s*===\s*['"]sprite-lit['"]/.test(src)).toBe(false);

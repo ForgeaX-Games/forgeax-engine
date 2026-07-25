@@ -16,11 +16,26 @@
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-fbx-skin smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "vite app bundle downstream of @forgeax/engine-runtime" },
-      "fps": { "enabled": false, "reason": "hello-fbx-cube anchor only; structural-smoke covers 300-frame GPU path" },
-      "bench": { "enabled": false, "reason": "convergence integration app" },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/hello-fbx-skin smoke" },
-      "spike-report": { "enabled": false, "reason": "not a spike app" }
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle downstream of @forgeax/engine-runtime"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "hello-fbx-cube anchor only; structural-smoke covers 300-frame GPU path"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "convergence integration app"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-fbx-skin smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app"
+      }
     }
   },
   "dependencies": {
@@ -30,7 +45,11 @@
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-types": "workspace:*"
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-animation": "workspace:*",
+    "@forgeax/engine-skinning": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-shader": "workspace:*",

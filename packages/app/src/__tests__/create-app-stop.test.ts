@@ -14,8 +14,8 @@
 // createApp.start() (R-1 timing); we return a noop unsubscribe.
 
 import { World } from '@forgeax/engine-ecs';
+import type { Renderer } from '@forgeax/engine-render';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
-import type { Renderer } from '@forgeax/engine-runtime';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 

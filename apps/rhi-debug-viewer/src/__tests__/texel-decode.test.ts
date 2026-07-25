@@ -1,7 +1,7 @@
 // texel-decode.test.ts — host-side decode of uncompressed color formats to RGBA8.
 
+import { decodeToRgba8, halfToFloat } from '@forgeax/engine-rhi-debug';
 import { describe, expect, it } from 'vitest';
-import { decodeToRgba8, halfToFloat } from '../texel-decode';
 
 /** Pack a Float32Array into a little-endian byte view. */
 function f32Bytes(values: number[]): Uint8Array {

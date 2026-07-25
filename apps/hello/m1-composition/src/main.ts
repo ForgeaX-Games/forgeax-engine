@@ -3,7 +3,8 @@ import { FixedUpdate, Update, defineComponent, ok } from '@forgeax/engine-ecs';
 import { INPUT_MAP_KEY, INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine-input';
 import { runPlugins } from '@forgeax/engine-plugin';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { ChildOf, Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
+import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
 import { addOnEnter, addOnExit, defineState, despawnOnExit, getState, setNextState } from '@forgeax/engine-state';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 

@@ -47,14 +47,10 @@
 
 import { AssetRegistry, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  createRenderer,
-  MeshFilter,
-  MeshRenderer,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import { createRenderer } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset, SamplerAsset, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 

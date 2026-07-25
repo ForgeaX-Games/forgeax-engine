@@ -22,9 +22,9 @@
 
 import { numMipLevels } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import type { DecodedImage, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { GpuResourceStore } from '../../gpu-resource-store';
 
 // feat-20260601-gpu-resource-store-extraction M1: uploadTexture moved to the
 // store (POD carries format + mipmap flag, decoded carries pixel bytes; D-2).

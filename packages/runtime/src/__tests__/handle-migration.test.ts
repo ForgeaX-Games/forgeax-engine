@@ -13,9 +13,9 @@ import {
   resolveAssetHandle,
 } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import { handleSlot, pack } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { GpuResourceStore } from '../gpu-resource-store';
 
 describe('M5 handle-migration', () => {
   describe('GPU store Map key uses handleSlot (AC-09)', () => {

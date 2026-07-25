@@ -166,8 +166,14 @@ export interface InputSnapshot {
      */
     up(key: string): boolean;
   };
-  /** Mouse view (charter F2 minimal surface: movementDelta + button + wheelDelta). */
+  /** Mouse view (charter F2 minimal surface: position + movementDelta + button + wheelDelta). */
   readonly mouse: {
+    /**
+     * Latest canvas-pixel cursor position. This is available during hover;
+     * it does not require a button press or pointer capture. The position is
+     * frozen with the rest of the frame-start snapshot.
+     */
+    readonly position: { readonly x: number; readonly y: number } | undefined;
     /**
      * PointerLock-style accumulated movement since the previous frame.
      * Value is frozen at frame-start; reading it does not clear the
@@ -370,6 +376,9 @@ export interface InputBackendSample {
   readonly buttons: readonly [boolean, boolean, boolean];
   readonly movementX: number;
   readonly movementY: number;
+  /** Latest canvas-pixel mouse position; absent for non-pointer backends. */
+  readonly mouseX?: number;
+  readonly mouseY?: number;
   /**
    * Sign-discrete wheel notch accumulator since the previous sample
    * (plan-strategy D-5). Browser backend writes `Math.sign(deltaY)` per
@@ -491,6 +500,10 @@ export function snapshotFromSample(
     sample.buttons[2],
   ];
   const movementDelta = Object.freeze({ x: sample.movementX, y: sample.movementY });
+  const mousePosition =
+    sample.mouseX === undefined || sample.mouseY === undefined
+      ? undefined
+      : Object.freeze({ x: sample.mouseX, y: sample.mouseY });
   const wheelDelta = sample.wheelDelta;
 
   // D-9: use `??` empty-signal defaults for all new optional fields.
@@ -546,6 +559,7 @@ export function snapshotFromSample(
       },
     },
     mouse: {
+      position: mousePosition,
       movementDelta,
       pointerLocked: sample.pointerLocked,
       button(i) {

@@ -249,7 +249,10 @@ async function importComponents(): Promise<{
   Camera: unknown;
   DirectionalLight: unknown;
 }> {
-  return (await import('../index')) as never;
+  return {
+    ...(await import('@forgeax/engine-render/internal')),
+    ...(await import('@forgeax/engine-scene')),
+  } as never;
 }
 
 function cameraTransform() {

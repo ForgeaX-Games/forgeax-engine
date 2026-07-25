@@ -92,19 +92,19 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import type { Handle, MaterialAsset } from '@forgeax/engine-types';
-import { afterEach, describe, expect, it } from 'vitest';
 import {
   Camera,
   DirectionalLight,
+  extractFrame,
   MeshFilter,
   MeshRenderer,
   PointLight,
   SpotLight,
-  Transform,
-} from '../components';
+} from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
+import type { Handle, MaterialAsset } from '@forgeax/engine-types';
+import { afterEach, describe, expect, it } from 'vitest';
 import { Engine } from '../index';
-import { extractFrame } from '../render-system-extract';
 
 type EngineRenderer = Awaited<ReturnType<typeof Engine.create>>;
 

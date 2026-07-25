@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "learn-render LearnOpenGL section 5.advanced-lighting 4.normal-mapping \u2014 normal-mapped brick wall with tangent-space normal lighting.",
+  "description": "learn-render LearnOpenGL section 5.advanced-lighting 4.normal-mapping — normal-mapped brick wall with tangent-space normal lighting.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -46,7 +46,9 @@
     "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-rhi-wgpu": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-types": "workspace:*"
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",

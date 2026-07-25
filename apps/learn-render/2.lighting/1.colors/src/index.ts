@@ -19,7 +19,13 @@ import { Entity, World } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
 import { vec3 } from '@forgeax/engine-math';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Camera, DirectionalLight, EngineEnvironmentError, Materials, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
+
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {

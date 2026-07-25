@@ -24,15 +24,10 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { toShared, type TilesetAsset } from '@forgeax/engine-types';
-import {
-  Camera,
-  ChildOf,
-  Transform,
-  TileLayer,
-  Tilemap,
-  createRenderer,
-  markTileLayerDirty,
-} from '@forgeax/engine-runtime';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+import { Camera } from '@forgeax/engine-render';
+import { createRenderer } from '@forgeax/engine-runtime';
+import { TileLayer, Tilemap, markTileLayerDirty } from '@forgeax/engine-render/authoring';
 
 async function main(): Promise<void> {
   const canvas = document.getElementById('app') as HTMLCanvasElement | null;

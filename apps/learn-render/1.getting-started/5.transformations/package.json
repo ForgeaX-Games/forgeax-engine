@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "learn-render LearnOpenGL section 1.5 transformations \u2014 cube + Transform.rotation/scale animation (M9 milestone fills index.ts).",
+  "description": "learn-render LearnOpenGL section 1.5 transformations — cube + Transform.rotation/scale animation (M9 milestone fills index.ts).",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -53,7 +53,9 @@
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-types": "workspace:*"
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",

@@ -1,6 +1,6 @@
 # @forgeax/engine-input
 
-> **Frame-start scanned, frozen `InputSnapshot` Resource for forgeax-engine.** Multi-device surface frozen before user systems run each frame: keyboard (down/up edge) + mouse (movementDelta / button / wheelDelta) + gamepad (7 readpoints: button / buttonValue / justPressed / justReleased / axis / standardMapping / connected) + pointer (per-pointerId position / pressure / delta / phase event queue) + virtualAxis (named joystick readpoint). Higher-level abstractions: **action indirection** (declare once, forget device — `snap.action(name)` / `snap.getAxis` / `snap.getVector`) + **gesture recognizer** (pinch / rotate / swipe / long-press / double-tap — `snap.gesture` + `snap.gestureEvents`). Capability probe (`snap.capabilities`) available at attach time.
+> **Frame-start scanned, frozen `InputSnapshot` Resource for forgeax-engine.** Multi-device surface frozen before user systems run each frame: keyboard (down/up edge) + mouse (position / movementDelta / button / wheelDelta) + gamepad (7 readpoints: button / buttonValue / justPressed / justReleased / axis / standardMapping / connected) + pointer (per-pointerId position / pressure / delta / phase event queue) + virtualAxis (named joystick readpoint). Higher-level abstractions: **action indirection** (declare once, forget device — `snap.action(name)` / `snap.getAxis` / `snap.getVector`) + **gesture recognizer** (pinch / rotate / swipe / long-press / double-tap — `snap.gesture` + `snap.gestureEvents`). Capability probe (`snap.capabilities`) available at attach time.
 
 ## 4 步 recipe
 
@@ -84,10 +84,11 @@ detach();
 | `snap.keyboard.down(key)` | `boolean` | `key` 当前帧首仍处于按下状态（`document.hasFocus()` 失焦时保持上一帧状态） |
 | `snap.keyboard.up(key)` | `boolean` | `key` 上一帧 down、本帧 up 的边沿（一帧内 true，下一帧自动消失） |
 
-### mouse（4 读点）
+### mouse（5 读点）
 
 | 调用 | 返回 | 语义 |
 |:--|:--|:--|
+| `snap.mouse.position` | `{ x: number; y: number } | undefined` | 最新 canvas-pixel 鼠标坐标；悬停时也更新，不需要按键或 pointer capture；尚未收到鼠标事件时为 `undefined` |
 | `snap.mouse.movementDelta` | `{ x: number; y: number }` | PointerLock `movementX/Y` 自上次扫描以来的累加；扫描后 backend 自动清零 |
 | `snap.mouse.pointerLocked` | `boolean` | 合并锁态——W3C `pointerlockchange`（`pointerLockElement === canvas`）OR host `lockProvider.requestLock()` 置位；`required` 字段，非 optional。consumer 写 `if (snap.mouse.pointerLocked)` 判断"仅锁定态消费 look delta"。与 `movementDelta` 同位——两个事实在同一属性路径下（charter F1 单点可索引） |
 | `snap.mouse.button(i)` | `boolean`（`i: 0 \| 1 \| 2`） | 对齐 W3C MouseEvent.button：0=主键 / 1=辅助键 / 2=次键。`i: 3` 触发 TS 编译错误 |

@@ -26,7 +26,8 @@ import { SUT_ATTRIBUTABLE_CODES } from '@forgeax/apps-shared/onerror-gate';
 import { createApp } from '@forgeax/engine-app';
 import type { BootstrapContext } from '@forgeax/engine-app';
 import { createQueryState, Entity, queryRun } from '@forgeax/engine-ecs';
-import { Camera, createDevImportTransport } from '@forgeax/engine-runtime';
+import { Camera } from '@forgeax/engine-render';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { bootstrap } from '../../../templates/game-default/main';

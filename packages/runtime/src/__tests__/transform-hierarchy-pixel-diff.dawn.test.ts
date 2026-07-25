@@ -18,17 +18,15 @@
 
 import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import { describe, expect, it } from 'vitest';
 import {
   Camera,
-  ChildOf,
   DirectionalLight,
   MeshFilter,
   MeshRenderer,
-  Transform,
-} from '../components';
+} from '@forgeax/engine-render/internal';
+import { ChildOf, registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
+import { describe, expect, it } from 'vitest';
 import { createRenderer } from '../index';
-import { registerPropagateTransforms } from '../systems/propagate-transforms';
 
 const WIDTH = 256;
 const HEIGHT = 256;

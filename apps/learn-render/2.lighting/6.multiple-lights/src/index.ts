@@ -6,7 +6,12 @@ import type { App, CanvasAppError } from '@forgeax/engine-app';
 import type { InputBackend } from '@forgeax/engine-input';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, PointLight, SpotLight, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { PointLight, SpotLight } from '@forgeax/engine-render';
+
 import type {
   MaterialAsset,
   MeshAsset,

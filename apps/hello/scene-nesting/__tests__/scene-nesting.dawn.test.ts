@@ -14,14 +14,10 @@ import { fileURLToPath } from 'node:url';
 
 import { err, ok, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  Materials,
-  SceneInstance,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera, DirectionalLight } from '@forgeax/engine-render';
+import { createRenderer } from '@forgeax/engine-runtime';
+import { Materials, SceneInstance } from '@forgeax/engine-render';
 import type { Handle, SceneAsset, SceneInstanceMount } from '@forgeax/engine-types';
 import { toShared, type LocalEntityId } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';

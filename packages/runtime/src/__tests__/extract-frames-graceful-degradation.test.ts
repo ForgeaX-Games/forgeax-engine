@@ -21,10 +21,10 @@
 //   requirements AC-09
 
 import { World } from '@forgeax/engine-ecs';
+import type { ExtractedFrame } from '@forgeax/engine-render/internal';
+import { Camera, DirectionalLight, extractFrame } from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { Camera, DirectionalLight, Transform } from '../components';
-import type { ExtractedFrame } from '../render-system-extract';
-import { extractFrame } from '../render-system-extract';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

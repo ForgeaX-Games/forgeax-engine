@@ -24,15 +24,16 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { SharedRefStore } from '@forgeax/engine-ecs';
+import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import type { Result, RhiCaps } from '@forgeax/engine-rhi';
 import { err, ok, RhiError } from '@forgeax/engine-rhi';
 import type { EquirectAsset, Handle, TextureAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
-import { GpuResourceStore } from '../gpu-resource-store';
-
-const STORE_SRC = fileURLToPath(new URL('../gpu-resource-store.ts', import.meta.url));
+const STORE_SRC = fileURLToPath(
+  new URL('../../../render/src/gpu-resource-store.ts', import.meta.url),
+);
 
 function texturePodFixture(): TextureAsset {
   return {

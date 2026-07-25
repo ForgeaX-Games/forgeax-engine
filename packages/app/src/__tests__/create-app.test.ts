@@ -22,7 +22,7 @@
 // exercise external HTTP triggers or in-page buttons.
 
 import { World } from '@forgeax/engine-ecs';
-import { Camera, orthographic, perspective } from '@forgeax/engine-runtime';
+import { Camera, orthographic, perspective } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
 
 import { syncCameraAspect } from '../create-app';

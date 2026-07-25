@@ -13,13 +13,11 @@
 //   (3) storageBuffer=false -> SSAO buffers still allocate through UBOs
 //   (4) config.ssao.enabled=false -> zero ssao-* passes + zero allocation
 
+import type { RenderPipelineContext, RenderSystemRuntime } from '@forgeax/engine-render/internal';
+import { addSsaoPasses, getOrCreateSsaoBuffers } from '@forgeax/engine-render/internal';
 import { RenderGraph } from '@forgeax/engine-render-graph';
 import type { RhiCaps, RhiDevice } from '@forgeax/engine-rhi';
 import { describe, expect, it, vi } from 'vitest';
-import { addSsaoPasses } from '../render-graph-primitives';
-import type { RenderPipelineContext } from '../render-pipeline-context';
-import type { RenderSystemRuntime } from '../render-system';
-import { getOrCreateSsaoBuffers } from '../ssao-buffers';
 
 function makeMockRuntime(capsOverride: Partial<RhiCaps> = {}): {
   runtime: RenderSystemRuntime;

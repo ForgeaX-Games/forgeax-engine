@@ -106,7 +106,12 @@
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, Engine, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport, Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
+
 import { unwrapHandle } from '@forgeax/engine-types';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';

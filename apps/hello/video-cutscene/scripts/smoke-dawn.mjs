@@ -132,7 +132,9 @@ const mockCanvas = {
 // --- Engine boot (createApp path, mirrors src/main.ts) ---
 const { createApp } = await import('@forgeax/engine-app');
 const runtime = await import('@forgeax/engine-runtime');
-const { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, Transform } = runtime;
+const { Materials } = await import('@forgeax/engine-render');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const { HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
 const { quat } = await import('@forgeax/engine-math');
 const { Time, Update } = await import('@forgeax/engine-ecs');

@@ -22,13 +22,17 @@
 
 import type { Handle, World as WorldType } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
+import {
+  driveLazyEquirectProjection,
+  GpuResourceStore,
+  RhiErrorListenerRegistry,
+  warnMultiSkybox,
+  warnMultiSkylight,
+} from '@forgeax/engine-render/internal';
 import type { RhiCaps } from '@forgeax/engine-rhi';
 import type { EquirectAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GpuResourceStore } from '../gpu-resource-store';
-import { driveLazyEquirectProjection, warnMultiSkybox, warnMultiSkylight } from '../record';
-import { RhiErrorListenerRegistry } from '../renderer';
 
 // ── caps probes ──────────────────────────────────────────────────────────────
 

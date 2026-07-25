@@ -11,10 +11,9 @@
 // getCurrentTexture failure triggers reconfigure+retry and that consecutive
 // failures escalate to health internal-fault.
 
+import { HealthListenerRegistry, recordFrame } from '@forgeax/engine-render/internal';
 import { RhiError } from '@forgeax/engine-rhi';
 import { describe, expect, it } from 'vitest';
-import { recordFrame } from '../record';
-import { HealthListenerRegistry } from '../renderer';
 
 // biome-ignore lint/suspicious/noExplicitAny: mock objects are intentionally opaque in test code
 type MockObj = Record<string, any>;

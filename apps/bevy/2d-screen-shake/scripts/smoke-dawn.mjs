@@ -82,7 +82,9 @@ const mockCanvas = {
 
 // --- build ---
 const { World } = await import('@forgeax/engine-ecs');
-const { Camera, Transform, createRenderer, propagateTransforms } = await import('@forgeax/engine-runtime');
+const { Camera } = await import('@forgeax/engine-render');
+const { Transform, propagateTransforms } = await import('@forgeax/engine-scene');
+const { createRenderer } = await import('@forgeax/engine-runtime');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { buildScreenShakeWorld, cameraPosition, cameraTrauma, stepScreenShake } = await import(resolve(here, '..', 'src', 'screen-shake.ts'));

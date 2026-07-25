@@ -31,7 +31,12 @@ import { Update } from '@forgeax/engine-ecs';
 // eye (and the smoke's stability check) a fixed landmark.
 
 import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
-import { Camera, ChildOf, createRenderer, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, registerPropagateTransforms, Transform } from '@forgeax/engine-runtime';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { registerPropagateTransforms } from '@forgeax/engine-scene';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
 
 import { World } from '@forgeax/engine-ecs';
 

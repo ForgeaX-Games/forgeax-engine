@@ -358,9 +358,9 @@ describe('inspectDrawJson fields cropping', () => {
     }
   });
 
-  it('fields=undefined (full report) returns rt as {width,height,pixels} (browser path shape)', async () => {
+  it('fields=undefined (full report) returns rt as {width,height,format,pixels} (browser path shape)', async () => {
     // InspectRtPayload browser arm: inspectDrawJson hands back the decoded
-    // {width,height,pixels} triple (NOT a PNG path string). Asserts the union
+    // {width,height,format,pixels} tuple (NOT a PNG path string). Asserts the union
     // shape so the type no longer lies via `as any` (charter P2).
     const handleMap = new Map<string, unknown>();
     handleMap.set('tv:1', { __brand: 'Texture' } as any);
@@ -377,6 +377,7 @@ describe('inspectDrawJson fields cropping', () => {
       if (typeof rt === 'object' && rt !== undefined) {
         expect(rt.width).toBe(512);
         expect(rt.height).toBe(512);
+        expect(rt.format).toBe('rgba8unorm');
         expect(rt.pixels).toBeInstanceOf(Uint8Array);
         expect(rt.pixels.length).toBe(512 * 512 * 4);
       }

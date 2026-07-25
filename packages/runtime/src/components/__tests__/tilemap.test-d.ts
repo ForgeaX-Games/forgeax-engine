@@ -5,9 +5,9 @@
 // AGENTS.md §Component naming (single-semantic component drops Component suffix).
 
 import { createQueryState } from '@forgeax/engine-ecs';
+import { Tilemap } from '@forgeax/engine-render/authoring';
+import { ChildOf } from '@forgeax/engine-scene';
 import { describe, expectTypeOf, it } from 'vitest';
-import { ChildOf } from '../child-of';
-import { Tilemap } from '../tilemap';
 
 describe('Tilemap component schema (M0 baseline)', () => {
   it('type-level: 5 schema fields (cols / rows / tileSize / tileset / chunkSize)', () => {

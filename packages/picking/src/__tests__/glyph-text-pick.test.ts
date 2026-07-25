@@ -8,15 +8,15 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, type Handle, World } from '@forgeax/engine-ecs';
+import { CAMERA_PROJECTION_PERSPECTIVE, Camera } from '@forgeax/engine-render';
 import {
-  CAMERA_PROJECTION_PERSPECTIVE,
-  Camera,
   GlyphText,
-  GpuResourceStore,
   glyphTextLayoutSystem,
   resetGlyphBakeCache,
-  Transform,
-} from '@forgeax/engine-runtime';
+} from '@forgeax/engine-render/authoring';
+import { GpuResourceStore } from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
+
 import type { FontAsset, GlyphMetric } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { pick } from '../pick';

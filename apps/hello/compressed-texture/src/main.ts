@@ -27,7 +27,12 @@
 import { createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+
 import type { TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 

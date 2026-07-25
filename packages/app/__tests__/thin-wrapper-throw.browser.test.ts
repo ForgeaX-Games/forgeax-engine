@@ -13,7 +13,8 @@
 // path in one file is not viable.
 
 import { World } from '@forgeax/engine-ecs';
-import { EngineEnvironmentError, type Renderer } from '@forgeax/engine-runtime';
+import { type Renderer } from '@forgeax/engine-render';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { describe, expect, it, vi } from 'vitest';
 
 const innerWebgpuError = new Error('navigator.gpu missing');

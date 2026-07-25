@@ -144,17 +144,9 @@ const mockCanvas = {
 
 const { createApp } = await import('@forgeax/engine-app');
 const runtimePkg = await import('@forgeax/engine-runtime');
-const {
-  BLOOM_ENABLED,
-  Camera,
-  DirectionalLight,
-  GlyphText,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  TONEMAP_REINHARD_EXTENDED,
-  Transform,
-} = runtimePkg;
+const { GlyphText } = await import('@forgeax/engine-render/authoring');
+const { BLOOM_ENABLED, Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective, TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');

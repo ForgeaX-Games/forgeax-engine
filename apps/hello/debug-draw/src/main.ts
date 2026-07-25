@@ -14,7 +14,8 @@ import { Update } from '@forgeax/engine-ecs';
 import type { Mat4 } from '@forgeax/engine-math';
 import { mat4, vec3 } from '@forgeax/engine-math';
 import { createShaderModule, _internal_getRawDevice, rhi } from '@forgeax/engine-rhi-webgpu';
-import { Camera, perspective, Transform } from '@forgeax/engine-runtime';
+import { Camera, perspective } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const params = new URLSearchParams(window.location.search);
@@ -362,7 +363,7 @@ async function runDepth(): Promise<void> {
 
 async function runHdrpTonemap(): Promise<void> {
   const { createApp } = await import('@forgeax/engine-app');
-  const { HDRP_PIPELINE_ID, hdrpPipeline } = await import('@forgeax/engine-runtime');
+  const { HDRP_PIPELINE_ID, hdrpPipeline } = await import('@forgeax/engine-render/internal');
 
   const appResult = await createApp(canvas!);
   if (!appResult.ok) throw appResult.error;

@@ -705,6 +705,8 @@ export interface MaterialRenderState {
   readonly depthWriteEnabled?: boolean;
   /** Blend state descriptor (spec-aligned with `GPUBlendState`). Default: undefined (no blending). */
   readonly blend?: GPUBlendState;
+  /** Enable alpha-to-coverage when the active camera uses MSAA. Default: `false`. */
+  readonly alphaToCoverageEnabled?: boolean;
   /** Stencil face state. Default: undefined (no stencil operations). */
   readonly stencil?: StencilFaceState;
   /**
@@ -763,7 +765,12 @@ export interface MaterialPassDescriptor {
   readonly vertexEntry?: string;
   /** Fragment shader entry-point function name. Default: `'fs_main'`. */
   readonly fragmentEntry?: string;
-  /** Per-pass preprocessor defines — each key becomes `#define KEY VALUE` before shader compile. Default: `{}`. */
+  /**
+   * Per-pass shader defines. Build-time shader authors use the same names for
+   * `#define` composition; when a manifest variant axis is present, the
+   * runtime uses these values to select that already-compiled variant. Default:
+   * `{}`.
+   */
   readonly defines?: Record<string, string>;
   /** Free key-value tags for pass routing via {@link PassSelector}. Default: `{}`. */
   readonly tags?: Record<string, string>;

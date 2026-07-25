@@ -14,12 +14,11 @@
 //                        captures sharedDevice + offscreen mock canvas. Returns a state
 //                        object whose .sharedDevice / .renderTarget update lazily as the
 //                        engine path triggers context.configure / getCurrentTexture.
-//   populateSmokeWorld(world, runtime) - canonical 3-entity smoke world spawn (triangle
-//                                        mesh + camera + directional light). Caller passes
-//                                        runtime exports because the smoke scripts must
-//                                        hold the literal `await import('@forgeax/engine-ecs')`
-//                                        and `@forgeax/engine-runtime` tokens to satisfy
-//                                        smoke-coverage-gate.mjs delta layer (charter prop 6).
+//   populateSmokeWorld(world, components, assets) - canonical 3-entity smoke world spawn
+//                                        (triangle mesh + camera + directional light).
+//                                        Component schemas come from their canonical
+//                                        engine-render / engine-scene owners; the smoke
+//                                        script keeps the runtime import for the renderer.
 //   bootRenderer(opts) - createRenderer try/catch + backend log + onError listener
 //                        registration. Returns { renderer, errors } so the smoke script
 //                        can keep the literal `await renderer.ready` token in its body.
@@ -180,8 +179,8 @@ export async function setupGpuShim({ width, height, rerunCmd }) {
 // @forgeax/engine-assets-runtime, passed as `assets`. Data values mirror
 // apps/hello/triangle/src/main.ts M0 SSOT lock (charter proposition 5 co-source
 // binding exemplar).
-export function populateSmokeWorld(world, runtime, assets) {
-  const { Camera, DirectionalLight, MeshFilter, MeshRenderer, Transform } = runtime;
+export function populateSmokeWorld(world, components, assets) {
+  const { Camera, DirectionalLight, MeshFilter, MeshRenderer, Transform } = components;
   const { HANDLE_TRIANGLE } = assets;
   world.spawn(
     {

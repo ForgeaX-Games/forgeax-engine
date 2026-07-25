@@ -20,13 +20,8 @@
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
-import {
-  Camera,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import demoShader from './multi-uv-demo.wgsl';
 
 const DEMO_MATERIAL_SHADER_PATH = 'hello-multi-uv::multi-uv-demo';
@@ -125,15 +120,34 @@ if (!app.ok) {
   const world = app.value.world;
   const shader = app.value.renderer.shader;
   const assets = app.value.renderer.assets;
+  const falsifyVariantSelection = new URLSearchParams(location.search).has('falsify');
+  const variantControl = document.createElement('label');
+  variantControl.id = 'variant-control';
+  variantControl.style.cssText =
+    'position:fixed;z-index:1;top:12px;left:12px;padding:8px 10px;color:#fff;background:#111c;border-radius:4px;font:14px monospace';
+  variantControl.append('M3_MULTI_UV_VARIANT ');
+  const variantSelect = document.createElement('select');
+  variantSelect.id = 'variant-select';
+  variantSelect.setAttribute('aria-label', 'M3 multi-UV shader variant');
+  variantSelect.add(new Option('true (default)', 'true'));
+  variantSelect.add(new Option('false', 'false'));
+  variantControl.append(variantSelect, ' ');
+  const variantStatus = document.createElement('span');
+  variantStatus.id = 'variant-status';
+  variantStatus.textContent = 'M3_MULTI_UV_VARIANT=true';
+  variantControl.append(variantStatus);
+  document.body.append(variantControl);
 
   // Register the demo's custom material shader (AC-10 visual carrier). The
   // smoke-dawn path passes the same paramSchema explicitly; here vite's
   // forgeaxShader() transform already composed multi-uv-demo.wgsl into
   // { hash, wgsl } and the .meta.json sidecar is the paramSchema SSOT.
-  shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
-    source: demoShader.wgsl,
-    paramSchema: [{ name: 'baseColor', type: 'color' }],
-  });
+  if (!shader.lookupMaterialShader(DEMO_MATERIAL_SHADER_PATH).ok) {
+    shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
+      source: demoShader.wgsl,
+      paramSchema: [{ name: 'baseColor', type: 'color' }],
+    });
+  }
 
   // Build MeshAsset with independent per-attribute typed arrays. The interleaved
   // `vertices` buffer is the main GPU vertex data; `attributes` provides
@@ -164,7 +178,7 @@ if (!app.ok) {
   // carrier). The shader samples uv1 -> visible per-quad checkerboard; the
   // built-in PBR is deliberately NOT used here so the engine core stays
   // single-UV-zero-regression clean.
-  const materialAsset = {
+  const materialAsset = (variant: 'true' | 'false') => ({
     kind: 'material' as const,
     passes: [
       {
@@ -172,34 +186,58 @@ if (!app.ok) {
         shader: DEMO_MATERIAL_SHADER_PATH,
         tags: { LightMode: 'Forward' },
         queue: 2000,
+        defines: {
+          M3_MULTI_UV_VARIANT: falsifyVariantSelection ? 'true' : variant,
+        },
       },
     ],
     paramValues: {
       baseColor: [0.7, 0.7, 0.7],
     },
-  };
+  });
+  const defaultMaterial = materialAsset('true');
+  const falseMaterial = materialAsset('false');
 
   // catalog acquires the GUID -> payload mapping (for loadByGuid fast-path);
   // allocSharedRef mints the ECS column handles needed by MeshFilter.assetHandle
   // / MeshRenderer.materials[] (Handle<'MeshAsset','shared'> and
   // Handle<'MaterialAsset','shared'> respectively).
   assets.catalog('guid:0a0a0a0a-0000-0000-0000-0a0a0a0a0a0a', meshAsset);
-  assets.catalog('guid:1b1b1b1b-0000-0000-0000-1b1b1b1b1b1b', materialAsset);
+  assets.catalog('guid:1b1b1b1b-0000-0000-0000-1b1b1b1b1b1b', defaultMaterial);
+  assets.catalog('guid:2c2c2c2c-0000-0000-0000-2c2c2c2c2c2c', falseMaterial);
   const meshHandle = world.allocSharedRef('MeshAsset', meshAsset);
-  const matHandle = world.allocSharedRef('MaterialAsset', materialAsset);
+  const defaultMatHandle = world.allocSharedRef('MaterialAsset', defaultMaterial);
+  const falseMatHandle = world.allocSharedRef('MaterialAsset', falseMaterial);
 
-  world.spawn(
-    {
-      component: Transform,
-      data: {
-        pos: [0, 0, 0.5],
-        quat: [0, 0, 0, 1],
-        scale: [1, 1, 1],
+  const planeEntity = world
+    .spawn(
+      {
+        component: Transform,
+        data: {
+          pos: [0, 0, 0.5],
+          quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+        },
       },
-    },
-    { component: MeshFilter, data: { assetHandle: meshHandle } },
-    { component: MeshRenderer, data: { materials: [matHandle] } },
-  );
+      { component: MeshFilter, data: { assetHandle: meshHandle } },
+      { component: MeshRenderer, data: { materials: [defaultMatHandle] } },
+    )
+    .unwrap();
+
+  const selectVariant = (variant: 'true' | 'false') => {
+    const result = world.set(planeEntity, MeshRenderer, {
+      materials: [variant === 'true' ? defaultMatHandle : falseMatHandle],
+    });
+    if (!result.ok) {
+      console.error('[multi-uv] variant selection failed:', result.error);
+      return;
+    }
+    variantSelect.value = variant;
+    variantStatus.textContent = `M3_MULTI_UV_VARIANT=${variant}`;
+  };
+  variantSelect.addEventListener('change', () => {
+    selectVariant(variantSelect.value === 'false' ? 'false' : 'true');
+  });
   world.spawn(
     {
       component: Transform,

@@ -10,8 +10,8 @@
 // type assertions do NOT count), so the vitest typecheck project enforces it.
 
 import { World } from '@forgeax/engine-ecs';
+import { DirectionalLight, PointLight, Skylight, SpotLight } from '@forgeax/engine-render/internal';
 import { describe, it } from 'vitest';
-import { DirectionalLight, PointLight, Skylight, SpotLight } from '../components';
 
 describe('w5a -- residual per-axis light keys are compile errors (AC-04)', () => {
   it('DirectionalLight rejects residual directionX/colorR at spawn call-site', () => {

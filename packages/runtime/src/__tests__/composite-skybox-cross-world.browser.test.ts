@@ -32,9 +32,6 @@
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { halfFloat } from '@forgeax/engine-math';
-import type { EquirectAsset, Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
-import { afterEach, describe, expect, it } from 'vitest';
-import { page } from 'vitest/browser';
 import {
   Camera,
   DirectionalLight,
@@ -44,8 +41,11 @@ import {
   SkyboxBackground,
   Skylight,
   TONEMAP_REINHARD_EXTENDED,
-  Transform,
-} from '../components';
+} from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
+import type { EquirectAsset, Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
+import { afterEach, describe, expect, it } from 'vitest';
+import { page } from 'vitest/browser';
 import { Engine } from '../index';
 
 type EngineRenderer = Awaited<ReturnType<typeof Engine.create>>;

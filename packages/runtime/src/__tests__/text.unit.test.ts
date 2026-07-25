@@ -23,14 +23,16 @@ import {
   trackFontConcurrency,
   VERTEX_OFFSET,
 } from '@forgeax/engine-graphics-extras';
+import {
+  GlyphText,
+  glyphTextLayoutSystem,
+  resetGlyphBakeCache,
+} from '@forgeax/engine-render/authoring';
+import { GpuResourceStore, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
 import type { FontAsset, GlyphMetric, MeshAsset } from '@forgeax/engine-types';
 import { TextError } from '@forgeax/engine-types';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MeshRenderer, Transform } from '../components';
-import { GlyphText } from '../components/glyph-text';
-import { MeshFilter } from '../components/mesh-filter';
-import { glyphTextLayoutSystem, resetGlyphBakeCache } from '../glyph-text-layout-system';
-import { GpuResourceStore } from '../gpu-resource-store';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {

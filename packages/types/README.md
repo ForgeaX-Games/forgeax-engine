@@ -42,20 +42,20 @@
 `Handle<T,M>` is a dual-axis phantom-branded `number`, zero runtime overhead (`__handle` field only exists at the type level), TS compile-time brand enforces cross-target / cross-mode non-assignability (charter P3 explicit failure + P4 consistent abstraction):
 
 ```ts
-export type Handle<T extends string, M extends 'managed' | 'unmanaged'> = number & {
+export type Handle<T extends string, M extends 'unique' | 'shared'> = number & {
   readonly __handle: { readonly target: T; readonly mode: M };
 };
 ```
 
 - **`T extends string`** -- asset target tag (e.g. `'MeshAsset'` / `'TextureAsset'`); cross-tag `Handle<'MeshAsset',M>` and `Handle<'TextureAsset',M>` are mutually non-assignable.
-- **`M extends 'managed' | 'unmanaged'`** -- release responsibility: `'managed'` tracked by ECS via `ManagedRefStore`; `'unmanaged'` held by external owner (e.g. `AssetRegistry`); cross-mode non-assignability is a TS compile-time redline, preventing misuse of ECS managed handles with self-releasing registries.
+- **`M extends 'unique' | 'shared'`** -- release responsibility: `'unique'` is tracked by ECS; `'shared'` is held by an external owner such as `AssetRegistry`; cross-mode non-assignability is a TS compile-time redline.
 
 Convenience aliases:
 
 | Alias | Shape | Where used |
 |:--|:--|:--|
-| `ManagedHandle<T>` | `Handle<T, 'managed'>` | ECS internal consumption (`managed-ref-store.ts` column slot reads etc.); **`@forgeax/engine-ecs` barrel no longer re-exports this alias** (AC-15 grep gate, narrow AI user-facing surface); external callers write `Handle<T, 'managed'>` literal |
-| `UnmanagedHandle<T>` | `Handle<T, 'unmanaged'>` | `AssetRegistry.register<T>` return signature / `MeshFilter.assetHandle` column type; `@forgeax/engine-ecs` barrel re-exports alongside `Handle` |
+| `UniqueHandle<T>` | `Handle<T, 'unique'>` | ECS-owned handle; external callers normally write `Handle<T, 'unique'>` |
+| `SharedHandle<T>` | `Handle<T, 'shared'>` | `AssetRegistry.register<T>` return signature / `MeshFilter.assetHandle` column type |
 
 ### `AssetTagMap` 5-member table
 
@@ -85,20 +85,20 @@ export type TagOf<T extends Asset> = T extends { kind: infer K }
   : never;
 ```
 
-`AssetRegistry.register<T extends Asset>(asset: T): Handle<TagOf<T>, 'unmanaged'>` is the primary consumer of this mapping -- AI users write `register(meshAsset)` and get `Handle<'MeshAsset', 'unmanaged'>` without explicit generic parameter at the call site.
+`AssetRegistry.register<T extends Asset>(asset: T): Handle<TagOf<T>, 'shared'>` is the primary consumer of this mapping -- AI users write `register(meshAsset)` and get `Handle<'MeshAsset', 'shared'>` without explicit generic parameter at the call site.
 
 ### Three helper signatures
 
 ```ts
-export function toManaged<T extends string>(raw: number): Handle<T, 'managed'>;
-export function toUnmanaged<T extends string>(raw: number): Handle<T, 'unmanaged'>;
-export function unwrapHandle<T extends string, M extends 'managed' | 'unmanaged'>(
+export function toUnique<T extends string>(raw: number): Handle<T, 'unique'>;
+export function toShared<T extends string>(raw: number): Handle<T, 'shared'>;
+export function unwrapHandle<T extends string, M extends 'unique' | 'shared'>(
   h: Handle<T, M>,
 ): number;
 ```
 
-- **`toManaged<T>(raw)`** -- brand-creation factory, `as Handle<T, 'managed'>` literal is the AC-01 exemption "only" brand creation point (D-7); consumed internally by `ManagedRefStore.alloc<T>(value)`.
-- **`toUnmanaged<T>(raw)`** -- brand-creation factory, external owner side; consumed internally by `AssetRegistry.register<T>` + `BUILTIN_HANDLE_*` u32 constant branding (replaces call-site `as unknown as Handle<...>` literals, AC-05).
+- **`toUnique<T>(raw)`** -- brand-creation factory for ECS-owned handles.
+- **`toShared<T>(raw)`** -- brand-creation factory for externally owned handles such as asset-registry entries.
 - **`unwrapHandle(h)`** -- brand removal helper, runtime identity; exists to converge all "brand -> raw u32" conversion points into one function, AC-01 grep gate sweeps scattered `as unknown as number` literals (D-7 / D-8 cast collapse plan). AI users at spawn-site / register-site typically do not need to call this directly (charter P1 progressive disclosure).
 
 Usage example:
@@ -106,20 +106,19 @@ Usage example:
 ```ts
 import {
   type Handle,
-  type UnmanagedHandle,
-  toUnmanaged,
+  toShared,
   unwrapHandle,
 } from '@forgeax/engine-types';
 import { Engine } from '@forgeax/engine-runtime';
 
 const engine = await Engine.create({ canvas });
 
-// register returns Handle<TagOf<T>, 'unmanaged'> - generic inferred from asset.kind literal
+// register returns Handle<TagOf<T>, 'shared'> - generic inferred from asset.kind literal
 const meshHandle = engine.assets.register(myMeshAsset);
-//    ^? Handle<'MeshAsset', 'unmanaged'>
+//    ^? Handle<'MeshAsset', 'shared'>
 
 // builtin handle u32 -> branded handle
-const HANDLE_FOO: UnmanagedHandle<'MeshAsset'> = toUnmanaged<'MeshAsset'>(0xdead);
+const HANDLE_FOO: Handle<'MeshAsset', 'shared'> = toShared<'MeshAsset'>(0xdead);
 
 // brand removal (only when interacting with underlying Map<number, ...> / data structure keys)
 const raw: number = unwrapHandle(meshHandle);
@@ -130,14 +129,14 @@ const raw: number = unwrapHandle(meshHandle);
 Same precedent as `LocalEntityId` / `SceneInstanceId`:
 
 - Physical SSOT is one file (`packages/types/src/handle.ts`); package barrel `index.ts` pass-through via `export * from './handle'`.
-- `@forgeax/engine-ecs` barrel re-exports a **narrowed subset**: `export type { Handle, UnmanagedHandle } from '@forgeax/engine-types'` + `export { toManaged, toUnmanaged } from '@forgeax/engine-types'`, for existing `import { Handle } from '@forgeax/engine-ecs'` consumers to continue working; `TagOf` / `unwrapHandle` / `ManagedHandle` are not in the ecs barrel (AC-15 narrow AI user-facing surface, get these directly `from '@forgeax/engine-types'`).
+- `@forgeax/engine-ecs` barrel re-exports a **narrowed subset** of the handle vocabulary; the complete brand and helper surface is available from `@forgeax/engine-types`.
 - Under `verbatimModuleSyntax: true`, `export type` and `export { runtime }` are strictly separate.
-- `ManagedHandle<T>` alias + internal `'String'` tag not in ECS barrel (AC-15 grep gate; narrow AI user-facing surface).
+- `UniqueHandle<T>` / `SharedHandle<T>` are convenience aliases; the internal string representation is not part of the public API.
 
 ### Internal conventions
 
-- **`'String'` tag not public** -- `Handle<'String','managed'>` is the internal representation of schema vocab `'string'` (feat-20260515-string-managed-collapse), only appearing inside `world.ts` / `managed-ref-store.ts` as `toManaged<'String'>()`; external callers face JS `string` value type.
-- **`AC-01` exemption single point** -- only the 3 helpers in `packages/types/src/handle.ts` may contain `as Handle<T, M>` / `as Handle<T, 'managed'>` / `as Handle<T, 'unmanaged'>` literals; brand creation elsewhere must route through helpers. `rg -n 'as unknown as Handle<' packages apps` should hit 0.
+- **String values are not handles** -- schema vocab `'string'` materializes as a native JS `string`; the storage representation is internal.
+- **`AC-01` exemption single point** -- only the helpers in `packages/types/src/handle.ts` may contain the brand-creation cast; brand creation elsewhere must route through `toUnique` / `toShared`. `rg -n 'as unknown as Handle<' packages apps` should hit 0.
 - **`unwrapHandle` is the sole channel for eliminating `as unknown as number`** -- `rg -n 'as unknown as number' packages apps` expected 0 hits (feat-20260517 M2-M4 sweep consequence).
 
 ## MaterialAsset
@@ -152,7 +151,7 @@ The single path (feat-20260527-material-registration-unification M3): carries `p
 interface MaterialAsset {
   readonly kind: 'material';
   readonly passes?: readonly MaterialPassDescriptor[];
-  readonly parent?: Handle<'MaterialAsset', 'unmanaged'>;
+  readonly parent?: Handle<'MaterialAsset', 'shared'>;
   readonly paramValues?: Readonly<Record<string, unknown>>;
 }
 ```
@@ -161,7 +160,7 @@ interface MaterialAsset {
 |:--|:--|:--|
 | `passes` | `readonly MaterialPassDescriptor[]` | Array of pass descriptors; each `pass.shader` routes to `ShaderRegistry.lookupMaterialShader` for paramSchema validation at register-time. |
 | `paramValues` | `Readonly<Record<string, unknown>>` | Instantiated parameter values; validated at register-time via `_validateMaterialPasses` (union paramSchema, extra-key ignore, missing-required error). |
-| `parent` | `Handle<'MaterialAsset', 'unmanaged'>` | Inheritance chain parent for lazy-resolve merging. |
+| `parent` | `Handle<'MaterialAsset', 'shared'>` | Inheritance chain parent for lazy-resolve merging. |
 
 `ParamSchemaEntry` shape (from `@forgeax/engine-types`):
 
@@ -207,6 +206,7 @@ Each entry in `MaterialAsset.passes[]` is a `MaterialPassDescriptor` (all option
 | `frontFace` | `'ccw' \| 'cw'` | `'ccw'` | Triangle front-face winding order |
 | `cullMode` | `string` | `'back'` | Face culling mode |
 | `blend` | `MaterialBlendState` | opaque | Blend state for alpha blending |
+| `alphaToCoverageEnabled` | `boolean` | `false` | Enable MSAA alpha-to-coverage for cutout/partially covered materials |
 | `stencil` | `MaterialStencilState` | no-op | Stencil test state (`StencilFaceState` per-face) |
 
 `MaterialStencilState` (for the `stencil` field): `compare` / `failOp` / `depthFailOp` / `passOp` apply per-face (`stencilFront` / `stencilBack`). The mask fields are NOT on `StencilFaceState` -- they are top-level on `MaterialRenderState`.

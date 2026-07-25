@@ -20,8 +20,9 @@ import type {
 } from '@forgeax/engine-input';
 import type { PhysicsWorld, PhysicsWorld2D } from '@forgeax/engine-physics';
 import type { Plugin, PluginError } from '@forgeax/engine-plugin';
+import type { Renderer, RendererError } from '@forgeax/engine-render';
 import type { RhiError, RhiInstance } from '@forgeax/engine-rhi';
-import type { EngineEnvironmentError, Renderer, RendererError } from '@forgeax/engine-runtime';
+import type { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import type { ImportTransport } from '@forgeax/engine-types';
 
 import type { AppError, AppErrorCode } from './errors';

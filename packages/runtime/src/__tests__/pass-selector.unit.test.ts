@@ -1,6 +1,6 @@
+import { matchPass, selectPasses } from '@forgeax/engine-render/internal';
 import type { MaterialPassDescriptor, PassSelector } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { matchPass, selectPasses } from '../systems/pass-selector';
 
 /*
  * feat-20260609 M1 / T-003: AddScenePass/AddShadowPass selector required.

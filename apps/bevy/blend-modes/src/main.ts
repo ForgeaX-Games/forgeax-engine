@@ -5,16 +5,14 @@
 
 import { createApp } from '@forgeax/engine-app';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import {
-  Camera,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { Materials } from '@forgeax/engine-render';
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
+import { PointLight } from '@forgeax/engine-render';
+
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { createSphereGeometry } from '@forgeax/engine-geometry';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';

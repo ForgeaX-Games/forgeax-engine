@@ -158,17 +158,11 @@ export async function runIblSmoke(opts) {
   // --- 3. Engine + manifest ---
   const { World } = await import('@forgeax/engine-ecs');
   const { createSphereGeometry } = await import('@forgeax/engine-geometry');
-  const {
-    Camera,
-    createRenderer,
-    MeshFilter,
-    MeshRenderer,
-    SKYBOX_MODE_CUBEMAP,
-    SkyboxBackground,
-    Skylight,
-    TONEMAP_REINHARD_EXTENDED,
-    Transform,
-  } = await import('@forgeax/engine-runtime');
+  const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { SKYBOX_MODE_CUBEMAP, SkyboxBackground, Skylight } = await import('@forgeax/engine-render');
+const { TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 
   const ENGINE_MANIFEST = await buildEngineShaderManifest();

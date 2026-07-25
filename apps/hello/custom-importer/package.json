@@ -23,7 +23,10 @@
     "gauntletScenario": {
       "id": "hello-custom-importer-dawn",
       "script": "smoke",
-      "domains": ["Asset schemas, import, and delivery", "Rendering and shader construction"],
+      "domains": [
+        "Asset schemas, import, and delivery",
+        "Rendering and shader construction"
+      ],
       "packages": [
         "@forgeax/engine-assets-runtime",
         "@forgeax/engine-ecs",
@@ -79,7 +82,9 @@
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-pack": "workspace:^",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-types": "workspace:*"
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-pack": "workspace:*",

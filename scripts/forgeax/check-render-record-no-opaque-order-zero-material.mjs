@@ -4,7 +4,7 @@
 // plan-strategy section 2 D-3 + requirements AC-06 reverse-grep precision).
 //
 // Reverse-grep enforcement of the per-entity material texture binding fix
-// on `packages/runtime/src/render-system-record.ts`. The record stage MUST
+// on `packages/render/src/render-system-record.ts`. The record stage MUST
 // NOT resolve baseColorTexture globally from `validatedOrdered[0]?.source
 // .material` and MUST NOT create a single shared material BindGroup outside
 // the per-entity draw loop. Each entity must get its own per-entity material
@@ -30,10 +30,10 @@ import { fileURLToPath } from 'node:url';
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..', '..');
 // feat-20260704 M3/w24: the record-stage monolith split into the
-// packages/runtime/src/record/ cluster. The gate now scans every .ts in
+// packages/render/src/record/ cluster. The gate now scans every .ts in
 // that directory so a banned pattern cannot regrow in any sibling file
 // (plan-strategy D-2 no-root-shim + section 5.6 no empty-pass).
-const RECORD_DIR = resolve(REPO_ROOT, 'packages/runtime/src/record');
+const RECORD_DIR = resolve(REPO_ROOT, 'packages/render/src/record');
 
 const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {
@@ -44,7 +44,7 @@ if (args.includes('--help') || args.includes('-h')) {
       'Usage:',
       '  node scripts/forgeax/check-render-record-no-opaque-order-zero-material.mjs',
       '',
-      'Asserts that no file under packages/runtime/src/record/ does NOT',
+      'Asserts that no file under packages/render/src/record/ does NOT',
       'resolve material textureView globally from validatedOrdered[0]?.source',
       '.material and does NOT export a shared `materialBindGroup` variable',
       'created outside the per-entity draw loop.',

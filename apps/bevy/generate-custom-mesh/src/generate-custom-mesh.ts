@@ -1,13 +1,11 @@
 import { type World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  MeshFilter,
-  MeshRenderer,
-  Materials,
-  perspective,
-  Transform,
-  type MaterialAsset,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { type MaterialAsset } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
+
 import type { MeshAsset } from '@forgeax/engine-types';
 import { quat } from '@forgeax/engine-math';
 

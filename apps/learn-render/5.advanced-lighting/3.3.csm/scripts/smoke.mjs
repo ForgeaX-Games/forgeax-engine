@@ -186,16 +186,10 @@ const { createApp } = enginePkg;
 
 const runtimePkg = await import('@forgeax/engine-runtime');
 const { createPlaneGeometry } = await import('@forgeax/engine-geometry');
-const {
-  Camera,
-  DirectionalLight,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-  URP_PIPELINE_ID,
-} = runtimePkg;
+const { Materials } = await import('@forgeax/engine-render');
+const { URP_PIPELINE_ID } = await import('@forgeax/engine-render/internal');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');
@@ -413,7 +407,7 @@ app.renderer.postProcess.register(OVERLAY_PP_ID, {
 
 // Spawn a PostProcessParams entity so the engine writes the params UBO per
 // frame. Default: tintMode=-1 (passthrough), fakeDepth=0 (real depth).
-const { PostProcessParams } = await import('@forgeax/engine-runtime');
+const { PostProcessParams } = await import('@forgeax/engine-render');
 const paramsInitial = falsifyFakeDepth
   ? packOverlayParams(0 /* all */, 1 /* fake */)
   : packOverlayParams(0 /* all */, 0 /* real */);

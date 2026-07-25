@@ -54,7 +54,8 @@ The demo spawns three cubes + a camera + a directional light:
 ```typescript
 // 1. engine usage — zero UBO code, just engine APIs:
 import { createApp } from '@forgeax/engine-app';
-import { Camera, DirectionalLight, HANDLE_CUBE, Materials, ... } from '@forgeax/engine-runtime';
+import { Camera, DirectionalLight, Materials, ... } from '@forgeax/engine-render';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 
 // 3. bootstrap — app creation + scene spawn:
 const app = await createApp(canvas, { clearColor, shaderManifestUrl });

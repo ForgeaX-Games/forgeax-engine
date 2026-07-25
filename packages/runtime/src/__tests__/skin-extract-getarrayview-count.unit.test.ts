@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 
 const extractPath = (() => {
   const here = dirname(fileURLToPath(import.meta.url));
-  return join(here, '..', 'render-system-extract.ts');
+  return join(here, '..', '..', '..', 'render', 'src', 'render-system-extract.ts');
 })();
 
 describe('_getArrayView count (AC-03 gate)', () => {

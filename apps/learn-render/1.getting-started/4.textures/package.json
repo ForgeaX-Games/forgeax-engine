@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "learn-render LearnOpenGL section 1.4 textures \u2014 disk JPEG + sidecar meta + GPU upload via loadByGuid (M8 milestone fills index.ts + smoke).",
+  "description": "learn-render LearnOpenGL section 1.4 textures — disk JPEG + sidecar meta + GPU upload via loadByGuid (M8 milestone fills index.ts + smoke).",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -50,7 +50,9 @@
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-types": "workspace:*"
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",

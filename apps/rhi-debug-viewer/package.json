@@ -1,5 +1,5 @@
 {
-  "name": "@forgeax/rhi-debug-viewer",
+  "name": "@forgeax/engine-rhi-debug-viewer",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -29,7 +29,7 @@
       },
       "gate": {
         "enabled": true,
-        "command": "pnpm --filter @forgeax/rhi-debug-viewer build"
+        "command": "pnpm --filter @forgeax/engine-rhi-debug-viewer build"
       },
       "spike-report": {
         "enabled": false,

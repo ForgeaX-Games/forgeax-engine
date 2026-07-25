@@ -23,10 +23,10 @@
 // fallback exit with the mode-gate bypass means the helper output is
 // the SSOT for "should this bucket fold or fall back?").
 
+import type { DispatchEntry } from '@forgeax/engine-render/internal';
+import { evaluateFoldBucketUniformCap, type FoldBucket } from '@forgeax/engine-render/internal';
 import { RhiError } from '@forgeax/engine-rhi';
 import { describe, expect, it } from 'vitest';
-import type { DispatchEntry } from '../render-system-extract';
-import { evaluateFoldBucketUniformCap, type FoldBucket } from '../render-system-fold';
 
 const FOLD_UNIFORM_CAP = 128;
 

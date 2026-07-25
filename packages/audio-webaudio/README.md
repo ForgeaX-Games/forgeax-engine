@@ -53,7 +53,7 @@ Both tick systems (audioTickSystem + audioListenerSync) are registered by `audio
 
 ```ts
 import { audioTickSystem, syncListenerFromWorldMatrix } from '@forgeax/engine-audio-webaudio';
-import { PROPAGATE_TRANSFORMS_SYSTEM, Transform } from '@forgeax/engine-runtime';
+import { PROPAGATE_TRANSFORMS_SYSTEM, Transform } from '@forgeax/engine-scene';
 import { AudioListener } from '@forgeax/engine-audio';
 import { Update, createQueryState, Entity, queryRun } from '@forgeax/engine-ecs';
 

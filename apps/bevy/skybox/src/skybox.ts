@@ -4,15 +4,14 @@ import type { World } from '@forgeax/engine-ecs';
 import {
   Camera,
   DirectionalLight,
-  SKYBOX_MODE_CUBEMAP,
   SkyboxBackground,
   Skylight,
-  TONEMAP_REINHARD_EXTENDED,
-  Transform,
   perspective,
-} from '@forgeax/engine-runtime';
+} from '@forgeax/engine-render';
+import { SKYBOX_MODE_CUBEMAP, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render/internal';
 import type { Handle } from '@forgeax/engine-types';
 import { quat } from '@forgeax/engine-math';
+import { Transform } from '@forgeax/engine-scene';
 
 export function buildSkyboxWorld(
   world: World,

@@ -99,7 +99,7 @@ The function is **pure** (no side effects, no I/O). It throws on schema-author e
 Engine-injected resources (shadow maps, IBL skylight, lightmap emissive/AO) attach **after** the user paramSchema region. The starting binding is `bgl.length` -- never a hardcoded constant -- so any user-region size flows through to the injection start without a coupled edit:
 
 ```ts
-import { appendInjection, type InjectionKind } from '@forgeax/engine-runtime';
+import { appendInjection, type InjectionKind } from '@forgeax/engine-render/internal';
 
 // userBgl = derive(schema).bglEntries
 const merged = [...userBgl, ...appendInjection(userBgl, 'ibl')];

@@ -37,7 +37,8 @@
 
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
-import { EngineEnvironmentError, Name } from '@forgeax/engine-runtime';
+import { Name } from '@forgeax/engine-scene';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { populateDemoWorld } from '../../../shared/src/populate-demo-world';
 

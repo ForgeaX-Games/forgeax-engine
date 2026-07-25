@@ -16,8 +16,8 @@
 //   (5) POST_PROCESS_EXPECTED + postProcessHint resolve both new codes (the
 //       hint switch's own `default: never` arm guards completeness there too).
 
+import { PostProcessError, type PostProcessErrorCode } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import { PostProcessError, type PostProcessErrorCode } from '../post-process-errors';
 
 // Compile-time exhaustiveness probe: a switch over every member with no default.
 // If a future code is added to the union without a case here, `code` is not

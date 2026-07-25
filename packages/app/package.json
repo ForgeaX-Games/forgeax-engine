@@ -37,10 +37,13 @@
     "@forgeax/engine-physics-rapier2d": "workspace:*",
     "@forgeax/engine-physics-rapier3d": "workspace:*",
     "@forgeax/engine-plugin": "workspace:*",
+    "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-state": "workspace:*",
-    "@forgeax/engine-types": "workspace:*"
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-animation": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-remote": "workspace:*",

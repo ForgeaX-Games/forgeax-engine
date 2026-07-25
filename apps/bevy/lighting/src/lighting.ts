@@ -25,19 +25,15 @@
 
 import type { World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE, HANDLE_QUAD, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
-import {
-  Camera,
-  DirectionalLight,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  PointLight,
-  Skylight,
-  SpotLight,
-  Transform,
-  perspective,
-} from '@forgeax/engine-runtime';
-import type { MaterialAsset } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { Materials, Skylight } from '@forgeax/engine-render';
+import { PointLight } from '@forgeax/engine-render';
+import { SpotLight } from '@forgeax/engine-render';
+
+import type { MaterialAsset } from '@forgeax/engine-runtime';;
 import { quat } from '@forgeax/engine-math';
 
 // ── Light colors (Bevy RED / LIME / BLUE) ───────────────────────────────

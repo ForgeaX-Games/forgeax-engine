@@ -5,9 +5,9 @@
 // AGENTS.md §Component naming.
 
 import type { EcsError, EntityHandle, World } from '@forgeax/engine-ecs';
+import { markTileLayerDirty, TileLayer } from '@forgeax/engine-render/authoring';
 import type { Result } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
-import { markTileLayerDirty, TileLayer } from '../tile-layer';
 
 describe('TileLayer component schema (M0 baseline)', () => {
   it('type-level: 3 schema fields (tiles / layerOrder / dirty)', () => {

@@ -23,7 +23,7 @@
 // bias+PCF is deployed). The suggested X = floor(max(diff) * 0.5 * 100) / 100
 // with a floor of 0.02 to avoid vanishing thresholds that invite flakiness.
 
-import type { Renderer } from '@forgeax/engine-runtime';
+import type { Renderer } from '@forgeax/engine-render/internal';
 
 /**
  * Shadow factor sample returned by debugSampleShadowFactor.

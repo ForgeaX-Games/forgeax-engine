@@ -19,6 +19,7 @@
 // change to handle bookkeeping flips the second-destroy branch).
 
 import { SharedRefStore } from '@forgeax/engine-ecs';
+import { GpuBuffer, GpuResourceStore, GpuTexture } from '@forgeax/engine-render/internal';
 import type { Buffer, Result, RhiCaps, RhiDevice, Texture } from '@forgeax/engine-rhi';
 import { err, ok, RhiError } from '@forgeax/engine-rhi';
 import {
@@ -30,9 +31,6 @@ import {
   unwrapHandle,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-
-import { GpuBuffer, GpuTexture } from '../gpu-resource';
-import { GpuResourceStore } from '../gpu-resource-store';
 
 // ── Minimal RhiDevice stub (only destroyBuffer / destroyTexture wired) ──
 
@@ -445,8 +443,7 @@ describe('GpuResourceStore.destroyAll (feat-20260612 M3 / w10, AC-06 prereq)', (
 // per-frame path keeps its existing 'just delete the key' semantics
 // (plan-strategy D-7 / OOS-11).
 
-import { GpuBuffer as GpuBufferCls } from '../gpu-resource';
-import { disposeInstanceBuffers } from '../instance-buffer-cache';
+import { disposeInstanceBuffers, GpuBuffer as GpuBufferCls } from '@forgeax/engine-render/internal';
 
 describe('disposeInstanceBuffers (feat-20260612 M4 / w14)', () => {
   it('walks the Map and destroys every entry; clears the Map', () => {

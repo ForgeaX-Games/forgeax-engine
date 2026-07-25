@@ -22,7 +22,8 @@ import {
   RigidBody,
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
-import { Materials, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
+import { Materials, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 
 import { PORTAL_GROUPS } from '../collision-groups';

@@ -15,11 +15,13 @@
 //   - Instances schema not touched (stride=16)
 //   - no new file in packages/runtime/src/scene-instances/ (AC-08)
 
+import type { DispatchEntry } from '@forgeax/engine-render/internal';
+import {
+  foldDispatchBuckets,
+  TRANSPARENT_SORT_MODE_LAYER_Z,
+} from '@forgeax/engine-render/internal';
 import { RenderQueue } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import type { DispatchEntry } from '../render-system-extract';
-import { foldDispatchBuckets } from '../render-system-fold';
-import { TRANSPARENT_SORT_MODE_LAYER_Z } from '../systems/transparent-sort-config';
 
 // Minimal mock DispatchEntry — only the fields the fold helper reads:
 // materialHandle, renderableIndex, layer, queue. Other fields are

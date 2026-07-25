@@ -21,7 +21,13 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { type MeshAsset } from '@forgeax/engine-assets-runtime';
-import { acquireCanvasContext, Camera, createRenderer, DirectionalLight, EngineEnvironmentError, type MaterialAsset, Materials, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { perspective } from '@forgeax/engine-render';
+import { acquireCanvasContext, createRenderer, EngineEnvironmentError, type MaterialAsset } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+
 import { pick } from '@forgeax/engine-picking';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';

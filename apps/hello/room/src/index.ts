@@ -18,12 +18,8 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  acquireCanvasContext,
-  createRenderer,
-  EngineEnvironmentError,
-  Materials,
-} from '@forgeax/engine-runtime';
+import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
 import {
   type LocalEntityId,
   type SceneAsset,

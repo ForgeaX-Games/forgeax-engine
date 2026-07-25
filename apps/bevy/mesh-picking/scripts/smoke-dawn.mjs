@@ -104,17 +104,9 @@ const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const { createBoxGeometry, createSphereGeometry, createCapsuleGeometry, createTorusGeometry } = await import('@forgeax/engine-geometry');
 const { pick } = await import('@forgeax/engine-picking');
-const {
-  Camera,
-  createRenderer,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  propagateTransforms,
-  Transform,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { Transform, propagateTransforms } = await import('@forgeax/engine-scene');
+const { Camera, Materials, MeshFilter, MeshRenderer, perspective, PointLight } = await import('@forgeax/engine-render');
 
 const world = new World();
 

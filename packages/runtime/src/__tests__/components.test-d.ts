@@ -15,16 +15,14 @@
 //   decision §2.6.
 
 import type { Handle, InputShapeOf, ShapeOf } from '@forgeax/engine-ecs';
-import { describe, expectTypeOf, it } from 'vitest';
-
 import type {
   Camera,
-  ChildOf,
   DirectionalLight,
   MeshFilter,
   MeshRenderer,
-  Transform,
-} from '../components';
+} from '@forgeax/engine-render/internal';
+import type { ChildOf, Transform } from '@forgeax/engine-scene';
+import { describe, expectTypeOf, it } from 'vitest';
 
 describe('w7 type-level - 5 component schemas yield exact data shapes via ShapeOf', () => {
   it('Transform data shape has 3 local inline-array fields + world array<f32,16>', () => {

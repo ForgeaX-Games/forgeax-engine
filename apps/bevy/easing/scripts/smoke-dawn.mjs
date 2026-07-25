@@ -107,7 +107,8 @@ const mockCanvas = {
 
 // --- build the easing World via the shared SSOT builder ---
 const { World } = await import('@forgeax/engine-ecs');
-const { createRenderer, propagateTransforms, Transform } = await import('@forgeax/engine-runtime');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { propagateTransforms, Transform } = await import('@forgeax/engine-scene');
 const { createQueryState, queryRun, Entity } = await import('@forgeax/engine-ecs');
 
 const here = dirname(fileURLToPath(import.meta.url));

@@ -130,8 +130,8 @@ const mockCanvas = {
 const enginePkg = await import('@forgeax/engine-app');
 const { createApp } = enginePkg;
 
-const runtimePkg = await import('@forgeax/engine-runtime');
-const { Camera, DirectionalLight, Transform } = runtimePkg;
+const { Camera, DirectionalLight } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 
 const audioPkg = await import('@forgeax/engine-audio');
 const { AUDIO_ENGINE_RESOURCE_KEY } = audioPkg;

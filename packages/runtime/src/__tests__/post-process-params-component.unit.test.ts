@@ -8,8 +8,8 @@
 // component field shape and type assignability.
 
 import { createQueryState, Entity, queryRun, World } from '@forgeax/engine-ecs';
+import { PostProcessParams } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import { PostProcessParams } from '../components/post-process-params';
 
 describe('PostProcessParams component definition', () => {
   it('should be registered as a named component', () => {

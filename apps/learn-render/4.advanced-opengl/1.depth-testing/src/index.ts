@@ -25,7 +25,12 @@ import { createApp } from '@forgeax/engine-app';
 import type { App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, DirectionalLight, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
+
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -107,14 +112,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 4.1 depth-testing] renderer.shader is null');
     return;
   }
-  shader.registerMaterialShader(DEPTH_VIZ_SHADER_ID, {
-    source: depthVizShader.wgsl,
-    paramSchema: [
-      { name: 'baseColor', type: 'color' },
-      { name: 'metallic', type: 'f32' },
-      { name: 'roughness', type: 'f32' },
-    ],
-  });
+  if (!shader.lookupMaterialShader(DEPTH_VIZ_SHADER_ID).ok) {
+    shader.registerMaterialShader(DEPTH_VIZ_SHADER_ID, {
+      source: depthVizShader.wgsl,
+      paramSchema: [
+        { name: 'baseColor', type: 'color' },
+        { name: 'metallic', type: 'f32' },
+        { name: 'roughness', type: 'f32' },
+      ],
+    });
+  }
 
   // Wire the pack-index URL for GUID-based texture loading.
   assets.configurePackIndex(PACK_INDEX_URL);

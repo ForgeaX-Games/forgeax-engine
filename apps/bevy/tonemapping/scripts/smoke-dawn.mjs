@@ -41,7 +41,11 @@ const mockCanvas = { width: WIDTH, height: HEIGHT, getContext(k) {
 
 const { World } = await import('@forgeax/engine-ecs');
 const { createBoxGeometry, createSphereGeometry } = await import('@forgeax/engine-geometry');
-const { Camera, createRenderer, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, TONEMAP_AGX, Transform } = await import('@forgeax/engine-runtime');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { Materials } = await import('@forgeax/engine-render');
+const { perspective, TONEMAP_AGX } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const world = new World();
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(resolve(here, '..', 'dist', 'shaders', 'manifest.json'), 'utf8'))}`;

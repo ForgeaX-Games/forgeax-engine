@@ -70,7 +70,13 @@ import { mat4, quat, vec3 } from '@forgeax/engine-math';
 //      raw device, while AI-user-facing code only sees the forgeax
 //      abstraction (charter proposition 5 consistent abstraction red line).
 import { AssetRegistry, HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
-import { Camera, acquireCanvasContext, createRenderer, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, perspective, type Renderer, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { type Renderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import brdfSrc from './shaders/brdf.wgsl?raw';
 import pbrSrc from './shaders/pbr.wgsl?raw';

@@ -16,7 +16,8 @@
 import { describe, expect, it } from 'vitest';
 import { World } from '@forgeax/engine-ecs';
 import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
-import { registerPropagateTransforms, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { registerPropagateTransforms } from '@forgeax/engine-scene';
 import { loadRapier2D } from '../src/wasm-loader';
 import {
   createRapier2DPhysicsWorld,

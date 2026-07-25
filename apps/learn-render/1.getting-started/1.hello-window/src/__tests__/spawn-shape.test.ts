@@ -24,7 +24,8 @@
 // acceptanceCheck.
 
 import { World } from '@forgeax/engine-ecs';
-import { Camera, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
 
 // CAMERA_PROJECTION_PERSPECTIVE numeric encoding (0) is duplicated here

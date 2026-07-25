@@ -140,17 +140,16 @@ const mockCanvas = {
 import { readFileSync as readFileSyncFs } from 'node:fs';
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  ChildOf,
-  createRenderer,
-  DirectionalLight,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} = enginePkg;
+  const enginePkg = await import('@forgeax/engine-runtime');
+  const { createRenderer } = enginePkg;
+const { Materials } = await import('@forgeax/engine-render');
+  const {
+    Camera,
+    DirectionalLight,
+    MeshFilter,
+    MeshRenderer,
+  } = await import('@forgeax/engine-render');
+  const { ChildOf, Transform } = await import('@forgeax/engine-scene');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const ROOM_PACK_PATH = resolve(here, '..', 'assets', 'room.pack.json');

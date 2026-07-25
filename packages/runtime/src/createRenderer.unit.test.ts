@@ -9,13 +9,13 @@
 // Byte-equiv guarantee is at the PSO descriptor level (M2-T4-TEST, plan D-5),
 // not the cache-key string level.
 
+import { cacheKeyOf, type PipelineSpec } from '@forgeax/engine-render/internal';
 import type {
   MaterialRenderState,
   PrimitiveTopology,
   VertexAttributeMap,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { cacheKeyOf, type PipelineSpec } from './pipeline-spec';
 
 const PROCEDURAL_ATTR_LAYOUT: VertexAttributeMap = {
   position: new Float32Array(0),

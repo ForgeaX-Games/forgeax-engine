@@ -28,6 +28,8 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import { Camera, extractFrames, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type {
   Handle,
@@ -36,8 +38,6 @@ import type {
   MeshAsset,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
-import { extractFrames } from '../render-system-extract';
 
 // Two-index owner shape w4-w6 introduces (see w1 for rationale).
 interface OwnerSplit {

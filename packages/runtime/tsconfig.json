@@ -12,6 +12,7 @@
     "src/**/*"
   ],
   "references": [
+    { "path": "../animation" },
     { "path": "../assets-runtime" },
     { "path": "../audio-webaudio" },
     { "path": "../codec" },
@@ -32,6 +33,9 @@
     { "path": "../plugin" },
     { "path": "../state" },
     { "path": "../vite-plugin-shader" },
-    { "path": "../import" }
+    { "path": "../import" },
+    { "path": "../render" },
+    { "path": "../scene" },
+    { "path": "../skinning" }
   ]
 }

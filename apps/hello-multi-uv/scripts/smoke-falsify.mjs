@@ -188,7 +188,8 @@ console.log('[falsify-smoke] uv1 data collapsed to zero -- checkerboard should v
 
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
-const { Camera, createRenderer, DirectionalLight, MeshFilter, MeshRenderer, Transform } = enginePkg;
+const { createRenderer, Transform } = enginePkg;
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 
 const world = new World();
 const DEMO_MATERIAL_SHADER_PATH = 'hello-multi-uv::multi-uv-demo';

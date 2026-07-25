@@ -11,7 +11,7 @@
 ```ts
 import { createDebugDraw } from '@forgeax/engine-debug-draw';
 import { createShaderModule } from '@forgeax/engine-rhi-webgpu';
-import { createApp } from '@forgeax/engine-runtime';
+import { createApp } from '@forgeax/engine-app';
 
 // ---- runtime path (zero-config auto-flush) ----
 const app = await createApp({ canvas });

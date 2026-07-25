@@ -15,13 +15,10 @@ import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { LocalEntityId, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '../components/scene-instance';
+import '@forgeax/engine-render/internal';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { ChildOf, Children, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { rootsToSceneAsset } from '../collect-scene-asset';
-import { ChildOf } from '../components/child-of';
-import { Children } from '../components/children';
-import { Transform } from '../components/transform';
-import { propagateTransforms } from '../systems/propagate-transforms';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // Read the resolved world mat4 (column-major 16 floats) from the Transform

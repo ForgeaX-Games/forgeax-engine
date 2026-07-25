@@ -7,8 +7,8 @@
 // Charter P3: required-field omission must produce compile-time error,
 // not runtime silent fallback.
 
+import { orthographic, perspective } from '@forgeax/engine-render/internal';
 import { describe, expectTypeOf, it } from 'vitest';
-import { orthographic, perspective } from '../camera';
 
 describe('perspective factory type-level', () => {
   it('perspective({ fov: 60, aspect: 4/3 }) type-checks OK', () => {

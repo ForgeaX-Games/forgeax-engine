@@ -90,9 +90,12 @@ const mockCanvas = {
 
 // --- build the spotlight World via the shared SSOT builder ---
 const { World } = await import('@forgeax/engine-ecs');
-const { Camera, createRenderer, Materials, MeshFilter, MeshRenderer, perspective, SpotLight, Transform } = await import(
-  '@forgeax/engine-runtime'
-);
+const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { SpotLight } = await import('@forgeax/engine-render');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { Materials } = await import('@forgeax/engine-render');
+const { perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const { HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
 const { quat } = await import('@forgeax/engine-math');
 

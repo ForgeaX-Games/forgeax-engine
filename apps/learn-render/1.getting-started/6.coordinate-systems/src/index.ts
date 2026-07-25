@@ -89,7 +89,11 @@ import type { CanvasAppError } from '@forgeax/engine-app';
 import { quat, vec3 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, EngineEnvironmentError, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+
 import type { MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';

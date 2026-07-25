@@ -10,7 +10,9 @@
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
-    "@forgeax/engine-runtime": "workspace:*"
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "exports": {
     "./onerror-gate": "./src/onerror-gate.ts"

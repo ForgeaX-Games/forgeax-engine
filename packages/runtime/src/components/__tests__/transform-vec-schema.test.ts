@@ -18,8 +18,8 @@
 // quaternion / zero scale).
 
 import { World } from '@forgeax/engine-ecs';
+import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { Transform } from '../transform';
 
 describe('w4 -- Transform vec schema (AC-05)', () => {
   it('(a) schema declares pos/quat/scale array columns, no per-axis scalars', () => {

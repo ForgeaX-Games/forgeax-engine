@@ -91,10 +91,12 @@ const mockCanvas = {
 
 // --- build the lighting World inline (Node can't import .ts) ---
 const { World } = await import('@forgeax/engine-ecs');
-const {
-  Camera, createRenderer, DirectionalLight, Materials, MeshFilter, MeshRenderer,
-  perspective, PointLight, Skylight, SpotLight, Transform,
-} = await import('@forgeax/engine-runtime');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { PointLight, SpotLight } = await import('@forgeax/engine-render');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { Materials, Skylight } = await import('@forgeax/engine-render');
+const { perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const { HANDLE_CUBE, HANDLE_QUAD, HANDLE_SPHERE } = await import('@forgeax/engine-assets-runtime');
 const { quat } = await import('@forgeax/engine-math');
 

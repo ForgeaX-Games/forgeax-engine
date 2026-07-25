@@ -40,7 +40,15 @@
 import { type App, createApp } from '@forgeax/engine-app';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, EngineEnvironmentError, HDRP_PIPELINE_ID, Materials, MeshFilter, MeshRenderer, perspective, PointLight, Skylight, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { Materials, Skylight } from '@forgeax/engine-render';
+import { HDRP_PIPELINE_ID } from '@forgeax/engine-render/internal';
+import { PointLight } from '@forgeax/engine-render';
+
 import type { MaterialAsset, SceneAsset } from '@forgeax/engine-types';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';

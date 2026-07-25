@@ -47,7 +47,9 @@
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-rhi-webgpu": "workspace:*",
-    "@forgeax/engine-rhi-wgpu": "workspace:*"
+    "@forgeax/engine-rhi-wgpu": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",

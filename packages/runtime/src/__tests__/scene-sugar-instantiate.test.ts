@@ -18,10 +18,11 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { defineComponent, type EntityHandle, World } from '@forgeax/engine-ecs';
+import { SceneInstance } from '@forgeax/engine-render/internal';
+import { ChildOf } from '@forgeax/engine-scene';
 import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { ChildOf, SceneInstance } from '../components';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function localId(n: number): LocalEntityId {

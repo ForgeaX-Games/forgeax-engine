@@ -152,6 +152,29 @@ function firePointerLockChange(fakes: LockStateFakes, newLockedElement: Element 
 // ---------------------------------------------------------------------------
 
 describe('browser-backend-lock-state.test.ts (w1)', () => {
+  it('tracks hover mouse position without a button press', () => {
+    const fakes = buildLockStateFakes();
+    const handle = attachBrowserInputBackend(fakes.canvas, {
+      document: fakes.doc,
+      window: fakes.win,
+    });
+
+    fakes.store.fire('canvas', 'pointermove', {
+      pointerType: 'mouse',
+      pointerId: 1,
+      pressure: 0,
+      clientX: 400,
+      clientY: 300,
+      movementX: 0,
+      movementY: 0,
+    } as unknown as Event);
+
+    const sample = handle.backend.sample();
+    expect(sample.mouseX).toBe(400);
+    expect(sample.mouseY).toBe(300);
+    expect(snapshotFromSample(sample).mouse.position).toEqual({ x: 400, y: 300 });
+  });
+
   describe('W3C pointerlockchange → w3cLocked tracking', () => {
     it('pointerlockchange with pointerLockElement === canvas sets w3cLocked=true in sample', () => {
       const fakes = buildLockStateFakes();

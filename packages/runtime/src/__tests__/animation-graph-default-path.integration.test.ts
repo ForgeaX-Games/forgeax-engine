@@ -14,12 +14,11 @@
 // carrier never gets evaluated, so weights[] stays empty; after them the default
 // plugin fills it automatically.
 
+import { AnimationPlayer, defineAnimationGraph } from '@forgeax/engine-animation';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import type { AnimationClip } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { defineAnimationGraph } from '../animation/define-animation-graph';
-import { AnimationPlayer } from '../components/animation-player';
 import { animationPlugin } from '../plugin-factories';
 
 function registerClip(world: World, duration: number) {

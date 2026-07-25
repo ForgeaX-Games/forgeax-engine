@@ -20,12 +20,12 @@
 // M3). The test reaches it through an `as any` cast.
 
 import type { Handle, World } from '@forgeax/engine-ecs';
+import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import type { Result, RhiCaps } from '@forgeax/engine-rhi';
 import { ok } from '@forgeax/engine-rhi';
 import type { EquirectAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { GpuResourceStore } from '../gpu-resource-store';
 
 // ── Hardware caps probe (rgba16float renderable => HDR cubemap path allowed) ──
 

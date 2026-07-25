@@ -172,15 +172,9 @@ const { createApp } = enginePkg;
 
 const runtimePkg = await import('@forgeax/engine-runtime');
 const { createPlaneGeometry } = await import('@forgeax/engine-geometry');
-const {
-  Camera,
-  DirectionalLight,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} = runtimePkg;
+const { Materials } = await import('@forgeax/engine-render');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');

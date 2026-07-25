@@ -57,6 +57,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AnimationPlayer } from '@forgeax/engine-animation';
 import type { AssetRuntimeErrorCode } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle } from '@forgeax/engine-ecs';
@@ -70,26 +71,13 @@ import {
   World,
 } from '@forgeax/engine-ecs';
 import { mat4, vec3 } from '@forgeax/engine-math';
-import type { BindGroupEntry, Buffer, Sampler, Texture, TextureView } from '@forgeax/engine-rhi';
-import { ok as rhiOk } from '@forgeax/engine-rhi';
-import { TONEMAP_LUMINANCE_EPSILON } from '@forgeax/engine-shader';
-import type {
-  EquirectAsset,
-  Handle,
-  MaterialAsset,
-  MeshAsset,
-  SkeletonAsset,
-  TextureFormat,
-} from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   SPRITE_PLAYBACK_MODE_CLAMP,
   SPRITE_PLAYBACK_MODE_LOOP,
   SpriteAnimation,
   SpriteRegionOverride,
-} from '../components';
-import { AnimationPlayer } from '../components/animation-player';
+} from '@forgeax/engine-render/authoring';
+import type { RenderErrorCode } from '@forgeax/engine-render/internal';
 import {
   ANTIALIAS_FXAA,
   ANTIALIAS_NONE,
@@ -101,67 +89,78 @@ import {
   CAMERA_PROJECTION_PERSPECTIVE,
   Camera,
   cameraProjectionFromF32,
-} from '../components/camera';
-import { ChildOf } from '../components/index';
-import { MeshFilter } from '../components/mesh-filter';
-import { MeshRenderer } from '../components/mesh-renderer';
-import { Name } from '../components/name';
-import { Skin } from '../components/skin';
-import { SkyboxBackground } from '../components/skybox-background';
-import { Skylight } from '../components/skylight';
-import { Transform } from '../components/transform';
-import { selectSwapChainFormat } from '../createRenderer';
-import type { RenderErrorCode } from '../errors/render';
-import { VertexStorageBufferUnavailableError } from '../errors/render';
-import type { SkinErrorCode } from '../errors/skin';
+  MeshFilter,
+  MeshRenderer,
+  SkinPaletteOverflowError,
+  SkyboxBackground,
+  Skylight,
+  selectSwapChainFormat,
+  VertexStorageBufferUnavailableError,
+} from '@forgeax/engine-render/internal';
+import type { BindGroupEntry, Buffer, Sampler, Texture, TextureView } from '@forgeax/engine-rhi';
+import { ok as rhiOk } from '@forgeax/engine-rhi';
+import { ChildOf, Name, propagateTransforms, Transform } from '@forgeax/engine-scene';
+import { TONEMAP_LUMINANCE_EPSILON } from '@forgeax/engine-shader';
+import type { SkinErrorCode } from '@forgeax/engine-skinning';
 import {
+  Skin,
   SkinInstancesCoexistForbiddenError,
   SkinJointCountExceededError,
   SkinJointDespawnedError,
   SkinJointPathUnresolvedError,
-  SkinPaletteOverflowError,
-} from '../errors/skin';
+} from '@forgeax/engine-skinning';
+import type {
+  EquirectAsset,
+  Handle,
+  MaterialAsset,
+  MeshAsset,
+  SkeletonAsset,
+  TextureFormat,
+} from '@forgeax/engine-types';
+import { toShared } from '@forgeax/engine-types';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // feat-20260704-runtime-tier1-decomposition M2 / w12: reconstitute the
 // eliminated top-level RuntimeErrorCode aggregate union (D-3) as a test-local
 // alias so the exhaustive-switch bodies below stay byte-identical (AC-09).
 type RuntimeLayerErrorCode = RenderErrorCode | AssetRuntimeErrorCode | SkinErrorCode;
 
-import { GpuResourceStore } from '../gpu-resource-store';
-import { getOrCreateIblCache, hasIblCache } from '../ibl/IblPipelineCache';
+import { advanceAnimationPlayer as canonicalAdvanceAnimationPlayer } from '@forgeax/engine-animation';
+import type {
+  CameraSnapshot,
+  ExtractedLights,
+  InstanceBufferCacheEntry,
+} from '@forgeax/engine-render/internal';
+// (moved from import body)
 import {
   assembleMaterialWithSkylightEntries,
+  buildPbrPipelineLayouts,
+  buildUnlitMaterialBgl,
+  createSkinPaletteAllocator,
   createSkylightFallback,
+  extractFrame,
+  extractFrames,
+  GpuResourceStore,
+  getOrCreateIblCache,
+  getTransparentSortConfig,
+  hasIblCache,
   mergeSkylightIntoMaterialBgl,
   SKYLIGHT_BINDING_OFFSET,
   SKYLIGHT_MERGED_ENTRY_COUNT,
-} from '../ibl/skylight-bind-group';
-import type { InstanceBufferCacheEntry } from '../instance-buffer-cache';
-import { buildPbrPipelineLayouts, buildUnlitMaterialBgl } from '../pbr-pipeline';
-import {
-  warnMultiLightDirectional,
-  warnMultiLightPoint,
-  warnMultiLightSpot,
-  ZERO_CAMERA_CLEAR_FALLBACK,
-} from '../record';
-import type { CameraSnapshot, ExtractedLights } from '../render-system-extract';
-import { extractFrame, extractFrames } from '../render-system-extract';
-import { advanceAnimationPlayer } from '../systems/advance-animation-player';
-import { propagateTransforms } from '../systems/propagate-transforms';
-import { createSkinPaletteAllocator } from '../systems/skin-palette-allocator';
-import { spriteAnimationTickSystem } from '../systems/sprite-animation-tick';
-import { REC709_LUMA_WEIGHTS, tonemapReinhardLuminance } from '../systems/tonemap';
-import { transparentSortEntries } from '../systems/transparent-sort';
-// (moved from import body)
-import {
-  getTransparentSortConfig,
   setTransparentSortConfig,
   TRANSPARENT_SORT_CONFIG_KEY,
   TRANSPARENT_SORT_MODE_LAYER_Y,
   TRANSPARENT_SORT_MODE_LAYER_YZ,
   TRANSPARENT_SORT_MODE_LAYER_Z,
-} from '../systems/transparent-sort-config';
-import { urpPipeline } from '../urp-pipeline';
+  urpPipeline,
+  warnMultiLightDirectional,
+  warnMultiLightPoint,
+  warnMultiLightSpot,
+  ZERO_CAMERA_CLEAR_FALLBACK,
+} from '@forgeax/engine-render/internal';
+import { spriteAnimationTickSystem } from '../systems/sprite-animation-tick';
+import { REC709_LUMA_WEIGHTS, tonemapReinhardLuminance } from '../systems/tonemap';
+import { transparentSortEntries } from '../systems/transparent-sort';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
@@ -801,7 +800,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { internals } = makeRecorderInternals(log);
       const ps = makePipelineState(false);
       (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
-      const { recordFrame } = await import('../record');
+      const { recordFrame } = await import('@forgeax/engine-render/internal');
       recordFrame(
         internals as never,
         new World() as never,
@@ -854,7 +853,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const { internals } = makeRecorderInternals(log);
       const ps = makePipelineState(false);
       (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
-      const { recordFrame } = await import('../record');
+      const { recordFrame } = await import('@forgeax/engine-render/internal');
       recordFrame(
         internals as never,
         new World() as never,
@@ -1884,7 +1883,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     Camera: unknown;
     DirectionalLight: unknown;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
+    } as never;
   }
 
   function cameraTransform() {
@@ -2185,20 +2187,20 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('equirect-projection-failed error class shape', () => {
     it('has .code === equirect-projection-failed', async () => {
-      const { EquirectProjectionFailedError } = await import('../errors/render');
+      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
       const err = new EquirectProjectionFailedError(42);
       expect(err.code).toBe('equirect-projection-failed');
     });
 
     it('exposes .detail.handle === the constructor argument', async () => {
-      const { EquirectProjectionFailedError } = await import('../errors/render');
+      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
       const err = new EquirectProjectionFailedError(42);
       expect(err.detail).toBeDefined();
       expect(err.detail.handle).toBe(42);
     });
 
     it('exposes non-empty .hint with actionable guidance', async () => {
-      const { EquirectProjectionFailedError } = await import('../errors/render');
+      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
       const err = new EquirectProjectionFailedError(42);
       expect(err.hint).toBeDefined();
       expect(typeof err.hint).toBe('string');
@@ -2206,7 +2208,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('exposes .expected describing expected state', async () => {
-      const { EquirectProjectionFailedError } = await import('../errors/render');
+      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
       const err = new EquirectProjectionFailedError(42);
       expect(err.expected).toBeDefined();
       expect(typeof err.expected).toBe('string');
@@ -2214,7 +2216,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('extends Error so it can be thrown and caught', async () => {
-      const { EquirectProjectionFailedError } = await import('../errors/render');
+      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
       const err = new EquirectProjectionFailedError(42);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('EquirectProjectionFailedError');
@@ -2226,7 +2228,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // The actual TS union membership is verified by typecheck: if
       // 'equirect-projection-failed' is not in RuntimeErrorCode, no expression
       // can assign err.code to a RuntimeErrorCode-typed variable.
-      const { EquirectProjectionFailedError } = await import('../errors/render');
+      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
       const err = new EquirectProjectionFailedError(42);
       expect(err.code).toBe('equirect-projection-failed');
     });
@@ -2238,7 +2240,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       // the equirect handle, it binds the white-cube fallback and fires this
       // structured error ONCE (it does not retry; R-2/AC-09). The record-stage
       // integration is covered by the M3 lazy-projection tests + smoke gate.
-      const { EquirectProjectionFailedError } = await import('../errors/render');
+      const { EquirectProjectionFailedError } = await import('@forgeax/engine-render/internal');
       const err = new EquirectProjectionFailedError(42);
       expect(err.code).toBe('equirect-projection-failed');
       expect(err.detail.handle).toBe(42);
@@ -2783,7 +2785,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const here = url.fileURLToPath(import.meta.url);
       // feat-20260704 M5/w31: main-pass draw code split across main-pass.ts +
       // main-pass-geometry.ts + main-pass-sprite-draws.ts; scan the set.
-      const recordDir = pathMod.resolve(pathMod.dirname(here), '..', 'record');
+      const recordDir = pathMod.resolve(
+        pathMod.dirname(here),
+        '..',
+        '..',
+        '..',
+        'render',
+        'src',
+        'record',
+      );
       const source = ['main-pass.ts', 'main-pass-geometry.ts', 'main-pass-sprite-draws.ts']
         .map((name) => fs.readFileSync(pathMod.resolve(recordDir, name), 'utf8'))
         .join('\n');
@@ -2809,7 +2819,15 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const here = url.fileURLToPath(import.meta.url);
       // feat-20260704 M5/w31: main-pass draw code split across main-pass.ts +
       // main-pass-geometry.ts + main-pass-sprite-draws.ts; scan the set.
-      const recordDir = pathMod.resolve(pathMod.dirname(here), '..', 'record');
+      const recordDir = pathMod.resolve(
+        pathMod.dirname(here),
+        '..',
+        '..',
+        '..',
+        'render',
+        'src',
+        'record',
+      );
       const source = ['main-pass.ts', 'main-pass-geometry.ts', 'main-pass-sprite-draws.ts']
         .map((name) => fs.readFileSync(pathMod.resolve(recordDir, name), 'utf8'))
         .join('\n');
@@ -2827,7 +2845,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('t58 (M4 round-4) -- unlit material BG isolation', () => {
     it('(e) buildUnlitMaterialBindGroupEntries returns 7 entries (no Skylight contamination)', async () => {
-      const mod = await import('../pbr-pipeline');
+      const mod = await import('@forgeax/engine-render/internal');
       const buildFn = (mod as { buildUnlitMaterialBindGroupEntries?: unknown })
         .buildUnlitMaterialBindGroupEntries;
       expect(typeof buildFn).toBe('function');
@@ -3655,7 +3673,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       const internals = makeRecorderInternals(log);
       const ps = makePipelineState(internals as never, false);
       (internals as { getPipelineState: () => unknown }).getPipelineState = () => ps;
-      const { recordFrame } = await import('../record');
+      const { recordFrame } = await import('@forgeax/engine-render/internal');
       const cameras = [makeCamera('none')];
       recordFrame(
         internals as never,
@@ -3757,8 +3775,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     }
 
     it('despawned key (not in validated set): recordFrame destroys GpuBuffer + deletes Map entry', async () => {
-      const { recordFrame } = await import('../record');
-      const { GpuBuffer } = await import('../gpu-resource');
+      const { recordFrame } = await import('@forgeax/engine-render/internal');
+      const { GpuBuffer } = await import('@forgeax/engine-render/internal');
       const { err: rhiErrFn, RhiError: RhiErrorCtor } = await import('@forgeax/engine-rhi');
       const { device: bufDev, destroyedHandles } = makeBufRecorderDevice(
         rhiErrFn,
@@ -3829,8 +3847,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('isDestroyed dedup: a pre-destroyed orphan is not double-destroyed (still removed)', async () => {
-      const { recordFrame } = await import('../record');
-      const { GpuBuffer } = await import('../gpu-resource');
+      const { recordFrame } = await import('@forgeax/engine-render/internal');
+      const { GpuBuffer } = await import('@forgeax/engine-render/internal');
       const { err: rhiErrFn, RhiError: RhiErrorCtor } = await import('@forgeax/engine-rhi');
       const { device: bufDev, destroyedHandles } = makeBufRecorderDevice(
         rhiErrFn,
@@ -4029,12 +4047,33 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     };
   }
 
-  function makeResolver(clips: Map<number, AnimationClip>): AnimationAssetResolver {
-    return {
-      resolveAnimationClip(_world: World, handleRaw: number): AnimationClip | undefined {
-        return clips.get(handleRaw);
-      },
-    };
+  type TestResolver = { clips: Map<number, AnimationClip>; handles?: Map<number, number> };
+
+  function makeResolver(clips: Map<number, AnimationClip>): TestResolver {
+    return { clips };
+  }
+
+  function advanceAnimationPlayer(world: World, resolver: TestResolver, dt: number): void {
+    const handles = resolver.handles ?? new Map<number, number>();
+    resolver.handles = handles;
+    for (const [raw, clip] of resolver.clips) {
+      if (!handles.has(raw)) handles.set(raw, world.allocSharedRef('AnimationClip', clip));
+    }
+    const state = createQueryState({ with: [AnimationPlayer, Entity] });
+    const allocated = new Set(handles.values());
+    queryRun(state, world, (bundle) => {
+      for (const raw of bundle.Entity.self) {
+        const entity = raw as EntityHandle;
+        const player = world.get(entity, AnimationPlayer);
+        if (!player.ok) continue;
+        const clips = Array.from(player.value.clips, (handle) => {
+          const mapped = handles.get(handle);
+          return mapped ?? (allocated.has(handle) ? handle : 0);
+        });
+        world.set(entity, AnimationPlayer, { clips });
+      }
+    });
+    canonicalAdvanceAnimationPlayer(world, dt);
   }
 
   // M2 / w3: spawn data migrated to SoA inline arrays. Single-clip legacy
@@ -4274,9 +4313,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('T-17 — registerAdvanceAnimationPlayer schedule order (D-9)', () => {
     it('constant ADVANCE_ANIMATION_PLAYER_SYSTEM name matches', async () => {
-      const { ADVANCE_ANIMATION_PLAYER_SYSTEM } = await import(
-        '../systems/advance-animation-player'
-      );
+      const { ADVANCE_ANIMATION_PLAYER_SYSTEM } = await import('@forgeax/engine-animation');
       expect(ADVANCE_ANIMATION_PLAYER_SYSTEM).toBe('advanceAnimationPlayer');
     });
   });
@@ -4300,7 +4337,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('M2 / w6 — advanceAnimationPlayer dev-mode warn throttle (D-2)', () => {
     it('60 consecutive frames with same (entity, channel, reason) emit warn exactly once', async () => {
-      const { _resetAnimationWarnsForTests } = await import('../systems/advance-animation-player');
+      const { _resetAnimationWarnsForTests } = await import('@forgeax/engine-animation');
       const world = new World();
       // Channel leaf 'mismatched-leaf' has no matching joint name 'real-joint'
       // — every frame triggers channel-leaf-mismatch on (entity, clip:1, ch:0).
@@ -4355,7 +4392,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('two distinct channel indices on same entity each emit one warn (3 channels => 3 warns)', async () => {
-      const { _resetAnimationWarnsForTests } = await import('../systems/advance-animation-player');
+      const { _resetAnimationWarnsForTests } = await import('@forgeax/engine-animation');
       const world = new World();
       // Three channels each targeting an unmapped leaf — chIdx differs, so
       // the (entity, clip, chIdx, reason) key splits into 3 distinct entries
@@ -4416,7 +4453,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     });
 
     it('two distinct reasons on same channel emit two warns (key includes reason)', async () => {
-      const { _resetAnimationWarnsForTests } = await import('../systems/advance-animation-player');
+      const { _resetAnimationWarnsForTests } = await import('@forgeax/engine-animation');
       const world = new World();
       // Slot 0: clip 1 has channel 0 = translation on 'real-joint' (resolves)
       //         and channel 1 = translation on 'unknown-joint' (leaf-mismatch).
@@ -5265,7 +5302,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
   describe('w10 skybox graph pass order + loadOp contract', () => {
     async function buildGraph(): Promise<PassInfo[]> {
-      const { urpPipeline } = (await import('../urp-pipeline')) as unknown as {
+      const { urpPipeline } = (await import('@forgeax/engine-render/internal')) as unknown as {
         urpPipeline: { buildGraph: (ctx: unknown, data: unknown) => GraphLike };
       };
       const ctx = {
@@ -7628,7 +7665,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     Camera: unknown;
     DirectionalLight: unknown;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
+    } as never;
   }
 
   function cameraTransform() {
@@ -7781,7 +7821,7 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       ]);
 
       // Use the extract API directly so we can inspect the snapshot shape.
-      const { extractFrame } = (await import('../render-system-extract')) as {
+      const { extractFrame } = (await import('@forgeax/engine-render/internal')) as {
         extractFrame: (
           w: unknown,
           a: unknown,
@@ -8073,7 +8113,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     Camera: unknown;
     DirectionalLight: unknown;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
+    } as never;
   }
 
   function cameraTransform() {
@@ -8815,7 +8858,7 @@ type ExtractFrameWithPipeline = (
 {
   describe('feat-20260612 M3 / m3-1: record dynOffset[1] real value + skin BG cache stats', () => {
     it('_computeSkinGroup2DynOffsets returns group2DynamicOffsets[1] === byteOffset for skin entries; length 1 otherwise (m3-1a)', async () => {
-      const recordModule = (await import('../record')) as {
+      const recordModule = (await import('@forgeax/engine-render/internal')) as {
         _computeSkinGroup2DynOffsets?: (
           meshSlotIdx: number,
           skinByteOffset: number | undefined,
@@ -8862,7 +8905,7 @@ type ExtractFrameWithPipeline = (
     });
 
     it('skin BG cache dedups by buffer identity: N=3 lookups -> miss=1 + hit=2 (m3-1b)', async () => {
-      const recordModule = (await import('../record')) as {
+      const recordModule = (await import('@forgeax/engine-render/internal')) as {
         getOrCreateFromChain: (
           root: WeakMap<object, unknown>,
           handles: readonly object[],
@@ -8989,7 +9032,7 @@ type ExtractFrameWithPipeline = (
 
   async function _loadM4Libs() {
     const { err: m4err, ok: m4ok, RhiError } = await import('@forgeax/engine-rhi');
-    const { GpuBuffer } = await import('../gpu-resource');
+    const { GpuBuffer } = await import('@forgeax/engine-render/internal');
     return { m4err, m4ok, RhiError, GpuBuffer };
   }
 
@@ -9239,7 +9282,8 @@ type ExtractFrameWithPipeline = (
       World: new () => IntegrationWorld;
     };
     const C = {
-      ...(await import('../index')),
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
       ...(await import('@forgeax/engine-assets-runtime')),
     } as unknown as IntegrationComponents;
     const errors: { code: string }[] = [];
@@ -9309,7 +9353,7 @@ type ExtractFrameWithPipeline = (
     });
 
     it('disposeInstanceBuffers: destroy clears map, isDestroyed gate skips pre-destroyed entries', async () => {
-      const { disposeInstanceBuffers } = await import('../instance-buffer-cache');
+      const { disposeInstanceBuffers } = await import('@forgeax/engine-render/internal');
       const { m4err, m4ok, RhiError, GpuBuffer } = await _loadM4Libs();
       const dev = _mkBufDevice(m4err, m4ok, RhiError);
 
@@ -9334,7 +9378,7 @@ type ExtractFrameWithPipeline = (
     });
 
     it('disposeInstanceBuffers: sweep continues, all non-pre-destroyed entries destroyed', async () => {
-      const { disposeInstanceBuffers } = await import('../instance-buffer-cache');
+      const { disposeInstanceBuffers } = await import('@forgeax/engine-render/internal');
       const { m4err, m4ok, RhiError, GpuBuffer } = await _loadM4Libs();
       const dev = _mkBufDevice(m4err, m4ok, RhiError);
 
@@ -9361,7 +9405,7 @@ type ExtractFrameWithPipeline = (
     });
 
     it('disposeInstanceBuffers: without errorRegistry parameter, no fire (no crash)', async () => {
-      const { disposeInstanceBuffers } = await import('../instance-buffer-cache');
+      const { disposeInstanceBuffers } = await import('@forgeax/engine-render/internal');
       const { m4err, m4ok, RhiError, GpuBuffer } = await _loadM4Libs();
       const dev = _mkBufDevice(m4err, m4ok, RhiError);
 
@@ -9593,24 +9637,24 @@ type ExtractFrameWithPipeline = (
 
   describe('AC-02 encodeTilemapLayerValue (sortScope=per-cell folds chunkIndex)', () => {
     it("sortScope='per-cell': encodeTilemapLayerValue(2, 5, 'per-cell') === 0x200000", async () => {
-      const { encodeTilemapLayerValue } = await import('@forgeax/engine-runtime');
+      const { encodeTilemapLayerValue } = await import('@forgeax/engine-render/internal');
       expect(encodeTilemapLayerValue(2, 5, 'per-cell')).toBe(0x200000);
     });
 
     it("sortScope='layer': encodeTilemapLayerValue(2, 5, 'layer') === ((2 << 20) | 5)", async () => {
-      const { encodeTilemapLayerValue } = await import('@forgeax/engine-runtime');
+      const { encodeTilemapLayerValue } = await import('@forgeax/engine-render/internal');
       expect(encodeTilemapLayerValue(2, 5, 'layer')).toBe((2 << 20) | 5);
     });
 
     it("sortScope defaults to 'layer' (third arg omitted matches 'layer')", async () => {
-      const { encodeTilemapLayerValue } = await import('@forgeax/engine-runtime');
+      const { encodeTilemapLayerValue } = await import('@forgeax/engine-render/internal');
       expect(encodeTilemapLayerValue(2, 5)).toBe(encodeTilemapLayerValue(2, 5, 'layer'));
     });
   });
 
   describe('AC-03 transparent-sort 4-mode constants reachable through barrel', () => {
     it('4 mode constants resolve to 0/1/2/3 through @forgeax/engine-runtime', async () => {
-      const runtime = await import('@forgeax/engine-runtime');
+      const runtime = await import('@forgeax/engine-render/internal');
       expect(runtime.TRANSPARENT_SORT_MODE_LAYER_Z).toBe(0);
       expect(runtime.TRANSPARENT_SORT_MODE_LAYER_Y).toBe(1);
       expect(runtime.TRANSPARENT_SORT_MODE_LAYER_YZ).toBe(2);
@@ -9618,7 +9662,7 @@ type ExtractFrameWithPipeline = (
     });
 
     it('setTransparentSortConfig accepts all 4 modes (VALID_MODES proxy: size 4)', async () => {
-      const runtime = await import('@forgeax/engine-runtime');
+      const runtime = await import('@forgeax/engine-render/internal');
       for (const mode of [
         runtime.TRANSPARENT_SORT_MODE_LAYER_Z,
         runtime.TRANSPARENT_SORT_MODE_LAYER_Y,

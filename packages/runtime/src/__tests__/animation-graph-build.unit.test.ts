@@ -12,11 +12,11 @@
 // not resolve and defineAnimationGraph does not exist — the file fails to
 // compile. After w13/w14 the legal graph constructs and the rc assertions pass.
 
+import { defineAnimationGraph } from '@forgeax/engine-animation';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import type { AnimationClip } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { defineAnimationGraph } from '../animation/define-animation-graph';
 
 // A test-only component carrying a single shared<AnimationGraph> handle. M2 does
 // NOT extend AnimationPlayer with a graph field (that is M3 / w24), so this

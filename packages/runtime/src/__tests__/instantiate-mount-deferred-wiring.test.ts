@@ -25,9 +25,9 @@ import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '../components';
-import { ChildOf } from '../components/child-of';
-import { SceneInstance } from '../components/scene-instance';
+import '@forgeax/engine-render/internal';
+import { SceneInstance } from '@forgeax/engine-render/internal';
+import { ChildOf } from '@forgeax/engine-scene';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const G_CHILD = '11111111-1111-4111-8111-111111111111';

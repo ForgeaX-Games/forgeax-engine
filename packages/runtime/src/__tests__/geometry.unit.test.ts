@@ -25,14 +25,19 @@ import type { AssetRuntimeError } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import type { RenderError, SkinError } from '@forgeax/engine-render/internal';
+import {
+  Camera,
+  createMeshSsboGrowController,
+  Instances,
+  MeshFilter,
+  MeshRenderer,
+} from '@forgeax/engine-render/internal';
 import type { PipelineLayout, RenderPipeline, RhiDevice, ShaderModule } from '@forgeax/engine-rhi';
+import { Transform } from '@forgeax/engine-scene';
 import type { AssetErrorDetail, Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { ASSET_ERROR_HINTS, AssetError, unwrapHandle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Camera, Instances, MeshFilter, MeshRenderer, Transform } from '../components';
-import { createMeshSsboGrowController } from '../createRenderer';
-import type { RenderError } from '../errors/render';
-import type { SkinError } from '../errors/skin';
 
 // feat-20260704-runtime-tier1-decomposition M2 / w12: reconstitute the
 // eliminated top-level RuntimeError aggregate union (D-3) as a test-local alias
@@ -41,22 +46,22 @@ import type { SkinError } from '../errors/skin';
 type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import type { GpuBuffer } from '../gpu-resource';
-import { GpuResourceStore } from '../gpu-resource-store';
 import type {
+  ExtractedFrame,
+  GpuBuffer,
+  MeshGpuHandles,
   PipelineBuilderContext,
   PipelineBuilderShaderModuleFactory,
-} from '../pipeline-builder';
-import { buildPipelineForMaterialShader } from '../pipeline-builder';
+} from '@forgeax/engine-render/internal';
 import {
+  buildPipelineForMaterialShader,
   ensureMeshSsboCapacity,
+  extractFrame,
+  GpuResourceStore,
   isMeshSsboDevMode,
   setMeshSsboDevModeProbeForTests,
-} from '../record';
-import type { MeshGpuHandles } from '../render-system';
-import type { ExtractedFrame } from '../render-system-extract';
-import { extractFrame } from '../render-system-extract';
-import { propagateTransforms } from '../systems/propagate-transforms';
+} from '@forgeax/engine-render/internal';
+import { propagateTransforms } from '@forgeax/engine-scene';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 {
@@ -2127,7 +2132,10 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     DirectionalLight: unknown;
     Instances: unknown;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
+    } as never;
   }
 
   function cameraTransform() {

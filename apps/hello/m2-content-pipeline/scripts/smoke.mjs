@@ -50,6 +50,11 @@ console.log('[m2-content] host importer delivery: PASS');
 execFileSync('pnpm', ['--filter', '@forgeax/hello-custom-importer', 'smoke:browser'], { cwd: root, stdio: 'inherit' });
 console.log('[m2-content] browser HMR delivery: PASS');
 
+execFileSync('pnpm', ['--filter', '@forgeax/hello-m2-content-pipeline', 'smoke:source-reimport'], {
+  cwd: root,
+  stdio: 'inherit',
+});
+
 execFileSync('node', [resolve(here, 'real-fixtures.mjs')], { cwd: root, stdio: 'inherit' });
 execFileSync('pnpm', ['--filter', '@forgeax/hello-text', 'smoke'], { cwd: root, stdio: 'inherit' });
 execFileSync('pnpm', ['--filter', '@forgeax/hello-fbx-cube', 'smoke'], { cwd: root, stdio: 'inherit' });
@@ -76,4 +81,4 @@ if (restored.length !== original.length || restored.some((value, index) => value
 console.log(`[m2-content] codec round-trip: PASS original=${original.length} compressed=${compressed.length}`);
 
 console.log('[m2-content] PASS - M2 partial content pipeline gates GREEN');
-console.log('[m2-content] deferred: font bake in plain Node requires a Worker-capable host; semantic source-changing reimport across every importer family remains open.');
+console.log('[m2-content] deferred: font bake in plain Node requires a Worker-capable host; image, glTF, FBX, and host source-changing reimport are covered.');

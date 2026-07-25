@@ -17,7 +17,13 @@ import { createApp } from '@forgeax/engine-app';
 import type { App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, SKYBOX_MODE_CUBEMAP, SkyboxBackground, Skylight, TONEMAP_REINHARD_EXTENDED, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
+import { Materials, SKYBOX_MODE_CUBEMAP, SkyboxBackground, Skylight } from '@forgeax/engine-render';
+
 import type { EquirectAsset, MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';

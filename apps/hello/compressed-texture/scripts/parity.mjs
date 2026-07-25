@@ -260,7 +260,8 @@ const mockCanvas = {
 
 const { World } = await import('@forgeax/engine-ecs');
 const engine = await import('@forgeax/engine-runtime');
-const { createRenderer, MeshFilter, MeshRenderer, Transform, DirectionalLight, Camera, perspective } = engine;
+const { createRenderer, Transform } = engine;
+const { MeshFilter, MeshRenderer, DirectionalLight, Camera, perspective } = await import('@forgeax/engine-render');
 const { HANDLE_QUAD } = await import('@forgeax/engine-assets-runtime');
 
 const MANIFEST_URL = `data:application/json,${encodeURIComponent(

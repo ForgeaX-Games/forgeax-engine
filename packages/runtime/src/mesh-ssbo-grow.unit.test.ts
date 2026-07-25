@@ -13,14 +13,14 @@
 //   4. all limits zero (R-1 extreme)          -> falls to spec floor 128 MiB
 //   5. absent field (R-1 edge)                -> still non-zero
 
-import type { Buffer } from '@forgeax/engine-rhi';
-import { describe, expect, it } from 'vitest';
 import {
   createMeshSsboGrowController,
   deriveStorageBufferCeiling,
   type MeshSsboGrowControllerInit,
   type MeshSsboGrowErrorRegistry,
-} from './createRenderer';
+} from '@forgeax/engine-render/internal';
+import type { Buffer } from '@forgeax/engine-rhi';
+import { describe, expect, it } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Stubs (mirror createRenderer.unit.test.ts pattern — minimal device fake)

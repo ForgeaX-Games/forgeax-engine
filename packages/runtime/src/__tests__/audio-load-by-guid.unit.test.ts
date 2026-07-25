@@ -1,8 +1,8 @@
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { audioLoader } from '@forgeax/engine-audio-webaudio';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AudioClipAsset } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { audioLoader } from '../audio-loader';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const AUDIO_GUID = 'db30f00d-0000-4000-8000-000000000001';

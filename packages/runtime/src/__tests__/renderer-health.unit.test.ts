@@ -12,16 +12,19 @@
 // w1-w4: unit tests (types + registry, GREEN after M1 w5-w7)
 // w8-w10: integration tests (createRenderer + mock RHI, RED until w11-w13)
 
-import type { Result } from '@forgeax/engine-rhi';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RecoverError, type RecoverErrorCode } from '../errors/recover';
+import type {
+  HealthChangeListener,
+  HealthReason,
+  HealthSnapshot,
+} from '@forgeax/engine-render/internal';
 import {
   deriveRecoverable,
-  type HealthChangeListener,
   HealthListenerRegistry,
-  type HealthReason,
-  type HealthSnapshot,
-} from '../renderer';
+  RecoverError,
+  type RecoverErrorCode,
+} from '@forgeax/engine-render/internal';
+import type { Result, RhiInstance } from '@forgeax/engine-rhi';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── w1: HealthReason narrowing + detail discriminated union (AC-05) ─────────
 
@@ -342,6 +345,26 @@ function makeFakeRhiDevice(): Record<string, unknown> {
   };
 }
 
+function makeExplicitRhi(): RhiInstance {
+  const adapter = {
+    features: new Set<string>(),
+    limits: {},
+    requestDevice: async () => ({ ok: true, value: makeFakeRhiDevice() }),
+  };
+  return {
+    requestAdapter: async () => ({ ok: true, value: adapter }),
+    acquireCanvasContext: () => ({
+      ok: true,
+      value: {
+        configure: () => ({ ok: true, value: undefined }),
+        unconfigure: () => ({ ok: true, value: undefined }),
+        getCurrentTexture: () => ({ ok: true, value: { __brand: 'TextureView' } }),
+      },
+    }),
+    createShaderModule: async () => ({ ok: true, value: { __brand: 'ShaderModule' } }),
+  } as unknown as RhiInstance;
+}
+
 function makeMockCanvas(): HTMLCanvasElement {
   return {
     width: 800,
@@ -464,10 +487,10 @@ describe('Renderer health/recover integration (M2 RED)', () => {
 
   it('w8: health() returns alive baseline when registry has not been fired', async () => {
     const canvas = makeMockCanvas();
-    const { createRenderer } = await import('../createRenderer');
+    const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
     const renderer = await createRenderer(
       canvas,
-      {},
+      { rhi: makeExplicitRhi() },
       { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
     );
 
@@ -493,10 +516,10 @@ describe('Renderer health/recover integration (M2 RED)', () => {
 
   it('w9: recover() on healthy renderer returns recover-not-needed error', async () => {
     const canvas = makeMockCanvas();
-    const { createRenderer } = await import('../createRenderer');
+    const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
     const renderer = await createRenderer(
       canvas,
-      {},
+      { rhi: makeExplicitRhi() },
       { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
     );
 
@@ -529,10 +552,10 @@ describe('Renderer health/recover integration (M2 RED)', () => {
 
   it('w10: recover() on degraded renderer attempts rebuild; failure keeps health device-lost', async () => {
     const canvas = makeMockCanvas();
-    const { createRenderer } = await import('../createRenderer');
+    const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
     const renderer = await createRenderer(
       canvas,
-      {},
+      { rhi: makeExplicitRhi() },
       { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
     );
 
@@ -600,10 +623,10 @@ describe('Renderer draw device-lost guard (w7 TDD RED)', () => {
 
   it('w7(a): device-lost state draw() returns Result.err without firing onError each frame', async () => {
     const canvas = makeMockCanvas();
-    const { createRenderer } = await import('../createRenderer');
+    const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
     const renderer = await createRenderer(
       canvas,
-      {},
+      { rhi: makeExplicitRhi() },
       { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
     );
 
@@ -626,7 +649,8 @@ describe('Renderer draw device-lost guard (w7 TDD RED)', () => {
 
     // Need a World with Camera to reach draw internals
     const { World } = await import('@forgeax/engine-ecs');
-    const { Transform, Camera } = await import('../index');
+    const { Transform } = await import('@forgeax/engine-scene');
+    const { Camera } = await import('@forgeax/engine-render/internal');
     const world = new World();
     world.spawn(
       {
@@ -686,10 +710,10 @@ describe('Renderer draw device-lost guard (w7 TDD RED)', () => {
 
   it('w7(b): disposed latch prevents reconstruction on device-lost event', async () => {
     const canvas = makeMockCanvas();
-    const { createRenderer } = await import('../createRenderer');
+    const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
     const renderer = await createRenderer(
       canvas,
-      {},
+      { rhi: makeExplicitRhi() },
       { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
     );
 
@@ -743,10 +767,10 @@ describe('Renderer health device.lost integration (M3 RED)', () => {
 
   it('w14: device.lost reason=unknown sets health().reason to device-lost with correct detail + recoverable', async () => {
     const canvas = makeMockCanvas();
-    const { createRenderer } = await import('../createRenderer');
+    const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
     const renderer = await createRenderer(
       canvas,
-      {},
+      { rhi: makeExplicitRhi() },
       { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
     );
 
@@ -790,10 +814,10 @@ describe('Renderer health device.lost integration (M3 RED)', () => {
 
   it('w14: device.lost with unknown reason sets lostReason to unknown', async () => {
     const canvas = makeMockCanvas();
-    const { createRenderer } = await import('../createRenderer');
+    const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
     const renderer = await createRenderer(
       canvas,
-      {},
+      { rhi: makeExplicitRhi() },
       { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
     );
 
@@ -825,10 +849,10 @@ describe('Renderer health device.lost integration (M3 RED)', () => {
 
   it('w15: onHealthChange callback called exactly once on device.lost', async () => {
     const canvas = makeMockCanvas();
-    const { createRenderer } = await import('../createRenderer');
+    const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
     const renderer = await createRenderer(
       canvas,
-      {},
+      { rhi: makeExplicitRhi() },
       { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
     );
 
@@ -868,10 +892,10 @@ describe('Renderer health device.lost integration (M3 RED)', () => {
 
   it('w15: late-attach replay after device.lost fires immediately', async () => {
     const canvas = makeMockCanvas();
-    const { createRenderer } = await import('../createRenderer');
+    const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
     const renderer = await createRenderer(
       canvas,
-      {},
+      { rhi: makeExplicitRhi() },
       { shaderManifestUrl: HEALTH_TEST_MANIFEST_URL },
     );
 

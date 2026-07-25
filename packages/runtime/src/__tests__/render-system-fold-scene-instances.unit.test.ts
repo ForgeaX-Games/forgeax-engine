@@ -1,5 +1,5 @@
 // feat-20260622-chunk-gpu-instancing-sprite-tilemap M4 / w15 — AC-08
-// guard: `packages/runtime/src/scene-instances/` directory file set must
+// guard: `packages/render/src/scene-instances/` directory file set must
 // remain at the feat baseline (no GPU-instancing files added).
 //
 // Why: requirements §4 AC-08 + research F-7 + plan-strategy §3.1 say the
@@ -25,7 +25,7 @@
 //   - research F-7: positive + negative grep proves the directory's two
 //     files have zero GPU-instancing call sites; baseline set is stable.
 //   - plan-strategy §3.1: targetFiles for this feat do not cross into
-//     `packages/runtime/src/scene-instances/`.
+//     `packages/render/src/scene-instances/`.
 //
 // FALSIFY anchor (documented, not in CI): `touch packages/runtime/src/
 // scene-instances/fold-bucket-builder.ts` -> this test goes red.
@@ -37,14 +37,10 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// __tests__ -> src -> scene-instances/
-const SCENE_INSTANCES_DIR = resolve(HERE, '..', 'scene-instances');
+// runtime/src/__tests__ -> packages/render/src/scene-instances/
+const SCENE_INSTANCES_DIR = resolve(HERE, '..', '..', '..', 'render', 'src', 'scene-instances');
 
-const BASELINE_ENTRIES: readonly string[] = [
-  '__tests__',
-  'index.ts',
-  'post-spawn-resolve-joints.ts',
-];
+const BASELINE_ENTRIES: readonly string[] = ['post-spawn-resolve-joints.ts'];
 
 describe('scene-instances/ directory guard (AC-08)', () => {
   it('contains exactly the baseline file set (no GPU-instancing additions)', () => {

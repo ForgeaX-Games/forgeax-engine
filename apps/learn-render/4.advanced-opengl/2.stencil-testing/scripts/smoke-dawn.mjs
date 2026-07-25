@@ -229,14 +229,10 @@ const { ok: okResult, World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const enginePkg = await import('@forgeax/engine-runtime');
 const {
-  Camera,
   createRenderer,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
 } = enginePkg;
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
   HANDLE_QUAD,
@@ -304,11 +300,13 @@ if (shader === null) {
   console.error('[smoke] FAIL - renderer.shader is null');
   process.exit(1);
 }
-shader.registerMaterialShader('learn-render::outline-solid', {
-  source: COMPOSED_OUTLINE_WGSL,
-  paramSchema: [{ name: 'baseColor', type: 'color' }],
-  bindingLayout: [],
-});
+if (!shader.lookupMaterialShader('learn-render::outline-solid').ok) {
+  shader.registerMaterialShader('learn-render::outline-solid', {
+    source: COMPOSED_OUTLINE_WGSL,
+    paramSchema: [{ name: 'baseColor', type: 'color' }],
+    bindingLayout: [],
+  });
+}
 
 // Register textures under their GUIDs.
 const metalGuidRes = AssetGuid.parse('019e3969-1d47-760f-982e-7bad1ffd969c');

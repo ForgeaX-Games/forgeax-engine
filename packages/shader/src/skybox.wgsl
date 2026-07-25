@@ -20,14 +20,22 @@
 //   @binding(0) cubemap       : texture_cube<f32>    // skybox environment map
 //   @binding(1) cubemapSampler : sampler             // linear filter + clamp-to-edge
 //   @binding(2) view          : View (UBO)           // carries inverseViewProj (w3)
+//   @binding(3) rotation      : SkyboxRotation (UBO)
 
 #import forgeax_view::common::FullscreenOutput
 #import forgeax_view::common::View
 #import forgeax_view::common::fullscreen_triangle
+#import forgeax_pbr::ibl_shared::{inverseRotateEnvironment}
 
 @group(0) @binding(0) var cubemap       : texture_cube<f32>;
 @group(0) @binding(1) var cubemapSampler : sampler;
 @group(0) @binding(2) var<uniform> view : View;
+
+struct SkyboxRotation {
+  rotation: vec4<f32>,
+};
+
+@group(0) @binding(3) var<uniform> environment : SkyboxRotation;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index : u32) -> FullscreenOutput {
@@ -50,7 +58,8 @@ fn skyboxDirection(uv : vec2<f32>) -> vec3<f32> {
   let ndc = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0, 1.0);
   let worldDir = view.inverseViewProj * ndc;
   let dir = normalize(worldDir.xyz / worldDir.w);
-  return vec3<f32>(dir.x, -dir.y, dir.z);
+  let rotated = inverseRotateEnvironment(dir, environment.rotation);
+  return vec3<f32>(rotated.x, -rotated.y, rotated.z);
 }
 
 @fragment

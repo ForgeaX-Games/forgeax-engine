@@ -15,16 +15,16 @@
 // the same row share posY and consecutive same-material runs collapse into
 // one instanced draw call (D-5 extension).
 
-import { RenderQueue } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
-import type { DispatchEntry } from '../render-system-extract';
-import { foldDispatchBuckets } from '../render-system-fold';
+import type { DispatchEntry } from '@forgeax/engine-render/internal';
 import {
+  foldDispatchBuckets,
   TRANSPARENT_SORT_MODE_DISTANCE,
   TRANSPARENT_SORT_MODE_LAYER_Y,
   TRANSPARENT_SORT_MODE_LAYER_YZ,
   TRANSPARENT_SORT_MODE_LAYER_Z,
-} from '../systems/transparent-sort-config';
+} from '@forgeax/engine-render/internal';
+import { RenderQueue } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
 
 function mockEntry(opts: {
   renderableIndex: number;

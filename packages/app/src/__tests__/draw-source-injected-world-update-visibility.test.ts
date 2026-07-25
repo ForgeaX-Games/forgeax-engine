@@ -34,8 +34,8 @@
 
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
-import type { Renderer } from '@forgeax/engine-runtime';
-import { registerPropagateTransforms, Transform } from '@forgeax/engine-runtime';
+import type { Renderer } from '@forgeax/engine-render';
+import { registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { createFrameLoop, type FrameLoopOptions } from '../internal/frame-loop';
 

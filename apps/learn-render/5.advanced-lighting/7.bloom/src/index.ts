@@ -29,7 +29,13 @@ import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { quat } from '@forgeax/engine-math';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { BLOOM_DISABLED, BLOOM_ENABLED, Camera, Materials, MeshFilter, MeshRenderer, perspective, PointLight, TONEMAP_REINHARD_EXTENDED, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { BLOOM_DISABLED, BLOOM_ENABLED, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
+import { Materials } from '@forgeax/engine-render';
+import { PointLight } from '@forgeax/engine-render';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';

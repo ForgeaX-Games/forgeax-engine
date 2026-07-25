@@ -12,7 +12,9 @@ import type { Result } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import { DebugError } from './errors';
 import { extractDrawInfo } from './inspect-core';
+import { adaptReplayFormat } from './replay-format';
 import type { Replay } from './replayer';
+import { bytesPerTexel } from './texel-layout';
 import type { RhiCallEvent } from './types';
 
 // ============================================================================
@@ -393,7 +395,12 @@ export async function readbackDrawRt(
   device: RhiDevice,
 ): Promise<
   Result<
-    { readonly width: number; readonly height: number; readonly pixels: Uint8Array },
+    {
+      readonly width: number;
+      readonly height: number;
+      readonly format: string;
+      readonly pixels: Uint8Array;
+    },
     DebugError
   >
 > {
@@ -457,11 +464,28 @@ export async function readbackDrawRt(
   // Resolve real texture dimensions from tape events
   const texWidth = resolved?.width ?? 512;
   const texHeight = resolved?.height ?? 512;
+  // Older tapes can lack a createTexture event for the attachment. Keep the
+  // established 512x512 fallback usable by pairing it with the former implicit
+  // RGBA8 readback format.
+  const format = adaptReplayFormat(resolved?.format) ?? 'rgba8unorm';
+  const texelBytes = bytesPerTexel(format as GPUTextureFormat | undefined);
+  if (format === undefined || texelBytes === undefined) {
+    return err(
+      new DebugError({
+        code: 'rt-readback-failed',
+        expected: 'a copyable color attachment format',
+        hint: `color attachment '${drawInfo.colorAttachmentHandleId}' has unsupported format '${format ?? 'unknown'}'`,
+      }),
+    );
+  }
 
-  // Read back tight-packed RGBA8 pixels from the GPU texture
+  // Read back tight-packed native texels. The display layer decodes these
+  // according to `format`; assuming RGBA8 corrupts wide formats such as HDR f16.
   let pixels: Uint8Array;
   try {
-    pixels = await readbackTexturePixels(device, tex, texWidth, texHeight);
+    pixels = await readbackTexturePixels(device, tex, texWidth, texHeight, {
+      bytesPerTexel: texelBytes,
+    });
   } catch (e) {
     return err(
       new DebugError({
@@ -472,5 +496,5 @@ export async function readbackDrawRt(
     );
   }
 
-  return ok({ width: texWidth, height: texHeight, pixels });
+  return ok({ width: texWidth, height: texHeight, format, pixels });
 }

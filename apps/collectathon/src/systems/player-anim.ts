@@ -17,9 +17,9 @@
 // fn wires it to the PlayerMoveSignal produced by player-move (no re-querying
 // input -- D-5 one-way signal).
 
+import { AnimationPlayer } from '@forgeax/engine-animation';
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem } from '@forgeax/engine-ecs';
-import { AnimationPlayer } from '@forgeax/engine-runtime';
 
 import { readDt } from './frame-time';
 import type { PlayerMoveSignal } from './player-move';

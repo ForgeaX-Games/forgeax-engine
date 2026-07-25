@@ -76,7 +76,10 @@ const mockCanvas = {
 
 const { World } = await import('@forgeax/engine-ecs');
 const { registerStatesPlugin } = await import('@forgeax/engine-state');
-const { Camera, perspective, Transform, createRenderer } = await import('@forgeax/engine-runtime');
+const { Camera } = await import('@forgeax/engine-render');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');

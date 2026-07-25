@@ -47,10 +47,10 @@ flowchart LR
 // 1. engine usage - 引擎公开符号集
 import { Update, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera, Engine, EngineEnvironmentError, HANDLE_CUBE,
-  MeshRenderer, MeshFilter, Transform,
-} from '@forgeax/engine-runtime';
+import { Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { Camera, MeshRenderer, MeshFilter } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import type { Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 
 // 2. example-specific glue - LO §1.5 GLM 累乘的 forgeax 等价

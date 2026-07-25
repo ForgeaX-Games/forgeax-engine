@@ -11,13 +11,15 @@
 // TDD red anchor: before w24 + w25 the file fails to compile; after them a
 // dangling clip handle throws the structured error before any slot is written.
 
+import {
+  AnimationPlayer,
+  defineAnimationGraph,
+  evaluateAnimationGraph,
+} from '@forgeax/engine-animation';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { defineAnimationGraph } from '../animation/define-animation-graph';
-import { evaluateAnimationGraph } from '../animation/evaluate-animation-graph';
-import { AnimationPlayer } from '../components/animation-player';
 
 interface StructuredError {
   code?: unknown;
@@ -25,7 +27,7 @@ interface StructuredError {
 }
 
 describe('evaluateAnimationGraph — clip-missing structured error (M3 / w22)', () => {
-  it('throws animation-graph-clip-missing and writes no dirty pose', () => {
+  it('throws animation-asset-not-found and writes no dirty pose', () => {
     const world = new World();
 
     // A clip handle that was never registered (slot >= BUILTIN_BASE, so it
@@ -50,7 +52,7 @@ describe('evaluateAnimationGraph — clip-missing structured error (M3 / w22)', 
     }
 
     expect(caught).toBeDefined();
-    expect(caught?.code).toBe('animation-graph-clip-missing');
+    expect(caught?.code).toBe('animation-asset-not-found');
     expect(typeof caught?.hint).toBe('string');
     expect((caught?.hint as string).length).toBeGreaterThan(0);
 

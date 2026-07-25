@@ -19,7 +19,7 @@ import type { Mat4Like, Vec3 } from '@forgeax/engine-math';
 import { mat4, quat, vec3 } from '@forgeax/engine-math';
 import type { PhysicsWorld } from '@forgeax/engine-physics';
 import { CharacterController } from '@forgeax/engine-physics';
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 
 import { readDt } from './frame-time';
 

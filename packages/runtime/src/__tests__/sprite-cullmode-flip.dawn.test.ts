@@ -22,10 +22,17 @@
 
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
+import {
+  ANTIALIAS_NONE,
+  Camera,
+  MeshFilter,
+  MeshRenderer,
+  TONEMAP_NONE,
+} from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
-import { ANTIALIAS_NONE, TONEMAP_NONE } from '../components/camera';
-import { createRenderer, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../index';
+import { createRenderer } from '../index';
 
 const WIDTH = 256;
 const HEIGHT = 256;

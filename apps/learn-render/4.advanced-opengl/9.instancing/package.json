@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "learn-render LearnOpenGL section 4.advanced-opengl 9.instancing \u2014 asteroid belt of 1200 rocks via the Instances component + engine-math orbit transforms in a single instanced draw.",
+  "description": "learn-render LearnOpenGL section 4.advanced-opengl 9.instancing — asteroid belt of 1200 rocks via the Instances component + engine-math orbit transforms in a single instanced draw.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -44,7 +44,9 @@
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-types": "workspace:*"
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",

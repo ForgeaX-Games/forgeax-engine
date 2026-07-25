@@ -10,15 +10,10 @@ import {
   type PeerId,
 } from '@forgeax/engine-net';
 import { connectWebSocketClientEndpoint } from '@forgeax/engine-net-websocket/browser';
-import {
-  Camera,
-  type MaterialAsset,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  orthographic,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Camera, Materials, MeshFilter, MeshRenderer, orthographic } from '@forgeax/engine-render';
+import type { MaterialAsset } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
 import { type Direction, encodeCommand, encodeDirectionCommand } from './shared/commands';
 import {
   Food,

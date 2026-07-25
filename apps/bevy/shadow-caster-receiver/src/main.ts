@@ -5,10 +5,10 @@
 import { createApp } from '@forgeax/engine-app';
 import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import type { Handle } from '@forgeax/engine-types';
-import {
-  Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer,
-  perspective, Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { Materials } from '@forgeax/engine-render';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');

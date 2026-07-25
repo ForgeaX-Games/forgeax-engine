@@ -34,14 +34,14 @@
 //     skin animator integration is OOS-3 of feat-20260611. This test
 //     cares only about BGL shape + buffer-binding contract.
 
-import type { BindGroupLayout, PipelineLayout, RhiError } from '@forgeax/engine-rhi';
-import { ok, type Result } from '@forgeax/engine-rhi';
-import { describe, expect, it } from 'vitest';
 import {
   buildPbrPipelineLayouts,
   buildPbrSkinLayouts,
   type PbrPipelineDevice,
-} from '../pbr-pipeline';
+} from '@forgeax/engine-render/internal';
+import type { BindGroupLayout, PipelineLayout, RhiError } from '@forgeax/engine-rhi';
+import { ok, type Result } from '@forgeax/engine-rhi';
+import { describe, expect, it } from 'vitest';
 
 interface CapturedBglDesc {
   readonly label: string | undefined;

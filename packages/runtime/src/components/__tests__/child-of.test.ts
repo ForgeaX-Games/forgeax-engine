@@ -10,9 +10,9 @@
 
 import { Entity, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
-// Side-effect: ensures Children is defined before ChildOf resolves its mirror.
-import '../children';
-import { ChildOf } from '../child-of';
+// Side-effect: loads the canonical scene barrel before ChildOf is consumed.
+import '@forgeax/engine-scene';
+import { ChildOf } from '@forgeax/engine-scene';
 
 function alive(world: World, entity: EntityHandle): boolean {
   const r = world.get(entity, Entity);

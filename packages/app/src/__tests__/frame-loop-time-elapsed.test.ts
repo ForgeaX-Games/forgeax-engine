@@ -12,7 +12,7 @@
 //   4. delta is still present + correct (existing consumers unaffected).
 
 import { Time, type TimeResource, World } from '@forgeax/engine-ecs';
-import type { Renderer } from '@forgeax/engine-runtime';
+import type { Renderer } from '@forgeax/engine-render';
 import { describe, expect, it } from 'vitest';
 import { createFrameLoop } from '../internal/frame-loop';
 

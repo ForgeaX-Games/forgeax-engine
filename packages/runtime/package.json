@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@forgeax/engine-assets-runtime": "workspace:*",
+    "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-audio-webaudio": "workspace:*",
     "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-debug-draw": "workspace:*",
@@ -43,6 +44,9 @@
     "@forgeax/engine-pack": "workspace:^",
     "@forgeax/engine-plugin": "workspace:*",
     "@forgeax/engine-render-graph": "workspace:*",
+    "@forgeax/engine-render": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-skinning": "workspace:*",
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-rhi-null": "workspace:*",
     "@forgeax/engine-rhi-webgpu": "workspace:*",

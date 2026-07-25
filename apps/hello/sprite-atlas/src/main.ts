@@ -35,7 +35,12 @@ import { createApp } from '@forgeax/engine-app';
 import { ok as okResult } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { CAMERA_PROJECTION_ORTHOGRAPHIC, Camera, createDevImportTransport, EngineEnvironmentError, MeshFilter, MeshRenderer, SpriteRegionOverride, SPRITE_PREMULTIPLIED_ALPHA_BLEND, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { CAMERA_PROJECTION_ORTHOGRAPHIC } from '@forgeax/engine-render';
+import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { SpriteRegionOverride, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
 import type {
   Handle,

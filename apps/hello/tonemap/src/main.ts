@@ -56,18 +56,13 @@
 //                    inside the (0.3, 1.0) per-channel band
 
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  EngineEnvironmentError,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  TONEMAP_REINHARD_EXTENDED,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
+
 import { createSphereGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';

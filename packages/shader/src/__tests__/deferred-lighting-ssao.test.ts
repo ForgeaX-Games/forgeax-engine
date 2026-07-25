@@ -55,7 +55,7 @@ describe('deferred lighting ambient SSAO synthesis (M2 / w11)', () => {
     // where ao = mix(1.0, aoSample.r, material.occlusionStrength).
     // M7/w32 changed `let` -> `var` so the SSAO blend line `ambient *= mix(...)` can mutate it.
     const codeOnly = stripComments(pbrSource);
-    expect(codeOnly).toMatch(/var\s+ambient\s*=\s*\(kD\s*\*\s*irradiance/);
+    expect(codeOnly).toMatch(/var\s+ambient\s*=\s*\(\s*\(kD\s*\*\s*irradiance/);
     expect(codeOnly).toMatch(/material\.occlusionStrength/);
     expect(codeOnly).toMatch(/skylight\.intensity/);
   });

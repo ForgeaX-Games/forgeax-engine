@@ -4,7 +4,7 @@
 // plan-strategy section 4 R-A6 / requirements AC-07 reverse-grep precision).
 //
 // Reverse-grep enforcement of the extract -> record Pipeline Isolation
-// boundary on `packages/runtime/src/render-system-record.ts`. The record
+// boundary on `packages/render/src/render-system-record.ts`. The record
 // stage MUST consume material data only from the `RenderableSnapshot.material`
 // POD that the extract stage produced; it MUST NOT directly reach into
 // `internals.assets.get<MaterialAsset>(...)` or smuggle a typed cast over
@@ -38,10 +38,10 @@ import { fileURLToPath } from 'node:url';
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..', '..');
 // feat-20260704 M3/w24: the record-stage monolith split into the
-// packages/runtime/src/record/ cluster. The gate scans every .ts in that
+// packages/render/src/record/ cluster. The gate scans every .ts in that
 // directory so a banned MaterialAsset-read pattern cannot regrow in any
 // sibling file (plan-strategy D-2 no-root-shim + section 5.6 no empty-pass).
-const RECORD_DIR = resolve(REPO_ROOT, 'packages/runtime/src/record');
+const RECORD_DIR = resolve(REPO_ROOT, 'packages/render/src/record');
 
 const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {
@@ -52,7 +52,7 @@ if (args.includes('--help') || args.includes('-h')) {
       'Usage:',
       '  node scripts/forgeax/check-render-record-no-material-asset-get.mjs',
       '',
-      'Asserts that no file under packages/runtime/src/record/ does NOT',
+      'Asserts that no file under packages/render/src/record/ does NOT',
       'reach `internals.assets.get<MaterialAsset>` directly, does NOT cast',
       '`firstMaterial` to read texture handles, and does NOT name the',
       '`baseColorHandle` local that the cast pattern produced. The mesh',

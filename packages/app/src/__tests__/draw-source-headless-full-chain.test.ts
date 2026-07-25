@@ -31,18 +31,18 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
-import type { RhiNullDevice } from '@forgeax/engine-rhi-null';
-import { rhi } from '@forgeax/engine-rhi-null';
 import {
   Camera,
-  createRenderer,
   DirectionalLight,
   MeshFilter,
   MeshRenderer,
   type Renderer,
-  registerPropagateTransforms,
-  Transform,
-} from '@forgeax/engine-runtime';
+} from '@forgeax/engine-render';
+import type { RhiNullDevice } from '@forgeax/engine-rhi-null';
+import { rhi } from '@forgeax/engine-rhi-null';
+import { createRenderer } from '@forgeax/engine-runtime';
+import { registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFrameLoop, type FrameLoopOptions } from '../internal/frame-loop';
 
@@ -152,8 +152,8 @@ const createFrameLoopWithDrawSource = createFrameLoop as unknown as (
 // headless test; cast the options bag to RendererOptions so the direct
 // createRenderer import (strict RendererOptions) accepts the injected backend.
 const rhiOptions = {
-  rhi: rhi as unknown as import('@forgeax/engine-runtime').RendererOptions['rhi'],
-} as import('@forgeax/engine-runtime').RendererOptions;
+  rhi: rhi as unknown as import('@forgeax/engine-render').RendererOptions['rhi'],
+} as import('@forgeax/engine-render').RendererOptions;
 
 let renderer: Renderer | null = null;
 

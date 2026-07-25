@@ -16,8 +16,12 @@
 //   - no re-test of the block table contents (codec w9 owns that)
 //   - pure node unit, no browser / dawn dependency
 
+import {
+  deriveMipUploadLayout,
+  deriveTextureExtent,
+  type MipUploadLevel,
+} from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import { deriveMipUploadLayout, deriveTextureExtent, type MipUploadLevel } from '../render-data';
 
 /** Sum of every level's byte length -- the total block-byte buffer size. */
 function totalBytes(layout: readonly MipUploadLevel[]): number {

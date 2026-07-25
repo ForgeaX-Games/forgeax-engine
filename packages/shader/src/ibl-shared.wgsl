@@ -34,6 +34,15 @@ fn sampleSphericalMap(v: vec3<f32>) -> vec2<f32> {
   return uv * INV_ATAN + 0.5;
 }
 
+// Rotate a sampling direction by the inverse of an environment quaternion.
+// This keeps the baked cubemap reusable while rotating the source map in
+// world space at the final sampling boundary.
+fn inverseRotateEnvironment(direction: vec3<f32>, rotation: vec4<f32>) -> vec3<f32> {
+  let q = normalize(rotation);
+  let t = 2.0 * cross(q.xyz, direction);
+  return direction - q.w * t + cross(q.xyz, t);
+}
+
 // Van der Corput radical inverse in base 2.
 fn radicalInverseVdC(bits: u32) -> f32 {
   var b: u32 = bits;

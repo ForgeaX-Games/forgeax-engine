@@ -15,7 +15,7 @@
 // world identity path (worldId 0) is preserved (AC-03 regression guarantee).
 
 import { World } from '@forgeax/engine-ecs';
-import type { Renderer } from '@forgeax/engine-runtime';
+import type { Renderer } from '@forgeax/engine-render';
 import { describe, expect, it, vi } from 'vitest';
 import { createFrameLoop } from '../internal/frame-loop';
 

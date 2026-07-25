@@ -5,7 +5,8 @@
 // (pickTile); feat-20260604 baseline; charter P3 explicit failure.
 
 import { World } from '@forgeax/engine-ecs';
-import { ChildOf, TileLayer, Tilemap, Transform } from '@forgeax/engine-runtime';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
 import { type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { pickTile } from '../pick-tile';

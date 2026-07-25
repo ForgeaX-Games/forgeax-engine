@@ -107,15 +107,10 @@ const mockCanvas = {
 // --- 3. Engine + Fox.glb pipeline (load side, mirrors smoke-dawn.mjs) ------
 
 const { World } = await import('@forgeax/engine-ecs');
-const {
-  ChildOf,
-  createRenderer,
-  SceneInstance,
-  Skin,
-  Transform,
-  rootsToSceneAsset,
-  serializeSceneAssetToPack,
-} = await import('@forgeax/engine-runtime');
+const { ChildOf, Transform } = await import('@forgeax/engine-scene');
+const { createRenderer, rootsToSceneAsset, serializeSceneAssetToPack } = await import('@forgeax/engine-runtime');
+const { SceneInstance } = await import('@forgeax/engine-render');
+const { Skin } = await import('@forgeax/engine-skinning');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { gltfDocToSceneAsset, meshIrToMeshAsset, parseGlb, toMaterialAsset } = await import(
   '@forgeax/engine-gltf'

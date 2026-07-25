@@ -194,20 +194,11 @@ const mockCanvas = {
 
 const { ok: okResult, World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  createRenderer,
-  Layer,
-  MeshFilter,
-  MeshRenderer,
-  setTransparentSortConfig,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  TONEMAP_NONE,
-  TONEMAP_REINHARD_EXTENDED,
-  TRANSPARENT_SORT_MODE_LAYER_Y,
-  TRANSPARENT_SORT_MODE_LAYER_Z,
-  Transform,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_LAYER_Y, TRANSPARENT_SORT_MODE_LAYER_Z } = await import('@forgeax/engine-render/internal');
+const { SPRITE_PREMULTIPLIED_ALPHA_BLEND } = await import('@forgeax/engine-render/authoring');
+const { Camera, Layer, MeshFilter, MeshRenderer, TONEMAP_NONE, TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_QUAD,
 } = await import('@forgeax/engine-assets-runtime');
@@ -607,8 +598,8 @@ for (const matrixCase of MATRIX) {
 //
 // AC-12 ECS-side zero-increment (plan-review.md round 1 issue #2):
 //   The 9-slice work must NOT add `9-slice` / `nineslice` references to
-//   `packages/runtime/src/components/sort-key.ts` /
-//   `packages/runtime/src/components/layer.ts` (RenderQueue + Layer + sort
+//   `packages/render/src/components/sort-key.ts` /
+//   `packages/render/src/components/layer.ts` (RenderQueue + Layer + sort
 //   formula `pos y - pivotY * sizeY` stay 9-slice-agnostic). The smoke greps
 //   the two files inline and fails if either contains a hit.
 
@@ -814,8 +805,8 @@ if (FALSIFY_NINESLICE_ANCHOR && softWarnDelta < 1) {
 //   appears. The smoke-dawn.mjs scope owns this gate so the AI-user
 //   reviewing the smoke output sees a single grep verdict per run.
 const AC12_FILES = [
-  resolve(here, '..', '..', '..', '..', 'packages', 'runtime', 'src', 'components', 'sort-key.ts'),
-  resolve(here, '..', '..', '..', '..', 'packages', 'runtime', 'src', 'components', 'layer.ts'),
+  resolve(here, '..', '..', '..', '..', 'packages', 'render', 'src', 'components', 'sort-key.ts'),
+  resolve(here, '..', '..', '..', '..', 'packages', 'render', 'src', 'components', 'layer.ts'),
 ];
 const AC12_PATTERN = /9.?slice|nineslice/i;
 for (const filePath of AC12_FILES) {

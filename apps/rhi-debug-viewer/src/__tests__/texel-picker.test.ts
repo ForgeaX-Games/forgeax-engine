@@ -3,9 +3,9 @@
 // (a) canvasToTexel: zoom fit/1:1/2x modes, object-fit contain letterbox, OOB -> null.
 // (b) decodeTexelRaw: raw byte decode without float clamp (D-4), HDR >1.0 preserved.
 
+import { decodeTexelRaw } from '@forgeax/engine-rhi-debug';
 import { describe, expect, it } from 'vitest';
 import { canvasToTexel } from '../texel-coord';
-import { decodeTexelRaw } from '../texel-decode';
 
 // ---- helpers ----------------------------------------------------------------
 

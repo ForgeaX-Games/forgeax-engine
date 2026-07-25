@@ -16,7 +16,7 @@ import {
 } from '@forgeax/engine-input';
 import { runPlugins } from '@forgeax/engine-plugin';
 import { vec3 } from '@forgeax/engine-math';
-import { ChildOf } from '@forgeax/engine-runtime';
+import { ChildOf } from '@forgeax/engine-scene';
 import {
   addOnEnter,
   addOnExit,

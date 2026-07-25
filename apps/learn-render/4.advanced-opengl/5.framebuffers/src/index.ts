@@ -29,7 +29,14 @@ import type { App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { RenderGraph } from '@forgeax/engine-render-graph';
 import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { addFullscreenPass, addScenePass, Camera, createDevImportTransport, MeshFilter, MeshRenderer, perspective, type RenderPipeline, type RenderPipelineContext, type RenderPipelineData, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
+import type { RenderPipeline, RenderPipelineContext, RenderPipelineData } from '@forgeax/engine-render';
+import { addFullscreenPass, addScenePass } from '@forgeax/engine-render';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+
 import type {
   MaterialAsset,
   RenderPipelineAsset,

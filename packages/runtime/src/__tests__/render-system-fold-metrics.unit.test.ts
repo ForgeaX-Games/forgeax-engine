@@ -30,14 +30,14 @@
 //   - Semantics: count of instanced drawIndexed emitted this frame; not
 //     entity count, not pre-filter bucket count.
 
-import { describe, expect, it, vi } from 'vitest';
-import { createEngineMetrics } from '../engine-metrics';
-import type { DispatchEntry } from '../render-system-extract';
+import type { DispatchEntry } from '@forgeax/engine-render/internal';
 import {
+  createEngineMetrics,
   type FoldBucket,
   type FoldDispatchPlan,
   incrementFoldedDrawsMetric,
-} from '../render-system-fold';
+} from '@forgeax/engine-render/internal';
+import { describe, expect, it, vi } from 'vitest';
 
 const METRIC_KEY = 'render.instancing.foldedDraws';
 

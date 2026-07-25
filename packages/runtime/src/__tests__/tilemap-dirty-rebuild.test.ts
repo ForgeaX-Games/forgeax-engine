@@ -13,22 +13,20 @@
 // Anchors: plan-tasks m0-t9; charter F1.
 
 import { Entity, type EntityHandle, World } from '@forgeax/engine-ecs';
-import { type TilesetAsset, toShared } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
 import {
-  ChildOf,
-  Children,
   encodeSortScope,
   markTileLayerDirty,
   TileLayer,
   Tilemap,
-  Transform,
-} from '../components';
+  tilemapChunkExtractSystem,
+} from '@forgeax/engine-render/authoring';
 import {
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
-  tilemapChunkExtractSystem,
-} from '../tilemap-chunk-extract-system';
+} from '@forgeax/engine-render/internal';
+import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
+import { type TilesetAsset, toShared } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
 
 function setup() {
   const world = new World();

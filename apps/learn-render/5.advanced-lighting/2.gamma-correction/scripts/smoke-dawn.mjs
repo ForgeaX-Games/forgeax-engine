@@ -192,16 +192,10 @@ if (!existsSync(WOOD_SRC_PATH)) {
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  addFullscreenPass,
-  addScenePass,
-  Camera,
-  createRenderer,
-  MeshFilter,
-  MeshRenderer,
-  PointLight,
-  Transform,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { addFullscreenPass, addScenePass } = await import('@forgeax/engine-render');
+const { Camera, MeshFilter, MeshRenderer, PointLight } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_QUAD,
 } = await import('@forgeax/engine-assets-runtime');

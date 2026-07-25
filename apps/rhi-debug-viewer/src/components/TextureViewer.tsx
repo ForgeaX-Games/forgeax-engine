@@ -26,7 +26,10 @@
 
 import type { RhiCallEvent } from '@forgeax/engine-rhi-debug';
 import {
+  adaptReplayFormat,
   bytesPerTexel,
+  decodeTexelRaw,
+  decodeToRgba8,
   formatInfo,
   readbackDrawRt,
   readbackTexturePixels,
@@ -50,7 +53,6 @@ import {
   textureZoomAnchor,
 } from '../selectors';
 import { canvasToTexel } from '../texel-coord';
-import { decodeTexelRaw, decodeToRgba8 } from '../texel-decode';
 import { sampleScalar } from '../texel-scalar';
 import {
   isDepthFormat,
@@ -161,12 +163,14 @@ export function collectThumbnails(
 
   // Color RT
   if (draw.colorAttachmentHandleId !== undefined) {
+    const desc = resolveTextureDescriptor(events, draw.colorAttachmentHandleId);
+    const format = adaptReplayFormat(desc?.format) ?? 'unknown';
     entries.push({
       handleId: draw.colorAttachmentHandleId,
       label: 'Color RT 0',
-      format: 'rgba8unorm',
+      format,
       kind: 'color-rt',
-      status: { handleId: draw.colorAttachmentHandleId, status: 'ok', format: 'rgba8unorm' },
+      status: { handleId: draw.colorAttachmentHandleId, status: 'ok', format },
     });
   }
 
@@ -205,7 +209,7 @@ export function collectThumbnails(
       if (!seen.has(handleId)) {
         seen.add(handleId);
         const desc = resolveTextureDescriptor(events, handleId);
-        const format = desc?.format ?? 'unknown';
+        const format = adaptReplayFormat(desc?.format) ?? 'unknown';
         entries.push({
           handleId,
           label: `Texture ${handleId}`,
@@ -560,20 +564,13 @@ export function TextureViewer(_props: IDockviewPanelProps) {
         }
         // renderRtToCanvas resizes the canvas drawing buffer to the RT dims.
         if (canvas.width > 0 && canvas.height > 0) markDims(canvas.width, canvas.height);
-        // Cache raw RT bytes for the texel picker (bug #2: the color-RT path used to
-        // discard pixels, so hover always read 0). readbackDrawRt is the SSOT readback
-        // renderRtToCanvas already runs; the RT format is the REAL attachment format
-        // (bgra8unorm on this platform), not the thumbnail's hard-coded 'rgba8unorm'.
-        const rtDesc =
-          draw.colorAttachmentHandleId !== undefined
-            ? resolveTextureDescriptor(tape.events, draw.colorAttachmentHandleId)
-            : null;
+        // Cache the same native-format bytes the canvas decoder just painted.
         const rtReadback = await readbackDrawRt(replay, selectedDrawIdx, device);
         if (cancelled) return;
         if (rtReadback.ok) {
           rawPixelsRef.current = {
             bytes: rtReadback.value.pixels,
-            format: rtDesc?.format ?? 'rgba8unorm',
+            format: rtReadback.value.format,
           };
         }
         setStatus('ok');
@@ -599,8 +596,9 @@ export function TextureViewer(_props: IDockviewPanelProps) {
         }
         // Clamp the slice to the texture's range (state may lag a thumbnail change).
         const layer = Math.min(selectedSlice, Math.max(0, desc.arrayLayers - 1));
+        const format = adaptReplayFormat(desc.format) ?? desc.format;
         try {
-          if (isDepthFormat(desc.format)) {
+          if (isDepthFormat(format)) {
             // Bound depth texture: same faithful depth path as the depth attachment
             // (readbackDepthAuto branches direct-readback vs blit by format), then
             // normalize + grayscale. `layer` selects one cube/array slice.
@@ -608,7 +606,7 @@ export function TextureViewer(_props: IDockviewPanelProps) {
               device,
               createShaderModule,
               liveTexture,
-              desc.format,
+              format,
               desc.width,
               desc.height,
               layer,
@@ -633,12 +631,12 @@ export function TextureViewer(_props: IDockviewPanelProps) {
               liveTexture,
               desc.width,
               desc.height,
-              { baseArrayLayer: layer, bytesPerTexel: bytesPerTexel(desc.format as never) ?? 4 },
+              { baseArrayLayer: layer, bytesPerTexel: bytesPerTexel(format as never) ?? 4 },
             );
             if (cancelled) return;
             // Cache raw readback bytes for D-4 texel picker (raw byte bypass).
-            rawPixelsRef.current = { bytes: pixels, format: desc.format };
-            const painted = paintColorPixels(canvas, pixels, desc.width, desc.height, desc.format);
+            rawPixelsRef.current = { bytes: pixels, format };
+            const painted = paintColorPixels(canvas, pixels, desc.width, desc.height, format);
             if (painted) markDims(desc.width, desc.height);
             setStatus(painted ? 'ok' : 'error');
             setMessage(painted ? null : '2d canvas context unavailable');

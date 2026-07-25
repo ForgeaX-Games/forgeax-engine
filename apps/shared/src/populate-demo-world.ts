@@ -24,8 +24,8 @@ import {
   MeshFilter,
   MeshRenderer,
   perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+} from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 
 export function populateDemoWorld(world: World): void {
   // Cube entity: builtin geometry + identity transform + empty MeshRenderer

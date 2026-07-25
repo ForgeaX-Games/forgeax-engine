@@ -301,6 +301,8 @@ export function attachBrowserInputBackend(
     }
   >();
   const phaseQueue: PointerPhaseEvent[] = [];
+  let mouseX: number | undefined;
+  let mouseY: number | undefined;
 
   // w21: virtual joystick binding state (per-joystick name → BindState).
   const vjConfigs = options.virtualJoysticks ?? [];
@@ -381,6 +383,10 @@ export function attachBrowserInputBackend(
     }
     // Track pointer in map for multi-pointer + delta (w15).
     const coords = computePointerCoords(ev);
+    if (ev.pointerType === 'mouse') {
+      mouseX = coords.x;
+      mouseY = coords.y;
+    }
     pointerMap.set(ev.pointerId, {
       x: coords.x,
       y: coords.y,
@@ -462,6 +468,10 @@ export function attachBrowserInputBackend(
     // Update live position; prevX/prevY NOT updated here (AC-09: prev only
     // snapshots at sample() time, preventing Bevy #12442 zero-delta bug).
     const coords = computePointerCoords(ev);
+    if (ev.pointerType === 'mouse') {
+      mouseX = coords.x;
+      mouseY = coords.y;
+    }
     const entry = pointerMap.get(ev.pointerId);
     if (entry) {
       entry.x = coords.x;
@@ -741,6 +751,7 @@ export function attachBrowserInputBackend(
       buttons: [buttons[0], buttons[1], buttons[2]] as readonly [boolean, boolean, boolean],
       movementX: mvx,
       movementY: mvy,
+      ...(mouseX !== undefined && mouseY !== undefined ? { mouseX, mouseY } : {}),
       wheelDelta: wheelAccum,
       focused: isFocused(),
       capabilities: caps,

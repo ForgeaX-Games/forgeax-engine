@@ -41,7 +41,12 @@ import {
 } from '@forgeax/engine-types';
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
-import { CAMERA_PROJECTION_ORTHOGRAPHIC, Camera, ChildOf, MeshFilter, MeshRenderer, SPRITE_PREMULTIPLIED_ALPHA_BLEND, TileLayer, Tilemap, Transform, createRenderer } from '@forgeax/engine-runtime';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+
+import { CAMERA_PROJECTION_ORTHOGRAPHIC } from '@forgeax/engine-render';
+import { createRenderer } from '@forgeax/engine-runtime';
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND, TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
 const COLS = 32;
 const ROWS = 32;

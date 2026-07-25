@@ -25,10 +25,10 @@ import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { MeshFilter, SceneInstance } from '@forgeax/engine-render/internal';
 import type { LocalEntityId, MeshAsset, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { BUILTIN_BASE } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
-import { MeshFilter, SceneInstance } from '../components';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function localId(n: number): LocalEntityId {

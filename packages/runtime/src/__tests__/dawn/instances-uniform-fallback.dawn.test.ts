@@ -109,9 +109,11 @@ describe('w6 -- AC-07 storage+uniform variant test (degraded best-effort)', () =
 
     const { World } = await import('@forgeax/engine-ecs');
     const { AssetRegistry, HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
-    const { Camera, createRenderer, Instances, MeshFilter, MeshRenderer, Transform } = await import(
-      '@forgeax/engine-runtime'
-    );
+    const { Camera, MeshRenderer } = await import('@forgeax/engine-render/internal');
+    const { Instances } = await import('@forgeax/engine-render/internal');
+    const { createRenderer } = await import('@forgeax/engine-runtime');
+    const { MeshFilter } = await import('@forgeax/engine-render/internal');
+    const { Transform } = await import('@forgeax/engine-scene');
     const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
     const ENGINE_MANIFEST_W6 = await buildEngineShaderManifest();
     const ENGINE_MANIFEST_URL_W6 = `data:application/json,${encodeURIComponent(

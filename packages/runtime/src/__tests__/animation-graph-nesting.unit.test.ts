@@ -18,13 +18,15 @@
 // TDD red anchor: before w24 + w25 the file fails to compile; after them the
 // nested weights propagate as above.
 
+import {
+  AnimationPlayer,
+  defineAnimationGraph,
+  evaluateAnimationGraph,
+} from '@forgeax/engine-animation';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import type { AnimationClip } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { defineAnimationGraph } from '../animation/define-animation-graph';
-import { evaluateAnimationGraph } from '../animation/evaluate-animation-graph';
-import { AnimationPlayer } from '../components/animation-player';
 
 function registerClip(world: World, duration: number) {
   const clip: AnimationClip = { kind: 'animation-clip', duration, channels: [] };

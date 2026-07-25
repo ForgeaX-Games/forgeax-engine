@@ -20,25 +20,24 @@
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { Entity, World } from '@forgeax/engine-ecs';
 import {
+  encodeSortScope,
+  TileLayer,
+  Tilemap,
+  tilemapChunkExtractSystem,
+} from '@forgeax/engine-render/authoring';
+import {
+  MeshRenderer,
+  resetTilemapChunkExtractCache,
+  resetTilemapDerivedEntityTracker,
+} from '@forgeax/engine-render/internal';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+import {
   type Handle,
   type MaterialAsset,
   type TilesetAsset,
   toShared,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import {
-  ChildOf,
-  encodeSortScope,
-  MeshRenderer,
-  TileLayer,
-  Tilemap,
-  Transform,
-} from '../components';
-import {
-  resetTilemapChunkExtractCache,
-  resetTilemapDerivedEntityTracker,
-  tilemapChunkExtractSystem,
-} from '../tilemap-chunk-extract-system';
 
 interface RegionWithAtlasIndex {
   x: number;

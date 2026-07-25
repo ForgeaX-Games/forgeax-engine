@@ -28,7 +28,7 @@ import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
 import type { PhysicsWorld } from '@forgeax/engine-physics';
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 
 import { Guardian, GuardianAttack, GuardianModeValue } from '../components';
 import type { GuardianHandles } from '../spawn/spawn-guardian';

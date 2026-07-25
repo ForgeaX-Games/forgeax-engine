@@ -1,32 +1,63 @@
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { chromium } from 'playwright';
 
-const port = 65476;
 const falsifyCompanion = process.argv.includes('--falsify-companion');
+const reloadBeforeCapture = process.argv.includes('--reload-before-capture');
 const appDir = fileURLToPath(new URL('..', import.meta.url));
 const viteBin = fileURLToPath(new URL('../../../node_modules/vite/bin/vite.js', import.meta.url));
+const port = await availablePort();
 const server = spawn(process.execPath, [viteBin, '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
   cwd: appDir,
   stdio: 'ignore',
 });
 const stop = () => server.kill('SIGTERM');
 process.on('exit', stop);
-try {
+
+async function availablePort() {
+  const probe = createServer();
+  await new Promise((resolve, reject) => {
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', resolve);
+  });
+  const address = probe.address();
+  if (address === null || typeof address === 'string') throw new Error('preview smoke could not allocate a TCP port');
+  await new Promise((resolve, reject) => probe.close((error) => (error ? reject(error) : resolve())));
+  return address.port;
+}
+
+async function waitForServer(origin) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (server.exitCode !== null || server.signalCode !== null) {
+      throw new Error(
+        `preview Vite server exited before becoming ready (exit ${server.exitCode}, signal ${server.signalCode})`,
+      );
+    }
     try {
-      await fetch(`http://127.0.0.1:${port}/`);
-      break;
+      await fetch(origin);
+      return;
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
+  throw new Error('preview Vite server did not become ready');
+}
+
+try {
+  const origin = `http://127.0.0.1:${port}`;
+  await waitForServer(`${origin}/`);
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 320, height: 180 }, deviceScaleFactor: 1 });
-  await page.goto(`http://127.0.0.1:${port}/?game=game-default`, { waitUntil: 'domcontentloaded' });
+  const pageFailures = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') pageFailures.push(message.text());
+  });
+  page.on('pageerror', (error) => pageFailures.push(error.message));
+  await page.goto(`${origin}/?game=game-default`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => Boolean(globalThis.__forgeaxUiAuthoring), null, { timeout: 30_000 });
-  const captureSelector = '[data-ui-authoring-root] [data-ui-asset]';
+  let captureSequence = 0;
   const waitForPaint = async () => {
     await page.evaluate(
       () =>
@@ -36,45 +67,90 @@ try {
     );
     await page.evaluate(() => document.fonts.ready);
   };
-  const screenshotRenderable = async () => {
+  const screenshotRenderable = async (scenario) => {
+    const attempts = [];
     for (let attempt = 0; attempt < 8; attempt += 1) {
+      const captureToken = `ui-capture-${captureSequence++}`;
       await waitForPaint();
-      // Capture the target above the live game overlay so compositor frames cannot leak into PNG bytes.
-      const previousBackground = await page.evaluate((selector) => {
-        const target = document.querySelector(selector);
-        if (!(target instanceof HTMLElement)) throw new Error('preview capture target is unavailable');
-        const previous = target.style.backgroundColor;
-        const authoringRoot = target.closest('[data-ui-authoring-root]');
-        if (!(authoringRoot instanceof HTMLElement)) throw new Error('preview authoring root is unavailable');
-        authoringRoot.dataset.uiCaptureZIndex = authoringRoot.style.zIndex;
-        authoringRoot.style.zIndex = '2147483647';
-        target.style.backgroundColor = 'rgb(0, 0, 0)';
-        return previous;
-      }, captureSelector);
-      try {
-        const bytes = await page.locator(captureSelector).screenshot({ animations: 'disabled' });
-        if (bytes.length >= 100) return bytes;
-      } finally {
-        await page.evaluate(([selector, background]) => {
-          const target = document.querySelector(selector);
-          if (!(target instanceof HTMLElement)) return;
-          target.style.backgroundColor = background;
-          const authoringRoot = target.closest('[data-ui-authoring-root]');
-          if (authoringRoot instanceof HTMLElement) {
-            authoringRoot.style.zIndex = authoringRoot.dataset.uiCaptureZIndex ?? '';
-            delete authoringRoot.dataset.uiCaptureZIndex;
+      await page.waitForFunction(
+        async ({ scenario, captureToken }) => {
+          const host = globalThis.__forgeaxUiAuthoring;
+          if (!host) return false;
+          if (!host.getCaptureTarget()) {
+            const opened = await host.open(scenario);
+            if (!opened.ok) throw new Error(`scenario failed: ${opened.error.code}`);
           }
-        }, [captureSelector, previousBackground]);
+          const target = host.getCaptureTarget();
+          if (!(target instanceof HTMLElement) || !target.isConnected) return false;
+          const rect = target.getBoundingClientRect();
+          if (rect.width !== 320 || rect.height !== 180) return false;
+          const authoringRoot = target.closest('[data-ui-authoring-root]');
+          if (!(authoringRoot instanceof HTMLElement)) return false;
+          target.dataset.uiCaptureToken = captureToken;
+          authoringRoot.dataset.uiCaptureRootToken = captureToken;
+          authoringRoot.dataset.uiCaptureZIndex = authoringRoot.style.zIndex;
+          authoringRoot.dataset.uiCaptureBackground = authoringRoot.style.backgroundColor;
+          authoringRoot.style.zIndex = '2147483647';
+          authoringRoot.style.backgroundColor = 'rgb(0, 0, 0)';
+          return true;
+        },
+        { scenario, captureToken },
+        { timeout: 30_000 },
+      );
+      try {
+        const target = page.locator(`[data-ui-capture-token="${captureToken}"]`);
+        const bytes = await target.screenshot({ animations: 'disabled' });
+        const state = await page.evaluate((captureToken) => {
+          const host = globalThis.__forgeaxUiAuthoring;
+          const target = host?.getCaptureTarget();
+          const root = host?.root;
+          const rect = target?.getBoundingClientRect();
+          return {
+            token: captureToken,
+            connected: target?.isConnected ?? false,
+            rect: { width: rect?.width ?? 0, height: rect?.height ?? 0 },
+            shadowChildren: target?.shadowRoot?.childElementCount ?? 0,
+            captureTarget: target?.dataset.uiCaptureToken === captureToken,
+            captureRoot: root?.dataset.uiCaptureRootToken === captureToken,
+          };
+        }, captureToken);
+        if (state.connected && state.rect.width === 320 && state.rect.height === 180 && state.captureTarget && state.captureRoot) {
+          if (bytes.length >= 100) return bytes;
+          attempts.push({ ...state, bytes: bytes.length });
+        } else {
+          attempts.push(state);
+        }
+      } catch (error) {
+        attempts.push({ token: captureToken, state: error instanceof Error ? error.message : String(error) });
+      } finally {
+        await page.evaluate((captureToken) => {
+          const host = globalThis.__forgeaxUiAuthoring;
+          const captureTarget = host?.getCaptureTarget();
+          if (captureTarget?.dataset.uiCaptureToken === captureToken) {
+            delete captureTarget.dataset.uiCaptureToken;
+          }
+          const authoringRoot = host?.root;
+          if (authoringRoot?.dataset.uiCaptureRootToken === captureToken) {
+            authoringRoot.style.backgroundColor = authoringRoot.dataset.uiCaptureBackground ?? '';
+            authoringRoot.style.zIndex = authoringRoot.dataset.uiCaptureZIndex ?? '';
+            delete authoringRoot.dataset.uiCaptureBackground;
+            delete authoringRoot.dataset.uiCaptureZIndex;
+            delete authoringRoot.dataset.uiCaptureRootToken;
+          }
+        }, captureToken);
       }
     }
-    throw new Error('preview screenshot did not become renderable');
+    throw new Error(`preview screenshot did not become renderable: ${JSON.stringify({ attempts, pageFailures })}`);
   };
-  const captureWithBytes = async (bytes) =>
-    page.evaluate(async (pngBytes) => {
+  const captureWithBytes = async (bytes, scenario) =>
+    page.evaluate(async ({ pngBytes, scenario }) => {
       const host = globalThis.__forgeaxUiAuthoring;
       if (!host) throw new Error('preview authoring host is unavailable');
-      const mountedHost = () =>
-        document.querySelector('[data-ui-authoring-root] [data-ui-asset]')?.shadowRoot;
+      if (!host.getCaptureTarget()) {
+        const opened = await host.open(scenario);
+        if (!opened.ok) throw new Error(`scenario failed: ${opened.error.code}`);
+      }
+      const mountedHost = () => host.getCaptureTarget()?.shadowRoot;
       return host.capture({
         viewport: { width: 320, height: 180 },
         deviceScaleFactor: 1,
@@ -92,7 +168,7 @@ try {
         freezeClock: async () => ({ ok: true, value: { timeMs: 1000 } }),
         screenshot: async () => new Uint8Array(pngBytes),
       });
-    }, Array.from(bytes));
+    }, { pngBytes: Array.from(bytes), scenario });
   const setup = await page.evaluate(async ({ falsify }) => {
     const host = globalThis.__forgeaxUiAuthoring;
     if (!host) throw new Error('preview authoring host is unavailable');
@@ -120,7 +196,7 @@ try {
   }, { falsify: falsifyCompanion });
   if (falsifyCompanion) {
     await waitForPaint();
-    const failed = await captureWithBytes(new Uint8Array());
+    const failed = await captureWithBytes(new Uint8Array(), 'default');
     if (failed.ok || failed.error.code !== 'capture-not-ready') {
       throw new Error('companion falsification did not identify resources');
     }
@@ -132,10 +208,13 @@ try {
     await browser.close();
   } else {
     const captures = [];
-    await screenshotRenderable();
+    if (reloadBeforeCapture) {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+    }
+    await screenshotRenderable('default');
     for (let index = 0; index < 3; index += 1) {
-      const bytes = await screenshotRenderable();
-      captures.push(await captureWithBytes(bytes));
+      const bytes = await screenshotRenderable('default');
+      captures.push(await captureWithBytes(bytes, 'default'));
     }
     if (captures.some((capture) => !capture.ok)) {
       throw new Error(`default capture failed: ${JSON.stringify(captures)}`);
@@ -152,8 +231,8 @@ try {
       const extreme = await host.open('extreme');
       if (!extreme.ok) throw new Error(`extreme scenario failed: ${extreme.error.code}`);
     });
-    const extremeBytes = await screenshotRenderable();
-    const extremeCapture = await captureWithBytes(extremeBytes);
+    const extremeBytes = await screenshotRenderable('extreme');
+    const extremeCapture = await captureWithBytes(extremeBytes, 'extreme');
     if (!extremeCapture.ok) throw new Error('extreme capture failed');
     const discovered = await page.evaluate(() => {
       const host = globalThis.__forgeaxUiAuthoring;

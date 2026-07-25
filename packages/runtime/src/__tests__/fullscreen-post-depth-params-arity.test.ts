@@ -9,13 +9,13 @@
 // entry (plan D-3); this test pins the bindgroup emits all five bindings when
 // that UBO + depth views are supplied.
 
-import type { BindGroup, BindGroupLayout, Buffer, Sampler, TextureView } from '@forgeax/engine-rhi';
-import { describe, expect, it } from 'vitest';
 import {
   createFullscreenBindGroup,
   DEPTH_MIN_PARAMS_BYTE_SIZE,
   entryHasDepthRead,
-} from '../fullscreen-post-process-pass';
+} from '@forgeax/engine-render/internal';
+import type { BindGroup, BindGroupLayout, Buffer, Sampler, TextureView } from '@forgeax/engine-rhi';
+import { describe, expect, it } from 'vitest';
 
 interface RecordedEntry {
   binding: number;

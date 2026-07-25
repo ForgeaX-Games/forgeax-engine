@@ -7,7 +7,8 @@
 The whole point of the feature: an AI user never touches a layout asset, a glyph mesh, or a text pipeline. Spawn `GlyphText` + `Transform` and the auto-wired `glyphTextLayoutSystem` (loaded by `createRenderer` / `createApp`) does the rest.
 
 ```ts
-import { GlyphText, Transform } from '@forgeax/engine-runtime';
+import { GlyphText } from '@forgeax/engine-render/authoring';
+import { Transform } from '@forgeax/engine-scene';
 import type { FontAsset } from '@forgeax/engine-types';
 
 // 1. DefineComponent already makes components globally usable (no per-World

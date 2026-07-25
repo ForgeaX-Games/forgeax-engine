@@ -21,7 +21,13 @@
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, MeshFilter, MeshRenderer, perspective, PointLight, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
+import { PointLight } from '@forgeax/engine-render';
+
 import type {
   MaterialAsset,
   RenderPipelineAsset,

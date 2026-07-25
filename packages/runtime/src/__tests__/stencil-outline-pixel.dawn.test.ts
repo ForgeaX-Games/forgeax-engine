@@ -29,10 +29,11 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { RenderQueue } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
 import { createRenderer } from '../index';
 
 const WIDTH = 256;

@@ -33,7 +33,14 @@ import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
 import type { World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, orthographic, PointLight, SpotLight, SPRITE_PREMULTIPLIED_ALPHA_BLEND, TONEMAP_NONE, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { orthographic, TONEMAP_NONE } from '@forgeax/engine-render';
+import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
+import { PointLight, SpotLight } from '@forgeax/engine-render';
+
 import type { Handle, MaterialAsset, SamplerAsset, TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 

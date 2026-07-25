@@ -14,11 +14,14 @@
 // mixed-TDD form).
 
 import { World } from '@forgeax/engine-ecs';
+import {
+  Camera,
+  extractFrame,
+  makeZeroCameraFallbackSnapshot,
+  ZERO_CAMERA_CLEAR_FALLBACK,
+} from '@forgeax/engine-render/internal';
+import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { Camera, Transform } from '../components';
-import { makeZeroCameraFallbackSnapshot, ZERO_CAMERA_CLEAR_FALLBACK } from '../record';
-import { extractFrame } from '../render-system-extract';
-import { propagateTransforms } from '../systems/propagate-transforms';
 
 function spawnCameraWithClear(world: World, clear: readonly [number, number, number, number]) {
   world

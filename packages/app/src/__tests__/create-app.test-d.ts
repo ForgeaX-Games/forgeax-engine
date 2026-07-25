@@ -19,8 +19,9 @@
 
 import type { Result, World } from '@forgeax/engine-ecs';
 import type { PluginError } from '@forgeax/engine-plugin';
+import type { Renderer, RendererOptions } from '@forgeax/engine-render';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
-import type { EngineEnvironmentError, Renderer, RendererOptions } from '@forgeax/engine-runtime';
+import type { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { describe, expectTypeOf, it } from 'vitest';
 import { type App, type AppError, createApp } from '../index';
 

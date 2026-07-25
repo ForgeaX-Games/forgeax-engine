@@ -18,3 +18,4 @@ export { type PickTileError, type PickTileHit, pickTile } from './pick-tile';
 // --- vertex-level pick (per-entity + full-scene) ---
 export type { VertexHit } from './pick-vertex';
 export { pickVertex, pickVertexOnEntity } from './pick-vertex';
+export { viewportToWorld } from './viewport-to-world';

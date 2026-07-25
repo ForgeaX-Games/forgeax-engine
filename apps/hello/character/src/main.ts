@@ -27,7 +27,9 @@ import {
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Camera, DirectionalLight, EngineEnvironmentError, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 // Capsule character dims: radius 0.3 + halfHeight 0.5 -> half-total 0.8.

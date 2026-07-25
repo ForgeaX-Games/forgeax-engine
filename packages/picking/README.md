@@ -17,6 +17,9 @@ never the reverse.
   `PickHit { entity, point, distance }` (or `undefined` on a miss). AABB
   granularity (Three.js `Raycaster`-aligned MVP; per-triangle precision is
   `pickVertex`).
+- **`viewportToWorld(world, cameraEntity, screenX, screenY, viewportWidth, viewportHeight)`**
+  — exposes the same camera unprojection as a world-space `Ray` for cursor
+  placement, gizmos, and custom plane/triangle queries.
 - **`pickVertexOnEntity` / `pickVertex`** — per-triangle vertex-level queries
   (editor vertex-snapping workflow). Three-state static-dispatch overload:
   without options -> `VertexHit | undefined`; with `{ limit: N }` -> `VertexHit[]`
@@ -42,7 +45,8 @@ never the reverse.
 
 ```ts
 import { pick, type PickHit } from '@forgeax/engine-picking';
-import { MeshRenderer, propagateTransforms } from '@forgeax/engine-runtime';
+import { MeshRenderer } from '@forgeax/engine-render';
+import { propagateTransforms } from '@forgeax/engine-scene';
 
 // Caller resolves Transform.world for the current frame first (D-9 contract):
 propagateTransforms(world);
@@ -74,6 +78,16 @@ would be a lie (use `pickVertex` for per-triangle vertices). Both `perspective`
 and `orthographic` camera projections are supported. Reads the resolved
 `Transform.world` mat4 directly (feat-20260601 D-3), so the camera + candidates
 must have propagated transforms for the current frame.
+
+### Screen-to-world (`viewportToWorld`)
+
+| Function | Signature | Return |
+|:--|:--|:--|
+| `viewportToWorld` | `(world, cameraEntity, screenX, screenY, viewportWidth, viewportHeight)` | `Ray \| undefined` |
+
+The returned ray uses the same top-left/y-down viewport coordinates as `pick`.
+It is the low-level cursor-to-world front door: intersect it with the game
+surface you own, then place an entity or debug primitive at the result.
 
 ### Vertex-level (`pickVertex` / `pickVertexOnEntity`)
 

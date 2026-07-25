@@ -44,7 +44,9 @@
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {

@@ -17,7 +17,8 @@
 //      bake meshes + attach MeshFilter + MeshRenderer per frame.
 
 import type { World } from '@forgeax/engine-ecs';
-import { GlyphText, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { GlyphText } from '@forgeax/engine-render/authoring';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SamplerAsset } from '@forgeax/engine-types';

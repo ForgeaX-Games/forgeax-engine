@@ -3,7 +3,7 @@ import { defineProject } from 'vitest/config';
 export default defineProject({
   test: {
     environment: 'node',
-    name: '@forgeax/rhi-debug',
+    name: '@forgeax/engine-rhi-debug',
     passWithNoTests: true,
     // Exclude `*.browser.test.ts` / `*.dawn.test.ts` -- those are owned by
     // the root `browser` / `dawn` vitest projects (K-3 split stance, root

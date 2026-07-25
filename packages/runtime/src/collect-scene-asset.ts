@@ -60,6 +60,7 @@ import {
   type World,
 } from '@forgeax/engine-ecs';
 import { classifyEntityField } from '@forgeax/engine-ecs/externalization';
+import { collectSubtree, SceneInstance } from '@forgeax/engine-render/internal';
 import { err, ok, type Result } from '@forgeax/engine-rhi';
 import type {
   Asset,
@@ -70,8 +71,6 @@ import type {
   SceneEntity,
   SceneInstanceMount,
 } from '@forgeax/engine-types';
-import { SceneInstance } from './components/scene-instance';
-import { collectSubtree } from './scene-utils/collect-subtree';
 import { foldMountOverrides } from './scene-utils/mount-override-fold';
 
 // Shared helpers

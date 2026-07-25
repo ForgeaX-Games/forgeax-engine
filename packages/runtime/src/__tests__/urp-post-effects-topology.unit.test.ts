@@ -13,11 +13,14 @@
 // Runs in the unit layer: mocks runtime + device caps and reads the pass list
 // via RenderGraph.listPasses().
 
+import type {
+  RenderPipelineContext,
+  RenderPipelineData,
+  RenderSystemRuntime,
+} from '@forgeax/engine-render/internal';
+import { urpPipeline } from '@forgeax/engine-render/internal';
 import type { RhiCaps, RhiDevice } from '@forgeax/engine-rhi';
 import { describe, expect, it, vi } from 'vitest';
-import type { RenderPipelineContext, RenderPipelineData } from '../render-pipeline-context';
-import type { RenderSystemRuntime } from '../render-system';
-import { urpPipeline } from '../urp-pipeline';
 
 function mockRuntime(capsOverride: Partial<RhiCaps> = {}): RenderSystemRuntime {
   const errorRegistry = {

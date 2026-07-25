@@ -14,7 +14,8 @@
 // image. The overlay pass is always active (installed once); 'off' mode
 // writes tintMode=-1 to params, which the shader detects and passthroughs.
 
-import { PostProcessParams, URP_PIPELINE_ID } from '@forgeax/engine-runtime';
+import { PostProcessParams } from '@forgeax/engine-render';
+import { URP_PIPELINE_ID } from '@forgeax/engine-render/internal';
 import type { RenderPipelineAsset } from '@forgeax/engine-types';
 import overlayShader from './cascade-overlay.wgsl';
 

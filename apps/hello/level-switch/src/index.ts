@@ -12,7 +12,9 @@
 import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { Materials } from '@forgeax/engine-render';
 import type { MaterialAsset, SceneAsset } from '@forgeax/engine-types';
 import { defineState, setNextState, getState, addOnEnter, despawnOnExit } from '@forgeax/engine-state';
 import type { StateTokenVariant } from '@forgeax/engine-state';

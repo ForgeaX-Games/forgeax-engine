@@ -14,9 +14,8 @@
 //   plan-strategy D-1/D-9
 //   requirements AC-03
 
+import { worldEntityKey } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-
-import { worldEntityKey } from '../record/frame-snapshot';
 
 describe('worldEntityKey', () => {
   // ── Identity: worldId=0 ──────────────────────────────────────────────────

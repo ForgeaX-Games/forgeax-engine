@@ -1,5 +1,5 @@
 {
-  "name": "@forgeax/shadertoy-fractal-pyramid",
+  "name": "@forgeax/engine-shadertoy-fractal-pyramid",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -13,7 +13,7 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
-    "smokeInvocation": "pnpm --filter @forgeax/shadertoy-fractal-pyramid smoke",
+    "smokeInvocation": "pnpm --filter @forgeax/engine-shadertoy-fractal-pyramid smoke",
     "metrics": {
       "bundle-size": {
         "enabled": false,
@@ -29,7 +29,7 @@
       },
       "gate": {
         "enabled": true,
-        "command": "pnpm --filter @forgeax/shadertoy-fractal-pyramid smoke"
+        "command": "pnpm --filter @forgeax/engine-shadertoy-fractal-pyramid smoke"
       },
       "spike-report": {
         "enabled": false,
@@ -42,7 +42,9 @@
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
-    "@forgeax/engine-math": "workspace:*"
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",

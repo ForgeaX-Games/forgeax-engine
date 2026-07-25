@@ -311,6 +311,10 @@ export default defineConfig({
     },
     coverage: {
       provider: 'v8',
+      // Package projects exercise one another through workspace imports. Keep
+      // those first-party sources in the aggregate instead of dropping them
+      // merely because they sit outside the importing project's root.
+      allowExternal: true,
       reporter: ['text', 'json-summary', 'html'],
       // Exclude test fixtures, mocks, and generated build artifacts so the
       // global threshold reflects production source coverage. `__tests__/`

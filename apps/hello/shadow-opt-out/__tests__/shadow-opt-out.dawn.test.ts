@@ -15,7 +15,12 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Camera, createRenderer, DirectionalLight, Materials, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { createRenderer } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
+
 import { describe, expect, it } from 'vitest';
 
 // ── Fixture constants ──────────────────────────────────────────────────

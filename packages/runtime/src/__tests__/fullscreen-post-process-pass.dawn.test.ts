@@ -20,9 +20,15 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import {
+  ANTIALIAS_FXAA,
+  ANTIALIAS_NONE,
+  Camera,
+  MeshFilter,
+  MeshRenderer,
+} from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
-import { ANTIALIAS_FXAA, ANTIALIAS_NONE } from '../components/camera';
 import { createRenderer } from '../index';
 
 const WIDTH = 256;

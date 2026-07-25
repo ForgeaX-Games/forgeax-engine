@@ -76,7 +76,9 @@ function expectWorldEntityKeyAt(
 // ── Geometry pass instanceBuffers (D-1a #1) ────────────────────────────────
 
 describe('production-path geometry instanceBuffers worldEntityKey', () => {
-  const FILE = fileURLToPath(new URL('../record/main-pass-geometry.ts', import.meta.url));
+  const FILE = fileURLToPath(
+    new URL('../../../render/src/record/main-pass-geometry.ts', import.meta.url),
+  );
 
   it('inst.cacheKey get at line 618 uses worldEntityKey', () => {
     expectWorldEntityKeyAt(FILE, 618, 'main-pass-geometry:618 instanceBuffers.get');
@@ -89,7 +91,9 @@ describe('production-path geometry instanceBuffers worldEntityKey', () => {
 
 // ── Sprite identity BG instancesBgPerEntity (D-1a #3) ──────────────────────
 
-const SPRITE_FILE = fileURLToPath(new URL('../record/main-pass-sprite-draws.ts', import.meta.url));
+const SPRITE_FILE = fileURLToPath(
+  new URL('../../../render/src/record/main-pass-sprite-draws.ts', import.meta.url),
+);
 
 describe('production-path sprite identity instancesBgPerEntity worldEntityKey', () => {
   it('identityInstBg entityKey at line 345 uses worldEntityKey', () => {
@@ -139,7 +143,9 @@ describe('production-path SpriteInstances instanceBuffers worldEntityKey', () =>
 
 // ── Shadow pass instanceBuffers (D-1a #1) ──────────────────────────────────
 
-const SHADOW_FILE = fileURLToPath(new URL('../record/shadow-pass.ts', import.meta.url));
+const SHADOW_FILE = fileURLToPath(
+  new URL('../../../render/src/record/shadow-pass.ts', import.meta.url),
+);
 
 describe('production-path shadow instanceBuffers worldEntityKey', () => {
   it('shadowInst.cacheKey get at line 575 uses worldEntityKey', () => {

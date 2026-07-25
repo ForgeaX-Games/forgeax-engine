@@ -13,24 +13,13 @@
 // are always equal-length and the guard cannot trip — advance never throws and
 // this test stays red. After w5 lands the entry guard the mismatch is caught.
 
+import { AnimationPlayer, advanceAnimationPlayer } from '@forgeax/engine-animation';
 import { World } from '@forgeax/engine-ecs';
 import type { AnimationClip } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AnimationPlayer } from '../components/animation-player';
-import type { AnimationAssetResolver } from '../systems/advance-animation-player';
-import { advanceAnimationPlayer } from '../systems/advance-animation-player';
 
 function makeClip(duration: number): AnimationClip {
   return { kind: 'animation-clip', duration, channels: [] };
-}
-
-function makeResolver(clips: Map<number, AnimationClip>): AnimationAssetResolver {
-  return {
-    resolveAnimationClip(_world: World, handleRaw: number): AnimationClip | undefined {
-      return clips.get(handleRaw);
-    },
-  };
 }
 
 interface StructuredError {
@@ -41,11 +30,8 @@ interface StructuredError {
 describe('AnimationPlayer — slot-length guard (M1 / w2)', () => {
   it('rejects unequal parallel-array lengths with a structured error (no silent pad/truncate)', () => {
     const world = new World();
-    const clipMap = new Map<number, AnimationClip>([
-      [1, makeClip(10)],
-      [2, makeClip(10)],
-    ]);
-    const resolver = makeResolver(clipMap);
+    const clipOne = world.allocSharedRef('AnimationClip', makeClip(10));
+    const clipTwo = world.allocSharedRef('AnimationClip', makeClip(10));
 
     // clips/times/speeds carry two slots; weights carries only one — a
     // consumer that forgot to keep the four columns length-synced.
@@ -53,7 +39,7 @@ describe('AnimationPlayer — slot-length guard (M1 / w2)', () => {
       .spawn({
         component: AnimationPlayer,
         data: {
-          clips: [toShared<'AnimationClip'>(1), toShared<'AnimationClip'>(2)],
+          clips: [clipOne, clipTwo],
           times: new Float32Array([0, 0]),
           weights: new Float32Array([1]),
           speeds: new Float32Array([1, 1]),
@@ -63,7 +49,7 @@ describe('AnimationPlayer — slot-length guard (M1 / w2)', () => {
 
     let caught: StructuredError | undefined;
     try {
-      advanceAnimationPlayer(world, resolver, 0.5);
+      advanceAnimationPlayer(world, 0.5);
     } catch (e) {
       caught = e as StructuredError;
     }
@@ -76,14 +62,13 @@ describe('AnimationPlayer — slot-length guard (M1 / w2)', () => {
 
   it('does not throw when the four columns are length-synced', () => {
     const world = new World();
-    const clipMap = new Map<number, AnimationClip>([[1, makeClip(10)]]);
-    const resolver = makeResolver(clipMap);
+    const clip = world.allocSharedRef('AnimationClip', makeClip(10));
 
     world
       .spawn({
         component: AnimationPlayer,
         data: {
-          clips: [toShared<'AnimationClip'>(1)],
+          clips: [clip],
           times: new Float32Array([0]),
           weights: new Float32Array([1]),
           speeds: new Float32Array([1]),
@@ -91,6 +76,6 @@ describe('AnimationPlayer — slot-length guard (M1 / w2)', () => {
       })
       .unwrap();
 
-    expect(() => advanceAnimationPlayer(world, resolver, 0.5)).not.toThrow();
+    expect(() => advanceAnimationPlayer(world, 0.5)).not.toThrow();
   });
 });

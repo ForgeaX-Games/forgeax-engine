@@ -51,12 +51,14 @@ const { World } = await import('@forgeax/engine-ecs');
 const runtime = await import('@forgeax/engine-runtime');
 const { createRenderer } = runtime;
 const assets = await import('@forgeax/engine-assets-runtime');
+const render = await import('@forgeax/engine-render');
+const scene = await import('@forgeax/engine-scene');
 const { _internal_getRawDevice: captureRawDevice, rhi } = await import('@forgeax/engine-rhi-webgpu');
 
 // World spawn: data-equivalent mirror of apps/hello/triangle/src/main.ts M0
 // SSOT lock values (charter proposition 5 co-source binding exemplar).
 const world = new World();
-populateSmokeWorld(world, runtime, assets);
+populateSmokeWorld(world, { ...render, ...scene }, assets);
 
 // rhi.requestDevice was deprecated by feat-20260510-rhi-resource-creation
 // breaking point #2 (top-level single-step factory removed; spec-aligned

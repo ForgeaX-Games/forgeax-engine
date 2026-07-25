@@ -19,10 +19,10 @@
 //   (c) Calling appendInjection twice (e.g. shadow + ibl) chains correctly:
 //       the second call's bindings start after the first's last binding.
 
+import { appendInjection } from '@forgeax/engine-render/internal';
 import type { ParamSchemaEntry } from '@forgeax/engine-types';
 import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { appendInjection } from '../pbr-pipeline';
 
 const standardPbrSchema: readonly ParamSchemaEntry[] = [
   { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },

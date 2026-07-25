@@ -20,7 +20,7 @@
 //   P3 explicit failure: structured compile-time diagnostics; no
 //            string-message contract.
 
-import type { RendererOptions } from '@forgeax/engine-runtime';
+import type { RendererOptions } from '@forgeax/engine-render';
 import { describe, expectTypeOf, it } from 'vitest';
 import type { BundlerOptions, CreateAppOptions } from '../index';
 

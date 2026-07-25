@@ -25,12 +25,12 @@ import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import {
   Camera,
-  createRenderer,
   DirectionalLight,
   MeshFilter,
   MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+} from '@forgeax/engine-render/internal';
+import { createRenderer } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 
 // ── Fixture constants SSOT (plan-strategy section 8.1 test anchor) ─────────

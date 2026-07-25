@@ -46,13 +46,8 @@
 //   - "bgra8unorm"              non-sRGB target literal (AC-12)
 
 import { RenderGraph } from '@forgeax/engine-render-graph';
-import {
-  addFullscreenPass,
-  addScenePass,
-  type RenderPipeline,
-  type RenderPipelineContext,
-  type RenderPipelineData,
-} from '@forgeax/engine-runtime';
+import type { RenderPipeline, RenderPipelineContext, RenderPipelineData } from '@forgeax/engine-render';
+import { addFullscreenPass, addScenePass } from '@forgeax/engine-render';
 
 /**
  * Closed roster of gamma demo modes. The two values map 1:1 to the two

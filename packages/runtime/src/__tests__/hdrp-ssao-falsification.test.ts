@@ -29,12 +29,11 @@
 // Local-only test (not in CI). The smoke discriminability proof is that
 // w23 FAILS (this test fails) when reads are mutated.
 
+import type { RenderPipelineContext, RenderSystemRuntime } from '@forgeax/engine-render/internal';
+import { addSsaoPasses } from '@forgeax/engine-render/internal';
 import { RenderGraph } from '@forgeax/engine-render-graph';
 import type { RhiCaps, RhiDevice } from '@forgeax/engine-rhi';
 import { describe, expect, it, vi } from 'vitest';
-import { addSsaoPasses } from '../render-graph-primitives';
-import type { RenderPipelineContext } from '../render-pipeline-context';
-import type { RenderSystemRuntime } from '../render-system';
 
 function mockRuntime(capsOverride: Partial<RhiCaps> = {}): RenderSystemRuntime {
   const errorRegistry = {

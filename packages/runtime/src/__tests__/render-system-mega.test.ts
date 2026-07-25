@@ -7,17 +7,17 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { type EcsErrorCode, World } from '@forgeax/engine-ecs';
-import type { Handle } from '@forgeax/engine-types';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Camera,
   DirectionalLight,
+  extractFrame,
   Instances,
   MeshFilter,
   MeshRenderer,
-  Transform,
-} from '../components';
-import { extractFrame } from '../render-system-extract';
+} from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
+import type { Handle } from '@forgeax/engine-types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ─── from render-system.test.ts ───
 {
@@ -319,7 +319,8 @@ import { extractFrame } from '../render-system-extract';
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
     return {
-      ...(await import('../index')),
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
       ...(await import('@forgeax/engine-assets-runtime')),
     } as never;
   }
@@ -934,7 +935,15 @@ import { extractFrame } from '../render-system-extract';
         fileURLToPath: (u: string) => string;
       };
       const here = url.fileURLToPath(import.meta.url);
-      const renderSystemSrc = path.resolve(path.dirname(here), '..', 'render-system.ts');
+      const renderSystemSrc = path.resolve(
+        path.dirname(here),
+        '..',
+        '..',
+        '..',
+        'render',
+        'src',
+        'render-system.ts',
+      );
       const text = fs.readFileSync(renderSystemSrc, 'utf8');
       expect(text).toMatch(/@forgeax\/engine-math/);
     });
@@ -987,7 +996,7 @@ import { extractFrame } from '../render-system-extract';
       const { World } = await importEcs();
       const C = await importComponents();
       const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } = await import(
-        '../systems/transparent-sort-config'
+        '@forgeax/engine-render/internal'
       );
       const { RenderQueue } = await import('@forgeax/engine-types');
 
@@ -1134,7 +1143,7 @@ import { extractFrame } from '../render-system-extract';
       const { World } = await importEcs();
       const C = await importComponents();
       const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } = await import(
-        '../systems/transparent-sort-config'
+        '@forgeax/engine-render/internal'
       );
 
       // Register a MaterialAsset with Geometry-queue pass.

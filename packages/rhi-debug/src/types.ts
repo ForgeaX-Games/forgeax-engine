@@ -740,12 +740,14 @@ export type CreateDescriptor =
 /**
  * Decoded RGBA8 pixels of the RT readback at the inspected draw call — the
  * structured RT payload produced by the node-free browser path (L3b
- * `inspectDrawJson`). `pixels.length === width * height * 4` (tight-packed,
- * row-alignment padding stripped).
+ * `inspectDrawJson`). `format` describes the native replay texels, so callers
+ * can decode wide and floating-point attachments correctly. `pixels` are
+ * tight-packed with row-alignment padding stripped.
  */
 export interface InspectRtPixels {
   readonly width: number;
   readonly height: number;
+  readonly format: string;
   readonly pixels: Uint8Array;
 }
 
@@ -756,7 +758,7 @@ export interface InspectRtPixels {
  * - `string` — a PNG **file path** on disk, produced by the Node CLI path
  *   (`inspector.inspectAt`), which encodes the readback to a PNG under the
  *   inspect/ output dir. Discriminate with `typeof rt === 'string'`.
- * - {@link InspectRtPixels} — the decoded `{ width, height, pixels }` triple,
+ * - {@link InspectRtPixels} — the native `{ width, height, format, pixels }` tuple,
  *   produced by the node-free browser path (`inspectDrawJson`), which cannot
  *   write files and so hands back raw RGBA8 pixels. Discriminate with
  *   `typeof rt === 'object'` (or `'pixels' in rt`).

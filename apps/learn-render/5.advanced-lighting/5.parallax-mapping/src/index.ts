@@ -26,7 +26,10 @@
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -113,17 +116,19 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 5.5 parallax-mapping] renderer.shader is null');
     return;
   }
-  shader.registerMaterialShader(PARALLAX_SHADER_ID, {
-    source: parallaxShader.wgsl,
-    paramSchema: [
-      { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
-      { name: 'heightScale', type: 'f32', default: HEIGHT_SCALE_DEFAULT },
-      { name: 'algoMode', type: 'f32', default: 0.0 },
-      { name: 'baseColorTexture', type: 'texture2d' },
-      { name: 'normalTexture', type: 'texture2d' },
-      { name: 'heightTexture', type: 'texture2d' },
-    ],
-  });
+  if (!shader.lookupMaterialShader(PARALLAX_SHADER_ID).ok) {
+    shader.registerMaterialShader(PARALLAX_SHADER_ID, {
+      source: parallaxShader.wgsl,
+      paramSchema: [
+        { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
+        { name: 'heightScale', type: 'f32', default: HEIGHT_SCALE_DEFAULT },
+        { name: 'algoMode', type: 'f32', default: 0.0 },
+        { name: 'baseColorTexture', type: 'texture2d' },
+        { name: 'normalTexture', type: 'texture2d' },
+        { name: 'heightTexture', type: 'texture2d' },
+      ],
+    });
+  }
 
   // Load both texture sets up front so set-switching is a paramValues swap
   // (no async on keypress). Each loaded TextureAsset is wrapped into a column

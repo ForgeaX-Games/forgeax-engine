@@ -9,7 +9,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 
-const root = process.argv[2] ?? 'packages/render-graph/src';
+const root = process.argv[2] ?? 'packages/render/src';
 const pat = /import\s+[^'"]*['"]@forgeax\/engine-runtime['"]/;
 const hits = [];
 

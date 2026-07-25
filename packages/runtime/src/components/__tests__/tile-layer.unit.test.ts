@@ -26,8 +26,13 @@
 // P1 (progressive disclosure — `'layer'` / `'per-cell'` reads directly).
 
 import { World } from '@forgeax/engine-ecs';
+import {
+  decodeSortScope,
+  encodeSortScope,
+  type SortScope,
+  TileLayer,
+} from '@forgeax/engine-render/authoring';
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { decodeSortScope, encodeSortScope, type SortScope, TileLayer } from '../../components';
 
 describe('TileLayer.sortScope union lock (w5, round-2 production)', () => {
   it("'layer' is assignable to SortScope", () => {

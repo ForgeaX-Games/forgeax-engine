@@ -193,15 +193,9 @@ const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { createApp } = await import('@forgeax/engine-app');
 const runtimePkg = await import('@forgeax/engine-runtime');
-const {
-  addFullscreenPass,
-  addScenePass,
-  Camera,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} = runtimePkg;
+const { addFullscreenPass, addScenePass } = await import('@forgeax/engine-render');
+const { Camera, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
   HANDLE_QUAD,

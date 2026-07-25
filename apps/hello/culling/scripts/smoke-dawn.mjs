@@ -120,13 +120,10 @@ const enginePkg = await import('@forgeax/engine-runtime');
 const geometryPkg = await import('@forgeax/engine-geometry');
 const mathPkg = await import('@forgeax/engine-math');
 const {
-  Camera,
   createRenderer,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
 } = enginePkg;
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const { quat } = mathPkg;
 const {
   HANDLE_CUBE,

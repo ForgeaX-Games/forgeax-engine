@@ -16,8 +16,9 @@
 
 import { err, ok, type Result, World } from '@forgeax/engine-ecs';
 import { RhiError } from '@forgeax/engine-rhi/errors';
-import { registerPropagateTransforms, Transform } from '@forgeax/engine-runtime';
-import type { Renderer } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { registerPropagateTransforms } from '@forgeax/engine-scene';
+import type { Renderer } from '@forgeax/engine-render';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/create-app';

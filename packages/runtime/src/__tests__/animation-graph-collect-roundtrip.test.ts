@@ -31,13 +31,15 @@ import type {
   LoadContext,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '../components';
-import '../components/scene-instance';
-import { defineAnimationGraph } from '../animation/define-animation-graph';
-import { evaluateAnimationGraph } from '../animation/evaluate-animation-graph';
-import { serializeAnimationGraph } from '../animation/serialize-animation-graph';
+import '@forgeax/engine-render/internal';
+import '@forgeax/engine-render/internal';
+import {
+  AnimationPlayer,
+  defineAnimationGraph,
+  evaluateAnimationGraph,
+  serializeAnimationGraph,
+} from '@forgeax/engine-animation';
 import { rootsToSceneAsset } from '../collect-scene-asset';
-import { AnimationPlayer } from '../components/animation-player';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeRegistry(): AssetRegistry {

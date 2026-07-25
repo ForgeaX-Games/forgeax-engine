@@ -8,8 +8,8 @@
 // Covers AC-04: split numerical correctness / monotonicity / λ degeneration /
 // near≈far error / N=1..4 end-to-end.
 
+import { pssmSplit } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import { pssmSplit } from '../render-system-extract';
 
 // ── Hand-calculated anchors ────────────────────────────────────────────────
 //

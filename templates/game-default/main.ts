@@ -1,58 +1,39 @@
-// Default game template -- a small lowpoly "vignette" scene + a movable character.
-//
-// The STATIC scene (ground, sun, props, the character's INITIAL position) is an
-// engine-native scene ASSET: `assets/scene.pack.json` (one `kind:'scene'` asset +
-// N `kind:'material'` siblings, GUID refs), discovered by GUID via
-// `forge.json.defaultScene`. main.ts loads it the SAME canonical way every other
-// app does (apps/hello/room, apps/collectathon) -- `loadByGuid<SceneAsset>` ->
-// `allocSharedRef` -> `assets.instantiate`. No bespoke pack preprocessing: the
-// scene is authored in the CURRENT schema (`entities`, `MeshRenderer.materials`,
-// dense localIds), so instantiate resolves refs[]->GUID->handle and builds the
-// localId->Entity table itself. What you arrange in ✎ Edit is exactly what loads
-// here in ▶ Play. This file adds only the DYNAMIC layer: the camera, WASD/arrow
-// movement on the "Player" entity, and the HDR environment.
-//
-// Every mesh the scene references is now an engine BUILTIN (cube / sphere /
-// cylinder), each pre-catalogued by its GUID in AssetRegistry — so the scene's
-// recursive ref-load resolves entirely from the builtin catalog with no runtime
-// catalog step and no `__import` round-trip.
-//
-// No `@forgeax/scene` dependency: the pack is a plain engine pack, so the template
-// stays self-contained inside the engine workspace.
-
+import { Transform } from '@forgeax/engine-scene';
 import {
-  Transform, Camera, perspective, quat, Materials, MeshFilter, MeshRenderer,
-  SceneInstance,
-  TONEMAP_REINHARD_EXTENDED,
-  BLOOM_ENABLED, ANTIALIAS_FXAA, PointLight,
-  type MaterialAsset, type Handle,
-} from '@forgeax/engine-runtime';
-import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
-import { pick } from '@forgeax/engine-picking';
+  ANTIALIAS_FXAA, BLOOM_ENABLED, Camera, MeshFilter, MeshRenderer, perspective,
+  PointLight, TONEMAP_REINHARD_EXTENDED, Materials,
+} from '@forgeax/engine-render';
+import { quat, type Handle, type MaterialAsset } from '@forgeax/engine-runtime';
+import { HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import { createSphereGeometry } from '@forgeax/engine-geometry';
-
-type MatHandle = Handle<'MaterialAsset', 'shared'>;
-import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
+import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue, type PhysicsWorld } from '@forgeax/engine-physics';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { defineSystem, Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { BootstrapContext } from '@forgeax/engine-app';
 import {
-  createInputSnapshot,
-  INPUT_MAP_KEY,
-  INPUT_SNAPSHOT_RESOURCE_KEY,
-  type ActionConfig,
-  type InputSnapshot,
+  createInputSnapshot, INPUT_MAP_KEY, INPUT_SNAPSHOT_RESOURCE_KEY,
+  type ActionConfig, type InputSnapshot,
 } from '@forgeax/engine-input';
-import type { SceneAsset } from '@forgeax/engine-types';
+import type { UiAsset, UiError, UiResult } from '@forgeax/engine-ui';
 import { installHud, HUD_UI_GUID, type ViewMode } from './src/hud';
 import { createGameSettingsState, mountSettings, SETTINGS_UI_GUID } from './src/settings';
-import type { UiAsset, UiError, UiResult } from '@forgeax/engine-ui';
-
-/** Narrowed context for helper functions consuming world + optional assets/app. */
-type Ctx = { world: World; assets?: import('@forgeax/engine-runtime').AssetRegistry };
+import { installGameplayInput } from './src/gameplay-input';
+import { installGameplayLifecycle } from './src/gameplay-lifecycle';
+import {
+  attachScenePhysics, loadedFromHost, loadScene, PLAYER_Y, setupPlayerRoot,
+  spawnFallbackScene, spawnGroundCollider, type LoadedScene, type MatHandle,
+} from './src/scene-runtime';
 
 async function loadUiAsset(ctx: BootstrapContext | undefined, guidText: string): Promise<UiResult<UiAsset>> {
-  const fail = (message: string): UiResult<UiAsset> => ({ ok: false, error: { code: 'invalid-asset', expected: 'a loadable UiAsset from the configured pack', hint: 'Check the UI GUID and dev pack transport.', detail: { message, asset: guidText } } });
+  const fail = (message: string): UiResult<UiAsset> => ({
+    ok: false,
+    error: {
+      code: 'invalid-asset',
+      expected: 'a loadable UiAsset from the configured pack',
+      hint: 'Check the UI GUID and dev pack transport.',
+      detail: { message, asset: guidText },
+    },
+  });
   if (!ctx?.assets) return fail('Asset registry is unavailable');
   const guid = AssetGuid.parse(guidText);
   if (!guid.ok) return fail(`Invalid UI GUID: ${guidText}`);
@@ -60,196 +41,6 @@ async function loadUiAsset(ctx: BootstrapContext | undefined, guidText: string):
   if (loaded.ok) return loaded;
   const runtimeError = loaded.error;
   return fail(`${runtimeError.code}: ${runtimeError.hint}`);
-}
-
-// The scene's GUID (assets/scene.pack.json assets[0].guid; also forge.json
-// defaultScene). loadByGuid<SceneAsset>(this) pulls the scene AND recursively
-// its refs[] (the material siblings) from the pluginPack pack-index.
-const SCENE_GUID = '1036f6f0-d3c2-5f31-9593-3432942d4c93';
-
-interface PackNode { localId: number; components: Record<string, Record<string, unknown>> }
-
-// Environment lighting is DECLARATIVE -- authored in assets/scene.pack.json, not
-// installed by code. The scene carries a `Skylight` entity (equirect -> sky.hdr
-// GUID via refs[]) + a `SkyboxBackground` entity (same equirect). instantiate
-// resolves the equirect GUID->handle synchronously; the render-system record arm
-// then projects the equirect->cubemap + IBL lazily and binds it once ready. No
-// code-side sky install, no manual cubemap upload call, no WebKit UA guard:
-// caps.rgba16floatRenderable is the engine's sole gate -- WebKit/WKWebView whose
-// WebGPU lacks that feature falls back to the 1x1 white irradiance cube (solid
-// ambient, no skybox) automatically, without poisoning the device. The Skylight
-// is live on the first frame (white fallback) and upgrades to full IBL once the
-// projection settles -- same behaviour every other declarative scene gets free.
-
-// Load the authored scene the canonical way -- loadByGuid<SceneAsset> ->
-// allocSharedRef -> assets.instantiate -- and return the localId->Entity mapping
-// (so the caller can find the Player) + the entity nodes (for per-node physics /
-// player wiring). Returns null on any failure (caller falls back to a minimal
-// scene). No bespoke pack parsing: the scene is authored in the current schema
-// and instantiate resolves refs[]->GUID->handle + builds the mapping itself.
-async function loadScene(
-  ctx: Ctx,
-): Promise<{ mapping: ReadonlyMap<number, EntityHandle>; nodes: PackNode[] } | null> {
-  const { world, assets } = ctx;
-  if (!assets) return null;
-
-  // All scene meshes (cube / sphere / cylinder) are engine builtins, pre-catalogued
-  // by GUID in AssetRegistry -- so the scene's recursive ref-load resolves them from
-  // the builtin catalog directly; no runtime catalog step is needed here.
-  const sceneGuid = AssetGuid.parse(SCENE_GUID);
-  if (!sceneGuid.ok) return null;
-
-  // loadByGuid pulls the scene AND recursively its refs[] (material siblings)
-  // from the pluginPack pack-index; the returned payload already has each handle
-  // field resolved from a refs[] index to its GUID string.
-  const loadRes = await assets.loadByGuid<SceneAsset>(sceneGuid.value);
-  if (!loadRes.ok) { console.error('[game] scene loadByGuid failed:', loadRes.error); return null; }
-
-  // assets.instantiate returns the synthetic root Entity directly; it wires the
-  // World-level scene resolver, resolves GUID->handle, spawns every node, and
-  // stamps the `SceneInstance` component whose `mapping` Uint32Array is indexed
-  // by authored localId (sized to maxLocalId+1, so sparse localIds keep working).
-  const sceneHandle = world.allocSharedRef('SceneAsset', loadRes.value);
-  const instRes = assets.instantiate<SceneAsset>(sceneHandle, world);
-  if (!instRes.ok) { console.error('[game] scene instantiate failed:', (instRes.error as { code?: string })?.code); return null; }
-  const root = instRes.value;
-  const sceneInst = world.get(root, SceneInstance);
-  if (!sceneInst.ok) { console.error('[game] SceneInstance lookup failed:', sceneInst.error); return null; }
-  const mappingArr = sceneInst.value.mapping;
-  const nodes = loadRes.value.entities as unknown as PackNode[];
-  const mapping = new Map<number, EntityHandle>();
-  for (const n of nodes) {
-    const e = mappingArr[n.localId];
-    if (e !== undefined) mapping.set(n.localId, e as EntityHandle);
-  }
-  return { mapping, nodes };
-}
-
-// Minimal fallback scene (ground + cube + sun) so Play still runs if the pack is
-// missing/unreadable. The editor authors the real one.
-function spawnFallbackScene(ctx: Ctx): void {
-  const { world } = ctx;
-  const ground = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ baseColor: [0.48, 0.62, 0.35, 1], roughness: 0.95, metallic: 0 }));
-  world.spawn(
-    { component: Transform, data: { pos: [0, -0.1, 0], scale: [24, 0.2, 24]} },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
-    { component: MeshRenderer, data: { materials: [ground] } },
-  );
-}
-
-// A THICK invisible static floor whose TOP sits at y=0 (the visual ground's top).
-// Dynamic props rest + collide against this, not the thin 0.2-tall visual ground —
-// so a hard knock can't push them partway THROUGH a thin slab and leave them sunk.
-function spawnGroundCollider(ctx: Ctx): void {
-  ctx.world.spawn(
-    { component: Transform, data: { pos: [0, -5, 0]} },
-    { component: RigidBody, data: { type: RigidBodyTypeValue.static } },
-    { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtents: [60, 5, 60], friction: 0.9, restitution: 0 } },
-  );
-}
-
-// The player root's rest height (matches the authored "Player" root in the pack):
-// its kinematic capsule (radius 0.3 + halfHeight 0.4) is centered here.
-const PLAYER_Y = 0.75;
-
-// Attach engine physics (RigidBody + Collider) to the instantiated scene, by entity
-// Name. The pack's authored `Collider` is stripped on load (Studio metadata, a
-// different schema); engine colliders are sized here from each entity's mesh +
-// Transform.scale. Collider dimensions are ABSOLUTE (Rapier doesn't scale colliders
-// by Transform), so halfExtents = unit-mesh-extent(1)·scale·0.5, sphere radius =
-// scale·0.5 (unit sphere r=0.5).
-//   Ground                        → static box (immovable floor)
-//   RedBox / BlueBall / YellowPillar → dynamic (fall, get shoved + knocked flying)
-//   TreeTrunk / TreeCanopy        → Collider ONLY = static obstacle, never simulated
-//                                   (collider only, no physics body; dynamic props bounce off it)
-//   Player / Sun                  → skipped (Player becomes the kinematic box-man root)
-function attachScenePhysics(
-  ctx: Ctx,
-  loaded: { mapping: ReadonlyMap<number, EntityHandle>; nodes: PackNode[] },
-): {
-  props: Array<{ e: EntityHandle; mat: MatHandle }>;
-  walkBlockers: Array<{ cx: number; cz: number; r: number }>;
-  targets: Array<{ e: EntityHandle; points: number }>;
-} {
-  const { world } = ctx;
-  const props: Array<{ e: EntityHandle; mat: MatHandle }> = [];    // dynamic → hit-flash targets
-  const targets: Array<{ e: EntityHandle; points: number }> = [];  // scorable props (entity → points)
-  // XZ circles the kinematic player can't enter (the tree TRUNK). The player is
-  // kinematic → rapier gives it no collision response vs static bodies, so we
-  // block it manually. A single forward raycast missed the thin (0.4-wide) trunk
-  // from off-center angles; an XZ push-out blocks from EVERY angle. Only obstacles
-  // that sit on the ground (yMin < 0.8) are walk-blockers — an elevated obstacle
-  // (the canopy, yMin 1.0) is foliage you walk UNDER, not into.
-  const walkBlockers: Array<{ cx: number; cz: number; r: number }> = [];
-  const addBlocker = (cx: number, cz: number, r: number, yMin: number) => {
-    if (yMin < 0.8) walkBlockers.push({ cx, cz, r });
-  };
-  const matOf = (e: EntityHandle): MatHandle => {
-    const mr = world.get(e, MeshRenderer);
-    return (mr.ok ? mr.value.materials[0] : 0) as MatHandle;
-  };
-  for (const node of loaded.nodes) {
-    const name = (node.components.Name as { value?: string } | undefined)?.value;
-    const e = loaded.mapping.get(node.localId);
-    if (e === undefined || !name) continue;
-    const t = (node.components.Transform ?? {}) as { pos?: number[]; scale?: number[] };
-    // Collider sizing: the builtin CUBE is createBoxGeometry(1,1,1) → extent 1
-    // (half 0.5), but the builtin SPHERE is createSphereGeometry(1,…) → radius 1.
-    // So a cuboid half-extent is scale·0.5, while a sphere's radius is the FULL
-    // scale (scale·1). Getting this wrong makes the collider half the visual size
-    // → the mesh sinks into the floor and bodies interpenetrate before colliding.
-    const hx = (t.scale?.[0] ?? 1) * 0.5, hy = (t.scale?.[1] ?? 1) * 0.5, hz = (t.scale?.[2] ?? 1) * 0.5;
-    const sphereR = t.scale?.[0] ?? 1;
-    const box = (restitution: number) =>
-      world.addComponent(e, { component: Collider, data: { shape: ColliderShapeValue.cuboid, halfExtents: [hx, hy, hz], restitution, friction: 0.7 } });
-    const sphere = (restitution: number) =>
-      world.addComponent(e, { component: Collider, data: { shape: ColliderShapeValue.sphere, radius: sphereR, restitution, friction: 0.6 } });
-    const dynamic = () =>
-      world.addComponent(e, { component: RigidBody, data: { type: RigidBodyTypeValue.dynamic, mass: 1, linearDamping: 0.05, angularDamping: 0.1, ccdEnabled: true } });
-    const staticBody = () =>
-      world.addComponent(e, { component: RigidBody, data: { type: RigidBodyTypeValue.static } });
-    switch (name) {
-      // Ground gets NO collider here — a separate THICK floor (spawnGroundCollider)
-      // handles collision. A thin 0.2-tall ground slab lets a hard knock push a
-      // dynamic body partway THROUGH it (penetration that doesn't recover → the
-      // prop rests sunk into the ground). A deep floor box can't be tunneled.
-      case 'Ground': break;
-      // Tree = STATIC body (immovable, never simulated — "no physics") so props
-      // bounce off it. NOTE: this engine's physicsSyncBackend only registers
-      // entities with the full (Transform, RigidBody, Collider) triplet, so a
-      // Collider WITHOUT a RigidBody is silently ignored (no collision at all).
-      // A static RigidBody is the right way to get an immovable obstacle.
-      case 'TreeTrunk': staticBody(); box(0.2); addBlocker(t.pos?.[0] ?? 0, t.pos?.[2] ?? 0, Math.hypot(hx, hz), (t.pos?.[1] ?? 0) - hy); break;
-      case 'TreeCanopy': staticBody(); sphere(0.2); addBlocker(t.pos?.[0] ?? 0, t.pos?.[2] ?? 0, sphereR, (t.pos?.[1] ?? 0) - sphereR); break;
-      case 'RedBox': dynamic(); box(0.25); props.push({ e, mat: matOf(e) }); targets.push({ e, points: 10 }); break;
-      case 'BlueBall': dynamic(); sphere(0.55); props.push({ e, mat: matOf(e) }); targets.push({ e, points: 15 }); break;
-      case 'YellowPillar': dynamic(); box(0.2); props.push({ e, mat: matOf(e) }); targets.push({ e, points: 10 }); break;
-      // showcase props — now AUTHORED in scene.pack.json (so ✎ Edit shows them
-      // too); main.ts just gives them dynamics. "Crate*" = knockable pyramid,
-      // "BouncyBall" = high-restitution bouncer.
-      case 'BouncyBall': dynamic(); sphere(0.92); props.push({ e, mat: matOf(e) }); targets.push({ e, points: 25 }); break;
-      default:
-        if (name.startsWith('Crate')) { dynamic(); box(0.1); props.push({ e, mat: matOf(e) }); targets.push({ e, points: 5 }); }
-        break;
-    }
-  }
-  return { props, walkBlockers, targets };
-}
-
-// Wire up the low-poly box-man. Its cube parts ("PlayerTorso/Head/ArmL/ArmR/LegL/
-// LegR") are authored in scene.pack.json as ChildOf children of the "Player" root
-// with LOCAL coordinates — a single hierarchy representation that both ✎ Edit and
-// ▶ Play consume verbatim (the editor viewport and Play run the same engine +
-// propagateTransforms, so ChildOf resolves in both; scene-pack round-trips ChildOf
-// losslessly). So the avatar already renders + moves as a unit; here we only make
-// the root a kinematic body (driven by its Transform → shoves props). No runtime
-// re-parenting: that split representation (flat pack + Play-time reparent) was a
-// SSOT violation and the source of a stale-view bug (reading a Transform array view
-// across the ChildOf archetype migration scrambled the parts).
-function setupPlayerRoot(ctx: Ctx, root: EntityHandle): void {
-  const { world } = ctx;
-  world.addComponent(root, { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic } });
-  world.addComponent(root, { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: 0.3, halfHeight: 0.4 } });
 }
 
 export async function bootstrap(world: World, ctx?: BootstrapContext) {
@@ -267,43 +58,12 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
   const aspect = canvas.width / canvas.height || 1;
 
-  // ── load the authored scene (the SAME native asset ✎ Edit writes) ────────────
-  let loaded: { mapping: ReadonlyMap<number, EntityHandle>; nodes: PackNode[] } | null = null;
-
-  // Asset-first host (preview + editor ▶ Play): the host resolves + instantiates
-  // forge.json.defaultScene BEFORE bootstrap runs and hands us the synthetic root
-  // via ctx.defaultSceneRoot (+ the loaded SceneAsset via ctx.defaultScene). ADOPT
-  // that instance — re-instantiating here would load the scene TWICE (host copy +
-  // our copy). Recover the { mapping, nodes } the Player / physics wiring below
-  // reads: mapping from the SceneInstance component on the host root (localId->
-  // Entity), nodes from the author-side entity list (carries Name components).
-  const hostRoot = ctx?.defaultSceneRoot;
-  if (hostRoot !== undefined && ctx?.defaultScene !== undefined) {
-    const sceneInst = world.get(hostRoot, SceneInstance);
-    if (!sceneInst.ok) {
-      console.error('[game] SceneInstance lookup on host root failed:', sceneInst.error);
-    } else {
-      // mapping is a Uint32Array sized maxLocalId+1, indexed by localId; skip
-      // unspawned slots (ENTITY_NULL_RAW = 0xffffffff) and 0.
-      const mappingArr = sceneInst.value.mapping as unknown as { length: number; [i: number]: number };
-      const mapping = new Map<number, EntityHandle>();
-      for (let localId = 0; localId < mappingArr.length; localId++) {
-        const e = mappingArr[localId];
-        if (e !== undefined && e !== 0xffffffff && e !== 0) mapping.set(localId, e as EntityHandle);
-      }
-      loaded = { mapping, nodes: ctx.defaultScene.entities as unknown as PackNode[] };
-    }
-  }
-
-  // Fallback: no host-instantiated scene (standalone game module, or the host has
-  // no defaultScene) — load it ourselves the canonical loadByGuid<SceneAsset> ->
-  // instantiate path.
+  // The host normally hands us its already-instantiated default scene. Standalone
+  // runs use the same GUID load path, while fallback keeps the learning loop visible.
+  let loaded: LoadedScene | null = ctx ? loadedFromHost(world, ctx) : null;
   if (!loaded) {
-    try {
-      loaded = await loadScene({ world, assets: ctx?.assets });
-    } catch (err) {
-      console.warn('[game] scene asset unavailable:', err);
-    }
+    try { loaded = await loadScene({ world, assets: ctx?.assets }); }
+    catch (err) { console.warn('[game] scene asset unavailable:', err); }
   }
   if (!loaded) spawnFallbackScene({ world });
 
@@ -537,6 +297,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     { action: 'moveRight', bindings: [KEY('d'), KEY('D')] },
     { action: 'jump', bindings: [KEY(' ')] },
     { action: 'shoot', bindings: [KEY('f'), KEY('F')] },
+    { action: 'reset', bindings: [KEY('r'), KEY('R')] },
     // Arrows: context-dependent (top-down move vs FPS look), so declared as
     // their own actions and read individually below (snap.action('arrowUp')
     // etc.) — their meaning stays with the per-mode logic, not the InputMap.
@@ -557,94 +318,20 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       ? world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)
       : EMPTY_SNAP;
 
-  // FPS mouse-look: STANDARD POINTER-LOCK pattern — click locks the cursor
-  // (hidden), then mousemove movementX/Y rotates the view (infinite turn). ESC
-  // releases. Arrow keys remain a keyboard fallback if lock can't be granted.
-  const LOOK_SENS = 0.0022;
-  let lookYaw = 0;     // 0 → forward (0,-1); forward = (-sin yaw, -cos yaw)
-  let lookPitch = 0;
-  let wantShoot = false;
-  // Top-down click sets a one-shot world-XZ aim direction here; the fire block
-  // consumes it (so a click-aim is preserved even if the player is moving and
-  // the movement block overwrites faceX/faceZ on the same frame).
-  let shotDir: { x: number; z: number } | null = null;
-  const clampPitch = (p: number) => Math.max(-1.2, Math.min(1.2, p));
-  // FPS mouse-look now reads from the engine InputSnapshot (M3 D-1):
-  // snap.mouse.movementDelta carries the per-frame accumulated pointer-lock
-  // movement, and snap.mouse.pointerLocked gates consumption (AC-02: only
-  // consume delta while locked). The look system is an ECS system registered
-  // on the world schedule — no DOM mousemove listener.
-  const GameLook = defineSystem({
-    name: 'game-look',
-    queries: [] as const,
-    after: ['input-frame-start-scan'],
-    fn: (world) => {
-      const snap = readInput();
-      if (mode !== 'fps' || !snap.mouse.pointerLocked) {
-        // Update HUD lock status every frame from the SSOT (D-8).
-        // The backend controls cursor hiding via browser behaviors; the
-        // template only drives the HUD text line.
-        if (mode === 'fps') {
-          hud.setLockStatus(snap.mouse.pointerLocked
-            ? '🎮 Locked · mouse look · ESC releases'
-            : '👍 Click canvas to lock mouse');
-        }
-        return;
-      }
-      lookYaw -= snap.mouse.movementDelta.x * LOOK_SENS;
-      lookPitch = clampPitch(lookPitch - snap.mouse.movementDelta.y * LOOK_SENS);
-      hud.setLockStatus('🎮 Locked · mouse look · ESC releases');
-    },
+  // Input-to-intent systems own pointer-lock look and pointer-to-world aim.
+  // Main keeps only the mutable state it consumes when steering the player and bullets.
+  let px = initX, pz = initZ;
+  let faceX = 0, faceZ = -1;
+  const gameplayInput = installGameplayInput({
+    world,
+    camera,
+    canvas,
+    hud,
+    readInput,
+    getMode: () => mode,
+    getPlayerPosition: () => ({ x: px, z: pz }),
+    setFacing: (x, z) => { faceX = x; faceZ = z; },
   });
-  world.addSystem(Update, GameLook);
-
-  // Pointer-lock is now handled entirely by the engine backend's onCanvasClick
-  // (browser-backend.ts). The host (apps/preview) calls ctx.setPointerLockAllowed
-  // via the setMode pathway above; the backend's gate (gameGate × hostPredicate)
-  // decides whether to request lock per click. Template has zero DOM listeners
-  // for pointer-lock / mousedown / mousemove / click (AC-01, AC-06).
-
-  // Click handling, per mode, now reads from the engine InputSnapshot (M3 D-5):
-  //   - FPS (locked):   pointerEvents down edge → shoot forward (look direction).
-  //   - FPS (unlocked):  no-op (backend onCanvasClick already requested lock).
-  //   - Top-down:       pointerEvents down edge → AIM character toward the click
-  //                     point via pick(), then shoot. Coordinates come from the
-  //                     event (DPR-corrected canvas pixels), matching pick()'s
-  //                     contract. No DOM closure — world comes from ECS params.
-  const GamePickShoot = defineSystem({
-    name: 'game-pick-shoot',
-    queries: [] as const,
-    after: ['input-frame-start-scan'],
-    fn: (world) => {
-      const snap = readInput();
-      for (const ev of snap.pointerEvents) {
-        if (ev.phase !== 'down' || ev.pointerType !== 'mouse') continue;
-        if (mode === 'fps') {
-          if (snap.mouse.pointerLocked) wantShoot = true;
-          continue;
-        }
-        // top-down: screen-to-world pick + aim
-        const hit = pick(world, camera, ev.x, ev.y, canvas.width, canvas.height);
-        let aimX: number, aimZ: number;
-        if (hit) {
-          const tr = world.get(hit.entity, Transform);
-          if (tr.ok) { aimX = tr.value.pos[0] ?? 0; aimZ = tr.value.pos[2] ?? 0; }
-          else { aimX = px + (ev.x - canvas.width / 2); aimZ = pz + (ev.y - canvas.height / 2); }
-        } else {
-          aimX = px + (ev.x - canvas.width / 2); aimZ = pz + (ev.y - canvas.height / 2);
-        }
-        const dx = aimX - px, dz = aimZ - pz;
-        const len = Math.hypot(dx, dz);
-        if (len > 1e-3) {
-          const nx = dx / len, nz = dz / len;
-          shotDir = { x: nx, z: nz };
-          faceX = nx; faceZ = nz;
-          wantShoot = true;
-        }
-      }
-    },
-  });
-  world.addSystem(Update, GamePickShoot);
 
   // Bullet material — EMISSIVE so it glows and drives the Camera.bloom bright-pass
   // (HDR emissive > bloomThreshold 1.0 → blooms). Showcases the post-processing path.
@@ -676,8 +363,6 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const BULLET_LIFE = 1.5;    // bullet lifetime (s)
   const SHOOT_CD = 0.18;      // fire cooldown (s)
 
-  let px = initX, pz = initZ;
-  let faceX = 0, faceZ = -1;          // facing unit vector (default: into the scene)
   let jumpY = PLAYER_Y, vy = 0, grounded = true;
   let shootCd = 0;
   // Bullets fly THROUGH props rather than despawning on contact. Why: rapier's
@@ -692,6 +377,60 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // on lifetime expiry (BULLET_LIFE) — no leftover ball-shadow because it never
   // sits still.
   const bullets: Array<{ e: EntityHandle; x: number; y: number; z: number; dx: number; dy: number; dz: number; age: number; hits: Set<EntityHandle> }> = [];
+
+  type TransformSnapshot = {
+    pos: [number, number, number];
+    quat: [number, number, number, number];
+    scale: [number, number, number];
+  };
+  const initialTransforms = new Map<EntityHandle, TransformSnapshot>();
+  for (const prop of flashables) {
+    const tr = world.get(prop.e, Transform);
+    if (!tr.ok) continue;
+    initialTransforms.set(prop.e, {
+      pos: [tr.value.pos[0] ?? 0, tr.value.pos[1] ?? 0, tr.value.pos[2] ?? 0],
+      quat: [tr.value.quat[0] ?? 0, tr.value.quat[1] ?? 0, tr.value.quat[2] ?? 0, tr.value.quat[3] ?? 1],
+      scale: [tr.value.scale[0] ?? 1, tr.value.scale[1] ?? 1, tr.value.scale[2] ?? 1],
+    });
+  }
+  const physics = world.hasResource('PhysicsWorld')
+    ? world.getResource<PhysicsWorld>('PhysicsWorld')
+    : undefined;
+
+  const resetGameplay = () => {
+    for (const bullet of bullets) world.despawn(bullet.e);
+    bullets.length = 0;
+    for (const [entity, timer] of flashUntil) {
+      if (timer > 0) world.set(entity, MeshRenderer, { materials: [origMatOf.get(entity)!] });
+    }
+    flashUntil.clear();
+    for (const [entity, snapshot] of initialTransforms) {
+      world.set(entity, Transform, snapshot);
+      if (physics?.hasBody(entity)) physics.teleport(entity, snapshot.pos);
+    }
+    px = initX;
+    pz = initZ;
+    faceX = 0;
+    faceZ = -1;
+    jumpY = PLAYER_Y;
+    vy = 0;
+    grounded = true;
+    shootCd = 0;
+    gameplayInput.lookYaw = 0;
+    gameplayInput.lookPitch = 0;
+    gameplayInput.wantShoot = false;
+    gameplayInput.shotDir = null;
+    camX = initX;
+    camZ = initZ + TOP_DZ;
+    score = 0;
+    hud.setScore(0);
+    setMode('topdown');
+    if (player !== undefined) {
+      world.set(player, Transform, { pos: [px, jumpY, pz], quat: [0, 0, 0, 1] });
+      if (physics?.hasBody(player)) physics.teleport(player, [px, jumpY, pz]);
+    }
+  };
+  installGameplayLifecycle({ world, readInput, reset: resetGameplay });
 
   if (player !== undefined) {
     const root = player;
@@ -711,10 +450,10 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       //   lock, which the embedded preview iframe disallows). —
       if (mode === 'fps') {
         const TURN = 2.4;
-        if (arrowLeft) lookYaw += TURN * dt;
-        if (arrowRight) lookYaw -= TURN * dt;
-        if (arrowUp) lookPitch = Math.min(1.2, lookPitch + TURN * 0.6 * dt);
-        if (arrowDown) lookPitch = Math.max(-1.2, lookPitch - TURN * 0.6 * dt);
+        if (arrowLeft) gameplayInput.lookYaw += TURN * dt;
+        if (arrowRight) gameplayInput.lookYaw -= TURN * dt;
+        if (arrowUp) gameplayInput.lookPitch = Math.min(1.2, gameplayInput.lookPitch + TURN * 0.6 * dt);
+        if (arrowDown) gameplayInput.lookPitch = Math.max(-1.2, gameplayInput.lookPitch - TURN * 0.6 * dt);
       }
 
       // — movement + facing, per view mode —
@@ -730,7 +469,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       let mvx = 0, mvz = 0;
       if (mode === 'fps') {
         // look-relative; facing = look forward (front = local −Z; yaw 0 → (0,−1))
-        const fwdX = -Math.sin(lookYaw), fwdZ = -Math.cos(lookYaw);
+        const fwdX = -Math.sin(gameplayInput.lookYaw), fwdZ = -Math.cos(gameplayInput.lookYaw);
         const rgtX = -fwdZ, rgtZ = fwdX;          // +90° about Y → strafe right
         faceX = fwdX; faceZ = fwdZ;
         mvx = fwdX * f + rgtX * s; mvz = fwdZ * f + rgtZ * s;
@@ -776,8 +515,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
 
       // — shoot (F, or left-click in FPS): kinematic bullet flies along `face` —
       shootCd -= dt;
-      const fire = (snap.action('shoot').isPressed() || wantShoot) && shootCd <= 0;
-      wantShoot = false;
+      const fire = (snap.action('shoot').isPressed() || gameplayInput.wantShoot) && shootCd <= 0;
+      gameplayInput.wantShoot = false;
       if (fire) {
         shootCd = SHOOT_CD;
         // 3D shot direction, per mode:
@@ -788,13 +527,13 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         let dirX = faceX, dirY = 0, dirZ = faceZ;
         let by = jumpY + 0.15;
         if (mode === 'fps') {
-          const cp = Math.cos(lookPitch);
-          dirX = -Math.sin(lookYaw) * cp; dirY = Math.sin(lookPitch); dirZ = -Math.cos(lookYaw) * cp;
+          const cp = Math.cos(gameplayInput.lookPitch);
+          dirX = -Math.sin(gameplayInput.lookYaw) * cp; dirY = Math.sin(gameplayInput.lookPitch); dirZ = -Math.cos(gameplayInput.lookYaw) * cp;
           by = jumpY + EYE;
-        } else if (shotDir) {
-          dirX = shotDir.x; dirZ = shotDir.z; dirY = 0;
+        } else if (gameplayInput.shotDir) {
+          dirX = gameplayInput.shotDir.x; dirZ = gameplayInput.shotDir.z; dirY = 0;
         }
-        shotDir = null;   // one-shot snapshot consumed
+        gameplayInput.shotDir = null;   // one-shot snapshot consumed
         const bx = px + dirX * 0.6, byy = by + dirY * 0.6, bz = pz + dirZ * 0.6;
         const e = world.spawn(
           { component: Transform, data: { pos: [bx, byy, bz]} },
@@ -863,8 +602,8 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
 
       // — camera, per view mode —
       if (mode === 'fps') {
-        const qy = quat.create(); quat.fromAxisAngle(qy, [0, 1, 0], lookYaw);
-        const qx = quat.create(); quat.fromAxisAngle(qx, [1, 0, 0], lookPitch);
+        const qy = quat.create(); quat.fromAxisAngle(qy, [0, 1, 0], gameplayInput.lookYaw);
+        const qx = quat.create(); quat.fromAxisAngle(qx, [1, 0, 0], gameplayInput.lookPitch);
         const cq = quat.create(); quat.multiply(cq, qy, qx);
         world.set(camera, Transform, { pos: [px, jumpY + EYE, pz], quat: [cq[0]!, cq[1]!, cq[2]!, cq[3]!]});
       } else {

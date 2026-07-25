@@ -70,6 +70,21 @@
       "default": 0.0
     },
     {
+      "name": "alphaCutoff",
+      "type": "f32",
+      "default": 0.0
+    },
+    {
+      "name": "clearcoat",
+      "type": "f32",
+      "default": 0.0
+    },
+    {
+      "name": "clearcoatRoughness",
+      "type": "f32",
+      "default": 0.5
+    },
+    {
       "name": "baseColorTexture",
       "type": "texture2d"
     },

@@ -10,6 +10,16 @@ import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { mat4, vec3 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import {
+  Camera,
+  DirectionalLight,
+  extractFrame,
+  MeshFilter,
+  MeshRenderer,
+  PointLight,
+  SpotLight,
+} from '@forgeax/engine-render/internal';
+import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type {
   Handle,
@@ -18,18 +28,6 @@ import type {
   MeshAsset,
 } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  Camera,
-  ChildOf,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-  PointLight,
-  SpotLight,
-  Transform,
-} from '../components';
-import { extractFrame } from '../render-system-extract';
-import { propagateTransforms } from '../systems/propagate-transforms';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ─── from render-system-extract.test.ts ───

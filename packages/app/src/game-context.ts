@@ -25,7 +25,7 @@
 
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import type { Renderer } from '@forgeax/engine-runtime';
+import type { Renderer } from '@forgeax/engine-render';
 import type { SceneAsset } from '@forgeax/engine-types';
 
 import type { App } from './types';

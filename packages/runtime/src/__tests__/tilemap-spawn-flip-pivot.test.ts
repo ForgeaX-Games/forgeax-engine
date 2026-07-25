@@ -35,14 +35,19 @@
 
 import { Entity, World } from '@forgeax/engine-ecs';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
-import { type TilesetAsset, toShared } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
-import { ChildOf, encodeSortScope, TileLayer, Tilemap, Transform } from '../components';
+import {
+  encodeSortScope,
+  TileLayer,
+  Tilemap,
+  tilemapChunkExtractSystem,
+} from '@forgeax/engine-render/authoring';
 import {
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
-  tilemapChunkExtractSystem,
-} from '../tilemap-chunk-extract-system';
+} from '@forgeax/engine-render/internal';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+import { type TilesetAsset, toShared } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
 
 const SQRT1_2 = Math.SQRT1_2;
 

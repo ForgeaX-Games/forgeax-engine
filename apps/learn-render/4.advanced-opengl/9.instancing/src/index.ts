@@ -26,17 +26,14 @@
 // 1. engine usage
 import { mat4, quat } from '@forgeax/engine-math';
 import { createApp } from '@forgeax/engine-app';
-import {
-  Camera,
-  createDevImportTransport,
-  DirectionalLight,
-  Instances,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
+import { Instances } from '@forgeax/engine-render';
+
 import type {
   MaterialAsset,
   MeshAsset,

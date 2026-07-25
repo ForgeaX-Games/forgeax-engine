@@ -21,23 +21,28 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
-import type { Handle } from '@forgeax/engine-types';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type {
+  PointLightSnapshot,
+  ShadowInvalidConfigError,
+  SpotLightSnapshot,
+} from '@forgeax/engine-render/internal';
 import {
+  buildPbrViewBglEntries,
   Camera,
+  computeInvRangeSquared,
   DirectionalLight,
+  degToCos,
+  extractFrame,
   PointLight,
+  packLightArrayHeader,
+  packPointLight,
+  packSpotLight,
   Skylight,
   SpotLight,
-  Transform,
-} from '../components';
-import type { ShadowInvalidConfigError } from '../errors/render';
-import { packLightArrayHeader, packPointLight, packSpotLight } from '../light-buffer-layout';
-import { computeInvRangeSquared, degToCos } from '../light-helpers';
-import { buildPbrViewBglEntries } from '../pbr-pipeline';
-import type { PointLightSnapshot, SpotLightSnapshot } from '../render-system-extract';
-import { extractFrame } from '../render-system-extract';
-import { propagateTransforms } from '../systems/propagate-transforms';
+} from '@forgeax/engine-render/internal';
+import { propagateTransforms, Transform } from '@forgeax/engine-scene';
+import type { Handle } from '@forgeax/engine-types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 {
   // ─── feat-20260709 M2 / w4: vec-collapse schema shape + default equivalence ───
@@ -1956,7 +1961,10 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
       HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
     }> {
-      return (await import('../index')) as never;
+      return {
+        ...(await import('@forgeax/engine-render/internal')),
+        ...(await import('@forgeax/engine-scene')),
+      } as never;
     }
 
     interface TestSetup {

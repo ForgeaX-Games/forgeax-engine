@@ -30,6 +30,8 @@
 import { AssetRegistry, HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { Camera, extractFrame, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type {
   Handle,
   MaterialAsset,
@@ -38,10 +40,7 @@ import type {
   VideoAsset,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
 import { createRenderer } from '../index';
-import { extractFrame } from '../render-system-extract';
-import { propagateTransforms } from '../systems/propagate-transforms';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const WIDTH = 128;

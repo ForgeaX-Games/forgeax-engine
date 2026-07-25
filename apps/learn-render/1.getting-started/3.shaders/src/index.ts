@@ -59,7 +59,9 @@
 // resolves to 'unlit').
 import { World } from '@forgeax/engine-ecs';
 import { HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
-import { Camera, Engine, EngineEnvironmentError, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import playShaderSrc from './shaders/play.wgsl?raw';

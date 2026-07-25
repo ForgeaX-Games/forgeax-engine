@@ -25,9 +25,7 @@
 import process from 'node:process';
 
 const { World } = await import('@forgeax/engine-ecs');
-const { animationPlugin, defineAnimationGraph, AnimationPlayer } = await import(
-  '@forgeax/engine-runtime'
-);
+const { animationPlugin, defineAnimationGraph, AnimationPlayer } = await import('@forgeax/engine-animation');
 
 let failCount = 0;
 let unexpectedPassCount = 0;

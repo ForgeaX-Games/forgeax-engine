@@ -13,9 +13,8 @@
 //   plan-strategy D-1a #1-#3
 //   requirements AC-07
 
+import { cleanPerEntityCache, worldEntityKey } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-
-import { cleanPerEntityCache, worldEntityKey } from '../record';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

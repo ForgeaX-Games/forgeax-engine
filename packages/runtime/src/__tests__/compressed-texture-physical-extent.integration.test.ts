@@ -1,10 +1,9 @@
 import { numMipLevels } from '@forgeax/engine-assets-runtime';
+import { deriveMipUploadLayout, GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok, type RhiCaps } from '@forgeax/engine-rhi';
 import type { TextureAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { GpuResourceStore } from '../gpu-resource-store';
-import { deriveMipUploadLayout } from '../render-data';
 
 type TextureCall = { readonly size: { readonly width: number; readonly height: number } };
 type WriteCall = {

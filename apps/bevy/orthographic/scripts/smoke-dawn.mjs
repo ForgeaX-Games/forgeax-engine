@@ -96,9 +96,12 @@ const mockCanvas = {
 
 // --- build the orthographic World (mirrors src/orthographic.ts) ---
 const { World } = await import('@forgeax/engine-ecs');
-const { Camera, createRenderer, Materials, MeshFilter, MeshRenderer, orthographic, PointLight, Transform } = await import(
-  '@forgeax/engine-runtime'
-);
+const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { PointLight } = await import('@forgeax/engine-render');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { Materials } = await import('@forgeax/engine-render');
+const { orthographic } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const { HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
 const { quat } = await import('@forgeax/engine-math');
 

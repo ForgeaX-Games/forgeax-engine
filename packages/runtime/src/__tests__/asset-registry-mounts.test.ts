@@ -35,9 +35,9 @@ import {
   unwrapHandle,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '../components';
-import { AnimationPlayer } from '../components/animation-player';
-import { MeshFilter } from '../components/mesh-filter';
+import '@forgeax/engine-render/internal';
+import { AnimationPlayer } from '@forgeax/engine-animation';
+import { MeshFilter } from '@forgeax/engine-render/internal';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 /** Access the private parseAssetPayload method via structural view-cast. */

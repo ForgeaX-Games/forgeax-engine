@@ -27,6 +27,7 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
+import { AnimationPlayer } from '@forgeax/engine-animation';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import {
   createQueryState,
@@ -37,19 +38,25 @@ import {
   queryRun,
   World,
 } from '@forgeax/engine-ecs';
-import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
-import { describe, expect, expectTypeOf, it } from 'vitest';
+import {
+  GlyphText,
+  SPRITE_PLAYBACK_MODE_CLAMP,
+  SPRITE_PLAYBACK_MODE_LOOP,
+  SpriteAnimation,
+  type SpritePlaybackMode,
+  SpriteRegionOverride,
+  spritePlaybackModeFromU32,
+  TileLayer,
+  Tilemap,
+} from '@forgeax/engine-render/authoring';
 import {
   ANTIALIAS_NONE,
-  AnimationPlayer,
   BLOOM_DISABLED,
   CAMERA_PROJECTION_ORTHOGRAPHIC,
   CAMERA_PROJECTION_PERSPECTIVE,
   Camera,
-  ChildOf,
-  Children,
   DirectionalLight,
+  extractFrame,
   Layer,
   MeshFilter,
   MeshRenderer,
@@ -59,23 +66,15 @@ import {
   SkyboxBackground,
   type SkyboxMode,
   SortKey,
-  SPRITE_PLAYBACK_MODE_CLAMP,
-  SPRITE_PLAYBACK_MODE_LOOP,
-  SpriteAnimation,
-  type SpritePlaybackMode,
-  SpriteRegionOverride,
   skyboxModeFromF32,
-  spritePlaybackModeFromU32,
-  TileLayer,
-  Tilemap,
   TONEMAP_NONE,
   TONEMAP_REINHARD_EXTENDED,
-  Transform,
   tonemapFromF32,
-} from '../components';
-import { GlyphText } from '../components/glyph-text';
-import { extractFrame } from '../render-system-extract';
-import { propagateTransforms } from '../systems/propagate-transforms';
+} from '@forgeax/engine-render/internal';
+import { ChildOf, Children, propagateTransforms, Transform } from '@forgeax/engine-scene';
+import type { Handle, LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
+import { toShared } from '@forgeax/engine-types';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 {
   // --- from children.test.ts ---
@@ -773,13 +772,13 @@ import { propagateTransforms } from '../systems/propagate-transforms';
   // satisfies the mirror-before-holder define-time contract.
   describe('relationship-migration-regression (feat-20260602 M2 / w7 barrel order)', () => {
     it('imports @forgeax/engine-runtime without throwing on module evaluation', async () => {
-      const mod = await import('@forgeax/engine-runtime');
+      const mod = await import('@forgeax/engine-scene');
       expect(mod.Children).toBeDefined();
       expect(mod.ChildOf).toBeDefined();
     });
 
     it('runtime ChildOf resolves its Children mirror as array<entity>', async () => {
-      const { ChildOf, Children } = await import('@forgeax/engine-runtime');
+      const { ChildOf, Children } = await import('@forgeax/engine-scene');
       expect(ChildOf.relationship?.mirror).toBe('Children');
       expect((Children.schema as Record<string, string>).entities).toBe('array<entity>');
     });
@@ -2281,7 +2280,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
   // T-07 lands the SSOT (plan-strategy section 2 D-5 / requirements
   // section AC-02 + section 2.3).
   //
-  // The shape mirrors `packages/runtime/src/components/camera.ts:72-90`
+  // The shape mirrors `packages/render/src/components/camera.ts:72-90`
   // Tonemap block (TONEMAP_NONE = 0 / TONEMAP_REINHARD_EXTENDED = 1 +
   // `type Tonemap = 'none' | 'reinhard-extended'` + `tonemapFromF32`)
   // because ECS schema whitelist SchemaFieldType does not accept string-

@@ -227,13 +227,10 @@ const { World } = await import('@forgeax/engine-ecs');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const enginePkg = await import('@forgeax/engine-runtime');
 const {
-  Camera,
   createRenderer,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
 } = enginePkg;
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');

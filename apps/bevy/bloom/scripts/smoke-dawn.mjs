@@ -91,10 +91,11 @@ const mockCanvas = {
 
 const { World } = await import('@forgeax/engine-ecs');
 const { createBoxGeometry, createSphereGeometry } = await import('@forgeax/engine-geometry');
-const {
-  BLOOM_ENABLED, Camera, createRenderer, DirectionalLight, Materials,
-  MeshFilter, MeshRenderer, perspective, TONEMAP_REINHARD_EXTENDED, Transform,
-} = await import('@forgeax/engine-runtime');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { Materials } = await import('@forgeax/engine-render');
+const { BLOOM_ENABLED, perspective, TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 
 const world = new World();
 

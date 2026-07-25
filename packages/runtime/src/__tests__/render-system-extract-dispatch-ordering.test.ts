@@ -50,11 +50,16 @@
 
 import { AssetRegistry, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import {
+  Camera,
+  extractFrame,
+  Instances,
+  MeshFilter,
+  MeshRenderer,
+} from '@forgeax/engine-render/internal';
+import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { Camera, Instances, MeshFilter, MeshRenderer, Transform } from '../components';
-import { extractFrame } from '../render-system-extract';
-import { propagateTransforms } from '../systems/propagate-transforms';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function identityTransform() {

@@ -69,6 +69,38 @@ import {
 } from '@forgeax/engine-input';
 import { type Mat4, mat4, type Vec3, vec3 } from '@forgeax/engine-math';
 import {
+  assertStorageBufferCap,
+  bin,
+  buildPbrPipelineLayouts,
+  buildPbrViewBglEntries,
+  buildPipelineForMaterialShader,
+  Camera,
+  type ClusterBinError,
+  cacheKeyOf,
+  calculateSphereClusterBounds,
+  clusterSpaceObjectAabb,
+  createEngineMetrics,
+  createHdrpBindGroupLayoutDescriptor,
+  deriveCullingRadius,
+  deriveRenderDataCubemap,
+  deriveRenderDataMesh,
+  deriveRenderDataTexture,
+  extractFrame,
+  GpuResourceStore,
+  HdrpInstallError,
+  MeshFilter,
+  MeshRenderer,
+  matchPass,
+  ndcPositionToCluster,
+  type PbrCaps,
+  type PipelineBuilderContext,
+  type PipelineBuilderShaderModuleFactory,
+  type PipelineSpec,
+  sortDispatchByQueue,
+  validateClusterGrid,
+  viewZToZSlice,
+} from '@forgeax/engine-render/internal';
+import {
   err,
   ok,
   type PipelineLayout,
@@ -80,6 +112,12 @@ import {
   ok as rhiOk,
   type ShaderModule,
 } from '@forgeax/engine-rhi';
+import {
+  acquireCanvasContext as acquireNullCanvasContext,
+  createShaderModule as createNullShaderModule,
+  RhiNullAdapter,
+} from '@forgeax/engine-rhi-null';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
 import {
   findVariantByKey,
   type MaterialShaderEntry,
@@ -100,36 +138,62 @@ import {
   toShared,
 } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  bin,
-  type ClusterBinError,
-  calculateSphereClusterBounds,
-  clusterSpaceObjectAabb,
-  deriveCullingRadius,
-  ndcPositionToCluster,
-  viewZToZSlice,
-} from '../cluster-binner';
-import { Camera, ChildOf, MeshFilter, MeshRenderer, Transform } from '../components';
-import { createEngineMetrics } from '../engine-metrics';
-import { GpuResourceStore } from '../gpu-resource-store';
-import { createHdrpBindGroupLayoutDescriptor } from '../hdrp-buffers';
-import { HdrpInstallError, validateClusterGrid } from '../hdrp-pipeline';
-import { assertStorageBufferCap } from '../light-buffer-layout';
-import { buildPbrPipelineLayouts, buildPbrViewBglEntries, type PbrCaps } from '../pbr-pipeline';
-import {
-  buildPipelineForMaterialShader,
-  type PipelineBuilderContext,
-  type PipelineBuilderShaderModuleFactory,
-} from '../pipeline-builder';
-import { cacheKeyOf, type PipelineSpec } from '../pipeline-spec';
-import {
-  deriveRenderDataCubemap,
-  deriveRenderDataMesh,
-  deriveRenderDataTexture,
-} from '../render-data';
-import { extractFrame, sortDispatchByQueue } from '../render-system-extract';
-import { matchPass } from '../systems/pass-selector';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
+
+function makeExplicitNullRhi(spies: {
+  setIndexBuffer: ReturnType<typeof vi.fn>;
+  setVertexBuffer: ReturnType<typeof vi.fn>;
+  draw: ReturnType<typeof vi.fn>;
+  drawIndexed: ReturnType<typeof vi.fn>;
+}): unknown {
+  const adapter = new RhiNullAdapter();
+  const requestDevice = adapter.requestDevice.bind(adapter);
+  adapter.requestDevice = async () => {
+    const result = await requestDevice();
+    if (result.ok) {
+      const device = result.value;
+      const createCommandEncoder = device.createCommandEncoder.bind(device);
+      device.createCommandEncoder = (desc) => {
+        const encoderResult = createCommandEncoder(desc);
+        if (!encoderResult.ok) return encoderResult;
+        const encoder = encoderResult.value;
+        const beginRenderPass = encoder.beginRenderPass.bind(encoder);
+        encoder.beginRenderPass = (passDesc) => {
+          const pass = beginRenderPass(passDesc);
+          const draw = pass.draw.bind(pass);
+          const drawIndexed = pass.drawIndexed.bind(pass);
+          const setIndexBuffer = pass.setIndexBuffer.bind(pass);
+          const setVertexBuffer = pass.setVertexBuffer.bind(pass);
+          pass.draw = (...args) => {
+            spies.draw(...args);
+            draw(...args);
+          };
+          pass.drawIndexed = (...args) => {
+            spies.drawIndexed(...args);
+            drawIndexed(...args);
+          };
+          pass.setIndexBuffer = (...args) => {
+            spies.setIndexBuffer(...args);
+            setIndexBuffer(...args);
+          };
+          pass.setVertexBuffer = (...args) => {
+            spies.setVertexBuffer(...args);
+            setVertexBuffer(...args);
+          };
+          return pass;
+        };
+        return { ok: true, value: encoder };
+      };
+    }
+    return result;
+  };
+  return {
+    requestAdapter: async () => ({ ok: true, value: adapter }),
+    acquireCanvasContext: acquireNullCanvasContext,
+    createShaderModule: (device: unknown, desc: { code: string; label?: string }) =>
+      createNullShaderModule(device as never, desc),
+  };
+}
 
 vi.mock('@forgeax/engine-rhi-wgpu', () => {
   return {
@@ -158,8 +222,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from create-renderer-fallback.test.ts ---
-  const ENGINE = '../createRenderer';
-  const ERRORS = '../errors/environment';
+  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
+  const ERRORS = new URL('../../../render/src/renderer/environment-error.ts', import.meta.url).href;
 
   // ─── RhiError shape ──────────────────────────────────────────────────────────
 
@@ -273,7 +337,16 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         };
       },
     };
-    return { rhi, ensureReady: async () => undefined };
+    return {
+      rhi,
+      ensureReady: async () => undefined,
+      createShaderModule: async () => ({ ok: true, value: {} }),
+      translateErrorEventToRhiError: () => ({
+        ok: false,
+        error: makeRhiError('webgpu-runtime-error', 'mock Channel 3 error'),
+      }),
+      _internal_getRawDevice: () => undefined,
+    };
   }
 
   // ─── Navigator baseline ──────────────────────────────────────────────────────
@@ -297,6 +370,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       // navigator.gpu completely absent (no gpu property)
       vi.stubGlobal('navigator', { ...baseNavigator });
       // Mock Channel 3 (rhi-wgpu) with a working backend (ok adapter)
+      vi.resetModules();
       vi.doMock('@forgeax/engine-rhi-wgpu', () => makeMockChannel3Module('ok'));
 
       const canvas = makeMockCanvas({ webgpu: 'context' });
@@ -326,6 +400,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       // via loadBackendPack). Mock Channel 3 to fail.
       vi.stubGlobal('navigator', { ...baseNavigator });
       // Mock Channel 3 with a failing adapter
+      vi.resetModules();
       vi.doMock('@forgeax/engine-rhi-wgpu', () => makeMockChannel3Module('null'));
 
       const canvas = makeMockCanvas({ webgpu: 'context' });
@@ -879,7 +954,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from create-renderer-fallback-shader-manifest.test.ts ---
-  const CREATE_RENDERER_SRC = fileURLToPath(new URL('../createRenderer.ts', import.meta.url));
+  const CREATE_RENDERER_SRC = fileURLToPath(
+    new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url),
+  );
 
   describe('createRenderer fallback shaderManifestUrl literal (AC-08, D-2 q5-A)', () => {
     it("preserves the '/shaders/manifest.json' default in createRenderer.ts", () => {
@@ -1034,8 +1111,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from createRenderer.test.ts ---
-  const ENGINE = '../createRenderer';
-  const ERRORS = '../errors/environment';
+  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
+  const ERRORS = new URL('../../../render/src/renderer/environment-error.ts', import.meta.url).href;
 
   // Default mock: Channel 3 (rhi-wgpu) dynamic import fails so existing
   // "throws" tests continue to see EngineEnvironmentError. Overridden
@@ -2877,7 +2954,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from record-all-topology.test.ts ---
-  const ENGINE = '../createRenderer';
+  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
 
   interface PassSpies {
     setIndexBuffer: ReturnType<typeof vi.fn>;
@@ -2915,56 +2992,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       removeEventListener: () => undefined,
     };
     return canvas as Partial<HTMLCanvasElement> as HTMLCanvasElement;
-  }
-
-  function makeMockGPUDevice(spies: PassSpies): { device: unknown } {
-    const lost = new Promise<unknown>(() => undefined);
-    const device = {
-      __mockTag: 'gpu-device',
-      lost,
-      features: new Set(),
-      limits: {},
-      queue: {
-        submit: () => undefined,
-        writeBuffer: () => undefined,
-        writeTexture: () => undefined,
-      },
-      createShaderModule: () => ({ getCompilationInfo: async () => ({ messages: [] }) }),
-      createBindGroupLayout: () => ({}),
-      createPipelineLayout: () => ({}),
-      createRenderPipeline: () => ({}),
-      createBindGroup: () => ({}),
-      createBuffer: () => ({
-        getMappedRange: () => new ArrayBuffer(64),
-        unmap: () => undefined,
-      }),
-      createCommandEncoder: () => ({
-        beginRenderPass: () => ({
-          setPipeline: () => undefined,
-          setVertexBuffer: spies.setVertexBuffer,
-          setIndexBuffer: spies.setIndexBuffer,
-          setBindGroup: () => undefined,
-          setStencilReference: () => undefined,
-          setViewport: () => undefined,
-          setScissorRect: () => undefined,
-          draw: spies.draw,
-          drawIndexed: spies.drawIndexed,
-          end: () => undefined,
-        }),
-        finish: () => ({}),
-      }),
-      createTexture: () => ({ createView: () => ({}) }),
-      createSampler: () => ({}),
-      destroy: () => undefined,
-    };
-    return { device };
-  }
-
-  function makeMockGPU(deviceObj: unknown): unknown {
-    return {
-      requestAdapter: async () => ({ requestDevice: async () => deviceObj }),
-      getPreferredCanvasFormat: () => 'bgra8unorm',
-    };
   }
 
   const baseNavigator: Navigator = {
@@ -3034,7 +3061,10 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     Camera: unknown;
     DirectionalLight: unknown;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import(new URL('../../../render/src/index.ts', import.meta.url).href)),
+      ...(await import('@forgeax/engine-scene')),
+    } as never;
   }
 
   function cameraTransform() {
@@ -3092,12 +3122,10 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   }
 
   async function setupRenderer(spies: PassSpies): Promise<{ renderer: RendererLike }> {
-    const { device } = makeMockGPUDevice(spies);
-    vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
     const { createRenderer } = await importEngine();
     const renderer = await createRenderer(
       makeMockCanvas(),
-      {},
+      { rhi: makeExplicitNullRhi(spies) },
       { shaderManifestUrl: buildManifestDataUrl() },
     );
     await renderer.ready;
@@ -3107,7 +3135,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   async function spawnScene(_renderer: RendererLike, meshAsset: MeshAsset): Promise<unknown> {
     const { World } = await importEcs();
     const C = await importComponents();
+    const { registerPropagateTransforms } = await import('@forgeax/engine-scene');
     const world = new World();
+    registerPropagateTransforms(world);
     const meshHandle = world.allocSharedRef('MeshAsset', meshAsset) as Handle<
       'MeshAsset',
       'shared'
@@ -3134,11 +3164,14 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       { component: C.DirectionalLight, data: {} },
       { component: C.Transform, data: cameraTransform() },
     );
-    world.spawn(
-      { component: C.MeshRenderer, data: { materials: [0] } },
-      { component: C.MeshFilter, data: { assetHandle: meshHandle } },
-      { component: C.Transform, data: originTransform() },
-    );
+    world
+      .spawn(
+        { component: C.MeshRenderer, data: { materials: [] } },
+        { component: C.MeshFilter, data: { assetHandle: meshHandle } },
+        { component: C.Transform, data: originTransform() },
+      )
+      .unwrap();
+    expect(world.update(1 / 60).ok).toBe(true);
     return world;
   }
 
@@ -3195,7 +3228,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from record-draw-branch.test.ts ---
-  const ENGINE = '../createRenderer';
+  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
 
   interface PassSpies {
     setIndexBuffer: ReturnType<typeof vi.fn>;
@@ -3233,56 +3266,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       removeEventListener: () => undefined,
     };
     return canvas as Partial<HTMLCanvasElement> as HTMLCanvasElement;
-  }
-
-  function makeMockGPUDevice(spies: PassSpies): { device: unknown } {
-    const lost = new Promise<unknown>(() => undefined);
-    const device = {
-      __mockTag: 'gpu-device',
-      lost,
-      features: new Set(),
-      limits: {},
-      queue: {
-        submit: () => undefined,
-        writeBuffer: () => undefined,
-        writeTexture: () => undefined,
-      },
-      createShaderModule: () => ({ getCompilationInfo: async () => ({ messages: [] }) }),
-      createBindGroupLayout: () => ({}),
-      createPipelineLayout: () => ({}),
-      createRenderPipeline: () => ({}),
-      createBindGroup: () => ({}),
-      createBuffer: () => ({
-        getMappedRange: () => new ArrayBuffer(64),
-        unmap: () => undefined,
-      }),
-      createCommandEncoder: () => ({
-        beginRenderPass: () => ({
-          setPipeline: () => undefined,
-          setVertexBuffer: spies.setVertexBuffer,
-          setIndexBuffer: spies.setIndexBuffer,
-          setBindGroup: () => undefined,
-          setStencilReference: () => undefined,
-          setViewport: () => undefined,
-          setScissorRect: () => undefined,
-          draw: spies.draw,
-          drawIndexed: spies.drawIndexed,
-          end: () => undefined,
-        }),
-        finish: () => ({}),
-      }),
-      createTexture: () => ({ createView: () => ({}) }),
-      createSampler: () => ({}),
-      destroy: () => undefined,
-    };
-    return { device };
-  }
-
-  function makeMockGPU(deviceObj: unknown): unknown {
-    return {
-      requestAdapter: async () => ({ requestDevice: async () => deviceObj }),
-      getPreferredCanvasFormat: () => 'bgra8unorm',
-    };
   }
 
   const baseNavigator: Navigator = {
@@ -3352,7 +3335,10 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     Camera: unknown;
     DirectionalLight: unknown;
   }> {
-    return (await import('../index')) as never;
+    return {
+      ...(await import(new URL('../../../render/src/index.ts', import.meta.url).href)),
+      ...(await import('@forgeax/engine-scene')),
+    } as never;
   }
 
   function cameraTransform() {
@@ -3407,12 +3393,10 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   }
 
   async function setupRenderer(spies: PassSpies): Promise<{ renderer: RendererLike }> {
-    const { device } = makeMockGPUDevice(spies);
-    vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
     const { createRenderer } = await importEngine();
     const renderer = await createRenderer(
       makeMockCanvas(),
-      {},
+      { rhi: makeExplicitNullRhi(spies) },
       { shaderManifestUrl: buildManifestDataUrl() },
     );
     await renderer.ready;
@@ -3422,7 +3406,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   async function spawnScene(_renderer: RendererLike, meshAsset: MeshAsset): Promise<unknown> {
     const { World } = await importEcs();
     const C = await importComponents();
+    const { registerPropagateTransforms } = await import('@forgeax/engine-scene');
     const world = new World();
+    registerPropagateTransforms(world);
     const meshHandle = world.allocSharedRef('MeshAsset', meshAsset) as Handle<
       'MeshAsset',
       'shared'
@@ -3449,11 +3435,14 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
       { component: C.DirectionalLight, data: {} },
       { component: C.Transform, data: cameraTransform() },
     );
-    world.spawn(
-      { component: C.MeshRenderer, data: { materials: [0] } },
-      { component: C.MeshFilter, data: { assetHandle: meshHandle } },
-      { component: C.Transform, data: originTransform() },
-    );
+    world
+      .spawn(
+        { component: C.MeshRenderer, data: { materials: [] } },
+        { component: C.MeshFilter, data: { assetHandle: meshHandle } },
+        { component: C.Transform, data: originTransform() },
+      )
+      .unwrap();
+    expect(world.update(1 / 60).ok).toBe(true);
     return world;
   }
 
@@ -3832,8 +3821,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from renderer-draw-world.test.ts ---
-  const ENGINE = '../createRenderer';
-  const RENDERER = '../renderer';
+  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
+  const RENDERER = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url)
+    .href;
 
   // ─── Mock helpers ───────────────────────────────────────────────────────────
 
@@ -3992,7 +3982,16 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         fileURLToPath: (u: string) => string;
       };
       const here = url.fileURLToPath(import.meta.url);
-      const rendererSrc = path.resolve(path.dirname(here), '..', 'renderer.ts');
+      const rendererSrc = path.resolve(
+        path.dirname(here),
+        '..',
+        '..',
+        '..',
+        'render',
+        'src',
+        'renderer',
+        'renderer-factory.ts',
+      );
       const text = fs.readFileSync(rendererSrc, 'utf8');
       expect(text).not.toMatch(/interface RendererDrawTarget/);
       expect(text).not.toMatch(/RendererDrawTarget/);
@@ -4017,7 +4016,6 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         }>;
       };
       const { World } = (await import('@forgeax/engine-ecs')) as { World: new () => unknown };
-
       const renderer = await createRenderer(
         canvas,
         {},
@@ -4045,7 +4043,16 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         fileURLToPath: (u: string) => string;
       };
       const here = url.fileURLToPath(import.meta.url);
-      const createRendererSrc = path.resolve(path.dirname(here), '..', 'createRenderer.ts');
+      const createRendererSrc = path.resolve(
+        path.dirname(here),
+        '..',
+        '..',
+        '..',
+        'render',
+        'src',
+        'renderer',
+        'renderer-factory.ts',
+      );
       const text = fs.readFileSync(createRendererSrc, 'utf8');
       expect(text).toMatch(/draw\s*\(\s*\w+\s*:\s*World\b/);
       expect(text).not.toMatch(/draw\s*\(\s*\w+\s*:\s*RendererDrawTarget\b/);
@@ -4116,7 +4123,11 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         }>;
       };
       const { World } = (await import('@forgeax/engine-ecs')) as { World: new () => unknown };
-      const components = (await import('../components')) as {
+      const { registerPropagateTransforms } = await import('@forgeax/engine-scene');
+      const components = {
+        ...(await import(new URL('../../../render/src/index.ts', import.meta.url).href)),
+        ...(await import('@forgeax/engine-scene')),
+      } as {
         Transform: unknown;
         Camera: unknown;
         MeshFilter: unknown;
@@ -4147,7 +4158,9 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         spawn: (...components: unknown[]) => { unwrap: () => unknown };
         setErrorHandler: (handler: (err: Error, ctx: unknown) => void) => void;
         allocSharedRef: (target: string, payload: unknown) => number;
+        update: (delta: number) => { ok: boolean };
       };
+      registerPropagateTransforms(world as never);
 
       // Mint a material with zero passes (no parent chain) as a user-tier column
       // handle. The extract stage's material walk returns Err with
@@ -4211,6 +4224,8 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
         )
         .unwrap();
 
+      expect(world.update(1 / 60).ok).toBe(true);
+
       renderer.draw([world], { owner: 0 });
 
       // Property-access assertions only (charter P3 + P5: structured error
@@ -4228,7 +4243,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from renderer-input-snapshot.test.ts ---
-  const ENGINE = '../createRenderer';
+  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
 
   interface MockGL2Context {
     __mockTag: 'webgl2';
@@ -4390,7 +4405,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from renderer-read-pixels.test.ts ---
-  const ENGINE = '../createRenderer';
+  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
 
   interface CanvasOptions {
     webgl2: 'context' | 'null';
@@ -4668,7 +4683,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
 {
   // --- from renderer-ready.test.ts ---
-  const ENGINE = '../createRenderer';
+  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
 
   // ─── Mock helpers (mirrors createRenderer.test.ts shape) ────────────────────
 
@@ -6042,13 +6057,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // --- from hdrp-caps-gate.test.ts ---
   describe('HdrpCapsInsufficientError class shape (AC-17/AC-18/AC-20)', () => {
     it('has .code === hdrp-caps-insufficient', async () => {
-      const { HdrpCapsInsufficientError } = await import('../errors/render');
+      const { HdrpCapsInsufficientError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
       expect(err.code).toBe('hdrp-caps-insufficient');
     });
 
     it('.detail carries { capName, actual, required }', async () => {
-      const { HdrpCapsInsufficientError } = await import('../errors/render');
+      const { HdrpCapsInsufficientError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
       expect(err.detail).toBeDefined();
       expect(err.detail.capName).toBe('maxStorageBuffersPerShaderStage');
@@ -6057,7 +6072,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('.hint contains fall-back-to-URP substring (AC-18)', async () => {
-      const { HdrpCapsInsufficientError } = await import('../errors/render');
+      const { HdrpCapsInsufficientError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
       expect(err.hint).toBeDefined();
       expect(typeof err.hint).toBe('string');
@@ -6066,7 +6081,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('.expected describes the capacity requirement', async () => {
-      const { HdrpCapsInsufficientError } = await import('../errors/render');
+      const { HdrpCapsInsufficientError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
       expect(err.expected).toBeDefined();
       expect(typeof err.expected).toBe('string');
@@ -6074,7 +6089,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('extends Error', async () => {
-      const { HdrpCapsInsufficientError } = await import('../errors/render');
+      const { HdrpCapsInsufficientError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('HdrpCapsInsufficientError');
@@ -6085,13 +6100,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   describe('HdrpLightBudgetExceededError class shape (AC-07/AC-20)', () => {
     it('has .code === hdrp-light-budget-exceeded', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors/render');
+      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.code).toBe('hdrp-light-budget-exceeded');
     });
 
     it('.detail carries { actual, budget }', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors/render');
+      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.detail).toBeDefined();
       expect(err.detail.actual).toBe(257);
@@ -6099,7 +6114,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('.hint is a non-empty actionable string', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors/render');
+      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.hint).toBeDefined();
       expect(typeof err.hint).toBe('string');
@@ -6107,7 +6122,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('extends Error', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors/render');
+      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('HdrpLightBudgetExceededError');
@@ -6118,13 +6133,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   describe('HdrpIndexListOverflowError class shape (AC-24)', () => {
     it('has .code === hdrp-index-list-overflow', async () => {
-      const { HdrpIndexListOverflowError } = await import('../errors/render');
+      const { HdrpIndexListOverflowError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpIndexListOverflowError(65537, 65536);
       expect(err.code).toBe('hdrp-index-list-overflow');
     });
 
     it('.detail carries { actual, capacity }', async () => {
-      const { HdrpIndexListOverflowError } = await import('../errors/render');
+      const { HdrpIndexListOverflowError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpIndexListOverflowError(65537, 65536);
       expect(err.detail).toBeDefined();
       expect(err.detail.actual).toBe(65537);
@@ -6132,7 +6147,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('.hint is a non-empty actionable string', async () => {
-      const { HdrpIndexListOverflowError } = await import('../errors/render');
+      const { HdrpIndexListOverflowError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpIndexListOverflowError(65537, 65536);
       expect(err.hint).toBeDefined();
       expect(typeof err.hint).toBe('string');
@@ -6140,7 +6155,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('extends Error', async () => {
-      const { HdrpIndexListOverflowError } = await import('../errors/render');
+      const { HdrpIndexListOverflowError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpIndexListOverflowError(65537, 65536);
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('HdrpIndexListOverflowError');
@@ -6153,7 +6168,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   describe('HDRP caps gate 5 scenarios (AC-17)', () => {
     it('caps=0 (uniform fallback) yields ok(false)', async () => {
-      const { assertStorageBufferCap } = await import('../light-buffer-layout');
+      const { assertStorageBufferCap } = await import('@forgeax/engine-render/internal');
       const result = assertStorageBufferCap(0);
       expect(result.ok).toBe(true);
       if (result.ok) {
@@ -6162,19 +6177,19 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('caps=1 (insufficient, partial storage) yields err', async () => {
-      const { assertStorageBufferCap } = await import('../light-buffer-layout');
+      const { assertStorageBufferCap } = await import('@forgeax/engine-render/internal');
       const result = assertStorageBufferCap(1);
       expect(result.ok).toBe(false);
     });
 
     it('caps=3 (insufficient, below 4) yields err', async () => {
-      const { assertStorageBufferCap } = await import('../light-buffer-layout');
+      const { assertStorageBufferCap } = await import('@forgeax/engine-render/internal');
       const result = assertStorageBufferCap(3);
       expect(result.ok).toBe(false);
     });
 
     it('caps=4 (sufficient) yields ok(true)', async () => {
-      const { assertStorageBufferCap } = await import('../light-buffer-layout');
+      const { assertStorageBufferCap } = await import('@forgeax/engine-render/internal');
       const result = assertStorageBufferCap(4);
       expect(result.ok).toBe(true);
       if (result.ok) {
@@ -6183,7 +6198,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('caps=8 (sufficient, above minimum) yields ok(true)', async () => {
-      const { assertStorageBufferCap } = await import('../light-buffer-layout');
+      const { assertStorageBufferCap } = await import('@forgeax/engine-render/internal');
       const result = assertStorageBufferCap(8);
       expect(result.ok).toBe(true);
       if (result.ok) {
@@ -6196,7 +6211,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   describe('RuntimeErrorCode union 12 -> 15 (D-4)', () => {
     it('HdrpCapsInsufficientError .code is recognized as RuntimeErrorCode literal', async () => {
-      const { HdrpCapsInsufficientError } = await import('../errors/render');
+      const { HdrpCapsInsufficientError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpCapsInsufficientError('maxStorageBuffersPerShaderStage', 2, 4);
       const code: string = err.code;
       // If hdrp-caps-insufficient is not in the RuntimeErrorCode union,
@@ -6206,14 +6221,14 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
     });
 
     it('HdrpLightBudgetExceededError .code is recognized as RuntimeErrorCode literal', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors/render');
+      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpLightBudgetExceededError(257, 256);
       const code: string = err.code;
       expect(code).toMatch(/^hdrp-/);
     });
 
     it('HdrpIndexListOverflowError .code is recognized as RuntimeErrorCode literal', async () => {
-      const { HdrpIndexListOverflowError } = await import('../errors/render');
+      const { HdrpIndexListOverflowError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpIndexListOverflowError(65537, 65536);
       const code: string = err.code;
       expect(code).toMatch(/^hdrp-/);
@@ -6368,7 +6383,7 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   describe('hdrp-index-list-overflow RuntimeError class shape (AC-24)', () => {
     it('HdrpIndexListOverflowError has the expected shape', async () => {
-      const { HdrpIndexListOverflowError } = await import('../errors/render');
+      const { HdrpIndexListOverflowError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpIndexListOverflowError(70000, 65536);
       expect(err.code).toBe('hdrp-index-list-overflow');
       expect(err.detail.actual).toBe(70000);
@@ -6386,13 +6401,13 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
 
   describe('URP light budget warn-once guardrail (AC-03)', () => {
     it('LIGHT_ARRAY_MAX_SLOTS is still 4 (URP first-slice cap)', async () => {
-      const { LIGHT_ARRAY_MAX_SLOTS } = await import('../light-buffer-layout');
+      const { LIGHT_ARRAY_MAX_SLOTS } = await import('@forgeax/engine-render/internal');
       expect(LIGHT_ARRAY_MAX_SLOTS).toBe(4);
     });
 
     it('POINT_LIGHT_STD430_BYTES and SPOT_LIGHT_STD430_BYTES still match URP specs', async () => {
       const { POINT_LIGHT_STD430_BYTES, SPOT_LIGHT_STD430_BYTES } = await import(
-        '../light-buffer-layout'
+        '@forgeax/engine-render/internal'
       );
       expect(POINT_LIGHT_STD430_BYTES).toBe(32);
       // feat-20260625-spot-light-shadow-mapping M2 / w8 (D-4): SpotLight grew
@@ -6406,33 +6421,33 @@ vi.mock('@forgeax/engine-rhi-wgpu', () => {
   // --- from hdrp-light-budget.test.ts ---
   describe('HdrpLightBudgetExceededError class shape (AC-07)', () => {
     it('has .code === hdrp-light-budget-exceeded', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors/render');
+      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.code).toBe('hdrp-light-budget-exceeded');
     });
 
     it('.detail carries { actual, budget } with correct values', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors/render');
+      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.detail.actual).toBe(257);
       expect(err.detail.budget).toBe(256);
     });
 
     it('.detail budget is 256 (the D-scope limit)', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors/render');
+      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpLightBudgetExceededError(300, 256);
       expect(err.detail.budget).toBe(256);
     });
 
     it('.expected describes the budget constraint', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors/render');
+      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.expected.length).toBeGreaterThan(0);
       expect(err.expected).toMatch(/256/);
     });
 
     it('.hint is a non-empty actionable string', async () => {
-      const { HdrpLightBudgetExceededError } = await import('../errors/render');
+      const { HdrpLightBudgetExceededError } = await import('@forgeax/engine-render/internal');
       const err = new HdrpLightBudgetExceededError(257, 256);
       expect(err.hint.length).toBeGreaterThan(0);
     });

@@ -40,7 +40,7 @@ phase G done
 
 phase B start
 node_modules/.bin/jscodeshift \
-  --parser=ts \
+  --parser=tsx \
   --extensions=ts,tsx,mts,cts,mjs,cjs,js,jsx \
   --fail-on-error \
   --ignore-pattern='**/dist/**' \

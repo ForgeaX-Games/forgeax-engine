@@ -249,7 +249,7 @@ describe('M4 HDRP point shadow smoke (dawn structural)', () => {
   });
 
   it("'HDRP point shadow smoke' -- hdrpPipeline.buildGraph imports addPointShadowPass (T-M4-1 wiring)", async () => {
-    const hdrpModule = await import('../hdrp-pipeline');
+    const hdrpModule = await import('@forgeax/engine-render/internal');
     expect(hdrpModule.hdrpPipeline).toBeDefined();
     expect(typeof hdrpModule.hdrpPipeline.buildGraph).toBe('function');
   });
@@ -549,10 +549,12 @@ describe('Round-2 F-3 / Issue 3: createRenderer e2e dawn (T-M5-1)', () => {
       // pattern). buildEngineShaderManifest produces the data: URL the
       // renderer's shaderManifestUrl needs.
       const { World } = await import('@forgeax/engine-ecs');
-      const componentsModule = await import('../components');
-      const { Camera, DirectionalLight, MeshFilter, MeshRenderer, PointLight, Transform } =
-        componentsModule;
-      const { PointLightShadow } = await import('../components/point-light-shadow');
+      const componentsModule = await import('@forgeax/engine-render/internal');
+      const sceneComponents = await import('@forgeax/engine-scene');
+      const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = componentsModule;
+      const { Transform } = sceneComponents;
+      const { PointLight } = componentsModule;
+      const { PointLightShadow } = await import('@forgeax/engine-render/internal');
       const { createRenderer } = await import('../index');
       const { HANDLE_CUBE } = await import('@forgeax/engine-assets-runtime');
       const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');

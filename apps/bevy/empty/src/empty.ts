@@ -1,9 +1,7 @@
 import { type World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
 import { quat } from '@forgeax/engine-math';
 
 /**

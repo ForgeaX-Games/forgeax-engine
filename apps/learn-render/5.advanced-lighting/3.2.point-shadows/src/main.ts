@@ -12,7 +12,13 @@ import { Update } from '@forgeax/engine-ecs';
 // 1. engine usage
 import { createApp } from '@forgeax/engine-app';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective, PointLight, PointLightShadow, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { Materials, PointLightShadow } from '@forgeax/engine-render';
+import { PointLight } from '@forgeax/engine-render';
+
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { addFirstPersonSystem } from '../../../../shared/src/learn-render-first-person';

@@ -17,17 +17,19 @@
 //   - sampleIblSpecular(N, V, roughness, F0, prefilterMap, prefilterSampler,
 //                       brdfLut, brdfLutSampler)
 
-#import forgeax_pbr::ibl_shared::{fresnelSchlickRoughness}
+#import forgeax_pbr::ibl_shared::{fresnelSchlickRoughness, inverseRotateEnvironment}
 
 // Sample pre-convolved irradiance from the irradiance cubemap.
 // Y is negated to compensate for WebGPU's top-left texture origin vs the
 // OpenGL convention used during equirect-to-cube render passes.
 fn sampleIblDiffuse(
   normal: vec3<f32>,
+  rotation: vec4<f32>,
   irradianceMap: texture_cube<f32>,
   irradianceSampler: sampler,
 ) -> vec3<f32> {
-  let dir = vec3<f32>(normal.x, -normal.y, normal.z);
+  let rotated = inverseRotateEnvironment(normal, rotation);
+  let dir = vec3<f32>(rotated.x, -rotated.y, rotated.z);
   return textureSample(irradianceMap, irradianceSampler, dir).rgb;
 }
 
@@ -37,6 +39,7 @@ fn sampleIblSpecular(
   view: vec3<f32>,
   roughness: f32,
   F0: vec3<f32>,
+  rotation: vec4<f32>,
   prefilterMap: texture_cube<f32>,
   prefilterSampler: sampler,
   brdfLut: texture_2d<f32>,
@@ -44,7 +47,8 @@ fn sampleIblSpecular(
 ) -> vec3<f32> {
   let NdotV = max(dot(normal, view), 0.001);
   let R = reflect(-view, normal);
-  let Rflip = vec3<f32>(R.x, -R.y, R.z);
+  let rotated = inverseRotateEnvironment(R, rotation);
+  let Rflip = vec3<f32>(rotated.x, -rotated.y, rotated.z);
   let mip = roughness * 4.0;
   let prefilteredColor = textureSampleLevel(prefilterMap, prefilterSampler, Rflip, mip).rgb;
   let envBRDF = textureSample(brdfLut, brdfLutSampler, vec2<f32>(NdotV, roughness)).rg;

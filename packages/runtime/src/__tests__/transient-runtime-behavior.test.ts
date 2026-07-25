@@ -22,13 +22,11 @@ import type { Asset } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { createQueryState, Entity, type EntityHandle, queryRun, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { SceneInstance } from '@forgeax/engine-render/internal';
+import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
 import type { Handle, LocalEntityId, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset } from '../collect-scene-asset';
-import { ChildOf } from '../components/child-of';
-import { Children } from '../components/children';
-import { SceneInstance } from '../components/scene-instance';
-import { Transform } from '../components/transform';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeRegistry(): AssetRegistry {

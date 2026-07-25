@@ -44,12 +44,9 @@
 // the LO §1.1 minimum semantic), so a single Camera entity is enough
 // to paint the swap-chain with `clearColor` every frame.
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  Engine,
-  EngineEnvironmentError,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera } from '@forgeax/engine-render';
+import { Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
 
 // 2. example-specific glue - LO 1.1 ends `glClearColor(0.2f, 0.3f, 0.3f,
 // 1.0f); glClear(GL_COLOR_BUFFER_BIT);` once per frame. In forgeax the

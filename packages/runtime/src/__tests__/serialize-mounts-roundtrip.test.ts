@@ -13,9 +13,9 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset, SceneInstanceMount } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { serializeSceneAssetToPack } from '../collect-scene-asset';
-import '../components';
+import '@forgeax/engine-render/internal';
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import { SceneInstance } from '../components/scene-instance';
+import { SceneInstance } from '@forgeax/engine-render/internal';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ═══════════════════════════════════════════════════════════════════════════════

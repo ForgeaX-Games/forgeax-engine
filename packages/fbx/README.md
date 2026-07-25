@@ -37,7 +37,8 @@ need it explicitly:
 
 ```ts
 import { fbxImporter } from '@forgeax/engine-fbx';
-import { importers } from '@forgeax/engine-import';
+import { ImporterRegistry } from '@forgeax/engine-import';
+const importers = new ImporterRegistry();
 importers.register(fbxImporter);
 ```
 

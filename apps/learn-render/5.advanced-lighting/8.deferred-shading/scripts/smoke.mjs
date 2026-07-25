@@ -149,16 +149,10 @@ const enginePkg = await import('@forgeax/engine-app');
 const { createApp } = enginePkg;
 
 const runtimePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  HDRP_PIPELINE_ID,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  Transform,
-} = runtimePkg;
+const { Materials } = await import('@forgeax/engine-render');
+const { HDRP_PIPELINE_ID } = await import('@forgeax/engine-render/internal');
+const { Camera, MeshFilter, MeshRenderer, perspective, PointLight } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');

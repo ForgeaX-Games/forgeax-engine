@@ -32,14 +32,8 @@
 import { World } from '@forgeax/engine-ecs';
 import { packMeshBin } from '@forgeax/engine-import';
 import { pick } from '@forgeax/engine-picking';
-import {
-  Camera,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Camera, Materials, MeshFilter, MeshRenderer, perspective } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import type { Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { meshIrToMeshAsset } from '../bridge.js';

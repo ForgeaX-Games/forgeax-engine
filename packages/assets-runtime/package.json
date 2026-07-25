@@ -36,6 +36,9 @@
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
+  "devDependencies": {
+    "@forgeax/engine-skinning": "workspace:*"
+  },
   "forgeax": {
     "metrics": {
       "bundle-size": {

@@ -30,14 +30,15 @@ import { fileURLToPath } from 'node:url';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, resolveComponent, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { LocalEntityId, MaterialAsset, SceneAsset, SceneEntity } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
+import { MeshRenderer, SceneInstance } from '@forgeax/engine-render/internal';
 // Importing the runtime components barrel populates the global component
 // table consulted by `World._buildSceneEntityComponentDatas` — without
 // these named bindings, Transform / MeshRenderer / ChildOf resolve to
 // undefined during instantiate. ChildOf + SceneInstance are used directly
 // below as values; Transform / MeshRenderer pin the side-effect import.
-import { ChildOf, MeshRenderer, SceneInstance, Transform } from '../components';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+import type { LocalEntityId, MaterialAsset, SceneAsset, SceneEntity } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function lid(n: number): LocalEntityId {

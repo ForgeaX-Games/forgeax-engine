@@ -64,18 +64,12 @@
 // explicit per-shader uniform descriptor lifecycle is OOS-9.
 
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  acquireCanvasContext,
-  createRenderer,
-  DirectionalLight,
-  EngineEnvironmentError,
-  MeshFilter,
-  MeshRenderer,
-  Name,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Name, Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset } from '@forgeax/engine-runtime';  // feat-20260527 M1: register<MaterialAsset>
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -145,14 +139,16 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // dual-path note: production build reads paramSchema from
   // pulse-material.wgsl.meta.json sidecar via vite-plugin-shader w10;
   // the hardcoded copy below is the smoke-only fallback).
-  shader.registerMaterialShader(PULSE_MATERIAL_SHADER_PATH, {
-    source: pulseShader.wgsl,
-    paramSchema: [
-      { name: 'baseColor', type: 'color' },
-      { name: 'metallic', type: 'f32' },
-      { name: 'roughness', type: 'f32' },
-    ],
-  });
+  if (!shader.lookupMaterialShader(PULSE_MATERIAL_SHADER_PATH).ok) {
+    shader.registerMaterialShader(PULSE_MATERIAL_SHADER_PATH, {
+      source: pulseShader.wgsl,
+      paramSchema: [
+        { name: 'baseColor', type: 'color' },
+        { name: 'metallic', type: 'f32' },
+        { name: 'roughness', type: 'f32' },
+      ],
+    });
+  }
 
   // Register the schema-driven MaterialAsset that references the user
   // shader. paramSchema names mirror the engine Material UBO slot names

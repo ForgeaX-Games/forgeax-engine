@@ -29,9 +29,9 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { appendInjection } from '@forgeax/engine-render/internal';
 import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { appendInjection } from '../pbr-pipeline';
 
 const repoRoot = (() => {
   // packages/runtime/src/__tests__/<this file>.ts -> repo root
@@ -72,7 +72,14 @@ describe('shadow_caster empty schema (M4 w21)', () => {
   });
 
   it('(d) shadow_caster register call site carries paramSchema: []', () => {
-    const createRendererPath = join(repoRoot, 'packages', 'runtime', 'src', 'createRenderer.ts');
+    const createRendererPath = join(
+      repoRoot,
+      'packages',
+      'render',
+      'src',
+      'renderer',
+      'renderer-factory.ts',
+    );
     const src = readFileSync(createRendererPath, 'utf8');
     const re =
       /registerMaterialShader\(\s*shadowCasterIdentifier\s*,\s*\{[^}]*paramSchema\s*:\s*\[\s*\][^}]*\}\s*\)/s;

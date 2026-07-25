@@ -172,17 +172,10 @@ if (!existsSync(WOOD_SRC_PATH) || !existsSync(CONTAINER2_SRC_PATH)) {
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  BLOOM_ENABLED,
-  Camera,
-  createRenderer,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  PointLight,
-  TONEMAP_REINHARD_EXTENDED,
-  Transform,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { Materials } = await import('@forgeax/engine-render');
+const { BLOOM_ENABLED, Camera, MeshFilter, MeshRenderer, PointLight, TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');

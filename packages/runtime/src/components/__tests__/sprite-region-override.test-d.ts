@@ -31,9 +31,8 @@
 // at the ECS storage / runtime boundary).
 
 import type { Component, ShapeOf } from '@forgeax/engine-ecs';
+import type { SpriteRegionOverride } from '@forgeax/engine-render/authoring';
 import { describe, expectTypeOf, it } from 'vitest';
-
-import type { SpriteRegionOverride } from '../sprite-region-override';
 
 describe('SpriteRegionOverride — Component token shape (AC-01 schema lock)', () => {
   it("name literal type is 'SpriteRegionOverride'", () => {

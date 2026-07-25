@@ -17,12 +17,8 @@
 
 import type { Component, EntityHandle, FieldView, World } from '@forgeax/engine-ecs';
 import { mat4, ray } from '@forgeax/engine-math';
-import {
-  Camera,
-  type CameraProjection,
-  cameraProjectionFromF32,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Camera, type CameraProjection, cameraProjectionFromF32 } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import { PickError } from './pick-errors';
 
 /**

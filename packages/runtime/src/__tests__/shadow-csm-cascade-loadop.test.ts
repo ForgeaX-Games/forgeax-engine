@@ -210,7 +210,8 @@ async function importComponents(): Promise<{
   HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
 }> {
   return {
-    ...(await import('../index')),
+    ...(await import('@forgeax/engine-render/internal')),
+    ...(await import('@forgeax/engine-scene')),
     ...(await import('@forgeax/engine-assets-runtime')),
   } as never;
 }

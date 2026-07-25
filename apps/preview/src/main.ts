@@ -11,6 +11,7 @@
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {
+  type App,
   type BootstrapContext,
   type BootstrapEntry,
   type CanvasAppError,
@@ -20,7 +21,7 @@ import {
   loadGame,
 } from '@forgeax/engine-app';
 import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
-import { createPreviewUiRun } from './ui-root';
+import { createPreviewUiRun, type PreviewUiRun, reportPreviewEngineFailure } from './ui-root';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('preview: missing <canvas id="app"> in index.html');
@@ -40,82 +41,88 @@ const app = await createApp(
   },
 );
 if (!app.ok) {
-  previewRun.cleanup();
-  reportCreateError(app.error);
-  throw new Error('preview: createApp failed');
+  const diagnostic = reportCreateError(app.error);
+  reportPreviewEngineFailure(previewRun, diagnostic);
+} else {
+  await startPreview(app.value, previewRun);
 }
 
-const assets = app.value.renderer.assets;
-assets.configurePackIndex('/pack-index.json');
+async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
+  const assets = app.renderer.assets;
+  assets.configurePackIndex('/pack-index.json');
 
-const ctx: BootstrapContext = {
-  assets,
-  app: app.value,
-  // M2 D-9: wire the pointer-lock gate setter. The game template calls
-  // setPointerLockAllowed(mode === 'fps') when switching modes; the
-  // preview host delegates to the input backend's setPointerLockAllowed.
-  // No lockProvider is injected — Web host goes W3C path.
-  setPointerLockAllowed: (allowed: boolean) => app.value.input?.setPointerLockAllowed?.(allowed),
-  uiRoot: previewRun.uiRoot,
-  registerCleanup: previewRun.registerCleanup,
-};
+  const ctx: BootstrapContext = {
+    assets,
+    app,
+    // M2 D-9: wire the pointer-lock gate setter. The game template calls
+    // setPointerLockAllowed(mode === 'fps') when switching modes; the
+    // preview host delegates to the input backend's setPointerLockAllowed.
+    // No lockProvider is injected — Web host goes W3C path.
+    setPointerLockAllowed: (allowed: boolean) => app.input?.setPointerLockAllowed?.(allowed),
+    uiRoot: previewRun.uiRoot,
+    registerCleanup: previewRun.registerCleanup,
+  };
 
-const slug = new URLSearchParams(window.location.search).get('game') ?? 'game-default';
+  const slug = new URLSearchParams(window.location.search).get('game') ?? 'game-default';
 
-const templateModules = import.meta.glob<{ bootstrap: () => unknown }>(
-  '../../../templates/*/main.ts',
-);
+  const templateModules = import.meta.glob<{ bootstrap: () => unknown }>(
+    '../../../templates/*/main.ts',
+  );
 
-const loaded = await loadGame(slug, (s) => {
-  const key = `../../../templates/${s}/main.ts`;
-  const loader = templateModules[key];
-  if (!loader) return Promise.reject(new Error(`Unknown template: ${s}`));
-  return loader();
-});
-if (!loaded.ok) {
-  previewRun.cleanup();
-  reportLoadError(loaded.error);
-  throw new Error('preview: loadGame failed');
-}
-
-const entry: BootstrapEntry = loaded.value;
-try {
-  await entry(app.value.world, ctx);
-} catch (e: unknown) {
-  previewRun.cleanup();
-  console.error('[preview] bootstrap rejected:', e);
-  throw e;
-}
-app.value.start();
-
-// Graceful GPU shutdown: dispose before reload. Without this, rapid reloads
-// leak GPU contexts -> STATUS_ACCESS_VIOLATION.
-let disposed = false;
-const gracefulDispose = (): void => {
-  if (disposed) return;
-  disposed = true;
-  app.value.stop();
-  app.value.renderer.dispose();
-  previewRun.cleanup();
-};
-window.addEventListener('message', (ev) => {
-  if ((ev.data as { type?: string } | null)?.type === 'VAG_PREVIEW_DISPOSE') {
-    gracefulDispose();
+  const loaded = await loadGame(slug, (s) => {
+    const key = `../../../templates/${s}/main.ts`;
+    const loader = templateModules[key];
+    if (!loader) return Promise.reject(new Error(`Unknown template: ${s}`));
+    return loader();
+  });
+  if (!loaded.ok) {
+    previewRun.cleanup();
+    reportLoadError(loaded.error);
+    throw new Error('preview: loadGame failed');
   }
-});
-window.addEventListener('pagehide', gracefulDispose);
-app.value.onError((err: { code?: string }) => {
-  if (err.code === 'device-lost') {
-    window.parent?.postMessage({ type: 'VAG_DEVICE_LOST' }, '*');
-  }
-});
 
-function reportCreateError(err: CanvasAppError): void {
+  const entry: BootstrapEntry = loaded.value;
+  try {
+    await entry(app.world, ctx);
+  } catch (e: unknown) {
+    previewRun.cleanup();
+    console.error('[preview] bootstrap rejected:', e);
+    throw e;
+  }
+  app.start();
+
+  // Graceful GPU shutdown: dispose before reload. Without this, rapid reloads
+  // leak GPU contexts -> STATUS_ACCESS_VIOLATION.
+  let disposed = false;
+  const gracefulDispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    app.stop();
+    app.renderer.dispose();
+    previewRun.cleanup();
+  };
+  window.addEventListener('message', (ev) => {
+    if ((ev.data as { type?: string } | null)?.type === 'VAG_PREVIEW_DISPOSE') {
+      gracefulDispose();
+    }
+  });
+  window.addEventListener('pagehide', gracefulDispose);
+  app.onError((err: { code?: string }) => {
+    if (err.code === 'device-lost') {
+      window.parent?.postMessage({ type: 'VAG_DEVICE_LOST' }, '*');
+    }
+  });
+}
+
+function reportCreateError(err: CanvasAppError): {
+  readonly code: string;
+  readonly detail: string;
+} {
   if (err instanceof EngineEnvironmentError) {
     const inner = err.detail.webgpuError;
     const code = inner !== undefined && 'code' in inner ? inner.code : '<none>';
     console.error(`[preview] EngineEnvironmentError: webgpu inner=${code}`);
-    return;
+    return { code: 'engine-environment', detail: `webgpu inner=${code}` };
   }
   if (isAppError(err)) {
     switch (err.code) {
@@ -126,7 +133,7 @@ function reportCreateError(err: CanvasAppError): void {
       case 'app-system-update-failed':
       case 'app-pointer-lock-failed':
         console.error(`[preview] AppError ${err.code}: ${err.hint}`);
-        return;
+        return { code: err.code, detail: err.hint };
     }
   } else {
     switch (err.code) {
@@ -150,9 +157,10 @@ function reportCreateError(err: CanvasAppError): void {
       case 'hierarchy-broken':
       case 'destroy-after-destroy':
         console.error(`[preview] RhiError ${err.code}: ${err.hint}`);
-        return;
+        return { code: err.code, detail: err.hint };
     }
   }
+  return { code: 'unknown', detail: String(err) };
 }
 
 function reportLoadError(err: unknown): void {

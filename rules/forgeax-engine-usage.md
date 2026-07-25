@@ -11,9 +11,14 @@
 |:--|:--|
 | 引导 app / 跑游戏循环 / 读输入快照 | `forgeax-engine-app` |
 | 定义组件 / 写查询与系统 / 关系 / 反射 | `forgeax-engine-ecs` |
+| 场景身份 / hierarchy / Transform propagation / `scenePlugin` | `@forgeax/engine-scene`（见 `packages/scene/README.md`） |
+| Skin / joint binding / skeletal errors | `@forgeax/engine-skinning`（见 `packages/skinning/README.md`） |
+| Animation graph / player / clip lookup / playback | `@forgeax/engine-animation`（见 `packages/animation/README.md`） |
+| Render vocabulary / frame stages / Renderer construction | `@forgeax/engine-render` + `forgeax-engine-app`（见 `packages/render/README.md`） |
 | 让东西可见：MeshFilter + MeshRenderer + Material + 灯光（含 `forgeax::sprite-lit` per-light forward） | `forgeax-engine-material` |
 | 写自定义 WGSL + registerMaterialShader | `forgeax-engine-shader` |
 | 加 pass / 后处理 / tonemap / bloom / fxaa / skybox | `forgeax-engine-render-pipeline` |
+| Assemble a renderer, diagnose backend selection, or recover a lost renderer | `forgeax-engine-app` + `packages/runtime/README.md` assembly owner |
 | Vec/Mat/Quat/Color / 从 mat4 读 pose / screenToRay | `forgeax-engine-math` |
 | sidecar (`*.meta.json` / `*.pack.json`) → 导入 → loadByGuid（glTF .glb/.gltf / FBX .fbx）| `forgeax-engine-assets` |
 | inspector (JSON-RPC WS) / kubectl 式 CLI 子命令 | `forgeax-engine-cli` |

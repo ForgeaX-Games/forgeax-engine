@@ -98,17 +98,10 @@ const mockCanvas = {
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const { createBoxGeometry, createSphereGeometry } = await import('@forgeax/engine-geometry');
-const {
-  Camera,
-  createRenderer,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  Transform,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { Transform } = await import('@forgeax/engine-scene');
+const { Camera, Materials, MeshFilter, MeshRenderer, perspective, PointLight } = await import('@forgeax/engine-render');
+const { SPRITE_PREMULTIPLIED_ALPHA_BLEND } = await import('@forgeax/engine-render/authoring');
 
 const world = new World();
 

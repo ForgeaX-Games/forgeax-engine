@@ -135,8 +135,8 @@ const mockCanvas = {
 const enginePkg = await import('@forgeax/engine-app');
 const { createApp } = enginePkg;
 
-const runtimePkg = await import('@forgeax/engine-runtime');
-const { Camera, DirectionalLight, Transform } = runtimePkg;
+const { Camera, DirectionalLight } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 
 const physicsPkg = await import('@forgeax/engine-physics');
 const { CharacterController, Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue, physicsPlugin } =

@@ -22,15 +22,14 @@
 // the existing 5-entry assertions in pipeline.unit.test.ts are migrated
 // holistically (one-cut, no v1/v2 dual fixture).
 
-import type { Buffer, RhiCaps, RhiDevice, Texture, TextureView } from '@forgeax/engine-rhi';
-import { describe, expect, it, vi } from 'vitest';
-import type { HdrpBuffers } from '../hdrp-buffers';
+import type { HdrpBuffers, RenderSystemRuntime } from '@forgeax/engine-render/internal';
 import {
   createHdrpBindGroupLayoutDescriptor,
   createHdrpUnifiedBindGroup,
   getOrCreateSsaoFallbackTexture,
-} from '../hdrp-buffers';
-import type { RenderSystemRuntime } from '../render-system';
+} from '@forgeax/engine-render/internal';
+import type { Buffer, RhiCaps, RhiDevice, Texture, TextureView } from '@forgeax/engine-rhi';
+import { describe, expect, it, vi } from 'vitest';
 
 const FRAGMENT_VISIBILITY = 0x2;
 

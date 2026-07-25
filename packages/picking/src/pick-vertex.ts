@@ -46,7 +46,8 @@
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { Entity, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import { mat4, ray, type Vec3Like, vec2, vec3 } from '@forgeax/engine-math';
-import { MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
+import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import {

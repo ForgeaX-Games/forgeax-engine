@@ -7,10 +7,8 @@ import { Update } from '@forgeax/engine-ecs';
 // 10 real names with real fn bodies -- zero closure, zero placeholder, zero
 // spread-over-fn (D-4).
 //
-// w10 (AC-16): the anim + input systems are resource-ified -- inserting the
-// AnimationAssetResolver / InputBackend resources then driving update() runs
-// the real behaviour; a missing dependency routes through the structured
-// ParamValidation 'invalid' path (D-2), never a raw throw.
+// w10 (AC-16): input is resource-ified. Animation owns World-local asset lookup
+// directly, so it has no app/runtime resolver resource seam.
 //
 // PLACEMENT NOTE (filesOutsideTargets): plan-tasks.json targets
 // packages/ecs/__tests__/builtin-systems.test.ts, but @forgeax/engine-ecs is
@@ -39,13 +37,8 @@ import {
 import '@forgeax/engine-input';
 import '@forgeax/engine-physics-rapier2d';
 import '@forgeax/engine-physics-rapier3d';
-import {
-  ADVANCE_ANIMATION_PLAYER_SYSTEM,
-  ANIMATION_ASSET_RESOLVER_KEY,
-  type AnimationAssetResolver,
-  registerAdvanceAnimationPlayer,
-  registerPropagateTransforms,
-} from '@forgeax/engine-runtime';
+import { ADVANCE_ANIMATION_PLAYER_SYSTEM, registerAdvanceAnimationPlayer } from '@forgeax/engine-animation';
+import { registerPropagateTransforms } from '@forgeax/engine-scene';
 import '@forgeax/engine-runtime';
 import { registerStatesPlugin } from '@forgeax/engine-state';
 import { defineComponent } from '@forgeax/engine-ecs';
@@ -106,9 +99,6 @@ describe('builtin-systems.test.ts', () => {
       // registry handle's fn (no {...handle, fn: closure} overlay).
       const registry = getRegisteredSystems();
       const world = new World();
-      world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, {
-        resolveAnimationClip: () => undefined,
-      } satisfies AnimationAssetResolver);
       registerAdvanceAnimationPlayer(world);
       const handle = registry.get(ADVANCE_ANIMATION_PLAYER_SYSTEM);
       const scheduled = world
@@ -120,22 +110,13 @@ describe('builtin-systems.test.ts', () => {
     });
   });
 
-  describe('w10 (AC-16): resource-ified anim/input behave unchanged', () => {
-    it('anim system runs when ANIMATION_ASSET_RESOLVER_KEY resource is present', () => {
+  describe('w10 (AC-16): input resource behaviour remains explicit', () => {
+    it('animation system runs without an app-provided resolver resource', () => {
       const world = new World();
-      let resolverCalls = 0;
-      const resolver: AnimationAssetResolver = {
-        resolveAnimationClip: () => {
-          resolverCalls += 1;
-          return undefined;
-        },
-      };
-      world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, resolver);
       registerAdvanceAnimationPlayer(world);
-      // No AnimationPlayer entities -> queryRun yields nothing, resolver not
-      // called, but the system runs (no throw) -- behaviour-unchanged baseline.
+      // No AnimationPlayer entities -> queryRun yields nothing, but the
+      // canonical animation system still runs without resolver plumbing.
       expect(world.update(1 / 60).ok).toBe(true);
-      expect(resolverCalls).toBe(0);
     });
 
     it('input system writes InputSnapshot when INPUT_BACKEND_KEY resource present', () => {
@@ -199,9 +180,6 @@ describe('builtin-systems.test.ts', () => {
   describe('SystemSet registration anchoring', () => {
     it('records every builtin system under its production SystemSet', () => {
       const world = new World();
-      world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, {
-        resolveAnimationClip: () => undefined,
-      } satisfies AnimationAssetResolver);
       world.insertResource(INPUT_BACKEND_KEY, {} as never);
 
       registerPropagateTransforms(world);
@@ -240,8 +218,8 @@ describe('builtin-systems.test.ts', () => {
       // This is a grepping gate: grep for patterns that indicate a cast
       // introduced by the fn-signature migration (world-first param).
       const srcFiles = [
-        'packages/runtime/src/systems/propagate-transforms.ts',
-        'packages/runtime/src/systems/advance-animation-player.ts',
+        'packages/scene/src/systems/propagate-transforms.ts',
+        'packages/animation/src/systems/advance-animation-player.ts',
         'packages/input/src/frame-start-scan-system.ts',
         'packages/state/src/register-plugin.ts',
       ];
@@ -265,38 +243,18 @@ describe('builtin-systems.test.ts', () => {
     });
   });
 
-    it('missing dependency routes through ParamValidation invalid (no raw throw)', () => {
-      // advanceAnimationPlayer declares resources:[ANIMATION_ASSET_RESOLVER_KEY].
-      // With the resource ABSENT, ParamValidation returns 'invalid' and the
-      // ErrorHandler (default Panic) throws -- the system fn body never runs
-      // its raw world.getResource throw. We assert the validation path fires
-      // (an error surfaces) rather than a silent skip.
-      const world = new World();
-      registerAdvanceAnimationPlayer(world);
-      let captured: unknown;
-      world.setErrorHandler((error) => {
-        captured = error;
-      });
-      world.update(1 / 60).unwrap();
-      expect(captured).toBeInstanceOf(Error);
-      expect((captured as Error).message).toContain(ANIMATION_ASSET_RESOLVER_KEY);
-    });
   });
 
-  // feat-20260618 M4 / w29 (AC-16): the two new resource keys must flow through
-  // their exported constants -- ANIMATION_ASSET_RESOLVER_KEY / INPUT_BACKEND_KEY.
-  // A consumer that hand-writes the bare string ('AnimationAssetResolver' /
-  // 'InputBackend') at an insertResource/getResource site re-opens the
+  // feat-20260618 M4 / w29 (AC-16): the input resource key must flow through
+  // its exported constant. A consumer that hand-writes the bare string
+  // ('InputBackend') at an insertResource/getResource site re-opens the
   // stringly-typed hole: a typo would compile and fail at runtime, defeating the
   // charter P3 "typo degrades to an import error" intent. This gate asserts each
   // bare string appears ONLY at its `export const ... = '...' as const`
   // definition site, nowhere else in source. dist/ skipped (O-1 dist-staleness).
   describe('w29 (AC-16): new resource keys are never used as bare strings', () => {
     const SKIP_DIRS = new Set(['dist', 'node_modules', '.turbo', 'coverage', '.git']);
-    const KEY_VALUES = [
-      { value: 'AnimationAssetResolver', defFile: 'packages/runtime/src/systems/advance-animation-player.ts' },
-      { value: 'InputBackend', defFile: 'packages/input/src/frame-start-scan-system.ts' },
-    ] as const;
+    const KEY_VALUES = [{ value: 'InputBackend', defFile: 'packages/input/src/frame-start-scan-system.ts' }] as const;
 
     function listSources(dir: string, out: string[]): void {
       let entries: string[];
@@ -349,8 +307,8 @@ describe('builtin-systems.test.ts', () => {
     }
 
     it('is falsifiable: a synthetic bare-string consumer is detected', () => {
-      const sample = stripComments(`world.insertResource('AnimationAssetResolver', r);`);
-      expect(/['"]AnimationAssetResolver['"]/.test(sample)).toBe(true);
+      const sample = stripComments(`world.insertResource('InputBackend', r);`);
+      expect(/['"]InputBackend['"]/.test(sample)).toBe(true);
     });
   });
 });

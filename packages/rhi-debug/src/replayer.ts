@@ -39,6 +39,7 @@ import { DebugError } from './errors';
 import { findEventIdxForDraw } from './inspect-core';
 import { readbackTexturePixels, resolveAttachmentSize } from './readback';
 import type { CreateShaderModuleFn } from './recorder';
+import { adaptReplayFormat } from './replay-format';
 import { computeTextureLayout } from './texel-layout';
 import type {
   HandleId,
@@ -982,11 +983,7 @@ async function replayEvent(
  * This adaptation is replay-layer-generic (every browser-captured tape replayed
  * offline needs it), which is why it lives here rather than in any per-demo script.
  */
-export function adaptReplayFormat(format: string | undefined): string | undefined {
-  if (format === 'bgra8unorm-srgb') return 'rgba8unorm-srgb';
-  if (format === 'bgra8unorm') return 'rgba8unorm';
-  return format;
-}
+export { adaptReplayFormat } from './replay-format';
 
 /**
  * True for the exact bgra8 formats `adaptReplayFormat` rewrites to rgba8 — i.e.

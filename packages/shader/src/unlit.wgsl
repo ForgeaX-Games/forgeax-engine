@@ -54,8 +54,7 @@
 
 struct Material {
   baseColor : vec4<f32>,
-  metallic  : f32,
-  roughness : f32,
+  alphaCutoff : f32,
   textureScalePadding : array<vec4<f32>, 3>,
   baseColorUvScale : vec2<f32>,
   metallicRoughnessUvScale : vec2<f32>,
@@ -105,5 +104,8 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let texSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, in.uv, material.baseColorUvScale);
+  if (material.alphaCutoff > 0.0 && material.baseColor.a * texSample.a < material.alphaCutoff) {
+    discard;
+  }
   return vec4<f32>(material.baseColor.rgb * texSample.rgb, material.baseColor.a * texSample.a);
 }

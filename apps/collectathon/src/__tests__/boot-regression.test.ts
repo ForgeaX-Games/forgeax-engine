@@ -17,7 +17,8 @@
 // the bound), this fails.
 
 import { createQueryState, Entity, queryRun, World } from '@forgeax/engine-ecs';
-import { Camera, Transform } from '@forgeax/engine-runtime';
+import { Camera } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import {
   addOnEnter,
   defineState,

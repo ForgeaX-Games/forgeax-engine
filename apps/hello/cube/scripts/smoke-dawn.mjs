@@ -171,15 +171,11 @@ const mockCanvas = {
 // installed so the engine sees navigator.gpu.
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
-const { Name } = enginePkg;
 const {
-  Camera,
   createRenderer,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
 } = enginePkg;
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Name, Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');

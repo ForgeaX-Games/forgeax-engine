@@ -11,35 +11,22 @@
 // itself fails. After w4 the variable schema accepts 6 slots and the frame
 // leaves all six weight columns intact.
 
+import { AnimationPlayer, advanceAnimationPlayer } from '@forgeax/engine-animation';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import type { AnimationClip } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { AnimationPlayer } from '../components/animation-player';
-import type { AnimationAssetResolver } from '../systems/advance-animation-player';
-import { advanceAnimationPlayer } from '../systems/advance-animation-player';
 
 function makeClip(duration: number): AnimationClip {
   return { kind: 'animation-clip', duration, channels: [] };
 }
 
-function makeResolver(clips: Map<number, AnimationClip>): AnimationAssetResolver {
-  return {
-    resolveAnimationClip(_world: World, handleRaw: number): AnimationClip | undefined {
-      return clips.get(handleRaw);
-    },
-  };
-}
-
 describe('AnimationPlayer — variable N-slot (M1 / w1)', () => {
   it('constructs and evaluates 6 concurrent slots without overflow / truncation', () => {
     const world = new World();
-    const clipMap = new Map<number, AnimationClip>();
-    for (let i = 1; i <= 6; i++) clipMap.set(i, makeClip(10));
-    const resolver = makeResolver(clipMap);
-
-    const clips = [1, 2, 3, 4, 5, 6].map((id) => toShared<'AnimationClip'>(id));
+    const clips = Array.from({ length: 6 }, () =>
+      world.allocSharedRef('AnimationClip', makeClip(10)),
+    );
     const e = world
       .spawn({
         component: AnimationPlayer,
@@ -52,7 +39,7 @@ describe('AnimationPlayer — variable N-slot (M1 / w1)', () => {
       })
       .unwrap() as EntityHandle;
 
-    expect(() => advanceAnimationPlayer(world, resolver, 0.5)).not.toThrow();
+    expect(() => advanceAnimationPlayer(world, 0.5)).not.toThrow();
 
     const ap = world.get(e, AnimationPlayer).unwrap() as unknown as {
       clips: Uint32Array;
@@ -71,6 +58,6 @@ describe('AnimationPlayer — variable N-slot (M1 / w1)', () => {
       expect.closeTo(0.6, 5),
     ]);
     // The 6th clip handle is a real slot, not clamped away.
-    expect(ap.clips[5]).toBe(toShared<'AnimationClip'>(6));
+    expect(ap.clips[5]).toBe(clips[5]);
   });
 });

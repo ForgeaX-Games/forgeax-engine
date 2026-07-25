@@ -44,13 +44,9 @@ import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createRenderer,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import { createRenderer } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';

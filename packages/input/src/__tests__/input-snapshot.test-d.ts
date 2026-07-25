@@ -35,6 +35,13 @@ describe('InputSnapshot type surface (AC-07)', () => {
     }>();
   });
 
+  it('mouse.position has shape { x: number; y: number }', () => {
+    const snap: InputSnapshot = createInputSnapshot();
+    expectTypeOf(snap.mouse.position).toEqualTypeOf<
+      { readonly x: number; readonly y: number } | undefined
+    >();
+  });
+
   it('mouse.pointerLocked returns boolean (required, alongside movementDelta)', () => {
     const snap: InputSnapshot = createInputSnapshot();
     expectTypeOf(snap.mouse.pointerLocked).toEqualTypeOf<boolean>();

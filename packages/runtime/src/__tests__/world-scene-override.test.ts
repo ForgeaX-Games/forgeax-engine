@@ -15,7 +15,8 @@
 //     with detail.{ comp, field, expectedType, actualType }.
 
 import { defineComponent, ok, World } from '@forgeax/engine-ecs';
-import { SceneInstance, Transform } from '@forgeax/engine-runtime';
+import { SceneInstance } from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
@@ -50,6 +51,8 @@ describe('AC-19 mount-time override apply (w20)', () => {
     if (!r.ok) throw new Error('instantiate failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
+    expect(inst.value.mapping).toBeInstanceOf(Uint32Array);
+    if (!(inst.value.mapping instanceof Uint32Array)) return;
     const member = inst.value.mapping[1] as unknown as number;
     // Read-back invariant
     const t = world.get(member as never, Transform);
@@ -79,6 +82,8 @@ describe('world.setSceneOverride (w20)', () => {
     if (!r.ok) throw new Error('instantiate failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
+    expect(inst.value.mapping).toBeInstanceOf(Uint32Array);
+    if (!(inst.value.mapping instanceof Uint32Array)) return;
     const member = inst.value.mapping[0] as unknown as number;
     const sr = world.setSceneOverride(r.value.root, member as never, Transform, 'pos', [99, 0, 0]);
     expect(sr.ok).toBe(true);

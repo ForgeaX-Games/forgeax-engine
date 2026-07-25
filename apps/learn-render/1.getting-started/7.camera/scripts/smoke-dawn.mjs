@@ -194,14 +194,10 @@ const { World } = ecsPkg;
 const inputPkg = await import('@forgeax/engine-input');
 const { INPUT_BACKEND_KEY, InputFrameStartScan, INPUT_SNAPSHOT_RESOURCE_KEY } = inputPkg;
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  createRenderer,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { Materials } = await import('@forgeax/engine-render');
+const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');

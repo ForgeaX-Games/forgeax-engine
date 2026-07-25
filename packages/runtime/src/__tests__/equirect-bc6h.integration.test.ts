@@ -23,9 +23,9 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { deriveRenderDataCubemap } from '@forgeax/engine-render/internal';
 import type { EquirectAsset } from '@forgeax/engine-types';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { deriveRenderDataCubemap } from '../render-data';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const gpu = globalThis.navigator?.gpu;

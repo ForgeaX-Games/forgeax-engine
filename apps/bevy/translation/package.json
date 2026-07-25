@@ -13,7 +13,11 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
-    "bevyExample": { "name": "translation", "category": "Transforms", "status": "implemented" },
+    "bevyExample": {
+      "name": "translation",
+      "category": "Transforms",
+      "status": "implemented"
+    },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-translation smoke",
     "metrics": {
       "bundle-size": {
@@ -43,7 +47,9 @@
     "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
-    "@forgeax/engine-runtime": "workspace:*"
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",

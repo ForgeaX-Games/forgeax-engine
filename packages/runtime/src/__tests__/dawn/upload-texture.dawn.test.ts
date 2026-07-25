@@ -29,12 +29,12 @@
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok } from '@forgeax/engine-rhi';
 import { rhi } from '@forgeax/engine-rhi-webgpu';
 import type { DecodedImage, EquirectAsset, TextureAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { GpuResourceStore } from '../../gpu-resource-store';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,

@@ -37,7 +37,12 @@ import { createApp } from '@forgeax/engine-app';
 import type { App } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, DirectionalLight, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
+
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { RenderQueue, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -119,10 +124,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 4.2 stencil-testing] renderer.shader is null');
     return;
   }
-  shader.registerMaterialShader(OUTLINE_SHADER_ID, {
-    source: outlineSolidShader.wgsl,
-    paramSchema: [{ name: 'baseColor', type: 'color' }],
-  });
+  if (!shader.lookupMaterialShader(OUTLINE_SHADER_ID).ok) {
+    shader.registerMaterialShader(OUTLINE_SHADER_ID, {
+      source: outlineSolidShader.wgsl,
+      paramSchema: [{ name: 'baseColor', type: 'color' }],
+    });
+  }
 
   // Wire the pack-index URL for GUID-based texture loading.
   assets.configurePackIndex(PACK_INDEX_URL);

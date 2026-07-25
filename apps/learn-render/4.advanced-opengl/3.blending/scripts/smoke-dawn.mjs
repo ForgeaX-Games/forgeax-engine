@@ -221,16 +221,10 @@ for (const p of texturePaths) {
 const { ok: okResult, World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-  setTransparentSortConfig,
-  TRANSPARENT_SORT_MODE_DISTANCE,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } = await import('@forgeax/engine-render/internal');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
   HANDLE_QUAD,
@@ -310,15 +304,17 @@ if (shader === null) {
   console.error('[smoke] FAIL - renderer.shader is null');
   process.exit(1);
 }
-shader.registerMaterialShader('learn-render::alpha-test', {
-  source: COMPOSED_ALPHA_TEST_WGSL,
-  paramSchema: [
-    { name: 'baseColor', type: 'color' },
-    { name: 'metallic', type: 'f32' },
-    { name: 'roughness', type: 'f32' },
-    { name: 'baseColorTexture', type: 'texture2d' },
-  ],
-});
+if (!shader.lookupMaterialShader('learn-render::alpha-test').ok) {
+  shader.registerMaterialShader('learn-render::alpha-test', {
+    source: COMPOSED_ALPHA_TEST_WGSL,
+    paramSchema: [
+      { name: 'baseColor', type: 'color' },
+      { name: 'metallic', type: 'f32' },
+      { name: 'roughness', type: 'f32' },
+      { name: 'baseColorTexture', type: 'texture2d' },
+    ],
+  });
+}
 
 // Register textures under their GUIDs.
 const METAL_GUID = '019e3969-1d47-760f-982e-7bad1ffd969c';

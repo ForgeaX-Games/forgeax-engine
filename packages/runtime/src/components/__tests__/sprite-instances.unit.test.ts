@@ -21,12 +21,13 @@
 // Instances).
 
 import { type Component, getRegisteredComponents, type ShapeOf, World } from '@forgeax/engine-ecs';
-import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
+  SpriteInstances,
+  type SpriteInstancesData,
   type SpriteInstancesData as SpriteInstancesDataFromBarrel,
   SpriteInstances as SpriteInstancesFromBarrel,
-} from '../../index';
-import { SpriteInstances, type SpriteInstancesData } from '../sprite-instances';
+} from '@forgeax/engine-render/authoring';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 describe('SpriteInstances — defineComponent registration (w3 a)', () => {
   it("getRegisteredComponents() carries an entry named 'SpriteInstances'", () => {

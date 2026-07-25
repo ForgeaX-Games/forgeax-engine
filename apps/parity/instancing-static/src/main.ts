@@ -32,7 +32,12 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Camera, createRenderer, DirectionalLight, EngineEnvironmentError, Instances, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { Instances } from '@forgeax/engine-render';
+
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const CANVAS_W = 1280;

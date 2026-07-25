@@ -16,6 +16,7 @@
 // serialize (payload + refs); w30 lands the loader; the round-trip goes green
 // once both halves exist (a round-trip test spans both impl seams by nature).
 
+import { defineAnimationGraph, serializeAnimationGraph } from '@forgeax/engine-animation';
 import {
   AssetRegistry,
   animationGraphLoader,
@@ -31,8 +32,6 @@ import type {
   LoadContext,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { defineAnimationGraph } from '../animation/define-animation-graph';
-import { serializeAnimationGraph } from '../animation/serialize-animation-graph';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeRegistry(): AssetRegistry {

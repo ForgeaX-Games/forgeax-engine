@@ -127,7 +127,8 @@ const mockCanvas = {
 
 // --- build the N-body World via the shared SSOT builder ---
 const { World } = await import('@forgeax/engine-ecs');
-const { createRenderer, propagateTransforms } = await import('@forgeax/engine-runtime');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { propagateTransforms } = await import('@forgeax/engine-scene');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { buildIterCombinationsWorld, stepInteract, stepIntegrate, bodySpread } = await import(

@@ -14,7 +14,11 @@
     "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
-    "bevyExample": { "name": "play_sound_effect", "category": "Audio", "status": "implemented" },
+    "bevyExample": {
+      "name": "play_sound_effect",
+      "category": "Audio",
+      "status": "implemented"
+    },
     "assets": {
       "roots": []
     },
@@ -52,7 +56,9 @@
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-physics": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-types": "workspace:*"
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-pack": "workspace:*",

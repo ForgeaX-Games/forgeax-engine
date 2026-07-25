@@ -8,7 +8,7 @@ Attach three components to an entity and the physics engine drives its position 
 
 ```ts
 import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue } from '@forgeax/engine-physics';
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 
 // Dynamic body: falls under gravity, responds to forces.
 world.spawn(

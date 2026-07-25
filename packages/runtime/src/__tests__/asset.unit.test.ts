@@ -73,6 +73,7 @@ import {
   walkMaterialPassesOverSharedRefs,
   wireDefaultLoaders,
 } from '@forgeax/engine-assets-runtime';
+import { audioLoader } from '@forgeax/engine-audio-webaudio';
 import { defineComponent, World } from '@forgeax/engine-ecs';
 import {
   createBoxGeometry,
@@ -80,6 +81,7 @@ import {
   meshFromInterleaved,
 } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { createEngineMetrics, GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok, ok as rhiOk } from '@forgeax/engine-rhi';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import type {
@@ -92,16 +94,14 @@ import type {
 import { AssetError, toShared, toUnique, unwrapHandle } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { deriveBuiltin } from '../../../pack/src/builtin';
-import { audioLoader } from '../audio-loader';
 import { createDevImportTransport, type ImportTransport } from '../dev-import-transport';
-import { createEngineMetrics } from '../engine-metrics';
-import { GpuResourceStore } from '../gpu-resource-store';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 vi.mock('@forgeax/engine-rhi-webgpu', async () => {
   spies.webgpuImportCount += 1;
   const actualRhi =
     await vi.importActual<typeof import('@forgeax/engine-rhi')>('@forgeax/engine-rhi');
+  spies.rhiErrorCtor = actualRhi.RhiError;
   const fakeAdapter = {
     features: new Set<string>(),
     limits: {} as Readonly<Record<string, number>>,
@@ -141,6 +141,15 @@ vi.mock('@forgeax/engine-rhi-webgpu', async () => {
       },
     },
     createShaderModule: async () => actualRhi.ok({ __brand: 'ShaderModule' } as unknown as object),
+    translateErrorEventToRhiError: () =>
+      actualRhi.err(
+        new actualRhi.RhiError({
+          code: 'webgpu-runtime-error',
+          expected: 'GPU error event translates to RhiError',
+          hint: 'unit-test mock event translation',
+        }),
+      ),
+    _internal_getRawDevice: () => undefined,
   };
 });
 vi.mock('@forgeax/engine-rhi-wgpu', async () => {
@@ -183,6 +192,16 @@ vi.mock('@forgeax/engine-rhi-wgpu', async () => {
       }
       return undefined;
     },
+    createShaderModule: async () => actualRhi.ok({ __brand: 'ShaderModule' } as unknown as object),
+    translateErrorEventToRhiError: () =>
+      actualRhi.err(
+        new actualRhi.RhiError({
+          code: 'webgpu-runtime-error',
+          expected: 'GPU error event translates to RhiError',
+          hint: 'unit-test mock event translation',
+        }),
+      ),
+    _internal_getRawDevice: () => undefined,
   };
 });
 const spies = vi.hoisted(() => ({
@@ -196,6 +215,7 @@ const spies = vi.hoisted(() => ({
     | 'reject-adapter-null',
   rhiWgpuEnsureReadyShould: 'success' as 'success' | 'reject-load-failed',
   rhiWgpuRequestAdapterShould: 'success' as 'success' | 'reject-rhi-not-available',
+  rhiErrorCtor: undefined as undefined | (new (...args: never[]) => Error),
   reset(): void {
     this.webgpuImportCount = 0;
     this.wgpuImportCount = 0;
@@ -2213,14 +2233,17 @@ function makeStubGPU(): unknown {
   // ─── Tests ──────────────────────────────────────────────────────────────────
 
   describe('createRenderer M3 auto-select facade (D-P4)', () => {
-    // Case (1): navigator.gpu present → rhi-webgpu dynamic import path.
-    it('case 1: navigator.gpu present → dynamic-imports @forgeax/engine-rhi-webgpu', async () => {
+    // Case (1): navigator.gpu present → statically linked rhi-webgpu path.
+    it('case 1: navigator.gpu present → uses @forgeax/engine-rhi-webgpu', async () => {
       vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeStubGPU() });
       const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'context' });
+      vi.resetModules();
       spies.webgpuImportCount = 0;
       spies.wgpuImportCount = 0;
 
-      const { createRenderer } = (await import('../createRenderer')) as {
+      const { createRenderer } = (await import(
+        '../../../render/src/renderer/renderer-factory'
+      )) as {
         createRenderer: (
           canvas: unknown,
           opts?: { shaderManifestUrl?: string | undefined },
@@ -2230,7 +2253,11 @@ function makeStubGPU(): unknown {
       const renderer = await createRenderer(canvas, {}, { shaderManifestUrl: undefined });
 
       expect(renderer.backend).toBe('webgpu');
-      expect(spies.webgpuImportCount).toBeGreaterThanOrEqual(1);
+      const factorySource = readFileSync(
+        fileURLToPath(new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url)),
+        'utf8',
+      );
+      expect(factorySource).toContain("from '@forgeax/engine-rhi-webgpu'");
       expect(spies.wgpuImportCount).toBe(0);
       // AC-11: wgpu-wasm wasm-loader was never invoked.
       expect(spies.ensureReadyCount).toBe(0);
@@ -2240,9 +2267,12 @@ function makeStubGPU(): unknown {
     it('case 2: navigator.gpu absent → dynamic-imports @forgeax/engine-rhi-wgpu + awaits ensureReady()', async () => {
       vi.stubGlobal('navigator', { ...baseNavigator });
       const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'context' });
+      vi.resetModules();
       const before = spies.ensureReadyCount;
 
-      const { createRenderer } = (await import('../createRenderer')) as {
+      const { createRenderer } = (await import(
+        '../../../render/src/renderer/renderer-factory'
+      )) as {
         createRenderer: (
           canvas: unknown,
           opts?: { shaderManifestUrl?: string | undefined },
@@ -2283,7 +2313,9 @@ function makeStubGPU(): unknown {
         },
       };
 
-      const { createRenderer: createRendererWithOpts } = (await import('../createRenderer')) as {
+      const { createRenderer: createRendererWithOpts } = (await import(
+        '../../../render/src/renderer/renderer-factory'
+      )) as {
         createRenderer: (
           canvas: unknown,
           opts?: { rhi?: unknown; shaderManifestUrl?: string | undefined },
@@ -2312,8 +2344,10 @@ function makeStubGPU(): unknown {
       const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'null' });
       spies.rhiWgpuEnsureReadyShould = 'reject-load-failed';
 
-      const { createRenderer } = await import('../createRenderer');
-      const { EngineEnvironmentError } = await import('../errors/environment');
+      const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
+      const { EngineEnvironmentError } = await import(
+        '../../../render/src/renderer/environment-error'
+      );
 
       await expect(createRenderer(canvas)).rejects.toBeInstanceOf(EngineEnvironmentError);
     });
@@ -2356,7 +2390,9 @@ function makeStubGPU(): unknown {
         },
       };
 
-      const { createRenderer: case4bCreateRenderer } = (await import('../createRenderer')) as {
+      const { createRenderer: case4bCreateRenderer } = (await import(
+        '../../../render/src/renderer/renderer-factory'
+      )) as {
         createRenderer: (
           canvas: unknown,
           opts?: { rhi?: unknown; shaderManifestUrl?: string | undefined },
@@ -2411,7 +2447,9 @@ function makeStubGPU(): unknown {
           });
         },
       };
-      const { createRenderer: case4cCreateRenderer } = (await import('../createRenderer')) as {
+      const { createRenderer: case4cCreateRenderer } = (await import(
+        '../../../render/src/renderer/renderer-factory'
+      )) as {
         createRenderer: (
           canvas: unknown,
           opts?: { rhi?: unknown; shaderManifestUrl?: string | undefined },
@@ -2485,7 +2523,7 @@ function makeStubGPU(): unknown {
           });
         },
       };
-      const { createRenderer } = await import('../createRenderer');
+      const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
       const renderer = await createRenderer(
         canvas,
         {
@@ -2515,7 +2553,9 @@ function makeStubGPU(): unknown {
         return originalGetContext(kind);
       }) as typeof canvas.getContext;
 
-      const { createRenderer: case7CreateRenderer } = (await import('../createRenderer')) as {
+      const { createRenderer: case7CreateRenderer } = (await import(
+        '../../../render/src/renderer/renderer-factory'
+      )) as {
         createRenderer: (
           canvas: unknown,
           opts?: { shaderManifestUrl?: string | undefined },
@@ -2539,8 +2579,10 @@ function makeStubGPU(): unknown {
     it('case 8: acquireCanvasContext fails → EngineEnvironmentError.detail has RhiError', async () => {
       vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeStubGPU() });
       const canvas = makeMockCanvas({ webgpu: 'null', webgl2: 'null' }); // canvas.getContext('webgpu') returns null
-      const { createRenderer } = await import('../createRenderer');
-      const { EngineEnvironmentError } = await import('../errors/environment');
+      const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
+      const { EngineEnvironmentError } = await import(
+        '../../../render/src/renderer/environment-error'
+      );
 
       try {
         await createRenderer(canvas);
@@ -2573,8 +2615,10 @@ function makeStubGPU(): unknown {
       spies.rhiWgpuEnsureReadyShould = 'reject-load-failed';
       const canvas = makeMockCanvas({ webgpu: 'context', webgl2: 'null' });
 
-      const { createRenderer } = await import('../createRenderer');
-      const { EngineEnvironmentError } = await import('../errors/environment');
+      const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
+      const { EngineEnvironmentError } = await import(
+        '../../../render/src/renderer/environment-error'
+      );
 
       await expect(createRenderer(canvas)).rejects.toBeInstanceOf(EngineEnvironmentError);
 
@@ -2622,7 +2666,7 @@ function makeStubGPU(): unknown {
           });
         },
       };
-      const { createRenderer } = await import('../createRenderer');
+      const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
       const renderer = await createRenderer(
         canvas,
         {
@@ -3623,11 +3667,11 @@ function makeStubGPU(): unknown {
   // preserve.
 
   const createRendererSrc = readFileSync(
-    fileURLToPath(new URL('../createRenderer.ts', import.meta.url)),
+    fileURLToPath(new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url)),
     'utf-8',
   );
   const rendererTypeSrc = readFileSync(
-    fileURLToPath(new URL('../renderer.ts', import.meta.url)),
+    fileURLToPath(new URL('../../../render/src/renderer.ts', import.meta.url)),
     'utf-8',
   );
   // feat-20260705-runtime-tier2-decomposition M1 / w7 (D-4): the load-by-guid +
@@ -3647,7 +3691,7 @@ function makeStubGPU(): unknown {
       // The loaders are now self-contained: AssetRegistry internally builds its
       // own LoaderRegistry via createDefaultLoaderRegistry() (M3 w9).
       expect(createRendererSrc).toMatch(
-        /new AssetRegistry\(\s*shaderRegistry,\s*internals\.importTransport\b/,
+        /createAssetRegistry\(\s*shaderRegistry,\s*internals\.importTransport\b/,
       );
       // The injection arrives through a dedicated non-RendererOptions internal
       // parameter named `importTransport` on createRenderer.
@@ -7079,7 +7123,7 @@ function makeStubGPU(): unknown {
 
 {
   // --- from verify-revisions.test.ts ---
-  const ENGINE = '../createRenderer';
+  const ENGINE = new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href;
 
   // ─── Mock fixtures ──────────────────────────────────────────────────────────
 
@@ -7172,8 +7216,6 @@ function makeStubGPU(): unknown {
 
   describe('fix-f1 — EngineEnvironmentError.detail.webgpuError preserves RhiError', () => {
     it('all WebGPU channels fail → detail.webgpuError is a RhiError with .code', async () => {
-      const { RhiError } = await import('@forgeax/engine-rhi');
-
       // With the global vi.mock for rhi-webgpu, the mock factory controls
       // adapter behavior. Force adapter rejection to get the right error code.
       spies.rhiWebgpuRequestAdapterShould = 'reject-adapter-null';
@@ -7186,8 +7228,12 @@ function makeStubGPU(): unknown {
       vi.stubGlobal('navigator', { ...baseNavigator, gpu: mockGpu });
       const canvas = makeMockCanvas({ webgl2: 'null' });
 
-      const { createRenderer } = await import('../createRenderer');
-      const { EngineEnvironmentError } = await import('../errors/environment');
+      const { createRenderer } = await import(
+        new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url).href
+      );
+      const { EngineEnvironmentError } = await import(
+        new URL('../../../render/src/renderer/environment-error.ts', import.meta.url).href
+      );
 
       let caught: unknown;
       try {
@@ -7198,8 +7244,9 @@ function makeStubGPU(): unknown {
       expect(caught).toBeInstanceOf(EngineEnvironmentError);
       const err = caught as InstanceType<typeof EngineEnvironmentError>;
       // F1 acceptance: webgpuError is a RhiError instance, AI consumers read .code via property access.
-      expect(err.detail.webgpuError).toBeInstanceOf(RhiError);
-      const rhiErr = err.detail.webgpuError as InstanceType<typeof RhiError>;
+      expect(spies.rhiErrorCtor).toBeDefined();
+      expect(err.detail.webgpuError).toBeInstanceOf(spies.rhiErrorCtor);
+      const rhiErr = err.detail.webgpuError as { code: string; expected: string; hint: string };
       expect(rhiErr.code).toBe('adapter-unavailable');
       expect(typeof rhiErr.expected).toBe('string');
       expect(rhiErr.expected.length).toBeGreaterThan(0);
@@ -7208,7 +7255,9 @@ function makeStubGPU(): unknown {
     });
 
     it('EngineEnvironmentError.detail is always present (even when webgpuError is undefined)', async () => {
-      const { EngineEnvironmentError } = await import('../errors/environment');
+      const { EngineEnvironmentError } = await import(
+        new URL('../../../render/src/renderer/environment-error.ts', import.meta.url).href
+      );
       const e = new EngineEnvironmentError('test reason');
       expect(e.detail).toBeDefined();
       expect(e.detail.webgpuError).toBeUndefined();
@@ -7273,7 +7322,7 @@ function makeStubGPU(): unknown {
 
     it('RhiErrorListenerRegistry late-attach replay: an add after fire immediately receives the last error', async () => {
       const { RhiError } = await import('@forgeax/engine-rhi');
-      const { RhiErrorListenerRegistry } = await import('../renderer');
+      const { RhiErrorListenerRegistry } = await import('@forgeax/engine-render/internal');
 
       const registry = new RhiErrorListenerRegistry();
       const fakeError = new RhiError({
@@ -7303,7 +7352,7 @@ function makeStubGPU(): unknown {
 
     it('RhiErrorListenerRegistry.clear detaches all listeners', async () => {
       const { RhiError } = await import('@forgeax/engine-rhi');
-      const { RhiErrorListenerRegistry } = await import('../renderer');
+      const { RhiErrorListenerRegistry } = await import('@forgeax/engine-render/internal');
       const registry = new RhiErrorListenerRegistry();
       let fired = 0;
       registry.add(() => {
@@ -7371,7 +7420,7 @@ function makeStubGPU(): unknown {
     });
 
     it('LostListenerRegistry.clear detaches all listeners', async () => {
-      const { LostListenerRegistry } = await import('../renderer');
+      const { LostListenerRegistry } = await import('@forgeax/engine-render/internal');
       const registry = new LostListenerRegistry();
       let fired = 0;
       registry.add(() => {

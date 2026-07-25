@@ -34,9 +34,9 @@ import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
 import type { Mat4, Vec3 } from '@forgeax/engine-math';
 import { mat4, vec3 } from '@forgeax/engine-math';
+import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
+import { Skin } from '@forgeax/engine-skinning';
 import { describe, expect, it } from 'vitest';
-import { ChildOf, Skin, Transform } from '../components';
-import { propagateTransforms } from '../systems/propagate-transforms';
 
 // ── helpers ──────────────────────────────────────────────────────────────
 

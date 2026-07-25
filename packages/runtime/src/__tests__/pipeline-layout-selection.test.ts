@@ -23,10 +23,12 @@
 // pipelineState carries no `hdrpPbrPipelineLayout` field yet. Test imports
 // will fail until w36 lands the boot-time build + w37 lands the selector.
 
+import {
+  resolveMaterialShaderVariantSet,
+  selectPipelineLayoutForVariant,
+} from '@forgeax/engine-render/internal';
 import type { PipelineLayout } from '@forgeax/engine-rhi';
 import { describe, expect, it } from 'vitest';
-
-import { selectPipelineLayoutForVariant } from '../createRenderer';
 
 // Sentinel handles -- structurally `unknown` opaque tokens.
 const URP_LAYOUT = { __brand: 'urp' } as unknown as PipelineLayout;
@@ -173,6 +175,47 @@ describe('selectPipelineLayoutForVariant -- skin LayoutKind routing (bug-2026061
     };
     expect(selectPipelineLayoutForVariant(state, undefined)).toBe(URP_LAYOUT);
     expect(selectPipelineLayoutForVariant(state, '')).toBe(HDRP_LAYOUT);
+  });
+});
+
+describe('resolveMaterialShaderVariantSet -- backend capability routing', () => {
+  const pbrVariants = [
+    { defines: { CLUSTER_FORWARD_AVAILABLE: false, STORAGE_BUFFER_AVAILABLE: false } },
+    { defines: { CLUSTER_FORWARD_AVAILABLE: false, STORAGE_BUFFER_AVAILABLE: true } },
+    { defines: { CLUSTER_FORWARD_AVAILABLE: true, STORAGE_BUFFER_AVAILABLE: true } },
+  ];
+
+  it('rewrites the storage axis for the WebGL2 fallback', () => {
+    expect(
+      resolveMaterialShaderVariantSet(
+        'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+        pbrVariants,
+        'wgpu-webgl2',
+        false,
+      ),
+    ).toBe('CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=false');
+  });
+
+  it('preserves the requested native variant when the backend supports storage buffers', () => {
+    expect(
+      resolveMaterialShaderVariantSet(
+        'CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true',
+        pbrVariants,
+        'webgpu',
+        true,
+      ),
+    ).toBe('CLUSTER_FORWARD_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true');
+  });
+
+  it('does not rewrite shaders without capability axes', () => {
+    expect(
+      resolveMaterialShaderVariantSet(
+        'MY_FEATURE=true',
+        [{ defines: { MY_FEATURE: true } }],
+        'wgpu-webgl2',
+        false,
+      ),
+    ).toBe('MY_FEATURE=true');
   });
 });
 

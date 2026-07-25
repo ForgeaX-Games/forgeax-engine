@@ -15,10 +15,16 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import type { Renderer } from '@forgeax/engine-render/internal';
+import {
+  Camera,
+  DirectionalLight,
+  MeshFilter,
+  MeshRenderer,
+} from '@forgeax/engine-render/internal';
 import { rhi } from '@forgeax/engine-rhi-null';
+import { Transform } from '@forgeax/engine-scene';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Camera, DirectionalLight, MeshFilter, MeshRenderer, Transform } from '../components';
-import type { Renderer } from '../renderer';
 
 const ENGINE = '../createRenderer';
 

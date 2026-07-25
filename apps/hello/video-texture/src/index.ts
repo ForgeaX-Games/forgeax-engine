@@ -30,7 +30,12 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { VideoPlayer, VIDEO_ELEMENT_PROVIDER_KEY } from '@forgeax/engine-graphics-extras';
 import type { VideoElementProvider } from '@forgeax/engine-graphics-extras';
-import { Camera, createRenderer, DirectionalLight, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createRenderer } from '@forgeax/engine-runtime';
+
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 // GUIDs: stable per-run (not persisted across builds).

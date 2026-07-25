@@ -10,8 +10,8 @@
 //
 // AC-03 anchor: kernel length 64 + distribution properties.
 
+import { generateSsaoKernel, generateSsaoNoise } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import { generateSsaoKernel, generateSsaoNoise } from '../ssao-data';
 
 function readFloat(v: Float32Array, idx: number): number {
   const val = v[idx];

@@ -7,12 +7,11 @@
 //
 // feat-20260702-postprocess-camera-depth-read M1 / w2.
 
-import { describe, expectTypeOf, it } from 'vitest';
-
 import type {
   PostProcessReadEntry,
   PostProcessReadSampleType,
-} from '../fullscreen-post-process-pass';
+} from '@forgeax/engine-render/internal';
+import { describe, expectTypeOf, it } from 'vitest';
 
 describe('w2 PostProcessReadSampleType narrowing at register call site', () => {
   it('PostProcessReadSampleType = "depth" is a singleton closed union', () => {

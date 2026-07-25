@@ -37,6 +37,16 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EcsErrorCode, World } from '@forgeax/engine-ecs';
+import { SpriteInstances } from '@forgeax/engine-render/authoring';
+import {
+  Camera,
+  DirectionalLight,
+  extractFrame,
+  Instances,
+  MeshFilter,
+  MeshRenderer,
+} from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type {
   Handle,
@@ -45,16 +55,6 @@ import type {
   MeshAsset,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import {
-  Camera,
-  DirectionalLight,
-  Instances,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '../components';
-import { SpriteInstances } from '../components/sprite-instances';
-import { extractFrame } from '../render-system-extract';
 
 interface CollectedError {
   readonly code: EcsErrorCode;

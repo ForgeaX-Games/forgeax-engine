@@ -16,7 +16,7 @@
 // (component.ts:315-333) and admits no opaque/object field type, so an
 // HTMLVideoElement reference cannot live inside a component. A World Resource
 // is the typed singleton channel for host-owned services — the same shape used
-// by AnimationAssetResolver / TransparentSortConfig (research Finding 5,
+// by animation-domain lookups / TransparentSortConfig (research Finding 5,
 // plan-strategy D-1; plan-decisions F-3 correction: this uses the REAL World
 // Resource API insertResource/getResource, not audio's direct-parameter
 // injection).
@@ -33,7 +33,7 @@ import type { Handle } from '@forgeax/engine-types';
  *
  * Consumers import this constant rather than the bare string so a typo
  * degrades to an import error rather than a silent missing-resource at runtime
- * (charter P3). Naming mirrors `ANIMATION_ASSET_RESOLVER_KEY` /
+ * (charter P3). Naming mirrors the animation-domain lookup boundary /
  * `TRANSPARENT_SORT_CONFIG_KEY`.
  *
  * @example Host registers its provider once per World:

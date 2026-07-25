@@ -168,13 +168,10 @@ const mockCanvas = {
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const {
-  Camera,
   createRenderer,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
 } = enginePkg;
+const { Camera, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
 let MANIFEST_URL;

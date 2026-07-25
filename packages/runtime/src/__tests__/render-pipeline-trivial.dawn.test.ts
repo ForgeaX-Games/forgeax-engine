@@ -16,13 +16,17 @@
 
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import type {
+  RenderPipeline,
+  RenderPipelineContext,
+  RenderPipelineData,
+} from '@forgeax/engine-render/internal';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
 import { RenderGraph } from '@forgeax/engine-render-graph';
+import { Transform } from '@forgeax/engine-scene';
 import type { RenderPipelineAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
 import { createRenderer } from '../index';
-import type { RenderPipeline } from '../render-pipeline';
-import type { RenderPipelineContext, RenderPipelineData } from '../render-pipeline-context';
 
 const WIDTH = 256;
 const HEIGHT = 256;

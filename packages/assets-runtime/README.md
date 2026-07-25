@@ -34,7 +34,8 @@ the task is "get an asset into the World".
 
 ```ts
 import { AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
+import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 
 // A builtin mesh handle needs no registration ceremony:
 world.spawn(

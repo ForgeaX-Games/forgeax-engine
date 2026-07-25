@@ -102,22 +102,23 @@ const mockCanvas = {
 
 let runtime;
 let ecs;
+let render;
+let authoring;
 try {
   runtime = await import('@forgeax/engine-runtime');
   ecs = await import('@forgeax/engine-ecs');
+  render = await import('@forgeax/engine-render');
+  authoring = await import('@forgeax/engine-render/authoring');
 } catch (err) {
   await deferred(`engine-runtime import failed: ${err instanceof Error ? err.message : String(err)}`);
 }
 
 const {
   Camera,
-  ChildOf,
-  Transform,
-  TileLayer,
-  Tilemap,
-  createRenderer,
-  markTileLayerDirty,
-} = runtime;
+} = render;
+const { TileLayer, Tilemap, markTileLayerDirty } = authoring;
+const { createRenderer } = runtime;
+const { ChildOf, Transform } = await import('@forgeax/engine-scene');
 const { World } = ecs;
 
 const here = dirname(fileURLToPath(import.meta.url));

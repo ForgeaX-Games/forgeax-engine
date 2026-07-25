@@ -11,6 +11,7 @@
 // yet escalated, so a new info diagnostic still blocks the merge.
 
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,7 +20,14 @@ import { fileURLToPath } from 'node:url';
 // directly in its own job; this wrapper is only invoked from primary-pnpm
 // (and `pnpm run lint` locally), where biome is in devDependencies.
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const biomeBin = join(repoRoot, 'node_modules', '.bin', 'biome');
+// `pnpm install --ignore-scripts` can leave root .bin shims absent on a
+// persistent self-hosted runner even though the package itself is present.
+// Resolve the package entrypoint as a deterministic fallback so lint reports
+// real diagnostics instead of an opaque spawn ENOENT.
+const shimBin = join(repoRoot, 'node_modules', '.bin', 'biome');
+const biomeBin = existsSync(shimBin)
+  ? shimBin
+  : join(repoRoot, 'node_modules', '@biomejs', 'biome', 'bin', 'biome');
 
 const result = spawnSync(biomeBin, ['ci', '.', '--reporter=summary'], {
   stdio: ['inherit', 'pipe', 'inherit'],

@@ -23,9 +23,9 @@ import {
   cameraProjectionFromF32,
   MeshFilter,
   MeshRenderer,
-  propagateTransforms,
-  Transform,
-} from '@forgeax/engine-runtime';
+} from '@forgeax/engine-render';
+import { propagateTransforms, Transform } from '@forgeax/engine-scene';
+
 import type { Handle, MaterialAsset, MeshAsset, VertexAttributeMap } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';

@@ -12,7 +12,11 @@ let sd,oa=globalThis.navigator.gpu.requestAdapter.bind(globalThis.navigator.gpu)
 globalThis.navigator.gpu.requestAdapter=async o=>{const a=await oa(o);if(a===null)return a;const od=a.requestDevice.bind(a);a.requestDevice=async d=>{const dv=await od(d);sd||=dv;return dv};return a};
 let rt;const mc={width:W,height:H,getContext(k){if(k!=='webgpu')return null;return{configure(d){rt||=d.device.createTexture({size:{width:W,height:H},format:d.format??'rgba8unorm',usage:0x10|0x01,viewFormats:['rgba8unorm-srgb']})},unconfigure(){},getCurrentTexture(){if(!rt){if(!sd)throw new Error('no device');rt=sd.createTexture({size:{width:W,height:H},format:'rgba8unorm',usage:0x10|0x01,viewFormats:['rgba8unorm-srgb']})}return rt}}},addEventListener(){},removeEventListener(){}};
 const{World}=await import('@forgeax/engine-ecs');const{createBoxGeometry,createSphereGeometry}=await import('@forgeax/engine-geometry');
-const{Camera,createRenderer,DirectionalLight,Materials,MeshFilter,MeshRenderer,perspective,Transform}=await import('@forgeax/engine-runtime');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { Materials } = await import('@forgeax/engine-render');
+const { perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const w=new World();const here=dirname(fileURLToPath(import.meta.url));
 const MU=`data:application/json,${encodeURIComponent(readFileSync(resolve(here,'..','dist','shaders','manifest.json'),'utf8'))}`;
 let r;try{r=await createRenderer(mc,{},{shaderManifestUrl:MU})}catch(e){console.error(`[smoke] FAIL renderer: ${e.message}`);process.exit(1)}finally{globalThis.navigator.gpu.requestAdapter=oa}

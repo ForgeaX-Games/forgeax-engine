@@ -23,11 +23,11 @@
 // silently no-ops (charter P3) and ensuring the registry survives a real
 // renderer.draw cycle.
 
+import type { RenderPipelineContext } from '@forgeax/engine-render/internal';
+import { addFullscreenPass } from '@forgeax/engine-render/internal';
 import { RenderGraph } from '@forgeax/engine-render-graph';
 import { describe, expect, it } from 'vitest';
 import { createRenderer } from '../createRenderer';
-import { addFullscreenPass } from '../render-graph-primitives';
-import type { RenderPipelineContext } from '../render-pipeline-context';
 
 const WIDTH = 256;
 const HEIGHT = 256;

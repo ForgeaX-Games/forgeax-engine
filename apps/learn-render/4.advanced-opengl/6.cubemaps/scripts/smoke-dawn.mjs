@@ -167,18 +167,11 @@ if (!existsSync(HDR_PATH)) {
 
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-  SKYBOX_MODE_CUBEMAP,
-  SkyboxBackground,
-  Skylight,
-  TONEMAP_REINHARD_EXTENDED,
-  Transform,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { SkyboxBackground, Skylight } = await import('@forgeax/engine-render');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer, TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
+const { SKYBOX_MODE_CUBEMAP } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');

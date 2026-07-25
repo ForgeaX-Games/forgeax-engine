@@ -1,6 +1,6 @@
 import { err, ok, type Result, type World } from '@forgeax/engine-ecs';
+import type { Renderer } from '@forgeax/engine-render';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
-import type { Renderer } from '@forgeax/engine-runtime';
 
 import type { AppErrorCode, AppErrorDetailFor } from '../errors';
 import { AppError } from '../errors';

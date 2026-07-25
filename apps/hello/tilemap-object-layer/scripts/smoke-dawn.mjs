@@ -129,12 +129,18 @@ let ecs;
 let types;
 let assetsRuntime;
 let graphicsExtras;
+let render;
+let authoring;
+let scene;
 try {
   runtime = await import('@forgeax/engine-runtime');
   ecs = await import('@forgeax/engine-ecs');
   types = await import('@forgeax/engine-types');
   assetsRuntime = await import('@forgeax/engine-assets-runtime');
   graphicsExtras = await import('@forgeax/engine-graphics-extras');
+  render = await import('@forgeax/engine-render');
+  authoring = await import('@forgeax/engine-render/authoring');
+  scene = await import('@forgeax/engine-scene');
 } catch (err) {
   await deferred(
     `engine-runtime import failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -144,15 +150,12 @@ try {
 const {
   CAMERA_PROJECTION_ORTHOGRAPHIC,
   Camera,
-  ChildOf,
   MeshFilter,
   MeshRenderer,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  TileLayer,
-  Tilemap,
-  Transform,
-  createRenderer,
-} = runtime;
+} = render;
+const { SPRITE_PREMULTIPLIED_ALPHA_BLEND, TileLayer, Tilemap } = authoring;
+const { createRenderer } = runtime;
+const { ChildOf, Transform } = scene;
 const { HANDLE_QUAD } = assetsRuntime;
 const { encodeTileBits } = graphicsExtras;
 const { World } = ecs;

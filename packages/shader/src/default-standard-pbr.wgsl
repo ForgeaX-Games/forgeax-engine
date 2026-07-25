@@ -36,7 +36,7 @@
 //                                                               + metallic + roughness
 //                                                               + 4 channel selectors f32
 //                                                               + emissive vec3 + emissiveIntensity
-//                                                               + occlusionStrength = 80 B)
+//                                                               + uv/alpha/clearcoat = 96 B)
 //   @group(1) @binding(1) baseColorSampler           sampler
 //   @group(1) @binding(2) baseColorTexture           texture_2d<f32>
 //   @group(1) @binding(3) metallicRoughnessSampler   sampler
@@ -106,10 +106,12 @@ struct Material {
   // `baseColorTexture.texCoord` (and the sibling MR/normal slots, which share
   // it per material in practice) chooses which vertex UV set the textures
   // sample. 0.0 -> set 0 (in.uv), >=0.5 -> set 1 (in.uv1). Lands at offset 68;
-  // the struct still rounds to 80 B (alignUp(72,16)=80), so the material UBO /
-  // BGL minBindingSize is byte-stable versus the pre-selector layout.
+  // clearcoat occupies offsets 76..84; the authored schema rounds to 96 B,
+  // while the engine-owned UV scale tail begins at byte 88.
   uvSet              : f32,
-  textureScalePad    : vec2<f32>,
+  alphaCutoff        : f32,
+  clearcoat          : f32,
+  clearcoatRoughness : f32,
   baseColorUvScale          : vec2<f32>,
   metallicRoughnessUvScale  : vec2<f32>,
   normalUvScale             : vec2<f32>,
@@ -158,14 +160,12 @@ struct SkylightUniforms {
   // The former pad0/1/2 lanes now carry the linear-space ambient `color` tint
   // (downstream integration #4). Kept as three scalars (NOT vec3<f32>) so the
   // struct stays exactly 16 B: a vec3 has 16-byte alignment in std140 and
-  // would push `color` to offset 16, growing the UBO to 32 B and breaking the
-  // single 16 B host store. WebGL2 / GLES 3.0 still requires the 16-byte
-  // multiple (no `BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED`). Host writes
-  // `[intensity, colorR, colorG, colorB]`; color defaults to white (1,1,1) so
-  // the multiply is identity for intensity-only callers.
+  // would push `color` to offset 16. The rotation vec4 follows at offset 16,
+  // so the host writes one 32 B payload.
   colorR : f32,
   colorG : f32,
   colorB : f32,
+  rotation : vec4<f32>,
 };
 @group(1) @binding(7)  var irradianceMap        : texture_cube<f32>;
 @group(1) @binding(8)  var irradianceSampler    : sampler;
@@ -310,10 +310,17 @@ fn selectUv(in : VsOut) -> vec2<f32> {
   return select(in.uv, in.uv1, material.uvSet >= 0.5);
 }
 
+fn alphaTest(alpha : f32) {
+  if (material.alphaCutoff > 0.0 && alpha < material.alphaCutoff) {
+    discard;
+  }
+}
+
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let uv = selectUv(in);
   let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, uv, material.baseColorUvScale);
+  alphaTest(material.baseColor.a * baseSample.a);
   let albedo = material.baseColor.rgb * baseSample.rgb;
 
   // Metallic-roughness texture sampling with per-field channel selectors
@@ -345,6 +352,9 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 
   let v = normalize(view.cameraPos - in.worldPos);
   let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+  let coatRoughness = max(material.clearcoatRoughness, 0.04);
+  let coatAlpha = coatRoughness * coatRoughness;
+  let coatF = f_schlick(max(dot(n, v), 0.0), vec3<f32>(0.04)) * material.clearcoat;
 
   // Ambient (IBL) + 1 + N + N accumulation
   // (feat-20260520-skylight-ibl-cubemap M3 / t48 +
@@ -377,9 +387,15 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // shadow-map PCF lookup (CSM, feat-20260613).
   let kD = (vec3<f32>(1.0) - f_schlick(max(dot(n, v), 0.0), f0)) * (1.0 - metallic);
   let iblRoughness = max(material.roughness, 0.04) * roughnessTex;
-  let irradiance = sampleIblDiffuse(n, irradianceMap, irradianceSampler);
+  let irradiance = sampleIblDiffuse(n, skylight.rotation, irradianceMap, irradianceSampler);
   let specularIbl = sampleIblSpecular(
     n, v, iblRoughness, f0,
+    skylight.rotation,
+    prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
+  );
+  let clearcoatIbl = sampleIblSpecular(
+    n, v, coatRoughness, vec3<f32>(0.04),
+    skylight.rotation,
     prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
   );
   let aoSample = sampleMaterialTexture(occlusionTexture, occlusionSampler, uv, material.occlusionUvScale);
@@ -388,7 +404,10 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   // CLUSTER_FORWARD_AVAILABLE branch below can `ambient *=` the SSAO
   // factor. The non-HDRP path leaves ambient untouched.
   let skyColor = vec3<f32>(skylight.colorR, skylight.colorG, skylight.colorB);
-  var ambient = (kD * irradiance * albedo + specularIbl) * skyColor * skylight.intensity * ao;
+  var ambient = (
+    (kD * irradiance * albedo + specularIbl) * (vec3<f32>(1.0) - coatF) +
+    clearcoatIbl * material.clearcoat
+  ) * skyColor * skylight.intensity * ao;
 #ifdef CLUSTER_FORWARD_AVAILABLE
   // feat-20260612-hdrp-ssao M2 round-1 + M7 round-2 (plan-strategy D-7 + D-B + D-C):
   // SSAO ambient synthesis. Reads the half-res R8 `ssaoBlurredTexture` from
@@ -408,10 +427,16 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 #endif
   var color = ambient;
   color = color + evalDirectional(n, v, albedo, metallic, a, f0, in.worldPos, in.viewZ);
+  color = color + material.clearcoat * evalDirectional(
+    n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04), in.worldPos, in.viewZ,
+  );
 #ifdef CLUSTER_FORWARD_AVAILABLE
   // NDC from vertex shader (perspective-divided clip-space, interpolated).
   // view_z: NDC depth for cluster Z-slice lookup.
   color = color + evaluate_cluster_lights(in.ndc, in.viewZ, in.worldPos, n, v, albedo, metallic, a);
+  color = color + material.clearcoat * evaluate_cluster_lights(
+    in.ndc, in.viewZ, in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatRoughness,
+  );
 #else
   let pointCount = pointLightsBuffer.count;
   for (var i: u32 = 0u; i < pointCount; i = i + 1u) {
@@ -430,16 +455,29 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         in.worldPos, n, v, albedo, metallic, a, f0,
         p.shadowAtlasLayer, lane.x, lane.y, 0.005, 0.05,
       );
+      color = color + material.clearcoat * evalPointShadowed(
+        p.position, p.colorTimesIntensity, p.invRangeSquared,
+        in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
+        p.shadowAtlasLayer, lane.x, lane.y, 0.005, 0.05,
+      );
     } else {
       color = color + evalPoint(
         p.position, p.colorTimesIntensity, p.invRangeSquared,
         in.worldPos, n, v, albedo, metallic, a, f0,
+      );
+      color = color + material.clearcoat * evalPoint(
+        p.position, p.colorTimesIntensity, p.invRangeSquared,
+        in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
       );
     }
 #else
     color = color + evalPoint(
       p.position, p.colorTimesIntensity, p.invRangeSquared,
       in.worldPos, n, v, albedo, metallic, a, f0,
+    );
+    color = color + material.clearcoat * evalPoint(
+      p.position, p.colorTimesIntensity, p.invRangeSquared,
+      in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
     );
 #endif
   }
@@ -463,12 +501,23 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         in.worldPos, n, v, albedo, metallic, a, f0,
         view.spotLightViewProj[s.shadowAtlasTile], s.shadowAtlasTile, 0.005, 0.05,
       );
+      color = color + material.clearcoat * evalSpotShadowed(
+        s.position, s.direction, s.colorTimesIntensity,
+        s.cosInner, s.cosOuter, s.invRangeSquared,
+        in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
+        view.spotLightViewProj[s.shadowAtlasTile], s.shadowAtlasTile, 0.005, 0.05,
+      );
     } else {
-      color = color + evalSpot(
+    color = color + evalSpot(
         s.position, s.direction, s.colorTimesIntensity,
         s.cosInner, s.cosOuter, s.invRangeSquared,
         in.worldPos, n, v, albedo, metallic, a, f0,
-      );
+    );
+    color = color + material.clearcoat * evalSpot(
+      s.position, s.direction, s.colorTimesIntensity,
+      s.cosInner, s.cosOuter, s.invRangeSquared,
+      in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
+    );
     }
   }
 #endif // CLUSTER_FORWARD_AVAILABLE
@@ -507,6 +556,7 @@ struct GBufferOutput {
 fn fs_gbuffer(in : VsOut) -> GBufferOutput {
   let uv = selectUv(in);
   let baseSample = sampleMaterialTexture(baseColorTexture, baseColorSampler, uv, material.baseColorUvScale);
+  alphaTest(material.baseColor.a * baseSample.a);
   let albedo = material.baseColor.rgb * baseSample.rgb;
 
   let mrSample = sampleMaterialTexture(metallicRoughnessTexture, metallicRoughnessSampler, uv, material.metallicRoughnessUvScale);

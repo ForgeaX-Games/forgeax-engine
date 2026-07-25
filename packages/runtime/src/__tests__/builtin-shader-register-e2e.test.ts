@@ -17,16 +17,27 @@
 // this test and packages/shader/src/*.wgsl.meta.json surfaces immediately
 // (charter F2: structural, falsifiable).
 
+import { appendInjection } from '@forgeax/engine-render/internal';
 import type { ParamSchemaEntry } from '@forgeax/engine-types';
 import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { appendInjection } from '../pbr-pipeline';
 
 // ─── post-w18 default-standard-pbr sidecar ──────────────────────────────────
 const STANDARD_PBR_SIDECAR: readonly ParamSchemaEntry[] = [
   { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
   { name: 'metallic', type: 'f32', default: 0.0 },
   { name: 'roughness', type: 'f32', default: 0.5 },
+  { name: 'metallicChannel', type: 'f32', default: 2.0 },
+  { name: 'roughnessChannel', type: 'f32', default: 1.0 },
+  { name: 'aoChannel', type: 'f32', default: 0.0 },
+  { name: 'extraChannel', type: 'f32', default: 0.0 },
+  { name: 'emissive', type: 'vec3', default: [0.0, 0.0, 0.0] },
+  { name: 'emissiveIntensity', type: 'f32', default: 0.0 },
+  { name: 'occlusionStrength', type: 'f32', default: 1.0 },
+  { name: 'uvSet', type: 'f32', default: 0.0 },
+  { name: 'alphaCutoff', type: 'f32', default: 0.0 },
+  { name: 'clearcoat', type: 'f32', default: 0.0 },
+  { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
   { name: 'baseColorTexture', type: 'texture2d' },
   { name: 'metallicRoughnessTexture', type: 'texture2d' },
   { name: 'normalTexture', type: 'texture2d' },

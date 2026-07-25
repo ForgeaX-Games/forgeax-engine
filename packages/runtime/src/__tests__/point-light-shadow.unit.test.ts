@@ -14,10 +14,12 @@
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
+import {
+  buildPointShadowMatrices,
+  PointLightShadow,
+  ShadowInvalidConfigError,
+} from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import { PointLightShadow } from '../components/point-light-shadow';
-import { ShadowInvalidConfigError } from '../errors/render';
-import { buildPointShadowMatrices } from '../render-system-extract';
 
 {
   // ─── T-M1-2: PointLightShadow component schema (AC-01) ───
@@ -473,7 +475,7 @@ import { buildPointShadowMatrices } from '../render-system-extract';
         // recordFrame never invokes atlas.ensure(). The unit guarantee here
         // is that `new ShadowAtlas(device)` itself does no GPU work — the
         // construction-only path stays allocation-free.
-        const { ShadowAtlas } = await import('../shadow-atlas');
+        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         new ShadowAtlas(makeMockDevice().device);
         expect(calls.createTexture).toBe(0);
         expect(calls.createTextureView).toBe(0);
@@ -482,7 +484,7 @@ import { buildPointShadowMatrices } from '../render-system-extract';
 
       it('ensure() lazily allocates exactly one texture + cube-array view + sampler', async () => {
         const { device, calls } = makeMockDevice();
-        const { ShadowAtlas } = await import('../shadow-atlas');
+        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         const atlas = new ShadowAtlas(device);
         expect(atlas.isAllocated()).toBe(false);
         atlas.ensure();
@@ -495,7 +497,7 @@ import { buildPointShadowMatrices } from '../render-system-extract';
 
       it('ensure() is idempotent — second call is zero-cost', async () => {
         const { device, calls } = makeMockDevice();
-        const { ShadowAtlas } = await import('../shadow-atlas');
+        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         const atlas = new ShadowAtlas(device);
         atlas.ensure();
         atlas.ensure();
@@ -507,7 +509,7 @@ import { buildPointShadowMatrices } from '../render-system-extract';
 
       it('faceView caches per (layer, face) — second call same key is zero-cost', async () => {
         const { device, calls } = makeMockDevice();
-        const { ShadowAtlas } = await import('../shadow-atlas');
+        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         const atlas = new ShadowAtlas(device);
         atlas.ensure();
         // 1 view from ensure() (cube-array sampling view).
@@ -524,14 +526,14 @@ import { buildPointShadowMatrices } from '../render-system-extract';
 
       it('faceView throws when called before ensure()', async () => {
         const { device } = makeMockDevice();
-        const { ShadowAtlas } = await import('../shadow-atlas');
+        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         const atlas = new ShadowAtlas(device);
         expect(() => atlas.faceView(0, 0)).toThrow(/before ensure/);
       });
 
       it('faceView range-checks layer + face', async () => {
         const { device } = makeMockDevice();
-        const { ShadowAtlas } = await import('../shadow-atlas');
+        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         const atlas = new ShadowAtlas(device, { layers: 4 });
         atlas.ensure();
         expect(() => atlas.faceView(-1, 0)).toThrow(/layer out of range/);
@@ -542,7 +544,7 @@ import { buildPointShadowMatrices } from '../render-system-extract';
 
       it('dispose() releases GPU memory + clears caches; subsequent ensure() re-allocates', async () => {
         const { device, calls } = makeMockDevice();
-        const { ShadowAtlas } = await import('../shadow-atlas');
+        const { ShadowAtlas } = await import('@forgeax/engine-render/internal');
         const atlas = new ShadowAtlas(device);
         atlas.ensure();
         atlas.faceView(0, 0); // populate the per-face cache
@@ -563,7 +565,7 @@ import { buildPointShadowMatrices } from '../render-system-extract';
       it('default size + layers match plan-strategy §D-1 (512 x 512 x 4 cube layers)', async () => {
         const { device } = makeMockDevice();
         const { SHADOW_ATLAS_DEFAULT_FACE_SIZE, SHADOW_ATLAS_DEFAULT_LAYERS, ShadowAtlas } =
-          await import('../shadow-atlas');
+          await import('@forgeax/engine-render/internal');
         expect(SHADOW_ATLAS_DEFAULT_FACE_SIZE).toBe(512);
         expect(SHADOW_ATLAS_DEFAULT_LAYERS).toBe(4);
         const atlas = new ShadowAtlas(device);
@@ -600,7 +602,7 @@ import { buildPointShadowMatrices } from '../render-system-extract';
         // PointLightShadow component); AC-09's zero-allocation guarantee is
         // upheld by the atlas's `ensure()` lazy-allocate path which
         // `recordFrame` also gates on the same `length > 0` check.
-        const primitivesModule = await import('../render-graph-primitives');
+        const primitivesModule = await import('@forgeax/engine-render/internal');
         // The addPointShadowPass primitive is exported from
         // render-graph-primitives.ts; urp-pipeline.ts imports + invokes it
         // unconditionally inside buildGraph. The execute closure is the gate.
@@ -621,7 +623,7 @@ import { buildPointShadowMatrices } from '../render-system-extract';
         // contract is identical to URP's: zero-shadow scenes -> zero passes
         // (AC-05 no-regression for HDRP), N=4 lights -> 24 caster passes
         // (AC-04 6 x N).
-        const hdrpModule = await import('../hdrp-pipeline');
+        const hdrpModule = await import('@forgeax/engine-render/internal');
         expect(hdrpModule.hdrpPipeline).toBeDefined();
         expect(typeof hdrpModule.hdrpPipeline.buildGraph).toBe('function');
         // Smoke: hdrpPipeline.buildGraph signature mirrors URP's (ctx, data).
@@ -629,7 +631,7 @@ import { buildPointShadowMatrices } from '../render-system-extract';
       });
 
       it('AC-13: packLightSlot writes shadow info onto LightSlot pad lanes (byte 52..64)', async () => {
-        const { packLightSlot } = await import('../light-buffer-layout');
+        const { packLightSlot } = await import('@forgeax/engine-render/internal');
         const snap = {
           kind: 'point' as const,
           position: vec3.create(1, 2, 3),
@@ -657,7 +659,7 @@ import { buildPointShadowMatrices } from '../render-system-extract';
       });
 
       it('AC-13: spot light packLightSlot leaves pad lanes at sentinel (-1, 0, 0)', async () => {
-        const { packLightSlot } = await import('../light-buffer-layout');
+        const { packLightSlot } = await import('@forgeax/engine-render/internal');
         const spotSnap = {
           kind: 'spot' as const,
           position: vec3.create(0, 0, 0),
@@ -688,7 +690,9 @@ import { buildPointShadowMatrices } from '../render-system-extract';
       });
 
       it('AC-05: LIGHTSLOT_LAYOUT byteSize unchanged at 64 (no-regression for HDRP)', async () => {
-        const { LIGHTSLOT_LAYOUT, BYTES_PER_LIGHT_SLOT } = await import('../light-buffer-layout');
+        const { LIGHTSLOT_LAYOUT, BYTES_PER_LIGHT_SLOT } = await import(
+          '@forgeax/engine-render/internal'
+        );
         // The pad-lane re-purposing must not change the total LightSlot size:
         // the std430 vec4 stride is preserved; only the field semantics within
         // bytes 52..64 changed (u32 pad -> i32 layer + f32 near + f32 far).

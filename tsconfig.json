@@ -30,6 +30,18 @@
       "path": "./packages/runtime"
     },
     {
+      "path": "./packages/render"
+    },
+    {
+      "path": "./packages/scene"
+    },
+    {
+      "path": "./packages/skinning"
+    },
+    {
+      "path": "./packages/animation"
+    },
+    {
       "path": "./packages/picking"
     },
     {

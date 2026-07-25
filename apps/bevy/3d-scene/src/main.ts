@@ -22,18 +22,14 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import {
-  acquireCanvasContext,
-  Camera,
-  createRenderer,
-  EngineEnvironmentError,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { perspective } from '@forgeax/engine-render';
+import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
+import { PointLight } from '@forgeax/engine-render';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { quat } from '@forgeax/engine-math';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';

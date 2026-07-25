@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { LoaderRegistry } from '../loader-registry';
 import {
   animationClipLoader,
+  animationGraphLoader,
   INLINE_PACK_LOADERS,
   materialLoader,
   meshLoader,
@@ -247,6 +248,9 @@ describe('animationClipLoader', () => {
 });
 
 describe('wireDefaultLoaders / createDefaultLoaderRegistry', () => {
+  it('keeps animation graph loader in assets-runtime', () => {
+    expect(animationGraphLoader.kind).toBe('animation-graph');
+  });
   it('wires the engine default kinds and leaves sampler/shader unregistered', () => {
     const reg = wireDefaultLoaders(new LoaderRegistry());
     for (const kind of [

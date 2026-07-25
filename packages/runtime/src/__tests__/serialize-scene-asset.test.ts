@@ -21,9 +21,9 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { LocalEntityId, MountOverride, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
-import '../components';
-import { AnimationPlayer } from '../components/animation-player';
-import { SceneInstance } from '../components/scene-instance';
+import '@forgeax/engine-render/internal';
+import { AnimationPlayer } from '@forgeax/engine-animation';
+import { SceneInstance } from '@forgeax/engine-render/internal';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ═══════════════════════════════════════════════════════════════════════════════

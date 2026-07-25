@@ -86,7 +86,10 @@ const mockCanvas = {
 
 // --- build the camera-orbit World via the shared SSOT builder ---
 const { World, createQueryState, Entity, queryRun } = await import('@forgeax/engine-ecs');
-const { CAMERA_PROJECTION_PERSPECTIVE, Camera, Transform, createRenderer, propagateTransforms } = await import('@forgeax/engine-runtime');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { CAMERA_PROJECTION_PERSPECTIVE } = await import('@forgeax/engine-render');
+const { Camera } = await import('@forgeax/engine-render');
+const { Transform, propagateTransforms } = await import('@forgeax/engine-scene');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { buildCameraZoomWorld, cameraZoomValue, ZoomCamera, stepCameraZoom } = await import(resolve(here, '..', 'src', 'camera-zoom.ts'));

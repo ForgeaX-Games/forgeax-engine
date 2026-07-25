@@ -170,16 +170,10 @@ if (
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  Instances,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { Materials } = await import('@forgeax/engine-render');
+const { Camera, DirectionalLight, Instances, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { meshIrToMeshAsset } = await import('@forgeax/engine-gltf');

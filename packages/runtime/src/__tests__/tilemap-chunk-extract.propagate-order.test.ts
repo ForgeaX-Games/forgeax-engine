@@ -32,10 +32,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const callOrder: string[] = [];
 
-vi.mock('../systems/propagate-transforms', async () => {
-  const actual = await vi.importActual<typeof import('../systems/propagate-transforms')>(
-    '../systems/propagate-transforms',
-  );
+vi.mock('@forgeax/engine-scene', async () => {
+  const actual =
+    await vi.importActual<typeof import('@forgeax/engine-scene')>('@forgeax/engine-scene');
   return {
     ...actual,
     propagateTransforms: vi.fn((world: Parameters<typeof actual.propagateTransforms>[0]) => {
@@ -45,10 +44,10 @@ vi.mock('../systems/propagate-transforms', async () => {
   };
 });
 
-vi.mock('../tilemap-chunk-extract-system', async () => {
-  const actual = await vi.importActual<typeof import('../tilemap-chunk-extract-system')>(
-    '../tilemap-chunk-extract-system',
-  );
+vi.mock('../../../render/src/tilemap-chunk-extract-system', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../../render/src/tilemap-chunk-extract-system')
+  >('../../../render/src/tilemap-chunk-extract-system');
   return {
     ...actual,
     tilemapChunkExtractSystem: vi.fn(() => {
@@ -57,9 +56,9 @@ vi.mock('../tilemap-chunk-extract-system', async () => {
   };
 });
 
-vi.mock('../render-system-extract', async () => {
-  const actual = await vi.importActual<typeof import('../render-system-extract')>(
-    '../render-system-extract',
+vi.mock('../../../render/src/render-system-extract', async () => {
+  const actual = await vi.importActual<typeof import('../../../render/src/render-system-extract')>(
+    '../../../render/src/render-system-extract',
   );
   const mockExtractFrameResult = {
     cameras: [],
@@ -104,7 +103,7 @@ vi.mock('../render-system-extract', async () => {
   };
 });
 
-vi.mock('../render-system-record', () => ({
+vi.mock('../../../render/src/record', () => ({
   // render-system.ts only imports `recordFrame` (and the `RenderFrameState`
   // type). Mock the function alone; skipping `vi.importActual` avoids a
   // relative `typeof import('../render-system-record')` type reference that
@@ -114,14 +113,13 @@ vi.mock('../render-system-record', () => ({
   }),
 }));
 
+import type { RenderSystemInternals } from '@forgeax/engine-render/internal';
 // After the mocks are declared, import the module under test + the actual
 // functions we still need for the FALSIFY case. The mocked exports each
 // spread `...actual`, so `_getArrayView` and the real `propagateTransforms`
 // remain accessible.
-import { Transform } from '../components/index';
-import type { RenderSystemInternals } from '../render-system';
-import { createRenderSystem } from '../render-system';
-import { propagateTransforms as realPropagate } from '../systems/propagate-transforms';
+import { propagateTransforms as realPropagate, Transform } from '@forgeax/engine-scene';
+import { createRenderSystem } from '../../../render/src/render-system';
 
 // Minimal RenderSystemInternals stub. `draw` only reaches `internals.assets`,
 // `internals.getPipelineState()`, and `internals.gpuStore` in the branch we
@@ -200,7 +198,9 @@ describe('FALSIFY: tilemap-chunk-extract does not propagate on its own', () => {
     // implementation, the real function still contains no propagate call
     // (verified by grep of tilemap-chunk-extract-system.ts). Either way,
     // Transform.world must stay zero after this call.
-    const { tilemapChunkExtractSystem } = await import('../tilemap-chunk-extract-system');
+    const { tilemapChunkExtractSystem } = await import(
+      '../../../render/src/tilemap-chunk-extract-system'
+    );
 
     const world = new World();
     const entity = world

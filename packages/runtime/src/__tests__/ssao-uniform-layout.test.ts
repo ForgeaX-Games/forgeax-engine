@@ -12,8 +12,8 @@
 //
 // AC-03 anchor: uniform byte-layout matches WGSL struct.
 
+import { SSAO_UNIFORM_BYTES, SSAO_UNIFORM_INTENSITY_OFFSET } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import { SSAO_UNIFORM_BYTES, SSAO_UNIFORM_INTENSITY_OFFSET } from '../ssao-buffers';
 
 const FLOATS_PER_MAT4 = 16;
 const MAT4_COUNT = 3;

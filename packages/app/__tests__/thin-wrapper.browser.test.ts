@@ -24,7 +24,8 @@
 //     truth; (A) only adds canvas-specific glue.
 
 import { World } from '@forgeax/engine-ecs';
-import { EngineEnvironmentError, type Renderer } from '@forgeax/engine-runtime';
+import { type Renderer } from '@forgeax/engine-render';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/index';

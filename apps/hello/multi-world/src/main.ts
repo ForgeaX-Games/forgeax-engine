@@ -30,7 +30,13 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { acquireCanvasContext, Camera, createRenderer, DirectionalLight, EngineEnvironmentError, type MaterialAsset, Materials, MeshFilter, MeshRenderer, perspective, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { perspective } from '@forgeax/engine-render';
+import { acquireCanvasContext, createRenderer, EngineEnvironmentError, type MaterialAsset } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 // ── Scene SSOT lock values (paired with scripts/smoke-dawn.mjs) ──────────────

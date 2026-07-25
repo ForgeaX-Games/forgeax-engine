@@ -6,14 +6,10 @@
 
 import { ok, World, type EntityHandle } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  Materials,
-  SceneInstance,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera, DirectionalLight } from '@forgeax/engine-render';
+import { createRenderer } from '@forgeax/engine-runtime';
+import { Materials, SceneInstance } from '@forgeax/engine-render';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 
 export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {

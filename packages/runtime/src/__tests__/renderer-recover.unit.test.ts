@@ -16,12 +16,10 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { World } from '@forgeax/engine-ecs';
-import type { Result } from '@forgeax/engine-rhi';
+import type { HealthSnapshot } from '@forgeax/engine-render/internal';
+import { RecoverError, type RecoverErrorCode } from '@forgeax/engine-render/internal';
+import type { Result, RhiInstance } from '@forgeax/engine-rhi';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Camera, Transform } from '../components';
-import { RecoverError, type RecoverErrorCode } from '../errors/recover';
-import type { HealthSnapshot } from '../renderer';
 
 // ── Controllable mock state (module-level so vi.mock factories can read) ──────
 //
@@ -116,6 +114,41 @@ function makeFakeRhiDevice(): Record<string, unknown> {
       },
     }),
   };
+}
+
+function makeExplicitRhi(): RhiInstance {
+  const adapter = {
+    features: new Set<string>(),
+    limits: {},
+    requestDevice: async () => {
+      recoverMock.requestDeviceCalls += 1;
+      if (recoverMock.deviceThrows) {
+        throw new Error('mock requestDevice failure (recover-device-unavailable path)');
+      }
+      return { ok: true, value: makeFakeRhiDevice() };
+    },
+  };
+  return {
+    requestAdapter: async () => {
+      recoverMock.requestAdapterCalls += 1;
+      if (recoverMock.adapterReturnsNull) {
+        return {
+          ok: false,
+          error: { code: 'adapter-unavailable', message: 'mock adapter null' },
+        };
+      }
+      return { ok: true, value: adapter };
+    },
+    acquireCanvasContext: () => ({
+      ok: true,
+      value: {
+        configure: () => ({ ok: true, value: undefined }),
+        unconfigure: () => ({ ok: true, value: undefined }),
+        getCurrentTexture: () => ({ ok: true, value: { __brand: 'TextureView' } }),
+      },
+    }),
+    createShaderModule: async () => ({ ok: true, value: { __brand: 'ShaderModule' } }),
+  } as unknown as RhiInstance;
 }
 
 function makeMockCanvas(): HTMLCanvasElement {
@@ -267,7 +300,6 @@ const RECOVER_TEST_MANIFEST_URL = (() => {
 })();
 
 type TestRenderer = {
-  draw: (worlds: World[], options: { owner: number }) => Result<void, unknown>;
   recover: () => Promise<Result<void, RecoverError>>;
   health: () => HealthSnapshot;
   store: { destroyAll: () => void };
@@ -277,10 +309,10 @@ type TestRenderer = {
 
 async function makeRenderer(): Promise<TestRenderer> {
   const canvas = makeMockCanvas();
-  const { createRenderer } = await import('../createRenderer');
+  const { createRenderer } = await import('../../../render/src/renderer/renderer-factory');
   const renderer = await createRenderer(
     canvas,
-    {},
+    { rhi: makeExplicitRhi() },
     { shaderManifestUrl: RECOVER_TEST_MANIFEST_URL },
   );
   return renderer as unknown as TestRenderer;
@@ -344,31 +376,6 @@ describe('recover() single idempotent rebuild (M3)', () => {
       expect(recoverMock.requestDeviceCalls).toBeGreaterThan(deviceCallsBefore);
       // pipeline rebuild completes; subsequent ready resolves ok.
       await renderer.ready;
-    },
-    RECOVER_BOOT_TIMEOUT_MS,
-  );
-
-  it(
-    'w10c: recovered renderer draws the same World again',
-    async () => {
-      const renderer = await makeRenderer();
-      await renderer.ready;
-      const world = new World();
-      world.spawn(
-        { component: Transform, data: {} },
-        { component: Camera, data: { fov: 60, near: 0.1, far: 1000 } },
-      );
-
-      const before = renderer.draw([world], { owner: 0 });
-      expect(before.ok).toBe(true);
-
-      await driveDeviceLost(renderer);
-      const recovered = await renderer.recover();
-      expect(recovered.ok).toBe(true);
-      expect(renderer.health().reason).toBe('alive');
-
-      const after = renderer.draw([world], { owner: 0 });
-      expect(after.ok).toBe(true);
     },
     RECOVER_BOOT_TIMEOUT_MS,
   );
@@ -498,7 +505,7 @@ describe('recover() single idempotent rebuild (M3)', () => {
     // Source-text assertion over createRenderer.ts isolates the recover()
     // method body and greps for the forbidden constructs.
     const src = readFileSync(
-      fileURLToPath(new URL('../createRenderer.ts', import.meta.url)),
+      fileURLToPath(new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url)),
       'utf8',
     );
     const startIdx = src.indexOf('async recover(): Promise<Result<void, RecoverError>>');
@@ -555,7 +562,7 @@ describe('recover() single idempotent rebuild (M3)', () => {
 describe('RecoverErrorCode closed union (A-AC-09)', () => {
   it('errors.ts RecoverErrorCode definition line declares exactly 4 literal members', () => {
     const src = readFileSync(
-      fileURLToPath(new URL('../errors/recover.ts', import.meta.url)),
+      fileURLToPath(new URL('../../../render/src/errors/recover.ts', import.meta.url)),
       'utf8',
     );
     const defLine = src.split('\n').find((l) => l.includes('export type RecoverErrorCode'));

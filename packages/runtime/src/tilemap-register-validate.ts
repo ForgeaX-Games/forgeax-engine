@@ -11,13 +11,13 @@
 // state, no further migration to a tilemap feature package).
 
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import { err, ok, type Result } from '@forgeax/engine-rhi';
-import { ASSET_ERROR_HINTS, AssetError, handleSlot } from '@forgeax/engine-types';
 import {
-  ChildOf as runtimeChildOf,
   TileLayer as runtimeTileLayer,
   Tilemap as runtimeTilemap,
-} from './components';
+} from '@forgeax/engine-render/authoring';
+import { err, ok, type Result } from '@forgeax/engine-rhi';
+import { ChildOf } from '@forgeax/engine-scene';
+import { ASSET_ERROR_HINTS, AssetError, handleSlot } from '@forgeax/engine-types';
 
 function invalidValue(field: string, value: unknown, reason: string): AssetError {
   return new AssetError({
@@ -74,7 +74,7 @@ export function validateTileLayerAtRegister(
   if (!layer.ok) {
     return err(invalidValue('TileLayer', layerEntity, 'tilelayer-entity-missing-component'));
   }
-  const child = world.get(layerEntity, runtimeChildOf);
+  const child = world.get(layerEntity, ChildOf);
   if (!child.ok) {
     return err(invalidValue('TileLayer.ChildOf', layerEntity, 'tilelayer-missing-childof'));
   }

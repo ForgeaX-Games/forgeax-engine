@@ -110,18 +110,11 @@ const mockCanvas = {
 // Import engine.
 const { ok: okResult, err: errResult, World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  AnimationPlayer,
-  Camera,
-  ChildOf,
-  createRenderer,
-  DirectionalLight,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  SceneInstance,
-  Transform,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { Materials, SceneInstance } = await import('@forgeax/engine-render');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { ChildOf, Transform } = await import('@forgeax/engine-scene');
+const { AnimationPlayer } = await import('@forgeax/engine-animation');
 
 const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
 const ENGINE_MANIFEST = await buildEngineShaderManifest();

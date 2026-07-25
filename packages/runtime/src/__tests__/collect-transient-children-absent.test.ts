@@ -14,7 +14,7 @@ import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { LocalEntityId, SceneAsset, SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '../components/scene-instance';
+import '@forgeax/engine-render/internal';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { rootsToSceneAsset } from '../collect-scene-asset';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';

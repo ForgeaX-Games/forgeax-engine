@@ -12,9 +12,9 @@
 // naming, no semantic 'skin'); plan-strategy R-1 (single-member -> two-member
 // union evolution); research E-2 (render-data.ts:118 hardcoded layout).
 
+import { deriveRenderDataMesh } from '@forgeax/engine-render/internal';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { deriveRenderDataMesh } from '../render-data';
 
 function meshWithoutSkin(): MeshAsset {
   return {

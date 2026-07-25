@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 export const CATALOG_HOSTS = [
+  'apps/bevy/skybox/vite.config.ts',
   'apps/collectathon/vite.config.ts',
   'apps/hello/animation-graph/vite.config.ts',
   'apps/hello/audio/vite.config.ts',
@@ -21,7 +22,6 @@ export const CATALOG_HOSTS = [
   'apps/learn-render/2.lighting/5.light-casters/vite.config.ts',
   'apps/learn-render/2.lighting/6.multiple-lights/vite.config.ts',
   'apps/learn-render/3.model-loading/1.model-loading/vite.config.ts',
-  'apps/learn-render/3.model-loading/2.city-glb/vite.config.ts',
   'apps/learn-render/4.advanced-opengl/1.depth-testing/vite.config.ts',
   'apps/learn-render/4.advanced-opengl/10.anti-aliasing-msaa/vite.config.ts',
   'apps/learn-render/4.advanced-opengl/2.stencil-testing/vite.config.ts',

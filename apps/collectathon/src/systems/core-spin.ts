@@ -15,7 +15,7 @@
 
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem } from '@forgeax/engine-ecs';
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 
 import { CORE_BASE_Y } from '../spawn/spawn-core';
 import { readDt } from './frame-time';

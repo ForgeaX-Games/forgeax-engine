@@ -20,15 +20,14 @@
 // `*.test-d.ts` suffix (root vitest config K-3 unit project's typecheck pass
 // covers any .test-d.ts file in any package).
 
-import { expectTypeOf, test } from 'vitest';
-
 import type {
   DirectionalLightSnapshot,
   ExtractedLights,
   LightSnapshot,
   PointLightSnapshot,
   SpotLightSnapshot,
-} from '../render-system-extract';
+} from '@forgeax/engine-render/internal';
+import { expectTypeOf, test } from 'vitest';
 
 function assertNever(_x: never): never {
   throw new Error('exhaustive');

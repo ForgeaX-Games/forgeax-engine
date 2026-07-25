@@ -5,13 +5,12 @@ import {
   MeshFilter,
   MeshRenderer,
   PointLight,
-  PostProcessParams,
-  URP_PIPELINE_ID,
   perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+} from '@forgeax/engine-render';
+import { PostProcessParams, URP_PIPELINE_ID } from '@forgeax/engine-render/internal';
 import { quat } from '@forgeax/engine-math';
 import type { World } from '@forgeax/engine-ecs';
+import { Transform } from '@forgeax/engine-scene';
 import fogShader from './fog.wgsl';
 
 export const FOG_POSTPROCESS_ID = 'bevy-fog::distance';

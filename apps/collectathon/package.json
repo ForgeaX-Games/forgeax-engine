@@ -53,7 +53,11 @@
     "@forgeax/engine-audio-webaudio": "workspace:*",
     "@forgeax/engine-state": "workspace:*",
     "@forgeax/engine-font": "workspace:*",
-    "@forgeax/engine-debug-draw": "workspace:*"
+    "@forgeax/engine-debug-draw": "workspace:*",
+    "@forgeax/engine-animation": "workspace:*",
+    "@forgeax/engine-skinning": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-fbx": "workspace:*",

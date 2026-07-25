@@ -19,11 +19,13 @@
 //   (c) createTextureView returning a mock depth-only view on aspect:'depth-only'
 //   (d) createBindGroup spy asserts entry count == 5 and bindings @3/@4
 
+import type {
+  PostProcessShaderEntry,
+  RenderPipelineContext,
+} from '@forgeax/engine-render/internal';
+import { addFullscreenPass } from '@forgeax/engine-render/internal';
 import { RenderGraph } from '@forgeax/engine-render-graph';
 import { describe, expect, it } from 'vitest';
-import type { PostProcessShaderEntry } from '../fullscreen-post-process-pass';
-import { addFullscreenPass } from '../render-graph-primitives';
-import type { RenderPipelineContext } from '../render-pipeline-context';
 
 interface BindGroupEntry {
   readonly binding: number;

@@ -11,6 +11,20 @@ import { defineProject } from 'vitest/config';
 process.env.NODE_ENV = 'test';
 
 export default defineProject({
+  resolve: {
+    alias: {
+      // The public runtime facade delegates to this internal render entry.
+      // Cover the authored implementation, rather than its built output, when
+      // runtime integration tests exercise that boundary.
+      '@forgeax/engine-render/internal/construct-renderer': new URL(
+        '../render/src/construct-renderer.ts',
+        import.meta.url,
+      ).pathname,
+      '@forgeax/engine-render/authoring': new URL('../render/src/authoring.ts', import.meta.url)
+        .pathname,
+      '@forgeax/engine-render/internal': new URL('../render/src/internal.ts', import.meta.url).pathname,
+    },
+  },
   test: {
     environment: 'node',
     name: '@forgeax/engine-runtime',

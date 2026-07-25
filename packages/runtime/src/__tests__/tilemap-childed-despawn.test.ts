@@ -11,6 +11,19 @@
 
 import { Entity, type EntityHandle, World } from '@forgeax/engine-ecs';
 import {
+  encodeSortScope,
+  markTileLayerDirty,
+  TileLayer,
+  Tilemap,
+  tilemapChunkExtractSystem,
+} from '@forgeax/engine-render/authoring';
+import {
+  _peekPerCellStreamingLayerKeys,
+  resetTilemapChunkExtractCache,
+  resetTilemapDerivedEntityTracker,
+} from '@forgeax/engine-render/internal';
+import { ChildOf, Children, Transform } from '@forgeax/engine-scene';
+import {
   defineState,
   despawnOnExit,
   registerStatesPlugin,
@@ -18,21 +31,6 @@ import {
 } from '@forgeax/engine-state';
 import { type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import {
-  ChildOf,
-  Children,
-  encodeSortScope,
-  markTileLayerDirty,
-  TileLayer,
-  Tilemap,
-  Transform,
-} from '../components';
-import {
-  _peekPerCellStreamingLayerKeys,
-  resetTilemapChunkExtractCache,
-  resetTilemapDerivedEntityTracker,
-  tilemapChunkExtractSystem,
-} from '../tilemap-chunk-extract-system';
 
 // One state token per file — defineState is module-level, redefining under
 // the same name throws. `GameState` is shared between AC-04 setup and

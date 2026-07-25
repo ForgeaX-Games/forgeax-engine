@@ -22,9 +22,10 @@
 // baseline); charter P3.
 
 import { World } from '@forgeax/engine-ecs';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import { ChildOf } from '@forgeax/engine-scene';
 import { AssetError, type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { ChildOf, TileLayer, Tilemap } from '../components';
 import {
   validateTileLayerAtRegister,
   validateTilemapAtRegister,

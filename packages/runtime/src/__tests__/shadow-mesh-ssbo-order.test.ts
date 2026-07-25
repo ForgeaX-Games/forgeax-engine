@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const shadowPassPath = fileURLToPath(new URL('../record/shadow-pass.ts', import.meta.url));
+const shadowPassPath = fileURLToPath(
+  new URL('../../../render/src/record/shadow-pass.ts', import.meta.url),
+);
 const shadowPass = readFileSync(shadowPassPath, 'utf8');
 
 function sourceAfter(signature: string): string {

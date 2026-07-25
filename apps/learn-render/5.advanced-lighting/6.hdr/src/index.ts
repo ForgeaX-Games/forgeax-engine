@@ -22,7 +22,14 @@
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Camera, Materials, MeshFilter, MeshRenderer, PointLight, PostProcessParams, TONEMAP_REINHARD_EXTENDED, Transform, createDevImportTransport, perspective } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { TONEMAP_REINHARD_EXTENDED, perspective } from '@forgeax/engine-render';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
+import { PointLight, PostProcessParams } from '@forgeax/engine-render';
+
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, MeshAsset, RenderPipelineAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';

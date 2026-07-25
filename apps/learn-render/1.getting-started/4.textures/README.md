@@ -41,10 +41,10 @@ flowchart LR
 // 1. engine usage - 引擎公开符号集
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera, Engine, EngineEnvironmentError, HANDLE_CUBE,
-  MeshRenderer, MeshFilter, Transform,
-} from '@forgeax/engine-runtime';
+import { Engine, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { Camera, MeshRenderer, MeshFilter } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import type { Handle, MaterialAsset, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import materialPackJson from '../assets/material-wood.pack.json';
 

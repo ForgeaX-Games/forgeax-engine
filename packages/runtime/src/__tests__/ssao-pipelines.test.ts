@@ -105,6 +105,15 @@ describe('SSAO RenderPipeline PSO descriptor assertions (w24 — RED)', () => {
     expect(b1?.type).toBe('uniform');
   });
 
+  it('(g1) renderer BGL keeps the kernel binding uniform', () => {
+    const factory = readFileSync(
+      fileURLToPath(new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url)),
+      'utf8',
+    );
+    const ssaoBgl = factory.slice(factory.indexOf("label: 'ssao-bgl'"));
+    expect(ssaoBgl).toMatch(/binding: 1,[\s\S]{0,160}buffer: \{ type: 'uniform' \}/);
+  });
+
   it('(h) binding 2 is texture_2d<f32> (noise)', () => {
     const bindings = extractSssaoBindings(wgsl);
     const b2 = bindings.find((b) => b.binding === 2);

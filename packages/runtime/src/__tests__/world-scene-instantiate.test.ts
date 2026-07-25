@@ -19,7 +19,8 @@
 // w23: perf — 100 entities x 5 components instantiates < 50ms (plan §5.4).
 
 import { defineComponent, World } from '@forgeax/engine-ecs';
-import { ChildOf, SceneInstance, Transform } from '@forgeax/engine-runtime';
+import { SceneInstance } from '@forgeax/engine-render/internal';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
@@ -63,6 +64,8 @@ describe('world.instantiateScene basic (w17)', () => {
     if (!r.ok) return;
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
+    expect(inst.value.mapping).toBeInstanceOf(Uint32Array);
+    if (!(inst.value.mapping instanceof Uint32Array)) return;
     expect(inst.value.mapping.length).toBe(3);
   });
 
@@ -82,6 +85,8 @@ describe('world.instantiateScene basic (w17)', () => {
     if (!r.ok) throw new Error('instantiateScene failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get SceneInstance failed');
+    expect(inst.value.mapping).toBeInstanceOf(Uint32Array);
+    if (!(inst.value.mapping instanceof Uint32Array)) return;
     const memberRaw = inst.value.mapping[0];
     expect(memberRaw).toBeDefined();
     if (memberRaw === undefined) return;

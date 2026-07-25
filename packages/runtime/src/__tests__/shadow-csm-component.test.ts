@@ -7,9 +7,8 @@
 // -> ShadowInvalidConfigError), and D-1 (legacy fixed-extent field deleted).
 
 import { World } from '@forgeax/engine-ecs';
+import { DirectionalLight, ShadowInvalidConfigError } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import { DirectionalLight } from '../components/directional-light';
-import { ShadowInvalidConfigError } from '../errors/render';
 
 // ── AC-01: new field defaults ────────────────────────────────────────────
 

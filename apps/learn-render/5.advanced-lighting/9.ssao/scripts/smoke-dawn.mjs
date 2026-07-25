@@ -195,16 +195,9 @@ if (DISCRIMINATION) {
 
     const { createApp: createAppLocal } = await import('@forgeax/engine-app');
     const runtimePkgLocal = await import('@forgeax/engine-runtime');
-    const {
-  Camera: CameraLocal,
-  DirectionalLight: DirectionalLightLocal,
-  HDRP_PIPELINE_ID: HDRP_PIPELINE_ID_LOCAL,
-  Materials: MaterialsLocal,
-  MeshFilter: MeshFilterLocal,
-  MeshRenderer: MeshRendererLocal,
-  perspective: perspectiveLocal,
-  Transform: TransformLocal,
-} = runtimePkgLocal;
+    const { Transform: TransformLocal } = runtimePkgLocal;
+const { Camera: CameraLocal, DirectionalLight: DirectionalLightLocal, Materials: MaterialsLocal, MeshFilter: MeshFilterLocal, MeshRenderer: MeshRendererLocal, perspective: perspectiveLocal } = await import('@forgeax/engine-render');
+const { HDRP_PIPELINE_ID: HDRP_PIPELINE_ID_LOCAL } = await import('@forgeax/engine-render/internal');
 const {
   HANDLE_CUBE: HANDLE_CUBE_LOCAL,
   HANDLE_SPHERE: HANDLE_SPHERE_LOCAL,
@@ -447,16 +440,10 @@ const enginePkg = await import('@forgeax/engine-app');
 const { createApp } = enginePkg;
 
 const runtimePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  DirectionalLight,
-  HDRP_PIPELINE_ID,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} = runtimePkg;
+const { Materials } = await import('@forgeax/engine-render');
+const { HDRP_PIPELINE_ID } = await import('@forgeax/engine-render/internal');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
   HANDLE_SPHERE,

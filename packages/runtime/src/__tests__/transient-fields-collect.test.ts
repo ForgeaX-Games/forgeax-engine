@@ -13,10 +13,10 @@
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { VideoPlayer } from '@forgeax/engine-graphics-extras';
+import { SpriteAnimation } from '@forgeax/engine-render/authoring';
 import type { SceneEntity } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset } from '../collect-scene-asset';
-import { SpriteAnimation } from '../components/sprite-animation';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeRegistry(): AssetRegistry {

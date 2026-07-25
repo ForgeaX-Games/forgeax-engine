@@ -5,7 +5,8 @@ publishes nothing on its own. To use the engine, install the runtime entry
 `@forgeax/engine-runtime` and the family members you need.
 
 ```ts
-import { Engine, World } from '@forgeax/engine-runtime'
+import { Engine } from '@forgeax/engine-runtime'
+import { World } from '@forgeax/engine-ecs'
 ```
 
 ## Family members
@@ -24,7 +25,7 @@ import { Engine, World } from '@forgeax/engine-runtime'
 | `@forgeax/engine-shader` | Runtime shader registry |
 | `@forgeax/engine-shader-compiler` | Build-time shader compiler |
 | `@forgeax/engine-vite-plugin-shader` | Vite plugin forwarding to shader-compiler |
-| `@forgeax/engine-remote` | Remote eval server + CLI (`forgeax-engine-remote`) |
+| `@forgeax/engine-console` | Inspector P0 server + CLI (`forgeax-engine-console`) |
 
 ## Family rules
 

@@ -8,10 +8,15 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import {
+  type ExtractedFrame,
+  extractFrame,
+  MeshFilter,
+  MeshRenderer,
+} from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
 import type { Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MeshFilter, MeshRenderer, Transform } from '../components';
-import { type ExtractedFrame, extractFrame } from '../render-system-extract';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ─── from bind-group-cache-stable-frame.test.ts ───
@@ -206,7 +211,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
   }> {
     return {
-      ...(await import('../index')),
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
       ...(await import('@forgeax/engine-assets-runtime')),
     } as never;
   }
@@ -575,7 +581,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
     return {
-      ...(await import('../index')),
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
       ...(await import('@forgeax/engine-assets-runtime')),
     } as never;
   }
@@ -1128,7 +1135,8 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
     return {
-      ...(await import('../index')),
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
       ...(await import('@forgeax/engine-assets-runtime')),
     } as never;
   }

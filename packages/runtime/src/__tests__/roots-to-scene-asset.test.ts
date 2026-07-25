@@ -20,11 +20,10 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
-import '../components';
-import { AnimationPlayer } from '../components/animation-player';
-import { ChildOf } from '../components/child-of';
-import { Children } from '../components/children';
-import { SceneInstance } from '../components/scene-instance';
+import '@forgeax/engine-render/internal';
+import { AnimationPlayer } from '@forgeax/engine-animation';
+import { SceneInstance } from '@forgeax/engine-render/internal';
+import { ChildOf, Children } from '@forgeax/engine-scene';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ═══════════════════════════════════════════════════════════════════════════════

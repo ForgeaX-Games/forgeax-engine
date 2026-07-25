@@ -13,16 +13,16 @@ import {
   CAMERA_PROJECTION_ORTHOGRAPHIC,
   CAMERA_PROJECTION_PERSPECTIVE,
   Camera,
-  ChildOf,
   MeshFilter,
   MeshRenderer,
-  propagateTransforms,
-  Transform,
-} from '@forgeax/engine-runtime';
+} from '@forgeax/engine-render';
+import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
+
 import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { type PickHit, pick } from '../pick';
 import { PickError } from '../pick-errors';
+import { viewportToWorld } from '../viewport-to-world';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // --- from pick.test.ts ---
@@ -342,6 +342,24 @@ describe('w12 — camera-missing precondition (AC-11)', () => {
       expect(err.hint).toContain('world.set');
       expect(err.detail.cameraEntity).toBe(notACamera as unknown as number);
     }
+  });
+});
+
+describe('viewportToWorld', () => {
+  it('returns the center ray through the camera', () => {
+    const scene = makeScene();
+    const camera = spawnPerspectiveCamera(scene.world, 5);
+    propagateTransforms(scene.world);
+
+    const result = viewportToWorld(scene.world, camera, VP / 2, VP / 2, VP, VP);
+
+    expect(result).toBeDefined();
+    expect(result?.[0]).toBeCloseTo(0, 4);
+    expect(result?.[1]).toBeCloseTo(0, 4);
+    expect(result?.[2]).toBeCloseTo(4.9, 4);
+    expect(result?.[3]).toBeCloseTo(0, 4);
+    expect(result?.[4]).toBeCloseTo(0, 4);
+    expect(result?.[5]).toBeCloseTo(-1, 4);
   });
 });
 

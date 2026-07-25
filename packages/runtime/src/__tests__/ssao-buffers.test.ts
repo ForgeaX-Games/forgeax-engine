@@ -9,10 +9,10 @@
 //
 // AC-05 anchor: lazy alloc + hdrp-ssao-* labels + call-count assertions.
 
+import type { RenderSystemRuntime } from '@forgeax/engine-render/internal';
+import { getOrCreateSsaoBuffers } from '@forgeax/engine-render/internal';
 import type { Buffer, RhiCaps, RhiDevice, Texture } from '@forgeax/engine-rhi';
 import { describe, expect, it, vi } from 'vitest';
-import type { RenderSystemRuntime } from '../render-system';
-import { getOrCreateSsaoBuffers } from '../ssao-buffers';
 
 function mockTexture(label?: string): Texture {
   return { label: label ?? 'mock-tex' } as unknown as Texture;

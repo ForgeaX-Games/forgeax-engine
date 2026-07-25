@@ -28,7 +28,7 @@
       "risks": ["baseline", "dynamic", "live", "fault", "recovery", "behavioral", "visual"],
       "phaseInputs": ["baseline", "dynamic", "live", "fault", "recovery"],
       "evidence": {
-        "frontDoors": ["node-app", "shader-build", "render-graph", "post-process", "multi-uv", "browser-webgpu", "rhi-debug"],
+        "frontDoors": ["node-app", "shader-build", "render-graph", "post-process", "multi-uv", "browser-variant-selection", "browser-webgpu", "rhi-debug"],
         "legs": ["live", "gpu", "behavioral", "recovery"]
       },
       "oracle": {
@@ -40,6 +40,7 @@
           "[m3-programmable] multi-UV Dawn: PASS",
           "[m3-programmable] multi-UV falsifier: PASS",
           "[m3-programmable] multi-UV variant: PASS",
+          "[m3-programmable] multi-UV browser variant: PASS",
           "[m3-programmable] browser live pipeline: PASS",
           "[m3-programmable] PASS - M3 programmable rendering gates GREEN"
         ]

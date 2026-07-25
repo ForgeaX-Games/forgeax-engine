@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Frame-start scanned, frozen InputSnapshot Resource (keyboard.down/up + mouse.movementDelta + mouse.button(0|1|2)) + browser PointerLock backend for forgeax-engine.",
+  "description": "Frame-start scanned, frozen InputSnapshot Resource (keyboard.down/up + mouse.position/movementDelta + mouse.button(0|1|2)) + browser PointerLock backend for forgeax-engine.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

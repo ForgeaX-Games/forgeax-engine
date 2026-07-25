@@ -30,7 +30,14 @@ import { createApp } from '@forgeax/engine-app';
 import { World } from '@forgeax/engine-ecs';
 import { HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
-import { CAMERA_PROJECTION_ORTHOGRAPHIC, Camera, ChildOf, EngineEnvironmentError, encodeSortScope, Layer, MeshFilter, MeshRenderer, setTransparentSortConfig, SpriteRegionOverride, SPRITE_PREMULTIPLIED_ALPHA_BLEND, TRANSPARENT_SORT_MODE_LAYER_Y, Tilemap, TileLayer, Transform } from '@forgeax/engine-runtime';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+
+import { CAMERA_PROJECTION_ORTHOGRAPHIC } from '@forgeax/engine-render';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { setTransparentSortConfig, TRANSPARENT_SORT_MODE_LAYER_Y } from '@forgeax/engine-render/internal';
+import { encodeSortScope, SpriteRegionOverride, SPRITE_PREMULTIPLIED_ALPHA_BLEND, Tilemap, TileLayer } from '@forgeax/engine-render/authoring';
+import { Layer } from '@forgeax/engine-render';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 
 import type {
   Handle,

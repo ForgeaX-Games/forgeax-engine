@@ -13,10 +13,10 @@
 import { BUILTIN_FLOATS_PER_VERTEX, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { mat4 } from '@forgeax/engine-math';
+import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok } from '@forgeax/engine-rhi';
 import type { EquirectAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { GpuResourceStore } from '../../gpu-resource-store';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,

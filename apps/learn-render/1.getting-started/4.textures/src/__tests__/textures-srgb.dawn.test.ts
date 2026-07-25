@@ -35,7 +35,7 @@ import type { DecodedImage, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
 
-import { GpuResourceStore } from '@forgeax/engine-runtime';
+import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import { toShared } from '@forgeax/engine-types';
 
 function makeWoodTexture(format: GPUTextureFormat, colorSpace: 'srgb' | 'linear'): TextureAsset {

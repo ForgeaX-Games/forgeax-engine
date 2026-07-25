@@ -46,12 +46,14 @@
 // Exit codes: 0 = green, 1 = red (regression), 2 = harness error (vite/browser).
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appDir = resolve(here, '..');
+const viteBin = resolve(appDir, 'node_modules', 'vite', 'bin', 'vite.js');
 
 // M5 baseline LOCKED (this is the real-app SSOT for the instantiated count).
 // The Play scene spawns: DirectionalLight + Skylight + Camera + ground + 4 walls
@@ -69,12 +71,22 @@ const POLL_BUDGET_MS = 20000;
 // and the spike m6-1 reproduced. Matched against the full console stream (they
 // surface as console error/warning), never wiped.
 const CRASH_SIGNATURES = ['render-system-no-camera', 'channel-leaf-mismatch', 'MAX_VERTEX_CAPACITY'];
+const AUDIO_GUIDS = new Set([
+  '201222ef-ccf4-4538-96ce-14a96ecc993d',
+  '8f87b826-bcec-4be1-9ea1-caa964b0a9ba',
+  '724242e6-5df8-44b8-9b41-0e430d1acc2c',
+  '2e23f877-a9e3-40cc-ba75-1126aef34cce',
+  '49c2c8b1-8091-4e9e-b782-f658ee4e31b0',
+  '3b298083-a2bc-496f-91fb-80e5bb8cfe48',
+]);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- 1. spawn the Vite dev server ---------------------------------------------
 
-const viteProc = spawn('pnpm', ['exec', 'vite', '--host', '127.0.0.1', '--clearScreen', 'false'], {
+if (!existsSync(viteBin)) throw new Error(`collectathon browser smoke cannot find Vite: ${viteBin}`);
+
+const viteProc = spawn(process.execPath, [viteBin, '--host', '127.0.0.1', '--clearScreen', 'false'], {
   cwd: appDir,
   env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
 });
@@ -146,12 +158,19 @@ const page = await ctx.newPage();
 const pageErrors = [];
 const consoleMessages = [];
 const consoleErrors = [];
+const audioImportRequests = [];
 page.on('pageerror', (e) => pageErrors.push(`PAGEERROR: ${e.message}`));
 page.on('console', (msg) => {
   const txt = msg.text();
   process.stdout.write(`[page:${msg.type()}] ${txt}\n`);
   consoleMessages.push(txt);
   if (msg.type() === 'error') consoleErrors.push(`CONSOLE-ERR: ${txt}`);
+});
+page.on('request', (request) => {
+  const guid = new URL(request.url()).pathname.split('/').at(-1)?.toLowerCase();
+  if (request.method() === 'POST' && guid !== undefined && AUDIO_GUIDS.has(guid)) {
+    audioImportRequests.push(request.url());
+  }
 });
 
 // The self-hosted Linux image currently crashes Chromium's WebGPU
@@ -353,6 +372,9 @@ const sutErrors = [...captured.deviceErrors, ...consoleErrors].filter((e) => {
 });
 if (sutErrors.length > 0) {
   failures.push(`(c) ${sutErrors.length} SUT error(s): ${sutErrors.slice(0, 5).join(' | ')}`);
+}
+if (audioImportRequests.length > 0) {
+  failures.push(`(c) audio GUIDs used lazy import instead of their catalog payloads: ${audioImportRequests.join(', ')}`);
 }
 
 // (d) Camera present (Play entered + camera ready -- the R-12 surface).

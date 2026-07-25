@@ -20,11 +20,26 @@
     },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-delayed-commands smoke",
     "metrics": {
-      "bundle-size": {"enabled": false, "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level"},
-      "fps": {"enabled": false, "reason": "demo-specific fps evidence belongs to its completed reproduction"},
-      "bench": {"enabled": false, "reason": "demo-specific benchmarks belong to its completed reproduction"},
-      "gate": {"enabled": true, "command": "pnpm --filter @forgeax/bevy-delayed-commands smoke"},
-      "spike-report": {"enabled": false, "reason": "not a spike app; Bevy example reproduction"}
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "demo-specific fps evidence belongs to its completed reproduction"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "demo-specific benchmarks belong to its completed reproduction"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/bevy-delayed-commands smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; Bevy example reproduction"
+      }
     }
   },
   "dependencies": {
@@ -34,7 +49,9 @@
     "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-math": "workspace:*",
-    "@forgeax/engine-runtime": "workspace:*"
+    "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",

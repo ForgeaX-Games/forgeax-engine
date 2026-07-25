@@ -56,11 +56,10 @@ flowchart TD
 
 // 1. engine usage - 引擎公开符号集
 import { createApp } from '@forgeax/engine-app';
-import {
-  Camera, HANDLE_CUBE, HDRP_PIPELINE_ID,
-  Materials, MeshFilter, MeshRenderer, perspective,
-  PointLight, Transform,
-} from '@forgeax/engine-runtime';
+import { Camera, Materials, MeshFilter, MeshRenderer, perspective, PointLight } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
+import { HDRP_PIPELINE_ID } from '@forgeax/engine-render/internal';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import type { MaterialAsset, RenderPipelineAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 

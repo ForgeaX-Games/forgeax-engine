@@ -20,10 +20,10 @@ import type { Asset } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { Children, Name, Transform } from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';
-import { Children, Name, Transform } from '../components';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const G_CHILD = '11111111-1111-4111-8111-111111111111';

@@ -12,15 +12,16 @@
 // TDD red anchor: before w24 + w25 the file fails to compile; after them the
 // slots read back at the expected distribution.
 
+import {
+  AnimationPlayer,
+  advanceAnimationPlayer,
+  defineAnimationGraph,
+  evaluateAnimationGraph,
+} from '@forgeax/engine-animation';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
 import type { AnimationClip, Handle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { defineAnimationGraph } from '../animation/define-animation-graph';
-import { evaluateAnimationGraph } from '../animation/evaluate-animation-graph';
-import { AnimationPlayer } from '../components/animation-player';
-import type { AnimationAssetResolver } from '../systems/advance-animation-player';
-import { advanceAnimationPlayer } from '../systems/advance-animation-player';
 
 function registerClip(world: World, duration: number): number {
   const clip: AnimationClip = { kind: 'animation-clip', duration, channels: [] };
@@ -83,13 +84,6 @@ describe('evaluateAnimationGraph — variable N-slot fill (M3 / w21)', () => {
     expect(total).toBeCloseTo(1, 5);
 
     // The eval output is a valid input to advance's N-way blend (length-synced).
-    const resolver: AnimationAssetResolver = {
-      resolveAnimationClip(_w: World, handleRaw: number): AnimationClip | undefined {
-        return handles.includes(handleRaw)
-          ? { kind: 'animation-clip', duration: 10, channels: [] }
-          : undefined;
-      },
-    };
-    expect(() => advanceAnimationPlayer(world, resolver, 1 / 60)).not.toThrow();
+    expect(() => advanceAnimationPlayer(world, 1 / 60)).not.toThrow();
   });
 });

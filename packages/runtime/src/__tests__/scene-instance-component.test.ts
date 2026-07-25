@@ -14,8 +14,8 @@
 // dynamic structure); plan-tasks §M2 / w15.
 
 import { resolveComponent } from '@forgeax/engine-ecs';
+import { SceneInstance } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import { SceneInstance } from '../components/scene-instance';
 
 describe('SceneInstance component (w15)', () => {
   it('registers via the global resolveComponent index', () => {

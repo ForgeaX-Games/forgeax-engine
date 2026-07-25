@@ -19,6 +19,11 @@
       "type": "color"
     },
     {
+      "name": "alphaCutoff",
+      "type": "f32",
+      "default": 0.0
+    },
+    {
       "name": "baseColorTexture",
       "type": "texture2d"
     }

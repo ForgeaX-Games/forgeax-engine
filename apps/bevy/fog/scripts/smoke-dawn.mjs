@@ -94,14 +94,13 @@ const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-
 const manifest = await buildEngineShaderManifest();
 const manifestUrl = `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
 const { createApp } = await import('@forgeax/engine-app');
-const runtime = await import('@forgeax/engine-runtime');
 const { World } = await import('@forgeax/engine-ecs');
 const { quat } = await import('@forgeax/engine-math');
 const { HANDLE_CUBE, HANDLE_SPHERE } = await import('@forgeax/engine-assets-runtime');
-const {
-  Camera, Materials, MeshFilter, MeshRenderer, PointLight, PostProcessParams,
-  URP_PIPELINE_ID, perspective, Transform,
-} = runtime;
+const { Camera, Materials, MeshFilter, MeshRenderer, PointLight, perspective } =
+  await import('@forgeax/engine-render');
+const { PostProcessParams, URP_PIPELINE_ID } = await import('@forgeax/engine-render/internal');
+const { Transform } = await import('@forgeax/engine-scene');
 
 const appResult = await createApp(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
 globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;

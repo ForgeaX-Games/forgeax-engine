@@ -142,18 +142,10 @@ const mockCanvas = {
 // --- 3. Drive engine ECS path --------------------------------------------
 
 const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  createRenderer,
-  MeshFilter,
-  MeshRenderer,
-  PointLight,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  SpotLight,
-  TONEMAP_NONE,
-  Transform,
-} = enginePkg;
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { Camera, MeshFilter, MeshRenderer, PointLight, SpotLight, TONEMAP_NONE } = await import('@forgeax/engine-render');
+const { SPRITE_PREMULTIPLIED_ALPHA_BLEND } = await import('@forgeax/engine-render/authoring');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_QUAD,
 } = await import('@forgeax/engine-assets-runtime');
@@ -338,6 +330,9 @@ async function buildSweepSpotWorld({ intensity }) {
           range: 6.0,
           innerConeDeg: 15,
           outerConeDeg: 30,
+          // Match the product scene: the flashlight illuminates the sprite
+          // but does not cast a self-shadow onto its own planar receiver.
+          castShadow: false,
         },
       },
     ),

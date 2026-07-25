@@ -10,7 +10,7 @@
 //
 // This file is *.test-d.ts: vitest typecheck validates it; it is not executed.
 
-import type { RenderError, RenderErrorCode } from '../errors/render';
+import type { RenderError, RenderErrorCode } from '@forgeax/engine-render/internal';
 
 function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
   switch (code) {
@@ -37,6 +37,12 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
     case 'video-upload-unsupported':
       return code;
     case 'vertex-storage-buffer-unavailable':
+      return code;
+    case 'skin-palette-overflow':
+      return code;
+    case 'skin-material-mismatch':
+      return code;
+    case 'material-skin-attr-missing':
       return code;
     default: {
       const exhaustive: never = code;
@@ -92,6 +98,18 @@ function narrowRenderError(err: RenderError): void {
       break;
     case 'vertex-storage-buffer-unavailable':
       // No detail on this class.
+      break;
+    case 'skin-palette-overflow':
+      void err.detail.requestedBytes;
+      void err.detail.limit;
+      break;
+    case 'skin-material-mismatch':
+      void err.detail.entity;
+      void err.detail.actualShader;
+      break;
+    case 'material-skin-attr-missing':
+      void err.detail.entity;
+      void err.detail.missing;
       break;
     default: {
       const exhaustive: never = err;

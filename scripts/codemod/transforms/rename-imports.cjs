@@ -111,4 +111,4 @@ module.exports = function transform(file, api, options) {
   return mutated ? root.toSource({ quote: 'single' }) : null;
 };
 
-module.exports.parser = 'ts';
+module.exports.parser = 'tsx';

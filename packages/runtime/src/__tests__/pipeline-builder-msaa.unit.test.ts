@@ -11,6 +11,11 @@
  * factory stub returns a dummy ShaderModule so the pipeline build reaches
  * the descriptor stage without a real GPU.
  */
+
+import {
+  buildPipelineForMaterialShader,
+  type PipelineBuilderContext,
+} from '@forgeax/engine-render/internal';
 import {
   ok,
   type RenderPipeline,
@@ -20,7 +25,6 @@ import {
   type ShaderModule,
 } from '@forgeax/engine-rhi';
 import { describe, expect, it, vi } from 'vitest';
-import { buildPipelineForMaterialShader, type PipelineBuilderContext } from '../pipeline-builder';
 
 function fakeShaderModule(): ShaderModule {
   return { label: 'fake-module' } as unknown as ShaderModule;
@@ -118,6 +122,29 @@ describe('buildPipelineForMaterialShader multisample descriptor (M2)', () => {
     expect(spy).toHaveBeenCalledTimes(1);
     const desc = spy.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(desc.multisample).toEqual({ count: 4 });
+  });
+
+  it('sampleCount=4 carries alpha-to-coverage into the multisample descriptor', () => {
+    const spy = vi.fn<(desc: unknown) => Result<RenderPipeline, RhiError>>(
+      () => ok(fakeRenderPipeline()) as unknown as Result<RenderPipeline, RhiError>,
+    );
+    const ctx = buildCtx({ createPipelineSpy: spy });
+
+    buildPipelineForMaterialShader(
+      'test::shader',
+      fakeEntry(),
+      ctx,
+      { alphaToCoverageEnabled: true },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'forward',
+      4,
+    );
+
+    const desc = spy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(desc.multisample).toEqual({ count: 4, alphaToCoverageEnabled: true });
   });
 
   it('sampleCount=2 narrowed to 1 per PipelineSpec contract (1 | 4 only)', () => {

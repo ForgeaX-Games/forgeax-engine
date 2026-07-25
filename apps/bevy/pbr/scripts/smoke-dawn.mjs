@@ -93,10 +93,11 @@ const mockCanvas = {
 
 // --- build the PBR World inline (Node can't import .ts) ---
 const { World } = await import('@forgeax/engine-ecs');
-const {
-  Camera, createRenderer, DirectionalLight, Materials, MeshFilter, MeshRenderer,
-  orthographic, Skylight, Transform,
-} = await import('@forgeax/engine-runtime');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { Materials, Skylight } = await import('@forgeax/engine-render');
+const { orthographic } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const { HANDLE_SPHERE } = await import('@forgeax/engine-assets-runtime');
 const { quat } = await import('@forgeax/engine-math');
 

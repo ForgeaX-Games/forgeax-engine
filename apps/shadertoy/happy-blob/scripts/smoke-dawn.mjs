@@ -47,7 +47,7 @@ try {
   console.error(
     `[smoke] FAIL - dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`,
   );
-  console.error('  rerun: pnpm --filter @forgeax/shadertoy-happy-blob smoke');
+  console.error('  rerun: pnpm --filter @forgeax/engine-shadertoy-happy-blob smoke');
   process.exit(1);
 }
 Object.assign(globalThis, globals);
@@ -130,12 +130,14 @@ const mockCanvas = {
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const { createPlaneGeometry } = await import('@forgeax/engine-geometry');
-const { Camera, createRenderer, MeshFilter, MeshRenderer, Transform } = enginePkg;
+const { createRenderer } = enginePkg;
+const { Transform } = await import('@forgeax/engine-scene');
+const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 
 const MANIFEST_PATH = resolve(appRoot, 'dist', 'shaders', 'manifest.json');
 if (!existsSync(MANIFEST_PATH)) {
   console.error(`[smoke] FAIL - dist/shaders/manifest.json missing at ${MANIFEST_PATH}`);
-  console.error('  hint: rebuild via `pnpm --filter @forgeax/shadertoy-happy-blob build`');
+  console.error('  hint: rebuild via `pnpm --filter @forgeax/engine-shadertoy-happy-blob build`');
   process.exit(1);
 }
 const manifestRaw = readFileSync(MANIFEST_PATH, 'utf8');
@@ -198,14 +200,16 @@ if (shader === null || assets === null) {
   process.exit(1);
 }
 
-shader.registerMaterialShader('shadertoy::happy-blob', {
-  source: composedWgsl,
-  paramSchema: [
-    { name: 'iResolution', type: 'vec2' },
-    { name: 'iTime', type: 'f32' },
-  ],
-  bindingLayout: [],
-});
+if (!shader.lookupMaterialShader('shadertoy::happy-blob').ok) {
+  shader.registerMaterialShader('shadertoy::happy-blob', {
+    source: composedWgsl,
+    paramSchema: [
+      { name: 'iResolution', type: 'vec2' },
+      { name: 'iTime', type: 'f32' },
+    ],
+    bindingLayout: [],
+  });
+}
 
 const paramValues = {
   iResolution: [WIDTH, HEIGHT],
@@ -359,7 +363,7 @@ if (errors.length > 0) {
 if (failures.length > 0) {
   console.error(`[smoke] FAIL -- ${failures.length} criteria failed:`);
   for (const f of failures) console.error(`  ${f}`);
-  console.error('  rerun: pnpm --filter @forgeax/shadertoy-happy-blob smoke');
+  console.error('  rerun: pnpm --filter @forgeax/engine-shadertoy-happy-blob smoke');
   await delay(0);
   device.destroy?.();
   process.exit(1);

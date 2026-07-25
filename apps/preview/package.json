@@ -42,7 +42,8 @@
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-input": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-ui": "workspace:*"
+    "@forgeax/engine-ui": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",

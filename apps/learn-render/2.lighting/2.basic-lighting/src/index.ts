@@ -30,7 +30,10 @@ import type { App, CanvasAppError } from '@forgeax/engine-app';
 import { Entity, World } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Camera, EngineEnvironmentError, MeshFilter, MeshRenderer, PointLight, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { PointLight } from '@forgeax/engine-render';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import {

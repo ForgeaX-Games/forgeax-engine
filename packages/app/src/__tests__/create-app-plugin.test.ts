@@ -24,6 +24,7 @@
 //   P3 explicit failure: duplicate / build-failed paths assert the structured
 //       PluginError code + detail.
 
+import { animationPlugin } from '@forgeax/engine-animation';
 import { AUDIO_ENGINE_RESOURCE_KEY } from '@forgeax/engine-audio';
 import {
   AUDIO_TICK_SYSTEM_NAME,
@@ -34,8 +35,8 @@ import { err, type Result, World } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY } from '@forgeax/engine-input';
 import { physicsPlugin } from '@forgeax/engine-physics';
 import { type Plugin, PluginError, runPlugins } from '@forgeax/engine-plugin';
-import type { Renderer } from '@forgeax/engine-runtime';
-import { animationPlugin, transformPlugin } from '@forgeax/engine-runtime';
+import type { Renderer } from '@forgeax/engine-render';
+import { scenePlugin } from '@forgeax/engine-scene';
 import { statePlugin } from '@forgeax/engine-state';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../create-app';
@@ -83,17 +84,12 @@ describe('createApp plugin runner -- default set (AC-03)', () => {
     // scan system (mirrors createApp's app-layer input attach).
     const world = new World();
     world.insertResource(INPUT_BACKEND_KEY, {} as never);
-    const defaultSet: Plugin[] = [
-      transformPlugin(),
-      animationPlugin(),
-      statePlugin(),
-      inputPlugin(),
-    ];
+    const defaultSet: Plugin[] = [scenePlugin(), animationPlugin(), statePlugin(), inputPlugin()];
     const result = await runPlugins(world, defaultSet, []);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect([...result.value.keys()]).toEqual(['transform', 'animation', 'state', 'input']);
+    expect([...result.value.keys()]).toEqual(['scene', 'animation', 'state', 'input']);
 
     // World systems registered by the default set.
     const names = systemNames(world);

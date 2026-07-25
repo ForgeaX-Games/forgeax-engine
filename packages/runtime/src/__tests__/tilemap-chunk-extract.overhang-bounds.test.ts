@@ -51,24 +51,22 @@
 import { Entity, type EntityHandle, World } from '@forgeax/engine-ecs';
 import { encodeTileBits } from '@forgeax/engine-graphics-extras';
 import { frustum, mat4 } from '@forgeax/engine-math';
-import { type TilesetAsset, type TilesetTileEntry, toShared } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
 import {
-  CAMERA_PROJECTION_ORTHOGRAPHIC,
-  Camera,
-  ChildOf,
   encodeSortScope,
   TileLayer,
   Tilemap,
-  Transform,
-} from '../components';
-import { propagateTransforms } from '../systems/propagate-transforms';
+  tilemapChunkExtractSystem,
+} from '@forgeax/engine-render/authoring';
 import {
+  CAMERA_PROJECTION_ORTHOGRAPHIC,
+  Camera,
   computeChunkStreamBounds,
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
-  tilemapChunkExtractSystem,
-} from '../tilemap-chunk-extract-system';
+} from '@forgeax/engine-render/internal';
+import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
+import { type TilesetAsset, type TilesetTileEntry, toShared } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
 
 // Camera window x in [CAMERA_POS - 5, CAMERA_POS + 5]. Landing at 55 puts
 // the right edge at 60, which straddles the footprint of a widthCells=2

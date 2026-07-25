@@ -25,9 +25,7 @@ import process from 'node:process';
 // --- 1. Import engine ECS + animation primitives ---
 
 const { World } = await import('@forgeax/engine-ecs');
-const { animationPlugin, defineAnimationGraph, AnimationPlayer } = await import(
-  '@forgeax/engine-runtime'
-);
+const { animationPlugin, defineAnimationGraph, AnimationPlayer } = await import('@forgeax/engine-animation');
 
 // --- 2. Assertion helpers ---
 

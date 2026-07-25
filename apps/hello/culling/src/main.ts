@@ -14,16 +14,11 @@
 //   (4) frustumStats verified in smoke script
 
 import { World } from '@forgeax/engine-ecs';
-import {
-  Camera,
-  DirectionalLight,
-  acquireCanvasContext,
-  createRenderer,
-  EngineEnvironmentError,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { quat } from '@forgeax/engine-math';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';

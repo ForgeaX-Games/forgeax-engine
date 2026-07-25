@@ -3,7 +3,7 @@
 // header for the shared pattern rationale). RecoverError carries no .detail
 // field, so this guard covers the RecoverErrorCode exhaustiveness only.
 
-import type { RecoverError, RecoverErrorCode } from '../errors/recover';
+import type { RecoverError, RecoverErrorCode } from '@forgeax/engine-render/internal';
 
 function exhaustiveSwitchOnRecoverCode(code: RecoverErrorCode): string {
   switch (code) {

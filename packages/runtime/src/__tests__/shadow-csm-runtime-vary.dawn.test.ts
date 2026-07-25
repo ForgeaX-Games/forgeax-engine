@@ -18,10 +18,9 @@
 
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
+import { Camera, DirectionalLight } from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { Camera } from '../components/camera';
-import { DirectionalLight } from '../components/directional-light';
-import { Transform } from '../components/transform';
 import { createRenderer } from '../createRenderer';
 
 const ENGINE_MANIFEST = await (async () => {

@@ -13,17 +13,12 @@
 // is irrelevant because the custom vertex shader emits clip-space directly.
 
 import { World } from '@forgeax/engine-ecs';
-import {
-  acquireCanvasContext,
-  Camera,
-  createRenderer,
-  EngineEnvironmentError,
-  MeshFilter,
-  MeshRenderer,
-  Name,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Name, Transform } from '@forgeax/engine-scene';
+
+import { perspective } from '@forgeax/engine-render';
+import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -100,13 +95,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   }
   const world = new World();
 
-  shader.registerMaterialShader(BLOB_SHADER_PATH, {
-    source: blobShader.wgsl,
-    paramSchema: [
-      { name: 'iResolution', type: 'vec2' },
-      { name: 'iTime', type: 'f32' },
-    ],
-  });
+  if (!shader.lookupMaterialShader(BLOB_SHADER_PATH).ok) {
+    shader.registerMaterialShader(BLOB_SHADER_PATH, {
+      source: blobShader.wgsl,
+      paramSchema: [
+        { name: 'iResolution', type: 'vec2' },
+        { name: 'iTime', type: 'f32' },
+      ],
+    });
+  }
 
   const paramValues: Record<string, number | number[]> = {
     iResolution: [target.width, target.height],

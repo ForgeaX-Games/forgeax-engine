@@ -26,7 +26,7 @@ import { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '../components';
+import '@forgeax/engine-render/internal';
 import type { Asset } from '@forgeax/engine-assets-runtime';
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { rootsToSceneAsset, serializeSceneAssetToPack } from '../collect-scene-asset';

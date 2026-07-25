@@ -14,7 +14,7 @@
       "id": "hello-m6-inspection-forensics",
       "script": "smoke",
       "domains": ["Inspection, debugging, and development bridges", "World and host contract", "GPU abstraction and implementations"],
-      "packages": ["@forgeax/engine-remote", "@forgeax/engine-rhi-debug", "@forgeax/rhi-debug-viewer", "@forgeax/remote-demo"],
+      "packages": ["@forgeax/engine-remote", "@forgeax/engine-rhi-debug", "@forgeax/engine-rhi-debug-viewer", "@forgeax/remote-demo"],
       "risks": ["baseline", "dynamic", "behavioral", "fault", "recovery", "cleanup"],
       "phaseInputs": ["baseline", "dynamic", "behavioral", "fault", "recovery"],
       "evidence": {

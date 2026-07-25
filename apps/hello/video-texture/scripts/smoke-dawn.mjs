@@ -128,14 +128,10 @@ import { readFileSync } from 'node:fs';
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const {
-  Camera,
   createRenderer,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
 } = enginePkg;
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer, perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_QUAD,
 } = await import('@forgeax/engine-assets-runtime');

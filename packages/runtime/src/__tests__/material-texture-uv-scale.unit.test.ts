@@ -1,5 +1,5 @@
+import { materialTextureUvScale } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import { materialTextureUvScale } from '../record/main-pass-material';
 
 describe('material texture UV scale [w37]', () => {
   it('maps a non-aligned BC7 logical edge below padded physical storage', () => {

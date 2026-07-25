@@ -12,7 +12,7 @@
 // the hidden file input upload path works end-to-end, window.__forgeaxViewer
 // is populated, and the RT canvas renders non-black pixels when WebGPU is available.
 //
-// Invocation: `pnpm --filter @forgeax/rhi-debug-viewer smoke:browser`
+// Invocation: `pnpm --filter @forgeax/engine-rhi-debug-viewer smoke:browser`
 //
 // Exit codes:
 //   0 = green (all assertions pass)
@@ -61,7 +61,7 @@ if (FALSIFY_MODE) {
   console.log('[smoke-browser] FALSIFY mode: skipping createShaderModule — RT expected all-black');
 }
 
-const viteProc = spawn('pnpm', ['-F', '@forgeax/rhi-debug-viewer', 'dev'], {
+const viteProc = spawn('pnpm', ['-F', '@forgeax/engine-rhi-debug-viewer', 'dev'], {
   cwd: REPO_ROOT,
   stdio: ['ignore', 'pipe', 'pipe'],
 });

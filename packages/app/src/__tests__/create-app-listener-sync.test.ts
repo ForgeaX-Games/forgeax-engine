@@ -30,7 +30,7 @@
 
 import { AudioListener as AudioListenerComponent } from '@forgeax/engine-audio';
 import { audioPlugin, type WebAudioEngine } from '@forgeax/engine-audio-webaudio';
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../create-app';
 

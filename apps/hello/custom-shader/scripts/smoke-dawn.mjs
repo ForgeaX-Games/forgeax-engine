@@ -152,14 +152,11 @@ const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const { createBoxGeometry } = await import('@forgeax/engine-geometry');
 const {
-  ANTIALIAS_MSAA,
-  Camera,
   createRenderer,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
 } = enginePkg;
+const { ANTIALIAS_MSAA, Camera, DirectionalLight, MeshFilter, MeshRenderer } =
+  await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 
 const MANIFEST_PATH = resolve(appRoot, 'dist', 'shaders', 'manifest.json');
 if (!existsSync(MANIFEST_PATH)) {
@@ -226,15 +223,17 @@ if (shader === null || assets === null) {
 
 // Register the user shader entry with the composed wgsl source (as the
 // browser app does via `import './pulse-material.wgsl'`).
-shader.registerMaterialShader('my-game::pulse-material', {
-  source: composedWgsl,
-  paramSchema: [
-    { name: 'baseColor', type: 'color' },
-    { name: 'metallic', type: 'f32' },
-    { name: 'roughness', type: 'f32' },
-  ],
-  bindingLayout: [],
-});
+if (!shader.lookupMaterialShader('my-game::pulse-material').ok) {
+  shader.registerMaterialShader('my-game::pulse-material', {
+    source: composedWgsl,
+    paramSchema: [
+      { name: 'baseColor', type: 'color' },
+      { name: 'metallic', type: 'f32' },
+      { name: 'roughness', type: 'f32' },
+    ],
+    bindingLayout: [],
+  });
+}
 
 const paramValues = {
   baseColor: [0.95, 0.45, 0.2],

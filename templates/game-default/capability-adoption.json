@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "template": "templates/game-default",
+  "rules": [
+    {
+      "id": "reachable-package-is-core",
+      "match": { "kind": "package", "templateImport": true },
+      "classification": "core",
+      "frontDoors": ["preview"],
+      "evidence": ["templates/game-default/main.ts"]
+    },
+    {
+      "id": "cross-solo-method-is-tooling",
+      "match": { "kind": "cross-solo-method" },
+      "classification": "tooling",
+      "frontDoors": ["game-default:audit"],
+      "evidence": ["templates/game-default/AGENTS.md"]
+    }
+  ],
+  "declarations": [
+    {
+      "id": "asset:hdr",
+      "classification": "core",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/assets/scene.pack.json"
+      ]
+    }
+  ]
+}

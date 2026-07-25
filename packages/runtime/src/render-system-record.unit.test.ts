@@ -28,21 +28,18 @@
 //     site (line ~5080) go; the only remaining path through "shader cache
 //     returned null" is `smPipelineHandle === null -> continue` skip-draw.
 
-import { describe, expect, it } from 'vitest';
-
-import type { InstanceBufferCacheEntry } from './instance-buffer-cache';
+import type { InstanceBufferCacheEntry } from '@forgeax/engine-render/internal';
 import {
   cacheKeyOf,
   getOrBuildPipeline,
+  interleaveSpriteInstanceBuffer,
   type PipelineDeviceProvider,
   type PipelineSpec,
   PipelineSpecError,
-} from './pipeline-spec';
-import {
-  interleaveSpriteInstanceBuffer,
   type SpriteInstancesSnapshot,
   spriteInstancesCacheHit,
-} from './record';
+} from '@forgeax/engine-render/internal';
+import { describe, expect, it } from 'vitest';
 
 const SPEC_BASE: PipelineSpec = {
   shader: { id: 'forgeax::default-standard-pbr', passKind: 'forward', variantSet: undefined },
@@ -67,7 +64,7 @@ const SPEC_MSAA: PipelineSpec = {
 
 describe('render-system-record M6-T1 silent fallback removal', () => {
   it('selectStandardFallbackPipeline export is gone (grep gate)', async () => {
-    const mod = await import('./record');
+    const mod = await import('@forgeax/engine-render/internal');
     expect((mod as Record<string, unknown>).selectStandardFallbackPipeline).toBeUndefined();
   });
 

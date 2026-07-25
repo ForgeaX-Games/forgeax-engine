@@ -1,7 +1,10 @@
+import {
+  cacheKeyOf,
+  type PipelineSpec,
+  SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET,
+} from '@forgeax/engine-render/internal';
 import { KNOWN_PASS_KINDS, type PassKind, type VertexAttributeMap } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET } from '../pbr-pipeline';
-import { cacheKeyOf, type PipelineSpec } from '../pipeline-spec';
 
 /*
  * feat-20260615-pipeline-spec-ssot M2-T2: cache key axis tests migrated from

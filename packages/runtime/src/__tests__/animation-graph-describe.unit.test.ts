@@ -10,10 +10,9 @@
 // TDD red anchor: describeAnimationGraph does not exist before w15; the file
 // fails to compile. After w15 the introspection matches the declaration.
 
+import { defineAnimationGraph, describeAnimationGraph } from '@forgeax/engine-animation';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { defineAnimationGraph } from '../animation/define-animation-graph';
-import { describeAnimationGraph } from '../animation/describe-animation-graph';
 
 function clipHandle(id: number) {
   return toShared<'AnimationClip'>(id);

@@ -45,7 +45,11 @@
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-physics": "workspace:*",
     "@forgeax/engine-picking": "workspace:*",
+    "@forgeax/engine-render": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-skinning": "workspace:*",
+    "@forgeax/engine-animation": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {

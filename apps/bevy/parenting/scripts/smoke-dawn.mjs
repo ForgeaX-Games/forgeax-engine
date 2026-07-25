@@ -95,7 +95,9 @@ const mockCanvas = {
 
 // --- build the parenting World via the shared SSOT builder ---
 const { createQueryState, Entity, queryRun, World } = await import('@forgeax/engine-ecs');
-const { ChildOf, createRenderer, propagateTransforms, Transform } = await import('@forgeax/engine-runtime');
+const { ChildOf, Transform } = await import('@forgeax/engine-scene');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { propagateTransforms } = await import('@forgeax/engine-scene');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { buildParentingWorld, stepRotate } = await import(resolve(here, '..', 'src', 'parenting.ts'));

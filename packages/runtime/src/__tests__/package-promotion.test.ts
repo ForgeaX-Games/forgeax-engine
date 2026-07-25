@@ -17,9 +17,9 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { createEngineMetrics } from '@forgeax/engine-render/internal';
 import type { SamplerAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { createEngineMetrics } from '../engine-metrics';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 const G1 = 'c0000000-0000-4000-c000-000000000001';

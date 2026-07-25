@@ -110,7 +110,9 @@ if (!ready.ok) {
 
 // Build world with the custom plugin
 const { printMessagePlugin } = await import(resolve(here, '..', 'src', 'plugin.ts'));
-const { Camera, perspective, Transform } = await import('@forgeax/engine-runtime');
+const { Camera } = await import('@forgeax/engine-render');
+const { perspective } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const { quat } = await import('@forgeax/engine-math');
 const world = new World();
 const plugin = printMessagePlugin(0, 'This is an example plugin');

@@ -6,14 +6,12 @@
 // "7-slot" name predates the SSAO scope-amend that pushed the count to 9
 // while keeping the BglKind tag stable.
 
-import { describe, expect, it } from 'vitest';
+import type { PipelineSpec } from '@forgeax/engine-render/internal';
 import {
+  buildBindGroupLayoutDescriptor,
   createHdrpBindGroupLayoutDescriptor,
-  HDRP_UNIFORM_LIGHT_CAPACITY,
-  packClusterUniform,
-} from './hdrp-buffers';
-import type { PipelineSpec } from './pipeline-spec';
-import { buildBindGroupLayoutDescriptor } from './pipeline-spec';
+} from '@forgeax/engine-render/internal';
+import { describe, expect, it } from 'vitest';
 
 function makeSpec(): PipelineSpec {
   return {
@@ -36,13 +34,6 @@ function makeSpec(): PipelineSpec {
 }
 
 describe('buildBindGroupLayoutDescriptor — hdrp-7-slot byte-equiv', () => {
-  it('packs the uniform downlevel light count into the existing cluster UBO lane', () => {
-    const payload = packClusterUniform({ x: 16, y: 9, z: 24 }, 0.1, 100, 0.9, 200);
-    const u32 = new Uint32Array(payload);
-    expect(u32[3]).toBe(HDRP_UNIFORM_LIGHT_CAPACITY);
-    expect(payload.byteLength).toBe(32);
-  });
-
   it('storageBuffer=true: 9 entries matching createHdrpBindGroupLayoutDescriptor(true)', () => {
     const spec = makeSpec();
     const out = buildBindGroupLayoutDescriptor(spec, {

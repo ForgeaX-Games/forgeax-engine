@@ -6,8 +6,8 @@
 // - Undefined viewport preserves backward compat (existing callers unchanged)
 // - addShadowPass accepts viewport parameter without error
 
+import type { AddShadowPassOptions } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import type { AddShadowPassOptions } from '../render-graph-primitives';
 
 describe('CSM viewport (w10)', () => {
   describe('AddShadowPassOptions viewport field', () => {

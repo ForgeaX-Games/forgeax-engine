@@ -33,7 +33,16 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Camera, createRenderer, EngineEnvironmentError, HDRP_PIPELINE_ID, Materials, MeshFilter, MeshRenderer, perspective, PointLight, type Renderer, Transform, URP_PIPELINE_ID } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { type Renderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
+import { HDRP_PIPELINE_ID, URP_PIPELINE_ID } from '@forgeax/engine-render/internal';
+import { PointLight } from '@forgeax/engine-render';
+
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const CANVAS_W = 512;

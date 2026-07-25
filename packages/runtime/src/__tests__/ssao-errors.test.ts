@@ -17,8 +17,8 @@
 // RED before w10 (SSAO codes not yet added to PostProcessErrorCode).
 // GREEN after w10 extends the union.
 
+import { PostProcessError } from '@forgeax/engine-render/internal';
 import { describe, expect, it } from 'vitest';
-import { PostProcessError } from '../post-process-errors.js';
 
 describe('SSAO PostProcessErrorCode exhaustive switch (M2 / w9)', () => {
   it('(a) PostProcessErrorCode union has the 2 SSAO validation members', () => {

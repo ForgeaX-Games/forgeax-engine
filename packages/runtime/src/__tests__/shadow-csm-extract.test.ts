@@ -12,9 +12,9 @@
 // castShadow: true; lightViewProj won't populate.
 
 import { World } from '@forgeax/engine-ecs';
+import { Camera, DirectionalLight, extractFrame } from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { Camera, DirectionalLight, Transform } from '../components';
-import { extractFrame } from '../render-system-extract';
 
 function makeWorld(castShadow?: boolean): World {
   const world = new World();

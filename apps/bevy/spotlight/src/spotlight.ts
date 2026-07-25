@@ -16,15 +16,11 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import {
-  Camera,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  SpotLight,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { Materials } from '@forgeax/engine-render';
+import { SpotLight } from '@forgeax/engine-render';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { quat } from '@forgeax/engine-math';
 

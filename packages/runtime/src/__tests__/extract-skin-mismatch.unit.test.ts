@@ -23,12 +23,12 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { type Handle, Severity, World } from '@forgeax/engine-ecs';
+import { Camera, extractFrame, MeshFilter, MeshRenderer } from '@forgeax/engine-render/internal';
+import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { ShaderRegistry } from '@forgeax/engine-shader';
+import { Skin } from '@forgeax/engine-skinning';
 import type { MaterialAsset, MeshAsset, SkeletonAsset } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
-import { Camera, MeshFilter, MeshRenderer, Skin, Transform } from '../components';
-import { extractFrame } from '../render-system-extract';
-import { propagateTransforms } from '../systems/propagate-transforms';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 // ── helpers ──────────────────────────────────────────────────────────────

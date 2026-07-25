@@ -14,7 +14,11 @@
     "smoke:browser": "node scripts/smoke-browser.mjs"
   },
   "forgeax": {
-    "bevyExample": { "name": "mesh_picking", "category": "Picking", "status": "implemented" },
+    "bevyExample": {
+      "name": "mesh_picking",
+      "category": "Picking",
+      "status": "implemented"
+    },
     "smokeInvocation": "pnpm --filter @forgeax/hello-picking smoke",
     "metrics": {
       "bundle-size": {
@@ -45,7 +49,9 @@
     "@forgeax/engine-runtime": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
-    "@forgeax/engine-math": "workspace:*"
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",

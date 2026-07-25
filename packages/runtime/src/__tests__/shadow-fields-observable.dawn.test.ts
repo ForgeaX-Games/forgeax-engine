@@ -16,13 +16,13 @@ import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import {
   Camera,
-  createRenderer,
   DirectionalLight,
   Instances,
   MeshFilter,
   MeshRenderer,
-  Transform,
-} from '@forgeax/engine-runtime';
+} from '@forgeax/engine-render/internal';
+import { createRenderer } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 

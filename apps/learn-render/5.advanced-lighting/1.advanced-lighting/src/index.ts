@@ -17,14 +17,10 @@
 // 1. engine usage
 import { type App, createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera,
-  createDevImportTransport,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { unwrapHandle } from '@forgeax/engine-types';
@@ -109,13 +105,15 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 5.1 blinn-phong] renderer.shader is null');
     return;
   }
-  shader.registerMaterialShader(BLINN_PHONG_SHADER_ID, {
-    source: blinnPhongShader.wgsl,
-    paramSchema: [
-      { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
-      { name: 'baseColorTexture', type: 'texture2d' },
-    ],
-  });
+  if (!shader.lookupMaterialShader(BLINN_PHONG_SHADER_ID).ok) {
+    shader.registerMaterialShader(BLINN_PHONG_SHADER_ID, {
+      source: blinnPhongShader.wgsl,
+      paramSchema: [
+        { name: 'baseColor', type: 'color', default: [1.0, 1.0, 1.0, 1.0] },
+        { name: 'baseColorTexture', type: 'texture2d' },
+      ],
+    });
+  }
 
   // Parse texture GUID.
   const woodGuidRes = AssetGuid.parse(WOOD_GUID_STR);

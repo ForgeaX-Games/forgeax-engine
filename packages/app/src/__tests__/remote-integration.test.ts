@@ -18,7 +18,7 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { startServer } from '@forgeax/engine-remote/server';
-import type { Renderer } from '@forgeax/engine-runtime';
+import type { Renderer } from '@forgeax/engine-render';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import { createApp } from '../create-app';

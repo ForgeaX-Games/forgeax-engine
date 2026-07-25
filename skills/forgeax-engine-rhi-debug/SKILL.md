@@ -158,7 +158,7 @@ flowchart LR
 | 属性 | 内容 |
 |:--|:--|
 | **入口** | `apps/rhi-debug-viewer/`（独立 Vite + React app） |
-| **启动** | `pnpm -F @forgeax/rhi-debug-viewer dev` → localhost:5173 |
+| **启动** | `pnpm -F @forgeax/engine-rhi-debug-viewer dev` → localhost:5173 |
 | **消费原语** | `buildFrameModel`（`/frame-model`，整帧分析 SSOT）/ `deserializeTape` / `createReplay` / `renderRtToCanvas` / `readbackTexturePixels` |
 | **浏览器依赖** | 纯事件面板（EventBrowser / PipelineState / ResourceInspector）零 GPU；TextureViewer 面板需 WebGPU 才能渲染真实像素（无 GPU 时 per-texture 降级为 no-webgpu 文案） |
 | **tape 版本兼容** | viewer 读 `TAPE_FORMAT_VERSION` ∈ {2, 3}（`deserializeTape` 接受旧 v2 tape）。v2 tape 缺失的 v3 新事件（setBlendConstant / drawIndirect / pass-level debug group 等）视为「命令不存在」，对应面板区域呈空态而非报错 |

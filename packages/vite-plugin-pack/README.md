@@ -131,7 +131,8 @@ export default defineConfig({
 
 ```ts
 // app host (client side)
-import { createApp, createDevImportTransport } from '@forgeax/engine-runtime';
+import { createApp } from '@forgeax/engine-app';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
 
 const app = await createApp(canvas, options, { importTransport: createDevImportTransport() });
 ```

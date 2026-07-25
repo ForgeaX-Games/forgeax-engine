@@ -30,11 +30,9 @@ import {
   INPUT_BACKEND_KEY,
   type InputBackend,
 } from '@forgeax/engine-input';
-import {
-  RhiError,
-  type RendererErrorListener,
-  type RendererLostListener,
-} from '@forgeax/engine-runtime';
+import { type RendererLostListener } from '@forgeax/engine-render';
+import { RhiError } from '@forgeax/engine-runtime';
+import type { RendererErrorListener } from '@forgeax/engine-render';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createApp, inputPlugin } from '../src/index';

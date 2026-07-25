@@ -12,9 +12,12 @@
 //     in order between g-buffer and lighting; lighting.reads includes ssaoBlurred
 //   - config.ssao.enabled=false -> zero ssao-* passes
 
+import type {
+  RenderPipelineContext,
+  RenderPipelineData,
+  RenderSystemRuntime,
+} from '@forgeax/engine-render/internal';
 import { describe, expect, it, vi } from 'vitest';
-import type { RenderPipelineContext, RenderPipelineData } from '../render-pipeline-context';
-import type { RenderSystemRuntime } from '../render-system';
 
 // Minimal mock that satisfies the buildGraph contract. We need enough of a
 // RenderSystemRuntime that getOrCreateHdrpBuffers and getOrCreateSsaoBuffers
@@ -135,7 +138,7 @@ describe('hdrp-pipeline buildGraph SSAO integration (M4 / w17)', () => {
 
     // Dynamic import to avoid hoist issues — the pipeline needs the full
     // engine runtime to be wired (getOrCreateHdrpBuffers, getOrCreateSsaoBuffers).
-    const { hdrpPipeline } = await import('../hdrp-pipeline');
+    const { hdrpPipeline } = await import('@forgeax/engine-render/internal');
     const graph = hdrpPipeline.buildGraph(ctx, data);
     expect(graph).not.toBeNull();
     if (graph === null) return; // type-narrow guard
@@ -169,7 +172,7 @@ describe('hdrp-pipeline buildGraph SSAO integration (M4 / w17)', () => {
     const ctx = makeMockCtx(runtime);
     const data = makeMockData({ ssao: { enabled: false } });
 
-    const { hdrpPipeline } = await import('../hdrp-pipeline');
+    const { hdrpPipeline } = await import('@forgeax/engine-render/internal');
     const graph = hdrpPipeline.buildGraph(ctx, data);
     expect(graph).not.toBeNull();
 
@@ -185,7 +188,7 @@ describe('hdrp-pipeline buildGraph SSAO integration (M4 / w17)', () => {
     // config without ssao field
     const data = makeMockData({ clusterGrid: { x: 16, y: 9, z: 24 } });
 
-    const { hdrpPipeline } = await import('../hdrp-pipeline');
+    const { hdrpPipeline } = await import('@forgeax/engine-render/internal');
     const graph = hdrpPipeline.buildGraph(ctx, data);
     expect(graph).not.toBeNull();
 

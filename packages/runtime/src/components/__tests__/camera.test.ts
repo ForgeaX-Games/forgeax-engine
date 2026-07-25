@@ -14,8 +14,8 @@
 // exercises the world.get path.
 
 import { World } from '@forgeax/engine-ecs';
+import { Camera, perspective } from '@forgeax/engine-render/internal';
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import { Camera, perspective } from '../camera';
 
 describe('camera.ts autoAspect bool column (w8)', () => {
   it('world.get(cam, Camera).autoAspect reads a JS boolean, not a number', () => {

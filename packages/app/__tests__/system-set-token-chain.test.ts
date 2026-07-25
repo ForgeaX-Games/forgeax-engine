@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { World } from '@forgeax/engine-ecs';
 import { InputSet } from '@forgeax/engine-input';
 import { PhysicsSet } from '@forgeax/engine-physics';
-import { AnimationSet, TransformSet } from '@forgeax/engine-runtime';
+import { AnimationSet } from '@forgeax/engine-animation';
+import { TransformSet } from '@forgeax/engine-scene';
 import { StateSet } from '@forgeax/engine-state';
 import { describe, expect, it } from 'vitest';
 

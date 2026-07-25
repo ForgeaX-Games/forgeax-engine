@@ -141,14 +141,10 @@ const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(MA
 
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  PointLight,
-  Skylight,
-  Transform,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { Skylight } = await import('@forgeax/engine-render');
+const { Camera, DirectionalLight, PointLight } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 let renderer;

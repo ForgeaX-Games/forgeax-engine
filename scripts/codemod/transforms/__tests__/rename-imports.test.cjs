@@ -17,11 +17,11 @@ const transform = require(path.resolve(__dirname, '..', 'rename-imports.cjs'));
 
 const MAP_PATH = path.resolve(__dirname, '..', '..', 'rename-map.json');
 
-function run(source) {
+function run(source, extension = 'ts') {
   return transform(
-    { source, path: '/virtual/file.ts' },
+    { source, path: `/virtual/file.${extension}` },
     {
-      jscodeshift: jscodeshift.withParser('ts'),
+      jscodeshift: jscodeshift.withParser('tsx'),
       stats: () => undefined,
       report: () => undefined,
     },
@@ -94,6 +94,17 @@ assertEq(
   run(worstCase) ?? worstCase,
   worstCase,
   'literal equality: @forgeax/engine-shader is never coerced to engine-runtime-shader',
+);
+
+// 8) TSX must parse JSX while preserving the import rewrite contract. The
+// idempotency gate runs the transform over every .tsx source file.
+assertEq(
+  run(
+    "import { Engine } from '@forgeax/engine';\nexport const View = () => <main>{Engine.name}</main>;\n",
+    'tsx',
+  ),
+  "import { Engine } from '@forgeax/engine-runtime';\nexport const View = () => <main>{Engine.name}</main>;\n",
+  'TSX import rewrites without rejecting JSX',
 );
 
 console.warn('\nall rename-imports.cjs assertions passed');

@@ -3,7 +3,7 @@
 // header for the shared pattern rationale). SkinErrorCode folds the 3-member
 // SkinExtractErrorCode subset union.
 
-import type { SkinError, SkinErrorCode } from '../errors/skin';
+import type { SkinError, SkinErrorCode } from '@forgeax/engine-skinning';
 
 function exhaustiveSwitchOnSkinCode(code: SkinErrorCode): string {
   switch (code) {
@@ -14,12 +14,6 @@ function exhaustiveSwitchOnSkinCode(code: SkinErrorCode): string {
     case 'skin-joint-path-unresolved':
       return code;
     case 'skin-instances-coexist-forbidden':
-      return code;
-    case 'skin-palette-overflow':
-      return code;
-    case 'skin-material-mismatch':
-      return code;
-    case 'material-skin-attr-missing':
       return code;
     // SkinExtractErrorCode subset union (extract-stage fail-fast).
     case 'skeleton-resolve-failed':
@@ -51,18 +45,6 @@ function narrowSkinError(err: SkinError): void {
       break;
     case 'skin-instances-coexist-forbidden':
       void err.detail.entity; // number
-      break;
-    case 'skin-palette-overflow':
-      void err.detail.requestedBytes; // number
-      void err.detail.limit; // number
-      break;
-    case 'skin-material-mismatch':
-      void err.detail.entity; // number
-      void err.detail.actualShader; // string | undefined
-      break;
-    case 'material-skin-attr-missing':
-      void err.detail.entity; // number
-      void err.detail.missing; // 'skinIndex' | 'skinWeight' | 'both'
       break;
     case 'skeleton-resolve-failed':
       void err.detail.entity; // number

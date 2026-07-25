@@ -146,7 +146,9 @@ const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const enginePkg = await import('@forgeax/engine-runtime');
 const { createPlaneGeometry } = await import('@forgeax/engine-geometry');
-const { Camera, createRenderer, MeshFilter, MeshRenderer, Transform } = enginePkg;
+const { createRenderer } = enginePkg;
+const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
@@ -230,10 +232,12 @@ if (!blinnPhongEntry) {
   console.error('[smoke] FAIL - manifest.materialShaders[] missing 5_1_blinn_phong entry');
   process.exit(1);
 }
-shader.registerMaterialShader('learn-render::5-1-blinn-phong', {
-  source: blinnPhongEntry.composedWgsl,
-  paramSchema: JSON.parse(blinnPhongEntry.paramSchema),
-});
+if (!shader.lookupMaterialShader('learn-render::5-1-blinn-phong').ok) {
+  shader.registerMaterialShader('learn-render::5-1-blinn-phong', {
+    source: blinnPhongEntry.composedWgsl,
+    paramSchema: JSON.parse(blinnPhongEntry.paramSchema),
+  });
+}
 
 // Register texture under its GUID (wood.png, the LO 5.1 floor texture).
 const woodGuidRes = AssetGuid.parse('019e3969-1d48-7c3b-ac24-6d68f457065f');

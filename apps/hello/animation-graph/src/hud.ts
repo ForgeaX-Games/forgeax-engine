@@ -7,7 +7,7 @@
 //   - Total weight sum -- visibly > 1 when overlay Add layer is active
 
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import { AnimationPlayer } from '@forgeax/engine-runtime';
+import { AnimationPlayer } from '@forgeax/engine-animation';
 
 export interface HudParams {
   readonly locomotion: number;

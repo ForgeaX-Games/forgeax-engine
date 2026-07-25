@@ -27,21 +27,20 @@
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { Entity, World } from '@forgeax/engine-ecs';
-import { type MaterialAsset, type TilesetAsset, toShared } from '@forgeax/engine-types';
-import { describe, expect, it } from 'vitest';
 import {
-  ChildOf,
   encodeSortScope,
-  MeshRenderer,
   TileLayer,
   Tilemap,
-  Transform,
-} from '../components';
+  tilemapChunkExtractSystem,
+} from '@forgeax/engine-render/authoring';
 import {
+  MeshRenderer,
   resetTilemapChunkExtractCache,
   resetTilemapDerivedEntityTracker,
-  tilemapChunkExtractSystem,
-} from '../tilemap-chunk-extract-system';
+} from '@forgeax/engine-render/internal';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+import { type MaterialAsset, type TilesetAsset, toShared } from '@forgeax/engine-types';
+import { describe, expect, it } from 'vitest';
 
 interface AtlasMeta {
   atlasWidth: number;

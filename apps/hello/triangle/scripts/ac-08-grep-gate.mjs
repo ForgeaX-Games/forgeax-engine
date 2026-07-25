@@ -515,7 +515,7 @@ const G_GET_RAW_DEVICE_WHITELIST = new Set([
     // so the file must be in the allow-list; renamed-imports are not
     // applicable here because the call goes through a `RhiBackendPack`
     // record property, not a top-level import.
-    'packages/runtime/src/createRenderer.ts',
+    'packages/render/src/renderer/renderer-factory.ts',
     // feat-20260511-asset-system-v1 verify F-1 fix-up (w17): dual-impl
     // texture upload spike invokes `_internal_getRawDevice(device)` to drop
     // to the raw GPUDevice for readback (copyTextureToBuffer destination

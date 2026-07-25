@@ -164,7 +164,7 @@ Each task in our planning system maps to one commit; commit messages take the fo
 
 ## Architecture invariants
 
-- The monorepo is a layered graph of `@forgeax/engine-*` packages (`packages/<pkg>/` ↔ `@forgeax/engine-<pkg>`; bare `@forgeax/engine` in `packages/engine/` is a README-only placeholder). Each `packages/<pkg>/README.md` is the SSOT for that package's API, error codes, and capability gates — see AGENTS.md §Packages. Cross-level imports that violate the dependency direction break the build.
+- The monorepo is a layered graph of `@forgeax/engine-*` packages (`packages/<pkg>/` ↔ `@forgeax/engine-<pkg>`; bare `@forgeax/engine-runtime` in `packages/engine/` is a README-only placeholder). Each `packages/<pkg>/README.md` is the SSOT for that package's API, error codes, and capability gates — see AGENTS.md §Packages. Cross-level imports that violate the dependency direction break the build.
 - `tsup` emits `.mjs` only (`format: ['esm']`); declarations come from `tsc -b` composite mode (`dts: false` in tsup, `emitDeclarationOnly: true` in tsconfig). `pnpm -r build` alone leaves `.d.ts` stale — run `pnpm build` (chains `tsc -b`).
 - All runtime diagnostics use `console.warn` / `console.error` (Biome's `noConsole` rule allows only these levels in source).
 - Source and entry docs are **English-only** (ASCII + math/Greek), enforced by `scripts/forgeax/check_english_only.py`.

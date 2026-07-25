@@ -44,9 +44,12 @@
 // (consistent abstraction with M1 Tonemap encoding).
 
 import type { Component, ShapeOf } from '@forgeax/engine-ecs';
+import type { SpriteAnimation } from '@forgeax/engine-render/authoring';
+import {
+  SPRITE_PLAYBACK_MODE_CLAMP,
+  SPRITE_PLAYBACK_MODE_LOOP,
+} from '@forgeax/engine-render/authoring';
 import { describe, expectTypeOf, it } from 'vitest';
-import type { SpriteAnimation } from '../sprite-animation';
-import { SPRITE_PLAYBACK_MODE_CLAMP, SPRITE_PLAYBACK_MODE_LOOP } from '../sprite-playback-mode';
 
 describe('SpriteAnimation — Component token shape (AC-02 schema lock)', () => {
   it("name literal type is 'SpriteAnimation'", () => {

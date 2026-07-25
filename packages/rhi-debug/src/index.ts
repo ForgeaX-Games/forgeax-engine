@@ -72,6 +72,7 @@ export {
   deserializeTape,
   serializeTape,
 } from './tape-format';
+export { decodeTexelRaw, decodeToRgba8, halfToFloat } from './texel-decode';
 export {
   bytesPerTexel,
   type ChannelType,

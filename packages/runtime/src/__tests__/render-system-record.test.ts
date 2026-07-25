@@ -8,6 +8,23 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import {
+  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
+  SpriteRegionOverride,
+} from '@forgeax/engine-render/authoring';
+import type { DispatchEntry } from '@forgeax/engine-render/internal';
+import * as recordModule from '@forgeax/engine-render/internal';
+import {
+  Camera,
+  createEngineMetrics,
+  detectNineSliceScaleTooSmall,
+  extractFrame,
+  isLitMaterialSnapshot,
+  type MaterialSnapshot,
+  MeshFilter,
+  MeshRenderer,
+} from '@forgeax/engine-render/internal';
+import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry, type ShaderRegistryDevice } from '@forgeax/engine-shader';
 import type {
   Handle,
@@ -19,21 +36,12 @@ import type {
 } from '@forgeax/engine-types';
 import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { Camera, MeshFilter, MeshRenderer, Transform } from '../components';
-import { SpriteRegionOverride } from '../components/sprite-region-override';
-import { createEngineMetrics } from '../engine-metrics';
-import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../materials';
-import * as recordModule from '../record';
-import { detectNineSliceScaleTooSmall, isLitMaterialSnapshot } from '../record';
-import type { DispatchEntry } from '../render-system-extract';
-import { extractFrame, type MaterialSnapshot } from '../render-system-extract';
-import { propagateTransforms } from '../systems/propagate-transforms';
 
 // ─── from render-system-record-pbr-ubo-stable.test.ts ───
 {
   // render-system-record-pbr-ubo-stable - feat-20260527-sprite-nineslice M2 / w6.
   //
-  // PBR Material UBO 80 B byte-sequence regression net (D-7 isolation):
+  // PBR Material UBO 128 B byte-sequence regression net (D-7 isolation):
   // any deviation in the PBR write path's byte sequence (even 1 byte) caused
   // by the sprite-branch schema-driven UBO extension (w11) MUST fail this test
   // — that triggers R-8 fallback (revert D-7 to physically isolated sprite
@@ -43,7 +51,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
   // (render-system-record.ts:2194-2277 -- baseColor, metallic, roughness,
   // channelMap u32 packing, emissive, occlusionStrength, paramSnapshot
   // schema-driven overlay) into a pure helper
-  // `buildPbrMaterialUboPayload(material) -> ArrayBuffer(80B)` so this
+  // `buildPbrMaterialUboPayload(material) -> ArrayBuffer(128B)` so this
   // regression test can exercise the PBR write byte-for-byte.
   //
   // The helper MUST produce the exact byte sequence the inline path produced
@@ -51,7 +59,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
   // asserts the PBR baseline against literal byte values.
   //
   // Coverage:
-  //   - 80 B payload (STANDARD_PBR_UBO_SIZE)
+  //   - 128 B payload (STANDARD_PBR_UBO_SIZE)
   //   - slot 0 = baseColor.rgb + 1 (alpha hardcoded)
   //   - slot 1 first 8 B = metallic, roughness (f32x2)
   //   - slot 1 last 4 u32 (channelMap) = [2, 1, 0, 0]
@@ -66,6 +74,11 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 
   const mod = recordModule as unknown as {
     buildPbrMaterialUboPayload?: (material: MaterialSnapshot) => ArrayBuffer;
+    applyMaterialTextureUvScales?: (
+      payload: ArrayBuffer,
+      material: MaterialSnapshot,
+      world: World,
+    ) => void;
   };
 
   function makePbrSnapshot(opts: {
@@ -75,6 +88,8 @@ import { propagateTransforms } from '../systems/propagate-transforms';
     emissive?: readonly [number, number, number];
     emissiveIntensity?: number;
     occlusionStrength?: number;
+    clearcoat?: number;
+    clearcoatRoughness?: number;
   }): MaterialSnapshot {
     return {
       baseColor: opts.baseColor ?? [0.5, 0.6, 0.7, 1],
@@ -85,6 +100,8 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       ...(opts.emissive !== undefined && { emissive: opts.emissive }),
       ...(opts.emissiveIntensity !== undefined && { emissiveIntensity: opts.emissiveIntensity }),
       ...(opts.occlusionStrength !== undefined && { occlusionStrength: opts.occlusionStrength }),
+      ...(opts.clearcoat !== undefined && { clearcoat: opts.clearcoat }),
+      ...(opts.clearcoatRoughness !== undefined && { clearcoatRoughness: opts.clearcoatRoughness }),
     } as unknown as MaterialSnapshot;
   }
 
@@ -104,6 +121,8 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         emissive: [0, 0, 0],
         emissiveIntensity: 0,
         occlusionStrength: 1,
+        clearcoat: 0.85,
+        clearcoatRoughness: 0.12,
       });
       const buf = mod.buildPbrMaterialUboPayload(snap);
       expect(buf.byteLength).toBe(128);
@@ -134,10 +153,35 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(f32[15]).toBe(0);
       // occlusionStrength (offset 64..67).
       expect(f32[16]).toBe(1);
-      // trailing pad (offset 68..79 to 16 B align).
+      // uvSet + alphaCutoff (offsets 68..75).
       expect(f32[17]).toBe(0);
       expect(f32[18]).toBe(0);
-      expect(f32[19]).toBe(0);
+      // clearcoat layer (offsets 76..83).
+      expect(f32[19]).toBeCloseTo(0.85);
+      expect(f32[20]).toBeCloseTo(0.12);
+    });
+
+    it('keeps engine-owned texture UV tails aligned across PBR and sprite layouts', () => {
+      const apply = mod.applyMaterialTextureUvScales;
+      if (typeof apply !== 'function') throw new Error('helper not exported yet');
+      const world = new World();
+      const pbrPayload = new ArrayBuffer(128);
+      apply(pbrPayload, makePbrSnapshot({}), world);
+      const pbrF32 = new Float32Array(pbrPayload);
+      expect(pbrF32[22]).toBe(1);
+      expect(pbrF32[30]).toBe(1);
+      expect(pbrF32[20]).toBe(0);
+
+      const spritePayload = new ArrayBuffer(128);
+      apply(
+        spritePayload,
+        { ...makePbrSnapshot({}), materialShaderId: 'forgeax::sprite' } as MaterialSnapshot,
+        world,
+      );
+      const spriteF32 = new Float32Array(spritePayload);
+      expect(spriteF32[20]).toBe(1);
+      expect(spriteF32[28]).toBe(1);
+      expect(spriteF32[30]).toBe(0);
     });
 
     it('byte-stable across two equivalent PBR snapshots (idempotent write)', () => {
@@ -978,8 +1022,8 @@ import { propagateTransforms } from '../systems/propagate-transforms';
 // --- from feat-20260625-refactor-sprite-as-transparent-mesh M1 / w2 ---
 {
   // standard-pbr regression: the generic writer over the engine-shipped
-  // default-standard-pbr.wgsl.meta.json paramSchema (10 numeric entries
-  // std140-packed into 80 B) must produce byte-identical output to
+  // default-standard-pbr.wgsl.meta.json paramSchema (14 numeric entries
+  // std140-packed into 96 B) must produce byte-identical output to
   // buildPbrMaterialUboPayload. This is the gate plan-strategy section 2
   // D-2 sets so the generic writer can replace the inline overlay without
   // perturbing PBR rendering. RED until w3 lands the helper.
@@ -1009,12 +1053,16 @@ import { propagateTransforms } from '../systems/propagate-transforms';
     { name: 'emissive', type: 'vec3', default: [0, 0, 0] },
     { name: 'emissiveIntensity', type: 'f32', default: 0 },
     { name: 'occlusionStrength', type: 'f32', default: 1 },
+    { name: 'uvSet', type: 'f32', default: 0 },
+    { name: 'alphaCutoff', type: 'f32', default: 0 },
+    { name: 'clearcoat', type: 'f32', default: 0 },
+    { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
   ];
 
   describe('applyParamSnapshotToUbo: standard-pbr byte-identical via derive (M1 / w2)', () => {
-    it('derive(standard-pbr).uboLayout matches the 80 B layout the inline PBR writer uses', () => {
+    it('derive(standard-pbr).uboLayout matches the 96 B layout the inline PBR writer uses', () => {
       const { uboLayout } = derive(STANDARD_PBR_SCHEMA);
-      expect(uboLayout.totalBytes).toBe(80);
+      expect(uboLayout.totalBytes).toBe(96);
       const byName = new Map(uboLayout.entries.map((e) => [e.name, e]));
       expect(byName.get('baseColor')?.offset).toBe(0);
       expect(byName.get('metallic')?.offset).toBe(16);
@@ -1027,6 +1075,10 @@ import { propagateTransforms } from '../systems/propagate-transforms';
       expect(byName.get('emissive')?.offset).toBe(48);
       expect(byName.get('emissiveIntensity')?.offset).toBe(60);
       expect(byName.get('occlusionStrength')?.offset).toBe(64);
+      expect(byName.get('uvSet')?.offset).toBe(68);
+      expect(byName.get('alphaCutoff')?.offset).toBe(72);
+      expect(byName.get('clearcoat')?.offset).toBe(76);
+      expect(byName.get('clearcoatRoughness')?.offset).toBe(80);
     });
 
     it('generic writer over standard-pbr snapshot equals buildPbrMaterialUboPayload bytes', () => {
@@ -1055,6 +1107,10 @@ import { propagateTransforms } from '../systems/propagate-transforms';
         emissive,
         emissiveIntensity,
         occlusionStrength,
+        uvSet: 0,
+        alphaCutoff: 0,
+        clearcoat: 0,
+        clearcoatRoughness: 0.5,
       } as unknown as MaterialSnapshot;
       const baseline = mod.buildPbrMaterialUboPayload(material);
       // Construct the generic-writer output: start from the same explicit
@@ -1569,7 +1625,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
   describe('AC-04 setTransparentSortConfig mode=99 returns Result.err (KV untouched)', () => {
     it('Result.err carries code/expected/hint/detail + KV resource is NOT inserted', async () => {
       const { setTransparentSortConfig, TRANSPARENT_SORT_CONFIG_KEY } = await import(
-        '@forgeax/engine-runtime'
+        '@forgeax/engine-render/internal'
       );
       const world = new World();
       // Pre-check: resource MUST be absent before the rejected call.
@@ -1596,7 +1652,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
   describe('AC-05 LAYER_Y footY ordering (same layer, deeper foot draws later)', () => {
     it('footY=10/20/30 same layer -> output order footY=30/20/10 (back-to-front)', async () => {
       const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_LAYER_Y } = await import(
-        '@forgeax/engine-runtime'
+        '@forgeax/engine-render/internal'
       );
       const { transparentSortEntries } = await import('../systems/transparent-sort');
       const world = new World();
@@ -1656,7 +1712,7 @@ import { propagateTransforms } from '../systems/propagate-transforms';
   describe('R-2 mode=DISTANCE + cameraPos absent preserves insertion order', () => {
     it('transparentSortEntries(entries, world) with mode=3 + no cameraPos = insertion order', async () => {
       const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } = await import(
-        '@forgeax/engine-runtime'
+        '@forgeax/engine-render/internal'
       );
       const { transparentSortEntries } = await import('../systems/transparent-sort');
       const world = new World();

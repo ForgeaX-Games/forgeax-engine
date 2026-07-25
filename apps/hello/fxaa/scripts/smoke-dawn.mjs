@@ -133,16 +133,18 @@ const mockCanvas = {
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
 const {
+  createRenderer,
+} = enginePkg;
+const {
   ANTIALIAS_NONE,
   ANTIALIAS_FXAA,
   Camera,
-  createRenderer,
   DirectionalLight,
   MeshFilter,
   MeshRenderer,
   perspective,
-  Transform,
-} = enginePkg;
+} = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
   HANDLE_QUAD,

@@ -18,7 +18,10 @@
     "gauntletScenario": {
       "id": "hello-level-switch-dawn",
       "script": "smoke",
-      "domains": ["World and host contract", "Rendering and shader construction"],
+      "domains": [
+        "World and host contract",
+        "Rendering and shader construction"
+      ],
       "packages": [
         "@forgeax/engine-assets-runtime",
         "@forgeax/engine-ecs",
@@ -70,7 +73,9 @@
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-state": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
-    "@forgeax/engine-math": "workspace:*"
+    "@forgeax/engine-math": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",

@@ -5,7 +5,7 @@
 // viewer gracefully degrades: tree + bindings render normally, RT panel
 // shows no-webgpu state with centered text, layout preserved, no crash.
 //
-// Invocation: `pnpm --filter @forgeax/rhi-debug-viewer smoke:browser:no-webgpu`
+// Invocation: `pnpm --filter @forgeax/engine-rhi-debug-viewer smoke:browser:no-webgpu`
 //
 // Exit codes:
 //   0 = green (degradation path working as expected)
@@ -34,7 +34,7 @@ const FIXTURES_DIR = mkdtempSync(resolve(tmpdir(), 'rhi-debug-viewer-fixture-'))
   writeFileSync(resolve(FIXTURES_DIR, 'frame-0.report.json'), JSON.stringify(report, null, 2));
 }
 
-const viteProc = spawn('pnpm', ['-F', '@forgeax/rhi-debug-viewer', 'dev'], {
+const viteProc = spawn('pnpm', ['-F', '@forgeax/engine-rhi-debug-viewer', 'dev'], {
   cwd: REPO_ROOT,
   stdio: ['ignore', 'pipe', 'pipe'],
 });

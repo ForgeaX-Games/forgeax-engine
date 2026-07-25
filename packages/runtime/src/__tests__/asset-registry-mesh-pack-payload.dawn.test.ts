@@ -32,10 +32,10 @@
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { GpuResourceStore } from '@forgeax/engine-render/internal';
 import { ok } from '@forgeax/engine-rhi';
 import type { EquirectAsset, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { GpuResourceStore } from '../gpu-resource-store';
 
 // feat-20260601-gpu-resource-store-extraction M1: configureGpuDevice moved to
 // GpuResourceStore (D-3 registerCube relay). These tests exercise registry-side

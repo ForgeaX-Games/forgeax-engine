@@ -33,18 +33,17 @@ import { Update } from '@forgeax/engine-ecs';
 import { createApp } from '@forgeax/engine-app';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  AnimationPlayer,
-  Camera,
-  ChildOf,
-  createDevImportTransport,
-  DirectionalLight,
-  EngineEnvironmentError,
-  perspective,
-  SceneInstance,
-  Skin,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Skin } from '@forgeax/engine-skinning';
+
+import { AnimationPlayer } from '@forgeax/engine-animation';
+
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { SceneInstance } from '@forgeax/engine-render';
+
 import type { AnimationClip, Handle, SceneAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 

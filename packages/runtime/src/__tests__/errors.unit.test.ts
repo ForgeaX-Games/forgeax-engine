@@ -23,16 +23,19 @@ import {
   SceneCollectAssetGuidUnresolvedError,
   SceneCollectEntityRefOutOfClosureError,
 } from '@forgeax/engine-assets-runtime';
+import type { RenderError, RenderErrorCode } from '@forgeax/engine-render/internal';
+import {
+  EquirectProjectionFailedError,
+  RhiErrorListenerRegistry,
+} from '@forgeax/engine-render/internal';
 import { RhiError } from '@forgeax/engine-rhi';
+import type { SkinError, SkinErrorCode } from '@forgeax/engine-skinning';
 import type { AssetErrorCode, ImageErrorCode } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import {
   __classifyEnvErrorReasonForTest,
   __composeEnvErrorHintForTest,
 } from '../create-renderer-env-classify';
-import type { RenderError, RenderErrorCode } from '../errors/render';
-import { EquirectProjectionFailedError } from '../errors/render';
-import type { SkinError, SkinErrorCode } from '../errors/skin';
 
 // feat-20260704-runtime-tier1-decomposition M2 / w12: the eliminated top-level
 // RuntimeError / RuntimeErrorCode aggregate unions (D-3) are reconstituted here
@@ -50,8 +53,7 @@ import {
   type PipelineErrorCode,
   type PipelineNotFoundDetail,
   type PipelinePreviouslyRegisteredDetail,
-} from '../pipeline-errors';
-import { RhiErrorListenerRegistry } from '../renderer';
+} from '@forgeax/engine-render/internal';
 
 {
   // ─── from create-renderer-env-error-classify.test.ts ───
@@ -1508,7 +1510,7 @@ import { RhiErrorListenerRegistry } from '../renderer';
     // P3 fail-fast + P4 property access).
     describe('feat-20260609 M1 T-1: PostProcessErrorCode 3-member closed union + dispatchFullscreenPass throw', () => {
       it('PostProcessErrorCode union includes fullscreen-input-not-found member (T-2 closed-set growth)', async () => {
-        const ppe = await import('../post-process-errors');
+        const ppe = await import('@forgeax/engine-render/internal');
         type RealCode = (typeof ppe)['PostProcessError'] extends {
           new (args: { code: infer C; detail: never }): unknown;
         }
@@ -1521,10 +1523,10 @@ import { RhiErrorListenerRegistry } from '../renderer';
       });
 
       it('exhaustive switch over PostProcessErrorCode covers 3 members without default', async () => {
-        const ppeMod: typeof import('../post-process-errors') = await import(
-          '../post-process-errors'
+        const ppeMod: typeof import('@forgeax/engine-render/internal') = await import(
+          '@forgeax/engine-render/internal'
         );
-        type Code = import('../post-process-errors').PostProcessErrorCode;
+        type Code = import('@forgeax/engine-render/internal').PostProcessErrorCode;
         const classify = (code: Code): string => {
           switch (code) {
             case 'post-process-already-registered':
@@ -1554,7 +1556,7 @@ import { RhiErrorListenerRegistry } from '../renderer';
       });
 
       it('fullscreen-input-not-found variant detail = { readsKey, passName } (T-2 detail shape)', async () => {
-        const ppe = await import('../post-process-errors');
+        const ppe = await import('@forgeax/engine-render/internal');
         const err = new ppe.PostProcessError({
           code: 'fullscreen-input-not-found',
           detail: { readsKey: 'offscreenColor', passName: 'pp' },
@@ -1562,7 +1564,8 @@ import { RhiErrorListenerRegistry } from '../renderer';
         expect(err.code).toBe('fullscreen-input-not-found');
         if (err.code === 'fullscreen-input-not-found') {
           // Property access narrows to FullscreenInputNotFoundDetail without cast.
-          const detail: import('../post-process-errors').FullscreenInputNotFoundDetail = err.detail;
+          const detail: import('@forgeax/engine-render/internal').FullscreenInputNotFoundDetail =
+            err.detail;
           expect(detail.readsKey).toBe('offscreenColor');
           expect(detail.passName).toBe('pp');
         }
@@ -1574,8 +1577,8 @@ import { RhiErrorListenerRegistry } from '../renderer';
 
       it('dispatchFullscreenPass throws fullscreen-input-not-found when reads[0] resolves to undefined (T-3 throw site)', async () => {
         const { RenderGraph } = await import('@forgeax/engine-render-graph');
-        const { addFullscreenPass } = await import('../render-graph-primitives');
-        type RPC = import('../render-pipeline-context').RenderPipelineContext;
+        const { addFullscreenPass } = await import('@forgeax/engine-render/internal');
+        type RPC = import('@forgeax/engine-render/internal').RenderPipelineContext;
         // Stub ctx whose runtime.lookupPostProcess returns a registered entry but
         // whose resolve context (passed via graph.execute) returns undefined for
         // the requested reads key. The dispatcher's reads-resolve branch must

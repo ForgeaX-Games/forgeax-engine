@@ -26,7 +26,13 @@
 import { createApp } from '@forgeax/engine-app';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, DirectionalLight, MeshFilter, MeshRenderer, perspective, Transform, setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport } from '@forgeax/engine-runtime';
+import { setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } from '@forgeax/engine-render/internal';
+
 import type { MaterialAsset, TextureAsset } from '@forgeax/engine-types';
 import { RenderQueue, unwrapHandle } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
@@ -122,15 +128,17 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[learn-render 4.3 blending] renderer.shader is null');
     return;
   }
-  shader.registerMaterialShader(ALPHA_TEST_SHADER_ID, {
-    source: alphaTestShader.wgsl,
-    paramSchema: [
-      { name: 'baseColor', type: 'color' },
-      { name: 'metallic', type: 'f32' },
-      { name: 'roughness', type: 'f32' },
-      { name: 'baseColorTexture', type: 'texture2d' },
-    ],
-  });
+  if (!shader.lookupMaterialShader(ALPHA_TEST_SHADER_ID).ok) {
+    shader.registerMaterialShader(ALPHA_TEST_SHADER_ID, {
+      source: alphaTestShader.wgsl,
+      paramSchema: [
+        { name: 'baseColor', type: 'color' },
+        { name: 'metallic', type: 'f32' },
+        { name: 'roughness', type: 'f32' },
+        { name: 'baseColorTexture', type: 'texture2d' },
+      ],
+    });
+  }
 
   // Wire the pack-index URL for GUID-based texture loading.
   assets.configurePackIndex(PACK_INDEX_URL);

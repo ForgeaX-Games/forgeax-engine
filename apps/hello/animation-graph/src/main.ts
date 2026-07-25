@@ -1,4 +1,3 @@
-// hello-animation-graph -- Fox.glb + AnimationGraph DAG demo.
 // feat-20260713-animation-state-machine-plugin M5 / w33 (AC-13).
 //
 // Demonstrates the full AnimationGraph evaluation pipeline:
@@ -31,19 +30,18 @@ import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  AnimationPlayer,
-  Camera,
-  ChildOf,
-  createDevImportTransport,
-  defineAnimationGraph,
-  DirectionalLight,
-  EngineEnvironmentError,
-  perspective,
-  SceneInstance,
-  Skin,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { AnimationPlayer, defineAnimationGraph } from '@forgeax/engine-animation';
+
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+
+import { Skin } from '@forgeax/engine-skinning';
+
+import { Camera } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { SceneInstance } from '@forgeax/engine-render';
+import { DirectionalLight } from '@forgeax/engine-render';
+
 import type { AnimationClip, Handle, SceneAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { refreshHud } from './hud';

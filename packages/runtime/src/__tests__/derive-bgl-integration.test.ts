@@ -25,10 +25,10 @@
 //       std140 walk produced by derive — caller writes scalars at the
 //       reported offsets and the totalBytes is the buffer allocation size.
 
+import { appendInjection } from '@forgeax/engine-render/internal';
 import type { ParamSchemaEntry } from '@forgeax/engine-types';
 import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { appendInjection } from '../pbr-pipeline';
 
 // ─── Synthetic schemas (one per built-in shader family) ─────────────────────
 //
@@ -45,6 +45,13 @@ const standardPbrSchema: readonly ParamSchemaEntry[] = [
   { name: 'roughnessChannel', type: 'f32', default: 1 },
   { name: 'aoChannel', type: 'f32', default: 0 },
   { name: 'extraChannel', type: 'f32', default: 0 },
+  { name: 'emissive', type: 'vec3', default: [0, 0, 0] },
+  { name: 'emissiveIntensity', type: 'f32', default: 0 },
+  { name: 'occlusionStrength', type: 'f32', default: 1 },
+  { name: 'uvSet', type: 'f32', default: 0 },
+  { name: 'alphaCutoff', type: 'f32', default: 0 },
+  { name: 'clearcoat', type: 'f32', default: 0 },
+  { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
   { name: 'baseColorTexture', type: 'texture2d' },
   { name: 'metallicRoughnessTexture', type: 'texture2d' },
   { name: 'normalTexture', type: 'texture2d' },
@@ -160,7 +167,7 @@ describe('derive(schema) integration over 5 built-in shader families (M3 w11)', 
 // refactor (derived BGL replaces fixed base-7) is validated bit-for-bit.
 //
 // Layout (verified against pbr-pipeline.ts + default-standard-pbr.wgsl.meta.json):
-//   user-region:    binding 0 (UBO, 10 numeric run-merged) + 3 sampler/texture pairs
+//   user-region:    binding 0 (UBO, 12 numeric run-merged) + 3 sampler/texture pairs
 //                   (baseColorTexture normalTexture, metallicRoughnessTexture) = 7 entries,
 //                   userRegionBindingEnd = 7
 //   ibl injection:  binding 7..13 (7 entries: irradiance/prefilter cube + brdfLut 2d +
@@ -172,7 +179,7 @@ describe('derive(schema) integration over 5 built-in shader families (M3 w11)', 
 //           injection order ibl-then-lightmap (D-8).
 
 // Exact paramSchema from packages/shader/src/default-standard-pbr.wgsl.meta.json:68-77
-// (10 numeric entries + 3 texture2d entries).
+// (12 numeric entries + 3 texture2d entries).
 const defaultStandardPbrSchema: readonly ParamSchemaEntry[] = [
   { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
   { name: 'metallic', type: 'f32', default: 0 },
@@ -184,6 +191,8 @@ const defaultStandardPbrSchema: readonly ParamSchemaEntry[] = [
   { name: 'emissive', type: 'vec3', default: [0, 0, 0] },
   { name: 'emissiveIntensity', type: 'f32', default: 0 },
   { name: 'occlusionStrength', type: 'f32', default: 1 },
+  { name: 'uvSet', type: 'f32', default: 0 },
+  { name: 'alphaCutoff', type: 'f32', default: 0 },
   { name: 'baseColorTexture', type: 'texture2d' },
   { name: 'metallicRoughnessTexture', type: 'texture2d' },
   { name: 'normalTexture', type: 'texture2d' },
@@ -193,7 +202,7 @@ describe('built-in PBR derive+injection 18-entry regression fence (M1 w1)', () =
   it('w1 user-region: derive produces 7 entries (binding 0 UBO + 3 sampler/texture pairs), userRegionBindingEnd=7', () => {
     const out = derive(defaultStandardPbrSchema);
 
-    // 10 numeric entries run-merged into binding 0 UBO + 3 textures x 2 (sampler+texture) = 1 + 6 = 7
+    // 12 numeric entries run-merged into binding 0 UBO + 3 textures x 2 (sampler+texture) = 1 + 6 = 7
     expect(out.bglEntries.length).toBe(7);
     expect(out.userRegionBindingEnd).toBe(7);
 

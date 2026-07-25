@@ -16,11 +16,14 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { composeShader } from '@forgeax/engine-naga';
+import {
+  GpuResourceStore,
+  getOrCreateIblCache,
+  setIblComposedShaders,
+} from '@forgeax/engine-render/internal';
 import { ok } from '@forgeax/engine-rhi';
 import type { EquirectAsset, TextureFormat } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { GpuResourceStore } from '../../gpu-resource-store';
-import { getOrCreateIblCache, setIblComposedShaders } from '../../ibl/IblPipelineCache';
 
 const mockCaps = {
   backendKind: 'webgpu' as const,

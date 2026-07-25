@@ -10,14 +10,14 @@
 // must be replaced by buildBindGroupLayoutDescriptor calls without changing
 // what the device sees.
 
-import { describe, expect, it } from 'vitest';
+import type { PipelineSpec } from '@forgeax/engine-render/internal';
 import {
   appendInjection,
+  buildBindGroupLayoutDescriptor,
   buildPbrMaterialUserRegionEntries,
   buildPbrViewBglEntries,
-} from './pbr-pipeline';
-import type { PipelineSpec } from './pipeline-spec';
-import { buildBindGroupLayoutDescriptor } from './pipeline-spec';
+} from '@forgeax/engine-render/internal';
+import { describe, expect, it } from 'vitest';
 
 // Stable spec stub — the dispatcher uses spec.shader for reflection only when
 // a registry is supplied; without registry the BGL shape comes purely from

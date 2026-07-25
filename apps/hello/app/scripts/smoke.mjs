@@ -163,8 +163,8 @@ const { createApp } = enginePkg;
 // no geometry covers the center pixel. The browser entry
 // (apps/hello/app/src/main.ts) does spawn populateDemoWorld for visual
 // `vite dev` parity with hello-cube.
-const runtimePkg = await import('@forgeax/engine-runtime');
-const { Camera, DirectionalLight, Transform } = runtimePkg;
+const { Camera, DirectionalLight } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');

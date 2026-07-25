@@ -1037,9 +1037,11 @@ import { toRollupLog } from '../wrap.js';
 
       // Verify known paramSchema field counts. Post feat-20260613 fix-issue-1
       // (D-8 channelMap split): default-standard-pbr + pbr-skin sidecars now
-      // expose the full 80-B UBO field-by-field (baseColor + metallic +
+      // expose the full 96-B authored UBO field-by-field (baseColor + metallic +
       // roughness + 4 channel selectors + emissive + emissiveIntensity +
-      // occlusionStrength + 3 textures = 13 entries). Sampler-first auto-pair
+      // occlusionStrength + uvSet + alphaCutoff + clearcoat +
+      // clearcoatRoughness + 3 textures = 17 entries).
+      // Sampler-first auto-pair
       // (D-4) still applies; shadow-caster stays 0 (vertex-only depth pass).
       //
       // feat-20260625-refactor-sprite-as-transparent-mesh M3 / w11: sprite
@@ -1049,11 +1051,11 @@ import { toRollupLog } from '../wrap.js';
       // offsets straight from `derive(paramSchema).uboLayout`.
       const expectedFieldCounts: Record<string, number> = {
         // feat-city-glb Bug 4 (multi-UV tiling): built-in PBR + skin gained a
-        // `uvSet` param (13 -> 14) so the fragment selects the glTF
-        // `baseColorTexture.texCoord` UV set. UBO stays 80 B (offset 68).
-        'forgeax::default-standard-pbr': 14,
-        'forgeax::pbr-skin': 14,
-        'forgeax::default-unlit': 2,
+        // `uvSet` and `alphaCutoff` params, then clearcoat added two coat controls
+        // (13 -> 17) so the fragment selects the glTF UV set and coat layer.
+        'forgeax::default-standard-pbr': 17,
+        'forgeax::pbr-skin': 17,
+        'forgeax::default-unlit': 3,
         'forgeax::sprite': 5,
         'forgeax::sprite-lit': 5,
         'forgeax::msdf-text': 3,

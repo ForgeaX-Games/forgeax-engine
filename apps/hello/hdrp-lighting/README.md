@@ -19,7 +19,7 @@ install.
 Three lines:
 
 ```ts
-import { HDRP_PIPELINE_ID } from '@forgeax/engine-runtime';
+import { HDRP_PIPELINE_ID } from '@forgeax/engine-render/internal';
 
 const hdrpRes = assets.register<RenderPipelineAsset>({
   kind: 'render-pipeline',

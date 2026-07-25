@@ -44,7 +44,14 @@
 
 import { World } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import { Camera, createRenderer, EngineEnvironmentError, Materials, MeshFilter, MeshRenderer, perspective, quat, type Renderer, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { type Renderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { createRenderer, EngineEnvironmentError, quat } from '@forgeax/engine-runtime';
+import { Materials } from '@forgeax/engine-render';
+
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 

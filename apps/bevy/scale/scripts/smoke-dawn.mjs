@@ -120,7 +120,8 @@ const mockCanvas = {
 
 // --- build the scale World via the shared SSOT builder ---
 const { World, createQueryState, Entity, queryRun } = await import('@forgeax/engine-ecs');
-const { Transform, createRenderer, propagateTransforms } = await import('@forgeax/engine-runtime');
+const { Transform, propagateTransforms } = await import('@forgeax/engine-scene');
+const { createRenderer } = await import('@forgeax/engine-runtime');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { buildScaleWorld, Scaling, stepScale } = await import(resolve(here, '..', 'src', 'scale.ts'));

@@ -40,11 +40,6 @@
       "kind": "window-flag",
       "name": "__sponzaSceneReady",
       "timeoutMs": 30000
-    },
-    "3.model-loading/2.city-glb": {
-      "kind": "window-flag",
-      "name": "__citySceneReady",
-      "timeoutMs": 30000
     }
   }
 }

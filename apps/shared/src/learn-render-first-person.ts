@@ -21,14 +21,13 @@ import { createApp, inputPlugin } from '@forgeax/engine-app';
 import { Entity, World } from '@forgeax/engine-ecs';
 import { INPUT_BACKEND_KEY, type InputBackend } from '@forgeax/engine-input';
 import { quat, vec3 } from '@forgeax/engine-math';
+import { Camera, SpotLight } from '@forgeax/engine-render';
 import {
-  Camera,
   createDevImportTransport,
   createRenderer,
   EngineEnvironmentError,
-  SpotLight,
-  Transform,
 } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 
 // -------------------------------------------------------------------
 // Constants

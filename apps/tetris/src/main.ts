@@ -12,19 +12,21 @@
 import { type AssetRegistry, HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import {
-  acquireCanvasContext,
   Camera,
-  createRenderer,
   DirectionalLight,
-  EngineEnvironmentError,
-  type Handle,
-  type MaterialAsset,
   Materials,
   MeshFilter,
   MeshRenderer,
   perspective,
-  Transform,
+} from '@forgeax/engine-render';
+import {
+  acquireCanvasContext,
+  createRenderer,
+  EngineEnvironmentError,
+  type Handle,
+  type MaterialAsset,
 } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 
 import {
   BOARD_H,

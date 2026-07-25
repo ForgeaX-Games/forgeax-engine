@@ -7,6 +7,18 @@ export interface PreviewUiRun {
   readonly authoring: UiAuthoringHostHandle;
 }
 
+export interface PreviewEngineDiagnostic {
+  readonly code: string;
+  readonly detail: string;
+}
+
+export function reportPreviewEngineFailure(
+  run: PreviewUiRun,
+  diagnostic: PreviewEngineDiagnostic,
+): void {
+  run.uiRoot.dataset.forgeaxPreviewEngineFailure = JSON.stringify(diagnostic);
+}
+
 export function createPreviewUiRun(parent: HTMLElement): PreviewUiRun {
   const uiRoot = document.createElement('div');
   uiRoot.dataset.forgeaxUiRoot = 'true';

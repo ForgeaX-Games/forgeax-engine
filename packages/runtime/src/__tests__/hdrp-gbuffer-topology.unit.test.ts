@@ -13,11 +13,14 @@
 // caps and verifies the pass list + reads/writes topology via RenderGraph's
 // `listPasses()` and `listResources()` introspection APIs.
 
+import type {
+  RenderPipelineContext,
+  RenderPipelineData,
+  RenderSystemRuntime,
+} from '@forgeax/engine-render/internal';
+import { hdrpPipeline } from '@forgeax/engine-render/internal';
 import type { RhiCaps, RhiDevice } from '@forgeax/engine-rhi';
 import { describe, expect, it, vi } from 'vitest';
-import { hdrpPipeline } from '../hdrp-pipeline';
-import type { RenderPipelineContext, RenderPipelineData } from '../render-pipeline-context';
-import type { RenderSystemRuntime } from '../render-system';
 
 function mockRuntime(capsOverride: Partial<RhiCaps> = {}): RenderSystemRuntime {
   const errorRegistry = {

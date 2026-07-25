@@ -13,7 +13,9 @@
 
 import { Entity, queryRun, createQueryState, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { InputSnapshot } from '@forgeax/engine-input';
-import { Camera, orthographic, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera } from '@forgeax/engine-render';
+import { orthographic } from '@forgeax/engine-render';
 
 /** Bevy CSS srgb(0.5, 0.5, 0.9) = blue-ish. */
 const INITIAL_COLOR: [number, number, number, number] = [0.5, 0.5, 0.9, 1.0];

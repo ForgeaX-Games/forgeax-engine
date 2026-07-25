@@ -37,13 +37,8 @@
 //   - "installHdrPipelineByKey" pure key -> RenderPipelineAsset table-lookup
 
 import { RenderGraph } from '@forgeax/engine-render-graph';
-import {
-  addFullscreenPass,
-  addScenePass,
-  type RenderPipeline,
-  type RenderPipelineContext,
-  type RenderPipelineData,
-} from '@forgeax/engine-runtime';
+import type { RenderPipeline, RenderPipelineContext, RenderPipelineData } from '@forgeax/engine-render';
+import { addFullscreenPass, addScenePass } from '@forgeax/engine-render';
 import { type Result, err, ok } from '@forgeax/engine-types';
 import type { RenderPipelineAsset } from '@forgeax/engine-types';
 

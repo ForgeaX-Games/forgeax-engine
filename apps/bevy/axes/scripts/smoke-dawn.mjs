@@ -110,7 +110,8 @@ const mockCanvas = {
 
 // --- build the axes World via the shared SSOT builder ---
 const { World } = await import('@forgeax/engine-ecs');
-const { createRenderer, propagateTransforms } = await import('@forgeax/engine-runtime');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { propagateTransforms } = await import('@forgeax/engine-scene');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { buildAxesWorld, drawAxesForEntities, AXIS_LENGTH } = await import(

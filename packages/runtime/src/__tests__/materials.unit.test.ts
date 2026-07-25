@@ -16,9 +16,9 @@
 // Grep gate: passKind:'deferred' / passKind:'forward' / passKind:'shadow-caster'
 //   each hit >=1 in packages/runtime/src/materials.ts
 
+import { Materials } from '@forgeax/engine-render/internal';
 import type { PassKind } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { Materials } from '../materials';
 
 describe('Materials.standard multi-pass (w14)', () => {
   describe('deferred pass', () => {
@@ -100,6 +100,25 @@ describe('Materials.standard multi-pass (w14)', () => {
       expect(mat.paramValues?.roughness).toBe(0.5);
     });
 
+    it('paramValues includes the optional clearcoat layer', () => {
+      const mat = Materials.standard({
+        baseColor: [0.5, 0.5, 0.5, 1],
+        clearcoat: 1,
+        clearcoatRoughness: 0.1,
+      });
+      expect(mat.paramValues?.clearcoat).toBe(1);
+      expect(mat.paramValues?.clearcoatRoughness).toBe(0.1);
+    });
+
+    it('rejects clearcoat values outside the normalized range', () => {
+      expect(() => Materials.standard({ baseColor: [1, 1, 1, 1], clearcoat: 1.1 })).toThrow(
+        'clearcoat must be in [0, 1]',
+      );
+      expect(() =>
+        Materials.standard({ baseColor: [1, 1, 1, 1], clearcoatRoughness: -0.1 }),
+      ).toThrow('clearcoatRoughness must be in [0, 1]');
+    });
+
     it('paramValues includes optional emissive/occlusion', () => {
       const mat = Materials.standard({
         baseColor: [0.5, 0.5, 0.5, 1],
@@ -114,6 +133,19 @@ describe('Materials.standard multi-pass (w14)', () => {
       expect(mat.paramValues?.baseColorTexture).toBe(42);
       expect(mat.paramValues?.occlusionTexture).toBe(84);
       expect(mat.paramValues?.occlusionStrength).toBe(0.75);
+    });
+
+    it('stores alphaCutoff and renderState on both standard passes', () => {
+      const renderState = { alphaToCoverageEnabled: true, depthWriteEnabled: false } as const;
+      const mat = Materials.standard({
+        baseColor: [0.5, 0.5, 0.5, 1],
+        alphaCutoff: 0.5,
+        renderState,
+      });
+      expect(mat.paramValues?.alphaCutoff).toBe(0.5);
+      expect(
+        mat.passes?.filter((p) => p.passKind !== 'shadow-caster').map((p) => p.renderState),
+      ).toEqual([renderState, renderState]);
     });
   });
 });
@@ -136,5 +168,10 @@ describe('Materials.unlit forward-only (w14)', () => {
     const mat = Materials.unlit([1, 1, 1, 1]);
     const shadowPass = mat.passes?.find((p) => p.passKind === ('shadow-caster' as PassKind));
     expect(shadowPass).toBeDefined();
+  });
+
+  it('stores alphaCutoff on the unlit material', () => {
+    const mat = Materials.unlit([1, 1, 1, 1], { alphaCutoff: 0.1 });
+    expect(mat.paramValues?.alphaCutoff).toBe(0.1);
   });
 });

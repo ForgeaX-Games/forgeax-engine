@@ -18,7 +18,7 @@ owns the contract (`Importer` / `ImportContext` / `ImportTransport` in
 // Host assembly (vite.config.ts or build script)
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { gltfImporter } from '@forgeax/engine-gltf';
-import { imageImporter } from '@forgeax/engine-image';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
 
 export default {
   plugins: [

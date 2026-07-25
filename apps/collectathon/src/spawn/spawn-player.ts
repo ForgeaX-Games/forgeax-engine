@@ -20,6 +20,7 @@
 // child's authored local offset (cm->world scale + feet drop) -- never a
 // per-frame parent-follow copy.
 
+import { AnimationPlayer } from '@forgeax/engine-animation';
 import type { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import {
@@ -30,14 +31,9 @@ import {
   RigidBody,
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
-import {
-  AnimationPlayer,
-  ChildOf,
-  MeshRenderer,
-  SceneInstance,
-  Skin,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { MeshRenderer, SceneInstance } from '@forgeax/engine-render';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
+import { Skin } from '@forgeax/engine-skinning';
 import type { AnimationClip, Handle, MaterialAsset, SceneAsset } from '@forgeax/engine-types';
 
 import { PLAYER_GROUPS } from '../collision-groups';

@@ -20,9 +20,9 @@
 //   - reuse the AssetError code system (D-9); the new code is
 //     'mipgen-unsupported-compressed-format'
 
+import { deriveRenderDataTexture } from '@forgeax/engine-render/internal';
 import type { TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { deriveRenderDataTexture } from '../render-data';
 
 function tex(overrides: Partial<TextureAsset>): TextureAsset {
   return {

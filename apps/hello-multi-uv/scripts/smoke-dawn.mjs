@@ -199,14 +199,9 @@ for (let i = 0; i < vertexCount; i++) {
 
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  MeshFilter,
-  MeshRenderer,
-  Transform,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { Transform } = await import('@forgeax/engine-scene');
+const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 
 const world = new World();
 
@@ -359,11 +354,13 @@ if (!ready.ok) {
 // PBR is NOT used here (it stays single-UV byte-identical, AC-11/AC-12). The
 // materialAsset minted above references this shader by path; registering the
 // path here resolves the material's pass to a real pipeline.
-renderer.shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
-  source: demoComposedWgsl,
-  paramSchema: [{ name: 'baseColor', type: 'color' }],
-  bindingLayout: [],
-});
+if (!renderer.shader.lookupMaterialShader(DEMO_MATERIAL_SHADER_PATH).ok) {
+  renderer.shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
+    source: demoComposedWgsl,
+    paramSchema: [{ name: 'baseColor', type: 'color' }],
+    bindingLayout: [],
+  });
+}
 
 // Warm-up phase: the custom demo shader's GPU module is compiled lazily and
 // asynchronously (first draw returns 'rhi-not-available' with the retry-on-next-

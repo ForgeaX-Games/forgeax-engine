@@ -121,14 +121,11 @@ const mockCanvas = {
 // --- 3. Build engine shader manifest for pbr + unlit pipelines ---
 
 const { World } = await import('@forgeax/engine-ecs');
-const {
-  Camera,
-  createRenderer,
-  MeshFilter,
-  MeshRenderer,
-  PointLight,
-  Transform,
-} = await import('@forgeax/engine-runtime');
+const { Camera, MeshRenderer } = await import('@forgeax/engine-render');
+const { PointLight } = await import('@forgeax/engine-render');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { MeshFilter } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_CUBE,
 } = await import('@forgeax/engine-assets-runtime');

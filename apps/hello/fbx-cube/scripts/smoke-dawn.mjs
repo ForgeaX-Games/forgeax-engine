@@ -123,7 +123,10 @@ const mockCanvas = {
 
 // --- 3. Engine + FBX import ---
 const { World } = await import('@forgeax/engine-ecs');
-const { Transform, MeshFilter, MeshRenderer, Camera, DirectionalLight, createRenderer } = await import('@forgeax/engine-runtime');
+const { Transform } = await import('@forgeax/engine-scene');
+const { MeshFilter, DirectionalLight } = await import('@forgeax/engine-render');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { MeshRenderer, Camera } = await import('@forgeax/engine-render');
 const { fbxImporter } = await import('@forgeax/engine-fbx');
 
 const MANIFEST_PATH = resolve(here, '..', 'dist', 'shaders', 'manifest.json');

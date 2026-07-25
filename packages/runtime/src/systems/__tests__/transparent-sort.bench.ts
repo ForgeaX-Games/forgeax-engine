@@ -55,16 +55,15 @@
 // (5_000_000 ns/op working baseline; R1 F-2 defer note above).
 
 import { World } from '@forgeax/engine-ecs';
-import { bench, describe } from 'vitest';
-
-import type { TransparentEntry } from '../transparent-sort';
-import { transparentSortEntries } from '../transparent-sort';
 import {
   setTransparentSortConfig,
   TRANSPARENT_SORT_MODE_LAYER_Y,
   TRANSPARENT_SORT_MODE_LAYER_YZ,
   TRANSPARENT_SORT_MODE_LAYER_Z,
-} from '../transparent-sort-config';
+} from '@forgeax/engine-render/internal';
+import { bench, describe } from 'vitest';
+import type { TransparentEntry } from '../transparent-sort';
+import { transparentSortEntries } from '../transparent-sort';
 import { createXorshift32 } from './_xorshift';
 
 // AC-14 sample size + iterations (plan-strategy D-3 SSOT). Vitest 4.x

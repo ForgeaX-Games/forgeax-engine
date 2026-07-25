@@ -21,7 +21,8 @@
 
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem } from '@forgeax/engine-ecs';
-import { GlyphText, Transform } from '@forgeax/engine-runtime';
+import { GlyphText } from '@forgeax/engine-render/authoring';
+import { Transform } from '@forgeax/engine-scene';
 import type { StateToken } from '@forgeax/engine-state';
 import { despawnOnExit } from '@forgeax/engine-state';
 import type { Handle } from '@forgeax/engine-types';

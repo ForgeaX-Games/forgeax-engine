@@ -26,7 +26,6 @@ import { createRenderer as _createRendererForEngineAlias } from './createRendere
  *   const ctxResult = acquireCanvasContext(canvas);
  */
 export { acquireCanvasContext } from '@forgeax/engine-rhi-webgpu';
-export type { BundlerOptions } from './createRenderer';
 export { createRenderer } from './createRenderer';
 
 // feat-20260704-runtime-tier1-decomposition M2 / w10 (D-3 / D-9): the top-level
@@ -45,55 +44,8 @@ export { createRenderer } from './createRenderer';
 // -- environment cluster --
 export { EngineEnvironmentError } from './errors/environment';
 // -- recover cluster --
-export type {
-  // feat-20260621-renderer-health-recover-skeleton verify minor-edit:
-  // closed RecoverErrorCode union re-exported so AI users `switch (err.code)`
-  // exhaustively on the recover() failure result.
-  RecoverErrorCode,
-} from './errors/recover';
-export {
-  // RecoverError class re-exported so AI users `instanceof RecoverError` the
-  // recover() failure (peer convention to SkinMaterialMismatchError etc.).
-  RecoverError,
-} from './errors/recover';
 // -- render cluster --
-export type {
-  EquirectProjectionFailedDetail,
-  RenderError,
-  RenderErrorCode,
-  ShadowInvalidConfigDetail,
-} from './errors/render';
-export {
-  EquirectProjectionFailedError,
-  HdrpCapsInsufficientError,
-  HdrpIndexListOverflowError,
-  HdrpLightBudgetExceededError,
-  PointShadowAtlasBoundsViolationError,
-  PointShadowAtlasUninitializedError,
-  ShadowInvalidConfigError,
-  // feat-20260623-world-space-video-asset M3 / w11: AC-10 capability
-  // double-miss error class (instanceof + .code/.hint property access).
-  VideoUploadUnsupportedError,
-} from './errors/render';
 // -- skin cluster --
-export type {
-  MaterialSkinAttrMissingDetail,
-  SkinError,
-  SkinErrorCode,
-  SkinMaterialMismatchDetail,
-} from './errors/skin';
-export {
-  // feat-20260612-skin-palette-per-frame-upload M2 / m2-5: SkinExtractErrorCode
-  // subset union (3 new extract-stage classes) + M2 fixup post-spawn fail-fast.
-  // Re-exported so AI users can `instanceof JointCountMismatchError` etc. per
-  // the convention established by SkinMaterialMismatchError / MaterialSkinAttrMissingError.
-  JointCountMismatchError,
-  JointEntityDanglingError,
-  MaterialSkinAttrMissingError,
-  SkeletonResolveFailedError,
-  SkinMaterialMismatchError,
-  SkinPaletteOverflowError,
-} from './errors/skin';
 
 /**
  * `Engine` namespace alias for `createRenderer` (w55 round 2 fix-up F-3
@@ -129,30 +81,6 @@ export {
 export const Engine = {
   create: _createRendererForEngineAlias,
 } as const;
-
-export type {
-  // feat-20260621-renderer-health-recover-skeleton verify minor-edit:
-  // health channel types re-exported for parity with the onLost / onError
-  // channels (RendererLostInfo / RendererLostListener / RhiErrorDetail
-  // variants below). `switch (snap.reason)` narrows `snap.detail` to the
-  // matching HealthDetail* interface; AI users import these to annotate the
-  // callback + name extracted detail variants. The HealthListenerRegistry
-  // mechanism stays internal (peer LostListenerRegistry is also unexported).
-  HealthChangeListener,
-  HealthDetailDeviceLost,
-  HealthDetailInternalFault,
-  HealthReason,
-  HealthSnapshot,
-  Renderer,
-  RendererBackend,
-  // feat-20260704-runtime-tier1-decomposition M2 / w11 (D-4): the onError
-  // fan-out channel wire contract, composed from the cluster unions. External
-  // consumers import this to type their onError listener + derive AppDispatchError.
-  RendererError,
-  RendererLostInfo,
-  RendererLostListener,
-  RendererOptions,
-} from './renderer';
 
 // ─── ECS render bridge (feat-20260509-ecs-render-bridge-mvp) ────────────────
 //
@@ -190,9 +118,9 @@ export type {
  * @example
  *   import {
  *     RhiError, type RhiErrorCode, type LimitExceededDetail,
- *     type RuntimeError, type EquirectProjectionFailedDetail,
  *   } from '@forgeax/engine-runtime';
- *   renderer.onError((e: RhiError | RuntimeError) => {
+ *   import { type EquirectProjectionFailedDetail, type RendererError } from '@forgeax/engine-render';
+ *   renderer.onError((e: RendererError) => {
  *     switch (e.code) {
  *       case 'limit-exceeded': {
  *         const detail = e.detail as LimitExceededDetail;
@@ -200,7 +128,7 @@ export type {
  *         break;
  *       }
  *       case 'equirect-projection-failed': {
- *         // RuntimeError arm — e narrows to EquirectProjectionFailedError
+ *         // renderer error arm — e narrows to EquirectProjectionFailedError
  *         const detail: EquirectProjectionFailedDetail = e.detail;
  *         // detail.handle — the equirect handle whose projection failed
  *         break;
@@ -231,7 +159,6 @@ export {
  *     // surface a once-per-session UI hint, run a regression bench, etc.
  *   }
  */
-export type { EngineMetrics } from '@forgeax/engine-types';
 /**
  * Asset system SSOT re-exports (feat-20260511-asset-system-v1 / w30 / D-P7 +
  * plan-strategy §7.4 discoverability dual-entry).
@@ -240,7 +167,9 @@ export type { EngineMetrics } from '@forgeax/engine-types';
  * 4-member union + `AssetError` class + `ASSET_ERROR_HINTS` per-code hint table);
  * this barrel is a thin re-export so AI users can write a single-line import —
  *
- *   import { Handle, Asset, AssetError } from '@forgeax/engine-runtime';
+ *   import type { Asset } from '@forgeax/engine-assets-runtime';
+ *   import type { Handle } from '@forgeax/engine-types';
+ *   import { AssetError } from '@forgeax/engine-runtime';
  *
  * — and let IDE autocomplete on `@forgeax/engine-runtime` cover the full asset
  * surface (charter proposition 1 progressive disclosure). `@forgeax/engine-types`
@@ -263,98 +192,12 @@ export {
 // moved to @forgeax/engine-assets-runtime (AC-105).
 // feat-20260705-runtime-tier2-decomposition M1 / w14: AssetRegistry + the
 // HANDLE_* builtin mesh handles moved to @forgeax/engine-assets-runtime (AC-105).
-// The audio catalog-entry loader belongs to the renderer assembly boundary:
-// assets-runtime stays independent of the concrete Web Audio implementation.
-export { audioLoader } from './audio-loader';
 // feat-20260705-runtime-tier2-decomposition M1 / w14: the process-static
 // BuiltinAssetRegistry tier (BUILTIN_* payloads + BUILTIN_FLOATS_PER_VERTEX)
 // moved to @forgeax/engine-assets-runtime (AC-105).
-/**
- * 5-component schema set (Transform / MeshFilter / MeshRenderer /
- * Camera / DirectionalLight). Each is a frozen `Component<N, S>`
- * token returned by `defineComponent`. Pair with `world.spawn({ component, data })`
- * and the builtin `HANDLE_CUBE` / `HANDLE_TRIANGLE` constants (added in w10).
- *
- * feat-20260517-merge-mesh-renderer-material-renderer M2 / w7: the legacy
- * dual material-binding component (the previously separate component
- * carrying `{ material: 'ref' }`) and its companion data-shape re-export
- * were physically deleted alongside the component file; the merged
- * `MeshRenderer` (`{ materials: 'array<shared<MaterialAsset>>' }` schema) is the
- * single material-binding component AI users see; spawn payloads omit
- * `material` to request the mid-grey default (D-Q7 case B). Migration
- * SSOT lives in AGENTS.md §Breaking changes row dated 2026-05-17.
- *
- * @example
- *   import {
- *     Transform, MeshFilter, MeshRenderer,
- *     Camera, DirectionalLight,
- *   } from '@forgeax/engine-runtime';
- */
-export {
-  ANTIALIAS_FXAA,
-  ANTIALIAS_MSAA,
-  ANTIALIAS_NONE,
-  AnimationPlayer,
-  type Antialias,
-  antialiasFromF32,
-  BLOOM_DISABLED,
-  BLOOM_ENABLED,
-  type BloomEnabled,
-  bloomEnabledFromF32,
-  CAMERA_PROJECTION_ORTHOGRAPHIC,
-  CAMERA_PROJECTION_PERSPECTIVE,
-  Camera,
-  type CameraProjection,
-  ChildOf,
-  Children,
-  cameraProjectionFromF32,
-  DirectionalLight,
-  decodeSortScope,
-  encodeSortScope,
-  Instances,
-  type InstancesData,
-  Layer,
-  MeshFilter,
-  MeshRenderer,
-  markTileLayerDirty,
-  Name,
-  orthographic,
-  PointLight,
-  PointLightShadow,
-  PostProcessParams,
-  perspective,
-  SceneInstance,
-  type SceneInstanceOverrideRecord,
-  type SceneInstanceState,
-  SKYBOX_MODE_CUBEMAP,
-  Skin,
-  SkyboxBackground,
-  type SkyboxMode,
-  Skylight,
-  SortKey,
-  type SortScope,
-  SPRITE_PLAYBACK_MODE_CLAMP,
-  SPRITE_PLAYBACK_MODE_LOOP,
-  SpotLight,
-  SpriteAnimation,
-  type SpritePlaybackMode,
-  SpriteRegionOverride,
-  skyboxModeFromF32,
-  spritePlaybackModeFromU32,
-  TileLayer,
-  type TileLayerData,
-  Tilemap,
-  TONEMAP_ACES_FILMIC,
-  TONEMAP_AGX,
-  TONEMAP_CINEON,
-  TONEMAP_LINEAR,
-  TONEMAP_NEUTRAL,
-  TONEMAP_NONE,
-  TONEMAP_REINHARD_EXTENDED,
-  type Tonemap,
-  Transform,
-  tonemapFromF32,
-} from './components';
+// Runtime-specific authoring components remain here. Domain authorities are
+// imported directly from @forgeax/engine-scene, @forgeax/engine-animation,
+// @forgeax/engine-skinning, and @forgeax/engine-render.
 /**
  * GlyphText authoring component for world-space MSDF text
  * (feat-20260531-world-space-msdf-text-rendering M4 / w14). Carries
@@ -365,7 +208,6 @@ export {
  * system in `@forgeax/engine-runtime` so AI users import the component and
  * the system from one package.
  */
-export { GlyphText } from './components/glyph-text';
 /**
  * feat-20260625-sprite-instances-and-tilemap-terrain-static-batch M1 / w4 —
  * SpriteInstances primitive: 2D peer of `Instances`. Carries per-instance
@@ -376,16 +218,11 @@ export { GlyphText } from './components/glyph-text';
  * not in `@forgeax/engine-ecs` — the ecs package stays unaware of the sprite
  * shading model concept.
  */
-export {
-  SpriteInstances,
-  type SpriteInstancesData,
-} from './components/sprite-instances';
 // feat-20260604-hdr-equirect-cube-importer-loader M4 / w15: the dev-only
 // ImportTransport factory. A host wires it into createRenderer / createApp so
 // a DDC miss at runtime triggers an on-demand POST /__import import against the
 // vite-plugin-pack dev server. Aligned with the create*/wire* factory family.
 export { createDevImportTransport } from './dev-import-transport';
-export { createEngineMetrics } from './engine-metrics';
 // feat-20260705-runtime-tier2-decomposition M3 / w31: glyph-layout +
 // glyph-mesh-bake (FloatsPerGlyphVertex / FONT_CONCURRENCY_LIMIT /
 // GlyphLayoutResult / layoutGlyphText / resetFontConcurrency /
@@ -400,7 +237,6 @@ export { createEngineMetrics } from './engine-metrics';
  * renderer auto-invokes it at the top of `draw(world)`; hosts driving their own
  * loop can call it directly before `renderer.draw(world)`.
  */
-export { glyphTextLayoutSystem, resetGlyphBakeCache } from './glyph-text-layout-system';
 /**
  * GpuBuffer / GpuTexture runtime wrappers + GpuResource union
  * (feat-20260612-rhi-destroy-renderer-dispose-gpu-lifecycle / M2).
@@ -416,14 +252,11 @@ export { glyphTextLayoutSystem, resetGlyphBakeCache } from './glyph-text-layout-
  * bookkeeping lives once on the RHI shim. Second `.destroy()` returns
  * `Result.err({ code: 'destroy-after-destroy' })`.
  */
-export type { GpuResource } from './gpu-resource';
-export { GpuBuffer, GpuTexture } from './gpu-resource';
 /**
  * feat-20260601-gpu-resource-store-extraction M1: the GPU residency store.
  * Reachable as `renderer.store`; exported here so AI users can construct one
  * directly for tests and `grep GpuResourceStore` discovers it.
  */
-export { GpuResourceStore } from './gpu-resource-store';
 // feat-20260705-runtime-tier2-decomposition M1 / w14: the loader-injection
 // surface (LoaderRegistry / wireDefaultLoaders / createDefaultLoaderRegistry)
 // moved to @forgeax/engine-assets-runtime (AC-105).
@@ -443,24 +276,16 @@ export { GpuResourceStore } from './gpu-resource-store';
  *
  * @example
  *   import {
- *     Transform, MeshFilter, MeshRenderer,
- *     Camera, DirectionalLight,
- *     RenderSystem, AssetRegistry, HANDLE_CUBE, HANDLE_TRIANGLE,
- *   } from '@forgeax/engine-runtime';
+ *     Camera, DirectionalLight, MeshFilter, MeshRenderer,
+ *   } from '@forgeax/engine-render';
+ *   import { Transform } from '@forgeax/engine-scene';
+ *   import { AssetRegistry, HANDLE_CUBE, HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
  */
-export type { RenderSystem } from './render-system';
 // feat-20260705-runtime-tier2-decomposition M1 / w14: resolveAssetHandle moved
 // to @forgeax/engine-assets-runtime (AC-105).
 export type { SpriteParamValues } from './sprite-param-values';
 // feat-20260630-viewport-2x2-run-x-display-redesign M2 / w12 / plan-strategy D-2:
 // engine-neutral by-entity-id active camera selection (no editor concept).
-export {
-  ACTIVE_CAMERA_KEY,
-  type ActiveCamera,
-  getActiveCamera,
-  selectActiveCameraIndex,
-  setActiveCamera,
-} from './systems/active-camera';
 /**
  * Transparent-bucket sort configuration (feat-20260520-2d-sprite-layer-mvp
  * M-2 w14). The POD interface + 3 named mode constants + `get/set`
@@ -479,7 +304,7 @@ export {
  *     TRANSPARENT_SORT_CONFIG_KEY,
  *     TRANSPARENT_SORT_MODE_LAYER_Y,
  *     setTransparentSortConfig,
- *   } from '@forgeax/engine-runtime';
+ *   } from '@forgeax/engine-render/internal';
  *   const r = setTransparentSortConfig(world,
  *     { mode: TRANSPARENT_SORT_MODE_LAYER_Y, yzAlpha: 1.0 });
  */
@@ -503,27 +328,11 @@ export {
  *   ] } });
  */
 export { spriteAnimationTickSystem } from './systems/sprite-animation-tick';
-export {
-  getTransparentSortConfig,
-  setTransparentSortConfig,
-  TRANSPARENT_SORT_CONFIG_KEY,
-  TRANSPARENT_SORT_MODE_DISTANCE,
-  TRANSPARENT_SORT_MODE_LAYER_Y,
-  TRANSPARENT_SORT_MODE_LAYER_YZ,
-  TRANSPARENT_SORT_MODE_LAYER_Z,
-  type TransparentSortConfig,
-} from './systems/transparent-sort-config';
 // feat-20260705-runtime-tier2-decomposition M3 / w31: tile-bits (decodeTileBits
 // / encodeTileBits) moved to @forgeax/engine-graphics-extras (AC-303). Zero shim
 // -- import from that package. tilemapChunkExtractSystem stays here (system
 // entry, S12).
 // feat-20260608-tilemap-object-layer-rendering M0 baseline rebuild — chunk-extract system
-export {
-  encodeTilemapLayerValue,
-  resetTilemapChunkExtractCache,
-  resetTilemapDerivedEntityTracker,
-  tilemapChunkExtractSystem,
-} from './tilemap-chunk-extract-system';
 // feat-20260705-runtime-tier2-decomposition M3 / w31: the video cluster
 // (VIDEO_ELEMENT_PROVIDER_KEY / VideoElementProvider / videoLoader / VideoPlayer
 // / probeVideoHighPerfUpload / VideoCapabilityDevice) moved to
@@ -555,84 +364,12 @@ export {
  */
 export { quat } from '@forgeax/engine-math';
 
-/**
- * `Materials` namespace with static factory functions (unlit / standard).
- *
- * AI users create material asset payloads without writing full POJOs:
- * `Materials.unlit([r,g,b,a])` returns an UnlitMaterialAsset shape;
- * `Materials.standard({ baseColor, metallic?, roughness? })` returns
- * a `MaterialAsset` for `register<MaterialAsset>`.
- *
- * @example
- * ```ts
- * import { Materials } from '@forgeax/engine-runtime';
- * const unlitWhite = Materials.unlit([1, 1, 1, 1]);
- * const standardPbr = Materials.standard({ baseColor: [0.5, 0.5, 0.5, 1] });
- * ```
- *
- * `SPRITE_PREMULTIPLIED_ALPHA_BLEND` is a sibling re-export here for
- * sprite materials opting into the transparent compositing route —
- * assign on `MaterialPassDescriptor.renderState.blend`. See
- * `./materials.ts` for the constant's full JSDoc (factor pair, equation,
- * paste-able snippet).
- */
-export { Materials, SPRITE_PREMULTIPLIED_ALPHA_BLEND } from './materials';
-
 // w8: Inspector contributor (registerRuntimeInspector + RegisterRuntimeInspectorResult)
 // deleted — routing layer (Registry / sandbox) is removed; eval is the sole
 // command channel.
 
 // ─── Animation system wiring (M1 / T-19 - feat-20260523-skin-skeleton-animation) ──
 
-// ─── AnimationGraph builder + introspection (feat-20260713 M2 / w14 / w15) ──
-export type {
-  AnimationGraphBuilder,
-  AnimationGraphNodeRef,
-} from './animation/define-animation-graph';
-export { defineAnimationGraph } from './animation/define-animation-graph';
-export type {
-  AnimationGraphDescription,
-  AnimationGraphNodeDescription,
-} from './animation/describe-animation-graph';
-export { describeAnimationGraph } from './animation/describe-animation-graph';
-export {
-  ADVANCE_ANIMATION_PLAYER_SYSTEM,
-  AdvanceAnimationPlayer,
-  ANIMATION_ASSET_RESOLVER_KEY,
-  AnimationSet,
-  createAnimationAssetResolver,
-  PROPAGATE_TRANSFORMS_SYSTEM,
-  PropagateTransforms,
-  registerAdvanceAnimationPlayer,
-  registerPropagateTransforms,
-  TransformSet,
-} from './createRenderer';
-// feat-20260713 verify round 1 / V-2: re-export the AnimationGraph structured
-// error cluster (closed AnimationGraphErrorCode + AnimationGraphError union +
-// each class + detail interfaces) so AI users `switch (err.code)` exhaustively
-// AND `instanceof`/reuse the classes — peer convention to SkinError etc.
-export type {
-  AnimationGraphClipMissingDetail,
-  AnimationGraphCycleDetail,
-  AnimationGraphError,
-  AnimationGraphErrorCode,
-  AnimationGraphNodeOutOfRangeDetail,
-  AnimationGraphNodeWeightInvalidDetail,
-} from './errors/animation-graph';
-export {
-  AnimationGraphClipMissingError,
-  AnimationGraphCycleError,
-  AnimationGraphEmptyError,
-  AnimationGraphNodeOutOfRangeError,
-  AnimationGraphNodeWeightInvalidError,
-} from './errors/animation-graph';
-// ─── Plugin factories (M2 / w6 - feat-20260623-plugin-system-unify) ─────────
-export { animationPlugin, transformPlugin } from './plugin-factories';
-// feat-20260705-runtime-tier2-decomposition M2 / w25: the imperative
-// propagateTransforms(world) driver — required by the @forgeax/engine-picking
-// vertex/AABB pick contract (D-9: callers must resolve Transform.world before
-// picking). Barrel-exported so downstream picking consumers can drive it.
-export { propagateTransforms } from './systems/propagate-transforms';
 // w8: registerRuntimeInspector export deleted alongside register-inspector.ts removal.
 
 // feat-20260623-editor-openproject M2 w11+w12: SceneInstance→SceneAsset writeback
@@ -651,7 +388,6 @@ export { rootsToSceneAsset, serializeSceneAssetToPack } from './collect-scene-as
 // so DebugDraw.flush() never ran in the browser build (debug overlay leaked +
 // never rendered). One barrel entry => one module copy => one registry shared by
 // createDebugDrawOnReady (the writer) and attachDebugOverlayPass (the reader).
-export { attachDebugOverlayPass, createDebugDrawOnReady } from './debug-draw-glue';
 // feat-20260704-runtime-tier1-decomposition M2 / w10 (D-3): the third error
 // re-export block (HdrpCapsInsufficientError / HdrpIndexListOverflowError /
 // HdrpLightBudgetExceededError) is folded into the render-cluster class
@@ -660,92 +396,22 @@ export { attachDebugOverlayPass, createDebugDrawOnReady } from './debug-draw-glu
 // feat-20260608-cluster-lighting M2 / w10 + verify F-1/F-2: HDRP cluster-forward
 // pipeline exports — full barrel surface (4 error classes + 4 sizing constants
 // + pipeline + grid validator).
-export {
-  CLUSTER_GRID_STRIDE_U32,
-  DEFAULT_CLUSTER_GRID,
-  HDRP_PIPELINE_ID,
-  HdrpInstallError,
-  hdrpPipeline,
-  LIGHT_INDEX_LIST_CAPACITY,
-  MAX_LIGHTS,
-  validateClusterGrid,
-} from './hdrp-pipeline';
-export type {
-  PipelineErrorCode,
-  PipelineErrorDetail,
-  PipelineNotFoundDetail,
-  PipelinePreviouslyRegisteredDetail,
-} from './pipeline-errors';
-export { PipelineError } from './pipeline-errors';
 // feat-20260615-pipeline-spec-ssot: PipelineSpec 4-axis SSOT public surface
 // (charter F1 single-entry indexability + P2 schema-as-contract). All 6 pure
 // derive functions + the closed PipelineSpecErrorCode union + getOrBuildPipeline
 // entrypoint reachable through the engine-runtime barrel so AI users follow
 // `import { ... } from '@forgeax/engine-runtime'` without spelunking subpaths.
 // Implementation SSOT: packages/runtime/src/pipeline-spec.ts.
-export type {
-  AttachmentColorOps,
-  AttachmentDepthOps,
-  BglKind,
-  BindGroupLayoutDescriptorOutput,
-  BindGroupLayoutShape,
-  PassKindAttachmentPolicy,
-  PipelineCache,
-  PipelineDeviceProvider,
-  PipelineSpec,
-  PipelineSpecErrorCode,
-} from './pipeline-spec';
-export {
-  buildBeginRenderPassDescriptor,
-  buildBindGroupLayoutDescriptor,
-  buildPipelineDescriptor,
-  cacheKeyOf,
-  deriveBglShapeFromShader,
-  getOrBuildPipeline,
-  PipelineSpecError,
-  passKindPolicyTable,
-  specsEqual,
-  validateSpec,
-} from './pipeline-spec';
-// feat-20260612-hdrp-ssao: PostProcessError surfaces SSAO parameter
-// failures (radius-non-positive / bias-negative)
+// Round-2 [F-3] feat-20260612-hdrp-ssao: PostProcessError surfaces SSAO
+// failures (storageBuffer-unavailable / radius-non-positive / bias-negative)
 // alongside the existing fullscreen post-process register / not-found /
 // reads-not-found codes. AI users `switch (err.code)` over the closed
-// closed union without `default`; .detail narrows per-code per charter P3.
-export type {
-  FullscreenInputNotFoundDetail,
-  PostProcessErrorCode,
-  PostProcessErrorDetail,
-  PostProcessNotFoundDetail,
-  PostProcessPreviouslyRegisteredDetail,
-  SsaoBiasNegativeDetail,
-  SsaoRadiusNonPositiveDetail,
-} from './post-process-errors';
-export { PostProcessError } from './post-process-errors';
+// 6-member union without `default`; .detail narrows per-code per charter P3.
 // feat-20260604 M3 / w19: render-graph-primitives — the public AI-user vocabulary
 // for assembling a render pipeline's per-frame graph (addScenePass /
 // addShadowPass / addSkyboxPass / addBloomPasses / addTonemapPass /
 // addFullscreenPass). The urp pipeline (w21) and any custom
 // pipeline use these factories — the dogfood proof of D-5.
-export type {
-  AddBloomPassesOptions,
-  AddFullscreenPassOptions,
-  AddScenePassOptions,
-  AddShadowPassOptions,
-  AddSkyboxPassOptions,
-  AddSsaoPassesOptions,
-  AddSsaoPassesParams,
-  AddTonemapPassOptions,
-} from './render-graph-primitives';
-export {
-  addBloomPasses,
-  addFullscreenPass,
-  addScenePass,
-  addShadowPass,
-  addSkyboxPass,
-  addSsaoPasses,
-  addTonemapPass,
-} from './render-graph-primitives';
 // feat-20260601-customizable-render-pipeline-seam-and-dogfood-rend M1.
 /**
  * Render-pipeline surface. `renderer.registerPipeline(id, impl)` registers a
@@ -758,16 +424,12 @@ export {
  *   import {
  *     type RenderPipeline, urpPipeline, URP_PIPELINE_ID,
  *     PipelineError, type PipelineErrorCode,
- *   } from '@forgeax/engine-runtime';
+ *   } from '@forgeax/engine-render/internal';
  */
-export type { RenderPipeline, RenderPipelineData } from './render-pipeline';
 // feat-20260604 M3 / w20 (AC-14): RenderPipelineContext is now barrel-exported so
 // custom-pipeline buildGraph / execute closures can `import type` the clean,
 // post-narrowing public ctx face from `@forgeax/engine-runtime` directly.
-export type { RenderPipelineContext } from './render-pipeline-context';
 // feat-20260701-rootstosceneasset verify minor-edit (F2): collectSubtree is a
 // reusable "BFS a subtree along Children" primitive (the forgeax-engine-ecs
 // skill documents importing it from the barrel) — re-export so that claim holds.
-export { collectSubtree } from './scene-utils/collect-subtree';
-export { URP_PIPELINE_ID, urpPipeline } from './urp-pipeline';
 // cache-bust-marker for feat-20260615-fbx-importer-via-sdk PR-CI run on bf1d383f / 05a331cd (post-rebase tsbuildinfo restore-keys staleness)

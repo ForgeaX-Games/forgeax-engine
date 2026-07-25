@@ -9,7 +9,7 @@
 // SpriteRegionOverride shape via vitest typecheck (expectTypeOf).
 
 import type { ShapeOf } from '@forgeax/engine-ecs';
-import { SpriteAnimation, SpriteRegionOverride } from '@forgeax/engine-runtime';
+import { SpriteAnimation, SpriteRegionOverride } from '@forgeax/engine-render/authoring';
 import { describe, expectTypeOf, it } from 'vitest';
 
 // SpriteAnimation data shape: 6 fields inferred from defineComponent schema.

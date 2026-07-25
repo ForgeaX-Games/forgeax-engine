@@ -23,6 +23,7 @@
 //   - plan-strategy D-1 (D-6 mirror sprite, NO shared registration)
 //   - requirements AC-08 / AC-12
 
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const SPRITE_ID: string = 'forgeax::sprite';
@@ -110,17 +111,11 @@ describe('sprite-lit pipeline cache-key string isolation (D-11 remap, AC-08)', (
     // identifiers in its registration code path. The literal must
     // appear in source for the runtime to ship sprite-lit as a
     // recognised material shader.
-    const fsId = 'node:fs';
-    const moduleId = 'node:module';
-    const fs = (await import(fsId)) as { readFileSync(p: string, e: string): string };
-    const mod = (await import(moduleId)) as {
-      createRequire(u: string | URL): (id: string) => string;
-    };
-    const require = mod.createRequire(import.meta.url);
-    const resolved = require as unknown as { resolve(id: string): string };
-    const pkgJson = resolved.resolve('@forgeax/engine-runtime/package.json');
-    const srcDir = pkgJson.replace(/package\.json$/, 'src');
-    const src = fs.readFileSync(`${srcDir}/createRenderer.ts`, 'utf8');
+    const fs = await import('node:fs');
+    const src = fs.readFileSync(
+      fileURLToPath(new URL('../../../render/src/renderer/renderer-factory.ts', import.meta.url)),
+      'utf8',
+    );
     // Once t7 wires it, both literals appear (sprite already in tree).
     expect(src.includes("'forgeax::sprite'")).toBe(true);
     expect(src.includes("'forgeax::sprite-lit'")).toBe(true);

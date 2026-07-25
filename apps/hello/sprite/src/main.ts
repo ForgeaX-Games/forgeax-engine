@@ -88,7 +88,18 @@ import { createApp } from '@forgeax/engine-app';
 import type { World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { HANDLE_NINESLICE_QUAD, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
-import { Camera, createDevImportTransport, EngineEnvironmentError, Layer, MeshFilter, MeshRenderer, orthographic, setTransparentSortConfig, SPRITE_PREMULTIPLIED_ALPHA_BLEND, TRANSPARENT_SORT_MODE_LAYER_Y, TRANSPARENT_SORT_MODE_LAYER_Z, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { orthographic } from '@forgeax/engine-render';
+import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
+import {
+  setTransparentSortConfig,
+  TRANSPARENT_SORT_MODE_LAYER_Y,
+  TRANSPARENT_SORT_MODE_LAYER_Z,
+} from '@forgeax/engine-render/internal';
+import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '@forgeax/engine-render/authoring';
+import { Layer } from '@forgeax/engine-render';
 
 import type {
   Handle,

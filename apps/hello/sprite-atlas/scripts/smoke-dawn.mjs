@@ -204,15 +204,10 @@ function buildSyntheticAtlas() {
 
 const { ok: okResult, World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
-const {
-  Camera,
-  createRenderer,
-  MeshFilter,
-  MeshRenderer,
-  SpriteRegionOverride,
-  SPRITE_PREMULTIPLIED_ALPHA_BLEND,
-  Transform,
-} = enginePkg;
+const { createRenderer } = enginePkg;
+const { SpriteRegionOverride, SPRITE_PREMULTIPLIED_ALPHA_BLEND } = await import('@forgeax/engine-render/authoring');
+const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const {
   HANDLE_QUAD,
 } = await import('@forgeax/engine-assets-runtime');

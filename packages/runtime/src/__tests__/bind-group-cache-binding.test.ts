@@ -227,7 +227,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
     return {
-      ...(await import('../index')),
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
       ...(await import('@forgeax/engine-assets-runtime')),
     } as never;
   }
@@ -900,7 +901,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
     return {
-      ...(await import('../index')),
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
       ...(await import('@forgeax/engine-assets-runtime')),
     } as never;
   }
@@ -1259,7 +1261,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     HANDLE_TRIANGLE: Handle<'MeshAsset', 'shared'>;
   }> {
     return {
-      ...(await import('../index')),
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
       ...(await import('@forgeax/engine-assets-runtime')),
     } as never;
   }
@@ -1692,7 +1695,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
     HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
   }> {
     return {
-      ...(await import('../index')),
+      ...(await import('@forgeax/engine-render/internal')),
+      ...(await import('@forgeax/engine-scene')),
       ...(await import('@forgeax/engine-assets-runtime')),
     } as never;
   }

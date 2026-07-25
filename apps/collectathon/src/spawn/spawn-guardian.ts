@@ -31,7 +31,8 @@ import {
   RigidBody,
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
-import { ChildOf, Materials, MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
+import { Materials, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
 
 import { GUARDIAN_BODY_GROUPS, GUARDIAN_GROUPS } from '../collision-groups';

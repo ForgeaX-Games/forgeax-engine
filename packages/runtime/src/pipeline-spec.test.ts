@@ -10,7 +10,6 @@
 // M1-T4-TEST: getOrBuildPipeline cache miss/hit + fail-fast unit (5 cases)
 // M1-T5-TEST: 12 SPEC_CONST unit (mutual uniqueness + sampleCount + axis round-trip)
 
-import { describe, expect, it } from 'vitest';
 // M1-T1 (after impl exists) re-exports (only import what the tests actually use):
 import {
   buildBeginRenderPassDescriptor,
@@ -27,7 +26,8 @@ import {
   SPEC_CONST_TABLE,
   specsEqual,
   validateSpec,
-} from './pipeline-spec';
+} from '@forgeax/engine-render/internal';
+import { describe, expect, it } from 'vitest';
 
 // =============================================================================
 // M1-T0: PipelineSpec type + error codes narrowing
@@ -433,7 +433,7 @@ describe('getOrBuildPipeline', () => {
       createRenderPipeline: () => {
         throw new Error('should not be called on cache hit');
       },
-    } as unknown as import('./pipeline-spec').PipelineDeviceProvider;
+    } as unknown as import('@forgeax/engine-render/internal').PipelineDeviceProvider;
 
     // M1: verify cache hit returns the pre-populated handle.
     const result = getOrBuildPipeline(spec, _deviceProvider, cache);

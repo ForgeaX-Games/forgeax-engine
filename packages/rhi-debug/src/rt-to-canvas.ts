@@ -24,6 +24,7 @@ import { err, ok } from '@forgeax/engine-types';
 import { DebugError } from './errors';
 import { readbackDrawRt } from './readback';
 import type { Replay } from './replayer';
+import { decodeToRgba8 } from './texel-decode';
 
 // ============================================================================
 // renderRtToCanvas
@@ -34,8 +35,10 @@ import type { Replay } from './replayer';
  * an external canvas element via ImageData + putImageData.
  *
  * Reuses `readbackDrawRt` (SSOT per-draw GPU readback, D-2) and renders the
- * RGBA8 pixels onto the canvas using a 2d rendering context. The canvas drawing
- * buffer is resized to the RT dimensions internally — callers need not pre-size
+ * native RT pixels onto the canvas using a 2d rendering context. The recorded
+ * format is decoded to displayable RGBA8 first, so float and packed attachments
+ * retain their correct row stride. The canvas drawing buffer is resized to the
+ * RT dimensions internally — callers need not pre-size
  * it (`putImageData` writes at (0,0) and clips to the drawing buffer, so a
  * default 300x150 canvas would otherwise show only the RT's top-left corner).
  *
@@ -67,13 +70,19 @@ export async function renderRtToCanvas(
   if (!readbackRes.ok) {
     return err(readbackRes.error);
   }
-  const { width, height, pixels } = readbackRes.value;
+  const { width, height, format, pixels } = readbackRes.value;
 
-  // Create ImageData from the readback pixels.
-  // Copy into a fresh Uint8ClampedArray so the backing buffer is ArrayBuffer
-  // (ImageData rejects SharedArrayBuffer backings from shared-memory types).
-  const clamped = new Uint8ClampedArray(pixels);
-  const imageData = new ImageData(clamped, width, height);
+  const rgba = decodeToRgba8(pixels, format, width, height);
+  if (rgba === null) {
+    return err(
+      new DebugError({
+        code: 'rt-readback-failed',
+        expected: 'a displayable color attachment format',
+        hint: `cannot decode color attachment format '${format}' for canvas preview`,
+      }),
+    );
+  }
+  const imageData = new ImageData(rgba, width, height);
 
   // Size the canvas drawing buffer to the RT dimensions BEFORE putImageData.
   // putImageData ignores CSS size and writes into the drawing buffer at (0,0),

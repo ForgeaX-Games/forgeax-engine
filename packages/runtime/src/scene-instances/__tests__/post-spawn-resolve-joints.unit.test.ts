@@ -7,15 +7,16 @@
 //   - missing joint inside subtree: structured error 'skin-joint-path-unresolved'.
 
 import { World } from '@forgeax/engine-ecs';
-import type { SkinAsset } from '@forgeax/engine-types';
-import { describe, expect, it, vi } from 'vitest';
+import { postSpawnResolveJoints } from '@forgeax/engine-render/internal';
 // Use the components barrel so Children (the relationship mirror) is defined
 // before ChildOf (the holder). The barrel sequences these imports
 // deterministically; cherry-picking from individual files would let biome's
 // organizeImports rule reorder them and trip
 // relationship-mirror-component-not-registered.
-import { ChildOf, Children, Name, Skin } from '../../components';
-import { postSpawnResolveJoints } from '../post-spawn-resolve-joints';
+import { ChildOf, Children, Name } from '@forgeax/engine-scene';
+import { Skin } from '@forgeax/engine-skinning';
+import type { SkinAsset } from '@forgeax/engine-types';
+import { describe, expect, it, vi } from 'vitest';
 
 /**
  * Build a 3-joint linear chain `Root -> Spine -> Hip` rooted at a fresh entity,

@@ -74,15 +74,18 @@ struct Material {
   aoChannel          : f32,
   extraChannel       : f32,
   // vec3 align=16 inserts implicit padding so emissive lands at offset 48;
-  // total UBO = 80 B (matches default-standard-pbr SSOT).
+  // the authored schema rounds to 96 B (matches default-standard-pbr SSOT).
   emissive           : vec3<f32>,
   emissiveIntensity  : f32,
   occlusionStrength  : f32,
   // feat-city-glb multi-UV tiling: per-material UV-set selector (mirrors
   // default-standard-pbr.wgsl SSOT). 0.0 -> set 0 (in.uv), >=0.5 -> set 1
-  // (in.uv1). Offset 68; struct still rounds to 80 B.
+  // (in.uv1). Clearcoat occupies offsets 76..84; the authored schema rounds
+  // to 96 B and the engine-owned UV scale tail begins at byte 88.
   uvSet              : f32,
-  textureScalePad    : vec2<f32>,
+  alphaCutoff        : f32,
+  clearcoat          : f32,
+  clearcoatRoughness : f32,
   baseColorUvScale          : vec2<f32>,
   metallicRoughnessUvScale  : vec2<f32>,
   normalUvScale             : vec2<f32>,
@@ -120,6 +123,7 @@ struct SkylightUniforms {
   colorR : f32,
   colorG : f32,
   colorB : f32,
+  rotation : vec4<f32>,
 };
 @group(1) @binding(7)  var irradianceMap        : texture_cube<f32>;
 @group(1) @binding(8)  var irradianceSampler    : sampler;
@@ -262,18 +266,33 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 
   let v = normalize(view.cameraPos - in.worldPos);
   let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+  let coatRoughness = max(material.clearcoatRoughness, 0.04);
+  let coatAlpha = coatRoughness * coatRoughness;
+  let coatF = f_schlick(max(dot(n, v), 0.0), vec3<f32>(0.04)) * material.clearcoat;
 
   let kD = (vec3<f32>(1.0) - f_schlick(max(dot(n, v), 0.0), f0)) * (1.0 - metallic);
   let iblRoughness = max(material.roughness, 0.04) * roughnessTex;
-  let irradiance = sampleIblDiffuse(n, irradianceMap, irradianceSampler);
+  let irradiance = sampleIblDiffuse(n, skylight.rotation, irradianceMap, irradianceSampler);
   let specularIbl = sampleIblSpecular(
     n, v, iblRoughness, f0,
+    skylight.rotation,
+    prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
+  );
+  let clearcoatIbl = sampleIblSpecular(
+    n, v, coatRoughness, vec3<f32>(0.04),
+    skylight.rotation,
     prefilterMap, prefilterSampler, brdfLut, brdfLutSampler,
   );
   let skyColor = vec3<f32>(skylight.colorR, skylight.colorG, skylight.colorB);
-  let ambient = (kD * irradiance * albedo + specularIbl) * skyColor * skylight.intensity;
+  let ambient = (
+    (kD * irradiance * albedo + specularIbl) * (vec3<f32>(1.0) - coatF) +
+    clearcoatIbl * material.clearcoat
+  ) * skyColor * skylight.intensity;
   var color = ambient;
   color = color + evalDirectional(n, v, albedo, metallic, a, f0, in.worldPos, in.viewZ);
+  color = color + material.clearcoat * evalDirectional(
+    n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04), in.worldPos, in.viewZ,
+  );
   let pointCount = pointLightsBuffer.count;
   for (var i: u32 = 0u; i < pointCount; i = i + 1u) {
     let p = pointLightsBuffer.slots[i];
@@ -285,16 +304,29 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         in.worldPos, n, v, albedo, metallic, a, f0,
         p.shadowAtlasLayer, lane.x, lane.y, 0.005, 0.05,
       );
+      color = color + material.clearcoat * evalPointShadowed(
+        p.position, p.colorTimesIntensity, p.invRangeSquared,
+        in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
+        p.shadowAtlasLayer, lane.x, lane.y, 0.005, 0.05,
+      );
     } else {
       color = color + evalPoint(
         p.position, p.colorTimesIntensity, p.invRangeSquared,
         in.worldPos, n, v, albedo, metallic, a, f0,
+      );
+      color = color + material.clearcoat * evalPoint(
+        p.position, p.colorTimesIntensity, p.invRangeSquared,
+        in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
       );
     }
 #else
     color = color + evalPoint(
       p.position, p.colorTimesIntensity, p.invRangeSquared,
       in.worldPos, n, v, albedo, metallic, a, f0,
+    );
+    color = color + material.clearcoat * evalPoint(
+      p.position, p.colorTimesIntensity, p.invRangeSquared,
+      in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
     );
 #endif
   }
@@ -305,6 +337,11 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
       s.position, s.direction, s.colorTimesIntensity,
       s.cosInner, s.cosOuter, s.invRangeSquared,
       in.worldPos, n, v, albedo, metallic, a, f0,
+    );
+    color = color + material.clearcoat * evalSpot(
+      s.position, s.direction, s.colorTimesIntensity,
+      s.cosInner, s.cosOuter, s.invRangeSquared,
+      in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04),
     );
   }
   return vec4<f32>(color, material.baseColor.a * baseSample.a);

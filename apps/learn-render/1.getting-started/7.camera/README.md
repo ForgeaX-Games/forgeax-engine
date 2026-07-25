@@ -97,10 +97,10 @@ flowchart LR
 import { createApp } from '@forgeax/engine-app';
 import { Time, Update } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import {
-  Camera, EngineEnvironmentError, HANDLE_CUBE,
-  MeshRenderer, MeshFilter, Transform,
-} from '@forgeax/engine-runtime';
+import { EngineEnvironmentError } from '@forgeax/engine-runtime';
+import { Camera, MeshRenderer, MeshFilter } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import {
   CAMERA_SPEED_PER_SECOND, computeWasdDisplacement, createScrollFovAccumulator,

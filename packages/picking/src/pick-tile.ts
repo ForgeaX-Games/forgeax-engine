@@ -30,7 +30,8 @@ import {
   queryRun,
   type World,
 } from '@forgeax/engine-ecs';
-import { ChildOf, TileLayer, Tilemap, Transform } from '@forgeax/engine-runtime';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
 import { err, ok, type Result } from '@forgeax/engine-types';
 
 /**

@@ -128,7 +128,8 @@ const mockCanvas = {
 
 // --- build the 3d_rotation World via the shared SSOT builder ---
 const { World } = await import('@forgeax/engine-ecs');
-const { createRenderer, propagateTransforms } = await import('@forgeax/engine-runtime');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { propagateTransforms } = await import('@forgeax/engine-scene');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { buildRotationWorld, stepSpin } = await import(resolve(here, '..', 'src', 'rotation.ts'));

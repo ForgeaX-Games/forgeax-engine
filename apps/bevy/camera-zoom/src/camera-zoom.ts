@@ -11,18 +11,13 @@ import {
   type World,
 } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
-import {
-  CAMERA_PROJECTION_ORTHOGRAPHIC,
-  CAMERA_PROJECTION_PERSPECTIVE,
-  Camera,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  orthographic,
-  perspective,
-  PointLight,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { CAMERA_PROJECTION_ORTHOGRAPHIC, CAMERA_PROJECTION_PERSPECTIVE, orthographic, perspective } from '@forgeax/engine-render';
+import { Materials } from '@forgeax/engine-render';
+import { PointLight } from '@forgeax/engine-render';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import type { InputSnapshot } from '@forgeax/engine-input';
 import { quat } from '@forgeax/engine-math';

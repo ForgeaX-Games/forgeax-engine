@@ -13,12 +13,9 @@
 // TDD red anchor: defineAnimationGraph does not exist before w14; the file fails
 // to compile. After w14 each illegal graph returns the matching structured code.
 
+import { type AnimationGraphNodeRef, defineAnimationGraph } from '@forgeax/engine-animation';
 import { toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import {
-  type AnimationGraphNodeRef,
-  defineAnimationGraph,
-} from '../animation/define-animation-graph';
 
 function clipHandle(id: number) {
   return toShared<'AnimationClip'>(id);

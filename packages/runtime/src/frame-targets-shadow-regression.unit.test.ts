@@ -1,10 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
-
 import {
   ensurePerFrameGraph,
   resolveShadowMapSize,
   writebackGraphViews,
-} from './record/frame-targets';
+} from '@forgeax/engine-render/internal';
+import { describe, expect, it, vi } from 'vitest';
 
 describe('frame targets shadow removal', () => {
   it('clears every shadow slot when the final caster disappears', () => {

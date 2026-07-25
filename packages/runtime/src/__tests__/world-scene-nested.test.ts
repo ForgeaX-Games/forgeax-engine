@@ -23,7 +23,8 @@ import {
   queryRun,
   World,
 } from '@forgeax/engine-ecs';
-import { ChildOf, SceneInstance } from '@forgeax/engine-runtime';
+import { SceneInstance } from '@forgeax/engine-render/internal';
+import { ChildOf } from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
@@ -177,6 +178,8 @@ describe('AC-26 same prefab mounted multiple times — disjoint mappings', () =>
     if (!r.ok) return;
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get SceneInstance failed');
+    expect(inst.value.mapping).toBeInstanceOf(Uint32Array);
+    if (!(inst.value.mapping instanceof Uint32Array)) return;
     // Two mount-time children at memberFirst=3 and memberFirst=4 should be
     // distinct entities.
     const m3 = inst.value.mapping[3];
@@ -217,6 +220,8 @@ describe('AC-24 outer entity ChildOf points into mount sub-region', () => {
     if (!r.ok) return;
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
+    expect(inst.value.mapping).toBeInstanceOf(Uint32Array);
+    if (!(inst.value.mapping instanceof Uint32Array)) return;
     const outerE = inst.value.mapping[1] as unknown as number;
     const memberE = inst.value.mapping[3] as unknown as number;
     const co = world.get(outerE as never, ChildOf);

@@ -1,6 +1,8 @@
 import { FixedUpdate, Update, type World } from '@forgeax/engine-ecs';
 import { quat } from '@forgeax/engine-math';
-import { Camera, perspective, Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+import { Camera } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
 
 export interface FixedTimestepState {
   updateFrames: number;

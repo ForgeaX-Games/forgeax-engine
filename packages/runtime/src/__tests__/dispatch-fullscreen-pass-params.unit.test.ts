@@ -25,12 +25,15 @@
 //         PostProcessError{code:'params-update-size-mismatch'} (detail carries
 //         byteSize / actualLength).
 
+import type { RenderPipelineContext } from '@forgeax/engine-render/internal';
+import {
+  addFullscreenPass,
+  buildBindGroupLayoutDescriptor,
+  type PipelineSpec,
+  PostProcessError,
+} from '@forgeax/engine-render/internal';
 import { RenderGraph } from '@forgeax/engine-render-graph';
 import { describe, expect, it } from 'vitest';
-import { buildBindGroupLayoutDescriptor, type PipelineSpec } from '../pipeline-spec';
-import { PostProcessError } from '../post-process-errors';
-import { addFullscreenPass } from '../render-graph-primitives';
-import type { RenderPipelineContext } from '../render-pipeline-context';
 
 interface BindGroupEntry {
   readonly binding: number;

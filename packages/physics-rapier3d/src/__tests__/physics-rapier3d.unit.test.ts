@@ -23,7 +23,7 @@ import {
   RigidBody,
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
-import { ChildOf, registerPropagateTransforms, Transform } from '@forgeax/engine-runtime';
+import { ChildOf, registerPropagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { createRapier3DPhysicsWorld, registerPhysicsSystems } from '../rapier-physics-world-3d';
 import { detectSimd3D, loadRapier3D } from '../wasm-loader';

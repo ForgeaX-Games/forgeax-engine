@@ -24,7 +24,7 @@ export function createResourceStore(): ResourceStore {
  *
  * @example
  * ```ts
- * import { createResourceStore, insertResource, type ResourceStore } from '@forgeax/engine-ecs';
+ * import { createResourceStore, insertResource, type ResourceStore } from './resource';
  *
  * const store: ResourceStore = createResourceStore();
  * insertResource(store, 'health', 100);
@@ -42,7 +42,7 @@ export function insertResource<T>(store: ResourceStore, key: string, value: T): 
  *
  * @example
  * ```ts
- * import { getResource, insertResource, type ResourceStore } from '@forgeax/engine-ecs';
+ * import { getResource, insertResource, type ResourceStore } from './resource';
  *
  * declare const store: ResourceStore;
  * insertResource(store, 'health', 100);
@@ -62,7 +62,7 @@ export function getResource<T>(store: ResourceStore, key: string): T {
  *
  * @example
  * ```ts
- * import { hasResource, insertResource, type ResourceStore } from '@forgeax/engine-ecs';
+ * import { hasResource, insertResource, type ResourceStore } from './resource';
  *
  * declare const store: ResourceStore;
  * insertResource(store, 'health', 100);
@@ -80,7 +80,7 @@ export function hasResource(store: ResourceStore, key: string): boolean {
  *
  * @example
  * ```ts
- * import { hasResource, insertResource, removeResource, type ResourceStore } from '@forgeax/engine-ecs';
+ * import { hasResource, insertResource, removeResource, type ResourceStore } from './resource';
  *
  * declare const store: ResourceStore;
  * insertResource(store, 'health', 100);

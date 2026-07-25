@@ -8,22 +8,12 @@ import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
 import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import type { Handle } from '@forgeax/engine-types';
-import {
-  Camera,
-  DirectionalLight,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  TONEMAP_ACES_FILMIC,
-  TONEMAP_AGX,
-  TONEMAP_CINEON,
-  TONEMAP_LINEAR,
-  TONEMAP_NEUTRAL,
-  TONEMAP_NONE,
-  TONEMAP_REINHARD_EXTENDED,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
+
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective, TONEMAP_ACES_FILMIC, TONEMAP_AGX, TONEMAP_CINEON, TONEMAP_LINEAR, TONEMAP_NEUTRAL, TONEMAP_NONE, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
+import { Materials } from '@forgeax/engine-render';
+
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 const TONEMAP_MODES = [

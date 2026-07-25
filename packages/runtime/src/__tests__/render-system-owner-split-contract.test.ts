@@ -31,9 +31,9 @@
 //     required indices) + §5.3 key test point + §3.3 interface example
 
 import { World } from '@forgeax/engine-ecs';
+import { Camera, extractFrames, Skylight } from '@forgeax/engine-render/internal';
+import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { Camera, Skylight, Transform } from '../components';
-import { extractFrames } from '../render-system-extract';
 
 // The two-index owner shape w4-w6 will introduce. Declared locally so this
 // test states the contract independent of the (not-yet-updated) source type.

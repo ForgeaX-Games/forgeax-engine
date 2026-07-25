@@ -11,19 +11,25 @@
 // plan-strategy section 5.3 key test points (type-level surface assertion).
 
 import type { AssetRuntimeError } from '@forgeax/engine-assets-runtime';
+import type {
+  EquirectProjectionFailedError,
+  PostProcessError,
+  RenderError,
+  Renderer,
+  RendererErrorListener,
+} from '@forgeax/engine-render/internal';
 import type { RhiError } from '@forgeax/engine-rhi';
 import type {
+  // @ts-expect-error - BundlerOptions must be imported from @forgeax/engine-render/internal
+  BundlerOptions as _BundlerOptionsRemoved,
   // @ts-expect-error - ConsoleHandle must not be exported from @forgeax/engine-runtime
   ConsoleHandle as _ConsoleHandleRemoved,
   // @ts-expect-error - StartConsoleOptions must not be exported from @forgeax/engine-runtime
   StartConsoleOptions as _StartConsoleOptionsRemoved,
 } from '@forgeax/engine-runtime';
+import type { SkinError } from '@forgeax/engine-skinning';
 import type { ImageError } from '@forgeax/engine-types';
 import { describe, expectTypeOf, it } from 'vitest';
-import type { EquirectProjectionFailedError, RenderError } from '../errors/render';
-import type { SkinError } from '../errors/skin';
-import type { PostProcessError } from '../post-process-errors';
-import type { Renderer, RendererErrorListener } from '../renderer';
 
 // feat-20260704-runtime-tier1-decomposition M2 / w12: the eliminated top-level
 // RuntimeError aggregate union (D-3) reconstituted as a test-local alias so the
@@ -34,7 +40,7 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
 
 // Reference the imported aliases so TS does not strip them before reaching
 // the @ts-expect-error attached to each import specifier.
-type _UnusedSink = _StartConsoleOptionsRemoved | _ConsoleHandleRemoved;
+type _UnusedSink = _StartConsoleOptionsRemoved | _ConsoleHandleRemoved | _BundlerOptionsRemoved;
 
 describe('w5td runtime surface - Renderer.startConsole literally absent (AC-11)', () => {
   it('Renderer has no startConsole property (TS index access fails)', () => {

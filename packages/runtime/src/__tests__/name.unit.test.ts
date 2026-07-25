@@ -5,7 +5,7 @@
 // authoritative location is now @forgeax/engine-runtime, not the ECS framework.
 
 import { World } from '@forgeax/engine-ecs';
-import { Name } from '@forgeax/engine-runtime';
+import { Name } from '@forgeax/engine-scene';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 describe('Name component --- schema literal (w2, AC-03 a/d)', () => {

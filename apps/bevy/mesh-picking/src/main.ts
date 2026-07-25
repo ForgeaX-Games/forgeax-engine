@@ -9,16 +9,11 @@
 import { createApp } from '@forgeax/engine-app';
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { type MeshAsset } from '@forgeax/engine-assets-runtime';
-import {
-  Camera,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  PointLight,
-  propagateTransforms,
-  Transform,
-} from '@forgeax/engine-runtime';
+import { propagateTransforms, Transform } from '@forgeax/engine-scene';
+import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { perspective } from '@forgeax/engine-render';
+import { Materials } from '@forgeax/engine-render';
+import { PointLight } from '@forgeax/engine-render';
 import type { MaterialAsset } from '@forgeax/engine-runtime';
 import { createBoxGeometry, createSphereGeometry, createCapsuleGeometry, createTorusGeometry } from '@forgeax/engine-geometry';
 import { pick } from '@forgeax/engine-picking';

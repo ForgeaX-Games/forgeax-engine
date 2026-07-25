@@ -24,16 +24,16 @@ import type {
   SceneAsset,
 } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import '../components';
-import '../components/scene-instance';
+import '@forgeax/engine-render/internal';
+import '@forgeax/engine-render/internal';
 import {
   type Asset,
   AssetRegistry,
   resolveAssetHandle,
   SceneCollectAssetGuidUnresolvedError,
 } from '@forgeax/engine-assets-runtime';
+import { MeshRenderer, SceneInstance } from '@forgeax/engine-render/internal';
 import { rootsToSceneAsset } from '../collect-scene-asset';
-import { MeshRenderer, SceneInstance } from '../components';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function makeReg(): AssetRegistry {

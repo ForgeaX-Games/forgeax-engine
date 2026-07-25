@@ -306,8 +306,8 @@ async function main() {
       rmSync(fixtureDir, { recursive: true, force: true });
     }
 
-    run('RHI viewer', ['--filter', '@forgeax/rhi-debug-viewer', 'smoke:browser']);
-    run('RHI falsifier', ['--filter', '@forgeax/rhi-debug-viewer', 'smoke:browser'], { FALSIFY_NO_SHADER_MODULE: '1' });
+    run('RHI viewer', ['--filter', '@forgeax/engine-rhi-debug-viewer', 'smoke:browser']);
+    run('RHI falsifier', ['--filter', '@forgeax/engine-rhi-debug-viewer', 'smoke:browser'], { FALSIFY_NO_SHADER_MODULE: '1' });
     console.log('[m6-forensics] PASS - M6 inspection/forensics gates GREEN');
     console.log('[m6-forensics] deferred: renderer device-loss recovery remains open.');
   } catch (error) {

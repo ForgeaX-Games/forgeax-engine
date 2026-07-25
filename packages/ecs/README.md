@@ -657,7 +657,8 @@ queryCombinations(state, world, 2, (pair) => {
 > **30-second TLDR**: `Name { value: 'string' }` is the canonical single-field exemplar of the `'string'` schema vocab. Read returns a native JS `string` (no view class — collapsed onto the managed-ref dispatch by feat-20260515-string-managed-collapse). AI users round-trip via `world.get(e, Name).unwrap().value` and mutate via `world.set(e, Name, { value: 'NewName' })`. Despawn frees the underlying `ManagedRefStore` handle through the same 3-path release as every other managed field.
 
 ```ts
-import { defineComponent, Name, World } from '@forgeax/engine-ecs';
+import { defineComponent, World } from '@forgeax/engine-ecs';
+import { Name } from '@forgeax/engine-scene';
 // Name is pre-defined; equivalent to: defineComponent('Name', { value: 'string' })
 
 const world = new World();

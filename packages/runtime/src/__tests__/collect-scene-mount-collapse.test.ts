@@ -15,11 +15,10 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { rootsToSceneAsset } from '../collect-scene-asset';
-import '../components';
+import '@forgeax/engine-render/internal';
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
-import { ChildOf } from '../components/child-of';
-import { Children } from '../components/children';
-import { SceneInstance } from '../components/scene-instance';
+import { SceneInstance } from '@forgeax/engine-render/internal';
+import { ChildOf, Children } from '@forgeax/engine-scene';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 function mkReg() {

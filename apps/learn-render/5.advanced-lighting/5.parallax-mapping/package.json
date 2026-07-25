@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "learn-render LearnOpenGL section 5.advanced-lighting 5.parallax-mapping \u2014 basic/steep/POM parallax on a custom material shader with per-shader-derived BGL (height texture).",
+  "description": "learn-render LearnOpenGL section 5.advanced-lighting 5.parallax-mapping — basic/steep/POM parallax on a custom material shader with per-shader-derived BGL (height texture).",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -46,7 +46,9 @@
     "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-rhi-wgpu": "workspace:*",
     "@forgeax/engine-runtime": "workspace:*",
-    "@forgeax/engine-types": "workspace:*"
+    "@forgeax/engine-types": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-render": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",

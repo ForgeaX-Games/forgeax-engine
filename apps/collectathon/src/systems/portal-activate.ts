@@ -25,7 +25,7 @@
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem } from '@forgeax/engine-ecs';
 import { CollidingEntities } from '@forgeax/engine-physics';
-import { MeshRenderer } from '@forgeax/engine-runtime';
+import { MeshRenderer } from '@forgeax/engine-render';
 import type { StateToken } from '@forgeax/engine-state';
 import { setNextState } from '@forgeax/engine-state';
 import type { MaterialAsset } from '@forgeax/engine-types';

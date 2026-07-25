@@ -141,6 +141,25 @@ console.log(
   `[m3-programmable] multi-UV variant: PASS uvSetCount=${multiUvShader.uvSetCount} variants=${variants.length} falseVariantBytesDiffer=true`,
 );
 
+const browserVariant = run(
+  'multi-UV browser variant',
+  ['--filter', '@forgeax/hello-multi-uv', 'smoke:browser-variant'],
+  {
+    FORGEAX_M3_ARTIFACT_DIR:
+      process.env.FORGEAX_M3_ARTIFACT_DIR ??
+      resolve(repoRoot, '.forgeax-gauntlet', 'hello-m3-programmable-rendering', 'browser-variant'),
+  },
+);
+if (
+  browserVariant.status !== 0 ||
+  !browserVariant.output.includes('[m3-browser-variant] PASS -') ||
+  !browserVariant.output.includes('falsifiedDelta=0.000')
+) {
+  console.error('[m3-programmable] multi-UV browser variant: FAIL - live compiled variant selection did not pass');
+  process.exit(1);
+}
+console.log('[m3-programmable] multi-UV browser variant: PASS');
+
 const browserLive = run(
   'browser live pipeline',
   ['--filter', '@forgeax/app-learn-render-4-advanced-opengl-5-framebuffers', 'smoke:browser-live'],

@@ -23,6 +23,7 @@
 // inherits .tagName from HTMLElement, so the property test cleanly
 // separates the canvas argument from the AppAssembleArgs plain object.
 
+import { animationPlugin } from '@forgeax/engine-animation';
 import {
   ASSET_REGISTRY_RESOURCE_KEY,
   AUDIO_ENGINE_RESOURCE_KEY,
@@ -50,23 +51,16 @@ import type { InputBackend } from '@forgeax/engine-input';
 import { INPUT_BACKEND_KEY } from '@forgeax/engine-input';
 import type { Plugin } from '@forgeax/engine-plugin';
 import { runPlugins } from '@forgeax/engine-plugin';
+import type { RendererError } from '@forgeax/engine-render';
+import { CAMERA_PROJECTION_PERSPECTIVE, Camera, type Renderer } from '@forgeax/engine-render';
+import { createDebugDrawOnReady } from '@forgeax/engine-render/internal';
 import type { RhiInstance } from '@forgeax/engine-rhi';
 import type { RhiError } from '@forgeax/engine-rhi/errors';
 import type { CreateShaderModuleFn, DebugRhiInstance } from '@forgeax/engine-rhi-debug';
 import * as engineRuntimeModule from '@forgeax/engine-runtime';
-import {
-  animationPlugin,
-  CAMERA_PROJECTION_PERSPECTIVE,
-  Camera,
-  createDebugDrawOnReady,
-  createRenderer,
-  EngineEnvironmentError,
-  PROPAGATE_TRANSFORMS_SYSTEM,
-  type Renderer,
-  type RendererError,
-  Transform,
-  transformPlugin,
-} from '@forgeax/engine-runtime';
+import { createRenderer, EngineEnvironmentError } from '@forgeax/engine-runtime';
+
+import { PROPAGATE_TRANSFORMS_SYSTEM, scenePlugin, Transform } from '@forgeax/engine-scene';
 import { statePlugin } from '@forgeax/engine-state';
 import type { AppErrorCode, AppErrorDetailFor } from './errors';
 import { AppError } from './errors';
@@ -191,7 +185,7 @@ async function createAppFromCanvas(
   // so the two RHI escape hatches (rhi / rawDeviceForContextConfigure) are
   // forwarded explicitly. Build a RendererOptions object out of just those
   // fields when present; an empty {} keeps createRenderer on its default path.
-  const rendererOpts: import('@forgeax/engine-runtime').RendererOptions = {};
+  const rendererOpts: import('@forgeax/engine-render').RendererOptions = {};
   if (opts?.rhi !== undefined) {
     Object.assign(rendererOpts, { rhi: opts.rhi });
   }
@@ -478,12 +472,9 @@ async function createAppFromCanvas(
   // Step 3.1 (M2 plugin-system-unify / D-4): app-layer side effects that the
   // plugins consume via pre-injected world resources.
   //
-  // NOTE: AnimationAssetResolver is NO LONGER inserted here — animationPlugin()
-  // (in the defaultSet below, and in every assemble-form host's plugin list) now
-  // self-owns it in build(), the same way physicsPlugin/statePlugin own their
-  // resources. This collapses the canvas-vs-assemble divergence that crashed the
-  // editor ▶ Play fork ("Required resource 'AnimationAssetResolver' not found"):
-  // the sole owner is the plugin, so both createApp forms are correct for free.
+  // Animation resolves World-local asset handles in its own package. No app
+  // layer resource injection is needed, so canvas and assemble forms share one
+  // ownership path.
   // transform + animation system registration lives in the plugins (default set).
 
   // A normal canvas app owns its browser acquisition. An embedding host that
@@ -524,7 +515,7 @@ async function createAppFromCanvas(
   // post-resolve timing gap). M3 (w15): legacy opts.physics / opts.audio bridges
   // deleted -- demos pass plugins directly; audio backend is auto-created above
   // when audioPlugin is detected in userPlugins.
-  const defaultSet: Plugin[] = [transformPlugin(), animationPlugin(), statePlugin(), inputPlugin()];
+  const defaultSet: Plugin[] = [scenePlugin(), animationPlugin(), statePlugin(), inputPlugin()];
   const pluginResult = await runPlugins(world, defaultSet, userPlugins);
   if (!pluginResult.ok) {
     return err(pluginResult.error);

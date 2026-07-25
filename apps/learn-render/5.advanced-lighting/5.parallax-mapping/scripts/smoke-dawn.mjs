@@ -136,7 +136,9 @@ if (!existsSync(DIFFUSE_SRC_PATH) || !existsSync(NORMAL_SRC_PATH) || !existsSync
 const { World } = await import('@forgeax/engine-ecs');
 const { decodeImageFromFile } = await import('@forgeax/engine-image/decode-image-from-file');
 const enginePkg = await import('@forgeax/engine-runtime');
-const { Camera, createRenderer, MeshFilter, MeshRenderer, Transform } = enginePkg;
+const { createRenderer } = enginePkg;
+const { Camera, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 const { HANDLE_QUAD } = await import('@forgeax/engine-assets-runtime');
 const { unwrapHandle } = await import('@forgeax/engine-types');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
@@ -212,10 +214,12 @@ if (!parallaxEntry) {
   console.error('[smoke] FAIL - manifest.materialShaders[] missing learn-render::5-5-parallax entry');
   process.exit(1);
 }
-shader.registerMaterialShader('learn-render::5-5-parallax', {
-  source: parallaxEntry.composedWgsl,
-  paramSchema: JSON.parse(parallaxEntry.paramSchema),
-});
+if (!shader.lookupMaterialShader('learn-render::5-5-parallax').ok) {
+  shader.registerMaterialShader('learn-render::5-5-parallax', {
+    source: parallaxEntry.composedWgsl,
+    paramSchema: JSON.parse(parallaxEntry.paramSchema),
+  });
+}
 
 // --- 6. Catalogue textures + spawn scene ---
 

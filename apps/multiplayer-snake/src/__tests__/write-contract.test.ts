@@ -5,7 +5,8 @@ import {
   type NetSession,
   netPlugin,
 } from '@forgeax/engine-net';
-import { MeshFilter, MeshRenderer, Transform } from '@forgeax/engine-runtime';
+import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { gridToWorldPosition, registerReplicaDerivation } from '../client';
 import { createServerWorld } from '../server';

@@ -21,7 +21,7 @@
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem } from '@forgeax/engine-ecs';
 import { vec3 } from '@forgeax/engine-math';
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 
 // Overlay colours (RGB; debug-draw fills alpha=1).
 const PLAYER_COLOR = [0, 1, 0] as const;

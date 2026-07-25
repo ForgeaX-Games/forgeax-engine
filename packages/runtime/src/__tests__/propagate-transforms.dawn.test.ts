@@ -23,10 +23,10 @@
 
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
+import { TileLayer, Tilemap } from '@forgeax/engine-render/authoring';
+import { ChildOf, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { type TilesetAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { ChildOf, TileLayer, Tilemap, Transform } from '../components/index';
-import { propagateTransforms } from '../systems/propagate-transforms';
 
 function identityTransformData() {
   return {

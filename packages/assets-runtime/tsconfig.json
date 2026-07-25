@@ -18,6 +18,7 @@
     { "path": "../pack" },
     { "path": "../rhi" },
     { "path": "../shader" },
+    { "path": "../skinning" },
     { "path": "../types" }
   ]
 }

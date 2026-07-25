@@ -11,13 +11,12 @@
 // Architecture (plan-strategy D-7): epsilon=0.1 permits WebGPU deferred-destroy
 // in-flight double-buffer float, while forbidding monotonic growth.
 
+import { cleanPerEntityCache, GpuResourceStore } from '@forgeax/engine-render/internal';
 import type { Result, RhiCaps, RhiError } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-rhi';
 import type { EquirectAsset, Handle, MeshAsset, TextureAsset } from '@forgeax/engine-types';
 import { toShared, unwrapHandle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { GpuResourceStore } from '../gpu-resource-store';
-import { cleanPerEntityCache } from '../record';
 
 // ── Mock device (same shape as gpu-resource.test.ts makeStoreMockDevice) ──
 

@@ -297,18 +297,12 @@ globalThis.fetch = async (url, ...rest) => {
 
 // --- 4. Engine bootstrap ---
 const { World } = await import('@forgeax/engine-ecs');
-const {
-  Transform,
-  Camera,
-  DirectionalLight,
-  Skin,
-  SceneInstance,
-  AnimationPlayer,
-  createRenderer,
-  createAnimationAssetResolver,
-  registerAdvanceAnimationPlayer,
-  ANIMATION_ASSET_RESOLVER_KEY,
-} = await import('@forgeax/engine-runtime');
+const { Transform } = await import('@forgeax/engine-scene');
+const { Camera, DirectionalLight } = await import('@forgeax/engine-render');
+const { Skin } = await import('@forgeax/engine-skinning');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { SceneInstance } = await import('@forgeax/engine-render');
+const { AnimationPlayer, registerAdvanceAnimationPlayer } = await import('@forgeax/engine-animation');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 
 const MANIFEST_PATH = resolve(DIST_DIR, 'shaders', 'manifest.json');
@@ -396,8 +390,6 @@ world.spawn({
   data: { direction: [-0.5, -1, -0.3], color: [1, 1, 1], intensity: 1 },
 });
 
-// Wire the animation advance system so world.update(1 / 60).unwrap() ticks the AnimationPlayer.
-world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, createAnimationAssetResolver(assets));
 registerAdvanceAnimationPlayer(world);
 
 const errors = [];

@@ -114,20 +114,20 @@ const mockCanvas = {
 
 // --- 3. Drive engine ECS path ---
 
-const { World } = await import('@forgeax/engine-ecs');
-const enginePkg = await import('@forgeax/engine-runtime');
-const { createBoxGeometry } = await import('@forgeax/engine-geometry');
-const { pick } = await import('@forgeax/engine-picking');
-const {
-  Camera,
-  createRenderer,
-  DirectionalLight,
-  Materials,
-  MeshFilter,
-  MeshRenderer,
-  perspective,
-  Transform,
-} = enginePkg;
+  const { World } = await import('@forgeax/engine-ecs');
+  const enginePkg = await import('@forgeax/engine-runtime');
+  const { createBoxGeometry } = await import('@forgeax/engine-geometry');
+  const { pick } = await import('@forgeax/engine-picking');
+  const { createRenderer } = enginePkg;
+const { Materials } = await import('@forgeax/engine-render');
+  const {
+    Camera,
+    DirectionalLight,
+    MeshFilter,
+    MeshRenderer,
+    perspective,
+  } = await import('@forgeax/engine-render');
+  const { Transform } = await import('@forgeax/engine-scene');
 
 const world = new World();
 

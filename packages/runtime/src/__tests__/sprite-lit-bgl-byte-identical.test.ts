@@ -15,15 +15,15 @@
 //     white texture; BGL JSON unchanged across sprite vs sprite-lit)
 //   - requirements AC-07
 
-import { describe, expect, it } from 'vitest';
-import { mergeSkylightIntoMaterialBgl } from '../ibl/skylight-bind-group';
+import type { PipelineSpec } from '@forgeax/engine-render/internal';
 import {
   appendInjection,
+  buildBindGroupLayoutDescriptor,
   buildPbrMaterialUserRegionEntries,
   buildPbrViewBglEntries,
-} from '../pbr-pipeline';
-import type { PipelineSpec } from '../pipeline-spec';
-import { buildBindGroupLayoutDescriptor } from '../pipeline-spec';
+  mergeSkylightIntoMaterialBgl,
+} from '@forgeax/engine-render/internal';
+import { describe, expect, it } from 'vitest';
 
 function makeSpec(shaderId: string): PipelineSpec {
   return {

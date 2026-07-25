@@ -13,11 +13,6 @@
 // (Camera clear pass is M3, not here.)
 
 import { vec3 } from '@forgeax/engine-math';
-import type { Buffer, RhiQueue } from '@forgeax/engine-rhi';
-import { ok } from '@forgeax/engine-rhi';
-import { describe, expect, it } from 'vitest';
-import { packPointLight, packSpotLight } from '../light-buffer-layout';
-import { writeViewUbo } from '../record/view-ubo';
 import type {
   CameraSnapshot,
   DirectionalLightSnapshot,
@@ -25,7 +20,11 @@ import type {
   PointLightSnapshot,
   SkylightSnapshot,
   SpotLightSnapshot,
-} from '../render-system-extract';
+} from '@forgeax/engine-render/internal';
+import { packPointLight, packSpotLight, writeViewUbo } from '@forgeax/engine-render/internal';
+import type { Buffer, RhiQueue } from '@forgeax/engine-rhi';
+import { ok } from '@forgeax/engine-rhi';
+import { describe, expect, it } from 'vitest';
 
 function identityCamera(): CameraSnapshot {
   return {
@@ -149,6 +148,7 @@ describe('w7 -- light GPU pack byte-neutral (AC-11)', () => {
       equirectHandle: 0,
       color: [0.2, 0.4, 0.6],
       intensity: 0.3,
+      rotation: [0, 0, 0, 1],
       entityHandle: 1,
     };
     const [cr, cg, cb] = snap.color;

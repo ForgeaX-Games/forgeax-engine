@@ -10,7 +10,8 @@
 //   - opts.keepDetached preserves members marked via detachSceneMember.
 
 import { World } from '@forgeax/engine-ecs';
-import { ChildOf, SceneInstance, Transform } from '@forgeax/engine-runtime';
+import { SceneInstance } from '@forgeax/engine-render/internal';
+import { ChildOf, Transform } from '@forgeax/engine-scene';
 import type { Handle, SceneAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 
@@ -33,6 +34,8 @@ describe('world.despawnScene (w19)', () => {
     if (!r.ok) throw new Error('instantiateScene failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
+    expect(inst.value.mapping).toBeInstanceOf(Uint32Array);
+    if (!(inst.value.mapping instanceof Uint32Array)) return;
     const m0 = inst.value.mapping[0] as unknown as number;
     const m1 = inst.value.mapping[1] as unknown as number;
 
@@ -61,6 +64,8 @@ describe('world.despawnScene (w19)', () => {
     if (!r.ok) throw new Error('instantiate failed');
     const inst = world.get(r.value.root, SceneInstance);
     if (!inst.ok) throw new Error('get failed');
+    expect(inst.value.mapping).toBeInstanceOf(Uint32Array);
+    if (!(inst.value.mapping instanceof Uint32Array)) return;
     const member1 = inst.value.mapping[1] as unknown as number;
 
     const det = world.detachSceneMember(r.value.root, member1 as never);

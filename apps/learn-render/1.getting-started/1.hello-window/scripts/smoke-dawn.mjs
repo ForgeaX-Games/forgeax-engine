@@ -162,7 +162,9 @@ const mockCanvas = {
 
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
-const { Camera, createRenderer, Transform } = enginePkg;
+const { createRenderer } = enginePkg;
+const { Camera } = await import('@forgeax/engine-render');
+const { Transform } = await import('@forgeax/engine-scene');
 
 // Reuse the engine shader manifest (mirrors the 4.textures template).
 // LO 1.1 is clear-pass only but the renderer still validates the

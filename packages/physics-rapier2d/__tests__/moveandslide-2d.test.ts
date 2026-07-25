@@ -26,7 +26,7 @@ import {
   RigidBody,
   RigidBodyTypeValue,
 } from '@forgeax/engine-physics';
-import { Transform } from '@forgeax/engine-runtime';
+import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import {
   createRapier2DPhysicsWorld,

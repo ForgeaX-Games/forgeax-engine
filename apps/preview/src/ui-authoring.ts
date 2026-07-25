@@ -28,6 +28,7 @@ export interface UiAuthoringHostHandle {
   }) => Promise<UiAuthoringResult>;
   readonly open: (scenario?: 'default' | 'extreme') => ReturnType<UiPreviewSession['open']>;
   readonly capture: (adapter: UiPreviewCaptureAdapter) => Promise<UiPreviewCaptureResult>;
+  readonly getCaptureTarget: () => HTMLElement | null;
   readonly repair: (source: {
     readonly html: string;
     readonly css: string;
@@ -110,6 +111,10 @@ export function createUiAuthoringHost(parent: HTMLElement): UiAuthoringHostHandl
         };
       }
       return captureUiPreview(session, adapter);
+    },
+    getCaptureTarget: () => {
+      const target = session?.state === 'mounted' ? session.instance?.host : null;
+      return target?.isConnected ? target : null;
     },
     getSession: () => session,
     dispose() {

@@ -220,19 +220,12 @@ const mockCanvas = {
 // --- 3. Engine + Fox.glb pipeline -----------------------------------------------
 
 const { World } = await import('@forgeax/engine-ecs');
-const {
-  ANIMATION_ASSET_RESOLVER_KEY,
-  AnimationPlayer,
-  Camera,
-  ChildOf,
-  createAnimationAssetResolver,
-  createRenderer,
-  DirectionalLight,
-  registerAdvanceAnimationPlayer,
-  SceneInstance,
-  Skin,
-  Transform,
-} = await import('@forgeax/engine-runtime');
+const { createRenderer } = await import('@forgeax/engine-runtime');
+const { SceneInstance } = await import('@forgeax/engine-render');
+const { AnimationPlayer, registerAdvanceAnimationPlayer } = await import('@forgeax/engine-animation');
+const { Camera, DirectionalLight } = await import('@forgeax/engine-render');
+const { ChildOf, Transform } = await import('@forgeax/engine-scene');
+const { Skin } = await import('@forgeax/engine-skinning');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { gltfDocToSceneAsset, meshIrToMeshAsset, parseGlb, toMaterialAsset } = await import(
   '@forgeax/engine-gltf'
@@ -520,11 +513,6 @@ world.spawn({
   data: { direction: [-0.5, -1, -0.3], color: [1, 1, 1], intensity: 1 },
 });
 
-// feat-20260713 M1 / w8: align to the production 1-arg signature. The resolver
-// is supplied via the World resource ({@link ANIMATION_ASSET_RESOLVER_KEY})
-// rather than as a positional argument (the retired 2-arg shape silently
-// bypassed the resource-backed advance system, research R-4).
-world.insertResource(ANIMATION_ASSET_RESOLVER_KEY, createAnimationAssetResolver(assets));
 registerAdvanceAnimationPlayer(world);
 
 // --- 5. Render loop + pixel readback -------------------------------------------

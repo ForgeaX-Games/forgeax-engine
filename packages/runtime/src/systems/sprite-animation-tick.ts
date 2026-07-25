@@ -67,10 +67,11 @@ import {
   Time,
   type World,
 } from '@forgeax/engine-ecs';
-
-import { SpriteAnimation } from '../components/sprite-animation';
-import { spritePlaybackModeFromU32 } from '../components/sprite-playback-mode';
-import { SpriteRegionOverride } from '../components/sprite-region-override';
+import {
+  SpriteAnimation,
+  SpriteRegionOverride,
+  spritePlaybackModeFromU32,
+} from '@forgeax/engine-render/authoring';
 
 // Engine-internal hooks the tick system uses to walk archetype rows and read
 // each row's full Entity handle from the essential id=0 `Entity` column —

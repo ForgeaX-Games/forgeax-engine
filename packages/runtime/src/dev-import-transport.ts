@@ -25,7 +25,8 @@ import type { ImportTransport, PackIndexEntry } from '@forgeax/engine-types';
  * IDE autocomplete on `@forgeax/engine-runtime` surfaces it.
  *
  * @example
- *   import { createApp, createDevImportTransport } from '@forgeax/engine-runtime';
+ *   import { createApp } from '@forgeax/engine-app';
+ *   import { createDevImportTransport } from '@forgeax/engine-runtime';
  *   const app = await createApp(canvas, opts, {
  *     importTransport: createDevImportTransport(),
  *   });
