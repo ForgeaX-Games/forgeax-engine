@@ -1,9 +1,10 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type { PackErrorCode } from '@forgeax/engine-types';
+import type { ImportedOutputDeclaration, PackErrorCode } from '@forgeax/engine-types';
 import { MATERIAL_PARAM_TYPES, PACK_ERROR_HINTS } from '@forgeax/engine-types';
 import { loadAssetConfig } from './config.js';
 import { PackError } from './errors.js';
+import { validateProducerContract, validateProducerOutputs } from './producer-contract.js';
 import { resolveAssetSource } from './resolve-asset-source.js';
 import { buildMaterialAssetValidator, validateMeta, validatePack } from './schema-compiled.js';
 
@@ -138,6 +139,18 @@ export async function scan(
   }
 
   for (const root of roots) {
+    // Explicit file roots are useful when a host wants one source package
+    // from a larger asset tree without also scanning sibling packages. Keep
+    // directory-root behaviour unchanged; this is only an opt-in whitelist.
+    try {
+      const rootStat = await stat(root);
+      if (rootStat.isFile()) {
+        if (root.endsWith('.meta.json') || root.endsWith('.pack.json')) rawPaths.push(root);
+        continue;
+      }
+    } catch {
+      // The existing directory traversal treats missing roots as empty.
+    }
     await traverse(root);
   }
 
@@ -146,8 +159,9 @@ export async function scan(
   const packPaths = rawPaths.filter((p) => p.endsWith('.pack.json'));
 
   // Step 2 + 3: parse + schema validate + GUID format validate each pack file
-  // Collect GUID -> path map for collision detection + refs for cycle detection
-  const guidToPackPath = new Map<string, string>();
+  // One normalized GUID map covers pack assets and meta subAssets. The source
+  // kind stays in the path/detail evidence; identity is the normalized GUID.
+  const guidToPath = new Map<string, string>();
   const packRefs = new Map<string, string[]>(); // guid -> refs[]
 
   // Collect material payloads for step-7 validation
@@ -185,8 +199,47 @@ export async function scan(
       );
     }
 
+    const packageContract = validateProducerContract(parsed);
+    if (!packageContract.ok) {
+      return packErr(
+        makePackError('pack-malformed-pack', {
+          path: packPath,
+          ajvErrors: [{ instancePath: '', message: packageContract.error.code }],
+        }),
+      );
+    }
+
     // Step 3: validate GUIDs in pack
-    const packObj = parsed as { assets: { guid: string; refs: string[] }[] };
+    const packObj = parsed as {
+      assets: { guid: string; refs: string[]; sourceKey?: string; sourceIndex?: number }[];
+    };
+    const producerAssets = packObj.assets.filter(
+      (asset) => asset.sourceKey !== undefined || asset.sourceIndex !== undefined,
+    );
+    if (producerAssets.length > 0) {
+      for (const asset of producerAssets) {
+        const assetContract = validateProducerContract(asset);
+        if (!assetContract.ok) {
+          return packErr(
+            makePackError('pack-malformed-pack', {
+              path: packPath,
+              ajvErrors: [{ instancePath: '/assets', message: assetContract.error.code }],
+            }),
+          );
+        }
+      }
+      const topologyContract = validateProducerOutputs(
+        producerAssets as unknown as readonly ImportedOutputDeclaration[],
+      );
+      if (!topologyContract.ok) {
+        return packErr(
+          makePackError('pack-malformed-pack', {
+            path: packPath,
+            ajvErrors: [{ instancePath: '/assets', message: topologyContract.error.code }],
+          }),
+        );
+      }
+    }
     for (const asset of packObj.assets) {
       if (!isValidGuid(asset.guid)) {
         return packErr(
@@ -209,7 +262,7 @@ export async function scan(
 
       // Step 4: collision check
       const normalizedGuid = asset.guid.toLowerCase();
-      const existing = guidToPackPath.get(normalizedGuid);
+      const existing = guidToPath.get(normalizedGuid);
       if (existing !== undefined) {
         return packErr(
           makePackError('pack-guid-collision', {
@@ -218,7 +271,7 @@ export async function scan(
           }),
         );
       }
-      guidToPackPath.set(normalizedGuid, packPath);
+      guidToPath.set(normalizedGuid, packPath);
 
       // Accumulate refs for cycle detection
       const existingRefs = packRefs.get(normalizedGuid) ?? [];
@@ -298,10 +351,25 @@ export async function scan(
       );
     }
 
+    const metaContract = validateProducerContract(parsed);
+    if (!metaContract.ok) {
+      return packErr(
+        makePackError('pack-malformed-meta', {
+          path: metaPath,
+          ajvErrors: [{ instancePath: '', message: metaContract.error.code }],
+        }),
+      );
+    }
+
     // Step 3: validate GUIDs in meta subAssets
     const metaObj = parsed as {
       source?: string;
-      subAssets: { guid: string; sourceIndex: number }[];
+      subAssets: {
+        guid: string;
+        sourceIndex: number;
+        sourceKey?: string;
+        kind: string;
+      }[];
     };
     for (const sub of metaObj.subAssets) {
       if (!isValidGuid(sub.guid)) {
@@ -309,6 +377,31 @@ export async function scan(
           makePackError('pack-guid-malformed', {
             raw: sub.guid,
             reason: 'expected 36-char RFC 4122 dash-form UUID in subAssets[].guid',
+          }),
+        );
+      }
+      const normalizedGuid = sub.guid.toLowerCase();
+      const existing = guidToPath.get(normalizedGuid);
+      if (existing !== undefined) {
+        return packErr(
+          makePackError('pack-guid-collision', {
+            paths: [existing, metaPath],
+            guid: normalizedGuid,
+          }),
+        );
+      }
+      guidToPath.set(normalizedGuid, metaPath);
+    }
+    const producerSubAssets = metaObj.subAssets.filter((sub) => sub.sourceKey !== undefined);
+    if (producerSubAssets.length > 0) {
+      const topologyContract = validateProducerOutputs(
+        producerSubAssets as unknown as readonly ImportedOutputDeclaration[],
+      );
+      if (!topologyContract.ok) {
+        return packErr(
+          makePackError('pack-malformed-meta', {
+            path: metaPath,
+            ajvErrors: [{ instancePath: '/subAssets', message: topologyContract.error.code }],
           }),
         );
       }
@@ -358,7 +451,7 @@ export async function scan(
     return null;
   }
 
-  for (const guid of guidToPackPath.keys()) {
+  for (const guid of guidToPath.keys()) {
     if (!visited.has(guid)) {
       const cycle = dfs(guid, [guid]);
       if (cycle !== null) {

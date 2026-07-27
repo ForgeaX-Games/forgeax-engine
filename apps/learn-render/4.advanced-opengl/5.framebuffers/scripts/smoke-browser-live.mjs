@@ -142,6 +142,14 @@ try {
       undefined,
       { timeout: 15_000 },
     );
+    // The HUD and canvas dimensions come from index.html before the async
+    // createApp/bootstrap path finishes. Wait for the demo's public capture
+    // seam so the first sample cannot race renderer setup.
+    await page.waitForFunction(
+      () => typeof globalThis.__captureFramebuffers === 'function',
+      undefined,
+      { timeout: 30_000 },
+    );
     await page.waitForTimeout(500);
 
     const baseline = await capture(page, 'pipeline-passthrough');

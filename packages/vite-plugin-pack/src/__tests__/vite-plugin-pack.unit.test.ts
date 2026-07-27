@@ -1758,7 +1758,7 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
   }
 
   describe('scene-asset-fixture.test.ts', () => {
-    it('(a) catalog includes one entry with kind === "scene" + the room SceneAsset GUID', async () => {
+    it('(a) degraded catalog projection omits the collided room SceneAsset', async () => {
       const fixtureRaw = readFileSync(SAF_ROOM_PACK_PATH, 'utf-8');
       expect(fixtureRaw.includes(SAF_ROOM_SCENE_GUID)).toBe(true);
       const { middleware } = await safAttachPlugin([SAF_HELLO_ROOM_ASSETS]);
@@ -1769,26 +1769,32 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
         relativeUrl: string;
         kind: string;
       }>;
-      const sceneEntries = catalog.filter((e) => e.kind === 'scene');
-      expect(sceneEntries.length).toBeGreaterThanOrEqual(1);
-      expect(
-        sceneEntries.some((e) => e.guid.toLowerCase() === SAF_ROOM_SCENE_GUID.toLowerCase()),
-      ).toBe(true);
+      // The fixture intentionally has pack/meta GUID collisions for the
+      // stub-backed mesh/material rows. The legacy array endpoint is only a
+      // projection of the structured result, so it must not expose a
+      // first-seen scene identity from a degraded root scan.
+      expect(catalog).toMatchObject({
+        schemaVersion: 'catalog-legacy-v1',
+        authority: 'degraded',
+        entries: [],
+        diagnostics: [
+          {
+            code: 'catalog-scan-failed',
+            subjects: [SAF_HELLO_ROOM_ASSETS],
+          },
+        ],
+      });
     });
 
-    it('(b) /__pack/lookup/<sceneGuid> resolves to a catalog entry pointing at room.pack.json', async () => {
+    it('(b) /__pack/lookup/<sceneGuid> rejects the collided room identity', async () => {
       const { middleware } = await safAttachPlugin([SAF_HELLO_ROOM_ASSETS]);
       const res = await safFetchUrl(middleware, `/__pack/lookup/${SAF_ROOM_SCENE_GUID}`);
       expect(res._headers['Content-Type']).toBe('application/json');
-      const entry = JSON.parse(res._body) as {
-        guid: string;
-        relativeUrl: string;
-        kind: string;
-        sourcePath: string;
-      };
-      expect(entry.kind).toBe('scene');
-      expect(entry.guid.toLowerCase()).toBe(SAF_ROOM_SCENE_GUID.toLowerCase());
-      expect(entry.sourcePath.endsWith('room.pack.json')).toBe(true);
+      expect(res.statusCode).toBe(404);
+      expect(JSON.parse(res._body)).toEqual({
+        error: 'not-found',
+        guid: SAF_ROOM_SCENE_GUID,
+      });
     });
 
     it('(c) empty roots: catalog is `[]` (degrade-not-crash)', async () => {
@@ -2250,10 +2256,18 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       const res = makeAc17Res();
       await handler({ url: '/__pack/index', method: 'GET' }, res, () => {});
       expect(res.statusCode).toBe(200);
-      // Since scan failed, catalog was never built; an empty catalog is returned
-      // (the catch path sets catalogReady = true with empty catalog)
-      const catalog = JSON.parse(res.body) as unknown[];
-      expect(catalog).toEqual([]);
+      // Since scan failed, first-seen rows remain visible only inside the
+      // versioned degraded projection; the legacy array shape is not emitted.
+      const catalog = JSON.parse(res.body) as {
+        schemaVersion: string;
+        authority: string;
+        entries: unknown[];
+        diagnostics: Array<{ code: string; subjects?: string[] }>;
+      };
+      expect(catalog.schemaVersion).toBe('catalog-legacy-v1');
+      expect(catalog.authority).toBe('degraded');
+      expect(catalog.entries).toEqual([]);
+      expect(catalog.diagnostics[0]?.code).toBe('catalog-scan-failed');
     });
   });
 }

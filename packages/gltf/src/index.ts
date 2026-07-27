@@ -121,6 +121,12 @@ export {
 // Byte-stable meta JSON serialization (D-3; AC-04).
 export { serializeMetaJson } from './serialize-meta.js';
 export type {
+  GltfSourceKeyError,
+  GltfSourceKeyErrorCode,
+  GltfSourceKeyResult,
+} from './source-key.js';
+export { deriveGltfSourceKeys, sourceKeyForGltfOutput } from './source-key.js';
+export type {
   DecomposedTransform,
   NodeTransformJson,
   TransformDiagnostics,

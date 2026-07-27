@@ -24,10 +24,14 @@
 // for them so the caller can account for the sidecar without writing a DDC.
 
 import type {
+  AssetRelation,
+  CatalogDiagnostic,
   ImageError,
   ImportContext,
   ImportError as ImportErrorType,
   ImportProduct,
+  ProviderProvenance,
+  ResourceRevision,
   TextureAsset,
 } from '@forgeax/engine-types';
 import { IMPORT_ERROR_HINTS, ImportError } from '@forgeax/engine-types';
@@ -125,10 +129,17 @@ export type RunImportOk =
 export interface DdcPack {
   readonly schemaVersion: string;
   readonly kind: 'internal-text-package';
+  readonly packageId?: string;
+  readonly provenance?: ProviderProvenance;
+  readonly revision?: ResourceRevision;
+  readonly diagnostics?: readonly CatalogDiagnostic[];
   readonly assets: ReadonlyArray<{
     readonly guid: string;
     readonly kind: string;
     readonly name?: string;
+    readonly sourceKey?: string;
+    readonly sourceIndex?: number;
+    readonly relations?: readonly AssetRelation[];
     readonly payload: Record<string, unknown>;
     readonly refs: readonly string[];
   }>;
@@ -138,12 +149,29 @@ export interface DdcPack {
 export interface RunImportMeta {
   readonly importer: string;
   readonly source: string;
+  readonly packageId?: string;
+  readonly provenance?: ProviderProvenance;
+  readonly revision?: ResourceRevision;
+  readonly diagnostics?: readonly CatalogDiagnostic[];
   readonly importSettings?: Readonly<Record<string, unknown>>;
   readonly subAssets: ReadonlyArray<{
     readonly guid: string;
     readonly sourceIndex: number;
     readonly kind: string;
+    readonly sourceKey?: string;
+    readonly relations?: readonly AssetRelation[];
   }>;
+}
+
+function declarationFields(
+  declaration: RunImportMeta['subAssets'][number] | undefined,
+): Pick<DdcPack['assets'][number], 'sourceKey' | 'sourceIndex' | 'relations'> {
+  if (declaration === undefined) return {};
+  return {
+    sourceIndex: declaration.sourceIndex,
+    ...(declaration.sourceKey !== undefined ? { sourceKey: declaration.sourceKey } : {}),
+    ...(declaration.relations !== undefined ? { relations: declaration.relations } : {}),
+  };
 }
 
 /** Filesystem + decode capabilities the runner needs to drive an importer.
@@ -447,8 +475,12 @@ export async function runImport(
   // RunImportOk.bins (keyed by lowercased GUID) so the pack payload carries
   // only metadata (width/height/format/colorSpace).
   const bins = new Map<string, Uint8Array>();
+  const declarations = new Map(
+    meta.subAssets.map((declaration) => [declaration.guid, declaration]),
+  );
   const assets = produced.map((a) => {
     const payload = a.payload as unknown as Record<string, unknown>;
+    const outputFields = declarationFields(declarations.get(a.guid));
     if (
       a.kind === 'texture' &&
       'data' in payload &&
@@ -467,6 +499,7 @@ export async function runImport(
       return {
         guid: a.guid,
         kind: a.kind,
+        ...outputFields,
         ...(a.name !== undefined ? { name: a.name } : {}),
         payload: { ...auxNormalised, data: new Uint8Array(0) },
         refs: a.refs.map((r) => r.guid),
@@ -486,6 +519,7 @@ export async function runImport(
       return {
         guid: a.guid,
         kind: a.kind,
+        ...outputFields,
         ...(a.name !== undefined ? { name: a.name } : {}),
         payload: {
           vertices: [],
@@ -498,6 +532,7 @@ export async function runImport(
     return {
       guid: a.guid,
       kind: a.kind,
+      ...outputFields,
       ...(a.name !== undefined ? { name: a.name } : {}),
       // bug-20260610: mesh / scene / animation-clip payloads carry Float32Array
       // / Uint16Array / Uint32Array fields. JSON.stringify on a typed array
@@ -515,6 +550,10 @@ export async function runImport(
   const pack: DdcPack = {
     schemaVersion: '1.0.0',
     kind: 'internal-text-package',
+    ...(meta.packageId !== undefined ? { packageId: meta.packageId } : {}),
+    ...(meta.provenance !== undefined ? { provenance: meta.provenance } : {}),
+    ...(meta.revision !== undefined ? { revision: meta.revision } : {}),
+    ...(meta.diagnostics !== undefined ? { diagnostics: meta.diagnostics } : {}),
     assets,
   };
 

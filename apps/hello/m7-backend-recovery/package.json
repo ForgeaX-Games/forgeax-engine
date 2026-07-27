@@ -6,7 +6,8 @@
   "license": "Apache-2.0",
   "description": "M7 backend and recovery gauntlet: browser, Dawn, wgpu, null, resize, faults, and tree-shaking.",
   "scripts": {
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:browser-device-loss": "node scripts/smoke-browser-device-loss.mjs"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-m7-backend-recovery smoke",
@@ -30,7 +31,7 @@
       "risks": ["baseline", "dynamic", "churn", "fault", "recovery", "cleanup", "behavioral"],
       "phaseInputs": ["baseline", "dynamic", "churn", "fault", "recovery", "cleanup"],
       "evidence": {
-        "frontDoors": ["null-lifecycle", "wgpu-contract", "browser-submit", "dawn-resize", "browser-capture", "tree-shake"],
+        "frontDoors": ["null-lifecycle", "wgpu-contract", "browser-submit", "dawn-resize", "browser-capture", "browser-driver-device-loss", "tree-shake"],
         "legs": ["semantic", "live", "gpu", "behavioral", "recovery"]
       },
       "oracle": {
@@ -41,6 +42,7 @@
           "[m7-backend] Dawn unsupported fallback rejection: PASS",
           "[m7-backend] Dawn resize/resource churn: PASS",
           "[m7-backend] browser WebGPU capture: PASS",
+          "[m7-backend] browser/driver device-loss recovery: PASS",
           "[m7-backend] same-scene cross-backend replay: PASS",
           "[m7-backend] debug-only tree-shake: PASS",
           "[m7-backend] PASS - M7 backend/recovery evidence GREEN"
@@ -54,5 +56,9 @@
       "gate": {"enabled": true, "command": "pnpm --filter @forgeax/hello-m7-backend-recovery smoke"},
       "spike-report": {"enabled": false, "reason": "not a spike app"}
     }
+  },
+  "devDependencies": {
+    "playwright": "^1.50.0",
+    "pngjs": "^7.0.0"
   }
 }

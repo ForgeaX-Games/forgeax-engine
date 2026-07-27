@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
+import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { gltfImporter } from '@forgeax/engine-gltf';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
@@ -157,16 +157,23 @@ export default defineConfig({
               // template's assets/ holds the scene pack + material packs (the
               // scene is a GUID-discoverable asset, forge.json.defaultScene); the
               // submodule subtree holds sky.hdr (loaded via loadByGuid through
-              // this middleware). Mirrors apps/preview/vite.config.ts roots.
+              // this middleware). Select its sidecar explicitly so the
+              // mirrored UI sidecars are not scanned twice; explicit file
+              // roots are supported by the pack scanner.
               resolve(rootDir, 'templates/game-default'),
-              resolve(rootDir, 'forgeax-engine-assets/demo-assets/template-game-default'),
+              resolve(
+                rootDir,
+                'forgeax-engine-assets/demo-assets/template-game-default/sky.hdr.meta.json',
+              ),
+              // game-default spatial hit SFX (ordinary MP3 sidecar/GUID path).
+              resolve(rootDir, 'forgeax-engine-assets/sfx'),
             ],
             // feat-learn-render-5.9 ssao: the backpack is a .gltf scene whose
             // sub-assets (mesh / material / textures) must be importable through
             // the middleware for the SSAO onerror-gate. Without these the gltf
             // meta resolves to importer-not-registered (422). imageImporter also
             // covers any non-pre-baked image sidecars under the scanned roots.
-            importers: [imageImporter, gltfImporter],
+            importers: [imageImporter, gltfImporter, audioImporter],
           }),
         ],
         server: {

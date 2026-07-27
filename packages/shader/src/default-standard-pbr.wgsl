@@ -36,14 +36,15 @@
 //                                                               + metallic + roughness
 //                                                               + 4 channel selectors f32
 //                                                               + emissive vec3 + emissiveIntensity
-//                                                               + uv/alpha/clearcoat = 96 B)
+//                                                               + uv/alpha/clearcoat/specularTint = 112 B)
 //   @group(1) @binding(1) baseColorSampler           sampler
 //   @group(1) @binding(2) baseColorTexture           texture_2d<f32>
 //   @group(1) @binding(3) metallicRoughnessSampler   sampler
 //   @group(1) @binding(4) metallicRoughnessTexture   texture_2d<f32>
 //   @group(1) @binding(5) normalSampler              sampler
 //   @group(1) @binding(6) normalTexture              texture_2d<f32>
-//   @group(1) @binding(7..13) Skylight (irradiance / prefilter / brdfLut +
+//   @group(1) @binding(7) specularTintSampler + @binding(8) specularTintTexture
+//   @group(1) @binding(9..15) Skylight (irradiance / prefilter / brdfLut +
 //                              samplers) + skylight uniform (intensity)
 //   @group(2) @binding(0) meshes                     storage   (worldFromLocal mat4
 //                                                               + normalMatrix mat3,
@@ -54,7 +55,7 @@
 //                                                               (instance_index);
 //                                                               see common.wgsl)
 //
-// 14 entries fit within `device.limits.maxBindingsPerBindGroup` (default
+// 20 entries fit within `device.limits.maxBindingsPerBindGroup` (default
 // 1000 across all known WebGPU devices; chrome-beta + dawn confirmed via
 // the runtime probe in createRenderer.ts -- requirements R-E acceptance
 // gate). Adding more bindings requires raising the entry-count fixture in
@@ -106,15 +107,17 @@ struct Material {
   // `baseColorTexture.texCoord` (and the sibling MR/normal slots, which share
   // it per material in practice) chooses which vertex UV set the textures
   // sample. 0.0 -> set 0 (in.uv), >=0.5 -> set 1 (in.uv1). Lands at offset 68;
-  // clearcoat occupies offsets 76..84; the authored schema rounds to 96 B,
-  // while the engine-owned UV scale tail begins at byte 88.
+  // clearcoat occupies offsets 76..84; specularTint is aligned to offset 96,
+  // while the engine-owned UV scale tail begins at byte 112.
   uvSet              : f32,
   alphaCutoff        : f32,
   clearcoat          : f32,
   clearcoatRoughness : f32,
+  specularTint       : vec3<f32>,
   baseColorUvScale          : vec2<f32>,
   metallicRoughnessUvScale  : vec2<f32>,
   normalUvScale             : vec2<f32>,
+  specularTintUvScale       : vec2<f32>,
   emissiveUvScale           : vec2<f32>,
   occlusionUvScale          : vec2<f32>,
 };
@@ -126,6 +129,8 @@ struct Material {
 @group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
 @group(1) @binding(5) var normalSampler : sampler;
 @group(1) @binding(6) var normalTexture : texture_2d<f32>;
+@group(1) @binding(7) var specularTintSampler : sampler;
+@group(1) @binding(8) var specularTintTexture : texture_2d<f32>;
 
 // Naga reflection does not retain filtering usage through the generic shared
 // helper. These compile-time-only witnesses retain the binding contract while
@@ -134,11 +139,13 @@ fn materialTextureFilteringWitness() {
   let base = baseColorTexture;
   let metallicRoughness = metallicRoughnessTexture;
   let normal = normalTexture;
+  let specularTint = specularTintTexture;
   let emissive = emissiveTexture;
   let occlusion = occlusionTexture;
   let baseWitness = textureSample(base, baseColorSampler, vec2<f32>(0.0));
   let metallicRoughnessWitness = textureSample(metallicRoughness, metallicRoughnessSampler, vec2<f32>(0.0));
   let normalWitness = textureSample(normal, normalSampler, vec2<f32>(0.0));
+  let specularTintWitness = textureSample(specularTint, specularTintSampler, vec2<f32>(0.0));
   let emissiveWitness = textureSample(emissive, emissiveSampler, vec2<f32>(0.0));
   let occlusionWitness = textureSample(occlusion, occlusionSampler, vec2<f32>(0.0));
 }
@@ -167,17 +174,17 @@ struct SkylightUniforms {
   colorB : f32,
   rotation : vec4<f32>,
 };
-@group(1) @binding(7)  var irradianceMap        : texture_cube<f32>;
-@group(1) @binding(8)  var irradianceSampler    : sampler;
-@group(1) @binding(9)  var prefilterMap         : texture_cube<f32>;
-@group(1) @binding(10) var prefilterSampler     : sampler;
-@group(1) @binding(11) var brdfLut              : texture_2d<f32>;
-@group(1) @binding(12) var brdfLutSampler       : sampler;
-@group(1) @binding(13) var<uniform> skylight    : SkylightUniforms;
-@group(1) @binding(14) var emissiveSampler      : sampler;
-@group(1) @binding(15) var emissiveTexture      : texture_2d<f32>;
-@group(1) @binding(16) var occlusionSampler     : sampler;
-@group(1) @binding(17) var occlusionTexture     : texture_2d<f32>;
+@group(1) @binding(9)  var irradianceMap        : texture_cube<f32>;
+@group(1) @binding(10) var irradianceSampler    : sampler;
+@group(1) @binding(11) var prefilterMap         : texture_cube<f32>;
+@group(1) @binding(12) var prefilterSampler     : sampler;
+@group(1) @binding(13) var brdfLut              : texture_2d<f32>;
+@group(1) @binding(14) var brdfLutSampler       : sampler;
+@group(1) @binding(15) var<uniform> skylight    : SkylightUniforms;
+@group(1) @binding(16) var emissiveSampler      : sampler;
+@group(1) @binding(17) var emissiveTexture      : texture_2d<f32>;
+@group(1) @binding(18) var occlusionSampler     : sampler;
+@group(1) @binding(19) var occlusionTexture     : texture_2d<f32>;
 
 // feat-20260612-hdrp-ssao M7 (round 2) D-B + D-C, scope-amend-webgl2-ubo:
 // SSAO sampling lives on the HDRP unified BGL @group(2) alongside the
@@ -351,7 +358,10 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 
   let v = normalize(view.cameraPos - in.worldPos);
-  let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+  let specularTint = material.specularTint * sampleMaterialTexture(
+    specularTintTexture, specularTintSampler, uv, material.specularTintUvScale,
+  ).rgb;
+  let f0 = mix(vec3<f32>(0.04) * specularTint, albedo, metallic);
   let coatRoughness = max(material.clearcoatRoughness, 0.04);
   let coatAlpha = coatRoughness * coatRoughness;
   let coatF = f_schlick(max(dot(n, v), 0.0), vec3<f32>(0.04)) * material.clearcoat;

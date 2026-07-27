@@ -85,6 +85,25 @@ the public row and delta shapes are `CatalogEntry` and `CatalogDelta` from
 `@forgeax/engine-types`. Read those exported types for their complete fields
 instead of copying a second schema into a consumer.
 
+### Producer fact parity
+
+> [!IMPORTANT]
+> Static entries and URL/fetch entries have the same neutral `CatalogEntry`
+> shape. `parseCatalog()` preserves `packageId`, `provenance`, `revision`,
+> `sourceKey`, `sourceIndex`, `relations`, and `diagnostics`; it never derives
+> them from `relativeUrl`, `sourcePath`, or array position.
+
+| Runtime input | What is checked | What is not done |
+|:--|:--|:--|
+| Static `entries` | Optional expected revision continuity | No payload decode or re-import |
+| URL `fetch` | JSON shape, required locator, and optional expected revision | No identity reconstruction from the URL |
+| Malformed row | Structured `asset-parse-failed` with `expected` and `hint` | Never converted into an empty successful catalog |
+| Revision mismatch | Structured failure with expected and actual revisions | Never applied over the last verified snapshot |
+
+The source is a neutral facts boundary, not an asset decoder. Decode, upload,
+and GPU work remain in their existing loader paths; the catalog parser only
+enumerates facts and locators.
+
 ```ts
 const unsubscribe = assets.subscribeCatalog((delta) => {
   // Delete first, then replace added/changed rows by their stable GUID.
@@ -129,6 +148,10 @@ Call `setCatalogSource(source)` before enumeration. Without a source,
 error; endpoint and parse failures remain structured results as well. Inspect
 `.code` and `.hint`, repair the external condition, then enumerate again — a
 failed enumeration is not a permanent result.
+
+When a source returns `asset-parse-failed`, branch on `.expected`, `.hint`, and
+`.detail` rather than `.message`. For a stale revision, keep the last verified
+catalog, repair or re-fetch the producer revision, and enumerate again.
 
 Subscribe before the first enumeration to avoid the consumer-side missed-event
 window. If a consumer subscribed late or needs to resynchronise after a

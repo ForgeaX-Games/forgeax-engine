@@ -123,7 +123,10 @@ import { WebAudioEngine } from '../web-audio-engine';
   describe('audioImporter pass-through (AC-18, no decode)', () => {
     it('emits a thin audio descriptor under the declared GUID', async () => {
       const ctx = makeCtx([{ guid: GUID, sourceIndex: 0, kind: 'audio' }]);
-      const produced = await audioImporter.import(ctx);
+      const result = await audioImporter.import(ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const produced = result.value.assets;
       expect(produced.length).toBe(1);
       expect(produced[0]?.guid).toBe(GUID);
       expect(produced[0]?.kind).toBe('audio');
@@ -145,8 +148,10 @@ import { WebAudioEngine } from '../web-audio-engine';
 
     it('skips a non-audio sub-asset kind', async () => {
       const ctx = makeCtx([{ guid: GUID, sourceIndex: 0, kind: 'texture' }]);
-      const produced = await audioImporter.import(ctx);
-      expect(produced.length).toBe(0);
+      const result = await audioImporter.import(ctx);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.assets.length).toBe(0);
     });
   });
 }

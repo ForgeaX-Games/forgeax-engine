@@ -132,6 +132,15 @@ export interface AddScenePassOptions {
   readonly color: string;
   /** Graph depth target to write (declared via g.addColorTarget). */
   readonly depth: string;
+  /**
+   * Optional single-sample resolve target for a multisample colour target.
+   * When `_routeFromOpts` is true and the active camera has MSAA enabled,
+   * `recordMainPass` resolves `color` into this graph-owned target before a
+   * downstream fullscreen pass samples it. Pass `null` to explicitly disable
+   * the default resolve in a custom-pipeline falsifier; omit it for
+   * single-sample scenes or to preserve the URP-owned resolve.
+   */
+  readonly resolve?: string | null | undefined;
   /** Resource keys this pass samples (typically 'shadowDepth' + an upstream colour). */
   readonly reads?: readonly string[] | undefined;
   /**
@@ -183,7 +192,11 @@ export function addScenePass(
 ): void {
   graph.addPass(name, {
     reads: opts.reads ?? [],
-    writes: [opts.color, opts.depth],
+    writes: [
+      opts.color,
+      opts.depth,
+      ...(opts.resolve === undefined || opts.resolve === null ? [] : [opts.resolve]),
+    ],
     // feat-20260609 framebuffers demo M5 / T-12-a: route opts.color/opts.depth
     // through the resolveCtx and override the geometry view fields on the ctx
     // handed to recordMainPass when the caller is a non-URP custom pipeline.
@@ -212,10 +225,17 @@ export function addScenePass(
       }
       const colorView = resolveCtx?.resolve(opts.color) as TextureView | undefined;
       const depthView = resolveCtx?.resolve(opts.depth) as TextureView | undefined;
+      const resolveView =
+        opts.resolve === undefined
+          ? undefined
+          : opts.resolve === null
+            ? null
+            : (resolveCtx?.resolve(opts.resolve) as TextureView | undefined);
       const overridden: _InternalRenderPipelineContext = {
         ...internalCtx,
         geometryColorView: colorView ?? internalCtx.geometryColorView,
         geometryDepthView: depthView ?? internalCtx.geometryDepthView,
+        ...(resolveView !== undefined ? { geometryColorResolveView: resolveView } : {}),
       };
       recordMainPass(overridden, opts.selector);
     },

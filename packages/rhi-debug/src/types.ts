@@ -254,6 +254,12 @@ export interface RhiCallEventBeginRenderPass {
     readonly maxDrawCount?: number | undefined;
   };
   readonly colorAttachmentViewHandleIds: readonly (HandleId | undefined)[];
+  /**
+   * Fresh-device handle identities for MSAA resolve targets. Optional for
+   * backwards compatibility with tapes recorded before resolve capture was
+   * added; those tapes retain their serialized descriptor behavior.
+   */
+  readonly colorAttachmentResolveTargetHandleIds?: readonly (HandleId | undefined)[];
   readonly depthStencilViewHandleId?: HandleId | undefined;
 }
 

@@ -21,9 +21,9 @@
     "templates/game-default"
   ],
   "scripts": {
-    "build": "pnpm -r build && tsc -b --clean && tsc -b",
+    "build": "pnpm -r build && pnpm exec tsc -b --clean && pnpm exec tsc -b",
     "build:apps": "node scripts/build-apps.mjs",
-    "typecheck": "tsc -b && tsc -p scripts/tsconfig.json && node scripts/typecheck-apps.mjs",
+    "typecheck": "node node_modules/typescript/bin/tsc -b && node node_modules/typescript/bin/tsc -p scripts/tsconfig.json && node scripts/typecheck-apps.mjs",
     "fx": "bun scripts/fx.ts",
     "test:fx": "vitest run scripts/__tests__/fx.test.ts",
     "test": "vitest run --project='@forgeax/*' --project=hello-triangle --project=unit",
@@ -99,6 +99,8 @@
     "changeset:version": "changeset version"
   },
   "devDependencies": {
+    "@forgeax/engine-audio": "workspace:*",
+    "@forgeax/engine-audio-webaudio": "workspace:*",
     "@biomejs/biome": "2.4.14",
     "@changesets/cli": "2.31.0",
     "@fast-check/vitest": "0.4.1",

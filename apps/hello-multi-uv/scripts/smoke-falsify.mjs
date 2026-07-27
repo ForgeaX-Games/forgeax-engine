@@ -188,11 +188,42 @@ console.log('[falsify-smoke] uv1 data collapsed to zero -- checkerboard should v
 
 const { World } = await import('@forgeax/engine-ecs');
 const enginePkg = await import('@forgeax/engine-runtime');
-const { createRenderer, Transform } = enginePkg;
+const { createRenderer } = enginePkg;
+const { Transform } = await import('@forgeax/engine-scene');
 const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 
 const world = new World();
 const DEMO_MATERIAL_SHADER_PATH = 'hello-multi-uv::multi-uv-demo';
+const baseColorTexture = {
+  kind: 'texture',
+  width: 2,
+  height: 2,
+  format: 'rgba8unorm',
+  data: new Uint8Array([
+    255, 128, 64, 255,
+    255, 128, 64, 255,
+    255, 128, 64, 255,
+    255, 128, 64, 255,
+  ]),
+  colorSpace: 'linear',
+  mipmap: false,
+};
+const baseColorTextureHandle = world.allocSharedRef('TextureAsset', baseColorTexture);
+const detailTexture = {
+  kind: 'texture',
+  width: 2,
+  height: 2,
+  format: 'rgba8unorm',
+  data: new Uint8Array([
+    64, 192, 255, 255,
+    64, 192, 255, 255,
+    64, 192, 255, 255,
+    64, 192, 255, 255,
+  ]),
+  colorSpace: 'linear',
+  mipmap: false,
+};
+const detailTextureHandle = world.allocSharedRef('TextureAsset', detailTexture);
 const meshAsset = {
   kind: 'mesh',
   vertices,
@@ -204,7 +235,11 @@ const meshAsset = {
 const materialAsset = {
   kind: 'material',
   passes: [{ name: 'Forward', shader: DEMO_MATERIAL_SHADER_PATH, tags: { LightMode: 'Forward' }, queue: 2000 }],
-  paramValues: { baseColor: [0.7, 0.7, 0.7] },
+  paramValues: {
+    baseColor: [0.7, 0.7, 0.7],
+    baseColorTexture: baseColorTextureHandle,
+    detailTexture: detailTextureHandle,
+  },
 };
 const meshHandle = world.allocSharedRef('MeshAsset', meshAsset);
 const matHandle = world.allocSharedRef('MaterialAsset', materialAsset);
@@ -264,11 +299,32 @@ if (!demoShaderEntry) {
 const demoComposedWgsl = demoShaderEntry.composedWgsl.includes('\n')
   ? demoShaderEntry.composedWgsl
   : readFileSync(resolve(here, '..', 'dist', 'shaders', demoShaderEntry.composedWgsl.replace(/^\.\//, '')), 'utf8');
-renderer.shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
-  source: demoComposedWgsl,
-  paramSchema: [{ name: 'baseColor', type: 'color' }],
-  bindingLayout: [],
-});
+const manifestParamSchema =
+  typeof demoShaderEntry.paramSchema === 'string'
+    ? JSON.parse(demoShaderEntry.paramSchema)
+    : (demoShaderEntry.paramSchema ?? []);
+if (
+  !Array.isArray(manifestParamSchema) ||
+  !manifestParamSchema.some((entry) => entry?.name === 'baseColorTexture' && entry?.type === 'texture2d') ||
+  !manifestParamSchema.some((entry) => entry?.name === 'detailTexture' && entry?.type === 'texture2d') ||
+  !demoComposedWgsl.includes('textureSample(baseColorTexture, baseColorTexture_sampler') ||
+  !demoComposedWgsl.includes('textureSample(detailTexture, detailTexture_sampler')
+) {
+  console.error('[falsify-smoke] FAIL - multi-UV multi-texture schema/sample binding is missing');
+  process.exit(1);
+}
+console.log('[falsify-smoke] texture binding: PASS schema=baseColorTexture+detailTexture textureSample=true');
+if (!renderer.shader.lookupMaterialShader(DEMO_MATERIAL_SHADER_PATH).ok) {
+  renderer.shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
+    source: demoComposedWgsl,
+    paramSchema: [
+      { name: 'baseColor', type: 'color' },
+      { name: 'baseColorTexture', type: 'texture2d' },
+      { name: 'detailTexture', type: 'texture2d' },
+    ],
+    bindingLayout: [],
+  });
+}
 
 const yieldTick = () => new Promise((resolve) => setTimeout(resolve, 0));
 for (let warm = 0; warm < 16; warm++) {
@@ -332,9 +388,9 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-// Falsification verdict: the custom multi-UV shader paints uv1 directly. With
-// uv1 collapsed to zero, every covered sample has the same shader input and
-// the checkerboard variance must disappear.
+// Falsification verdict: the custom multi-UV shader paints uv1 after sampling
+// the real texture with uv0. With uv1 collapsed to zero, every covered sample
+// has the same checkerboard input and the variance must disappear.
 if (maxDiff < 0.03) {
   console.log('[falsify-smoke] PASS_FALSIFY - constant uv1 killed checkerboard variance (maxDiff < 0.03). AC-10 smoke is falsifiable.');
   process.exit(0);

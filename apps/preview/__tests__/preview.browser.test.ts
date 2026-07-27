@@ -25,14 +25,19 @@
 import { SUT_ATTRIBUTABLE_CODES } from '@forgeax/apps-shared/onerror-gate';
 import { createApp } from '@forgeax/engine-app';
 import type { BootstrapContext } from '@forgeax/engine-app';
+import { AudioSource } from '@forgeax/engine-audio';
+import { audioPlugin } from '@forgeax/engine-audio-webaudio';
 import { createQueryState, Entity, queryRun } from '@forgeax/engine-ecs';
+import type { InputBackend, InputSnapshot } from '@forgeax/engine-input';
 import { Camera } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import { createDevImportTransport } from '@forgeax/engine-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { bootstrap } from '../../../templates/game-default/main';
 import { HUD_UI_GUID } from '../../../templates/game-default/src/hud';
 import { SETTINGS_UI_GUID } from '../../../templates/game-default/src/settings';
+import { HIT_FLASH_SHADER_ID } from '../../../templates/game-default/src/hit-flash-material';
 
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -41,6 +46,7 @@ function nextFrame(): Promise<void> {
 describe('apps/preview e2e -- templates/game-default loads + renders error-free', () => {
   let canvas: HTMLCanvasElement;
   let viewport: HTMLDivElement;
+  let activeApp: { stop(): unknown } | undefined;
 
   beforeEach(() => {
     // The template reads `document.querySelector('#app')` and its
@@ -58,14 +64,38 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
   });
 
   afterEach(() => {
+    activeApp?.stop();
+    activeApp = undefined;
     viewport.remove();
   });
 
   it('createApp + bootstrap + 10 frames instantiates the scene, a Camera, and zero renderer errors', async () => {
-    const appRes = await createApp(canvas, {}, { importTransport: createDevImportTransport() });
+    // Browser workers may reuse a page across files; clear any backend left by
+    // a neighboring fixture before attaching this test's input backend.
+    window.dispatchEvent(new Event('blur'));
+    const heldKeys = new Set<string>();
+    const inputBackend: InputBackend = {
+      sample: () => ({
+        downKeys: new Set(heldKeys),
+        upKeys: new Set<string>(),
+        buttons: [false, false, false],
+        movementX: 0,
+        movementY: 0,
+        wheelDelta: 0,
+        focused: true,
+        pointerLocked: false,
+      }),
+      detach: () => {},
+    };
+    const appRes = await createApp(
+      canvas,
+      { input: inputBackend, plugins: [audioPlugin()] },
+      { importTransport: createDevImportTransport() },
+    );
     expect(appRes.ok).toBe(true);
     if (!appRes.ok) return;
     const app = appRes.value;
+    activeApp = app;
 
     const errors: string[] = [];
     const uiFailures: string[] = [];
@@ -85,7 +115,7 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     const uiRoot = document.createElement('div');
     uiRoot.dataset.testUiRoot = 'preview-bootstrap';
     viewport.appendChild(uiRoot);
-    const ctx: BootstrapContext = { assets, app, uiRoot };
+    const ctx: BootstrapContext = { assets, app, renderer: app.renderer, uiRoot };
 
     // bootstrap(world, ctx) awaits the scene loadByGuid<SceneAsset> +
     // instantiate; a throw here is a real failure (stale pack schema, missing
@@ -112,6 +142,17 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     expect(dialog?.getAttribute('aria-labelledby')).toBe('settings-title');
     expect(settingsShadow?.querySelector('[data-ui-setting="music"]')).not.toBeNull();
     expect(settingsShadow?.querySelector('[data-ui-setting="high-contrast"]')).not.toBeNull();
+    const audioEntities: number[] = [];
+    queryRun(createQueryState({ with: [AudioSource, Entity] }), app.world, (bundle) => {
+      audioEntities.push(...bundle.Entity.self);
+    });
+    expect(audioEntities.length, 'bootstrap must attach a player-owned AudioSource').toBeGreaterThan(0);
+    expect(
+      [...app.renderer.shader.materialShaderIdentifiers()],
+      'bootstrap must register the template custom WGSL material',
+    ).toContain(HIT_FLASH_SHADER_ID);
+    const source = app.world.get(audioEntities[0]!, AudioSource);
+    expect(source.ok).toBe(true);
     const openSettings = hudShadow?.querySelector<HTMLButtonElement>('[data-ui-action="open-settings"]');
     expect(openSettings).not.toBeNull();
     openSettings?.click();
@@ -121,13 +162,57 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     closeSettings?.click();
     expect(dialog?.hidden).toBe(true);
 
+    const readCameraX = (): number => {
+      let x = 0;
+      queryRun(createQueryState({ with: [Camera, Entity] }), app.world, (bundle) => {
+        for (const entity of bundle.Entity.self) {
+          const tr = app.world.get(entity, Transform);
+          if (tr.ok) x = tr.value.pos[0] ?? 0;
+        }
+      });
+      return x;
+    };
+    const tickWorld = (): void => {
+      const updateRes = app.world.update(1 / 60);
+      expect(updateRes.ok).toBe(true);
+    };
+    const initialCameraX = readCameraX();
+    // Drive the world directly so action edges are observed in the same tick
+    // as the injected backend sample; a live RAF would make a one-frame edge
+    // race the test callback.
+    heldKeys.delete('d');
+    heldKeys.delete('D');
+    tickWorld();
+    heldKeys.add('d');
+    tickWorld();
+    const movementSnapshot = app.world.getResource<InputSnapshot>('InputSnapshot');
+    const movementInputSeen = movementSnapshot?.action('moveRight').isPressed() ?? false;
+    const movedCameraX = readCameraX();
+    heldKeys.delete('d');
+    expect(movementInputSeen).toBe(true);
+    expect(Math.abs(movedCameraX - initialCameraX)).toBeGreaterThan(0.00001);
+    tickWorld();
+    // Normalize the injected backend before proving the reset edge.
+    heldKeys.delete('r');
+    heldKeys.delete('R');
+    tickWorld();
+    heldKeys.add('r');
+    tickWorld();
+    const resetSnapshot = app.world.getResource<InputSnapshot>('InputSnapshot');
+    expect(resetSnapshot?.action('reset').justPressed()).toBe(true);
+    heldKeys.delete('r');
+    heldKeys.delete('R');
+    tickWorld();
+    const resetCameraX = readCameraX();
+    expect(Math.abs(resetCameraX - initialCameraX)).toBeLessThan(Math.abs(movedCameraX - initialCameraX));
+
     const startRes = app.start();
     expect(startRes.ok).toBe(true);
-
     for (let i = 0; i < 10; i++) {
       await nextFrame();
     }
-    app.stop();
+    activeApp?.stop();
+    activeApp = undefined;
 
     // Camera => the dynamic layer (camera + gameplay) executed.
     let cameraCount = 0;
@@ -162,6 +247,6 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     // the renderer here, to avoid being that polluting sibling.)
     const sutErrors = errors.filter((c) => SUT_ATTRIBUTABLE_CODES.has(c));
     expect(sutErrors, `SUT renderer errors: ${sutErrors.join(', ')}`).toEqual([]);
-  });
+  }, 60_000);
 
 });

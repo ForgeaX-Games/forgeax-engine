@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -61,6 +61,53 @@ execFileSync('pnpm', ['--filter', '@forgeax/hello-fbx-cube', 'smoke'], { cwd: ro
 execFileSync('pnpm', ['--filter', '@forgeax/hello-fbx-skin', 'smoke'], { cwd: root, stdio: 'inherit' });
 console.log('[m2-content] font + FBX fixture delivery: PASS');
 
+execFileSync('pnpm', ['--filter', '@forgeax/hello-m2-content-pipeline', 'smoke:browser-font'], {
+  cwd: root,
+  stdio: 'inherit',
+});
+console.log('[m2-content] browser Worker font bake: PASS');
+
+const fontCliPath = resolve(root, 'packages/font/dist/cli-font.mjs');
+const fontSourcePath = resolve(root, 'forgeax-engine-assets/dejavu-fonts/DejaVuSansMono.ttf');
+const nodeFontOutput = resolve(root, '.forgeax-gauntlet/hello-m2-content-pipeline/node-font-worker');
+mkdirSync(nodeFontOutput, { recursive: true });
+const invalidFontPath = resolve(nodeFontOutput, 'invalid.woff2');
+writeFileSync(invalidFontPath, Buffer.from('wOF2\u0000\u0000\u0000\u0000'));
+let invalidFontStderr = '';
+try {
+  execFileSync('node', [fontCliPath, 'bake', invalidFontPath, nodeFontOutput], {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+} catch (error) {
+  invalidFontStderr = String(error.stderr ?? '');
+}
+let invalidFontFailure;
+try {
+  invalidFontFailure = JSON.parse(invalidFontStderr.trim());
+} catch {
+  fail(`plain-Node invalid font did not return structured JSON: ${invalidFontStderr}`);
+}
+if (invalidFontFailure.code !== 'unsupported-font-format' || invalidFontFailure.expected !== 'ttf') {
+  fail(`plain-Node invalid font returned ${invalidFontStderr}`);
+}
+execFileSync('node', [fontCliPath, 'bake', fontSourcePath, nodeFontOutput], {
+  cwd: root,
+  stdio: 'inherit',
+});
+const nodeFontAtlas = resolve(nodeFontOutput, 'DejaVuSansMono.atlas.png');
+const nodeFontSidecar = resolve(nodeFontOutput, 'DejaVuSansMono.meta.json');
+const nodeFontSidecarData = JSON.parse(readFileSync(nodeFontSidecar, 'utf8'));
+const nodeFontGlyphs = Object.keys(nodeFontSidecarData.glyphs ?? {});
+if (!existsSync(nodeFontAtlas) || readFileSync(nodeFontAtlas)[0] !== 0x89) {
+  fail('plain-Node font bake emitted no PNG atlas');
+}
+if (nodeFontSidecarData.common?.atlasWidth !== 1024 || nodeFontGlyphs.length <= 90) {
+  fail(`plain-Node font bake emitted invalid sidecar glyphs=${nodeFontGlyphs.length}`);
+}
+console.log(`[m2-content] plain Node font bake + structured recovery: PASS glyphs=${nodeFontGlyphs.length}`);
+
 const imageMetaPath = resolve(root, 'forgeax-engine-assets/learn-opengl/objects/planet/mars.png.meta.json');
 const imageMeta = JSON.parse(readFileSync(imageMetaPath, 'utf8'));
 const stableGuid = imageMeta.subAssets[0]?.guid;
@@ -81,4 +128,3 @@ if (restored.length !== original.length || restored.some((value, index) => value
 console.log(`[m2-content] codec round-trip: PASS original=${original.length} compressed=${compressed.length}`);
 
 console.log('[m2-content] PASS - M2 partial content pipeline gates GREEN');
-console.log('[m2-content] deferred: font bake in plain Node requires a Worker-capable host; image, glTF, FBX, and host source-changing reimport are covered.');

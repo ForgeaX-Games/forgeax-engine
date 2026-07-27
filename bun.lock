@@ -12,6 +12,8 @@
         "@biomejs/biome": "2.4.14",
         "@changesets/cli": "2.31.0",
         "@fast-check/vitest": "0.4.1",
+        "@forgeax/engine-audio": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-gltf": "workspace:*",
         "@forgeax/engine-image": "workspace:*",
@@ -172,10 +174,61 @@
         "@forgeax/engine-render": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/bevy/audio": {
+      "name": "@forgeax/bevy-audio",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-audio": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "typescript": "~5.8.3",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/bevy/audio-control": {
+      "name": "@forgeax/bevy-audio-control",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-audio": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "typescript": "~5.8.3",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -557,6 +610,27 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/bevy/load-gltf": {
+      "name": "@forgeax/bevy-load-gltf",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-gltf": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/bevy/logs": {
       "name": "@forgeax/bevy-logs",
       "version": "0.0.0",
@@ -672,6 +746,31 @@
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/bevy/play-sound-effect": {
+      "name": "@forgeax/bevy-play-sound-effect",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-audio": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "typescript": "~5.8.3",
         "vite": "8.0.10",
         "webgpu": "^0.4.0",
       },
@@ -865,6 +964,106 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/bevy/soundtrack": {
+      "name": "@forgeax/bevy-soundtrack",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-audio": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "typescript": "~5.8.3",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/bevy/spatial-audio-2d": {
+      "name": "@forgeax/bevy-spatial-audio-2d",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-audio": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "typescript": "~5.8.3",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/bevy/spatial-audio-3d": {
+      "name": "@forgeax/bevy-spatial-audio-3d",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-audio": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "typescript": "~5.8.3",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
+    "apps/bevy/specular-tint": {
+      "name": "@forgeax/bevy-specular-tint",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-geometry": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-image": "workspace:*",
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/bevy/spotlight": {
       "name": "@forgeax/bevy-spotlight",
       "version": "0.0.0",
@@ -1038,6 +1237,28 @@
         "webgpu": "^0.4.0",
       },
     },
+    "apps/bevy/update-gltf-scene": {
+      "name": "@forgeax/bevy-update-gltf-scene",
+      "version": "0.0.0",
+      "dependencies": {
+        "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-ecs": "workspace:*",
+        "@forgeax/engine-gltf": "workspace:*",
+        "@forgeax/engine-math": "workspace:*",
+        "@forgeax/engine-pack": "workspace:*",
+        "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-runtime": "workspace:*",
+        "@forgeax/engine-scene": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
+      },
+      "devDependencies": {
+        "@forgeax/engine-vite-plugin-pack": "workspace:*",
+        "@forgeax/engine-vite-plugin-shader": "workspace:*",
+        "@webgpu/types": "^0.1.71",
+        "vite": "8.0.10",
+        "webgpu": "^0.4.0",
+      },
+    },
     "apps/bevy/viewport-to-world": {
       "name": "@forgeax/bevy-viewport-to-world",
       "version": "0.0.0",
@@ -1137,11 +1358,14 @@
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-render": "workspace:*",
+        "@forgeax/engine-render-graph": "workspace:*",
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-scene": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
+        "@forgeax/engine-rhi-debug": "workspace:*",
+        "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
         "@webgpu/types": "^0.1.71",
         "playwright": "^1.50.0",
@@ -1398,6 +1622,7 @@
         "@forgeax/engine-runtime": "workspace:*",
         "@forgeax/engine-scene": "workspace:*",
         "@forgeax/engine-shader": "workspace:*",
+        "@forgeax/engine-types": "workspace:*",
       },
       "devDependencies": {
         "@forgeax/engine-vite-plugin-shader": "workspace:*",
@@ -1608,6 +1833,10 @@
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-project": "workspace:*",
       },
+      "devDependencies": {
+        "@zappar/msdf-generator": "1.2.4",
+        "playwright": "^1.50.0",
+      },
     },
     "apps/hello/m3-programmable-rendering": {
       "name": "@forgeax/hello-m3-programmable-rendering",
@@ -1628,6 +1857,10 @@
     "apps/hello/m7-backend-recovery": {
       "name": "@forgeax/hello-m7-backend-recovery",
       "version": "0.0.0",
+      "devDependencies": {
+        "playwright": "^1.50.0",
+        "pngjs": "^7.0.0",
+      },
     },
     "apps/hello/multi-material": {
       "name": "@forgeax/hello-multi-material",
@@ -3055,6 +3288,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@forgeax/engine-app": "workspace:*",
+        "@forgeax/engine-audio-webaudio": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-input": "workspace:*",
         "@forgeax/engine-render": "workspace:*",
@@ -3810,6 +4044,7 @@
         "@forgeax/engine-ui": "workspace:*",
       },
       "devDependencies": {
+        "@forgeax/engine-assets-runtime": "workspace:*",
         "@forgeax/engine-pack": "workspace:*",
         "@forgeax/engine-types": "workspace:*",
         "@types/node": "^20.14.0",
@@ -3863,6 +4098,7 @@
         "@forgeax/engine-animation": "workspace:*",
         "@forgeax/engine-app": "workspace:*",
         "@forgeax/engine-assets-runtime": "workspace:*",
+        "@forgeax/engine-audio": "workspace:*",
         "@forgeax/engine-ecs": "workspace:*",
         "@forgeax/engine-geometry": "workspace:*",
         "@forgeax/engine-input": "workspace:*",
@@ -4194,6 +4430,10 @@
 
     "@forgeax/bevy-anti-aliasing": ["@forgeax/bevy-anti-aliasing@workspace:apps/bevy/anti-aliasing"],
 
+    "@forgeax/bevy-audio": ["@forgeax/bevy-audio@workspace:apps/bevy/audio"],
+
+    "@forgeax/bevy-audio-control": ["@forgeax/bevy-audio-control@workspace:apps/bevy/audio-control"],
+
     "@forgeax/bevy-axes": ["@forgeax/bevy-axes@workspace:apps/bevy/axes"],
 
     "@forgeax/bevy-blend-modes": ["@forgeax/bevy-blend-modes@workspace:apps/bevy/blend-modes"],
@@ -4232,6 +4472,8 @@
 
     "@forgeax/bevy-lines": ["@forgeax/bevy-lines@workspace:apps/bevy/lines"],
 
+    "@forgeax/bevy-load-gltf": ["@forgeax/bevy-load-gltf@workspace:apps/bevy/load-gltf"],
+
     "@forgeax/bevy-logs": ["@forgeax/bevy-logs@workspace:apps/bevy/logs"],
 
     "@forgeax/bevy-mesh-picking": ["@forgeax/bevy-mesh-picking@workspace:apps/bevy/mesh-picking"],
@@ -4243,6 +4485,8 @@
     "@forgeax/bevy-parenting": ["@forgeax/bevy-parenting@workspace:apps/bevy/parenting"],
 
     "@forgeax/bevy-pbr": ["@forgeax/bevy-pbr@workspace:apps/bevy/pbr"],
+
+    "@forgeax/bevy-play-sound-effect": ["@forgeax/bevy-play-sound-effect@workspace:apps/bevy/play-sound-effect"],
 
     "@forgeax/bevy-plugin": ["@forgeax/bevy-plugin@workspace:apps/bevy/plugin"],
 
@@ -4262,6 +4506,14 @@
 
     "@forgeax/bevy-smooth-follow": ["@forgeax/bevy-smooth-follow@workspace:apps/bevy/smooth-follow"],
 
+    "@forgeax/bevy-soundtrack": ["@forgeax/bevy-soundtrack@workspace:apps/bevy/soundtrack"],
+
+    "@forgeax/bevy-spatial-audio-2d": ["@forgeax/bevy-spatial-audio-2d@workspace:apps/bevy/spatial-audio-2d"],
+
+    "@forgeax/bevy-spatial-audio-3d": ["@forgeax/bevy-spatial-audio-3d@workspace:apps/bevy/spatial-audio-3d"],
+
+    "@forgeax/bevy-specular-tint": ["@forgeax/bevy-specular-tint@workspace:apps/bevy/specular-tint"],
+
     "@forgeax/bevy-spotlight": ["@forgeax/bevy-spotlight@workspace:apps/bevy/spotlight"],
 
     "@forgeax/bevy-states": ["@forgeax/bevy-states@workspace:apps/bevy/states"],
@@ -4279,6 +4531,8 @@
     "@forgeax/bevy-translation": ["@forgeax/bevy-translation@workspace:apps/bevy/translation"],
 
     "@forgeax/bevy-transparency-3d": ["@forgeax/bevy-transparency-3d@workspace:apps/bevy/transparency-3d"],
+
+    "@forgeax/bevy-update-gltf-scene": ["@forgeax/bevy-update-gltf-scene@workspace:apps/bevy/update-gltf-scene"],
 
     "@forgeax/bevy-viewport-to-world": ["@forgeax/bevy-viewport-to-world@workspace:apps/bevy/viewport-to-world"],
 
@@ -5483,6 +5737,18 @@
     "@forgeax/app-learn-render-1-getting-started-4-textures/@types/node": ["@types/node@25.9.1", "", { "dependencies": { "undici-types": ">=7.24.0 <7.24.7" } }, "sha512-xfrlY7UD5rMJk3ZVJP8BNzS28J36YJg+xp+LPXV1TdWxr8uMH5A860QNxYDGQe/ylDSgjxE52Q9VnO7p75tJxg=="],
 
     "@forgeax/app-learn-render-5-advanced-lighting-5-parallax-mapping/@types/node": ["@types/node@25.9.1", "", { "dependencies": { "undici-types": ">=7.24.0 <7.24.7" } }, "sha512-xfrlY7UD5rMJk3ZVJP8BNzS28J36YJg+xp+LPXV1TdWxr8uMH5A860QNxYDGQe/ylDSgjxE52Q9VnO7p75tJxg=="],
+
+    "@forgeax/bevy-audio/typescript": ["typescript@5.8.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ=="],
+
+    "@forgeax/bevy-audio-control/typescript": ["typescript@5.8.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ=="],
+
+    "@forgeax/bevy-play-sound-effect/typescript": ["typescript@5.8.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ=="],
+
+    "@forgeax/bevy-soundtrack/typescript": ["typescript@5.8.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ=="],
+
+    "@forgeax/bevy-spatial-audio-2d/typescript": ["typescript@5.8.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ=="],
+
+    "@forgeax/bevy-spatial-audio-3d/typescript": ["typescript@5.8.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ=="],
 
     "@forgeax/collectathon/@types/node": ["@types/node@25.9.1", "", { "dependencies": { "undici-types": ">=7.24.0 <7.24.7" } }, "sha512-xfrlY7UD5rMJk3ZVJP8BNzS28J36YJg+xp+LPXV1TdWxr8uMH5A860QNxYDGQe/ylDSgjxE52Q9VnO7p75tJxg=="],
 

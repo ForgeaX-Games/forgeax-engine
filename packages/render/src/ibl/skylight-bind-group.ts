@@ -165,63 +165,64 @@ export interface SkylightFallback {
 // ─── Pure merger: BindGroupLayout entries (D-5 round-4) ─────────────────────
 
 /**
- * Append the 7 Skylight BindGroupLayout entries (binding 7..13) onto the
- * existing PBR material entries (binding 0..6). Pure function -- the
+ * Append the 7 Skylight BindGroupLayout entries after the existing PBR
+ * user-region entries. Pure function -- the
  * caller passes the result to `device.createBindGroupLayout`. Charter P4
  * consistent abstraction: one BGL holds material + Skylight together,
  * no second `@group(4)` allocated.
  *
- * Throws if the input does not look like the 7-entry PBR material layout
- * (defensive guard; mirrors charter P3 explicit failure).
+ * Throws if the input is too short to contain the material UBO plus one
+ * sampler/texture pair (defensive guard; mirrors charter P3 explicit failure).
  */
 export function mergeSkylightIntoMaterialBgl(
   materialBglEntries: readonly GPUBindGroupLayoutEntry[],
 ): GPUBindGroupLayoutEntry[] {
-  if (materialBglEntries.length !== 7) {
+  if (materialBglEntries.length < 7) {
     throw new Error(
-      `mergeSkylightIntoMaterialBgl: expected 7 material BGL entries (PBR layout), got ${materialBglEntries.length}`,
+      `mergeSkylightIntoMaterialBgl: expected at least 7 material BGL entries (PBR layout), got ${materialBglEntries.length}`,
     );
   }
   const merged: GPUBindGroupLayoutEntry[] = [...materialBglEntries];
+  const skylightBindingStart = materialBglEntries.length;
   // binding 7: irradianceMap (texture_cube)
   merged.push({
-    binding: SKYLIGHT_BINDING_START,
+    binding: skylightBindingStart,
     visibility: GPU_SHADER_STAGE_FRAGMENT,
     texture: { sampleType: 'float', viewDimension: 'cube' },
   } as BglEntry);
   // binding 8: irradianceSampler
   merged.push({
-    binding: SKYLIGHT_BINDING_START + 1,
+    binding: skylightBindingStart + 1,
     visibility: GPU_SHADER_STAGE_FRAGMENT,
     sampler: { type: 'filtering' },
   } as BglEntry);
   // binding 9: prefilterMap (texture_cube)
   merged.push({
-    binding: SKYLIGHT_BINDING_START + 2,
+    binding: skylightBindingStart + 2,
     visibility: GPU_SHADER_STAGE_FRAGMENT,
     texture: { sampleType: 'float', viewDimension: 'cube' },
   } as BglEntry);
   // binding 10: prefilterSampler
   merged.push({
-    binding: SKYLIGHT_BINDING_START + 3,
+    binding: skylightBindingStart + 3,
     visibility: GPU_SHADER_STAGE_FRAGMENT,
     sampler: { type: 'filtering' },
   } as BglEntry);
   // binding 11: brdfLut (texture_2d)
   merged.push({
-    binding: SKYLIGHT_BINDING_START + 4,
+    binding: skylightBindingStart + 4,
     visibility: GPU_SHADER_STAGE_FRAGMENT,
     texture: { sampleType: 'float', viewDimension: '2d' },
   } as BglEntry);
   // binding 12: brdfLutSampler
   merged.push({
-    binding: SKYLIGHT_BINDING_START + 5,
+    binding: skylightBindingStart + 5,
     visibility: GPU_SHADER_STAGE_FRAGMENT,
     sampler: { type: 'filtering' },
   } as BglEntry);
   // binding 13: uniform { intensity: f32 }
   merged.push({
-    binding: SKYLIGHT_BINDING_START + 6,
+    binding: skylightBindingStart + 6,
     visibility: GPU_SHADER_STAGE_FRAGMENT,
     buffer: { type: 'uniform' },
   } as BglEntry);

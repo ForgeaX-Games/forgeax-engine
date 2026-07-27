@@ -57,7 +57,7 @@ import {
 } from '@forgeax/engine-rhi';
 import { doubleDestroy, makeRhiBuffer, type RawBufferLike, unwrapBuffer } from './buffer';
 import { makeRhiCommandEncoder, type RawCommandEncoderLike } from './command-encoder';
-import { descriptorInvalid, webgpuRuntimeError } from './errors';
+import { descriptorInvalid, featureNotEnabled, webgpuRuntimeError } from './errors';
 import { makeRhiQueue, type RawQueueLike } from './queue';
 
 /**
@@ -230,7 +230,11 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       // multisample targets instead of discovering the limitation as a panic
       // during render-graph texture allocation.
       backendKind: 'wgpu-webgl2' as const,
-      compute: true,
+      // WebGL2 has no compute-shader analogue. Keep this capability false so
+      // render-graph and pipeline callers receive the structured refusal
+      // promised by the RHI contract instead of entering the command-encoder
+      // shim's historical no-op compute pass.
+      compute: false,
       timestampQuery: hasFeature('timestamp-query'),
       indirectDrawing: true,
       textureCompressionBc: hasFeature('texture-compression-bc'),
@@ -467,6 +471,7 @@ class RhiWgpuDeviceImpl implements RhiDevice {
   }
 
   createComputePipeline(desc: ComputePipelineDescriptor): Result<ComputePipeline, RhiError> {
+    if (!this.caps.compute) return featureNotEnabled('compute');
     return this.wrap<ComputePipeline>(this.raw.createComputePipeline, desc);
   }
 

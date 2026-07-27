@@ -47,6 +47,12 @@ surface can change without a consumer migration promise. If a custom renderer
 needs a capability absent from the supported root operations, treat that as a
 request for an explicit public design rather than importing `/internal`.
 
+For a custom `RenderPipeline` with `Camera.antialias = ANTIALIAS_MSAA`, declare
+the scene colour and depth targets with `sample: 4`, add a single-sample colour
+resolve target, and pass its key through `addScenePass(..., { resolve })`.
+Downstream fullscreen passes read the resolve target; single-sample pipelines
+omit `resolve`.
+
 ```mermaid
 flowchart LR
   World["World data"] --> Extract["extract"]

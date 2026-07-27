@@ -1,83 +1,207 @@
 #!/usr/bin/env node
-// bevy-tonemapping headless dawn smoke (structural-only).
-//   (a) backend=webgpu (b) frames >= SMOKE_MIN_FRAMES (c) Renderer.onError count == 0
+// bevy-tonemapping headless dawn smoke (pixel falsifier + structural gate).
+// Strategy: render one shared HDR sphere field through all seven Camera tone-map
+// modes; the modes must produce materially different readbacks.
 
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
-const WIDTH = 200, HEIGHT = 150;
+const WIDTH = 200;
+const HEIGHT = 150;
 
-let create, globals;
-try { ({ create, globals } = await import('webgpu')); } catch (err) {
-  console.error(`[smoke] FAIL - dawn.node import`); process.exit(1);
+let create;
+let globals;
+try {
+  ({ create, globals } = await import('webgpu'));
+} catch (err) {
+  console.error(`[smoke] FAIL - dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
 }
 Object.assign(globalThis, globals);
 if (!('navigator' in globalThis) || globalThis.navigator === undefined) {
   Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true, writable: true });
 }
 let gpu;
-try { gpu = create([]); } catch { console.error('[smoke] FAIL - create([])'); process.exit(1); }
+try {
+  gpu = create([]);
+} catch (err) {
+  console.error(`[smoke] FAIL - dawn-node create([]) failed: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
 Object.defineProperty(globalThis.navigator, 'gpu', { value: gpu, configurable: true, writable: true });
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
 
 let sharedDevice;
-const origReqAdapter = globalThis.navigator.gpu.requestAdapter.bind(globalThis.navigator.gpu);
+const originalRequestAdapter = globalThis.navigator.gpu.requestAdapter.bind(globalThis.navigator.gpu);
 globalThis.navigator.gpu.requestAdapter = async (opts) => {
-  const a = await origReqAdapter(opts); if (a === null) return a;
-  const origDev = a.requestDevice.bind(a);
-  a.requestDevice = async (d) => { const dev = await origDev(d); sharedDevice ||= dev; return dev; };
-  return a;
+  const rawAdapter = await originalRequestAdapter(opts);
+  if (rawAdapter === null) return rawAdapter;
+  const originalRequestDevice = rawAdapter.requestDevice.bind(rawAdapter);
+  rawAdapter.requestDevice = async (desc) => {
+    const device = await originalRequestDevice(desc);
+    sharedDevice ||= device;
+    return device;
+  };
+  return rawAdapter;
 };
 
-let rt;
-const mockCanvas = { width: WIDTH, height: HEIGHT, getContext(k) {
-  if (k !== 'webgpu') return null;
-  return { configure(d) { rt ||= d.device.createTexture({ size: { width: WIDTH, height: HEIGHT }, format: d.format ?? 'rgba8unorm', usage: 0x10 | 0x01, viewFormats: ['rgba8unorm-srgb'] }); }, unconfigure() {}, getCurrentTexture() { if (!rt) { if (!sharedDevice) throw new Error('no device'); rt = sharedDevice.createTexture({ size: { width: WIDTH, height: HEIGHT }, format: 'rgba8unorm', usage: 0x10 | 0x01, viewFormats: ['rgba8unorm-srgb'] }); } return rt; } };
-}, addEventListener() {}, removeEventListener() {} };
+let renderTarget;
+function ensureRenderTarget(device, format) {
+  if (renderTarget) return renderTarget;
+  renderTarget = device.createTexture({
+    size: { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+    format,
+    usage: 0x10 | 0x04 | 0x01,
+    viewFormats: ['rgba8unorm-srgb'],
+  });
+  return renderTarget;
+}
+
+const mockCanvas = {
+  width: WIDTH,
+  height: HEIGHT,
+  getContext(kind) {
+    if (kind !== 'webgpu') return null;
+    return {
+      configure(desc) { ensureRenderTarget(desc.device, desc.format ?? 'rgba8unorm'); },
+      unconfigure() {},
+      getCurrentTexture() {
+        if (!renderTarget) {
+          if (!sharedDevice) throw new Error('no shared device captured');
+          ensureRenderTarget(sharedDevice, 'rgba8unorm');
+        }
+        return renderTarget;
+      },
+    };
+  },
+  addEventListener() {},
+  removeEventListener() {},
+};
 
 const { World } = await import('@forgeax/engine-ecs');
-const { createBoxGeometry, createSphereGeometry } = await import('@forgeax/engine-geometry');
-const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
 const { createRenderer } = await import('@forgeax/engine-runtime');
-const { Materials } = await import('@forgeax/engine-render');
-const { perspective, TONEMAP_AGX } = await import('@forgeax/engine-render');
-const { Transform } = await import('@forgeax/engine-scene');
+const { Camera } = await import('@forgeax/engine-render');
+const { TONEMAP_MODES, TONEMAP_NAMES, buildTonemappingWorld } = await import(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'tonemapping.ts'));
+
 const world = new World();
 const here = dirname(fileURLToPath(import.meta.url));
-const MANIFEST_URL = `data:application/json,${encodeURIComponent(readFileSync(resolve(here, '..', 'dist', 'shaders', 'manifest.json'), 'utf8'))}`;
+const manifestPath = resolve(here, '..', 'dist', 'shaders', 'manifest.json');
+const manifestUrl = `data:application/json,${encodeURIComponent(readFileSync(manifestPath, 'utf8'))}`;
 
 let renderer;
-try { renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: MANIFEST_URL }); }
-catch (err) { console.error(`[smoke] FAIL - createRenderer: ${err.message}`); process.exit(1); }
-finally { globalThis.navigator.gpu.requestAdapter = origReqAdapter; }
+try {
+  renderer = await createRenderer(mockCanvas, {}, { shaderManifestUrl: manifestUrl });
+} catch (err) {
+  console.error(`[smoke] FAIL - createRenderer threw: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+} finally {
+  globalThis.navigator.gpu.requestAdapter = originalRequestAdapter;
+}
+
 console.log(`[tonemapping] backend=${renderer.backend}`);
-const errors = []; renderer.onError((e) => errors.push(e));
-if (!(await renderer.ready).ok) { console.error('[smoke] FAIL - renderer.ready'); process.exit(1); }
+const errors = [];
+renderer.onError((err) => errors.push({ code: err.code, hint: err.hint }));
+const ready = await renderer.ready;
+if (!ready.ok) {
+  console.error(`[smoke] FAIL - renderer.ready failed: ${ready.error.code} - ${ready.error.hint}`);
+  process.exit(1);
+}
 
-const cube = createBoxGeometry(1, 1, 1, 1, 1, 1); if (!cube.ok) { console.error('cube fail'); process.exit(1); }
-const sphere = createSphereGeometry(0.5, 32, 16); if (!sphere.ok) { console.error('sphere fail'); process.exit(1); }
-const cH = world.allocSharedRef('MeshAsset', cube.value);
-const sH = world.allocSharedRef('MeshAsset', sphere.value);
-const mat = world.allocSharedRef('MaterialAsset', Materials.standard({ baseColor: [0.8, 0.7, 0.6, 1], metallic: 0, roughness: 0.4 }));
-world.spawn({ component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } }, { component: MeshFilter, data: { assetHandle: sH } }, { component: MeshRenderer, data: { materials: [mat] } });
-world.spawn({ component: Transform, data: { pos: [1.5, 0, 0], quat: [0, 0, 0, 1], scale: [0.8, 0.8, 0.8] } }, { component: MeshFilter, data: { assetHandle: cH } }, { component: MeshRenderer, data: { materials: [mat] } });
-world.spawn({ component: DirectionalLight, data: { direction: [-0.4, -0.6, -0.7], color: [1, 1, 1], intensity: 2 } });
-world.spawn({ component: Transform, data: { pos: [0, 0, 6] } }, { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: WIDTH / HEIGHT }), tonemap: TONEMAP_AGX } });
+const scene = buildTonemappingWorld(world, WIDTH / HEIGHT);
+console.log(`[tonemapping] scene spheres=${scene.sphereCount} modes=${TONEMAP_NAMES.join(',')}`);
 
-const TARGET = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
-let n = 0;
-for (let i = 0; i < TARGET; i++) { renderer.draw([world], { owner: 0 }); n++; }
-const dev = sharedDevice; if (dev) await dev.queue.onSubmittedWorkDone();
-console.log(`[smoke] frames observed=${n}`);
+async function capturePixels() {
+  await sharedDevice.queue.onSubmittedWorkDone();
+  const bytesPerRow = Math.ceil((WIDTH * 4) / 256) * 256;
+  const readback = sharedDevice.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
+  const encoder = sharedDevice.createCommandEncoder();
+  encoder.copyTextureToBuffer(
+    { texture: renderTarget },
+    { buffer: readback, bytesPerRow, rowsPerImage: HEIGHT },
+    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+  );
+  sharedDevice.queue.submit([encoder.finish()]);
+  await readback.mapAsync(0x01);
+  const mapped = new Uint8Array(readback.getMappedRange().slice(0));
+  readback.unmap();
+  readback.destroy();
+  const pixels = new Uint8Array(WIDTH * HEIGHT * 4);
+  for (let y = 0; y < HEIGHT; y += 1) {
+    pixels.set(mapped.subarray(y * bytesPerRow, y * bytesPerRow + WIDTH * 4), y * WIDTH * 4);
+  }
+  return pixels;
+}
 
-const fail = [];
-if (renderer.backend !== 'webgpu') fail.push(`(a) backend=${renderer.backend}`);
-if (n < SMOKE_MIN_FRAMES) fail.push(`(b) frames=${n} < ${SMOKE_MIN_FRAMES}`);
-if (errors.length > 0) fail.push(`(c) RhiError count=${errors.length}`);
-if (fail.length > 0) { console.error(`[smoke] FAIL: ${fail.join('; ')}`); process.exit(1); }
-console.log(`[smoke] PASS - backend=webgpu, frames=${n}, RhiError count=0`);
-dev?.destroy?.(); delete globalThis.navigator.gpu; process.exit(0);
+function diff(left, right) {
+  let total = 0;
+  let changedPixels = 0;
+  for (let i = 0; i < left.length; i += 4) {
+    const value = Math.abs(left[i] - right[i]) + Math.abs(left[i + 1] - right[i + 1]) + Math.abs(left[i + 2] - right[i + 2]);
+    total += value;
+    if (value > 3) changedPixels += 1;
+  }
+  return { mean: total / (WIDTH * HEIGHT * 3), changedPixels };
+}
+
+const targetFrames = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const modeFrames = Math.max(1, Math.floor(targetFrames / TONEMAP_MODES.length));
+let framesObserved = 0;
+let drawErrors = 0;
+const modePixels = [];
+for (let i = 0; i < TONEMAP_MODES.length; i += 1) {
+  const tonemap = TONEMAP_MODES[i];
+  if (tonemap === undefined) continue;
+  world.set(scene.camera, Camera, { tonemap });
+  for (let frame = 0; frame < modeFrames; frame += 1) {
+    const result = renderer.draw([world], { owner: 0 });
+    if (!result.ok) drawErrors += 1;
+    framesObserved += 1;
+  }
+  modePixels.push(await capturePixels());
+}
+const remainingFrames = targetFrames - framesObserved;
+for (let frame = 0; frame < remainingFrames; frame += 1) {
+  const result = renderer.draw([world], { owner: 0 });
+  if (!result.ok) drawErrors += 1;
+  framesObserved += 1;
+}
+
+const artifactDir = resolve(here, '..', 'artifacts');
+mkdirSync(artifactDir, { recursive: true });
+const nonePng = resolve(artifactDir, 'tonemap-none.png');
+const agxPng = resolve(artifactDir, 'tonemap-agx.png');
+writeFileSync(nonePng, writeReferencePng(modePixels[0], WIDTH, HEIGHT));
+writeFileSync(agxPng, writeReferencePng(modePixels[5], WIDTH, HEIGHT));
+
+const modeDiffs = modePixels.map((pixels, index) => diff(modePixels[0], pixels));
+const distinctModes = modeDiffs.filter((value) => value.mean > 0.25 && value.changedPixels > 20).length;
+const passNames = renderer.perFramePassNames;
+const device = sharedDevice;
+if (device) await device.queue.onSubmittedWorkDone();
+console.log(`[smoke] frames observed=${framesObserved} distinctModes=${distinctModes} diffs=${modeDiffs.map((value, i) => `${TONEMAP_NAMES[i]}:${value.mean.toFixed(4)}/${value.changedPixels}`).join(',')} passes=${passNames.join(',')} none=${nonePng} agx=${agxPng}`);
+
+const failures = [];
+if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
+if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
+if (errors.length > 0) failures.push(`(c) Renderer.onError fired ${errors.length} times: [${errors.map((err) => err.code).join(', ')}]`);
+if (drawErrors > 0) failures.push(`(c) draw returned ${drawErrors} errors`);
+if (distinctModes < 3) failures.push(`(d) fewer than 3 tone-map modes changed pixels: ${distinctModes}`);
+if (!passNames.includes('tonemap')) failures.push(`(e) missing tonemap pass; actual=${passNames.join(',')}`);
+
+if (failures.length > 0) {
+  console.error(`[smoke] FAIL - ${failures.length} criteria failed:`);
+  for (const failure of failures) console.error(`  ${failure}`);
+  await delay(0);
+  device?.destroy?.();
+  process.exit(1);
+}
+
+console.log(`[smoke] PASS - backend=webgpu, frames=${framesObserved}, distinctModes=${distinctModes}, RhiError count=0`);
+device?.destroy?.();
+delete globalThis.navigator.gpu;
+process.exit(0);

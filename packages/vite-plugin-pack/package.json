@@ -42,6 +42,7 @@
     "vite": "^7 || ^8"
   },
   "devDependencies": {
+    "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@types/node": "^20.14.0",

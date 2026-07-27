@@ -50,6 +50,12 @@ try {
     'packages/rhi-wgpu/src/__tests__/submit-error-fanout.browser.test.ts',
   ]);
 
+  run('browser/driver device-loss recovery', [
+    '--filter',
+    '@forgeax/hello-m7-backend-recovery',
+    'smoke:browser-device-loss',
+  ]);
+
   run('Dawn unsupported fallback rejection', [
     'exec',
     'vitest',
@@ -85,7 +91,7 @@ try {
 
   console.log('[m7-backend] PASS - M7 backend/recovery evidence GREEN');
   console.log(
-    '[m7-backend] deferred: real hardware device-loss rebuild remains open.',
+    '[m7-backend] deferred: physical hardware TDR beyond the Chrome GPU-process crash control is not claimed.',
   );
 } catch (error) {
   console.error(`[m7-backend] FAIL - ${error instanceof Error ? error.message : String(error)}`);

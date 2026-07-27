@@ -131,6 +131,10 @@ interface StandardOpts {
   clearcoat?: number;
   /** Clearcoat perceptual roughness, in [0, 1]. */
   clearcoatRoughness?: number;
+  /** Dielectric specular tint; metallic materials keep their base-color F0. */
+  specularTint?: readonly [number, number, number];
+  /** Optional texture multiplied into the dielectric specular tint. */
+  specularTintTexture?: number;
   emissive?: readonly [number, number, number];
   emissiveIntensity?: number;
   emissiveTexture?: number;
@@ -185,6 +189,12 @@ function standard(opts: StandardOpts): MaterialAsset {
       `Materials.standard: clearcoatRoughness must be in [0, 1], got ${opts.clearcoatRoughness}`,
     );
   }
+  const specularTint = opts.specularTint ?? ([1, 1, 1] as const);
+  if (specularTint.some((channel) => channel < 0 || channel > 1)) {
+    throw new Error(
+      `Materials.standard: specularTint channels must be in [0, 1], got ${specularTint}`,
+    );
+  }
   const paramValues: Record<string, unknown> = {
     baseColor: opts.baseColor,
     metallic: opts.metallic ?? 0,
@@ -195,12 +205,16 @@ function standard(opts: StandardOpts): MaterialAsset {
   if (opts.clearcoatRoughness !== undefined) {
     paramValues.clearcoatRoughness = opts.clearcoatRoughness;
   }
+  paramValues.specularTint = specularTint;
   if (opts.alphaCutoff !== undefined) paramValues.alphaCutoff = opts.alphaCutoff;
   if (opts.emissive !== undefined) paramValues.emissive = opts.emissive;
   if (opts.emissiveIntensity !== undefined) paramValues.emissiveIntensity = opts.emissiveIntensity;
   if (opts.emissiveTexture !== undefined) paramValues.emissiveTexture = opts.emissiveTexture;
   if (opts.baseColorTexture !== undefined) paramValues.baseColorTexture = opts.baseColorTexture;
   if (opts.occlusionTexture !== undefined) paramValues.occlusionTexture = opts.occlusionTexture;
+  if (opts.specularTintTexture !== undefined) {
+    paramValues.specularTintTexture = opts.specularTintTexture;
+  }
   // feat-20260612-hdrp-deferred-shading M3 / w15: 3-pass literal declaration.
   // Pass 1: deferred opaque — writes g-buffer (fs_gbuffer entry per D-8).
   // Pass 2: forward transparent — cluster-forward GGX (fs_main entry).

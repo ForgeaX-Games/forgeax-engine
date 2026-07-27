@@ -27,7 +27,7 @@ import addFormats from 'ajv-formats';
 import { build as viteBuild } from 'vite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import packIndexSchemaJson from '../../schema/pack-index.schema.json' with { type: 'json' };
-import { buildCatalog, buildCatalogStrict } from '../build-catalog.js';
+import { buildCatalog, buildCatalogProjection, buildCatalogStrict } from '../build-catalog.js';
 import { pluginPack } from '../index.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -179,13 +179,10 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
       expect(result.errors.length).toBeGreaterThan(0);
     });
 
-    it('(b) sidecar with an unregistered importer key -> raw-source row, no error (AC-08, w9)', async () => {
-      // P2 (feat-20260629): the former whitelist wall rejected any importer
-      // key outside the 5 engine built-ins with
-      // `catalog-meta-unfoldable-importer`. After the wall is gone, an
-      // unregistered key (here 'video', with an empty registered-key set)
-      // keeps a raw-source row so the runtime can fall back to the source,
-      // rather than failing the build.
+    it('(b) sidecar with an unregistered importer key -> structured provider conflict (AC-08, w22)', async () => {
+      // An unregistered provider cannot produce an authoritative projection.
+      // Keep the failure structured so the host can register the provider and
+      // retry without silently treating an incomplete row as usable output.
       await writeFile(
         join(tmpRoot, 'wood-container.jpg.meta.json'),
         JSON.stringify({
@@ -201,13 +198,45 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
 
       const result = await buildCatalogStrict([tmpRoot], '/', new Set());
 
-      expect(result.errors).toHaveLength(0);
-      expect(result.catalog).toHaveLength(1);
-      expect(result.catalog[0]?.guid.toLowerCase()).toBe(WOOD_GUID);
-      expect(result.catalog[0]?.relativeUrl.endsWith('wood-container.jpg')).toBe(true);
+      expect(result.catalog).toHaveLength(0);
+      expect(result.errors).toMatchObject([
+        {
+          code: 'catalog-provider-unregistered',
+          actual: 'video',
+          expected: expect.any(String),
+          hint: expect.any(String),
+        },
+      ]);
     });
 
-    it('(c) sidecar fails ajv schema (broken subAsset) -> error surfaced + 0 catalog rows', async () => {
+    it('(c) shader sidecar is consumed by vite-plugin-shader, not folded into pack catalog', async () => {
+      await writeFile(
+        join(tmpRoot, 'hit-flash.wgsl.meta.json'),
+        JSON.stringify({
+          schemaVersion: '1.0.0',
+          kind: 'external-asset-package',
+          importer: 'shader',
+          source: 'hit-flash.wgsl',
+          importSettings: { materialShaderIdentifier: 'game_default::hit_flash' },
+          subAssets: [
+            {
+              guid: '019e4000-0c86-79da-aa76-b0984c860a05',
+              sourceIndex: 0,
+              kind: 'material-shader',
+            },
+          ],
+          paramSchema: [{ name: 'baseColor', type: 'color' }],
+        }),
+      );
+      await writeFile(join(tmpRoot, 'hit-flash.wgsl'), '@vertex fn vs_main() {}');
+
+      const result = await buildCatalogStrict([tmpRoot], '/', new Set());
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.catalog).toHaveLength(0);
+    });
+
+    it('(d) sidecar fails ajv schema (broken subAsset) -> error surfaced + 0 catalog rows', async () => {
       await writeFile(
         join(tmpRoot, 'wood-container.jpg.meta.json'),
         JSON.stringify({
@@ -764,7 +793,8 @@ const WORKTREE_ROOT = join(HERE, '..', '..', '..', '..');
         'template-game-default',
       );
 
-      const entries = await buildCatalog([fixtureDir]);
+      const projection = await buildCatalogProjection([fixtureDir]);
+      const entries = projection.entries;
       const skyRows = entries.filter(
         (e) => e.guid.toLowerCase() === '81eec382-392f-5a93-8998-0ecf11ef7990',
       );
@@ -1599,7 +1629,10 @@ console.log('import-hdr-test entry');
       const gameB = await makeGameRoot('gameB', [GUID_B, GUID_SHARED]);
       roots.push(gameA, gameB);
 
-      const entries = await buildCatalog([gameA, gameB]);
+      const projection = await buildCatalogProjection([gameA, gameB]);
+      expect(projection.authority).toBe('degraded');
+      expect(projection.diagnostics).not.toEqual([]);
+      const entries = projection.entries;
       const guids = new Set(entries.map((e) => e.guid.toLowerCase()));
 
       // Each game's UNIQUE asset survives -- the collision is NOT fatal for
@@ -1835,7 +1868,7 @@ console.log('import-hdr-test entry');
       expect(result.catalog[0]?.metadata?.kind).toBe('texture');
     });
 
-    it('(c) unregistered importer key produces a raw-source row, not an error (AC-08)', async () => {
+    it('(c) unregistered importer key produces a structured provider conflict (AC-08, w22)', async () => {
       await writeFile(
         join(tmpRoot, 'mystery.blob.meta.json'),
         JSON.stringify({
@@ -1852,14 +1885,15 @@ console.log('import-hdr-test entry');
       // Empty registered set -> 'not-wired' is unregistered.
       const result = await buildCatalogStrict([tmpRoot], '/', new Set());
 
-      // AC-08: skip fold + keep a raw-source row (no catalog error). The row
-      // preserves the source so the runtime can still resolve / fall back.
-      expect(result.errors).toHaveLength(0);
-      expect(result.catalog).toHaveLength(1);
-      const row = result.catalog[0];
-      expect(row?.guid.toLowerCase()).toBe(UNREG_GUID);
-      expect(row?.relativeUrl.endsWith('mystery.blob')).toBe(true);
-      expect(row?.sourcePath.endsWith('mystery.blob')).toBe(true);
+      expect(result.catalog).toHaveLength(0);
+      expect(result.errors).toMatchObject([
+        {
+          code: 'catalog-provider-unregistered',
+          actual: 'not-wired',
+          expected: expect.any(String),
+          hint: expect.any(String),
+        },
+      ]);
     });
 
     it('(d) dev path (buildCatalog) and build path (buildCatalogStrict) agree on the same host sidecar', async () => {
@@ -1889,7 +1923,7 @@ console.log('import-hdr-test entry');
       expect(kinds).toEqual(new Set(['reel-level', 'reel-actor']));
     });
 
-    it('(f) unregistered importer: dev path and build path both keep a raw-source row, no error (AC-08 consistency, w10)', async () => {
+    it('(f) unregistered importer: dev path and build path both return a structured conflict (AC-08 consistency, w22)', async () => {
       await writeFile(
         join(tmpRoot, 'thing.blob.meta.json'),
         JSON.stringify({
@@ -1907,14 +1941,16 @@ console.log('import-hdr-test entry');
       const devRows = await buildCatalog([tmpRoot], '/', empty);
       const buildResult = await buildCatalogStrict([tmpRoot], '/', empty);
 
-      // No catalog error on either path (unregistered is a skip-fold +
-      // raw-source-row case, NOT an unfoldable error).
-      expect(buildResult.errors).toHaveLength(0);
-      expect(devRows).toHaveLength(1);
-      expect(buildResult.catalog).toHaveLength(1);
-      expect(devRows[0]?.guid.toLowerCase()).toBe(HOST_GUID_B);
-      expect(buildResult.catalog[0]?.guid.toLowerCase()).toBe(HOST_GUID_B);
-      expect(devRows[0]?.sourcePath).toBe(buildResult.catalog[0]?.sourcePath);
+      expect(buildResult.errors).toMatchObject([
+        {
+          code: 'catalog-provider-unregistered',
+          actual: 'unwired-host',
+          expected: expect.any(String),
+          hint: expect.any(String),
+        },
+      ]);
+      expect(devRows).toHaveLength(0);
+      expect(buildResult.catalog).toHaveLength(0);
     });
 
     it('(g) D-7: a registered host importer whose sub.kind collides with an engine built-in kind reports a conflict (no silent override)', async () => {

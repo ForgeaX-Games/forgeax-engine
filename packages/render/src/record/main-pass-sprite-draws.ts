@@ -800,7 +800,8 @@ function recordSpriteEntityDraws(
 
     spritePass.setBindGroup(2, meshBindGroup as BindGroup, [i * MESH_PER_ENTITY_STRIDE]);
 
-    // Per-entity sprite material bind group: same 7-entry layout as in
+    // Per-entity sprite material bind group: same standard PBR user-region
+    // layout as in the geometry pass sprite branch + Skylight merged entries
     // the geometry pass sprite branch + Skylight merged entries (same
     // skylightResources in scope from above). Texture view is resolved
     // from the sprite material's baseColorTexture handle.
@@ -849,6 +850,17 @@ function recordSpriteEntityDraws(
         resource: {
           kind: 'textureView' as const,
           value: pipelineState.defaultNormalTextureView,
+        },
+      },
+      {
+        binding: 7,
+        resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
+      },
+      {
+        binding: 8,
+        resource: {
+          kind: 'textureView' as const,
+          value: pipelineState.defaultWhiteTextureView,
         },
       },
     ];

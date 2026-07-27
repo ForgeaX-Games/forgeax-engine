@@ -33,6 +33,35 @@
           "minLength": 1,
           "description": "Relative path to the source .pack.json or .meta.json file from the project root."
         },
+        "sourceIndex": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Producer-declared output position; not an identity key when sourceKey is present."
+        },
+        "packageId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable producer-owned package identity."
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "revision": {
+          "$ref": "#/$defs/revision"
+        },
+        "sourceKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Producer-owned stable imported-output topology key."
+        },
+        "relations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/relation" }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diagnostic" }
+        },
         "refs": {
           "type": "array",
           "description": "Optional outgoing dependency edges (GUIDs this asset cross-references), surfaced from pack.json assets[].refs. Add-only field for backward compatibility; absent for legacy rows / kinds with no refs.",
@@ -41,6 +70,64 @@
             "format": "uuid"
           }
         }
+      }
+    },
+    "subjectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "type": "string", "enum": ["asset", "package", "resource"] },
+        "id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "version"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 }
+      }
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "observedAt", "rootId"],
+      "properties": {
+        "digest": { "type": "string", "minLength": 1 },
+        "observedAt": { "type": "number" },
+        "rootId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "type", "provenance"],
+      "properties": {
+        "from": { "$ref": "#/$defs/subjectRef" },
+        "to": { "$ref": "#/$defs/subjectRef" },
+        "type": { "type": "string", "minLength": 1 },
+        "policy": { "type": "object" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "severity": { "type": "string", "enum": ["info", "warning", "blocking"] },
+        "message": { "type": "string" },
+        "subject": { "$ref": "#/$defs/subjectRef" },
+        "expected": { "type": "string", "minLength": 1 },
+        "actual": { "type": "string" },
+        "hint": { "type": "string", "minLength": 1 },
+        "authority": { "type": "string", "enum": ["producer", "pack", "catalog"] },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/subjectRef" } },
+        "recoveryIntents": { "type": "array", "items": { "type": "string", "minLength": 1 } }
       }
     }
   }

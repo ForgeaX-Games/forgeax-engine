@@ -364,7 +364,22 @@ export function needsLocalProvenanceIsolation(command) {
 }
 
 export function isRunnerProvisioning(command) {
-  return /\$\{?(?:RUNNER_TEMP|GITHUB_PATH)\}?\b|\bnproc\b|\/proc\/cpuinfo/.test(command);
+  if (/\$\{?(?:RUNNER_TEMP)\}?\b|\bnproc\b|\/proc\/cpuinfo/.test(command)) return true;
+  if (!/\$\{?GITHUB_PATH\}?\b/.test(command)) return false;
+  return command
+    .split(/\r?\n/)
+    .every(
+      (line) =>
+        !line.trim() || line.trim().startsWith('#') || />>\s*['"]?\$\{?GITHUB_PATH/.test(line),
+    );
+}
+
+export function localizeRunnerProvisioning(command) {
+  return command
+    .split(/\r?\n/)
+    .filter((line) => !/>>\s*['"]?\$\{?GITHUB_PATH/.test(line))
+    .join('\n')
+    .trim();
 }
 
 export function requiredContexts() {
@@ -515,7 +530,9 @@ function run(step, dryRun, environment, matrix, needsResults, githubEnvironment,
   const isCodemodAssertion = isLocalCodemodIdempotencyAssertion(command);
   const localStep = {
     ...step,
-    command: isCodemodAssertion ? codemodCommandWithoutAssertion(command) : command,
+    command: localizeRunnerProvisioning(
+      isCodemodAssertion ? codemodCommandWithoutAssertion(command) : command,
+    ),
   };
   console.log(`\n[ci:${dryRun ? 'dry-run' : 'run'}] ${command}`);
   if (dryRun) return 0;

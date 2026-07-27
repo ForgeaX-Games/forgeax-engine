@@ -357,6 +357,70 @@ describe('recorder proxy spy', () => {
     const events = debugInst.getEvents();
     expect(events.some((e) => e.kind === 'submit')).toBe(true);
   });
+
+  it('records a raw swapchain texture used by copyTextureToTexture without a prior view', async () => {
+    const { debugInst } = await bootstrap();
+    const adapter = await getAdapter(debugInst);
+    const device = await getDevice(adapter);
+    const rawTexture = {
+      width: 640,
+      height: 360,
+      depthOrArrayLayers: 1,
+      format: 'bgra8unorm',
+      usage: 0x10,
+    };
+
+    debugInst.arm(1);
+    const encRes = device.createCommandEncoder();
+    const enc = (encRes as any).value;
+    const destination = device.createTexture({
+      size: { width: 640, height: 360 },
+      format: 'bgra8unorm',
+      usage: 0x10,
+    });
+    enc.copyTextureToTexture(
+      { texture: rawTexture },
+      { texture: (destination as any).value },
+      { width: 640, height: 360, depthOrArrayLayers: 1 },
+    );
+    debugInst.onFrameEnd();
+
+    const tapeResult = debugInst.getTape();
+    expect(tapeResult).toBeDefined();
+    expect(tapeResult instanceof DebugError).toBe(false);
+    const tape = tapeResult as Tape;
+    const swapchainTexture = tape.events.find(
+      (event) =>
+        event.kind === 'createTexture' && (event.desc.size as { width?: number }).width === 640,
+    );
+    expect(swapchainTexture).toBeDefined();
+  });
+
+  it('keeps a texture create event while an idle survivor view still references it', async () => {
+    const { debugInst } = await bootstrap();
+    const adapter = await getAdapter(debugInst);
+    const device = await getDevice(adapter);
+
+    const texture = device.createTexture({
+      size: { width: 4, height: 4 },
+      format: 'rgba8unorm',
+      usage: 0x10,
+    });
+    const view = device.createTextureView((texture as any).value, {});
+    device.destroyTexture((texture as any).value);
+
+    debugInst.arm(1);
+    const encRes = device.createCommandEncoder();
+    const enc = (encRes as any).value;
+    enc.beginRenderPass({
+      colorAttachments: [{ view: (view as any).value, loadOp: 'clear', storeOp: 'store' }],
+    });
+    debugInst.onFrameEnd();
+
+    const tapeResult = debugInst.getTape();
+    expect(tapeResult).toBeDefined();
+    expect(tapeResult instanceof DebugError).toBe(false);
+  });
 });
 
 // ================================================================
@@ -1341,5 +1405,23 @@ describe('descriptor registry (w16)', () => {
     // and the underlying device call still runs without throwing.
     expect(() => device.destroyBuffer({} as any)).not.toThrow();
     expect(debugInst._getDescriptorTable().size).toBe(1);
+  });
+
+  it('resets device-bound registries after device loss', async () => {
+    const { debugInst } = await bootstrap();
+    const adapter = await getAdapter(debugInst);
+    const device = await getDevice(adapter);
+
+    device.createBuffer({ size: 64, usage: 16 });
+    expect(debugInst._getDescriptorTable().size).toBe(1);
+    expect(debugInst._getCapturedDevice()).toBeDefined();
+
+    debugInst._resetForDeviceLoss();
+
+    expect(debugInst.getState()).toBe('idle');
+    expect(debugInst.getEvents()).toHaveLength(0);
+    expect(debugInst._getDescriptorTable().size).toBe(0);
+    expect(debugInst._getCapturedDevice()).toBeUndefined();
+    expect(debugInst.arm(1).ok).toBe(true);
   });
 });

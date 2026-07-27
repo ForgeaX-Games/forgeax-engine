@@ -3,10 +3,15 @@ import {
   ASSET_ERROR_HINTS,
   type AssetCompression,
   AssetError,
+  type AssetRelation,
+  type CatalogDiagnostic,
   type ImageMetadata,
+  type ProviderProvenance,
+  type ResourceRevision,
 } from '@forgeax/engine-types';
 import type { AssetRegistry } from '../asset-registry';
 
+/** Runtime catalog row parsed from the shared pack-index POD shape. */
 export interface CatalogRecord {
   readonly relativeUrl: string;
   readonly kind: string;
@@ -15,12 +20,61 @@ export interface CatalogRecord {
   readonly refs?: readonly string[];
   readonly compression?: AssetCompression;
   readonly sourcePath?: string;
+  readonly packageId?: string;
+  readonly provenance?: ProviderProvenance;
+  readonly revision?: ResourceRevision;
+  readonly sourceKey?: string;
+  readonly sourceIndex?: number;
+  readonly relations?: readonly AssetRelation[];
+  readonly diagnostics?: readonly CatalogDiagnostic[];
 }
 
 type CatalogFetch = (input: string) => PromiseLike<{
   readonly ok: boolean;
   json(): Promise<unknown>;
 }>;
+
+function parseError(
+  expected: string,
+  detail?: object,
+  hint = ASSET_ERROR_HINTS['asset-parse-failed'],
+): AssetError {
+  return new AssetError({
+    code: 'asset-parse-failed',
+    expected,
+    hint,
+    ...(detail === undefined ? {} : { detail: detail as never }),
+  });
+}
+
+function sameRevision(left: ResourceRevision, right: ResourceRevision): boolean {
+  return (
+    left.digest === right.digest &&
+    left.observedAt === right.observedAt &&
+    left.rootId === right.rootId
+  );
+}
+
+function checkExpectedRevision(
+  records: readonly CatalogRecord[],
+  expectedRevision: ResourceRevision | undefined,
+): AssetError | undefined {
+  if (expectedRevision === undefined || records.length === 0) return undefined;
+  const actualRevisions = records.flatMap((record) =>
+    record.revision === undefined ? [] : [record.revision],
+  );
+  if (
+    actualRevisions.length > 0 &&
+    actualRevisions.every((revision) => sameRevision(revision, expectedRevision))
+  ) {
+    return undefined;
+  }
+  return parseError(
+    'every catalog entry to carry the expected producer revision',
+    { expectedRevision, actualRevisions },
+    'restore a verified catalog revision before applying the source',
+  );
+}
 
 /** Resolve a catalog entry URL against the configured pack-index URL. */
 export function resolveCatalogAssetUrl(registry: AssetRegistry, relativeUrl: string): string {
@@ -35,19 +89,19 @@ export function resolveCatalogAssetUrl(registry: AssetRegistry, relativeUrl: str
   }
 }
 
-/** Parse the shared pack-index/catalog wire shape without loading payloads. */
+/**
+ * Parse the shared pack-index/catalog wire shape without loading payloads.
+ *
+ * The returned map is keyed by normalized GUID; all producer facts and
+ * structured diagnostics remain data for AI-readable callers.
+ */
 export function parseCatalog(
   raw: unknown,
   resolveUrl: (relativeUrl: string) => string = (relativeUrl) => relativeUrl,
+  expectedRevision?: ResourceRevision,
 ): Result<Map<string, CatalogRecord>, AssetError> {
   if (!Array.isArray(raw)) {
-    return err(
-      new AssetError({
-        code: 'asset-parse-failed',
-        expected: 'pack-index.json to be a JSON array',
-        hint: ASSET_ERROR_HINTS['asset-parse-failed'],
-      }),
-    );
+    return err(parseError('pack-index.json to be a JSON array'));
   }
 
   const catalog = new Map<string, CatalogRecord>();
@@ -60,13 +114,22 @@ export function parseCatalog(
     refs?: unknown;
     compression?: unknown;
     sourcePath?: unknown;
+    packageId?: unknown;
+    provenance?: unknown;
+    revision?: unknown;
+    sourceKey?: unknown;
+    sourceIndex?: unknown;
+    relations?: unknown;
+    diagnostics?: unknown;
   }>) {
-    if (
-      typeof item.guid !== 'string' ||
-      typeof item.relativeUrl !== 'string' ||
-      typeof item.kind !== 'string'
-    ) {
-      continue;
+    if (typeof item.guid !== 'string' || item.guid.length === 0) {
+      return err(parseError('each catalog entry to contain a non-empty guid'));
+    }
+    if (typeof item.relativeUrl !== 'string' || item.relativeUrl.length === 0) {
+      return err(parseError(`catalog entry ${item.guid} to contain a non-empty relativeUrl`));
+    }
+    if (typeof item.kind !== 'string' || item.kind.length === 0) {
+      return err(parseError(`catalog entry ${item.guid} to contain a non-empty kind`));
     }
 
     const compression =
@@ -77,8 +140,19 @@ export function parseCatalog(
       item.compression === 'basis-uastc-hdr'
         ? item.compression
         : undefined;
+    let resolvedUrl: string;
+    try {
+      resolvedUrl = resolveUrl(item.relativeUrl);
+    } catch (error) {
+      return err(
+        parseError(`catalog entry ${item.guid} to resolve its relativeUrl`, {
+          relativeUrl: item.relativeUrl,
+          reason: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
     const row: CatalogRecord = {
-      relativeUrl: resolveUrl(item.relativeUrl),
+      relativeUrl: resolvedUrl,
       kind: item.kind,
       metadata: item.metadata as ImageMetadata | undefined,
       ...(typeof item.name === 'string' ? { name: item.name } : {}),
@@ -87,9 +161,24 @@ export function parseCatalog(
         ? { refs: item.refs as readonly string[] }
         : {}),
       ...(compression !== undefined ? { compression } : {}),
+      ...(typeof item.packageId === 'string' ? { packageId: item.packageId } : {}),
+      ...(item.provenance !== undefined
+        ? { provenance: item.provenance as ProviderProvenance }
+        : {}),
+      ...(item.revision !== undefined ? { revision: item.revision as ResourceRevision } : {}),
+      ...(typeof item.sourceKey === 'string' ? { sourceKey: item.sourceKey } : {}),
+      ...(typeof item.sourceIndex === 'number' ? { sourceIndex: item.sourceIndex } : {}),
+      ...(Array.isArray(item.relations)
+        ? { relations: item.relations as readonly AssetRelation[] }
+        : {}),
+      ...(Array.isArray(item.diagnostics)
+        ? { diagnostics: item.diagnostics as readonly CatalogDiagnostic[] }
+        : {}),
     };
     catalog.set(item.guid.toLowerCase(), row);
   }
+  const revisionError = checkExpectedRevision([...catalog.values()], expectedRevision);
+  if (revisionError !== undefined) return err(revisionError);
   return ok(catalog);
 }
 
@@ -98,6 +187,7 @@ export async function fetchCatalog(
   url: string,
   fetch: CatalogFetch,
   resolveUrl?: (relativeUrl: string) => string,
+  expectedRevision?: ResourceRevision,
 ): Promise<Result<Map<string, CatalogRecord>, AssetError>> {
   let raw: unknown;
   try {
@@ -121,7 +211,7 @@ export async function fetchCatalog(
       }),
     );
   }
-  return parseCatalog(raw, resolveUrl);
+  return parseCatalog(raw, resolveUrl, expectedRevision);
 }
 
 export function fetchPackIndex(

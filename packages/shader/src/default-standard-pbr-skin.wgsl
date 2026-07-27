@@ -33,7 +33,8 @@
 //   @group(1) @binding(4) metallicRoughnessTexture   texture_2d<f32>
 //   @group(1) @binding(5) normalSampler              sampler
 //   @group(1) @binding(6) normalTexture              texture_2d<f32>
-//   @group(1) @binding(7..13) Skylight (irradiance / prefilter / brdfLut +
+//   @group(1) @binding(7) specularTintSampler + @binding(8) specularTintTexture
+//   @group(1) @binding(9..15) Skylight (irradiance / prefilter / brdfLut +
 //                              samplers) + skylight uniform (intensity)
 //   @group(2) @binding(0) meshes                     storage   (worldFromLocal mat4
 //                                                               + normalMatrix mat3,
@@ -74,21 +75,23 @@ struct Material {
   aoChannel          : f32,
   extraChannel       : f32,
   // vec3 align=16 inserts implicit padding so emissive lands at offset 48;
-  // the authored schema rounds to 96 B (matches default-standard-pbr SSOT).
+  // the authored schema rounds to 112 B (matches default-standard-pbr SSOT).
   emissive           : vec3<f32>,
   emissiveIntensity  : f32,
   occlusionStrength  : f32,
   // feat-city-glb multi-UV tiling: per-material UV-set selector (mirrors
   // default-standard-pbr.wgsl SSOT). 0.0 -> set 0 (in.uv), >=0.5 -> set 1
-  // (in.uv1). Clearcoat occupies offsets 76..84; the authored schema rounds
-  // to 96 B and the engine-owned UV scale tail begins at byte 88.
+  // (in.uv1). Clearcoat occupies offsets 76..84; specularTint is aligned to
+  // 96 B and the engine-owned UV scale tail begins at byte 112.
   uvSet              : f32,
   alphaCutoff        : f32,
   clearcoat          : f32,
   clearcoatRoughness : f32,
+  specularTint       : vec3<f32>,
   baseColorUvScale          : vec2<f32>,
   metallicRoughnessUvScale  : vec2<f32>,
   normalUvScale             : vec2<f32>,
+  specularTintUvScale       : vec2<f32>,
   emissiveUvScale           : vec2<f32>,
   occlusionUvScale          : vec2<f32>,
 };
@@ -100,15 +103,19 @@ struct Material {
 @group(1) @binding(4) var metallicRoughnessTexture : texture_2d<f32>;
 @group(1) @binding(5) var normalSampler : sampler;
 @group(1) @binding(6) var normalTexture : texture_2d<f32>;
+@group(1) @binding(7) var specularTintSampler : sampler;
+@group(1) @binding(8) var specularTintTexture : texture_2d<f32>;
 
 // Preserve filtering reflection for resources passed to the shared sampler.
 fn materialTextureFilteringWitness() {
   let base = baseColorTexture;
   let metallicRoughness = metallicRoughnessTexture;
   let normal = normalTexture;
+  let specularTint = specularTintTexture;
   let baseWitness = textureSample(base, baseColorSampler, vec2<f32>(0.0));
   let metallicRoughnessWitness = textureSample(metallicRoughness, metallicRoughnessSampler, vec2<f32>(0.0));
   let normalWitness = textureSample(normal, normalSampler, vec2<f32>(0.0));
+  let specularTintWitness = textureSample(specularTint, specularTintSampler, vec2<f32>(0.0));
 }
 
 struct SkylightUniforms {
@@ -125,13 +132,13 @@ struct SkylightUniforms {
   colorB : f32,
   rotation : vec4<f32>,
 };
-@group(1) @binding(7)  var irradianceMap        : texture_cube<f32>;
-@group(1) @binding(8)  var irradianceSampler    : sampler;
-@group(1) @binding(9)  var prefilterMap         : texture_cube<f32>;
-@group(1) @binding(10) var prefilterSampler     : sampler;
-@group(1) @binding(11) var brdfLut              : texture_2d<f32>;
-@group(1) @binding(12) var brdfLutSampler       : sampler;
-@group(1) @binding(13) var<uniform> skylight    : SkylightUniforms;
+@group(1) @binding(9)  var irradianceMap        : texture_cube<f32>;
+@group(1) @binding(10) var irradianceSampler    : sampler;
+@group(1) @binding(11) var prefilterMap         : texture_cube<f32>;
+@group(1) @binding(12) var prefilterSampler     : sampler;
+@group(1) @binding(13) var brdfLut              : texture_2d<f32>;
+@group(1) @binding(14) var brdfLutSampler       : sampler;
+@group(1) @binding(15) var<uniform> skylight    : SkylightUniforms;
 
 #if STORAGE_BUFFER_AVAILABLE == true
 @group(2) @binding(1) var<storage, read> palette : array<mat4x4<f32>>;
@@ -265,7 +272,10 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let n = applyTBN(in.worldNormal, in.worldTangent, normTangent);
 
   let v = normalize(view.cameraPos - in.worldPos);
-  let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+  let specularTint = material.specularTint * sampleMaterialTexture(
+    specularTintTexture, specularTintSampler, uv, material.specularTintUvScale,
+  ).rgb;
+  let f0 = mix(vec3<f32>(0.04) * specularTint, albedo, metallic);
   let coatRoughness = max(material.clearcoatRoughness, 0.04);
   let coatAlpha = coatRoughness * coatRoughness;
   let coatF = f_schlick(max(dot(n, v), 0.0), vec3<f32>(0.04)) * material.clearcoat;

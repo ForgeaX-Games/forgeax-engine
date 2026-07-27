@@ -451,7 +451,7 @@ export function buildPipelineDescriptor(
  *
  * Three groups by derivation source:
  * 1. Shader-derived (paramSchema reflection + injection chain):
- *    - `'pbr-material-merged'` — 18 entries: base 7 + Skylight 7 + lightmap 4
+ *    - `'pbr-material-merged'` — derived user region + Skylight 7 + lightmap 4
  *    - `'unlit-material'` — 7 entries: base PBR material only (no inject)
  *    - `'hdrp-7-slot'` — 7 entries (binding 0 + 3..8): HDRP cluster + SSAO group(2) BGL
  * 2. Caps-driven literal shapes (no shader):
@@ -536,7 +536,7 @@ const GPU_SHADER_STAGE_FRAGMENT = 0x2;
  *
  * Priority (D-1): explicit `options.materialParamSchema` > registry lookup of
  * `spec.shader.id` > `undefined` (the user-region builder then falls back to
- * the built-in standard-PBR 3-texture schema, byte-equivalent to base-7).
+ * the built-in standard-PBR 4-texture schema, whose user region is 9 entries).
  */
 function resolveMaterialParamSchema(
   spec: PipelineSpec,
@@ -561,7 +561,7 @@ export function buildBindGroupLayoutDescriptor(
      * (`'pbr-material-merged'` / `'unlit-material'`). When supplied it is the
      * authoritative source for the user-region BGL shape (D-1); when omitted,
      * `buildPbrMaterialUserRegionEntries` falls back to the built-in
-     * standard-PBR 3-texture schema (byte-equivalent to the legacy base-7), so
+     * standard-PBR 4-texture schema (user region is 9 entries), so
      * the caps-driven `buildPbrPipelineLayouts` seam keeps working unchanged.
      * A registry + resolvable shader id takes precedence over this field.
      */
@@ -642,8 +642,7 @@ export function buildBindGroupLayoutDescriptor(
       // + IBL injection (7) + lightmap injection (4). The user-region size is
       // the only variable; injection start = userRegion.length so a 4-texture
       // custom schema shifts IBL/lightmap by one sampler/texture pair (D-1).
-      // For the built-in 3-texture standard-PBR schema this is 7 + 7 + 4 = 18,
-      // bit-for-bit the legacy fixed layout (D-2 / AC-06).
+      // For the built-in 4-texture standard-PBR schema this is 9 + 7 + 4 = 20.
       //
       // Schema source priority (D-1): explicit materialParamSchema option >
       // registry lookup of spec.shader.id > built-in standard-PBR fallback.

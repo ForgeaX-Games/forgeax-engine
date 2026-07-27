@@ -24,9 +24,9 @@
 //
 // GUID import-stable iron law: every produced GUID comes from `ctx.subAssets[]`.
 
-import type { ImportContext, ImportedAsset, Importer } from '@forgeax/engine-types';
+import type { ImportContext, ImportedAsset, Importer, ImportResult } from '@forgeax/engine-types';
 
-async function importAudio(ctx: ImportContext): Promise<readonly ImportedAsset[]> {
+async function importAudio(ctx: ImportContext): Promise<ImportResult> {
   // Probe the source is readable so a missing file fails the build (the runner
   // already probes, but this keeps the importer self-validating, P3). No decode
   // happens here -- decodeAudioData is the runtime loader's job.
@@ -47,7 +47,7 @@ async function importAudio(ctx: ImportContext): Promise<readonly ImportedAsset[]
     const payload = { kind: 'audio', source: ctx.source } as unknown as ImportedAsset['payload'];
     out.push({ guid: sub.guid, kind: 'audio', payload, refs: [] });
   }
-  return out;
+  return { ok: true, value: { assets: out, artifacts: [], sourceDependencies: [] } };
 }
 
 /**

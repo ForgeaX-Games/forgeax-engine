@@ -223,9 +223,11 @@ function sortTransparentDispatch(
  *   alphaCutoff        : f32          72..76
  *   clearcoat          : f32          76..80
  *   clearcoatRoughness : f32          80..84
- *                                     = alignUp(84, 16) = 96
- * The engine-owned texture UV scale tail begins at byte 88 in the shader
- * struct; the bind window remains 128 B and the dynamic-offset stride remains
+ *   (vec3 align=16 inserts implicit pad to 96)
+ *   specularTint       : vec3<f32>    96..108
+ *                                     = alignUp(108, 16) = 112
+ * The engine-owned texture UV scale tail begins at byte 112 in the shader
+ * struct; the bind window is 160 B and the dynamic-offset stride remains
  * `PER_ENTITY_STRIDE = 256` (D-P9).
  */
 const STANDARD_PBR_SIDECAR_SCHEMA: readonly ParamSchemaEntry[] = [
@@ -243,16 +245,17 @@ const STANDARD_PBR_SIDECAR_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'alphaCutoff', type: 'f32' },
   { name: 'clearcoat', type: 'f32' },
   { name: 'clearcoatRoughness', type: 'f32' },
+  { name: 'specularTint', type: 'vec3' },
 ];
 
 /**
  * Per-entity material slice size. The authored parameter schema owns the
- * leading 96-byte material payload; the engine-owned texture UV scales begin
- * at byte 88 in the shader and the full bind window remains 128 bytes.
+ * leading 112-byte material payload; the engine-owned texture UV scales begin
+ * at byte 112 in the shader and the full bind window is 160 bytes.
  */
 export const STANDARD_PBR_UBO_SIZE = Math.max(
   derive(STANDARD_PBR_SIDECAR_SCHEMA).uboLayout.totalBytes,
-  128,
+  160,
 );
 
 /**
@@ -1420,7 +1423,7 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     // feat-20260622-handle-to-id-allocator-elimination M1 / w3: per-frame
     // bind group caches as nested WeakMap chain roots. viewBindGroupCache
     // covers main and shadow variants; meshBindGroupCache keys on inner
-    // buffer handles (D-3). Roots are init-time stable (never cleared).
+    // buffer handles (D-3). Roots are stable between device recoveries.
     viewBindGroupCache: new WeakMap(),
     meshBindGroupCache: new WeakMap(),
     // feat-20260622-handle-to-id-allocator-elimination M1 / w2: per-entity
@@ -1831,13 +1834,30 @@ export function createRenderSystem(internals: RenderSystemInternals): RenderSyst
     },
     resetForRecover(): void {
       // feat-20260622-s5 M3 / B-2 / w18: recover() rebuild drops device-bound
-      // state minted by the lost device. (1) graph pendingDestroy (stale
-      // handles, skip device.destroyTexture); no-op when no graph compiled yet.
+      // state minted by the lost device. The active graph and per-entity caches
+      // must be discarded, not merely marked for destruction: their opaque
+      // handles cannot be used on the fresh device and the next draw must
+      // lazily build a new graph from the preserved ECS / asset POD caches.
       frameState.perFrameGraph?.clearPendingDestroy();
+      frameState.perFrameGraph = null;
       for (const retiredGraph of frameState.retiredPerFrameGraphs) {
         retiredGraph.clearPendingDestroy();
       }
       frameState.retiredPerFrameGraphs.clear();
+      frameState.instanceBuffers.clear();
+      frameState.transientInstanceBuffers = [];
+      frameState.pointShadowAtlas = null;
+      // Bind groups retain opaque handles from the lost device. WeakMap roots
+      // cannot be cleared, so replace them; the Map-backed caches can be
+      // emptied in place. The next frame recreates every binding from the
+      // rebuilt PipelineState and fresh residency handles.
+      frameState.viewBindGroupCache = new WeakMap();
+      frameState.meshBindGroupCache = new WeakMap();
+      frameState.materialBgPerEntity.clear();
+      frameState.instancesBgPerEntity.clear();
+      frameState.materialBgShared.clear();
+      frameState.singletonMaterialCache.clear();
+      frameState.postProcessBgCache = new WeakMap();
       // (2) post-process registry + eager param UBOs: the rebuild's
       // buildReadyWebGPU re-registers the engine tonemap, which would throw
       // `post-process-already-registered` against a populated registry; the

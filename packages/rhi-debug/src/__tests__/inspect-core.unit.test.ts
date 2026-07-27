@@ -108,6 +108,16 @@ describe('extractDrawInfo', () => {
     expect(info.colorAttachmentHandleId).toBe('tv:1');
   });
 
+  it('tracks a single-sample resolve target for an MSAA color attachment', () => {
+    const events = makeSingleDrawEvents().map((event) =>
+      event.kind === 'beginRenderPass'
+        ? { ...event, colorAttachmentResolveTargetHandleIds: ['tv:resolve'] }
+        : event,
+    );
+    const info = extractDrawInfo(events, 0);
+    expect(info.colorAttachmentResolveTargetHandleId).toBe('tv:resolve');
+  });
+
   it('detects drawIndexed correctly', () => {
     const events: readonly RhiCallEvent[] = [
       { kind: 'frameMark', frameIdx: 0 },

@@ -429,6 +429,30 @@ function setNavigatorGpu(gpu: unknown): void {
         expect(r.device.caps.float32Filterable).toBe(true);
       });
 
+      it('compute is an explicit WebGL2 capability refusal', () => {
+        const createComputePipeline = vi.fn(() => ({}));
+        const raw = mockRawDevice();
+        raw.createComputePipeline = createComputePipeline;
+        const r = makeRhiDevice(raw);
+
+        expect(r.device.caps.compute).toBe(false);
+        const result = r.device.createComputePipeline({
+          label: 'webgl2-compute-must-refuse',
+          layout: 'auto',
+          compute: { module: {} as never, entryPoint: 'main' },
+        });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.code).toBe('feature-not-enabled');
+          expect(result.error.expected).toBe(
+            'feature compute to be enabled on the active wgpu backend',
+          );
+          expect(result.error.hint).toContain('check engine.rhi.caps.compute');
+        }
+        expect(createComputePipeline).not.toHaveBeenCalled();
+      });
+
       it('m1-1-b: caps.rg11b10ufloatRenderable is false when feature absent (no createTexture call)', () => {
         let createTextureCalls = 0;
         const raw = mockRawDevice({

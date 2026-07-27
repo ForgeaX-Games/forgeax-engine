@@ -28,12 +28,13 @@
       "risks": ["baseline", "dynamic", "live", "fault", "recovery", "behavioral", "visual"],
       "phaseInputs": ["baseline", "dynamic", "live", "fault", "recovery"],
       "evidence": {
-        "frontDoors": ["node-app", "shader-build", "render-graph", "post-process", "multi-uv", "browser-variant-selection", "browser-webgpu", "rhi-debug"],
+        "frontDoors": ["node-app", "shader-build", "render-graph", "post-process", "multi-uv", "browser-variant-selection", "browser-webgpu", "browser-composed-custom-post", "custom-pipeline-rhi", "custom-pipeline-rhi-variant", "custom-pipeline-rhi-live-variant", "rhi-debug"],
         "legs": ["live", "gpu", "behavioral", "recovery"]
       },
       "oracle": {
         "stdoutIncludes": [
           "[m3-programmable] custom material pixel: PASS",
+          "[m3-programmable] custom material texture binding: PASS",
           "[m3-programmable] render graph seam: PASS",
           "[m3-programmable] depth-aware URP overlay: PASS",
           "[m3-programmable] fake-depth falsifier: PASS",
@@ -42,6 +43,15 @@
           "[m3-programmable] multi-UV variant: PASS",
           "[m3-programmable] multi-UV browser variant: PASS",
           "[m3-programmable] browser live pipeline: PASS",
+          "[m3-programmable] browser custom pipeline + post composition: PASS",
+          "[m3-programmable] browser multi-texture falsifier: PASS",
+          "[m3-programmable] custom pipeline RHI: PASS",
+          "[m3-programmable] custom pipeline RHI true variant: PASS",
+          "[m3-programmable] custom pipeline RHI texture binding: PASS",
+          "[m3-programmable] custom pipeline MSAA adjacent pipeline: PASS",
+          "[m3-programmable] custom pipeline MSAA inversion post: PASS",
+          "[m3-programmable] custom pipeline MSAA live post: PASS",
+          "[m3-programmable] custom pipeline live variant switch: PASS",
           "[m3-programmable] PASS - M3 programmable rendering gates GREEN"
         ]
       }

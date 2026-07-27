@@ -17,15 +17,15 @@
 //  Site 4:  main-pass-sprite-draws.ts:701 — instanceBuffers.get (spriteInst.cacheKey → worldEntityKey)
 //  Site 5:  main-pass-sprite-draws.ts:730 — instanceBuffers.set (spriteInst.cacheKey → worldEntityKey)
 //  Site 6:  main-pass-sprite-draws.ts:772 — instancesBgPerEntity write (entityKey → worldEntityKey)
-//  Site 7:  main-pass-sprite-draws.ts:927 — instanceBuffers.get (spriteInstancesSnap.cacheKey → worldEntityKey)
-//  Site 8:  main-pass-sprite-draws.ts:950 — instanceBuffers.set (spriteInstancesSnap.cacheKey → worldEntityKey)
-//  Site 9:  shadow-pass.ts:575  — instanceBuffers.get (shadowInst.cacheKey → worldEntityKey)
-//  Site 10: shadow-pass.ts:604  — instanceBuffers.set (shadowInst.cacheKey → worldEntityKey)
-//  Site 11: shadow-pass.ts:630  — instancesBgPerEntity write (entityKey → worldEntityKey)
-//  Site 12: shadow-pass.ts:1010 — instanceBuffers.get (read-side, inst.cacheKey → worldEntityKey)
-//  Site 13: shadow-pass.ts:1457 — instanceBuffers.get (read-side, inst.cacheKey → worldEntityKey)
-//  Site 14: shadow-pass.ts:1027 — instancesBgPerEntity read (read-side, entityKey → worldEntityKey)
-//  Site 15: shadow-pass.ts:1468 — instancesBgPerEntity read (read-side, entityKey → worldEntityKey)
+//  Site 7:  main-pass-sprite-draws.ts:946 — instanceBuffers.get (spriteInstancesSnap.cacheKey → worldEntityKey)
+//  Site 8:  main-pass-sprite-draws.ts:971 — instanceBuffers.set (spriteInstancesSnap.cacheKey → worldEntityKey)
+//  Site 9:  shadow-pass.ts:588  — instanceBuffers.get (shadowInst.cacheKey → worldEntityKey)
+//  Site 10: shadow-pass.ts:619  — instanceBuffers.set (shadowInst.cacheKey → worldEntityKey)
+//  Site 11: shadow-pass.ts:648  — instancesBgPerEntity write (entityKey → worldEntityKey)
+//  Site 12: shadow-pass.ts:1040 — instanceBuffers.get (read-side, inst.cacheKey → worldEntityKey)
+//  Site 13: shadow-pass.ts:1494 — instanceBuffers.get (read-side, inst.cacheKey → worldEntityKey)
+//  Site 14: shadow-pass.ts:1058 — instancesBgPerEntity read (read-side, entityKey → worldEntityKey)
+//  Site 15: shadow-pass.ts:1506 — instancesBgPerEntity read (read-side, entityKey → worldEntityKey)
 //
 // Each site check uses a line-range window: we read the source file and verify
 // that within the line range, a `worldEntityKey(...)` call appears on a line
@@ -132,12 +132,12 @@ describe('production-path sprite pass instancesBgPerEntity worldEntityKey', () =
 // ── SpriteInstances instanceBuffers (D-1a #1) ──────────────────────────────
 
 describe('production-path SpriteInstances instanceBuffers worldEntityKey', () => {
-  it('spriteInstancesSnap.cacheKey get at line 927 uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(SPRITE_FILE, 927, 'main-pass-sprite-draws:927 instanceBuffers.get');
+  it('spriteInstancesSnap.cacheKey get at line 946 uses worldEntityKey', () => {
+    expectWorldEntityKeyAt(SPRITE_FILE, 946, 'main-pass-sprite-draws:946 instanceBuffers.get');
   });
 
-  it('spriteInstancesSnap.cacheKey set at line 950 uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(SPRITE_FILE, 950, 'main-pass-sprite-draws:950 instanceBuffers.set');
+  it('spriteInstancesSnap.cacheKey set at line 971 uses worldEntityKey', () => {
+    expectWorldEntityKeyAt(SPRITE_FILE, 971, 'main-pass-sprite-draws:971 instanceBuffers.set');
   });
 });
 
@@ -148,36 +148,36 @@ const SHADOW_FILE = fileURLToPath(
 );
 
 describe('production-path shadow instanceBuffers worldEntityKey', () => {
-  it('shadowInst.cacheKey get at line 575 uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(SHADOW_FILE, 575, 'shadow-pass:575 instanceBuffers.get');
+  it('shadowInst.cacheKey get at line 588 uses worldEntityKey', () => {
+    expectWorldEntityKeyAt(SHADOW_FILE, 588, 'shadow-pass:588 instanceBuffers.get');
   });
 
-  it('shadowInst.cacheKey set at line 604 uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(SHADOW_FILE, 604, 'shadow-pass:604 instanceBuffers.set');
+  it('shadowInst.cacheKey set at line 619 uses worldEntityKey', () => {
+    expectWorldEntityKeyAt(SHADOW_FILE, 619, 'shadow-pass:619 instanceBuffers.set');
   });
 
-  it('shadow dir read-side inst.cacheKey get at line 1010 uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(SHADOW_FILE, 1010, 'shadow-pass:1010 instanceBuffers.get (read)');
+  it('shadow dir read-side inst.cacheKey get at line 1040 uses worldEntityKey', () => {
+    expectWorldEntityKeyAt(SHADOW_FILE, 1040, 'shadow-pass:1040 instanceBuffers.get (read)');
   });
 
-  it('shadow spot read-side inst.cacheKey get at line 1457 uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(SHADOW_FILE, 1457, 'shadow-pass:1457 instanceBuffers.get (read)');
+  it('shadow spot read-side inst.cacheKey get at line 1494 uses worldEntityKey', () => {
+    expectWorldEntityKeyAt(SHADOW_FILE, 1494, 'shadow-pass:1494 instanceBuffers.get (read)');
   });
 });
 
 // ── Shadow pass instancesBgPerEntity (D-1a #3) ─────────────────────────────
 
 describe('production-path shadow instancesBgPerEntity worldEntityKey', () => {
-  it('shadowInstancesBg entityKey write at line 630 uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(SHADOW_FILE, 630, 'shadow-pass:630 instancesBgPerEntity write');
+  it('shadowInstancesBg entityKey write at line 648 uses worldEntityKey', () => {
+    expectWorldEntityKeyAt(SHADOW_FILE, 648, 'shadow-pass:648 instancesBgPerEntity write');
   });
 
-  it('shadow dir read-side instancesBgPerEntity.get at ~1027 uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(SHADOW_FILE, 1027, 'shadow-pass:1027 instancesBgPerEntity read');
+  it('shadow dir read-side instancesBgPerEntity.get at ~1058 uses worldEntityKey', () => {
+    expectWorldEntityKeyAt(SHADOW_FILE, 1058, 'shadow-pass:1058 instancesBgPerEntity read');
   });
 
-  it('shadow spot read-side instancesBgPerEntity.get at ~1468 uses worldEntityKey', () => {
-    expectWorldEntityKeyAt(SHADOW_FILE, 1468, 'shadow-pass:1468 instancesBgPerEntity read');
+  it('shadow spot read-side instancesBgPerEntity.get at ~1506 uses worldEntityKey', () => {
+    expectWorldEntityKeyAt(SHADOW_FILE, 1506, 'shadow-pass:1506 instancesBgPerEntity read');
   });
 });
 

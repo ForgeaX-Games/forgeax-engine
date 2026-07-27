@@ -343,11 +343,20 @@ export const BUILTIN_USER_REGION_TEXTURE_FIELDS: readonly string[] = [
   'baseColorTexture',
   'metallicRoughnessTexture',
   'normalTexture',
+  'specularTintTexture',
 ];
 
 const LEGACY_MATERIAL_TEXTURE_SCALE_OFFSET = 80;
-const STANDARD_PBR_TEXTURE_SCALE_OFFSET = 88;
+const STANDARD_PBR_TEXTURE_SCALE_OFFSET = 112;
 const MATERIAL_TEXTURE_SCALE_FIELDS = [
+  'baseColorTexture',
+  'metallicRoughnessTexture',
+  'normalTexture',
+  'specularTintTexture',
+  'emissiveTexture',
+  'occlusionTexture',
+] as const;
+const LEGACY_MATERIAL_TEXTURE_SCALE_FIELDS = [
   'baseColorTexture',
   'metallicRoughnessTexture',
   'normalTexture',
@@ -392,8 +401,12 @@ export function applyMaterialTextureUvScales(
     material.materialShaderId === 'forgeax::default-standard-pbr-skin'
       ? STANDARD_PBR_TEXTURE_SCALE_OFFSET
       : LEGACY_MATERIAL_TEXTURE_SCALE_OFFSET;
-  for (let index = 0; index < MATERIAL_TEXTURE_SCALE_FIELDS.length; index++) {
-    const field = MATERIAL_TEXTURE_SCALE_FIELDS[index];
+  const isStandardPbr = textureScaleOffset === STANDARD_PBR_TEXTURE_SCALE_OFFSET;
+  const fields = isStandardPbr
+    ? MATERIAL_TEXTURE_SCALE_FIELDS
+    : LEGACY_MATERIAL_TEXTURE_SCALE_FIELDS;
+  for (let index = 0; index < fields.length; index++) {
+    const field = fields[index];
     if (field === undefined) continue;
     const handle = materialTextureForField(material, field);
     const resolved =
@@ -410,7 +423,7 @@ export function applyMaterialTextureUvScales(
  * feat-20260621-learn-render-5-5-parallax M2 / w8 (D-3): ordered user-region
  * texture field names for a material's bind-group assembly, derived from the
  * shader's paramSchema via the `derive()` SSOT (insertion order = sampler/
- * texture pair order in derive().bglEntries). Falls back to the built-in 3
+ * texture pair order in derive().bglEntries). Falls back to the built-in 4
  * fields when the schema is unavailable.
  */
 export function userRegionTextureFieldOrder(
@@ -512,8 +525,9 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): ArrayBuf
   //   f32[19]     clearcoat          (offset 76)
   //   f32[20]     clearcoatRoughness (offset 80)
   //                                  (offset 84..87 alignment pad)
-  //   f32[22..]   engine-owned texture UV scales (offset 88)
-  // Total bind window = 128 B; dynamic stride remains 256 B.
+  //   f32[24..26] specularTint      (offset 96, vec3)
+  //   f32[28..]   engine-owned texture UV scales (offset 112)
+  // Total bind window = 160 B; dynamic stride remains 256 B.
   f32[0] = material.baseColor[0] ?? 0;
   f32[1] = material.baseColor[1] ?? 0;
   f32[2] = material.baseColor[2] ?? 0;
@@ -540,6 +554,9 @@ export function buildPbrMaterialUboPayload(material: MaterialSnapshot): ArrayBuf
   f32[18] = 0;
   f32[19] = material.clearcoat ?? 0;
   f32[20] = material.clearcoatRoughness ?? 0.5;
+  f32[24] = 1;
+  f32[25] = 1;
+  f32[26] = 1;
   // Schema-driven paramSnapshot overlay (feat-20260523 M9-T05, AC-14):
   // for user-shaders with a paramSnapshot, project the first vec4/color
   // entry onto slot 0 and the first two f32 entries onto slot 1's first

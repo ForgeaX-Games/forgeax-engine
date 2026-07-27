@@ -21,6 +21,7 @@ import {
   jobEnvironment,
   localGitHubFilePaths,
   localGitHubRuntime,
+  localizeRunnerProvisioning,
   localShardReportPaths,
   localSharedProvenancePaths,
   localTargets,
@@ -87,6 +88,17 @@ test('local PR CI projection covers every required context and maps matrix legs 
   }
   assert.equal(isRunnerProvisioning('echo "$RUNNER_TEMP" >> "$GITHUB_PATH"'), true);
   assert.equal(isRunnerProvisioning('nproc && cat /proc/cpuinfo'), true);
+  const typecheckWithPathSetup = [
+    'echo "$PWD/node_modules/typescript/bin" >> "$GITHUB_PATH"',
+    'echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"',
+    'export PATH="$PWD/node_modules/typescript/bin:$PWD/node_modules/.bin:$PATH"',
+    'pnpm run typecheck',
+  ].join('\n');
+  assert.equal(isRunnerProvisioning(typecheckWithPathSetup), false);
+  assert.equal(
+    localizeRunnerProvisioning(typecheckWithPathSetup),
+    'export PATH="$PWD/node_modules/typescript/bin:$PWD/node_modules/.bin:$PATH"\npnpm run typecheck',
+  );
   assert.equal(
     isLocalDependencyAssertion(
       `test '${githubExpression('needs.core-build.result')}' = success\ntest '${githubExpression('needs.app-shard-0.result')}' = success`,

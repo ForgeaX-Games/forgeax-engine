@@ -36,9 +36,14 @@ const defaultStandardPbrParamSchema: readonly ParamSchemaEntry[] = [
   // feat-city-glb multi-UV tiling: per-material UV-set selector (offset 68,
   // UBO byte-stable at 80). Mirrors default-standard-pbr.wgsl.meta.json SSOT.
   { name: 'uvSet', type: 'f32', default: 0.0 },
+  { name: 'alphaCutoff', type: 'f32', default: 0.0 },
+  { name: 'clearcoat', type: 'f32', default: 0.0 },
+  { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
+  { name: 'specularTint', type: 'vec3', default: [1.0, 1.0, 1.0] },
   { name: 'baseColorTexture', type: 'texture2d' },
   { name: 'metallicRoughnessTexture', type: 'texture2d' },
   { name: 'normalTexture', type: 'texture2d' },
+  { name: 'specularTintTexture', type: 'texture2d' },
 ];
 
 const RESERVED_ID = 'forgeax::pbr-skin' as const;

@@ -81,7 +81,8 @@ publishes nothing on its own. To use the engine, install the runtime entry
 \`@forgeax/engine-runtime\` and the family members you need.
 
 \`\`\`ts
-import { Engine, World } from '@forgeax/engine-runtime'
+import { Engine } from '@forgeax/engine-runtime'
+import { World } from '@forgeax/engine-ecs'
 \`\`\`
 
 ## Family members

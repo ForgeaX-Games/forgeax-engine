@@ -6,27 +6,10 @@
 
 import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
-import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
-import type { Handle } from '@forgeax/engine-types';
-import { Transform } from '@forgeax/engine-scene';
-
-import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
-import { perspective, TONEMAP_ACES_FILMIC, TONEMAP_AGX, TONEMAP_CINEON, TONEMAP_LINEAR, TONEMAP_NEUTRAL, TONEMAP_NONE, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
-import { Materials } from '@forgeax/engine-render';
+import { Camera } from '@forgeax/engine-render';
+import { TONEMAP_MODES, TONEMAP_NAMES, buildTonemappingWorld } from './tonemapping';
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
-
-const TONEMAP_MODES = [
-  TONEMAP_NONE,
-  TONEMAP_REINHARD_EXTENDED,
-  TONEMAP_LINEAR,
-  TONEMAP_CINEON,
-  TONEMAP_ACES_FILMIC,
-  TONEMAP_AGX,
-  TONEMAP_NEUTRAL,
-];
-
-const TONEMAP_NAMES = ['none', 'reinhard', 'linear', 'cineon', 'aces', 'agx', 'neutral'];
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('bevy-tonemapping: missing <canvas id="app"> in index.html');
@@ -44,31 +27,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const app = appResult.value;
   const world = app.world;
 
-  const matHandle = world.allocSharedRef('MaterialAsset', Materials.standard({
-    baseColor: [0.8, 0.7, 0.6, 1], metallic: 0, roughness: 0.4,
-  }));
-
-  world.spawn(
-    { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [0.5, 0.5, 0.5] } },
-    { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE as Handle<'MeshAsset', 'shared'> } },
-    { component: MeshRenderer, data: { materials: [matHandle] } },
-  );
-
-  world.spawn(
-    { component: Transform, data: { pos: [1.5, 0, 0], quat: [0, 0, 0, 1], scale: [0.4, 0.4, 0.4] } },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE as Handle<'MeshAsset', 'shared'> } },
-    { component: MeshRenderer, data: { materials: [matHandle] } },
-  );
-
-  world.spawn({
-    component: DirectionalLight,
-    data: { direction: [-0.4, -0.6, -0.7], color: [1, 1, 1], intensity: 2 },
-  });
-
-  const camEntity = world.spawn(
-    { component: Transform, data: { pos: [0, 0, 6] } },
-    { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9 }), tonemap: TONEMAP_NONE } },
-  ).unwrap();
+  const scene = buildTonemappingWorld(world, target.width / target.height);
+  const camEntity = scene.camera;
 
   world.addSystem(Update, {
     name: 'tonemap-cycle',

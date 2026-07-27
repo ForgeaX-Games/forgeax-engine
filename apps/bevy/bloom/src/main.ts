@@ -6,13 +6,8 @@
 
 import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
-import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
-import type { Handle } from '@forgeax/engine-types';
-import { Transform } from '@forgeax/engine-scene';
-
-import { BLOOM_DISABLED, BLOOM_ENABLED, perspective, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine-render';
-import { Materials } from '@forgeax/engine-render';
-import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { BLOOM_DISABLED, BLOOM_ENABLED, Camera } from '@forgeax/engine-render';
+import { buildBloomWorld } from './bloom';
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -32,48 +27,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const app = appResult.value;
   const world = app.world;
 
-  const cubeMat = world.allocSharedRef('MaterialAsset', Materials.standard({
-    baseColor: [0.7, 0.7, 0.7, 1],
-    metallic: 0,
-    roughness: 0.4,
-  }));
-
-  const emissiveMat = world.allocSharedRef('MaterialAsset', Materials.standard({
-    baseColor: [0.9, 0.9, 0.9, 1],
-    metallic: 0,
-    roughness: 0.4,
-    emissive: [50, 0, 0],
-    emissiveIntensity: 1,
-  }));
-
-  world.spawn(
-    { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [0.5, 0.5, 0.5] } },
-    { component: MeshFilter, data: { assetHandle: HANDLE_SPHERE as Handle<'MeshAsset', 'shared'> } },
-    { component: MeshRenderer, data: { materials: [emissiveMat] } },
-  );
-
-  world.spawn(
-    { component: Transform, data: { pos: [1.5, 0, 0], quat: [0, 0, 0, 1], scale: [0.4, 0.4, 0.4] } },
-    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE as Handle<'MeshAsset', 'shared'> } },
-    { component: MeshRenderer, data: { materials: [cubeMat] } },
-  );
-
-  world.spawn({
-    component: DirectionalLight,
-    data: { direction: [-0.4, -0.6, -0.7], color: [1, 1, 1], intensity: 1.5 },
-  });
-
-  const camEntity = world.spawn(
-    { component: Transform, data: { pos: [0, 0, 6] } },
-    {
-      component: Camera,
-      data: {
-        ...perspective({ fov: Math.PI / 4, aspect: 16 / 9 }),
-        tonemap: TONEMAP_REINHARD_EXTENDED,
-        bloom: BLOOM_DISABLED,
-      },
-    },
-  ).unwrap();
+  const scene = buildBloomWorld(world, target.width / Math.max(target.height, 1));
 
   let prevSpace = false;
   let currentBloom: number = BLOOM_DISABLED;
@@ -87,7 +41,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       const cur = snap.keyboard.down(' ');
       if (cur && !prevSpace) {
         currentBloom = currentBloom === BLOOM_ENABLED ? BLOOM_DISABLED : BLOOM_ENABLED;
-        world.set(camEntity, Camera, { bloom: currentBloom });
+        world.set(scene.camera, Camera, { bloom: currentBloom });
       }
       prevSpace = cur;
     },

@@ -1,6 +1,7 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
+import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { defineConfig } from 'vite';
 
@@ -8,9 +9,17 @@ const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..');
 const templatesDir = resolve(monorepoRoot, 'templates');
 // Binary demo-assets (sky.hdr, ...) live in the forgeax-engine-assets submodule
-// so the engine repo stays binary-free. pluginPack scans both roots and folds
-// them into a single pack-index served at /pack-index.json.
-const submoduleDemoAssetsDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'demo-assets');
+// so the engine repo stays binary-free. Select the sky sidecar explicitly;
+// the submodule also mirrors the template UI sidecars, which must not be
+// scanned twice because GUIDs are globally unique.
+const submoduleSkyMetaPath = resolve(
+  monorepoRoot,
+  'forgeax-engine-assets',
+  'demo-assets',
+  'template-game-default',
+  'sky.hdr.meta.json',
+);
+const submoduleSfxDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'sfx');
 
 export default defineConfig({
   plugins: [
@@ -22,8 +31,10 @@ export default defineConfig({
         // GUID-discoverable via forge.json.defaultScene) + material packs;
         // submodule holds binary demo assets.
         resolve(templatesDir, 'game-default'),
-        resolve(submoduleDemoAssetsDir, 'template-game-default'),
+        submoduleSkyMetaPath,
+        submoduleSfxDir,
       ],
+      importers: [audioImporter],
     }) as never,
   ],
   server: {

@@ -1,4 +1,5 @@
 import { Transform } from '@forgeax/engine-scene';
+import { AudioListener } from '@forgeax/engine-audio';
 import {
   ANTIALIAS_FXAA, BLOOM_ENABLED, Camera, MeshFilter, MeshRenderer, perspective,
   PointLight, TONEMAP_REINHARD_EXTENDED, Materials,
@@ -19,6 +20,9 @@ import { installHud, HUD_UI_GUID, type ViewMode } from './src/hud';
 import { createGameSettingsState, mountSettings, SETTINGS_UI_GUID } from './src/settings';
 import { installGameplayInput } from './src/gameplay-input';
 import { installGameplayLifecycle } from './src/gameplay-lifecycle';
+import { installGameplayAudio } from './src/gameplay-audio';
+import { createHitFlashMaterial } from './src/hit-flash-material';
+import { installRenderEvidence } from './src/render-evidence';
 import {
   attachScenePhysics, loadedFromHost, loadScene, PLAYER_Y, setupPlayerRoot,
   spawnFallbackScene, spawnGroundCollider, type LoadedScene, type MatHandle,
@@ -117,6 +121,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     // color needs no GPU feature; a daytime blue reads as sky. Linear/pre-tonemap.
     // On Chromium the cubemap skybox draws over it (harmless).
     { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect, near: 0.1, far: 200 }), tonemap: TONEMAP_REINHARD_EXTENDED, bloom: BLOOM_ENABLED, antialias: ANTIALIAS_FXAA, clearColor: [0.4, 0.6, 1.0, 1] } },
+    { component: AudioListener, data: {} },
   ).unwrap();
 
   // ── one warm accent point light (learn-render §2 multiple-lights; the scene
@@ -346,8 +351,14 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const bulletMesh = bulletMeshRes.ok ? world.allocSharedRef('MeshAsset', bulletMeshRes.value) : HANDLE_SPHERE;
   // Hit-flash material — a bright emissive white-yellow swapped onto a prop for a
   // few frames when a bullet strikes it (then restored to its base material).
-  const flashMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ baseColor: [1, 1, 0.9, 1], roughness: 0.5, metallic: 0, emissive: [1, 1, 0.6], emissiveIntensity: 6 }));
+  const flashMat = createHitFlashMaterial(world, ctx?.renderer);
   const flashUntil = new Map<EntityHandle, number>();    // entity → remaining flash seconds
+  const triggerFlash = (entity?: EntityHandle): void => {
+    const target = entity === undefined ? flashables[0]?.e : entity;
+    if (target === undefined || flashUntil.has(target)) return;
+    world.set(target, MeshRenderer, { materials: [flashMat] });
+    flashUntil.set(target, 0.2);
+  };
   // squared hit radius for bullet→prop scoring (bullet_r 0.2 + avg prop_r 0.5 ≈
   // 0.7, plus frame-step slack since the bullet advances ~0.4/frame). Generous
   // overshoot is fine: the per-bullet `hits` set prevents duplicate scoring.
@@ -396,6 +407,9 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const physics = world.hasResource('PhysicsWorld')
     ? world.getResource<PhysicsWorld>('PhysicsWorld')
     : undefined;
+  const gameplayAudio = player === undefined
+    ? undefined
+    : await installGameplayAudio(world, player, ctx?.assets);
 
   const resetGameplay = () => {
     for (const bullet of bullets) world.despawn(bullet.e);
@@ -429,7 +443,16 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       world.set(player, Transform, { pos: [px, jumpY, pz], quat: [0, 0, 0, 1] });
       if (physics?.hasBody(player)) physics.teleport(player, [px, jumpY, pz]);
     }
+    gameplayAudio?.reset();
   };
+  installRenderEvidence({
+    renderer: ctx?.renderer,
+    flashables,
+    triggerFlash: () => triggerFlash(),
+    isFlashed: (entity) => flashUntil.has(entity),
+    reset: resetGameplay,
+    registerCleanup,
+  });
   installGameplayLifecycle({ world, readInput, reset: resetGameplay });
 
   if (player !== undefined) {
@@ -441,6 +464,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         fn: () => {
           const dt = world.getResource(Time).delta;
           const snap = readInput();
+          gameplayAudio?.rearm();
       const arrowUp = snap.action('arrowUp').isPressed();
       const arrowDown = snap.action('arrowDown').isPressed();
       const arrowLeft = snap.action('arrowLeft').isPressed();
@@ -580,11 +604,9 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
               score += pts;
               hud.setScore(score);
               spawnPopup('+' + pts, fxp, fyp + 0.8, fzp);
+              gameplayAudio?.triggerHit();
             }
-            if (!flashUntil.has(fl.e)) {
-              world.set(fl.e, MeshRenderer, { materials: [flashMat] });
-              flashUntil.set(fl.e, 0.2);
-            }
+            if (!flashUntil.has(fl.e)) triggerFlash(fl.e);
           }
         }
       }

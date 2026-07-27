@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
+import { createCatalogSource } from '../catalog-source';
 
 function registry(): AssetRegistry {
   return new AssetRegistry({} as never);
@@ -24,5 +25,27 @@ describe('AssetRegistry.enumerateCatalog', () => {
     expect(enumerate).toHaveBeenCalledTimes(1);
     expect((await assets.enumerateCatalog()).ok).toBe(true);
     expect(enumerate).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns the complete neutral entry from a catalog source', async () => {
+    const entry = {
+      guid: '11111111-1111-4111-8111-111111111111',
+      kind: 'host/blob',
+      relativeUrl: '/assets/blob.bin',
+      sourcePath: 'assets/blob.source',
+      packageId: 'pkg/registry',
+      provenance: { provider: 'registry-fixture', version: '1.0.0' },
+      revision: { digest: 'sha256:registry', observedAt: 5, rootId: 'root-registry' },
+      sourceKey: 'blob/main',
+      sourceIndex: 0,
+      relations: [],
+      diagnostics: [{ code: 'registry-note', severity: 'info', hint: 'no action' }],
+    } as const;
+    const assets = registry();
+    assets.setCatalogSource(createCatalogSource({ entries: [entry] }));
+
+    const result = await assets.enumerateCatalog();
+
+    expect(result).toEqual({ ok: true, value: [entry] });
   });
 });

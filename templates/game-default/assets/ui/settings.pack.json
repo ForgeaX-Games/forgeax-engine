@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "internal-text-package",
+  "assets": [
+    {
+      "guid": "019f8354-6386-4387-849d-f2ab4b9622a0",
+      "kind": "ui",
+      "payload": {
+        "guid": "019f8354-6386-4387-849d-f2ab4b9622a0",
+        "html": "<section class=\"settings\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"settings-title\" hidden>\n  <div class=\"backdrop\" data-ui-action=\"close-settings\"></div>\n  <div class=\"panel\" role=\"document\" tabindex=\"-1\">\n    <h2 id=\"settings-title\">Game settings</h2>\n    <label>Music <input data-ui-setting=\"music\" type=\"range\" min=\"0\" max=\"100\" value=\"70\"></label>\n    <label><input data-ui-setting=\"high-contrast\" type=\"checkbox\"> High contrast</label>\n    <button type=\"button\" data-ui-action=\"close-settings\">Done</button>\n  </div>\n</section>\n",
+        "css": ":host { display: block; color: #fff; font: 14px ui-sans-serif, system-ui, sans-serif; }\n.settings[hidden] { display: none; }\n.settings { position: absolute; inset: 0; z-index: 1; }\n.backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 60%); pointer-events: auto; }\n.panel { position: absolute; top: 50%; left: 50%; min-width: 260px; padding: 24px; background: #1b2235; border-radius: 12px; transform: translate(-50%, -50%); }\nlabel { display: block; margin: 16px 0; }\n"
+      },
+      "refs": []
+    }
+  ]
+}

@@ -19,9 +19,10 @@ Check per submodule:
   git -C <submodule> fetch origin main        # refresh origin/main tip
   git -C <submodule> merge-base --is-ancestor <pin> <main-ref>
 
-  <main-ref> is `origin/main` when present (the CI case: submodule checked out in
-  detached HEAD), else the local `main` branch. A submodule with neither is a
-  distinct failure (cannot verify), not a silent pass.
+  CI requires a successful fetch and uses the resulting `origin/main` ref. A
+  shallow submodule is unshallowed before the fetch so ancestry is complete. A
+  submodule with no remote main is a distinct failure (cannot verify), not a
+  silent pass.
 
 Exit codes:
   0  all submodule pins are on their submodule main (or repo has no submodules)
@@ -84,34 +85,55 @@ def _pin_sha(repo: Path, sub_path: str) -> str | None:
     return None
 
 
-def _resolve_main_ref(sub_repo: Path) -> str | None:
-    """Pick the ref for the submodule's main line: origin/main preferred, else main.
+def _git_detail(res: subprocess.CompletedProcess) -> str:
+    detail = (res.stderr or res.stdout).strip()
+    return detail or f"git exited with code {res.returncode}"
 
-    origin/main is preferred over a local `main` branch because in CI (and any
-    fresh checkout) the submodule sits in detached HEAD and any local `main` is
-    absent or stale; the just-fetched origin/main is the remote source of truth.
+
+def _resolve_main_ref(sub_repo: Path) -> tuple[str | None, str | None]:
+    """Refresh and resolve the submodule's remote main ref.
+
+    The submodule checkout is detached in CI and may be shallow. Never fall
+    back to a stale local ref when refreshing the remote fails: that turns a
+    transport or cache problem into a misleading ancestry verdict.
     """
-    # `git fetch origin main` updates FETCH_HEAD only; it intentionally does
-    # not guarantee that refs/remotes/origin/main moves. That distinction is
-    # observable in CI's detached, shallow submodule checkouts: the subsequent
-    # ancestry check can inspect a stale origin/main and reject a pin which has
-    # already landed on the remote main branch. Update the exact ref we inspect.
-    _git(
-        sub_repo,
+    shallow = _git(sub_repo, "rev-parse", "--is-shallow-repository")
+    if shallow.returncode != 0:
+        return None, f"could not inspect repository depth: {_git_detail(shallow)}"
+
+    fetch_args = [
         "fetch",
         "--quiet",
+    ]
+    if shallow.stdout.strip() == "true":
+        fetch_args.append("--unshallow")
+    fetch_args.extend([
         "origin",
         "+refs/heads/main:refs/remotes/origin/main",
+    ])
+    fetched = _git(sub_repo, *fetch_args)
+    if fetched.returncode != 0:
+        return None, f"failed to refresh origin/main: {_git_detail(fetched)}"
+
+    main_ref = _git(
+        sub_repo,
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "refs/remotes/origin/main",
     )
-    if _git(sub_repo, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main").returncode == 0:
-        return "origin/main"
-    if _git(sub_repo, "rev-parse", "--verify", "--quiet", "refs/heads/main").returncode == 0:
-        return "main"
-    return None
+    if main_ref.returncode != 0:
+        return None, "origin/main is missing after a successful fetch"
+    return "origin/main", None
 
 
-def _is_ancestor(sub_repo: Path, pin: str, main_ref: str) -> bool:
-    return _git(sub_repo, "merge-base", "--is-ancestor", pin, main_ref).returncode == 0
+def _is_ancestor(sub_repo: Path, pin: str, main_ref: str) -> tuple[bool, str | None]:
+    result = _git(sub_repo, "merge-base", "--is-ancestor", pin, main_ref)
+    if result.returncode == 0:
+        return True, None
+    if result.returncode == 1:
+        return False, None
+    return False, f"could not verify ancestry: {_git_detail(result)}"
 
 
 def check_repo(repo: Path) -> tuple[int, list[tuple[str, str, str]]]:
@@ -135,15 +157,19 @@ def check_repo(repo: Path) -> tuple[int, list[tuple[str, str, str]]]:
                 f"`git submodule update --init {sub_path}` then re-check",
             ))
             continue
-        main_ref = _resolve_main_ref(sub_repo)
+        main_ref, resolve_error = _resolve_main_ref(sub_repo)
         if main_ref is None:
             findings.append((
                 sub_path,
                 pin,
-                "no origin/main or local main in submodule — cannot verify pin",
+                f"{resolve_error or 'no origin/main in submodule — cannot verify pin'}",
             ))
             continue
-        if not _is_ancestor(sub_repo, pin, main_ref):
+        is_ancestor, ancestry_error = _is_ancestor(sub_repo, pin, main_ref)
+        if ancestry_error is not None:
+            findings.append((sub_path, pin, ancestry_error))
+            continue
+        if not is_ancestor:
             findings.append((
                 sub_path,
                 pin,
@@ -166,43 +192,82 @@ def _print_findings(repo: Path, findings: list[tuple[str, str, str]]) -> None:
         print(f"      reason: {reason}", file=sys.stderr)
 
 
-def _self_test() -> int:
-    """Fixture-based check of the ancestry logic using throwaway git repos.
+def _run_git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
-    Builds a submodule-like repo with a main branch and a feature branch, then
-    asserts _is_ancestor is True for a main commit and False for a feature-only
-    commit. No network, no real submodules.
-    """
+
+def _self_test() -> int:
+    """Exercise remote refresh, shallow history, and ancestry failure modes."""
     import tempfile
 
     with tempfile.TemporaryDirectory() as td:
-        sub = Path(td) / "sub"
-        sub.mkdir()
+        bare = Path(td) / "remote.git"
+        seed = Path(td) / "seed"
+        bare.mkdir()
+        seed.mkdir()
         env_cfg = [
-            ("init", "-q", "-b", "main"),
             ("config", "user.email", "t@t"),
             ("config", "user.name", "t"),
         ]
+        if _run_git("init", "-q", "--bare", str(bare)).returncode != 0:
+            print("self-test setup failed: bare repo", file=sys.stderr)
+            return 2
+        if _git(seed, "init", "-q", "-b", "main").returncode != 0:
+            print("self-test setup failed: seed repo", file=sys.stderr)
+            return 2
         for args in env_cfg:
-            if _git(sub, *args).returncode != 0:
-                print("self-test setup failed", file=sys.stderr)
+            if _git(seed, *args).returncode != 0:
+                print("self-test setup failed: git config", file=sys.stderr)
                 return 2
-        (sub / "f").write_text("1\n")
-        _git(sub, "add", "f")
-        _git(sub, "commit", "-q", "-m", "c1")
-        main_commit = _git(sub, "rev-parse", "HEAD").stdout.strip()
-        _git(sub, "checkout", "-q", "-b", "feat")
-        (sub / "f").write_text("2\n")
-        _git(sub, "add", "f")
-        _git(sub, "commit", "-q", "-m", "c2")
-        feat_commit = _git(sub, "rev-parse", "HEAD").stdout.strip()
+        (seed / "f").write_text("1\n")
+        _git(seed, "add", "f")
+        _git(seed, "commit", "-q", "-m", "c1")
+        main_commit = _git(seed, "rev-parse", "HEAD").stdout.strip()
+        _git(seed, "remote", "add", "origin", str(bare))
+        _git(seed, "push", "-q", "origin", "main")
+        _git(seed, "checkout", "-q", "-b", "feat")
+        (seed / "f").write_text("2\n")
+        _git(seed, "add", "f")
+        _git(seed, "commit", "-q", "-m", "c2")
+        feat_commit = _git(seed, "rev-parse", "HEAD").stdout.strip()
+        _git(seed, "push", "-q", "origin", "feat")
+
+        checkout = Path(td) / "checkout"
+        clone = _run_git(
+            "clone",
+            "-q",
+            "--depth=1",
+            "--branch",
+            "feat",
+            f"file://{bare}",
+            str(checkout),
+        )
+        if clone.returncode != 0:
+            print(f"self-test setup failed: shallow clone: {_git_detail(clone)}", file=sys.stderr)
+            return 2
 
         ok = True
-        if not _is_ancestor(sub, main_commit, "main"):
-            print("self-test FAIL: main commit should be ancestor of main", file=sys.stderr)
+        main_ref, resolve_error = _resolve_main_ref(checkout)
+        if resolve_error is not None or main_ref != "origin/main":
+            print(f"self-test FAIL: remote refresh: {resolve_error or main_ref}", file=sys.stderr)
             ok = False
-        if _is_ancestor(sub, feat_commit, "main"):
+        main_is_ancestor, ancestry_error = _is_ancestor(checkout, main_commit, "origin/main")
+        if ancestry_error is not None or not main_is_ancestor:
+            print(f"self-test FAIL: main ancestry: {ancestry_error or 'not an ancestor'}", file=sys.stderr)
+            ok = False
+        feature_is_ancestor, ancestry_error = _is_ancestor(checkout, feat_commit, "origin/main")
+        if ancestry_error is not None or feature_is_ancestor:
             print("self-test FAIL: feature-only commit should NOT be on main", file=sys.stderr)
+            ok = False
+        _git(checkout, "remote", "set-url", "origin", str(Path(td) / "missing.git"))
+        missing_ref, refresh_error = _resolve_main_ref(checkout)
+        if missing_ref is not None or refresh_error is None:
+            print("self-test FAIL: fetch failure must not use a stale ref", file=sys.stderr)
             ok = False
         if ok:
             print("self-test OK")

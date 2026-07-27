@@ -420,7 +420,9 @@ export async function readbackDrawRt(
 
   // Find the color attachment texture handle at drawIdx
   const drawInfo = extractDrawInfo(events, drawIdx);
-  if (drawInfo.colorAttachmentHandleId === undefined) {
+  const attachmentHandleId =
+    drawInfo.colorAttachmentResolveTargetHandleId ?? drawInfo.colorAttachmentHandleId;
+  if (attachmentHandleId === undefined) {
     return err(
       new DebugError({
         code: 'rt-readback-failed',
@@ -445,8 +447,8 @@ export async function readbackDrawRt(
 
   // colorAttachmentHandleId is the textureVIEW handle. copyTextureToBuffer needs
   // the source GPUTexture, so resolve view -> source texture (+ real dimensions).
-  const resolved = resolveTextureDescriptor(events, drawInfo.colorAttachmentHandleId);
-  const textureHandleId = resolved?.handleId ?? drawInfo.colorAttachmentHandleId;
+  const resolved = resolveTextureDescriptor(events, attachmentHandleId);
+  const textureHandleId = resolved?.handleId ?? attachmentHandleId;
 
   const texture = resolveHandle(textureHandleId);
   // biome-ignore lint/suspicious/noExplicitAny: texture is an opaque branded type from RHI
@@ -456,7 +458,7 @@ export async function readbackDrawRt(
       new DebugError({
         code: 'rt-readback-failed',
         expected: 'color attachment texture was recreated by replay',
-        hint: `handleId '${textureHandleId}' (from view '${drawInfo.colorAttachmentHandleId}') not found in replay handle map`,
+        hint: `handleId '${textureHandleId}' (from attachment '${attachmentHandleId}') not found in replay handle map`,
       }),
     );
   }

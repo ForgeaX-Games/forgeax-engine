@@ -150,6 +150,23 @@ describe('snapshot isolation (w18)', () => {
     const pool = debugInst.getBlobPool();
     expect(pool.has(initEvent!.dataHash)).toBe(true);
   });
+
+  it('retains a snapshot seed when the live resource is destroyed before finalization', async () => {
+    const { debugInst, device } = await bootstrapSnapshot();
+    const bufferRes = device.createBuffer({ size: 8, usage: 0x20 });
+    expect(bufferRes.ok).toBe(true);
+
+    debugInst.arm(1);
+    await debugInst.snapshotAllLiveResources();
+    debugInst.onFrameEnd();
+    device.destroyBuffer(bufferRes.value);
+
+    const tape = debugInst.getTape();
+    expect(tape).toBeDefined();
+    expect(tape).not.toHaveProperty('code');
+    expect((tape as Tape).events.some((event) => event.kind === 'initialData')).toBe(true);
+    expect((tape as Tape).events.some((event) => event.kind === 'createBuffer')).toBe(true);
+  });
 });
 
 // ================================================================

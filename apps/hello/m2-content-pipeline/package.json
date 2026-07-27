@@ -7,7 +7,8 @@
   "description": "M2 content-pipeline gauntlet: project manifest, sidecar scan, host importer delivery, GUID reimport, and codec round-trip.",
   "scripts": {
     "smoke": "node scripts/smoke.mjs",
-    "smoke:source-reimport": "node scripts/source-reimport.mjs"
+    "smoke:source-reimport": "node scripts/source-reimport.mjs",
+    "smoke:browser-font": "node scripts/smoke-browser-font.mjs"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-m2-content-pipeline smoke",
@@ -15,15 +16,15 @@
       "id": "hello-m2-content-pipeline",
       "script": "smoke",
       "domains": ["Asset schemas, import, and delivery", "World and host contract", "Inspection, debugging, and development bridges"],
-      "packages": ["@forgeax/engine-codec", "@forgeax/engine-fbx", "@forgeax/engine-image", "@forgeax/engine-pack", "@forgeax/engine-project"],
+      "packages": ["@forgeax/engine-codec", "@forgeax/engine-fbx", "@forgeax/engine-font", "@forgeax/engine-image", "@forgeax/engine-pack", "@forgeax/engine-project"],
       "risks": ["baseline", "content", "build", "delivery", "fault", "recovery", "behavioral"],
       "phaseInputs": ["baseline", "content", "build", "delivery", "fault", "recovery"],
       "evidence": {
-        "frontDoors": ["node-app", "vite-pack", "browser-hmr", "project-manifest", "content-catalog"],
+        "frontDoors": ["node-app", "vite-pack", "browser-hmr", "browser-font-worker", "node-font-worker", "project-manifest", "content-catalog"],
         "legs": ["semantic", "recovery"]
       },
       "oracle": {
-        "stdoutIncludes": ["[m2-content] project manifest: PASS", "[m2-content] sidecar scan: PASS", "[m2-content] host importer delivery: PASS", "[smoke-browser] PASS - browser HMR reloaded changed host asset content", "[m2-content] browser HMR delivery: PASS", "[m2-content] image source reimport: PASS", "[m2-content] gltf source reimport: PASS", "[m2-content] FBX source reimport: PASS", "[m2-content] source reimport: PASS image+gltf+fbx semantic mutation with stable GUIDs", "[m2-content] FBX fixture reimport: PASS", "[m2-content] font fixture delivery: PASS", "[m2-content] font + FBX fixture delivery: PASS", "[m2-content] GUID reimport: PASS", "[m2-content] codec round-trip: PASS", "[m2-content] PASS - M2 partial content pipeline gates GREEN"]
+        "stdoutIncludes": ["[m2-content] project manifest: PASS", "[m2-content] sidecar scan: PASS", "[m2-content] host importer delivery: PASS", "[smoke-browser] PASS - browser HMR reloaded changed host asset content", "[m2-content] browser HMR delivery: PASS", "[m2-content] image source reimport: PASS", "[m2-content] gltf source reimport: PASS", "[m2-content] FBX source reimport: PASS", "[m2-content] source reimport: PASS image+gltf+fbx semantic mutation with stable GUIDs", "[m2-content] FBX fixture reimport: PASS", "[m2-content] font fixture delivery: PASS", "[m2-content] font + FBX fixture delivery: PASS", "[m2-content] browser Worker font bake: PASS", "[m2-content] plain Node font bake + structured recovery: PASS", "[m2-content] GUID reimport: PASS", "[m2-content] codec round-trip: PASS", "[m2-content] PASS - M2 partial content pipeline gates GREEN"]
       }
     },
     "metrics": {
@@ -40,5 +41,9 @@
     "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-project": "workspace:*"
+  },
+  "devDependencies": {
+    "@zappar/msdf-generator": "1.2.4",
+    "playwright": "^1.50.0"
   }
 }

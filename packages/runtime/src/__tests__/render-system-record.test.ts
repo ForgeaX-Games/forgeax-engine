@@ -110,7 +110,7 @@ import { describe, expect, it } from 'vitest';
       expect(typeof mod.buildPbrMaterialUboPayload).toBe('function');
     });
 
-    it('128 B payload size + standard PBR slot layout (baseline)', () => {
+    it('160 B payload size + standard PBR slot layout (baseline)', () => {
       if (typeof mod.buildPbrMaterialUboPayload !== 'function') {
         throw new Error('helper not exported yet');
       }
@@ -125,7 +125,7 @@ import { describe, expect, it } from 'vitest';
         clearcoatRoughness: 0.12,
       });
       const buf = mod.buildPbrMaterialUboPayload(snap);
-      expect(buf.byteLength).toBe(128);
+      expect(buf.byteLength).toBe(160);
       const f32 = new Float32Array(buf);
       // feat-20260613 fix-issue-1 (D-8 channelMap split): the 4 channelMap
       // u32 slots collapse into 4 independent f32 channel selectors at
@@ -165,12 +165,13 @@ import { describe, expect, it } from 'vitest';
       const apply = mod.applyMaterialTextureUvScales;
       if (typeof apply !== 'function') throw new Error('helper not exported yet');
       const world = new World();
-      const pbrPayload = new ArrayBuffer(128);
+      const pbrPayload = new ArrayBuffer(160);
       apply(pbrPayload, makePbrSnapshot({}), world);
       const pbrF32 = new Float32Array(pbrPayload);
-      expect(pbrF32[22]).toBe(1);
+      expect(pbrF32[28]).toBe(1);
       expect(pbrF32[30]).toBe(1);
-      expect(pbrF32[20]).toBe(0);
+      expect(pbrF32[32]).toBe(1);
+      expect(pbrF32[34]).toBe(1);
 
       const spritePayload = new ArrayBuffer(128);
       apply(

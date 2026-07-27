@@ -1,14 +1,17 @@
 #!/usr/bin/env node
-// bevy-bloom headless dawn smoke (structural-only, no pixel readback).
-// Strategy: emissive sphere + non-emissive cube, bloom enabled.
+// bevy-bloom headless dawn smoke (pixel falsifier + structural gate).
+// Strategy: the shared Bevy-faithful 10x10 emissive sphere field is rendered
+// with bloom off and on; the two readbacks must differ.
 //   (a) backend=webgpu
 //   (b) frames >= SMOKE_MIN_FRAMES
 //   (c) Renderer.onError count == 0
+//   (d) bloom-on vs bloom-off pixel readback differs materially
 
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
 const SMOKE_DURATION_MS = Number.parseInt(process.env.SMOKE_DURATION_MS ?? '5000', 10);
 const SMOKE_MIN_FRAMES = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '300', 10);
@@ -60,7 +63,7 @@ function ensureRenderTarget(device, format) {
   renderTarget = device.createTexture({
     size: { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
     format,
-    usage: 0x10 | 0x01,
+    usage: 0x10 | 0x04 | 0x01,
     viewFormats: ['rgba8unorm-srgb'],
   });
   return renderTarget;
@@ -90,12 +93,8 @@ const mockCanvas = {
 // --- Build scene ---
 
 const { World } = await import('@forgeax/engine-ecs');
-const { createBoxGeometry, createSphereGeometry } = await import('@forgeax/engine-geometry');
 const { createRenderer } = await import('@forgeax/engine-runtime');
-const { Materials } = await import('@forgeax/engine-render');
-const { BLOOM_ENABLED, perspective, TONEMAP_REINHARD_EXTENDED } = await import('@forgeax/engine-render');
-const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@forgeax/engine-render');
-const { Transform } = await import('@forgeax/engine-scene');
+const { BLOOM_DISABLED, BLOOM_ENABLED, Camera } = await import('@forgeax/engine-render');
 
 const world = new World();
 
@@ -124,71 +123,82 @@ if (!ready.ok) {
   process.exit(1);
 }
 
-const cubeGeom = createBoxGeometry(1, 1, 1, 1, 1, 1);
-if (!cubeGeom.ok) { console.error('cube geom failed'); process.exit(1); }
-const sphereGeom = createSphereGeometry(0.5, 32, 16);
-if (!sphereGeom.ok) { console.error('sphere geom failed'); process.exit(1); }
+const { buildBloomWorld } = await import(resolve(here, '..', 'src', 'bloom.ts'));
+const scene = buildBloomWorld(world, WIDTH / HEIGHT);
+console.log(`[bloom] scene spheres=${scene.sphereCount} emissive=${scene.emissiveCount}`);
 
-const cubeHandle = world.allocSharedRef('MeshAsset', cubeGeom.value);
-const sphereHandle = world.allocSharedRef('MeshAsset', sphereGeom.value);
+async function capturePixels() {
+  await sharedDevice.queue.onSubmittedWorkDone();
+  const bytesPerRow = Math.ceil((WIDTH * 4) / 256) * 256;
+  const readback = sharedDevice.createBuffer({ size: bytesPerRow * HEIGHT, usage: 0x01 | 0x08 });
+  const encoder = sharedDevice.createCommandEncoder();
+  encoder.copyTextureToBuffer({ texture: renderTarget }, { buffer: readback, bytesPerRow, rowsPerImage: HEIGHT }, { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 });
+  sharedDevice.queue.submit([encoder.finish()]);
+  await readback.mapAsync(0x01);
+  const mapped = new Uint8Array(readback.getMappedRange().slice(0));
+  readback.unmap();
+  readback.destroy();
+  const pixels = new Uint8Array(WIDTH * HEIGHT * 4);
+  for (let y = 0; y < HEIGHT; y += 1) pixels.set(mapped.subarray(y * bytesPerRow, y * bytesPerRow + WIDTH * 4), y * WIDTH * 4);
+  return pixels;
+}
 
-const cubeMat = world.allocSharedRef('MaterialAsset', Materials.standard({
-  baseColor: [0.7, 0.7, 0.7, 1], metallic: 0, roughness: 0.4,
-}));
-const emissiveMat = world.allocSharedRef('MaterialAsset', Materials.standard({
-  baseColor: [0.9, 0.9, 0.9, 1], metallic: 0, roughness: 0.4,
-  emissive: [50, 0, 0], emissiveIntensity: 1,
-}));
-
-world.spawn(
-  { component: Transform, data: { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
-  { component: MeshFilter, data: { assetHandle: sphereHandle } },
-  { component: MeshRenderer, data: { materials: [emissiveMat] } },
-);
-
-world.spawn(
-  { component: Transform, data: { pos: [1.5, 0, 0], quat: [0, 0, 0, 1], scale: [0.8, 0.8, 0.8] } },
-  { component: MeshFilter, data: { assetHandle: cubeHandle } },
-  { component: MeshRenderer, data: { materials: [cubeMat] } },
-);
-
-world.spawn({
-  component: DirectionalLight,
-  data: { direction: [-0.4, -0.6, -0.7], color: [1, 1, 1], intensity: 1.5 },
-});
-
-world.spawn(
-  { component: Transform, data: { pos: [0, 0, 6] } },
-  {
-    component: Camera,
-    data: {
-      ...perspective({ fov: Math.PI / 4, aspect: WIDTH / HEIGHT }),
-      tonemap: TONEMAP_REINHARD_EXTENDED,
-      bloom: BLOOM_ENABLED,
-    },
-  },
-);
+function meanByteDiff(left, right) {
+  let total = 0;
+  let changedPixels = 0;
+  for (let i = 0; i < left.length; i += 4) {
+    const diff = Math.abs(left[i] - right[i]) + Math.abs(left[i + 1] - right[i + 1]) + Math.abs(left[i + 2] - right[i + 2]);
+    total += diff;
+    if (diff > 3) changedPixels += 1;
+  }
+  return { mean: total / (WIDTH * HEIGHT * 3), changedPixels };
+}
 
 // --- Frame loop ---
 
 const TARGET_FRAMES = Math.max(SMOKE_MIN_FRAMES, Math.ceil(SMOKE_DURATION_MS / 16.67));
+const phaseFrames = Math.max(1, Math.floor(TARGET_FRAMES / 3));
 let framesObserved = 0;
+let drawErrors = 0;
+const drawPhase = (count) => {
+  for (let i = 0; i < count; i += 1) {
+    const r = renderer.draw([world], { owner: 0 });
+    if (!r.ok) { drawErrors += 1; console.error(`[smoke] draw frame ${framesObserved} error: ${r.error.code}`); }
+    framesObserved += 1;
+  }
+};
 
-for (let i = 0; i < TARGET_FRAMES; i++) {
-  const r = renderer.draw([world], { owner: 0 });
-  if (!r.ok) console.error(`[smoke] draw frame ${i} error: ${r.error.code}`);
-  framesObserved++;
-}
+world.set(scene.camera, Camera, { bloom: BLOOM_DISABLED });
+drawPhase(phaseFrames);
+const bloomOffPixels = await capturePixels();
+world.set(scene.camera, Camera, { bloom: BLOOM_ENABLED });
+drawPhase(phaseFrames);
+const bloomOnPixels = await capturePixels();
+const passNames = renderer.perFramePassNames;
+drawPhase(TARGET_FRAMES - phaseFrames * 2);
+
+const artifactDir = resolve(here, '..', 'artifacts');
+mkdirSync(artifactDir, { recursive: true });
+const offPng = resolve(artifactDir, 'bloom-off.png');
+const onPng = resolve(artifactDir, 'bloom-on.png');
+writeFileSync(offPng, writeReferencePng(bloomOffPixels, WIDTH, HEIGHT));
+writeFileSync(onPng, writeReferencePng(bloomOnPixels, WIDTH, HEIGHT));
 
 const device = sharedDevice;
 if (device) await device.queue.onSubmittedWorkDone();
-console.log(`[smoke] frames observed=${framesObserved}`);
+const diff = meanByteDiff(bloomOffPixels, bloomOnPixels);
+console.log(`[smoke] frames observed=${framesObserved} bloomDiffMean=${diff.mean.toFixed(4)} changedPixels=${diff.changedPixels} passes=${passNames.join(',')} off=${offPng} on=${onPng}`);
 
 const failures = [];
 if (renderer.backend !== 'webgpu') failures.push(`(a) backend=${renderer.backend} (expected webgpu)`);
 if (framesObserved < SMOKE_MIN_FRAMES) failures.push(`(b) frames=${framesObserved} < ${SMOKE_MIN_FRAMES}`);
 if (errors.length > 0) {
   failures.push(`(c) Renderer.onError fired ${errors.length} times: [${errors.map((e) => e.code).join(', ')}]`);
+}
+if (drawErrors > 0) failures.push(`(c) draw returned ${drawErrors} errors`);
+if (diff.mean <= 0.25 || diff.changedPixels <= 20) failures.push(`(d) bloom on/off diff too small: mean=${diff.mean.toFixed(4)}, changedPixels=${diff.changedPixels}`);
+for (const pass of ['bloom-bright', 'bloom-blur-h', 'bloom-blur-v', 'bloom-composite']) {
+  if (!passNames.includes(pass)) failures.push(`(e) missing bloom pass ${pass}; actual=${passNames.join(',')}`);
 }
 
 if (failures.length > 0) {

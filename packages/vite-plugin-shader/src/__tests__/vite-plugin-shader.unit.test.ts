@@ -1040,7 +1040,7 @@ import { toRollupLog } from '../wrap.js';
       // expose the full 96-B authored UBO field-by-field (baseColor + metallic +
       // roughness + 4 channel selectors + emissive + emissiveIntensity +
       // occlusionStrength + uvSet + alphaCutoff + clearcoat +
-      // clearcoatRoughness + 3 textures = 17 entries).
+      // clearcoatRoughness + specularTint + 4 textures = 19 entries).
       // Sampler-first auto-pair
       // (D-4) still applies; shadow-caster stays 0 (vertex-only depth pass).
       //
@@ -1051,10 +1051,11 @@ import { toRollupLog } from '../wrap.js';
       // offsets straight from `derive(paramSchema).uboLayout`.
       const expectedFieldCounts: Record<string, number> = {
         // feat-city-glb Bug 4 (multi-UV tiling): built-in PBR + skin gained a
-        // `uvSet` and `alphaCutoff` params, then clearcoat added two coat controls
-        // (13 -> 17) so the fragment selects the glTF UV set and coat layer.
-        'forgeax::default-standard-pbr': 17,
-        'forgeax::pbr-skin': 17,
+        // `uvSet` and `alphaCutoff` params, then clearcoat and specular tint
+        // added five fields so the fragment selects the glTF UV set, coat
+        // layer, and tinted specular response.
+        'forgeax::default-standard-pbr': 19,
+        'forgeax::pbr-skin': 19,
         'forgeax::default-unlit': 3,
         'forgeax::sprite': 5,
         'forgeax::sprite-lit': 5,

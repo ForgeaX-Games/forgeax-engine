@@ -23,6 +23,7 @@
 //   - AC-13: reimport idempotency overall (no spurious GUID churn)
 
 import { AssetGuid } from '@forgeax/engine-pack/guid';
+import { sourceKeyForGltfOutput } from './source-key.js';
 import { type GltfDocItemLike, subAssetKey } from './sub-asset-key.js';
 
 export type { SubAssetKey } from './sub-asset-key.js';
@@ -34,6 +35,7 @@ export interface GltfSubAssetEntry {
   readonly guid: string;
   readonly sourceIndex: number;
   readonly kind: string;
+  readonly sourceKey?: string;
 }
 
 export interface GltfMetaJson {
@@ -103,23 +105,23 @@ export function reimportReuseMeta(
       // indexFallback) tuple are those whose stored indexFallback equals
       // the new one. Stage 2 is the same physical map; the discriminator
       // is whether the new item's group is conflicted.
-      const key = `${entry.kind} ${entry.sourceIndex}`;
-      stage1Index.set(key, entry);
-      stage2Index.set(key, entry);
+      if (entry.sourceKey !== undefined) stage1Index.set(entry.sourceKey, entry);
+      stage2Index.set(`${entry.kind} ${entry.sourceIndex}`, entry);
     }
   }
 
   const subAssets: GltfSubAssetEntry[] = [];
   for (const item of items) {
     const groupKey = item.name === undefined ? null : `${item.kind} ${item.name}`;
+    const sourceKey = sourceKeyForGltfOutput(item);
     const indexKey = `${item.kind} ${item.sourceIndex}`;
     let reused: GltfSubAssetEntry | undefined;
 
     // Stage 1: (kind, name, indexFallback) exact match. Existing entries
     // do not store `name`, so stage 1 collapses to the indexKey lookup
     // *unless* the group is conflicted (in which case stage 1 is skipped).
-    if (groupKey !== null && !conflictedGroups.has(groupKey)) {
-      reused = stage1Index.get(indexKey);
+    if (groupKey !== null && !conflictedGroups.has(groupKey) && sourceKey !== undefined) {
+      reused = stage1Index.get(sourceKey);
     }
     // Stage 2: (kind, indexFallback) only.
     if (reused === undefined) {
@@ -131,6 +133,7 @@ export function reimportReuseMeta(
         guid: reused.guid,
         sourceIndex: item.sourceIndex,
         kind: item.kind,
+        ...(sourceKey === undefined ? {} : { sourceKey }),
       });
     } else {
       const fresh = AssetGuid.random();
@@ -138,6 +141,7 @@ export function reimportReuseMeta(
         guid: AssetGuid.format(fresh),
         sourceIndex: item.sourceIndex,
         kind: item.kind,
+        ...(sourceKey === undefined ? {} : { sourceKey }),
       });
     }
   }

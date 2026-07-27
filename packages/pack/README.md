@@ -1,5 +1,11 @@
 # @forgeax/engine-pack
 
+> [!IMPORTANT]
+> The producer publishes facts; the consumer does not guess. `packageId`,
+> `provenance`, `revision`, `sourceKey`, relations, and diagnostics survive
+> package moves and DDC relocation. Paths and array positions are locators,
+> not identities.
+
 Disk schema, GUID tools (`AssetGuid` brand + UUIDv7/v5), scanner fail-fast chain (13-member `PackErrorCode`) for the forgeax engine asset package system. The three CLI surfaces -- `scan`, `lookup`, `verify` -- are shipped as the standalone plugin bin `forgeax-engine-remote-asset` (resolved via PATH-prefix discovery for `forgeax-engine-remote-`; filesystem-mode; offline; no WS connection required).
 
 > Package name vs directory: this package is published as `@forgeax/engine-pack` but lives at `packages/pack` on disk. The `@forgeax/engine-` prefix is the IDE-autocomplete entrypoint AI users discover the package family by; the directory drops the prefix to keep tree depth flat (mirrors the `packages/runtime` / `@forgeax/engine-runtime` pair). All other packages in the engine family follow the same convention.
@@ -31,7 +37,7 @@ Two sidecar JSON files live next to each source file in an asset directory:
 {
   "schemaVersion": "1.0.0",
   "kind": "external-asset-package",
-  "assetType": "gltf",
+    "importer": "gltf",
   "source": "<source-filename>",
   "importSettings": {},
   "subAssets": [
@@ -68,6 +74,36 @@ Two sidecar JSON files live next to each source file in an asset directory:
   ]
 }
 ```
+
+### Producer provenance and topology
+
+Both package schemas accept producer-owned `packageId`, `provenance`,
+`revision`, and structured `diagnostics`. Asset/output rows may declare a
+stable `sourceKey`; `sourceIndex` is positional evidence only. The runtime
+function `diffTopology(previous, next)` (also exported as
+`calculateTopologyDiff`) preserves GUIDs by `sourceKey`, reports additions,
+removals, and kind changes, and marks multi-output source-index-only matching
+as ambiguous.
+
+| Fact | Published by | Consumer rule |
+|:--|:--|:--|
+| `packageId` | Producer declaration | Keep stable across path or URL relocation |
+| `provenance` | Producer declaration | Copy without replacing it with importer guesses |
+| `revision` | Producer/DDC | Use to detect stale updates; do not silently overwrite a verified snapshot |
+| `sourceKey` | Imported-output producer | Match topology only when the producer supplies a stable semantic key |
+| `sourceIndex` | Imported-output producer | Display or inspect position; never use it as identity |
+| `relations` / `diagnostics` | Producer facts | Preserve the complete structured values |
+
+> [!WARNING]
+> A missing `sourceKey` in a multi-output declaration is evidence insufficiency,
+> not permission to hash a path or promote `sourceIndex`. Keep the result
+> ambiguous and expose the repair hint.
+
+The DDC path is also lossless: the import runner copies package-level facts to
+the `.pack.json` envelope and copies each declared output's `sourceKey`,
+`sourceIndex`, and relations onto the matching GUID row. The catalog builder
+then projects those rows into `PackIndexEntry`; it does not create a second
+authoritative fact store.
 
 ### MaterialAsset shape -- pass-based material in `.pack.json`
 

@@ -3,8 +3,8 @@
 // Anchors:
 //   - plan-strategy D-5 (round-4 REVISED): the PBR pipeline keeps a 4-slot
 //     pipeline layout `[view, material, mesh-array, instances]`. The
-//     material BGL grows from 7 to 14 entries by appending the 7 Skylight
-//     resources (binding 7..13) via `mergeSkylightIntoMaterialBgl`. The
+//     material BGL grows from the derived user region by appending the 7
+//     Skylight resources via `mergeSkylightIntoMaterialBgl`. The
 //     unlit pipeline keeps its 7-entry material BGL (no Skylight binding
 //     7..13 contamination) so unlit demos don't carry IBL state.
 //   - charter P4: same pipeline layout shape drives Skylight present +
@@ -82,8 +82,8 @@ export interface PbrPipelineLayoutBundle {
   /** view BindGroupLayout (slot 0). */
   readonly viewBgl: BindGroupLayout;
   /**
-   * PBR material BindGroupLayout (slot 1) -- 14 entries (material 0..6 +
-   * Skylight 7..13 per D-5 round-4).
+   * PBR material BindGroupLayout (slot 1) -- derived user-region entries plus
+   * Skylight and lightmap injection.
    */
   readonly materialBgl: BindGroupLayout;
   /** Per-entity mesh BindGroupLayout (slot 2). */
@@ -128,9 +128,11 @@ const DEFAULT_STANDARD_PBR_USER_REGION_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'alphaCutoff', type: 'f32', default: 0 },
   { name: 'clearcoat', type: 'f32', default: 0 },
   { name: 'clearcoatRoughness', type: 'f32', default: 0.5 },
+  { name: 'specularTint', type: 'vec3', default: [1, 1, 1] },
   { name: 'baseColorTexture', type: 'texture2d' },
   { name: 'metallicRoughnessTexture', type: 'texture2d' },
   { name: 'normalTexture', type: 'texture2d' },
+  { name: 'specularTintTexture', type: 'texture2d' },
 ];
 
 /**
@@ -142,9 +144,9 @@ const DEFAULT_STANDARD_PBR_USER_REGION_SCHEMA: readonly ParamSchemaEntry[] = [
  * custom schema (e.g. parallax + heightTexture) shifts the injection region by
  * one sampler/texture pair automatically.
  *
- * The built-in `default-standard-pbr` paramSchema declares exactly 3 textures,
- * so this derives to binding 0 UBO + 3 pairs = 7 entries, byte-equivalent to
- * the legacy fixed base-7 (AC-06 bit-for-bit).
+ * The built-in `default-standard-pbr` paramSchema declares exactly 4 textures,
+ * so this derives to binding 0 UBO + 4 pairs = 9 entries. Injection is appended
+ * after that derived region.
  *
  * One material-UBO convention is layered on top of the pure `derive()` output:
  * binding 0 is patched to `{ type: 'uniform', hasDynamicOffset: true }` with
@@ -486,8 +488,8 @@ export function buildPbrViewBglEntries(caps: PbrCaps): GPUBindGroupLayoutEntry[]
 
 /**
  * Build the PBR pipeline layout under D-5 round-4: 4 slots `[view,
- * material, mesh-array, instances]`; the material BGL holds 18 entries
- * (material 0..6 + Skylight 7..13 + emissive/AO 14..17).
+ * material, mesh-array, instances]`; the material BGL is derived from the
+ * standard material schema and engine injection chain.
  *
  * `caps.storageBuffer===false` switches every storage-buffer BGL entry
  * (view bindings 1+2, mesh-array, instances) to `uniform`.
@@ -510,7 +512,7 @@ export function buildPbrPipelineLayouts(
   );
   if (!viewBglRes.ok) throw viewBglRes.error;
 
-  // material BGL (18 entries -- material 0..6 + Skylight 7..13 + emissive/AO 14..17).
+  // Material BGL: derived user region + Skylight + lightmap injection.
   // feat-20260613 fix-issue-5: drop the buildPbrMaterialEmissiveAoEntries
   // shim. The lightmap injection start binding is computed from the post-
   // skylight BGL length (= 14) directly inside appendInjection.

@@ -37,6 +37,7 @@ import {
 import { runCliAsset } from '../cli-asset.js';
 import { PackError } from '../errors.js';
 import { AssetGuid } from '../guid.js';
+import { validateProducerContract, validateProducerOutputs } from '../producer-contract.js';
 import { scan } from '../scanner.js';
 import {
   buildMaterialAssetValidator,
@@ -117,6 +118,42 @@ const V1_WHITELIST = new Set([
         ) => string;
         expect(triangle).toBe(format(raw));
       });
+    });
+  });
+}
+
+{
+  describe('w4 producer conformance matrix', () => {
+    const providers = [
+      ['gltf', 'scene'],
+      ['image', 'texture'],
+      ['fbx', 'mesh'],
+      ['audio', 'audio'],
+      ['font', 'font'],
+      ['host-fixture', 'host/blob'],
+    ] as const;
+
+    it('accepts every built-in importer and one open host provider through one contract', () => {
+      for (const [provider, kind] of providers) {
+        const result = validateProducerContract({
+          packageId: `pkg/${provider}`,
+          provenance: { provider, version: '1.0.0' },
+          revision: { digest: `sha256:${provider}`, observedAt: 1, rootId: 'root-a' },
+          sourceKey: `${provider}:main`,
+          sourceIndex: 0,
+          kind,
+        });
+        expect(result.ok, provider).toBe(true);
+      }
+    });
+
+    it('returns structured ambiguity for a multi-output provider without keys', () => {
+      const result = validateProducerOutputs([
+        { guid: 'a', kind: 'host/blob', sourceIndex: 0 },
+        { guid: 'b', kind: 'host/blob', sourceIndex: 1 },
+      ]);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('source-index-ambiguous');
     });
   });
 }

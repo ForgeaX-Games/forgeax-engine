@@ -13,5 +13,9 @@
       "kind": "material-shader"
     }
   ],
-  "paramSchema": [{ "name": "baseColor", "type": "color" }]
+  "paramSchema": [
+    { "name": "baseColor", "type": "color" },
+    { "name": "baseColorTexture", "type": "texture2d" },
+    { "name": "detailTexture", "type": "texture2d" }
+  ]
 }

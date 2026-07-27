@@ -205,6 +205,37 @@ const { Camera, DirectionalLight, MeshFilter, MeshRenderer } = await import('@fo
 
 const world = new World();
 
+const baseColorTexture = {
+  kind: 'texture',
+  width: 2,
+  height: 2,
+  format: 'rgba8unorm',
+  data: new Uint8Array([
+    255, 128, 64, 255,
+    255, 128, 64, 255,
+    255, 128, 64, 255,
+    255, 128, 64, 255,
+  ]),
+  colorSpace: 'linear',
+  mipmap: false,
+};
+const baseColorTextureHandle = world.allocSharedRef('TextureAsset', baseColorTexture);
+const detailTexture = {
+  kind: 'texture',
+  width: 2,
+  height: 2,
+  format: 'rgba8unorm',
+  data: new Uint8Array([
+    64, 192, 255, 255,
+    64, 192, 255, 255,
+    64, 192, 255, 255,
+    64, 192, 255, 255,
+  ]),
+  colorSpace: 'linear',
+  mipmap: false,
+};
+const detailTextureHandle = world.allocSharedRef('TextureAsset', detailTexture);
+
 // Mint user-tier column handles for the custom mesh + material via
 // world.allocSharedRef (slots >= 1024, resolved by the renderer through
 // world.sharedRefs at draw time). This mirrors apps/hello-multi-uv/src/main.ts:
@@ -247,6 +278,8 @@ const materialAsset = {
   ],
   paramValues: {
     baseColor: [0.7, 0.7, 0.7],
+    baseColorTexture: baseColorTextureHandle,
+    detailTexture: detailTextureHandle,
   },
 };
 const meshHandle = world.allocSharedRef('MeshAsset', meshAsset);
@@ -325,6 +358,21 @@ if (
   }
   demoComposedWgsl = readFileSync(composedWgslPath, 'utf8');
 }
+const manifestParamSchema =
+  typeof demoShaderEntry.paramSchema === 'string'
+    ? JSON.parse(demoShaderEntry.paramSchema)
+    : (demoShaderEntry.paramSchema ?? []);
+if (
+  !Array.isArray(manifestParamSchema) ||
+  !manifestParamSchema.some((entry) => entry?.name === 'baseColorTexture' && entry?.type === 'texture2d') ||
+  !manifestParamSchema.some((entry) => entry?.name === 'detailTexture' && entry?.type === 'texture2d') ||
+  !demoComposedWgsl.includes('textureSample(baseColorTexture, baseColorTexture_sampler') ||
+  !demoComposedWgsl.includes('textureSample(detailTexture, detailTexture_sampler')
+) {
+  console.error('[smoke] FAIL - multi-UV multi-texture schema/sample binding is missing');
+  process.exit(1);
+}
+console.log('[smoke] texture binding: PASS schema=baseColorTexture+detailTexture textureSample=true');
 
 let renderer;
 try {
@@ -350,14 +398,19 @@ if (!ready.ok) {
 }
 
 // Register the demo's custom material shader (AC-10 visual carrier). It
-// samples uv1 so the per-quad checkerboard becomes observable; the built-in
+// samples the real texture with uv0 and uv1 so the per-quad checkerboard becomes
+// observable; the built-in
 // PBR is NOT used here (it stays single-UV byte-identical, AC-11/AC-12). The
 // materialAsset minted above references this shader by path; registering the
 // path here resolves the material's pass to a real pipeline.
 if (!renderer.shader.lookupMaterialShader(DEMO_MATERIAL_SHADER_PATH).ok) {
   renderer.shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
     source: demoComposedWgsl,
-    paramSchema: [{ name: 'baseColor', type: 'color' }],
+    paramSchema: [
+      { name: 'baseColor', type: 'color' },
+      { name: 'baseColorTexture', type: 'texture2d' },
+      { name: 'detailTexture', type: 'texture2d' },
+    ],
     bindingLayout: [],
   });
 }

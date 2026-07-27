@@ -18,6 +18,13 @@
   "filePairIgnore": [
     {
       "files": [
+        "apps/hello-multi-uv/scripts/smoke-browser-pipeline.mjs",
+        "apps/hello-multi-uv/scripts/smoke-browser-variant.mjs"
+      ],
+      "rationale": "engine-gauntlet M3 standard/custom pipeline round 20260724-141143: both browser front-door smokes keep their adaptive PNG decoder, canvas clipping, and Playwright/WebGPU lifecycle inline so an AI user can grep each falsifiable journey in one file. The pipeline smoke is unique where it matters: it installs a user RenderGraph and asserts live standard/custom inversion plus a URP-mapped falsifier; the variant smoke asserts MaterialPassDescriptor shader-variant selection. Revisit if a third hello-multi-uv browser smoke repeats this harness."
+    },
+    {
+      "files": [
         "apps/bevy/3d-scene/scripts/smoke-dawn.mjs",
         "apps/bevy/3d-shapes/scripts/smoke-dawn.mjs"
       ],
@@ -1563,6 +1570,13 @@
         "packages/shader/src/sprite-lit.wgsl.meta.json"
       ],
       "rationale": "feat-20260624-sprite-lit-shading-model-pure-2d-lighting M1' / AC-07: sprite-lit.wgsl.meta.json paramSchema mirrors sprite.wgsl.meta.json byte-identically by design — BGL JSON byte-identical contract is the SSOT compression axis (plan-strategy D-1: materialShaderId routing without union extension). Diverging the two would break AC-07 and waste the BGL cache."
+    },
+    {
+      "files": [
+        "apps/hello-multi-uv/scripts/smoke-browser-composed.mjs",
+        "apps/hello-multi-uv/scripts/smoke-browser-variant.mjs"
+      ],
+      "rationale": "solo engine-gauntlet M3 round 20260724-131329: both browser smokes intentionally keep the adaptive Playwright PNG decoder inline for AI grepability, while their assertions are different (combined variant+post+resize+RHI versus standalone variant selection). Extracting a shared decoder at the second consumer would add a traversal concept; revisit only when a third browser PNG smoke needs the same decoder."
     }
   ]
 }

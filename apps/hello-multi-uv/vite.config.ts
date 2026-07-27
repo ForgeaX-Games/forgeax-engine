@@ -1,24 +1,8 @@
-import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
-import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
+import { dirname } from 'node:path';
+import { withRhiDebug } from '../shared/src/rhi-debug-vite-preset';
 
+// Mount the dev-only tape endpoint while keeping capture activation in the
+// browser smoke's FORGEAX_ENGINE_RHI_DEBUG=1 environment.
 const here = dirname(fileURLToPath(import.meta.url));
-const monorepoRoot = resolve(here, '..', '..', '..');
-
-export default defineConfig({
-  plugins: [forgeaxShader() as never],
-  server: {
-    fs: {
-      allow: [monorepoRoot],
-    },
-  },
-  build: {
-    target: 'esnext',
-    rollupOptions: {
-      input: {
-        main: resolve(here, 'index.html'),
-      },
-    },
-  },
-});
+export default withRhiDebug({ here, rootDepth: 2, port: 5198 });

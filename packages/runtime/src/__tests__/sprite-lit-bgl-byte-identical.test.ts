@@ -118,19 +118,19 @@ describe('sprite-lit BGL byte-identical to sprite (AC-07, w4/w5 close)', () => {
   });
 
   describe('material BGL congruence (pbr-material-merged / unlit-material)', () => {
-    it('pbr-material-user-region entries are 7 (PBR layout reused by sprite & sprite-lit)', () => {
+    it('pbr-material-user-region entries are 9 (PBR layout reused by sprite & sprite-lit)', () => {
       // sprite + sprite-lit use the default standard-PBR user-region
       // schema (5 user fields produce 7 BGL entries after std140 merge).
       // Both share the same userRegion shape and therefore the same BGL.
       const base = buildPbrMaterialUserRegionEntries();
-      expect(base.length).toBe(7);
+      expect(base.length).toBe(9);
     });
 
-    it('pbr-material-merged stays 18 entries (sprite/sprite-lit do not change material BGL shape)', () => {
+    it('pbr-material-merged stays 20 entries (sprite/sprite-lit do not change material BGL shape)', () => {
       const merged = buildBindGroupLayoutDescriptor(makeSpec('forgeax::sprite-lit'), {
         kind: 'pbr-material-merged',
       });
-      expect(merged.entries.length).toBe(18);
+      expect(merged.entries.length).toBe(20);
       // mergeSkylightIntoMaterialBgl + lightmap injection must stay
       // append-only against the 7-entry PBR base.
       const base = buildPbrMaterialUserRegionEntries();

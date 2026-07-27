@@ -8,7 +8,7 @@
 // `<source>.meta.json`). `importer` is the open string key the
 // @forgeax/engine-import runner dispatches on (feat-20260603-asset-import-loader-injection
 // M2; replaces the former closed `assetType` enum, one-cut migration):
-//   - `*.pack.json`  -- legacy `internal-text-package` arm, emits one
+//   - `*.pack.json`  -- self-contained `internal-text-package` arm, emits one
 //      PackIndexEntry per `assets[]` row (4-field, no `metadata`).
 //   - `*.meta.json`  -- `external-asset-package` arm. Reads `meta.importer`.
 //      The catalog knows how to fold four importer keys: 'image' emits a
@@ -50,9 +50,21 @@ import { deriveAssetName } from '@forgeax/engine-pack/name';
 import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
 import { scan } from '@forgeax/engine-pack/scanner';
 import { validateMeta } from '@forgeax/engine-pack/schema';
-import type { ImageMetadata, PackIndexEntry } from '@forgeax/engine-types';
+import type {
+  AssetRelation,
+  CatalogDiagnostic,
+  ImageMetadata,
+  PackIndexEntry,
+  ProviderProvenance,
+  ResourceRevision,
+} from '@forgeax/engine-types';
 
 interface PackJson {
+  readonly schemaVersion?: string;
+  readonly packageId?: string;
+  readonly provenance?: ProviderProvenance;
+  readonly revision?: ResourceRevision;
+  readonly diagnostics?: readonly CatalogDiagnostic[];
   readonly assets?: ReadonlyArray<{
     readonly guid: string;
     readonly kind: string;
@@ -60,6 +72,9 @@ interface PackJson {
     readonly name?: string;
     /** Outgoing dependency GUIDs (pack.schema.json assets[].refs). */
     readonly refs?: readonly string[];
+    readonly sourceKey?: string;
+    readonly sourceIndex?: number;
+    readonly relations?: PackIndexEntry['relations'];
   }>;
 }
 
@@ -80,11 +95,15 @@ function withBase(base: string, sourceRel: string): string {
 interface ExternalAssetMetaJson {
   readonly schemaVersion: string | number;
   readonly kind: 'external-asset-package';
+  readonly packageId?: string;
+  readonly provenance?: ProviderProvenance;
+  readonly revision?: ResourceRevision;
+  readonly diagnostics?: readonly CatalogDiagnostic[];
   // P2 (feat-20260629 D-4): the importer key is an open string. The catalog
   // dispatches the engine-built-in arms (image / gltf / fbx / audio / font) on
   // literal comparisons below; any other key is a host importer, folded via
-  // the registered-key set (default passthrough) or kept as a raw-source row
-  // when unregistered. There is no closed whitelist of foldable keys.
+  // the registered-key set or reported as a structured provider conflict when
+  // unregistered. There is no closed whitelist of foldable keys.
   readonly importer: string;
   readonly source?: string;
   readonly importSettings: {
@@ -101,9 +120,70 @@ interface ExternalAssetMetaJson {
     readonly guid: string;
     readonly sourceIndex: number;
     readonly kind: string;
+    readonly sourceKey?: string;
     /** Optional display name from the source (e.g. glTF image.name / mesh.name). */
     readonly name?: string;
   }>;
+}
+
+function referenceRelations(
+  guid: string,
+  refs: readonly string[] | undefined,
+  provenance: ProviderProvenance,
+): readonly AssetRelation[] | undefined {
+  if (refs === undefined || refs.length === 0) return undefined;
+  return refs.map((ref) => ({
+    from: { type: 'asset', id: guid } as const,
+    to: { type: 'asset', id: ref } as const,
+    type: 'references' as const,
+    policy: { strength: 'required' as const },
+    provenance,
+  }));
+}
+
+function producerFields(
+  producer: {
+    readonly packageId?: string;
+    readonly provenance?: ProviderProvenance;
+    readonly revision?: ResourceRevision;
+    readonly diagnostics?: readonly CatalogDiagnostic[];
+    readonly provider?: string;
+    readonly importer?: string;
+    readonly schemaVersion: string | number;
+  },
+  output?: {
+    readonly guid: string;
+    readonly sourceKey?: string;
+    readonly sourceIndex?: number;
+    readonly relations?: PackIndexEntry['relations'];
+  },
+  refs?: readonly string[],
+): Pick<
+  PackIndexEntry,
+  | 'packageId'
+  | 'provenance'
+  | 'revision'
+  | 'sourceKey'
+  | 'sourceIndex'
+  | 'relations'
+  | 'diagnostics'
+> {
+  const provenance =
+    producer.provenance ??
+    ({
+      provider: producer.provider ?? producer.importer ?? 'engine',
+      version: String(producer.schemaVersion),
+    } satisfies ProviderProvenance);
+  const relations = output?.relations ?? referenceRelations(output?.guid ?? '', refs, provenance);
+  return {
+    provenance,
+    ...(producer.packageId !== undefined ? { packageId: producer.packageId } : {}),
+    ...(producer.revision !== undefined ? { revision: producer.revision } : {}),
+    ...(output?.sourceKey !== undefined ? { sourceKey: output.sourceKey } : {}),
+    ...(output?.sourceIndex !== undefined ? { sourceIndex: output.sourceIndex } : {}),
+    ...(relations !== undefined ? { relations } : {}),
+    ...(producer.diagnostics !== undefined ? { diagnostics: producer.diagnostics } : {}),
+  };
 }
 
 /**
@@ -117,24 +197,72 @@ export interface CatalogBuildError {
   readonly code:
     | 'catalog-meta-missing-importer'
     | 'catalog-meta-schema-invalid'
+    | 'catalog-scan-failed'
+    | 'catalog-provider-unregistered'
     // P2 (feat-20260629 D-7): a registered host importer declared a sub.kind
     // that collides with an engine-owned kind. Reported, never silently
     // shadowing the engine kind.
     | 'catalog-host-kind-conflict';
   readonly path: string;
   readonly message: string;
+  readonly expected?: string;
+  readonly actual?: string;
+  readonly hint?: string;
+  readonly subjects?: readonly string[];
+}
+
+export type CatalogAuthority = 'authoritative' | 'degraded';
+
+/** One canonical snapshot plus its authority and machine-readable diagnostics. */
+export interface CatalogBuildResult {
+  readonly entries: readonly PackIndexEntry[];
+  readonly authority: CatalogAuthority;
+  readonly diagnostics: readonly CatalogBuildError[];
+}
+
+/**
+ * Versioned compatibility projection for legacy catalog consumers.
+ *
+ * The rows remain derived from the canonical result, but authority and
+ * diagnostics travel with the projection. A degraded first-seen snapshot is
+ * therefore never observable as an unmarked identity-bearing array.
+ */
+export interface CatalogLegacyProjection {
+  readonly schemaVersion: 'catalog-legacy-v1';
+  readonly entries: readonly PackIndexEntry[];
+  readonly authority: CatalogAuthority;
+  readonly diagnostics: readonly CatalogBuildError[];
+}
+
+/**
+ * Project the canonical catalog result for a versioned legacy consumer.
+ *
+ * This is the only compatibility boundary for the old array-shaped response;
+ * the canonical result remains the schema SSOT and is never reconstructed from
+ * the projection.
+ */
+export function projectLegacyCatalog(result: CatalogBuildResult): CatalogLegacyProjection {
+  return {
+    schemaVersion: 'catalog-legacy-v1',
+    entries: [...result.entries],
+    authority: result.authority,
+    diagnostics: [...result.diagnostics],
+  };
 }
 
 // The importer keys the catalog folds via dedicated, hard-coded arms below.
 // Any other key is a host importer: folded via default passthrough when the
-// host registered it (`pluginPack({ importers })`), or kept as a raw-source
-// row when unregistered (P2 / feat-20260629 D-3/D-4).
+// host registered it (`pluginPack({ importers })`), or reported as a
+// structured provider conflict when unregistered (P2 / feat-20260629 D-3/D-4).
 const ENGINE_BUILTIN_IMPORTER_KEYS: ReadonlySet<string> = new Set([
   'image',
   'gltf',
   'fbx',
   'audio',
   'font',
+  // Shader sidecars are consumed by vite-plugin-shader. They are scanned
+  // alongside pack roots, but must never become runtime catalog rows.
+  'shader',
 ]);
 
 // The pack-index `kind` values the engine's own arms + runtime loaders own. A
@@ -202,6 +330,10 @@ function findHostKindConflict(
         code: 'catalog-host-kind-conflict',
         path: rawPath,
         message: `host importer ${JSON.stringify(meta.importer)} declares sub.kind ${JSON.stringify(sub.kind)}, which collides with an engine-owned kind; rename the host kind (engine-owned: ${[...ENGINE_BUILTIN_KINDS].join(', ')})`,
+        expected: 'host importer kinds must not use engine-owned kinds',
+        actual: sub.kind,
+        hint: 'rename the host kind to a provider-owned namespace before rebuilding',
+        subjects: [rawPath],
       };
     }
   }
@@ -247,8 +379,9 @@ async function processMetaSidecar(
   // 5-key whitelist wall that used to reject any other importer key with
   // `catalog-meta-unfoldable-importer`: fold is now driven by the registered
   // importer set, not a hard-coded key list. A non-engine-built-in key is a
-  // host importer -- folded via default passthrough when registered, or kept
-  // as a raw-source row when unregistered (see the host-importer arm below).
+  // host importer -- folded via default passthrough when registered, or
+  // reported as a structured provider conflict when unregistered (see the
+  // host-importer arm below).
   const metaObj = (metaRaw ?? {}) as Record<string, unknown>;
   if (typeof metaObj.importer !== 'string' || metaObj.importer.length === 0) {
     return {
@@ -310,6 +443,7 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: 'equirect',
           sourcePath: sourceRel,
+          ...producerFields(meta, sub),
           name: subName(sub),
           metadata: {
             kind: 'texture',
@@ -328,6 +462,7 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: sub.kind,
           sourcePath: sourceRel,
+          ...producerFields(meta, sub),
           name: subName(sub),
           metadata,
         });
@@ -351,6 +486,7 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: 'audio',
           sourcePath: sourceRel,
+          ...producerFields(meta, sub),
           name: subName(sub),
         });
       }
@@ -400,6 +536,7 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: sub.kind,
           sourcePath: sourceRel,
+          ...producerFields(meta, sub),
           name: subName(sub),
         });
       } else if (sub.kind === 'texture') {
@@ -419,6 +556,7 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: 'texture',
           sourcePath: sourceRel,
+          ...producerFields(meta, sub),
           name: subName(sub),
           metadata: gltfTextureMetadata,
         });
@@ -453,6 +591,7 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: sub.kind,
           sourcePath: sourceRel,
+          ...producerFields(meta, sub),
           name: subName(sub),
         });
       } else if (sub.kind === 'texture') {
@@ -469,6 +608,7 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: 'texture',
           sourcePath: sourceRel,
+          ...producerFields(meta, sub),
           name: subName(sub),
           metadata: fbxTextureMetadata,
         });
@@ -497,6 +637,7 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: 'texture',
           sourcePath: sourceRel,
+          ...producerFields(meta, sub),
           name: subName(sub),
           metadata: atlasMetadata,
         });
@@ -506,6 +647,7 @@ async function processMetaSidecar(
           relativeUrl: normalizedUrl,
           kind: 'font',
           sourcePath: sourceRel,
+          ...producerFields(meta, sub),
           name: subName(sub),
         });
       }
@@ -526,6 +668,7 @@ async function processMetaSidecar(
         relativeUrl: normalizedUrl,
         kind: 'ui',
         sourcePath: sourceRel,
+        ...producerFields(meta, sub),
         name: subName(sub),
       });
     }
@@ -536,11 +679,8 @@ async function processMetaSidecar(
   //   - registered (host wired it via `pluginPack({ importers })`): default
   //     passthrough, emitting one row per subAsset with `sub.kind` carried
   //     through verbatim as the pack-index kind (no engine remap).
-  //   - unregistered: skip the import enrichment but still keep a raw-source
-  //     row per subAsset so the declared GUID stays discoverable and the
-  //     runtime can fall back to the source (AC-08). The catalog rows are the
-  //     same passthrough shape; the difference is the import step (index.ts
-  //     generateBundle) only enriches registered importers.
+  //   - unregistered: return a structured provider conflict and emit no rows;
+  //     an incomplete provider projection cannot be authoritative (AC-08).
   // Engine built-in arms above own their keys; this arm never runs for them.
   if (!ENGINE_BUILTIN_IMPORTER_KEYS.has(meta.importer)) {
     const sourceRel = relative(cwd, sourceAbsPath).replace(/\\/g, '/');
@@ -554,15 +694,15 @@ async function processMetaSidecar(
       const conflict = findHostKindConflict(meta, rawPath);
       if (conflict) return conflict;
     } else {
-      // Unregistered host importer: keep raw-source rows but hint the host that
-      // the importer was never wired (AC-08 discoverability -- "I forgot to
-      // inject it in pluginPack({ importers })"). The rows still resolve to the
-      // source so the build does not fail. No kind-conflict check: an
-      // unregistered importer never enriches a row, so it cannot shadow an
-      // engine loader.
-      console.warn(
-        `[forgeax-pack] sidecar 'importer' = ${JSON.stringify(meta.importer)} @ ${rawPath} is not a registered importer; keeping raw-source rows. Wire it via pluginPack({ importers }) to enable build-time import.`,
-      );
+      return {
+        code: 'catalog-provider-unregistered',
+        path: rawPath,
+        message: `sidecar importer ${JSON.stringify(meta.importer)} is not registered; register the provider before building the catalog`,
+        expected: 'the sidecar importer must be present in the registered provider set',
+        actual: meta.importer,
+        hint: 'wire the provider through pluginPack({ importers }) and rebuild',
+        subjects: [rawPath],
+      };
     }
 
     for (const sub of meta.subAssets) {
@@ -571,6 +711,7 @@ async function processMetaSidecar(
         relativeUrl: normalizedUrl,
         kind: sub.kind,
         sourcePath: sourceRel,
+        ...producerFields(meta, sub),
         name: subName(sub),
       });
     }
@@ -586,7 +727,7 @@ async function processMetaSidecar(
  * lives in exactly one place.
  *
  * Two-arm dispatch on extension:
- *   - `.pack.json` -- legacy 4-field rows from `assets[]`
+ *   - `.pack.json` -- self-contained rows from `assets[]`
  *   - `.meta.json` -- 5-field rows (4 core + `metadata`) from `subAssets[]`
  */
 async function foldPaths(
@@ -620,12 +761,25 @@ async function foldPaths(
       const assetList = parsed.assets ?? [];
       const packagePath = rawPath;
       const assetCount = assetList.length;
-      for (const asset of assetList) {
+      const packProducer = {
+        ...(parsed.packageId !== undefined ? { packageId: parsed.packageId } : {}),
+        ...(parsed.provenance !== undefined ? { provenance: parsed.provenance } : {}),
+        ...(parsed.revision !== undefined ? { revision: parsed.revision } : {}),
+        ...(parsed.diagnostics !== undefined ? { diagnostics: parsed.diagnostics } : {}),
+        provider: 'pack' as const,
+        schemaVersion: parsed.schemaVersion ?? 'legacy',
+      };
+      for (const [sourceIndex, asset] of assetList.entries()) {
         catalog.push({
           guid: asset.guid,
           relativeUrl: normalizedUrl,
           kind: asset.kind,
           sourcePath: rel,
+          ...producerFields(
+            packProducer,
+            { ...asset, sourceIndex: asset.sourceIndex ?? sourceIndex },
+            asset.refs,
+          ),
           name: deriveAssetName(packagePath, assetCount, asset.name),
           ...(asset.refs !== undefined ? { refs: asset.refs } : {}),
         });
@@ -659,12 +813,14 @@ async function foldPaths(
  * across roots (keep first), and only the offending root drops out instead
  * of the entire catalog.
  */
-export async function buildCatalog(
+export async function buildCatalogResult(
   roots: readonly string[],
   base = '/',
   registeredImporterKeys: ReadonlySet<string> = new Set(),
-): Promise<PackIndexEntry[]> {
-  if (roots.length === 0) return [];
+): Promise<CatalogBuildResult> {
+  if (roots.length === 0) {
+    return { entries: [], authority: 'authoritative', diagnostics: [] };
+  }
 
   const cwd = process.cwd();
   const { paths: assetPaths } = loadAssetConfig(cwd);
@@ -685,7 +841,11 @@ export async function buildCatalog(
       registeredImporterKeys,
     );
     warnErrors(errors);
-    return catalog;
+    return {
+      entries: catalog,
+      authority: errors.length === 0 ? 'authoritative' : 'degraded',
+      diagnostics: errors,
+    };
   }
 
   // Global scan failed (e.g. cross-root GUID collision). Degrade per-root
@@ -702,6 +862,15 @@ export async function buildCatalog(
       console.warn(
         `[forgeax-pack] per-root scan error @ ${root}: ${r.error.message} — dropping this root`,
       );
+      errors.push({
+        code: 'catalog-scan-failed',
+        path: root,
+        message: r.error.message,
+        expected: 'the root to pass pack/meta scanning',
+        actual: r.error.message,
+        hint: 'repair this root before treating its catalog rows as authoritative',
+        subjects: [root],
+      });
       continue;
     }
     const folded = await foldPaths(r.value, cwd, base, assetPaths, registeredImporterKeys);
@@ -713,8 +882,42 @@ export async function buildCatalog(
       catalog.push(row);
     }
   }
+  if (errors.length === 0 && roots.length > 1) {
+    errors.push({
+      code: 'catalog-scan-failed',
+      path: '<scan>',
+      message: result.error.message,
+      expected: 'all catalog roots to pass pack/meta scanning',
+      actual: result.error.message,
+      hint: 'repair the affected roots and rebuild the authoritative catalog before applying identity changes',
+      subjects: [...roots],
+    });
+  }
   warnErrors(errors);
-  return catalog;
+  return { entries: catalog, authority: 'degraded', diagnostics: errors };
+}
+
+/** Legacy array API derived from the canonical build result. */
+export async function buildCatalogProjection(
+  roots: readonly string[],
+  base = '/',
+  registeredImporterKeys: ReadonlySet<string> = new Set(),
+): Promise<CatalogLegacyProjection> {
+  return projectLegacyCatalog(await buildCatalogResult(roots, base, registeredImporterKeys));
+}
+
+/**
+ * Legacy array API. A degraded result fails closed instead of exposing its
+ * first-seen rows as an unmarked identity-bearing array. Callers that need
+ * authority and diagnostics must consume buildCatalogProjection.
+ */
+export async function buildCatalog(
+  roots: readonly string[],
+  base = '/',
+  registeredImporterKeys: ReadonlySet<string> = new Set(),
+): Promise<PackIndexEntry[]> {
+  const projection = await buildCatalogProjection(roots, base, registeredImporterKeys);
+  return projection.authority === 'authoritative' ? [...projection.entries] : [];
 }
 
 /**
@@ -726,24 +929,15 @@ export async function buildCatalogStrict(
   roots: readonly string[],
   base = '/',
   registeredImporterKeys: ReadonlySet<string> = new Set(),
-): Promise<{ catalog: PackIndexEntry[]; errors: CatalogBuildError[] }> {
-  if (roots.length === 0) return { catalog: [], errors: [] };
-
-  const cwd = process.cwd();
-  const { paths: assetPaths } = loadAssetConfig(cwd);
-  const result = await scan(roots);
-  if (!result.ok) {
-    return {
-      catalog: [],
-      errors: [
-        {
-          code: 'catalog-meta-schema-invalid',
-          path: '<scan>',
-          message: `scan error: ${result.error.message}`,
-        },
-      ],
-    };
-  }
-
-  return foldPaths(result.value, cwd, base, assetPaths, registeredImporterKeys);
+): Promise<{
+  catalog: PackIndexEntry[];
+  errors: CatalogBuildError[];
+  projection: CatalogLegacyProjection;
+}> {
+  const result = await buildCatalogResult(roots, base, registeredImporterKeys);
+  return {
+    catalog: [...result.entries],
+    errors: [...result.diagnostics],
+    projection: projectLegacyCatalog(result),
+  };
 }

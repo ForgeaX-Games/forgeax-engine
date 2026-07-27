@@ -2957,47 +2957,47 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
       expect(layout?.label).toBe('pbr-pl');
     });
 
-    it('(b) PBR material BGL entry count === 18 (material 0..6 + Skylight 7..13 + emissive/AO 14..17)', () => {
+    it('(b) PBR material BGL entry count === 20 (user region 0..8 + Skylight 9..15 + lightmap 16..19)', () => {
       const device = makeMockDevice();
       // biome-ignore lint/suspicious/noExplicitAny: structural mock
       buildPbrPipelineLayouts(device as any, STORAGE_CAPS);
       const materialBgl = device.capturedBgls.find((b) => b.label === 'pbr-material-skylight-bgl');
       expect(materialBgl).toBeDefined();
-      expect(materialBgl?.entries).toHaveLength(18);
+      expect(materialBgl?.entries).toHaveLength(20);
     });
 
-    it('(c) binding indices 0..17 in order; 7..13 resource types in D-5 round-4 order; 14..17 emissive/AO', () => {
+    it('(c) binding indices 0..19 in order; 9..15 resource types in D-5 round-4 order; 16..19 lightmap', () => {
       const device = makeMockDevice();
       // biome-ignore lint/suspicious/noExplicitAny: structural mock
       buildPbrPipelineLayouts(device as any, STORAGE_CAPS);
       const materialBgl = device.capturedBgls.find((b) => b.label === 'pbr-material-skylight-bgl');
       expect(materialBgl).toBeDefined();
       const entries = materialBgl?.entries ?? [];
-      // binding indices 0..17 in order
-      for (let i = 0; i < 18; i++) {
+      // binding indices 0..19 in order
+      for (let i = 0; i < 20; i++) {
         expect(entries[i]?.binding).toBe(i);
       }
-      // 7..13 resource types
-      expect((entries[7] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
-        'cube',
-      );
-      expect((entries[8] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
+      // 9..15 resource types
       expect((entries[9] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
         'cube',
       );
       expect((entries[10] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
       expect((entries[11] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
-        '2d',
+        'cube',
       );
       expect((entries[12] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
-      expect((entries[13] as { buffer?: { type: string } }).buffer?.type).toBe('uniform');
-      // 14..17 emissive/AO resource types
-      expect((entries[14] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
-      expect((entries[15] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
+      expect((entries[13] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
         '2d',
       );
+      expect((entries[14] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
+      expect((entries[15] as { buffer?: { type: string } }).buffer?.type).toBe('uniform');
+      // 16..19 lightmap resource types
       expect((entries[16] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
       expect((entries[17] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
+        '2d',
+      );
+      expect((entries[18] as { sampler?: { type: string } }).sampler?.type).toBe('filtering');
+      expect((entries[19] as { texture?: { viewDimension: string } }).texture?.viewDimension).toBe(
         '2d',
       );
     });
@@ -3023,13 +3023,13 @@ import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
   // ─── (e)(f) Unlit material BGL shape + name ─────────────────────────────────
 
   describe('t57 (M4 round-4) -- unlitPipeline material BGL shape', () => {
-    it('(e) unlit material BGL entry count === 7 (no Skylight binding 7..13 contamination)', () => {
+    it('(e) unlit material BGL entry count === 9 (no Skylight binding contamination)', () => {
       const device = makeMockDevice();
       // biome-ignore lint/suspicious/noExplicitAny: structural mock
       buildUnlitMaterialBgl(device as any);
       const unlitBgl = device.capturedBgls.find((b) => b.label === 'unlit-material-bgl');
       expect(unlitBgl).toBeDefined();
-      expect(unlitBgl?.entries).toHaveLength(7);
+      expect(unlitBgl?.entries).toHaveLength(9);
     });
 
     it("(f) PBR material BGL labelled 'pbr-material-skylight-bgl'; unlit labelled 'unlit-material-bgl'", () => {

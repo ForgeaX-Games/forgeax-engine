@@ -79,13 +79,13 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
   });
 
   describe('pbr-material-merged', () => {
-    it('18 entries: user-region 7 (derived) + ibl 7 + lightmap 4', () => {
+    it('20 entries: user-region 9 (derived) + ibl 7 + lightmap 4', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'pbr-material-merged',
       });
       // Post-M2 (D-1): user-region comes from derive(paramSchema).bglEntries
-      // (built-in standard-PBR 3-texture fallback), then IBL + lightmap are
+      // (built-in standard-PBR 4-texture fallback), then IBL + lightmap are
       // appended at start = userRegion.length.
       const userRegion = buildPbrMaterialUserRegionEntries();
       const afterIbl = [...userRegion, ...appendInjection(userRegion, 'ibl')];
@@ -94,7 +94,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
         entries: [...afterIbl, ...appendInjection(afterIbl, 'lightmap')],
       };
       expect(out).toEqual(expected);
-      expect(out.entries.length).toBe(18);
+      expect(out.entries.length).toBe(20);
     });
   });
 
@@ -182,7 +182,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
   });
 
   describe('unlit-material', () => {
-    it('7 entries: base PBR material only (no skylight injection)', () => {
+    it('9 entries: base PBR material only (no skylight injection)', () => {
       const spec = makeSpec();
       const out = buildBindGroupLayoutDescriptor(spec, {
         kind: 'unlit-material',
@@ -191,7 +191,7 @@ describe('buildBindGroupLayoutDescriptor — pbr-pipeline 6 sites byte-equiv', (
         label: 'unlit-material-bgl',
         entries: buildPbrMaterialUserRegionEntries(),
       });
-      expect(out.entries.length).toBe(7);
+      expect(out.entries.length).toBe(9);
     });
   });
 });

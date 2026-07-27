@@ -230,17 +230,47 @@ if (!shader.lookupMaterialShader('my-game::pulse-material').ok) {
       { name: 'baseColor', type: 'color' },
       { name: 'metallic', type: 'f32' },
       { name: 'roughness', type: 'f32' },
+      { name: 'baseColorTexture', type: 'texture2d' },
     ],
     bindingLayout: [],
   });
 }
 
+const manifestParamSchema =
+  typeof matShaderEntry.paramSchema === 'string'
+    ? JSON.parse(matShaderEntry.paramSchema)
+    : (matShaderEntry.paramSchema ?? []);
+if (
+  !manifestParamSchema.some((entry) => entry?.name === 'baseColorTexture' && entry?.type === 'texture2d') ||
+  !composedWgsl.includes('textureSample(baseColorTexture, baseColorTexture_sampler')
+) {
+  console.error('[smoke] FAIL - custom shader texture schema/sample binding is missing');
+  process.exit(1);
+}
+console.log('[smoke] custom texture binding: PASS schema=baseColorTexture textureSample=true');
+
 const paramValues = {
   baseColor: [0.95, 0.45, 0.2],
   metallic: 0,
   roughness: 2,
+  baseColorTexture: 0,
 };
 const world = new World();
+const pulseTexture = world.allocSharedRef('TextureAsset', {
+  kind: 'texture',
+  width: 2,
+  height: 2,
+  format: 'rgba8unorm',
+  data: new Uint8Array([
+    255, 128, 64, 255,
+    255, 128, 64, 255,
+    255, 128, 64, 255,
+    255, 128, 64, 255,
+  ]),
+  colorSpace: 'linear',
+  mipmap: false,
+});
+paramValues.baseColorTexture = pulseTexture;
 const materialHandle = world.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [
@@ -424,10 +454,26 @@ const msaaCustomParamValues = {
   baseColor: [0.95, 0.45, 0.2],
   metallic: 0,
   roughness: 2,
+  baseColorTexture: 0,
 };
 // feat-20260614 M8 (D-17): handles are per-World; mint the custom material into
 // worldMsaaCustom via world.allocSharedRef (bare Handle, not a Result).
 const worldMsaaCustom = new World();
+const msaaCustomTexture = worldMsaaCustom.allocSharedRef('TextureAsset', {
+  kind: 'texture',
+  width: 2,
+  height: 2,
+  format: 'rgba8unorm',
+  data: new Uint8Array([
+    255, 128, 64, 255,
+    255, 128, 64, 255,
+    255, 128, 64, 255,
+    255, 128, 64, 255,
+  ]),
+  colorSpace: 'linear',
+  mipmap: false,
+});
+msaaCustomParamValues.baseColorTexture = msaaCustomTexture;
 const msaaCustomMatHandle = worldMsaaCustom.allocSharedRef('MaterialAsset', {
   kind: 'material',
   passes: [{

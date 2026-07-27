@@ -20,6 +20,7 @@ import {
   isLoadGameError,
   loadGame,
 } from '@forgeax/engine-app';
+import { audioPlugin } from '@forgeax/engine-audio-webaudio';
 import { createDevImportTransport, EngineEnvironmentError } from '@forgeax/engine-runtime';
 import { createPreviewUiRun, type PreviewUiRun, reportPreviewEngineFailure } from './ui-root';
 
@@ -34,7 +35,7 @@ const previewRun = createPreviewUiRun(canvas.parentElement ?? document.body);
 // Absent transport => any DDC miss fails fast with 'asset-not-imported'.
 const app = await createApp(
   canvas,
-  { uiRoot: previewRun.uiRoot },
+  { uiRoot: previewRun.uiRoot, plugins: [audioPlugin()] },
   {
     ...forgeaxBundlerAdapter(),
     importTransport: createDevImportTransport(),
@@ -54,6 +55,7 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
   const ctx: BootstrapContext = {
     assets,
     app,
+    renderer: app.renderer,
     // M2 D-9: wire the pointer-lock gate setter. The game template calls
     // setPointerLockAllowed(mode === 'fps') when switching modes; the
     // preview host delegates to the input backend's setPointerLockAllowed.

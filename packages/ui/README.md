@@ -1,6 +1,6 @@
 # `@forgeax/engine-ui`
 
-Browser UI is an asset plus a small behavior island. Authors keep stable HTML/CSS and private companions in a `.ui.html` package; game code supplies dynamic text, template clones, input and lifecycle.
+Browser UI is an asset plus a small behavior island. The asset package owns the stable HTML/CSS payload; game code supplies dynamic text, template clones, input and lifecycle.
 
 > [!IMPORTANT]
 > `engine-ui` is browser-only. A headless consumer can validate/import the asset, but must not call `mountUi` without a DOM.
@@ -88,7 +88,7 @@ The adapter must report `viewport`, `deviceScale`, `fonts`, `resources`, `scenar
 
 ```mermaid
 flowchart LR
-  source[".ui.html + .ui.css + meta GUID"] --> load["loadByGuid<UiAsset>"]
+  source["*.pack.json + UiAsset GUID"] --> load["loadByGuid<UiAsset>"]
   load --> mount["mountUi(root, layer)"]
   mount --> instance["UiInstance: host + open ShadowRoot + signal"]
   instance --> behavior["dynamic DOM/framework island"]
@@ -105,11 +105,13 @@ Blocking diagnostics use the shared import shape: `code`, `severity`, `sourcePat
 
 Normalizable surfaces (inline style, global selectors, root or parent URLs, generated classes) are reported without changing source. Runtime-bound surfaces (scripts, inline handlers, remote URLs, CSS imports, and CSS-in-JS markers) must be moved to a consumer-side framework island.
 
-The `.ui.html` file is the stable structure. The importer pairs its same-name CSS and records relative image/font reads as private companions. The manifest owns exactly one public GUID; companions do not receive consumer GUIDs. Keep author sources in the assets submodule, not in a template's `assets/ui` directory.
+Authoring sources (`.ui.html` plus same-name `.ui.css`) remain the source-to-payload input for consumers that own an importer. The importer pairs the files and records relative image/font reads as private companions. The manifest owns exactly one public GUID; companions do not receive consumer GUIDs. Keep author sources in the assets submodule, not in a template's `assets/ui` directory.
+
+The `*.pack.json` file is the canonical contract for prepared UI assets such as the template HUD and settings. It owns exactly one public GUID and stores the final HTML/CSS payload directly, so loading it does not invoke an importer, generate DDC, or require an `ImportTransport`. A consumer-owned prepared pack belongs in that consumer's `assets/ui` directory; only generic authoring sources and binary demo inputs belong in the assets submodule.
 
 | Concern | Owner |
 | --- | --- |
-| HTML, CSS, companion URLs | UI author package |
+| HTML and CSS payload | UI pack |
 | GUID and build transport | pack/import pipeline |
 | dynamic text, events, template clones | game module |
 | mount/dispose and ShadowRoot | `engine-ui` |

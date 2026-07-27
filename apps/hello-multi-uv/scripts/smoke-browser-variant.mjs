@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(HERE, '..');
-const REPO_ROOT = resolve(APP_ROOT, '..', '..', '..', '..');
+const REPO_ROOT = resolve(APP_ROOT, '..', '..');
 const ARTIFACT_DIR = resolve(
   process.env.FORGEAX_M3_ARTIFACT_DIR ?? resolve(APP_ROOT, '.forgeax-debug', 'm3-browser-variant'),
 );
@@ -174,14 +174,13 @@ async function driveSelection(page, baseUrl, falsify) {
 const devPort = Number(process.env.FORGEAX_BROWSER_PORT ?? 55900) + Math.floor(Math.random() * 90);
 const viteProc = spawn(process.execPath, [
   resolve(REPO_ROOT, 'node_modules/vite/bin/vite.js'),
-  'preview',
   '--host',
   '127.0.0.1',
   '--port',
   String(devPort),
 ], {
   cwd: APP_ROOT,
-  env: { ...process.env },
+  env: { ...process.env, FORGEAX_ENGINE_RHI_DEBUG: '1' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let browser;

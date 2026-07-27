@@ -21,18 +21,23 @@
 // uvSetCount=2 for this shader, driving deriveVertexBufferLayout to bind the
 // second UV set (clamp-to-last when a mesh has fewer sets).
 //
-// Visual rule: the fragment paints uv1 directly into the red/green channels
-// (remapped to [0,1]). The procedural plane's uv1 is a per-quad checkerboard
-// (0,0) vs (1,1), so the surface shows alternating dark/bright cells when the
-// multi-UV pipeline feeds the second set. If uv1 collapses to uv0 (clamp) or
-// the pipeline is broken, the checkerboard variance disappears -- the smoke's
-// AC-10 falsification variant relies on this.
+// Visual rule: the fragment samples the real baseColorTexture with uv0, then
+// paints uv1 into the red/green channels (remapped to [0,1]). The procedural
+// plane's uv1 is a per-quad checkerboard (0,0) vs (1,1), so the surface shows
+// alternating dark/bright cells when the multi-UV pipeline feeds the second
+// set. If uv1 collapses to uv0 (clamp) or the pipeline is broken, the
+// checkerboard variance disappears -- the smoke's AC-10 falsification variant
+// relies on this while retaining the texture binding in the same material.
 
 struct DemoUniforms {
   baseColor : vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> demo : DemoUniforms;
+@group(1) @binding(1) var baseColorTexture_sampler : sampler;
+@group(1) @binding(2) var baseColorTexture : texture_2d<f32>;
+@group(1) @binding(3) var detailTexture_sampler : sampler;
+@group(1) @binding(4) var detailTexture : texture_2d<f32>;
 
 struct VsIn  {
   @location(0) pos     : vec3<f32>,
@@ -75,5 +80,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 #else
   let variantTint = vec3<f32>(0.85, 1.0, 0.85);
 #endif
-  return vec4<f32>(demo.baseColor.rgb * pattern * variantTint, demo.baseColor.a);
+  let sampled = textureSample(baseColorTexture, baseColorTexture_sampler, in.uv);
+  let detail = textureSample(detailTexture, detailTexture_sampler, in.uv);
+  return vec4<f32>(demo.baseColor.rgb * sampled.rgb * detail.rgb * pattern * variantTint, demo.baseColor.a * sampled.a * detail.a);
 }

@@ -15,7 +15,7 @@ import { loadAssetConfig } from '@forgeax/engine-pack/config';
 import { resolveAssetSource } from '@forgeax/engine-pack/resolve';
 import type { ImageMetadata, Importer, PackIndexEntry } from '@forgeax/engine-types';
 import { createUiImporter } from '@forgeax/engine-ui/importer';
-import { buildCatalog } from './build-catalog.js';
+import { buildCatalogProjection, type CatalogLegacyProjection } from './build-catalog.js';
 import { type AssetHostRefreshPolicy, CATALOG_DELTA_EVENT } from './catalog-client.js';
 import { calculateCatalogDelta } from './catalog-watch.js';
 import { compressArtifact } from './compress-artifact.js';
@@ -202,6 +202,12 @@ async function readOverrideFromMeta(
 export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   // Mutable catalog state — rebuilt on startup and on file watch events.
   let catalog: PackIndexEntry[] = [];
+  let catalogProjection: CatalogLegacyProjection = {
+    schemaVersion: 'catalog-legacy-v1',
+    entries: [],
+    authority: 'authoritative',
+    diagnostics: [],
+  };
   // Map from normalized `relativeUrl` to absolute source path for serving
   // files that live outside the Vite root (e.g. submodule assets).
   let urlToAbs: Map<string, string> = new Map();
@@ -276,6 +282,25 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       out.push(e);
     }
     return out;
+  }
+
+  function installCatalogProjection(projection: CatalogLegacyProjection): void {
+    // A degraded snapshot may contain first-seen rows for machine inspection,
+    // but those rows are not a usable identity catalog. Keep them only inside
+    // the marked projection and fail closed for lookup/import operations.
+    const entries =
+      projection.authority === 'authoritative' ? applyImportedRows(projection.entries) : [];
+    catalog = entries;
+    catalogProjection = {
+      ...projection,
+      ...(projection.authority === 'authoritative' ? { entries } : {}),
+    };
+  }
+
+  function legacyCatalogResponse(): readonly PackIndexEntry[] | CatalogLegacyProjection {
+    return catalogProjection.authority === 'authoritative'
+      ? catalogProjection.entries
+      : catalogProjection;
   }
 
   // Import exactly ONE texture GUID to the DDC
@@ -743,8 +768,11 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
   function configureServer(server: ViteDevServerLike): void {
     // Async startup: scan roots to build the initial catalog.
     const { roots } = resolvePackBuildInputs(opts);
-    Promise.all([buildCatalog(roots, opts.base, registeredImporterKeys), buildGuidToMetaMap(roots)])
-      .then(([rawEntries, g2m]) => {
+    Promise.all([
+      buildCatalogProjection(roots, opts.base, registeredImporterKeys),
+      buildGuidToMetaMap(roots),
+    ])
+      .then(([rawProjection, g2m]) => {
         // The dev catalog passes the discoverable bare-source texture rows
         // straight through, with the per-asset import overlay applied so any
         // already-imported `.bin` row survives the rebuild (monotonic import).
@@ -752,7 +780,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
         // texture row to the dev transport for lazy import; keeping the row
         // discoverable is the precondition for Sponza's catalog-first
         // findTextureGuidByFilename.
-        catalog = applyImportedRows(rawEntries);
+        installCatalogProjection(rawProjection);
         guidToMeta = g2m;
         urlToAbs = buildUrlToAbsolute(catalog, {
           cwd: process.cwd(),
@@ -787,11 +815,11 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
             if (sidecars.length > 0 || importedRowsInvalidated) {
               const previousCatalog = catalog;
               try {
-                const [rawEntries2, g2m2] = await Promise.all([
-                  buildCatalog(roots, opts.base, registeredImporterKeys),
+                const [rawProjection2, g2m2] = await Promise.all([
+                  buildCatalogProjection(roots, opts.base, registeredImporterKeys),
                   buildGuidToMetaMap(roots),
                 ]);
-                catalog = applyImportedRows(rawEntries2);
+                installCatalogProjection(rawProjection2);
                 guidToMeta = g2m2;
                 urlToAbs = buildUrlToAbsolute(catalog, {
                   cwd: process.cwd(),
@@ -870,7 +898,7 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           });
         }
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify(catalog));
+        res.end(JSON.stringify(legacyCatalogResponse()));
         return;
       }
 
@@ -942,8 +970,12 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
           // the lightweight GUID index once so the import endpoint remains
           // race-free for just-written authoring sources.
           guidToMeta = await buildGuidToMetaMap(roots);
-          const refreshedCatalog = await buildCatalog(roots, opts.base, registeredImporterKeys);
-          catalog = applyImportedRows(refreshedCatalog);
+          const refreshedProjection = await buildCatalogProjection(
+            roots,
+            opts.base,
+            registeredImporterKeys,
+          );
+          installCatalogProjection(refreshedProjection);
           urlToAbs = buildUrlToAbsolute(catalog, {
             cwd: process.cwd(),
             ddcPath: (guid) => ddcPath(process.cwd(), guid),
@@ -1182,7 +1214,17 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
       return;
     }
     const { paths } = loadAssetConfig(cwd);
-    const entries = await buildCatalog(roots, opts.base, registeredImporterKeys);
+    const projection = await buildCatalogProjection(roots, opts.base, registeredImporterKeys);
+    if (projection.authority !== 'authoritative') {
+      throw new Error(
+        JSON.stringify({
+          code: 'catalog-degraded',
+          authority: projection.authority,
+          diagnostics: projection.diagnostics,
+        }),
+      );
+    }
+    const entries = [...projection.entries];
 
     if (process.env.FORGEAX_SHARED_APP_INPUTS_MODE === 'catalog-only') {
       // Catalog probes validate metadata and browser/HMR wiring; the producer job owns full payload import.
@@ -1307,12 +1349,36 @@ export function pluginPack(opts: PluginPackOptions = {}): ForgeaXPackPlugin {
     // `runImport` once per meta (one pass produces all sub-assets).
     const guidSeen = new Set<string>();
     const finalizedUiUrls = new Map<string, string>();
+    const emittedPackUrls = new Map<string, string>();
 
     for (const entry of importedEntries) {
       if (guidSeen.has(entry.guid.toLowerCase())) continue;
       const metaPath = guidToMetaBuild.get(entry.guid.toLowerCase());
       if (metaPath === undefined) {
-        // Legacy pack entries (pre-existing .pack.json or non-meta rows).
+        // Self-contained packs are already final payloads. Emit each source
+        // pack once and point every asset row in that pack at the shipped
+        // Rollup asset. They must not enter the importer/DDC path.
+        if (entry.sourcePath.endsWith('.pack.json')) {
+          let packUrl = emittedPackUrls.get(entry.sourcePath);
+          if (packUrl === undefined) {
+            const packPath = resolve(cwd, entry.sourcePath);
+            const packRef = this.emitFile({
+              type: 'asset',
+              name: `${entry.guid.toLowerCase()}.pack.json`,
+              originalFileName: packPath,
+              source: await readFile(packPath, 'utf-8'),
+            });
+            packUrl = projectPackIndexUrl(basePrefix, this.getFileName(packRef));
+            emittedPackUrls.set(entry.sourcePath, packUrl);
+          }
+          for (let index = 0; index < importedEntries.length; index += 1) {
+            const candidate = importedEntries[index];
+            if (candidate?.sourcePath === entry.sourcePath) {
+              importedEntries[index] = { ...candidate, relativeUrl: packUrl };
+            }
+          }
+        }
+        // Non-meta rows are already final and do not need an importer.
         guidSeen.add(entry.guid.toLowerCase());
         continue;
       }

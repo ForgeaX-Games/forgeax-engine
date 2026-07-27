@@ -124,8 +124,8 @@ The 5 engine-shipped shaders sidecar `paramSchema` declarations after w18-w21 (M
 
 | Shader | `paramSchema` entries | `userRegionBindingEnd` |
 |:--|:--|:--|
-| `default-standard-pbr` | UBO numeric run (`baseColor` color + `metallic` f32 + `roughness` f32) + `baseColorTexture` + `metallicRoughnessTexture` + `normalTexture` (each auto-pairs a sampler) | 7 |
-| `default-standard-pbr-skin` | Same as standard-pbr (skin palette is `storage_buffer` injected separately at build time) | 7 |
+| `default-standard-pbr` | UBO numeric run (`baseColor`, channel selectors, emissive/occlusion, `uvSet`, alpha cutoff, clearcoat, clearcoat roughness, and `specularTint`) + `baseColorTexture` + `metallicRoughnessTexture` + `normalTexture` + `specularTintTexture` (each auto-pairs a sampler) | 9 |
+| `default-standard-pbr-skin` | Same as standard-pbr (skin palette is `storage_buffer` injected separately at build time) | 9 |
 | `unlit` | UBO numeric run (`tint` color) + `mainTex` texture2d (auto-pairs sampler) | 3 |
 | `sprite` | UBO numeric run (`mainColor` color + sprite uniforms) + `mainTex` texture2d (auto-pairs sampler) | 3 |
 | `sprite-lit` | Same shape as `sprite` (paramSchema is field-set byte-identical: 4 vec4 + 1 texture2d; auto-paired sampler). AC-07: BGL JSON byte-identical to `sprite`. | 3 |

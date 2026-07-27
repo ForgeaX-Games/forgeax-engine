@@ -1410,6 +1410,13 @@ function replayBeginRenderPass(
           entry.view = view;
         }
       }
+      const resolveTargetHandleId = event.colorAttachmentResolveTargetHandleIds?.[attachIdx];
+      if (resolveTargetHandleId !== undefined && resolveTargetHandleId !== null) {
+        const resolveTarget = handleMap.get(resolveTargetHandleId);
+        if (resolveTarget !== undefined) {
+          entry.resolveTarget = resolveTarget;
+        }
+      }
       colorAttachments.push(entry);
     }
     attachIdx++;

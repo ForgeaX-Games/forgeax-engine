@@ -233,6 +233,7 @@ export function instantiateFlat<T extends SceneAsset>(
   world: World,
 ): Result<EntityHandle[], AssetError | PackError | EcsError> {
   let roots: EntityHandle[];
+  let mountEntities: EntityHandle[];
   const sceneRes0 = resolveAssetHandle<SceneAsset>(
     world,
     handle as unknown as Handle<string, 'shared'>,
@@ -261,12 +262,14 @@ export function instantiateFlat<T extends SceneAsset>(
       return sceneInst as unknown as Result<EntityHandle[], AssetError | PackError | EcsError>;
     }
     roots = sceneInst.value.roots;
+    mountEntities = sceneInst.value.mountEntities;
   } else {
     const sceneInst = world.instantiateSceneFlat(handle as Handle<'SceneAsset', 'shared'>);
     if (!sceneInst.ok) {
       return sceneInst as unknown as Result<EntityHandle[], AssetError | PackError | EcsError>;
     }
     roots = sceneInst.value.roots;
+    mountEntities = sceneInst.value.mountEntities;
   }
 
   // Post-spawn Skin.joints wiring, per top-level root. Mirrors the anchor
@@ -297,7 +300,9 @@ export function instantiateFlat<T extends SceneAsset>(
         return undefined;
       },
     };
-    for (const root of roots) {
+    const hookRoots = new Set<EntityHandle>(roots);
+    for (const mountEntity of mountEntities) hookRoots.add(mountEntity);
+    for (const root of hookRoots) {
       const jointResolveResult = hook(world, resolver, root);
       if (!jointResolveResult.ok) {
         return { ok: false, error: jointResolveResult.error } as unknown as Result<

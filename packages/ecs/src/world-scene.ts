@@ -84,6 +84,12 @@ export type SceneInstantiateOk = {
  */
 export type SceneInstantiateFlatOk = {
   readonly roots: EntityHandle[];
+  /**
+   * All mount carrier entities spawned while flattening this scene. These are
+   * separate from `roots`: carriers with an authored parent are not roots,
+   * but still delimit a nested prefab subtree for post-spawn hooks.
+   */
+  readonly mountEntities: EntityHandle[];
   readonly diagnostics: readonly SceneInstantiateDiagnostic[];
 };
 
@@ -104,6 +110,8 @@ export interface SceneMembersSpawn {
   readonly rootEntities: EntityHandle[];
   /** Mount carriers whose `mount.parent === undefined` (default-parented). */
   readonly mountEntitiesNeedingRootParent: EntityHandle[];
+  /** Every mount carrier spawned by this scene, including explicitly parented carriers. */
+  readonly mountEntities: EntityHandle[];
   /** `entities.length + mounts + Σ memberCount`, captured at instantiate-time. */
   readonly totalSlots: number;
 }
@@ -205,14 +213,14 @@ export function worldInstantiateSceneFlat(
   const resolved = worldResolveSceneAsset(world, handle);
   if (!resolved.ok) return resolved;
   stack.add(handleKey);
-  let r: Result<EntityHandle[], EcsError>;
+  let r: Result<{ roots: EntityHandle[]; mountEntities: EntityHandle[] }, EcsError>;
   try {
     r = worldInstantiateSceneAssetFlat(world, handle, resolved.value, stack, diagnostics);
   } finally {
     stack.delete(handleKey);
   }
   if (!r.ok) return r;
-  return ok({ roots: r.value, diagnostics });
+  return ok({ ...r.value, diagnostics });
 }
 /**
  * @internal Recursive helper carrying the cycle-detection stack. Sugar /
@@ -375,6 +383,7 @@ export function worldSpawnSceneMembers(
   const mapping = new Uint32Array(totalSlots).fill(ENTITY_NULL_RAW);
   const entityToLocalId = new Map<EntityHandle, LocalEntityId>();
   const rootEntities: EntityHandle[] = [];
+  const mountEntities: EntityHandle[] = [];
   // R2/B-1: mount entities whose `mount.parent === undefined` need their
   // ChildOf wired to the outer synthetic root (this scene's root). Step 5
   // does the wiring once the synthetic root entity is materialised; we
@@ -406,6 +415,7 @@ export function worldSpawnSceneMembers(
     const mountSpawnRes = worldSpawnMountEntity(world, mount, mapping, diagnostics);
     if (!mountSpawnRes.ok) return mountSpawnRes;
     const mountEntity = mountSpawnRes.value;
+    mountEntities.push(mountEntity);
     mapping[mountLid] = mountEntity as unknown as number;
 
     // Resolve mount.source -> child SceneAsset handle.
@@ -539,6 +549,7 @@ export function worldSpawnSceneMembers(
     entityToLocalId,
     rootEntities,
     mountEntitiesNeedingRootParent,
+    mountEntities,
     totalSlots,
   });
 }
@@ -724,10 +735,10 @@ export function worldInstantiateSceneAssetFlat(
   asset: SceneAsset,
   stack: Set<number>,
   diagnostics: SceneInstantiateDiagnostic[],
-): Result<EntityHandle[], EcsError> {
+): Result<{ roots: EntityHandle[]; mountEntities: EntityHandle[] }, EcsError> {
   const membersRes = worldSpawnSceneMembers(world, handle, asset, stack, diagnostics);
   if (!membersRes.ok) return membersRes;
-  const { mapping, rootEntities, mountEntitiesNeedingRootParent } = membersRes.value;
+  const { mapping, rootEntities, mountEntitiesNeedingRootParent, mountEntities } = membersRes.value;
   const childOfToken = resolveComponent('ChildOf');
   const ownMounts = asset.mounts ?? [];
 
@@ -747,7 +758,12 @@ export function worldInstantiateSceneAssetFlat(
           memberEntityRaw as unknown as EntityHandle,
           ov,
         );
-        if (!applyRes.ok) return applyRes as Result<EntityHandle[], EcsError>;
+        if (!applyRes.ok) {
+          return applyRes as Result<
+            { roots: EntityHandle[]; mountEntities: EntityHandle[] },
+            EcsError
+          >;
+        }
       }
     }
   }
@@ -766,7 +782,7 @@ export function worldInstantiateSceneAssetFlat(
     }
   }
 
-  return ok([...rootEntities, ...mountEntitiesNeedingRootParent]);
+  return ok({ roots: [...rootEntities, ...mountEntitiesNeedingRootParent], mountEntities });
 }
 /** @internal Build ComponentData[] for one SceneEntity, remapping localIds.
  *

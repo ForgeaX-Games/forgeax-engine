@@ -1113,7 +1113,7 @@ export class World {
     asset: SceneAsset,
     stack: Set<number>,
     diagnostics: SceneInstantiateDiagnostic[],
-  ): Result<EntityHandle[], EcsError> {
+  ): Result<{ roots: EntityHandle[]; mountEntities: EntityHandle[] }, EcsError> {
     return worldInstantiateSceneAssetFlat(this, handle, asset, stack, diagnostics);
   }
   /** @internal */

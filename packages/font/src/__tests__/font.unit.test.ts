@@ -17,7 +17,13 @@ import { ImporterRegistry } from '@forgeax/engine-import';
 import type { ImportContext, ImportedAsset, ImportSubAsset } from '@forgeax/engine-types';
 import { FontError } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type BakeAtlas, bakeFont, type MsdfGenerator, runCliFont } from '../cli-font.js';
+import {
+  type BakeAtlas,
+  bakeFont,
+  type MsdfGenerator,
+  realGeneratorFactory,
+  runCliFont,
+} from '../cli-font.js';
 import { fontImporter } from '../font-importer.js';
 
 let tmpRoot: string;
@@ -105,6 +111,26 @@ async function findRealTtf(): Promise<string | undefined> {
         expect(sidecar.common.distanceRange).toBeGreaterThan(0);
         expect(sidecar.common.atlasWidth).toBe(1024);
         expect(Object.keys(sidecar.glyphs).length).toBeGreaterThan(0);
+      });
+
+      it('(a2) plain Node real run uses the Worker-capable host and writes artefacts', async () => {
+        const ttfPath = resolve(
+          dirname(fileURLToPath(import.meta.url)),
+          '../../../../forgeax-engine-assets/dejavu-fonts/DejaVuSansMono.ttf',
+        );
+        const result = await bakeFont(ttfPath, tmpRoot, realGeneratorFactory);
+        const png = await readFile(result.atlasPath);
+        const sidecar = JSON.parse(await readFile(result.sidecarPath, 'utf8')) as {
+          common: { distanceRange: number; atlasWidth: number; atlasHeight: number };
+          glyphs: Record<string, unknown>;
+        };
+        expect(png[0]).toBe(0x89);
+        expect(sidecar.common).toMatchObject({
+          distanceRange: 4,
+          atlasWidth: 1024,
+          atlasHeight: 1024,
+        });
+        expect(Object.keys(sidecar.glyphs).length).toBeGreaterThan(90);
       });
 
       it('(b) non-TTF input throws unsupported-font-format; valid TTF magic does not', async () => {

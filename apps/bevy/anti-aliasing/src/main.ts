@@ -7,12 +7,8 @@
 
 import { createApp } from '@forgeax/engine-app';
 import { Update } from '@forgeax/engine-ecs';
-import { HANDLE_CUBE, HANDLE_QUAD, HANDLE_SPHERE, HANDLE_TRIANGLE } from '@forgeax/engine-assets-runtime';
-import { Transform } from '@forgeax/engine-scene';
-
-import { ANTIALIAS_FXAA, ANTIALIAS_NONE, perspective } from '@forgeax/engine-render';
-import { Materials } from '@forgeax/engine-render';
-import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { Camera } from '@forgeax/engine-render';
+import { ANTIALIAS_MODES, ANTIALIAS_NAMES, buildAntiAliasingWorld } from './anti-aliasing';
 
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
@@ -32,56 +28,23 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const app = appResult.value;
   const world = app.world;
 
-  const matHandle = world.allocSharedRef('MaterialAsset', Materials.standard({
-    baseColor: [0.7, 0.7, 0.7, 1],
-    metallic: 0,
-    roughness: 0.4,
-  }));
-
-  // 4 geometric shapes spread horizontally — sharp edges make aliasing visible.
-  const LAYOUT: readonly {
-    readonly handle: typeof HANDLE_TRIANGLE;
-    readonly pos: readonly [number, number, number];
-  }[] = [
-    { handle: HANDLE_TRIANGLE, pos: [-1.05, 0, 0] },
-    { handle: HANDLE_CUBE, pos: [-0.35, 0, 0] },
-    { handle: HANDLE_QUAD, pos: [0.35, 0, 0] },
-    { handle: HANDLE_SPHERE, pos: [1.05, 0, 0] },
-  ];
-  for (const slot of LAYOUT) {
-    world.spawn(
-      { component: Transform, data: { pos: slot.pos, quat: [0, 0, 0, 1], scale: [0.5, 0.5, 0.5] } },
-      { component: MeshFilter, data: { assetHandle: slot.handle } },
-      { component: MeshRenderer, data: { materials: [matHandle] } },
-    );
-  }
-
-  world.spawn({
-    component: DirectionalLight,
-    data: { direction: [-0.4, -0.6, -0.7], color: [1, 1, 1], intensity: 1.5 },
-  });
-
-  const camEntity = world.spawn(
-    { component: Transform, data: { pos: [0, 0, 6] } },
-    { component: Camera, data: { ...perspective({ fov: Math.PI / 4, aspect: 16 / 9 }), antialias: ANTIALIAS_NONE } },
-  ).unwrap();
-
-  // Space toggle between FXAA ON / OFF.
-  let prevSpace = false;
-  let currentAA: number = ANTIALIAS_NONE;
+  const scene = buildAntiAliasingWorld(world, target.width / target.height);
+  const camEntity = scene.camera;
   world.addSystem(Update, {
-    name: 'aa-toggle',
+    name: 'aa-cycle',
     after: ['input-frame-start-scan'],
     queries: [],
     fn: () => {
       const snap = app.renderer.input.snapshot(world);
       if (!snap) return;
-      const cur = snap.keyboard.down(' ');
-      if (cur && !prevSpace) {
-        currentAA = currentAA === ANTIALIAS_FXAA ? ANTIALIAS_NONE : ANTIALIAS_FXAA;
-        world.set(camEntity, Camera, { antialias: currentAA });
+      for (let i = 0; i < ANTIALIAS_MODES.length; i += 1) {
+        if (!snap.keyboard.down(String(i + 1))) continue;
+        const mode = ANTIALIAS_MODES[i];
+        if (mode === undefined) continue;
+        world.set(camEntity, Camera, { antialias: mode });
+        console.log(`[anti-aliasing] mode: ${ANTIALIAS_NAMES[i]}`);
+        break;
       }
-      prevSpace = cur;
     },
   });
 
@@ -90,5 +53,5 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     console.error('[bevy-anti-aliasing] app.start() failed:', started.error);
     return;
   }
-  console.warn('[bevy-anti-aliasing] running. Press Space to toggle FXAA.');
+  console.warn('[bevy-anti-aliasing] running. Press 1 for none, 2 for MSAA, 3 for FXAA.');
 }

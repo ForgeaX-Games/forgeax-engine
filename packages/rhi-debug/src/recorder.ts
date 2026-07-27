@@ -264,6 +264,8 @@ interface RecorderInternal {
    * Preserved across arm() cycles (SSOT for closure computation in getTape).
    */
   bootstrapCreates: Map<HandleId, RhiCallEvent>;
+  /** Handles whose initialData event was emitted by the current capture. */
+  snapshotSeededHandles: Set<HandleId>;
   /**
    * @internal
    * Descriptor registry of currently-live resources. Written by createBuffer /
@@ -361,10 +363,64 @@ function registerHandle(
   return hId;
 }
 
+function ensureTextureCreateEvent(
+  s: RecorderInternal,
+  texture: object,
+  textureId: HandleId,
+): DebugError | undefined {
+  if (s.bootstrapCreates.has(textureId)) return undefined;
+
+  const raw = texture as Record<string, unknown>;
+  const width = raw.width as number | undefined;
+  const height = raw.height as number | undefined;
+  const depthOrArrayLayers = (raw.depthOrArrayLayers as number | undefined) ?? 1;
+  const format = raw.format as string | undefined;
+  const rawUsage = raw.usage as number | undefined;
+
+  if (
+    width === undefined ||
+    height === undefined ||
+    format === undefined ||
+    rawUsage === undefined
+  ) {
+    return new DebugError({
+      code: 'tape-handle-graph-broken',
+      expected: 'swapchain GPUTexture runtime properties readable (width/height/format/usage)',
+      hint: `swapchain texture '${textureId}' has unreadable dimensions (width=${width}, height=${height}, format=${format}, usage=${rawUsage}); the backend may not expose runtime texture properties — re-capture with a device that does`,
+      detail: {
+        danglingHandleId: textureId,
+        referencingEventIndex: -1,
+      },
+    });
+  }
+
+  const event: RhiCallEvent = {
+    kind: 'createTexture',
+    handleId: textureId,
+    desc: {
+      size: { width, height, depthOrArrayLayers },
+      format: format as GPUTextureFormat,
+      usage: (rawUsage | TEXTURE_USAGE_COPY_SRC) as GPUTextureUsageFlags,
+    },
+  };
+  s.bootstrapCreates.set(textureId, event);
+  pushEvent(s, event);
+  return undefined;
+}
+
+function hasBootstrapDependency(s: RecorderInternal, handleId: HandleId): boolean {
+  for (const event of s.bootstrapCreates.values()) {
+    if (_getCreateEventReferencedHandleIds(event).includes(handleId)) return true;
+  }
+  return false;
+}
+
 function getHandleId(s: RecorderInternal, handle: object, kind: string): HandleId {
   const id = s.handleMap.get(handle);
   if (id !== undefined) return id;
-  return registerHandle(s, handle, kind);
+  const newId = registerHandle(s, handle, kind);
+  if (kind === 'texture') ensureTextureCreateEvent(s, handle, newId);
+  return newId;
 }
 
 // ============================================================================
@@ -850,6 +906,13 @@ export interface DebugRhiInstance extends RhiInstance {
   _getCapturedDevice(): RhiDevice | undefined;
   /**
    * @internal
+   * Drop all device-bound recorder state after the host observes a real
+   * device loss. A tape recorded against the lost device cannot seed a fresh
+   * device, so the next capture must start from the rebuilt resource graph.
+   */
+  _resetForDeviceLoss(): void;
+  /**
+   * @internal
    * Return the recorder's `valid` flag. Consumed by `finalizeToMemory`
    * in recorder-core to embed `valid` in the serialized report without
    * duplicating state-machine knowledge.
@@ -903,6 +966,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     handleMap: new WeakMap(),
     textureViewHandleMap: new WeakMap(),
     bootstrapCreates: new Map(),
+    snapshotSeededHandles: new Set(),
     descriptorTable: new Map(),
     _skipRecord: false,
     frameIdx: 0,
@@ -946,6 +1010,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     s.recordedFrames = 0;
     s.events = [];
     s.blobPool = new Map();
+    s.snapshotSeededHandles.clear();
     s.frameIdx = 0;
     s.bootstrap = true;
     s.valid = true;
@@ -1080,13 +1145,25 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
 
     if (missing !== null) {
       // Missing create — return error (hint refined in w9)
+      const referencingEventIndex = s.events.findIndex((event) => {
+        try {
+          return JSON.stringify(event).includes(missing);
+        } catch {
+          return false;
+        }
+      });
+      const referencingEventKind =
+        referencingEventIndex >= 0 ? s.events[referencingEventIndex]?.kind : undefined;
+      const referencingCreate = [...s.bootstrapCreates.entries()].find(([, event]) =>
+        _getCreateEventReferencedHandleIds(event).includes(missing),
+      );
       return new DebugError({
         code: 'tape-handle-graph-broken',
         expected: 'all referenced handleIds must have create events in bootstrapCreates',
-        hint: `handleId '${missing}' has no create event in bootstrap table; the resource may have been created before wrap() was called — re-capture with recorder wrap() before all resource creation`,
+        hint: `handleId '${missing}' has no create event in bootstrap table; referenced by event ${referencingEventIndex} (${referencingEventKind ?? 'unknown'}) and bootstrap ${referencingCreate?.[0] ?? 'unknown'} (${referencingCreate?.[1].kind ?? 'unknown'}); the resource may have been created before wrap() was called — re-capture with recorder wrap() before all resource creation`,
         detail: {
           danglingHandleId: missing,
-          referencingEventIndex: -1,
+          referencingEventIndex,
         },
       });
     }
@@ -1347,6 +1424,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     }
 
     pushEvent(s, { kind: 'initialData', handleId, dataHash });
+    s.snapshotSeededHandles.add(handleId);
     return makeOk({ handleId, dataHash }) as unknown as SnapshotResult;
   }
 
@@ -1750,9 +1828,11 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         // would dereference the original GPUTextureView brand directly,
         // which fails on a fresh device (cross-device GPU object reuse).
         const colorAttachmentViewHandleIds: (HandleId | undefined)[] = [];
+        const colorAttachmentResolveTargetHandleIds: (HandleId | undefined)[] = [];
         for (const att of desc.colorAttachments) {
           if (att === null || att === undefined) {
             colorAttachmentViewHandleIds.push(undefined);
+            colorAttachmentResolveTargetHandleIds.push(undefined);
           } else {
             const view = (att as GPURenderPassColorAttachment).view;
             const id =
@@ -1760,6 +1840,12 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
                 ? s.handleMap.get(view as unknown as object)
                 : undefined;
             colorAttachmentViewHandleIds.push(id);
+            const resolveTarget = (att as GPURenderPassColorAttachment).resolveTarget;
+            const resolveTargetId =
+              resolveTarget !== undefined && resolveTarget !== null
+                ? s.handleMap.get(resolveTarget as unknown as object)
+                : undefined;
+            colorAttachmentResolveTargetHandleIds.push(resolveTargetId);
           }
         }
         let depthStencilViewHandleId: HandleId | undefined;
@@ -1775,6 +1861,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
           passHandleId: passHId,
           desc: desc as Omit<GPURenderPassDescriptor, 'label'>,
           colorAttachmentViewHandleIds,
+          colorAttachmentResolveTargetHandleIds,
           depthStencilViewHandleId,
         });
         const realPass = realEnc.beginRenderPass(desc);
@@ -2077,55 +2164,15 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         const res = realDevice.createTextureView(texture, desc);
         if (!res.ok) return res;
         const srcId = getHandleId(s, texture as unknown as object, 'texture');
+        const textureError = ensureTextureCreateEvent(s, texture as unknown as object, srcId);
+        if (textureError !== undefined) {
+          return makeErr(textureError) as unknown as Result<
+            TextureView,
+            import('@forgeax/engine-rhi').RhiError
+          >;
+        }
         const viewId = registerHandle(s, res.value as unknown as object, 'textureView');
         s.textureViewHandleMap.set(res.value, viewId);
-
-        // Emit a faithful createTexture if the source texture is a
-        // swapchain texture that has no createTexture event yet.
-        // getCurrentTexture() returns the raw GPUTexture whose runtime
-        // properties (width, height, format, usage) are readable —
-        // read them to construct a faithful createTexture event instead
-        // of a synthetic 1x1 stand-in (D-1, C-3).
-        if (!s.bootstrapCreates.has(srcId)) {
-          const raw = texture as unknown as Record<string, unknown>;
-          const width = raw.width as number | undefined;
-          const height = raw.height as number | undefined;
-          const depthOrArrayLayers = (raw.depthOrArrayLayers as number | undefined) ?? 1;
-          const format = raw.format as string | undefined;
-          const rawUsage = raw.usage as number | undefined;
-
-          if (
-            width === undefined ||
-            height === undefined ||
-            format === undefined ||
-            rawUsage === undefined
-          ) {
-            return makeErr(
-              new DebugError({
-                code: 'tape-handle-graph-broken',
-                expected:
-                  'swapchain GPUTexture runtime properties readable (width/height/format/usage)',
-                hint: `swapchain texture '${srcId}' has unreadable dimensions (width=${width}, height=${height}, format=${format}, usage=${rawUsage}); the backend may not expose runtime texture properties — re-capture with a device that does`,
-                detail: {
-                  danglingHandleId: srcId,
-                  referencingEventIndex: -1,
-                },
-              }),
-            ) as unknown as Result<TextureView, import('@forgeax/engine-rhi').RhiError>;
-          }
-
-          const texEvent: RhiCallEvent = {
-            kind: 'createTexture',
-            handleId: srcId,
-            desc: {
-              size: { width, height, depthOrArrayLayers },
-              format: format as GPUTextureFormat,
-              usage: (rawUsage | 0x01) as GPUTextureUsageFlags, // D-4: COPY_SRC for replay readbackRt
-            },
-          };
-          s.bootstrapCreates.set(srcId, texEvent);
-          pushEvent(s, texEvent);
-        }
 
         const event: RhiCallEvent = {
           kind: 'createTextureView',
@@ -2345,7 +2392,13 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
           // WeakRef + FinalizationRegistry over the create-event objects (same
           // spirit as handleMap's WeakMap, but keyed by handleId so it needs the
           // WeakRef wrapper) -- a finalization-semantics change, out of scope here.
-          if (!isRecordingActive(s)) s.bootstrapCreates.delete(hId);
+          if (
+            !isRecordingActive(s) &&
+            !s.snapshotSeededHandles.has(hId) &&
+            !hasBootstrapDependency(s, hId)
+          ) {
+            s.bootstrapCreates.delete(hId);
+          }
         }
         return realDevice.destroyBuffer(buf);
       },
@@ -2355,7 +2408,13 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
         if (hId !== undefined) {
           s.descriptorTable.delete(hId);
           // Same gate + same bounded residual as destroyBuffer above.
-          if (!isRecordingActive(s)) s.bootstrapCreates.delete(hId);
+          if (
+            !isRecordingActive(s) &&
+            !s.snapshotSeededHandles.has(hId) &&
+            !hasBootstrapDependency(s, hId)
+          ) {
+            s.bootstrapCreates.delete(hId);
+          }
         }
         return realDevice.destroyTexture(tex);
       },
@@ -2420,6 +2479,27 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     },
     _getCapturedDevice(): RhiDevice | undefined {
       return s.capturedDevice;
+    },
+    _resetForDeviceLoss(): void {
+      // A lost GPU device invalidates every opaque handle and every descriptor
+      // entry. Keep the recorder usable for the renderer's subsequent rebuild:
+      // resource and shader creation calls during recovery repopulate these
+      // registries against the fresh device before the next capture arms.
+      s.state = RecorderState.Idle;
+      s.requestedFrames = 0;
+      s.recordedFrames = 0;
+      s.events = [];
+      s.blobPool = new Map();
+      s.handleMap = new WeakMap();
+      s.textureViewHandleMap = new WeakMap();
+      s.bootstrapCreates = new Map();
+      s.descriptorTable = new Map();
+      s.snapshotSeededHandles = new Set();
+      s.frameIdx = 0;
+      s.bootstrap = true;
+      s.recordedCaps = undefined;
+      s.valid = true;
+      s.capturedDevice = undefined;
     },
     _getValid(): boolean {
       return s.valid;

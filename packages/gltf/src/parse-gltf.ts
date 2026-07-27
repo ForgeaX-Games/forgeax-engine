@@ -1075,7 +1075,8 @@ export async function parseGlb(
  *
  * Sub-asset ordering: meshes first, then materials, then scenes - the
  * order is stable across reimports so AC-13 byte-identical holds when
- * source content does not change.
+ * source content does not change. Stable semantic sourceKey values are
+ * assigned by the producer reuse boundary; sourceIndex remains a locator.
  */
 export function toAssetPack(
   doc: GltfDoc,

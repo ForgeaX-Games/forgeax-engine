@@ -10,3 +10,8 @@ declare module 'virtual:forgeax/bundler' {
     readonly importTransport?: undefined;
   };
 }
+
+declare module '*.wgsl' {
+  const value: { readonly hash: string; readonly wgsl: string };
+  export default value;
+}

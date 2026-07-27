@@ -33,6 +33,53 @@
 | Asset register contracts | `register<MaterialAsset>()` / `registerWithGuid<MaterialAsset>()` / `lookupMaterialShader()` | Runtime factory functions + validation; detail in `packages/runtime/README.md` |
 | Remote error model | `RemoteErrorCode` / `RemoteError` | 4-member closed union (script-syntax-error / script-runtime-error / server-startup-failed / server-not-running) + structural interface; runtime class lives in `@forgeax/engine-remote/errors` (`implements RemoteError`); see [`@forgeax/engine-remote` README](../remote/README.md) for the full error model |
 
+### Asset producer contract
+
+> [!IMPORTANT]
+> Producer facts are the canonical published truth. Consumers read the fields
+> below and never infer identity, provenance, or topology from a URL, filename,
+> DDC location, or array position.
+
+`AssetSubjectRef`, `ProviderProvenance`, `ResourceRevision`, `AssetRelation`,
+`CatalogDiagnostic`, and `TopologyDiff` are neutral producer-owned PODs.
+`CatalogEntry` carries them through one stable shape:
+
+| Field | Role | Optional behavior |
+|:--|:--|:--|
+| `guid` | Asset identity | Required and stable across locator changes |
+| `packageId` | Producer package identity | Omit when the producer cannot prove it |
+| `provenance` | Provider and version evidence | Omit when no evidence was published |
+| `revision` | Revision continuity evidence | Omit when no revision was published |
+| `sourceKey` | Stable imported-output identity | Required for keyed multi-output matching |
+| `sourceIndex` | Producer output position | Locator evidence only; never an identity fallback |
+| `relativeUrl` / `sourcePath` | Payload locators | Replaceable; never used to reconstruct producer facts |
+| `relations` / `diagnostics` | Typed edges and machine-readable signals | Preserve exactly when present |
+
+The propagation contract is a one-way chain:
+
+`meta declaration → DDC pack row → pack-index/delta → static or URL CatalogSource`
+
+Each stage may add a derived legacy projection such as `relativeUrl`, but it
+must not replace or reinterpret the producer-owned fields. Missing evidence
+stays missing; a consumer must not synthesize a provider, package, relation,
+or stable source key.
+
+#### Structured recovery
+
+`CatalogDiagnostic` fields are read by property, not by parsing `message`:
+
+| Field | Meaning |
+|:--|:--|
+| `code` | Stable failure category |
+| `subject` | Affected asset, package, or resource |
+| `expected` / `actual` | Machine-readable mismatch context |
+| `hint` | Executable recovery direction |
+| `authority` | Whether producer, pack, or catalog owns the signal |
+
+When a result is not authoritative, callers should reject the update or
+return to the last verified revision. Legacy arrays are projections of a
+canonical result; they are not a second source of truth.
+
 ## Handle
 
 > Cross-package `Handle<T,M>` single physical SSOT (feat-20260517-handle-type-unify). This section is the AI user's mid-level detail reference; top proposition at [`AGENTS.md` Breaking changes](../../AGENTS.md#breaking-changes) 2026-05-18 row; bottom-level fallback at [`src/handle.ts`](./src/handle.ts) IDE hover JSDoc.

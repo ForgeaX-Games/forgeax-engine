@@ -374,6 +374,17 @@ async function createAppFromCanvas(
   // events. Only wired when FORGEAX_ENGINE_RHI_DEBUG=1.
   let _debugAdapter: unknown | undefined;
   if (_debugInst !== undefined) {
+    // A real device loss invalidates every opaque handle retained by the
+    // recorder. Renderer.recover() rebuilds the GPU graph through the same
+    // wrapped RHI instance, so reset the recorder before that rebuild can
+    // repopulate its device-bound registries. Without this, a post-recovery
+    // capture tries to snapshot resources minted by the lost device.
+    renderer.onHealthChange((snapshot) => {
+      if (snapshot.reason === 'device-lost') {
+        _debugInst?._resetForDeviceLoss();
+      }
+    });
+
     const r = renderer as Renderer & {
       _onFrameEnd(listener: () => void): () => void;
     };

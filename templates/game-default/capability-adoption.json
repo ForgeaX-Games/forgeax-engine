@@ -26,6 +26,54 @@
         "templates/game-default/main.ts",
         "templates/game-default/assets/scene.pack.json"
       ]
+    },
+    {
+      "id": "asset:mp3",
+      "classification": "core",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/gameplay-audio.ts",
+        "apps/preview/vite.config.ts",
+        "forgeax-engine-assets/sfx/dragon-studio-correct-472358.mp3.meta.json"
+      ]
+    },
+    {
+      "id": "package:@forgeax/engine-audio-webaudio",
+      "classification": "core",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "apps/preview/src/main.ts",
+        "packages/audio-webaudio/README.md"
+      ]
+    },
+    {
+      "id": "app:hello/audio",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/gameplay-audio.ts",
+        "apps/hello/audio/src/main.ts"
+      ]
+    },
+    {
+      "id": "app:bevy/spatial-audio-3d",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/gameplay-audio.ts",
+        "apps/bevy/spatial-audio-3d/src/spatial-audio-3d.ts"
+      ]
+    },
+    {
+      "id": "app:hello/custom-shader",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/hit-flash.wgsl",
+        "templates/game-default/src/hit-flash-material.ts",
+        "apps/hello/custom-shader/src/index.ts",
+        "apps/preview/vite.config.ts"
+      ]
     }
   ]
 }

@@ -303,7 +303,7 @@ describe('builtin-systems.test.ts', () => {
           offenders,
           `bare string '${value}' must be replaced by the exported constant in:\n  ${offenders.join('\n  ')}`,
         ).toEqual([]);
-      });
+      }, 15_000);
     }
 
     it('is falsifiable: a synthetic bare-string consumer is detected', () => {

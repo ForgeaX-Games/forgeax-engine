@@ -4387,6 +4387,28 @@ export interface ImageMetadata {
   readonly downscaleMaxDimension?: number;
 }
 
+export type {
+  AssetRelation,
+  AssetRelationPolicy,
+  AssetRelationType,
+  AssetSubjectRef,
+  AssetSubjectType,
+  CatalogDiagnostic,
+  CatalogDiagnosticSeverity,
+  ExistingOutput,
+  ImportedOutputDeclaration,
+  KindChange,
+  MatchConflict,
+  ProducerContractDiagnostic,
+  ProducerContractErrorCode,
+  ProducerContractResult,
+  ProposedOutput,
+  ProviderProvenance,
+  ResourceRevision,
+  TopologyConflictReason,
+  TopologyDiff,
+  TopologyPreserved,
+} from './asset-producer';
 /**
  * One row in the pack-index catalog (`pack-index.json` for build path,
  * `/__pack/index` JSON response for dev path).
@@ -4410,7 +4432,13 @@ export interface ImageMetadata {
  *     emit 4-field rows). Runtime consumers narrow with `entry.metadata !==
  *     undefined` before consumption (D-2 backward-compat strategy).
  */
-export type { CatalogDelta, CatalogEntry, CatalogEntry as PackIndexEntry } from './catalog';
+export type {
+  CatalogDelta,
+  CatalogEntry,
+  CatalogEntry as PackIndexEntry,
+  CatalogRevisionPoint,
+  CatalogRevisionWindow,
+} from './catalog';
 
 // === InspectEntry / InspectSnapshot (feat-20260618-asset-and-pack-name-fields M1 / w3) ===
 //

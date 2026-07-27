@@ -19,12 +19,14 @@
 //     'Worker is not defined' and the bake reports 'bake-failed' (exit 1) --
 //     the best-effort real run requires a Worker + wasm host.
 
+import { Buffer } from 'node:buffer';
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { deflateSync } from 'node:zlib';
 import { FontError, type GlyphMetric } from '@forgeax/engine-types';
+import { NodeWorkerAdapter } from './node-worker-adapter.js';
 
 /**
  * Minimal subset of the @zappar/msdf-generator glyph record consumed by the
@@ -309,7 +311,10 @@ interface ZapparAtlas {
 
 export async function realGeneratorFactory(): Promise<MsdfGenerator> {
   const mod = (await import('@zappar/msdf-generator')) as unknown as {
-    MSDF: new () => {
+    MSDF: new (config?: {
+      workerUrl?: URL;
+      wasmUrl?: string;
+    }) => {
       initialize(): Promise<void>;
       generateAtlas(opts: {
         font: Uint8Array;
@@ -321,8 +326,30 @@ export async function realGeneratorFactory(): Promise<MsdfGenerator> {
       dispose(): Promise<void>;
     };
   };
-  const msdf = new mod.MSDF();
-  await msdf.initialize();
+
+  const wasmModuleUrl = import.meta.resolve('@zappar/msdf-generator/msdfgen_wasm.wasm');
+  const wasmBytes = await readFile(new URL(wasmModuleUrl));
+  const wasmUrl = `data:application/octet-stream;base64,${Buffer.from(wasmBytes).toString('base64')}`;
+  const nodeGlobal = globalThis as unknown as { Worker?: typeof NodeWorkerAdapter };
+  const previousWorker = nodeGlobal.Worker;
+  nodeGlobal.Worker = NodeWorkerAdapter;
+  let msdf: InstanceType<typeof mod.MSDF> | undefined;
+  try {
+    msdf = new mod.MSDF({
+      workerUrl: new URL('./node-msdf-worker.mjs', import.meta.url),
+      wasmUrl,
+    });
+    await msdf.initialize();
+  } finally {
+    if (previousWorker === undefined) {
+      delete nodeGlobal.Worker;
+    } else {
+      nodeGlobal.Worker = previousWorker;
+    }
+  }
+  if (msdf === undefined) {
+    throw new Error('the MSDF generator did not initialize');
+  }
   return {
     async generateAtlas(ttf: Uint8Array): Promise<BakeAtlas> {
       const a = await msdf.generateAtlas({

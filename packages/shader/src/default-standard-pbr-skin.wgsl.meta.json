@@ -85,6 +85,11 @@
       "default": 0.5
     },
     {
+      "name": "specularTint",
+      "type": "vec3",
+      "default": [1.0, 1.0, 1.0]
+    },
+    {
       "name": "baseColorTexture",
       "type": "texture2d"
     },
@@ -94,6 +99,10 @@
     },
     {
       "name": "normalTexture",
+      "type": "texture2d"
+    },
+    {
+      "name": "specularTintTexture",
       "type": "texture2d"
     }
   ]

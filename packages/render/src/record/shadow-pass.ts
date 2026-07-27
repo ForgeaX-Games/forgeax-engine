@@ -345,6 +345,17 @@ export function recordShadowPass(
             value: pipelineState.defaultNormalTextureView,
           },
         },
+        {
+          binding: 7,
+          resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
+        },
+        {
+          binding: 8,
+          resource: {
+            kind: 'textureView' as const,
+            value: pipelineState.defaultWhiteTextureView,
+          },
+        },
       ];
       const shadowSkyFb = pipelineState.skylightFallback;
       const shadowEmissiveAo: EmissiveAoBindGroupResources = {
@@ -935,6 +946,17 @@ export function recordPointShadowPass(c: _InternalRenderPipelineContext): void {
               binding: 6,
               resource: { kind: 'textureView' as const, value: pipelineState.fallbackTextureView },
             },
+            {
+              binding: 7,
+              resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler },
+            },
+            {
+              binding: 8,
+              resource: {
+                kind: 'textureView' as const,
+                value: pipelineState.defaultWhiteTextureView,
+              },
+            },
           ];
           const merged =
             fb !== null
@@ -1218,6 +1240,11 @@ function ensureSpotShadowMaterialBg(c: _InternalRenderPipelineContext): BindGrou
     {
       binding: 6,
       resource: { kind: 'textureView' as const, value: pipelineState.fallbackTextureView },
+    },
+    { binding: 7, resource: { kind: 'sampler' as const, value: pipelineState.defaultSampler } },
+    {
+      binding: 8,
+      resource: { kind: 'textureView' as const, value: pipelineState.defaultWhiteTextureView },
     },
   ];
   const merged =

@@ -42,6 +42,8 @@ export interface DrawInfo {
   readonly bindings: readonly InspectBindingEntry[];
   readonly drawCall: InspectDrawCall;
   readonly colorAttachmentHandleId: string | undefined;
+  /** Prefer the single-sample MSAA resolve target for pixel readback. */
+  readonly colorAttachmentResolveTargetHandleId: string | undefined;
 }
 
 // ============================================================================
@@ -354,6 +356,7 @@ export function extractDrawInfo(events: readonly RhiCallEvent[], targetDrawIdx: 
 
   // Track the last color attachment from beginRenderPass
   let lastColorAttachmentHandleId: string | undefined;
+  let lastColorAttachmentResolveTargetHandleId: string | undefined;
   // Track whether we saw a setPipeline event (for draw call kind)
   const lastSeenPerPass: Map<
     string,
@@ -374,6 +377,8 @@ export function extractDrawInfo(events: readonly RhiCallEvent[], targetDrawIdx: 
     if (event.kind === 'beginRenderPass') {
       currentPassHandleId = event.passHandleId;
       lastColorAttachmentHandleId = event.colorAttachmentViewHandleIds[0] ?? undefined;
+      lastColorAttachmentResolveTargetHandleId =
+        event.colorAttachmentResolveTargetHandleIds?.[0] ?? undefined;
     } else if (event.kind === 'endRenderPass') {
       currentPassHandleId = undefined;
     }
@@ -505,6 +510,7 @@ export function extractDrawInfo(events: readonly RhiCallEvent[], targetDrawIdx: 
         pipelineHandleId: 'unknown',
       },
       colorAttachmentHandleId: undefined,
+      colorAttachmentResolveTargetHandleId: undefined,
     };
   }
 
@@ -514,6 +520,7 @@ export function extractDrawInfo(events: readonly RhiCallEvent[], targetDrawIdx: 
     bindings: drawBindings,
     drawCall,
     colorAttachmentHandleId: lastColorAttachmentHandleId,
+    colorAttachmentResolveTargetHandleId: lastColorAttachmentResolveTargetHandleId,
   };
 }
 

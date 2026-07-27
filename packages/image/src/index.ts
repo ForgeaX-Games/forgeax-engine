@@ -32,6 +32,8 @@ export type {
 export { reimportReuseMeta } from './reimport-reuse-meta.js';
 export type { Result, ResultErr, ResultOk } from './result.js';
 export { err, ok } from './result.js';
+export type { ImageSourceKeyLocator } from './source-key.js';
+export { deriveImageSourceKey } from './source-key.js';
 export type { SubAssetKey, SubAssetKeyInput } from './sub-asset-key.js';
 export { subAssetKey, subAssetKeyEqual } from './sub-asset-key.js';
 export type {

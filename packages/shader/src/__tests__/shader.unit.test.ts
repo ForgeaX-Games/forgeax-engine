@@ -910,9 +910,14 @@ import {
     'occlusionStrength',
     // feat-city-glb multi-UV tiling: per-material UV-set selector.
     'uvSet',
+    'alphaCutoff',
+    'clearcoat',
+    'clearcoatRoughness',
+    'specularTint',
     'baseColorTexture',
     'metallicRoughnessTexture',
     'normalTexture',
+    'specularTintTexture',
   ] as const;
 
   const STUB_WGSL = '// stub composed pbr-skin wgsl\n';
@@ -967,11 +972,11 @@ import {
   });
 
   describe('T-31 (c) — paramSchema reuses default-standard-pbr schema (R-10)', () => {
-    it('paramSchema length matches expected 14 params (D-8 split + uvSet)', () => {
+    it('paramSchema length matches the default standard-PBR schema', () => {
       const registry = makeMockRegistry();
       registerDefaultStandardPbrSkin(registry, STUB_WGSL, STORAGE_CAPS);
       const entry = lookup(registry);
-      expect(entry.paramSchema).toHaveLength(14);
+      expect(entry.paramSchema).toHaveLength(19);
     });
 
     it('paramSchema names match default-standard-pbr schema field-for-field', () => {
@@ -1002,6 +1007,13 @@ import {
         'f32',
         // uvSet selector (feat-city-glb multi-UV tiling).
         'f32',
+        // alpha cutoff + clearcoat controls.
+        'f32',
+        'f32',
+        'f32',
+        // specular tint and its texture map.
+        'vec3',
+        'texture2d',
         'texture2d',
         'texture2d',
         'texture2d',

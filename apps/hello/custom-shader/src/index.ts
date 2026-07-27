@@ -72,6 +72,7 @@ import { acquireCanvasContext, createRenderer, EngineEnvironmentError } from '@f
 
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import type { MaterialAsset } from '@forgeax/engine-runtime';  // feat-20260527 M1: register<MaterialAsset>
+import type { TextureAsset } from '@forgeax/engine-types';
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 
 import pulseShader from './pulse-material.wgsl';
@@ -146,6 +147,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
         { name: 'baseColor', type: 'color' },
         { name: 'metallic', type: 'f32' },
         { name: 'roughness', type: 'f32' },
+        { name: 'baseColorTexture', type: 'texture2d' },
       ],
     });
   }
@@ -155,18 +157,34 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   // so the record-stage writer (M9-T05 schema-driven overlay) fills the
   // 48-byte UBO positionally: the first color entry -> baseColor (offset
   // 0..16), the first f32 -> Material.metallic offset (16), the second
-  // f32 -> Material.roughness offset (20). pulse-material.wgsl reads the
-  // metallic offset as `time` and the roughness offset as `speed` (both
-  // are f32 fields in PulseUniforms, std140 byte-identical). Initial
+  // f32 -> Material.roughness offset (20). The texture entry derives the
+  // paired sampler/texture bindings for pulse-material.wgsl. The shader
+  // reads the metallic offset as `time` and the roughness offset as `speed`
+  // (both are f32 fields in PulseUniforms, std140 byte-identical). Initial
   // paramValues seeds time=0 and speed=2 (sin period ~pi seconds).
   //
   // Note: Materials.standard() uses forgeax::default-standard-pbr, but
   // this demo uses a custom material shader path. We register via
   // register<MaterialAsset> with the custom materialShader identifier.
+  const pulseTextureHandle = world.allocSharedRef<'TextureAsset', TextureAsset>('TextureAsset', {
+    kind: 'texture',
+    width: 2,
+    height: 2,
+    format: 'rgba8unorm',
+    data: new Uint8Array([
+      255, 128, 64, 255,
+      255, 128, 64, 255,
+      255, 128, 64, 255,
+      255, 128, 64, 255,
+    ]),
+    colorSpace: 'linear',
+    mipmap: false,
+  });
   const paramValues: Record<string, number | number[]> = {
     baseColor: [0.95, 0.45, 0.2],
     metallic: 0,
     roughness: 2,
+    baseColorTexture: pulseTextureHandle,
   };
   const materialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', {
     kind: 'material',

@@ -61,6 +61,15 @@ if (!app.ok) {
   const world = app.value.world;
   populateDemoWorld(world);
 
+  // M7 browser/driver device-loss probe. Keep this opt-in so the normal Hello
+  // Cube surface remains unchanged; the probe still calls only public Renderer
+  // health/recover methods and observes the same World instance.
+  const deviceLossProbe = new URLSearchParams(location.search).has('m7-device-loss');
+  const healthTransitions: unknown[] = [];
+  if (deviceLossProbe) {
+    app.value.renderer.onHealthChange((snapshot) => healthTransitions.push(snapshot));
+  }
+
   // feat-20260515-ecs-name-component-and-string-schema M3 / w3-hello-cube-app
   // (AC-14): canonical Name + 'string' schema vocab end-to-end exemplar. AI
   // users discover the round-trip via `rg "Name { value:" apps/hello/cube` --
@@ -75,6 +84,33 @@ if (!app.ok) {
   world.despawn(player).unwrap();
 
   app.value.start();
+  if (deviceLossProbe) {
+    Object.assign(globalThis, {
+      __forgeaxM7DeviceRecovery: {
+        health: () => app.value.renderer.health(),
+        recover: () => app.value.renderer.recover(),
+        entityCount: () => world.inspect().entityCount,
+        healthTransitions: () => healthTransitions.slice(),
+        debug: () => {
+          const debugRhi = (app.value as typeof app.value & { _debugRhi?: {
+            getState(): string;
+            getEvents(): readonly unknown[];
+            _getDescriptorTable(): ReadonlyMap<unknown, unknown>;
+            _getCapturedDevice(): unknown;
+          } })._debugRhi;
+          return debugRhi === undefined
+            ? undefined
+            : {
+                state: debugRhi.getState(),
+                events: debugRhi.getEvents().length,
+                descriptors: debugRhi._getDescriptorTable().size,
+                capturedDevice: debugRhi._getCapturedDevice() !== undefined,
+              };
+        },
+        drawOnce: () => app.value.renderer.draw([world], { owner: 0 }),
+      },
+    });
+  }
 }
 
 function reportError(err: CanvasAppError): void {

@@ -20,14 +20,113 @@
 import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import type { CanvasAppError } from '@forgeax/engine-app';
 import { createApp } from '@forgeax/engine-app';
-import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import {
+  ANTIALIAS_MSAA,
+  addFullscreenPass,
+  addScenePass,
+  Camera,
+  DirectionalLight,
+  MeshFilter,
+  MeshRenderer,
+  type RenderPipeline,
+  type RenderPipelineContext,
+  type RenderPipelineData,
+} from '@forgeax/engine-render';
+import { RenderGraph } from '@forgeax/engine-render-graph';
 import { Transform } from '@forgeax/engine-scene';
+import type { RenderPipelineAsset, TextureAsset } from '@forgeax/engine-types';
+import customPipelineInversionShader from './custom-pipeline-inversion.wgsl';
 import demoShader from './multi-uv-demo.wgsl';
+import inversionShader from './post-inversion.wgsl';
+import passthroughShader from './post-passthrough.wgsl';
 
 const DEMO_MATERIAL_SHADER_PATH = 'hello-multi-uv::multi-uv-demo';
+const CUSTOM_PIPELINE_ID = 'hello-multi-uv::custom-render-graph';
+const CUSTOM_PIPELINE_INVERSION_ID = 'hello-multi-uv::custom-render-graph-inversion';
+const CUSTOM_PIPELINE_PASSTHROUGH_ID = 'hello-multi-uv::custom-render-graph-passthrough';
+const CUSTOM_COLOR_KEY = 'helloMultiUvCustomColor';
+const CUSTOM_DEPTH_KEY = 'helloMultiUvCustomDepth';
+const CUSTOM_RESOLVE_KEY = 'helloMultiUvCustomResolve';
+
+function makeCustomPipeline(postShader: string): RenderPipeline {
+  return {
+    buildGraph(
+      ctx: RenderPipelineContext,
+      _data: RenderPipelineData,
+    ): RenderGraph<RenderPipelineContext> | null {
+      const graph = new RenderGraph<RenderPipelineContext>();
+      const colorFormat = ctx.pipelineState.colorAttachmentFormat ?? 'rgba8unorm-srgb';
+      // `ctx` is intentionally a stable early-build carrier and does not
+      // expose per-camera topology state there. The per-frame camera snapshot
+      // is the public buildGraph source for MSAA, while execute receives the
+      // matching live `ctx.msaaActive` for recordMainPass.
+      const msaaActive = _data.camera.antialias === 'msaa';
+      const falsifyMsaaResolve = params.has('falsify-msaa-resolve');
+      const sceneSample = msaaActive ? 4 : 1;
+      graph.addColorTarget(CUSTOM_COLOR_KEY, {
+        format: colorFormat,
+        size: 'swapchain',
+        sample: sceneSample,
+        usage: 0x10 | 0x04,
+      });
+      graph.addColorTarget(CUSTOM_DEPTH_KEY, {
+        format: 'depth24plus-stencil8',
+        size: 'swapchain',
+        sample: sceneSample,
+        usage: 0x10,
+      });
+      if (msaaActive && !falsifyMsaaResolve) {
+        graph.addColorTarget(CUSTOM_RESOLVE_KEY, {
+          format: colorFormat,
+          size: 'swapchain',
+          sample: 1,
+          usage: 0x10 | 0x04,
+        });
+      }
+      const colorInputKey =
+        msaaActive && !falsifyMsaaResolve ? CUSTOM_RESOLVE_KEY : CUSTOM_COLOR_KEY;
+      addScenePass(graph, 'custom-scene', {
+        color: CUSTOM_COLOR_KEY,
+        depth: CUSTOM_DEPTH_KEY,
+        ...(msaaActive ? { resolve: falsifyMsaaResolve ? null : CUSTOM_RESOLVE_KEY } : {}),
+        selector: { LightMode: ['Forward'] },
+        _routeFromOpts: true,
+      });
+      addFullscreenPass(graph, 'custom-present', {
+        shader: postShader,
+        color: 'swapchain',
+        reads: [colorInputKey],
+      });
+      const compiled = graph.compile({
+        backendKind: ctx.runtime.device.caps.backendKind,
+        caps: ctx.runtime.device.caps,
+        device: ctx.runtime.device,
+      });
+      if (!compiled.ok) {
+        console.error('[hello-multi-uv] custom pipeline graph compile failed:', compiled.error);
+        return null;
+      }
+      return graph;
+    },
+    execute(ctx: RenderPipelineContext): void {
+      ctx.frameState.perFrameGraph?.execute(ctx);
+    },
+  };
+}
 
 const canvas = document.querySelector<HTMLCanvasElement>('#app');
 if (!canvas) throw new Error('hello-multi-uv: missing <canvas id="app"> in index.html');
+const targetCanvas = canvas;
+const params = new URLSearchParams(location.search);
+const useMsaa = params.has('msaa');
+
+function resizeCanvas(): void {
+  targetCanvas.width = window.innerWidth;
+  targetCanvas.height = window.innerHeight;
+}
+
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
 
 const HALF_W = 1.5;
 const HALF_H = 1.5;
@@ -38,6 +137,8 @@ const VY = GRID_Y + 1;
 const UV_SETS = 2;
 const FLOATS_BASE = 12;
 const FLOATS_PER_VERTEX = FLOATS_BASE + (UV_SETS - 1) * 2; // 14
+const POST_PASSTHROUGH_ID = 'hello-multi-uv::passthrough';
+const POST_INVERSION_ID = 'hello-multi-uv::inversion';
 
 const vertexCount = VX * VY;
 const indexCount = GRID_X * GRID_Y * 6;
@@ -120,7 +221,8 @@ if (!app.ok) {
   const world = app.value.world;
   const shader = app.value.renderer.shader;
   const assets = app.value.renderer.assets;
-  const falsifyVariantSelection = new URLSearchParams(location.search).has('falsify');
+  const startupVariant: 'true' | 'false' = params.get('variant') === 'false' ? 'false' : 'true';
+  const falsifyVariantSelection = params.has('falsify');
   const variantControl = document.createElement('label');
   variantControl.id = 'variant-control';
   variantControl.style.cssText =
@@ -138,16 +240,109 @@ if (!app.ok) {
   variantControl.append(variantStatus);
   document.body.append(variantControl);
 
+  const pipelineControl = document.createElement('label');
+  pipelineControl.id = 'pipeline-control';
+  pipelineControl.style.cssText =
+    'position:fixed;z-index:1;top:58px;left:12px;padding:8px 10px;color:#fff;background:#111c;border-radius:4px;font:14px monospace';
+  pipelineControl.append('M3_PIPELINE ');
+  const pipelineSelect = document.createElement('select');
+  pipelineSelect.id = 'pipeline-select';
+  pipelineSelect.setAttribute('aria-label', 'M3 render pipeline');
+  pipelineSelect.add(new Option('standard URP', 'standard'));
+  pipelineSelect.add(new Option('custom RenderGraph', 'custom'));
+  pipelineControl.append(pipelineSelect, ' ');
+  const pipelineStatus = document.createElement('span');
+  pipelineStatus.id = 'pipeline-status';
+  pipelineStatus.textContent = 'M3_PIPELINE=standard';
+  pipelineControl.append(pipelineStatus);
+  document.body.append(pipelineControl);
+
+  const postControl = document.createElement('label');
+  postControl.id = 'post-control';
+  postControl.style.cssText =
+    'position:fixed;z-index:1;top:104px;left:12px;padding:8px 10px;color:#fff;background:#111c;border-radius:4px;font:14px monospace';
+  postControl.append('M3_POST_EFFECT ');
+  const postSelect = document.createElement('select');
+  postSelect.id = 'post-select';
+  postSelect.setAttribute('aria-label', 'M3 post-process effect');
+  postSelect.add(new Option('passthrough', 'passthrough'));
+  postSelect.add(new Option('inversion', 'inversion'));
+  postControl.append(postSelect, ' ');
+  const postStatus = document.createElement('span');
+  postStatus.id = 'post-status';
+  postStatus.textContent = 'M3_POST_EFFECT=passthrough';
+  postControl.append(postStatus);
+  document.body.append(postControl);
+
   // Register the demo's custom material shader (AC-10 visual carrier). The
+  // shader samples uv0 through a real TextureAsset and paints uv1; the
   // smoke-dawn path passes the same paramSchema explicitly; here vite's
   // forgeaxShader() transform already composed multi-uv-demo.wgsl into
   // { hash, wgsl } and the .meta.json sidecar is the paramSchema SSOT.
   if (!shader.lookupMaterialShader(DEMO_MATERIAL_SHADER_PATH).ok) {
     shader.registerMaterialShader(DEMO_MATERIAL_SHADER_PATH, {
       source: demoShader.wgsl,
-      paramSchema: [{ name: 'baseColor', type: 'color' }],
+      paramSchema: [
+        { name: 'baseColor', type: 'color' },
+        { name: 'baseColorTexture', type: 'texture2d' },
+        { name: 'detailTexture', type: 'texture2d' },
+      ],
     });
   }
+  const baseColorTexture: TextureAsset = {
+    kind: 'texture',
+    width: 2,
+    height: 2,
+    format: 'rgba8unorm',
+    data: new Uint8Array([
+      255, 128, 64, 255, 255, 128, 64, 255, 255, 128, 64, 255, 255, 128, 64, 255,
+    ]),
+    colorSpace: 'linear',
+    mipmap: false,
+  };
+  const baseColorTextureHandle = world.allocSharedRef<'TextureAsset', TextureAsset>(
+    'TextureAsset',
+    baseColorTexture,
+  );
+  const detailTexture: TextureAsset = {
+    kind: 'texture',
+    width: 2,
+    height: 2,
+    format: 'rgba8unorm',
+    data: new Uint8Array([
+      64, 192, 255, 255, 64, 192, 255, 255, 64, 192, 255, 255, 64, 192, 255, 255,
+    ]),
+    colorSpace: 'linear',
+    mipmap: false,
+  };
+  const detailTextureHandle = world.allocSharedRef<'TextureAsset', TextureAsset>(
+    'TextureAsset',
+    detailTexture,
+  );
+  assets.catalog('guid:3d3d3d3d-0000-0000-0000-3d3d3d3d3d3d', baseColorTexture);
+  assets.catalog('guid:4e4e4e4e-0000-0000-0000-4e4e4e4e4e4e', detailTexture);
+  const textureStatus = document.createElement('span');
+  textureStatus.id = 'texture-status';
+  textureStatus.textContent = 'M3_TEXTURE_BINDING=baseColorTexture+detailTexture';
+  variantControl.append(' ', textureStatus);
+  const antialiasStatus = document.createElement('span');
+  antialiasStatus.id = 'antialias-status';
+  antialiasStatus.textContent = `M3_ANTIALIAS=${useMsaa ? 'msaa' : 'none'}`;
+  variantControl.append(' ', antialiasStatus);
+  app.value.renderer.postProcess.register(CUSTOM_PIPELINE_INVERSION_ID, {
+    source: customPipelineInversionShader.wgsl,
+  });
+  app.value.renderer.postProcess.register(CUSTOM_PIPELINE_PASSTHROUGH_ID, {
+    source: passthroughShader.wgsl,
+  });
+  app.value.renderer.registerPipeline(
+    CUSTOM_PIPELINE_ID,
+    makeCustomPipeline(CUSTOM_PIPELINE_PASSTHROUGH_ID),
+  );
+  app.value.renderer.registerPipeline(
+    CUSTOM_PIPELINE_INVERSION_ID,
+    makeCustomPipeline(CUSTOM_PIPELINE_INVERSION_ID),
+  );
 
   // Build MeshAsset with independent per-attribute typed arrays. The interleaved
   // `vertices` buffer is the main GPU vertex data; `attributes` provides
@@ -175,9 +370,11 @@ if (!app.ok) {
   };
 
   // Build MaterialAsset referencing the custom multi-uv shader (AC-10 visual
-  // carrier). The shader samples uv1 -> visible per-quad checkerboard; the
+  // carrier). The shader samples the real texture with uv0 and uv1 -> visible
+  // per-quad checkerboard; the
   // built-in PBR is deliberately NOT used here so the engine core stays
   // single-UV-zero-regression clean.
+  const falsifyDetailTexture = new URLSearchParams(location.search).has('falsify-texture');
   const materialAsset = (variant: 'true' | 'false') => ({
     kind: 'material' as const,
     passes: [
@@ -193,6 +390,8 @@ if (!app.ok) {
     ],
     paramValues: {
       baseColor: [0.7, 0.7, 0.7],
+      baseColorTexture: baseColorTextureHandle,
+      ...(falsifyDetailTexture ? {} : { detailTexture: detailTextureHandle }),
     },
   });
   const defaultMaterial = materialAsset('true');
@@ -238,6 +437,7 @@ if (!app.ok) {
   variantSelect.addEventListener('change', () => {
     selectVariant(variantSelect.value === 'false' ? 'false' : 'true');
   });
+  selectVariant(startupVariant);
   world.spawn(
     {
       component: Transform,
@@ -249,7 +449,13 @@ if (!app.ok) {
     },
     {
       component: Camera,
-      data: { fov: Math.PI / 4, aspect: 16 / 9, near: 0.1, far: 100 },
+      data: {
+        fov: Math.PI / 4,
+        aspect: 16 / 9,
+        near: 0.1,
+        far: 100,
+        ...(useMsaa ? { antialias: ANTIALIAS_MSAA } : {}),
+      },
     },
   );
   world.spawn({
@@ -261,7 +467,78 @@ if (!app.ok) {
     },
   });
 
+  const falsifyPipelineSelection = new URLSearchParams(location.search).has('falsify-pipeline');
+  const standardPipeline: RenderPipelineAsset = {
+    kind: 'render-pipeline',
+    pipelineId: 'forgeax::urp',
+  };
+  type PipelineChoice = 'standard' | 'custom';
+  type PostChoice = 'passthrough' | 'inversion';
+  let selectedPipeline: PipelineChoice = 'standard';
+  let selectedPost: PostChoice = 'passthrough';
+  const pipelineAsset = (pipeline: PipelineChoice, post: PostChoice): RenderPipelineAsset => ({
+    kind: 'render-pipeline',
+    pipelineId:
+      pipeline === 'custom'
+        ? falsifyPipelineSelection
+          ? 'forgeax::urp'
+          : post === 'inversion'
+            ? CUSTOM_PIPELINE_INVERSION_ID
+            : CUSTOM_PIPELINE_ID
+        : standardPipeline.pipelineId,
+    ...(pipeline === 'standard'
+      ? {
+          config: { postEffects: [post === 'inversion' ? POST_INVERSION_ID : POST_PASSTHROUGH_ID] },
+        }
+      : {}),
+  });
+  const selectPipeline = (pipeline: PipelineChoice) => {
+    const asset = pipelineAsset(pipeline, selectedPost);
+    const result = app.value.renderer.installPipeline(asset);
+    if (!result.ok) {
+      console.error('[hello-multi-uv] pipeline selection failed:', result.error);
+      return;
+    }
+    selectedPipeline = pipeline;
+    pipelineSelect.value = pipeline;
+    pipelineStatus.textContent = `M3_PIPELINE=${pipeline}`;
+  };
+  pipelineSelect.addEventListener('change', () => {
+    selectPipeline(pipelineSelect.value === 'custom' ? 'custom' : 'standard');
+  });
+
+  app.value.renderer.postProcess.register(POST_PASSTHROUGH_ID, {
+    source: passthroughShader.wgsl,
+  });
+  app.value.renderer.postProcess.register(POST_INVERSION_ID, {
+    source: inversionShader.wgsl,
+  });
+
+  const selectPost = (effect: PostChoice) => {
+    const asset = pipelineAsset(selectedPipeline, effect);
+    const result = app.value.renderer.installPipeline(asset);
+    if (!result.ok) {
+      console.error('[hello-multi-uv] post selection failed:', result.error);
+      return;
+    }
+    selectedPost = effect;
+    postSelect.value = effect;
+    postStatus.textContent = `M3_POST_EFFECT=${effect}`;
+  };
+  postSelect.addEventListener('change', () => {
+    selectPost(postSelect.value === 'inversion' ? 'inversion' : 'passthrough');
+  });
+
+  const initialPost: PostChoice = params.get('post') === 'inversion' ? 'inversion' : 'passthrough';
+  selectedPost = initialPost;
+  postSelect.value = initialPost;
+  postStatus.textContent = `M3_POST_EFFECT=${initialPost}`;
   app.value.start();
+  if (params.get('pipeline') === 'custom') {
+    selectPipeline('custom');
+  } else {
+    selectPost(initialPost);
+  }
 }
 
 function reportError(err: CanvasAppError): void {

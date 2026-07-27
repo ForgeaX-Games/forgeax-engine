@@ -1248,17 +1248,17 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
   // BGL + pipeline layout cache. A custom material shader declaring >3
   // user-region textures (e.g. parallax `heightTexture`) needs a material BGL
   // whose user-region + injection start differ from the shared built-in
-  // 18-entry layout, plus a pipeline layout [view, perShaderMaterialBgl,
+  // derived shared layout, plus a pipeline layout [view, perShaderMaterialBgl,
   // meshArray, instances] that the PSO builds against. Built lazily on first
-  // request and cached by shaderId; 3-texture shaders never enter the cache
+  // request and cached by shaderId; 4-or-fewer-texture shaders never enter the cache
   // (they reuse the shared layout, byte-for-byte the built-in shape — D-2).
   const perShaderMaterialLayoutCache = new Map<
     string,
     { materialBgl: BindGroupLayout; pipelineLayout: PipelineLayout }
   >();
   // Returns the per-shader { materialBgl, pipelineLayout } for a custom shader
-  // whose user-region texture count exceeds the built-in 3, or null when the
-  // shader resolves to the shared built-in layout (3 textures) / is
+  // whose user-region texture count exceeds the built-in 4, or null when the
+  // shader resolves to the shared built-in layout (4 textures) / is
   // unregistered / pipelineState is not ready. Pure-ish: builds + caches on
   // miss via the same buildBindGroupLayoutDescriptor SSOT (kind
   // 'pbr-material-merged' + materialParamSchema) used by buildPbrPipelineLayouts.
@@ -1271,9 +1271,9 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
     const lookup = getShader().lookupMaterialShader(materialShaderId);
     if (!lookup.ok) return null;
     const paramSchema = lookup.value.paramSchema;
-    // 3-or-fewer user-region textures derive to the same 18-entry shape as the
-    // shared built-in BGL -> reuse it (D-2 bit-for-bit; no per-shader entry).
-    if (derive(paramSchema).textureFieldNames.size <= 3) return null;
+    // 4-or-fewer user-region textures derive to the same shape as the shared
+    // built-in BGL -> reuse it (D-2; no per-shader entry).
+    if (derive(paramSchema).textureFieldNames.size <= 4) return null;
     const spec: PipelineSpec = {
       shader: { id: materialShaderId, passKind: 'forward', variantSet: undefined },
       attachments: { colorFormats: [], depthFormat: undefined, sampleCount: 1 },
@@ -1684,12 +1684,36 @@ async function makeWebGPURenderer(internals: WebGPURendererInternals): Promise<R
         break;
       }
     }
-    const effectiveVariantSet = resolveMaterialShaderVariantSet(
+    const resolvedVariantSet = resolveMaterialShaderVariantSet(
       variantSet,
       manifestEntry?.variants ?? [],
       internals.device.caps.backendKind,
       internals.device.caps.storageBuffer,
     );
+    // The record stage also composes engine capability axes for user shaders.
+    // Keep only manifest-declared axes for non-engine material IDs: a plain
+    // custom shader must not collapse that request to '' because '' is the
+    // canonical HDRP variant key and would pair an HDRP PSO with the URP mesh
+    // bind group. Builtin forgeax:: shaders keep the compatibility request
+    // when a reduced test/legacy manifest omits variant metadata.
+    let effectiveVariantSet = resolvedVariantSet;
+    if (
+      manifestEntry !== undefined &&
+      !materialShaderId.startsWith('forgeax::') &&
+      effectiveVariantSet !== undefined &&
+      effectiveVariantSet !== ''
+    ) {
+      const declaredAxes = new Set<string>();
+      for (const variant of manifestEntry.variants) {
+        for (const axis of Object.keys(variant.defines)) declaredAxes.add(axis);
+      }
+      const filteredVariantParts = effectiveVariantSet
+        .split('+')
+        .filter((part) => declaredAxes.has(part.slice(0, part.indexOf('='))))
+        .sort();
+      effectiveVariantSet =
+        filteredVariantParts.length === 0 ? undefined : filteredVariantParts.join('+');
+    }
     // feat-20260629 M4: auto-fill shaderUvSetCount from naga reflection
     // (stored in materialShaderUvSetCounts during prepareMaterialShaders).
     const resolvedUvSetCount = shaderUvSetCount ?? materialShaderUvSetCounts.get(materialShaderId);
@@ -4945,7 +4969,7 @@ async function buildReadyWebGPU(
     // M-3 / w12: builtin direct-upload fallback path mirrors the gpuStore
     // mesh entry shape -- raw RHI Buffer handles are wrapped in GpuBuffer so
     // the dispose chain (M-5) can walk them via `.destroy()`.
-    meshHandles.set(handle, {
+    meshHandles.set(id, {
       vertexBuffer: new GpuBuffer(rhiDevice, vboResult.value),
       indexBuffer: ibo === null ? null : new GpuBuffer(rhiDevice, ibo as Buffer),
       vboBytes: vertexBytes,

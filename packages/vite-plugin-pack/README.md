@@ -5,6 +5,32 @@
 // (parseImage -> raw RGBA bytes -> emitFile hashed `<guid>-[hash].bin`),
 // rewrites `relativeUrl` to the hashed path, and emits `pack-index.json`.
 
+## Producer fields are catalog facts
+
+The build producer copies `packageId`, `provenance`, `revision`,
+`sourceKey`/`sourceIndex`, typed `relations`, and structured `diagnostics`
+from pack/meta declarations into every emitted `CatalogEntry`. It supplies a
+fallback provenance version from the producer schema when a sidecar omits one;
+consumers never need to guess importer identity from a URL or file suffix.
+
+> [!IMPORTANT]
+> `buildCatalogResult()` is the canonical builder result. It contains
+> `entries`, `authority`, and structured `diagnostics`. The legacy
+> `buildCatalog()` array is a one-way projection of that result, so old callers
+> remain source-compatible without creating a second catalog truth.
+
+| Result field | Meaning | Safe consumer action |
+|:--|:--|:--|
+| `entries` | Complete neutral catalog rows | Read producer facts and merge by lowercase GUID |
+| `authority: 'authoritative'` | Scan and fold completed with verified inputs | Apply the snapshot or delta |
+| `authority: 'degraded'` | Some roots or declarations could not be verified | Keep affected subjects isolated and follow diagnostics |
+| `diagnostics` | Structured scan/fold evidence | Branch on `code`, `expected`, `actual`, and `hint` |
+
+`packageId` is the topology group identity. `sourcePath`, `relativeUrl`, and
+DDC locations are replaceable locators; they are never used as a fallback
+identity. Revision and producer facts remain attached to every row in a
+catalog delta, including a row whose locator changed.
+
 # Catalog transport and host refresh
 
 > [!IMPORTANT]
@@ -104,6 +130,9 @@ Each row in `pack-index.json` (build) or `/__pack/index` (dev) carries:
 | `kind` | `string` (closed disc.) | `'texture'` / `'mesh'` / `'scene'` / `'material'` / future arms |
 | `sourcePath` | `string` | on-disk source path (debugging + grep; build retains source JPG path even though `relativeUrl` points to import artefact) |
 | `metadata` | `ImageMetadata \| undefined` | present iff `kind === 'texture'`; sub-structure: `width?` / `height?` / `format: GPUTextureFormat` / `colorSpace: 'srgb' \| 'linear'` / `mipmap: boolean`; `width` / `height` may be absent in dev-mode entries pre-decode (build-mode import fills them) |
+| `packageId`, `provenance`, `revision` | producer PODs | stable facts copied from the declaration; absent means no evidence was published |
+| `sourceKey`, `sourceIndex` | topology PODs | semantic key plus positional evidence; `sourceIndex` is never identity |
+| `relations`, `diagnostics` | structured facts | copied into the row and consumed by property, not message parsing |
 
 `metadata.mipmap` is the boolean form; sidecar `*.meta.json` `importSettings.mipmap` string tokens `'auto'` / `'none'` are mapped at the catalog builder (feat-20260517-vite-plugin-image-build-time-cook D-5; runtime is unaware of the string form). 5-field shape is feat-20260517-vite-plugin-image-build-time-cook D-2 (charter P4 consistent abstraction; metadata field names mirror `TextureAsset` POD byte-for-byte).
 

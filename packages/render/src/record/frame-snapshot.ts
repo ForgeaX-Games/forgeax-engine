@@ -144,7 +144,7 @@ export interface RenderFrameState {
   /** Graphs detached from the active pipeline while GPU work may still use them. */
   readonly retiredPerFrameGraphs: Set<RenderGraph<RenderPipelineContext>>;
   readonly instanceBuffers: Map<number, InstanceBufferCacheEntry>;
-  readonly transientInstanceBuffers: InstanceBufferCacheEntry[];
+  transientInstanceBuffers: InstanceBufferCacheEntry[];
   warnedZeroLightStandard: boolean;
   /**
    * feax-20260608-multi-light-warn-once M3: once-warn latch for multi-light
@@ -221,11 +221,12 @@ export interface RenderFrameState {
    * Each root is a WeakMap<object, WeakMap<...>> walked by
    * getOrCreateFromChain; the chain depth varies by variant
    * (view-main = 7, mesh = 1, hdrp-unified = 5, skin = 2).
-   * The root WeakMap is init-time stable — never cleared, no eviction.
-   * Chain keys are always inner buffer handles, never wrappers (D-3).
+   * Roots are stable between device recoveries and replaced when the renderer
+   * swaps to a fresh device. Chain keys are always inner buffer handles, never
+   * wrappers (D-3).
    */
-  readonly viewBindGroupCache: WeakMap<object, unknown>;
-  readonly meshBindGroupCache: WeakMap<object, unknown>;
+  viewBindGroupCache: WeakMap<object, unknown>;
+  meshBindGroupCache: WeakMap<object, unknown>;
   /**
    * feat-20260622-handle-to-id-allocator-elimination M1 / w2: per-entity
    * bind group caches scoped by entityKey (packed u32 as number).
@@ -278,7 +279,7 @@ export interface RenderFrameState {
    * the pre-fix `pp.*BindGroup === null` single-slot caches that never
    * invalidated on resize and submitted destroyed textures.
    */
-  readonly postProcessBgCache: WeakMap<object, unknown>;
+  postProcessBgCache: WeakMap<object, unknown>;
   /**
    * feat-20260601-customizable-render-pipeline-seam M1 / w7: the raw u32 handle of the
    * currently installed RenderPipelineAsset (0 = none installed). `installPipeline` sets

@@ -1,6 +1,7 @@
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { DecodedImage, ImageColorSpace } from '@forgeax/engine-types';
 
+import { deriveImageSourceKey } from './source-key.js';
 import type { SubAssetKey } from './sub-asset-key.js';
 import { subAssetKey, subAssetKeyEqual } from './sub-asset-key.js';
 
@@ -15,6 +16,7 @@ export interface ExistingSubAsset {
   readonly sourceIndex: number;
   readonly kind: string;
   readonly name?: string;
+  readonly sourceKey?: string;
 }
 
 /**
@@ -43,6 +45,7 @@ export interface EmittedSubAsset {
   readonly sourceIndex: number;
   readonly kind: string;
   readonly name?: string;
+  readonly sourceKey?: string;
 }
 
 /**
@@ -71,6 +74,7 @@ export function reimportReuseMeta(
   const freshKeys: readonly SubAssetKey[] = [subAssetKey({ kind: 'texture', sourceIndex: 0 })];
 
   const out: EmittedSubAsset[] = [];
+  const sourceKey = deriveImageSourceKey('texture');
 
   for (let i = 0; i < freshKeys.length; i++) {
     const fresh = freshKeys[i];
@@ -79,6 +83,10 @@ export function reimportReuseMeta(
     let reuseGuid: string | undefined;
     if (existing !== undefined) {
       for (const candidate of existing.subAssets) {
+        if (sourceKey !== undefined && candidate.sourceKey === sourceKey) {
+          reuseGuid = candidate.guid;
+          break;
+        }
         const candidateKey = subAssetKey({
           kind: candidate.kind,
           sourceIndex: candidate.sourceIndex,
@@ -94,8 +102,19 @@ export function reimportReuseMeta(
     const guid = reuseGuid ?? AssetGuid.format(AssetGuid.random());
     const emit: EmittedSubAsset =
       fresh.name !== undefined
-        ? { guid, sourceIndex: i, kind: fresh.kind, name: fresh.name }
-        : { guid, sourceIndex: i, kind: fresh.kind };
+        ? {
+            guid,
+            sourceIndex: i,
+            kind: fresh.kind,
+            name: fresh.name,
+            ...(sourceKey === undefined ? {} : { sourceKey }),
+          }
+        : {
+            guid,
+            sourceIndex: i,
+            kind: fresh.kind,
+            ...(sourceKey === undefined ? {} : { sourceKey }),
+          };
     out.push(emit);
   }
 

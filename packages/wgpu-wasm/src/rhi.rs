@@ -2826,10 +2826,27 @@ struct DepthStencilStateJs {
     depth_write_enabled: bool,
     #[serde(default)]
     depth_compare: Option<wgpu::CompareFunction>,
+    // GPUDepthStencilState keeps the stencil face states and masks at the
+    // top level. The RHI descriptor mirrors that WebGPU shape; nesting these
+    // fields under `stencil` silently dropped every custom stencil state on
+    // the WebGL2/WASM fallback path.
     #[serde(default)]
-    stencil: Option<StencilStateJs>,
+    stencil_front: Option<StencilFaceStateJs>,
     #[serde(default)]
-    bias: Option<DepthBiasJs>,
+    stencil_back: Option<StencilFaceStateJs>,
+    #[serde(default)]
+    stencil_read_mask: Option<u32>,
+    #[serde(default)]
+    stencil_write_mask: Option<u32>,
+    // GPUDepthStencilState keeps depth bias as three top-level fields. The
+    // RHI descriptor mirrors that WebGPU shape; nesting them under `bias`
+    // silently drops every authored depth-bias value on the WebGL2 fallback.
+    #[serde(default)]
+    depth_bias: Option<i32>,
+    #[serde(default)]
+    depth_bias_slope_scale: Option<f32>,
+    #[serde(default)]
+    depth_bias_clamp: Option<f32>,
 }
 impl DepthStencilStateJs {
     fn into_wgpu(self) -> wgpu::DepthStencilState {
@@ -2837,31 +2854,17 @@ impl DepthStencilStateJs {
             format: self.format,
             depth_write_enabled: Some(self.depth_write_enabled),
             depth_compare: self.depth_compare,
-            stencil: self.stencil.unwrap_or_default().into_wgpu(),
-            bias: self.bias.unwrap_or_default().into_wgpu(),
-        }
-    }
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct StencilStateJs {
-    #[serde(default)]
-    front: Option<StencilFaceStateJs>,
-    #[serde(default)]
-    back: Option<StencilFaceStateJs>,
-    #[serde(default)]
-    read_mask: Option<u32>,
-    #[serde(default)]
-    write_mask: Option<u32>,
-}
-impl StencilStateJs {
-    fn into_wgpu(self) -> wgpu::StencilState {
-        wgpu::StencilState {
-            front: self.front.map(|f| f.into_wgpu()).unwrap_or_default(),
-            back: self.back.map(|b| b.into_wgpu()).unwrap_or_default(),
-            read_mask: self.read_mask.unwrap_or(0),
-            write_mask: self.write_mask.unwrap_or(0),
+            stencil: wgpu::StencilState {
+                front: self.stencil_front.map(|f| f.into_wgpu()).unwrap_or_default(),
+                back: self.stencil_back.map(|b| b.into_wgpu()).unwrap_or_default(),
+                read_mask: self.stencil_read_mask.unwrap_or(u32::MAX),
+                write_mask: self.stencil_write_mask.unwrap_or(u32::MAX),
+            },
+            bias: wgpu::DepthBiasState {
+                constant: self.depth_bias.unwrap_or(0),
+                slope_scale: self.depth_bias_slope_scale.unwrap_or(0.0),
+                clamp: self.depth_bias_clamp.unwrap_or(0.0),
+            },
         }
     }
 }
@@ -2885,26 +2888,6 @@ impl StencilFaceStateJs {
             fail_op: self.fail_op.unwrap_or(wgpu::StencilOperation::Keep),
             depth_fail_op: self.depth_fail_op.unwrap_or(wgpu::StencilOperation::Keep),
             pass_op: self.pass_op.unwrap_or(wgpu::StencilOperation::Keep),
-        }
-    }
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct DepthBiasJs {
-    #[serde(default)]
-    constant: Option<i32>,
-    #[serde(default)]
-    slope_scale: Option<f32>,
-    #[serde(default)]
-    clamp: Option<f32>,
-}
-impl DepthBiasJs {
-    fn into_wgpu(self) -> wgpu::DepthBiasState {
-        wgpu::DepthBiasState {
-            constant: self.constant.unwrap_or(0),
-            slope_scale: self.slope_scale.unwrap_or(0.0),
-            clamp: self.clamp.unwrap_or(0.0),
         }
     }
 }
@@ -3121,6 +3104,48 @@ mod tests {
         assert_eq!(wgpu_ds.format, wgpu::TextureFormat::Depth24Plus);
         assert_eq!(wgpu_ds.depth_write_enabled, Some(true));
         assert_eq!(wgpu_ds.depth_compare, Some(wgpu::CompareFunction::Less));
+    }
+
+    #[wasm_bindgen_test]
+    fn test_render_pipeline_flat_stencil_state_round_trip() {
+        let ds: DepthStencilStateJs = serde_json::from_str(
+            r#"{
+                "format":"depth24plus-stencil8",
+                "depthWriteEnabled":false,
+                "depthCompare":"less",
+                "stencilReadMask":255,
+                "stencilWriteMask":255,
+                "stencilFront":{"compare":"always","passOp":"replace"},
+                "stencilBack":{"compare":"always","passOp":"replace"}
+            }"#,
+        )
+        .unwrap();
+        let wgpu_ds = ds.into_wgpu();
+        assert_eq!(wgpu_ds.format, wgpu::TextureFormat::Depth24PlusStencil8);
+        assert_eq!(wgpu_ds.stencil.read_mask, 255);
+        assert_eq!(wgpu_ds.stencil.write_mask, 255);
+        assert_eq!(wgpu_ds.stencil.front.compare, wgpu::CompareFunction::Always);
+        assert_eq!(wgpu_ds.stencil.front.pass_op, wgpu::StencilOperation::Replace);
+        assert_eq!(wgpu_ds.stencil.back.pass_op, wgpu::StencilOperation::Replace);
+    }
+
+    #[wasm_bindgen_test]
+    fn test_render_pipeline_flat_depth_bias_round_trip() {
+        let ds: DepthStencilStateJs = serde_json::from_str(
+            r#"{
+                "format":"depth32float",
+                "depthWriteEnabled":true,
+                "depthCompare":"less",
+                "depthBias":7,
+                "depthBiasSlopeScale":1.25,
+                "depthBiasClamp":0.5
+            }"#,
+        )
+        .unwrap();
+        let wgpu_ds = ds.into_wgpu();
+        assert_eq!(wgpu_ds.bias.constant, 7);
+        assert_eq!(wgpu_ds.bias.slope_scale, 1.25);
+        assert_eq!(wgpu_ds.bias.clamp, 0.5);
     }
 
     #[wasm_bindgen_test]
