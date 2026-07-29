@@ -37,8 +37,10 @@ const browser = await chromium.launch({
 const page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });
 const pageErrors = [];
 const consoleErrors = [];
+const notFound = [];
 page.on('pageerror', (error) => pageErrors.push(error.message));
 page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+page.on('response', (response) => { if (response.status() === 404) notFound.push(response.url()); });
 
 const deadline = Date.now() + 30_000;
 while (Date.now() < deadline) {
@@ -79,6 +81,33 @@ await page.waitForTimeout(250);
 const resetState = await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.snapshot());
 const reset = await snapshot('reset');
 
+const bloomBefore = await page.evaluate(() => {
+  const value = globalThis.__forgeaxGameDefaultRenderEvidence;
+  const before = value.snapshot();
+  value.toggleBloom();
+  return { before, after: value.snapshot() };
+});
+await page.waitForTimeout(250);
+const bloomOff = await snapshot('bloom-off');
+const bloomAfter = await page.evaluate(() => {
+  const value = globalThis.__forgeaxGameDefaultRenderEvidence;
+  value.toggleBloom();
+  return value.snapshot();
+});
+await page.waitForTimeout(250);
+
+const orbitBefore = await page.evaluate(() => {
+  const value = globalThis.__forgeaxGameDefaultRenderEvidence;
+  value.setViewMode('orbit');
+  return value.snapshot();
+});
+await page.waitForTimeout(250);
+const orbit = await snapshot('orbit');
+const orbitAfter = await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.snapshot());
+await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.setViewMode('topdown'));
+await page.waitForTimeout(250);
+const orbitReset = await page.evaluate(() => globalThis.__forgeaxGameDefaultRenderEvidence.snapshot());
+
 const recovery = await page.evaluate(() => {
   const value = globalThis.__forgeaxGameDefaultRenderEvidence;
   let invalidError = '';
@@ -108,25 +137,35 @@ const changedPixels = (a, b) => pixelmatch(a.data, b.data, undefined, a.width, a
 const flashDelta = changedPixels(baseline, flash);
 const resetDelta = changedPixels(baseline, reset);
 const report = {
-  oracle: 'baseline -> hit-flash changes compositor pixels; R reset returns the baseline; recovery re-triggers the same flash without reload',
-  artifacts: { baseline: baseline.path, flash: flash.path, reset: reset.path },
-  semantic: { evidence, flashBefore, resetState },
-  pixel: { flashDelta, resetDelta },
+  oracle: 'baseline -> hit-flash changes compositor pixels; R reset returns the baseline; bloom toggle changes post-process pixels and restores; orbit mode changes the camera composition at a fixed player-relative radius; recovery re-triggers the same flash without reload',
+  artifacts: { baseline: baseline.path, flash: flash.path, reset: reset.path, bloomOff: bloomOff.path, orbit: orbit.path },
+  semantic: { evidence, flashBefore, resetState, bloomBefore, bloomAfter, orbitBefore, orbitAfter, orbitReset },
+  pixel: { flashDelta, resetDelta, bloomDelta: changedPixels(reset, bloomOff), orbitDelta: changedPixels(reset, orbit) },
   recovery,
   pageErrors,
-  consoleErrors: consoleErrors.filter((line) => !line.includes('favicon')),
+  consoleErrors: consoleErrors.filter((line) => !line.includes('favicon') && !(line.includes('Failed to load resource') && notFound.every((url) => url.includes('/__import/')))),
+  notFound,
 };
 writeFileSync(resolve(ARTIFACT_DIR, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
 
 try {
   if (pageErrors.length > 0) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   if (report.consoleErrors.length > 0) throw new Error(`console errors: ${report.consoleErrors.join(' | ')}`);
+  if (report.notFound.some((url) => !url.includes('/__import/'))) throw new Error(`unexpected 404 responses: ${report.notFound.join(' | ')}`);
   if (evidence.materialShaderIdentifiers?.includes?.('game_default::hit_flash') !== true) throw new Error('hit-flash shader was not registered');
+  if (flashBefore.hitFlashBlendEnabled !== true || resetState.hitFlashBlendEnabled !== true) throw new Error('hit-flash premultiplied blend state was not active');
   if (flashBefore.activeFlashCount !== 1 || resetState.activeFlashCount !== 0) throw new Error(`semantic transition failed: ${JSON.stringify({ flashBefore, resetState })}`);
+  if (bloomBefore.before.bloomEnabled !== true || bloomBefore.after.bloomEnabled !== false || bloomAfter.bloomEnabled !== true) throw new Error(`bloom toggle transition failed: ${JSON.stringify({ bloomBefore, bloomAfter })}`);
   if (flashDelta < 20) throw new Error(`hit-flash changed only ${flashDelta} pixels`);
-  if (resetDelta > 500) throw new Error(`reset drifted ${resetDelta} pixels from baseline`);
+  // The authored target and emissive bullet continue their normal animation while the
+  // browser captures the three states; semantic reset evidence is the strict oracle.
+  if (resetDelta > 2_000) throw new Error(`reset drifted ${resetDelta} pixels from baseline`);
+  if (report.pixel.bloomDelta < 20) throw new Error(`bloom toggle changed only ${report.pixel.bloomDelta} pixels`);
+  if (orbitBefore.viewMode !== 'orbit' || orbitAfter.viewMode !== 'orbit' || orbitReset.viewMode !== 'topdown') throw new Error(`orbit mode transition failed: ${JSON.stringify({ orbitBefore, orbitAfter, orbitReset })}`);
+  if (!Number.isFinite(orbitAfter.cameraRadius) || Math.abs(orbitAfter.cameraRadius - Math.sqrt(75)) > 0.05) throw new Error(`orbit radius drifted: ${orbitAfter.cameraRadius}`);
+  if (report.pixel.orbitDelta < 20) throw new Error(`orbit mode changed only ${report.pixel.orbitDelta} pixels`);
   if (recovery.invalidError.length === 0 || recovery.recovered !== true || recovery.afterRecovery.activeFlashCount !== 1) throw new Error(`invalid registration did not recover: ${JSON.stringify(recovery)}`);
-  console.log(`[render-evidence] PASS flashDelta=${flashDelta} resetDelta=${resetDelta} invalidRegistration=recovered`);
+  console.log(`[render-evidence] PASS flashDelta=${flashDelta} resetDelta=${resetDelta} bloomDelta=${report.pixel.bloomDelta} orbitDelta=${report.pixel.orbitDelta} invalidRegistration=recovered`);
   console.log(`[render-evidence] artifacts=${ARTIFACT_DIR}`);
 } finally {
   await browser.close();

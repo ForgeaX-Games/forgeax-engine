@@ -5,8 +5,10 @@
 // invalidateAll, inspect, listCatalog. Uses a mock ShaderRegistry (no GPU).
 
 import type { MaterialAsset, MeshAsset, TilesetAsset } from '@forgeax/engine-types';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
+import type { CatalogRecord } from '../registry/catalog';
+import { registerPackagesFromIndex } from '../registry/load-by-guid';
 
 const GUID_A = '11111111-1111-4111-8111-111111111111';
 const GUID_B = '22222222-2222-4222-8222-222222222222';
@@ -150,6 +152,30 @@ describe('invalidate / invalidateAll', () => {
     expect(reg.lookup(GUID_A)).toBeUndefined();
   });
 
+  it('invalidate preserves a derived package name when a reload changes the DDC path', () => {
+    const reg = makeRegistry();
+    reg._registerPackage('/assets/sky.hdr', [GUID_A]);
+    reg.catalog(GUID_A, meshPayload());
+    expect(reg.resolveName(GUID_A)).toBe('sky.hdr');
+
+    reg.invalidate(GUID_A);
+    registerPackagesFromIndex(
+      reg,
+      new Map([
+        [
+          GUID_A,
+          {
+            relativeUrl: '/node_modules/.cache/forgeax-ddc/sky.bin',
+            sourcePath: '/assets/sky.hdr',
+          },
+        ],
+      ]),
+    );
+    reg.catalog(GUID_A, meshPayload());
+
+    expect(reg.resolveName(GUID_A)).toBe('sky.hdr');
+  });
+
   it('invalidateAll clears every catalogued asset and reports the count', () => {
     const reg = makeRegistry();
     reg.catalog(GUID_A, meshPayload());
@@ -163,6 +189,14 @@ describe('invalidate / invalidateAll', () => {
 });
 
 describe('inspect / listCatalog', () => {
+  it('returns an empty readonly catalog before a registry is bound', () => {
+    const reg = makeRegistry();
+    reg.assetCatalog.clear();
+    const rows = reg.listCatalog();
+    expect(rows).toEqual([]);
+    expectTypeOf(rows).toMatchTypeOf<readonly unknown[]>();
+  });
+
   it('inspect lists catalogued assets with guid/kind/name', () => {
     const reg = makeRegistry();
     reg.catalog(GUID_A, meshPayload());
@@ -176,6 +210,61 @@ describe('inspect / listCatalog', () => {
     reg.catalog(GUID_A, meshPayload());
     const rows = reg.listCatalog();
     expect(rows.some((r) => r.guid === GUID_A.toLowerCase() && r.kind === 'mesh')).toBe(true);
+  });
+
+  it('listCatalog deeply preserves every canonical producer fact from the full catalog', () => {
+    const reg = makeRegistry();
+    reg.assetCatalog.clear();
+    const provenance = { provider: 'host-importer', version: '7.2.0' } as const;
+    const revision = { digest: 'sha256:catalog', observedAt: 42, rootId: 'game-root' } as const;
+    const relations = [
+      {
+        from: { type: 'asset', id: GUID_A },
+        to: { type: 'resource', id: 'source/blob' },
+        type: 'produces',
+        provenance,
+      },
+    ] as const;
+    const diagnostics = [
+      {
+        code: 'producer-warning',
+        severity: 'warning',
+        expected: 'stable source key',
+        actual: 'legacy index fallback',
+        hint: 'repair the producer declaration',
+        authority: 'producer',
+      },
+    ] as const;
+    const canonicalRow: CatalogRecord = {
+      relativeUrl: '/assets/blob.pack.json',
+      sourcePath: 'models/blob.host',
+      kind: 'host/blob',
+      packageId: 'host-package',
+      provenance,
+      revision,
+      sourceKey: 'blob/main',
+      sourceIndex: 3,
+      relations,
+      diagnostics,
+    } as const;
+    const legacyRow: CatalogRecord = {
+      relativeUrl: '/assets/legacy.pack.json',
+      sourcePath: 'models/legacy.host',
+      kind: 'host/legacy',
+    } as const;
+    reg.packIndexCache = new Map([
+      [GUID_A.toLowerCase(), canonicalRow],
+      [GUID_B.toLowerCase(), legacyRow],
+    ]);
+
+    expect(reg.listCatalog()).toEqual([
+      { guid: GUID_A.toLowerCase(), ...canonicalRow },
+      { guid: GUID_B.toLowerCase(), ...legacyRow },
+    ]);
+    expect(reg.listCatalog()[1]).toEqual({
+      guid: GUID_B.toLowerCase(),
+      ...legacyRow,
+    });
   });
 
   it('listCatalog includes a catalogued AnimationGraph with kind=animation-graph', () => {

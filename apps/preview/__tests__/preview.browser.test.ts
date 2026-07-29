@@ -142,6 +142,7 @@ describe('apps/preview e2e -- templates/game-default loads + renders error-free'
     expect(dialog?.getAttribute('aria-labelledby')).toBe('settings-title');
     expect(settingsShadow?.querySelector('[data-ui-setting="music"]')).not.toBeNull();
     expect(settingsShadow?.querySelector('[data-ui-setting="high-contrast"]')).not.toBeNull();
+    expect(settingsShadow?.querySelector('[data-ui-setting="antialias"]')).not.toBeNull();
     const audioEntities: number[] = [];
     queryRun(createQueryState({ with: [AudioSource, Entity] }), app.world, (bundle) => {
       audioEntities.push(...bundle.Entity.self);

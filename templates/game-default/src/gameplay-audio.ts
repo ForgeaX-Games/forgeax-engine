@@ -1,12 +1,14 @@
-// game-default gameplay audio: one loaded spatial SFX and its ECS edge state.
+// game-default gameplay audio: GUID-loaded spatial SFX plus looping music bus controls.
 
-import { AudioSource } from '@forgeax/engine-audio';
+import { AUDIO_ENGINE_RESOURCE_KEY, AudioSource, type AudioBackend } from '@forgeax/engine-audio';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { AudioClipAsset, Handle } from '@forgeax/engine-types';
 
 /** SSOT: forgeax-engine-assets/sfx/dragon-studio-correct-472358.mp3.meta.json. */
 export const HIT_SFX_GUID = '019e7535-5e5e-75fe-a328-0b08e3a72744';
+/** SSOT: forgeax-engine-assets/collectathon-audio/bgm-loop.wav.meta.json. */
+export const MUSIC_GUID = '3b298083-a2bc-496f-91fb-80e5bb8cfe48';
 
 type ClipHandle = Handle<'AudioClipAsset', 'shared'>;
 const HANDLE_NONE = 0 as unknown as ClipHandle;
@@ -22,6 +24,9 @@ export interface GameplayAudio {
   rearm(): void;
   reset(): void;
   triggerHit(): void;
+  setMusicPlaying(playing: boolean): void;
+  setMusicSettings(volume: number, muted: boolean): void;
+  musicSnapshot(): { readonly clipLoaded: boolean; readonly playing: boolean; readonly volume: number; readonly muted: boolean };
 }
 
 const setSource = (world: World, player: EntityHandle, clip: ClipHandle, playing: boolean): void => {
@@ -42,6 +47,18 @@ export async function installGameplayAudio(
   let clip = HANDLE_NONE;
   let armed = false;
 
+  const musicEntity = world.spawn({
+    component: AudioSource,
+    data: { clip: HANDLE_NONE, playing: false, loop: true, volume: 1, spatialBlend: 0, bus: 'music' },
+  }).unwrap();
+  let musicClip = HANDLE_NONE;
+  let musicPlaying = false;
+  let musicVolume = 0.7;
+  let musicMuted = false;
+  const audio = world.hasResource(AUDIO_ENGINE_RESOURCE_KEY)
+    ? world.getResource<AudioBackend>(AUDIO_ENGINE_RESOURCE_KEY)
+    : undefined;
+
   if (!assets) {
     console.warn('[game] gameplay SFX unavailable: AssetRegistry is unavailable');
   } else {
@@ -59,6 +76,28 @@ export async function installGameplayAudio(
     }
   }
 
+  if (assets) {
+    const parsed = AssetGuid.parse(MUSIC_GUID);
+    if (!parsed.ok) {
+      console.error('[game] background music unavailable: invalid GUID', MUSIC_GUID);
+    } else {
+      const loaded = await assets.loadByGuid<AudioClipAsset>(parsed.value);
+      if (loaded.ok) {
+        musicClip = world.allocSharedRef('AudioClipAsset', loaded.value);
+        world.set(musicEntity, AudioSource, { clip: musicClip, playing: false, loop: true, volume: 1, spatialBlend: 0, bus: 'music' });
+      } else {
+        console.warn('[game] background music unavailable:', loaded.error.code, loaded.error.hint);
+      }
+    }
+  } else {
+    console.warn('[game] background music unavailable: AssetRegistry is unavailable');
+  }
+
+  const writeMusic = (): void => {
+    if (musicClip === HANDLE_NONE) return;
+    world.set(musicEntity, AudioSource, { clip: musicClip, playing: musicPlaying, loop: true, volume: 1, spatialBlend: 0, bus: 'music' });
+  };
+
   return {
     rearm() {
       if (!armed) return;
@@ -68,11 +107,27 @@ export async function installGameplayAudio(
     reset() {
       setSource(world, player, clip, false);
       armed = false;
+      musicPlaying = false;
+      writeMusic();
     },
     triggerHit() {
       if (clip === HANDLE_NONE) return;
       setSource(world, player, clip, true);
       armed = true;
+    },
+    setMusicPlaying(playing) {
+      if (musicPlaying === playing) return;
+      musicPlaying = playing;
+      writeMusic();
+    },
+    setMusicSettings(volume, muted) {
+      musicVolume = Math.max(0, Math.min(1, volume));
+      musicMuted = muted;
+      audio?.setBusVolume('music', musicVolume);
+      audio?.setBusMute('music', muted);
+    },
+    musicSnapshot() {
+      return { clipLoaded: musicClip !== HANDLE_NONE, playing: musicPlaying, volume: musicVolume, muted: musicMuted };
     },
   };
 }

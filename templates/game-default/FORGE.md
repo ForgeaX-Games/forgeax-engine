@@ -1,6 +1,6 @@
 # Game Default
 
-This is ForgeaX's canonical first game: a small two-view target range that teaches scene assets,
+This is ForgeaX's canonical first game: a small three-view target range that teaches scene assets,
 ECS behavior, physics, picking, rendering, UiAssets, and spatial audio through one coherent loop.
 
 ## Run, inspect, change
@@ -14,11 +14,21 @@ pnpm --filter @forgeax/preview dev
 Open `http://localhost:5173/?game=game-default` in a WebGPU browser. Start with
 `assets/scene.pack.json` for persistent world content. Start with `src/scene-runtime.ts` for scene
 loading, fallback, and physics attachment. `main.ts` composes those boundaries with input, camera,
-and gameplay systems; `src/gameplay-input.ts` owns the InputSnapshot-to-intent systems;
+and gameplay systems (top-down, fixed-radius orbit, and FPS); `src/camera-orbit.ts` owns the
+canonical spherical pose math; `src/gameplay-input.ts` owns the InputSnapshot-to-intent systems;
 `src/gameplay-lifecycle.ts` owns the reset request; `src/hud.ts` and `src/settings.ts` own the
 DOM-facing UiAssets; `src/gameplay-audio.ts` owns the GUID-loaded hit SFX and AudioSource edge loop;
 `src/hit-flash.wgsl` plus `src/hit-flash-material.ts` demonstrate the build-time/runtime custom
 material shader boundary.
+
+The authored HDR sky follows the same asset path. Preview registers the image importer, while
+`src/asset-content-evidence.ts` provides an opt-in browser witness for GUID loading, skybox
+application, reload/reset churn, and structured missing-asset recovery:
+
+```sh
+FORGEAX_ASSET_LOOP_DIR=<run>/artifacts \
+  pnpm --filter @forgeax/preview smoke:asset-loop
+```
 
 After a change, run the browser smoke and the derived capability audit from the engine root:
 

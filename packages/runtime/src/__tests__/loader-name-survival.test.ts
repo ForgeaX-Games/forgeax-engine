@@ -169,10 +169,9 @@ describe('loader name survival (AC-08)', () => {
 
     const r = await reg.loadByGuid(parseGuid(TEX));
     expect(r.ok).toBe(true);
-    // Single-asset texture package -> basename(path) (AC-01). The wiring is what
-    // makes this non-empty: without entry -> Package the texture lands in a null
-    // package and resolveName would be ''.
-    expect(reg.resolveName(TEX)).toBe('diffuse.bin');
+    // Single-asset texture package -> basename(authored sourcePath). The
+    // replaceable DDC relativeUrl must not become package identity.
+    expect(reg.resolveName(TEX)).toBe('diffuse.png');
   });
 
   it('FALSIFY: stripped entry.name degrades to basename, proving name-sensitivity', async () => {
@@ -185,10 +184,10 @@ describe('loader name survival (AC-08)', () => {
     expect(rA.ok).toBe(true);
     expect(rB.ok).toBe(true);
 
-    // Multi-asset package with no stored names -> basename fallback (AC-15.1),
-    // NOT the original 'Body' / 'Head'. If the assertion still saw 'Body', the
-    // name path would be a tautology.
-    expect(reg.resolveName(MESH_A)).toBe('char.pack.json');
-    expect(reg.resolveName(MESH_B)).toBe('char.pack.json');
+    // Multi-asset package with no stored names -> basename(authored
+    // sourcePath), NOT the original 'Body' / 'Head'. If the assertion still
+    // saw 'Body', the name path would be a tautology.
+    expect(reg.resolveName(MESH_A)).toBe('char.glb');
+    expect(reg.resolveName(MESH_B)).toBe('char.glb');
   });
 });

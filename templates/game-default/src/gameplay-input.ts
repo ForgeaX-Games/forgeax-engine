@@ -24,7 +24,7 @@ export type GameplayInputContext = {
 
 const LOOK_SENS = 0.0022;
 
-/** Install the input-to-intent systems shared by top-down and FPS play. */
+/** Install the input-to-intent systems shared by all three camera views. */
 export function installGameplayInput(ctx: GameplayInputContext): GameplayInputState {
   const state: GameplayInputState = {
     lookYaw: 0,
@@ -40,8 +40,9 @@ export function installGameplayInput(ctx: GameplayInputContext): GameplayInputSt
     after: ['input-frame-start-scan'],
     fn: () => {
       const snap = ctx.readInput();
-      if (ctx.getMode() !== 'fps' || !snap.mouse.pointerLocked) {
-        if (ctx.getMode() === 'fps') {
+      const mode = ctx.getMode();
+      if ((mode !== 'fps' && mode !== 'orbit') || !snap.mouse.pointerLocked) {
+        if (mode === 'fps' || mode === 'orbit') {
           ctx.hud.setLockStatus(snap.mouse.pointerLocked
             ? '🎮 Locked · mouse look · ESC releases'
             : '👍 Click canvas to lock mouse');
@@ -63,7 +64,7 @@ export function installGameplayInput(ctx: GameplayInputContext): GameplayInputSt
       const snap = ctx.readInput();
       for (const ev of snap.pointerEvents) {
         if (ev.phase !== 'down' || ev.pointerType !== 'mouse') continue;
-        if (ctx.getMode() === 'fps') {
+        if (ctx.getMode() === 'fps' || (ctx.getMode() === 'orbit' && snap.mouse.pointerLocked)) {
           if (snap.mouse.pointerLocked) state.wantShoot = true;
           continue;
         }

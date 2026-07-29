@@ -2,6 +2,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
+import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { defineConfig } from 'vite';
 
@@ -20,6 +21,7 @@ const submoduleSkyMetaPath = resolve(
   'sky.hdr.meta.json',
 );
 const submoduleSfxDir = resolve(monorepoRoot, 'forgeax-engine-assets', 'sfx');
+const submoduleBgmMetaPath = resolve(monorepoRoot, 'forgeax-engine-assets', 'collectathon-audio', 'bgm-loop.wav.meta.json');
 
 export default defineConfig({
   plugins: [
@@ -33,8 +35,9 @@ export default defineConfig({
         resolve(templatesDir, 'game-default'),
         submoduleSkyMetaPath,
         submoduleSfxDir,
+        submoduleBgmMetaPath,
       ],
-      importers: [audioImporter],
+      importers: [audioImporter, imageImporter],
     }) as never,
   ],
   server: {

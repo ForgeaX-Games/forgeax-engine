@@ -27,5 +27,8 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
 
 @fragment
 fn fs_main() -> @location(0) vec4<f32> {
-  return vec4<f32>(material.baseColor.rgb * material.intensity, material.baseColor.a);
+  // MaterialAsset uses the public premultiplied-alpha preset. Keep the
+  // emitted RGB premultiplied so the blend equation remains correct for
+  // arbitrary hit opacity values.
+  return vec4<f32>(material.baseColor.rgb * material.intensity * material.baseColor.a, material.baseColor.a);
 }

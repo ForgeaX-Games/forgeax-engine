@@ -80,7 +80,7 @@
 // the file's role explicit; tweak-20260612 then lifted the Entity component
 // from the historical `components/entity.ts` back into `./entity` since that
 // slot was free).
-import { Entity, ESSENTIAL_COMPONENT_IDS, foldEssentials } from './entity';
+import { Disabled, Entity, ESSENTIAL_COMPONENT_IDS, foldEssentials } from './entity';
 
 if (ESSENTIAL_COMPONENT_IDS.length !== 1 || ESSENTIAL_COMPONENT_IDS[0] !== 0) {
   throw new Error(
@@ -95,6 +95,7 @@ if (ESSENTIAL_COMPONENT_IDS.length !== 1 || ESSENTIAL_COMPONENT_IDS[0] !== 0) {
 // barrel re-export keeps the historical `import { err, ok, Result } from
 // '@forgeax/engine-ecs'` consumer surface unchanged.
 export { err, ok, type Result } from '@forgeax/engine-types';
+export type { ChangeTicks } from './change-detection';
 /**
  * Branded-number handle type identifying a row (24-bit index + 8-bit
  * generation). The `Entity` component token (value-space, id=0) and the
@@ -132,7 +133,7 @@ export type { EcsError } from './world';
  * world.get(e, Entity).unwrap().self === e;
  * ```
  */
-export { Entity, ESSENTIAL_COMPONENT_IDS, foldEssentials };
+export { Disabled, Entity, ESSENTIAL_COMPONENT_IDS, foldEssentials };
 
 // ────────────────────────────────────────────────────────────────────────────
 // Core API — the 80% surface most users need
@@ -350,7 +351,14 @@ export type { CommandBuffer } from './commands';
  * const set: SystemSet = defineSystemSet({ name: 'gameplay' });
  * ```
  */
-export type { SystemDescriptor, SystemHandle, SystemSet } from './schedule';
+export type {
+  SystemDescriptor,
+  SystemHandle,
+  SystemParamDefinition,
+  SystemParamQueryResults,
+  SystemParamValues,
+  SystemSet,
+} from './schedule';
 /**
  * Define a system at module level + register it globally ("define ==
  * register"). Returns a {@link SystemHandle} token consumed directly by
@@ -380,6 +388,7 @@ export type { SystemDescriptor, SystemHandle, SystemSet } from './schedule';
  */
 export {
   defineSystem,
+  defineSystemParam,
   defineSystemSet,
   getRegisteredSystemSets,
   getRegisteredSystems,
@@ -401,7 +410,8 @@ export type SystemFn<
   Qs extends ReadonlyArray<import('./query').QueryDescriptor> = ReadonlyArray<
     import('./query').QueryDescriptor
   >,
-> = import('./schedule').SystemDescriptor<Qs>['fn'];
+  Ps extends ReadonlyArray<unknown> = readonly [],
+> = import('./schedule').SystemDescriptor<Qs, Ps>['fn'];
 
 /**
  * Inspection snapshot returned by `world.inspect()`. Contains entity count,
@@ -442,7 +452,7 @@ export { decodeEntity, encodeEntity } from './entity-handle';
 // Query engine utilities
 // ────────────────────────────────────────────────────────────────────────────
 
-export { createQueryState, queryCombinations, queryRun } from './query';
+export { createQueryState, queryCombinations, queryRun, queryRunContiguous } from './query';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Component internals (for advanced use: custom storage, tooling)

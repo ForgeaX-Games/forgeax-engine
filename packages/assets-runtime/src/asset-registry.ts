@@ -44,7 +44,6 @@ import type { ShaderRegistry } from '@forgeax/engine-shader';
 import {
   ASSET_ERROR_HINTS,
   type Asset,
-  type AssetCompression,
   type AssetEnvelope,
   AssetError,
   type AssetRef,
@@ -53,7 +52,6 @@ import {
   type Handle,
   handleSlot,
   type ImageError,
-  type ImageMetadata,
   type ImportTransport,
   type InspectEntry,
   type InspectSnapshot,
@@ -104,7 +102,7 @@ import {
   HANDLE_TRIANGLE,
 } from './handles';
 import { inferAtlasExtent, validateMeshPayload, validateTilesetPayload } from './payload-validate';
-import { fetchPackIndex } from './registry/catalog';
+import { type CatalogRecord, createInlineCatalogRecord, fetchPackIndex } from './registry/catalog';
 import {
   instantiateFlat as instantiateFlatImpl,
   instantiate as instantiateImpl,
@@ -293,20 +291,7 @@ export class AssetRegistry {
   // first call, caches the parsed catalog in packIndexCache, then fetches
   // each resource URL resolved against that index and registers the asset.
   packIndexUrl: string | undefined = undefined;
-  packIndexCache:
-    | Map<
-        string,
-        {
-          relativeUrl: string;
-          kind: string;
-          name?: string;
-          metadata?: ImageMetadata | undefined;
-          refs?: readonly string[];
-          compression?: AssetCompression;
-          sourcePath?: string;
-        }
-      >
-    | undefined = undefined;
+  packIndexCache: Map<string, CatalogRecord> | undefined = undefined;
 
   // tweak-20260609 M1: in-flight Map for recursive loadByGuid dedup + cycle
   // prevention (D-5 / B-10). Maps guidKey → Promise<Result<Handle, ...>> so
@@ -583,12 +568,13 @@ export class AssetRegistry {
    */
   invalidate(guid: string): void {
     const guidKey = guid.toLowerCase();
-    // D-6: the stored name lives on the envelope; preserve it across the delete
-    // (the `packages` mapping survives, so resolveName must still see the name
-    // until a re-load's registerPackage overwrites it) by parking it on
-    // pendingNames -- the next catalog() of this GUID drains it back.
-    const survivingName = this.assetCatalog.get(guidKey)?.name;
-    if (survivingName !== undefined) this.pendingNames.set(guidKey, survivingName);
+    // D-6: preserve the resolved display identity across the delete. A
+    // single-asset package derives its name from the package path, so the
+    // envelope may not carry a stored name even though `resolveName()` is
+    // non-empty. Without parking that derived name, a dev re-import changes
+    // `sky.hdr` into the DDC `.bin` filename after invalidate/reload.
+    const survivingName = this.resolveName(guidKey);
+    if (survivingName !== '') this.pendingNames.set(guidKey, survivingName);
     this.assetCatalog.delete(guidKey);
     // R-1 hard fix (research-decisions.md): delete inFlight entry so the
     // next loadByGuid does not hit the old Promise whose generation no
@@ -1399,47 +1385,15 @@ export class AssetRegistry {
    * }
    * ```
    */
-  listCatalog(): readonly {
-    guid: string;
-    kind: string;
-    name?: string;
-    relativeUrl: string;
-    refs?: readonly string[];
-    /** Build-time compression strategy. `undefined` for legacy / uncompressed rows. */
-    compression?: AssetCompression;
-    /**
-     * On-disk source-file path for external imported assets (FBX / GLB / HDR /
-     * audio / font), relative to the game root. Editors locate the
-     * `.meta.json` sidecar via `sourcePath + '.meta.json'` for CRUD; unlike
-     * `relativeUrl` (the runtime load artefact) it is stable across DDC cook
-     * state. `undefined` for inline / dev-path assets (no sidecar, no CRUD).
-     */
-    sourcePath?: string;
-  }[] {
+  listCatalog(): readonly (CatalogRecord & { guid: string })[] {
     const seen = new Set<string>();
-    const result: {
-      guid: string;
-      kind: string;
-      name?: string;
-      relativeUrl: string;
-      refs?: readonly string[];
-      compression?: AssetCompression;
-      sourcePath?: string;
-    }[] = [];
+    const result: (CatalogRecord & { guid: string })[] = [];
 
     // Prod entries: packIndexCache carries relativeUrl + optional name + refs.
     if (this.packIndexCache) {
       for (const [guidKey, entry] of this.packIndexCache) {
         seen.add(guidKey);
-        result.push({
-          guid: guidKey,
-          kind: entry.kind,
-          name: entry.name ?? '',
-          relativeUrl: entry.relativeUrl,
-          ...(entry.refs !== undefined ? { refs: entry.refs } : {}),
-          ...(entry.compression !== undefined ? { compression: entry.compression } : {}),
-          ...(entry.sourcePath !== undefined ? { sourcePath: entry.sourcePath } : {}),
-        });
+        result.push({ guid: guidKey, ...entry });
       }
     }
 
@@ -1449,13 +1403,7 @@ export class AssetRegistry {
     for (const [guidKey, envelope] of this.assetCatalog) {
       if (!seen.has(guidKey)) {
         const name = envelope.name ?? this.resolveName(guidKey);
-        result.push({
-          guid: guidKey,
-          kind: envelope.payload.kind,
-          name,
-          relativeUrl: '',
-          ...(envelope.refs.length > 0 ? { refs: envelope.refs.map((r) => r.guid) } : {}),
-        });
+        result.push({ guid: guidKey, ...createInlineCatalogRecord(envelope, name) });
       }
     }
 

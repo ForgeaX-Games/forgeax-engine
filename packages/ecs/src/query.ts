@@ -4,8 +4,10 @@
 // Hot-table returns nested column bundle: { ComponentName: { fieldName: TypedArray }, entityCount }.
 // Per-archetype version stamp (D-10) for cache invalidation on grow.
 
+import { unpackSlot } from '@forgeax/engine-types';
 import type { Archetype, ArchetypeId } from './archetype';
 import type { ArchetypeGraph } from './archetype-graph';
+import { type ChangeTicks, NEVER_CHANGED_TICK } from './change-detection';
 import type { FieldView, ManagedColumnReader } from './column';
 import {
   type Component,
@@ -14,7 +16,7 @@ import {
   isManagedField,
   type TypedArrayFor,
 } from './component';
-import { Entity } from './entity';
+import { Disabled, Entity } from './entity';
 import type { EntityHandle } from './entity-handle';
 import {
   QueryCombinationsEntityRequiredError,
@@ -49,6 +51,10 @@ export interface QueryDescriptor<
   readonly without?: ReadonlyArray<Component>;
   /** Components exposed per-archetype but NOT participating in matching/filtering. */
   readonly optional?: Os;
+  /** Components whose rows must have changed since this query last ran. */
+  readonly changed?: ReadonlyArray<Component>;
+  /** Components whose rows must have been added since this query last ran. */
+  readonly added?: ReadonlyArray<Component>;
 }
 
 /** Helper: convert union to intersection via distributive conditional. */
@@ -143,6 +149,8 @@ export interface QueryState<
   lastGeneration: number;
   /** Cached column bundles keyed by ArchetypeId. */
   cachedBundles: Map<ArchetypeId, CachedBundle>;
+  /** Last world change tick observed by this query. */
+  lastChangeTick: number;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -212,14 +220,21 @@ export function createQueryState<
     }
   }
 
+  const withIds = descriptor.with.map((c) => c.id);
+  const withoutIds = descriptor.without ? descriptor.without.map((c) => c.id) : [];
+  if (!descriptor.with.includes(Disabled) && !withoutIds.includes(Disabled.id)) {
+    withoutIds.unshift(Disabled.id);
+  }
+
   return {
     descriptor,
-    withIds: descriptor.with.map((c) => c.id),
-    withoutIds: descriptor.without ? descriptor.without.map((c) => c.id) : [],
+    withIds,
+    withoutIds,
     optionalIds: optionalComponents.map((c) => c.id),
     matchedArchetypes: [],
     lastGeneration: 0,
     cachedBundles: new Map(),
+    lastChangeTick: NEVER_CHANGED_TICK,
   } as QueryState<Cs, Os>;
 }
 
@@ -333,6 +348,8 @@ function appendComponentColumns(
   bundle: Record<string, Record<string, FieldView | ManagedColumnReader<string>>>,
   components: ReadonlyArray<Component>,
   arch: Archetype,
+  rowStart = 0,
+  rowCount = arch.size,
 ): void {
   for (let i = 0; i < components.length; i++) {
     // biome-ignore lint/style/noNonNullAssertion: loop bounded by array length
@@ -344,12 +361,17 @@ function appendComponentColumns(
     }
     const componentFields: Record<string, FieldView | ManagedColumnReader<string>> = {};
     for (const [fieldName, col] of fieldCols) {
-      const sliceLen = arch.size * col.arity;
+      const sliceStart = rowStart * col.arity;
+      const sliceLen = rowCount * col.arity;
       const fieldType = comp.schema[fieldName];
       if (fieldType !== undefined && isManagedVocabBundleField(fieldType)) {
-        componentFields[fieldName] = makeManagedColumnReader(col.view, sliceLen, fieldType);
+        componentFields[fieldName] = makeManagedColumnReader(
+          col.view.subarray(sliceStart, sliceStart + sliceLen),
+          sliceLen,
+          fieldType,
+        );
       } else {
-        componentFields[fieldName] = col.view.subarray(0, sliceLen);
+        componentFields[fieldName] = col.view.subarray(sliceStart, sliceStart + sliceLen);
       }
     }
     bundle[comp.name] = componentFields;
@@ -365,10 +387,12 @@ function buildColumnBundle(
   arch: Archetype,
   withComponents: ReadonlyArray<Component>,
   optionalComponents: ReadonlyArray<Component>,
+  rowStart = 0,
+  rowCount = arch.size,
 ): ColumnBundle {
   const bundle: Record<string, Record<string, ColumnBundleField>> = {};
-  appendComponentColumns(bundle, withComponents, arch);
-  appendComponentColumns(bundle, optionalComponents, arch);
+  appendComponentColumns(bundle, withComponents, arch, rowStart, rowCount);
+  appendComponentColumns(bundle, optionalComponents, arch, rowStart, rowCount);
   return bundle as ColumnBundle;
 }
 
@@ -422,10 +446,18 @@ export function queryRun<
   Os extends ReadonlyArray<Component> = readonly [],
 >(
   state: QueryState<Cs, Os>,
-  world: { /** @internal */ _getGraph(): ArchetypeGraph },
+  world: {
+    /** @internal */
+    _getGraph(): ArchetypeGraph;
+    /** @internal */
+    _getChangeTick?(): number;
+    /** @internal */
+    _getComponentChange?(entity: EntityHandle, componentId: ComponentId): ChangeTicks | undefined;
+  },
   callback: (bundle: NestedColumnBundle<NoInfer<Cs>, NoInfer<Os>>) => void,
 ): void {
   const graph = world._getGraph();
+  const changeTick = world._getChangeTick?.() ?? NEVER_CHANGED_TICK;
 
   // ── Incremental update: check new archetypes since last generation ──
   if (graph.generation > state.lastGeneration) {
@@ -449,20 +481,113 @@ export function queryRun<
   // runtime correctness guaranteed by buildColumnBundle.
   const optionalComponents = state.descriptor.optional ?? [];
   const withComponents = state.descriptor.with;
+  const changedIds = state.descriptor.changed?.map((component) => component.id) ?? [];
+  const addedIds = state.descriptor.added?.map((component) => component.id) ?? [];
+  const hasChangeFilter = changedIds.length > 0 || addedIds.length > 0;
   for (const archId of state.matchedArchetypes) {
     const arch = graph.archetypes[archId];
     if (!arch || arch.size === 0) continue;
 
-    const cached = state.cachedBundles.get(archId);
-    let bundle: ColumnBundle;
-    if (cached && cached.version === arch.version && cached.size === arch.size) {
-      bundle = cached.bundle;
-    } else {
-      bundle = buildColumnBundle(arch, withComponents, optionalComponents);
-      state.cachedBundles.set(archId, { bundle, version: arch.version, size: arch.size });
+    if (!hasChangeFilter) {
+      const cached = state.cachedBundles.get(archId);
+      let bundle: ColumnBundle;
+      if (cached && cached.version === arch.version && cached.size === arch.size) {
+        bundle = cached.bundle;
+      } else {
+        bundle = buildColumnBundle(arch, withComponents, optionalComponents);
+        state.cachedBundles.set(archId, { bundle, version: arch.version, size: arch.size });
+      }
+      callback(bundle as unknown as NestedColumnBundle<NoInfer<Cs>, NoInfer<Os>>);
+      continue;
     }
-    callback(bundle as unknown as NestedColumnBundle<NoInfer<Cs>, NoInfer<Os>>);
+
+    const entityColumn = arch.columns.get(Entity.id)?.get('self');
+    if (!entityColumn) continue;
+    let runStart = -1;
+    for (let row = 0; row <= arch.size; row++) {
+      const entity =
+        row < arch.size ? (unpackSlot(entityColumn.view[row] ?? 0) as EntityHandle) : null;
+      const matches =
+        entity !== null &&
+        changeFilterMatches(world, entity, changedIds, addedIds, state.lastChangeTick);
+      if (matches && runStart < 0) runStart = row;
+      if ((!matches || row === arch.size) && runStart >= 0) {
+        const bundle = buildColumnBundle(
+          arch,
+          withComponents,
+          optionalComponents,
+          runStart,
+          row - runStart,
+        );
+        callback(bundle as unknown as NestedColumnBundle<NoInfer<Cs>, NoInfer<Os>>);
+        runStart = -1;
+      }
+    }
   }
+  state.lastChangeTick = changeTick;
+}
+
+/**
+ * Run a query only when its matched rows form dense archetype slices.
+ *
+ * ForgeaX stores each archetype column contiguously and `queryRun` already
+ * exposes that storage as zero-copy views. A query with optional columns can
+ * omit a column on some archetypes, and a change filter can split one
+ * archetype into row windows, so neither has the single dense shape promised
+ * by Bevy's `contiguous_iter_mut`. Those descriptors return `false` without
+ * invoking the callback. `without` remains supported because it only filters
+ * whole archetypes.
+ *
+ * @returns `true` when the descriptor has a dense shape and the callback was
+ *          routed through every non-empty matching archetype; `false` when
+ *          the descriptor cannot make that guarantee.
+ */
+export function queryRunContiguous<
+  Cs extends ReadonlyArray<Component>,
+  Os extends ReadonlyArray<Component> = readonly [],
+>(
+  state: QueryState<Cs, Os>,
+  world: {
+    /** @internal */
+    _getGraph(): ArchetypeGraph;
+    /** @internal */
+    _getChangeTick?(): number;
+    /** @internal */
+    _getComponentChange?(entity: EntityHandle, componentId: ComponentId): ChangeTicks | undefined;
+  },
+  callback: (bundle: NestedColumnBundle<NoInfer<Cs>, NoInfer<Os>>) => void,
+): boolean {
+  const descriptor = state.descriptor;
+  if (
+    (descriptor.optional?.length ?? 0) > 0 ||
+    (descriptor.changed?.length ?? 0) > 0 ||
+    (descriptor.added?.length ?? 0) > 0
+  ) {
+    return false;
+  }
+
+  queryRun(state, world, callback);
+  return true;
+}
+
+function changeFilterMatches(
+  world: {
+    _getComponentChange?(entity: EntityHandle, componentId: ComponentId): ChangeTicks | undefined;
+  },
+  entity: EntityHandle,
+  changedIds: ReadonlyArray<ComponentId>,
+  addedIds: ReadonlyArray<ComponentId>,
+  lastChangeTick: number,
+): boolean {
+  for (const componentId of changedIds) {
+    const change = world._getComponentChange?.(entity, componentId);
+    if (change === undefined || change.changed <= lastChangeTick) return false;
+  }
+  for (const componentId of addedIds) {
+    const change = world._getComponentChange?.(entity, componentId);
+    if (change === undefined || change.added <= lastChangeTick) return false;
+  }
+  return true;
 }
 
 /**

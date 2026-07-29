@@ -72,10 +72,13 @@ function scopeError(
   return err(new ScheduleScopeMismatchError(source.name, target.name, reference));
 }
 
-export function worldAddSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
+export function worldAddSystem<
+  const Qs extends ReadonlyArray<QueryDescriptor>,
+  const Ps extends ReadonlyArray<unknown>,
+>(
   world: World,
   token: ScheduleToken,
-  descriptor: SystemDescriptor<Qs>,
+  descriptor: SystemDescriptor<Qs, Ps>,
 ): Result<void, ScheduleScopeMismatchError> {
   const target = scheduleFor(world, token);
   if (!target.ok) return target;
@@ -93,22 +96,28 @@ export function worldRemoveSystem(
   return scheduleRemoveSystem(target.value, name);
 }
 
-export function worldReplaceSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
+export function worldReplaceSystem<
+  const Qs extends ReadonlyArray<QueryDescriptor>,
+  const Ps extends ReadonlyArray<unknown>,
+>(
   world: World,
   token: ScheduleToken,
   name: string,
-  descriptor: SystemDescriptor<Qs>,
+  descriptor: SystemDescriptor<Qs, Ps>,
 ): ReturnType<typeof scheduleReplaceSystem> | Result<never, ScheduleScopeMismatchError> {
   const target = scheduleFor(world, token);
   if (!target.ok) return target;
   return scheduleReplaceSystem(target.value, name, descriptor);
 }
 
-export function worldAddSystems<const Qs extends ReadonlyArray<QueryDescriptor>>(
+export function worldAddSystems<
+  const Qs extends ReadonlyArray<QueryDescriptor>,
+  const Ps extends ReadonlyArray<unknown>,
+>(
   world: World,
   token: ScheduleToken,
   set: SystemSet,
-  systems: ReadonlyArray<SystemDescriptor<Qs>>,
+  systems: ReadonlyArray<SystemDescriptor<Qs, Ps>>,
 ): Result<void, SystemSetNotRegisteredError | ScheduleScopeMismatchError> {
   const target = scheduleFor(world, token);
   if (!target.ok) return target;
@@ -178,6 +187,7 @@ function runFixed(world: World, fixed: FixedTimeResource, accumulator: { value: 
   let steps = 0;
   while (accumulator.value >= fixed.delta && steps < fixed.maxStepsPerUpdate) {
     accumulator.value = Math.round((accumulator.value - fixed.delta) * 1e12) / 1e12;
+    fixed.overstep = accumulator.value;
     fixed.tick += 1;
     runSchedule(fixedSchedule, world, world._getErrorHandler());
     steps += 1;
@@ -209,6 +219,7 @@ export function worldUpdate(
 
   const time = worldGetResource<TimeResource>(world, Time);
   const fixed = worldGetResource<FixedTimeResource>(world, FixedTime);
+  world._advanceChangeTick();
   if (time.maxDeltaSeconds < (fixed.maxStepsPerUpdate + 1) * fixed.delta) {
     return err(
       new TimeConfigInvalidError({
@@ -260,6 +271,7 @@ export function worldUpdate(
     runSchedule(update, world, world._getErrorHandler(), order.slice(anchor + 1), updateCommands);
   }
   world._setFixedAccumulator(accumulator.value);
+  fixed.overstep = accumulator.value;
   return ok(undefined);
 }
 
@@ -268,7 +280,9 @@ export function worldInsertResource<T>(world: World, key: ResourceKey, value: T)
   if (name === TIME_RESOURCE_KEY || name === FIXED_TIME_RESOURCE_KEY) {
     throw new ProtectedResourceError(name, 'insert');
   }
+  const existed = resHas(world._getResources(), name);
   resInsert(world._getResources(), name, value);
+  world._markResourceChanged(name, !existed);
 }
 
 export function worldGetResource<T>(world: World, key: ResourceKey): T {

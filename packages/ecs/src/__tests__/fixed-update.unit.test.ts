@@ -18,6 +18,7 @@ describe('fixed update loop', () => {
     expect(world.update(2 / 60).ok).toBe(true);
     expect(ticks).toEqual([1, 2, 3]);
     expect(world.getResource<typeof FixedTime>(FixedTime).tick).toBe(3);
+    expect(world.getResource<typeof FixedTime>(FixedTime).overstep).toBeCloseTo(1 / 300, 12);
   });
 
   it('clamps before accumulating fixed time and records exact dropped metrics', () => {
@@ -32,6 +33,7 @@ describe('fixed update loop', () => {
     expect(fixedRuns).toBe(4);
     expect(fixed.droppedUpdates).toBe(1);
     expect(fixed.droppedSeconds).toBeCloseTo(1 / 60, 12);
+    expect(fixed.overstep).toBeCloseTo(1 / 60, 10);
   });
 
   it('runs Update before and after the intrinsic fixed node', () => {

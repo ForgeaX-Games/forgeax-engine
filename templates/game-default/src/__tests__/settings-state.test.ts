@@ -5,8 +5,10 @@ describe('game-default settings state', () => {
   it('updates only the current run memory state', () => {
     const state = createGameSettingsState();
     applyGameSetting(state, 'music', 35);
+    applyGameSetting(state, 'musicMuted', true);
     applyGameSetting(state, 'highContrast', true);
-    expect(state).toEqual({ music: 35, highContrast: true });
-    expect(createGameSettingsState()).toEqual({ music: 70, highContrast: false });
+    applyGameSetting(state, 'antialias', 'msaa');
+    expect(state).toEqual({ music: 35, musicMuted: true, highContrast: true, antialias: 'msaa', bloom: true });
+    expect(createGameSettingsState()).toEqual({ music: 70, musicMuted: false, highContrast: false, antialias: 'fxaa', bloom: true });
   });
 });

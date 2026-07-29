@@ -382,6 +382,7 @@ function setNavigatorGpu(gpu: unknown): void {
   function mockRawDevice(overrides?: {
     features?: readonly string[];
     createTexture?: (desc: unknown) => unknown;
+    createTextureView?: (texture: unknown, desc: unknown) => unknown;
     createBindGroupLayout?: (desc: unknown) => unknown;
   }): RawDeviceLike {
     const featuresSet = new Set<string>(overrides?.features ?? []);
@@ -389,6 +390,9 @@ function setNavigatorGpu(gpu: unknown): void {
       features: featuresSet,
       limits: { maxStorageBuffersPerShaderStage: 8, maxStorageTexturesPerShaderStage: 4 },
       createTexture: (overrides?.createTexture ?? capsMakeNoop) as (desc: unknown) => unknown,
+      createTextureView: overrides?.createTextureView as
+        | ((texture: unknown, desc: unknown) => unknown)
+        | undefined,
       createSampler: capsMakeNoop,
       createBindGroupLayout: (overrides?.createBindGroupLayout ?? capsMakeNoop) as (
         desc: unknown,
@@ -451,6 +455,100 @@ function setNavigatorGpu(gpu: unknown): void {
           expect(result.error.hint).toContain('check engine.rhi.caps.compute');
         }
         expect(createComputePipeline).not.toHaveBeenCalled();
+      });
+
+      it('timestamp QuerySet creation is an explicit WebGL2 capability refusal', () => {
+        const createQuerySet = vi.fn(() => ({ type: 'timestamp', count: 2 }));
+        const raw = mockRawDevice() as RawDeviceLike;
+        raw.createQuerySet = createQuerySet;
+        const r = makeRhiDevice(raw);
+
+        expect(r.device.caps.timestampQuery).toBe(false);
+        const result = r.device.createQuerySet({ type: 'timestamp', count: 2 });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.code).toBe('feature-not-enabled');
+          expect(result.error.expected).toBe(
+            'caps.timestampQuery === true (timestamp-query feature)',
+          );
+          expect(result.error.hint).toContain('device.caps.timestampQuery');
+        }
+        expect(createQuerySet).not.toHaveBeenCalled();
+      });
+
+      it('classifies a wgpu-wasm descriptor parse error as descriptor-invalid', () => {
+        const raw = mockRawDevice({
+          createTexture: () => {
+            throw new Error(
+              '[wgpu-wasm] failed to parse texture descriptor: invalid view dimension',
+            );
+          },
+        });
+        const r = makeRhiDevice(raw);
+
+        const result = r.device.createTexture({
+          size: [4, 4, 2],
+          format: 'rgba8unorm',
+          usage: 0x04,
+          dimension: '2d',
+        });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.code).toBe('rhi-descriptor-invalid');
+          expect(result.error.hint).toContain('wgpu-wasm descriptor parse error');
+        }
+      });
+
+      it('classifies a string-valued wgpu-wasm parse refusal as descriptor-invalid', () => {
+        const raw = mockRawDevice({
+          createTexture: () => {
+            throw '[wgpu-wasm] failed to parse texture descriptor: invalid enum';
+          },
+        });
+        const r = makeRhiDevice(raw);
+
+        const result = r.device.createTexture({
+          size: [4, 4, 2],
+          format: 'rgba8unorm',
+          usage: 0x04,
+          dimension: '2d',
+        });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.code).toBe('rhi-descriptor-invalid');
+      });
+
+      it('classifies texture-view parse errors from the device entry point as descriptor-invalid', () => {
+        const raw = mockRawDevice({
+          createTextureView: () => {
+            throw '[wgpu-wasm] failed to parse textureView descriptor.aspect: invalid enum';
+          },
+        });
+        const r = makeRhiDevice(raw);
+        const result = r.device.createTextureView({} as never, { aspect: 'bad' });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.code).toBe('rhi-descriptor-invalid');
+      });
+
+      it('classifies texture-view parse errors from the texture entry point as descriptor-invalid', () => {
+        const raw = mockRawDevice();
+        const r = makeRhiDevice(raw);
+        const result = r.device.createTextureView(
+          {
+            createView: () => {
+              throw new Error(
+                '[wgpu-wasm] failed to parse textureView descriptor.dimension: invalid enum',
+              );
+            },
+          } as never,
+          { dimension: 'bad' },
+        );
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.code).toBe('rhi-descriptor-invalid');
       });
 
       it('m1-1-b: caps.rg11b10ufloatRenderable is false when feature absent (no createTexture call)', () => {

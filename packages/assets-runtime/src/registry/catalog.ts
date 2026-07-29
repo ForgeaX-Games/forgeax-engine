@@ -1,7 +1,9 @@
 import { err, ok, type Result } from '@forgeax/engine-rhi';
 import {
   ASSET_ERROR_HINTS,
+  type Asset,
   type AssetCompression,
+  type AssetEnvelope,
   AssetError,
   type AssetRelation,
   type CatalogDiagnostic,
@@ -27,6 +29,19 @@ export interface CatalogRecord {
   readonly sourceIndex?: number;
   readonly relations?: readonly AssetRelation[];
   readonly diagnostics?: readonly CatalogDiagnostic[];
+}
+
+/** Build the canonical row for an inline asset without inventing producer facts. */
+export function createInlineCatalogRecord(
+  envelope: AssetEnvelope<Asset>,
+  name: string,
+): CatalogRecord {
+  return {
+    relativeUrl: '',
+    kind: envelope.payload.kind,
+    name,
+    ...(envelope.refs.length > 0 ? { refs: envelope.refs.map((ref) => ref.guid) } : {}),
+  };
 }
 
 type CatalogFetch = (input: string) => PromiseLike<{

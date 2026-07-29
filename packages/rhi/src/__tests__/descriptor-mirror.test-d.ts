@@ -37,6 +37,7 @@ import type {
   RenderPassColorAttachment,
   RenderPassDepthStencilAttachment,
   RenderPassDescriptor,
+  RenderPassTimestampWrites,
   RenderPipelineDescriptor,
   SamplerDescriptor,
   TextureDescriptor,
@@ -254,10 +255,11 @@ describe('w8 - 4 new descriptors mirror @webgpu/types (D-S5)', () => {
     expectTypeOf<
       NonNullable<RenderPassDescriptor['depthStencilAttachment']>
     >().toEqualTypeOf<RenderPassDepthStencilAttachment>();
-    // timestampWrites and maxDrawCount keep spec types.
-    expectTypeOf<ValueOf<RenderPassDescriptor, 'timestampWrites'>>().toEqualTypeOf<
-      ValueOf<GPURenderPassDescriptor, 'timestampWrites'>
-    >();
+    // timestampWrites uses the forgeax QuerySet brand; maxDrawCount keeps the
+    // spec type.
+    expectTypeOf<
+      ValueOf<RenderPassDescriptor, 'timestampWrites'>
+    >().toEqualTypeOf<RenderPassTimestampWrites>();
     expectTypeOf<ValueOf<RenderPassDescriptor, 'maxDrawCount'>>().toEqualTypeOf<
       ValueOf<GPURenderPassDescriptor, 'maxDrawCount'>
     >();

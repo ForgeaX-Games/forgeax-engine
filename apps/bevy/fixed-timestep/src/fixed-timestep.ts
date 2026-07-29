@@ -1,4 +1,4 @@
-import { FixedUpdate, Update, type World } from '@forgeax/engine-ecs';
+import { FixedTime, FixedUpdate, Time, Update, type World } from '@forgeax/engine-ecs';
 import { quat } from '@forgeax/engine-math';
 import { Transform } from '@forgeax/engine-scene';
 import { Camera } from '@forgeax/engine-render';
@@ -7,24 +7,35 @@ import { perspective } from '@forgeax/engine-render';
 export interface FixedTimestepState {
   updateFrames: number;
   fixedUpdateFrames: number;
+  lastFrameDelta: number;
+  fixedDelta: number;
+  overstep: number;
 }
 
 export function buildFixedTimestepWorld(world: World): { getState: () => FixedTimestepState } {
-  const state: FixedTimestepState = { updateFrames: 0, fixedUpdateFrames: 0 };
+  const state: FixedTimestepState = {
+    updateFrames: 0,
+    fixedUpdateFrames: 0,
+    lastFrameDelta: 0,
+    fixedDelta: world.getResource(FixedTime).delta,
+    overstep: 0,
+  };
 
   world.addSystem(Update, {
     name: 'frame-update',
     queries: [],
-    fn: () => {
+    fn: (_world) => {
       state.updateFrames += 1;
+      state.lastFrameDelta = _world.getResource(Time).delta;
     },
   });
 
   world.addSystem(FixedUpdate, {
     name: 'fixed-update',
     queries: [],
-    fn: () => {
+    fn: (world) => {
       state.fixedUpdateFrames += 1;
+      state.overstep = world.getResource(FixedTime).overstep;
     },
   });
 
@@ -41,5 +52,10 @@ export function buildFixedTimestepWorld(world: World): { getState: () => FixedTi
     { component: Camera, data: perspective({ fov: Math.PI / 4, aspect: 16 / 9 }) },
   );
 
-  return { getState: () => state };
+  return {
+    getState: () => ({
+      ...state,
+      overstep: world.getResource(FixedTime).overstep,
+    }),
+  };
 }

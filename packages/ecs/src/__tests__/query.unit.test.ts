@@ -20,7 +20,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { ManagedColumnReader } from '../column';
 import { defineComponent } from '../component';
 import { Entity } from '../entity';
-import { createQueryState, queryRun } from '../query';
+import { createQueryState, queryRun, queryRunContiguous } from '../query';
 import { World } from '../world';
 
 // One component per managed vocab keyword + one POD reference + one
@@ -67,6 +67,9 @@ const FixedBlobM4 = defineComponent('FixedBlobM4', {
 const FixedListM4 = defineComponent('FixedListM4', {
   values: { type: 'array<f32, 4>' },
 });
+
+const ContiguousHealth = defineComponent('ContiguousHealth', { value: 'f32' });
+const ContiguousDecay = defineComponent('ContiguousDecay', { factor: 'f32' });
 
 describe('w10 --- AC-08 negative: managed columns reject direct index write', () => {
   // Each test runs the queryRun callback so the consumer-path requirement
@@ -277,5 +280,64 @@ describe('w10 --- type-d smoke: ManagedColumnReader<T> per-keyword localisation'
     queryRun(state, world, (bundle) => {
       expectTypeOf(bundle.GlyphTextM4.text).toEqualTypeOf<ManagedColumnReader<'string'>>();
     });
+  });
+});
+
+describe('contiguous query', () => {
+  it('returns dense writable slices for matching archetype columns', () => {
+    const world = new World();
+    for (let value = 0; value < 4; value++) {
+      world.spawn(
+        { component: ContiguousHealth, data: { value: (value + 1) * 5 } },
+        { component: ContiguousDecay, data: { factor: 0.9 } },
+      );
+    }
+
+    const state = createQueryState({ with: [ContiguousHealth, ContiguousDecay, Entity] });
+    const lengths: number[] = [];
+    const supported = queryRunContiguous(state, world, (bundle) => {
+      lengths.push(bundle.ContiguousHealth.value.length);
+      expect(bundle.ContiguousHealth.value.length).toBe(bundle.ContiguousDecay.factor.length);
+      expect(bundle.ContiguousHealth.value.length).toBe(bundle.Entity.self.length);
+      for (let row = 0; row < bundle.Entity.self.length; row++) {
+        const health = bundle.ContiguousHealth.value[row] ?? 0;
+        const decay = bundle.ContiguousDecay.factor[row] ?? 0;
+        bundle.ContiguousHealth.value[row] = health * decay;
+      }
+    });
+
+    expect(supported).toBe(true);
+    expect(lengths).toEqual([4]);
+    const values: number[] = [];
+    queryRun(state, world, (bundle) => {
+      for (let row = 0; row < bundle.Entity.self.length; row++) {
+        values.push(bundle.ContiguousHealth.value[row] ?? 0);
+      }
+    });
+    expect(values).toEqual([4.5, 9, 13.5, 18]);
+  });
+
+  it('rejects optional and row-filtered descriptors instead of claiming density', () => {
+    const world = new World();
+    world.spawn({ component: ContiguousHealth, data: { value: 5 } });
+
+    const optional = createQueryState({
+      with: [ContiguousHealth, Entity],
+      optional: [ContiguousDecay],
+    });
+    const changed = createQueryState({
+      with: [ContiguousHealth, Entity],
+      changed: [ContiguousHealth],
+    });
+    const added = createQueryState({
+      with: [ContiguousHealth, Entity],
+      added: [ContiguousHealth],
+    });
+
+    expect(queryRunContiguous(optional, world, () => expect.fail('optional query ran'))).toBe(
+      false,
+    );
+    expect(queryRunContiguous(changed, world, () => expect.fail('changed query ran'))).toBe(false);
+    expect(queryRunContiguous(added, world, () => expect.fail('added query ran'))).toBe(false);
   });
 });

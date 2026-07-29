@@ -5,7 +5,10 @@
   "type": "module",
   "license": "Apache-2.0",
   "description": "Default GameEntry template -- a lowpoly vignette authored in assets/scene.pack.json (engine-native scene asset, GUID-discoverable via forge.json.defaultScene) + a movable Player. Loaded by apps/preview via loadGame dynamic import.",
-  "scripts": {},
+  "scripts": {
+    "smoke:geometry": "node scripts/smoke-geometry.mjs",
+    "smoke:rotation": "node scripts/smoke-rotation.mjs"
+  },
   "forgeax": {
     "assets": {
       "roots": [
@@ -42,6 +45,7 @@
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-input": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-ui": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
     "@forgeax/engine-physics": "workspace:*",
@@ -51,6 +55,7 @@
     "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-skinning": "workspace:*",
     "@forgeax/engine-animation": "workspace:*",
+    "@forgeax/engine-state": "workspace:*",
     "@forgeax/engine-types": "workspace:*"
   },
   "devDependencies": {

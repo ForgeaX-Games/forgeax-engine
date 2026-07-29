@@ -80,11 +80,16 @@ export function spawnCore(
   record.row = row;
   const spawnedEntity = encodeEntity(indexSlot, record.generation);
   world._writeEntitySelf(arch, row, spawnedEntity);
+  for (const cd of componentDatas) {
+    world._markComponentAdded(spawnedEntity, cd.component.id);
+  }
   for (let i = 0; i < componentDatas.length; i++) {
     const cd = componentDatas[i];
     const filled = filledData[i];
     if (!cd || filled === undefined) continue;
+    const onAdd = (cd.component as Component).onAdd;
     const onInsert = (cd.component as Component).onInsert;
+    if (onAdd) onAdd(spawnedEntity, filled);
     if (onInsert) onInsert(spawnedEntity, filled);
     if (!internal && (cd.component as Component).relationship) {
       world._relationshipOnInsert(spawnedEntity, cd.component as Component, filled);
@@ -111,11 +116,14 @@ export function despawnCore(
   const linkedChildren = arch ? relationshipLinkedSpawnChildren(world, entity, arch) : [];
   if (arch) {
     for (const comp of arch.components) {
+      const onDiscard = comp.onDiscard;
       const onRemove = comp.onRemove;
       const rel = comp.relationship;
-      const needsOldValue = onRemove !== undefined || (rel !== undefined && !internal);
+      const needsOldValue =
+        onDiscard !== undefined || onRemove !== undefined || (rel !== undefined && !internal);
       if (needsOldValue) {
         const oldValue = world._readRow(arch, comp, record?.row) as Record<string, unknown>;
+        if (onDiscard) onDiscard(entity, oldValue);
         if (onRemove) onRemove(entity, oldValue);
         if (rel !== undefined && !internal) world._relationshipOnRemove(entity, comp, oldValue);
       }
@@ -128,6 +136,7 @@ export function despawnCore(
     }
   }
   if (record) {
+    world._removeEntityChanges(entity);
     record.archetypeId = -1;
     record.row = -1;
     record.generation += 1;

@@ -12,7 +12,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "smoke:ui-authoring": "node scripts/smoke-ui-authoring.mjs",
-    "smoke:render-evidence": "node scripts/smoke-render-evidence.mjs"
+    "smoke:render-evidence": "node scripts/smoke-render-evidence.mjs",
+    "smoke:fixed-state": "node scripts/smoke-fixed-state.mjs",
+    "smoke:asset-loop": "node scripts/smoke-asset-loop.mjs"
   },
   "forgeax": {
     "metrics": {
@@ -49,6 +51,7 @@
   },
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",
+    "@forgeax/engine-image": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@webgpu/types": "^0.1.71",

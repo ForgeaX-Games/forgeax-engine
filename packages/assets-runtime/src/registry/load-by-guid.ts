@@ -25,7 +25,7 @@ import {
 import type { AssetRegistry, ParsedPackFile } from '../asset-registry';
 import { isRawAssetContainerUrl, UPSTREAM_ENTRY_KINDS } from '../loaders/upstream-entry';
 import { unpackMeshBin } from '../mesh-bin';
-import { fetchPackIndex, resolveCatalogAssetUrl } from './catalog';
+import { type CatalogRecord, fetchPackIndex, resolveCatalogAssetUrl } from './catalog';
 import { buildBreadcrumbHint, buildSceneChildContext } from './instantiate';
 
 /**
@@ -323,14 +323,18 @@ export async function resolveCatalogEntry(
  */
 export function registerPackagesFromIndex(
   registry: AssetRegistry,
-  catalog: Map<string, { relativeUrl: string; name?: string }>,
+  catalog: Map<string, { relativeUrl: string; sourcePath?: string; name?: string }>,
 ): void {
   const byPath = new Map<string, { guids: string[]; names: Map<string, string> }>();
   for (const [guidKey, entry] of catalog) {
-    let group = byPath.get(entry.relativeUrl);
+    // Package identity follows the authored source, not a replaceable DDC or
+    // hashed payload URL. This keeps `resolveName()` stable across dev import,
+    // invalidate/reload, and production builds.
+    const packagePath = entry.sourcePath ?? entry.relativeUrl;
+    let group = byPath.get(packagePath);
     if (group === undefined) {
       group = { guids: [], names: new Map() };
-      byPath.set(entry.relativeUrl, group);
+      byPath.set(packagePath, group);
     }
     group.guids.push(guidKey);
     if (entry.name !== undefined) group.names.set(guidKey, entry.name);
@@ -853,31 +857,7 @@ export async function transportOrFail<T = Asset>(
     registry.packIndexCachePatchQueue = registry.packIndexCachePatchQueue.then(() => {
       if (registry.packIndexCache === undefined) registry.packIndexCache = new Map();
       for (const e of importedEntries) {
-        registry.packIndexCache.set(e.guid.toLowerCase(), {
-          relativeUrl: resolveCatalogAssetUrl(registry, e.relativeUrl),
-          kind: e.kind,
-          // Carry the transport's derived display name into the cache row.
-          // buildCatalog already resolves it (deriveAssetName: basename of the
-          // source for single-/no-storedName sub-assets), so a freshly imported
-          // GLB's 1000+ sub-assets show as "<file>.glb" in the Content Browser
-          // instead of blank. Dropping it here made listCatalog fall back to
-          // `entry.name ?? ''` — the whole-index re-read path (else branch) kept
-          // names, so only the incremental patch path was blank.
-          ...(e.name !== undefined ? { name: e.name } : {}),
-          ...(e.metadata !== undefined ? { metadata: e.metadata } : {}),
-          // Carry refs on the incremental patch path too, else an asset
-          // imported via POST /__import shows missing dependency edges until
-          // the next full pack-index refresh (feat: listCatalog refs).
-          ...(e.refs !== undefined ? { refs: e.refs } : {}),
-          ...(e.compression !== undefined ? { compression: e.compression } : {}),
-          // Carry sourcePath on the incremental patch path too (same red-line
-          // as refs above): an asset imported via POST /__import would
-          // otherwise expose no source-file path in listCatalog until the next
-          // full pack-index refresh, breaking editor CRUD sidecar lookup for
-          // freshly imported assets. `sourcePath` is a required PackIndexEntry
-          // field, so it is always present on the transport row.
-          ...(e.sourcePath !== undefined ? { sourcePath: e.sourcePath } : {}),
-        });
+        registry.packIndexCache.set(e.guid.toLowerCase(), withResolvedCatalogLocator(registry, e));
       }
     });
     await registry.packIndexCachePatchQueue;
@@ -899,6 +879,14 @@ export async function transportOrFail<T = Asset>(
 
   // Re-enter the DDC load path (identical to the catalog-hit path).
   return ddcLoad<T>(registry, guid, guidKey, entry);
+}
+
+/** Preserve the canonical producer row while changing only its load locator. */
+function withResolvedCatalogLocator(registry: AssetRegistry, entry: CatalogRecord): CatalogRecord {
+  return {
+    ...entry,
+    relativeUrl: resolveCatalogAssetUrl(registry, entry.relativeUrl),
+  };
 }
 
 /**

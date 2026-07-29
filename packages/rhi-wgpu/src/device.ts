@@ -33,6 +33,7 @@ import {
   type CommandEncoderDescriptor,
   type ComputePipeline,
   type ComputePipelineDescriptor,
+  err,
   ok,
   type PipelineLayout,
   type PipelineLayoutDescriptor,
@@ -45,6 +46,7 @@ import {
   type RhiCommandEncoder,
   type RhiDevice,
   type RhiError,
+  RhiError as RhiErrorClass,
   type RhiFeatures,
   type RhiLimits,
   type RhiQueue,
@@ -321,7 +323,7 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       const handle = method.call(this.raw, desc);
       return ok(handle as T);
     } catch (e) {
-      if (e instanceof Error && e.message.includes('[wgpu-wasm] failed to parse')) {
+      if (isDescriptorParseError(e)) {
         return descriptorInvalid(e);
       }
       return webgpuRuntimeError(e);
@@ -518,6 +520,7 @@ class RhiWgpuDeviceImpl implements RhiDevice {
         const view = this.raw.createTextureView.call(this.raw, texture, desc);
         return ok(view as TextureView);
       } catch (e) {
+        if (isDescriptorParseError(e)) return descriptorInvalid(e);
         return webgpuRuntimeError(e);
       }
     }
@@ -535,13 +538,28 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       const view = texAsCreateView.createView(desc as GPUTextureViewDescriptor);
       return ok(view as TextureView);
     } catch (e) {
+      if (isDescriptorParseError(e)) return descriptorInvalid(e);
       return webgpuRuntimeError(e);
     }
   }
 
   createQuerySet(desc: QuerySetDescriptor): Result<QuerySet, RhiError> {
+    if (desc.type === 'timestamp' && this.caps.timestampQuery !== true) {
+      return err(
+        new RhiErrorClass({
+          code: 'feature-not-enabled',
+          expected: 'caps.timestampQuery === true (timestamp-query feature)',
+          hint: 'check device.caps.timestampQuery before creating timestamp QuerySets on the wgpu WebGL2 backend',
+        }),
+      );
+    }
     return this.wrap<QuerySet>(this.raw.createQuerySet, desc);
   }
+}
+
+function isDescriptorParseError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('[wgpu-wasm] failed to parse');
 }
 
 /**

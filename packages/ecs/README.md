@@ -41,6 +41,33 @@ const r = world.update(0.016); // ~60fps delta
 if (!r.ok) console.error(r.error.code, r.error.hint);
 ```
 
+### Reusable system parameters
+
+`defineSystemParam` packages one named query/resource access contract and resolves it into the fourth argument of a system function. The parameter owns its query cache and required-resource validation; the system receives only the resolved value.
+
+```ts
+const PlayerCounter = defineSystemParam({
+  name: 'player-counter',
+  queries: [{ with: [Player, Entity] }],
+  resources: ['player-count'],
+  resolve: (world, results) => ({
+    players: results[0]?.reduce((n, bundle) => n + bundle.Entity.self.length, 0) ?? 0,
+    count: world.getResource<{ value: number }>('player-count'),
+  }),
+});
+
+world.addSystem(Update, {
+  name: 'count-players',
+  queries: [],
+  params: [PlayerCounter],
+  fn: (_world, _queries, _commands, [counter]) => {
+    counter.count.value = counter.players;
+  },
+});
+```
+
+Each parameter definition gets an independent per-World query-state cache. Missing resources are reported through the existing system parameter validation path before any resolver or system body runs.
+
 ### Schedule tokens
 
 `Update` and `FixedUpdate` are frozen nominal schedule tokens exported from `@forgeax/engine-ecs`. Every registration API takes one as its explicit first argument:
@@ -62,13 +89,39 @@ The engine owns two protected resources:
 | Resource | Fields | Description |
 |:--|:--|:--|
 | `Time` | `delta`, `elapsed`, `maxDeltaSeconds` | Variable-rate clock. `delta` is the measured frame delta capped by `maxDeltaSeconds`. `elapsed` is cumulative wall time. |
-| `FixedTime` | `delta`, `maxStepsPerUpdate`, `tick`, `droppedSeconds`, `droppedUpdates` | Fixed-rate clock. `delta` is 1/60 by default. `tick` increments each FixedUpdate iteration. |
+| `FixedTime` | `delta`, `maxStepsPerUpdate`, `tick`, `overstep`, `droppedSeconds`, `droppedUpdates` | Fixed-rate clock. `delta` is 1/60 by default. `tick` increments each FixedUpdate iteration; `overstep` is the seconds accrued toward the next iteration. |
 
 `Time` and `FixedTime` are protected — `world.insertResource` rejects them. Read them via `world.getResource(Time)` / `world.getResource(FixedTime)`.
 
 ### Zero-delta
 
 `world.update(0)` runs Update schedules but does not advance `Time` or run FixedUpdate. Use this for headless stepping or deterministic trace replay.
+
+### Disabled entities
+
+`Disabled` is a zero-field marker exported from `@forgeax/engine-ecs`. Every
+query excludes entities carrying `Disabled` by default, including renderer
+queries. Add `Disabled` to the query's `with` tuple to inspect those entities;
+remove the component to re-enable them.
+
+```ts
+import { Disabled, Entity, Update, World, defineComponent } from '@forgeax/engine-ecs';
+
+const Target = defineComponent('Target', {});
+const world = new World();
+const entity = world.spawn({ component: Target, data: {} }).unwrap();
+world.addComponent(entity, { component: Disabled, data: {} }).unwrap();
+
+world.addSystem(Update, {
+  name: 'reenable-targets',
+  queries: [{ with: [Target, Disabled, Entity] }],
+  fn: (_world, queryResults, commands) => {
+    for (const bundle of queryResults[0]) {
+      for (const entity of bundle.Entity.self) commands.removeComponent(entity, Disabled);
+    }
+  },
+}).unwrap();
+```
 
 ### Error codes
 
@@ -539,7 +592,7 @@ const ChildOf = defineComponent('ChildOf', { parent: 'entity' }, {
 
 **Traverse** — `world.iterDescendants(e)` / `world.iterAncestors(e)` return `Iterable<EntityHandle>` for `for...of`; both carry a visited-set so corrupt cyclic data terminates instead of looping.
 
-**Lifecycle** — bidirectional sync runs at three `World` sites: `addComponent`/`spawn` (append to mirror, lazily creating the mirror component if absent), `removeComponent` (prune), `despawn` (prune the mirror entry; cascade only if `linkedSpawn`). Built on the internal `onInsert`/`onRemove` component hooks (`DefineComponentOptions`, not a public registration API in this release).
+**Lifecycle** — bidirectional sync runs at three `World` sites: `addComponent`/`spawn` (append to mirror, lazily creating the mirror component if absent), `removeComponent` (prune), `despawn` (prune the mirror entry; cascade only if `linkedSpawn`). It uses the same `onInsert`/`onRemove` lifecycle hooks available through `DefineComponentOptions`.
 
 > Eliminates the prior manual `Children` ↔ `ChildOf` two-step maintenance (OOS-09 / OOS-10).
 
@@ -621,6 +674,64 @@ Real-world consumer: `packages/runtime/src/render-system-extract.ts` Camera / Po
 | Same token in both `with` and `optional` | **Fail-fast** at `createQueryState` construction time: `EcsError(code='query-descriptor-with-optional-conflict')` with `.hint` property-accessible (charter P3). `with` implies "always present + filter", `optional` means "may be absent, no filter" — they contradict for the same component. This is a descriptor self-consistency check, O(descriptor) one-time, zero per-frame / per-archetype overhead. |
 | Optional component not registered in World | Treated as absent from all archetypes — `optionalIds` omits unresolved tokens; no crash, predictable behaviour (<https://github.com/bevyengine/bevy/issues/17578>) |
 | Empty `optional: []` | Equivalent to pure `with` query — no optional keys in bundle. `DirectionalLight` query keeps this form (OOS-5). |
+
+## Query — change detection (`changed` / `added`)
+
+`changed` and `added` are query descriptor filters for Bevy-style per-component change detection. A filtered query only visits rows whose component changed or was added after that query state's previous run; the first run sees entities already present in the world. Multiple entries in either list use AND semantics.
+
+```ts
+const changed = createQueryState({
+  with: [Position, Entity],
+  changed: [Position],
+}, world);
+
+queryRun(changed, world, (bundle) => {
+  for (let i = 0; i < bundle.Entity.self.length; i++) {
+    const x = bundle.Position.x[i] ?? 0;
+    // Process only Position rows changed since this query last ran.
+    console.log(x);
+  }
+});
+```
+
+The World records component changes made through `spawn`, `addComponent`, `set`, `push`, and `pop`. `insertResource` records resource insertion/overwrite ticks, available through `world.getResourceChange(name)`. A query's change cursor belongs to its `QueryState`, so two states with the same descriptor observe changes independently. Raw writes through an unfiltered query's typed-array view cannot be tracked automatically; use `world.set` or another World mutation boundary when change evidence is required.
+
+When matching rows are interleaved inside one archetype, `queryRun` invokes the callback for contiguous live row windows. The returned typed-array views remain writable and are scoped to the callback segment, preserving the existing zero-copy column contract.
+
+`added` is distinct from `changed`: a newly spawned component satisfies both filters on its first observation, while a later `set` satisfies only `changed`.
+
+## Query — contiguous archetype slices (`queryRunContiguous`)
+
+`queryRunContiguous` is the dense-column counterpart to Bevy's `contiguous_iter_mut`. It returns `true` and routes the callback through every non-empty matching archetype when the descriptor has one dense shape. The callback receives the same writable, zero-copy column views as `queryRun`, so a system can process a whole archetype column without collecting entity handles or copying rows:
+
+```ts
+const state = createQueryState({ with: [Health, HealthDecay, Entity] });
+const supported = queryRunContiguous(state, world, (bundle) => {
+  const health = bundle.Health.value;
+  const decay = bundle.HealthDecay.factor;
+  for (let i = 0; i < bundle.Entity.self.length; i++) {
+    health[i] = (health[i] ?? 0) * (decay[i] ?? 0);
+  }
+});
+```
+
+`without` filters remain dense because they exclude whole archetypes. `optional`, `changed`, and `added` descriptors return `false` without invoking the callback: optional data can be absent per archetype, while row-level change filters can fragment one archetype into multiple windows. The API shares `queryRun`'s archetype matching, cache, and column slicing implementation; it adds a truthful capability check rather than a second iteration path.
+
+## Component lifecycle hooks (`onAdd` / `onInsert` / `onDiscard` / `onRemove`)
+
+`defineComponent` can attach four synchronous lifecycle hooks. They are useful for keeping an index or other derived data structure synchronized with component ownership; the callback receives the entity and a value snapshot, so it does not need to read a potentially migrating archetype row.
+
+```ts
+const index = new Map<number, EntityHandle>();
+const Marker = defineComponent('Marker', { key: 'u32' }, {
+  onAdd: () => {},
+  onInsert: (entity, value) => index.set(value.key, entity),
+  onDiscard: (_entity, value) => index.delete(value.key),
+  onRemove: () => {},
+});
+```
+
+`onAdd` fires only when the entity did not already carry the component. `onInsert` fires after spawn, add, and set writes. `onDiscard` receives the old value before a set replacement, component removal, or despawn; `onRemove` follows it while the component is still logically present. The same ordering applies to deferred `Commands` materialization. Hooks are synchronous and intentionally receive snapshots rather than a World handle; use systems or events when a callback needs broader world mutation.
 
 ## Query — pairwise / K-combination iteration (`queryCombinations`)
 

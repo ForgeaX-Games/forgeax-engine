@@ -4,7 +4,7 @@ import type { InputSnapshot } from '@forgeax/engine-input';
 export type GameplayLifecycleContext = {
   world: World;
   readInput: () => InputSnapshot;
-  reset: () => void;
+  requestReset: () => void;
 };
 
 /** Turn the reset action edge into one deterministic gameplay reset request. */
@@ -14,7 +14,7 @@ export function installGameplayLifecycle(ctx: GameplayLifecycleContext): void {
     queries: [] as const,
     after: ['input-frame-start-scan', 'game-look', 'game-pick-shoot'],
     fn: () => {
-      if (ctx.readInput().action('reset').justPressed()) ctx.reset();
+      if (ctx.readInput().action('reset').justPressed()) ctx.requestReset();
     },
   }));
 }

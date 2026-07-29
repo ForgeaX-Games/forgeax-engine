@@ -761,7 +761,7 @@ export type RenderPassDescriptor = ExplicitUndefined<
       | 'timestampWrites'
       | 'maxDrawCount'
     >,
-    'colorAttachments' | 'depthStencilAttachment' | 'occlusionQuerySet'
+    'colorAttachments' | 'depthStencilAttachment' | 'occlusionQuerySet' | 'timestampWrites'
   >
 > & {
   /**
@@ -780,7 +780,16 @@ export type RenderPassDescriptor = ExplicitUndefined<
    *  `device.caps.timestampQuery` ahead of `'timestamp'` query sets;
    *  occlusion sets are unconditionally available. */
   occlusionQuerySet?: QuerySet | undefined;
+  /** Optional timestamp query set and the pass boundary write slots. */
+  timestampWrites?: RenderPassTimestampWrites | undefined;
 };
+
+/** Timestamp writes attached to a render pass descriptor. */
+export interface RenderPassTimestampWrites {
+  querySet: QuerySet;
+  beginningOfPassWriteIndex?: number | undefined;
+  endOfPassWriteIndex?: number | undefined;
+}
 
 // ============================================================================
 // Capabilities trio (MVP-1.2) - readonly + independent fields

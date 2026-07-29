@@ -440,6 +440,12 @@ unsafe fn pipeline_layout_borrow(js: &JsValue) -> Option<&'static wgpu::Pipeline
     unsafe { read_wbg_ptr::<RhiWgpuPipelineLayout>(js) }.map(|h| &h.inner)
 }
 
+fn query_set_borrow(js: &JsValue, what: &str) -> Result<&'static wgpu::QuerySet, JsValue> {
+    unsafe { read_wbg_ptr::<RhiWgpuQuerySet>(js) }
+        .map(|h| &h.inner)
+        .ok_or_else(|| JsValue::from_str(&format!("{what} is not a live RhiWgpuQuerySet handle")))
+}
+
 /// bug-20260610 v9 side-channel: read the `forgeaxToken` getter off a
 /// wasm-bindgen handle. Returns the u32 token previously assigned in
 /// create_shader_module / create_pipeline_layout. The wasm-bindgen-generated
@@ -616,6 +622,13 @@ struct TextureDescriptorJs {
     usage: u32,
     #[serde(default)]
     view_formats: Vec<wgpu::TextureFormat>,
+    // WebGPU compatibility-mode field. wgpu 29's native TextureDescriptor
+    // has no equivalent, but the standard path carries the actual binding
+    // dimension through TextureViewDescriptor, so parsing this field is
+    // sufficient. Keep it in the JS mirror to reject malformed values rather
+    // than silently accepting an unknown enum member.
+    #[serde(default)]
+    texture_binding_view_dimension: Option<wgpu::TextureViewDimension>,
 }
 impl TextureDescriptorJs {
     fn into_wgpu(&self) -> wgpu::TextureDescriptor<'static> {
@@ -1239,12 +1252,16 @@ impl RhiWgpuDevice {
             .ok().unwrap_or(JsValue::UNDEFINED);
         let vbs = parse_vertex_buffers(&buffers_js)?;
         let vbs: &[wgpu::VertexBufferLayout<'static>] = Box::leak(vbs.into_boxed_slice());
+        let vertex_constants = parse_pipeline_constants(&vertex_js, "vertex.constants")?;
 
         let ep_leaked: Box<Option<&'static str>> = Box::new(if entry_point.is_empty() || entry_point == "main" { None } else { Some(leak_str(entry_point)) });
         let vertex = wgpu::VertexState {
             module: leaked_vertex,
             entry_point: *ep_leaked,
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: vertex_constants,
+                ..Default::default()
+            },
             buffers: vbs,
         };
 
@@ -1282,10 +1299,14 @@ impl RhiWgpuDevice {
 
             let targets = parse_color_targets(&targets_js)?;
             let targets: &[Option<wgpu::ColorTargetState>] = Box::leak(targets.into_boxed_slice());
+            let fragment_constants = parse_pipeline_constants(&frag_js, "fragment.constants")?;
             Some(wgpu::FragmentState {
                 module: frag_mod,
                 entry_point: if ep.is_empty() || ep == "main" { None } else { Some(leak_str(ep)) },
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: fragment_constants,
+                    ..Default::default()
+                },
                 targets,
             })
         } else {
@@ -1630,24 +1651,13 @@ fn parse_texture_view_descriptor(
     let label = js_sys::Reflect::get(desc_js, &JsValue::from_str("label"))
         .ok().and_then(|v| v.as_string()).map(leak_str);
     let format: Option<wgpu::TextureFormat> =
-        js_sys::Reflect::get(desc_js, &JsValue::from_str("format"))
-            .ok()
-            .filter(|v| !v.is_undefined() && !v.is_null())
-            .and_then(|v| serde_wasm_bindgen::from_value(v).ok());
+        parse_texture_view_enum(desc_js, "format")?;
     let dimension: Option<wgpu::TextureViewDimension> =
-        js_sys::Reflect::get(desc_js, &JsValue::from_str("dimension"))
-            .ok()
-            .filter(|v| !v.is_undefined() && !v.is_null())
-            .and_then(|v| serde_wasm_bindgen::from_value(v).ok());
+        parse_texture_view_enum(desc_js, "dimension")?;
     let usage: Option<u32> =
         js_sys::Reflect::get(desc_js, &JsValue::from_str("usage"))
-            .ok().and_then(|v| v.as_f64()).map(|n| n as u32);
-    let aspect = js_sys::Reflect::get(desc_js, &JsValue::from_str("aspect"))
-        .ok().and_then(|v| v.as_string()).map(|s| match s.as_str() {
-            "stencil-only" => wgpu::TextureAspect::StencilOnly,
-            "depth-only" => wgpu::TextureAspect::DepthOnly,
-            _ => wgpu::TextureAspect::All,
-        }).unwrap_or(wgpu::TextureAspect::All);
+        .ok().and_then(|v| v.as_f64()).map(|n| n as u32);
+    let aspect = parse_texture_view_aspect(desc_js)?;
     let base_mip_level = js_sys::Reflect::get(desc_js, &JsValue::from_str("baseMipLevel"))
         .ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
     let mip_level_count = js_sys::Reflect::get(desc_js, &JsValue::from_str("mipLevelCount"))
@@ -1667,6 +1677,49 @@ fn parse_texture_view_descriptor(
         base_array_layer,
         array_layer_count,
     })
+}
+
+fn parse_texture_view_enum<T>(desc_js: &JsValue, field: &str) -> Result<Option<T>, JsValue>
+where
+    T: for<'de> serde::Deserialize<'de>,
+{
+    let value = js_sys::Reflect::get(desc_js, &JsValue::from_str(field)).map_err(|error| {
+        texture_view_parse_error(field, &format!("could not read descriptor field: {error:?}"))
+    })?;
+    if value.is_undefined() || value.is_null() {
+        return Ok(None);
+    }
+    serde_wasm_bindgen::from_value(value)
+        .map(Some)
+        .map_err(|error| texture_view_parse_error(field, &error.to_string()))
+}
+
+fn parse_texture_view_aspect(desc_js: &JsValue) -> Result<wgpu::TextureAspect, JsValue> {
+    let value = js_sys::Reflect::get(desc_js, &JsValue::from_str("aspect")).map_err(|error| {
+        texture_view_parse_error("aspect", &format!("could not read descriptor field: {error:?}"))
+    })?;
+    if value.is_undefined() || value.is_null() {
+        return Ok(wgpu::TextureAspect::All);
+    }
+    match value.as_string().as_deref() {
+        Some("all") => Ok(wgpu::TextureAspect::All),
+        Some("stencil-only") => Ok(wgpu::TextureAspect::StencilOnly),
+        Some("depth-only") => Ok(wgpu::TextureAspect::DepthOnly),
+        Some(other) => Err(texture_view_parse_error(
+            "aspect",
+            &format!("unknown value '{other}' (expected 'all' | 'stencil-only' | 'depth-only')"),
+        )),
+        None => Err(texture_view_parse_error(
+            "aspect",
+            "expected a string enum value",
+        )),
+    }
+}
+
+fn texture_view_parse_error(field: &str, detail: &str) -> JsValue {
+    JsValue::from_str(&format!(
+        "[wgpu-wasm] failed to parse textureView descriptor.{field}: {detail}"
+    ))
 }
 
 // ============================================================================
@@ -1768,6 +1821,25 @@ fn parse_color_targets(
         }
     }
     Ok(targets)
+}
+
+fn parse_pipeline_constants(
+    stage_js: &JsValue,
+    field: &str,
+) -> Result<&'static [(&'static str, f64)], JsValue> {
+    let constants_js = js_sys::Reflect::get(stage_js, &JsValue::from_str("constants"))
+        .map_err(|e| JsValue::from_str(&format!("[wgpu-wasm] failed to parse {field}: {e:?}")))?;
+    if constants_js.is_undefined() || constants_js.is_null() {
+        return Ok(&[]);
+    }
+
+    let constants: HashMap<String, f64> = serde_wasm_bindgen::from_value(constants_js)
+        .map_err(|e| JsValue::from_str(&format!("[wgpu-wasm] failed to parse {field}: {e}")))?;
+    let constants = constants
+        .into_iter()
+        .map(|(name, value)| (leak_str(name), value))
+        .collect::<Vec<_>>();
+    Ok(Box::leak(constants.into_boxed_slice()))
 }
 
 // ============================================================================
@@ -2159,7 +2231,7 @@ impl RhiWgpuCommandEncoder {
                 };
                 result.push(Some(wgpu::RenderPassColorAttachment {
                     view: leaked_tv_view,
-                    depth_slice: None,
+                    depth_slice: ca.depth_slice,
                     resolve_target: resolve,
                     ops: wgpu::Operations {
                         load,
@@ -2231,12 +2303,56 @@ impl RhiWgpuCommandEncoder {
             core::mem::transmute(depth_stencil)
         };
 
+        let occlusion_query_set = match js_sys::Reflect::get(
+            &desc_js,
+            &JsValue::from_str("occlusionQuerySet"),
+        ) {
+            Ok(js) if !js.is_null() && !js.is_undefined() => Some(query_set_borrow(
+                &js,
+                "beginRenderPass.occlusionQuerySet",
+            )?),
+            _ => None,
+        };
+        let timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'static>> =
+            match js_sys::Reflect::get(&desc_js, &JsValue::from_str("timestampWrites")) {
+                Ok(js) if !js.is_null() && !js.is_undefined() => {
+                    let query_set = js_sys::Reflect::get(
+                        &js,
+                        &JsValue::from_str("querySet"),
+                    )
+                    .map_err(|_| JsValue::from_str("timestampWrites missing querySet"))?;
+                    let beginning = js_sys::Reflect::get(
+                        &js,
+                        &JsValue::from_str("beginningOfPassWriteIndex"),
+                    )
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .map(|v| v as u32);
+                    let end = js_sys::Reflect::get(
+                        &js,
+                        &JsValue::from_str("endOfPassWriteIndex"),
+                    )
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .map(|v| v as u32);
+                    Some(wgpu::RenderPassTimestampWrites {
+                        query_set: query_set_borrow(
+                            &query_set,
+                            "beginRenderPass.timestampWrites.querySet",
+                        )?,
+                        beginning_of_pass_write_index: beginning,
+                        end_of_pass_write_index: end,
+                    })
+                }
+                _ => None,
+            };
+
         let rp_desc = wgpu::RenderPassDescriptor {
             label: _desc.label.map(|s| leak_str(s.clone())),
             color_attachments,
             depth_stencil_attachment: ds_static,
-            occlusion_query_set: None,
-            timestamp_writes: None,
+            occlusion_query_set,
+            timestamp_writes,
             multiview_mask: None,
         };
 
@@ -2414,6 +2530,32 @@ impl RhiWgpuCommandEncoder {
         }
     }
 
+    #[wasm_bindgen(js_name = resolveQuerySet)]
+    pub fn resolve_query_set(
+        &mut self,
+        query_set: &RhiWgpuQuerySet,
+        first_query: u32,
+        query_count: u32,
+        destination: &RhiWgpuBuffer,
+        destination_offset: f64,
+    ) {
+        if let Some(enc) = self.inner.as_mut() {
+            enc.resolve_query_set(
+                &query_set.inner,
+                first_query..first_query + query_count,
+                &destination.inner,
+                destination_offset as u64,
+            );
+        }
+    }
+
+    #[wasm_bindgen(js_name = writeTimestamp)]
+    pub fn write_timestamp(&mut self, query_set: &RhiWgpuQuerySet, query_index: u32) {
+        if let Some(enc) = self.inner.as_mut() {
+            enc.write_timestamp(&query_set.inner, query_index);
+        }
+    }
+
     #[wasm_bindgen(js_name = pushDebugGroup)]
     pub fn push_debug_group(&mut self, label: String) {
         if let Some(enc) = self.inner.as_mut() {
@@ -2481,6 +2623,20 @@ impl RhiWgpuRenderPass {
                 None => first_instance..first_instance + 1,
             };
             rp.draw_indexed(first_index..first_index + index_count, base_vertex, instances);
+        }
+    }
+
+    #[wasm_bindgen(js_name = beginOcclusionQuery)]
+    pub fn begin_occlusion_query(&mut self, query_index: u32) {
+        if let Some(rp) = self.inner.as_mut() {
+            rp.begin_occlusion_query(query_index);
+        }
+    }
+
+    #[wasm_bindgen(js_name = endOcclusionQuery)]
+    pub fn end_occlusion_query(&mut self) {
+        if let Some(rp) = self.inner.as_mut() {
+            rp.end_occlusion_query();
         }
     }
 
@@ -2960,10 +3116,6 @@ struct RenderPassDescriptorJs {
     color_attachments: Vec<RenderPassColorAttachmentJs>,
     #[serde(default)]
     depth_stencil_attachment: Option<RenderPassDepthStencilAttachmentJs>,
-    #[serde(default)]
-    occlusion_query_set: Option<()>, // handled as raw JsValue later; skip for now
-    #[serde(default)]
-    timestamp_writes: Option<()>,
 }
 
 /// bug-20260610: WebGPU spec ships `loadOp` / `storeOp` as separate kebab-case
@@ -2996,6 +3148,8 @@ struct RenderPassColorAttachmentJs {
     /// Resolved to reference via try_from_js_value at call site
     #[serde(skip)]
     view: Option<wgpu::TextureView>,
+    #[serde(default)]
+    depth_slice: Option<u32>,
     #[serde(default)]
     resolve_target: Option<()>, // resolved similarly at call site
     #[serde(default)]
@@ -3062,6 +3216,71 @@ mod tests {
         assert_eq!(wgpu_desc.size.depth_or_array_layers, 1);
         assert_eq!(wgpu_desc.format, wgpu::TextureFormat::Rgba8Unorm);
         assert_eq!(wgpu_desc.mip_level_count, 1);
+    }
+
+    #[wasm_bindgen_test]
+    fn test_texture_descriptor_accepts_compatibility_binding_view_dimension() {
+        let desc: TextureDescriptorJs = serde_json::from_str(
+            r#"{"size":{"width":4,"height":4,"depthOrArrayLayers":6},"format":"rgba8unorm","usage":4,"dimension":"2d","textureBindingViewDimension":"cube"}"#
+        )
+        .unwrap();
+        assert_eq!(desc.texture_binding_view_dimension, Some(wgpu::TextureViewDimension::Cube));
+        let wgpu_desc = desc.into_wgpu();
+        assert_eq!(wgpu_desc.dimension, wgpu::TextureDimension::D2);
+        assert_eq!(wgpu_desc.size.depth_or_array_layers, 6);
+    }
+
+    #[wasm_bindgen_test]
+    fn test_texture_view_descriptor_round_trip_preserves_array_and_3d_dimensions() {
+        let array_desc: JsValue = js_sys::Object::new().into();
+        js_sys::Reflect::set(
+            &array_desc,
+            &JsValue::from_str("dimension"),
+            &JsValue::from_str("2d-array"),
+        )
+        .unwrap();
+        js_sys::Reflect::set(
+            &array_desc,
+            &JsValue::from_str("baseArrayLayer"),
+            &JsValue::from_f64(1.0),
+        )
+        .unwrap();
+        js_sys::Reflect::set(
+            &array_desc,
+            &JsValue::from_str("arrayLayerCount"),
+            &JsValue::from_f64(2.0),
+        )
+        .unwrap();
+        let array_view = parse_texture_view_descriptor(&array_desc).unwrap();
+        assert_eq!(array_view.dimension, Some(wgpu::TextureViewDimension::D2Array));
+        assert_eq!(array_view.base_array_layer, 1);
+        assert_eq!(array_view.array_layer_count, Some(2));
+
+        let volume_desc: JsValue = js_sys::Object::new().into();
+        js_sys::Reflect::set(
+            &volume_desc,
+            &JsValue::from_str("dimension"),
+            &JsValue::from_str("3d"),
+        )
+        .unwrap();
+        let volume_view = parse_texture_view_descriptor(&volume_desc).unwrap();
+        assert_eq!(volume_view.dimension, Some(wgpu::TextureViewDimension::D3));
+    }
+
+    #[wasm_bindgen_test]
+    fn test_texture_view_descriptor_rejects_invalid_format_dimension_and_aspect() {
+        for (field, value) in [
+            ("format", JsValue::from_str("not-a-format")),
+            ("dimension", JsValue::from_str("not-a-dimension")),
+            ("aspect", JsValue::from_str("not-an-aspect")),
+        ] {
+            let desc: JsValue = js_sys::Object::new().into();
+            js_sys::Reflect::set(&desc, &JsValue::from_str(field), &value).unwrap();
+            let error = parse_texture_view_descriptor(&desc).unwrap_err();
+            let message = error.as_string().unwrap_or_default();
+            assert!(message.contains("[wgpu-wasm] failed to parse textureView descriptor"));
+            assert!(message.contains(field));
+        }
     }
 
     #[wasm_bindgen_test]
@@ -3177,10 +3396,11 @@ mod tests {
     fn test_render_pass_descriptor_round_trip() {
         // Verify colorAttachments array with loadOp/storeOp enum deserialization
         let desc: RenderPassDescriptorJs = serde_json::from_str(
-            r#"{"label":"rp","colorAttachments":[{"loadOp":"load","storeOp":"store"}]}"#
+            r#"{"label":"rp","colorAttachments":[{"loadOp":"load","storeOp":"store","depthSlice":3}]}"#
         ).unwrap();
         assert_eq!(desc.color_attachments.len(), 1);
         assert_eq!(desc.label, Some("rp".to_string()));
+        assert_eq!(desc.color_attachments[0].depth_slice, Some(3));
         assert!(desc.depth_stencil_attachment.is_none());
 
         // Verify depthStencilAttachment mapping with lowercase ops
@@ -3457,6 +3677,30 @@ mod tests {
         assert!(res[0].is_none(), "null element -> None");
         assert!(res[1].is_some(), "valid element -> Some");
         assert!(res[2].is_none(), "undefined element -> None");
+    }
+
+    #[wasm_bindgen_test]
+    fn test_parse_pipeline_constants_round_trip() {
+        let constants = js_obj(&[
+            ("FOO", JsValue::from_f64(2.5)),
+            ("BAR", JsValue::from_f64(-1.0)),
+        ]);
+        let vertex = js_obj(&[("constants", constants)]);
+        let parsed = parse_pipeline_constants(&vertex, "vertex.constants")
+            .expect("pipeline constants must parse");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed.iter().find(|(name, _)| *name == "FOO").map(|(_, v)| *v), Some(2.5));
+        assert_eq!(parsed.iter().find(|(name, _)| *name == "BAR").map(|(_, v)| *v), Some(-1.0));
+    }
+
+    #[wasm_bindgen_test]
+    fn test_parse_pipeline_constants_rejects_non_numeric_value() {
+        let constants = js_obj(&[("FOO", JsValue::from_str("not-a-number"))]);
+        let vertex = js_obj(&[("constants", constants)]);
+        let error = parse_pipeline_constants(&vertex, "vertex.constants").unwrap_err();
+        let message = error.as_string().unwrap_or_default();
+        assert!(message.contains("[wgpu-wasm] failed to parse"));
+        assert!(message.contains("vertex.constants"));
     }
 
     // ========================================================================

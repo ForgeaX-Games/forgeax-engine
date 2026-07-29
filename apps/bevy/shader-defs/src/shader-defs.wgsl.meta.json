@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1.0.0",
+  "kind": "external-asset-package",
+  "importer": "shader",
+  "source": "shader-defs.wgsl",
+  "importSettings": {
+    "materialShaderIdentifier": "bevy::shader_defs"
+  },
+  "subAssets": [
+    {
+      "guid": "01935b00-7d8c-7c4e-9f12-345678abcd09",
+      "sourceIndex": 0,
+      "kind": "material-shader"
+    }
+  ],
+  "paramSchema": [
+    { "name": "baseColor", "type": "color", "default": [1.0, 1.0, 1.0, 1.0] },
+    { "name": "time", "type": "f32", "default": 0.0 },
+    { "name": "speed", "type": "f32", "default": 1.0 },
+    { "name": "baseColorTexture", "type": "texture2d" }
+  ]
+}

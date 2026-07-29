@@ -74,6 +74,14 @@ export const Entity = defineComponent('Entity', {
 });
 
 /**
+ * Marks an entity as disabled.
+ *
+ * Queries exclude this tag by default. Add `Disabled` to a query's `with`
+ * tuple when the query must inspect or re-enable disabled entities.
+ */
+export const Disabled = defineComponent('Disabled', {});
+
+/**
  * SSOT for component ids that are essential to every archetype. Every archetype
  * carries the columns named by these ids unconditionally (they cannot be added
  * or removed via `addComponent` / `removeComponent`). Currently only `Entity`

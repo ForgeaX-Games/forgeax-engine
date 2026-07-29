@@ -82,6 +82,45 @@ describe("dawn-real-gpu - 'command-encoder-finished' triggered by second finish(
       expect(finishTwice.error.hint.length).toBeGreaterThan(0);
     }
   });
+
+  it('preserves 2d-array and 3d texture-view dimensions on native Dawn', async () => {
+    const device = await requestRhiDevice();
+    if (device === undefined) return;
+
+    const arrayTexture = device.createTexture({
+      label: 'dawn-array-view-source',
+      size: { width: 8, height: 8, depthOrArrayLayers: 4 },
+      dimension: '2d',
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    expect(arrayTexture.ok).toBe(true);
+    if (!arrayTexture.ok) return;
+
+    const arrayView = device.createTextureView(arrayTexture.value, {
+      label: 'dawn-array-view',
+      dimension: '2d-array',
+      baseArrayLayer: 1,
+      arrayLayerCount: 2,
+    });
+    expect(arrayView.ok).toBe(true);
+
+    const volumeTexture = device.createTexture({
+      label: 'dawn-volume-view-source',
+      size: { width: 4, height: 4, depthOrArrayLayers: 4 },
+      dimension: '3d',
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+    });
+    expect(volumeTexture.ok).toBe(true);
+    if (!volumeTexture.ok) return;
+
+    const volumeView = device.createTextureView(volumeTexture.value, {
+      label: 'dawn-volume-view',
+      dimension: '3d',
+    });
+    expect(volumeView.ok).toBe(true);
+  });
 });
 
 describe("dawn-real-gpu - 'render-pass-not-ended' triggered by finish() with active pass (D-S3 #2)", () => {

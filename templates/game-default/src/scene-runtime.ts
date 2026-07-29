@@ -7,6 +7,8 @@ import { Transform } from '@forgeax/engine-scene';
 import type { BootstrapContext } from '@forgeax/engine-app';
 import type { Handle, MaterialAsset } from '@forgeax/engine-runtime';
 import type { SceneAsset } from '@forgeax/engine-types';
+import { Rotatable } from './rotating-target';
+import { ScoringTarget } from './scoring-target';
 
 export type MatHandle = Handle<'MaterialAsset', 'shared'>;
 export type GameContext = {
@@ -23,8 +25,8 @@ export type LoadedScene = {
 };
 export type ScenePhysics = {
   props: Array<{ e: EntityHandle; mat: MatHandle }>;
+  animatedMaterial?: { e: EntityHandle; mat: MatHandle };
   walkBlockers: Array<{ cx: number; cz: number; r: number }>;
-  targets: Array<{ e: EntityHandle; points: number }>;
 };
 
 export const SCENE_GUID = '1036f6f0-d3c2-5f31-9593-3432942d4c93';
@@ -95,7 +97,7 @@ export function setupPlayerRoot(ctx: GameContext, entity: EntityHandle): void {
 export function attachScenePhysics(ctx: GameContext, loaded: LoadedScene): ScenePhysics {
   const { world } = ctx;
   const props: ScenePhysics['props'] = [];
-  const targets: ScenePhysics['targets'] = [];
+  let animatedMaterial: ScenePhysics['animatedMaterial'];
   const walkBlockers: ScenePhysics['walkBlockers'] = [];
   const matOf = (entity: EntityHandle): MatHandle => {
     const renderer = world.get(entity, MeshRenderer);
@@ -122,14 +124,23 @@ export function attachScenePhysics(ctx: GameContext, loaded: LoadedScene): Scene
       case 'Ground': break;
       case 'TreeTrunk': staticBody(); box(0.2); addBlocker((transform.pos?.[1] ?? 0) - hy, Math.hypot(hx, hz)); break;
       case 'TreeCanopy': staticBody(); sphere(0.2); addBlocker((transform.pos?.[1] ?? 0) - sphereRadius, sphereRadius); break;
-      case 'RedBox': dynamic(); box(0.25); props.push({ e: entity, mat: matOf(entity) }); targets.push({ e: entity, points: 10 }); break;
-      case 'BlueBall': dynamic(); sphere(0.55); props.push({ e: entity, mat: matOf(entity) }); targets.push({ e: entity, points: 15 }); break;
-      case 'YellowPillar': dynamic(); box(0.2); props.push({ e: entity, mat: matOf(entity) }); targets.push({ e: entity, points: 10 }); break;
-      case 'BouncyBall': dynamic(); sphere(0.92); props.push({ e: entity, mat: matOf(entity) }); targets.push({ e: entity, points: 25 }); break;
+      case 'RedBox': dynamic(); box(0.25); props.push({ e: entity, mat: matOf(entity) }); world.addComponent(entity, { component: ScoringTarget, data: { points: 10 } }); break;
+      case 'BlueBall': dynamic(); sphere(0.55); props.push({ e: entity, mat: matOf(entity) }); world.addComponent(entity, { component: ScoringTarget, data: { points: 15 } }); break;
+      case 'YellowPillar':
+        dynamic();
+        box(0.2);
+        world.addComponent(entity, { component: Rotatable, data: { speed: 0.3 } });
+        props.push({ e: entity, mat: matOf(entity) });
+        animatedMaterial = { e: entity, mat: matOf(entity) };
+        world.addComponent(entity, { component: ScoringTarget, data: { points: 10 } });
+        break;
+      case 'BouncyBall': dynamic(); sphere(0.92); props.push({ e: entity, mat: matOf(entity) }); world.addComponent(entity, { component: ScoringTarget, data: { points: 25 } }); break;
       default:
-        if (name.startsWith('Crate')) { dynamic(); box(0.1); props.push({ e: entity, mat: matOf(entity) }); targets.push({ e: entity, points: 5 }); }
+        if (name.startsWith('Crate')) { dynamic(); box(0.1); props.push({ e: entity, mat: matOf(entity) }); world.addComponent(entity, { component: ScoringTarget, data: { points: 5 } }); }
         break;
     }
   }
-  return { props, walkBlockers, targets };
+  return animatedMaterial === undefined
+    ? { props, walkBlockers }
+    : { props, animatedMaterial, walkBlockers };
 }

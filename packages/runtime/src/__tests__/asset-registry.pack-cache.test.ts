@@ -10,7 +10,7 @@
 
 import { AssetRegistry } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import type { MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
+import type { PackIndexEntry, MeshAsset as TypesMeshAsset } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
@@ -775,5 +775,183 @@ describe('refreshCatalog re-fetches the pack-index immediately', () => {
   it('returns false (keeps stale cache) when no pack-index URL is configured', async () => {
     const reg = makeRegistry();
     expect(await reg.refreshCatalog()).toBe(false);
+  });
+});
+
+// -- M5 / w36: real import patch preserves the complete producer row ---------
+
+const M5_PACK_INDEX_URL = 'https://assets.example.test/game/pack-index.json';
+const M5_GUID_A = 'f0000000-0000-4000-f000-0000000000a2';
+const M5_GUID_B = 'f0000000-0000-4000-f000-0000000000a3';
+
+function makeRichImportedEntry(
+  guid: string,
+  relativeUrl: string,
+  sourceIndex: number,
+): PackIndexEntry {
+  const provenance = {
+    provider: 'fixture-importer',
+    version: '2.4.0',
+    source: 'fixture-source',
+  };
+  return {
+    guid,
+    relativeUrl,
+    kind: 'mesh',
+    sourcePath: `models/${guid}.source`,
+    packageId: 'fixture-package',
+    provenance,
+    revision: {
+      digest: 'sha256:fixture-revision',
+      observedAt: 17,
+      rootId: 'fixture-root',
+    },
+    sourceKey: `mesh/${guid}/main`,
+    sourceIndex,
+    relations: [
+      {
+        from: { type: 'asset', id: guid },
+        to: { type: 'resource', id: 'fixture-source' },
+        type: 'produces',
+        provenance,
+      },
+    ],
+    diagnostics: [
+      {
+        code: 'fixture-import-warning',
+        severity: 'warning',
+        expected: 'stable producer identity',
+        actual: 'imported during test',
+        hint: 'retain the producer row while resolving the locator',
+        authority: 'producer',
+      },
+    ],
+  };
+}
+
+function makeImportedMeshPack(guid: string): unknown {
+  return {
+    schemaVersion: '1.0.0',
+    kind: 'internal-text-package',
+    assets: [
+      {
+        guid,
+        kind: 'mesh',
+        payload: {
+          vertices: [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0,
+          ],
+          indices: [0, 1, 2],
+          attributes: {},
+          submeshes: [{ indexOffset: 0, indexCount: 3, vertexCount: 3, topology: 'triangle-list' }],
+        },
+      },
+    ],
+  };
+}
+
+describe('M5 real import patch preserves CatalogRecord facts', () => {
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch;
+    } else {
+      // biome-ignore lint/suspicious/noExplicitAny: test teardown
+      delete (globalThis as any).fetch;
+    }
+  });
+
+  it('keeps producer identity while resolving the imported locator', async () => {
+    const relativeUrl = './packs/imported-a.pack.json';
+    const resolvedUrl = 'https://assets.example.test/game/packs/imported-a.pack.json';
+    const entry = makeRichImportedEntry(M5_GUID_A, relativeUrl, 4);
+    const importTransport = {
+      fetchPack: vi.fn().mockResolvedValue({ ok: true, entries: [entry] }),
+    };
+    const reg = new AssetRegistry(
+      makeMockShaderRegistry(),
+      // biome-ignore lint/suspicious/noExplicitAny: focused transport fixture
+      importTransport as any,
+    );
+    reg.configurePackIndex(M5_PACK_INDEX_URL);
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === M5_PACK_INDEX_URL) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url === resolvedUrl) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(makeImportedMeshPack(M5_GUID_A)),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    }) as typeof globalThis.fetch;
+
+    const result = await reg.loadByGuid<TypesMeshAsset>(parseGuid(M5_GUID_A));
+    expect(result.ok).toBe(true);
+    expect(importTransport.fetchPack).toHaveBeenCalledWith(M5_GUID_A);
+    expect(reg.listCatalog()).toContainEqual({
+      ...entry,
+      relativeUrl: resolvedUrl,
+    });
+  });
+
+  it('keeps complete rows for concurrent import patches', async () => {
+    const entries = [
+      makeRichImportedEntry(M5_GUID_A, './packs/imported-a.pack.json', 4),
+      makeRichImportedEntry(M5_GUID_B, './packs/imported-b.pack.json', 5),
+    ];
+    const resolvers: Array<(value: unknown) => void> = [];
+    const importTransport = {
+      fetchPack: vi.fn().mockImplementation(() => {
+        return new Promise((resolve) => resolvers.push(resolve));
+      }),
+    };
+    const reg = new AssetRegistry(
+      makeMockShaderRegistry(),
+      // biome-ignore lint/suspicious/noExplicitAny: focused transport fixture
+      importTransport as any,
+    );
+    reg.configurePackIndex(M5_PACK_INDEX_URL);
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (url === M5_PACK_INDEX_URL) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      const entry = entries.find(
+        (candidate) => url === new URL(candidate.relativeUrl, M5_PACK_INDEX_URL).href,
+      );
+      if (entry !== undefined) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(makeImportedMeshPack(entry.guid)),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    }) as typeof globalThis.fetch;
+
+    const loads = [
+      reg.loadByGuid<TypesMeshAsset>(parseGuid(M5_GUID_A)),
+      reg.loadByGuid<TypesMeshAsset>(parseGuid(M5_GUID_B)),
+    ];
+    await vi.waitFor(() => expect(resolvers).toHaveLength(2));
+    resolvers[1]?.({ ok: true, entries: [entries[1]] });
+    resolvers[0]?.({ ok: true, entries: [entries[0]] });
+    const results = await Promise.all(loads);
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(reg.listCatalog()).toEqual(
+      expect.arrayContaining(
+        entries.map((entry) => ({
+          ...entry,
+          relativeUrl: new URL(entry.relativeUrl, M5_PACK_INDEX_URL).href,
+        })),
+      ),
+    );
   });
 });

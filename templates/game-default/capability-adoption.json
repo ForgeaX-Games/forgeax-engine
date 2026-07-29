@@ -65,6 +65,90 @@
       ]
     },
     {
+      "id": "app:bevy/3d-rotation",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/rotating-target.ts",
+        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "apps/bevy/3d-rotation/src/rotation.ts"
+      ],
+      "reason": "The reusable lesson is ECS-owned quaternion motion on an authored 3D target. The template adopts it as a Play-only YellowPillar rotation, scheduled after FixedUpdate so physics writeback cannot erase the visual pose, while Edit still shows the authored scene.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/3d-scene",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/3d-scene/package.json",
+        "apps/bevy/3d-scene/src/main.ts",
+        "templates/game-default/assets/scene.pack.json",
+        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a static direct-spawn cube/plane/PointLight introduction. game-default already teaches standard PBR, mesh/material/light composition through its authored pack and now has a moving target range; importing a second un-authored scene would duplicate the renderer lesson and bypass the template's asset boundary.",
+      "betterConsumer": "apps/bevy/3d-scene"
+    },
+    {
+      "id": "app:bevy/3d-shapes",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/scripts/smoke-geometry.mjs",
+        "apps/bevy/3d-shapes/src/shapes.ts"
+      ],
+      "reason": "The static seven-shape gallery stays canonical, but its capsule primitive composes with the existing runtime projectile: the template generates a final-size capsule MeshAsset, uses a matching capsule collider, and aligns it to shot direction with quat.fromUnitVectors. This exercises geometry, physics, math, hit, and reset together without another scene.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/component-hooks",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/scoring-target.ts",
+        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "apps/bevy/component-hooks/src/component-hooks.ts"
+      ],
+      "reason": "The candidate's lifecycle hooks compose with the existing score loop: a transient ScoringTarget component owns points, onAdd/onInsert register the entity, and onDiscard/onRemove remove it without a second targetPoints ledger. The canonical app remains the four-event lifecycle reference; game-default demonstrates the gameplay-sized index boundary.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/animated-material",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/animated-target-material.ts",
+        "templates/game-default/src/scene-runtime.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "apps/bevy/animated-material/src/animated-material.ts"
+      ],
+      "reason": "The canonical 3x3 gallery remains the focused material mutation lesson, while game-default extracts one authored YellowPillar into a Play-only hue animation that composes with its existing rotation, physics, hit, and reset loop. The public MaterialAsset paramValues path is exercised without a second gallery or a template-only material.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/anti-aliasing",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/settings.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/assets/ui/settings.pack.json",
+        "templates/game-default/AGENTS.md",
+        "apps/bevy/anti-aliasing/src/anti-aliasing.ts",
+        "apps/bevy/anti-aliasing/scripts/smoke-dawn.mjs"
+      ],
+      "reason": "game-default already uses FXAA in its real target-range camera; the guided extraction adds the canonical public camera setting boundary so a user can compare none/MSAA/FXAA in the same playable world without importing the four-shape gallery.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
       "id": "app:hello/custom-shader",
       "classification": "guided",
       "frontDoors": ["preview"],
@@ -74,6 +158,269 @@
         "apps/hello/custom-shader/src/index.ts",
         "apps/preview/vite.config.ts"
       ]
+    },
+    {
+      "id": "app:bevy/move-sprite",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/move-sprite/package.json",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a self-contained 2D orthographic sprite lesson; adding a second camera/render mode to the coherent 3D target range would be an isolated demo rather than a composing game slice.",
+      "betterConsumer": "apps/bevy/move-sprite"
+    },
+    {
+      "id": "app:bevy/sprite-animation",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/sprite-animation/package.json",
+        "apps/bevy/sprite-animation/src/sprite-animation.ts",
+        "apps/hello/asi-world/src/main.ts"
+      ],
+      "reason": "The candidate is a self-contained orthographic atlas-playback lesson; adding a second 2D camera and sprite-specific visual vocabulary to the coherent 3D target-range game would be an isolated showcase rather than a composing gameplay slice.",
+      "betterConsumer": "apps/bevy/sprite-animation"
+    },
+    {
+      "id": "app:hello/m3-programmable-rendering",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/hello/m3-programmable-rendering/package.json",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is an exhaustive cross-layer programmable-rendering gauntlet; importing its many pipeline variants, falsifiers, browser/Dawn legs, and RHI-debug controls into the coherent 3D target-range game would be a verification harness rather than a classic first-game teaching slice.",
+      "betterConsumer": "apps/hello/m3-programmable-rendering"
+    },
+    {
+      "id": "app:bevy/2d-rotation",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/2d-rotation/package.json",
+        "apps/bevy/2d-rotation/src/rotation.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is an isolated orthographic 2D lesson about player rotation and tracking enemies; adding a second camera, coordinate convention, and 2D gameplay vocabulary to the coherent 3D target-range game would be a parallel showcase rather than a composing slice.",
+      "betterConsumer": "apps/bevy/2d-rotation"
+    },
+    {
+      "id": "app:bevy/mesh2d",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/mesh2d/package.json",
+        "apps/bevy/mesh2d/src/mesh2d.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a standalone orthographic 2D custom-mesh showcase with three plane geometries; adding a parallel 2D camera and mesh vocabulary to the coherent 3D target-range game would be an isolated rendering lesson rather than a composing gameplay slice.",
+      "betterConsumer": "apps/bevy/mesh2d"
+    },
+    {
+      "id": "app:bevy/transparency-2d",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/transparency-2d/package.json",
+        "apps/bevy/transparency-2d/src/transparency-2d.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a standalone orthographic 2D layered-alpha sprite lesson; adding a parallel sprite blend queue, 2D camera, and alpha-ordering vocabulary to the coherent 3D target-range game would be an isolated rendering showcase rather than a composing gameplay slice.",
+      "betterConsumer": "apps/bevy/transparency-2d"
+    },
+    {
+      "id": "app:bevy/sprite-slice",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/sprite-slice/package.json",
+        "apps/bevy/sprite-slice/src/sprite-slice.ts",
+        "templates/game-default/AGENTS.md",
+        "templates/game-default/FORGE.md"
+      ],
+      "reason": "The candidate is a standalone orthographic 2D stretch/tile 9-slice panel lesson; adding a second sprite camera and render path to the coherent 3D target-range game would duplicate the documented DOM UiAsset HUD boundary instead of composing a classic gameplay slice.",
+      "betterConsumer": "apps/bevy/sprite-slice"
+    },
+    {
+      "id": "app:bevy/rotate-to-cursor",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/rotate-to-cursor/package.json",
+        "apps/bevy/rotate-to-cursor/src/rotate-to-cursor.ts",
+        "templates/game-default/src/gameplay-input.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a standalone orthographic 2D cursor-facing sprite lesson; game-default already teaches cursor-to-world picking and pointer-lock mouse-look in its coherent 3D target-range loop, so adding a second sprite camera and rotation vocabulary would duplicate rather than compose.",
+      "betterConsumer": "apps/bevy/rotate-to-cursor"
+    },
+    {
+      "id": "app:bevy/texture-atlas",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/texture-atlas/package.json",
+        "apps/bevy/texture-atlas/src/texture-atlas.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a standalone orthographic 2D atlas-padding and sampler comparison; adding a second sprite camera and atlas showcase to the coherent 3D target-range game would be an isolated renderer lesson rather than a composing gameplay slice. A future guided target indicator can reuse the public SpriteRegionOverride contract without adopting this demo wholesale.",
+      "betterConsumer": "apps/bevy/texture-atlas"
+    },
+    {
+      "id": "app:bevy/sprite-sheet",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/sprite-sheet/package.json",
+        "apps/bevy/sprite-sheet/src/sprite-sheet.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a standalone orthographic 2D sprite-sheet playback lesson; adding a second sprite camera and animation vocabulary to the coherent 3D target-range game would be an isolated showcase. Its public SpriteAnimation and SpriteRegionOverride contracts remain reusable for a future gameplay-composed indicator.",
+      "betterConsumer": "apps/bevy/sprite-sheet"
+    },
+    {
+      "id": "app:bevy/2d-screen-shake",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/2d-screen-shake/package.json",
+        "apps/bevy/2d-screen-shake/src/screen-shake.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a standalone orthographic 2D trauma/noise camera lesson. Its feedback concept is valuable for game-default's hit loop, but importing this parallel 2D scene would be an isolated showcase; a separate guided 3D camera-shake slice should adapt the public noise and camera-transform idiom in the game itself.",
+      "betterConsumer": "apps/bevy/2d-screen-shake"
+    },
+    {
+      "id": "app:bevy/2d-top-down-camera",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/2d-top-down-camera/package.json",
+        "apps/bevy/2d-top-down-camera/src/top-down-camera.ts",
+        "templates/game-default/src/gameplay-input.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a standalone orthographic 2D smooth-follow lesson; game-default already teaches a coherent 3D target-range camera and pointer-lock input, so adding a parallel 2D player/camera vocabulary would be an isolated showcase. Its smooth-follow contract remains a candidate for a future guided 3D camera mode.",
+      "betterConsumer": "apps/bevy/2d-top-down-camera"
+    },
+    {
+      "id": "app:bevy/mesh2d-alpha-mode",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/mesh2d-alpha-mode/package.json",
+        "apps/bevy/mesh2d-alpha-mode/src/mesh2d-alpha-mode.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a standalone orthographic 2D opaque/mask/blend comparison; adding a parallel sprite camera and alpha-ordering lesson to the coherent 3D target-range game would be an isolated renderer showcase. Its alpha-mode and premultiplied-blend contracts remain reusable for a future guided 3D transparent hit marker or indicator.",
+      "betterConsumer": "apps/bevy/mesh2d-alpha-mode"
+    },
+    {
+      "id": "app:bevy/audio",
+      "classification": "not-template-fit",
+      "frontDoors": ["game-default:audit"],
+      "evidence": [
+        "apps/bevy/audio/package.json",
+        "apps/bevy/audio/src/audio.ts",
+        "apps/bevy/audio/src/main.ts",
+        "apps/bevy/audio/scripts/smoke-dawn.mjs",
+        "apps/bevy/audio/scripts/smoke-browser.mjs",
+        "templates/game-default/src/gameplay-audio.ts",
+        "templates/game-default/AGENTS.md"
+      ],
+      "reason": "The candidate is a canonical looping imported-clip scene with one AudioListener and a music AudioSource. game-default already teaches the same GUID-to-AudioSource path, listener attachment, one-shot re-arm, spatial SFX, and reset cleanup through its target-hit loop; importing a second static audio scene would duplicate the audio contract. The adjacent audio-control app remains the better consumer for bus mute/volume controls, which is a distinct future guided candidate.",
+      "betterConsumer": "apps/bevy/audio"
+    },
+    {
+      "id": "asset:wav",
+      "classification": "core",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/gameplay-audio.ts",
+        "apps/preview/vite.config.ts",
+        "forgeax-engine-assets/collectathon-audio/bgm-loop.wav.meta.json"
+      ],
+      "reason": "game-default now consumes the engine-authored WAV through the same GUID sidecar, audio importer, preview pack, and runtime AudioClipAsset path as its MP3 hit SFX."
+    },
+    {
+      "id": "app:bevy/audio-control",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/gameplay-audio.ts",
+        "templates/game-default/src/settings.ts",
+        "templates/game-default/assets/ui/settings.pack.json",
+        "templates/game-default/AGENTS.md",
+        "apps/bevy/audio-control/src/main.ts"
+      ],
+      "reason": "The template composes the canonical app's distinct public music-bus mute/volume contract with a real engine-authored looping BGM source and its existing settings/reset boundary; the keyboard demo shell remains canonical in apps/bevy/audio-control.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/axes",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/debug-axes.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "apps/preview/scripts/smoke-debug-axes.mjs",
+        "apps/bevy/axes/src/axes-demo.ts"
+      ],
+      "reason": "The canonical app remains the focused local-frame debugDraw.axes correctness proof. game-default composes the same public primitive as a query-gated immediate-mode overlay on authored gameplay targets, with no parallel scene and an explicit R reset witness.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/blend-modes",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/hit-flash-material.ts",
+        "templates/game-default/src/hit-flash.wgsl",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/bevy/blend-modes/src/main.ts"
+      ],
+    "reason": "The canonical app remains the focused five-mode blend correctness matrix. game-default composes the public premultiplied-alpha renderState with its transient custom hit-feedback shader, emits premultiplied RGB, disables depth writes, and proves the exact flash/reset lifecycle in the real Preview WebGPU path.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/bloom",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/settings.ts",
+        "templates/game-default/assets/ui/settings.pack.json",
+        "templates/game-default/main.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/AGENTS.md",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/bevy/bloom/src/main.ts"
+      ],
+      "reason": "The canonical app remains the focused bloom post-processing correctness proof. game-default composes the public Camera.bloom contract with its existing emissive projectile and settings panel, while browser evidence toggles the effect and proves semantic restoration plus changed compositor pixels without adding a second presentation gallery.",
+      "betterConsumer": "templates/game-default"
+    },
+    {
+      "id": "app:bevy/camera-orbit",
+      "classification": "guided",
+      "frontDoors": ["preview"],
+      "evidence": [
+        "templates/game-default/src/camera-orbit.ts",
+        "templates/game-default/src/gameplay-input.ts",
+        "templates/game-default/src/hud.ts",
+        "templates/game-default/src/render-evidence.ts",
+        "templates/game-default/main.ts",
+        "templates/game-default/AGENTS.md",
+        "apps/preview/scripts/smoke-render-evidence.mjs",
+        "apps/bevy/camera-orbit/src/camera-orbit.ts"
+      ],
+      "reason": "The canonical app remains the isolated fixed-radius orbit correctness proof. game-default composes its spherical position, pitch clamp, and quaternion look-at pose with the existing authored target range, InputSnapshot pointer-lock fallback, HUD view cycle, reset owner, and browser pixel witness instead of adding a parallel scene.",
+      "betterConsumer": "templates/game-default"
     }
   ]
 }

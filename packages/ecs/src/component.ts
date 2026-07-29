@@ -743,19 +743,16 @@ export interface Component<N extends string = string, S extends ComponentSchema 
    */
   readonly cardinality?: number;
   /**
-   * Lifecycle hook for on-insert (internal, OOS-1).
-   * @see DefineComponentOptions.onInsert
-   *
-   * The value parameter is typed as a bare record for variance compatibility
-   * across `Component<string, ComponentSchema>` parameter sites (same pattern
-   * as `validate`). Callers that need the precise shape cast / narrow at the
-   * hook call-site.
+   * Lifecycle hook fired after a component value is written. The value
+   * parameter is typed as a bare record for variance compatibility across
+   * `Component<string, ComponentSchema>` parameter sites.
    */
   readonly onInsert?: (entity: EntityHandle, value: Record<string, unknown>) => void;
-  /**
-   * Lifecycle hook for on-remove (internal, OOS-1).
-   * @see DefineComponentOptions.onRemove
-   */
+  /** Lifecycle hook fired when an entity first gains this component. */
+  readonly onAdd?: (entity: EntityHandle, value: Record<string, unknown>) => void;
+  /** Lifecycle hook fired before an existing component value is discarded. */
+  readonly onDiscard?: (entity: EntityHandle, value: Record<string, unknown>) => void;
+  /** Lifecycle hook fired before a component row is removed. */
   readonly onRemove?: (entity: EntityHandle, value: Record<string, unknown>) => void;
   /**
    * Relationship metadata (feat-20260531 M2). `undefined` for non-relationship
@@ -1161,14 +1158,20 @@ export interface DefineComponentOptions<S extends ComponentSchema = ComponentSch
   readonly cardinality?: number;
   /**
    * Lifecycle hook: fired after a component value is written to an entity
-   * (via spawn / addComponent). Receives the entity handle and the
-   * written value (ShapeOf<S>) as context.
-   *
-   * Internal mechanism -- not surfaced in public README (OOS-1).
-   * The consumer (relationship bidirectional sync) reads this hook from
-   * the Component token after addComponent's writeRow completes.
+   * (via spawn / addComponent / set). Receives the entity handle and the
+   * written value (ShapeOf<S>) as a snapshot.
    */
   readonly onInsert?: (entity: EntityHandle, value: ShapeOf<S>) => void;
+  /**
+   * Lifecycle hook: fired after a component is added to an entity that did not
+   * already carry it, before `onInsert`.
+   */
+  readonly onAdd?: (entity: EntityHandle, value: ShapeOf<S>) => void;
+  /**
+   * Lifecycle hook: fired before an existing component value is discarded by
+   * `set`, `removeComponent`, or `despawn`.
+   */
+  readonly onDiscard?: (entity: EntityHandle, value: ShapeOf<S>) => void;
   /**
    * Lifecycle hook: fired before a component row is removed from an entity
    * (via removeComponent / despawn). Receives the entity handle and the
@@ -1178,7 +1181,7 @@ export interface DefineComponentOptions<S extends ComponentSchema = ComponentSch
    * (e.g. to locate mirror targets for AC-03/AC-08/AC-09) without
    * reading the column after move.
    *
-   * Internal mechanism -- not surfaced in public README (OOS-1).
+   * The callback receives a snapshot and cannot directly mutate the World.
    */
   readonly onRemove?: (entity: EntityHandle, value: ShapeOf<S>) => void;
   /**
@@ -1428,6 +1431,8 @@ export function defineComponent<const N extends string, const S extends FieldsIn
     cardinality: options?.cardinality,
     transient: options?.transient ?? false,
     onInsert: options?.onInsert,
+    onAdd: options?.onAdd,
+    onDiscard: options?.onDiscard,
     onRemove: options?.onRemove,
     relationship,
     coAttach,

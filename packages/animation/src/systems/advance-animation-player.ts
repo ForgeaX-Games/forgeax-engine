@@ -1,4 +1,4 @@
-import { Update } from '@forgeax/engine-ecs';
+import { Time, Update } from '@forgeax/engine-ecs';
 // @forgeax/engine-animation — advanceAnimationPlayer system (variable N-way blend).
 //
 // Per-tick: scans the variable-length SoA columns on each AnimationPlayer; for
@@ -773,7 +773,7 @@ export const AdvanceAnimationPlayer: SystemHandle<readonly []> = defineSystem({
   queries: [],
   before: ['propagateTransforms'],
   fn: (world) => {
-    advanceAnimationPlayer(world, 1 / 60);
+    advanceAnimationPlayer(world, world.getResource(Time).delta);
   },
 });
 

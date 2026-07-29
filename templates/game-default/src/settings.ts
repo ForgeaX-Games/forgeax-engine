@@ -2,12 +2,16 @@ import { mountUi, type UiAsset, type UiError, type UiInstance } from '@forgeax/e
 
 export const SETTINGS_UI_GUID = '019f8354-6386-4387-849d-f2ab4b9622a0';
 
-export interface GameSettingsState { music: number; highContrast: boolean }
-export const DEFAULT_GAME_SETTINGS: Readonly<GameSettingsState> = Object.freeze({ music: 70, highContrast: false });
+export type AntialiasMode = 'none' | 'msaa' | 'fxaa';
+export interface GameSettingsState { music: number; musicMuted: boolean; highContrast: boolean; antialias: AntialiasMode; bloom: boolean }
+export const DEFAULT_GAME_SETTINGS: Readonly<GameSettingsState> = Object.freeze({ music: 70, musicMuted: false, highContrast: false, antialias: 'fxaa', bloom: true });
 export function createGameSettingsState(): GameSettingsState { return { ...DEFAULT_GAME_SETTINGS }; }
-export function applyGameSetting(state: GameSettingsState, name: 'music' | 'highContrast', value: number | boolean): void {
+export function applyGameSetting(state: GameSettingsState, name: 'music' | 'musicMuted' | 'highContrast' | 'antialias' | 'bloom', value: number | boolean | string): void {
   if (name === 'music' && typeof value === 'number') state.music = Math.max(0, Math.min(100, value));
+  if (name === 'musicMuted' && typeof value === 'boolean') state.musicMuted = value;
   if (name === 'highContrast' && typeof value === 'boolean') state.highContrast = value;
+  if (name === 'antialias' && (value === 'none' || value === 'msaa' || value === 'fxaa')) state.antialias = value;
+  if (name === 'bloom' && typeof value === 'boolean') state.bloom = value;
 }
 export function restoreFocus(target: HTMLElement | null, fallback: HTMLElement): void {
   const candidate = target && target.isConnected && !target.hasAttribute('disabled') ? target : fallback;
@@ -68,9 +72,13 @@ export function mountSettings(asset: UiAsset | null, root: HTMLElement, state: G
   };
   const onInput = (event: Event): void => {
     const input = event.target instanceof HTMLInputElement ? event.target : null;
+    const select = event.target instanceof HTMLSelectElement ? event.target : null;
     const name = input?.dataset.uiSetting;
     if (name === 'music' && input) applyGameSetting(state, 'music', Number(input.value));
+    if (name === 'music-muted' && input) applyGameSetting(state, 'musicMuted', input.checked);
     if (name === 'high-contrast' && input) applyGameSetting(state, 'highContrast', input.checked);
+    if (name === 'bloom' && input) applyGameSetting(state, 'bloom', input.checked);
+    if (select?.dataset.uiSetting === 'antialias') applyGameSetting(state, 'antialias', select.value);
   };
   shadow.addEventListener('click', (event) => {
     const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('[data-ui-action]') : null;

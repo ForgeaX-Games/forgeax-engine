@@ -72,6 +72,7 @@ Systems read time through ECS resources:
 - `Time.elapsed`: accumulated validated variable-rate seconds.
 - `FixedTime.delta`: fixed simulation interval.
 - `FixedTime.tick`: completed fixed updates.
+- `FixedTime.overstep`: seconds accrued toward the next fixed update.
 - `FixedTime.droppedSeconds` and `FixedTime.droppedUpdates`: explicit metrics when the configured catch-up cap truncates work.
 
 The assemble form preserves the injected World's policy. Create that World before assembly instead of passing a competing app option.

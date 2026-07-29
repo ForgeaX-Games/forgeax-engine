@@ -231,7 +231,7 @@ class RhiWgpuCommandEncoderImpl implements RhiCommandEncoder {
         querySet,
         firstQuery,
         queryCount,
-        destination,
+        unwrapBuffer(destination),
         destinationOffset,
       );
       return ok(undefined);

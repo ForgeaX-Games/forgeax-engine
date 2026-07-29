@@ -3,7 +3,11 @@ import { forgeaxBundlerAdapter } from 'virtual:forgeax/bundler';
 import { buildFixedTimestepWorld } from './fixed-timestep.js';
 
 async function bootstrap(target: HTMLCanvasElement): Promise<void> {
-  const appResult = await createApp(target, {}, forgeaxBundlerAdapter());
+  const appResult = await createApp(
+    target,
+    { time: { fixedDeltaSeconds: 0.5, maxStepsPerUpdate: 4, maxDeltaSeconds: 2.5 } },
+    forgeaxBundlerAdapter(),
+  );
   if (!appResult.ok) {
     console.error('[fixed-timestep] createApp failed:', appResult.error);
     return;

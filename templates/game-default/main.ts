@@ -1,15 +1,16 @@
 import { Transform } from '@forgeax/engine-scene';
 import { AudioListener } from '@forgeax/engine-audio';
 import {
-  ANTIALIAS_FXAA, BLOOM_ENABLED, Camera, MeshFilter, MeshRenderer, perspective,
+  ANTIALIAS_FXAA, ANTIALIAS_MSAA, ANTIALIAS_NONE, BLOOM_DISABLED, BLOOM_ENABLED, Camera, MeshFilter, MeshRenderer, perspective,
   PointLight, TONEMAP_REINHARD_EXTENDED, Materials,
 } from '@forgeax/engine-render';
 import { quat, type Handle, type MaterialAsset } from '@forgeax/engine-runtime';
 import { HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
-import { createSphereGeometry } from '@forgeax/engine-geometry';
+import { createCapsuleGeometry } from '@forgeax/engine-geometry';
 import { Collider, ColliderShapeValue, RigidBody, RigidBodyTypeValue, type PhysicsWorld } from '@forgeax/engine-physics';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { defineSystem, Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { defineSystem, FixedUpdate, Time, Update, type EntityHandle, type World } from '@forgeax/engine-ecs';
+import { inState } from '@forgeax/engine-state';
 import type { BootstrapContext } from '@forgeax/engine-app';
 import {
   createInputSnapshot, INPUT_MAP_KEY, INPUT_SNAPSHOT_RESOURCE_KEY,
@@ -17,12 +18,20 @@ import {
 } from '@forgeax/engine-input';
 import type { UiAsset, UiError, UiResult } from '@forgeax/engine-ui';
 import { installHud, HUD_UI_GUID, type ViewMode } from './src/hud';
-import { createGameSettingsState, mountSettings, SETTINGS_UI_GUID } from './src/settings';
+import { createGameSettingsState, mountSettings, SETTINGS_UI_GUID, type AntialiasMode } from './src/settings';
 import { installGameplayInput } from './src/gameplay-input';
 import { installGameplayLifecycle } from './src/gameplay-lifecycle';
 import { installGameplayAudio } from './src/gameplay-audio';
+import { installAudioEvidence } from './src/audio-evidence';
+import { GameState, installGameplayState } from './src/gameplay-state';
+import { installAssetContentEvidence } from './src/asset-content-evidence';
 import { createHitFlashMaterial } from './src/hit-flash-material';
+import { stepRotatingTargets } from './src/rotating-target';
+import { createAnimatedMaterialTarget, resetAnimatedMaterial, stepAnimatedMaterial, type AnimatedMaterialTarget } from './src/animated-target-material';
+import { resetScoringTargets, scoringPoints } from './src/scoring-target';
 import { installRenderEvidence } from './src/render-evidence';
+import { installDebugAxes } from './src/debug-axes';
+import { ORBIT_INITIAL_PITCH, ORBIT_INITIAL_YAW, ORBIT_RADIUS, orbitPose } from './src/camera-orbit';
 import {
   attachScenePhysics, loadedFromHost, loadScene, PLAYER_Y, setupPlayerRoot,
   spawnFallbackScene, spawnGroundCollider, type LoadedScene, type MatHandle,
@@ -49,6 +58,8 @@ async function loadUiAsset(ctx: BootstrapContext | undefined, guidText: string):
 
 export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const { registerCleanup } = ctx ?? {};
+  resetScoringTargets();
+  registerCleanup?.(() => resetScoringTargets());
 
   // No DOM listeners are registered in this template (AC-01). The engine input
   // backend (browser-backend.ts) handles all pointer/keyboard events via the
@@ -86,12 +97,13 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // XZ circles the kinematic player is pushed out of (the tree trunk).
   const walkBlockers: Array<{ cx: number; cz: number; r: number }> = [];
   const flashables: Array<{ e: EntityHandle; mat: MatHandle }> = []; // hit-flash targets (dynamic props)
-  const targets: Array<{ e: EntityHandle; points: number }> = [];    // scorable props (entity → points)
+  let animatedMaterial: AnimatedMaterialTarget | undefined;
+  let materialElapsed = 0;
   if (loaded) {
     const phys = attachScenePhysics({ world }, loaded);
     walkBlockers.push(...phys.walkBlockers);
     flashables.push(...phys.props);
-    targets.push(...phys.targets);
+    if (phys.animatedMaterial) animatedMaterial = createAnimatedMaterialTarget(world, phys.animatedMaterial, 52);
     const playerNode = loaded.nodes.find((n) => (n.components.Name as { value?: string } | undefined)?.value === 'Player');
     if (playerNode) {
       const t = (playerNode.components.Transform ?? {}) as { pos?: number[] };
@@ -102,9 +114,21 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   }
   const origMatOf = new Map<EntityHandle, MatHandle>(flashables.map((f) => [f.e, f.mat] as [EntityHandle, MatHandle]));
 
-  // ── camera: TWO switchable view modes (top-down 2.5D ⇄ first-person) ─────────
+  const skylightEntity = loaded?.nodes
+    .find((node) => (node.components.Name as { value?: string } | undefined)?.value === 'Skylight')
+    ?.localId;
+  installAssetContentEvidence({
+    assets: ctx?.assets,
+    renderer: ctx?.renderer,
+    world,
+    skylight: skylightEntity === undefined ? undefined : loaded?.mapping.get(skylightEntity),
+    registerCleanup,
+  });
+
+  // ── camera: THREE switchable view modes (top-down ⇄ orbit ⇄ first-person) ───
   // Top-down = a high tilted follow cam; FPS = an eye-height cam driven by
-  // pointer-lock mouse-look. An on-screen UI button (HUD, below) toggles them.
+  // pointer-lock mouse-look. Orbit keeps a fixed radius around the player. An
+  // on-screen UI button (HUD, below) cycles through the three views.
   // antialias: ANTIALIAS_FXAA = post-process anti-aliasing (learn-render §4).
   const TOP_DY = 13, TOP_DZ = 9;                 // top-down offset (steeper = more 2.5D)
   const CAM_FOLLOW = 8;                          // top-down follow stiffness
@@ -149,8 +173,6 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   //   inline using the camera's current Transform + a hardcoded perspective
   //   FOV (matches the Camera spawn above), and hands off to hud.floatScore
   //   which spawns a brief animated div.
-  const targetPoints = new Map<EntityHandle, number>(targets.map((t) => [t.e, t.points] as [EntityHandle, number]));
-
   // Box-man body parts (PlayerTorso/Head/Arm*/Leg*): hidden in FPS so they don't
   // occlude the eye-level camera, shown in top-down. Toggled by scaling to 0 (safe
   // partial Transform set — no add/remove churn). Scales read AFTER setupPlayerRoot.
@@ -179,6 +201,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
 
   // ── on-screen UI + view-mode state (DOM overlay; gameplay stays ECS) ─────────
   let mode: ViewMode = 'topdown';
+  let gameplayInput!: ReturnType<typeof installGameplayInput>;
   let score = 0;
   // Pointer-lock is managed by engine-input's browser backend (M3 D-1/D-3):
   //   - Web:   backend onCanvasClick calls the W3C Pointer Lock API directly.
@@ -192,15 +215,19 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // setMode is captured inside the toggle button click; declared above the HUD
   // so installHud's onToggle can call it.
   const setMode = (m: ViewMode) => {
+    if (m !== mode && gameplayInput) {
+      gameplayInput.lookYaw = 0;
+      gameplayInput.lookPitch = 0;
+    }
     mode = m;
     hud.setMode(m);
     setPlayerVisible(m !== 'fps');
     canvas.style.cursor = m === 'fps' ? 'crosshair' : '';
-    // M3 D-3: gate pointer-lock through the engine backend. fps = allow lock;
-    // top-down = forbid + immediate release (backend handles both W3C exit
+    // M3 D-3: gate pointer-lock through the engine backend. Orbit and fps allow
+    // lock; top-down forbids it and immediately releases any existing lock.
     // and provider exitLock pathways). The template no longer touches
     // any pointer-lock escape-hatch directly (AC-06).
-    ctx?.setPointerLockAllowed?.(m === 'fps');
+    ctx?.setPointerLockAllowed?.(m !== 'topdown');
     // Don't request lock from here: setMode is called from the toggle BUTTON's
     // click; Chromium rejects pointer-lock requests on a different element from
     // the gesture's target. The backend's onCanvasClick requests it on canvas
@@ -228,7 +255,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const hud = installHud({
     asset: hudAsset,
     initialMode: 'topdown',
-    onToggle: () => setMode(mode === 'fps' ? 'topdown' : 'fps'),
+    onToggle: () => setMode(mode === 'topdown' ? 'orbit' : mode === 'orbit' ? 'fps' : 'topdown'),
     onSettings: () => settings?.open(),
     ...(hudHost ? { host: hudHost } : {}),
     ...(hudLoad.ok ? {} : { error: hudLoad.error }),
@@ -239,6 +266,31 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const settingsState = createGameSettingsState();
   settings = hudHost ? mountSettings(settingsAsset, hudHost, settingsState, canvas, settingsLoad.ok ? undefined : settingsLoad.error) : null;
   ctx?.registerCleanup?.(() => settings?.dispose());
+  let appliedAntialias: AntialiasMode = settingsState.antialias;
+  const antialiasValue = (mode: AntialiasMode): number => {
+    if (mode === 'none') return ANTIALIAS_NONE;
+    if (mode === 'msaa') return ANTIALIAS_MSAA;
+    return ANTIALIAS_FXAA;
+  };
+  world.addSystem(Update, {
+    name: 'game-antialias-settings',
+    queries: [],
+    fn: () => {
+      if (settingsState.antialias === appliedAntialias) return;
+      appliedAntialias = settingsState.antialias;
+      world.set(camera, Camera, { antialias: antialiasValue(appliedAntialias) });
+    },
+  }).unwrap();
+  let appliedBloom = settingsState.bloom;
+  world.addSystem(Update, {
+    name: 'game-bloom-settings',
+    queries: [],
+    fn: () => {
+      if (settingsState.bloom === appliedBloom) return;
+      appliedBloom = settingsState.bloom;
+      world.set(camera, Camera, { bloom: appliedBloom ? BLOOM_ENABLED : BLOOM_DISABLED });
+    },
+  }).unwrap();
 
   // Boot the view mode NOW so the engine input backend learns the lock policy
   // BEFORE the first canvas click. Without this, `setMode` only ran on the HUD
@@ -327,7 +379,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // Main keeps only the mutable state it consumes when steering the player and bullets.
   let px = initX, pz = initZ;
   let faceX = 0, faceZ = -1;
-  const gameplayInput = installGameplayInput({
+  gameplayInput = installGameplayInput({
     world,
     camera,
     canvas,
@@ -341,13 +393,13 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // Bullet material — EMISSIVE so it glows and drives the Camera.bloom bright-pass
   // (HDR emissive > bloomThreshold 1.0 → blooms). Showcases the post-processing path.
   const bulletMat = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', Materials.standard({ baseColor: [1, 0.85, 0.3, 1], roughness: 0.4, metallic: 0, emissive: [1, 0.7, 0.15], emissiveIntensity: 5 }));
-  // Bullet mesh — a 0.2-radius sphere baked AT the visual size (Transform.scale
-  // stays 1). The default HANDLE_SPHERE is a UNIT sphere; using `scale 0.2` to
-  // shrink it produced a large round ground shadow on every shot — a code path
-  // somewhere along the shadow-caster pipeline reads the unit-mesh extent
-  // before Transform.scale is folded in. Baking the geometry at the final
-  // radius removes the scale dependency and the shadow now matches the bullet.
-  const bulletMeshRes = createSphereGeometry(0.2, 12, 8);
+  // Bullet mesh — a procedural capsule baked at its final size. The capsule is
+  // oriented from +Y onto the shot direction below, so the geometry and physics
+  // shape share one public primitive instead of hiding a second renderer-only
+  // projectile representation.
+  const BULLET_RADIUS = 0.12;
+  const BULLET_HALF_HEIGHT = 0.16;
+  const bulletMeshRes = createCapsuleGeometry(BULLET_RADIUS, BULLET_HALF_HEIGHT * 2, 6, 12);
   const bulletMesh = bulletMeshRes.ok ? world.allocSharedRef('MeshAsset', bulletMeshRes.value) : HANDLE_SPHERE;
   // Hit-flash material — a bright emissive white-yellow swapped onto a prop for a
   // few frames when a bullet strikes it (then restored to its base material).
@@ -359,7 +411,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
     world.set(target, MeshRenderer, { materials: [flashMat] });
     flashUntil.set(target, 0.2);
   };
-  // squared hit radius for bullet→prop scoring (bullet_r 0.2 + avg prop_r 0.5 ≈
+  // squared hit radius for bullet→prop scoring (bullet_r 0.12 + avg prop_r 0.5 ≈
   // 0.7, plus frame-step slack since the bullet advances ~0.4/frame). Generous
   // overshoot is fine: the per-bullet `hits` set prevents duplicate scoring.
   const HIT2 = 0.9 * 0.9;
@@ -387,7 +439,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   // per-bullet `hits` set prevents double-scoring the same prop. Bullet despawns
   // on lifetime expiry (BULLET_LIFE) — no leftover ball-shadow because it never
   // sits still.
-  const bullets: Array<{ e: EntityHandle; x: number; y: number; z: number; dx: number; dy: number; dz: number; age: number; hits: Set<EntityHandle> }> = [];
+  const bullets: Array<{ e: EntityHandle; x: number; y: number; z: number; dx: number; dy: number; dz: number; quat: [number, number, number, number]; age: number; hits: Set<EntityHandle> }> = [];
 
   type TransformSnapshot = {
     pos: [number, number, number];
@@ -407,11 +459,32 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
   const physics = world.hasResource('PhysicsWorld')
     ? world.getResource<PhysicsWorld>('PhysicsWorld')
     : undefined;
+  const debugAxes = installDebugAxes({
+    world,
+    targets: flashables.map((target) => target.e),
+    debugDraw: ctx?.app.debugDraw,
+    registerCleanup,
+  });
   const gameplayAudio = player === undefined
     ? undefined
     : await installGameplayAudio(world, player, ctx?.assets);
+  installAudioEvidence({ world, gameplayAudio, registerCleanup });
+  let appliedMusicVolume = -1;
+  let appliedMusicMuted = false;
+  world.addSystem(Update, {
+    name: 'game-music-settings',
+    queries: [],
+    fn: () => {
+      const volume = settingsState.music / 100;
+      if (volume === appliedMusicVolume && settingsState.musicMuted === appliedMusicMuted) return;
+      appliedMusicVolume = volume;
+      appliedMusicMuted = settingsState.musicMuted;
+      gameplayAudio?.setMusicSettings(volume, settingsState.musicMuted);
+    },
+  }).unwrap();
 
   const resetGameplay = () => {
+    debugAxes.reset();
     for (const bullet of bullets) world.despawn(bullet.e);
     bullets.length = 0;
     for (const [entity, timer] of flashUntil) {
@@ -444,35 +517,58 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       if (physics?.hasBody(player)) physics.teleport(player, [px, jumpY, pz]);
     }
     gameplayAudio?.reset();
+    materialElapsed = 0;
+    if (animatedMaterial) resetAnimatedMaterial(world, animatedMaterial);
   };
+  const gameplayState = installGameplayState({ world, reset: resetGameplay });
   installRenderEvidence({
     renderer: ctx?.renderer,
     flashables,
     triggerFlash: () => triggerFlash(),
+    hitFlashBlendEnabled: () => {
+      const material = world.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(flashMat);
+      return material.ok && material.value.passes?.[0]?.renderState?.blend !== undefined;
+    },
+    bloomEnabled: () => settingsState.bloom,
+    toggleBloom: () => { settingsState.bloom = !settingsState.bloom; },
+    viewMode: () => mode,
+    setViewMode: setMode,
+    cameraRadius: () => {
+      const tr = world.get(camera, Transform);
+      if (!tr.ok || mode !== 'orbit') return Number.NaN;
+      return Math.hypot(tr.value.pos[0] - px, tr.value.pos[1] - (jumpY + 0.8), tr.value.pos[2] - pz);
+    },
+    cameraPosition: () => {
+      const tr = world.get(camera, Transform);
+      return tr.ok ? [tr.value.pos[0] ?? 0, tr.value.pos[1] ?? 0, tr.value.pos[2] ?? 0] : null;
+    },
     isFlashed: (entity) => flashUntil.has(entity),
     reset: resetGameplay,
+    state: gameplayState,
     registerCleanup,
   });
-  installGameplayLifecycle({ world, readInput, reset: resetGameplay });
+  installGameplayLifecycle({ world, readInput, requestReset: gameplayState.requestReset });
 
   if (player !== undefined) {
     const root = player;
     world
       .addSystem(Update, {
         name: 'game-update',
+        runIf: inState(GameState, 'Play'),
         queries: [],
         fn: () => {
           const dt = world.getResource(Time).delta;
           const snap = readInput();
+          gameplayAudio?.setMusicPlaying(true);
           gameplayAudio?.rearm();
       const arrowUp = snap.action('arrowUp').isPressed();
       const arrowDown = snap.action('arrowDown').isPressed();
       const arrowLeft = snap.action('arrowLeft').isPressed();
       const arrowRight = snap.action('arrowRight').isPressed();
 
-      // — FPS look via arrow keys (keyboard fallback: mouse-look needs pointer
-      //   lock, which the embedded preview iframe disallows). —
-      if (mode === 'fps') {
+      // — Orbit/FPS look via arrow keys (keyboard fallback: mouse-look needs
+      //   pointer lock, which the embedded preview iframe disallows). —
+      if (mode === 'fps' || mode === 'orbit') {
         const TURN = 2.4;
         if (arrowLeft) gameplayInput.lookYaw += TURN * dt;
         if (arrowRight) gameplayInput.lookYaw -= TURN * dt;
@@ -484,7 +580,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
       // intent axes: f = forward(+)/back(−), s = strafe right(+)/left(−). WASD
       // come from the InputMap getVector (radial deadzone; diagonal magnitude 1).
       // Arrows alias WASD only in top-down; in FPS they steer the view (above).
-      const am = mode !== 'fps';   // arrows-move (top-down only)
+      const am = mode === 'topdown';   // arrows-move (top-down only)
       const move = snap.getVector('moveLeft', 'moveRight', 'moveBack', 'moveForward');
       // getVector's Y is (posY action=moveForward) − (negY=moveBack); forward intent f
       // is +forward, so f = move.y. s = strafe right(+)/left(−) = move.x.
@@ -559,16 +655,17 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         }
         gameplayInput.shotDir = null;   // one-shot snapshot consumed
         const bx = px + dirX * 0.6, byy = by + dirY * 0.6, bz = pz + dirZ * 0.6;
+        const bulletQuat = quat.fromUnitVectors(quat.create(), [0, 1, 0], [dirX, dirY, dirZ]);
         const e = world.spawn(
-          { component: Transform, data: { pos: [bx, byy, bz]} },
+          { component: Transform, data: { pos: [bx, byy, bz], quat: [bulletQuat[0]!, bulletQuat[1]!, bulletQuat[2]!, bulletQuat[3]!]} },
           { component: MeshFilter, data: { assetHandle: bulletMesh } },
           { component: MeshRenderer, data: { materials: [bulletMat] } },
           // ccdEnabled sweeps the fast kinematic bullet's collider along each
           // step so it reliably contacts props instead of tunneling through.
           { component: RigidBody, data: { type: RigidBodyTypeValue.kinematic, ccdEnabled: true } },
-          { component: Collider, data: { shape: ColliderShapeValue.sphere, radius: 0.2, friction: 0, restitution: 0.6 } },
+          { component: Collider, data: { shape: ColliderShapeValue.capsule, radius: BULLET_RADIUS, halfHeight: BULLET_HALF_HEIGHT, friction: 0, restitution: 0.6 } },
         ).unwrap();
-        bullets.push({ e, x: bx, y: byy, z: bz, dx: dirX, dy: dirY, dz: dirZ, age: 0, hits: new Set<EntityHandle>() });
+        bullets.push({ e, x: bx, y: byy, z: bz, dx: dirX, dy: dirY, dz: dirZ, quat: [bulletQuat[0]!, bulletQuat[1]!, bulletQuat[2]!, bulletQuat[3]!], age: 0, hits: new Set<EntityHandle>() });
       }
       // Advance + cull bullets (3D travel). Bullets fly THROUGH props (not
       // despawned on hit) so each prop gets several frames of kinematic-vs-
@@ -580,7 +677,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         b.x += b.dx * BULLET_SPEED * dt;
         b.y += b.dy * BULLET_SPEED * dt;
         b.z += b.dz * BULLET_SPEED * dt;
-        world.set(b.e, Transform, { pos: [b.x, b.y, b.z]});
+        world.set(b.e, Transform, { pos: [b.x, b.y, b.z], quat: b.quat });
       }
 
       // — bullet↔target hit (rapier3d doesn't populate CollidingEntities →
@@ -599,7 +696,7 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
           const ex = b.x - fxp, ey = b.y - fyp, ez = b.z - fzp;
           if (ex * ex + ey * ey + ez * ez < HIT2) {
             b.hits.add(fl.e);
-            const pts = targetPoints.get(fl.e);
+            const pts = scoringPoints(fl.e);
             if (pts !== undefined) {
               score += pts;
               hud.setScore(score);
@@ -628,6 +725,9 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         const qx = quat.create(); quat.fromAxisAngle(qx, [1, 0, 0], gameplayInput.lookPitch);
         const cq = quat.create(); quat.multiply(cq, qy, qx);
         world.set(camera, Transform, { pos: [px, jumpY + EYE, pz], quat: [cq[0]!, cq[1]!, cq[2]!, cq[3]!]});
+      } else if (mode === 'orbit') {
+        const pose = orbitPose([px, jumpY + 0.8, pz], ORBIT_INITIAL_YAW + gameplayInput.lookYaw, ORBIT_INITIAL_PITCH + gameplayInput.lookPitch, ORBIT_RADIUS);
+        world.set(camera, Transform, { pos: pose.pos, quat: pose.quat });
       } else {
         const a = 1 - Math.exp(-CAM_FOLLOW * dt);
         camX += (px - camX) * a;
@@ -637,5 +737,68 @@ export async function bootstrap(world: World, ctx?: BootstrapContext) {
         },
       })
       .unwrap();
+
+    world
+      .addSystem(Update, {
+        name: 'game-rotating-targets',
+        runIf: inState(GameState, 'Play'),
+        after: [FixedUpdate],
+        queries: [],
+        fn: () => {
+          // Run after physics writeback so the authored motion survives the
+          // dynamic target's pose sync and is visible in the next frame.
+          stepRotatingTargets(world, world.getResource(Time).delta);
+          if (animatedMaterial) {
+            materialElapsed += world.getResource(Time).delta;
+            stepAnimatedMaterial(world, animatedMaterial, materialElapsed);
+          }
+        },
+      })
+      .unwrap();
+
+    world
+      .addSystem(Update, {
+        name: 'game-debug-axes',
+        runIf: inState(GameState, 'Play'),
+        after: ['game-rotating-targets'],
+        queries: [],
+        fn: () => debugAxes.draw(),
+      })
+      .unwrap();
+
+    world
+      .addSystem(Update, {
+        name: 'game-reset-camera',
+        runIf: inState(GameState, 'Reset'),
+        queries: [],
+        after: ['transitionStates'],
+        before: [FixedUpdate],
+        fn: () => {
+          // Reset owns the gameplay coordinates synchronously; mirror them to
+          // the camera while the simulation waits for the deferred Play entry.
+          world.set(camera, Transform, {
+            pos: [camX, TOP_DY, camZ],
+            quat: [topQ[0]!, topQ[1]!, topQ[2]!, topQ[3]!],
+          });
+        },
+      })
+      .unwrap();
+  }
+
+  // A host may provide a scene without the optional Player name while still
+  // wanting to inspect the template camera. Keep orbit discoverable in that
+  // case by driving its player-relative target from the deterministic fallback
+  // coordinates already used by the gameplay state.
+  if (player === undefined) {
+    world.addSystem(Update, {
+      name: 'game-camera-fallback',
+      runIf: inState(GameState, 'Play'),
+      queries: [],
+      fn: () => {
+        if (mode !== 'orbit') return;
+        const pose = orbitPose([px, jumpY + 0.8, pz], ORBIT_INITIAL_YAW + gameplayInput.lookYaw, ORBIT_INITIAL_PITCH + gameplayInput.lookPitch, ORBIT_RADIUS);
+        world.set(camera, Transform, { pos: pose.pos, quat: pose.quat });
+      },
+    }).unwrap();
   }
 }

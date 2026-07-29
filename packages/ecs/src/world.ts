@@ -21,6 +21,7 @@ import type {
 import type { Archetype } from './archetype';
 import { type ArchetypeGraph, createArchetypeGraph } from './archetype-graph';
 import { BufferPool } from './buffer-pool';
+import { type ChangeTicks, createChangeTicks, NEVER_CHANGED_TICK } from './change-detection';
 import type { FieldView } from './column';
 import type {
   Component,
@@ -308,6 +309,12 @@ export class World {
 
   /** Entity records: index slot → record. */
   private readonly records: EntityRecord[] = [];
+  /** Monotonic change-detection clock advanced once per World.update. */
+  private changeTick = 0;
+  /** Component change ticks keyed by packed entity handle, then component id. */
+  private readonly componentChanges = new Map<number, Map<number, ChangeTicks>>();
+  /** Resource change ticks keyed by resource name. */
+  private readonly resourceChanges = new Map<string, ChangeTicks>();
   /** Free index slots (LIFO stack). */
   private readonly freeIndices: number[] = [];
   /**
@@ -368,6 +375,9 @@ export class World {
     bufferPool: this.bufferPool,
     uniqueRefs: this.uniqueRefs,
     sharedRefs: this.sharedRefs,
+    markComponentAdded: (entity, component) => this._markComponentAdded(entity, component),
+    markComponentChanged: (entity, component) => this._markComponentChanged(entity, component),
+    removeComponentChange: (entity, component) => this._removeComponentChange(entity, component),
     routeError: (err, ctx) => this._routeError(err as EcsError, ctx),
   });
 
@@ -385,6 +395,74 @@ export class World {
   /** @internal Expose archetype graph for query engine. Not part of public API. */
   _getGraph(): ArchetypeGraph {
     return this.graph;
+  }
+
+  /** @internal Current World change tick for query filters. */
+  _getChangeTick(): number {
+    return this.changeTick;
+  }
+
+  /** @internal Component change state for query filters. */
+  _getComponentChange(entity: EntityHandle, componentId: number): ChangeTicks | undefined {
+    return this.componentChanges.get(entity as number)?.get(componentId);
+  }
+
+  /** @internal Advance the change clock at the start of each frame. */
+  _advanceChangeTick(): void {
+    this.changeTick += 1;
+  }
+
+  /** @internal Mark a component as both added and changed at the current tick. */
+  _markComponentAdded(entity: EntityHandle, componentId: number): void {
+    let changes = this.componentChanges.get(entity as number);
+    if (changes === undefined) {
+      changes = new Map();
+      this.componentChanges.set(entity as number, changes);
+    }
+    changes.set(componentId, createChangeTicks(this.changeTick));
+  }
+
+  /** @internal Mark an existing component as changed at the current tick. */
+  _markComponentChanged(entity: EntityHandle, componentId: number): void {
+    let changes = this.componentChanges.get(entity as number);
+    if (changes === undefined) {
+      changes = new Map();
+      this.componentChanges.set(entity as number, changes);
+    }
+    const current = changes.get(componentId);
+    if (current === undefined) {
+      changes.set(componentId, { added: NEVER_CHANGED_TICK, changed: this.changeTick });
+    } else {
+      current.changed = this.changeTick;
+    }
+  }
+
+  /** @internal Remove one component's change state after archetype removal. */
+  _removeComponentChange(entity: EntityHandle, componentId: number): void {
+    const changes = this.componentChanges.get(entity as number);
+    if (changes === undefined) return;
+    changes.delete(componentId);
+    if (changes.size === 0) this.componentChanges.delete(entity as number);
+  }
+
+  /** @internal Remove all change state before an entity handle is retired. */
+  _removeEntityChanges(entity: EntityHandle): void {
+    this.componentChanges.delete(entity as number);
+  }
+
+  /** @internal Mark a resource insertion/overwrite for resource change probes. */
+  _markResourceChanged(name: string, added: boolean): void {
+    const current = this.resourceChanges.get(name);
+    if (added || current === undefined) {
+      this.resourceChanges.set(name, createChangeTicks(this.changeTick));
+    } else {
+      current.changed = this.changeTick;
+    }
+  }
+
+  /** Return resource change ticks for diagnostics and resource-driven systems. */
+  getResourceChange(name: string): ChangeTicks | undefined {
+    return this.resourceChanges.get(name);
   }
 
   /**
@@ -471,9 +549,12 @@ export class World {
    * });
    * ```
    */
-  addSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
+  addSystem<
+    const Qs extends ReadonlyArray<QueryDescriptor>,
+    const Ps extends ReadonlyArray<unknown>,
+  >(
     schedule: import('./schedule-token').ScheduleToken,
-    descriptor: SystemDescriptor<Qs>,
+    descriptor: SystemDescriptor<Qs, Ps>,
   ): Result<void, ScheduleScopeMismatchError> {
     return worldAddSystem(this, schedule, descriptor);
   }
@@ -524,10 +605,13 @@ export class World {
    * });
    * ```
    */
-  replaceSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
+  replaceSystem<
+    const Qs extends ReadonlyArray<QueryDescriptor>,
+    const Ps extends ReadonlyArray<unknown>,
+  >(
     schedule: import('./schedule-token').ScheduleToken,
     name: string,
-    descriptor: SystemDescriptor<Qs>,
+    descriptor: SystemDescriptor<Qs, Ps>,
   ): Result<void, ScheduleMutationError | ScheduleScopeMismatchError> {
     return worldReplaceSystem(this, schedule, name, descriptor);
   }
@@ -549,10 +633,13 @@ export class World {
    * if (!r.ok) console.error(r.error.code, r.error.hint);
    * ```
    */
-  addSystems<const Qs extends ReadonlyArray<QueryDescriptor>>(
+  addSystems<
+    const Qs extends ReadonlyArray<QueryDescriptor>,
+    const Ps extends ReadonlyArray<unknown>,
+  >(
     schedule: import('./schedule-token').ScheduleToken,
     set: SystemSet,
-    systems: ReadonlyArray<SystemDescriptor<Qs>>,
+    systems: ReadonlyArray<SystemDescriptor<Qs, Ps>>,
   ): Result<void, SystemSetNotRegisteredError | ScheduleScopeMismatchError> {
     return worldAddSystems(this, schedule, set, systems);
   }

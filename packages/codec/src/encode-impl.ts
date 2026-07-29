@@ -16,17 +16,67 @@ interface ZstdWasm {
   compress(buf: Uint8Array, level?: number): Uint8Array;
 }
 
+/** How the build-time zstd WASM encoder module is loaded. @internal */
+type ZstdImporter = () => ZstdWasm;
+
+const defaultImporter: ZstdImporter = () => zstdRequire('@bokuweb/zstd-wasm');
+
+let importer: ZstdImporter = defaultImporter;
+
 /** Lazy-init singleton handle for the build-time zstd WASM encoder. @internal */
 let _zstd: ZstdWasm | null = null;
+/**
+ * Shared while the encoder WASM is initializing; cleared after a failed attempt.
+ * The dependency mutates module-level emscripten exports and memory views on
+ * every init, so a second init can bind calls to one instance and reads to another.
+ * @internal
+ */
+let _initPromise: Promise<ZstdWasm> | null = null;
+/** Test-only count of encoder WASM initialization attempts. @internal */
+let initCount = 0;
 
-async function getZstd(): Promise<ZstdWasm> {
+function getZstd(): Promise<ZstdWasm> {
   if (_zstd !== null) {
-    return _zstd;
+    return Promise.resolve(_zstd);
   }
-  const mod: ZstdWasm = zstdRequire('@bokuweb/zstd-wasm');
-  await mod.init();
-  _zstd = mod;
-  return _zstd;
+  if (_initPromise !== null) {
+    return _initPromise;
+  }
+
+  initCount++;
+  _initPromise = Promise.resolve()
+    .then(() => {
+      const mod = importer();
+      return mod.init().then(() => {
+        _zstd = mod;
+        return mod;
+      });
+    })
+    .catch((cause: unknown) => {
+      // Clear cached failure so a later import can retry (do not permanently cache).
+      _initPromise = null;
+      throw new Error('codec-init-failed', { cause });
+    });
+  return _initPromise;
+}
+
+/**
+ * Test-only: number of zstd encoder WASM initialization attempts.
+ * @internal
+ */
+export function _zstdEncodeInitCount(): number {
+  return initCount;
+}
+
+/**
+ * Test-only: reset the encoder singleton and optionally override its importer.
+ * @internal
+ */
+export function _setZstdEncoderImporter(next?: ZstdImporter): void {
+  importer = next ?? defaultImporter;
+  _zstd = null;
+  _initPromise = null;
+  initCount = 0;
 }
 
 /**

@@ -108,6 +108,42 @@ export type ParamValidation =
   | { readonly tag: 'skipped'; readonly reason: string }
   | { readonly tag: 'invalid'; readonly error: Error };
 
+/** Query results projected into a system parameter definition. */
+export type SystemParamQueryResults<
+  Qs extends ReadonlyArray<QueryDescriptor> = ReadonlyArray<QueryDescriptor>,
+> = {
+  [K in keyof Qs]: Qs[K] extends QueryDescriptor<infer Cs extends ReadonlyArray<Component>>
+    ? NestedColumnBundle<NoInfer<Cs>>[]
+    : ColumnBundle[];
+};
+
+/** Reusable resource/query bundle resolved immediately before a system runs. */
+export interface SystemParamDefinition<
+  T,
+  Qs extends ReadonlyArray<QueryDescriptor> = ReadonlyArray<QueryDescriptor>,
+> {
+  /** Stable name for inspection and diagnostics. */
+  readonly name: string;
+  /** Queries owned by this parameter; they are cached independently per world. */
+  readonly queries: Qs;
+  /** Resources required by this parameter before its resolver runs. */
+  readonly resources?: ReadonlyArray<string>;
+  /** Build the value passed to the system from this parameter's access window. */
+  readonly resolve: (world: World, queryResults: SystemParamQueryResults<Qs>) => T;
+}
+
+/** Values projected from a system's parameter-definition tuple. */
+export type SystemParamValues<Ps extends ReadonlyArray<unknown>> = {
+  [K in keyof Ps]: Ps[K] extends SystemParamDefinition<infer T, infer _Qs> ? T : never;
+};
+
+/** Freeze a reusable system parameter definition at its declaration boundary. */
+export function defineSystemParam<const Qs extends ReadonlyArray<QueryDescriptor>, T>(
+  definition: SystemParamDefinition<T, Qs>,
+): SystemParamDefinition<T, Qs> {
+  return Object.freeze(definition);
+}
+
 /**
  * System descriptor passed to `world.addSystem` — `fn` recovers per-query
  * bundle shapes mapped over `Qs`, no `as` casts required.
@@ -175,6 +211,7 @@ export type ParamValidation =
  */
 export interface SystemDescriptor<
   Qs extends ReadonlyArray<QueryDescriptor> = ReadonlyArray<QueryDescriptor>,
+  Ps extends ReadonlyArray<unknown> = readonly [],
 > {
   /** Unique system name (used for before/after references). */
   readonly name: string;
@@ -189,16 +226,16 @@ export interface SystemDescriptor<
    * `NestedColumnBundle<Qs[i]['with']>` with per-component TypedArray fields.
    * Direct access (`bundles.Position.x`) compiles without `as` casts.
    * @param commands Deferred-mutation buffer (flushed after the system).
+   * @param params Resolved values for the reusable definitions in `params`.
    */
   readonly fn: (
     world: World,
-    queryResults: {
-      [K in keyof Qs]: Qs[K] extends QueryDescriptor<infer Cs extends ReadonlyArray<Component>>
-        ? NestedColumnBundle<NoInfer<Cs>>[]
-        : ColumnBundle[];
-    },
+    queryResults: SystemParamQueryResults<Qs>,
     commands: CommandBuffer,
+    params: SystemParamValues<Ps>,
   ) => void | unknown;
+  /** Reusable query/resource bundles resolved as the fourth fn argument. */
+  readonly params?: Ps;
   /** Run this system after named systems or the FixedUpdate anchor. */
   readonly after?: ReadonlyArray<string | ScheduleToken>;
   /** Run this system before named systems or the FixedUpdate anchor. */
@@ -222,7 +259,8 @@ export interface SystemDescriptor<
  */
 export type SystemHandle<
   Qs extends ReadonlyArray<QueryDescriptor> = ReadonlyArray<QueryDescriptor>,
-> = SystemDescriptor<Qs>;
+  Ps extends ReadonlyArray<unknown> = readonly [],
+> = SystemDescriptor<Qs, Ps>;
 
 /** Internal system record with registration index. */
 interface SystemRecord {
@@ -231,6 +269,8 @@ interface SystemRecord {
   registrationIndex: number;
   /** Cached QueryStates, one per query descriptor. Lazily initialized on first runSchedule. */
   queryStates: QueryState[] | null;
+  /** Cached QueryStates owned by each declared system parameter. */
+  paramQueryStates: QueryState[][] | null;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -294,14 +334,15 @@ export function createSchedule(token: ScheduleToken): Schedule {
  * (S-5, KD-2). `SystemRecord` itself is intentionally non-generic — the
  * heterogeneous `Qs` cannot be expressed inside the systems Map (KD-3).
  */
-export function addSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
-  schedule: Schedule,
-  descriptor: SystemDescriptor<Qs>,
-): void {
+export function addSystem<
+  const Qs extends ReadonlyArray<QueryDescriptor>,
+  const Ps extends ReadonlyArray<unknown>,
+>(schedule: Schedule, descriptor: SystemDescriptor<Qs, Ps>): void {
   const record: SystemRecord = {
-    descriptor: descriptor as SystemDescriptor,
+    descriptor: descriptor as unknown as SystemDescriptor,
     registrationIndex: schedule.nextIndex++,
     queryStates: null, // Deferred: created in runSchedule when World is available
+    paramQueryStates: null,
   };
   schedule.systems.set(descriptor.name, record);
   schedule.dirty = true;
@@ -340,11 +381,12 @@ const SYSTEM_REGISTRY = new Map<string, SystemHandle>();
  * world.addSystem(Move);
  * ```
  */
-export function defineSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
-  descriptor: SystemDescriptor<Qs>,
-): SystemHandle<Qs> {
-  const handle = Object.freeze(descriptor) as SystemHandle<Qs>;
-  SYSTEM_REGISTRY.set(handle.name, handle as SystemHandle);
+export function defineSystem<
+  const Qs extends ReadonlyArray<QueryDescriptor>,
+  const Ps extends ReadonlyArray<unknown>,
+>(descriptor: SystemDescriptor<Qs, Ps>): SystemHandle<Qs, Ps> {
+  const handle = Object.freeze(descriptor) as unknown as SystemHandle<Qs, Ps>;
+  SYSTEM_REGISTRY.set(handle.name, handle as unknown as SystemHandle);
   return handle;
 }
 
@@ -504,10 +546,13 @@ export function removeSystem(
  * Failure: name not registered → `Result.err(ScheduleMutationError)` with
  * `.code = 'system-before-unknown'`.
  */
-export function replaceSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
+export function replaceSystem<
+  const Qs extends ReadonlyArray<QueryDescriptor>,
+  const Ps extends ReadonlyArray<unknown>,
+>(
   schedule: Schedule,
   name: string,
-  descriptor: SystemDescriptor<Qs>,
+  descriptor: SystemDescriptor<Qs, Ps>,
 ): Result<void, ScheduleMutationError> {
   const record = schedule.systems.get(name);
   if (!record) {
@@ -520,9 +565,10 @@ export function replaceSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
       ),
     );
   }
-  record.descriptor = descriptor as SystemDescriptor;
+  record.descriptor = descriptor as unknown as SystemDescriptor;
   // Reset cached query states — descriptor.queries may have changed shape.
   record.queryStates = null;
+  record.paramQueryStates = null;
   schedule.dirty = true;
   return ok(undefined);
 }
@@ -538,10 +584,13 @@ export function replaceSystem<const Qs extends ReadonlyArray<QueryDescriptor>>(
  * Returns `Result.err` with `SystemSetNotRegisteredError` if the set token
  * fails identity validation.
  */
-export function addSystems<const Qs extends ReadonlyArray<QueryDescriptor>>(
+export function addSystems<
+  const Qs extends ReadonlyArray<QueryDescriptor>,
+  const Ps extends ReadonlyArray<unknown>,
+>(
   schedule: Schedule,
   set: SystemSet,
-  systems: ReadonlyArray<SystemDescriptor<Qs>>,
+  systems: ReadonlyArray<SystemDescriptor<Qs, Ps>>,
 ): Result<void, SystemSetNotRegisteredError> {
   const validated = validateSystemSetTokens([set]);
   if (!validated.ok) {
@@ -918,6 +967,11 @@ export function runSchedule(
     if (record.queryStates === null) {
       record.queryStates = record.descriptor.queries.map((q) => createQueryState(q));
     }
+    if (record.paramQueryStates === null) {
+      record.paramQueryStates = (record.descriptor.params ?? []).map((param) =>
+        (param as SystemParamDefinition<unknown>).queries.map((q) => createQueryState(q)),
+      );
+    }
 
     // ── Layer 2: ParamValidation ──
     const validation = validateSystemParams(record, world);
@@ -975,6 +1029,17 @@ export function runSchedule(
       queryResults.push(bundles);
     }
 
+    const paramValues = (record.descriptor.params ?? []).map((param, index) => {
+      const paramResults: ColumnBundle[][] = [];
+      for (const qs of record.paramQueryStates?.[index] ?? []) {
+        const bundles: ColumnBundle[] = [];
+        queryRun(qs, world, (bundle) => bundles.push(bundle));
+        paramResults.push(bundles);
+      }
+      const resolver = (param as unknown as SystemParamDefinition<unknown>).resolve;
+      return resolver(world, paramResults as never);
+    });
+
     // ── Layer 3: system execution + Result collection ──
     // trusted-cast: F-R2 single-direction; runtime correctness guaranteed by buildColumnBundle
     const commands = createCommandBuffer(world);
@@ -983,6 +1048,7 @@ export function runSchedule(
       world,
       queryResults as Parameters<typeof record.descriptor.fn>[1],
       commands,
+      paramValues as unknown as Parameters<typeof record.descriptor.fn>[3],
     );
 
     // If system fn returns a Result with err, invoke ErrorHandler
@@ -1027,6 +1093,19 @@ function validateSystemParams(record: SystemRecord, world: ResourceChecker): Par
           tag: 'invalid',
           error: new Error(
             `Required resource "${key}" not found for system "${record.descriptor.name}".`,
+          ),
+        };
+      }
+    }
+  }
+
+  for (const param of record.descriptor.params ?? []) {
+    for (const key of (param as SystemParamDefinition<unknown>).resources ?? []) {
+      if (!world.hasResource(key)) {
+        return {
+          tag: 'invalid',
+          error: new Error(
+            `Required resource "${key}" not found for system parameter "${(param as SystemParamDefinition<unknown>).name}" in system "${record.descriptor.name}".`,
           ),
         };
       }

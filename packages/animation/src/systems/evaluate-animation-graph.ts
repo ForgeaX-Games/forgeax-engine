@@ -28,7 +28,14 @@
 // math never branches on graph mode; it just consumes whatever fills the slots.
 
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
-import { createQueryState, defineSystem, Entity, queryRun, Update } from '@forgeax/engine-ecs';
+import {
+  createQueryState,
+  defineSystem,
+  Entity,
+  queryRun,
+  Time,
+  Update,
+} from '@forgeax/engine-ecs';
 import type { AnimationClip, AnimationGraph, Handle } from '@forgeax/engine-types';
 import { AnimationPlayer } from '../animation-player';
 import { resolveAnimationAsset } from '../resolve-animation-asset';
@@ -218,7 +225,7 @@ export const EvaluateAnimationGraph: SystemHandle<readonly []> = defineSystem({
   queries: [],
   before: [ADVANCE_ANIMATION_PLAYER_SYSTEM],
   fn: (world) => {
-    evaluateAnimationGraph(world, 1 / 60);
+    evaluateAnimationGraph(world, world.getResource(Time).delta);
   },
 });
 

@@ -99,7 +99,9 @@ if (!ready.ok) {
 }
 
 const { buildFixedTimestepWorld } = await import(resolve(here, '..', 'src', 'fixed-timestep.ts'));
-const world = new World();
+const world = new World({
+  time: { fixedDeltaSeconds: 0.5, maxStepsPerUpdate: 4, maxDeltaSeconds: 2.5 },
+});
 const { getState } = buildFixedTimestepWorld(world);
 
 for (let i = 0; i < SMOKE_MIN_FRAMES; i++) {
@@ -114,6 +116,8 @@ const checks = [
   ['rhi-error-count=0', errors.length === 0],
   ['update-frames>0', state.updateFrames > 0],
   ['fixed-update-frames>0', state.fixedUpdateFrames > 0],
+  ['fixed-delta=0.5', Math.abs(state.fixedDelta - 0.5) < 1e-9],
+  ['overstep-visible', state.overstep >= 0 && state.overstep < state.fixedDelta],
 ];
 
 let allPass = true;
@@ -125,5 +129,5 @@ if (!allPass) {
   console.error(`[smoke] FAIL - ${checks.filter(([, ok]) => !ok).map(([n]) => n).join(', ')}`);
   process.exit(1);
 }
-console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, backend=${renderer.backend}, update=${state.updateFrames}, fixed=${state.fixedUpdateFrames}`);
+console.log(`[smoke] PASS - ${SMOKE_MIN_FRAMES} frames, backend=${renderer.backend}, update=${state.updateFrames}, fixed=${state.fixedUpdateFrames}, overstep=${state.overstep}`);
 process.exit(0);

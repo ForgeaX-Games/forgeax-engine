@@ -68,6 +68,9 @@ export interface ComponentAccessState {
   readonly bufferPool: BufferPool;
   readonly uniqueRefs: UniqueRefStore;
   readonly sharedRefs: SharedRefStore;
+  readonly markComponentAdded: (entity: EntityHandle, componentId: number) => void;
+  readonly markComponentChanged: (entity: EntityHandle, componentId: number) => void;
+  readonly removeComponentChange: (entity: EntityHandle, componentId: number) => void;
   routeError(err: unknown, ctx: ErrorContext): void;
 }
 
@@ -100,6 +103,14 @@ export class WorldComponentAccess {
 
   private routeError(err: unknown, ctx: ErrorContext): void {
     this.state.routeError(err, ctx);
+  }
+
+  private markComponentAdded(entity: EntityHandle, component: Component): void {
+    this.state.markComponentAdded(entity, component.id);
+  }
+
+  private markComponentChanged(entity: EntityHandle, component: Component): void {
+    this.state.markComponentChanged(entity, component.id);
   }
 
   checkCardinality(component: Component, extraCount: number): CardinalityExceededError | null {
@@ -379,6 +390,13 @@ export class WorldComponentAccess {
     if (sharedErr !== null) {
       return err(sharedErr as unknown as EcsError);
     }
+    const onDiscard = (component as Component).onDiscard;
+    const onInsert = (component as Component).onInsert;
+    const oldValue =
+      onDiscard !== undefined
+        ? (this.storage.readRow(arch, component, rec.row) as Record<string, unknown>)
+        : undefined;
+    if (onDiscard && oldValue !== undefined) onDiscard(entity, oldValue);
     for (const fieldName of Object.keys(value)) {
       const col = fieldCols.get(fieldName);
       if (!col) {
@@ -493,6 +511,10 @@ export class WorldComponentAccess {
         }
       }
     }
+    if (onInsert) {
+      onInsert(entity, this.storage.readRow(arch, component, rec.row) as Record<string, unknown>);
+    }
+    this.markComponentChanged(entity, component);
     return ok(undefined);
   }
 
@@ -630,6 +652,7 @@ export class WorldComponentAccess {
     // tail index. Entity values are stored as their u32 bit pattern.
     this.storage.writeArrayElementAt(liveBytes, count, arrayMeta.elementType, value as number);
     countCol.view[rec.row] = newCount;
+    this.markComponentChanged(entity, component);
     return ok(undefined);
   }
 
@@ -697,6 +720,7 @@ export class WorldComponentAccess {
     const liveBytes = this.bufferPool.view(slotId);
     const value = this.storage.readArrayElementAt(liveBytes, count - 1, arrayMeta.elementType);
     countCol.view[rec.row] = count - 1;
+    this.markComponentChanged(entity, component);
     return ok(value as ArrayFieldElementValue<S, K>);
   }
 
@@ -837,6 +861,7 @@ export class WorldComponentAccess {
           this.storage.writeArrayElementAt(liveBytes, i, arrayMeta.elementType, tail);
         }
         countCol.view[rec.row] = last;
+        this.markComponentChanged(entity, component);
         return ok(undefined);
       }
     }
@@ -979,6 +1004,9 @@ export class WorldComponentAccess {
       componentData.data as Record<string, unknown>,
     );
     this.storage.writeRow(targetArch, componentData.component, rec.row, filled as ShapeOf<S>);
+    const onAdd = (componentData.component as Component).onAdd;
+    if (onAdd) onAdd(entity, filled as Record<string, unknown>);
+    this.markComponentAdded(entity, componentData.component as Component);
 
     // M1 hook framework: fire onInsert after writeRow completes (D-6).
     // onInsert fires with the entity and the written value as context.
@@ -1071,14 +1099,19 @@ export class WorldComponentAccess {
     // M1 hook framework: fire onRemove before column removal, capturing the
     // old value snapshot so callbacks can inspect it (D-6, AC-03). M2 reuses
     // the same snapshot to locate the relationship target for mirror pruning.
+    const onDiscard = (component as Component).onDiscard;
     const onRemove = (component as Component).onRemove;
     const rel = (component as Component).relationship;
-    const needsOldValue = onRemove !== undefined || (rel !== undefined && !internal);
+    const needsOldValue =
+      onDiscard !== undefined || onRemove !== undefined || (rel !== undefined && !internal);
     if (needsOldValue) {
       const oldValue = this.storage.readRow(srcArch, component as Component, rec.row) as Record<
         string,
         unknown
       >;
+      if (onDiscard) {
+        onDiscard(entity, oldValue);
+      }
       if (onRemove) {
         onRemove(entity, oldValue);
       }
@@ -1097,6 +1130,7 @@ export class WorldComponentAccess {
 
     // Migrate entity: copy all data except the removed component.
     this.storage.migrateEntity(rec, srcArch, targetArch);
+    this.state.removeComponentChange(entity, component.id);
     return ok(undefined);
   }
 
@@ -1145,6 +1179,14 @@ export class WorldComponentAccess {
     // mirroring the synchronous `spawn` path: the deferred handle was minted at
     // `_allocatePendingEntity` time and is passed in here.
     this.storage.writeEntitySelf(arch, row, entity);
+    for (const cd of componentDatas) {
+      const onAdd = (cd.component as Component).onAdd;
+      if (onAdd) {
+        const filled = fillComponentDefaults(cd.component, cd.data as Record<string, unknown>);
+        onAdd(entity, filled as Record<string, unknown>);
+      }
+      this.markComponentAdded(entity, cd.component);
+    }
 
     record.archetypeId = arch.id;
     record.row = row;

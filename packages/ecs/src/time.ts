@@ -8,6 +8,8 @@ export interface FixedTimeResource {
   delta: number;
   maxStepsPerUpdate: number;
   tick: number;
+  /** Seconds accumulated toward the next fixed update. */
+  overstep: number;
   droppedSeconds: number;
   droppedUpdates: number;
 }
@@ -53,6 +55,7 @@ export function createFixedTimeResource(policy: Required<TimePolicy>): FixedTime
     delta: policy.fixedDeltaSeconds,
     maxStepsPerUpdate: policy.maxStepsPerUpdate,
     tick: 0,
+    overstep: 0,
     droppedSeconds: 0,
     droppedUpdates: 0,
   };

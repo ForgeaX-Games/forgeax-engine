@@ -5,7 +5,11 @@
  * Gated from runtime import by `check-image-pipeline-isolation.mjs` path d.
  */
 
-export { compressZstd } from '../encode-impl.js';
+export {
+  _setZstdEncoderImporter,
+  _zstdEncodeInitCount,
+  compressZstd,
+} from '../encode-impl.js';
 export type { BasisEncodeMode, BasisEncodeOptions } from './basis-encode.js';
 export {
   _basisEncoderInitCount,
